@@ -1,0 +1,501 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  HELP_DESK
+  RECIPIENT_MANAGEMENT
+  COMPLIANCE_MANAGEMENT
+  HYGIENE_MANAGEMENT
+  SERVER_MANAGEMENT
+  VIEW_ONLY_ORG
+  ORGANIZATION_MANAGEMENT
+}
+
+enum SharedMailboxPermType {
+  FULL_ACCESS
+  SEND_AS
+  SEND_ON_BEHALF
+  READ_ONLY
+}
+
+enum LogLevel {
+  ERROR
+  WARN
+  INFO
+  DEBUG
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AuthSource {
+  LOCAL
+  LDAP
+  OIDC
+}
+
+// ─────────────────────────────────────────────
+// Domains & Users
+// ─────────────────────────────────────────────
+
+model Domain {
+  id              String         @id @default(cuid())
+  name            String         @unique
+  dkimPrivateKey  String
+  dkimSelector    String         @default("coremail")
+  active          Boolean        @default(true)
+  users           User[]
+  sharedMailboxes SharedMailbox[]
+  ldapConfig      LdapConfig?
+  oidcProviders   OidcProvider[]
+  createdAt       DateTime       @default(now())
+
+  @@map("domains")
+}
+
+model User {
+  id              String         @id @default(cuid())
+  email           String         @unique
+  displayName     String
+  passwordHash    String?
+  authSource      AuthSource     @default(LOCAL)
+  externalId      String?        // LDAP objectGUID or OIDC sub
+  role            UserRole       @default(USER)
+  quotaBytes      BigInt         @default(5368709120)
+  usedBytes       BigInt         @default(0)
+  active          Boolean        @default(true)
+  domain          Domain         @relation(fields: [domainId], references: [id])
+  domainId        String
+  mailbox         Mailbox?
+  calendars       Calendar[]
+  contacts        Contact[]
+  sessions        Session[]
+  mfa             UserMfa?
+  appPasswords    AppPassword[]
+  sharedPerms     SharedMailboxPerm[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([domainId])
+  @@index([externalId])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Authentication
+// ─────────────────────────────────────────────
+
+model Session {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  tokenHash   String   @unique
+  ipAddress   String
+  userAgent   String   @default("")
+  mfaVerified Boolean  @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model UserMfa {
+  id                  String  @id @default(cuid())
+  user                User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId              String  @unique
+  totpSecret          String?
+  totpEnabled         Boolean @default(false)
+  webAuthnCredentials Json    @default("[]")
+  backupCodes         String[]
+  backupCodesUsed     Int     @default(0)
+  emailOtpEnabled     Boolean @default(false)
+
+  @@map("user_mfa")
+}
+
+model AppPassword {
+  id          String    @id @default(cuid())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  hash        String
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@map("app_passwords")
+}
+
+model LdapConfig {
+  id           String   @id @default(cuid())
+  domain       Domain   @relation(fields: [domainId], references: [id])
+  domainId     String   @unique
+  host         String
+  port         Int      @default(636)
+  ssl          Boolean  @default(true)
+  baseDN       String
+  bindDN       String
+  bindPassword String
+  userFilter   String   @default("(sAMAccountName={{username}})")
+  userDN       String
+  groupFilter  String?
+  attributeMap Json     @default("{}")
+  syncEnabled  Boolean  @default(true)
+  lastSyncAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@map("ldap_configs")
+}
+
+model OidcProvider {
+  id             String   @id @default(cuid())
+  domain         Domain   @relation(fields: [domainId], references: [id])
+  domainId       String
+  name           String
+  discoveryUrl   String
+  clientId       String
+  clientSecret   String
+  claimMap       Json     @default("{}")
+  autoProvision  Boolean  @default(true)
+  forcedDomains  String[]
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  @@map("oidc_providers")
+}
+
+// ─────────────────────────────────────────────
+// Mail Storage
+// ─────────────────────────────────────────────
+
+model Mailbox {
+  id          String    @id @default(cuid())
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String?   @unique
+  sharedBox   SharedMailbox? @relation(fields: [sharedBoxId], references: [id])
+  sharedBoxId String?   @unique
+  uidValidity Int       @default(1)
+  uidNext     Int       @default(1)
+  highestModSeq BigInt  @default(0)
+  folders     Folder[]
+  createdAt   DateTime  @default(now())
+
+  @@map("mailboxes")
+}
+
+model Folder {
+  id          String    @id @default(cuid())
+  mailbox     Mailbox   @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId   String
+  name        String
+  displayName String
+  parent      Folder?   @relation("FolderTree", fields: [parentId], references: [id])
+  parentId    String?
+  children    Folder[]  @relation("FolderTree")
+  messages    Message[]
+  totalCount  Int       @default(0)
+  unreadCount Int       @default(0)
+  changeKey   String    @default("")
+  subscribed  Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@unique([mailboxId, name])
+  @@index([mailboxId])
+  @@map("folders")
+}
+
+model Message {
+  id           String      @id @default(cuid())
+  folder       Folder      @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  folderId     String
+  uid          Int
+  modSeq       BigInt
+  flags        String[]
+  subject      String      @default("")
+  fromAddr     String      @default("")
+  fromName     String      @default("")
+  toAddrs      String[]
+  ccAddrs      String[]
+  bccAddrs     String[]
+  replyTo      String?
+  messageId    String?     // RFC 2822 Message-ID header
+  inReplyTo    String?
+  date         DateTime
+  bodyText     String      @default("")
+  bodyHtml     String      @default("")
+  rawSize      Int         @default(0)
+  storagePath  String?     // MinIO object key for large messages
+  changeKey    String      @default("")
+  deletedAt    DateTime?   // soft-delete (30 day recovery window)
+  attachments  Attachment[]
+  createdAt    DateTime    @default(now())
+
+  @@unique([folderId, uid])
+  @@index([folderId, date])
+  @@index([folderId, modSeq])
+  @@index([messageId])
+  @@index([deletedAt])
+  @@map("messages")
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId   String
+  contentId   String?
+  filename    String
+  mimeType    String
+  size        Int
+  sha256      String
+  storagePath String
+  inline      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([messageId])
+  @@index([sha256])
+  @@map("attachments")
+}
+
+// ─────────────────────────────────────────────
+// Shared Mailboxes
+// ─────────────────────────────────────────────
+
+model SharedMailbox {
+  id          String              @id @default(cuid())
+  email       String              @unique
+  displayName String
+  domain      Domain              @relation(fields: [domainId], references: [id])
+  domainId    String
+  quotaBytes  BigInt              @default(10737418240)
+  usedBytes   BigInt              @default(0)
+  active      Boolean             @default(true)
+  permissions SharedMailboxPerm[]
+  mailbox     Mailbox?
+  createdAt   DateTime            @default(now())
+
+  @@index([domainId])
+  @@map("shared_mailboxes")
+}
+
+model SharedMailboxPerm {
+  id              String               @id @default(cuid())
+  sharedMailbox   SharedMailbox        @relation(fields: [sharedMailboxId], references: [id], onDelete: Cascade)
+  sharedMailboxId String
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  permission      SharedMailboxPermType
+  grantedAt       DateTime             @default(now())
+  grantedBy       String
+
+  @@unique([sharedMailboxId, userId])
+  @@map("shared_mailbox_perms")
+}
+
+// ─────────────────────────────────────────────
+// Calendaring
+// ─────────────────────────────────────────────
+
+model Calendar {
+  id          String          @id @default(cuid())
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  color       String          @default("#0078D4")
+  isDefault   Boolean         @default(false)
+  acl         Json            @default("{}")
+  syncToken   String          @default("")
+  events      CalendarEvent[]
+  createdAt   DateTime        @default(now())
+
+  @@index([userId])
+  @@map("calendars")
+}
+
+model CalendarEvent {
+  id          String   @id @default(cuid())
+  calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  calendarId  String
+  uid         String   @unique // iCal UID
+  icalData    String
+  summary     String
+  description String   @default("")
+  location    String   @default("")
+  dtStart     DateTime
+  dtEnd       DateTime
+  allDay      Boolean  @default(false)
+  recurring   Boolean  @default(false)
+  rrule       String?
+  organizer   String?
+  attendees   Json     @default("[]")
+  status      String   @default("CONFIRMED")
+  changeKey   String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([calendarId, dtStart])
+  @@map("calendar_events")
+}
+
+// ─────────────────────────────────────────────
+// Contacts
+// ─────────────────────────────────────────────
+
+model Contact {
+  id          String  @id @default(cuid())
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  vcardData   String
+  displayName String
+  email       String  @default("")
+  email2      String  @default("")
+  phone       String  @default("")
+  mobile      String  @default("")
+  company     String  @default("")
+  department  String  @default("")
+  jobTitle    String  @default("")
+  notes       String  @default("")
+  photoUrl    String?
+  changeKey   String  @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([email])
+  @@map("contacts")
+}
+
+// ─────────────────────────────────────────────
+// Tasks & Notes
+// ─────────────────────────────────────────────
+
+model Task {
+  id          String   @id @default(cuid())
+  userId      String
+  subject     String
+  body        String   @default("")
+  status      String   @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | COMPLETED | DEFERRED
+  priority    String   @default("NORMAL")       // LOW | NORMAL | HIGH
+  dueDate     DateTime?
+  completedAt DateTime?
+  reminder    DateTime?
+  changeKey   String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@map("tasks")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  subject   String   @default("Notiz")
+  body      String   @default("")
+  color     String   @default("YELLOW")
+  changeKey String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("notes")
+}
+
+// ─────────────────────────────────────────────
+// Backup Jobs
+// ─────────────────────────────────────────────
+
+model BackupJob {
+  id          String    @id @default(cuid())
+  userId      String?
+  scope       String    // "user" | "domain" | "full"
+  format      String    // "mbox" | "eml" | "full"
+  status      JobStatus @default(PENDING)
+  progress    Int       @default(0)
+  downloadUrl String?
+  expiresAt   DateTime?
+  errorMsg    String?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@map("backup_jobs")
+}
+
+// ─────────────────────────────────────────────
+// System Logs
+// ─────────────────────────────────────────────
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  level     LogLevel
+  service   String
+  category  String   @default("SYSTEM")
+  message   String
+  metadata  Json?
+  userId    String?
+  messageId String?
+
+  @@index([timestamp])
+  @@index([service, timestamp])
+  @@index([level, timestamp])
+  @@index([category, timestamp])
+  @@map("system_logs")
+}
+
+// ─────────────────────────────────────────────
+// Security Filter
+// ─────────────────────────────────────────────
+
+model Blacklist {
+  id         String   @id @default(cuid())
+  pattern    String
+  patternType String  @default("EXACT") // EXACT | WILDCARD | REGEX
+  scope      String   @default("GLOBAL") // GLOBAL | DOMAIN | USER
+  scopeId    String?  // domainId or userId for non-global
+  comment    String   @default("")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([scope, scopeId])
+  @@map("blacklist")
+}
+
+model Quarantine {
+  id          String   @id @default(cuid())
+  messageId   String?
+  fromAddr    String
+  toAddr      String
+  subject     String   @default("")
+  reason      String   // VIRUS | SPAM | POLICY
+  details     Json     @default("{}")
+  rawPath     String   // MinIO path to raw message
+  released    Boolean  @default(false)
+  releasedAt  DateTime?
+  releasedBy  String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([reason])
+  @@map("quarantine")
+}

@@ -1,0 +1,409 @@
+name: coremail
+
+services:
+  # ─────────────────────────────────────────────
+  # Infrastructure (always required)
+  # ─────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coremail
+      POSTGRES_USER: coremail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  minio:
+    image: minio/minio:latest
+    container_name: coremail-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [coremail]
+
+  # ─────────────────────────────────────────────
+  # Security / Anti-Spam / Anti-Virus
+  # ─────────────────────────────────────────────
+
+  rspamd:
+    image: rspamd/rspamd:latest
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    volumes:
+      - rspamd-data:/var/lib/rspamd
+      - ./rspamd/local.d:/etc/rspamd/local.d:ro
+    ports:
+      - "11333:11333"
+      - "11334:11334"
+    networks: [coremail]
+
+  clamav:
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    volumes:
+      - clamav-db:/var/lib/clamav
+    expose:
+      - "3310"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    networks: [coremail]
+
+  geoipupdate:
+    image: ghcr.io/maxmind/geoipupdate:latest
+    container_name: coremail-geoipupdate
+    restart: unless-stopped
+    environment:
+      GEOIPUPDATE_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID:-0}
+      GEOIPUPDATE_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      GEOIPUPDATE_EDITION_IDS: "GeoLite2-City GeoLite2-Country"
+      GEOIPUPDATE_FREQUENCY: 24
+    volumes:
+      - geoip-data:/usr/share/GeoIP
+    networks: [coremail]
+
+  # ─────────────────────────────────────────────
+  # CoreMail Services
+  # ─────────────────────────────────────────────
+
+  storage-api:
+    build:
+      context: ../..
+      dockerfile: packages/storage/Dockerfile
+    container_name: coremail-storage-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "3001"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    networks: [coremail]
+
+  security-filter:
+    build:
+      context: ../..
+      dockerfile: packages/security-filter/Dockerfile
+    container_name: coremail-security-filter
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      RSPAMD_HOST: rspamd
+      RSPAMD_PORT: "11333"
+      GEOIP_DB_PATH: /usr/share/GeoIP/GeoLite2-Country.mmdb
+      MAXMIND_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID:-0}
+    volumes:
+      - geoip-data:/usr/share/GeoIP:ro
+    expose:
+      - "3002"
+    depends_on:
+      clamav: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    networks: [coremail]
+
+  smtp-server:
+    build:
+      context: ../..
+      dockerfile: packages/smtp-server/Dockerfile
+    container_name: coremail-smtp
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      SECURITY_FILTER_URL: http://security-filter:3002
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+      SMTP_HOSTNAME: ${MAIL_HOSTNAME}
+      NODE_ENV: ${NODE_ENV:-production}
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+    depends_on:
+      storage-api: { condition: service_started }
+      security-filter: { condition: service_started }
+    networks: [coremail]
+
+  imap-server:
+    build:
+      context: ../..
+      dockerfile: packages/imap-server/Dockerfile
+    container_name: coremail-imap
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+      IMAP_HOSTNAME: ${MAIL_HOSTNAME}
+      NODE_ENV: ${NODE_ENV:-production}
+    ports:
+      - "143:143"
+      - "993:993"
+    depends_on:
+      storage-api: { condition: service_started }
+    networks: [coremail]
+
+  pop3-server:
+    build:
+      context: ../..
+      dockerfile: packages/pop3-server/Dockerfile
+    container_name: coremail-pop3
+    restart: unless-stopped
+    profiles: [full]
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      STORAGE_API_URL: http://storage-api:3001
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+    ports:
+      - "110:110"
+      - "995:995"
+    depends_on:
+      storage-api: { condition: service_started }
+    networks: [coremail]
+
+  auth-service:
+    build:
+      context: ../..
+      dockerfile: packages/auth-service/Dockerfile
+    container_name: coremail-auth
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "3003"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [coremail]
+
+  ews-server:
+    build:
+      context: ../..
+      dockerfile: packages/ews-server/Dockerfile
+    container_name: coremail-ews
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      JWT_SECRET: ${JWT_SECRET}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "8080"
+    depends_on:
+      storage-api: { condition: service_started }
+      auth-service: { condition: service_started }
+    networks: [coremail]
+
+  autodiscover:
+    build:
+      context: ../..
+      dockerfile: packages/autodiscover/Dockerfile
+    container_name: coremail-autodiscover
+    restart: unless-stopped
+    environment:
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      EWS_URL: https://${MAIL_HOSTNAME}/EWS/Exchange.asmx
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "8081"
+    networks: [coremail]
+
+  caldav-server:
+    build:
+      context: ../..
+      dockerfile: packages/caldav-server/Dockerfile
+    container_name: coremail-caldav
+    restart: unless-stopped
+    profiles: [full]
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      JWT_SECRET: ${JWT_SECRET}
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "8082"
+    depends_on:
+      storage-api: { condition: service_started }
+    networks: [coremail]
+
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: packages/api-gateway/Dockerfile
+    container_name: coremail-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      EWS_SERVICE_URL: http://ews-server:8080
+      JWT_SECRET: ${JWT_SECRET}
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "3000"
+    depends_on:
+      storage-api: { condition: service_started }
+      auth-service: { condition: service_started }
+    networks: [coremail]
+
+  backup-service:
+    build:
+      context: ../..
+      dockerfile: packages/backup-service/Dockerfile
+    container_name: coremail-backup
+    restart: unless-stopped
+    profiles: [full]
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      STORAGE_API_URL: http://storage-api:3001
+      NODE_ENV: ${NODE_ENV:-production}
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    networks: [coremail]
+
+  # ─────────────────────────────────────────────
+  # Frontend (served as static files via nginx)
+  # ─────────────────────────────────────────────
+
+  web-client:
+    build:
+      context: ../..
+      dockerfile: packages/web-client/Dockerfile
+      args:
+        VITE_API_BASE_URL: https://${MAIL_HOSTNAME}/api/v1
+        VITE_EWS_URL: https://${MAIL_HOSTNAME}/EWS/Exchange.asmx
+    container_name: coremail-web
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks: [coremail]
+
+  admin-panel:
+    build:
+      context: ../..
+      dockerfile: packages/admin-panel/Dockerfile
+      args:
+        VITE_API_BASE_URL: https://${MAIL_HOSTNAME}/api/v1
+    container_name: coremail-admin
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks: [coremail]
+
+  # ─────────────────────────────────────────────
+  # Reverse Proxy
+  # ─────────────────────────────────────────────
+
+  nginx:
+    image: nginx:alpine
+    container_name: coremail-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - ews-server
+      - autodiscover
+      - api-gateway
+      - web-client
+      - admin-panel
+    networks: [coremail]
+
+# ─────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  rspamd-data:
+  clamav-db:
+  geoip-data:
+
+# ─────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────
+
+networks:
+  coremail:
+    driver: bridge
