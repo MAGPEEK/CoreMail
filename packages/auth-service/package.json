@@ -1,0 +1,31 @@
+{
+  "name": "@coremail/auth-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@coremail/core": "workspace:*",
+    "@coremail/storage": "workspace:*",
+    "@simplewebauthn/server": "^10.0.0",
+    "bcrypt": "^5.1.1",
+    "express": "^4.19.2",
+    "otpauth": "^9.3.6",
+    "qrcode": "^1.5.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.5",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
