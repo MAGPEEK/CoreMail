@@ -9,6 +9,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.6.1] — 2026-05-09 — Docker Hub Publishing & CI/CD
+
+### Added
+- **GitHub Actions Workflow** (`.github/workflows/docker-publish.yml`)
+  - Baut und pusht alle 13 Service-Images bei jedem Push auf `main` und bei Git-Tags (`v*.*.*`)
+  - Multi-Arch-Build: `linux/amd64` + `linux/arm64` via Docker Buildx / QEMU
+  - Layer-Caching via GitHub Actions Cache (scope pro Service)
+  - Semantisches Tagging: `1.2.3`, `1.2`, `1`, `latest`, `edge` (main-Branch), `sha-<hash>`
+  - OCI-Labels: `image.title`, `image.version`, `image.revision`, `image.source`
+  - Login-Schritt nur bei echten Pushes (nicht bei Pull Requests)
+  - Matrix-Strategy: alle 13 Services parallel, `fail-fast: false`
+- **`scripts/docker-push.sh`** — lokales Build-und-Push-Skript
+  - Version automatisch aus CHANGELOG extrahiert oder explizit angegeben
+  - `--no-push`-Flag zum reinen lokalen Bauen
+  - Multi-Arch via `docker buildx`, OCI-Labels mit Git-SHA und Timestamp
+  - Farbige Zusammenfassung mit allen gepushten Image-Namen
+- **`infra/docker/docker-compose.prod.yml`** — Production-Override
+  - Ersetzt `build:`-Direktiven durch fertige Docker-Hub-Images
+  - Image-Tag über `COREMAIL_VERSION`-Env-Variable steuerbar
+  - Verwendung: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+
+### Docker Hub Images
+
+Alle Images unter: **https://hub.docker.com/u/magpeek**
+
+| Image | Beschreibung |
+|-------|-------------|
+| `magpeek/coremail-storage-api` | Interner Storage-API-Service |
+| `magpeek/coremail-auth-service` | Authentifizierung (Local/LDAP/OIDC/MFA) |
+| `magpeek/coremail-security-filter` | SPF/DKIM/DMARC/DNSBL/ClamAV/rspamd |
+| `magpeek/coremail-smtp-server` | SMTP Inbound + Outbound (25/465/587) |
+| `magpeek/coremail-imap-server` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
+| `magpeek/coremail-pop3-server` | POP3 (110/995) |
+| `magpeek/coremail-ews-server` | Exchange Web Services SOAP/XML (Outlook) |
+| `magpeek/coremail-autodiscover` | Autodiscover v1 + v2 |
+| `magpeek/coremail-caldav-server` | CalDAV + CardDAV (iOS/Android/Thunderbird) |
+| `magpeek/coremail-api-gateway` | REST API + SSE Live-Events |
+| `magpeek/coremail-backup-service` | Backup/Restore (MBOX/EML/S3) |
+| `magpeek/coremail-web-client` | Webmail (OWA React UI) |
+| `magpeek/coremail-admin-panel` | Admin-Panel (ECP React UI) |
+
+---
+
 ## [0.6.0] — 2026-05-09 — Phase 5: Backup + Observability + Kubernetes
 
 ### Added

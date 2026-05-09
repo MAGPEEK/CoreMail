@@ -1,0 +1,65 @@
+# CoreMail — Production Override
+#
+# Verwendet fertige Docker-Hub-Images statt lokalem Build.
+# Zusammen mit docker-compose.yml verwenden:
+#
+#   docker compose \
+#     -f infra/docker/docker-compose.yml \
+#     -f infra/docker/docker-compose.prod.yml \
+#     up -d
+#
+# Image-Tag über Umgebungsvariable steuerbar:
+#   COREMAIL_VERSION=0.6.0 docker compose -f ... up -d
+
+services:
+  storage-api:
+    build: !reset null
+    image: magpeek/coremail-storage-api:${COREMAIL_VERSION:-latest}
+
+  auth-service:
+    build: !reset null
+    image: magpeek/coremail-auth-service:${COREMAIL_VERSION:-latest}
+
+  security-filter:
+    build: !reset null
+    image: magpeek/coremail-security-filter:${COREMAIL_VERSION:-latest}
+
+  smtp-server:
+    build: !reset null
+    image: magpeek/coremail-smtp-server:${COREMAIL_VERSION:-latest}
+
+  imap-server:
+    build: !reset null
+    image: magpeek/coremail-imap-server:${COREMAIL_VERSION:-latest}
+
+  pop3-server:
+    build: !reset null
+    image: magpeek/coremail-pop3-server:${COREMAIL_VERSION:-latest}
+
+  ews-server:
+    build: !reset null
+    image: magpeek/coremail-ews-server:${COREMAIL_VERSION:-latest}
+
+  autodiscover:
+    build: !reset null
+    image: magpeek/coremail-autodiscover:${COREMAIL_VERSION:-latest}
+
+  caldav-server:
+    build: !reset null
+    image: magpeek/coremail-caldav-server:${COREMAIL_VERSION:-latest}
+
+  api-gateway:
+    build: !reset null
+    image: magpeek/coremail-api-gateway:${COREMAIL_VERSION:-latest}
+
+  backup-service:
+    build: !reset null
+    image: magpeek/coremail-backup-service:${COREMAIL_VERSION:-latest}
+
+  web-client:
+    build: !reset null
+    image: magpeek/coremail-web-client:${COREMAIL_VERSION:-latest}
+
+  admin-panel:
+    build: !reset null
+    image: magpeek/coremail-admin-panel:${COREMAIL_VERSION:-latest}

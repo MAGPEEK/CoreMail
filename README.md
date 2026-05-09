@@ -21,21 +21,22 @@
 7. [Zugriff nach dem Start](#zugriff-nach-dem-start)
 8. [TLS-Zertifikate (Produktion)](#tls-zertifikate-produktion)
 9. [Erster Admin-Account](#erster-admin-account)
-10. [Konfiguration](#konfiguration)
-11. [Module im Detail](#module-im-detail)
-12. [Mail-Protokolle](#mail-protokolle)
-13. [Sicherheit & Anti-Spam](#sicherheit--anti-spam)
-14. [Authentifizierung](#authentifizierung)
-15. [Weboberfläche (OWA)](#weboberfläche-owa)
-16. [Admin-Panel (ECP)](#admin-panel-ecp)
-17. [Backup & Wiederherstellung](#backup--wiederherstellung)
-18. [Cluster & Hochverfügbarkeit](#cluster--hochverfügbarkeit)
-19. [Monitoring & Logs](#monitoring--logs)
-20. [Entwicklung](#entwicklung)
-21. [Deployment (Kubernetes)](#deployment-kubernetes)
-22. [URL-Struktur](#url-struktur)
-23. [Roadmap](#roadmap)
-24. [Lizenz](#lizenz)
+10. [Docker Hub Images](#docker-hub-images)
+11. [Konfiguration](#konfiguration)
+12. [Module im Detail](#module-im-detail)
+13. [Mail-Protokolle](#mail-protokolle)
+14. [Sicherheit & Anti-Spam](#sicherheit--anti-spam)
+15. [Authentifizierung](#authentifizierung)
+16. [Weboberfläche (OWA)](#weboberfläche-owa)
+17. [Admin-Panel (ECP)](#admin-panel-ecp)
+18. [Backup & Wiederherstellung](#backup--wiederherstellung)
+19. [Cluster & Hochverfügbarkeit](#cluster--hochverfügbarkeit)
+20. [Monitoring & Logs](#monitoring--logs)
+21. [Entwicklung](#entwicklung)
+22. [Deployment (Kubernetes)](#deployment-kubernetes)
+23. [URL-Struktur](#url-struktur)
+24. [Roadmap](#roadmap)
+25. [Lizenz](#lizenz)
 
 ---
 
@@ -445,6 +446,99 @@ curl -s -X POST https://<MAIL_HOSTNAME>/api/v1/admin/setup \
 ```
 
 Danach unter `https://<MAIL_HOSTNAME>/ecp/` mit den Zugangsdaten anmelden.
+
+---
+
+## Docker Hub Images
+
+Alle fertigen Images sind auf Docker Hub verfügbar und können ohne lokalen Build verwendet werden:
+
+**Übersicht:** [hub.docker.com/u/magpeek](https://hub.docker.com/u/magpeek)
+
+| Image | Tag | Beschreibung |
+|-------|-----|-------------|
+| `magpeek/coremail-storage-api` | `0.6.1` / `latest` | Interner Storage-API-Service |
+| `magpeek/coremail-auth-service` | `0.6.1` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
+| `magpeek/coremail-security-filter` | `0.6.1` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
+| `magpeek/coremail-smtp-server` | `0.6.1` / `latest` | SMTP Inbound + Outbound (25/465/587) |
+| `magpeek/coremail-imap-server` | `0.6.1` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
+| `magpeek/coremail-pop3-server` | `0.6.1` / `latest` | POP3 (110/995) |
+| `magpeek/coremail-ews-server` | `0.6.1` / `latest` | Exchange Web Services / Outlook-Support |
+| `magpeek/coremail-autodiscover` | `0.6.1` / `latest` | Autodiscover v1 + v2 |
+| `magpeek/coremail-caldav-server` | `0.6.1` / `latest` | CalDAV + CardDAV |
+| `magpeek/coremail-api-gateway` | `0.6.1` / `latest` | REST API + SSE |
+| `magpeek/coremail-backup-service` | `0.6.1` / `latest` | Backup/Restore (MBOX/EML/S3) |
+| `magpeek/coremail-web-client` | `0.6.1` / `latest` | Webmail OWA (React) |
+| `magpeek/coremail-admin-panel` | `0.6.1` / `latest` | Admin-Panel ECP (React) |
+
+### Produktion mit Docker-Hub-Images starten
+
+Kein lokaler Build nötig — Images werden direkt von Docker Hub gezogen:
+
+```bash
+# Neueste stabile Version (empfohlen)
+COREMAIL_VERSION=0.6.1 docker compose \
+  -f infra/docker/docker-compose.yml \
+  -f infra/docker/docker-compose.prod.yml \
+  up -d
+
+# Oder mit optionalen Modulen
+COREMAIL_VERSION=0.6.1 docker compose \
+  -f infra/docker/docker-compose.yml \
+  -f infra/docker/docker-compose.prod.yml \
+  --profile full --profile observability \
+  up -d
+```
+
+### Tag-Schema
+
+| Tag | Bedeutung |
+|-----|-----------|
+| `0.6.1` | Exakte Version |
+| `0.6` | Neueste Patch-Version von 0.6.x |
+| `0` | Neueste Minor-Version von 0.x.x |
+| `latest` | Neuestes stabiles Release |
+| `edge` | Aktueller Stand des `main`-Branches |
+| `sha-abc1234` | Commit-spezifischer Build |
+
+### CI/CD — Automatischer Build
+
+Der GitHub Actions Workflow (`.github/workflows/docker-publish.yml`) baut und
+pusht alle Images automatisch:
+
+- **Bei Push auf `main`** → Tag `edge` + `sha-<hash>`
+- **Bei Git-Tag `v0.6.1`** → Tags `0.6.1`, `0.6`, `0`, `latest`
+- **Bei Pull Request** → nur Build, kein Push
+
+**Multi-Arch:** Alle Images werden für `linux/amd64` und `linux/arm64` gebaut.
+
+### Secrets in GitHub konfigurieren
+
+Für den automatischen Push müssen in den Repository-Einstellungen zwei Secrets
+hinterlegt werden:
+
+```
+GitHub → Settings → Secrets and variables → Actions → New repository secret
+
+DOCKERHUB_USERNAME   magpeek
+DOCKERHUB_TOKEN      <Docker Hub Access Token>
+```
+
+Ein Access Token erstellt man unter:
+[hub.docker.com → Account Settings → Personal access tokens](https://hub.docker.com/settings/security)
+
+### Manueller Build und Push
+
+```bash
+# Version aus CHANGELOG lesen und alle Images bauen + pushen
+bash scripts/docker-push.sh
+
+# Explizite Version
+bash scripts/docker-push.sh 0.6.1
+
+# Nur bauen, nicht pushen (lokaler Test)
+bash scripts/docker-push.sh 0.6.1 --no-push
+```
 
 ---
 
