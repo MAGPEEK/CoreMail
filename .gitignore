@@ -3,7 +3,6 @@ dist/
 .env
 .env.local
 *.env
-pnpm-lock.yaml
 
 # Build artifacts
 *.js.map
