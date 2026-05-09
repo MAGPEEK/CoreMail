@@ -64,8 +64,8 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | SMTP Outbound mit MX-Lookup & DKIM-Signierung | ✅ Implementiert |
 | IMAP4rev1 mit IDLE, CONDSTORE, ESEARCH | ✅ Implementiert |
 | POP3 (Port 110, 995) | ✅ Implementiert |
-| EWS — Exchange Web Services (Outlook Desktop) | 🔧 Phase 3 |
-| Autodiscover v1 + v2 (Outlook-Autokonfiguration) | 🔧 Phase 3 |
+| EWS — Exchange Web Services (Outlook Desktop) | ✅ Implementiert |
+| Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
 | OWA — Outlook Web Access (Webmail) | 🔧 Phase 4 |
 | Freigegebene Postfächer (Shared Mailboxen) | 🔧 Phase 4 |
 | Öffentliche Ordner | 🔧 Phase 4 |
@@ -110,14 +110,15 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 
 | Feature | Status |
 |---------|--------|
-| Lokale Anmeldung (bcrypt + pepper) | 🔧 Phase 3 |
-| LDAP / Active Directory | 🔧 Phase 3 |
-| SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google) | 🔧 Phase 3 |
-| SAML 2.0 | 🔧 Phase 3 |
-| MFA: TOTP (Authenticator-App) | 🔧 Phase 3 |
-| MFA: WebAuthn / FIDO2 (YubiKey, Touch ID) | 🔧 Phase 3 |
-| App-Passwörter für Mail-Clients | 🔧 Phase 3 |
-| Session-Management (Admin-seitig) | 🔧 Phase 3 |
+| Lokale Anmeldung (bcrypt + pepper) | ✅ Implementiert |
+| LDAP / Active Directory | ✅ Implementiert |
+| SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google, Authentik, Okta) | ✅ Implementiert |
+| SAML 2.0 | ✅ Implementiert |
+| MFA: TOTP (Authenticator-App) | ✅ Implementiert |
+| MFA: WebAuthn / FIDO2 (YubiKey, Touch ID) | ✅ Implementiert |
+| MFA: Backup-Codes (10 Einmal-Codes, bcrypt-gehasht) | ✅ Implementiert |
+| App-Passwörter für Mail-Clients | ✅ Implementiert |
+| Session-Management (User + Admin) | ✅ Implementiert |
 
 ### Administration
 
@@ -303,6 +304,23 @@ MINIO_ROOT_PASSWORD=...       # Pflicht
 JWT_SECRET=...                # min. 32 Zeichen, zufällig
 PEPPER=...                    # min. 32 Zeichen, zufällig (für Passwort-Hashing)
 
+# ── Auth-Service ───────────────────────────────────────────────────────
+AUTH_PORT=3003                # Interner Port des Auth-Service (Standard: 3003)
+
+# ── WebAuthn (MFA FIDO2) ───────────────────────────────────────────────
+WEBAUTHN_RP_NAME=CoreMail             # Anzeigename im Authenticator-Dialog
+WEBAUTHN_RP_ID=mail.domain.de        # Must match MAIL_HOSTNAME
+WEBAUTHN_ORIGIN=https://mail.domain.de
+
+# ── EWS-Server ─────────────────────────────────────────────────────────
+EWS_URL=https://mail.domain.de/EWS/Exchange.asmx
+OWA_URL=https://mail.domain.de/owa/
+
+# ── Autodiscover ───────────────────────────────────────────────────────
+AUTODISCOVER_BASE=https://mail.domain.de
+IMAP_HOST=mail.domain.de
+SMTP_HOST=mail.domain.de
+
 # ── GeoIP (optional, für Country-Filtering) ───────────────────────────
 # Kostenlose Registrierung: https://www.maxmind.com/en/geolite2/signup
 MAXMIND_ACCOUNT_ID=           # Leer lassen = Country-Filter deaktiviert
@@ -371,17 +389,122 @@ IMAP4rev1-Server (Port 143 / 993).
 ### `packages/pop3-server` *(Phase 2 — optional)*
 POP3-Server (Port 110 / 995) — RFC 1939 mit UIDL, TOP, CAPA, STLS.
 
-### `packages/ews-server` *(Phase 3)*
-Exchange Web Services SOAP/XML-Endpunkt (`/EWS/Exchange.asmx`).
+### `packages/ews-server`
+Exchange Web Services SOAP/XML-Endpunkt (`/EWS/Exchange.asmx`) — die Schnittstelle für Outlook Desktop (2010–2024) und Outlook für Mac.
 
-Implementiert alle für Outlook-Kompatibilität notwendigen EWS-Operationen:
-`FindItem`, `GetItem`, `CreateItem`, `UpdateItem`, `DeleteItem`, `SyncFolderHierarchy`, `SyncFolderItems`, `StreamingSubscription`, `GetUserAvailability`, `ResolveNames`.
+**Implementierte EWS-Operationen:**
 
-### `packages/autodiscover` *(Phase 3)*
-Autodiscover-Service (`/Autodiscover/` und `/autodiscover/`) — ermöglicht Outlook die automatische Serverkonfiguration ohne manuelle Eingabe.
+| Operation | Beschreibung |
+|-----------|-------------|
+| `FindItem` | Nachrichtenliste (Paging, Sortierung), CalendarView |
+| `GetItem` | Vollständige Nachricht (Body, Anhänge, BaseShape IdOnly/Default/AllProperties) |
+| `CreateItem` | Entwurf (SaveOnly), Senden (SendOnly/SendAndSaveCopy), CalendarItem |
+| `UpdateItem` | IsRead setzen, Flags (Flagged/NotFlagged) via SetItemField |
+| `DeleteItem` | HardDelete, SoftDelete (30-Tage recoverable), MoveToDeletedItems |
+| `MoveItem` | Nachricht in anderen Ordner verschieben (DistinguishedFolderId + FolderId) |
+| `CopyItem` | Nachricht kopieren (neue UID, gleiche Metadaten) |
+| `SyncFolderHierarchy` | Ordner-Baum delta-sync (ChangeKey-basiert) |
+| `SyncFolderItems` | Nachrichten delta-sync (Create + Delete Events) |
+| `ResolveNames` | Autovervollständigung aus Users + Contacts (case-insensitive) |
+| `GetUserAvailability` | Frei-/Belegtzeiten aus Kalender (GetUserAvailability-Response) |
+| `Subscribe` | Streaming + Push Subscription anlegen (Redis-gesichert, 30 min TTL) |
+| `Unsubscribe` | Subscription beenden, Long-Poll-Verbindung schließen |
+| `GetStreamingEvents` | Long-Poll SSE-ähnlich → Outlook Push-Benachrichtigungen via Redis Pub/Sub |
 
-### `packages/auth-service` *(Phase 3)*
-Zentraler Authentifizierungsservice — koordiniert lokale Auth, LDAP/AD-Sync und OIDC/SSO-Flows.
+**Authentifizierung im EWS-Server:**
+- **Bearer Token** (Outlook Modern Auth / OAuth2): JWT direkt validiert
+- **Basic Auth** (Outlook Legacy): Weiterleitung an auth-service, Token-Rückgabe
+- **X-AnchorMailbox / X-OpenTypeMailbox**: Shared-Mailbox-Delegation (Berechtigungsprüfung via DB)
+
+**SOAP-Implementierung:**
+- Parser: `xml2js` (tag-name Normalisierung, kein Namespace-Overhead)
+- Builder: `xmlbuilder2` (streaming, kein DOM im Speicher)
+- EWS-Namespace: `http://schemas.microsoft.com/exchange/services/2006/messages`
+
+### `packages/autodiscover`
+Autodiscover-Service für automatische Outlook-Konfiguration — kein manuelles Einrichten nötig.
+
+**Autodiscover v1** (`POST /Autodiscover/Autodiscover.xml`) — Outlook 2010–2016:
+- XML-basiert, E-Mail-Adresse aus `<EMailAddress>`-Element extrahiert
+- Antwort enthält: EWS-URL (`EXCH`), IMAP (Port 993, SSL), SMTP (Port 587, STARTTLS)
+- DisplayName aus PostgreSQL-User aufgelöst
+
+**Autodiscover v2** (`GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=…`) — Outlook 2019/365:
+- JSON-basiert, Protocol-Parameter steuert Antworttyp
+- `Protocol=EWS` → EWS-URL
+- `Protocol=AutodiscoverV1` → Redirect auf v1-Endpunkt (für alte Clients)
+- `Protocol=IMAP` → IMAP-Host + Port
+- `Protocol=SMTP` → SMTP-Host + Port
+
+```
+# Outlook fragt automatisch (ohne Benutzeraktion):
+GET https://mail.domain.de/autodiscover/autodiscover.json/v1.0/user@domain.de?Protocol=AutodiscoverV1
+→ {"Protocol":"AutodiscoverV1","Url":"https://mail.domain.de/Autodiscover/Autodiscover.xml"}
+
+GET https://mail.domain.de/autodiscover/autodiscover.json/v1.0/user@domain.de?Protocol=EWS
+→ {"Protocol":"EWS","Url":"https://mail.domain.de/EWS/Exchange.asmx"}
+```
+
+### `packages/auth-service`
+Zentraler Authentifizierungsservice (Port 3003) — koordiniert alle Anmeldemethoden.
+
+**Authentifizierungsfluss:**
+```
+POST /auth/login { email, password }
+    │
+    ├── 1. Lokale Authentifizierung (bcrypt + pepper)
+    ├── 2. LDAP/AD-Fallback (wenn konfiguriert)
+    │
+    ├── MFA aktiviert? → { mfaRequired: true, challengeToken, method }
+    └── MFA deaktiviert? → { accessToken, refreshToken, expiresIn: 900 }
+
+POST /auth/mfa/verify { challengeToken, code|backupCode|webauthnResponse }
+    → { accessToken, refreshToken, expiresIn: 900 }
+```
+
+**MFA-Methoden im Detail:**
+- **TOTP**: Setup → QR-Code (otpauth URI), Confirm (Code bestätigt → aktiviert), Verify (±30s Fenster)
+- **WebAuthn/FIDO2**: Registration (Credential in PostgreSQL als JSON), Authentication (Counter-Verifikation gegen Replay-Attacks)
+- **Backup-Codes**: 10 Codes, bcrypt-gehasht, nach Nutzung automatisch entfernt
+- **MFA-Challenge-Token**: 32 Bytes kryptografisch sicher, 10 min TTL in Redis
+
+**App-Passwörter** (für IMAP/POP3/SMTP-Clients ohne Modern Auth):
+- Format `XXXX-XXXX-XXXX-XXXX` (8 kryptografisch sichere Bytes als Hex)
+- bcrypt-gehasht in PostgreSQL, nie im Klartext gespeichert
+- Last-Used-Tracking für Audit
+
+### `packages/auth-ldap`
+LDAP/Active Directory Integration via `ldapts` (async/await, LDAPS + STARTTLS).
+
+```yaml
+# Domain-spezifische Konfiguration in PostgreSQL (LdapConfig-Tabelle)
+host: ldap.company.com
+port: 636              # LDAPS
+baseDN: "dc=company,dc=com"
+bindDN: "cn=coremail,ou=serviceaccounts,dc=company,dc=com"
+userFilter: "(sAMAccountName={{username}})"
+attributeMap:
+  email: "mail"
+  displayName: "displayName"
+```
+
+**Ablauf:** Service-Account-Bind → User-Suche per Filter → User-Bind (Passwort-Verifikation) → User automatisch in PostgreSQL anlegen/aktualisieren → CoreMail-JWT ausstellen.
+
+**LDAP-Sync:** Stündlicher Bulk-Sync aller Verzeichnis-User per Domain (manuell auslösbar über ECP).
+
+### `packages/auth-sso`
+SSO via OIDC/OAuth2 mit `openid-client` (Panva, OIDC-zertifiziert).
+
+**Authorization Code Flow:**
+```
+1. GET /auth/oidc/start?providerId=...  → Redirect zu IdP
+2. IdP-Login → Callback: GET /auth/oidc/callback?code=...&state=...
+3. Code → Token-Exchange → ID-Token-Validierung (JWKS)
+4. User anlegen/sync in PostgreSQL
+5. CoreMail JWT ausstellen
+```
+
+State + Nonce in Redis gesichert (10 min TTL), OIDC-Client pro Provider gecacht (Discovery nur einmal).
 
 ### `packages/caldav-server` *(Phase 4)*
 CalDAV (RFC 4791) + CardDAV (RFC 6352) für mobile Clients (iOS, Android, Thunderbird).
@@ -429,28 +552,58 @@ Backup- und Wiederherstellungsservice — MBOX/EML-Export, Admin-Vollbackup zu S
 
 ### EWS (Exchange Web Services)
 
-Outlook Desktop (2010–2024) und Outlook für Mac kommunizieren via EWS:
+Outlook Desktop (2010–2024) und Outlook für Mac kommunizieren via EWS — SOAP/XML über HTTPS:
 
 ```
 POST https://mail.domain.de/EWS/Exchange.asmx
 Content-Type: text/xml; charset=utf-8
-Authorization: Basic <base64>
+Authorization: Bearer <token>        (Modern Auth)
+            oder Basic <base64>      (Legacy, Outlook 2016 und älter)
 
 <?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
   <soap:Body>
     <m:FindItem Traversal="Shallow">
-      ...
+      <m:ItemShape>
+        <t:BaseShape>Default</t:BaseShape>
+      </m:ItemShape>
+      <m:IndexedPageItemView MaxReturnsPerPage="50" Offset="0" BasePoint="Beginning"/>
+      <m:ParentFolderIds>
+        <t:DistinguishedFolderId Id="inbox"/>
+      </m:ParentFolderIds>
     </m:FindItem>
   </soap:Body>
 </soap:Envelope>
 ```
 
-**Autodiscover** — Outlook erkennt den Server automatisch:
+**Shared Mailboxen** — Outlook delegiert mit zusätzlichem Header:
 ```
+POST /EWS/Exchange.asmx
+X-AnchorMailbox: support@company.com
+X-OpenTypeMailbox: support@company.com
+Authorization: Basic <user-credentials>
+```
+
+**Autodiscover** — Outlook erkennt den Server automatisch, kein manuelles Setup nötig:
+```
+# Outlook 2019/365 (Modern Auth, v2)
 GET https://mail.domain.de/autodiscover/autodiscover.json/v1.0/user@domain.de?Protocol=EWS
 → { "Protocol": "EWS", "Url": "https://mail.domain.de/EWS/Exchange.asmx" }
+
+# Outlook 2016 und älter (v1)
+POST https://mail.domain.de/Autodiscover/Autodiscover.xml
+→ <EwsUrl>https://mail.domain.de/EWS/Exchange.asmx</EwsUrl>
+   + IMAP (Port 993), SMTP (Port 587) in derselben Antwort
+```
+
+**Streaming Subscription** — Outlook hält eine Long-Poll-Verbindung für Push-Events:
+```
+Outlook → Subscribe → SubscriptionId
+Outlook → GetStreamingEvents (long-poll, bis 30 min)
+              ↑ Redis Pub/Sub sendet NewMailEvent
+              → Outlook aktualisiert Inbox sofort
 ```
 
 ---
@@ -547,59 +700,121 @@ openssl rsa -in dkim_private.pem -pubout -out dkim_public.pem
 
 ## Authentifizierung
 
-CoreMail unterstützt **drei Authentifizierungsquellen** — gleichzeitig aktivierbar mit konfigurierbarer Priorität.
+CoreMail unterstützt **drei Authentifizierungsquellen gleichzeitig** mit konfigurierbarer Priorität (Local → LDAP → SSO).
+
+### Auth-Service-Endpunkte
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/auth/login` | POST | Anmeldung (gibt accessToken oder MFA-Challenge zurück) |
+| `/auth/mfa/verify` | POST | MFA-Code/WebAuthn/Backup-Code verifizieren |
+| `/auth/refresh` | POST | Neuen Access-Token via Refresh-Token |
+| `/auth/logout` | POST | Session invalidieren |
+| `/auth/mfa/totp/setup` | POST | TOTP-Secret generieren + QR-Code |
+| `/auth/mfa/totp/confirm` | POST | TOTP mit Code bestätigen (aktivieren) |
+| `/auth/mfa/webauthn/register/start` | POST | WebAuthn-Registration starten |
+| `/auth/mfa/webauthn/register/finish` | POST | WebAuthn-Registration abschließen |
+| `/auth/mfa/backup-codes/generate` | POST | 10 neue Backup-Codes generieren |
+| `/auth/app-passwords` | GET/POST/DELETE | App-Passwörter verwalten |
+| `/auth/sessions` | GET/DELETE | Sessions anzeigen / beenden |
 
 ### Lokale Anmeldung
 
-- Passwort-Hash: bcrypt (Cost 12) + pepper
+- Passwort-Hash: **bcrypt** (Cost Factor 12) + serverseitiger **pepper** (SHA-256 vorverarbeitet)
 - Passwort-Richtlinien: Mindestlänge, Komplexität, Ablaufdatum (ECP-konfigurierbar)
 - Konto-Sperrung: nach N Fehlversuchen (Standard: 5)
+- Passwort-Reset: Token per E-Mail (TTL 1h) oder Admin-Reset über ECP
 
 ### LDAP / Active Directory
 
 ```yaml
 # ECP → Organisation → Verzeichnisdienste
 host: ldap.company.com
-port: 636            # LDAPS
+port: 636            # LDAPS (empfohlen) oder 389 + STARTTLS
 baseDN: "dc=company,dc=com"
 bindDN: "cn=coremail-bind,ou=serviceaccounts,dc=company,dc=com"
 userFilter: "(sAMAccountName={{username}})"
 attributeMap:
   email: "mail"
   displayName: "displayName"
+  uid: "objectGUID"
 ```
 
-AD-Gruppen werden automatisch auf CoreMail-Rollen gemappt (konfigurierbar im ECP).
+**Verhalten:**
+- Automatisches Anlegen/Synchronisieren des Users in PostgreSQL beim ersten LDAP-Login
+- LDAP-Gruppen → CoreMail-Rollen-Mapping (konfigurierbar im ECP)
+- Kein Passwort in PostgreSQL gespeichert (LDAP-User)
+- Stündlicher Bulk-Sync + sofortige Sync-Option im ECP
+- Unterstützt: Active Directory, OpenLDAP, FreeIPA
 
 ### SSO / OIDC
 
-Unterstützte Provider:
+Unterstützte Provider (OIDC Discovery, Plug-and-Play):
 
-| Provider | Protokoll |
-|----------|-----------|
-| Microsoft Entra ID (Azure AD) | OIDC |
-| Google Workspace | OIDC |
-| Keycloak (self-hosted) | OIDC |
-| Authentik (self-hosted) | OIDC |
-| Okta | OIDC |
-| Beliebiger SAML 2.0 IdP | SAML |
+| Provider | Protokoll | Konfiguration |
+|----------|-----------|--------------|
+| Microsoft Entra ID (Azure AD) | OIDC | Tenant-ID + Client-ID + Secret |
+| Google Workspace | OIDC | Client-ID + Client-Secret |
+| Keycloak (self-hosted) | OIDC | Realm-URL + Client-ID |
+| Authentik (self-hosted) | OIDC | Server-URL + Client-ID |
+| Okta | OIDC | Domain + Client-ID |
+| Beliebiger SAML 2.0 IdP | SAML | IdP-Metadata-URL |
+
+**OIDC-Flow:**
+```
+Benutzer klickt "Mit SSO anmelden"
+    → GET /auth/oidc/start?providerId=<id>
+    → Redirect zu IdP (state + nonce in Redis)
+    → IdP-Login
+    → Callback: GET /auth/oidc/callback?code=...&state=...
+    → JWKS-Validierung des ID-Tokens
+    → User anlegen/aktualisieren in PostgreSQL
+    → CoreMail JWT ausgeben → OWA-Session
+```
 
 ### Multi-Faktor-Authentifizierung (MFA)
 
-| Methode | Beschreibung |
-|---------|-------------|
-| **TOTP** | Google Authenticator, Microsoft Authenticator, Authy |
-| **WebAuthn / FIDO2** | YubiKey, Touch ID, Windows Hello |
-| **Backup-Codes** | 10 Einmal-Codes für Notfälle |
-| **E-Mail OTP** | Fallback-Methode (deaktivierbar) |
+| Methode | Bibliothek | Beschreibung |
+|---------|-----------|-------------|
+| **TOTP** | `otpauth` + `qrcode` | Google/Microsoft Authenticator, Authy — 6-stelliger Code, 30s |
+| **WebAuthn / FIDO2** | `@simplewebauthn/server` | YubiKey, Touch ID, Windows Hello |
+| **Backup-Codes** | `bcrypt` + crypto | 10 Einmal-Codes (Format: `XXXX-XXXX`, bcrypt-gehasht) |
+| **E-Mail OTP** | SMTP-intern | Fallback-Code per E-Mail (deaktivierbar) |
 
-### App-Passwörter für Mail-Clients
+**MFA-Durchsetzung (ECP-konfigurierbar):**
+- Optional (User wählt selbst)
+- Pflicht für Admin-Rollen (immer)
+- Pflicht für bestimmte Domains
+- Pflicht für AD-Gruppen
 
-Da Outlook und Thunderbird über IMAP/SMTP keine MFA unterstützen, bietet CoreMail **App-Passwörter** (wie Google/Microsoft):
+**MFA bei IMAP/POP3/SMTP (Outlook, Thunderbird):**
 
-1. In OWA → Einstellungen → Sicherheit → App-Passwort erstellen
-2. Einmal angezeigten Code in Outlook/Thunderbird eintragen
-3. MFA-Schutz bleibt für den Web-Zugriff aktiv
+Da Outlook keine MFA über Basic Auth unterstützt, bietet CoreMail **App-Passwörter**:
+
+```
+1. OWA → Einstellungen → Sicherheit → "Neues App-Passwort"
+   → Name eingeben (z.B. "Outlook auf MacBook")
+   → Einmalig angezeigter Code: ABCD-1234-EF56-7890
+
+2. In Outlook / Thunderbird:
+   Server: mail.domain.de
+   Benutzername: user@domain.de
+   Passwort: ABCD-1234-EF56-7890   ← App-Passwort statt Hauptpasswort
+
+3. MFA-Schutz für den Web-Zugriff bleibt vollständig aktiv
+```
+
+App-Passwörter sind bcrypt-gehasht und werden nie im Klartext gespeichert. Jedes Passwort kann einzeln widerrufen werden.
+
+### Session-Management
+
+Jede erfolgreiche Anmeldung erstellt eine Session (Refresh-Token in PostgreSQL):
+
+```
+GET  /auth/sessions         → Aktive Sessions mit IP, User-Agent, Erstellungsdatum
+DELETE /auth/sessions/{id}  → Eigene Session beenden
+DELETE /auth/sessions/admin/{userId}  → Admin: alle Sessions eines Users beenden (ECP)
+```
 
 ---
 
@@ -1003,12 +1218,12 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 
 | Phase | Inhalt | Status |
 |-------|--------|--------|
-| **Phase 1** | Monorepo, Core, Storage, Docker Compose | ✅ Abgeschlossen |
-| **Phase 2** | Security-Filter, SMTP, IMAP4rev1 | ✅ Abgeschlossen |
-| **Phase 3** | EWS, Autodiscover, Auth (LDAP/OIDC/MFA) | 🔧 In Arbeit |
-| **Phase 4** | CalDAV, REST-API, OWA (React), ECP (React) | 📅 Geplant |
-| **Phase 5** | Backup-Service, Kubernetes Helm Chart, Observability | 📅 Geplant |
-| **Phase 6** | ActiveSync, S/MIME, PowerShell-Remoting-Stub | 📅 Geplant |
+| **Phase 1** | Monorepo, Core (JWT/bcrypt/Redis), Storage (Prisma/MinIO/MIME), Docker Compose | ✅ Abgeschlossen |
+| **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | ✅ Abgeschlossen |
+| **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | ✅ Abgeschlossen |
+| **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | 🔧 In Arbeit |
+| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | 📅 Geplant |
+| **Phase 6** | ActiveSync (EAS), S/MIME, PowerShell-Remoting-Stub | 📅 Geplant |
 
 ---
 
