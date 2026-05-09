@@ -17,21 +17,25 @@
 3. [Architektur](#architektur)
 4. [Voraussetzungen](#voraussetzungen)
 5. [Schnellstart](#schnellstart)
-6. [Konfiguration](#konfiguration)
-7. [Module im Detail](#module-im-detail)
-8. [Mail-Protokolle](#mail-protokolle)
-9. [Sicherheit & Anti-Spam](#sicherheit--anti-spam)
-10. [Authentifizierung](#authentifizierung)
-11. [Weboberfläche (OWA)](#weboberfläche-owa)
-12. [Admin-Panel (ECP)](#admin-panel-ecp)
-13. [Backup & Wiederherstellung](#backup--wiederherstellung)
-14. [Cluster & Hochverfügbarkeit](#cluster--hochverfügbarkeit)
-15. [Monitoring & Logs](#monitoring--logs)
-16. [Entwicklung](#entwicklung)
-17. [Deployment (Kubernetes)](#deployment-kubernetes)
-18. [URL-Struktur](#url-struktur)
-19. [Roadmap](#roadmap)
-20. [Lizenz](#lizenz)
+6. [Docker Compose — Betrieb](#docker-compose--betrieb)
+7. [Zugriff nach dem Start](#zugriff-nach-dem-start)
+8. [TLS-Zertifikate (Produktion)](#tls-zertifikate-produktion)
+9. [Erster Admin-Account](#erster-admin-account)
+10. [Konfiguration](#konfiguration)
+11. [Module im Detail](#module-im-detail)
+12. [Mail-Protokolle](#mail-protokolle)
+13. [Sicherheit & Anti-Spam](#sicherheit--anti-spam)
+14. [Authentifizierung](#authentifizierung)
+15. [Weboberfläche (OWA)](#weboberfläche-owa)
+16. [Admin-Panel (ECP)](#admin-panel-ecp)
+17. [Backup & Wiederherstellung](#backup--wiederherstellung)
+18. [Cluster & Hochverfügbarkeit](#cluster--hochverfügbarkeit)
+19. [Monitoring & Logs](#monitoring--logs)
+20. [Entwicklung](#entwicklung)
+21. [Deployment (Kubernetes)](#deployment-kubernetes)
+22. [URL-Struktur](#url-struktur)
+23. [Roadmap](#roadmap)
+24. [Lizenz](#lizenz)
 
 ---
 
@@ -200,6 +204,9 @@ api-gateway  ──SSE──▶   web-client       (Live-Updates)
 
 ## Schnellstart
 
+> **Voraussetzung:** Docker ≥ 24 und Docker Compose ≥ 2.20 müssen installiert sein.
+> Node.js / pnpm sind für den reinen Docker-Betrieb **nicht** erforderlich.
+
 ### 1. Repository klonen
 
 ```bash
@@ -207,75 +214,237 @@ git clone https://github.com/MAGPEEK/CoreMail.git
 cd CoreMail
 ```
 
-### 2. Abhängigkeiten installieren
+### 2. Ersteinrichtung (automatisch)
+
+Das mitgelieferte Setup-Skript erstellt die `.env`-Datei und generiert
+selbstsignierte TLS-Zertifikate für die lokale Entwicklung:
 
 ```bash
-corepack enable
-pnpm install
+bash scripts/setup.sh
 ```
 
-### 3. Konfiguration erstellen
+Alternativ manuell:
 
 ```bash
 cp .env.example .env
+bash scripts/gen-dev-certs.sh   # Entwicklungs-Zertifikate (selbstsigniert)
 ```
 
-Mindest-Pflichtfelder in `.env` anpassen:
+### 3. `.env` anpassen
+
+Öffne `.env` und setze mindestens diese Werte:
 
 ```env
+# Vollständiger Hostname des Mailservers (FQDN)
 MAIL_HOSTNAME=mail.meinedomain.de
-POSTGRES_PASSWORD=sicheres-passwort-hier
-REDIS_PASSWORD=redis-passwort-hier
+
+# Datenbank
+POSTGRES_PASSWORD=sicheres-postgres-passwort
+
+# Redis
+REDIS_PASSWORD=sicheres-redis-passwort
+
+# MinIO (Objektspeicher)
 MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minio-passwort-hier
-JWT_SECRET=mindestens-32-zeichen-langer-zufaelliger-string
-PEPPER=mindestens-32-zeichen-langer-zufaelliger-string-2
+MINIO_ROOT_PASSWORD=sicheres-minio-passwort
+
+# JWT & Passwort-Hashing — mind. 64 Zeichen, zufällig
+JWT_SECRET=$(openssl rand -hex 32)
+PEPPER=$(openssl rand -hex 32)
 ```
 
-Zufällige Secrets generieren:
+Secrets direkt in der Shell generieren:
 ```bash
-openssl rand -hex 32   # für JWT_SECRET
-openssl rand -hex 32   # für PEPPER
+openssl rand -hex 32   # → JWT_SECRET
+openssl rand -hex 32   # → PEPPER
 ```
 
-### 4. Infrastruktur starten
+---
+
+## Docker Compose — Betrieb
+
+Die gesamte Anwendung läuft als Docker-Stack. Der Build-Kontext ist das
+Monorepo-Root — `docker compose up --build` kompiliert alle Services
+vollautomatisch (TypeScript → JS, React → statische Dateien).
+
+### Standard-Stack starten
+
+Enthält: PostgreSQL, Redis, MinIO, rspamd, ClamAV, GeoIP, Storage-API,
+Auth-Service, SMTP, IMAP, EWS, Autodiscover, API-Gateway, Backup-Service,
+Webmail (OWA) und Admin-Panel (ECP).
 
 ```bash
-# Nur Datenbank, Redis und MinIO (für Entwicklung)
-pnpm docker:up -- postgres redis minio
-
-# Warten bis PostgreSQL bereit ist
-docker compose -f infra/docker/docker-compose.yml exec postgres \
-  pg_isready -U coremail
+docker compose -f infra/docker/docker-compose.yml up -d --build
 ```
 
-### 5. Datenbank initialisieren
-
+Kurzform über npm-Skript (nach `pnpm install`):
 ```bash
-pnpm db:migrate
-```
-
-### 6. Alle Services starten
-
-```bash
-# Vollständiger Stack
 pnpm docker:up
-
-# Oder mit optionalen Modulen (POP3, CalDAV, Backup)
-docker compose -f infra/docker/docker-compose.yml \
-  --profile full up -d
 ```
 
-### 7. Zugriff
+### Mit optionalen Modulen (Profil `full`)
 
-| URL | Beschreibung |
-|-----|-------------|
-| `https://localhost/owa/` | Webmail (OWA) |
-| `https://localhost/ecp/` | Admin-Panel |
-| `https://localhost/EWS/Exchange.asmx` | EWS-Endpunkt |
-| `http://localhost:9001` | MinIO-Konsole |
+Aktiviert zusätzlich **POP3** (Port 110/995) und **CalDAV/CardDAV** (Port 8082):
 
-> **Hinweis:** Für Localhost-Entwicklung selbstsigniertes Zertifikat unter `infra/docker/nginx/certs/` ablegen.
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  --profile full up -d --build
+
+# oder
+pnpm docker:up:full
+```
+
+### Mit Observability (Profil `observability`)
+
+Aktiviert: Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector
+sowie postgres-, redis- und node-exporter:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  --profile observability up -d --build
+
+# oder
+pnpm docker:up:obs
+```
+
+### Vollständiger Stack (alle Profile)
+
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  --profile full --profile observability up -d --build
+
+# oder
+pnpm docker:up:all
+```
+
+### Status prüfen
+
+```bash
+docker compose -f infra/docker/docker-compose.yml ps
+
+# oder
+pnpm docker:ps
+```
+
+Alle Services sollten nach ca. 60–90 Sekunden den Status `healthy` oder
+`running` erreichen. ClamAV benötigt beim ersten Start länger (Signaturen
+werden heruntergeladen).
+
+### Logs ansehen
+
+```bash
+# Alle Services
+docker compose -f infra/docker/docker-compose.yml logs -f
+
+# Einzelner Service
+docker compose -f infra/docker/docker-compose.yml logs -f smtp-server
+
+# oder
+pnpm docker:logs
+```
+
+### Stack stoppen
+
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  --profile full --profile observability down
+
+# oder
+pnpm docker:down
+```
+
+Volumes bleiben erhalten (Daten gehen nicht verloren). Zum vollständigen
+Löschen inklusive Daten:
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  --profile full --profile observability down -v
+```
+
+### Einzelnen Service neu bauen
+
+```bash
+docker compose -f infra/docker/docker-compose.yml \
+  up -d --build smtp-server
+```
+
+---
+
+## Zugriff nach dem Start
+
+| URL / Adresse | Beschreibung |
+|---------------|-------------|
+| `https://<MAIL_HOSTNAME>/owa/` | Webmail (OWA) |
+| `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel (ECP) |
+| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | Exchange Web Services (Outlook) |
+| `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover v1 |
+| `https://<MAIL_HOSTNAME>/api/v1/` | REST API |
+| `http://localhost:9001` | MinIO Web-Konsole |
+| `http://localhost:9090` | Prometheus *(Observability-Profil)* |
+| `http://localhost:3001` | Grafana *(Observability-Profil)* |
+| `http://localhost:9093` | Alertmanager *(Observability-Profil)* |
+
+**Mail-Ports** (erreichbar über `<MAIL_HOSTNAME>`):
+
+| Port | Protokoll | Verschlüsselung |
+|------|-----------|----------------|
+| 25 | SMTP (eingehend) | STARTTLS |
+| 465 | SMTPS (Submission) | Implizites TLS |
+| 587 | SMTP Submission | STARTTLS |
+| 143 | IMAP | STARTTLS |
+| 993 | IMAPS | Implizites TLS |
+| 110 | POP3 *(Profil: full)* | STARTTLS |
+| 995 | POP3S *(Profil: full)* | Implizites TLS |
+
+> **Hinweis Zertifikate:** In der Entwicklung nutze `scripts/gen-dev-certs.sh`
+> für selbstsignierte Zertifikate. Im Browser einmalig die Warnung akzeptieren
+> oder das CA-Zertifikat dem System-Keystore hinzufügen.
+> In der Produktion echte Zertifikate (z.B. Let's Encrypt) unter
+> `infra/docker/nginx/certs/fullchain.pem` und `privkey.pem` ablegen.
+
+---
+
+## TLS-Zertifikate (Produktion)
+
+Zertifikate unter `infra/docker/nginx/certs/` ablegen:
+
+```
+infra/docker/nginx/certs/
+├── fullchain.pem   ← Zertifikat + Zwischenzertifikate (z.B. Let's Encrypt)
+└── privkey.pem     ← Privater Schlüssel
+```
+
+Mit **Certbot** (Let's Encrypt):
+
+```bash
+certbot certonly --standalone -d mail.meinedomain.de
+
+# Zertifikate kopieren
+cp /etc/letsencrypt/live/mail.meinedomain.de/fullchain.pem \
+   infra/docker/nginx/certs/fullchain.pem
+cp /etc/letsencrypt/live/mail.meinedomain.de/privkey.pem \
+   infra/docker/nginx/certs/privkey.pem
+```
+
+Für automatische Erneuerung einen Cron-Job mit `certbot renew` und
+anschließendem `docker compose restart nginx` einrichten.
+
+---
+
+## Erster Admin-Account
+
+Nach dem ersten Start einen Admin-Benutzer über die API anlegen:
+
+```bash
+curl -s -X POST https://<MAIL_HOSTNAME>/api/v1/admin/setup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@meinedomain.de",
+    "password": "sicheres-passwort",
+    "displayName": "Administrator"
+  }'
+```
+
+Danach unter `https://<MAIL_HOSTNAME>/ecp/` mit den Zugangsdaten anmelden.
 
 ---
 
