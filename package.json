@@ -17,9 +17,15 @@
     "db:generate": "pnpm --filter @coremail/storage prisma generate",
     "db:migrate": "pnpm --filter @coremail/storage prisma migrate dev",
     "db:push": "pnpm --filter @coremail/storage prisma db push",
+    "docker:build": "docker compose -f infra/docker/docker-compose.yml build",
     "docker:up": "docker compose -f infra/docker/docker-compose.yml up -d",
-    "docker:down": "docker compose -f infra/docker/docker-compose.yml down",
-    "docker:logs": "docker compose -f infra/docker/docker-compose.yml logs -f"
+    "docker:up:full": "docker compose -f infra/docker/docker-compose.yml --profile full up -d",
+    "docker:up:obs": "docker compose -f infra/docker/docker-compose.yml --profile observability up -d",
+    "docker:up:all": "docker compose -f infra/docker/docker-compose.yml --profile full --profile observability up -d",
+    "docker:down": "docker compose -f infra/docker/docker-compose.yml --profile full --profile observability down",
+    "docker:logs": "docker compose -f infra/docker/docker-compose.yml logs -f",
+    "docker:ps": "docker compose -f infra/docker/docker-compose.yml ps",
+    "setup": "bash scripts/setup.sh"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",

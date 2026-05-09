@@ -17,8 +17,14 @@ Thumbs.db
 .idea/
 .vscode/settings.json
 
-# Docker
-infra/nginx/certs/
+# Docker — Zertifikate nie ins Repo
+infra/docker/nginx/certs/*.pem
+infra/docker/nginx/certs/*.key
+infra/docker/nginx/certs/*.crt
 
 # Prisma
 packages/storage/prisma/migrations/*.sql
+
+# Logs
+*.log
+logs/
