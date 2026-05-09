@@ -66,29 +66,29 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | POP3 (Port 110, 995) | ✅ Implementiert |
 | EWS — Exchange Web Services (Outlook Desktop) | ✅ Implementiert |
 | Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
-| OWA — Outlook Web Access (Webmail) | 🔧 Phase 4 |
-| Freigegebene Postfächer (Shared Mailboxen) | 🔧 Phase 4 |
-| Öffentliche Ordner | 🔧 Phase 4 |
-| Verteilergruppen & dynamische Gruppen | 🔧 Phase 4 |
-| Raum- und Gerätepostfächer | 🔧 Phase 4 |
-| Abwesenheitsassistent (Out of Office) | 🔧 Phase 4 |
-| Posteingangsregeln (Transport Rules) | 🔧 Phase 4 |
-| Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | 🔧 Phase 4 |
+| OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
+| Freigegebene Postfächer (Shared Mailboxen) | ✅ Implementiert |
+| Öffentliche Ordner | 🔧 Phase 5 |
+| Verteilergruppen & dynamische Gruppen | 🔧 Phase 5 |
+| Raum- und Gerätepostfächer | 🔧 Phase 5 |
+| Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
+| Posteingangsregeln (Transport Rules) | ✅ Implementiert |
+| Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
 
 ### Kalender & Zusammenarbeit
 
 | Feature | Status |
 |---------|--------|
-| Persönlicher Kalender | 🔧 Phase 4 |
-| Geteilte Teamkalender | 🔧 Phase 4 |
-| Besprechungsanfragen (iCal-Standard) | 🔧 Phase 4 |
-| Frei/Gebucht-Abfrage (GetUserAvailability) | 🔧 Phase 4 |
-| Raum- und Ressourcenbuchung | 🔧 Phase 4 |
-| CalDAV (iOS, Android, Thunderbird) | 🔧 Phase 4 |
-| Kontakte (CardDAV) | 🔧 Phase 4 |
-| Aufgaben / To-Do (EWS-sync) | 🔧 Phase 4 |
-| Notizen | 🔧 Phase 4 |
-| Globale Adressliste (GAL) | 🔧 Phase 4 |
+| Persönlicher Kalender | ✅ Implementiert |
+| Geteilte Teamkalender | ✅ Implementiert |
+| Besprechungsanfragen (iCal-Standard) | ✅ Implementiert |
+| Frei/Gebucht-Abfrage (GetUserAvailability) | ✅ Implementiert |
+| Raum- und Ressourcenbuchung | 🔧 Phase 5 |
+| CalDAV (iOS, Android, Thunderbird) | ✅ Implementiert |
+| Kontakte (CardDAV) | ✅ Implementiert |
+| Aufgaben / To-Do (EWS-sync) | ✅ Implementiert |
+| Notizen | ✅ Implementiert |
+| Globale Adressliste (GAL) | ✅ Implementiert |
 
 ### Sicherheit
 
@@ -124,11 +124,11 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 
 | Feature | Status |
 |---------|--------|
-| ECP Admin-Panel (Exchange Control Panel) | 🔧 Phase 4 |
-| RBAC (7 Rollen, Exchange-kompatibel) | 🔧 Phase 4 |
-| SMTP Queue-Monitor (live) | 🔧 Phase 4 |
-| Service-Konfiguration (live, kein Neustart) | 🔧 Phase 4 |
-| Log-Viewer mit Log-Level pro Service | 🔧 Phase 4 |
+| ECP Admin-Panel (Exchange Control Panel) | ✅ Implementiert |
+| RBAC (7 Rollen, Exchange-kompatibel) | ✅ Implementiert |
+| SMTP Queue-Monitor (live) | ✅ Implementiert |
+| Service-Konfiguration (live, kein Neustart) | ✅ Implementiert |
+| Log-Viewer mit Log-Level pro Service | ✅ Implementiert |
 | Backup: User-MBOX/EML-Export (Self-Service) | 🔧 Phase 5 |
 | Backup: Admin-Vollbackup zu S3 (PITR) | 🔧 Phase 5 |
 | Kubernetes Helm Chart (HPA, HA) | 🔧 Phase 5 |
@@ -1221,7 +1221,7 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 1** | Monorepo, Core (JWT/bcrypt/Redis), Storage (Prisma/MinIO/MIME), Docker Compose | ✅ Abgeschlossen |
 | **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | ✅ Abgeschlossen |
 | **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | ✅ Abgeschlossen |
-| **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | 🔧 In Arbeit |
+| **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | ✅ Abgeschlossen |
 | **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | 📅 Geplant |
 | **Phase 6** | ActiveSync (EAS), S/MIME, PowerShell-Remoting-Stub | 📅 Geplant |
 
