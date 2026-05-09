@@ -9,6 +9,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.6.0] — 2026-05-09 — Phase 5: Backup + Observability + Kubernetes
+
+### Added
+- **packages/backup-service** — Self-service and admin backup/restore on port 3004
+  - MBOX export (RFC 4155) with page-based streaming and backpressure handling
+  - EML-ZIP export — individual `.eml` files + `.vcf` contacts + `.ics` calendar events
+  - S3-compatible upload via `@aws-sdk/lib-storage` (MinIO multipart, 10 MB parts)
+  - Presigned download URLs (1 h TTL) via `@aws-sdk/s3-request-presigner`
+  - Scheduled full-server backup (daily 02:00 UTC via `cron` CronJob)
+  - Retention policy (configurable, default 30 days) applied after each scheduled run
+  - Soft-delete restore: users can recover messages deleted within the last 30 days
+  - MBOX import via streaming `readline` interface (no full-file buffering)
+  - Admin endpoints: trigger immediate backup, list jobs, download signed URLs
+  - User self-service endpoints: request backup, track status, download, list restorables
+- **packages/core — OpenTelemetry instrumentation**
+  - `initMetrics()` — PrometheusExporter on port 9464, MeterProvider with service labels
+  - `createMailMetrics()` — counters/histograms for messages, auth, HTTP, queue depth, storage
+  - `metricsMiddleware()` — Express middleware recording method/path/status/duration
+  - `initTracing()` — NodeSDK + OTLPTraceExporter → otel-collector, SIGTERM shutdown hook
+  - `withSpan()` — typed helper wrapping async functions with active spans and error recording
+- **infra/observability** — Full observability stack (docker-compose `observability` profile)
+  - **Prometheus** — scrapes all 9 CoreMail services + postgres-exporter + redis-exporter + node-exporter
+  - **Alertmanager** — 8 alert rules (dead-letter queue, high spam rate, virus found, brute-force, quota exceeded, service down, HTTP errors, slow responses), email routing
+  - **OTEL Collector** — OTLP gRPC+HTTP receivers, fan-out to Tempo + Prometheus remote write + Loki
+  - **Grafana** — pre-provisioned Prometheus, Tempo, Loki datasources; `coremail-overview` dashboard (8 panels)
+  - **Tempo** — distributed tracing backend, OTLP receiver, 7-day retention, local storage
+  - **Loki** — log aggregation, filesystem storage, v13 schema, 7-day retention
+  - **postgres-exporter**, **redis-exporter**, **node-exporter** — infrastructure metrics
+- **infra/k8s** — Kubernetes Helm chart (`helm install coremail ./infra/k8s`)
+  - `Chart.yaml` — chart metadata, Bitnami Redis subchart dependency
+  - `values.yaml` — fully documented defaults for all services, HPA, resources, CNPG, MinIO, Ingress
+  - `templates/_helpers.tpl` — shared helpers (image ref, secret name, env helpers)
+  - `templates/secret.yaml` — chart-managed Secret (skipped if `existingSecret` set)
+  - `templates/configmap.yaml` — shared env ConfigMap for all pods
+  - `templates/cnpg-cluster.yaml` — CloudNativePG `Cluster` resource (3 instances, 2 read replicas, optional WAL backup)
+  - `templates/minio.yaml` — MinIO distributed StatefulSet (4 nodes, erasure coding)
+  - `templates/deployments.yaml` — Deployment + Service + HPA + PodDisruptionBudget for all 12 services
+  - `templates/ingress.yaml` — nginx Ingress with cert-manager TLS, Exchange-compatible paths
+  - `templates/NOTES.txt` — post-install instructions
+
+### Changed
+- `infra/docker/docker-compose.yml` — backup-service promoted to always-on; 9 observability services added under `observability` profile; new volumes for all observability data
+
+---
+
 ## [0.5.0] — 2026-05-09 — Phase 4: CalDAV + API-Gateway + Frontend
 
 ### Added

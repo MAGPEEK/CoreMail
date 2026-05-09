@@ -9,7 +9,9 @@
     "./redis": "./dist/redis/index.js",
     "./types": "./dist/types/index.js",
     "./config": "./dist/config/index.js",
-    "./logger": "./dist/logger/index.js"
+    "./logger": "./dist/logger/index.js",
+    "./metrics": "./dist/metrics/index.js",
+    "./tracing": "./dist/tracing/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -17,6 +19,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-prometheus": "^0.53.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.53.0",
+    "@opentelemetry/resources": "^1.26.0",
+    "@opentelemetry/sdk-metrics": "^1.26.0",
+    "@opentelemetry/sdk-node": "^0.53.0",
+    "@opentelemetry/sdk-trace-base": "^1.26.0",
+    "@opentelemetry/semantic-conventions": "^1.27.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "pino": "^9.4.0",

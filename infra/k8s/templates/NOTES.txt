@@ -1,0 +1,21 @@
+CoreMail {{ .Chart.AppVersion }} deployed successfully!
+
+Domain: https://{{ .Values.global.domain }}
+
+  Webmail (OWA):       https://{{ .Values.global.domain }}/owa/
+  Admin panel (ECP):   https://{{ .Values.global.domain }}/ecp/
+  EWS (Outlook):       https://{{ .Values.global.domain }}/EWS/Exchange.asmx
+  REST API:            https://{{ .Values.global.domain }}/api/v1/
+
+Prerequisites (must be installed separately):
+  - CloudNativePG operator:  kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.22/releases/cnpg-1.22.0.yaml
+  - cert-manager:            helm install cert-manager jetstack/cert-manager --set installCRDs=true
+
+Check pod status:
+  kubectl get pods -n {{ .Release.Namespace }}
+
+Watch SMTP/IMAP LoadBalancer IPs:
+  kubectl get svc -n {{ .Release.Namespace }} -w
+
+View logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f --max-log-requests=20

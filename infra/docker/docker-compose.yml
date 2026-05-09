@@ -414,6 +414,176 @@ services:
       - admin-panel
     networks: [coremail]
 
+  backup-service:
+    build:
+      context: ../..
+      dockerfile: packages/backup-service/Dockerfile
+    container_name: coremail-backup
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      BACKUP_BUCKET: coremail-backups
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      JWT_SECRET: ${JWT_SECRET}
+      BACKUP_PORT: "3004"
+      NODE_ENV: ${NODE_ENV:-production}
+    expose:
+      - "3004"
+      - "9464"   # Prometheus metrics
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3004/healthz"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    networks: [coremail]
+
+  # ─────────────────────────────────────────────
+  # Observability Stack (profile: observability)
+  # ─────────────────────────────────────────────
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: coremail-otel
+    restart: unless-stopped
+    profiles: [observability]
+    command: ["--config=/etc/otel/otel-collector.yml"]
+    volumes:
+      - ../observability/otel-collector/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks: [coremail]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: coremail-prometheus
+    restart: unless-stopped
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [coremail]
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: coremail-alertmanager
+    restart: unless-stopped
+    profiles: [observability]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks: [coremail]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: coremail-grafana
+    restart: unless-stopped
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: https://${MAIL_HOSTNAME:-localhost}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks: [coremail]
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: coremail-tempo
+    restart: unless-stopped
+    profiles: [observability]
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ../observability/tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/tmp/tempo
+    expose:
+      - "3200"   # HTTP
+      - "4317"   # OTLP gRPC (internal)
+    networks: [coremail]
+
+  loki:
+    image: grafana/loki:latest
+    container_name: coremail-loki
+    restart: unless-stopped
+    profiles: [observability]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ../observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/tmp/loki
+    expose:
+      - "3100"
+    networks: [coremail]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: coremail-pg-exporter
+    restart: unless-stopped
+    profiles: [observability]
+    environment:
+      DATA_SOURCE_NAME: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail?sslmode=disable
+    expose:
+      - "9187"
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [coremail]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: coremail-redis-exporter
+    restart: unless-stopped
+    profiles: [observability]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    expose:
+      - "9121"
+    networks: [coremail]
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: coremail-node-exporter
+    restart: unless-stopped
+    profiles: [observability]
+    command:
+      - --path.rootfs=/host
+    volumes:
+      - /:/host:ro,rslave
+    expose:
+      - "9100"
+    networks: [coremail]
+
 # ─────────────────────────────────────────────
 # Volumes
 # ─────────────────────────────────────────────
@@ -425,6 +595,11 @@ volumes:
   rspamd-data:
   clamav-db:
   geoip-data:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  tempo-data:
+  loki-data:
 
 # ─────────────────────────────────────────────
 # Networks

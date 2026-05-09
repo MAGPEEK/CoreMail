@@ -1,0 +1,88 @@
+{
+  "title": "CoreMail — System Overview",
+  "uid": "coremail-overview",
+  "schemaVersion": 38,
+  "tags": ["coremail"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Messages Processed / min",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "rate(coremail_messages_processed_total[5m]) * 60",
+        "legendFormat": "msg/min"
+      }],
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 100, "color": "yellow" }, { "value": 500, "color": "red" }] } } }
+    },
+    {
+      "id": 2,
+      "title": "Messages Rejected / min",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "rate(coremail_messages_rejected_total[5m]) * 60",
+        "legendFormat": "rejected/min"
+      }],
+      "options": { "colorMode": "background" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 10, "color": "red" }] } } }
+    },
+    {
+      "id": 3,
+      "title": "Active Connections",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "datasource": "Prometheus", "expr": "sum(coremail_active_connections)", "legendFormat": "connections" }]
+    },
+    {
+      "id": 4,
+      "title": "Auth Failures / min",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "datasource": "Prometheus", "expr": "rate(coremail_auth_failures_total[5m]) * 60", "legendFormat": "failures/min" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 5, "color": "red" }] } } }
+    },
+    {
+      "id": 5,
+      "title": "Services Up",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "datasource": "Prometheus", "expr": "count(up == 1)", "legendFormat": "up" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "red" }, { "value": 9, "color": "green" }] } } }
+    },
+    {
+      "id": 6,
+      "title": "Mail Flow (in/out/spam)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 16, "h": 8 },
+      "targets": [
+        { "datasource": "Prometheus", "expr": "rate(coremail_messages_processed_total[5m]) * 60", "legendFormat": "Inbound" },
+        { "datasource": "Prometheus", "expr": "rate(coremail_messages_rejected_total[5m]) * 60", "legendFormat": "Rejected" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "HTTP P95 Latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 16, "h": 8 },
+      "targets": [{
+        "datasource": "Prometheus",
+        "expr": "histogram_quantile(0.95, sum by (le, service) (rate(coremail_http_request_duration_ms_bucket[5m])))",
+        "legendFormat": "{{service}} P95"
+      }]
+    },
+    {
+      "id": 8,
+      "title": "Queue Depth",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 4, "w": 8, "h": 8 },
+      "targets": [{ "datasource": "Prometheus", "expr": "coremail_queue_depth", "legendFormat": "{{queue}}" }]
+    }
+  ]
+}

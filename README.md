@@ -68,9 +68,9 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
 | OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
 | Freigegebene Postfächer (Shared Mailboxen) | ✅ Implementiert |
-| Öffentliche Ordner | 🔧 Phase 5 |
-| Verteilergruppen & dynamische Gruppen | 🔧 Phase 5 |
-| Raum- und Gerätepostfächer | 🔧 Phase 5 |
+| Öffentliche Ordner | 🔧 Phase 6 |
+| Verteilergruppen & dynamische Gruppen | 🔧 Phase 6 |
+| Raum- und Gerätepostfächer | 🔧 Phase 6 |
 | Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
 | Posteingangsregeln (Transport Rules) | ✅ Implementiert |
 | Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
@@ -83,7 +83,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Geteilte Teamkalender | ✅ Implementiert |
 | Besprechungsanfragen (iCal-Standard) | ✅ Implementiert |
 | Frei/Gebucht-Abfrage (GetUserAvailability) | ✅ Implementiert |
-| Raum- und Ressourcenbuchung | 🔧 Phase 5 |
+| Raum- und Ressourcenbuchung | 🔧 Phase 6 |
 | CalDAV (iOS, Android, Thunderbird) | ✅ Implementiert |
 | Kontakte (CardDAV) | ✅ Implementiert |
 | Aufgaben / To-Do (EWS-sync) | ✅ Implementiert |
@@ -129,9 +129,10 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | SMTP Queue-Monitor (live) | ✅ Implementiert |
 | Service-Konfiguration (live, kein Neustart) | ✅ Implementiert |
 | Log-Viewer mit Log-Level pro Service | ✅ Implementiert |
-| Backup: User-MBOX/EML-Export (Self-Service) | 🔧 Phase 5 |
-| Backup: Admin-Vollbackup zu S3 (PITR) | 🔧 Phase 5 |
-| Kubernetes Helm Chart (HPA, HA) | 🔧 Phase 5 |
+| Backup: User-MBOX/EML-Export (Self-Service) | ✅ Implementiert |
+| Backup: Admin-Vollbackup zu S3 (PITR) | ✅ Implementiert |
+| Kubernetes Helm Chart (HPA, HA) | ✅ Implementiert |
+| OpenTelemetry + Prometheus + Grafana + Loki + Tempo | ✅ Implementiert |
 
 ---
 
@@ -1222,7 +1223,7 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | ✅ Abgeschlossen |
 | **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | ✅ Abgeschlossen |
 | **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | ✅ Abgeschlossen |
-| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | 📅 Geplant |
+| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | ✅ Abgeschlossen |
 | **Phase 6** | ActiveSync (EAS), S/MIME, PowerShell-Remoting-Stub | 📅 Geplant |
 
 ---

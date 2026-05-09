@@ -1,0 +1,74 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: coremail
+    environment: production
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  # ─── CoreMail Services ───────────────────────────────────────────────────
+  - job_name: smtp-server
+    static_configs:
+      - targets: [smtp-server:9464]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: smtp-server
+
+  - job_name: imap-server
+    static_configs:
+      - targets: [imap-server:9464]
+
+  - job_name: pop3-server
+    static_configs:
+      - targets: [pop3-server:9464]
+
+  - job_name: ews-server
+    static_configs:
+      - targets: [ews-server:9464]
+
+  - job_name: api-gateway
+    static_configs:
+      - targets: [api-gateway:9464]
+
+  - job_name: auth-service
+    static_configs:
+      - targets: [auth-service:9464]
+
+  - job_name: caldav-server
+    static_configs:
+      - targets: [caldav-server:9464]
+
+  - job_name: backup-service
+    static_configs:
+      - targets: [backup-service:9464]
+
+  - job_name: security-filter
+    static_configs:
+      - targets: [security-filter:9464]
+
+  # ─── Infrastructure ──────────────────────────────────────────────────────
+  - job_name: postgres
+    static_configs:
+      - targets: [postgres-exporter:9187]
+
+  - job_name: redis
+    static_configs:
+      - targets: [redis-exporter:9121]
+
+  - job_name: node-exporter
+    static_configs:
+      - targets: [node-exporter:9100]
+
+  # ─── Self-monitoring ─────────────────────────────────────────────────────
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
