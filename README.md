@@ -38,7 +38,7 @@
 24. [Roadmap](#roadmap)
 25. [Lizenz](#lizenz)
 
-> **Aktuelle Version: v0.7.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
+> **Aktuelle Version: v0.8.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
 
 ---
 
@@ -73,15 +73,16 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | POP3 (Port 110, 995) | ✅ Implementiert |
 | EWS — Exchange Web Services (Outlook Desktop) | ✅ Implementiert |
 | Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
-| **ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile)** | ✅ **Neu in v0.7.0** |
+| **ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile)** | ✅ Implementiert |
 | OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
 | Freigegebene Postfächer (Shared Mailboxen) | ✅ Implementiert |
-| Öffentliche Ordner | 🔧 Geplant |
-| Verteilergruppen & dynamische Gruppen | 🔧 Geplant |
-| Raum- und Gerätepostfächer | 🔧 Geplant |
+| **Öffentliche Ordner (Public Folders)** | ✅ **Neu in v0.8.0** |
+| **Verteilergruppen & dynamische Gruppen** | ✅ **Neu in v0.8.0** |
+| **Raum- und Gerätepostfächer (auto-accept)** | ✅ **Neu in v0.8.0** |
 | Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
 | Posteingangsregeln (Transport Rules) | ✅ Implementiert |
 | Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
+| **PowerShell-Remoting (EMS Stub)** | ✅ **Neu in v0.8.0** |
 
 ### Kalender & Zusammenarbeit
 
@@ -91,7 +92,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Geteilte Teamkalender | ✅ Implementiert |
 | Besprechungsanfragen (iCal-Standard) | ✅ Implementiert |
 | Frei/Gebucht-Abfrage (GetUserAvailability) | ✅ Implementiert |
-| Raum- und Ressourcenbuchung | 🔧 Geplant |
+| **Raum- und Ressourcenbuchung (auto-accept)** | ✅ **Neu in v0.8.0** |
 | CalDAV (iOS, Android, Thunderbird) | ✅ Implementiert |
 | Kontakte (CardDAV) | ✅ Implementiert |
 | Aufgaben / To-Do (EWS-sync) | ✅ Implementiert |
@@ -464,20 +465,20 @@ Alle fertigen Images sind auf Docker Hub verfügbar und können ohne lokalen Bui
 
 | Image | Tag | Beschreibung |
 |-------|-----|-------------|
-| `magpeek/coremail-storage-api` | `0.7.0` / `latest` | Interner Storage-API-Service |
-| `magpeek/coremail-auth-service` | `0.7.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
-| `magpeek/coremail-security-filter` | `0.7.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
-| `magpeek/coremail-smtp-server` | `0.7.0` / `latest` | SMTP Inbound + Outbound (25/465/587) |
-| `magpeek/coremail-imap-server` | `0.7.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
-| `magpeek/coremail-pop3-server` | `0.7.0` / `latest` | POP3 (110/995) |
-| `magpeek/coremail-ews-server` | `0.7.0` / `latest` | Exchange Web Services / Outlook-Support |
-| `magpeek/coremail-autodiscover` | `0.7.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
-| `magpeek/coremail-caldav-server` | `0.7.0` / `latest` | CalDAV + CardDAV |
-| `magpeek/coremail-api-gateway` | `0.7.0` / `latest` | REST API + SSE + S/MIME API |
-| `magpeek/coremail-backup-service` | `0.7.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
-| **`magpeek/coremail-activesync`** | **`0.7.0` / `latest`** | **ActiveSync EAS 14.1 — neu in v0.7.0** |
-| `magpeek/coremail-web-client` | `0.7.0` / `latest` | Webmail OWA (React) |
-| `magpeek/coremail-admin-panel` | `0.7.0` / `latest` | Admin-Panel ECP (React) |
+| `magpeek/coremail-storage-api` | `0.8.0` / `latest` | Interner Storage-API-Service |
+| `magpeek/coremail-auth-service` | `0.8.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
+| `magpeek/coremail-security-filter` | `0.8.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
+| `magpeek/coremail-smtp-server` | `0.8.0` / `latest` | SMTP Inbound + Outbound + Gruppenexpansion |
+| `magpeek/coremail-imap-server` | `0.8.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
+| `magpeek/coremail-pop3-server` | `0.8.0` / `latest` | POP3 (110/995) |
+| `magpeek/coremail-ews-server` | `0.8.0` / `latest` | Exchange Web Services / Outlook-Support |
+| `magpeek/coremail-autodiscover` | `0.8.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
+| `magpeek/coremail-caldav-server` | `0.8.0` / `latest` | CalDAV + CardDAV |
+| `magpeek/coremail-api-gateway` | `0.8.0` / `latest` | REST API + SSE + S/MIME + PS-Stub |
+| `magpeek/coremail-backup-service` | `0.8.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
+| `magpeek/coremail-activesync` | `0.8.0` / `latest` | ActiveSync EAS 14.1 |
+| `magpeek/coremail-web-client` | `0.8.0` / `latest` | Webmail OWA (React) |
+| `magpeek/coremail-admin-panel` | `0.8.0` / `latest` | Admin-Panel ECP (React) |
 
 ### Produktion mit Docker-Hub-Images starten
 
@@ -485,13 +486,13 @@ Kein lokaler Build nötig — Images werden direkt von Docker Hub gezogen:
 
 ```bash
 # Neueste stabile Version (empfohlen)
-COREMAIL_VERSION=0.7.0 docker compose \
+COREMAIL_VERSION=0.8.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   up -d
 
 # Oder mit optionalen Modulen (inkl. POP3, CalDAV, ActiveSync)
-COREMAIL_VERSION=0.7.0 docker compose \
+COREMAIL_VERSION=0.8.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   --profile full --profile observability \
@@ -502,8 +503,8 @@ COREMAIL_VERSION=0.7.0 docker compose \
 
 | Tag | Bedeutung |
 |-----|-----------|
-| `0.7.0` | Exakte Version (aktuell) |
-| `0.7` | Neueste Patch-Version von 0.7.x |
+| `0.8.0` | Exakte Version (aktuell) |
+| `0.8` | Neueste Patch-Version von 0.8.x |
 | `0` | Neueste Minor-Version von 0.x.x |
 | `latest` | Neuestes stabiles Release |
 | `edge` | Aktueller Stand des `main`-Branches |
@@ -515,7 +516,7 @@ Der GitHub Actions Workflow (`.github/workflows/docker-publish.yml`) baut und
 pusht alle Images automatisch:
 
 - **Bei Push auf `main`** → Tag `edge` + `sha-<hash>`
-- **Bei Git-Tag `v0.7.0`** → Tags `0.7.0`, `0.7`, `0`, `latest`
+- **Bei Git-Tag `v0.8.0`** → Tags `0.8.0`, `0.8`, `0`, `latest`
 - **Bei Pull Request** → nur Build, kein Push
 
 **Multi-Arch:** Alle Images werden für `linux/amd64` und `linux/arm64` gebaut.
@@ -542,10 +543,10 @@ Ein Access Token erstellt man unter:
 bash scripts/docker-push.sh
 
 # Explizite Version
-bash scripts/docker-push.sh 0.7.0
+bash scripts/docker-push.sh 0.8.0
 
 # Nur bauen, nicht pushen (lokaler Test)
-bash scripts/docker-push.sh 0.7.0 --no-push
+bash scripts/docker-push.sh 0.8.0 --no-push
 ```
 
 ---
@@ -639,7 +640,7 @@ Gemeinsame Bibliothek — wird von allen anderen Modulen als Dependency eingebun
 ### `packages/storage`
 Datenhaltungsschicht — ebenfalls als Bibliothek, nicht als eigener HTTP-Service. Alle Services, die PostgreSQL oder MinIO benötigen, importieren diese Bibliothek.
 
-- **Prisma-Schema**: 22 Entitäten — User, Domain, Mailbox, Folder, Message, Attachment, SharedMailbox, Calendar, CalendarEvent, Contact, Task, Note, BackupJob, SystemLog, Quarantine, Blacklist, Session, UserMfa, AppPassword, LdapConfig, OidcProvider, SharedMailboxPerm
+- **Prisma-Schema**: 31 Entitäten — User, Domain, Mailbox, Folder, Message, Attachment, SharedMailbox, Calendar, CalendarEvent, Contact, Task, Note, BackupJob, SystemLog, Quarantine, Blacklist, Session, UserMfa, AppPassword, LdapConfig, OidcProvider, SharedMailboxPerm, ActiveSyncDevice, UserCertificate, DistributionGroup, DistributionGroupMember, ResourceMailbox, ResourceCalendar, ResourceBooking, PublicFolder, PublicFolderMessage
 - **MinIO-Client**: Upload/Download/Delete, Key-Factories (attachments/, raw/, quarantine/, backups/)
 - **MIME-Parser**: parst RFC 2822-Mails via `mailparser`, extrahiert Anhänge mit SHA-256-Hash für Deduplizierung
 
@@ -654,6 +655,8 @@ SMTP Inbound (Port 25) und Outbound-Queue.
 - **Inbound**: `smtp-server` npm-Paket, prüft Empfänger in PostgreSQL, ruft Security-Filter auf, speichert in PostgreSQL/MinIO, pusht via Redis für IMAP-IDLE
 - **Outbound**: BullMQ-Queue in Redis, 10 Retries mit exponentiellem Backoff (60s Basis), MX-Lookup, nodemailer-Relay, DKIM-Signierung
 - **Quarantäne**: Viren/Policy-Verstöße → MinIO-Upload + DB-Eintrag + Admin-Event
+- **Verteilergruppen-Expansion** *(Phase 7)*: Eingehende E-Mails an Gruppenadresse werden rekursiv zu allen Mitgliedern expandiert (Loop-Schutz via `visited`-Set, Deduplizierung)
+- **Ressourcen-Auto-Accept** *(Phase 7)*: iCal-VEVENT aus Anhängen wird geparst → Buchung automatisch als ACCEPTED/DECLINED/PENDING gespeichert
 
 ### `packages/imap-server`
 IMAP4rev1-Server (Port 143 / 993).
@@ -866,6 +869,88 @@ REST-Endpunkte unter `/api/v1/smime/` für die S/MIME-Zertifikat-Verwaltung im a
 - Gültigkeitszeitraum (notBefore / notAfter)
 - Binäre PKCS#12-Datei in MinIO (verschlüsselt)
 - `signingDefault` + `encryptDefault` Flags
+
+### Verteilergruppen *(Phase 7 — neu in v0.8.0)*
+
+Statische und dynamische Verteilergruppen für SMTP-Expansion und GAL:
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/admin/groups` | GET | Alle Gruppen (inkl. Mitgliederanzahl) |
+| `/api/v1/admin/groups` | POST | Neue Gruppe erstellen |
+| `/api/v1/admin/groups/:id` | PUT | Gruppe bearbeiten |
+| `/api/v1/admin/groups/:id` | DELETE | Gruppe löschen |
+| `/api/v1/admin/groups/:id/members` | GET/POST | Mitglieder verwalten |
+| `/api/v1/admin/groups/:id/members/:email` | DELETE | Mitglied entfernen |
+| `/api/v1/admin/groups/gal/list` | GET | Sichtbare Gruppen für Adress-Autovervollständigung |
+
+**Gruppentypen:**
+- `STATIC` — manuell gepflegte Mitgliederliste
+- `DYNAMIC` — LDAP-Filter-basiert (automatisch aktualisiert)
+
+**Mitgliedertypen:** `USER`, `SHARED_MAILBOX`, `GROUP` (verschachtelt), `EXTERNAL`
+
+**Konfigurierbar:** externe Absender erlauben/sperren, Moderierung (mit Moderatoren), GAL-Sichtbarkeit
+
+### Raum- und Ressourcenpostfächer *(Phase 7 — neu in v0.8.0)*
+
+Conference-Rooms und Equipment-Postfächer mit automatischer Buchungsverarbeitung:
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/admin/resources` | GET/POST | Ressourcen verwalten |
+| `/api/v1/admin/resources/:id` | PUT/DELETE | Ressource bearbeiten/löschen |
+| `/api/v1/admin/resources/:id/bookings` | GET | Buchungen anzeigen |
+| `/api/v1/admin/resources/:id/bookings/:id` | DELETE | Buchung stornieren |
+| `/api/v1/admin/resources/freebusy/query` | GET | Free/Busy-Abfrage für Outlook |
+
+**Auto-Accept-Logik:**
+```
+Eingehende E-Mail an raum@domain.de
+  → VEVENT in iCal-Anhang erkannt
+  → Konflikte prüfen (autoDeclineConflict=true)
+  → Buchung als ACCEPTED / DECLINED / PENDING speichern
+  → Status in ResourceBooking-Tabelle
+```
+
+**Buchungsregeln** (ECP-konfigurierbar): maximale Dauer, Buchungsvorlauf in Tagen, Genehmigungspflicht mit Delegierten, wiederkehrende Termine erlauben/sperren.
+
+### Öffentliche Ordner *(Phase 7 — neu in v0.8.0)*
+
+Hierarchische Ordnerstruktur für organisationsweite Inhalte:
+
+**Admin-API:**
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/admin/public-folders` | GET | Vollständigen Baum abrufen |
+| `/api/v1/admin/public-folders` | POST | Neuen Ordner erstellen |
+| `/api/v1/admin/public-folders/:id` | PUT/DELETE | Bearbeiten/Löschen (kaskadierend) |
+| `/api/v1/admin/public-folders/:id/acl` | GET/POST | ACL verwalten |
+| `/api/v1/admin/public-folders/:id/acl/:userId` | DELETE | ACL-Eintrag entfernen |
+
+**User-API:**
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/public-folders` | GET | Zugängliche Ordner anzeigen |
+| `/api/v1/public-folders/:id` | GET | Ordner-Detail |
+| `/api/v1/public-folders/:id/messages` | GET | Beiträge lesen |
+| `/api/v1/public-folders/:id/messages` | POST | Beitrag verfassen |
+
+**ACL-Berechtigungen:** `READ` (lesen), `POST` (lesen + schreiben), `OWNER` (vollständig)
+
+### PowerShell-Remoting-Stub *(Phase 7 — neu in v0.8.0)*
+
+Minimaler WSMan/WS-Management-Endpunkt für Exchange Management Shell (EMS) Kompatibilität:
+
+```
+GET  /PowerShell/  → WSDL-Beschreibung
+POST /PowerShell/  → WSMan-Identify (vollständige Antwort)
+                     + alle anderen Cmdlets (SOAP-Fault mit Hinweis)
+```
+
+Exchange Management Shell erkennt CoreMail als Exchange-Server und kann sich verbinden. Einzelne Cmdlets geben einen informativen SOAP-Fault zurück. Eine vollständige Cmdlet-Implementierung ist für Phase 8 geplant.
 
 ---
 
@@ -1253,7 +1338,7 @@ Das Admin-Panel unter `/ecp/` orientiert sich an **Exchange 2019 ECP** und biete
 
 | Sektion | Inhalt |
 |---------|--------|
-| **Empfänger** | Postfächer, Verteilergruppen, Ressourcen, Kontakte, Shared Mailboxen, Migration |
+| **Empfänger** | Postfächer, Verteilergruppen (statisch/dynamisch), Ressourcen (Räume/Equipment), Kontakte, Shared Mailboxen, Öffentliche Ordner, Migration |
 | **Berechtigungen** | Admin-Rollen (RBAC), Benutzerrollen, Rollenzuweisungen |
 | **Compliance** | eDiscovery, Aufbewahrungsrichtlinien, Journaling, Nachrichtenablaufverfolgung |
 | **Organisation** | Freigaberichtlinien, Apps/Add-ins, Adresslisten (GAL), Einstellungen |
@@ -1587,7 +1672,12 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | `/autodiscover/autodiscover.json/v1.0/` | `autodiscover` | Autodiscover v2 |
 | `/OAB/` | `ews-server` | Offline Address Book |
 | `/Microsoft-Server-ActiveSync` | `activesync` | ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile) |
+| `/PowerShell/` | `api-gateway` | PowerShell-Remoting (Exchange Management Shell Stub) |
 | `/api/v1/` | `api-gateway` | CoreMail REST-API |
+| `/api/v1/public-folders/` | `api-gateway` | Öffentliche Ordner (User-Zugriff) |
+| `/api/v1/admin/groups/` | `api-gateway` | Verteilergruppen-Verwaltung |
+| `/api/v1/admin/resources/` | `api-gateway` | Raum-/Ressourcenpostfächer |
+| `/api/v1/admin/public-folders/` | `api-gateway` | Öffentliche Ordner (Admin) |
 | `/health` | `api-gateway` | Health-Check-Endpunkt |
 
 ---
@@ -1601,8 +1691,9 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | — | ✅ Abgeschlossen |
 | **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | — | ✅ Abgeschlossen |
 | **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | v0.6.1 | ✅ Abgeschlossen |
-| **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | **v0.7.0** | ✅ **Abgeschlossen** |
-| **Phase 7** | PowerShell-Remoting-Stub, Öffentliche Ordner, Dynamische Verteilergruppen, Raum-/Ressourcenbuchung | — | 📅 Geplant |
+| **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | v0.7.0 | ✅ Abgeschlossen |
+| **Phase 7** | **Verteilergruppen** (statisch/dynamisch, SMTP-Expansion), **Raum-/Ressourcenpostfächer** (auto-accept iCal), **Öffentliche Ordner** (ACL, Hierarchie), **PowerShell-Remoting-Stub** (WSMan) | **v0.8.0** | ✅ **Abgeschlossen** |
+| **Phase 8** | Vollständige PowerShell-Cmdlets (EMS), MAPI over HTTP (Outlook 2013+), eDiscovery-Erweiterungen | — | 📅 Geplant |
 
 ---
 
