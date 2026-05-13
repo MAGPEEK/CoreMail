@@ -3,7 +3,7 @@
 > Open-Source-Alternative zu Microsoft Exchange 2019 — aufgebaut auf **React + Node.js/TypeScript**, container-first, modular und vollständig selbst gehostet.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![pnpm](https://img.shields.io/badge/pnpm-workspace-orange.svg)](https://pnpm.io)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
@@ -38,6 +38,8 @@
 24. [Roadmap](#roadmap)
 25. [Lizenz](#lizenz)
 
+> **Aktuelle Version: v0.7.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
+
 ---
 
 ## Über das Projekt
@@ -71,11 +73,12 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | POP3 (Port 110, 995) | ✅ Implementiert |
 | EWS — Exchange Web Services (Outlook Desktop) | ✅ Implementiert |
 | Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
+| **ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile)** | ✅ **Neu in v0.7.0** |
 | OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
 | Freigegebene Postfächer (Shared Mailboxen) | ✅ Implementiert |
-| Öffentliche Ordner | 🔧 Phase 6 |
-| Verteilergruppen & dynamische Gruppen | 🔧 Phase 6 |
-| Raum- und Gerätepostfächer | 🔧 Phase 6 |
+| Öffentliche Ordner | 🔧 Geplant |
+| Verteilergruppen & dynamische Gruppen | 🔧 Geplant |
+| Raum- und Gerätepostfächer | 🔧 Geplant |
 | Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
 | Posteingangsregeln (Transport Rules) | ✅ Implementiert |
 | Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
@@ -88,7 +91,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Geteilte Teamkalender | ✅ Implementiert |
 | Besprechungsanfragen (iCal-Standard) | ✅ Implementiert |
 | Frei/Gebucht-Abfrage (GetUserAvailability) | ✅ Implementiert |
-| Raum- und Ressourcenbuchung | 🔧 Phase 6 |
+| Raum- und Ressourcenbuchung | 🔧 Geplant |
 | CalDAV (iOS, Android, Thunderbird) | ✅ Implementiert |
 | Kontakte (CardDAV) | ✅ Implementiert |
 | Aufgaben / To-Do (EWS-sync) | ✅ Implementiert |
@@ -109,6 +112,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Adress-Blacklist (Global / Domain / User) | ✅ Implementiert |
 | Attachment-Filter (MIME, Doppel-Extension) | ✅ Implementiert |
 | Quarantäne-Management | ✅ Implementiert |
+| **S/MIME — Zertifikat-Verwaltung (Signierung & Verschlüsselung)** | ✅ **Neu in v0.7.0** |
 | TLS (STARTTLS + Implicit TLS) | ✅ Implementiert |
 
 ### Authentifizierung
@@ -149,14 +153,14 @@ CoreMail folgt dem **Container-first, Microservice-Prinzip**: Jedes Modul ist ei
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        nginx Reverse Proxy                               │
 │         TLS-Termination · Rate-Limiting · Exchange-URL-Routing          │
-└────┬──────┬────────┬───────┬──────┬──────┬────────┬─────────┬──────────┘
-     │      │        │       │      │      │        │         │
-     ▼      ▼        ▼       ▼      ▼      ▼        ▼         ▼
-  [EWS]  [API-GW] [OWA]  [ECP]  [Auto- [Cal-  [Backup]  [Auth-
-  :8080  :3000   :4000  :4001  disc.] DAV]   :8085    Service]
-                               :8081  :8082            :3003
-
-  SMTP(:25/465/587)     IMAP(:143/993)     POP3(:110/995)
+└────┬──────┬────────┬───────┬──────┬──────┬────────┬──────┬─────────────┘
+     │      │        │       │      │      │        │      │
+     ▼      ▼        ▼       ▼      ▼      ▼        ▼      ▼
+  [EWS]  [API-GW] [OWA]  [ECP]  [Auto- [Cal-  [Backup] [EAS]
+  :8080  :3000   :4000  :4001  disc.] DAV]   :3004   :3005
+                               :8081  :8082     [Auth]
+                                               :3003
+  SMTP(:25/465/587)  IMAP(:143/993)  POP3(:110/995)
 
   ┌─────────────────────────────────────────────────────────────┐
   │              Gemeinsame Infrastruktur                        │
@@ -285,7 +289,7 @@ pnpm docker:up
 
 ### Mit optionalen Modulen (Profil `full`)
 
-Aktiviert zusätzlich **POP3** (Port 110/995) und **CalDAV/CardDAV** (Port 8082):
+Aktiviert zusätzlich **POP3** (Port 110/995), **CalDAV/CardDAV** (Port 8082) und **ActiveSync EAS** (Port 3005):
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml \
@@ -377,8 +381,10 @@ docker compose -f infra/docker/docker-compose.yml \
 | `https://<MAIL_HOSTNAME>/owa/` | Webmail (OWA) |
 | `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel (ECP) |
 | `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | Exchange Web Services (Outlook) |
+| `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync EAS 14.1 (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover v1 |
 | `https://<MAIL_HOSTNAME>/api/v1/` | REST API |
+| `https://<MAIL_HOSTNAME>/api/v1/smime/certificates` | S/MIME Zertifikat-Verwaltung |
 | `http://localhost:9001` | MinIO Web-Konsole |
 | `http://localhost:9090` | Prometheus *(Observability-Profil)* |
 | `http://localhost:3001` | Grafana *(Observability-Profil)* |
@@ -395,6 +401,7 @@ docker compose -f infra/docker/docker-compose.yml \
 | 993 | IMAPS | Implizites TLS |
 | 110 | POP3 *(Profil: full)* | STARTTLS |
 | 995 | POP3S *(Profil: full)* | Implizites TLS |
+| 443 | ActiveSync EAS *(Profil: full, via nginx)* | TLS |
 
 > **Hinweis Zertifikate:** In der Entwicklung nutze `scripts/gen-dev-certs.sh`
 > für selbstsignierte Zertifikate. Im Browser einmalig die Warnung akzeptieren
@@ -457,19 +464,20 @@ Alle fertigen Images sind auf Docker Hub verfügbar und können ohne lokalen Bui
 
 | Image | Tag | Beschreibung |
 |-------|-----|-------------|
-| `magpeek/coremail-storage-api` | `0.6.1` / `latest` | Interner Storage-API-Service |
-| `magpeek/coremail-auth-service` | `0.6.1` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
-| `magpeek/coremail-security-filter` | `0.6.1` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
-| `magpeek/coremail-smtp-server` | `0.6.1` / `latest` | SMTP Inbound + Outbound (25/465/587) |
-| `magpeek/coremail-imap-server` | `0.6.1` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
-| `magpeek/coremail-pop3-server` | `0.6.1` / `latest` | POP3 (110/995) |
-| `magpeek/coremail-ews-server` | `0.6.1` / `latest` | Exchange Web Services / Outlook-Support |
-| `magpeek/coremail-autodiscover` | `0.6.1` / `latest` | Autodiscover v1 + v2 |
-| `magpeek/coremail-caldav-server` | `0.6.1` / `latest` | CalDAV + CardDAV |
-| `magpeek/coremail-api-gateway` | `0.6.1` / `latest` | REST API + SSE |
-| `magpeek/coremail-backup-service` | `0.6.1` / `latest` | Backup/Restore (MBOX/EML/S3) |
-| `magpeek/coremail-web-client` | `0.6.1` / `latest` | Webmail OWA (React) |
-| `magpeek/coremail-admin-panel` | `0.6.1` / `latest` | Admin-Panel ECP (React) |
+| `magpeek/coremail-storage-api` | `0.7.0` / `latest` | Interner Storage-API-Service |
+| `magpeek/coremail-auth-service` | `0.7.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
+| `magpeek/coremail-security-filter` | `0.7.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
+| `magpeek/coremail-smtp-server` | `0.7.0` / `latest` | SMTP Inbound + Outbound (25/465/587) |
+| `magpeek/coremail-imap-server` | `0.7.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
+| `magpeek/coremail-pop3-server` | `0.7.0` / `latest` | POP3 (110/995) |
+| `magpeek/coremail-ews-server` | `0.7.0` / `latest` | Exchange Web Services / Outlook-Support |
+| `magpeek/coremail-autodiscover` | `0.7.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
+| `magpeek/coremail-caldav-server` | `0.7.0` / `latest` | CalDAV + CardDAV |
+| `magpeek/coremail-api-gateway` | `0.7.0` / `latest` | REST API + SSE + S/MIME API |
+| `magpeek/coremail-backup-service` | `0.7.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
+| **`magpeek/coremail-activesync`** | **`0.7.0` / `latest`** | **ActiveSync EAS 14.1 — neu in v0.7.0** |
+| `magpeek/coremail-web-client` | `0.7.0` / `latest` | Webmail OWA (React) |
+| `magpeek/coremail-admin-panel` | `0.7.0` / `latest` | Admin-Panel ECP (React) |
 
 ### Produktion mit Docker-Hub-Images starten
 
@@ -477,13 +485,13 @@ Kein lokaler Build nötig — Images werden direkt von Docker Hub gezogen:
 
 ```bash
 # Neueste stabile Version (empfohlen)
-COREMAIL_VERSION=0.6.1 docker compose \
+COREMAIL_VERSION=0.7.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   up -d
 
-# Oder mit optionalen Modulen
-COREMAIL_VERSION=0.6.1 docker compose \
+# Oder mit optionalen Modulen (inkl. POP3, CalDAV, ActiveSync)
+COREMAIL_VERSION=0.7.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   --profile full --profile observability \
@@ -494,8 +502,8 @@ COREMAIL_VERSION=0.6.1 docker compose \
 
 | Tag | Bedeutung |
 |-----|-----------|
-| `0.6.1` | Exakte Version |
-| `0.6` | Neueste Patch-Version von 0.6.x |
+| `0.7.0` | Exakte Version (aktuell) |
+| `0.7` | Neueste Patch-Version von 0.7.x |
 | `0` | Neueste Minor-Version von 0.x.x |
 | `latest` | Neuestes stabiles Release |
 | `edge` | Aktueller Stand des `main`-Branches |
@@ -507,7 +515,7 @@ Der GitHub Actions Workflow (`.github/workflows/docker-publish.yml`) baut und
 pusht alle Images automatisch:
 
 - **Bei Push auf `main`** → Tag `edge` + `sha-<hash>`
-- **Bei Git-Tag `v0.6.1`** → Tags `0.6.1`, `0.6`, `0`, `latest`
+- **Bei Git-Tag `v0.7.0`** → Tags `0.7.0`, `0.7`, `0`, `latest`
 - **Bei Pull Request** → nur Build, kein Push
 
 **Multi-Arch:** Alle Images werden für `linux/amd64` und `linux/arm64` gebaut.
@@ -534,10 +542,10 @@ Ein Access Token erstellt man unter:
 bash scripts/docker-push.sh
 
 # Explizite Version
-bash scripts/docker-push.sh 0.6.1
+bash scripts/docker-push.sh 0.7.0
 
 # Nur bauen, nicht pushen (lokaler Test)
-bash scripts/docker-push.sh 0.6.1 --no-push
+bash scripts/docker-push.sh 0.7.0 --no-push
 ```
 
 ---
@@ -585,6 +593,10 @@ AUTODISCOVER_BASE=https://mail.domain.de
 IMAP_HOST=mail.domain.de
 SMTP_HOST=mail.domain.de
 
+# ── ActiveSync (EAS 14.1 — Phase 6) ─────────────────────────────────
+EAS_URL=https://mail.domain.de/Microsoft-Server-ActiveSync  # Autodiscover-URL
+EAS_PORT=3005                                                # Interner Container-Port
+
 # ── GeoIP (optional, für Country-Filtering) ───────────────────────────
 # Kostenlose Registrierung: https://www.maxmind.com/en/geolite2/signup
 MAXMIND_ACCOUNT_ID=           # Leer lassen = Country-Filter deaktiviert
@@ -609,6 +621,7 @@ docker compose -f infra/docker/docker-compose.yml --profile full up -d
 | POP3 | ⬜ optional | `full` |
 | CalDAV / CardDAV | ⬜ optional | `full` |
 | Backup-Service | ⬜ optional | `full` |
+| **ActiveSync EAS 14.1** | ⬜ optional | `full` |
 
 ---
 
@@ -785,6 +798,75 @@ React 19 ECP-UI — Exchange Control Panel-ähnliche Admin-Oberfläche.
 ### `packages/backup-service` *(Phase 5)*
 Backup- und Wiederherstellungsservice — MBOX/EML-Export, Admin-Vollbackup zu S3.
 
+### `packages/activesync` *(Phase 6 — neu in v0.7.0)*
+
+Microsoft Exchange ActiveSync EAS 14.1-Server (Port 3005) für mobile Clients: iOS Mail, Android Gmail/Outlook, Samsung Email.
+
+**WBXML-Codec** — binäres XML-Format, das EAS für alle Kommunikation verwendet:
+- Vollständige Implementierung der EAS Code Pages: AirSync, Email, FolderHierarchy, Provision, Ping, ComposeMail
+- Bidirektionaler Encoder + Decoder (eigene Implementierung, keine externe Abhängigkeit)
+
+**Implementierte EAS-Befehle:**
+
+| Befehl | Beschreibung |
+|--------|-------------|
+| `OPTIONS` | Capability-Aushandlung (Protokollversionen, unterstützte Befehle) |
+| `Provision` | Geräte-Registrierung, Richtlinien-Aushandlung (permissive Policy) |
+| `FolderSync` | Ordnerhierarchie synchronisieren (initial + inkrementell) |
+| `Sync` | Bidirektionale E-Mail-Synchronisation mit Delta-Tracking |
+| `SendMail` | Ausgehende E-Mails über Redis-Queue versenden |
+| `SmartReply` | Antworten mit MIME-Payload |
+| `SmartForward` | Weiterleiten mit MIME-Payload |
+| `Ping` | Long-Poll Push-Benachrichtigungen (Heartbeat bis 59 Minuten) |
+| `GetAttachment` | Anhang-Abruf per AttachmentName |
+
+**Authentifizierung:**
+- Basic Auth (Benutzername + Passwort)
+- App-Passwörter (für MFA-gesicherte Konten)
+
+**Geräteverwaltung** — `ActiveSyncDevice`-Tabelle in PostgreSQL:
+- Geräte-ID, Gerätetyp, freundlicher Name
+- SyncKey-Map pro Ordner (Delta-Tracking)
+- Status: OK / PENDING / BLOCKED / WIPED
+- Remote-Wipe-Zeitstempel
+
+**Autodiscover-Integration:** Autodiscover v1 gibt automatisch den ActiveSync-Protokollblock zurück — iOS und Android richten sich dadurch ohne manuelle Eingabe ein:
+```xml
+<Account>
+  <AccountType>email</AccountType>
+  <Action>settings</Action>
+  <Protocol>
+    <Type>ActiveSync</Type>
+    <Server>https://mail.domain.de/Microsoft-Server-ActiveSync</Server>
+    <LoginName>user@domain.de</LoginName>
+    <SSL>on</SSL>
+  </Protocol>
+</Account>
+```
+
+**nginx-Konfiguration:** `/Microsoft-Server-ActiveSync` hat `proxy_read_timeout 600s` — notwendig für den Ping-Befehl (Long-Poll bis 59 Minuten).
+
+### S/MIME API *(Phase 6 — neu in v0.7.0)*
+
+REST-Endpunkte unter `/api/v1/smime/` für die S/MIME-Zertifikat-Verwaltung im api-gateway:
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/smime/certificates` | GET | Alle eigenen Zertifikate auflisten |
+| `/api/v1/smime/certificates` | POST | PKCS#12-Zertifikat importieren |
+| `/api/v1/smime/certificates/:id` | PUT | Label / Standard-Flag ändern |
+| `/api/v1/smime/certificates/:id` | DELETE | Zertifikat entfernen |
+| `/api/v1/smime/public-key/:email` | GET | Public Key eines Kontakts für ausgehende Verschlüsselung |
+| `/api/v1/smime/devices` | GET | Eigene ActiveSync-Geräte anzeigen |
+| `/api/v1/smime/devices/:id` | DELETE | Gerät deregistrieren / Remote-Wipe |
+
+**Datenspeicherung** — `UserCertificate`-Tabelle in PostgreSQL:
+- SHA-256-Fingerprint (eindeutig)
+- X.509 Subject-DN + Issuer-DN
+- Gültigkeitszeitraum (notBefore / notAfter)
+- Binäre PKCS#12-Datei in MinIO (verschlüsselt)
+- `signingDefault` + `encryptDefault` Flags
+
 ---
 
 ## Mail-Protokolle
@@ -813,6 +895,33 @@ Backup- und Wiederherstellungsservice — MBOX/EML-Export, Admin-Vollbackup zu S
 
 **Unterstützte Extensions:**
 `IMAP4rev1`, `IDLE`, `CONDSTORE`, `ESEARCH`, `LITERAL+`, `QUOTA`, `NAMESPACE`, `UTF8=ACCEPT`, `AUTH=PLAIN`, `AUTH=LOGIN`
+
+### ActiveSync EAS 14.1 *(neu in v0.7.0)*
+
+Mobile Clients (iOS Mail, Android Gmail/Outlook, Samsung Email) synchronisieren via Exchange ActiveSync über HTTPS:
+
+```
+Endpunkt:  POST https://mail.domain.de/Microsoft-Server-ActiveSync?Cmd=<Befehl>
+Protokoll: WBXML (binäres XML), Content-Type: application/vnd.ms-sync.wbxml
+Auth:      Basic Auth (Benutzername + Passwort oder App-Passwort)
+```
+
+**Einrichten auf dem Smartphone:**
+iOS und Android erkennen den Server automatisch über Autodiscover — nur E-Mail-Adresse und Passwort eingeben, der Rest wird automatisch konfiguriert.
+
+Manuell:
+```
+Server:        mail.domain.de
+Benutzername:  user@domain.de
+Passwort:      Hauptpasswort oder App-Passwort (bei MFA)
+SSL:           Ja
+```
+
+**Sync-Verhalten:**
+- **Erstmalige Synchronisation**: alle vorhandenen Mails der letzten 30 Tage (konfigurierbar)
+- **Delta-Sync**: nur Änderungen seit dem letzten Sync (SyncKey-basiert, je Ordner)
+- **Push-Benachrichtigungen**: Ping-Befehl hält Verbindung offen — neue Mails werden sofort auf dem Gerät angezeigt (Heartbeat bis 59 Minuten)
+- **Bidirektional**: Lesen/Löschen auf dem Gerät wird sofort ins Postfach übertragen
 
 ### EWS (Exchange Web Services)
 
@@ -1338,17 +1447,22 @@ CoreMail/
 │   ├── imap-server/       # IMAP4rev1 + IDLE
 │   ├── pop3-server/       # POP3
 │   ├── auth-service/      # Auth: Lokal + LDAP + OIDC + MFA
+│   ├── auth-ldap/         # LDAP/AD-Connector
+│   ├── auth-sso/          # OIDC/OAuth2/SAML-Connector
 │   ├── ews-server/        # EWS (Exchange Web Services)
-│   ├── autodiscover/      # Autodiscover v1 + v2
+│   ├── autodiscover/      # Autodiscover v1 + v2 (inkl. ActiveSync)
 │   ├── caldav-server/     # CalDAV + CardDAV
-│   ├── api-gateway/       # REST + SSE + WebSocket
+│   ├── api-gateway/       # REST + SSE + S/MIME API
+│   ├── activesync/        # ActiveSync EAS 14.1 (Phase 6)
 │   ├── backup-service/    # Backup + Restore
 │   ├── web-client/        # React OWA-UI
 │   └── admin-panel/       # React ECP-UI
 ├── infra/
-│   ├── docker/            # Docker Compose + Dockerfiles
+│   ├── docker/            # Docker Compose + Dockerfiles + nginx
 │   ├── k8s/               # Kubernetes Helm Chart
+│   ├── observability/     # Prometheus, Grafana, Tempo, Loki, Alertmanager
 │   └── postgres/          # Migrations, Init-SQL
+├── CLAUDE.md              # Projektgedächtnis für Claude Code
 └── docs/
     ├── ews-protocol/      # EWS SOAP-Dokumentation
     └── api/               # OpenAPI-Spezifikation
@@ -1472,7 +1586,7 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | `/Autodiscover/Autodiscover.xml` | `autodiscover` | Autodiscover v1 |
 | `/autodiscover/autodiscover.json/v1.0/` | `autodiscover` | Autodiscover v2 |
 | `/OAB/` | `ews-server` | Offline Address Book |
-| `/Microsoft-Server-ActiveSync` | `activesync` | ActiveSync (Phase 6) |
+| `/Microsoft-Server-ActiveSync` | `activesync` | ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile) |
 | `/api/v1/` | `api-gateway` | CoreMail REST-API |
 | `/health` | `api-gateway` | Health-Check-Endpunkt |
 
@@ -1480,14 +1594,15 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 
 ## Roadmap
 
-| Phase | Inhalt | Status |
-|-------|--------|--------|
-| **Phase 1** | Monorepo, Core (JWT/bcrypt/Redis), Storage (Prisma/MinIO/MIME), Docker Compose | ✅ Abgeschlossen |
-| **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | ✅ Abgeschlossen |
-| **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | ✅ Abgeschlossen |
-| **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | ✅ Abgeschlossen |
-| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | ✅ Abgeschlossen |
-| **Phase 6** | ActiveSync (EAS), S/MIME, PowerShell-Remoting-Stub | 📅 Geplant |
+| Phase | Inhalt | Version | Status |
+|-------|--------|---------|--------|
+| **Phase 1** | Monorepo, Core (JWT/bcrypt/Redis), Storage (Prisma/MinIO/MIME), Docker Compose | — | ✅ Abgeschlossen |
+| **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | — | ✅ Abgeschlossen |
+| **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | — | ✅ Abgeschlossen |
+| **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | — | ✅ Abgeschlossen |
+| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | v0.6.1 | ✅ Abgeschlossen |
+| **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | **v0.7.0** | ✅ **Abgeschlossen** |
+| **Phase 7** | PowerShell-Remoting-Stub, Öffentliche Ordner, Dynamische Verteilergruppen, Raum-/Ressourcenbuchung | — | 📅 Geplant |
 
 ---
 
