@@ -1,0 +1,404 @@
+# CLAUDE.md — CoreMail Projektgedächtnis
+
+Diese Datei wird von Claude Code automatisch bei jedem Gespräch eingelesen.
+Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
+
+---
+
+## Projektüberblick
+
+**CoreMail** ist eine vollständige Open-Source-Alternative zu Microsoft Exchange 2019, entwickelt in diesem Verzeichnis:
+```
+/Users/stefan/Library/CloudStorage/SynologyDrive-Data/Mailserver/coremail/
+```
+
+**Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
+**Aktuelle Version**: `0.7.0`
+**GitHub**: https://github.com/MAGPEEK/CoreMail.git
+**Docker Hub**: https://hub.docker.com/u/magpeek
+
+---
+
+## Technologie-Stack
+
+| Bereich | Technologie |
+|---------|------------|
+| Frontend | React 19, Vite, TailwindCSS, shadcn/ui, TanStack Query v5, Zustand, Tiptap, FullCalendar |
+| Backend | Node.js 22, TypeScript 5.5, ESM (`"type":"module"`), Express 4 |
+| ORM | Prisma 5 (PostgreSQL) |
+| Datenbank | PostgreSQL 16, Redis 7, MinIO |
+| Monorepo | pnpm Workspaces (pnpm@11) |
+| Deployment | Docker Compose (dev/prod) + Kubernetes Helm Chart |
+| CI/CD | GitHub Actions → Docker Hub Multi-Arch (amd64 + arm64) |
+
+---
+
+## Monorepo-Struktur
+
+```
+coremail/
+├── packages/
+│   ├── core/              # Logger, JWT, Redis-Client, Auth-Helpers
+│   ├── storage/           # Prisma-Schema + -Client, MinIO-Abstraktionsschicht
+│   ├── smtp-server/       # SMTP Inbound/Outbound (Port 25, 465, 587)
+│   ├── imap-server/       # IMAP4rev1 + IDLE + CONDSTORE (Port 143, 993)
+│   ├── pop3-server/       # POP3 (Port 110, 995)
+│   ├── ews-server/        # Exchange Web Services SOAP/XML (Port 8080)
+│   ├── autodiscover/      # Autodiscover v1 + v2 (Port 8081)
+│   ├── caldav-server/     # CalDAV + CardDAV (Port 8082)
+│   ├── api-gateway/       # REST API + SSE (Port 3000)
+│   ├── auth-service/      # Lokal/LDAP/OIDC/MFA (Port 3003)
+│   ├── auth-ldap/         # LDAP-Connector (intern)
+│   ├── auth-sso/          # OIDC/OAuth2/SAML (intern)
+│   ├── backup-service/    # MBOX/EML/S3-Backup (Port 3004)
+│   ├── security-filter/   # SPF/DKIM/DMARC/ClamAV/rspamd (Port 3002)
+│   ├── activesync/        # Exchange ActiveSync EAS 14.1 (Port 3005) — Phase 6
+│   ├── web-client/        # React OWA Webmail (Port 80)
+│   └── admin-panel/       # React ECP Admin-Panel (Port 80)
+├── infra/
+│   ├── docker/            # docker-compose.yml, docker-compose.prod.yml, nginx/, postgres/, rspamd/
+│   ├── k8s/               # Helm Chart (Chart.yaml, values.yaml, templates/)
+│   └── observability/     # Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector
+├── scripts/               # setup.sh, gen-dev-certs.sh, docker-push.sh
+├── .github/workflows/     # docker-publish.yml (CI/CD)
+├── CHANGELOG.md           # Keep a Changelog Format
+├── CLAUDE.md              # Diese Datei
+└── .env.example
+```
+
+---
+
+## Services & Docker Images
+
+| Service | Port | Docker Image |
+|---------|------|-------------|
+| storage-api | 3001 | `magpeek/coremail-storage-api` |
+| auth-service | 3003 | `magpeek/coremail-auth-service` |
+| security-filter | 3002 | `magpeek/coremail-security-filter` |
+| smtp-server | 25/465/587 | `magpeek/coremail-smtp-server` |
+| imap-server | 143/993 | `magpeek/coremail-imap-server` |
+| pop3-server | 110/995 | `magpeek/coremail-pop3-server` |
+| ews-server | 8080 | `magpeek/coremail-ews-server` |
+| autodiscover | 8081 | `magpeek/coremail-autodiscover` |
+| caldav-server | 8082 | `magpeek/coremail-caldav-server` |
+| api-gateway | 3000 | `magpeek/coremail-api-gateway` |
+| backup-service | 3004 | `magpeek/coremail-backup-service` |
+| **activesync** | **3005** | **`magpeek/coremail-activesync`** |
+| web-client | 4000 | `magpeek/coremail-web-client` |
+| admin-panel | 4001 | `magpeek/coremail-admin-panel` |
+
+**Docker Hub**: `magpeek/coremail-<service>:<version>`
+- Manuell pushen: `bash scripts/docker-push.sh [VERSION]`
+- Production: `COREMAIL_VERSION=0.7.0 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+
+---
+
+## Implementierungsstand (Phasen)
+
+| Phase | Status | Inhalt |
+|-------|--------|--------|
+| Phase 1 | ✅ Fertig | Foundation: Core, Storage, Prisma, Docker |
+| Phase 2 | ✅ Fertig | SMTP + IMAP + POP3 + Security-Filter |
+| Phase 3 | ✅ Fertig | EWS + Autodiscover + Auth (LDAP/OIDC/MFA) |
+| Phase 4 | ✅ Fertig | CalDAV/CardDAV + REST API + React OWA + React ECP |
+| Phase 5 | ✅ Fertig | Backup + OpenTelemetry + Observability + Helm Chart |
+| Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
+
+---
+
+## TypeScript-Regeln (KRITISCH)
+
+Das Projekt verwendet `"exactOptionalPropertyTypes": true`. Das hat häufige Fallstricke:
+
+### Optionale Felder in Prisma-Updates
+```typescript
+// ❌ FALSCH — exactOptionalPropertyTypes wirft Fehler
+prisma.task.update({ data: { dueDate: dueDate ? new Date(dueDate) : undefined } });
+
+// ✅ RICHTIG — Conditional Spread
+prisma.task.update({ data: { ...(dueDate ? { dueDate: new Date(dueDate) } : {}) } });
+```
+
+### ESM-Imports
+Alle Imports müssen `.js`-Extension haben (auch wenn Datei `.ts` ist):
+```typescript
+import { foo } from './utils.js'; // ✅
+import { foo } from './utils';    // ❌
+```
+
+---
+
+## Prisma-Schema (wichtige Feldnamen)
+
+Die Prisma-Schema-Datei ist die einzige Quelle der Wahrheit:
+`packages/storage/prisma/schema.prisma`
+
+Häufige Fallstricke (historische Fehler):
+
+| Model | Richtiges Feld | Falsches Feld (veraltet) |
+|-------|---------------|--------------------------|
+| `AppPassword` | `lastUsedAt` | ~~`lastUsed`~~ |
+| `Session` | `tokenHash` | ~~`token`~~ |
+| `User` | `mailbox` (1:1) | ~~`mailboxes`~~ |
+| `Note` | `subject` | ~~`title`~~ |
+| `Task` | `subject`, `body`, `reminder` | ~~`title`~~, ~~`notes`~~, ~~`reminderAt`~~ |
+| `LdapConfig` | `lastSyncAt` | ~~`lastSync`~~ |
+| `Folder` | `displayName` (required!) | — |
+| `CalendarEvent` | `uid` (required!) | — |
+| `UserRole` | kein `ADMIN`-Wert | ~~`ADMIN`~~ |
+
+**Nach Schema-Änderungen immer** `prisma generate` ausführen:
+```bash
+pnpm --filter @coremail/storage exec prisma generate
+```
+
+**Neue Phase-6-Modelle**:
+- `ActiveSyncDevice` — Geräte-Registrierung, SyncKeys, PolicyKey
+- `UserCertificate` — S/MIME Zertifikate (Fingerprint, MinIO-Pfad)
+
+---
+
+## Dockerfile-Muster (Standard)
+
+Alle Dockerfiles folgen dem gleichen Multi-Stage-Muster. Beispiel von `ews-server`:
+
+```dockerfile
+FROM node:22-alpine AS builder
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
+COPY packages/core/package.json ./packages/core/
+COPY packages/storage/package.json ./packages/storage/
+COPY packages/<service>/package.json ./packages/<service>/
+
+RUN pnpm install --frozen-lockfile
+
+COPY tsconfig.base.json ./          # WICHTIG: muss kopiert werden!
+COPY packages/core ./packages/core
+COPY packages/storage ./packages/storage
+COPY packages/<service> ./packages/<service>
+
+RUN pnpm --filter @coremail/storage prisma:generate
+RUN pnpm --filter @coremail/core build
+RUN pnpm --filter @coremail/storage build
+RUN pnpm --filter @coremail/<service> build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@latest --activate
+# ... COPY --from=builder ...
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @coremail/storage exec prisma generate
+EXPOSE <port>
+CMD ["node", "packages/<service>/dist/server.js"]
+```
+
+**Häufige Fehler:**
+- `COPY tsconfig.base.json ./` vergessen → TypeScript-Fehler beim Build
+- `prisma generate` im Builder UND im Runner nötig
+- `pnpm@latest` via corepack (nicht `npm install -g pnpm@9`)
+
+---
+
+## Redis-Muster (ioredis)
+
+```typescript
+// ❌ FALSCH — callback bekommt (err, count), NICHT die Message
+subscriber.subscribe(CHANNEL, (message) => { ... });
+
+// ✅ RICHTIG
+void subscriber.subscribe(CHANNEL_NAME);
+subscriber.on('message', (_channel, message) => {
+  const event = JSON.parse(message) as MyType;
+  // ...
+});
+```
+
+---
+
+## API-Struktur (REST)
+
+Alle Endpunkte hinter nginx auf Port 443:
+
+| Pfad | Service | Beschreibung |
+|------|---------|-------------|
+| `/owa/` | web-client | Outlook Web Access |
+| `/ecp/` | admin-panel | Exchange Control Panel |
+| `/EWS/Exchange.asmx` | ews-server | Exchange Web Services (SOAP) |
+| `/Autodiscover/` | autodiscover | Autodiscover v1 |
+| `/autodiscover/` | autodiscover | Autodiscover v2 |
+| `/Microsoft-Server-ActiveSync` | activesync | EAS 14.1 (Phase 6) |
+| `/api/v1/` | api-gateway | REST API |
+| `/auth/` | auth-service | Authentifizierung |
+
+**api-gateway REST-Routen** (`/api/v1/`):
+```
+/mail/              mailRouter
+/calendar/          calendarRouter
+/contacts/          contactsRouter
+/tasks/             tasksRouter
+/notes/             notesRouter
+/user/              userRouter
+/smime/             smimeRouter        # Phase 6: S/MIME + Geräteverwaltung
+/admin/mailboxes/   adminMailboxesRouter
+/admin/domains/     adminDomainsRouter
+/admin/queues/      adminQueuesRouter
+/admin/logs/        adminLogsRouter
+/events             SSE Live-Events
+```
+
+---
+
+## Authentifizierung
+
+```
+Lokale DB (bcrypt) → LDAP/Active Directory (ldapts) → SSO/OIDC (openid-client)
+                            ↓
+                    MFA (TOTP / WebAuthn / Backup-Codes)
+                            ↓
+                    JWT Access Token + Refresh Token
+```
+
+**App-Passwörter**: Für IMAP/POP3/SMTP/EAS (kein MFA möglich)
+- Tabelle `AppPassword`, Feld `hash` (bcrypt), `lastUsedAt`
+- User generiert in OWA → Einstellungen → Sicherheit
+
+**UserRole-Enum** (kein ADMIN!):
+```
+USER, HELP_DESK, RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT,
+HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
+```
+
+---
+
+## Phase 6: ActiveSync (EAS 14.1)
+
+**Package**: `packages/activesync/` — Port 3005
+**Docker Image**: `magpeek/coremail-activesync:0.7.0`
+
+### WBXML-Codec
+`src/wbxml.ts` — Implementiert EAS Code Pages:
+- 0: AirSync (Sync, SyncKey, Collection, Status ...)
+- 2: Email (Subject, From, To, Body, Read ...)
+- 7: FolderHierarchy (FolderSync, ServerId, DisplayName, Type ...)
+- 14: Provision (PolicyKey, EASProvisionDoc ...)
+- 17: Ping (HeartbeatInterval, Folders ...)
+- 25: ComposeMail (SendMail, Mime ...)
+
+### EAS-Befehle
+| Befehl | Datei | Beschreibung |
+|--------|-------|-------------|
+| `Provision` | `commands/provision.ts` | Geräte-Registrierung + Policy |
+| `FolderSync` | `commands/folder-sync.ts` | Ordnerhierarchie |
+| `Sync` | `commands/sync.ts` | E-Mail-Delta-Sync |
+| `SendMail` | `commands/send-mail.ts` | Ausgehende Mails |
+| `SmartReply/Forward` | `commands/send-mail.ts` | Antworten/Weiterleiten |
+| `Ping` | `commands/ping.ts` | Long-Poll (bis 59 min) |
+
+### Ping Long-Poll
+nginx muss `proxy_read_timeout 600s` für `/Microsoft-Server-ActiveSync` haben (bereits konfiguriert).
+
+---
+
+## Phase 6: S/MIME
+
+**Router**: `packages/api-gateway/src/routes/smime.ts`
+**Route-Prefix**: `/api/v1/smime/`
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/certificates` | GET | Liste aller eigenen Zertifikate |
+| `/certificates` | POST | Neues Zertifikat importieren |
+| `/certificates/:id` | PUT | Label/Default-Flags ändern |
+| `/certificates/:id` | DELETE | Zertifikat löschen |
+| `/public-key/:email` | GET | Public Key eines Kontakts abrufen |
+| `/devices` | GET | ActiveSync-Geräte des Users |
+| `/devices/:id` | DELETE | Gerät deregistrieren |
+
+---
+
+## Changelog-Format
+
+Changelog (`CHANGELOG.md`) muss dem **Keep a Changelog** Format folgen:
+- Kategorien: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`
+- Versionsschema: Semantic Versioning (PATCH/MINOR/MAJOR)
+- Nächste Version: `## [Unreleased]` Abschnitt
+
+---
+
+## Häufig verwendete Befehle
+
+```bash
+# TypeScript-Check (alle Packages)
+pnpm -r exec tsc --noEmit
+
+# Prisma-Client generieren
+pnpm --filter @coremail/storage exec prisma generate
+
+# Docker Image bauen + pushen
+docker build -f packages/<service>/Dockerfile -t magpeek/coremail-<service>:0.7.0 .
+docker push magpeek/coremail-<service>:0.7.0
+
+# Alle Images pushen (Skript)
+bash scripts/docker-push.sh 0.7.0
+
+# GitHub Push mit PAT
+PAT="..." git -c url."https://x-access-token:${PAT}@github.com/".insteadOf="https://github.com/" push
+
+# GitHub Release erstellen
+GITHUB_TOKEN=$PAT gh release create v0.7.0 --title "..." --notes "..." --repo MAGPEEK/CoreMail
+
+# Issue schließen
+GITHUB_TOKEN=$PAT gh issue close <nr> --comment "..." --repo MAGPEEK/CoreMail
+```
+
+---
+
+## Infrastruktur-Konfiguration
+
+### Docker Compose Profile
+- Standard: alle Core-Services
+- `--profile full`: + POP3, CalDAV, ActiveSync
+- `--profile observability`: + Prometheus/Grafana/Tempo/Loki/Alertmanager
+
+### nginx (infra/docker/nginx/nginx.conf)
+Alle Pfade sind Exchange 2019 kompatibel. ActiveSync braucht 600s Timeout (Ping-Command).
+
+### Kubernetes (infra/k8s/)
+- CloudNativePG Operator (3 PostgreSQL-Instanzen, automatisches Failover)
+- HPA + PDB für alle Services (min 2, max 10 Pods)
+- Redis Cluster (6 Nodes: 3 Master + 3 Replicas)
+- MinIO Distributed (4 Nodes, Erasure Coding)
+- cert-manager + External Secrets Operator
+
+---
+
+## Sicherheits-Pipeline (eingehende Mails)
+
+```
+SMTP Verbindung
+  → Greylisting (Redis, IP+Sender+Empfänger Tripel)
+  → DNSBL (Spamhaus ZEN, SpamCop — parallel mit 2s Timeout)
+  → Country-Filtering (MaxMind GeoLite2)
+  → IP-Blacklist
+  → SPF / DKIM / DMARC / ARC (mailauth)
+  → E-Mail-Blacklist (Global/Domain/User)
+  → ClamAV (clamd TCP 3310)
+  → rspamd (HTTP API, Score → Inbox/Junk/Reject)
+  → Attachment-Filter (MIME-Types, Doppelextensionen)
+```
+
+---
+
+## Observability
+
+- **Metriken**: OpenTelemetry SDK → PrometheusExporter `:9464` → Grafana
+- **Traces**: OTLP → Tempo
+- **Logs**: pino (strukturiertes JSON) → Loki
+- **Dashboard**: `coremail-overview` in Grafana
+- **Alerts**: 8 Alert-Rules in Alertmanager (SMTP-Down, Queue-Backlog, High-Spam, etc.)
+
+---
+
+*Letzte Aktualisierung: 2026-05-13 (v0.7.0 — Phase 6: ActiveSync + S/MIME)*
