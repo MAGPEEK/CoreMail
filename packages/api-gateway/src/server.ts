@@ -12,6 +12,7 @@ import { adminMailboxesRouter } from './routes/admin/mailboxes.js';
 import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
 import { adminLogsRouter } from './routes/admin/logs.js';
+import { smimeRouter } from './routes/smime.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
 
@@ -38,6 +39,9 @@ app.use('/api/v1/contacts', contactsRouter);
 app.use('/api/v1/tasks', tasksRouter);
 app.use('/api/v1/notes', notesRouter);
 app.use('/api/v1/user', userRouter);
+
+// S/MIME + ActiveSync device management
+app.use('/api/v1/smime', smimeRouter);
 
 // Admin routes
 app.use('/api/v1/admin/mailboxes', adminMailboxesRouter);

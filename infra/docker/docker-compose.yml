@@ -450,6 +450,37 @@ services:
       retries: 3
     networks: [coremail]
 
+  # ── Phase 6: ActiveSync ───────────────────────────────────────────────────────
+
+  activesync:
+    build:
+      context: ../..
+      dockerfile: packages/activesync/Dockerfile
+    container_name: coremail-activesync
+    restart: unless-stopped
+    profiles: [full]
+    environment:
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      EAS_PORT: "3005"
+      EAS_URL: ${EAS_URL:-https://mail.example.com/Microsoft-Server-ActiveSync}
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
   # ── Frontends ────────────────────────────────────────────────────────────────
 
   web-client:

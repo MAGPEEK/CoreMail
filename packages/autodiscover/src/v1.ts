@@ -8,6 +8,7 @@ const EWS_URL = process.env['EWS_URL'] ?? 'https://mail.example.com/EWS/Exchange
 const OWA_URL = process.env['OWA_URL'] ?? 'https://mail.example.com/owa/';
 const IMAP_HOST = process.env['IMAP_HOST'] ?? 'mail.example.com';
 const SMTP_HOST = process.env['SMTP_HOST'] ?? 'mail.example.com';
+const EAS_URL = process.env['EAS_URL'] ?? 'https://mail.example.com/Microsoft-Server-ActiveSync';
 
 function buildAutodiscoverResponse(email: string, displayName: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -46,6 +47,17 @@ function buildAutodiscoverResponse(email: string, displayName: string): string {
         <AuthRequired>on</AuthRequired>
         <UsePOPAuth>off</UsePOPAuth>
         <SMTPLast>off</SMTPLast>
+      </Protocol>
+    </Account>
+    <Account>
+      <AccountType>email</AccountType>
+      <Action>settings</Action>
+      <Protocol>
+        <Type>ActiveSync</Type>
+        <Server>${escapeXml(EAS_URL)}</Server>
+        <LoginName>${escapeXml(email)}</LoginName>
+        <DomainRequired>off</DomainRequired>
+        <SSL>on</SSL>
       </Protocol>
     </Account>
   </Response>

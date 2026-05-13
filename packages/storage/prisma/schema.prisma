@@ -89,6 +89,8 @@ model User {
   mfa             UserMfa?
   appPasswords    AppPassword[]
   sharedPerms     SharedMailboxPerm[]
+  activeSyncDevices ActiveSyncDevice[]
+  certificates    UserCertificate[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -531,4 +533,51 @@ model Quarantine {
   @@index([createdAt])
   @@index([reason])
   @@map("quarantine")
+}
+
+// ─────────────────────────────────────────────
+// Phase 6 — ActiveSync (EAS)
+// ─────────────────────────────────────────────
+
+model ActiveSyncDevice {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId        String   // EAS DeviceId header
+  deviceType      String   @default("")  // EAS DeviceType (iPhone, Android, etc.)
+  deviceFriendlyName String @default("")
+  policyKey       String   @default("0")
+  status          String   @default("OK") // OK | PENDING | BLOCKED | WIPED
+  lastSyncAt      DateTime?
+  remoteWipeAt    DateTime?
+  createdAt       DateTime @default(now())
+  folderSyncKey   String   @default("0")
+  syncKeys        Json     @default("{}") // folderId → syncKey map
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+  @@map("active_sync_devices")
+}
+
+// ─────────────────────────────────────────────
+// Phase 6 — S/MIME Certificates
+// ─────────────────────────────────────────────
+
+model UserCertificate {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String   @default("My Certificate")
+  fingerprint   String   @unique  // SHA-256 hex
+  subject       String   // X.509 Subject DN
+  issuer        String   // X.509 Issuer DN
+  notBefore     DateTime
+  notAfter      DateTime
+  storagePath   String   // MinIO path to encrypted PKCS#12
+  signingDefault Boolean @default(false)
+  encryptDefault Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@map("user_certificates")
 }

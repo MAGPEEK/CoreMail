@@ -9,6 +9,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.7.0] — 2026-05-13 — Phase 6: ActiveSync (EAS) + S/MIME
+
+### Added
+- **`packages/activesync`** — Microsoft Exchange ActiveSync (EAS 14.1) Server
+  - WBXML binary codec mit vollständigem EAS-Codepage-Support (AirSync, Email, FolderHierarchy, Provision, Ping, ComposeMail)
+  - **Provision-Befehl**: Geräte-Registrierung, Policy-Aushandlung (permissive Policy out-of-the-box)
+  - **FolderSync-Befehl**: Initiale + inkrementelle Ordnerhierarchie-Synchronisation
+  - **Sync-Befehl**: Bidirektionale E-Mail-Synchronisation mit Delta-Tracking, Read-Flag, Delete
+  - **SendMail-Befehl**: Ausgehende E-Mails via Redis-Queue, optionales Speichern im Gesendeten-Ordner
+  - **SmartReply / SmartForward**: Antworten/Weiterleiten mit MIME-Payload
+  - **Ping-Befehl**: Long-Poll Push-Benachrichtigung (Heartbeat bis 59 Minuten)
+  - **GetAttachment**: Anhang-Abruf per AttachmentName
+  - Basic Auth + App-Passwort-Unterstützung
+  - Express-Server auf Port 3005 mit `/health`-Endpoint
+  - Eigenes Dockerfile
+- **S/MIME API** (`packages/api-gateway/src/routes/smime.ts`)
+  - `GET/POST/PUT/DELETE /api/v1/smime/certificates` — PKCS#12-Zertifikat-Verwaltung
+  - `GET /api/v1/smime/public-key/:email` — Public Key für Verschlüsselung ausgehender Mails
+  - `GET/DELETE /api/v1/smime/devices` — ActiveSync-Geräteverwaltung
+- **Prisma-Schema-Erweiterungen**
+  - `ActiveSyncDevice`-Model: Geräte-ID, Type, Policy-Key, Status, SyncKey-Map
+  - `UserCertificate`-Model: Fingerprint, Subject/Issuer, Gültigkeit, Signing/Encrypt-Default
+- **Autodiscover v1**: ActiveSync-Protokollblock (`<Type>ActiveSync</Type>`) hinzugefügt
+- **nginx**: Proxy-Route für `/Microsoft-Server-ActiveSync` mit Long-Poll-Timeout (600s)
+- **docker-compose.yml**: `activesync`-Service auf Port 3005
+
+### Changed
+- `packages/autodiscover/src/v1.ts`: `EAS_URL`-Umgebungsvariable + ActiveSync-Block im XML
+
+---
+
 ## [0.6.1] — 2026-05-09 — Docker Hub Publishing & CI/CD
 
 ### Added
