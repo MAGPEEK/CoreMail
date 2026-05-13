@@ -1,19 +1,19 @@
 import bcrypt from 'bcrypt';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import type { AuthResult } from '../types.js';
 
 export async function authenticateLocal(
   email: string,
   password: string,
 ): Promise<AuthResult | null> {
-  const prisma = getPrisma();
+  
 
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
     include: { domain: true },
   });
 
-  if (!user || !user.active) return null;
+  if (!user || !user.active || !user.passwordHash) return null;
 
   const pepper = process.env['PEPPER'] ?? '';
   const pepperedPassword = password + pepper;
@@ -34,7 +34,7 @@ export async function authenticateAppPassword(
   email: string,
   password: string,
 ): Promise<AuthResult | null> {
-  const prisma = getPrisma();
+  
 
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
@@ -51,7 +51,7 @@ export async function authenticateAppPassword(
     if (valid) {
       await prisma.appPassword.update({
         where: { id: ap.id },
-        data: { lastUsed: new Date() },
+        data: { lastUsedAt: new Date() },
       });
       return {
         userId: user.id,

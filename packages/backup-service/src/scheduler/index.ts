@@ -2,7 +2,7 @@ import { CronJob } from 'cron';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink } from 'node:fs/promises';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { exportZip } from '../export/zip.js';
 import { exportMbox } from '../export/mbox.js';
@@ -39,7 +39,7 @@ export function startBackupScheduler() {
 }
 
 export async function runFullBackup(): Promise<void> {
-  const prisma = getPrisma();
+  
   const users = await prisma.user.findMany({
     where: { active: true },
     select: { id: true, email: true },
@@ -86,7 +86,7 @@ async function applyRetentionPolicy() {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - retentionDays);
 
-  const prisma = getPrisma();
+  
   const { count } = await prisma.backupJob.deleteMany({
     where: { completedAt: { lt: cutoff }, scope: { not: 'full' } },
   });
@@ -102,7 +102,7 @@ export async function runUserBackup(
   format: 'mbox' | 'zip',
   folderIds: string[] | null
 ): Promise<{ jobId: string; downloadUrl: string }> {
-  const prisma = getPrisma();
+  
 
   const job = await prisma.backupJob.create({
     data: { userId, scope: 'user', format, status: 'PENDING' },

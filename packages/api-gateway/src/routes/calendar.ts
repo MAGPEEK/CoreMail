@@ -1,14 +1,14 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
-export const calendarRouter = Router();
+export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
 
 // GET /api/v1/calendar
 calendarRouter.get('/', async (req: Request, res: Response) => {
-  const prisma = getPrisma();
+  
   const calendars = await prisma.calendar.findMany({
     where: { userId: req.apiUser!.userId },
     select: { id: true, name: true, color: true },
@@ -22,7 +22,7 @@ calendarRouter.post('/', async (req: Request, res: Response) => {
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const calendar = await prisma.calendar.create({
     data: { userId: req.apiUser!.userId, name: parsed.data.name, color: parsed.data.color },
   });
@@ -37,11 +37,11 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const calendarId = req.query['calendarId'] as string | undefined;
 
-  const prisma = getPrisma();
+  
   const calendars = await prisma.calendar.findMany({ where: { userId: req.apiUser!.userId } });
   const calIds = calendarId
-    ? calendars.filter((c) => c.id === calendarId).map((c) => c.id)
-    : calendars.map((c) => c.id);
+    ? calendars.filter((c: { id: string }) => c.id === calendarId).map((c: { id: string }) => c.id)
+    : calendars.map((c: { id: string }) => c.id);
 
   const events = await prisma.calendarEvent.findMany({
     where: { calendarId: { in: calIds }, dtStart: { gte: start }, dtEnd: { lte: end } },
@@ -69,17 +69,19 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
 
   const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule } = parsed.data;
 
-  const prisma = getPrisma();
+  
   const calendar = await prisma.calendar.findFirst({
     where: { id: calendarId, userId: req.apiUser!.userId },
   });
   if (!calendar) { res.status(404).json({ error: 'Calendar not found' }); return; }
 
-  const icalData = buildIcal({ summary, dtStart, dtEnd, description, location, allDay, rrule });
+  const icalData = buildIcal({ summary, dtStart, dtEnd, description, location, allDay, ...(rrule !== undefined ? { rrule } : {}) });
 
+  const { randomUUID } = await import('node:crypto');
   const event = await prisma.calendarEvent.create({
     data: {
       calendarId,
+      uid: randomUUID(),
       summary,
       dtStart: new Date(dtStart),
       dtEnd: new Date(dtEnd),
@@ -96,7 +98,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const parsed = EventSchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const event = await prisma.calendarEvent.findFirst({
     where: { id, calendar: { userId: req.apiUser!.userId } },
   });
@@ -110,7 +112,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     description: description ?? '',
     location: location ?? '',
     allDay: allDay ?? false,
-    rrule,
+    ...(rrule !== undefined ? { rrule } : {}),
   });
 
   const updated = await prisma.calendarEvent.update({
@@ -129,7 +131,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
 // DELETE /api/v1/calendar/events/:id
 calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const prisma = getPrisma();
+  
   const event = await prisma.calendarEvent.findFirst({
     where: { id, calendar: { userId: req.apiUser!.userId } },
   });

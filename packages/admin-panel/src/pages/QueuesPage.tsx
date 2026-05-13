@@ -4,7 +4,6 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 
 interface QueueStat { name: string; count: number }
-interface QueueJob { index: number; data: Record<string, unknown> | string }
 
 export function QueuesPage() {
   const qc = useQueryClient();

@@ -1,10 +1,10 @@
-import express from 'express';
+import express, { type Express } from 'express';
 import { authRouter } from './router/auth.js';
 import { mfaRouter } from './router/mfa.js';
 import { appPasswordRouter } from './router/app-passwords.js';
 import { sessionRouter } from './router/sessions.js';
 
-export function createApp() {
+export function createApp(): Express {
   const app = express();
   app.use(express.json());
 

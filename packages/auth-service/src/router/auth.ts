@@ -1,9 +1,11 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger } from '@coremail/core';
+import type { UserRole } from '@coremail/core/types';
 import { authenticateLocal } from '../local/index.js';
 import { isMfaEnabled, createMfaChallenge, verifyMfaChallenge } from '../mfa/index.js';
+import { randomUUID } from 'node:crypto';
 
 const log = createLogger('auth:router');
 
@@ -23,7 +25,7 @@ const RefreshSchema = z.object({
   refreshToken: z.string(),
 });
 
-export const authRouter = Router();
+export const authRouter: RouterType = Router();
 
 authRouter.post('/login', async (req: Request, res: Response) => {
   const parsed = LoginSchema.safeParse(req.body);
@@ -37,9 +39,10 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
   let result = await authenticateLocal(email, password);
 
-  // Try LDAP if local fails
   if (!result) {
     try {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — optional module
       const { authenticateLdap } = await import('@coremail/auth-ldap');
       result = await authenticateLdap(email, password);
     } catch {
@@ -65,22 +68,37 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
-  const accessToken = signAccessToken({ userId: result.userId, role: result.role });
-  const refreshToken = signRefreshToken({ userId: result.userId });
+  const user = await prisma.user.findUnique({
+    where: { id: result.userId },
+    select: { id: true, email: true, role: true, domainId: true },
+  });
+  if (!user) {
+    res.status(401).json({ error: 'User not found' });
+    return;
+  }
 
-  // Persist session
-  const prisma = getPrisma();
+  const sessionId = randomUUID();
+  const accessToken = signAccessToken({
+    sub: user.id,
+    email: user.email,
+    role: user.role as UserRole,
+    domainId: user.domainId,
+    sessionId,
+    mfaVerified: false,
+  });
+  const refreshToken = signRefreshToken(user.id, sessionId);
+
   await prisma.session.create({
     data: {
-      userId: result.userId,
-      token: refreshToken,
+      userId: user.id,
+      tokenHash: refreshToken,
       ipAddress: ip,
       userAgent: req.get('user-agent') ?? '',
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
   });
 
-  log.info({ userId: result.userId, source: result.source }, 'Login successful');
+  log.info({ userId: user.id, source: result.source }, 'Login successful');
   res.json({ accessToken, refreshToken, expiresIn: 900 });
 });
 
@@ -91,10 +109,11 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
     return;
   }
 
+  const { code, backupCode, webauthnResponse } = parsed.data;
   const userId = await verifyMfaChallenge(parsed.data.challengeToken, {
-    code: parsed.data.code,
-    backupCode: parsed.data.backupCode,
-    webauthnResponse: parsed.data.webauthnResponse,
+    ...(code !== undefined ? { code } : {}),
+    ...(backupCode !== undefined ? { backupCode } : {}),
+    ...(webauthnResponse !== undefined ? { webauthnResponse } : {}),
   });
 
   if (!userId) {
@@ -103,20 +122,30 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
     return;
   }
 
-  const prisma = getPrisma();
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, role: true, domainId: true },
+  });
   if (!user) {
     res.status(401).json({ error: 'User not found' });
     return;
   }
 
-  const accessToken = signAccessToken({ userId: user.id, role: user.role });
-  const refreshToken = signRefreshToken({ userId: user.id });
+  const sessionId = randomUUID();
+  const accessToken = signAccessToken({
+    sub: user.id,
+    email: user.email,
+    role: user.role as UserRole,
+    domainId: user.domainId,
+    sessionId,
+    mfaVerified: true,
+  });
+  const refreshToken = signRefreshToken(user.id, sessionId);
 
   await prisma.session.create({
     data: {
       userId: user.id,
-      token: refreshToken,
+      tokenHash: refreshToken,
       ipAddress: req.ip ?? 'unknown',
       userAgent: req.get('user-agent') ?? '',
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -134,16 +163,16 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     return;
   }
 
-  const payload = verifyRefreshToken(parsed.data.refreshToken);
-  if (!payload) {
+  let payload: { sub: string; sessionId: string };
+  try {
+    payload = verifyRefreshToken(parsed.data.refreshToken);
+  } catch {
     res.status(401).json({ error: 'Invalid refresh token' });
     return;
   }
 
-  const prisma = getPrisma();
   const session = await prisma.session.findUnique({
-    where: { token: parsed.data.refreshToken },
-    include: { user: true },
+    where: { tokenHash: parsed.data.refreshToken },
   });
 
   if (!session || session.expiresAt < new Date()) {
@@ -151,15 +180,30 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     return;
   }
 
-  const accessToken = signAccessToken({ userId: session.userId, role: session.user.role });
+  const sessionUser = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { id: true, email: true, role: true, domainId: true },
+  });
+  if (!sessionUser) {
+    res.status(401).json({ error: 'User not found' });
+    return;
+  }
+
+  const accessToken = signAccessToken({
+    sub: sessionUser.id,
+    email: sessionUser.email,
+    role: sessionUser.role as UserRole,
+    domainId: sessionUser.domainId,
+    sessionId: payload.sessionId,
+    mfaVerified: false,
+  });
   res.json({ accessToken, expiresIn: 900 });
 });
 
 authRouter.post('/logout', async (req: Request, res: Response) => {
   const token = req.body?.refreshToken as string | undefined;
   if (token) {
-    const prisma = getPrisma();
-    await prisma.session.deleteMany({ where: { token } });
+    await prisma.session.deleteMany({ where: { tokenHash: token } });
   }
   res.json({ ok: true });
 });

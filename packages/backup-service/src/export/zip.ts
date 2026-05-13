@@ -1,7 +1,7 @@
 import archiver from 'archiver';
 import { createWriteStream } from 'node:fs';
 import { exportEmlStream } from './mbox.js';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:zip');
@@ -36,7 +36,7 @@ export async function exportZip(
       }
 
       // Add contacts as vCard
-      const prisma = getPrisma();
+      
       const contacts = await prisma.contact.findMany({ where: { userId } });
       for (const c of contacts) {
         if (c.vcardData) {

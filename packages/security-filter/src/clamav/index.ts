@@ -54,7 +54,7 @@ export async function scanBuffer(buffer: Buffer): Promise<ClamavResult> {
       } else if (response.includes('FOUND')) {
         const virusName = response.split(':')[1]?.trim().replace(' FOUND', '');
         log.warn({ virusName }, 'Virus detected');
-        resolve({ clean: false, virusName });
+        resolve({ clean: false, ...(virusName ? { virusName } : {}) });
       } else {
         log.error({ response }, 'Unexpected ClamAV response');
         // Fail safe — treat as clean to avoid blocking legitimate mail

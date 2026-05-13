@@ -1,6 +1,4 @@
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { TopBar } from './components/TopBar.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
@@ -30,14 +28,11 @@ function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { composeOpen } = useUiStore();
-  const [searchQ, setSearchQ] = useState('');
   useMailEvents();
 
   const currentApp = APP_MAP[location.pathname] ?? 'mail';
 
   const handleSearch = (q: string) => {
-    setSearchQ(q);
-    // navigate to mail search results
     if (q) navigate(`/mail?q=${encodeURIComponent(q)}`);
   };
 

@@ -230,7 +230,7 @@ async function processInboundMessage(
       fromAddr: meta.mailFrom,
       rcptTo: rcpt,
       toJunk: filterResult.junkFolder ?? false,
-      spamScore: filterResult.spamScore,
+      ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     });
   }
 }

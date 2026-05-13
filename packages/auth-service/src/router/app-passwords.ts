@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { verifyAccessToken } from '@coremail/core';
 import {
@@ -7,13 +7,13 @@ import {
   deleteAppPassword,
 } from '../app-passwords/index.js';
 
-export const appPasswordRouter = Router();
+export const appPasswordRouter: RouterType = Router();
 
 function getAuthenticatedUserId(req: Request): string | null {
   const header = req.get('Authorization');
   if (!header?.startsWith('Bearer ')) return null;
   const payload = verifyAccessToken(header.slice(7));
-  return payload?.userId ?? null;
+  return payload?.sub ?? null;
 }
 
 appPasswordRouter.get('/', async (req: Request, res: Response) => {

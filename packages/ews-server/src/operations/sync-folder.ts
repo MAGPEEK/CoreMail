@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -14,7 +14,7 @@ export async function syncFolderHierarchy(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: user.userId } });
   if (!mailbox) return errorResponse('SyncFolderHierarchy', 'ErrorMailboxNotFound', 'Mailbox not found');
@@ -65,7 +65,7 @@ export async function syncFolderItems(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const folderIdRaw = request['SyncFolderId'] as Record<string, unknown> | undefined;
   const distinguishedId = folderIdRaw?.['DistinguishedFolderId'] as
@@ -83,9 +83,12 @@ export async function syncFolderItems(
     const name = WELL_KNOWN_FOLDERS[distinguishedId['$']?.['Id']?.toLowerCase() ?? ''] ?? 'INBOX';
     folder = await prisma.folder.findFirst({ where: { mailboxId: mailbox.id, name } });
   } else if (folderId) {
-    folder = await prisma.folder.findFirst({
-      where: { id: folderId['$']?.['Id'], mailboxId: mailbox.id },
-    });
+    const folderIdStr = folderId['$']?.['Id'];
+    if (folderIdStr) {
+      folder = await prisma.folder.findFirst({
+        where: { id: folderIdStr, mailboxId: mailbox.id },
+      });
+    }
   }
 
   if (!folder) return errorResponse('SyncFolderItems', 'ErrorFolderNotFound', 'Folder not found');

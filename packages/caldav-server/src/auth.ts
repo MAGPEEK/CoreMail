@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('caldav:auth');
 
@@ -25,9 +25,9 @@ export async function davAuthMiddleware(
   if (authHeader.startsWith('Bearer ')) {
     const payload = verifyAccessToken(authHeader.slice(7));
     if (payload) {
-      const prisma = getPrisma();
+      
       const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
+        where: { id: payload.sub },
         select: { id: true, email: true, active: true },
       });
       if (user?.active) {
@@ -56,9 +56,9 @@ export async function davAuthMiddleware(
           if (data.accessToken) {
             const payload = verifyAccessToken(data.accessToken);
             if (payload) {
-              const prisma = getPrisma();
+              
               const user = await prisma.user.findUnique({
-                where: { id: payload.userId },
+                where: { id: payload.sub },
                 select: { id: true, email: true },
               });
               if (user) {

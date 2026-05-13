@@ -210,7 +210,7 @@ export async function handleFetch(
     include: { attachments: { select: { filename: true, mimeType: true, size: true } } },
   });
 
-  const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid));
+  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid));
 
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
@@ -263,7 +263,7 @@ export async function handleStore(
     orderBy: { uid: 'asc' },
   });
 
-  const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid));
+  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid));
 
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
@@ -274,7 +274,7 @@ export async function handleStore(
     } else if (command === '+FLAGS' || command === '+FLAGS.SILENT') {
       updatedFlags = [...new Set([...msg.flags, ...newFlags])];
     } else {
-      updatedFlags = msg.flags.filter((f) => !newFlags.includes(f));
+      updatedFlags = msg.flags.filter((f: string) => !newFlags.includes(f));
     }
 
     const updatedMsg = await prisma.message.update({
@@ -324,7 +324,7 @@ export async function handleExpunge(session: ImapSession, tag: string): Promise<
   });
 
   for (const [i, msg] of allMessages.entries()) {
-    if (toDelete.some((d) => d.uid === msg.uid)) {
+    if (toDelete.some((d: { uid: number }) => d.uid === msg.uid)) {
       sendUntagged(session, `${i + 1} EXPUNGE`);
     }
   }

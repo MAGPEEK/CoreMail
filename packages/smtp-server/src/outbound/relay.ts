@@ -39,8 +39,8 @@ async function signMessage(rawBuffer: Buffer, dkim: DkimOptions): Promise<Buffer
   const signed = await dkimSign(rawBuffer, {
     canonicalization: 'relaxed/relaxed',
     algorithm: 'rsa-sha256',
-    domainName: dkim.dkimDomain!,
-    keySelector: dkim.dkimSelector!,
+    signingDomain: dkim.dkimDomain!,
+    selector: dkim.dkimSelector!,
     privateKey: dkim.dkimPrivateKey!,
   });
 

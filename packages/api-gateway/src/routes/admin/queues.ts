@@ -1,15 +1,15 @@
-import { Router, type Request, type Response } from 'express';
-import { getRedis } from '@coremail/core';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { getRedisClient } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
-export const adminQueuesRouter = Router();
+export const adminQueuesRouter: RouterType = Router();
 adminQueuesRouter.use(requireAdmin);
 
 const QUEUE_NAMES = ['smtp:outbound', 'smtp:outbound:retry', 'smtp:outbound:dead', 'smtp:inbound'];
 
 // GET /api/v1/admin/queues
 adminQueuesRouter.get('/', async (_req: Request, res: Response) => {
-  const redis = getRedis();
+  const redis = getRedisClient();
   const stats = await Promise.all(
     QUEUE_NAMES.map(async (name) => ({
       name,
@@ -28,7 +28,7 @@ adminQueuesRouter.get('/:name/jobs', async (req: Request, res: Response) => {
   const queueKey = QUEUE_NAMES.find((q) => q === name || q.endsWith(`:${name}`));
   if (!queueKey) { res.status(404).json({ error: 'Queue not found' }); return; }
 
-  const redis = getRedis();
+  const redis = getRedisClient();
   const items = await redis.lrange(queueKey, offset, offset + limit - 1);
   const total = await redis.llen(queueKey);
 
@@ -45,7 +45,7 @@ adminQueuesRouter.delete('/:name/jobs/:index', async (req: Request, res: Respons
   const queueKey = QUEUE_NAMES.find((q) => q === name || q.endsWith(`:${name}`));
   if (!queueKey) { res.status(404).json({ error: 'Queue not found' }); return; }
 
-  const redis = getRedis();
+  const redis = getRedisClient();
   const item = await redis.lindex(queueKey, parseInt(index, 10));
   if (!item) { res.status(404).json({ error: 'Job not found' }); return; }
 
@@ -62,14 +62,14 @@ adminQueuesRouter.post('/:name/flush', async (req: Request, res: Response) => {
   const queueKey = QUEUE_NAMES.find((q) => q === name || q.endsWith(`:${name}`));
   if (!queueKey) { res.status(404).json({ error: 'Queue not found' }); return; }
 
-  const redis = getRedis();
+  const redis = getRedisClient();
   await redis.del(queueKey);
   res.json({ ok: true });
 });
 
 // GET /api/v1/admin/queues/stats
 adminQueuesRouter.get('/stats', async (_req: Request, res: Response) => {
-  const redis = getRedis();
+  const redis = getRedisClient();
   const stats = await Promise.all(
     QUEUE_NAMES.map(async (name) => ({
       name,

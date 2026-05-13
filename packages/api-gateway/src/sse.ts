@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getRedis, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
 
 const log = createLogger('api:sse');
 
@@ -24,7 +24,7 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
     res.write(':heartbeat\n\n');
   }, 25_000);
 
-  const subscriber = getRedis().duplicate();
+  const subscriber = getRedisClient().duplicate();
   await subscriber.subscribe(CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, `user:${userId}:events`);
 
   subscriber.on('message', (channel: string, message: string) => {

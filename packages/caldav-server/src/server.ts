@@ -25,7 +25,7 @@ async function main() {
 
   // DAV principal discovery
   app.all('/dav', davAuthMiddleware, (req, res) => {
-    const userId = req.davUser?.userId ?? '';
+    const userId = (req as any).davUser?.userId ?? '';
     res.redirect(301, `/dav/calendars/${userId}`);
   });
 

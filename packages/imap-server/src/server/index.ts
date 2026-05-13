@@ -193,7 +193,8 @@ function parseLine(line: string): string[] {
 function setupIdlePush(): void {
   const subscriber = getRedisClient().duplicate();
 
-  void subscriber.subscribe(CHANNEL_MAIL_NEW, (message) => {
+  void subscriber.subscribe(CHANNEL_MAIL_NEW);
+  subscriber.on('message', (_channel, message) => {
     try {
       const event = JSON.parse(message) as {
         userId: string;

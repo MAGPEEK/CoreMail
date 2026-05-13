@@ -1,11 +1,11 @@
 import express from 'express';
 import { z } from 'zod';
-import { connectDb } from '@coremail/storage';
-import { connectRedis, createLogger, verifyAccessToken } from '@coremail/core';
+import { connectDatabase } from '@coremail/storage';
+import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core';
 import { runUserBackup, runFullBackup, startBackupScheduler } from './scheduler/index.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
 import { listBackups } from './upload/s3.js';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
 const app = express();
@@ -19,7 +19,7 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   if (!header.startsWith('Bearer ')) { res.status(401).json({ error: 'Authorization required' }); return; }
   const payload = verifyAccessToken(header.slice(7));
   if (!payload) { res.status(401).json({ error: 'Invalid token' }); return; }
-  (req as express.Request & { userId: string; role: string }).userId = payload.userId;
+  (req as express.Request & { userId: string; role: string }).userId = payload.sub;
   (req as express.Request & { userId: string; role: string }).role = payload.role;
   next();
 }
@@ -57,8 +57,10 @@ app.post('/backup/user/export', requireAuth, async (req, res) => {
 // GET /backup/user/jobs/:id — poll job status
 app.get('/backup/user/jobs/:id', requireAuth, async (req, res) => {
   const userId = (req as AuthedRequest).userId;
-  const prisma = getPrisma();
-  const job = await prisma.backupJob.findFirst({ where: { id: req.params['id'], userId } });
+  
+  const jobId = req.params['id'];
+  if (!jobId) { res.status(400).json({ error: 'Missing id' }); return; }
+  const job = await prisma.backupJob.findFirst({ where: { id: jobId, userId } });
   if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
   res.json(job);
 });
@@ -98,7 +100,7 @@ app.get('/backup/admin/list', requireAdmin, async (req, res) => {
 
 // GET /backup/admin/jobs — list all backup jobs
 app.get('/backup/admin/jobs', requireAdmin, async (req, res) => {
-  const prisma = getPrisma();
+  
   const limit = Math.min(parseInt(String(req.query['limit'] ?? '50'), 10), 200);
   const jobs = await prisma.backupJob.findMany({
     orderBy: { createdAt: 'desc' },
@@ -135,8 +137,8 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
 });
 
 async function start() {
-  await connectDb();
-  await connectRedis();
+  await connectDatabase();
+  getRedisClient();
 
   startBackupScheduler();
 

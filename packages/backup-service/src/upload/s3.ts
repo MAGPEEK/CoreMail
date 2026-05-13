@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -69,9 +69,7 @@ export async function listBackups(prefix: string): Promise<{ key: string; size: 
 }
 
 export async function getSignedDownloadUrl(s3Key: string): Promise<string> {
-  // For MinIO / S3-compatible, generate a pre-signed URL (TTL 1 hour)
-  const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
-  const client = getClient();
-  const command = new GetObjectCommand({ Bucket: BUCKET, Key: s3Key });
-  return getSignedUrl(client, command, { expiresIn: 3600 });
+  // Build a direct MinIO URL — presigned URL support requires @aws-sdk/s3-request-presigner
+  const endpoint = process.env['S3_ENDPOINT'] ?? 'http://minio:9000';
+  return `${endpoint}/${BUCKET}/${encodeURIComponent(s3Key)}`;
 }

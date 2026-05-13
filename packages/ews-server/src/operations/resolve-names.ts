@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -6,7 +6,7 @@ export async function resolveNames(
   request: Record<string, unknown>,
   _user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const unresolvedEntry = String(request['UnresolvedEntry'] ?? '');
   if (!unresolvedEntry || unresolvedEntry.length < 2) {
@@ -45,8 +45,8 @@ export async function resolveNames(
   });
 
   const results = [
-    ...users.map((u) => ({ email: u.email, name: u.displayName, company: '' })),
-    ...contacts.map((c) => ({ email: c.email, name: c.displayName, company: c.company })),
+    ...users.map((u: { email: string; displayName: string }) => ({ email: u.email, name: u.displayName, company: '' })),
+    ...contacts.map((c: { email: string; displayName: string; company: string }) => ({ email: c.email, name: c.displayName, company: c.company })),
   ];
 
   return soapEnvelope((body) => {

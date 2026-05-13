@@ -1,6 +1,6 @@
 import express from 'express';
-import { connectDb } from '@coremail/storage';
-import { connectRedis, createLogger } from '@coremail/core';
+import { connectDatabase } from '@coremail/storage';
+import { getRedisClient, createLogger } from '@coremail/core';
 
 import { mailRouter } from './routes/mail.js';
 import { calendarRouter } from './routes/calendar.js';
@@ -55,8 +55,8 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 async function start() {
-  await connectDb();
-  await connectRedis();
+  await connectDatabase();
+  getRedisClient(); // initialize connection
   app.listen(PORT, () => log.info({ port: PORT }, 'API Gateway listening'));
 }
 

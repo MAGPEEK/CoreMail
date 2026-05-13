@@ -1,8 +1,15 @@
 import { Issuer, generators, type Client } from 'openid-client';
-import { getPrisma } from '@coremail/storage';
-import { getRedis } from '@coremail/core';
-import { createLogger } from '@coremail/core';
-import type { AuthResult } from '../../auth-service/src/types.js';
+import { prisma } from '@coremail/storage';
+import { getRedisClient, createLogger } from '@coremail/core';
+
+export interface AuthResult {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  source: 'local' | 'ldap' | 'oidc';
+  mfaRequired: boolean;
+}
 
 const log = createLogger('auth:sso');
 
@@ -22,7 +29,7 @@ async function getOidcClient(providerId: string): Promise<Client | null> {
     return clientCache.get(providerId) ?? null;
   }
 
-  const prisma = getPrisma();
+  
   const provider = await prisma.oidcProvider.findUnique({ where: { id: providerId } });
   if (!provider || !provider.active) return null;
 
@@ -51,7 +58,7 @@ export async function startOidcLogin(
 
   const state = generators.state();
   const nonce = generators.nonce();
-  const redis = getRedis();
+  const redis = getRedisClient();
 
   await redis.setex(
     `${STATE_PREFIX}${state}`,
@@ -73,7 +80,7 @@ export async function handleOidcCallback(
   state: string,
   code: string,
 ): Promise<AuthResult | null> {
-  const redis = getRedis();
+  const redis = getRedisClient();
   const raw = await redis.get(`${STATE_PREFIX}${state}`);
   if (!raw) {
     log.warn({ state }, 'OIDC state not found or expired');
@@ -91,7 +98,7 @@ export async function handleOidcCallback(
   const client = await getOidcClient(providerId);
   if (!client) return null;
 
-  const prisma = getPrisma();
+  
   const provider = await prisma.oidcProvider.findUnique({ where: { id: providerId } });
   if (!provider) return null;
 
@@ -161,7 +168,7 @@ export async function handleOidcCallback(
 }
 
 export async function listProviders() {
-  const prisma = getPrisma();
+  
   return prisma.oidcProvider.findMany({
     where: { active: true },
     select: { id: true, name: true, discoveryUrl: true },

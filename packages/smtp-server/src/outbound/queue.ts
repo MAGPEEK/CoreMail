@@ -55,9 +55,9 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivering message');
 
       await relayMessage(buffer, from, to, {
-        dkimDomain,
-        dkimSelector,
-        dkimPrivateKey,
+        ...(dkimDomain ? { dkimDomain } : {}),
+        ...(dkimSelector ? { dkimSelector } : {}),
+        ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
       });
 
       log.info({ jobId: job.id, to }, 'Message delivered');

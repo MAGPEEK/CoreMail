@@ -31,7 +31,8 @@ export function initTracing(config: TracingConfig): void {
       [SEMRESATTRS_SERVICE_NAME]: serviceName,
       [SEMRESATTRS_SERVICE_VERSION]: serviceVersion,
     }),
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spanProcessors: [new SimpleSpanProcessor(exporter) as any],
   });
 
   sdk.start();

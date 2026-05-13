@@ -1,6 +1,6 @@
 import * as OTPAuth from 'otpauth';
 import QRCode from 'qrcode';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('auth:totp');
@@ -26,14 +26,14 @@ export async function setupTotp(
     algorithm: 'SHA1',
     digits: 6,
     period: 30,
-    secret: OTPAuth.Secret.generate(20),
+    secret: new OTPAuth.Secret({ size: 20 }),
   });
 
   const secret = totp.secret.base32;
   const otpauthUrl = totp.toString();
   const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl);
 
-  const prisma = getPrisma();
+  
   await prisma.userMfa.upsert({
     where: { userId },
     create: { userId, totpSecret: encryptSecret(secret), totpEnabled: false },
@@ -45,7 +45,7 @@ export async function setupTotp(
 }
 
 export async function confirmTotp(userId: string, code: string): Promise<boolean> {
-  const prisma = getPrisma();
+  
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   if (!mfa?.totpSecret) return false;
 
@@ -63,7 +63,7 @@ export async function confirmTotp(userId: string, code: string): Promise<boolean
 }
 
 export async function verifyTotp(userId: string, code: string): Promise<boolean> {
-  const prisma = getPrisma();
+  
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   if (!mfa?.totpSecret || !mfa.totpEnabled) return false;
 
@@ -74,7 +74,7 @@ export async function verifyTotp(userId: string, code: string): Promise<boolean>
 }
 
 export async function disableTotp(userId: string): Promise<void> {
-  const prisma = getPrisma();
+  
   await prisma.userMfa.update({
     where: { userId },
     data: { totpSecret: null, totpEnabled: false },

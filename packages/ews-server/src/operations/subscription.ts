@@ -1,4 +1,4 @@
-import { getRedis, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE } from '@coremail/core';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 import type { Response } from 'express';
@@ -17,7 +17,7 @@ export async function subscribe(
   const subscriptionId = randomBytes(16).toString('hex');
 
   // Store subscription in Redis (30 min TTL)
-  const redis = getRedis();
+  const redis = getRedisClient();
   await redis.setex(
     `ews:subscription:${subscriptionId}`,
     30 * 60,
@@ -40,7 +40,7 @@ export async function unsubscribe(
   _user: EwsUser,
 ): Promise<string> {
   const subscriptionId = String(request['SubscriptionId'] ?? '');
-  const redis = getRedis();
+  const redis = getRedisClient();
   await redis.del(`ews:subscription:${subscriptionId}`);
 
   const stream = activeStreams.get(subscriptionId);
@@ -77,7 +77,7 @@ export async function getStreamingEvents(
 
   activeStreams.set(subscriptionId, res);
 
-  const redis = getRedis();
+  const redis = getRedisClient();
   const subscriber = redis.duplicate();
   await subscriber.subscribe(CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE);
 

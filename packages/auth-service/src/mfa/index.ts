@@ -1,5 +1,5 @@
-import { getPrisma } from '@coremail/storage';
-import { getRedis } from '@coremail/core';
+import { prisma } from '@coremail/storage';
+import { getRedisClient } from '@coremail/core';
 import { randomBytes } from 'node:crypto';
 import { verifyTotp } from './totp.js';
 import { verifyBackupCode } from './backup-codes.js';
@@ -10,7 +10,7 @@ const MFA_CHALLENGE_TTL = 10 * 60; // 10 minutes
 const MFA_CHALLENGE_PREFIX = 'auth:mfa:challenge:';
 
 export async function isMfaEnabled(userId: string): Promise<boolean> {
-  const prisma = getPrisma();
+  
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   if (!mfa) return false;
   const hasCreds = Array.isArray(mfa.webAuthnCredentials) && mfa.webAuthnCredentials.length > 0;
@@ -18,7 +18,7 @@ export async function isMfaEnabled(userId: string): Promise<boolean> {
 }
 
 export async function createMfaChallenge(userId: string): Promise<MfaChallenge> {
-  const prisma = getPrisma();
+  
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
 
   let method: MfaChallenge['method'] = 'totp';
@@ -30,7 +30,7 @@ export async function createMfaChallenge(userId: string): Promise<MfaChallenge> 
   }
 
   const challengeToken = randomBytes(32).toString('hex');
-  const redis = getRedis();
+  const redis = getRedisClient();
   await redis.setex(
     `${MFA_CHALLENGE_PREFIX}${challengeToken}`,
     MFA_CHALLENGE_TTL,
@@ -48,7 +48,7 @@ export async function verifyMfaChallenge(
     webauthnResponse?: unknown;
   },
 ): Promise<string | null> {
-  const redis = getRedis();
+  const redis = getRedisClient();
   const raw = await redis.get(`${MFA_CHALLENGE_PREFIX}${challengeToken}`);
   if (!raw) return null;
 
@@ -61,10 +61,10 @@ export async function verifyMfaChallenge(
   } else if (method === 'totp' && opts.code) {
     verified = await verifyTotp(userId, opts.code);
   } else if (method === 'webauthn' && opts.webauthnResponse) {
-    const { AuthenticationResponseJSON } = await import('@simplewebauthn/server');
     verified = await finishWebAuthnAuthentication(
       userId,
-      opts.webauthnResponse as Parameters<typeof finishWebAuthnAuthentication>[1],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      opts.webauthnResponse as any,
     );
   }
 

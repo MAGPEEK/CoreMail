@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('auth:backup-codes');
@@ -13,7 +13,7 @@ export async function generateBackupCodes(userId: string): Promise<string[]> {
   const codes = Array.from({ length: 10 }, () => generateCode());
   const hashes = await Promise.all(codes.map((c) => bcrypt.hash(c, 12)));
 
-  const prisma = getPrisma();
+  
   await prisma.userMfa.upsert({
     where: { userId },
     create: { userId, backupCodes: hashes, backupCodesUsed: 0 },
@@ -25,7 +25,7 @@ export async function generateBackupCodes(userId: string): Promise<string[]> {
 }
 
 export async function verifyBackupCode(userId: string, code: string): Promise<boolean> {
-  const prisma = getPrisma();
+  
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   if (!mfa || mfa.backupCodes.length === 0) return false;
 
@@ -34,7 +34,7 @@ export async function verifyBackupCode(userId: string, code: string): Promise<bo
     if (!hash) continue;
     const valid = await bcrypt.compare(code.toUpperCase(), hash);
     if (valid) {
-      const remaining = mfa.backupCodes.filter((_, idx) => idx !== i);
+      const remaining = mfa.backupCodes.filter((_: string, idx: number) => idx !== i);
       await prisma.userMfa.update({
         where: { userId },
         data: { backupCodes: remaining, backupCodesUsed: { increment: 1 } },

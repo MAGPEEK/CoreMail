@@ -25,10 +25,10 @@ export async function authenticateMail(
       mta: hostname,
     });
 
-    const spf   = (result.spf?.status?.result ?? 'none') as AuthResult['spf'];
+    const spf   = (result.spf !== false ? (result.spf.status?.result ?? 'none') : 'none') as AuthResult['spf'];
     const dkim  = result.dkim?.results?.[0]?.status?.result === 'pass' ? 'pass' : result.dkim?.results?.length ? 'fail' : 'none';
-    const dmarc = (result.dmarc?.status?.result === 'pass' ? 'pass' : result.dmarc?.status?.result ? 'fail' : 'none') as AuthResult['dmarc'];
-    const arc   = (result.arc?.status?.result === 'pass' ? 'pass' : result.arc?.status?.result ? 'fail' : 'none') as AuthResult['arc'];
+    const dmarc = (result.dmarc !== false ? (result.dmarc.status?.result === 'pass' ? 'pass' : result.dmarc.status?.result ? 'fail' : 'none') : 'none') as AuthResult['dmarc'];
+    const arc   = (result.arc !== false ? (result.arc.status?.result === 'pass' ? 'pass' : result.arc.status?.result ? 'fail' : 'none') : 'none') as AuthResult['arc'];
 
     log.debug({ senderIp, spf, dkim, dmarc, arc }, 'Auth result');
 
@@ -38,7 +38,7 @@ export async function authenticateMail(
       dmarc,
       arc,
       summary: buildSummary({ spf, dkim, dmarc, arc }),
-      receivedHeader: result.receivedChain ?? '',
+      receivedHeader: typeof result.receivedChain === 'string' ? result.receivedChain : '',
     };
   } catch (err) {
     log.error({ err, senderIp }, 'mailauth error');

@@ -1,4 +1,5 @@
-import { prisma, createLogger } from '@coremail/core';
+import { createLogger } from '@coremail/core';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('security-filter:blacklist');
 

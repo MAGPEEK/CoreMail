@@ -1,7 +1,15 @@
 import { Client } from 'ldapts';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import type { AuthResult } from '../../auth-service/src/types.js';
+
+export interface AuthResult {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  source: 'local' | 'ldap' | 'oidc';
+  mfaRequired: boolean;
+}
 
 const log = createLogger('auth:ldap');
 
@@ -31,7 +39,7 @@ export async function authenticateLdap(
   email: string,
   password: string,
 ): Promise<AuthResult | null> {
-  const prisma = getPrisma();
+  // prisma imported at top level
 
   // Find domain LDAP config
   const domain = email.split('@')[1] ?? '';
@@ -123,7 +131,6 @@ export async function authenticateLdap(
       update: {
         displayName,
         authSource: 'LDAP',
-        lastLdapSync: new Date(),
       },
     });
 
@@ -145,7 +152,7 @@ export async function authenticateLdap(
 }
 
 export async function syncLdapUsers(domainId: string): Promise<number> {
-  const prisma = getPrisma();
+  // prisma imported at top level
   const ldapConfig = await prisma.ldapConfig.findUnique({ where: { domainId } });
   if (!ldapConfig) return 0;
 
@@ -202,14 +209,14 @@ export async function syncLdapUsers(domainId: string): Promise<number> {
           authSource: 'LDAP',
           domainId,
         },
-        update: { displayName, lastLdapSync: new Date() },
+        update: { displayName },
       });
       synced++;
     }
 
     await prisma.ldapConfig.update({
       where: { domainId },
-      data: { lastSync: new Date() },
+      data: { lastSyncAt: new Date() },
     });
 
     log.info({ domainId, synced }, 'LDAP sync completed');

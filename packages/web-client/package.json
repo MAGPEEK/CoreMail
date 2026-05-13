@@ -23,6 +23,7 @@
     "@tiptap/react": "^2.5.8",
     "@tiptap/starter-kit": "^2.5.8",
     "date-fns": "^3.6.0",
+    "dompurify": "^3.4.2",
     "lucide-react": "^0.400.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -31,6 +32,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.2.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.1",

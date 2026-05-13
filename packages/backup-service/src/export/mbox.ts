@@ -1,7 +1,7 @@
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:mbox');
@@ -15,7 +15,7 @@ export async function exportMbox(
   folderIds: string[] | null,
   outPath: string
 ): Promise<{ messageCount: number; sizeBytes: number }> {
-  const prisma = getPrisma();
+  
   const ws: WriteStream = createWriteStream(outPath, { encoding: 'utf8' });
 
   let messageCount = 0;
@@ -28,7 +28,7 @@ export async function exportMbox(
   }
 
   const allFolderIds = folderIds ??
-    (await prisma.folder.findMany({ where: { mailboxId: mailbox.id }, select: { id: true } })).map((f) => f.id);
+    (await prisma.folder.findMany({ where: { mailboxId: mailbox.id }, select: { id: true } })).map((f: { id: string }) => f.id);
 
   for (const folderId of allFolderIds) {
     // Process in pages to avoid loading all messages into memory
@@ -78,7 +78,7 @@ export async function exportMbox(
   }
 
   await new Promise<void>((resolve, reject) => {
-    ws.end((err) => (err ? reject(err) : resolve()));
+    ws.end((err: Error | null | undefined) => (err ? reject(err) : resolve()));
   });
 
   log.info({ userId, messageCount, sizeBytes }, 'MBOX export complete');
@@ -92,12 +92,12 @@ export async function* exportEmlStream(
   userId: string,
   folderIds: string[] | null
 ): AsyncGenerator<{ filename: string; content: string }> {
-  const prisma = getPrisma();
+  
   const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
   if (!mailbox) return;
 
   const allFolderIds = folderIds ??
-    (await prisma.folder.findMany({ where: { mailboxId: mailbox.id }, select: { id: true } })).map((f) => f.id);
+    (await prisma.folder.findMany({ where: { mailboxId: mailbox.id }, select: { id: true } })).map((f: { id: string }) => f.id);
 
   for (const folderId of allFolderIds) {
     const folder = await prisma.folder.findUnique({ where: { id: folderId }, select: { name: true } });

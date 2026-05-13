@@ -1,14 +1,15 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
+import { hashPassword } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
-export const adminMailboxesRouter = Router();
+export const adminMailboxesRouter: RouterType = Router();
 adminMailboxesRouter.use(requireAdmin);
 
 // GET /api/v1/admin/mailboxes
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
-  const prisma = getPrisma();
+  
   const users = await prisma.user.findMany({
     select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
     orderBy: { email: 'asc' },
@@ -19,10 +20,10 @@ adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
 // GET /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const prisma = getPrisma();
+  
   const user = await prisma.user.findUnique({
     where: { id },
-    include: { mailboxes: { include: { folders: { select: { id: true, name: true, totalCount: true, unreadCount: true } } } } },
+    include: { mailbox: { include: { folders: { select: { id: true, name: true, totalCount: true, unreadCount: true } } } } },
   });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   res.json(user);
@@ -33,7 +34,7 @@ const CreateMailboxSchema = z.object({
   displayName: z.string().min(1),
   password: z.string().min(8),
   domainId: z.string(),
-  role: z.enum(['USER', 'ADMIN', 'ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'HELP_DESK', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT']).default('USER'),
+  role: z.enum(['USER', 'ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'HELP_DESK', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG']).default('USER'),
   quotaBytes: z.number().int().default(5368709120),
 });
 
@@ -43,7 +44,7 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { email, displayName, password, domainId, role, quotaBytes } = parsed.data;
-  const prisma = getPrisma();
+  
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) { res.status(409).json({ error: 'Email already in use' }); return; }
@@ -51,22 +52,21 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   const domain = await prisma.domain.findUnique({ where: { id: domainId } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
 
-  const bcrypt = await import('bcrypt');
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await hashPassword(password);
 
   const user = await prisma.user.create({
     data: {
       email, displayName, passwordHash, role, quotaBytes: BigInt(quotaBytes), domainId,
-      mailboxes: {
+      mailbox: {
         create: {
           folders: {
             create: [
-              { name: 'INBOX', totalCount: 0, unreadCount: 0 },
-              { name: 'Drafts', totalCount: 0, unreadCount: 0 },
-              { name: 'Sent', totalCount: 0, unreadCount: 0 },
-              { name: 'Trash', totalCount: 0, unreadCount: 0 },
-              { name: 'Junk', totalCount: 0, unreadCount: 0 },
-              { name: 'Archive', totalCount: 0, unreadCount: 0 },
+              { name: 'INBOX', displayName: 'Inbox', totalCount: 0, unreadCount: 0 },
+              { name: 'Drafts', displayName: 'Drafts', totalCount: 0, unreadCount: 0 },
+              { name: 'Sent', displayName: 'Sent Items', totalCount: 0, unreadCount: 0 },
+              { name: 'Trash', displayName: 'Deleted Items', totalCount: 0, unreadCount: 0 },
+              { name: 'Junk', displayName: 'Junk Email', totalCount: 0, unreadCount: 0 },
+              { name: 'Archive', displayName: 'Archive', totalCount: 0, unreadCount: 0 },
             ],
           },
         },
@@ -91,7 +91,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
@@ -101,18 +101,18 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   if (parsed.data.active !== undefined) data['active'] = parsed.data.active;
   if (parsed.data.quotaBytes) data['quotaBytes'] = BigInt(parsed.data.quotaBytes);
   if (parsed.data.password) {
-    const bcrypt = await import('bcrypt');
-    data['passwordHash'] = await bcrypt.hash(parsed.data.password, 12);
+    data['passwordHash'] = await hashPassword(parsed.data.password);
   }
 
-  const updated = await prisma.user.update({ where: { id }, data: data as Parameters<typeof prisma.user.update>[0]['data'] });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updated = await prisma.user.update({ where: { id }, data: data as any });
   res.json({ id: updated.id, email: updated.email, displayName: updated.displayName });
 });
 
 // DELETE /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const prisma = getPrisma();
+  
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   await prisma.user.delete({ where: { id } });
@@ -121,7 +121,7 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
 
 // GET /api/v1/admin/shared-mailboxes
 adminMailboxesRouter.get('/shared', async (_req: Request, res: Response) => {
-  const prisma = getPrisma();
+  
   const mailboxes = await prisma.sharedMailbox.findMany({
     include: { permissions: { include: { user: { select: { id: true, email: true, displayName: true } } } } },
     orderBy: { email: 'asc' },
@@ -140,7 +140,7 @@ adminMailboxesRouter.post('/shared', async (req: Request, res: Response) => {
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const mailbox = await prisma.sharedMailbox.create({
     data: {
       email: parsed.data.email,
@@ -162,7 +162,7 @@ adminMailboxesRouter.post('/shared/:id/permissions', async (req: Request, res: R
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const perm = await prisma.sharedMailboxPerm.upsert({
     where: { sharedMailboxId_userId: { sharedMailboxId: id, userId: parsed.data.userId } },
     update: { permission: parsed.data.permission },
@@ -179,7 +179,7 @@ adminMailboxesRouter.post('/shared/:id/permissions', async (req: Request, res: R
 // DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId
 adminMailboxesRouter.delete('/shared/:id/permissions/:userId', async (req: Request, res: Response) => {
   const { id, userId } = req.params as { id: string; userId: string };
-  const prisma = getPrisma();
+  
   await prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId: id, userId } });
   res.json({ ok: true });
 });

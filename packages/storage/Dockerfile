@@ -1,8 +1,8 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY pnpm-workspace.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY packages/core/package.json     ./packages/core/
 COPY packages/storage/package.json  ./packages/storage/
 
@@ -18,11 +18,13 @@ RUN pnpm --filter @coremail/core build
 RUN pnpm --filter @coremail/storage build
 
 # ── Runner ──────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 COPY --from=builder /app/pnpm-workspace.yaml ./
+COPY --from=builder /app/pnpm-lock.yaml ./
+COPY --from=builder /app/.npmrc ./
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/packages/core/package.json      ./packages/core/
 COPY --from=builder /app/packages/core/dist              ./packages/core/dist
@@ -31,9 +33,8 @@ COPY --from=builder /app/packages/storage/dist           ./packages/storage/dist
 # Include prisma schema + migrations for migrate deploy at runtime
 COPY --from=builder /app/packages/storage/prisma         ./packages/storage/prisma
 
-RUN pnpm install --prod --frozen-lockfile
-# Re-generate Prisma client in runner (needs schema + @prisma/client)
-RUN cd packages/storage && npx prisma generate
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @coremail/storage exec prisma generate
 
 EXPOSE 3001
 HEALTHCHECK --interval=15s --timeout=5s --retries=5 \

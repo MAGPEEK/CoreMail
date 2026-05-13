@@ -8,10 +8,8 @@ import type {
   RegistrationResponseJSON,
   AuthenticationResponseJSON,
 } from '@simplewebauthn/types';
-import { getPrisma } from '@coremail/storage';
-import { getRedis, CHANNEL_PREFIX } from '@coremail/core';
-import { createLogger } from '@coremail/core';
-import { randomBytes } from 'node:crypto';
+import { prisma } from '@coremail/storage';
+import { getRedisClient, createLogger } from '@coremail/core';
 
 const log = createLogger('auth:webauthn');
 
@@ -21,12 +19,12 @@ const ORIGIN = process.env['WEBAUTHN_ORIGIN'] ?? 'http://localhost:4000';
 const CHALLENGE_TTL = 5 * 60; // 5 minutes
 
 function challengeKey(userId: string): string {
-  return `${CHANNEL_PREFIX}webauthn:challenge:${userId}`;
+  return `coremail:webauthn:challenge:${userId}`;
 }
 
-export async function startWebAuthnRegistration(userId: string, email: string) {
-  const prisma = getPrisma();
-  const redis = getRedis();
+export async function startWebAuthnRegistration(userId: string, email: string): Promise<unknown> {
+  
+  const redis = getRedisClient();
 
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   const existingCredentials: { id: string }[] = [];
@@ -52,8 +50,8 @@ export async function finishWebAuthnRegistration(
   response: RegistrationResponseJSON,
   keyName: string,
 ): Promise<boolean> {
-  const prisma = getPrisma();
-  const redis = getRedis();
+  
+  const redis = getRedisClient();
 
   const expectedChallenge = await redis.get(challengeKey(userId));
   if (!expectedChallenge) return false;
@@ -68,37 +66,27 @@ export async function finishWebAuthnRegistration(
 
     if (!verification.verified || !verification.registrationInfo) return false;
 
-    const { credential } = verification.registrationInfo;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { credential } = verification.registrationInfo as any;
 
     const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-    const existing: unknown[] = (mfa?.webAuthnCredentials as unknown[]) ?? [];
+    const existing = ((mfa?.webAuthnCredentials as object[]) ?? []) as object[];
+    const newCred = {
+      id: credential.id as string,
+      publicKey: Buffer.from(credential.publicKey as Uint8Array).toString('base64'),
+      counter: credential.counter as number,
+      name: keyName,
+      createdAt: new Date().toISOString(),
+    };
 
     await prisma.userMfa.upsert({
       where: { userId },
       create: {
         userId,
-        webAuthnCredentials: [
-          ...existing,
-          {
-            id: credential.id,
-            publicKey: Buffer.from(credential.publicKey).toString('base64'),
-            counter: credential.counter,
-            name: keyName,
-            createdAt: new Date().toISOString(),
-          },
-        ],
+        webAuthnCredentials: [...existing, newCred],
       },
       update: {
-        webAuthnCredentials: [
-          ...existing,
-          {
-            id: credential.id,
-            publicKey: Buffer.from(credential.publicKey).toString('base64'),
-            counter: credential.counter,
-            name: keyName,
-            createdAt: new Date().toISOString(),
-          },
-        ],
+        webAuthnCredentials: [...existing, newCred],
       },
     });
 
@@ -111,9 +99,9 @@ export async function finishWebAuthnRegistration(
   }
 }
 
-export async function startWebAuthnAuthentication(userId: string) {
-  const prisma = getPrisma();
-  const redis = getRedis();
+export async function startWebAuthnAuthentication(userId: string): Promise<unknown> {
+  
+  const redis = getRedisClient();
 
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
   const creds = (mfa?.webAuthnCredentials as { id: string }[]) ?? [];
@@ -133,8 +121,8 @@ export async function finishWebAuthnAuthentication(
   userId: string,
   response: AuthenticationResponseJSON,
 ): Promise<boolean> {
-  const prisma = getPrisma();
-  const redis = getRedis();
+  
+  const redis = getRedisClient();
 
   const expectedChallenge = await redis.get(challengeKey(userId));
   if (!expectedChallenge) return false;
@@ -150,7 +138,8 @@ export async function finishWebAuthnAuthentication(
   if (!credential) return false;
 
   try {
-    const verification = await verifyAuthenticationResponse({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const verification = await (verifyAuthenticationResponse as any)({
       response,
       expectedChallenge,
       expectedOrigin: ORIGIN,

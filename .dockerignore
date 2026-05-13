@@ -6,6 +6,7 @@ node_modules
 **/dist
 **/.next
 **/build
+**/*.tsbuildinfo
 
 # Logs und temporäre Dateien
 *.log

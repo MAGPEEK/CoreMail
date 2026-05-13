@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('ews:auth');
 
@@ -29,9 +29,9 @@ export async function ewsAuthMiddleware(
     const token = authHeader.slice(7);
     const payload = verifyAccessToken(token);
     if (payload) {
-      const prisma = getPrisma();
+      
       const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
+        where: { id: payload.sub },
         select: { id: true, email: true, role: true, active: true },
       });
       if (user?.active) {
@@ -68,9 +68,9 @@ export async function ewsAuthMiddleware(
           if (data.accessToken) {
             const payload = verifyAccessToken(data.accessToken);
             if (payload) {
-              const prisma = getPrisma();
+              
               const user = await prisma.user.findUnique({
-                where: { id: payload.userId },
+                where: { id: payload.sub },
                 select: { id: true, email: true, role: true },
               });
               if (user) {

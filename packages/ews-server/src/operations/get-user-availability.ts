@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -6,7 +6,7 @@ export async function getUserAvailability(
   request: Record<string, unknown>,
   _user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const mailboxDataArray = request['MailboxDataArray'] as Record<string, unknown> | undefined;
   const mailboxDataRaw = mailboxDataArray?.['MailboxData'];
@@ -45,12 +45,12 @@ export async function getUserAvailability(
 
       // Fetch busy times for this user
       const dbUser = prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-      void dbUser.then(async (u) => {
+      void dbUser.then(async (u: { id: string; email: string } | null) => {
         if (!u) return;
-        const calendars = await prisma.calendar.findMany({ where: { userId: u.id } });
+        const calendars = await prisma.calendar.findMany({ where: { userId: (u as { id: string }).id } });
         const events = await prisma.calendarEvent.findMany({
           where: {
-            calendarId: { in: calendars.map((c) => c.id) },
+            calendarId: { in: calendars.map((c: { id: string }) => c.id) },
             dtStart: { gte: startTime },
             dtEnd: { lte: endTime },
           },

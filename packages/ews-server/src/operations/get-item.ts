@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -10,7 +10,7 @@ export async function getItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const itemShape = request['ItemShape'] as Record<string, unknown> | undefined;
   const baseShape = (itemShape?.['BaseShape'] as string | undefined) ?? 'Default';
@@ -39,7 +39,7 @@ export async function getItem(
   });
 
   // Verify ownership
-  const owned = messages.filter((m) => m.folder.mailbox.userId === user.userId);
+  const owned = messages.filter((m) => (m.folder.mailbox.userId ?? '') === user.userId);
 
   return soapEnvelope((body) => {
     const response = body

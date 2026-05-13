@@ -38,7 +38,7 @@ export async function storeInboundMessage(
   // Find the target folder (INBOX or Junk)
   const targetFolderName = opts.toJunk ? 'Junk E-Mail' : 'Inbox';
   const folder = mailbox.folders.find(
-    (f) => f.name === targetFolderName || f.name === 'INBOX',
+    (f: { name: string }) => f.name === targetFolderName || f.name === 'INBOX',
   );
 
   if (!folder) {

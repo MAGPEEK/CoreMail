@@ -2,7 +2,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
 import { verifyPassword } from '@coremail/core/auth';
-import { getPrisma } from '@coremail/storage/prisma';
+import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('pop3-session');
 
@@ -55,7 +55,7 @@ export class POP3Session {
 
   private async handleCommand(line: string) {
     const [cmd, ...args] = line.split(' ');
-    const command = cmd.toUpperCase();
+    const command = (cmd ?? '').toUpperCase();
 
     if (command === 'QUIT') {
       if (this.state === 'TRANSACTION') await this.updateAndDelete();
@@ -93,9 +93,9 @@ export class POP3Session {
       if (!this.user) return this.send('-ERR send USER first');
       if (!args[0]) return this.send('-ERR missing password');
 
-      const prisma = getPrisma();
+      
       const user = await prisma.user.findUnique({ where: { email: this.user } });
-      if (!user || !(await verifyPassword(args[0], user.passwordHash))) {
+      if (!user || !user.passwordHash || !(await verifyPassword(args[0], user.passwordHash))) {
         log.warn({ user: this.user }, 'auth failure');
         return this.send('-ERR invalid credentials');
       }
@@ -110,7 +110,7 @@ export class POP3Session {
   }
 
   private async loadMaildrop() {
-    const prisma = getPrisma();
+    
     const mailbox = await prisma.mailbox.findFirst({
       where: { userId: this.userId! },
       include: {
@@ -126,7 +126,7 @@ export class POP3Session {
         },
       },
     });
-    this.maildrop = (mailbox?.folders[0]?.messages ?? []).map((m) => ({
+    this.maildrop = (mailbox?.folders[0]?.messages ?? []).map((m: { id: string; uid: number; rawSize: number }) => ({
       ...m,
       deleted: false,
     }));
@@ -192,7 +192,7 @@ export class POP3Session {
   }
 
   private async sendMessage(id: string, topLines: number | null) {
-    const prisma = getPrisma();
+    
     const msg = await prisma.message.findUnique({ where: { id } });
     if (!msg) return this.send('-ERR message not found');
 
@@ -201,7 +201,7 @@ export class POP3Session {
 
     if (topLines !== null) {
       const parts = eml.split('\r\n\r\n');
-      const headers = parts[0];
+      const headers = parts[0] ?? '';
       const body = (parts.slice(1).join('\r\n\r\n')).split('\r\n').slice(0, topLines).join('\r\n');
       const output = body ? `${headers}\r\n\r\n${body}` : headers;
       this.send(output.replace(/^\./, '..'));
@@ -212,7 +212,7 @@ export class POP3Session {
   }
 
   private async updateAndDelete() {
-    const prisma = getPrisma();
+    
     const toDelete = this.maildrop.filter((m) => m.deleted).map((m) => m.id);
     if (toDelete.length > 0) {
       await prisma.message.updateMany({

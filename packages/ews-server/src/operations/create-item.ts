@@ -1,5 +1,5 @@
-import { getPrisma } from '@coremail/storage';
-import { getRedis, CHANNEL_MAIL_NEW } from '@coremail/core';
+import { prisma } from '@coremail/storage';
+import { getRedisClient, CHANNEL_MAIL_NEW } from '@coremail/core';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -7,8 +7,8 @@ export async function createItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
-  const redis = getRedis();
+  
+  const redis = getRedisClient();
 
   const messageDisposition = (request['$'] as Record<string, string> | undefined)?.[
     'MessageDisposition'
@@ -27,7 +27,7 @@ export async function createItem(
   }
 
   const subject = String((message['Subject'] as string | undefined) ?? '');
-  const bodyRaw = message['Body'] as Record<string, string> | undefined;
+  const bodyRaw = message['Body'] as any;
   const bodyText = bodyRaw?.['_'] ?? bodyRaw?.['$']?.['BodyType'] === 'Text'
     ? String(bodyRaw?.['_'] ?? '')
     : '';
@@ -109,7 +109,7 @@ async function createCalendarItem(
   item: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const summary = String((item['Subject'] as string | undefined) ?? '');
   const startStr = String((item['Start'] as string | undefined) ?? new Date().toISOString());
@@ -122,13 +122,16 @@ async function createCalendarItem(
     return errorResponse('CreateItem', 'ErrorCalendarFolderNotFound', 'Calendar not found');
   }
 
+  const { randomUUID } = await import('node:crypto');
+  const eventUid = randomUUID();
   const event = await prisma.calendarEvent.create({
     data: {
       calendarId: calendar.id,
+      uid: eventUid,
       summary,
       dtStart: new Date(startStr),
       dtEnd: new Date(endStr),
-      icalData: `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:${summary}\r\nDTSTART:${startStr}\r\nDTEND:${endStr}\r\nEND:VEVENT\r\nEND:VCALENDAR`,
+      icalData: `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:${eventUid}\r\nSUMMARY:${summary}\r\nDTSTART:${startStr}\r\nDTEND:${endStr}\r\nEND:VEVENT\r\nEND:VCALENDAR`,
     },
   });
 

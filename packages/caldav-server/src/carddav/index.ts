@@ -1,11 +1,11 @@
-import { Router, type Request, type Response } from 'express';
-import { getPrisma } from '@coremail/storage';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { create } from 'xmlbuilder2';
 
 const log = createLogger('carddav');
 
-export const carddavRouter = Router();
+export const carddavRouter: RouterType = Router();
 
 const NS_DAV = 'DAV:';
 const NS_CARDDAV = 'urn:ietf:params:xml:ns:carddav';
@@ -36,7 +36,7 @@ carddavRouter.all('/addressbooks/:userId', async (req: Request, res: Response) =
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  const prisma = getPrisma();
+  
   const contactCount = await prisma.contact.count({ where: { userId } });
 
   const doc = create({ version: '1.0', encoding: 'utf-8' })
@@ -62,7 +62,7 @@ carddavRouter.all('/addressbooks/:userId/default', async (req: Request, res: Res
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  const prisma = getPrisma();
+  
   const contacts = await prisma.contact.findMany({
     where: { userId },
     select: { id: true },
@@ -91,7 +91,7 @@ carddavRouter.get('/addressbooks/:userId/default/:contactId', async (req: Reques
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
   const id = contactId.replace(/\.vcf$/, '');
-  const prisma = getPrisma();
+  
   const contact = await prisma.contact.findFirst({ where: { id, userId } });
   if (!contact) { res.status(404).send('Not Found'); return; }
 
@@ -118,7 +118,7 @@ carddavRouter.put('/addressbooks/:userId/default/:contactId', async (req: Reques
   const email = emailMatch?.[1]?.trim() ?? '';
   const company = orgMatch?.[1]?.split(';')[0]?.trim() ?? '';
 
-  const prisma = getPrisma();
+  
   const existing = await prisma.contact.findFirst({ where: { id, userId } });
 
   if (existing) {
@@ -144,7 +144,7 @@ carddavRouter.delete('/addressbooks/:userId/default/:contactId', async (req: Req
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
   const id = contactId.replace(/\.vcf$/, '');
-  const prisma = getPrisma();
+  
   const contact = await prisma.contact.findFirst({ where: { id, userId } });
   if (!contact) { res.status(404).send('Not Found'); return; }
 
@@ -161,7 +161,7 @@ carddavRouter.all('/addressbooks/:userId/default', async (req: Request, res: Res
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  const prisma = getPrisma();
+  
   const contacts = await prisma.contact.findMany({
     where: { userId },
     select: { id: true, vcardData: true },

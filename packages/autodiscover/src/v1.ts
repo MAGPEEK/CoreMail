@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('autodiscover:v1');
 
@@ -85,7 +85,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   log.info({ email }, 'Autodiscover v1 request');
 
-  const prisma = getPrisma();
+  
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
     select: { displayName: true, email: true },

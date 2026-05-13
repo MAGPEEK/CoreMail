@@ -2,15 +2,15 @@ import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
 import { createLogger } from '@coremail/core/logger';
-import { getRedis } from '@coremail/core/redis';
+import { getRedisClient } from '@coremail/core/redis';
 import { POP3Session } from './session.js';
 
 const log = createLogger('pop3-server');
 
-const PORT_PLAIN = parseInt(process.env.POP3_PORT ?? '110', 10);
-const PORT_TLS = parseInt(process.env.POP3S_PORT ?? '995', 10);
-const TLS_CERT = process.env.TLS_CERT_PATH;
-const TLS_KEY = process.env.TLS_KEY_PATH;
+const PORT_PLAIN = parseInt(process.env['POP3_PORT'] ?? '110', 10);
+const PORT_TLS = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
+const TLS_CERT = process.env['TLS_CERT_PATH'];
+const TLS_KEY = process.env['TLS_KEY_PATH'];
 
 function createSession(socket: net.Socket | tls.TLSSocket, secure: boolean) {
   const session = new POP3Session(socket, secure);
@@ -51,7 +51,7 @@ if (TLS_CERT && TLS_KEY) {
 async function shutdown() {
   log.info('shutting down');
   plainServer.close();
-  await getRedis().quit();
+  await getRedisClient().quit();
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

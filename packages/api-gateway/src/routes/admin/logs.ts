@@ -1,9 +1,9 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
 
-export const adminLogsRouter = Router();
+export const adminLogsRouter: RouterType = Router();
 adminLogsRouter.use(requireAdmin);
 
 // GET /api/v1/admin/logs
@@ -22,7 +22,7 @@ adminLogsRouter.get('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid query' }); return; }
 
   const { service, level, category, q, from, to, limit, offset } = parsed.data;
-  const prisma = getPrisma();
+  
 
   const where: Record<string, unknown> = {};
   if (service) where['service'] = service;
@@ -55,8 +55,8 @@ adminLogsRouter.put('/levels', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   // Store log level overrides in Redis for services to pick up dynamically
-  const { getRedis } = await import('@coremail/core');
-  const redis = getRedis();
+  const { getRedisClient } = await import('@coremail/core');
+  const redis = getRedisClient();
   for (const [svc, lvl] of Object.entries(parsed.data)) {
     await redis.hset('config:log-levels', svc, lvl);
   }
@@ -70,7 +70,7 @@ adminLogsRouter.delete('/purge', async (req: Request, res: Response) => {
   const before = req.query['before'] as string | undefined;
   if (!before) { res.status(400).json({ error: 'before parameter required' }); return; }
 
-  const prisma = getPrisma();
+  
   const { count } = await prisma.systemLog.deleteMany({
     where: { timestamp: { lt: new Date(before) } },
   });

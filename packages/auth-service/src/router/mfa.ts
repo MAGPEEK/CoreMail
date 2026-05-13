@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { verifyAccessToken, createLogger } from '@coremail/core';
 import {
@@ -13,13 +13,13 @@ import {
 
 const log = createLogger('auth:mfa-router');
 
-export const mfaRouter = Router();
+export const mfaRouter: RouterType = Router();
 
 function getAuthenticatedUserId(req: Request): string | null {
   const header = req.get('Authorization');
   if (!header?.startsWith('Bearer ')) return null;
   const payload = verifyAccessToken(header.slice(7));
-  return payload?.userId ?? null;
+  return payload?.sub ?? null;
 }
 
 // TOTP

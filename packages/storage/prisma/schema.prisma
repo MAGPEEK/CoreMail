@@ -420,6 +420,39 @@ model Note {
 }
 
 // ─────────────────────────────────────────────
+// User Settings & Mail Rules
+// ─────────────────────────────────────────────
+
+model UserSettings {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  signature    String    @default("")
+  oofEnabled   Boolean   @default(false)
+  oofInternal  String    @default("")
+  oofExternal  String    @default("")
+  oofStart     DateTime?
+  oofEnd       DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  @@map("user_settings")
+}
+
+model MailRule {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String
+  enabled    Boolean  @default(true)
+  priority   Int      @default(0)
+  conditions Json     @default("[]")
+  actions    Json     @default("[]")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@map("mail_rules")
+}
+
+// ─────────────────────────────────────────────
 // Backup Jobs
 // ─────────────────────────────────────────────
 

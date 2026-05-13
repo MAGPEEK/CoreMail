@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Globe, ListOrdered,
+  LayoutDashboard, Globe, ListOrdered,
   ScrollText, Shield, Server, BarChart3, Mail, LogOut,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';

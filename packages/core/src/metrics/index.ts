@@ -28,7 +28,8 @@ export function initMetrics(config: MetricsConfig): void {
       [SEMRESATTRS_SERVICE_NAME]: serviceName,
       [SEMRESATTRS_SERVICE_VERSION]: serviceVersion,
     }),
-    readers: [exporter],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readers: [exporter as any],
   });
 
   metrics.setGlobalMeterProvider(meterProvider);

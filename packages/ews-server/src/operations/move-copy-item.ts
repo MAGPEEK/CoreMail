@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -15,7 +15,7 @@ async function resolveFolderId(
   mailboxId: string,
 ): Promise<string | null> {
   if (!folderIdRaw) return null;
-  const prisma = getPrisma();
+  
 
   const distinguishedId = folderIdRaw['DistinguishedFolderId'] as
     | Record<string, Record<string, string>>
@@ -36,7 +36,7 @@ export async function moveItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: user.userId } });
   if (!mailbox) return errorResponse('MoveItem', 'ErrorMailboxNotFound', 'Mailbox not found');
@@ -80,7 +80,7 @@ export async function copyItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: user.userId } });
   if (!mailbox) return errorResponse('CopyItem', 'ErrorMailboxNotFound', 'Mailbox not found');

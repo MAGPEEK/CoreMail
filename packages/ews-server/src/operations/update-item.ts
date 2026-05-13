@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -6,7 +6,7 @@ export async function updateItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const itemChanges = request['ItemChanges'] as Record<string, unknown> | undefined;
   const itemChange = itemChanges?.['ItemChange'];
@@ -66,7 +66,7 @@ export async function updateItem(
     if (Object.keys(dataToUpdate).length > 0) {
       await prisma.message.update({
         where: { id: messageId },
-        data: dataToUpdate as Parameters<typeof prisma.message.update>[0]['data'],
+        data: dataToUpdate as any,
       });
     }
 

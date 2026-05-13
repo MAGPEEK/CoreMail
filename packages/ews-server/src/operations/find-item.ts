@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -24,7 +24,7 @@ export async function findItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const traversal = (request['$'] as Record<string, string> | undefined)?.['Traversal'] ?? 'Shallow';
   const itemShape = request['ItemShape'] as Record<string, unknown> | undefined;
@@ -34,11 +34,10 @@ export async function findItem(
     (itemShape?.['BaseShape'] as string | undefined) ?? 'Default';
 
   // Determine folder
-  const distinguishedFolderId = folderIds?.['DistinguishedFolderId'] as
-    | Record<string, string>
-    | undefined;
-  const folderName = distinguishedFolderId?.['$']?.['Id'] ?? 'inbox';
-  const systemName = WELL_KNOWN_FOLDERS[folderName.toLowerCase()] ?? 'INBOX';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const distinguishedFolderId = folderIds?.['DistinguishedFolderId'] as any;
+  const folderName = String(distinguishedFolderId?.['$']?.['Id'] ?? 'inbox');
+  const systemName = (WELL_KNOWN_FOLDERS as Record<string, string>)[folderName.toLowerCase()] ?? 'INBOX';
 
   // Calendar view handling
   const calendarView = request['CalendarView'] as Record<string, unknown> | undefined;
@@ -47,11 +46,10 @@ export async function findItem(
   }
 
   // Paging
-  const indexedPageView = request['IndexedPageItemView'] as
-    | Record<string, string>
-    | undefined;
-  const maxReturn = parseInt(indexedPageView?.['$']?.['MaxReturnsPerPage'] ?? '50', 10);
-  const offset = parseInt(indexedPageView?.['$']?.['Offset'] ?? '0', 10);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const indexedPageView = request['IndexedPageItemView'] as any;
+  const maxReturn = parseInt(String(indexedPageView?.['$']?.['MaxReturnsPerPage'] ?? '50'), 10);
+  const offset = parseInt(String(indexedPageView?.['$']?.['Offset'] ?? '0'), 10);
 
   // Find user's mailbox → folder
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: user.userId } });
@@ -129,7 +127,7 @@ async function findCalendarItems(
   user: EwsUser,
   _baseShape: string,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
   const attrs = calendarView['$'] as Record<string, string> | undefined;
   const startDate = attrs?.['StartDate'] ? new Date(attrs['StartDate']) : new Date();
   const endDate = attrs?.['EndDate']
@@ -137,7 +135,7 @@ async function findCalendarItems(
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   const calendars = await prisma.calendar.findMany({ where: { userId: user.userId } });
-  const calendarIds = calendars.map((c) => c.id);
+  const calendarIds = calendars.map((c: { id: string }) => c.id);
 
   const events = await prisma.calendarEvent.findMany({
     where: {

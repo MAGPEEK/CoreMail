@@ -1,16 +1,16 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { getPrisma } from '@coremail/storage';
-import { getRedis, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
+import { prisma } from '@coremail/storage';
+import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
 const log = createLogger('api:mail');
-export const mailRouter = Router();
+export const mailRouter: RouterType = Router();
 mailRouter.use(requireAuth);
 
 // GET /api/v1/mail/folders — list all folders
 mailRouter.get('/folders', async (req: Request, res: Response) => {
-  const prisma = getPrisma();
+  
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   if (!mailbox) { res.json([]); return; }
 
@@ -28,7 +28,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
   const limit = Math.min(parseInt(String(req.query['limit'] ?? '50'), 10), 200);
   const offset = parseInt(String(req.query['offset'] ?? '0'), 10);
 
-  const prisma = getPrisma();
+  
   const folder = await prisma.folder.findFirst({
     where: { id: folderId, mailbox: { userId: req.apiUser!.userId } },
   });
@@ -55,7 +55,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
 // GET /api/v1/mail/messages/:id — full message
 mailRouter.get('/messages/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const prisma = getPrisma();
+  
   const msg = await prisma.message.findFirst({
     where: { id, deletedAt: null, folder: { mailbox: { userId: req.apiUser!.userId } } },
     include: { attachments: true },
@@ -90,7 +90,7 @@ mailRouter.patch('/messages/:id', async (req: Request, res: Response) => {
   const parsed = PatchMessageSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const prisma = getPrisma();
+  
   const msg = await prisma.message.findFirst({
     where: { id, folder: { mailbox: { userId: req.apiUser!.userId } } },
   });
@@ -120,7 +120,8 @@ mailRouter.patch('/messages/:id', async (req: Request, res: Response) => {
     updates['folderId'] = parsed.data.folderId;
   }
 
-  await prisma.message.update({ where: { id }, data: updates as Parameters<typeof prisma.message.update>[0]['data'] });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await prisma.message.update({ where: { id }, data: updates as any });
   res.json({ ok: true });
 });
 
@@ -129,7 +130,7 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const hard = req.query['hard'] === 'true';
 
-  const prisma = getPrisma();
+  
   const msg = await prisma.message.findFirst({
     where: { id, folder: { mailbox: { userId: req.apiUser!.userId } } },
   });
@@ -172,7 +173,7 @@ mailRouter.post('/send', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { to, cc = [], bcc = [], subject, bodyHtml = '', bodyText = '', inReplyTo } = parsed.data;
-  const redis = getRedis();
+  const redis = getRedisClient();
 
   await redis.lpush('smtp:outbound:api', JSON.stringify({
     from: req.apiUser!.email || req.apiUser!.userId,
@@ -189,14 +190,14 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   if (q.length < 2) { res.json({ messages: [], total: 0 }); return; }
 
-  const prisma = getPrisma();
+  
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   if (!mailbox) { res.json({ messages: [], total: 0 }); return; }
 
   const folderIds = (await prisma.folder.findMany({
     where: { mailboxId: mailbox.id },
     select: { id: true },
-  })).map((f) => f.id);
+  })).map((f: { id: string }) => f.id);
 
   const messages = await prisma.message.findMany({
     where: {

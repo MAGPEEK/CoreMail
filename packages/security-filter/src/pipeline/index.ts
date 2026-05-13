@@ -120,8 +120,8 @@ export async function runContentChecks(
     log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected');
     return {
       action: 'quarantine',
-      reason: `Virus detected: ${clamav.virusName}`,
-      virusName: clamav.virusName,
+      reason: `Virus detected: ${clamav.virusName ?? 'unknown'}`,
+      ...(clamav.virusName ? { virusName: clamav.virusName } : {}),
     };
   }
 

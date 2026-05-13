@@ -1,4 +1,4 @@
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { soapEnvelope } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -8,7 +8,7 @@ export async function deleteItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  const prisma = getPrisma();
+  
 
   const deleteType = ((request['$'] as Record<string, string> | undefined)?.['DeleteType'] ??
     'MoveToDeletedItems') as DeleteType;

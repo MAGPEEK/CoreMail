@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('auth:app-passwords');
@@ -18,7 +18,7 @@ export async function createAppPassword(
   const password = generateAppPassword();
   const hash = await bcrypt.hash(password, 12);
 
-  const prisma = getPrisma();
+  
   const record = await prisma.appPassword.create({
     data: { userId, name, hash },
   });
@@ -28,16 +28,16 @@ export async function createAppPassword(
 }
 
 export async function listAppPasswords(userId: string) {
-  const prisma = getPrisma();
+  
   return prisma.appPassword.findMany({
     where: { userId },
-    select: { id: true, name: true, lastUsed: true, createdAt: true },
+    select: { id: true, name: true, lastUsedAt: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   });
 }
 
 export async function deleteAppPassword(userId: string, id: string): Promise<boolean> {
-  const prisma = getPrisma();
+  
   const record = await prisma.appPassword.findFirst({ where: { id, userId } });
   if (!record) return false;
   await prisma.appPassword.delete({ where: { id } });

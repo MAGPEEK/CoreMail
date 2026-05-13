@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle, Server } from 'lucide-react';
+import { CheckCircle, Server } from 'lucide-react';
 
 interface ServiceStatus { name: string; port: string; description: string }
 

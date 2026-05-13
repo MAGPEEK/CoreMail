@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { getPrisma } from '@coremail/storage';
+import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:restore');
@@ -14,7 +14,7 @@ export async function importMbox(
   folderId: string,
   mboxPath: string
 ): Promise<{ imported: number; errors: number }> {
-  const prisma = getPrisma();
+  
 
   const folder = await prisma.folder.findFirst({
     where: { id: folderId, mailbox: { userId } },
@@ -98,7 +98,7 @@ export async function importMbox(
  * Restore a single message by ID from soft-delete (unset deletedAt).
  */
 export async function restoreMessage(userId: string, messageId: string): Promise<void> {
-  const prisma = getPrisma();
+  
   const msg = await prisma.message.findFirst({
     where: { id: messageId, deletedAt: { not: null }, folder: { mailbox: { userId } } },
   });
@@ -119,7 +119,7 @@ export async function restoreMessage(userId: string, messageId: string): Promise
  * List soft-deleted messages eligible for self-service restore (within 30 days).
  */
 export async function listRestorableMessages(userId: string) {
-  const prisma = getPrisma();
+  
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   return prisma.message.findMany({

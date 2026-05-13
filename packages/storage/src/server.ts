@@ -5,13 +5,13 @@
  */
 import express from 'express';
 import { createLogger } from '@coremail/core/logger';
-import { getPrisma } from './prisma/index.js';
+import { prisma } from './prisma/index.js';
 import { getMinioClient } from './minio/index.js';
 import { runMigrations } from './prisma/migrate.js';
 
 const log = createLogger('storage-api');
 const app = express();
-const PORT = parseInt(process.env.STORAGE_PORT ?? '3001', 10);
+const PORT = parseInt(process.env['STORAGE_PORT'] ?? '3001', 10);
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -21,8 +21,8 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 // ── Mailboxes ────────────────────────────────────────────────────────────────
 app.get('/mailboxes/:userId', async (req, res) => {
   try {
-    const mailbox = await getPrisma().mailbox.findFirst({
-      where: { userId: req.params.userId },
+    const mailbox = await prisma.mailbox.findFirst({
+      where: { userId: req.params['userId'] },
       include: { folders: true },
     });
     if (!mailbox) return res.status(404).json({ error: 'not found' });
@@ -35,7 +35,7 @@ app.get('/mailboxes/:userId', async (req, res) => {
 
 app.post('/mailboxes', async (req, res) => {
   try {
-    const mailbox = await getPrisma().mailbox.create({ data: req.body });
+    const mailbox = await prisma.mailbox.create({ data: req.body });
     res.status(201).json(mailbox);
   } catch (err) {
     log.error(err);
@@ -46,8 +46,8 @@ app.post('/mailboxes', async (req, res) => {
 // ── Folders ──────────────────────────────────────────────────────────────────
 app.get('/folders/:mailboxId', async (req, res) => {
   try {
-    const folders = await getPrisma().folder.findMany({
-      where: { mailboxId: req.params.mailboxId },
+    const folders = await prisma.folder.findMany({
+      where: { mailboxId: req.params['mailboxId'] },
       include: { children: true },
     });
     res.json(folders);
@@ -59,8 +59,8 @@ app.get('/folders/:mailboxId', async (req, res) => {
 
 app.get('/folders/by-name/:mailboxId/:name', async (req, res) => {
   try {
-    const folder = await getPrisma().folder.findFirst({
-      where: { mailboxId: req.params.mailboxId, name: req.params.name },
+    const folder = await prisma.folder.findFirst({
+      where: { mailboxId: req.params['mailboxId'], name: req.params['name'] },
     });
     if (!folder) return res.status(404).json({ error: 'not found' });
     res.json(folder);
@@ -72,7 +72,7 @@ app.get('/folders/by-name/:mailboxId/:name', async (req, res) => {
 
 app.post('/folders', async (req, res) => {
   try {
-    const folder = await getPrisma().folder.create({ data: req.body });
+    const folder = await prisma.folder.create({ data: req.body });
     res.status(201).json(folder);
   } catch (err) {
     log.error(err);
@@ -83,10 +83,10 @@ app.post('/folders', async (req, res) => {
 // ── Messages ─────────────────────────────────────────────────────────────────
 app.get('/messages/:folderId', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit as string ?? '50', 10);
-    const offset = parseInt(req.query.offset as string ?? '0', 10);
-    const messages = await getPrisma().message.findMany({
-      where: { folderId: req.params.folderId, deletedAt: null },
+    const limit = parseInt((req.query['limit'] as string | undefined) ?? '50', 10);
+    const offset = parseInt((req.query['offset'] as string | undefined) ?? '0', 10);
+    const messages = await prisma.message.findMany({
+      where: { folderId: req.params['folderId'], deletedAt: null },
       orderBy: { date: 'desc' },
       take: limit,
       skip: offset,
@@ -105,8 +105,8 @@ app.get('/messages/:folderId', async (req, res) => {
 
 app.get('/messages/by-id/:id', async (req, res) => {
   try {
-    const msg = await getPrisma().message.findUnique({
-      where: { id: req.params.id },
+    const msg = await prisma.message.findUnique({
+      where: { id: req.params['id'] },
       include: { attachments: true },
     });
     if (!msg || msg.deletedAt) return res.status(404).json({ error: 'not found' });
@@ -119,12 +119,12 @@ app.get('/messages/by-id/:id', async (req, res) => {
 
 app.post('/messages', async (req, res) => {
   try {
-    const msg = await getPrisma().message.create({
+    const msg = await prisma.message.create({
       data: req.body,
       include: { attachments: true },
     });
     // update folder counters
-    await getPrisma().folder.update({
+    await prisma.folder.update({
       where: { id: msg.folderId },
       data: {
         totalCount: { increment: 1 },
@@ -132,7 +132,7 @@ app.post('/messages', async (req, res) => {
       },
     });
     // advance uidNext on mailbox
-    await getPrisma().$executeRaw`
+    await prisma.$executeRaw`
       UPDATE "Mailbox" m
       SET "uidNext" = "uidNext" + 1
       FROM "Folder" f
@@ -146,8 +146,8 @@ app.post('/messages', async (req, res) => {
 
 app.patch('/messages/:id', async (req, res) => {
   try {
-    const msg = await getPrisma().message.update({
-      where: { id: req.params.id },
+    const msg = await prisma.message.update({
+      where: { id: req.params['id'] },
       data: req.body,
     });
     res.json(msg);
@@ -160,12 +160,12 @@ app.patch('/messages/:id', async (req, res) => {
 // Soft-delete
 app.delete('/messages/:id', async (req, res) => {
   try {
-    const hard = req.query.hard === 'true';
+    const hard = req.query['hard'] === 'true';
     if (hard) {
-      await getPrisma().message.delete({ where: { id: req.params.id } });
+      await prisma.message.delete({ where: { id: req.params['id'] } });
     } else {
-      await getPrisma().message.update({
-        where: { id: req.params.id },
+      await prisma.message.update({
+        where: { id: req.params['id'] },
         data: { deletedAt: new Date() },
       });
     }
@@ -180,8 +180,10 @@ app.delete('/messages/:id', async (req, res) => {
 app.get('/attachments/:key(*)', async (req, res) => {
   try {
     const minio = getMinioClient();
-    const bucket = process.env.MINIO_BUCKET ?? 'mail-attachments';
-    const stream = await minio.getObject(bucket, req.params.key);
+    const bucket = process.env['MINIO_BUCKET'] ?? 'mail-attachments';
+    const key = req.params['key'];
+    if (!key) return res.status(400).json({ error: 'missing key' });
+    const stream = await minio.getObject(bucket, key);
     stream.pipe(res);
   } catch (err) {
     log.error(err);
@@ -192,13 +194,13 @@ app.get('/attachments/:key(*)', async (req, res) => {
 // ── Users (read-only, for auth delegation) ───────────────────────────────────
 app.get('/users/by-email/:email', async (req, res) => {
   try {
-    const user = await getPrisma().user.findUnique({
-      where: { email: req.params.email },
+    const user = await prisma.user.findUnique({
+      where: { email: req.params['email'] },
       select: {
         id: true, email: true, displayName: true, passwordHash: true,
         role: true, domainId: true, quotaBytes: true, usedBytes: true,
         active: true,
-      } as Record<string, boolean>,
+      },
     });
     if (!user) return res.status(404).json({ error: 'not found' });
     res.json(user);
@@ -221,7 +223,7 @@ async function start() {
 
 process.on('SIGTERM', async () => {
   log.info('shutting down');
-  await getPrisma().$disconnect();
+  await prisma.$disconnect();
   process.exit(0);
 });
 
