@@ -1,0 +1,496 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CoreMail v0.9.0 — Synology Container Manager (Test-Setup)
+#
+# Anleitung:
+#   1. Ordner auf der NAS anlegen:
+#      /volume1/docker/coremail/certs/
+#      /volume1/docker/coremail/data/    (wird automatisch angelegt)
+#
+#   2. Self-signed Zertifikat erzeugen (einmalig, SSH zur NAS):
+#      mkdir -p /volume1/docker/coremail/certs
+#      openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
+#        -keyout /volume1/docker/coremail/certs/privkey.pem \
+#        -out    /volume1/docker/coremail/certs/fullchain.pem \
+#        -subj "/CN=mail.local/O=CoreMail/C=DE"
+#
+#   3. Stack in Container Manager importieren:
+#      Container Manager → Projekte → Erstellen → YAML hochladen
+#      Oder per SSH:
+#      docker compose -f docker-compose.synology.yml up -d
+#
+#   4. Erster Admin-Account (nach dem Start):
+#      curl -k -X POST https://<NAS-IP>:8443/api/v1/admin/setup \
+#        -H "Content-Type: application/json" \
+#        -d '{"email":"admin@mail.local","password":"Test1234!","displayName":"Admin"}'
+#
+# ⚠️  Port-Hinweise für Synology:
+#   • HTTPS 8443 statt 443 (DSM-Weboberfläche belegt oft 443)
+#   • HTTP  8080 statt 80  (DSM-Weboberfläche belegt oft 80)
+#   • Falls der Synology MailPlus-Server installiert ist, kollidieren
+#     die Ports 25/465/587/143/993 → MailPlus vorher deaktivieren
+#   • DSM-Ports: 5000 (HTTP) und 5001 (HTTPS) — diese bleiben frei
+#
+# Zugriff nach dem Start:
+#   OWA Webmail:  https://<NAS-IP>:8443/owa/
+#   Admin Panel:  https://<NAS-IP>:8443/ecp/
+#   MinIO Konsole: http://<NAS-IP>:9001
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: coremail
+
+services:
+
+  # ╔═══════════════════════════════════════════════════════════════════════════╗
+  # ║  Infrastruktur                                                             ║
+  # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coremail
+      POSTGRES_USER: coremail
+      POSTGRES_PASSWORD: CoreMailDB2024!      # ← Passwort anpassen
+    volumes:
+      - /volume1/docker/coremail/data/postgres:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass CoreMailRedis2024!
+    volumes:
+      - /volume1/docker/coremail/data/redis:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "CoreMailRedis2024!", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  minio:
+    image: minio/minio:latest
+    container_name: coremail-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: CoreMailMinio2024!   # ← Passwort anpassen
+    volumes:
+      - /volume1/docker/coremail/data/minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"     # MinIO Web-Konsole: http://<NAS-IP>:9001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks: [coremail]
+
+  rspamd:
+    image: rspamd/rspamd:latest
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    volumes:
+      - /volume1/docker/coremail/data/rspamd:/var/lib/rspamd
+    expose:
+      - "11333"
+      - "11334"
+    networks: [coremail]
+
+  clamav:
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    volumes:
+      - /volume1/docker/coremail/data/clamav:/var/lib/clamav
+    expose:
+      - "3310"
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 3 localhost 3310 | grep -q PONG"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 180s    # freshclam lädt beim ersten Start Signaturen (~250 MB)
+    networks: [coremail]
+
+  # ╔═══════════════════════════════════════════════════════════════════════════╗
+  # ║  CoreMail Services — pre-built von Docker Hub                             ║
+  # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  storage-api:
+    image: magpeek/coremail-storage-api:0.9.0
+    container_name: coremail-storage-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: CoreMailMinio2024!
+      MINIO_BUCKET: mail-attachments
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      PEPPER: "AENDERE-MICH-min32-zeichen-pepper-hier-eintragen-fuer-passwort-hashing"
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "3001"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      minio:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [coremail]
+
+  auth-service:
+    image: magpeek/coremail-auth-service:0.9.0
+    container_name: coremail-auth
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      PEPPER: "AENDERE-MICH-min32-zeichen-pepper-hier-eintragen-fuer-passwort-hashing"
+      AUTH_PORT: "3003"
+      WEBAUTHN_RP_NAME: "CoreMail Testserver"
+      WEBAUTHN_RP_ID: "mail.local"           # ← NAS-Hostname oder IP
+      WEBAUTHN_ORIGIN: "https://mail.local"  # ← muss zu WEBAUTHN_RP_ID passen
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "3003"
+    depends_on:
+      postgres:    { condition: service_healthy }
+      redis:       { condition: service_healthy }
+      storage-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
+  security-filter:
+    image: magpeek/coremail-security-filter:0.9.0
+    container_name: coremail-security-filter
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      RSPAMD_HOST: rspamd
+      RSPAMD_PORT: "11333"
+      # GeoIP deaktiviert (kein MaxMind-Account erforderlich für Tests)
+      GEOIP_ENABLED: "false"
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "3002"
+    depends_on:
+      storage-api: { condition: service_healthy }
+      clamav:      { condition: service_started }   # service_healthy dauert zu lange beim ersten Start
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
+  smtp-server:
+    image: magpeek/coremail-smtp-server:0.9.0
+    container_name: coremail-smtp
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      SECURITY_FILTER_URL: http://security-filter:3002
+      AUTH_SERVICE_URL: http://auth-service:3003
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      PEPPER: "AENDERE-MICH-min32-zeichen-pepper-hier-eintragen-fuer-passwort-hashing"
+      SMTP_HOSTNAME: mail.local              # ← NAS-Hostname oder IP
+      NODE_ENV: production
+      LOG_LEVEL: info
+    ports:
+      - "25:25"      # SMTP Inbound (MX)
+      - "465:465"    # SMTPS Submission (implizites TLS)
+      - "587:587"    # Submission (STARTTLS)
+    depends_on:
+      storage-api:      { condition: service_healthy }
+      security-filter:  { condition: service_started }
+      auth-service:     { condition: service_healthy }
+    networks: [coremail]
+
+  imap-server:
+    image: magpeek/coremail-imap-server:0.9.0
+    container_name: coremail-imap
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      PEPPER: "AENDERE-MICH-min32-zeichen-pepper-hier-eintragen-fuer-passwort-hashing"
+      IMAP_HOSTNAME: mail.local
+      NODE_ENV: production
+      LOG_LEVEL: info
+    ports:
+      - "143:143"    # IMAP (STARTTLS)
+      - "993:993"    # IMAPS (implizites TLS)
+    depends_on:
+      storage-api:  { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+    networks: [coremail]
+
+  ews-server:
+    image: magpeek/coremail-ews-server:0.9.0
+    container_name: coremail-ews
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      EWS_PORT: "8080"
+      EWS_URL: https://mail.local:8443/EWS/Exchange.asmx
+      OWA_URL: https://mail.local:8443/owa/
+      IMAP_HOST: mail.local
+      SMTP_HOST: mail.local
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "8080"
+    depends_on:
+      storage-api:  { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
+  autodiscover:
+    image: magpeek/coremail-autodiscover:0.9.0
+    container_name: coremail-autodiscover
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      EWS_URL: https://mail.local:8443/EWS/Exchange.asmx
+      OWA_URL: https://mail.local:8443/owa/
+      IMAP_HOST: mail.local
+      SMTP_HOST: mail.local
+      AUTODISCOVER_BASE: https://mail.local:8443
+      AUTODISCOVER_PORT: "8081"
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "8081"
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
+  api-gateway:
+    image: magpeek/coremail-api-gateway:0.9.0
+    container_name: coremail-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      STORAGE_API_URL: http://storage-api:3001
+      AUTH_SERVICE_URL: http://auth-service:3003
+      EWS_SERVICE_URL: http://ews-server:8080
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      API_PORT: "3000"
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "3000"
+    depends_on:
+      storage-api:  { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [coremail]
+
+  backup-service:
+    image: magpeek/coremail-backup-service:0.9.0
+    container_name: coremail-backup
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+      REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: CoreMailMinio2024!
+      BACKUP_BUCKET: coremail-backups
+      BACKUP_SCHEDULE: "0 3 * * *"     # täglich 03:00 Uhr
+      BACKUP_RETENTION_DAYS: "14"
+      JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+      BACKUP_PORT: "3004"
+      NODE_ENV: production
+      LOG_LEVEL: info
+    expose:
+      - "3004"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      minio:    { condition: service_healthy }
+    networks: [coremail]
+
+  # ── Optionale Services (bei Bedarf einkommentieren) ──────────────────────────
+
+  # POP3-Server (Standard deaktiviert)
+  #pop3-server:
+  #  image: magpeek/coremail-pop3-server:0.9.0
+  #  container_name: coremail-pop3
+  #  restart: unless-stopped
+  #  environment:
+  #    DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+  #    STORAGE_API_URL: http://storage-api:3001
+  #    AUTH_SERVICE_URL: http://auth-service:3003
+  #    JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+  #    PEPPER: "AENDERE-MICH-min32-zeichen-pepper-hier-eintragen-fuer-passwort-hashing"
+  #  ports:
+  #    - "110:110"
+  #    - "995:995"
+  #  depends_on:
+  #    storage-api:  { condition: service_healthy }
+  #    auth-service: { condition: service_healthy }
+  #  networks: [coremail]
+
+  # CalDAV + CardDAV (Standard deaktiviert)
+  #caldav-server:
+  #  image: magpeek/coremail-caldav-server:0.9.0
+  #  container_name: coremail-caldav
+  #  restart: unless-stopped
+  #  environment:
+  #    DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+  #    STORAGE_API_URL: http://storage-api:3001
+  #    AUTH_SERVICE_URL: http://auth-service:3003
+  #    JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+  #  expose:
+  #    - "8082"
+  #  depends_on:
+  #    storage-api:  { condition: service_healthy }
+  #    auth-service: { condition: service_healthy }
+  #  networks: [coremail]
+
+  # ActiveSync EAS 14.1 (Standard deaktiviert)
+  #activesync:
+  #  image: magpeek/coremail-activesync:0.9.0
+  #  container_name: coremail-activesync
+  #  restart: unless-stopped
+  #  environment:
+  #    DATABASE_URL: postgresql://coremail:CoreMailDB2024!@postgres:5432/coremail
+  #    REDIS_URL: redis://:CoreMailRedis2024!@redis:6379
+  #    JWT_SECRET: "AENDERE-MICH-min64-zeichen-zufaellige-zeichenfolge-hier-eintragen!!"
+  #    EAS_PORT: "3005"
+  #    EAS_URL: https://mail.local:8443/Microsoft-Server-ActiveSync
+  #  expose:
+  #    - "3005"
+  #  depends_on:
+  #    postgres: { condition: service_healthy }
+  #    redis:    { condition: service_healthy }
+  #  networks: [coremail]
+
+  # ── Frontends ────────────────────────────────────────────────────────────────
+
+  web-client:
+    image: magpeek/coremail-web-client:0.9.0
+    container_name: coremail-web
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: https://mail.local:8443/api/v1
+      VITE_EWS_URL: https://mail.local:8443/EWS/Exchange.asmx
+    expose:
+      - "80"
+    networks: [coremail]
+
+  admin-panel:
+    image: magpeek/coremail-admin-panel:0.9.0
+    container_name: coremail-admin
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: https://mail.local:8443/api/v1
+    expose:
+      - "80"
+    networks: [coremail]
+
+  # ── nginx Reverse Proxy ───────────────────────────────────────────────────────
+  #
+  # Verwendet Ports 8080 (HTTP→HTTPS) und 8443 (HTTPS) um Konflikte
+  # mit der Synology DSM-Weboberfläche zu vermeiden.
+  # TLS-Zertifikat: /volume1/docker/coremail/certs/
+  # (siehe Anleitung oben für self-signed Zertifikat)
+
+  nginx:
+    image: nginx:alpine
+    container_name: coremail-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"     # HTTP (→ leitet auf HTTPS um)
+      - "8443:443"    # HTTPS — OWA, ECP, EWS, API, Autodiscover
+    volumes:
+      - /volume1/docker/coremail/certs:/etc/nginx/certs:ro
+      - /volume1/docker/coremail/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      ews-server:   { condition: service_healthy }
+      autodiscover: { condition: service_healthy }
+      api-gateway:  { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+      - web-client
+      - admin-panel
+    networks: [coremail]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────────────────────────────
+# Alle persistenten Daten liegen unter /volume1/docker/coremail/data/
+# (bind mounts statt named volumes — besser für Synology-Backups via
+#  Hyper Backup und einfachere Inspektion der Daten)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Netzwerk
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  coremail:
+    name: coremail_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24   # Festes Subnetz — kein Konflikt mit DSM (172.17/172.18)
