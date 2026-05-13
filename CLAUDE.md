@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `0.8.0`
+**Aktuelle Version**: `0.9.0`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -104,6 +104,7 @@ coremail/
 | Phase 5 | ✅ Fertig | Backup + OpenTelemetry + Observability + Helm Chart |
 | Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
 | Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
+| Phase 8 | ✅ Fertig | EMS REST-Bridge (20+ Cmdlets) + MAPI over HTTP + eDiscovery & Legal Hold |
 
 ---
 
@@ -161,6 +162,11 @@ pnpm --filter @coremail/storage exec prisma generate
 - `DistributionGroup` / `DistributionGroupMember` — Verteilergruppen (statisch + dynamisch)
 - `ResourceMailbox` / `ResourceCalendar` / `ResourceBooking` — Raum-/Ressourcenpostfächer
 - `PublicFolder` / `PublicFolderMessage` — Öffentliche Ordner mit ACL
+
+**Phase-8-Modelle**:
+- `EDiscoverySearch` — Cross-Mailbox-Suche (JSON-Query, Status, resultCount, exportPath)
+- `LegalHold` — Aufbewahrungssperre (mailboxIds[], active, appliedBy/releasedAt)
+- `TransportRule` — Transportregeln (conditions/actions als JSON, priority, enabled)
 
 ---
 
@@ -255,13 +261,24 @@ Alle Endpunkte hinter nginx auf Port 443:
 /admin/groups/            adminGroupsRouter         # Phase 7: Verteilergruppen
 /admin/resources/         adminResourcesRouter      # Phase 7: Raum-/Ressourcenpostfächer
 /admin/public-folders/    adminPublicFoldersRouter  # Phase 7: Öffentliche Ordner (Admin)
+/admin/ediscovery/        adminEDiscoveryRouter     # Phase 8: eDiscovery & Legal Hold
+/admin/ems/               adminEmsRouter            # Phase 8: EMS REST-Bridge (20+ Cmdlets)
 /events                   SSE Live-Events
 ```
 
-**PowerShell Remoting** (Exchange Management Shell Stub — Phase 7):
+**PowerShell Remoting** (Exchange Management Shell — Phase 8):
 ```
 GET  /PowerShell/  → WSDL
-POST /PowerShell/  → WSMan-Identify (antwortet) + alle Cmdlets (SOAP-Fault mit Hinweis)
+POST /PowerShell/  → WSMan-Identify (antwortet) + Cmdlet-Routing zu EMS REST-Bridge
+                     (erkannte Cmdlets → JSON-Antwort im SOAP-Envelope)
+                     (unbekannte Cmdlets → SOAP-Fault mit Liste unterstützter Cmdlets)
+```
+
+**MAPI over HTTP** (ews-server — Phase 8):
+```
+GET  /mapi/healthcheck.htm   → "MAPI" (Outlook Connectivity-Probe)
+POST /mapi/emsmdb/           → Connect / Execute (EWS-Fallback) / Disconnect / NotificationWait
+POST /mapi/nspi/             → Bind / QueryRows (GAL) / ResolveNames / Unbind
 ```
 
 ---
@@ -417,4 +434,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-13 (v0.8.0 — Phase 7: Verteilergruppen, Raumverwaltung, Öffentliche Ordner, PowerShell-Stub)*
+*Letzte Aktualisierung: 2026-05-13 (v0.9.0 — Phase 8: EMS REST-Bridge, MAPI over HTTP, eDiscovery & Legal Hold)*

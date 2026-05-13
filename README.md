@@ -38,7 +38,7 @@
 24. [Roadmap](#roadmap)
 25. [Lizenz](#lizenz)
 
-> **Aktuelle Version: v0.8.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
+> **Aktuelle Version: v0.9.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
 
 ---
 
@@ -76,13 +76,15 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | **ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile)** | ✅ Implementiert |
 | OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
 | Freigegebene Postfächer (Shared Mailboxen) | ✅ Implementiert |
-| **Öffentliche Ordner (Public Folders)** | ✅ **Neu in v0.8.0** |
-| **Verteilergruppen & dynamische Gruppen** | ✅ **Neu in v0.8.0** |
-| **Raum- und Gerätepostfächer (auto-accept)** | ✅ **Neu in v0.8.0** |
+| **Öffentliche Ordner (Public Folders)** | ✅ Implementiert |
+| **Verteilergruppen & dynamische Gruppen** | ✅ Implementiert |
+| **Raum- und Gerätepostfächer (auto-accept)** | ✅ Implementiert |
 | Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
 | Posteingangsregeln (Transport Rules) | ✅ Implementiert |
 | Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
-| **PowerShell-Remoting (EMS Stub)** | ✅ **Neu in v0.8.0** |
+| **eDiscovery & Legal Hold (Cross-Mailbox-Suche)** | ✅ **Neu in v0.9.0** |
+| **PowerShell-Remoting (EMS mit 20+ Cmdlets)** | ✅ **Neu in v0.9.0** |
+| **MAPI over HTTP (Outlook 2013+ Native Transport)** | ✅ **Neu in v0.9.0** |
 
 ### Kalender & Zusammenarbeit
 
@@ -465,20 +467,20 @@ Alle fertigen Images sind auf Docker Hub verfügbar und können ohne lokalen Bui
 
 | Image | Tag | Beschreibung |
 |-------|-----|-------------|
-| `magpeek/coremail-storage-api` | `0.8.0` / `latest` | Interner Storage-API-Service |
-| `magpeek/coremail-auth-service` | `0.8.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
-| `magpeek/coremail-security-filter` | `0.8.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
-| `magpeek/coremail-smtp-server` | `0.8.0` / `latest` | SMTP Inbound + Outbound + Gruppenexpansion |
-| `magpeek/coremail-imap-server` | `0.8.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
-| `magpeek/coremail-pop3-server` | `0.8.0` / `latest` | POP3 (110/995) |
-| `magpeek/coremail-ews-server` | `0.8.0` / `latest` | Exchange Web Services / Outlook-Support |
-| `magpeek/coremail-autodiscover` | `0.8.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
-| `magpeek/coremail-caldav-server` | `0.8.0` / `latest` | CalDAV + CardDAV |
-| `magpeek/coremail-api-gateway` | `0.8.0` / `latest` | REST API + SSE + S/MIME + PS-Stub |
-| `magpeek/coremail-backup-service` | `0.8.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
-| `magpeek/coremail-activesync` | `0.8.0` / `latest` | ActiveSync EAS 14.1 |
-| `magpeek/coremail-web-client` | `0.8.0` / `latest` | Webmail OWA (React) |
-| `magpeek/coremail-admin-panel` | `0.8.0` / `latest` | Admin-Panel ECP (React) |
+| `magpeek/coremail-storage-api` | `0.9.0` / `latest` | Interner Storage-API-Service |
+| `magpeek/coremail-auth-service` | `0.9.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
+| `magpeek/coremail-security-filter` | `0.9.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
+| `magpeek/coremail-smtp-server` | `0.9.0` / `latest` | SMTP Inbound + Outbound + Gruppenexpansion |
+| `magpeek/coremail-imap-server` | `0.9.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
+| `magpeek/coremail-pop3-server` | `0.9.0` / `latest` | POP3 (110/995) |
+| `magpeek/coremail-ews-server` | `0.9.0` / `latest` | EWS + MAPI over HTTP (Outlook 2013+) |
+| `magpeek/coremail-autodiscover` | `0.9.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
+| `magpeek/coremail-caldav-server` | `0.9.0` / `latest` | CalDAV + CardDAV |
+| `magpeek/coremail-api-gateway` | `0.9.0` / `latest` | REST API + SSE + EMS (20+ Cmdlets) + eDiscovery |
+| `magpeek/coremail-backup-service` | `0.9.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
+| `magpeek/coremail-activesync` | `0.9.0` / `latest` | ActiveSync EAS 14.1 |
+| `magpeek/coremail-web-client` | `0.9.0` / `latest` | Webmail OWA (React) |
+| `magpeek/coremail-admin-panel` | `0.9.0` / `latest` | Admin-Panel ECP (React) |
 
 ### Produktion mit Docker-Hub-Images starten
 
@@ -486,13 +488,13 @@ Kein lokaler Build nötig — Images werden direkt von Docker Hub gezogen:
 
 ```bash
 # Neueste stabile Version (empfohlen)
-COREMAIL_VERSION=0.8.0 docker compose \
+COREMAIL_VERSION=0.9.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   up -d
 
 # Oder mit optionalen Modulen (inkl. POP3, CalDAV, ActiveSync)
-COREMAIL_VERSION=0.8.0 docker compose \
+COREMAIL_VERSION=0.9.0 docker compose \
   -f infra/docker/docker-compose.yml \
   -f infra/docker/docker-compose.prod.yml \
   --profile full --profile observability \
@@ -503,8 +505,8 @@ COREMAIL_VERSION=0.8.0 docker compose \
 
 | Tag | Bedeutung |
 |-----|-----------|
-| `0.8.0` | Exakte Version (aktuell) |
-| `0.8` | Neueste Patch-Version von 0.8.x |
+| `0.9.0` | Exakte Version (aktuell) |
+| `0.9` | Neueste Patch-Version von 0.9.x |
 | `0` | Neueste Minor-Version von 0.x.x |
 | `latest` | Neuestes stabiles Release |
 | `edge` | Aktueller Stand des `main`-Branches |
@@ -516,7 +518,7 @@ Der GitHub Actions Workflow (`.github/workflows/docker-publish.yml`) baut und
 pusht alle Images automatisch:
 
 - **Bei Push auf `main`** → Tag `edge` + `sha-<hash>`
-- **Bei Git-Tag `v0.8.0`** → Tags `0.8.0`, `0.8`, `0`, `latest`
+- **Bei Git-Tag `v0.9.0`** → Tags `0.9.0`, `0.9`, `0`, `latest`
 - **Bei Pull Request** → nur Build, kein Push
 
 **Multi-Arch:** Alle Images werden für `linux/amd64` und `linux/arm64` gebaut.
@@ -543,10 +545,10 @@ Ein Access Token erstellt man unter:
 bash scripts/docker-push.sh
 
 # Explizite Version
-bash scripts/docker-push.sh 0.8.0
+bash scripts/docker-push.sh 0.9.0
 
 # Nur bauen, nicht pushen (lokaler Test)
-bash scripts/docker-push.sh 0.8.0 --no-push
+bash scripts/docker-push.sh 0.9.0 --no-push
 ```
 
 ---
@@ -640,7 +642,7 @@ Gemeinsame Bibliothek — wird von allen anderen Modulen als Dependency eingebun
 ### `packages/storage`
 Datenhaltungsschicht — ebenfalls als Bibliothek, nicht als eigener HTTP-Service. Alle Services, die PostgreSQL oder MinIO benötigen, importieren diese Bibliothek.
 
-- **Prisma-Schema**: 31 Entitäten — User, Domain, Mailbox, Folder, Message, Attachment, SharedMailbox, Calendar, CalendarEvent, Contact, Task, Note, BackupJob, SystemLog, Quarantine, Blacklist, Session, UserMfa, AppPassword, LdapConfig, OidcProvider, SharedMailboxPerm, ActiveSyncDevice, UserCertificate, DistributionGroup, DistributionGroupMember, ResourceMailbox, ResourceCalendar, ResourceBooking, PublicFolder, PublicFolderMessage
+- **Prisma-Schema**: 34 Entitäten — User, Domain, Mailbox, Folder, Message, Attachment, SharedMailbox, Calendar, CalendarEvent, Contact, Task, Note, BackupJob, SystemLog, Quarantine, Blacklist, Session, UserMfa, AppPassword, LdapConfig, OidcProvider, SharedMailboxPerm, ActiveSyncDevice, UserCertificate, DistributionGroup, DistributionGroupMember, ResourceMailbox, ResourceCalendar, ResourceBooking, PublicFolder, PublicFolderMessage, EDiscoverySearch, LegalHold, TransportRule
 - **MinIO-Client**: Upload/Download/Delete, Key-Factories (attachments/, raw/, quarantine/, backups/)
 - **MIME-Parser**: parst RFC 2822-Mails via `mailparser`, extrahiert Anhänge mit SHA-256-Hash für Deduplizierung
 
@@ -940,17 +942,82 @@ Hierarchische Ordnerstruktur für organisationsweite Inhalte:
 
 **ACL-Berechtigungen:** `READ` (lesen), `POST` (lesen + schreiben), `OWNER` (vollständig)
 
-### PowerShell-Remoting-Stub *(Phase 7 — neu in v0.8.0)*
+### PowerShell-Remoting & EMS REST-Bridge *(Phase 8 — neu in v0.9.0)*
 
-Minimaler WSMan/WS-Management-Endpunkt für Exchange Management Shell (EMS) Kompatibilität:
+Vollständiger WSMan/WS-Management-Endpunkt für Exchange Management Shell (EMS):
 
 ```
-GET  /PowerShell/  → WSDL-Beschreibung
-POST /PowerShell/  → WSMan-Identify (vollständige Antwort)
-                     + alle anderen Cmdlets (SOAP-Fault mit Hinweis)
+GET  /PowerShell/   → WSDL-Beschreibung
+POST /PowerShell/   → WSMan-Identify (vollständige Antwort)
+                      + Cmdlets werden an EMS REST-Bridge geroutet
+                      + Nicht-unterstützte Cmdlets → SOAP-Fault mit Liste
 ```
 
-Exchange Management Shell erkennt CoreMail als Exchange-Server und kann sich verbinden. Einzelne Cmdlets geben einen informativen SOAP-Fault zurück. Eine vollständige Cmdlet-Implementierung ist für Phase 8 geplant.
+**Unterstützte Cmdlets (20+):**
+
+| Kategorie | Cmdlets |
+|-----------|---------|
+| Postfächer | `Get-Mailbox`, `New-Mailbox`, `Set-Mailbox`, `Remove-Mailbox` |
+| Gruppen | `Get-DistributionGroup`, `New-DistributionGroup`, `Set-DistributionGroup`, `Remove-DistributionGroup` |
+| Grupenmitglieder | `Add-DistributionGroupMember`, `Remove-DistributionGroupMember`, `Get-DistributionGroupMember` |
+| Domains | `Get-AcceptedDomain`, `New-AcceptedDomain`, `Remove-AcceptedDomain` |
+| Transportregeln | `Get-TransportRule`, `New-TransportRule`, `Set-TransportRule`, `Remove-TransportRule`, `Enable-TransportRule`, `Disable-TransportRule` |
+| Statistiken | `Get-MailboxStatistics` |
+| Ressourcen | `Get-ResourceMailbox` |
+
+**EMS REST-Bridge** (`/api/v1/admin/ems/`):
+```
+GET    /mailboxes                          → Get-Mailbox
+POST   /mailboxes                          → New-Mailbox
+PUT    /mailboxes/:identity                → Set-Mailbox
+DELETE /mailboxes/:identity                → Remove-Mailbox
+GET    /distribution-groups                → Get-DistributionGroup
+POST   /transport-rules                    → New-TransportRule
+GET    /mailbox-statistics/:identity       → Get-MailboxStatistics
+POST   /cmdlet                             → Universeller Cmdlet-Dispatcher
+```
+
+### eDiscovery & Legal Hold *(Phase 8 — neu in v0.9.0)*
+
+Compliance-Suche über alle Postfächer und rechtliche Aufbewahrungssperren:
+
+**eDiscovery-Suche:**
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/admin/ediscovery/searches` | GET/POST | Suchen verwalten |
+| `/api/v1/admin/ediscovery/searches/:id` | GET/DELETE | Einzelne Suche |
+| `/api/v1/admin/ediscovery/searches/:id/run` | POST | Suche ausführen (async via Redis) |
+| `/api/v1/admin/ediscovery/searches/:id/results` | GET | Ergebnisse paginiert abrufen |
+| `/api/v1/admin/ediscovery/searches/:id/export` | POST | Als MBOX exportieren (Job) |
+
+**Suchparameter:** Schlüsselwörter, Absender, Empfänger, Datum von/bis, Betreff, Hat Anhang, Postfach-Scope
+
+**Legal Hold:**
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|-------------|
+| `/api/v1/admin/ediscovery/holds` | GET/POST | Aufbewahrungssperren verwalten |
+| `/api/v1/admin/ediscovery/holds/:id` | GET/DELETE | Sperre anzeigen / aufheben |
+| `/api/v1/admin/ediscovery/holds/check/:userId` | GET | Ist User unter Legal Hold? |
+
+Legal Hold verhindert die permanente Löschung aller E-Mails der betroffenen Postfächer.
+
+### MAPI over HTTP *(Phase 8 — neu in v0.9.0)*
+
+Outlook 2013 SP1+ und Outlook 365 nutzen MAPI over HTTP als primären Transport (statt RPC/HTTP). Der EWS-Server implementiert den vollständigen Session-Lifecycle:
+
+```
+Outlook → GET  /mapi/healthcheck.htm       → "MAPI" (Connectivity-Probe)
+Outlook → POST /mapi/emsmdb/ {Connect}     → Session-Cookie + Server-Info
+Outlook → POST /mapi/emsmdb/ {Execute}     → ecNotSupported → EWS-Fallback
+Outlook → POST /mapi/emsmdb/ {Disconnect}  → Session beenden
+Outlook → POST /mapi/nspi/   {Bind}        → Adressbuch-Session
+Outlook → POST /mapi/nspi/   {QueryRows}   → GAL-Einträge (aus PostgreSQL)
+Outlook → POST /mapi/nspi/   {ResolveNames}→ Namensauflösung
+```
+
+**Verhalten:** Outlook öffnet eine MAPI-Session, erhält Server-Metadaten und fällt bei ROP-Befehlen (`Execute`) transparent auf EWS zurück — vollständig transparent für den Benutzer.
 
 ---
 
@@ -1672,12 +1739,14 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | `/autodiscover/autodiscover.json/v1.0/` | `autodiscover` | Autodiscover v2 |
 | `/OAB/` | `ews-server` | Offline Address Book |
 | `/Microsoft-Server-ActiveSync` | `activesync` | ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile) |
-| `/PowerShell/` | `api-gateway` | PowerShell-Remoting (Exchange Management Shell Stub) |
+| `/PowerShell/` | `api-gateway` | PowerShell-Remoting (EMS mit 20+ Cmdlets) |
 | `/api/v1/` | `api-gateway` | CoreMail REST-API |
 | `/api/v1/public-folders/` | `api-gateway` | Öffentliche Ordner (User-Zugriff) |
 | `/api/v1/admin/groups/` | `api-gateway` | Verteilergruppen-Verwaltung |
 | `/api/v1/admin/resources/` | `api-gateway` | Raum-/Ressourcenpostfächer |
 | `/api/v1/admin/public-folders/` | `api-gateway` | Öffentliche Ordner (Admin) |
+| `/api/v1/admin/ediscovery/` | `api-gateway` | eDiscovery-Suchen & Legal Hold |
+| `/api/v1/admin/ems/` | `api-gateway` | EMS REST-Bridge (Cmdlet-Dispatcher) |
 | `/health` | `api-gateway` | Health-Check-Endpunkt |
 
 ---
@@ -1692,8 +1761,9 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | — | ✅ Abgeschlossen |
 | **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | v0.6.1 | ✅ Abgeschlossen |
 | **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | v0.7.0 | ✅ Abgeschlossen |
-| **Phase 7** | **Verteilergruppen** (statisch/dynamisch, SMTP-Expansion), **Raum-/Ressourcenpostfächer** (auto-accept iCal), **Öffentliche Ordner** (ACL, Hierarchie), **PowerShell-Remoting-Stub** (WSMan) | **v0.8.0** | ✅ **Abgeschlossen** |
-| **Phase 8** | Vollständige PowerShell-Cmdlets (EMS), MAPI over HTTP (Outlook 2013+), eDiscovery-Erweiterungen | — | 📅 Geplant |
+| **Phase 7** | **Verteilergruppen** (statisch/dynamisch, SMTP-Expansion), **Raum-/Ressourcenpostfächer** (auto-accept iCal), **Öffentliche Ordner** (ACL, Hierarchie), **PowerShell-Remoting-Stub** (WSMan) | v0.8.0 | ✅ Abgeschlossen |
+| **Phase 8** | **EMS REST-Bridge** (20+ Cmdlets, Cmdlet-Dispatcher), **MAPI over HTTP** (Connect/Execute/NSPI/GAL, Outlook 2013+), **eDiscovery & Legal Hold** (Cross-Mailbox-Suche, MBOX-Export) | **v0.9.0** | ✅ **Abgeschlossen** |
+| **Phase 9** | S/MIME Inline-Signierung/-Verschlüsselung, Journaling-Regeln (RFC 3462), Aufbewahrungsrichtlinien (automatisches Archivieren/Löschen nach Ablauf) | — | 📅 Geplant |
 
 ---
 

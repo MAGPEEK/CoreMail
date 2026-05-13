@@ -9,6 +9,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.9.0] — 2026-05-13 — Phase 8: EMS REST-Bridge, MAPI over HTTP, eDiscovery & Legal Hold
+
+### Added
+- **EMS REST-Bridge** (`/api/v1/admin/ems/`)
+  - `adminEmsRouter` — vollständige REST-Implementierung aller 20+ Exchange Management Shell Cmdlets
+  - **Mailbox-Cmdlets**: `Get-Mailbox`, `New-Mailbox`, `Set-Mailbox`, `Remove-Mailbox`
+  - **Gruppen-Cmdlets**: `Get/New/Set/Remove-DistributionGroup`, `Add/Remove/Get-DistributionGroupMember`
+  - **Domain-Cmdlets**: `Get/New/Remove-AcceptedDomain`
+  - **Transportregel-Cmdlets**: `Get/New/Set/Remove-TransportRule`, `Enable/Disable-TransportRule`
+  - **Statistiken**: `Get-MailboxStatistics`
+  - **Ressourcen**: `Get-ResourceMailbox`
+  - POST `/cmdlet` — universeller Cmdlet-Dispatcher (EMS-kompatibles JSON-Interface)
+- **PowerShell-Remoting Phase 8** (`/PowerShell/`)
+  - Vollständiges Cmdlet-Routing: erkannte Cmdlets werden direkt an EMS REST-Bridge weitergeleitet
+  - SOAP-Antwort: erkannte Cmdlets liefern strukturierten JSON-Output im SOAP-Envelope
+  - SOAP-Fault mit vollständiger Cmdlet-Liste für nicht unterstützte Cmdlets
+  - Unterstützte Cmdlets als `Set<string>` (SUPPORTED_CMDLETS) — einfach erweiterbar
+- **MAPI over HTTP** (`/mapi/` — `packages/ews-server/src/mapi/handler.ts`)
+  - `GET /mapi/healthcheck.htm` — Outlook Connectivity-Probe (antwortet "MAPI")
+  - `POST /mapi/emsmdb/` — EMSMDB Session-Lifecycle:
+    - `Connect` → Session-Cookie + Server-Metadaten (Exchange 2019 Versions-String)
+    - `Execute` → ecNotSupported → transparenter EWS-Fallback für Outlook
+    - `Disconnect` → Session beenden
+    - `NotificationWait` → sofortige Antwort (kein Long-Poll)
+  - `POST /mapi/nspi/` — NSPI Adressbuch-Service:
+    - `Bind` → NSPI-Session
+    - `QueryRows` → GAL-Einträge aus PostgreSQL (max. 500 User)
+    - `ResolveNames` → Namensauflösung (Display Name + E-Mail)
+    - `Unbind` → Session beenden
+  - nginx routing: `/mapi/` → ews-server (bereits konfiguriert)
+- **eDiscovery & Legal Hold** (`/api/v1/admin/ediscovery/`)
+  - `adminEDiscoveryRouter` — vollständige eDiscovery-Verwaltung
+  - **Suchen**: `GET/POST/DELETE /searches`, `GET /searches/:id`
+  - **Suchausführung**: `POST /searches/:id/run` — asynchron via Redis Pub/Sub + `runSearch()`
+  - **Suchergebnisse**: `GET /searches/:id/results?limit=&offset=` — paginierte Ergebnisliste
+  - **Export**: `POST /searches/:id/export` — MBOX-Export-Job (Redis-Queue)
+  - **Legal Hold**: `GET/POST /holds`, `GET/DELETE /holds/:id`
+  - **Hold-Check**: `GET /holds/check/:userId` — User unter Legal Hold?
+  - Suchparameter: `keywords`, `senderAddresses`, `recipientAddresses`, `dateFrom`, `dateTo`, `subjectContains`, `hasAttachment`, `mailboxIds` (leer = alle Postfächer)
+- **Prisma-Schema Phase 8**
+  - Neues Enum: `EDiscoveryStatus` (DRAFT / RUNNING / COMPLETED / FAILED)
+  - Neues Model: `EDiscoverySearch` — Suchparameter als JSON, resultCount, exportPath
+  - Neues Model: `LegalHold` — mailboxIds, active, appliedBy, appliedAt, releasedAt
+  - Neues Model: `TransportRule` — conditions/actions als JSON, priority, enabled
+
+---
+
 ## [0.8.0] — 2026-05-13 — Phase 7: Verteilergruppen, Raumverwaltung, Öffentliche Ordner, PowerShell-Stub
 
 ### Added

@@ -3,6 +3,7 @@ import { createLogger } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
+import { mapiRouter } from './mapi/handler.js';
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
@@ -41,6 +42,10 @@ async function main() {
   app.get('/OAB/', (_req, res) => {
     res.status(404).json({ error: 'OAB not implemented' });
   });
+
+  // MAPI over HTTP — Phase 8
+  // Provides Connect/Execute/Disconnect for Outlook 2013 SP1+ and Outlook 365
+  app.use('/mapi', mapiRouter);
 
   app.listen(PORT, () => {
     log.info({ port: PORT }, 'EWS server started');

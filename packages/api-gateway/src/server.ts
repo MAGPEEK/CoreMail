@@ -15,6 +15,8 @@ import { adminLogsRouter } from './routes/admin/logs.js';
 import { adminGroupsRouter } from './routes/admin/groups.js';
 import { adminResourcesRouter } from './routes/admin/resources.js';
 import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
+import { adminEDiscoveryRouter } from './routes/admin/ediscovery.js';
+import { adminEmsRouter } from './routes/admin/ems.js';
 import { smimeRouter } from './routes/smime.js';
 import { publicFoldersRouter } from './routes/public-folders.js';
 import { powershellRouter } from './routes/powershell.js';
@@ -63,6 +65,8 @@ app.use('/api/v1/admin/logs', adminLogsRouter);
 app.use('/api/v1/admin/groups', adminGroupsRouter);
 app.use('/api/v1/admin/resources', adminResourcesRouter);
 app.use('/api/v1/admin/public-folders', adminPublicFoldersRouter);
+app.use('/api/v1/admin/ediscovery', adminEDiscoveryRouter);
+app.use('/api/v1/admin/ems', adminEmsRouter);
 
 // 404 handler
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

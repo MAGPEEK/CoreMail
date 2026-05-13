@@ -737,3 +737,71 @@ model PublicFolderMessage {
   @@index([folderId, date])
   @@map("public_folder_messages")
 }
+
+// ─────────────────────────────────────────────
+// Phase 8 — eDiscovery & Legal Hold
+// ─────────────────────────────────────────────
+
+enum EDiscoveryStatus {
+  DRAFT
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model EDiscoverySearch {
+  id          String            @id @default(cuid())
+  name        String
+  description String            @default("")
+  status      EDiscoveryStatus  @default(DRAFT)
+  // query: { keywords?, senderAddresses?, recipientAddresses?, dateFrom?, dateTo?, hasAttachment? }
+  query       Json              @default("{}")
+  // empty = all mailboxes
+  mailboxIds  String[]
+  resultCount Int               @default(0)
+  exportPath  String?           // MinIO path to exported archive
+  createdBy   String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([createdBy])
+  @@index([status])
+  @@map("ediscovery_searches")
+}
+
+model LegalHold {
+  id          String    @id @default(cuid())
+  name        String
+  description String    @default("")
+  // userIds under hold — messages cannot be permanently deleted
+  mailboxIds  String[]
+  active      Boolean   @default(true)
+  appliedBy   String    // userId of admin
+  appliedAt   DateTime  @default(now())
+  releasedAt  DateTime?
+
+  @@index([active])
+  @@map("legal_holds")
+}
+
+// ─────────────────────────────────────────────
+// Phase 8 — Transport Rules
+// ─────────────────────────────────────────────
+
+model TransportRule {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  priority    Int      @default(0)
+  enabled     Boolean  @default(true)
+  // conditions: [{field: "from"|"to"|"subject"|"body"|"hasAttachment", op: "contains"|"equals"|"regex", value}]
+  conditions  Json     @default("[]")
+  // actions: [{type: "addHeader"|"removeHeader"|"redirect"|"reject"|"addRecipient"|"setSubjectPrefix", value}]
+  actions     Json     @default("[]")
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([enabled, priority])
+  @@map("transport_rules")
+}
