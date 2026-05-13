@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `0.7.0`
+**Aktuelle Version**: `0.8.0`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -103,6 +103,7 @@ coremail/
 | Phase 4 | ✅ Fertig | CalDAV/CardDAV + REST API + React OWA + React ECP |
 | Phase 5 | ✅ Fertig | Backup + OpenTelemetry + Observability + Helm Chart |
 | Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
+| Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
 
 ---
 
@@ -152,9 +153,14 @@ Häufige Fallstricke (historische Fehler):
 pnpm --filter @coremail/storage exec prisma generate
 ```
 
-**Neue Phase-6-Modelle**:
+**Phase-6-Modelle**:
 - `ActiveSyncDevice` — Geräte-Registrierung, SyncKeys, PolicyKey
 - `UserCertificate` — S/MIME Zertifikate (Fingerprint, MinIO-Pfad)
+
+**Phase-7-Modelle**:
+- `DistributionGroup` / `DistributionGroupMember` — Verteilergruppen (statisch + dynamisch)
+- `ResourceMailbox` / `ResourceCalendar` / `ResourceBooking` — Raum-/Ressourcenpostfächer
+- `PublicFolder` / `PublicFolderMessage` — Öffentliche Ordner mit ACL
 
 ---
 
@@ -234,18 +240,28 @@ Alle Endpunkte hinter nginx auf Port 443:
 
 **api-gateway REST-Routen** (`/api/v1/`):
 ```
-/mail/              mailRouter
-/calendar/          calendarRouter
-/contacts/          contactsRouter
-/tasks/             tasksRouter
-/notes/             notesRouter
-/user/              userRouter
-/smime/             smimeRouter        # Phase 6: S/MIME + Geräteverwaltung
-/admin/mailboxes/   adminMailboxesRouter
-/admin/domains/     adminDomainsRouter
-/admin/queues/      adminQueuesRouter
-/admin/logs/        adminLogsRouter
-/events             SSE Live-Events
+/mail/                    mailRouter
+/calendar/                calendarRouter
+/contacts/                contactsRouter
+/tasks/                   tasksRouter
+/notes/                   notesRouter
+/user/                    userRouter
+/smime/                   smimeRouter              # Phase 6: S/MIME + Geräteverwaltung
+/public-folders/          publicFoldersRouter      # Phase 7: Öffentliche Ordner (User)
+/admin/mailboxes/         adminMailboxesRouter
+/admin/domains/           adminDomainsRouter
+/admin/queues/            adminQueuesRouter
+/admin/logs/              adminLogsRouter
+/admin/groups/            adminGroupsRouter         # Phase 7: Verteilergruppen
+/admin/resources/         adminResourcesRouter      # Phase 7: Raum-/Ressourcenpostfächer
+/admin/public-folders/    adminPublicFoldersRouter  # Phase 7: Öffentliche Ordner (Admin)
+/events                   SSE Live-Events
+```
+
+**PowerShell Remoting** (Exchange Management Shell Stub — Phase 7):
+```
+GET  /PowerShell/  → WSDL
+POST /PowerShell/  → WSMan-Identify (antwortet) + alle Cmdlets (SOAP-Fault mit Hinweis)
 ```
 
 ---
@@ -401,4 +417,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-13 (v0.7.0 — Phase 6: ActiveSync + S/MIME)*
+*Letzte Aktualisierung: 2026-05-13 (v0.8.0 — Phase 7: Verteilergruppen, Raumverwaltung, Öffentliche Ordner, PowerShell-Stub)*

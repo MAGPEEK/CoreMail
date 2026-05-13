@@ -12,7 +12,12 @@ import { adminMailboxesRouter } from './routes/admin/mailboxes.js';
 import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
 import { adminLogsRouter } from './routes/admin/logs.js';
+import { adminGroupsRouter } from './routes/admin/groups.js';
+import { adminResourcesRouter } from './routes/admin/resources.js';
+import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
 import { smimeRouter } from './routes/smime.js';
+import { publicFoldersRouter } from './routes/public-folders.js';
+import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
 
@@ -43,11 +48,21 @@ app.use('/api/v1/user', userRouter);
 // S/MIME + ActiveSync device management
 app.use('/api/v1/smime', smimeRouter);
 
+// Public Folders (user-facing)
+app.use('/api/v1/public-folders', publicFoldersRouter);
+
+// PowerShell Remoting stub (Exchange Management Shell compatibility)
+app.use(express.text({ type: 'application/soap+xml', limit: '5mb' }));
+app.use('/PowerShell', powershellRouter);
+
 // Admin routes
 app.use('/api/v1/admin/mailboxes', adminMailboxesRouter);
 app.use('/api/v1/admin/domains', adminDomainsRouter);
 app.use('/api/v1/admin/queues', adminQueuesRouter);
 app.use('/api/v1/admin/logs', adminLogsRouter);
+app.use('/api/v1/admin/groups', adminGroupsRouter);
+app.use('/api/v1/admin/resources', adminResourcesRouter);
+app.use('/api/v1/admin/public-folders', adminPublicFoldersRouter);
 
 // 404 handler
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

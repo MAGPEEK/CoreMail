@@ -50,21 +50,33 @@ enum AuthSource {
   OIDC
 }
 
+enum GroupType {
+  STATIC
+  DYNAMIC
+}
+
+enum ResourceType {
+  ROOM
+  EQUIPMENT
+}
+
 // ─────────────────────────────────────────────
 // Domains & Users
 // ─────────────────────────────────────────────
 
 model Domain {
-  id              String         @id @default(cuid())
-  name            String         @unique
-  dkimPrivateKey  String
-  dkimSelector    String         @default("coremail")
-  active          Boolean        @default(true)
-  users           User[]
-  sharedMailboxes SharedMailbox[]
-  ldapConfig      LdapConfig?
-  oidcProviders   OidcProvider[]
-  createdAt       DateTime       @default(now())
+  id                 String               @id @default(cuid())
+  name               String               @unique
+  dkimPrivateKey     String
+  dkimSelector       String               @default("coremail")
+  active             Boolean              @default(true)
+  users              User[]
+  sharedMailboxes    SharedMailbox[]
+  ldapConfig         LdapConfig?
+  oidcProviders      OidcProvider[]
+  distributionGroups DistributionGroup[]
+  resourceMailboxes  ResourceMailbox[]
+  createdAt          DateTime             @default(now())
 
   @@map("domains")
 }
@@ -190,16 +202,17 @@ model OidcProvider {
 // ─────────────────────────────────────────────
 
 model Mailbox {
-  id          String    @id @default(cuid())
-  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String?   @unique
-  sharedBox   SharedMailbox? @relation(fields: [sharedBoxId], references: [id])
-  sharedBoxId String?   @unique
-  uidValidity Int       @default(1)
-  uidNext     Int       @default(1)
-  highestModSeq BigInt  @default(0)
-  folders     Folder[]
-  createdAt   DateTime  @default(now())
+  id              String           @id @default(cuid())
+  user            User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String?          @unique
+  sharedBox       SharedMailbox?   @relation(fields: [sharedBoxId], references: [id])
+  sharedBoxId     String?          @unique
+  resourceMailbox ResourceMailbox?
+  uidValidity     Int              @default(1)
+  uidNext         Int              @default(1)
+  highestModSeq   BigInt           @default(0)
+  folders         Folder[]
+  createdAt       DateTime         @default(now())
 
   @@map("mailboxes")
 }
@@ -580,4 +593,147 @@ model UserCertificate {
 
   @@index([userId])
   @@map("user_certificates")
+}
+
+// ─────────────────────────────────────────────
+// Phase 7 — Distribution Groups
+// ─────────────────────────────────────────────
+
+model DistributionGroup {
+  id                String                    @id @default(cuid())
+  email             String                    @unique
+  displayName       String
+  description       String                    @default("")
+  domain            Domain                    @relation(fields: [domainId], references: [id])
+  domainId          String
+  groupType         GroupType                 @default(STATIC)
+  ldapFilter        String?                   // for DYNAMIC groups
+  requireSenderAuth Boolean                   @default(false)
+  allowExternal     Boolean                   @default(true)
+  moderationEnabled Boolean                   @default(false)
+  moderatorIds      String[]
+  hiddenFromGal     Boolean                   @default(false)
+  active            Boolean                   @default(true)
+  members           DistributionGroupMember[]
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@index([domainId])
+  @@index([email])
+  @@map("distribution_groups")
+}
+
+model DistributionGroupMember {
+  id          String            @id @default(cuid())
+  group       DistributionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId     String
+  memberEmail String            // resolved email address
+  memberType  String            @default("USER") // USER | SHARED_MAILBOX | GROUP | EXTERNAL
+  addedAt     DateTime          @default(now())
+  addedBy     String?           // userId of admin who added
+
+  @@unique([groupId, memberEmail])
+  @@index([groupId])
+  @@map("distribution_group_members")
+}
+
+// ─────────────────────────────────────────────
+// Phase 7 — Resource Mailboxes (Rooms & Equipment)
+// ─────────────────────────────────────────────
+
+model ResourceMailbox {
+  id                  String           @id @default(cuid())
+  email               String           @unique
+  displayName         String
+  resourceType        ResourceType     @default(ROOM)
+  domain              Domain           @relation(fields: [domainId], references: [id])
+  domainId            String
+  capacity            Int?
+  location            String           @default("")
+  phone               String           @default("")
+  autoAccept          Boolean          @default(true)
+  autoDeclineConflict Boolean          @default(true)
+  allowRecurring      Boolean          @default(true)
+  maxDurationMinutes  Int?
+  bookingWindowDays   Int              @default(180)
+  requireApproval     Boolean          @default(false)
+  delegateIds         String[]
+  active              Boolean          @default(true)
+  mailboxId           String?          @unique
+  mailbox             Mailbox?         @relation(fields: [mailboxId], references: [id])
+  calendar            ResourceCalendar?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@index([domainId])
+  @@map("resource_mailboxes")
+}
+
+model ResourceCalendar {
+  id         String           @id @default(cuid())
+  resource   ResourceMailbox  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  resourceId String           @unique
+  bookings   ResourceBooking[]
+  createdAt  DateTime         @default(now())
+
+  @@map("resource_calendars")
+}
+
+model ResourceBooking {
+  id         String           @id @default(cuid())
+  calendar   ResourceCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  calendarId String
+  uid        String           @unique // iCal UID
+  summary    String
+  organizer  String
+  attendees  Json             @default("[]")
+  dtStart    DateTime
+  dtEnd      DateTime
+  status     String           @default("ACCEPTED") // ACCEPTED | DECLINED | TENTATIVE | PENDING
+  icalData   String
+  createdAt  DateTime         @default(now())
+
+  @@index([calendarId, dtStart])
+  @@index([dtStart, dtEnd])
+  @@map("resource_bookings")
+}
+
+// ─────────────────────────────────────────────
+// Phase 7 — Public Folders
+// ─────────────────────────────────────────────
+
+model PublicFolder {
+  id          String                @id @default(cuid())
+  name        String
+  displayName String
+  description String                @default("")
+  parent      PublicFolder?         @relation("PublicFolderTree", fields: [parentId], references: [id])
+  parentId    String?
+  children    PublicFolder[]        @relation("PublicFolderTree")
+  messages    PublicFolderMessage[]
+  // ACL: [{userId: string, permission: "READ"|"POST"|"OWNER"}]
+  acl         Json                  @default("[]")
+  totalCount  Int                   @default(0)
+  createdBy   String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@map("public_folders")
+}
+
+model PublicFolderMessage {
+  id          String       @id @default(cuid())
+  folder      PublicFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  folderId    String
+  subject     String       @default("")
+  fromAddr    String
+  fromName    String       @default("")
+  bodyText    String       @default("")
+  bodyHtml    String       @default("")
+  date        DateTime
+  attachments Json         @default("[]")
+  createdAt   DateTime     @default(now())
+
+  @@index([folderId, date])
+  @@map("public_folder_messages")
 }

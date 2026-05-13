@@ -168,18 +168,16 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
   const [, domain] = rcptTo.toLowerCase().split('@');
   if (!domain) return false;
 
-  const [user, sharedMailbox] = await Promise.all([
-    prisma.user.findFirst({
-      where: { email: rcptTo.toLowerCase(), active: true },
-      select: { id: true },
-    }),
-    prisma.sharedMailbox.findFirst({
-      where: { email: rcptTo.toLowerCase(), active: true },
-      select: { id: true },
-    }),
+  const email = rcptTo.toLowerCase();
+
+  const [user, sharedMailbox, distGroup, resourceMailbox] = await Promise.all([
+    prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
+    prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
+    prisma.distributionGroup.findFirst({ where: { email, active: true }, select: { id: true } }),
+    prisma.resourceMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
   ]);
 
-  return !!(user ?? sharedMailbox);
+  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox);
 }
 
 async function processInboundMessage(
@@ -224,14 +222,166 @@ async function processInboundMessage(
     return;
   }
 
-  // Store the message for each recipient
-  for (const rcpt of meta.rcptTo) {
+  // Expand distribution groups and collect final delivery addresses
+  const deliveryAddresses = await expandRecipients(meta.rcptTo);
+
+  // Store the message for each final recipient
+  for (const rcpt of deliveryAddresses) {
     await storeInboundMessage(rawMessage, {
       fromAddr: meta.mailFrom,
       rcptTo: rcpt,
       toJunk: filterResult.junkFolder ?? false,
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     });
+  }
+
+  // Handle resource mailbox auto-accept for calendar invitations
+  await processResourceMailboxes(rawMessage, meta.rcptTo, meta.mailFrom);
+}
+
+/**
+ * Recursively expand distribution group addresses to individual member addresses.
+ * Prevents infinite loops by tracking visited groups.
+ */
+async function expandRecipients(
+  rcptTo: string[],
+  visited = new Set<string>(),
+): Promise<string[]> {
+  const result: string[] = [];
+
+  for (const email of rcptTo) {
+    const normalised = email.toLowerCase();
+
+    // Check if this is a distribution group
+    const group = await prisma.distributionGroup.findFirst({
+      where: { email: normalised, active: true },
+      include: { members: true },
+    });
+
+    if (group && !visited.has(normalised)) {
+      visited.add(normalised);
+      const memberEmails = group.members.map((m) => m.memberEmail);
+      // Recurse to handle nested groups
+      const expanded = await expandRecipients(memberEmails, visited);
+      result.push(...expanded);
+    } else if (!group) {
+      // Regular recipient (user / shared mailbox / resource mailbox)
+      result.push(normalised);
+    }
+  }
+
+  // Deduplicate
+  return [...new Set(result)];
+}
+
+/**
+ * Auto-accept/decline calendar invitations for resource mailboxes.
+ * Parses iCal data from the message and creates/declines bookings accordingly.
+ */
+async function processResourceMailboxes(
+  rawMessage: Buffer,
+  rcptTo: string[],
+  mailFrom: string,
+): Promise<void> {
+  for (const email of rcptTo) {
+    const resource = await prisma.resourceMailbox.findFirst({
+      where: { email: email.toLowerCase(), active: true },
+      include: { calendar: true },
+    });
+
+    if (!resource) continue;
+
+    // Extract iCal data from message (look for VEVENT in text/calendar attachment)
+    const rawText = rawMessage.toString('utf8');
+    const icalMatch = rawText.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/);
+    if (!icalMatch) continue;
+
+    const icalData = icalMatch[0];
+
+    // Extract essential fields
+    const uidMatch = /^UID:(.+)$/m.exec(icalData);
+    const dtStartMatch = /^DTSTART[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
+    const dtEndMatch = /^DTEND[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
+    const summaryMatch = /^SUMMARY:(.+)$/m.exec(icalData);
+    const methodMatch = /^METHOD:(.+)$/m.exec(icalData);
+
+    if (!uidMatch || !dtStartMatch || !dtEndMatch) continue;
+
+    const uid = uidMatch[1]?.trim() ?? '';
+    const summary = summaryMatch?.[1]?.trim() ?? 'Meeting';
+    const method = methodMatch?.[1]?.trim() ?? 'REQUEST';
+
+    // Parse dates (basic ISO conversion)
+    const parseDtStamp = (s: string): Date => {
+      const clean = s.replace(/Z$/, '');
+      if (clean.length === 8) {
+        return new Date(`${clean.slice(0,4)}-${clean.slice(4,6)}-${clean.slice(6,8)}`);
+      }
+      return new Date(`${clean.slice(0,4)}-${clean.slice(4,6)}-${clean.slice(6,8)}T${clean.slice(9,11)}:${clean.slice(11,13)}:${clean.slice(13,15)}Z`);
+    };
+
+    const dtStart = parseDtStamp(dtStartMatch[1] ?? '');
+    const dtEnd = parseDtStamp(dtEndMatch[1] ?? '');
+
+    if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
+
+    // Handle CANCEL method — remove booking
+    if (method === 'CANCEL') {
+      await prisma.resourceBooking.deleteMany({ where: { uid } });
+      log.info({ resource: email, uid }, 'Resource booking cancelled');
+      continue;
+    }
+
+    if (!resource.autoAccept || resource.requireApproval) {
+      // Store as PENDING for manual approval
+      const calendarId = resource.calendar?.id;
+      if (!calendarId) continue;
+      await prisma.resourceBooking.upsert({
+        where: { uid },
+        create: { calendarId, uid, summary, organizer: mailFrom, dtStart, dtEnd, status: 'PENDING', icalData },
+        update: { dtStart, dtEnd, summary, status: 'PENDING', icalData },
+      });
+      log.info({ resource: email, uid }, 'Resource booking pending approval');
+      continue;
+    }
+
+    // Check for conflicts
+    if (resource.autoDeclineConflict) {
+      const conflict = await prisma.resourceBooking.findFirst({
+        where: {
+          calendar: { resourceId: resource.id },
+          uid: { not: uid },
+          status: { in: ['ACCEPTED', 'TENTATIVE'] },
+          dtStart: { lt: dtEnd },
+          dtEnd: { gt: dtStart },
+        },
+      });
+
+      if (conflict) {
+        log.info({ resource: email, uid, conflict: conflict.uid }, 'Resource booking declined — conflict');
+        const calendarId = resource.calendar?.id;
+        if (calendarId) {
+          await prisma.resourceBooking.upsert({
+            where: { uid },
+            create: { calendarId, uid, summary, organizer: mailFrom, dtStart, dtEnd, status: 'DECLINED', icalData },
+            update: { status: 'DECLINED' },
+          });
+        }
+        continue;
+      }
+    }
+
+    // Auto-accept
+    const calendarId = resource.calendar?.id;
+    if (!calendarId) continue;
+
+    await prisma.resourceBooking.upsert({
+      where: { uid },
+      create: { calendarId, uid, summary, organizer: mailFrom, dtStart, dtEnd, status: 'ACCEPTED', icalData },
+      update: { dtStart, dtEnd, summary, status: 'ACCEPTED', icalData },
+    });
+
+    log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
   }
 }
 

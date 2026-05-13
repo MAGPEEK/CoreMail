@@ -9,6 +9,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.8.0] — 2026-05-13 — Phase 7: Verteilergruppen, Raumverwaltung, Öffentliche Ordner, PowerShell-Stub
+
+### Added
+- **Verteilergruppen (Distribution Groups)**
+  - `DistributionGroup`-Model: Statische und dynamische Gruppen (LDAP-Filter)
+  - `DistributionGroupMember`-Model: Mitglieder (USER / SHARED_MAILBOX / GROUP / EXTERNAL)
+  - SMTP-Expansion: Eingehende E-Mails an Gruppenadresse werden automatisch an alle Mitglieder zugestellt (rekursiv, Loop-Schutz)
+  - Admin-REST-API: `GET/POST/PUT/DELETE /api/v1/admin/groups`
+  - Mitglieder-API: `GET/POST/DELETE /api/v1/admin/groups/:id/members`
+  - GAL-Endpunkt: `GET /api/v1/admin/groups/gal/list` — für Adress-Autovervollständigung
+  - Konfigurierbar: Moderierung, externe Absender, verborgen aus GAL
+- **Raum- und Ressourcenpostfächer (Resource Mailboxes)**
+  - `ResourceMailbox`-Model: Typ ROOM / EQUIPMENT, Kapazität, Standort, Buchungsregeln
+  - `ResourceCalendar`-Model + `ResourceBooking`-Model: Buchungsverwaltung
+  - **Auto-Accept-Logik**: iCal-VEVENT aus eingehender E-Mail wird automatisch geparst und Buchung als ACCEPTED / DECLINED / PENDING gespeichert
+  - Konflikterkennung: Überschneidende Buchungen werden automatisch abgelehnt (konfigurierbar)
+  - Admin-REST-API: `GET/POST/PUT/DELETE /api/v1/admin/resources`
+  - Buchungs-API: `GET /api/v1/admin/resources/:id/bookings`, `DELETE /api/v1/admin/resources/:id/bookings/:bookingId`
+  - Free/Busy-Abfrage: `GET /api/v1/admin/resources/freebusy/query?email=&from=&to=`
+- **Öffentliche Ordner (Public Folders)**
+  - `PublicFolder`-Model: Hierarchischer Baum mit ACL-System (READ / POST / OWNER)
+  - `PublicFolderMessage`-Model: Beiträge in öffentlichen Ordnern
+  - Admin-API: `GET/POST/PUT/DELETE /api/v1/admin/public-folders` inkl. ACL-Verwaltung
+  - User-API: `GET /api/v1/public-folders` (nur zugängliche Ordner), `GET/POST /api/v1/public-folders/:id/messages`
+- **PowerShell-Remoting-Stub** (`/PowerShell/`)
+  - WSMan-Identifizierung: `POST /PowerShell/` mit SOAP-Envelope
+  - WSDL-Endpunkt: `GET /PowerShell/`
+  - Stub-Antwort für alle Cmdlets mit klarer Fehlermeldung (Phase 8 geplant)
+  - nginx-Routing: `/PowerShell/` → api-gateway mit Auth-Header-Weiterleitung
+- **SMTP-Server-Erweiterungen**
+  - `verifyRecipient()`: Akzeptiert nun auch Verteilergruppen- und Ressourcenpostfach-Adressen
+  - `expandRecipients()`: Rekursive Gruppenexpansion mit Duplikateleminierung
+  - `processResourceMailboxes()`: Auto-Accept-Verarbeitung für Raumkalender
+- **Prisma-Schema**
+  - Neue Enums: `GroupType` (STATIC / DYNAMIC), `ResourceType` (ROOM / EQUIPMENT)
+  - Neue Modelle: `DistributionGroup`, `DistributionGroupMember`, `ResourceMailbox`, `ResourceCalendar`, `ResourceBooking`, `PublicFolder`, `PublicFolderMessage`
+  - `Domain`-Relation: `distributionGroups`, `resourceMailboxes`
+  - `Mailbox`-Relation: `resourceMailbox`
+
+---
+
 ## [0.7.0] — 2026-05-13 — Phase 6: ActiveSync (EAS) + S/MIME
 
 ### Added
