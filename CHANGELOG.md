@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.0.2] — 2026-05-14 — Bugfix: OWA/ECP leere Seite
+
+### Fixed
+
+- **Vite base path** — `base: '/owa/'` (web-client) und `base: '/ecp/'` (admin-panel) gesetzt; Assets wurden zuvor mit absolutem Pfad `/assets/...` gebaut — Browser konnte sie unter `/owa/assets/...` nicht finden → leere Seite
+
+---
+
 ## [1.0.1] — 2026-05-14 — Bugfix: Prisma OpenSSL 3.x Kompatibilität
 
 ### Fixed
