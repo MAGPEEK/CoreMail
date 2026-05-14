@@ -24,6 +24,9 @@
 # ── Stage 1: Build aller Node.js-Pakete ──────────────────────────────────────
 FROM node:22-alpine AS builder
 WORKDIR /app
+# Prisma Engine-Binary-Download im Builder überspringen (schlägt unter QEMU fehl).
+# Nur den JS-Client generieren (für TypeScript-Typen). Die echte Engine wird im Runner-Stage geladen.
+ENV PRISMA_CLI_QUERY_ENGINE_TYPE=library
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Workspace-Konfiguration zuerst (Layer-Caching)
