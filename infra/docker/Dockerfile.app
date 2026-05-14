@@ -163,6 +163,8 @@ COPY --from=builder /app/packages/activesync/dist             ./packages/actives
 
 # Nur Produktions-Abhängigkeiten installieren
 RUN pnpm install --frozen-lockfile --prod
+# Altes Prisma-Engine-Binary löschen damit BuildKit-Cache nicht greift
+RUN find /app/node_modules -path "*/.prisma/client/libquery_engine*" -delete 2>/dev/null || true
 RUN pnpm --filter @coremail/storage exec prisma generate
 
 # Frontend-Bundles (statische Dateien)
