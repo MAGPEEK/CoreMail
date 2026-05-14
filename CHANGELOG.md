@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.4] — 2026-05-14 — Bugfix: OWA Login funktioniert nicht
+
+### Fixed
+
+- **Login-URL** — `fetch('http://localhost:3003/auth/login')` → `fetch('/auth/login')`; Browser hat Login-Request an eigenen PC statt an den Server gesendet
+
+---
+
 ## [1.1.3] — 2026-05-14 — Feature: First-Run Setup Wizard
 
 ### Added

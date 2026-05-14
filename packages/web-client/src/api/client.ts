@@ -36,7 +36,7 @@ export const api = {
 };
 
 export async function login(email: string, password: string): Promise<{ accessToken: string; refreshToken: string }> {
-  const res = await fetch('http://localhost:3003/auth/login', {
+  const res = await fetch('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
