@@ -41,31 +41,44 @@ const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 
 // ── Interner HTTP-Proxy (kein nginx nötig) ───────────────────────────────────
 // Leitet Anfragen an interne Services weiter (alles im gleichen Container).
+// Hop-by-hop Headers die nicht weitergeleitet werden dürfen (RFC 2616 §13.5.1)
+const HOP_BY_HOP = new Set([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+  'te', 'trailers', 'transfer-encoding', 'upgrade',
+]);
+
 function internalProxy(targetBase: string): express.RequestHandler {
   const url = new URL(targetBase);
   return (req: express.Request, res: express.Response) => {
-    // req.originalUrl behält den vollen Pfad inkl. Mount-Prefix und Query-String.
-    // req.path würde z.B. /auth/login → /login kürzen, was im Ziel-Service 404 ergibt.
-    //
-    // WICHTIG: express.json() hat den Body-Stream bereits konsumiert.
-    // Deshalb req.body re-serialisieren statt den leeren Stream zu pipen.
-    const bodyStr = (req.body !== undefined && req.method !== 'GET' && req.method !== 'HEAD')
-      ? JSON.stringify(req.body)
-      : undefined;
+    // Hop-by-hop Headers herausfiltern + Host auf internen Service setzen
+    const headers: Record<string, string | string[]> = { host: url.host };
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (!HOP_BY_HOP.has(k.toLowerCase()) && v !== undefined) {
+        headers[k] = v as string | string[];
+      }
+    }
 
-    const headers: Record<string, string | string[]> = { ...req.headers as Record<string, string | string[]>, host: url.host };
-    if (bodyStr !== undefined) {
-      headers['content-type']   = 'application/json';
-      headers['content-length'] = String(Buffer.byteLength(bodyStr));
+    // WICHTIG: express.json() hat den Body-Stream bereits konsumiert.
+    // Deshalb req.body re-serialisieren und content-length neu berechnen.
+    let bodyBuf: Buffer | undefined;
+    if (req.body !== undefined && req.method !== 'GET' && req.method !== 'HEAD') {
+      bodyBuf = Buffer.from(JSON.stringify(req.body), 'utf8');
+      headers['content-type']   = 'application/json; charset=utf-8';
+      headers['content-length'] = String(bodyBuf.length);
+    } else {
+      // Kein Body — content-length entfernen damit kein Konflikt entsteht
+      delete headers['content-length'];
     }
 
     const options: http.RequestOptions = {
       hostname: url.hostname,
-      port: parseInt(url.port || '80', 10),
-      path: req.originalUrl,
-      method: req.method,
+      port:     parseInt(url.port || '80', 10),
+      // req.originalUrl behält /auth/login statt /login (req.path würde Prefix strippen)
+      path:     req.originalUrl,
+      method:   req.method,
       headers,
     };
+
     const proxy = http.request(options, (upstream) => {
       res.writeHead(upstream.statusCode ?? 200, upstream.headers);
       upstream.pipe(res, { end: true });
@@ -74,10 +87,11 @@ function internalProxy(targetBase: string): express.RequestHandler {
       log.warn({ err, target: targetBase }, 'Internal proxy error');
       if (!res.headersSent) res.status(502).json({ error: 'Service temporarily unavailable' });
     });
-    if (bodyStr !== undefined) {
-      proxy.end(bodyStr);
+
+    if (bodyBuf !== undefined) {
+      proxy.end(bodyBuf);
     } else {
-      req.pipe(proxy, { end: true });
+      proxy.end();
     }
   };
 }
