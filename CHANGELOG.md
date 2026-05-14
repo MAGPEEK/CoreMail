@@ -9,7 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [1.0.3] — 2026-05-14 — Feature: First-Run Setup Wizard
+## [1.1.3] — 2026-05-14 — Feature: First-Run Setup Wizard
 
 ### Added
 
