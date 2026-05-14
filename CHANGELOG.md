@@ -9,6 +9,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.0.1] — 2026-05-14 — Bugfix: Prisma OpenSSL 3.x Kompatibilität
+
+### Fixed
+
+- **Prisma Engine OpenSSL 3.x** — `binaryTargets = ["native", "linux-musl-openssl-3.0.x"]` in `schema.prisma` hinzugefügt; behebt `libssl.so.1.1: No such file or directory` auf Alpine 3.20 / Node 22
+- **Prisma Schema-Deployment** — `prisma db push` statt `prisma migrate deploy` (kein Migrationsverlauf nötig); `prisma` CLI von `devDependencies` in `dependencies` verschoben
+- **Redis Synology** — AOF durch RDB-Snapshots ersetzt (`user: "0:0"`); behebt `Permission denied` auf Synology-Volumes
+- **Docker Entrypoint** — `entrypoint-app.sh` wartet auf PostgreSQL und führt `prisma db push` vor `supervisord` aus
+
+---
+
 ## [0.11.0] — 2026-05-14 — Phase 10: Benutzerverwaltung, Modern Auth, Audit-Log, Push, SMTP-Gateway
 
 ### Added
