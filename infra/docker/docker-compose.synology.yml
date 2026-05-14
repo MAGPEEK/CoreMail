@@ -143,11 +143,14 @@ services:
     image: redis:7-alpine
     container_name: coremail-redis
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-RedisSecret2024}
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-RedisSecret2024}
     volumes:
       - /volume1/docker/coremail/data/redis:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"${REDIS_PASSWORD:-RedisSecret2024}\" ping | grep -q PONG"]
+      # $$REDIS_PASSWORD → Compose schreibt $REDIS_PASSWORD → Container-Shell expandiert aus env
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
