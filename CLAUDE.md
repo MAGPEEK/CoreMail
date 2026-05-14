@@ -56,7 +56,7 @@ coremail/
 │   ├── web-client/        # React OWA Webmail (Port 80)
 │   └── admin-panel/       # React ECP Admin-Panel (Port 80)
 ├── infra/
-│   ├── docker/            # docker-compose.yml, docker-compose.prod.yml, nginx/, postgres/, rspamd/
+│   ├── docker/            # docker-compose.yml, docker-compose.synology.yml, nginx/, postgres/, rspamd/
 │   ├── k8s/               # Helm Chart (Chart.yaml, values.yaml, templates/)
 │   └── observability/     # Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector
 ├── scripts/               # setup.sh, gen-dev-certs.sh, docker-push.sh

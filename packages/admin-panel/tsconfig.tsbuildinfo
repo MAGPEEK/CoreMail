@@ -1,1 +1,0 @@
-{"root":["./src/main.tsx","./src/api/client.ts","./src/components/sidebar.tsx","./src/pages/dashboardpage.tsx","./src/pages/domainspage.tsx","./src/pages/loginpage.tsx","./src/pages/logspage.tsx","./src/pages/mailboxespage.tsx","./src/pages/protectionpage.tsx","./src/pages/queuespage.tsx","./src/pages/reportspage.tsx","./src/pages/serverspage.tsx"],"version":"5.9.3"}
