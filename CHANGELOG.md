@@ -13,7 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
-- **Interner Proxy — Body-Streaming** — `express.json()` konsumiert den Request-Body-Stream vor dem Proxy; Auth-Service erhielt leeren Body → Login-Validierung schlug fehl. Fix: `req.body` wird im Proxy re-serialisiert statt den leeren Stream zu pipen
+- **Interner Proxy — Hop-by-Hop-Header** — `connection`, `transfer-encoding` etc. werden jetzt korrekt gefiltert (RFC 2616); verhindert Connection-Konflikte (NetworkError im Browser)
+- **Interner Proxy — Body-Streaming** — `express.json()` konsumiert den Request-Body-Stream vor dem Proxy; Auth-Service erhielt leeren Body → Login-Validierung schlug fehl. Fix: `req.body` wird als Buffer re-serialisiert mit exakter `content-length`
 - **Interner Proxy — Pfad** — `req.path` → `req.originalUrl`; Express strippt bei `app.use('/auth', proxy)` den Prefix, sodass `POST /auth/login` als `POST /login` beim auth-service ankam → 404. Betrifft alle internen Proxys (auth, EWS, CalDAV, ActiveSync)
 
 ---
