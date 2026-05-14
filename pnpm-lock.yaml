@@ -587,6 +587,9 @@ importers:
       nodemailer:
         specifier: ^6.9.15
         version: 6.10.1
+      prisma:
+        specifier: ^5.20.0
+        version: 5.22.0
     devDependencies:
       '@types/express':
         specifier: ^4.17.21
@@ -597,9 +600,6 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.18
-      prisma:
-        specifier: ^5.20.0
-        version: 5.22.0
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
