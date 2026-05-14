@@ -19,11 +19,12 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
-import { createLogger, createAccessToken, verifyAccessToken } from '@coremail/core';
+import { createLogger, signAccessToken as createAccessToken, verifyAccessToken } from '@coremail/core';
+import type { Router as RouterType } from 'express';
 
 const log = createLogger('oauth2');
 
-export const oauth2Router = Router();
+export const oauth2Router: RouterType = Router();
 
 const BASE_URL = process.env['AUTODISCOVER_BASE'] ?? 'http://localhost:3000';
 const ACCESS_TOKEN_TTL_SEC  = 3600;          // 1 hour
@@ -313,10 +314,14 @@ async function issueTokens(
   if (!user) throw new Error('User not found');
 
   // Reuse createAccessToken from @coremail/core (HS256 JWT)
+  // domainId/sessionId/mfaVerified are not tracked per OAuth token — use safe defaults
   const accessToken = createAccessToken({
     sub: userId,
     email: user.email,
     role: user.role,
+    domainId: '',
+    sessionId: clientId,
+    mfaVerified: false,
   });
 
   const refreshTokenStr = crypto.randomBytes(40).toString('hex');

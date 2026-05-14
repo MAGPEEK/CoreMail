@@ -69,8 +69,12 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
 
 // ── Policy Application ────────────────────────────────────────────────────────
 
+type PolicyWithAssignments = Awaited<
+  ReturnType<typeof prisma.retentionPolicy.findMany<{ include: { assignments: true } }>>
+>[number];
+
 async function applyPolicy(
-  policy: Awaited<ReturnType<typeof prisma.retentionPolicy.findMany>>[number],
+  policy: PolicyWithAssignments,
   result: RetentionRunResult,
 ): Promise<void> {
   // Determine which users are in scope
@@ -109,7 +113,7 @@ async function applyPolicy(
 }
 
 async function applyPolicyForUser(
-  policy: Awaited<ReturnType<typeof prisma.retentionPolicy.findMany>>[number],
+  policy: PolicyWithAssignments,
   userId: string,
   cutoffDate: Date,
   heldUserIds: Set<string>,

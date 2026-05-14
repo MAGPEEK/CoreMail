@@ -39,9 +39,9 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
         // Phase 10: Also push notification to subscribed devices (fire-and-forget)
         if (payload.userId) {
           sendPushToUser(String(payload.userId), 'mail.new', {
-            title: `New message from ${String(payload.fromName ?? payload.fromAddr ?? 'Unknown')}`,
-            body: String(payload.subject ?? '(No subject)'),
-            tag: `mail-${String(payload.messageId ?? '')}`,
+            title: `New message from ${String(payload['fromName'] ?? payload['fromAddr'] ?? 'Unknown')}`,
+            body: String(payload['subject'] ?? '(No subject)'),
+            tag: `mail-${String(payload['messageId'] ?? '')}`,
             url: '/owa/',
           }).catch(() => undefined);
         }

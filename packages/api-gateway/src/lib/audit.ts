@@ -41,17 +41,18 @@ export function audit(entry: AuditEntry): void {
   prisma.auditLog
     .create({
       data: {
-        actorId: entry.actorId,
-        actorEmail: entry.actorEmail,
+        ...(entry.actorId !== undefined ? { actorId: entry.actorId } : {}),
+        ...(entry.actorEmail !== undefined ? { actorEmail: entry.actorEmail } : {}),
         action: entry.action,
-        targetType: entry.targetType,
-        targetId: entry.targetId,
-        targetName: entry.targetName,
-        ipAddress: entry.ipAddress,
-        userAgent: entry.userAgent,
-        ...(entry.changes ? { changes: entry.changes } : {}),
+        ...(entry.targetType !== undefined ? { targetType: entry.targetType } : {}),
+        ...(entry.targetId !== undefined ? { targetId: entry.targetId } : {}),
+        ...(entry.targetName !== undefined ? { targetName: entry.targetName } : {}),
+        ...(entry.ipAddress !== undefined ? { ipAddress: entry.ipAddress } : {}),
+        ...(entry.userAgent !== undefined ? { userAgent: entry.userAgent } : {}),
+        // Cast via unknown: Prisma InputJsonValue doesn't accept Record<string, unknown> directly
+        ...(entry.changes !== undefined ? { changes: entry.changes as unknown as Record<string, string> } : {}),
         success: entry.success ?? true,
-        errorMsg: entry.errorMsg,
+        ...(entry.errorMsg !== undefined ? { errorMsg: entry.errorMsg } : {}),
       },
     })
     .catch((err) => log.error({ err, action: entry.action }, 'Audit log write failed'));
@@ -85,10 +86,10 @@ export function auditMiddleware(
     const verb = req.method.toLowerCase();
 
     audit({
-      actorId: user?.userId,
-      actorEmail: user?.email,
+      ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
+      ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
       action: `${resource}.${verb}`,
-      targetId: pathParts[1],
+      ...(pathParts[1] !== undefined ? { targetId: pathParts[1] } : {}),
       ...auditContext(req),
     });
   }

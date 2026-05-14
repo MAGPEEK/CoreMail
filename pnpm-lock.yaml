@@ -127,9 +127,15 @@ importers:
       '@coremail/storage':
         specifier: workspace:*
         version: link:../storage
+      bcrypt:
+        specifier: ^5.1.1
+        version: 5.1.1
       express:
         specifier: ^4.19.2
         version: 4.22.1
+      nodemailer:
+        specifier: ^6.9.0
+        version: 6.10.1
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
@@ -140,12 +146,18 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@types/bcrypt':
+        specifier: ^5.0.2
+        version: 5.0.2
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.18
+      '@types/nodemailer':
+        specifier: ^6.4.17
+        version: 6.4.23
       '@types/web-push':
         specifier: ^3.6.3
         version: 3.6.4

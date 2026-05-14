@@ -10,12 +10,12 @@
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
-import { requireAuth, requireRole } from '../../middleware/auth.js';
+import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import nodemailer from 'nodemailer';
 
 export const adminGatewayRouter: RouterType = Router();
-adminGatewayRouter.use(requireAuth, requireRole('ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'));
+adminGatewayRouter.use(requireAuth, requireAdmin);
 
 /**
  * GET /api/v1/admin/gateway/settings
