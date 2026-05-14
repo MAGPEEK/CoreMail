@@ -61,11 +61,20 @@ export async function decryptIncomingSmime(
 
     const envelopedDer = forge.util.decode64(b64);
     const asn1 = forge.asn1.fromDer(envelopedDer);
-    const p7 = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsEnvelopedData;
+    // Cast via unknown: PkcsEnvelopedData.decrypt() expects (Recipient, PrivateKey) but
+    // forge internally accepts (Certificate, PrivateKey) — the @types definition is narrower.
+    const p7 = forge.pkcs7.messageFromAsn1(asn1) as unknown as {
+      decrypt(cert: forge.pki.Certificate, key: forge.pki.rsa.PrivateKey): void;
+      content: forge.util.ByteStringBuffer | undefined;
+    };
 
     p7.decrypt(certificate, privateKey);
 
-    const plaintext = Buffer.from(p7.content?.bytes() ?? '', 'binary');
+    // p7.content is a ByteStringBuffer after decryption
+    const contentBytes = p7.content instanceof Object && 'bytes' in p7.content
+      ? (p7.content as forge.util.ByteStringBuffer).bytes()
+      : '';
+    const plaintext = Buffer.from(contentBytes, 'binary');
     log.debug({ recipientUserId, size: plaintext.length }, 'S/MIME message decrypted');
 
     return { encrypted: true, decrypted: true, plaintext };

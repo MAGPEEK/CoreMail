@@ -64,9 +64,13 @@ export function signRaw(
   // Canonicalize MIME body (CRLF, no trailing whitespace)
   const canonBody = canonicalize(body);
 
+  // forge.pki.oids has an index signature → cast to plain Record to satisfy TS4111
+  const oids = forge.pki.oids as Record<string, string>;
+
   // Build CMS SignedData using node-forge
   const p7 = forge.pkcs7.createSignedData();
-  p7.content = forge.util.createBuffer(canonBody, 'binary');
+  // 'raw' = binary-safe buffer (node-forge encoding; 'binary' is not a valid Encoding type)
+  p7.content = forge.util.createBuffer(canonBody, 'raw');
 
   p7.addCertificate(certificate);
   for (const c of chain) {
@@ -76,12 +80,14 @@ export function signRaw(
   p7.addSigner({
     key: privateKey,
     certificate,
-    digestAlgorithm: forge.pki.oids.sha256,
+    digestAlgorithm: oids['sha256']!,
+    // Cast to any[] — forge internals handle Date→UTCTime conversion for signingTime;
+    // the @types/node-forge definition is narrower than the actual runtime API.
     authenticatedAttributes: [
-      { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-      { type: forge.pki.oids.signingTime, value: new Date() },
-      { type: forge.pki.oids.messageDigest },
-    ],
+      { type: oids['contentType']!, value: oids['data']! },
+      { type: oids['signingTime']!, value: new Date() },
+      { type: oids['messageDigest']! },
+    ] as unknown as { type: string; value?: string }[],
   });
 
   p7.sign({ detached: true });

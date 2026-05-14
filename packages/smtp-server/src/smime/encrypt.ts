@@ -75,7 +75,8 @@ export function encryptRaw(
 ): Buffer {
   // Build PKCS#7 EnvelopedData
   const p7 = forge.pkcs7.createEnvelopedData();
-  p7.content = forge.util.createBuffer(rawMessage.toString('binary'), 'binary');
+  // 'raw' = binary-safe in node-forge; 'binary' is not a valid Encoding type
+  p7.content = forge.util.createBuffer(rawMessage.toString('binary'), 'raw');
 
   p7.addRecipient(recipientCert);
   p7.encrypt();

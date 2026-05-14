@@ -15,6 +15,13 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('smime:verify');
 
+// node-forge's PkcsSignedData type is incomplete — augment locally
+type P7Signed = forge.pkcs7.PkcsSignedData & {
+  verify(): void;
+  signers: Array<{ serialNumber: string }>;
+  certificates: forge.pki.Certificate[];
+};
+
 export interface SmimeVerifyResult {
   signed: boolean;
   valid: boolean;
@@ -91,7 +98,7 @@ function verifyDetachedSignature(msgStr: string): SmimeVerifyResult {
 
   const sigDer = forge.util.decode64(sigBase64);
   const asn1 = forge.asn1.fromDer(sigDer);
-  const p7 = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsSignedData;
+  const p7 = forge.pkcs7.messageFromAsn1(asn1) as unknown as P7Signed;
 
   // Set content for verification
   const bodyHeaderEnd = bodyPart.indexOf('\r\n\r\n');
@@ -115,35 +122,29 @@ function verifyOpaqueSignature(msgStr: string): SmimeVerifyResult {
 
   const der = forge.util.decode64(b64);
   const asn1 = forge.asn1.fromDer(der);
-  const p7 = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsSignedData;
+  const p7 = forge.pkcs7.messageFromAsn1(asn1) as unknown as P7Signed;
   p7.verify();
   return buildResultFromP7(p7);
 }
 
-function buildResultFromP7(p7: forge.pkcs7.PkcsSignedData): SmimeVerifyResult {
+function buildResultFromP7(p7: P7Signed): SmimeVerifyResult {
   const signer = p7.signers?.[0];
-  const certs: forge.pki.Certificate[] = (p7 as unknown as { certificates: forge.pki.Certificate[] }).certificates ?? [];
-  const signerCert = certs.find((c) => {
-    const serial = c.serialNumber;
-    return serial === signer?.serialNumber;
-  }) ?? certs[0];
+  const certs: forge.pki.Certificate[] = p7.certificates ?? [];
+  const signerCert = certs.find((c) => c.serialNumber === signer?.serialNumber) ?? certs[0];
 
-  const signerEmail = signerCert
-    ? getEmailFromCert(signerCert)
-    : undefined;
-  const signerName = signerCert
-    ? getNameFromCert(signerCert)
-    : undefined;
+  const signerEmail = signerCert ? getEmailFromCert(signerCert) : undefined;
+  const signerName  = signerCert ? getNameFromCert(signerCert)  : undefined;
 
   return {
     signed: true,
     valid: true,
-    signerEmail,
-    signerName,
+    // exactOptionalPropertyTypes: only spread when value is defined
+    ...(signerEmail !== undefined ? { signerEmail } : {}),
+    ...(signerName  !== undefined ? { signerName  } : {}),
     ...(signerCert
       ? {
           notBefore: signerCert.validity.notBefore.toISOString(),
-          notAfter: signerCert.validity.notAfter.toISOString(),
+          notAfter:  signerCert.validity.notAfter.toISOString(),
         }
       : {}),
   };

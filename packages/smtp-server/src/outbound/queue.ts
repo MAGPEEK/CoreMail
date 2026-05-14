@@ -64,12 +64,13 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           where: { userId: senderUserId },
         });
         if (settings?.autoSign) {
-          buffer = await signMessageForUser(buffer, senderUserId);
+          // Buffer.from() coerces ArrayBufferLike → ArrayBuffer (TS strict mode)
+          buffer = Buffer.from(await signMessageForUser(buffer, senderUserId));
         }
         // ── Phase 9: S/MIME auto-encrypt (opportunistic) ───────────────────
         if (settings?.autoEncrypt && to.length === 1) {
           // Single-recipient encryption only (multi-recipient requires per-cert wrapping)
-          buffer = await encryptMessageForRecipient(buffer, to[0]!);
+          buffer = Buffer.from(await encryptMessageForRecipient(buffer, to[0]!));
         }
       }
 

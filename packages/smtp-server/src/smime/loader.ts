@@ -46,9 +46,12 @@ export async function loadP12FromMinio(
   const p12Asn1 = forge.asn1.fromDer(p12Der);
   const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, p12Password);
 
+  // forge.pki.oids has an index signature → use bracket access to satisfy TS4111
+  const oids = forge.pki.oids as Record<string, string>;
+
   // Extract private key
-  const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-  const rawBags = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag];
+  const keyBags = p12.getBags({ bagType: oids['pkcs8ShroudedKeyBag']! });
+  const rawBags = keyBags[oids['pkcs8ShroudedKeyBag']!];
   if (!rawBags || rawBags.length === 0) {
     throw new Error('No private key found in PKCS#12 bundle');
   }
@@ -58,12 +61,13 @@ export async function loadP12FromMinio(
   }
 
   // Extract certificate chain
-  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-  const rawCertBags = certBags[forge.pki.oids.certBag];
+  const certBags = p12.getBags({ bagType: oids['certBag']! });
+  const rawCertBags = certBags[oids['certBag']!];
   if (!rawCertBags || rawCertBags.length === 0) {
     throw new Error('No certificate found in PKCS#12 bundle');
   }
-  const certs = rawCertBags
+  // exactOptionalPropertyTypes: forge.Bag has cert?: Certificate — cast to loosen the constraint
+  const certs = (rawCertBags as Array<{ cert?: forge.pki.Certificate | undefined }>)
     .map((b) => b.cert)
     .filter((c): c is forge.pki.Certificate => c !== undefined);
 
