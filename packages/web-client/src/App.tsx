@@ -1,7 +1,9 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { SetupPage } from './pages/SetupPage.js';
 import { MailPage } from './pages/MailPage.js';
 import { CalendarPage } from './pages/CalendarPage.js';
 import { ContactsPage } from './pages/ContactsPage.js';
@@ -47,23 +49,51 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Prüft beim Start ob Setup erforderlich ist
+function SetupGuard({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/v1/setup/status')
+      .then((r) => r.json() as Promise<{ setupRequired: boolean }>)
+      .then((data) => {
+        if (data.setupRequired) navigate('/setup', { replace: true });
+      })
+      .catch(() => { /* Setup-Check fehlgeschlagen — normal weiterfahren */ })
+      .finally(() => setChecked(true));
+  }, [navigate]);
+
+  if (!checked) {
+    return (
+      <div className="min-h-screen bg-[#0078D4] flex items-center justify-center">
+        <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 export function App() {
   return (
     <Routes>
+      <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/*" element={
-        <AuthGuard>
-          <Layout>
-            <Routes>
-              <Route path="/mail" element={<MailPage />} />
-              <Route path="/calendar" element={<CalendarPage />} />
-              <Route path="/contacts" element={<ContactsPage />} />
-              <Route path="/tasks" element={<TasksPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/" element={<Navigate to="/mail" replace />} />
-            </Routes>
-          </Layout>
-        </AuthGuard>
+        <SetupGuard>
+          <AuthGuard>
+            <Layout>
+              <Routes>
+                <Route path="/mail" element={<MailPage />} />
+                <Route path="/calendar" element={<CalendarPage />} />
+                <Route path="/contacts" element={<ContactsPage />} />
+                <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/" element={<Navigate to="/mail" replace />} />
+              </Routes>
+            </Layout>
+          </AuthGuard>
+        </SetupGuard>
       } />
     </Routes>
   );

@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.0.3] — 2026-05-14 — Feature: First-Run Setup Wizard
+
+### Added
+
+- **Setup Wizard** (`GET /api/v1/setup/status`, `POST /api/v1/setup/complete`)
+  - Beim ersten Aufruf ohne Benutzer wird automatisch auf `/setup` weitergeleitet
+  - Formular: Mail-Domain, Administrator-E-Mail + Passwort (min. 8 Zeichen)
+  - Erstellt Domain, Admin-User (Rolle `ORGANIZATION_MANAGEMENT`) + Standard-Mailbox-Ordner
+  - Endpoint gesperrt sobald erster User existiert (409 Conflict)
+- **SetupPage** (`packages/web-client/src/pages/SetupPage.tsx`) — Exchange-Design, Erfolgs-Screen mit Weiterleitung zum Login
+- **SetupGuard** in `App.tsx` — prüft Setup-Status bei jedem App-Start, leitet automatisch weiter
+
+---
+
 ## [1.0.2] — 2026-05-14 — Bugfix: OWA/ECP leere Seite
 
 ### Fixed

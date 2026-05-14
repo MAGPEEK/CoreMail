@@ -28,6 +28,7 @@ import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
 import { adminGatewayRouter } from './routes/admin/gateway.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
+import { setupRouter } from './routes/setup.js';
 import { publicFoldersRouter } from './routes/public-folders.js';
 import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
@@ -120,6 +121,9 @@ app.get('/api/v1/changelog', (_req, res) => {
 app.get('/api/v1/events', requireAuth, sseHandler);
 
 // ── Feature routes ────────────────────────────────────────────────────────────
+// Setup — öffentlich, kein Auth (nur wenn noch kein User existiert)
+app.use('/api/v1/setup', setupRouter);
+
 app.use('/api/v1/mail', mailRouter);
 app.use('/api/v1/calendar', calendarRouter);
 app.use('/api/v1/contacts', contactsRouter);
