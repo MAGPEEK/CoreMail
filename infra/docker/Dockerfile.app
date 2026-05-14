@@ -113,8 +113,8 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# System-Abhängigkeiten: nginx + supervisord
-RUN apk add --no-cache nginx supervisor curl tini
+# supervisord für Process-Management (kein nginx — api-gateway übernimmt HTTP-Routing)
+RUN apk add --no-cache supervisor curl tini
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -170,16 +170,21 @@ RUN mkdir -p /app/www
 COPY --from=frontend-builder /app/packages/web-client/dist  /app/www/owa
 COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/ecp
 
-# Konfigurationsdateien
-COPY infra/docker/nginx/nginx.app.conf      /etc/nginx/nginx.conf
-COPY infra/docker/supervisord-app.conf      /etc/supervisord.conf
+# supervisord-Konfiguration
+COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 
-# Verzeichnisse für nginx und supervisord
-RUN mkdir -p /run/nginx /var/log/supervisor \
+# Verzeichnisse für supervisord
+RUN mkdir -p /var/log/supervisor \
  && chown -R node:node /app/www
 
-# Ports: HTTP/HTTPS, SMTP, IMAP, POP3
-EXPOSE 80 443 25 465 587 143 993 110 995
+# Ports:
+#   3000 — HTTP (OWA, ECP, API, Auth, EWS-Proxy, ActiveSync-Proxy)
+#         → TLS-Terminierung extern (Traefik, Caddy, DSM Application Portal …)
+#   8080 — EWS/MAPI/Autodiscover (direkter Zugriff optional)
+#   25/465/587 — SMTP
+#   143/993    — IMAP
+#   110/995    — POP3
+EXPOSE 3000 8080 25 465 587 143 993 110 995
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
   CMD curl -sf http://localhost:3000/healthz || exit 1

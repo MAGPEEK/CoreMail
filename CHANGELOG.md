@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.9.2] — 2026-05-14 — Kein Proxy: api-gateway übernimmt HTTP-Routing
+
+### Changed
+- **`packages/api-gateway/src/server.ts`** — HTTP-Routing ohne externen Proxy:
+  - **Statische Dateien**: Express-Static-Middleware für `/owa/` und `/ecp/` (Frontend-Bundles aus `/app/www/`)
+  - **Interner Proxy** (Node.js built-in `http.request`, keine neuen Dependencies) für:
+    `/auth/` → auth-service (localhost:3003)
+    `/EWS/`, `/mapi/`, `/OAB/`, `/Autodiscover/`, `/autodiscover/` → ews-server (localhost:8080)
+    `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
+    `/dav/` → caldav-server (localhost:8082)
+  - Root `GET /` → Redirect zu `/owa/`
+  - Konfigurierbar via `AUTH_SERVICE_URL`, `EWS_SERVICE_URL`, `EAS_SERVICE_URL`, `CALDAV_SERVICE_URL`
+- **`infra/docker/Dockerfile.app`** — nginx entfernt, nur noch `supervisor curl tini` als System-Deps; EXPOSE 3000 statt 80/443
+- **`infra/docker/supervisord-app.conf`** — nginx-Sektion entfernt
+- **`infra/docker/docker-compose.yml`** — Vereinfacht auf 4 Services: `coremail` + `postgres:16-alpine` + `redis:7-alpine` + `minio/minio` (keine Custom-Images für DB); Port 3000 statt 80/443
+- **`infra/docker/docker-compose.synology.yml`** — Gleiche Vereinfachung, `8080:3000` für DSM-Kompatibilität, kein TLS-Cert-Handling mehr (DSM Application Portal übernimmt)
+- **`scripts/synology-setup.sh`** — TLS-Zertifikat-Schritte entfernt; Anleitung für DSM Reverse Proxy
+- **`scripts/docker-push.sh`** — Nur noch 1 Image: `magpeek/coremail-app`
+
+### Removed
+- `infra/docker/Dockerfile.db` — nicht mehr nötig (Standard-Images)
+- `infra/docker/entrypoint-db.sh` — nicht mehr nötig
+- `infra/docker/supervisord-db.conf` — nicht mehr nötig
+- `infra/docker/nginx/nginx.app.conf` — nginx vollständig entfernt
+
+---
+
 ## [0.9.1] — 2026-05-14 — 2-Container-Architektur & Docker-Deployment-Dokumentation
 
 ### Added

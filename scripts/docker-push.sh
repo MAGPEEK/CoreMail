@@ -48,6 +48,9 @@ echo "  Version   : ${VERSION}"
 echo "  Commit    : ${GIT_SHA}"
 echo "  Push      : ${PUSH}"
 echo ""
+echo "  1 Image: magpeek/coremail-app"
+echo "  (Datenbank: Standard-Images postgres/redis/minio — kein eigenes Image)"
+echo ""
 
 FAILED=()
 BUILT=()
@@ -76,7 +79,7 @@ build_image() {
     --file "${DOCKERFILE}" \
     --tag "${TAG_VERSIONED}" \
     --tag "${TAG_LATEST}" \
-    --label "org.opencontainers.image.title=CoreMail ${NAME}" \
+    --label "org.opencontainers.image.title=CoreMail" \
     --label "org.opencontainers.image.version=${VERSION}" \
     --label "org.opencontainers.image.created=${BUILD_DATE}" \
     --label "org.opencontainers.image.revision=${GIT_SHA}" \
@@ -93,15 +96,10 @@ build_image() {
   echo ""
 }
 
-# ── Image 1: coremail-app ─────────────────────────────────────────────────────
-# Alle Node.js-Services + nginx + OWA/ECP-Frontends
+# ── Das einzige CoreMail-Image ────────────────────────────────────────────────
+# Alle Node.js-Services + OWA/ECP-Frontends (kein nginx — api-gateway übernimmt)
 
 build_image "coremail-app" "infra/docker/Dockerfile.app"
-
-# ── Image 2: coremail-db ──────────────────────────────────────────────────────
-# PostgreSQL 16 + Redis 7 + MinIO
-
-build_image "coremail-db" "infra/docker/Dockerfile.db"
 
 # ── Zusammenfassung ──────────────────────────────────────────────────────────
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -129,9 +127,12 @@ fi
 
 if [ "$PUSH" = true ]; then
   echo ""
-  echo "  Docker Hub: https://hub.docker.com/u/${ORG}"
+  echo "  Docker Hub: https://hub.docker.com/r/${ORG}/coremail-app"
   echo ""
   echo "  Schnellstart:"
-  echo "    docker compose up -d"
+  echo "    docker compose -f infra/docker/docker-compose.yml up -d"
+  echo ""
+  echo "  Synology NAS:"
+  echo "    NAS_HOSTNAME=<IP> bash scripts/synology-setup.sh"
 fi
 echo ""

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `0.9.1`
+**Aktuelle Version**: `0.9.2`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -74,8 +74,22 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail-app` | `magpeek/coremail-app:0.9.1` | Alle Node.js-Services + nginx + OWA/ECP-Frontends |
-| `coremail-db` | `magpeek/coremail-db:0.9.1` | PostgreSQL 16 + Redis 7 + MinIO |
+| `coremail` | `magpeek/coremail-app:0.9.2` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
+| `postgres` | `postgres:16-alpine` | Standard-Image |
+| `redis` | `redis:7-alpine` | Standard-Image |
+| `minio` | `minio/minio` | Standard-Image |
+
+**1 Custom Docker Hub Image**: `magpeek/coremail-app` — nur dieses Image wird gebaut/gepusht.
+
+**HTTP-Routing ohne nginx**: Der `api-gateway` auf Port 3000 übernimmt alle HTTP-Routen:
+- `/owa/` `/ecp/` — Express.static (Frontend-Bundles aus `/app/www/`)
+- `/auth/` → proxy zu auth-service (localhost:3003)
+- `/EWS/` `/mapi/` `/Autodiscover/` → proxy zu ews-server (localhost:8080)
+- `/Microsoft-Server-ActiveSync` → proxy zu activesync (localhost:3005)
+- `/dav/` → proxy zu caldav-server (localhost:8082)
+- `/api/v1/` `/PowerShell/` → direkte Handler
+
+**TLS**: Extern (Traefik, Caddy, DSM Application Portal) — kein TLS im CoreMail-Stack.
 
 **Interne Ports im App-Container** (localhost, von supervisord verwaltet):
 
@@ -121,7 +135,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 | Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
 | Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
 | Phase 8 | ✅ Fertig | EMS REST-Bridge (20+ Cmdlets) + MAPI over HTTP + eDiscovery & Legal Hold |
-| Infra | ✅ Fertig | 2-Container-Konsolidierung (coremail-app + coremail-db) + Docker-Deployment-Docs |
+| Infra | ✅ Fertig | Minimaler Stack: 1 Custom-Image (coremail-app), Standard-DB-Images, kein nginx/Proxy |
 
 ---
 
@@ -464,4 +478,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-14 (v0.9.1 — 2-Container-Architektur: magpeek/coremail-app + magpeek/coremail-db)*
+*Letzte Aktualisierung: 2026-05-14 (v0.9.2 — Kein Proxy: api-gateway mit eingebautem HTTP-Routing + Standard-DB-Images)*

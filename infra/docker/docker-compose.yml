@@ -1,152 +1,105 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v0.9.0 — 2-Container-Setup
+# CoreMail v0.9.2 — Minimaler Stack
 #
 # Schnellstart:
-#   cp .env.example .env        # Passwörter und Hostname anpassen
-#   bash scripts/gen-dev-certs.sh  # TLS-Zertifikat generieren (Entwicklung)
-#   docker compose up -d
+#   cp .env.example .env           # Hostname und Passwörter anpassen
+#   docker compose up -d           # Images von Docker Hub laden und starten
+#
+# Ports:
+#   3000  — HTTP (OWA Webmail, ECP Admin, REST API, Autodiscover, EWS)
+#           Für HTTPS eigenen Reverse Proxy vorschalten
+#           (Traefik, Caddy, nginx, DSM Application Portal …)
+#   25/465/587  — SMTP
+#   143/993     — IMAP
+#   110/995     — POP3 (optional)
+#   9001        — MinIO Web-Konsole (Dateiinspektion/Backup)
 #
 # Mit Observability:
 #   docker compose --profile observability up -d
-#
-# Voraussetzungen:
-#   • TLS-Zertifikat unter infra/docker/nginx/certs/
-#     (fullchain.pem + privkey.pem)
-#   • .env-Datei mit gesetzten Passwörtern
-#
-# Container:
-#   coremail-app  → magpeek/coremail-app:0.9.0
-#                   (alle Node.js-Services + nginx + Frontends)
-#   coremail-db   → magpeek/coremail-db:0.9.0
-#                   (PostgreSQL 16 + Redis 7 + MinIO)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  coremail-db — Datenbank-Container                                        ║
-  # ║  PostgreSQL 16 + Redis 7 + MinIO                                          ║
-  # ╚═══════════════════════════════════════════════════════════════════════════╝
+  # ── CoreMail Hauptanwendung ───────────────────────────────────────────────────
+  # Enthält: alle Node.js-Services + OWA/ECP-Frontends (supervisord)
+  # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
-  coremail-db:
-    image: magpeek/coremail-db:0.9.0
-    # Lokaler Build (zum Entwickeln/Testen):
-    # build:
-    #   context: ../..
-    #   dockerfile: infra/docker/Dockerfile.db
-    container_name: coremail-db
-    restart: unless-stopped
-    environment:
-      # PostgreSQL
-      POSTGRES_DB: coremail
-      POSTGRES_USER: coremail
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      PGDATA: /var/lib/postgresql/data/pgdata
-      # Redis
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      # MinIO
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - redisdata:/data/redis
-      - miniodata:/data/minio
-    ports:
-      - "9001:9001"   # MinIO Web Console (optional, kann entfernt werden)
-    expose:
-      - "5432"   # PostgreSQL (nur intern)
-      - "6379"   # Redis (nur intern)
-      - "9000"   # MinIO S3 API (nur intern)
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail && redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep -q PONG"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-    networks: [coremail]
-
-  # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  coremail-app — Hauptanwendung                                            ║
-  # ║  Alle Node.js-Services + nginx Reverse Proxy + OWA/ECP Frontends          ║
-  # ╚═══════════════════════════════════════════════════════════════════════════╝
-
-  coremail-app:
-    image: magpeek/coremail-app:0.9.0
-    # Lokaler Build (zum Entwickeln/Testen):
+  coremail:
+    image: magpeek/coremail-app:0.9.2
+    # Lokaler Build:
     # build:
     #   context: ../..
     #   dockerfile: infra/docker/Dockerfile.app
-    container_name: coremail-app
+    container_name: coremail
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
-      # ── Datenbank (zeigt auf coremail-db) ─────────────────────────────────
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@coremail-db:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@coremail-db:6379
-      MINIO_ENDPOINT: coremail-db
+      # Datenbank
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      MINIO_ENDPOINT: minio
       MINIO_PORT: "9000"
       MINIO_USE_SSL: "false"
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: mail-attachments
 
-      # ── Sicherheit ────────────────────────────────────────────────────────
+      # Sicherheitsschlüssel
       JWT_SECRET: ${JWT_SECRET}
       PEPPER: ${PEPPER}
 
-      # ── Mailserver-Hostname ────────────────────────────────────────────────
-      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
-      SMTP_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
-      IMAP_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
+      # Mailserver-Hostname
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      SMTP_HOSTNAME: ${MAIL_HOSTNAME}
+      IMAP_HOSTNAME: ${MAIL_HOSTNAME}
 
-      # ── Interne Service-URLs (localhost, gleicher Container) ───────────────
+      # Interne Service-URLs (localhost, gleicher Container)
       STORAGE_API_URL: http://localhost:3001
       AUTH_SERVICE_URL: http://localhost:3003
       SECURITY_FILTER_URL: http://localhost:3002
       EWS_SERVICE_URL: http://localhost:8080
+      EAS_SERVICE_URL: http://localhost:3005
+      CALDAV_SERVICE_URL: http://localhost:8082
 
-      # ── Service-Ports ──────────────────────────────────────────────────────
-      STORAGE_PORT: "3001"
-      AUTH_PORT: "3003"
-      SECURITY_FILTER_PORT: "3002"
+      # Service-Ports
       API_PORT: "3000"
+      STORAGE_PORT: "3001"
+      SECURITY_FILTER_PORT: "3002"
+      AUTH_PORT: "3003"
+      BACKUP_PORT: "3004"
+      EAS_PORT: "3005"
       EWS_PORT: "8080"
       AUTODISCOVER_PORT: "8081"
       CALDAV_PORT: "8082"
-      BACKUP_PORT: "3004"
-      EAS_PORT: "3005"
-      POP3_PORT: "110"
-      POP3S_PORT: "995"
 
-      # ── URLs (für EWS Autodiscover) ────────────────────────────────────────
-      EWS_URL: https://${MAIL_HOSTNAME:-mail.example.com}/EWS/Exchange.asmx
-      OWA_URL: https://${MAIL_HOSTNAME:-mail.example.com}/owa/
-      AUTODISCOVER_BASE: https://${MAIL_HOSTNAME:-mail.example.com}
-      EAS_URL: https://${MAIL_HOSTNAME:-mail.example.com}/Microsoft-Server-ActiveSync
+      # URLs (für Autodiscover und EWS-Antworten)
+      EWS_URL: http://${MAIL_HOSTNAME}/EWS/Exchange.asmx
+      OWA_URL: http://${MAIL_HOSTNAME}/owa/
+      AUTODISCOVER_BASE: http://${MAIL_HOSTNAME}
+      EAS_URL: http://${MAIL_HOSTNAME}/Microsoft-Server-ActiveSync
 
-      # ── WebAuthn (für MFA) ─────────────────────────────────────────────────
+      # WebAuthn (für MFA, optional)
       WEBAUTHN_RP_NAME: CoreMail
-      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME:-mail.example.com}
-      WEBAUTHN_ORIGIN: https://${MAIL_HOSTNAME:-mail.example.com}
+      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME}
+      WEBAUTHN_ORIGIN: http://${MAIL_HOSTNAME}
 
-      # ── Backup ────────────────────────────────────────────────────────────
-      S3_ENDPOINT: http://coremail-db:9000
+      # Backup
+      S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       BACKUP_BUCKET: coremail-backups
       BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
 
-      # ── GeoIP (optional — für Country-Filtering) ───────────────────────────
-      # MAXMIND_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID}
-      # MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY}
+      # Statische Dateien (OWA/ECP Frontends im Container)
+      WWW_DIR: /app/www
+
     ports:
-      - "80:80"       # HTTP (Redirect zu HTTPS)
-      - "443:443"     # HTTPS (OWA, ECP, API, EWS, Autodiscover)
+      - "3000:3000"   # HTTP — OWA, ECP, API, Auth, EWS, Autodiscover
       - "25:25"       # SMTP Inbound
       - "465:465"     # SMTPS (implizites TLS)
       - "587:587"     # Submission (STARTTLS)
@@ -154,10 +107,10 @@ services:
       - "993:993"     # IMAPS (implizites TLS)
       - "110:110"     # POP3 (STARTTLS)
       - "995:995"     # POP3S (implizites TLS)
-    volumes:
-      - ./nginx/certs:/etc/nginx/certs:ro   # TLS-Zertifikate
     depends_on:
-      coremail-db: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
       interval: 30s
@@ -166,9 +119,61 @@ services:
       start_period: 60s
     networks: [coremail]
 
-  # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  Observability Stack (--profile observability)                             ║
-  # ╚═══════════════════════════════════════════════════════════════════════════╝
+  # ── Infrastruktur (Standard-Images) ──────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coremail
+      POSTGRES_USER: coremail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [coremail]
+
+  minio:
+    image: minio/minio:latest
+    container_name: coremail-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9001:9001"   # MinIO Web-Konsole
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks: [coremail]
+
+  # ── Observability (--profile observability) ───────────────────────────────────
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
@@ -179,8 +184,8 @@ services:
     volumes:
       - ../observability/otel-collector/otel-collector.yml:/etc/otel/otel-collector.yml:ro
     ports:
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "4317:4317"
+      - "4318:4318"
     networks: [coremail]
 
   prometheus:
@@ -226,8 +231,6 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
-      GF_SERVER_ROOT_URL: https://${MAIL_HOSTNAME:-localhost}/grafana/
-      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -262,8 +265,6 @@ services:
     networks: [coremail]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Volumes
-# ─────────────────────────────────────────────────────────────────────────────
 
 volumes:
   pgdata:
@@ -274,10 +275,6 @@ volumes:
   grafana-data:
   tempo-data:
   loki-data:
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Netzwerk
-# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   coremail:
