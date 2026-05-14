@@ -22,7 +22,7 @@ name: coremail
 services:
 
   coremail:
-    image: magpeek/coremail-app:1.1.6
+    image: magpeek/coremail-app:1.1.7
     container_name: coremail
     restart: unless-stopped
     environment:

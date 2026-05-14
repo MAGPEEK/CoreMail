@@ -27,7 +27,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:1.1.6
+    image: magpeek/coremail-app:1.1.7
     # Lokaler Build:
     # build:
     #   context: ../..

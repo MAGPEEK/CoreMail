@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.7] — 2026-05-14 — Bugfix: NetworkError beim Login (Proxy ersetzt)
+
+### Fixed
+
+- **Interner Proxy** — Custom Node.js HTTP-Proxy durch `http-proxy-middleware` ersetzt; handhabt Body-Streaming, Hop-by-hop-Header und Content-Length-Neuberechnung korrekt → NetworkError beim Login behoben
+
+---
+
 ## [1.1.6] — 2026-05-14 — Bugfix: Login funktioniert nicht (Body leer + falscher Proxy-Pfad)
 
 ### Fixed
