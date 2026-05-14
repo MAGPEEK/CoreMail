@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.5] — 2026-05-14 — Bugfix: OWA/ECP Routing funktioniert nicht
+
+### Fixed
+
+- **BrowserRouter basename** — `basename="/owa"` (web-client) und `basename="/ecp"` (admin-panel) gesetzt; React Router hat `/owa/login` nicht als `/login` erkannt → Routing schlug komplett fehl, Login-Button tat nichts
+
+---
+
 ## [1.1.4] — 2026-05-14 — Bugfix: OWA Login funktioniert nicht
 
 ### Fixed

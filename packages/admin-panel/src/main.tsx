@@ -35,7 +35,7 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter basename="/ecp">
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/*" element={

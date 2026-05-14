@@ -18,7 +18,7 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter basename="/owa">
         <App />
         <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       </BrowserRouter>

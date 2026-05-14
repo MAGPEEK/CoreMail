@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version`: `1.1.4`
+**Aktuelle Version`: `1.1.5`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -74,7 +74,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:1.1.4` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:1.1.5` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
 | `redis` | `redis:7-alpine` | Standard-Image |
 | `minio` | `minio/minio` | Standard-Image |
@@ -434,8 +434,8 @@ pnpm -r exec tsc --noEmit
 pnpm --filter @coremail/storage exec prisma generate
 
 # App-Container bauen + pushen
-docker build -f infra/docker/Dockerfile.app -t magpeek/coremail-app:1.1.4 .
-docker push magpeek/coremail-app:1.1.4
+docker build -f infra/docker/Dockerfile.app -t magpeek/coremail-app:1.1.5 .
+docker push magpeek/coremail-app:1.1.5
 
 # DB-Container bauen + pushen
 docker build -f infra/docker/Dockerfile.db -t magpeek/coremail-db:0.11.0 .
@@ -502,4 +502,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-14 (v1.1.4 — Bugfix: OWA/ECP Vite base path)*
+*Letzte Aktualisierung: 2026-05-14 (v1.1.5 — Bugfix: OWA/ECP Vite base path)*
