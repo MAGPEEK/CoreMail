@@ -1,8 +1,8 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["fullTextSearch"]
-  // node:22-alpine verwendet OpenSSL 3.x — ohne diesen Target lädt die Engine nicht
-  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
+  // Explizit nur OpenSSL-3-Target — "native" weglassen da Auto-Detection in Alpine fehlschlägt
+  binaryTargets   = ["linux-musl-openssl-3.0.x"]
 }
 
 datasource db {

@@ -114,7 +114,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # supervisord für Process-Management (kein nginx — api-gateway übernimmt HTTP-Routing)
-RUN apk add --no-cache supervisor curl tini netcat-openbsd
+RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
