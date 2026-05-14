@@ -145,9 +145,17 @@ services:
     restart: unless-stopped
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-RedisSecret2024}
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-RedisSecret2024}
+    # Kein --appendonly (erzeugt Unterverzeichnis, Permission-Problem auf Synology)
+    # RDB-Snapshots schreiben nur eine einzelne dump.rdb Datei → keine Permission-Probleme
+    command: >
+      redis-server
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --requirepass ${REDIS_PASSWORD:-RedisSecret2024}
     volumes:
       - /volume1/docker/coremail/data/redis:/data
+    user: "0:0"  # Als root starten damit dump.rdb auf Synology-Volume geschrieben werden kann
     healthcheck:
       # $$REDIS_PASSWORD → Compose schreibt $REDIS_PASSWORD → Container-Shell expandiert aus env
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
