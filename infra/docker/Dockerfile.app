@@ -166,6 +166,11 @@ RUN pnpm install --frozen-lockfile --prod
 # Altes Prisma-Engine-Binary löschen damit BuildKit-Cache nicht greift
 RUN find /app/node_modules -path "*/.prisma/client/libquery_engine*" -delete 2>/dev/null || true
 RUN pnpm --filter @coremail/storage exec prisma generate
+# Symlink: linux-musl → linux-musl-openssl-3.0.x (Prisma Detection-Fallback absichern)
+RUN for f in $(find /app/node_modules -name "libquery_engine-linux-musl.so.node" 2>/dev/null); do \
+    t=$(echo "$f" | sed "s/linux-musl\.so/linux-musl-openssl-3.0.x.so/"); \
+    [ -f "$t" ] && ln -sf "$t" "$f" && echo "symlinked $f"; \
+  done
 
 # Frontend-Bundles (statische Dateien)
 RUN mkdir -p /app/www
