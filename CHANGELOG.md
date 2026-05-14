@@ -9,11 +9,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [1.1.6] — 2026-05-14 — Bugfix: Login 404 durch falschen Proxy-Pfad
+## [1.1.6] — 2026-05-14 — Bugfix: Login funktioniert nicht (Body leer + falscher Proxy-Pfad)
 
 ### Fixed
 
-- **Interner Proxy** — `req.path` → `req.originalUrl`; Express strippt bei `app.use('/auth', proxy)` den Prefix, sodass `POST /auth/login` als `POST /login` beim auth-service ankam → 404. Betrifft alle internen Proxys (auth, EWS, CalDAV, ActiveSync)
+- **Interner Proxy — Body-Streaming** — `express.json()` konsumiert den Request-Body-Stream vor dem Proxy; Auth-Service erhielt leeren Body → Login-Validierung schlug fehl. Fix: `req.body` wird im Proxy re-serialisiert statt den leeren Stream zu pipen
+- **Interner Proxy — Pfad** — `req.path` → `req.originalUrl`; Express strippt bei `app.use('/auth', proxy)` den Prefix, sodass `POST /auth/login` als `POST /login` beim auth-service ankam → 404. Betrifft alle internen Proxys (auth, EWS, CalDAV, ActiveSync)
 
 ---
 

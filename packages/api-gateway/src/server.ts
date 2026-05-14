@@ -46,12 +46,25 @@ function internalProxy(targetBase: string): express.RequestHandler {
   return (req: express.Request, res: express.Response) => {
     // req.originalUrl behält den vollen Pfad inkl. Mount-Prefix und Query-String.
     // req.path würde z.B. /auth/login → /login kürzen, was im Ziel-Service 404 ergibt.
+    //
+    // WICHTIG: express.json() hat den Body-Stream bereits konsumiert.
+    // Deshalb req.body re-serialisieren statt den leeren Stream zu pipen.
+    const bodyStr = (req.body !== undefined && req.method !== 'GET' && req.method !== 'HEAD')
+      ? JSON.stringify(req.body)
+      : undefined;
+
+    const headers: Record<string, string | string[]> = { ...req.headers as Record<string, string | string[]>, host: url.host };
+    if (bodyStr !== undefined) {
+      headers['content-type']   = 'application/json';
+      headers['content-length'] = String(Buffer.byteLength(bodyStr));
+    }
+
     const options: http.RequestOptions = {
       hostname: url.hostname,
       port: parseInt(url.port || '80', 10),
       path: req.originalUrl,
       method: req.method,
-      headers: { ...req.headers, host: url.host },
+      headers,
     };
     const proxy = http.request(options, (upstream) => {
       res.writeHead(upstream.statusCode ?? 200, upstream.headers);
@@ -61,7 +74,11 @@ function internalProxy(targetBase: string): express.RequestHandler {
       log.warn({ err, target: targetBase }, 'Internal proxy error');
       if (!res.headersSent) res.status(502).json({ error: 'Service temporarily unavailable' });
     });
-    req.pipe(proxy, { end: true });
+    if (bodyStr !== undefined) {
+      proxy.end(bodyStr);
+    } else {
+      req.pipe(proxy, { end: true });
+    }
   };
 }
 
