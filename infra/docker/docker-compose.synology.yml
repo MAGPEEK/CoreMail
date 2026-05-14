@@ -112,7 +112,7 @@ services:
       - "995:995"
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      redis: { condition: service_started }
       minio: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]

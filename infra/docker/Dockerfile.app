@@ -114,7 +114,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # supervisord für Process-Management (kein nginx — api-gateway übernimmt HTTP-Routing)
-RUN apk add --no-cache supervisor curl tini
+RUN apk add --no-cache supervisor curl tini netcat-openbsd
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -172,6 +172,8 @@ COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/ecp
 
 # supervisord-Konfiguration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
+COPY infra/docker/entrypoint-app.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Verzeichnisse für supervisord
 RUN mkdir -p /var/log/supervisor \
@@ -191,4 +193,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
 
 # tini als Init-Prozess (sauberes Signal-Handling)
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf", "-n"]
+CMD ["/entrypoint.sh", "/usr/bin/supervisord", "-c", "/etc/supervisord.conf", "-n"]
