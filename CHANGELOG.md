@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.6] — 2026-05-14 — Bugfix: Login 404 durch falschen Proxy-Pfad
+
+### Fixed
+
+- **Interner Proxy** — `req.path` → `req.originalUrl`; Express strippt bei `app.use('/auth', proxy)` den Prefix, sodass `POST /auth/login` als `POST /login` beim auth-service ankam → 404. Betrifft alle internen Proxys (auth, EWS, CalDAV, ActiveSync)
+
+---
+
 ## [1.1.5] — 2026-05-14 — Bugfix: OWA/ECP Routing funktioniert nicht
 
 ### Fixed

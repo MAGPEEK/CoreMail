@@ -44,11 +44,12 @@ const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 function internalProxy(targetBase: string): express.RequestHandler {
   const url = new URL(targetBase);
   return (req: express.Request, res: express.Response) => {
-    const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    // req.originalUrl behält den vollen Pfad inkl. Mount-Prefix und Query-String.
+    // req.path würde z.B. /auth/login → /login kürzen, was im Ziel-Service 404 ergibt.
     const options: http.RequestOptions = {
       hostname: url.hostname,
       port: parseInt(url.port || '80', 10),
-      path: req.path + qs,
+      path: req.originalUrl,
       method: req.method,
       headers: { ...req.headers, host: url.host },
     };
