@@ -1,6 +1,9 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import { getRedisClient, createLogger } from '@coremail/core';
+import { prisma } from '@coremail/storage/prisma';
 import { relayMessage } from './relay.js';
+import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
+import { journalMessage } from '../journaling/engine.js';
 
 const log = createLogger('smtp:outbound-queue');
 
@@ -9,6 +12,7 @@ export interface OutboundJob {
   from: string;
   to: string[];
   rawMessage: string;  // base64-encoded
+  senderUserId?: string; // for S/MIME auto-sign lookup
   dkimDomain?: string;
   dkimSelector?: string;
   dkimPrivateKey?: string;
@@ -49,16 +53,34 @@ export function startOutboundWorker(): Worker<OutboundJob> {
   const worker = new Worker<OutboundJob>(
     QUEUE_NAME,
     async (job: Job<OutboundJob>) => {
-      const { from, to, rawMessage, dkimDomain, dkimSelector, dkimPrivateKey } = job.data;
-      const buffer = Buffer.from(rawMessage, 'base64');
+      const { from, to, rawMessage, senderUserId, dkimDomain, dkimSelector, dkimPrivateKey } = job.data;
+      let buffer = Buffer.from(rawMessage, 'base64');
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivering message');
+
+      // ── Phase 9: S/MIME auto-sign ─────────────────────────────────────────
+      if (senderUserId) {
+        const settings = await prisma.smimeSettings.findUnique({
+          where: { userId: senderUserId },
+        });
+        if (settings?.autoSign) {
+          buffer = await signMessageForUser(buffer, senderUserId);
+        }
+        // ── Phase 9: S/MIME auto-encrypt (opportunistic) ───────────────────
+        if (settings?.autoEncrypt && to.length === 1) {
+          // Single-recipient encryption only (multi-recipient requires per-cert wrapping)
+          buffer = await encryptMessageForRecipient(buffer, to[0]!);
+        }
+      }
 
       await relayMessage(buffer, from, to, {
         ...(dkimDomain ? { dkimDomain } : {}),
         ...(dkimSelector ? { dkimSelector } : {}),
         ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
       });
+
+      // ── Phase 9: Journaling (outbound) ────────────────────────────────────
+      await journalMessage({ rawMessage: buffer, from, to, direction: 'OUTBOUND' });
 
       log.info({ jobId: job.id, to }, 'Message delivered');
     },

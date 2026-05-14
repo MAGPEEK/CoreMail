@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v0.9.2 — Minimaler Stack
+# CoreMail v0.11.0 — Minimaler Stack
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -27,7 +27,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:0.9.2
+    image: magpeek/coremail-app:0.11.0
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -97,6 +97,24 @@ services:
 
       # Statische Dateien (OWA/ECP Frontends im Container)
       WWW_DIR: /app/www
+
+      # VAPID Web Push (Phase 10)
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
+
+      # SMTP-Gateway-Modus (Phase 10 — optional)
+      GATEWAY_MODE: ${GATEWAY_MODE:-false}
+      GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-}
+      GATEWAY_UPSTREAM_PORT: ${GATEWAY_UPSTREAM_PORT:-25}
+      GATEWAY_UPSTREAM_TLS: ${GATEWAY_UPSTREAM_TLS:-false}
+      GATEWAY_UPSTREAM_USER: ${GATEWAY_UPSTREAM_USER:-}
+      GATEWAY_UPSTREAM_PASS: ${GATEWAY_UPSTREAM_PASS:-}
+      GATEWAY_DOMAINS: ${GATEWAY_DOMAINS:-}
+      GATEWAY_FILTER: ${GATEWAY_FILTER:-true}
+
+      # Aufbewahrungsrichtlinien-Zeitplan (Phase 9)
+      RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
 
     ports:
       - "3000:3000"   # HTTP — OWA, ECP, API, Auth, EWS, Autodiscover

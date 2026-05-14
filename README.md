@@ -39,7 +39,7 @@
 24. [Roadmap](#roadmap)
 25. [Lizenz](#lizenz)
 
-> **Aktuelle Version: v0.9.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
+> **Aktuelle Version: v0.11.0** — [Changelog ansehen](CHANGELOG.md) · [Alle Releases](https://github.com/MAGPEEK/CoreMail/releases)
 
 ---
 
@@ -83,9 +83,14 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Abwesenheitsassistent (Out of Office) | ✅ Implementiert |
 | Posteingangsregeln (Transport Rules) | ✅ Implementiert |
 | Volltextsuche (PostgreSQL GIN-Index, < 200 ms) | ✅ Implementiert |
-| **eDiscovery & Legal Hold (Cross-Mailbox-Suche)** | ✅ **Neu in v0.9.0** |
-| **PowerShell-Remoting (EMS mit 20+ Cmdlets)** | ✅ **Neu in v0.9.0** |
-| **MAPI over HTTP (Outlook 2013+ Native Transport)** | ✅ **Neu in v0.9.0** |
+| **eDiscovery & Legal Hold (Cross-Mailbox-Suche)** | ✅ Implementiert |
+| **PowerShell-Remoting (EMS mit 20+ Cmdlets)** | ✅ Implementiert |
+| **MAPI over HTTP (Outlook 2013+ Native Transport)** | ✅ Implementiert |
+| **S/MIME Inline (Signierung, Verschlüsselung, Verifikation)** | ✅ **Neu in v0.10.0** |
+| **Journaling-Regeln (RFC 3462)** | ✅ **Neu in v0.10.0** |
+| **Aufbewahrungsrichtlinien (ARCHIVE/DELETE/MOVE)** | ✅ **Neu in v0.10.0** |
+| **Outlook Modern Auth (OAuth2 / PKCE)** | ✅ **Neu in v0.11.0** |
+| **SMTP-Gateway-Modus (Relay zu Upstream-MTA)** | ✅ **Neu in v0.11.0** |
 
 ### Kalender & Zusammenarbeit
 
@@ -132,6 +137,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | MFA: Backup-Codes (10 Einmal-Codes, bcrypt-gehasht) | ✅ Implementiert |
 | App-Passwörter für Mail-Clients | ✅ Implementiert |
 | Session-Management (User + Admin) | ✅ Implementiert |
+| **OAuth2 Authorization Server (Modern Auth)** | ✅ **Neu in v0.11.0** |
 
 ### Administration
 
@@ -146,6 +152,9 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | Backup: Admin-Vollbackup zu S3 (PITR) | ✅ Implementiert |
 | Kubernetes Helm Chart (HPA, HA) | ✅ Implementiert |
 | OpenTelemetry + Prometheus + Grafana + Loki + Tempo | ✅ Implementiert |
+| **Audit-Log (alle Admin-Aktionen nachvollziehbar)** | ✅ **Neu in v0.11.0** |
+| **Web Push / VAPID-Benachrichtigungen** | ✅ **Neu in v0.11.0** |
+| **Auto-Mailbox-Provisionierung beim ersten Login** | ✅ **Neu in v0.11.0** |
 
 ---
 
@@ -1723,7 +1732,8 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | v0.7.0 | ✅ Abgeschlossen |
 | **Phase 7** | **Verteilergruppen** (statisch/dynamisch, SMTP-Expansion), **Raum-/Ressourcenpostfächer** (auto-accept iCal), **Öffentliche Ordner** (ACL, Hierarchie), **PowerShell-Remoting-Stub** (WSMan) | v0.8.0 | ✅ Abgeschlossen |
 | **Phase 8** | **EMS REST-Bridge** (20+ Cmdlets, Cmdlet-Dispatcher), **MAPI over HTTP** (Connect/Execute/NSPI/GAL, Outlook 2013+), **eDiscovery & Legal Hold** (Cross-Mailbox-Suche, MBOX-Export) | **v0.9.0** | ✅ **Abgeschlossen** |
-| **Phase 9** | S/MIME Inline-Signierung/-Verschlüsselung, Journaling-Regeln (RFC 3462), Aufbewahrungsrichtlinien (automatisches Archivieren/Löschen nach Ablauf) | — | 📅 Geplant |
+| **Phase 9** | **S/MIME Inline** (Signierung/Verschlüsselung/Verifikation/Entschlüsselung, CMS, node-forge), **Journaling-Regeln** (RFC 3462, multipart/report, Scope/RecipientType), **Aufbewahrungsrichtlinien** (ARCHIVE/DELETE/MOVE, Legal-Hold-Schutz, täglicher Worker) | v0.10.0 | ✅ Abgeschlossen |
+| **Phase 10** | **Automatische Mailbox-Provisionierung**, **Outlook Modern Auth (OAuth2 + PKCE)**, **Audit-Log & Compliance-Reporting**, **VAPID Web Push**, **SMTP-Gateway-Modus (Relay zu Upstream-MTA)** | **v0.11.0** | ✅ **Abgeschlossen** |
 
 ---
 

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink } from 'node:fs/promises';
 import { prisma } from '@coremail/storage';
+import { runRetentionPolicies } from '../retention/worker.js';
 import { createLogger } from '@coremail/core';
 import { exportZip } from '../export/zip.js';
 import { exportMbox } from '../export/mbox.js';
@@ -17,11 +18,13 @@ const log = createLogger('backup:scheduler');
  * Schedule: configurable via BACKUP_SCHEDULE env (default: daily at 02:00)
  */
 export function startBackupScheduler() {
-  const schedule = process.env['BACKUP_SCHEDULE'] ?? '0 2 * * *';
-  log.info({ schedule }, 'Starting backup scheduler');
+  const backupSchedule = process.env['BACKUP_SCHEDULE'] ?? '0 2 * * *';
+  const retentionSchedule = process.env['RETENTION_SCHEDULE'] ?? '0 3 * * *';
+  log.info({ backupSchedule, retentionSchedule }, 'Starting backup & retention schedulers');
 
-  const job = new CronJob(
-    schedule,
+  // Full backup job
+  const backupJob = new CronJob(
+    backupSchedule,
     async () => {
       log.info('Starting scheduled full backup');
       try {
@@ -35,7 +38,24 @@ export function startBackupScheduler() {
     'UTC'
   );
 
-  return job;
+  // Retention policy job (Phase 9)
+  const retentionJob = new CronJob(
+    retentionSchedule,
+    async () => {
+      log.info('Starting scheduled retention policy run');
+      try {
+        const result = await runRetentionPolicies();
+        log.info(result, 'Retention policy run complete');
+      } catch (err) {
+        log.error({ err }, 'Retention policy run failed');
+      }
+    },
+    null,
+    true,
+    'UTC'
+  );
+
+  return { backupJob, retentionJob };
 }
 
 export async function runFullBackup(): Promise<void> {

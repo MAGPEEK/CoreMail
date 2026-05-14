@@ -208,3 +208,71 @@ smimeRouter.delete('/devices/:id', async (req: Request, res: Response) => {
   await prisma.activeSyncDevice.delete({ where: { id } });
   res.json({ ok: true });
 });
+
+// ── Phase 9: S/MIME Inline Settings ──────────────────────────────────────────
+
+/**
+ * GET /api/v1/smime/settings
+ * Get the current user's S/MIME inline processing preferences.
+ */
+smimeRouter.get('/settings', async (req: Request, res: Response) => {
+  const settings = await prisma.smimeSettings.findUnique({
+    where: { userId: req.apiUser!.userId },
+    select: { autoSign: true, autoEncrypt: true, verifyIncoming: true, decryptIncoming: true },
+  });
+
+  // Return defaults if not yet configured
+  res.json(settings ?? {
+    autoSign: false,
+    autoEncrypt: false,
+    verifyIncoming: true,
+    decryptIncoming: true,
+  });
+});
+
+/**
+ * PUT /api/v1/smime/settings
+ * Update the current user's S/MIME inline processing preferences.
+ * Body: { autoSign?, autoEncrypt?, verifyIncoming?, decryptIncoming? }
+ */
+smimeRouter.put('/settings', async (req: Request, res: Response) => {
+  const { autoSign, autoEncrypt, verifyIncoming, decryptIncoming } = req.body as {
+    autoSign?: boolean;
+    autoEncrypt?: boolean;
+    verifyIncoming?: boolean;
+    decryptIncoming?: boolean;
+  };
+
+  // Validate: autoSign requires a default signing certificate
+  if (autoSign === true) {
+    const signingCert = await prisma.userCertificate.findFirst({
+      where: { userId: req.apiUser!.userId, signingDefault: true },
+    });
+    if (!signingCert) {
+      res.status(400).json({
+        error: 'No default signing certificate configured. Upload a certificate and set it as default for signing first.',
+      });
+      return;
+    }
+  }
+
+  const settings = await prisma.smimeSettings.upsert({
+    where: { userId: req.apiUser!.userId },
+    create: {
+      userId: req.apiUser!.userId,
+      ...(autoSign !== undefined ? { autoSign } : {}),
+      ...(autoEncrypt !== undefined ? { autoEncrypt } : {}),
+      ...(verifyIncoming !== undefined ? { verifyIncoming } : {}),
+      ...(decryptIncoming !== undefined ? { decryptIncoming } : {}),
+    },
+    update: {
+      ...(autoSign !== undefined ? { autoSign } : {}),
+      ...(autoEncrypt !== undefined ? { autoEncrypt } : {}),
+      ...(verifyIncoming !== undefined ? { verifyIncoming } : {}),
+      ...(decryptIncoming !== undefined ? { decryptIncoming } : {}),
+    },
+    select: { autoSign: true, autoEncrypt: true, verifyIncoming: true, decryptIncoming: true },
+  });
+
+  res.json(settings);
+});

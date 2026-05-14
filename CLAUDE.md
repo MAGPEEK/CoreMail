@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `0.9.2`
+**Aktuelle Version**: `0.11.0`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -74,7 +74,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:0.9.2` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:0.11.0` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
 | `redis` | `redis:7-alpine` | Standard-Image |
 | `minio` | `minio/minio` | Standard-Image |
@@ -135,6 +135,8 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 | Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
 | Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
 | Phase 8 | ✅ Fertig | EMS REST-Bridge (20+ Cmdlets) + MAPI over HTTP + eDiscovery & Legal Hold |
+| Phase 9 | ✅ Fertig | S/MIME Inline (sign/verify/encrypt/decrypt) + Journaling-Regeln (RFC 3462) + Aufbewahrungsrichtlinien |
+| Phase 10 | ✅ Fertig | Automatische Mailbox-Provisionierung + Outlook Modern Auth (OAuth2/PKCE) + Audit-Log + VAPID Web Push + SMTP-Gateway-Modus |
 | Infra | ✅ Fertig | Minimaler Stack: 1 Custom-Image (coremail-app), Standard-DB-Images, kein nginx/Proxy |
 
 ---
@@ -197,7 +199,22 @@ pnpm --filter @coremail/storage exec prisma generate
 **Phase-8-Modelle**:
 - `EDiscoverySearch` — Cross-Mailbox-Suche (JSON-Query, Status, resultCount, exportPath)
 - `LegalHold` — Aufbewahrungssperre (mailboxIds[], active, appliedBy/releasedAt)
+
+**Phase-9-Modelle**:
+- `SmimeSettings` — Pro-User: autoSign, autoEncrypt, verifyIncoming, decryptIncoming
+- `JournalingRule` — Journaling-Regeln (scope, recipientType, journalAddress, wrapAsReport)
+- `RetentionPolicy` — Aufbewahrungsrichtlinien (retentionDays, action, scope, respectLegalHold)
+- `RetentionPolicyAssignment` — Zuweisung von Policies zu GLOBAL / DOMAIN / USER
+- `Message.smimeMeta` — neues optionales String-Feld (JSON) für S/MIME-Signatur-/Verschlüsselungsmetadaten
 - `TransportRule` — Transportregeln (conditions/actions als JSON, priority, enabled)
+
+**Phase-10-Modelle**:
+- `AuditLog` — Admin-Aktionen (actorId, actorEmail, action, targetType, targetId, targetName, ipAddress, userAgent, changes, success, errorMsg)
+- `PushSubscription` — VAPID Web Push Subscriptions (userId, endpoint, p256dhKey, authKey, topics[], userAgent)
+- `OAuthClient` — OAuth2-Clients (clientId, clientSecret bcrypt, redirectUris, allowedScopes, trusted)
+- `OAuthAuthorizationCode` — Authorization Codes (PKCE S256, expiresAt, used)
+- `OAuthToken` — Access + Refresh Tokens (accessToken, refreshToken, revoked, expiresAt, refreshExpiresAt)
+- `GatewaySettings` — SMTP-Gateway-Konfiguration (Singleton id="singleton": enabled, upstreamHost/Port/Tls, relayDomains[], filterBeforeRelay)
 
 ---
 
@@ -303,6 +320,13 @@ Alle Endpunkte hinter nginx auf Port 443:
 /admin/public-folders/    adminPublicFoldersRouter  # Phase 7: Öffentliche Ordner (Admin)
 /admin/ediscovery/        adminEDiscoveryRouter     # Phase 8: eDiscovery & Legal Hold
 /admin/ems/               adminEmsRouter            # Phase 8: EMS REST-Bridge (20+ Cmdlets)
+/admin/compliance/journaling/ adminJournalingRouter # Phase 9: Journaling-Regeln
+/admin/compliance/retention/  adminRetentionRouter  # Phase 9: Aufbewahrungsrichtlinien
+/push/                    pushRouter                # Phase 10: VAPID Web Push
+/admin/audit-log/         adminAuditLogRouter       # Phase 10: Audit-Log
+/admin/oauth/             adminOAuthClientsRouter   # Phase 10: OAuth2-Clients
+/admin/gateway/           adminGatewayRouter        # Phase 10: SMTP-Gateway-Modus
+/changelog                inline (server.ts)        # Phase 10: Changelog-API
 /events                   SSE Live-Events
 ```
 
@@ -410,15 +434,15 @@ pnpm -r exec tsc --noEmit
 pnpm --filter @coremail/storage exec prisma generate
 
 # App-Container bauen + pushen
-docker build -f infra/docker/Dockerfile.app -t magpeek/coremail-app:0.9.1 .
-docker push magpeek/coremail-app:0.9.1
+docker build -f infra/docker/Dockerfile.app -t magpeek/coremail-app:0.11.0 .
+docker push magpeek/coremail-app:0.11.0
 
 # DB-Container bauen + pushen
-docker build -f infra/docker/Dockerfile.db -t magpeek/coremail-db:0.9.1 .
-docker push magpeek/coremail-db:0.9.1
+docker build -f infra/docker/Dockerfile.db -t magpeek/coremail-db:0.11.0 .
+docker push magpeek/coremail-db:0.11.0
 
 # Beide Images bauen + pushen (Skript)
-bash scripts/docker-push.sh 0.9.1
+bash scripts/docker-push.sh 0.11.0
 
 # GitHub Push mit PAT
 PAT="..." git -c url."https://x-access-token:${PAT}@github.com/".insteadOf="https://github.com/" push
@@ -478,4 +502,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-14 (v0.9.2 — Kein Proxy: api-gateway mit eingebautem HTTP-Routing + Standard-DB-Images)*
+*Letzte Aktualisierung: 2026-05-14 (v0.11.0 — Phase 10: Mailbox-Provisionierung, OAuth2 Modern Auth, Audit-Log, VAPID Push, SMTP-Gateway)*

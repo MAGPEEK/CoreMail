@@ -103,6 +103,10 @@ model User {
   sharedPerms     SharedMailboxPerm[]
   activeSyncDevices ActiveSyncDevice[]
   certificates    UserCertificate[]
+  smimeSettings   SmimeSettings?
+  pushSubscriptions PushSubscription[]
+  oauthCodes      OAuthAuthorizationCode[]
+  oauthTokens     OAuthToken[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -261,6 +265,8 @@ model Message {
   storagePath  String?     // MinIO object key for large messages
   changeKey    String      @default("")
   deletedAt    DateTime?   // soft-delete (30 day recovery window)
+  // Phase 9: S/MIME metadata JSON — { signed, valid, signerEmail, decrypted, ... }
+  smimeMeta    String?
   attachments  Attachment[]
   createdAt    DateTime    @default(now())
 
@@ -804,4 +810,262 @@ model TransportRule {
 
   @@index([enabled, priority])
   @@map("transport_rules")
+}
+
+// ─────────────────────────────────────────────
+// Phase 9 — S/MIME Inline Settings
+// ─────────────────────────────────────────────
+
+model SmimeSettings {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Automatically sign all outgoing messages
+  autoSign       Boolean  @default(false)
+  // Automatically encrypt outgoing messages when recipient cert is available
+  autoEncrypt    Boolean  @default(false)
+  // Verify incoming S/MIME signatures and show result in UI
+  verifyIncoming Boolean  @default(true)
+  // Attempt to decrypt incoming encrypted messages automatically
+  decryptIncoming Boolean @default(true)
+  updatedAt      DateTime @updatedAt
+
+  @@map("smime_settings")
+}
+
+// ─────────────────────────────────────────────
+// Phase 9 — Journaling Rules (RFC 3462)
+// ─────────────────────────────────────────────
+
+enum JournalScope {
+  ALL            // All messages (inbound + outbound + internal)
+  INBOUND        // Only inbound messages
+  OUTBOUND       // Only outbound messages
+  INTERNAL       // Only internal (same-domain) messages
+}
+
+enum JournalRecipientType {
+  ALL_MAILBOXES  // Journal every mailbox in the org
+  SPECIFIC_USERS // Only the listed userIds
+  DOMAIN         // Every mailbox of a specific domain
+}
+
+model JournalingRule {
+  id            String               @id @default(cuid())
+  name          String
+  description   String               @default("")
+  enabled       Boolean              @default(true)
+  // The journal sink — messages are BCC'd / forwarded to this address
+  journalAddress String
+  scope         JournalScope         @default(ALL)
+  recipientType JournalRecipientType @default(ALL_MAILBOXES)
+  // userIds or domainId depending on recipientType
+  recipientIds  String[]
+  // RFC 3462 journal report wrapping (true = wrap in Journal Report MIME envelope)
+  wrapAsReport  Boolean              @default(true)
+  createdBy     String
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([enabled])
+  @@map("journaling_rules")
+}
+
+// ─────────────────────────────────────────────
+// Phase 9 — Retention Policies
+// ─────────────────────────────────────────────
+
+enum RetentionAction {
+  ARCHIVE        // Move to Archive folder
+  DELETE         // Permanently delete (unless under Legal Hold)
+  MOVE_TO_FOLDER // Move to a specified folder
+}
+
+enum RetentionScope {
+  ALL_ITEMS      // Apply to all mail items
+  INBOX          // Only Inbox
+  SENT_ITEMS     // Only Sent Items
+  DELETED_ITEMS  // Only Deleted Items / Trash
+  JUNK           // Only Junk/Spam folder
+}
+
+model RetentionPolicy {
+  id          String               @id @default(cuid())
+  name        String
+  description String               @default("")
+  enabled     Boolean              @default(true)
+  // Number of days after which the action is triggered (based on message date)
+  retentionDays Int
+  action      RetentionAction      @default(ARCHIVE)
+  // For MOVE_TO_FOLDER action: target folder name
+  targetFolder String?
+  scope       RetentionScope       @default(ALL_ITEMS)
+  // If true, items under Legal Hold are skipped even if they match
+  respectLegalHold Boolean         @default(true)
+  assignments RetentionPolicyAssignment[]
+  createdBy   String
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@map("retention_policies")
+}
+
+enum RetentionAssignmentTarget {
+  USER           // Assigned to a specific user mailbox
+  DOMAIN         // Assigned to all users of a domain
+  GLOBAL         // Applies to all mailboxes in the org
+}
+
+model RetentionPolicyAssignment {
+  id         String                   @id @default(cuid())
+  policy     RetentionPolicy          @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policyId   String
+  target     RetentionAssignmentTarget @default(GLOBAL)
+  // userId or domainId, empty string for GLOBAL
+  targetId   String                   @default("")
+  createdAt  DateTime                 @default(now())
+
+  @@unique([policyId, target, targetId])
+  @@index([policyId])
+  @@map("retention_policy_assignments")
+}
+
+// ─────────────────────────────────────────────
+// Phase 10 — Audit Log
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  // Actor — null means system action
+  actorId    String?
+  actorEmail String?
+  // Action string: "mailbox.create", "user.delete", "auth.login", "rule.update", etc.
+  action     String
+  // Target resource
+  targetType String?  // "user" | "domain" | "mailbox" | "rule" | "session" | ...
+  targetId   String?
+  targetName String?
+  // Request context
+  ipAddress  String?
+  userAgent  String?
+  // Optional before/after diff (JSON)
+  changes    Json?
+  // Outcome
+  success    Boolean  @default(true)
+  errorMsg   String?
+
+  @@index([timestamp])
+  @@index([actorId, timestamp])
+  @@index([action, timestamp])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────
+// Phase 10 — VAPID Push Subscriptions
+// ─────────────────────────────────────────────
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Web Push endpoint URL (browser-specific)
+  endpoint  String   @unique
+  // ECDH keys for payload encryption
+  p256dhKey String
+  authKey   String
+  userAgent String?
+  // Topics the client is subscribed to
+  topics    String[] // e.g. ["mail.new", "calendar.reminder"]
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ─────────────────────────────────────────────
+// Phase 10 — OAuth2 / Modern Auth (EWS)
+// ─────────────────────────────────────────────
+
+model OAuthClient {
+  id           String   @id @default(cuid())
+  clientId     String   @unique
+  clientSecret String   // bcrypt hash for confidential clients
+  name         String
+  description  String   @default("")
+  redirectUris String[]
+  // Available scopes: "mail" | "calendar" | "contacts" | "ews" | "admin"
+  allowedScopes String[]
+  // Trusted clients skip user consent screen
+  trusted      Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdBy    String
+  createdAt    DateTime @default(now())
+  tokens       OAuthToken[]
+  codes        OAuthAuthorizationCode[]
+
+  @@map("oauth_clients")
+}
+
+model OAuthAuthorizationCode {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  client      OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientId    String
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope       String      // space-separated list
+  redirectUri String
+  codeChallenge     String?  // PKCE S256
+  codeChallengeMethod String? @default("S256")
+  expiresAt   DateTime
+  used        Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+
+  @@index([code])
+  @@index([userId])
+  @@map("oauth_authorization_codes")
+}
+
+model OAuthToken {
+  id               String      @id @default(cuid())
+  accessToken      String      @unique
+  tokenType        String      @default("Bearer")
+  scope            String
+  expiresAt        DateTime
+  refreshToken     String?     @unique
+  refreshExpiresAt DateTime?
+  client           OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  clientId         String
+  userId           String
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revoked          Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+
+  @@index([accessToken])
+  @@index([refreshToken])
+  @@index([userId, clientId])
+  @@map("oauth_tokens")
+}
+
+// ─────────────────────────────────────────────
+// Phase 10 — SMTP Gateway Settings
+// ─────────────────────────────────────────────
+
+model GatewaySettings {
+  id                  String   @id @default("singleton")
+  enabled             Boolean  @default(false)
+  upstreamHost        String   @default("")
+  upstreamPort        Int      @default(25)
+  upstreamTls         Boolean  @default(false)
+  upstreamUsername    String?
+  upstreamPassword    String?
+  // Domains to relay inbound mail for (empty = all accepted domains)
+  relayDomains        String[]
+  // Apply spam/virus filter before relaying
+  filterBeforeRelay   Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+
+  @@map("gateway_settings")
 }

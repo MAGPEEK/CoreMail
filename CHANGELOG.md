@@ -9,6 +9,150 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.11.0] — 2026-05-14 — Phase 10: Benutzerverwaltung, Modern Auth, Audit-Log, Push, SMTP-Gateway
+
+### Added
+
+- **Automatische Mailbox-Provisionierung** (`packages/api-gateway/src/lib/provision-mailbox.ts`)
+  - `ensureMailboxProvisioned(userId)` — idempotent: legt Mailbox + 8 Standard-Ordner an (INBOX, Drafts, Sent, Trash, Junk, Archive, Notes, Tasks), falls nicht vorhanden
+  - Wird beim ersten Login, beim IMAP-Connect und beim Admin-Import aufgerufen
+  - `POST /api/v1/admin/mailboxes/:id/provision` — einzelnen User provisionieren
+  - `POST /api/v1/admin/mailboxes/bulk-provision` — alle aktiven User ohne Mailbox in einem Durchlauf
+
+- **Audit-Log** (`packages/api-gateway/src/lib/audit.ts`, `src/routes/admin/audit-log.ts`)
+  - `audit(entry)` — Fire-and-forget Write in `AuditLog`-Tabelle (blockiert nie)
+  - `auditMiddleware` — Express-Middleware, loggt alle mutierenden Admin-Calls (POST/PUT/PATCH/DELETE) automatisch
+  - `GET  /api/v1/admin/audit-log` — abfragbar nach actorId, action, targetType, success, from/to, limit/offset
+  - `GET  /api/v1/admin/audit-log/export` — CSV-Export mit `Content-Disposition` Header
+  - `DELETE /api/v1/admin/audit-log/purge` — alte Einträge löschen (`{ before: ISO-date }`)
+  - **Neues Modell** `AuditLog`: actorId, actorEmail, action, targetType, targetId, targetName, ipAddress, userAgent, changes (Json), success, errorMsg
+
+- **OAuth2 / Outlook Modern Auth** (`packages/auth-service/src/oauth2/router.ts`)
+  - Authorization Code Flow + PKCE (S256) — vollständig nach RFC 7636
+  - `GET  /.well-known/openid-configuration` — OIDC Discovery Document
+  - `GET  /oauth2/jwks` — JSON Web Key Set (HS256)
+  - `GET  /oauth2/authorize` — startet OAuth2-Flow (redirect zu OWA Login)
+  - `POST /oauth2/authorize/complete` — gibt Auth-Code aus (server-seitig vom OWA-Backend aufgerufen)
+  - `POST /oauth2/token` — `authorization_code` + `refresh_token` Grants
+  - `POST /oauth2/token/revoke` — Token-Revozierung
+  - `GET  /oauth2/userinfo` — OIDC UserInfo-Endpoint
+  - **Admin API** (`/api/v1/admin/oauth`): Client-Verwaltung (CRUD), Secret-Rotation, Token-Übersicht + Revozierung
+  - **Neue Modelle**: `OAuthClient`, `OAuthAuthorizationCode`, `OAuthToken`
+  - **EWS Bearer-Token**: `packages/ews-server/src/auth/middleware.ts` prüft OAuth2-Revokation (DB-Lookup)
+
+- **VAPID Web Push** (`packages/api-gateway/src/lib/push.ts`, `src/routes/push.ts`)
+  - `sendPushToUser(userId, topic, payload)` — sendet an alle Subscriptions eines Users für ein Topic
+  - `broadcastPush(topic, payload)` — systemweiter Broadcast (für Admin-Alerts)
+  - Automatische Bereinigung abgelaufener Subscriptions (HTTP 410/404 → DB-Löschen)
+  - `GET  /api/v1/push/vapid-public-key` — VAPID Public Key für `PushManager.subscribe()`
+  - `POST /api/v1/push/subscribe` — Subscription registrieren (Upsert per Endpoint)
+  - `PUT  /api/v1/push/subscribe/:id/topics` — abonnierte Topics aktualisieren
+  - `DELETE /api/v1/push/subscribe/:id` — Subscription entfernen
+  - `GET  /api/v1/push/subscriptions` — eigene Subscriptions auflisten
+  - `POST /api/v1/push/test` — Test-Notification senden
+  - **SSE-Integration**: neue Mails lösen automatisch Web Push aus (auch wenn Tab geschlossen)
+  - **Neues Modell** `PushSubscription`: userId, endpoint, p256dhKey, authKey, topics, userAgent
+  - **Neue Dependency**: `web-push` ^3.6.7 + `@types/web-push` ^3.6.3 in `api-gateway`
+  - **ENV**: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`
+
+- **SMTP-Gateway-Modus** (`packages/smtp-server/src/gateway/relay.ts`)
+  - `getGatewayConfig()` — DB-first (GatewaySettings Singleton), ENV-Fallback, 60s-Cache
+  - `shouldRelayToGateway(recipientEmail)` — prüft ob Gateway aktiv + Domain in relayDomains
+  - `relayToUpstream(rawMessage, from, to)` — leitet via nodemailer an Upstream-MTA weiter
+  - Eingebunden in `message.ts`: Relay statt lokaler Zustellung wenn Gateway aktiv
+  - **Admin API** (`/api/v1/admin/gateway`):
+    - `GET  /api/v1/admin/gateway/settings` — aktuelle Konfiguration (Passwort maskiert)
+    - `PUT  /api/v1/admin/gateway/settings` — Gateway konfigurieren (upsert, Passwort nur bei expliziter Angabe überschrieben)
+    - `POST /api/v1/admin/gateway/test` — Upstream-Verbindung testen (10s Timeout)
+  - **Neues Modell** `GatewaySettings`: enabled, upstreamHost, upstreamPort, upstreamTls, upstreamUsername, upstreamPassword, relayDomains[], filterBeforeRelay
+  - **ENV**: `GATEWAY_MODE`, `GATEWAY_UPSTREAM_HOST`, `GATEWAY_UPSTREAM_PORT`, `GATEWAY_UPSTREAM_TLS`, `GATEWAY_UPSTREAM_USER`, `GATEWAY_UPSTREAM_PASS`, `GATEWAY_DOMAINS`, `GATEWAY_FILTER`
+
+- **Changelog-API** (`packages/api-gateway/src/server.ts`)
+  - `GET /api/v1/changelog` — gibt `CHANGELOG.md` als strukturiertes JSON + Rohtext aus
+  - Parst Keep-a-Changelog-Format in Versionen mit Sections (Added/Changed/Fixed …)
+  - Pfad konfigurierbar via `CHANGELOG_PATH` ENV
+
+### Changed
+- `packages/api-gateway/src/server.ts` — Phase-10-Routen registriert: `/api/v1/push`, `/api/v1/admin/audit-log`, `/api/v1/admin/oauth`, `/api/v1/admin/gateway`; `auditMiddleware` als globale Admin-Middleware; Changelog-API-Endpunkt inline
+- `packages/api-gateway/src/sse.ts` — VAPID Push-Notification bei neuer Mail (`CHANNEL_MAIL_NEW`)
+- `packages/smtp-server/src/handlers/message.ts` — Gateway-Relay-Prüfung vor lokaler Zustellung
+
+---
+
+## [0.10.0] — 2026-05-14 — Phase 9: S/MIME Inline, Journaling-Regeln, Aufbewahrungsrichtlinien
+
+### Added
+
+- **S/MIME Inline-Signierung & -Verschlüsselung** (`packages/smtp-server/src/smime/`)
+  - `sign.ts` — CMS SignedData (RFC 5652): erzeugt `multipart/signed` mit detachierter Signatur
+  - `verify.ts` — Verifiziert eingehende S/MIME-Signaturen (`multipart/signed` + opaque signed); Result als JSON in `Message.smimeMeta` gespeichert
+  - `encrypt.ts` — CMS EnvelopedData (AES-256-CBC): verschlüsselt ausgehende Nachrichten für den Empfänger wenn dessen Zertifikat in der DB vorhanden ist
+  - `decrypt.ts` — Entschlüsselt eingehende verschlüsselte Nachrichten automatisch vor Speicherung
+  - `loader.ts` — Lädt PKCS#12-Bundles aus MinIO (private Key + Zertifikatskette via `node-forge`)
+  - `index.ts` — Re-Export aller S/MIME-Funktionen
+  - **Neue Abhängigkeit**: `node-forge` ^1.3.1 + `@types/node-forge` ^1.3.11 in `smtp-server`
+
+- **SmimeSettings-Modell** (Prisma-Schema, Phase 9)
+  - Pro-User-Einstellungen: `autoSign`, `autoEncrypt`, `verifyIncoming`, `decryptIncoming`
+  - Relation `User.smimeSettings` (1:1 optional)
+
+- **SMTP Outbound Auto-Sign/-Encrypt** (`packages/smtp-server/src/outbound/queue.ts`)
+  - `OutboundJob.senderUserId` — neue Eigenschaft für S/MIME-Lookup
+  - Prüft `SmimeSettings.autoSign` → signiert mit Signing-Default-Zertifikat des Absenders
+  - Prüft `SmimeSettings.autoEncrypt` (bei Single-Recipient) → verschlüsselt opportunistisch wenn Empfänger-Zertifikat vorhanden
+
+- **SMTP Inbound Verify/Decrypt** (`packages/smtp-server/src/handlers/message.ts`)
+  - Entschlüsselt eingehende `application/pkcs7-mime; smime-type=enveloped-data` automatisch
+  - Verifiziert eingehende S/MIME-Signaturen; Ergebnis in `Message.smimeMeta` (JSON)
+  - Feld `Message.smimeMeta` (String?) im Prisma-Schema hinzugefügt
+
+- **S/MIME Settings API** (`packages/api-gateway/src/routes/smime.ts`)
+  - `GET  /api/v1/smime/settings` — User S/MIME-Einstellungen abfragen
+  - `PUT  /api/v1/smime/settings` — User S/MIME-Einstellungen setzen (mit Validierung: autoSign erfordert signingDefault-Zertifikat)
+
+- **Journaling-Engine** (`packages/smtp-server/src/journaling/engine.ts`)
+  - RFC 3462 Journal Reports: `multipart/report` mit Envelope-Metadaten + Original-Nachricht
+  - `JournalingRule`-Matching: Scope (ALL / INBOUND / OUTBOUND / INTERNAL) + RecipientType (ALL_MAILBOXES / SPECIFIC_USERS / DOMAIN)
+  - Wird nach jeder Inbound-Delivery und nach jedem Outbound-Relay aufgerufen (nie blockierend)
+  - Dispatch via nodemailer (SMTP intern)
+
+- **JournalingRule-Modell** (Prisma-Schema)
+  - Felder: `name`, `journalAddress`, `scope` (JournalScope), `recipientType`, `recipientIds[]`, `wrapAsReport`, `enabled`
+
+- **Admin API Journaling** (`packages/api-gateway/src/routes/admin/journaling.ts`)
+  - `GET/POST   /api/v1/admin/compliance/journaling`          — Liste + Anlegen
+  - `GET/PUT/DELETE /api/v1/admin/compliance/journaling/:id`  — Einzelne Regel
+  - `POST       /api/v1/admin/compliance/journaling/:id/toggle` — Aktivieren/Deaktivieren
+
+- **Aufbewahrungsrichtlinien-Worker** (`packages/backup-service/src/retention/worker.ts`)
+  - `runRetentionPolicies()` — verarbeitet alle aktivierten Policies
+  - Aktionen: `ARCHIVE` (in Archiv-Ordner verschieben), `DELETE` (Hart-Löschen mit Quota-Update), `MOVE_TO_FOLDER` (beliebiger Zielordner, wird angelegt falls nicht vorhanden)
+  - Scope: `ALL_ITEMS` / `INBOX` / `SENT_ITEMS` / `DELETED_ITEMS` / `JUNK`
+  - Legal Hold: Löschen wird bei aktiven Holds übersprungen (`respectLegalHold`)
+  - Dry-Run-Modus via `RETENTION_DRY_RUN=true`
+  - Läuft täglich 03:00 UTC via CronJob (`RETENTION_SCHEDULE` konfigurierbar)
+
+- **RetentionPolicy + RetentionPolicyAssignment-Modelle** (Prisma-Schema)
+  - `RetentionPolicy`: `retentionDays`, `action` (RetentionAction), `targetFolder`, `scope` (RetentionScope), `respectLegalHold`
+  - `RetentionPolicyAssignment`: `target` (GLOBAL / DOMAIN / USER), `targetId`
+
+- **Admin API Retention Policies** (`packages/api-gateway/src/routes/admin/retention.ts`)
+  - `GET/POST   /api/v1/admin/compliance/retention`                     — Liste + Anlegen
+  - `GET/PUT/DELETE /api/v1/admin/compliance/retention/:id`             — Einzelne Policy
+  - `POST       /api/v1/admin/compliance/retention/:id/toggle`          — Aktivieren/Deaktivieren
+  - `GET/POST   /api/v1/admin/compliance/retention/:id/assignments`     — Assignments verwalten
+  - `DELETE     /api/v1/admin/compliance/retention/:id/assignments/:aid`
+  - `POST       /api/v1/admin/compliance/retention/run`                 — Manueller Lauf (via backup-service)
+
+- **Internes Retention-Endpoint** (`packages/backup-service/src/server.ts`)
+  - `POST /internal/retention/run` — von api-gateway aufgerufen für manuellen Lauf
+
+### Changed
+- `packages/backup-service/src/scheduler/index.ts` — zweiter CronJob für Retention (03:00 UTC, `RETENTION_SCHEDULE` konfigurierbar); `startBackupScheduler()` gibt jetzt `{ backupJob, retentionJob }` zurück
+- `packages/api-gateway/src/server.ts` — neue Phase-9-Routen registriert: `/api/v1/admin/compliance/journaling`, `/api/v1/admin/compliance/retention`
+
+---
+
 ## [0.9.2] — 2026-05-14 — Kein Proxy: api-gateway übernimmt HTTP-Routing
 
 ### Changed

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
+import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 adminMailboxesRouter.use(requireAdmin);
@@ -179,7 +180,57 @@ adminMailboxesRouter.post('/shared/:id/permissions', async (req: Request, res: R
 // DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId
 adminMailboxesRouter.delete('/shared/:id/permissions/:userId', async (req: Request, res: Response) => {
   const { id, userId } = req.params as { id: string; userId: string };
-  
+
   await prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId: id, userId } });
   res.json({ ok: true });
+});
+
+// ── Phase 10: Mailbox Provisioning ───────────────────────────────────────────
+
+/**
+ * POST /api/v1/admin/mailboxes/:id/provision
+ * Ensure a user has a fully provisioned mailbox + default folders + calendar.
+ * Idempotent — safe to call on existing users (fills in missing folders/calendars).
+ */
+adminMailboxesRouter.post('/:id/provision', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  const result = await ensureMailboxProvisioned(id);
+  res.json({ ok: true, userId: id, email: user.email, ...result });
+});
+
+/**
+ * POST /api/v1/admin/mailboxes/bulk-provision
+ * Provision mailboxes for all users who don't have one yet.
+ * Returns a summary of what was created.
+ */
+adminMailboxesRouter.post('/bulk-provision', async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({
+    where: { active: true },
+    select: { id: true, email: true },
+  });
+
+  const results = {
+    total: users.length,
+    provisioned: 0,
+    alreadyExisted: 0,
+    errors: [] as string[],
+  };
+
+  for (const user of users) {
+    try {
+      const r = await ensureMailboxProvisioned(user.id);
+      if (r.alreadyExisted) {
+        results.alreadyExisted++;
+      } else {
+        results.provisioned++;
+      }
+    } catch (err) {
+      results.errors.push(`${user.email}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  res.json(results);
 });

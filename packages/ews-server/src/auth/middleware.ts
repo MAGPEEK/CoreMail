@@ -29,7 +29,20 @@ export async function ewsAuthMiddleware(
     const token = authHeader.slice(7);
     const payload = verifyAccessToken(token);
     if (payload) {
-      
+      // Phase 10: Check OAuth2 token revocation status in DB
+      const oauthToken = await prisma.oAuthToken.findUnique({
+        where: { accessToken: token },
+        select: { revoked: true, expiresAt: true },
+      }).catch(() => null);
+
+      // If found in oauth_tokens table, must not be revoked/expired
+      if (oauthToken && (oauthToken.revoked || oauthToken.expiresAt < new Date())) {
+        log.warn({ userId: payload.sub }, 'EWS: OAuth2 token revoked or expired');
+        res.set('WWW-Authenticate', 'Bearer realm="CoreMail EWS", error="invalid_token"');
+        res.status(401).send('Unauthorized');
+        return;
+      }
+
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
         select: { id: true, email: true, role: true, active: true },

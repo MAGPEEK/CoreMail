@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { connectDatabase } from '@coremail/storage';
 import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core';
 import { runUserBackup, runFullBackup, startBackupScheduler } from './scheduler/index.js';
+import { runRetentionPolicies } from './retention/worker.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
 import { listBackups } from './upload/s3.js';
 import { prisma } from '@coremail/storage';
@@ -107,6 +108,19 @@ app.get('/backup/admin/jobs', requireAdmin, async (req, res) => {
     take: limit,
   });
   res.json(jobs);
+});
+
+// ─── Internal retention endpoint (called by api-gateway) ─────────────────────
+
+// POST /internal/retention/run — trigger retention policy run
+app.post('/internal/retention/run', async (_req, res) => {
+  try {
+    const result = await runRetentionPolicies();
+    res.json(result);
+  } catch (err) {
+    log.error({ err }, 'Manual retention run failed');
+    res.status(500).json({ error: 'Retention run failed', detail: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // POST /backup/admin/import/:userId — import MBOX for a specific user (admin)

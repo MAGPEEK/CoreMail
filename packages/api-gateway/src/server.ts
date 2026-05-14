@@ -1,7 +1,7 @@
 import express from 'express';
 import * as http from 'node:http';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { connectDatabase } from '@coremail/storage';
 import { getRedisClient, createLogger } from '@coremail/core';
 
@@ -20,11 +20,19 @@ import { adminResourcesRouter } from './routes/admin/resources.js';
 import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
 import { adminEDiscoveryRouter } from './routes/admin/ediscovery.js';
 import { adminEmsRouter } from './routes/admin/ems.js';
+import { adminJournalingRouter } from './routes/admin/journaling.js';
+import { adminRetentionRouter } from './routes/admin/retention.js';
+// Phase 10
+import { adminAuditLogRouter } from './routes/admin/audit-log.js';
+import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
+import { adminGatewayRouter } from './routes/admin/gateway.js';
+import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { publicFoldersRouter } from './routes/public-folders.js';
 import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
+import { auditMiddleware } from './lib/audit.js';
 
 const log = createLogger('api-gateway');
 const app = express();
@@ -64,6 +72,50 @@ app.use((_req, res, next) => {
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'api-gateway' }));
 
+// ── Changelog API — Phase 10 ──────────────────────────────────────────────────
+// GET /api/v1/changelog — returns parsed CHANGELOG.md content
+// The file is embedded at build time from the repo root.
+const CHANGELOG_PATH = process.env['CHANGELOG_PATH']
+  ?? resolve(process.cwd(), 'CHANGELOG.md');
+
+app.get('/api/v1/changelog', (_req, res) => {
+  try {
+    const raw = readFileSync(CHANGELOG_PATH, 'utf-8');
+    // Parse Keep-a-Changelog format into structured versions
+    const versions: Array<{ version: string; date: string; sections: Record<string, string[]> }> = [];
+    let current: (typeof versions)[0] | null = null;
+    let currentSection = '';
+
+    for (const line of raw.split('\n')) {
+      // Match version headers: ## [0.11.0] — 2026-05-14
+      const versionMatch = /^## \[(.+?)\](?:\s*[—-]\s*(\d{4}-\d{2}-\d{2}))?/.exec(line);
+      if (versionMatch) {
+        if (current) versions.push(current);
+        current = { version: versionMatch[1]!, date: versionMatch[2] ?? '', sections: {} };
+        currentSection = '';
+        continue;
+      }
+      // Match section headers: ### Added
+      const sectionMatch = /^### (.+)/.exec(line);
+      if (sectionMatch && current) {
+        currentSection = sectionMatch[1]!;
+        current.sections[currentSection] = [];
+        continue;
+      }
+      // Match bullet items
+      const itemMatch = /^[-*] (.+)/.exec(line);
+      if (itemMatch && current && currentSection) {
+        current.sections[currentSection]!.push(itemMatch[1]!);
+      }
+    }
+    if (current) versions.push(current);
+
+    res.json({ versions, raw });
+  } catch {
+    res.status(503).json({ error: 'Changelog not available' });
+  }
+});
+
 // ── SSE live-events ───────────────────────────────────────────────────────────
 app.get('/api/v1/events', requireAuth, sseHandler);
 
@@ -76,12 +128,17 @@ app.use('/api/v1/notes', notesRouter);
 app.use('/api/v1/user', userRouter);
 app.use('/api/v1/smime', smimeRouter);
 app.use('/api/v1/public-folders', publicFoldersRouter);
+// Phase 10 — Push notifications
+app.use('/api/v1/push', pushRouter);
 
 // PowerShell Remoting stub
 app.use(express.text({ type: 'application/soap+xml', limit: '5mb' }));
 app.use('/PowerShell', powershellRouter);
 
 // ── Admin routes ──────────────────────────────────────────────────────────────
+// Phase 10 — Audit middleware for all mutating admin calls (fire-and-forget)
+app.use('/api/v1/admin', auditMiddleware);
+
 app.use('/api/v1/admin/mailboxes', adminMailboxesRouter);
 app.use('/api/v1/admin/domains', adminDomainsRouter);
 app.use('/api/v1/admin/queues', adminQueuesRouter);
@@ -91,6 +148,13 @@ app.use('/api/v1/admin/resources', adminResourcesRouter);
 app.use('/api/v1/admin/public-folders', adminPublicFoldersRouter);
 app.use('/api/v1/admin/ediscovery', adminEDiscoveryRouter);
 app.use('/api/v1/admin/ems', adminEmsRouter);
+// Phase 9 — Compliance
+app.use('/api/v1/admin/compliance/journaling', adminJournalingRouter);
+app.use('/api/v1/admin/compliance/retention', adminRetentionRouter);
+// Phase 10
+app.use('/api/v1/admin/audit-log', adminAuditLogRouter);
+app.use('/api/v1/admin/oauth', adminOAuthClientsRouter);
+app.use('/api/v1/admin/gateway', adminGatewayRouter);
 
 // ── Interne Service-Proxies (ersetzt nginx) ───────────────────────────────────
 // Alle HTTP-Dienste sind über den api-gateway auf einem einzigen Port erreichbar.
