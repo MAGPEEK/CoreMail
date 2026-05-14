@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# CoreMail — Docker Hub Build & Push
+# CoreMail — Docker Hub Build & Push (2-Container-Architektur)
 #
-# Baut alle Service-Images lokal und pusht sie zu Docker Hub.
-# Alternativ: der GitHub Actions Workflow übernimmt das automatisch bei jedem Tag.
+# Baut die zwei CoreMail-Images und pusht sie zu Docker Hub.
+# GitHub Actions übernimmt das automatisch bei jedem Version-Tag.
 #
 # Verwendung:
-#   bash scripts/docker-push.sh [VERSION]
+#   bash scripts/docker-push.sh [VERSION] [--no-push]
 #
 # Beispiele:
-#   bash scripts/docker-push.sh          # Version aus CHANGELOG (0.6.0)
-#   bash scripts/docker-push.sh 0.6.0    # explizite Version
-#   bash scripts/docker-push.sh 0.6.0 --no-push  # nur bauen, nicht pushen
+#   bash scripts/docker-push.sh              # Version aus CHANGELOG
+#   bash scripts/docker-push.sh 0.9.0        # explizite Version
+#   bash scripts/docker-push.sh 0.9.0 --no-push  # nur bauen, nicht pushen
 #
 set -euo pipefail
 
@@ -20,7 +20,6 @@ cd "$ROOT"
 # ── Konfiguration ────────────────────────────────────────────────────────────
 REGISTRY="docker.io"
 ORG="magpeek"
-PREFIX="${REGISTRY}/${ORG}/coremail"
 
 # Version aus CHANGELOG extrahieren falls nicht angegeben
 if [ -z "${1:-}" ] || [[ "$1" == --* ]]; then
@@ -35,73 +34,87 @@ if [[ "${1:-}" == "--no-push" ]]; then
   PUSH=false
 fi
 
-echo "══════════════════════════════════════════════════════════════════"
-echo "  CoreMail Docker Build & Push — v${VERSION}"
-echo "  Registry: ${REGISTRY}  |  Org: ${ORG}"
-echo "  Push: ${PUSH}"
-echo "══════════════════════════════════════════════════════════════════"
+GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# ── Service-Definitionen ─────────────────────────────────────────────────────
-declare -A SERVICES=(
-  [storage-api]="packages/storage/Dockerfile"
-  [auth-service]="packages/auth-service/Dockerfile"
-  [security-filter]="packages/security-filter/Dockerfile"
-  [smtp-server]="packages/smtp-server/Dockerfile"
-  [imap-server]="packages/imap-server/Dockerfile"
-  [pop3-server]="packages/pop3-server/Dockerfile"
-  [ews-server]="packages/ews-server/Dockerfile"
-  [autodiscover]="packages/autodiscover/Dockerfile"
-  [caldav-server]="packages/caldav-server/Dockerfile"
-  [api-gateway]="packages/api-gateway/Dockerfile"
-  [backup-service]="packages/backup-service/Dockerfile"
-  [web-client]="packages/web-client/Dockerfile"
-  [admin-panel]="packages/admin-panel/Dockerfile"
-)
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║         CoreMail Docker Build & Push — v${VERSION}            ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo "  Registry  : ${REGISTRY}"
+echo "  Org       : ${ORG}"
+echo "  Version   : ${VERSION}"
+echo "  Commit    : ${GIT_SHA}"
+echo "  Push      : ${PUSH}"
+echo ""
 
 FAILED=()
 BUILT=()
 
-# ── Build ────────────────────────────────────────────────────────────────────
-for SERVICE in "${!SERVICES[@]}"; do
-  DOCKERFILE="${SERVICES[$SERVICE]}"
-  IMAGE="${PREFIX}-${SERVICE}"
-  TAG_VERSIONED="${IMAGE}:${VERSION}"
-  TAG_LATEST="${IMAGE}:latest"
+# ── Build-Funktion ────────────────────────────────────────────────────────────
+build_image() {
+  local NAME="$1"
+  local DOCKERFILE="$2"
+  local IMAGE="${REGISTRY}/${ORG}/${NAME}"
+  local TAG_VERSIONED="${IMAGE}:${VERSION}"
+  local TAG_LATEST="${IMAGE}:latest"
 
-  echo ""
-  echo "▶ Building ${SERVICE} → ${TAG_VERSIONED}"
+  echo "▶ Baue ${NAME}:${VERSION} ..."
+  echo "  Dockerfile : ${DOCKERFILE}"
+  echo "  Image      : ${TAG_VERSIONED}"
+
+  local EXTRA_ARGS=()
+  if [ "$PUSH" = true ]; then
+    EXTRA_ARGS+=(--push)
+  else
+    EXTRA_ARGS+=(--load)
+  fi
 
   if docker buildx build \
     --platform linux/amd64,linux/arm64 \
-    --file "$DOCKERFILE" \
-    --tag "$TAG_VERSIONED" \
-    --tag "$TAG_LATEST" \
+    --file "${DOCKERFILE}" \
+    --tag "${TAG_VERSIONED}" \
+    --tag "${TAG_LATEST}" \
+    --label "org.opencontainers.image.title=CoreMail ${NAME}" \
     --label "org.opencontainers.image.version=${VERSION}" \
-    --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --label "org.opencontainers.image.revision=$(git rev-parse --short HEAD)" \
+    --label "org.opencontainers.image.created=${BUILD_DATE}" \
+    --label "org.opencontainers.image.revision=${GIT_SHA}" \
     --label "org.opencontainers.image.source=https://github.com/MAGPEEK/CoreMail" \
-    $([ "$PUSH" = true ] && echo "--push" || echo "--load") \
+    --label "org.opencontainers.image.licenses=MIT" \
+    "${EXTRA_ARGS[@]}" \
     .; then
-    BUILT+=("$SERVICE")
-    echo "  ✓ ${SERVICE}"
+    BUILT+=("${NAME}:${VERSION}")
+    echo "  ✓ ${NAME} erfolgreich gebaut"
   else
-    FAILED+=("$SERVICE")
-    echo "  ✗ ${SERVICE} FEHLGESCHLAGEN"
+    FAILED+=("${NAME}")
+    echo "  ✗ ${NAME} FEHLGESCHLAGEN" >&2
   fi
-done
+  echo ""
+}
+
+# ── Image 1: coremail-app ─────────────────────────────────────────────────────
+# Alle Node.js-Services + nginx + OWA/ECP-Frontends
+
+build_image "coremail-app" "infra/docker/Dockerfile.app"
+
+# ── Image 2: coremail-db ──────────────────────────────────────────────────────
+# PostgreSQL 16 + Redis 7 + MinIO
+
+build_image "coremail-db" "infra/docker/Dockerfile.db"
 
 # ── Zusammenfassung ──────────────────────────────────────────────────────────
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                     Zusammenfassung                          ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "══════════════════════════════════════════════════════════════════"
-echo "  Zusammenfassung"
-echo "══════════════════════════════════════════════════════════════════"
 echo "  Erfolgreich: ${#BUILT[@]} / $((${#BUILT[@]} + ${#FAILED[@]}))"
 
 if [ ${#BUILT[@]} -gt 0 ]; then
   echo ""
   echo "  Gepushte Images:"
-  for svc in "${BUILT[@]}"; do
-    echo "    ${PREFIX}-${svc}:${VERSION}"
+  for img in "${BUILT[@]}"; do
+    echo "    ✓ docker.io/${ORG}/${img}"
   done
 fi
 
@@ -118,6 +131,7 @@ if [ "$PUSH" = true ]; then
   echo ""
   echo "  Docker Hub: https://hub.docker.com/u/${ORG}"
   echo ""
-  echo "  Verwendung in docker-compose.yml:"
-  echo "    image: ${PREFIX}-smtp-server:${VERSION}"
+  echo "  Schnellstart:"
+  echo "    docker compose up -d"
 fi
+echo ""

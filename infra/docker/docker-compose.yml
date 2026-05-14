@@ -1,536 +1,173 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail — Docker Compose
+# CoreMail v0.9.0 — 2-Container-Setup
 #
-# Standard-Stack:   docker compose up -d
-# Mit Observability: docker compose --profile observability up -d
-# POP3 + CalDAV:   docker compose --profile full up -d
-# Alles:           docker compose --profile full --profile observability up -d
+# Schnellstart:
+#   cp .env.example .env        # Passwörter und Hostname anpassen
+#   bash scripts/gen-dev-certs.sh  # TLS-Zertifikat generieren (Entwicklung)
+#   docker compose up -d
+#
+# Mit Observability:
+#   docker compose --profile observability up -d
 #
 # Voraussetzungen:
-#   cp .env.example .env  → Werte anpassen
-#   infra/docker/nginx/certs/fullchain.pem + privkey.pem bereitstellen
-#   (Entwicklung: bash scripts/gen-dev-certs.sh)
+#   • TLS-Zertifikat unter infra/docker/nginx/certs/
+#     (fullchain.pem + privkey.pem)
+#   • .env-Datei mit gesetzten Passwörtern
+#
+# Container:
+#   coremail-app  → magpeek/coremail-app:0.9.0
+#                   (alle Node.js-Services + nginx + Frontends)
+#   coremail-db   → magpeek/coremail-db:0.9.0
+#                   (PostgreSQL 16 + Redis 7 + MinIO)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
   # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  Infrastruktur — immer erforderlich                                       ║
+  # ║  coremail-db — Datenbank-Container                                        ║
+  # ║  PostgreSQL 16 + Redis 7 + MinIO                                          ║
   # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: coremail-postgres
+  coremail-db:
+    image: magpeek/coremail-db:0.9.0
+    # Lokaler Build (zum Entwickeln/Testen):
+    # build:
+    #   context: ../..
+    #   dockerfile: infra/docker/Dockerfile.db
+    container_name: coremail-db
     restart: unless-stopped
     environment:
+      # PostgreSQL
       POSTGRES_DB: coremail
       POSTGRES_USER: coremail
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks: [coremail]
-
-  redis:
-    image: redis:7-alpine
-    container_name: coremail-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redisdata:/data
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks: [coremail]
-
-  minio:
-    image: minio/minio:latest
-    container_name: coremail-minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # Redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # MinIO
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
-      - miniodata:/data
+      - pgdata:/var/lib/postgresql/data
+      - redisdata:/data/redis
+      - miniodata:/data/minio
     ports:
-      - "9000:9000"
-      - "9001:9001"   # MinIO Web Console
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks: [coremail]
-
-  # ── Sicherheit / Anti-Spam / Anti-Virus ─────────────────────────────────────
-
-  rspamd:
-    image: rspamd/rspamd:latest
-    container_name: coremail-rspamd
-    restart: unless-stopped
-    volumes:
-      - rspamd-data:/var/lib/rspamd
-      - ./rspamd/local.d:/etc/rspamd/local.d:ro
-    ports:
-      - "11333:11333"   # HTTP API (spam check)
-      - "11334:11334"   # Controller (learn spam/ham)
-    networks: [coremail]
-
-  clamav:
-    image: clamav/clamav:stable
-    container_name: coremail-clamav
-    restart: unless-stopped
-    volumes:
-      - clamav-db:/var/lib/clamav
+      - "9001:9001"   # MinIO Web Console (optional, kann entfernt werden)
     expose:
-      - "3310"
+      - "5432"   # PostgreSQL (nur intern)
+      - "6379"   # Redis (nur intern)
+      - "9000"   # MinIO S3 API (nur intern)
     healthcheck:
-      test: ["CMD-SHELL", "echo PING | nc -w 3 localhost 3310 | grep -q PONG"]
-      interval: 60s
-      timeout: 30s
-      retries: 3
-      start_period: 120s   # freshclam braucht Zeit beim ersten Start
-    networks: [coremail]
-
-  geoipupdate:
-    image: ghcr.io/maxmind/geoipupdate:latest
-    container_name: coremail-geoipupdate
-    restart: unless-stopped
-    environment:
-      GEOIPUPDATE_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID:-0}
-      GEOIPUPDATE_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
-      GEOIPUPDATE_EDITION_IDS: "GeoLite2-City GeoLite2-Country"
-      GEOIPUPDATE_FREQUENCY: 24
-    volumes:
-      - geoip-data:/usr/share/GeoIP
-    networks: [coremail]
-
-  # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  CoreMail Services                                                        ║
-  # ╚═══════════════════════════════════════════════════════════════════════════╝
-
-  # Interner Storage-API-Service — nur innerhalb des Docker-Netzwerks erreichbar
-  storage-api:
-    build:
-      context: ../..
-      dockerfile: packages/storage/Dockerfile
-    container_name: coremail-storage-api
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
-      MINIO_USE_SSL: "false"
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: mail-attachments
-      JWT_SECRET: ${JWT_SECRET}
-      PEPPER: ${PEPPER}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "3001"
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      minio: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail && redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep -q PONG"]
       interval: 15s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 10
       start_period: 30s
     networks: [coremail]
 
-  security-filter:
-    build:
-      context: ../..
-      dockerfile: packages/security-filter/Dockerfile
-    container_name: coremail-security-filter
+  # ╔═══════════════════════════════════════════════════════════════════════════╗
+  # ║  coremail-app — Hauptanwendung                                            ║
+  # ║  Alle Node.js-Services + nginx Reverse Proxy + OWA/ECP Frontends          ║
+  # ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  coremail-app:
+    image: magpeek/coremail-app:0.9.0
+    # Lokaler Build (zum Entwickeln/Testen):
+    # build:
+    #   context: ../..
+    #   dockerfile: infra/docker/Dockerfile.app
+    container_name: coremail-app
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
-      CLAMAV_HOST: clamav
-      CLAMAV_PORT: "3310"
-      RSPAMD_HOST: rspamd
-      RSPAMD_PORT: "11333"
-      GEOIP_DB_PATH: /usr/share/GeoIP/GeoLite2-Country.mmdb
       NODE_ENV: ${NODE_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    volumes:
-      - geoip-data:/usr/share/GeoIP:ro
-    expose:
-      - "3002"
-      - "9464"   # Prometheus metrics
-    depends_on:
-      clamav: { condition: service_healthy }
-      storage-api: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
 
-  auth-service:
-    build:
-      context: ../..
-      dockerfile: packages/auth-service/Dockerfile
-    container_name: coremail-auth
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
+      # ── Datenbank (zeigt auf coremail-db) ─────────────────────────────────
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@coremail-db:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@coremail-db:6379
+      MINIO_ENDPOINT: coremail-db
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: mail-attachments
+
+      # ── Sicherheit ────────────────────────────────────────────────────────
       JWT_SECRET: ${JWT_SECRET}
       PEPPER: ${PEPPER}
+
+      # ── Mailserver-Hostname ────────────────────────────────────────────────
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
+      SMTP_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
+      IMAP_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
+
+      # ── Interne Service-URLs (localhost, gleicher Container) ───────────────
+      STORAGE_API_URL: http://localhost:3001
+      AUTH_SERVICE_URL: http://localhost:3003
+      SECURITY_FILTER_URL: http://localhost:3002
+      EWS_SERVICE_URL: http://localhost:8080
+
+      # ── Service-Ports ──────────────────────────────────────────────────────
+      STORAGE_PORT: "3001"
       AUTH_PORT: "3003"
-      WEBAUTHN_RP_NAME: CoreMail
-      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME}
-      WEBAUTHN_ORIGIN: https://${MAIL_HOSTNAME}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "3003"
-      - "9464"   # Prometheus metrics
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      storage-api: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
-
-  smtp-server:
-    build:
-      context: ../..
-      dockerfile: packages/smtp-server/Dockerfile
-    container_name: coremail-smtp
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
-      SECURITY_FILTER_URL: http://security-filter:3002
-      AUTH_SERVICE_URL: http://auth-service:3003
-      JWT_SECRET: ${JWT_SECRET}
-      PEPPER: ${PEPPER}
-      SMTP_HOSTNAME: ${MAIL_HOSTNAME}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports:
-      - "25:25"     # SMTP (eingehend extern)
-      - "465:465"   # SMTPS (Submission, implizites TLS)
-      - "587:587"   # Submission (STARTTLS)
-    expose:
-      - "9464"   # Prometheus metrics
-    depends_on:
-      storage-api: { condition: service_healthy }
-      security-filter: { condition: service_started }
-      auth-service: { condition: service_healthy }
-    networks: [coremail]
-
-  imap-server:
-    build:
-      context: ../..
-      dockerfile: packages/imap-server/Dockerfile
-    container_name: coremail-imap
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
-      AUTH_SERVICE_URL: http://auth-service:3003
-      JWT_SECRET: ${JWT_SECRET}
-      PEPPER: ${PEPPER}
-      IMAP_HOSTNAME: ${MAIL_HOSTNAME}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports:
-      - "143:143"   # IMAP (STARTTLS)
-      - "993:993"   # IMAPS (implizites TLS)
-    expose:
-      - "9464"   # Prometheus metrics
-    depends_on:
-      storage-api: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-    networks: [coremail]
-
-  ews-server:
-    build:
-      context: ../..
-      dockerfile: packages/ews-server/Dockerfile
-    container_name: coremail-ews
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
-      AUTH_SERVICE_URL: http://auth-service:3003
-      JWT_SECRET: ${JWT_SECRET}
+      SECURITY_FILTER_PORT: "3002"
+      API_PORT: "3000"
       EWS_PORT: "8080"
-      EWS_URL: https://${MAIL_HOSTNAME}/EWS/Exchange.asmx
-      OWA_URL: https://${MAIL_HOSTNAME}/owa/
-      IMAP_HOST: ${MAIL_HOSTNAME}
-      SMTP_HOST: ${MAIL_HOSTNAME}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "8080"
-      - "9464"   # Prometheus metrics
-    depends_on:
-      storage-api: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
-
-  autodiscover:
-    build:
-      context: ../..
-      dockerfile: packages/autodiscover/Dockerfile
-    container_name: coremail-autodiscover
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      EWS_URL: https://${MAIL_HOSTNAME}/EWS/Exchange.asmx
-      OWA_URL: https://${MAIL_HOSTNAME}/owa/
-      IMAP_HOST: ${MAIL_HOSTNAME}
-      SMTP_HOST: ${MAIL_HOSTNAME}
-      AUTODISCOVER_BASE: https://${MAIL_HOSTNAME}
       AUTODISCOVER_PORT: "8081"
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "8081"
-    depends_on:
-      postgres: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
+      CALDAV_PORT: "8082"
+      BACKUP_PORT: "3004"
+      EAS_PORT: "3005"
+      POP3_PORT: "110"
+      POP3S_PORT: "995"
 
-  api-gateway:
-    build:
-      context: ../..
-      dockerfile: packages/api-gateway/Dockerfile
-    container_name: coremail-api
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_API_URL: http://storage-api:3001
-      AUTH_SERVICE_URL: http://auth-service:3003
-      EWS_SERVICE_URL: http://ews-server:8080
-      JWT_SECRET: ${JWT_SECRET}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "3000"
-      - "9464"   # Prometheus metrics
-    depends_on:
-      storage-api: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
+      # ── URLs (für EWS Autodiscover) ────────────────────────────────────────
+      EWS_URL: https://${MAIL_HOSTNAME:-mail.example.com}/EWS/Exchange.asmx
+      OWA_URL: https://${MAIL_HOSTNAME:-mail.example.com}/owa/
+      AUTODISCOVER_BASE: https://${MAIL_HOSTNAME:-mail.example.com}
+      EAS_URL: https://${MAIL_HOSTNAME:-mail.example.com}/Microsoft-Server-ActiveSync
 
-  backup-service:
-    build:
-      context: ../..
-      dockerfile: packages/backup-service/Dockerfile
-    container_name: coremail-backup
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      # ── WebAuthn (für MFA) ─────────────────────────────────────────────────
+      WEBAUTHN_RP_NAME: CoreMail
+      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME:-mail.example.com}
+      WEBAUTHN_ORIGIN: https://${MAIL_HOSTNAME:-mail.example.com}
+
+      # ── Backup ────────────────────────────────────────────────────────────
+      S3_ENDPOINT: http://coremail-db:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       BACKUP_BUCKET: coremail-backups
       BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
-      JWT_SECRET: ${JWT_SECRET}
-      BACKUP_PORT: "3004"
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "3004"
-      - "9464"   # Prometheus metrics
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      minio: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3004/health"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-    networks: [coremail]
 
-  # ── Optionale Services (Profil: full) ────────────────────────────────────────
-
-  pop3-server:
-    build:
-      context: ../..
-      dockerfile: packages/pop3-server/Dockerfile
-    container_name: coremail-pop3
-    restart: unless-stopped
-    profiles: [full]
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      STORAGE_API_URL: http://storage-api:3001
-      AUTH_SERVICE_URL: http://auth-service:3003
-      JWT_SECRET: ${JWT_SECRET}
-      PEPPER: ${PEPPER}
-      POP3_PORT: "110"
-      POP3S_PORT: "995"
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # ── GeoIP (optional — für Country-Filtering) ───────────────────────────
+      # MAXMIND_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID}
+      # MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY}
     ports:
-      - "110:110"   # POP3 (STARTTLS)
-      - "995:995"   # POP3S (implizites TLS)
-    depends_on:
-      storage-api: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-    networks: [coremail]
-
-  caldav-server:
-    build:
-      context: ../..
-      dockerfile: packages/caldav-server/Dockerfile
-    container_name: coremail-caldav
-    restart: unless-stopped
-    profiles: [full]
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      STORAGE_API_URL: http://storage-api:3001
-      AUTH_SERVICE_URL: http://auth-service:3003
-      JWT_SECRET: ${JWT_SECRET}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "8082"
-    depends_on:
-      storage-api: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
-
-  # ── Phase 6: ActiveSync ───────────────────────────────────────────────────────
-
-  activesync:
-    build:
-      context: ../..
-      dockerfile: packages/activesync/Dockerfile
-    container_name: coremail-activesync
-    restart: unless-stopped
-    profiles: [full]
-    environment:
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      EAS_PORT: "3005"
-      EAS_URL: ${EAS_URL:-https://mail.example.com/Microsoft-Server-ActiveSync}
-      NODE_ENV: ${NODE_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    expose:
-      - "3005"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3005/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [coremail]
-
-  # ── Frontends ────────────────────────────────────────────────────────────────
-
-  web-client:
-    build:
-      context: ../..
-      dockerfile: packages/web-client/Dockerfile
-      args:
-        VITE_API_BASE_URL: https://${MAIL_HOSTNAME}/api/v1
-        VITE_EWS_URL: https://${MAIL_HOSTNAME}/EWS/Exchange.asmx
-    container_name: coremail-web
-    restart: unless-stopped
-    expose:
-      - "80"
-    networks: [coremail]
-
-  admin-panel:
-    build:
-      context: ../..
-      dockerfile: packages/admin-panel/Dockerfile
-      args:
-        VITE_API_BASE_URL: https://${MAIL_HOSTNAME}/api/v1
-    container_name: coremail-admin
-    restart: unless-stopped
-    expose:
-      - "80"
-    networks: [coremail]
-
-  # ── Reverse Proxy ────────────────────────────────────────────────────────────
-
-  nginx:
-    image: nginx:alpine
-    container_name: coremail-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
+      - "80:80"       # HTTP (Redirect zu HTTPS)
+      - "443:443"     # HTTPS (OWA, ECP, API, EWS, Autodiscover)
+      - "25:25"       # SMTP Inbound
+      - "465:465"     # SMTPS (implizites TLS)
+      - "587:587"     # Submission (STARTTLS)
+      - "143:143"     # IMAP (STARTTLS)
+      - "993:993"     # IMAPS (implizites TLS)
+      - "110:110"     # POP3 (STARTTLS)
+      - "995:995"     # POP3S (implizites TLS)
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/certs:/etc/nginx/certs:ro   # TLS-Zertifikate
     depends_on:
-      ews-server: { condition: service_healthy }
-      autodiscover: { condition: service_healthy }
-      api-gateway: { condition: service_healthy }
-      auth-service: { condition: service_healthy }
-      - web-client
-      - admin-panel
+      coremail-db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks: [coremail]
 
   # ╔═══════════════════════════════════════════════════════════════════════════╗
-  # ║  Observability Stack (Profil: observability)                              ║
+  # ║  Observability Stack (--profile observability)                             ║
   # ╚═══════════════════════════════════════════════════════════════════════════╝
 
   otel-collector:
@@ -555,7 +192,6 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=30d
-      - --web.enable-remote-write-receiver
       - --web.enable-lifecycle
     volumes:
       - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -598,8 +234,7 @@ services:
       - grafana-data:/var/lib/grafana
     ports:
       - "3001:3000"
-    depends_on:
-      - prometheus
+    depends_on: [prometheus]
     networks: [coremail]
 
   tempo:
@@ -611,9 +246,7 @@ services:
     volumes:
       - ../observability/tempo/tempo.yml:/etc/tempo.yml:ro
       - tempo-data:/tmp/tempo
-    expose:
-      - "3200"
-      - "4317"
+    expose: ["3200", "4317"]
     networks: [coremail]
 
   loki:
@@ -625,46 +258,7 @@ services:
     volumes:
       - ../observability/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki-data:/tmp/loki
-    expose:
-      - "3100"
-    networks: [coremail]
-
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    container_name: coremail-pg-exporter
-    restart: unless-stopped
-    profiles: [observability]
-    environment:
-      DATA_SOURCE_NAME: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail?sslmode=disable
-    expose:
-      - "9187"
-    depends_on:
-      postgres: { condition: service_healthy }
-    networks: [coremail]
-
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    container_name: coremail-redis-exporter
-    restart: unless-stopped
-    profiles: [observability]
-    environment:
-      REDIS_ADDR: redis://redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-    expose:
-      - "9121"
-    networks: [coremail]
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: coremail-node-exporter
-    restart: unless-stopped
-    profiles: [observability]
-    command:
-      - --path.rootfs=/host
-    volumes:
-      - /:/host:ro,rslave
-    expose:
-      - "9100"
+    expose: ["3100"]
     networks: [coremail]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -675,9 +269,6 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
-  rspamd-data:
-  clamav-db:
-  geoip-data:
   prometheus-data:
   alertmanager-data:
   grafana-data:

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `0.9.0`
+**Aktuelle Version**: `0.9.1`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -68,28 +68,44 @@ coremail/
 
 ---
 
-## Services & Docker Images
+## Services & Docker Images (2-Container-Architektur seit v0.9.1)
 
-| Service | Port | Docker Image |
-|---------|------|-------------|
-| storage-api | 3001 | `magpeek/coremail-storage-api` |
-| auth-service | 3003 | `magpeek/coremail-auth-service` |
-| security-filter | 3002 | `magpeek/coremail-security-filter` |
-| smtp-server | 25/465/587 | `magpeek/coremail-smtp-server` |
-| imap-server | 143/993 | `magpeek/coremail-imap-server` |
-| pop3-server | 110/995 | `magpeek/coremail-pop3-server` |
-| ews-server | 8080 | `magpeek/coremail-ews-server` |
-| autodiscover | 8081 | `magpeek/coremail-autodiscover` |
-| caldav-server | 8082 | `magpeek/coremail-caldav-server` |
-| api-gateway | 3000 | `magpeek/coremail-api-gateway` |
-| backup-service | 3004 | `magpeek/coremail-backup-service` |
-| **activesync** | **3005** | **`magpeek/coremail-activesync`** |
-| web-client | 4000 | `magpeek/coremail-web-client` |
-| admin-panel | 4001 | `magpeek/coremail-admin-panel` |
+CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
-**Docker Hub**: `magpeek/coremail-<service>:<version>`
+| Container | Docker Image | Inhalt |
+|-----------|-------------|--------|
+| `coremail-app` | `magpeek/coremail-app:0.9.1` | Alle Node.js-Services + nginx + OWA/ECP-Frontends |
+| `coremail-db` | `magpeek/coremail-db:0.9.1` | PostgreSQL 16 + Redis 7 + MinIO |
+
+**Interne Ports im App-Container** (localhost, von supervisord verwaltet):
+
+| Service | Port |
+|---------|------|
+| nginx | 80 / 443 |
+| api-gateway | 3000 |
+| storage-api | 3001 |
+| security-filter | 3002 |
+| auth-service | 3003 |
+| backup-service | 3004 |
+| activesync | 3005 |
+| ews-server | 8080 |
+| autodiscover | 8081 |
+| caldav-server | 8082 |
+| smtp-server | 25 / 465 / 587 |
+| imap-server | 143 / 993 |
+| pop3-server | 110 / 995 |
+
+**Docker Hub**: `magpeek/coremail-app` + `magpeek/coremail-db`
 - Manuell pushen: `bash scripts/docker-push.sh [VERSION]`
-- Production: `COREMAIL_VERSION=0.7.0 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+- Starten: `docker compose -f infra/docker/docker-compose.yml up -d`
+
+**Neue Dockerfiles:**
+- `infra/docker/Dockerfile.app` — monolithischer App-Container
+- `infra/docker/Dockerfile.db` — Datenbank-Container
+- `infra/docker/supervisord-app.conf` — supervisord für App
+- `infra/docker/supervisord-db.conf` — supervisord für DB
+- `infra/docker/nginx/nginx.app.conf` — nginx für App-Container
+- `infra/docker/entrypoint-db.sh` — Entrypoint für DB-Container
 
 ---
 
@@ -105,6 +121,7 @@ coremail/
 | Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
 | Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
 | Phase 8 | ✅ Fertig | EMS REST-Bridge (20+ Cmdlets) + MAPI over HTTP + eDiscovery & Legal Hold |
+| Infra | ✅ Fertig | 2-Container-Konsolidierung (coremail-app + coremail-db) + Docker-Deployment-Docs |
 
 ---
 
@@ -170,7 +187,16 @@ pnpm --filter @coremail/storage exec prisma generate
 
 ---
 
-## Dockerfile-Muster (Standard)
+## Dockerfile-Muster
+
+### Monolithischer App-Container (`infra/docker/Dockerfile.app`)
+
+Drei Stages: `builder` (alle Node.js-Pakete), `frontend-builder` (React-Bundles), `runner` (Alpine + nginx + supervisord).
+- `supervisord-app.conf` verwaltet alle Prozesse im Container
+- nginx-Config: `infra/docker/nginx/nginx.app.conf` (alle Upstreams auf localhost)
+- Frontends als statische Dateien in `/app/www/owa` und `/app/www/ecp`
+
+### Einzel-Service-Dockerfile (Standard für Entwicklung)
 
 Alle Dockerfiles folgen dem gleichen Multi-Stage-Muster. Beispiel von `ews-server`:
 
@@ -369,12 +395,16 @@ pnpm -r exec tsc --noEmit
 # Prisma-Client generieren
 pnpm --filter @coremail/storage exec prisma generate
 
-# Docker Image bauen + pushen
-docker build -f packages/<service>/Dockerfile -t magpeek/coremail-<service>:0.7.0 .
-docker push magpeek/coremail-<service>:0.7.0
+# App-Container bauen + pushen
+docker build -f infra/docker/Dockerfile.app -t magpeek/coremail-app:0.9.1 .
+docker push magpeek/coremail-app:0.9.1
 
-# Alle Images pushen (Skript)
-bash scripts/docker-push.sh 0.7.0
+# DB-Container bauen + pushen
+docker build -f infra/docker/Dockerfile.db -t magpeek/coremail-db:0.9.1 .
+docker push magpeek/coremail-db:0.9.1
+
+# Beide Images bauen + pushen (Skript)
+bash scripts/docker-push.sh 0.9.1
 
 # GitHub Push mit PAT
 PAT="..." git -c url."https://x-access-token:${PAT}@github.com/".insteadOf="https://github.com/" push
@@ -434,4 +464,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-13 (v0.9.0 — Phase 8: EMS REST-Bridge, MAPI over HTTP, eDiscovery & Legal Hold)*
+*Letzte Aktualisierung: 2026-05-14 (v0.9.1 — 2-Container-Architektur: magpeek/coremail-app + magpeek/coremail-db)*

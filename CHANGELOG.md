@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.9.1] — 2026-05-14 — 2-Container-Architektur & Docker-Deployment-Dokumentation
+
+### Added
+- **Monolithischer App-Container** (`magpeek/coremail-app`) — alle 13 Node.js-Services + nginx + OWA/ECP-Frontends in einem einzigen Image, verwaltet von `supervisord`
+  - `infra/docker/Dockerfile.app` — Multi-Stage-Build (Node.js Builder + Frontend Builder + Alpine Runner)
+  - `infra/docker/supervisord-app.conf` — supervisord-Konfiguration mit Prioritäten (nginx → storage-api → auth → security-filter → Protokoll-Services)
+  - `infra/docker/nginx/nginx.app.conf` — nginx-Konfiguration für App-Container (alle Upstream-Adressen auf localhost)
+- **Datenbank-Container** (`magpeek/coremail-db`) — PostgreSQL 16 + Redis 7 + MinIO in einem Image
+  - `infra/docker/Dockerfile.db` — abgeleitet von `postgres:16-alpine`, ergänzt um Redis (apk) und MinIO (Binary)
+  - `infra/docker/supervisord-db.conf` — supervisord für PostgreSQL + Redis + MinIO
+  - `infra/docker/entrypoint-db.sh` — Initialisierungs-Entrypoint: PostgreSQL-Init-Skript ausführen, dann supervisord starten
+- **Docker-Deployment-Dokumentation** (`docs/deployment-docker.md`) — vollständige Anleitung für Docker-Betrieb: Schnellstart, Konfigurationsreferenz, Synology NAS, Updates, Fehlerbehebung, Produktions-Checkliste
+
+### Changed
+- **`infra/docker/docker-compose.yml`** — von 14-Service-Stack auf 2-Container-Stack vereinfacht (`coremail-app` + `coremail-db`)
+  - Observability-Stack (Prometheus/Grafana/Loki/Tempo) bleibt als `--profile observability` erhalten
+  - Alle internen Service-URLs auf `localhost:PORT` (gleicher App-Container)
+- **`infra/docker/docker-compose.synology.yml`** — ebenfalls auf 2-Container vereinfacht (Ports 8080/8443 für DSM-Kompatibilität)
+- **`scripts/docker-push.sh`** — baut und pusht nur noch 2 Images (`coremail-app` + `coremail-db`) statt 14 Einzel-Images
+- **`README.md`** — Architektur-Diagramm auf 2-Container aktualisiert, Docker Hub Images-Tabelle vereinfacht, Deployment (Docker)-Abschnitt ergänzt
+
+### Removed
+- Alle 14 Einzel-Images aus der CI/CD-Pipeline entfernt: `magpeek/coremail-storage-api`, `magpeek/coremail-auth-service`, `magpeek/coremail-security-filter`, `magpeek/coremail-smtp-server`, `magpeek/coremail-imap-server`, `magpeek/coremail-pop3-server`, `magpeek/coremail-ews-server`, `magpeek/coremail-autodiscover`, `magpeek/coremail-caldav-server`, `magpeek/coremail-api-gateway`, `magpeek/coremail-backup-service`, `magpeek/coremail-activesync`, `magpeek/coremail-web-client`, `magpeek/coremail-admin-panel`
+- `infra/docker/docker-compose.prod.yml` (separates Prod-Overlay nicht mehr nötig — `docker-compose.yml` verwendet direkt Hub-Images)
+
+---
+
 ## [0.9.0] — 2026-05-13 — Phase 8: EMS REST-Bridge, MAPI over HTTP, eDiscovery & Legal Hold
 
 ### Added

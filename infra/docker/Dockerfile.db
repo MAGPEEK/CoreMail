@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CoreMail — Database Container  (magpeek/coremail-db)
+#
+# Enthält: PostgreSQL 16 + Redis 7 + MinIO
+# Process-Manager: supervisord
+#
+# Build (aus dem Repo-Root):
+#   docker build -f infra/docker/Dockerfile.db \
+#                -t magpeek/coremail-db:0.9.0 .
+#
+# Ports:
+#   5432  PostgreSQL
+#   6379  Redis
+#   9000  MinIO S3 API
+#   9001  MinIO Web Console
+#
+# Volumes:
+#   /var/lib/postgresql/data  PostgreSQL-Daten
+#   /data/redis               Redis-AOF-Persistenz
+#   /data/minio               MinIO-Objektspeicher
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM postgres:16-alpine
+
+# Redis und weitere Tools installieren
+RUN apk add --no-cache redis supervisor curl tini
+
+# MinIO-Binary herunterladen (Multi-Arch: amd64 + arm64)
+ARG TARGETARCH=amd64
+RUN MINIO_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") \
+ && curl -fsSL "https://dl.min.io/server/minio/release/linux-${MINIO_ARCH}/minio" \
+         -o /usr/local/bin/minio \
+ && chmod +x /usr/local/bin/minio
+
+# Datenverzeichnisse
+RUN mkdir -p /data/redis /data/minio
+
+# supervisord-Konfiguration
+COPY infra/docker/supervisord-db.conf /etc/supervisord.conf
+
+# PostgreSQL-Initialisierungs-SQL
+COPY infra/docker/postgres/init.sql /docker-entrypoint-initdb.d/01-coremail-init.sql
+
+# Custom Entrypoint: PostgreSQL initialisieren, dann supervisord starten
+COPY infra/docker/entrypoint-db.sh /entrypoint-db.sh
+RUN chmod +x /entrypoint-db.sh
+
+EXPOSE 5432 6379 9000 9001
+
+VOLUME ["/var/lib/postgresql/data", "/data/redis", "/data/minio"]
+
+ENTRYPOINT ["/sbin/tini", "--", "/entrypoint-db.sh"]

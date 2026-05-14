@@ -33,7 +33,8 @@
 19. [Cluster & Hochverfügbarkeit](#cluster--hochverfügbarkeit)
 20. [Monitoring & Logs](#monitoring--logs)
 21. [Entwicklung](#entwicklung)
-22. [Deployment (Kubernetes)](#deployment-kubernetes)
+22. [Deployment (Docker)](#deployment-docker)
+23. [Deployment (Kubernetes)](#deployment-kubernetes)
 23. [URL-Struktur](#url-struktur)
 24. [Roadmap](#roadmap)
 25. [Lizenz](#lizenz)
@@ -150,25 +151,40 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 
 ## Architektur
 
-CoreMail folgt dem **Container-first, Microservice-Prinzip**: Jedes Modul ist ein eigenständiger Container mit eigenem Dockerfile. Module kommunizieren ausschließlich über REST-APIs, Redis Pub/Sub oder die Queue — nie direkt über gemeinsamen Code zur Laufzeit.
+CoreMail verwendet eine **2-Container-Architektur** — alle Node.js-Services und das Frontend laufen in einem einzigen App-Container, verwaltet von `supervisord`. Kein Kubernetes erforderlich; zwei `docker compose up`-Befehle genügen.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        nginx Reverse Proxy                               │
-│         TLS-Termination · Rate-Limiting · Exchange-URL-Routing          │
-└────┬──────┬────────┬───────┬──────┬──────┬────────┬──────┬─────────────┘
-     │      │        │       │      │      │        │      │
-     ▼      ▼        ▼       ▼      ▼      ▼        ▼      ▼
-  [EWS]  [API-GW] [OWA]  [ECP]  [Auto- [Cal-  [Backup] [EAS]
-  :8080  :3000   :4000  :4001  disc.] DAV]   :3004   :3005
-                               :8081  :8082     [Auth]
-                                               :3003
-  SMTP(:25/465/587)  IMAP(:143/993)  POP3(:110/995)
-
-  ┌─────────────────────────────────────────────────────────────┐
-  │              Gemeinsame Infrastruktur                        │
-  │  PostgreSQL 16 · Redis 7 · MinIO · rspamd · ClamAV · GeoIP │
-  └─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    magpeek/coremail-app:0.9.0                                    │
+│                                                                                  │
+│  nginx (80/443)  ←── TLS-Termination + Exchange-URL-Routing + Static Files      │
+│      │                                                                            │
+│      ├── /owa/      → /app/www/owa/   (React OWA, statisch)                    │
+│      ├── /ecp/      → /app/www/ecp/   (React ECP, statisch)                    │
+│      ├── /api/      → api-gateway     :3000                                      │
+│      ├── /auth/     → auth-service    :3003                                      │
+│      ├── /EWS/      → ews-server      :8080  (SOAP + MAPI over HTTP)           │
+│      ├── /Autodiscover/ → autodiscover :8081                                    │
+│      ├── /dav/      → caldav-server   :8082                                      │
+│      └── /Microsoft-Server-ActiveSync → activesync :3005                        │
+│                                                                                  │
+│  supervisord verwaltet alle Prozesse:                                             │
+│  smtp-server · imap-server · pop3-server · security-filter · backup-service      │
+│  storage-api · auth-service · api-gateway · ews-server · autodiscover            │
+│  caldav-server · activesync · nginx                                               │
+│                                                                                  │
+│  SMTP(:25/465/587)    IMAP(:143/993)    POP3(:110/995)                          │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                               ▲
+                      DATABASE_URL / REDIS_URL
+                               │
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    magpeek/coremail-db:0.9.0                                     │
+│                                                                                  │
+│  PostgreSQL 16 (:5432)  +  Redis 7 (:6379)  +  MinIO (:9000/:9001)             │
+│                                                                                  │
+│  supervisord verwaltet alle drei Datenbank-Prozesse                              │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Inter-Service-Kommunikation
@@ -275,104 +291,70 @@ Die gesamte Anwendung läuft als Docker-Stack. Der Build-Kontext ist das
 Monorepo-Root — `docker compose up --build` kompiliert alle Services
 vollautomatisch (TypeScript → JS, React → statische Dateien).
 
-### Standard-Stack starten
+### Stack starten (2 Container)
 
-Enthält: PostgreSQL, Redis, MinIO, rspamd, ClamAV, GeoIP, Storage-API,
-Auth-Service, SMTP, IMAP, EWS, Autodiscover, API-Gateway, Backup-Service,
-Webmail (OWA) und Admin-Panel (ECP).
+Der gesamte CoreMail-Stack besteht aus **zwei Containern**:
+- `coremail-app` — alle Node.js-Services + nginx + Frontends
+- `coremail-db` — PostgreSQL + Redis + MinIO
 
 ```bash
+# Images von Docker Hub laden und starten
+docker compose -f infra/docker/docker-compose.yml up -d
+
+# Oder lokaler Build (aus Quellcode):
 docker compose -f infra/docker/docker-compose.yml up -d --build
-```
-
-Kurzform über npm-Skript (nach `pnpm install`):
-```bash
-pnpm docker:up
-```
-
-### Mit optionalen Modulen (Profil `full`)
-
-Aktiviert zusätzlich **POP3** (Port 110/995), **CalDAV/CardDAV** (Port 8082) und **ActiveSync EAS** (Port 3005):
-
-```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile full up -d --build
-
-# oder
-pnpm docker:up:full
 ```
 
 ### Mit Observability (Profil `observability`)
 
-Aktiviert: Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector
-sowie postgres-, redis- und node-exporter:
+Aktiviert zusätzlich: Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector:
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml \
-  --profile observability up -d --build
-
-# oder
-pnpm docker:up:obs
-```
-
-### Vollständiger Stack (alle Profile)
-
-```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile full --profile observability up -d --build
-
-# oder
-pnpm docker:up:all
+  --profile observability up -d
 ```
 
 ### Status prüfen
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml ps
-
-# oder
-pnpm docker:ps
 ```
 
-Alle Services sollten nach ca. 60–90 Sekunden den Status `healthy` oder
-`running` erreichen. ClamAV benötigt beim ersten Start länger (Signaturen
-werden heruntergeladen).
+Beide Container sollten nach ca. 60–90 Sekunden den Status `healthy` erreichen.
+
+### Einzelne Services im App-Container debuggen
+
+```bash
+# supervisorctl im App-Container
+docker exec -it coremail-app supervisorctl status
+
+# Einzelnen Service neu starten
+docker exec -it coremail-app supervisorctl restart api-gateway
+```
 
 ### Logs ansehen
 
 ```bash
-# Alle Services
+# Alle Logs
 docker compose -f infra/docker/docker-compose.yml logs -f
 
-# Einzelner Service
-docker compose -f infra/docker/docker-compose.yml logs -f smtp-server
+# Nur App-Container
+docker logs -f coremail-app
 
-# oder
-pnpm docker:logs
+# Nur DB-Container
+docker logs -f coremail-db
 ```
 
 ### Stack stoppen
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile full --profile observability down
-
-# oder
-pnpm docker:down
+docker compose -f infra/docker/docker-compose.yml down
 ```
 
 Volumes bleiben erhalten (Daten gehen nicht verloren). Zum vollständigen
 Löschen inklusive Daten:
 ```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile full --profile observability down -v
-```
-
-### Einzelnen Service neu bauen
-
-```bash
-docker compose -f infra/docker/docker-compose.yml \
-  up -d --build smtp-server
+docker compose -f infra/docker/docker-compose.yml down -v
 ```
 
 ---
@@ -461,44 +443,31 @@ Danach unter `https://<MAIL_HOSTNAME>/ecp/` mit den Zugangsdaten anmelden.
 
 ## Docker Hub Images
 
-Alle fertigen Images sind auf Docker Hub verfügbar und können ohne lokalen Build verwendet werden:
+CoreMail verwendet ab v0.9.0 eine **2-Container-Architektur** — nur noch zwei Images auf Docker Hub:
 
 **Übersicht:** [hub.docker.com/u/magpeek](https://hub.docker.com/u/magpeek)
 
-| Image | Tag | Beschreibung |
-|-------|-----|-------------|
-| `magpeek/coremail-storage-api` | `0.9.0` / `latest` | Interner Storage-API-Service |
-| `magpeek/coremail-auth-service` | `0.9.0` / `latest` | Authentifizierung (Local/LDAP/OIDC/MFA) |
-| `magpeek/coremail-security-filter` | `0.9.0` / `latest` | SPF/DKIM/DMARC, DNSBL, ClamAV, rspamd |
-| `magpeek/coremail-smtp-server` | `0.9.0` / `latest` | SMTP Inbound + Outbound + Gruppenexpansion |
-| `magpeek/coremail-imap-server` | `0.9.0` / `latest` | IMAP4rev1 + IDLE + CONDSTORE (143/993) |
-| `magpeek/coremail-pop3-server` | `0.9.0` / `latest` | POP3 (110/995) |
-| `magpeek/coremail-ews-server` | `0.9.0` / `latest` | EWS + MAPI over HTTP (Outlook 2013+) |
-| `magpeek/coremail-autodiscover` | `0.9.0` / `latest` | Autodiscover v1 + v2 (inkl. ActiveSync) |
-| `magpeek/coremail-caldav-server` | `0.9.0` / `latest` | CalDAV + CardDAV |
-| `magpeek/coremail-api-gateway` | `0.9.0` / `latest` | REST API + SSE + EMS (20+ Cmdlets) + eDiscovery |
-| `magpeek/coremail-backup-service` | `0.9.0` / `latest` | Backup/Restore (MBOX/EML/S3) |
-| `magpeek/coremail-activesync` | `0.9.0` / `latest` | ActiveSync EAS 14.1 |
-| `magpeek/coremail-web-client` | `0.9.0` / `latest` | Webmail OWA (React) |
-| `magpeek/coremail-admin-panel` | `0.9.0` / `latest` | Admin-Panel ECP (React) |
+| Image | Tag | Inhalt |
+|-------|-----|--------|
+| [`magpeek/coremail-app`](https://hub.docker.com/r/magpeek/coremail-app) | `0.9.0` / `latest` | Alle Node.js-Services + nginx + OWA/ECP-Frontends |
+| [`magpeek/coremail-db`](https://hub.docker.com/r/magpeek/coremail-db) | `0.9.0` / `latest` | PostgreSQL 16 + Redis 7 + MinIO |
 
-### Produktion mit Docker-Hub-Images starten
+### Was ist in `coremail-app`?
 
-Kein lokaler Build nötig — Images werden direkt von Docker Hub gezogen:
+Alle CoreMail-Dienste in einem Image, verwaltet von `supervisord`:
+
+```
+smtp-server · imap-server · pop3-server · ews-server (+ MAPI)
+api-gateway (+ EMS 20+ Cmdlets + eDiscovery) · auth-service
+caldav-server · autodiscover · backup-service · activesync
+security-filter · storage-api · nginx · OWA-Frontend · ECP-Frontend
+```
+
+### Produktion starten (ohne lokalen Build)
 
 ```bash
-# Neueste stabile Version (empfohlen)
-COREMAIL_VERSION=0.9.0 docker compose \
-  -f infra/docker/docker-compose.yml \
-  -f infra/docker/docker-compose.prod.yml \
-  up -d
-
-# Oder mit optionalen Modulen (inkl. POP3, CalDAV, ActiveSync)
-COREMAIL_VERSION=0.9.0 docker compose \
-  -f infra/docker/docker-compose.yml \
-  -f infra/docker/docker-compose.prod.yml \
-  --profile full --profile observability \
-  up -d
+# Beide Images von Docker Hub laden und starten
+docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
 ### Tag-Schema
@@ -507,41 +476,24 @@ COREMAIL_VERSION=0.9.0 docker compose \
 |-----|-----------|
 | `0.9.0` | Exakte Version (aktuell) |
 | `0.9` | Neueste Patch-Version von 0.9.x |
-| `0` | Neueste Minor-Version von 0.x.x |
 | `latest` | Neuestes stabiles Release |
 | `edge` | Aktueller Stand des `main`-Branches |
-| `sha-abc1234` | Commit-spezifischer Build |
 
 ### CI/CD — Automatischer Build
 
 Der GitHub Actions Workflow (`.github/workflows/docker-publish.yml`) baut und
-pusht alle Images automatisch:
+pusht beide Images automatisch:
 
 - **Bei Push auf `main`** → Tag `edge` + `sha-<hash>`
 - **Bei Git-Tag `v0.9.0`** → Tags `0.9.0`, `0.9`, `0`, `latest`
 - **Bei Pull Request** → nur Build, kein Push
 
-**Multi-Arch:** Alle Images werden für `linux/amd64` und `linux/arm64` gebaut.
-
-### Secrets in GitHub konfigurieren
-
-Für den automatischen Push müssen in den Repository-Einstellungen zwei Secrets
-hinterlegt werden:
-
-```
-GitHub → Settings → Secrets and variables → Actions → New repository secret
-
-DOCKERHUB_USERNAME   magpeek
-DOCKERHUB_TOKEN      <Docker Hub Access Token>
-```
-
-Ein Access Token erstellt man unter:
-[hub.docker.com → Account Settings → Personal access tokens](https://hub.docker.com/settings/security)
+**Multi-Arch:** Beide Images werden für `linux/amd64` und `linux/arm64` gebaut.
 
 ### Manueller Build und Push
 
 ```bash
-# Version aus CHANGELOG lesen und alle Images bauen + pushen
+# Beide Images bauen und zu Docker Hub pushen
 bash scripts/docker-push.sh
 
 # Explizite Version
@@ -1669,6 +1621,14 @@ pnpm db:generate
 # Schema direkt anwenden (nur Entwicklung, keine Migration)
 pnpm db:push
 ```
+
+---
+
+## Deployment (Docker)
+
+Detaillierte Anleitung für den Docker-Betrieb (inkl. Synology NAS, Heimserver, Produktion):
+
+📄 **[docs/deployment-docker.md](docs/deployment-docker.md)**
 
 ---
 
