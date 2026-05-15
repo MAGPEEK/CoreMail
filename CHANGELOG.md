@@ -9,6 +9,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.4] — 2026-05-15 — Feature: Vollständige Benutzerverwaltung im ECP
+
+### Added
+
+- **ECP Benutzerverwaltung** — komplett überarbeitete Seite „Empfänger → Postfächer":
+  - Benutzeravatar mit Initiale, E-Mail + Anzeigename in einer Zeile
+  - Domain-Filter-Dropdown (zeigt Anzahl Benutzer pro Domain)
+  - Quota-Fortschrittsbalken (grün/gelb/rot je nach Auslastung)
+  - **Bearbeiten-Dialog**: Anzeigename, Rolle, Speicherkontingent ändern
+  - **Passwort-Reset-Dialog** (Schlüssel-Symbol) — direkt aus der Liste
+  - Aktivieren/Deaktivieren per Klick auf Status-Badge
+  - **Neuer Benutzer**-Dialog: Domain zuerst wählen, dann nur Localpart eingeben (E-Mail wird automatisch zusammengesetzt)
+  - Deutsche Rollenbezeichnungen (Benutzer, Helpdesk, Administrator etc.)
+  - Speicherkontingent-Auswahl: 1 GB / 2 GB / 5 GB / 10 GB / 25 GB / 50 GB / Unbegrenzt
+
+---
+
 ## [1.2.3] — 2026-05-15 — Feature: Serverkonfiguration im ECP (Outlook Autodiscover)
 
 ### Added
