@@ -43,17 +43,17 @@ const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 // ── Interner HTTP-Proxy (kein nginx nötig) ───────────────────────────────────
 // Leitet Anfragen an interne Services weiter (alles im gleichen Container).
 function internalProxy(targetBase: string): express.RequestHandler {
-  // http-proxy-middleware kümmert sich korrekt um:
-  // - Body-Streaming (auch nach express.json())
-  // - Hop-by-hop Header
-  // - Content-Length Neuberechnung
-  // - Fehlerbehandlung
   const proxy = createProxyMiddleware({
     target: targetBase,
     changeOrigin: true,
-    // Pfad NICHT rewriten — /auth/login soll als /auth/login ankommen
-    // (auth-service hat app.use('/auth', authRouter))
     on: {
+      // Express strippt den Mount-Prefix aus req.url (z.B. /auth/login → /login).
+      // proxyReq.path mit req.originalUrl überschreiben damit der volle Pfad
+      // beim Ziel-Service ankommt (/auth/login statt /login).
+      proxyReq: (proxyReq, req) => {
+        const originalUrl = (req as express.Request).originalUrl;
+        proxyReq.path = originalUrl;
+      },
       error: (err, _req, res) => {
         log.warn({ err, target: targetBase }, 'Proxy error');
         if (!('headersSent' in res && res.headersSent)) {

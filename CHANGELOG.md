@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.9] — 2026-05-15 — Bugfix: Login "Invalid credentials" durch falschen Proxy-Pfad
+
+### Fixed
+
+- **Proxy `proxyReq`-Event** — `req.originalUrl` in `proxyReq.path` schreiben; `http-proxy-middleware` strippt wie Express den Mount-Prefix (`/auth/login` → `/login`), auth-service empfing falschen Pfad → 401 statt Login
+
+---
+
 ## [1.1.8] — 2026-05-15 — Bugfix: NetworkError — Proxy vor express.json() registrieren
 
 ### Fixed
