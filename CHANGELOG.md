@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.2] — 2026-05-15 — Bugfix: BigInt-Serialisierungsfehler crasht api-gateway nach Login
+
+### Fixed
+
+- **api-gateway Crash nach Login** — Nach erfolgreichem Login rief das Frontend `/api/v1/user/profile` ab. Die Felder `quotaBytes` und `usedBytes` (Prisma `BigInt`) konnten von `JSON.stringify` nicht serialisiert werden → Node.js-Fehler + api-gateway-Neustart → Browser sah NetworkError. Globaler `BigInt.prototype.toJSON`-Patch in server.ts konvertiert BigInt → Number für alle Routen
+
+---
+
 ## [1.2.1] — 2026-05-15 — Bugfix: "Invalid request" — express.json() vor Auth-Route
 
 ### Fixed

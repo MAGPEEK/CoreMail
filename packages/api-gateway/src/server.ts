@@ -41,6 +41,13 @@ const log = createLogger('api-gateway');
 const app = express();
 const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 
+// ── BigInt-Serialisierung (Prisma gibt BigInt für Quota-Felder zurück) ────────
+// JSON.stringify kann BigInt nicht nativ serialisieren → globaler Patch.
+// Quota-Werte (max ~1TB) liegen sicher im Number-Bereich (< 2^53).
+(BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function (this: bigint) {
+  return Number(this);
+};
+
 // ── Interner HTTP-Proxy (kein nginx nötig) ───────────────────────────────────
 // Leitet Anfragen an interne Services weiter (alles im gleichen Container).
 function internalProxy(targetBase: string): express.RequestHandler {
