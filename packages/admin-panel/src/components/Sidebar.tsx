@@ -12,7 +12,7 @@ const NAV = [
   { path: '/queues', label: 'Warteschlangen', icon: ListOrdered },
   { path: '/logs', label: 'Protokolle', icon: ScrollText },
   { path: '/protection', label: 'Schutz', icon: Shield },
-  { path: '/servers', label: 'Server & Health', icon: Server },
+  { path: '/services', label: 'Services', icon: Server },
   { path: '/reports', label: 'Berichte', icon: BarChart3 },
   { path: '/settings', label: 'Einstellungen', icon: Settings2 },
 ];

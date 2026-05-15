@@ -9,6 +9,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.0] — 2026-05-15 — Feature: Services-Verwaltung (Listener-Konfiguration)
+
+### Added
+
+- **Neue ECP-Seite „Services"** (`/ecp/#/services`) mit interner Sub-Navigation (dark sidebar):
+  - **Services Management** — Übersichtskarten (SMTP Receiving, SMTP Sending, IMAP, POP3) mit Listener-Counts und Aktivitätsbalken
+  - **SMTP Receiving** — Listener-Tabelle für Port 25, 465, 587 (mit SSL-Badge)
+  - **SMTP Sending** — Listener-Tabelle für Port 587
+  - **IMAP** — Listener-Tabelle für Port 143, 993
+  - **POP3** — Listener-Tabelle für Port 110, 995
+- **Listeners-Tabelle** exakt nach Vorbild (Screenshot): #, ADDRESS:PORT, SSL-Badge, STATUS-Toggle, Edit/Delete-Buttons
+- **ADD LISTENER** Button öffnet Modal mit IP-Adresse, Port, SSL-Toggle, Aktiv-Toggle
+- **Default-Seeding**: Beim ersten Abruf werden Standard-Listener automatisch angelegt
+- **API `GET /api/v1/admin/services/overview`** — Listener-Counts pro Service
+- **API `GET/POST /api/v1/admin/services/listeners/:service`** — Listener auflisten + hinzufügen
+- **API `PUT /api/v1/admin/services/listeners/:id`** — Listener bearbeiten
+- **API `PATCH /api/v1/admin/services/listeners/:id/toggle`** — aktivieren/deaktivieren
+- **API `DELETE /api/v1/admin/services/listeners/:id`** — Listener löschen
+- **Prisma-Modell `ServiceListener`** mit Enum `ServiceType` (SMTP_RECEIVE, SMTP_SEND, IMAP, POP3)
+- **`api.patch()`** Methode im Admin-Panel API-Client ergänzt
+- **Sidebar**: „Server & Health" durch „Services" ersetzt
+
+---
+
 ## [1.2.9] — 2026-05-15 — Feature: Globale Server-Einstellungen (ECP)
 
 ### Added
