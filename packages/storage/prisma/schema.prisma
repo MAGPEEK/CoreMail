@@ -72,6 +72,7 @@ model Domain {
   dkimPrivateKey     String
   dkimSelector       String               @default("coremail")
   active             Boolean              @default(true)
+  primary            Boolean              @default(false)
   users              User[]
   sharedMailboxes    SharedMailbox[]
   ldapConfig         LdapConfig?

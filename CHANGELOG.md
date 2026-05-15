@@ -9,6 +9,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.1] — 2026-05-15 — Feature: Manage Domains (komplette Überarbeitung)
+
+### Added
+
+- **ECP „Manage Domains"** (`/ecp/#/domains`) komplett nach Screenshot-Design:
+  - Titel-Leiste „Manage Domains"
+  - Suchfeld „Search domains" + blauer **+ ADD DOMAIN** Button
+  - Tabelle: `#`, `DOMAIN NAME`, **MAKE PRIMARY**-Button / „Primary Domain"-Label, **STATUS-Toggle**, **Bearbeiten**-Stift
+  - Pagination: Selektor „50 domains per page" (10/25/50/100), Gesamt-Anzeige, Blättern
+- **Primäre Domain** — genau eine Domain kann als primär markiert werden (Radio-Semantik)
+  - Bei MAKE PRIMARY: alle anderen Domains werden atomisch als nicht-primär gesetzt (DB-Transaction)
+  - Erste angelegte Domain wird automatisch primär
+  - Primäre Domain kann nicht gelöscht werden
+- **Status-Toggle** — Domain per Toggle aktivieren/deaktivieren (PATCH /toggle)
+- **Edit-Modal** — Name, DKIM-Selektor bearbeiten, DKIM-DNS-Eintrag einblenden + kopieren, Löschen (mit Guard)
+- **Add-Domain-Modal** — Name + DKIM-Selektor, DKIM-Schlüsselpaar wird automatisch generiert
+- **API `PATCH /api/v1/admin/domains/:id/toggle`** — active-Status umschalten
+- **API `POST /api/v1/admin/domains/:id/make-primary`** — primäre Domain setzen
+- **API `GET /api/v1/admin/domains`** — erweitert um `search`, `page`, `limit` Query-Parameter
+- **Prisma `Domain.primary`** — neues Boolean-Feld (@default false)
+
+---
+
 ## [1.3.0] — 2026-05-15 — Feature: Services-Verwaltung (Listener-Konfiguration)
 
 ### Added
