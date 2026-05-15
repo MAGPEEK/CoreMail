@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered,
-  ScrollText, Shield, Server, BarChart3, Mail, LogOut,
+  ScrollText, Shield, Server, BarChart3, Mail, LogOut, Settings2,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -14,6 +14,7 @@ const NAV = [
   { path: '/protection', label: 'Schutz', icon: Shield },
   { path: '/servers', label: 'Server & Health', icon: Server },
   { path: '/reports', label: 'Berichte', icon: BarChart3 },
+  { path: '/settings', label: 'Einstellungen', icon: Settings2 },
 ];
 
 export function Sidebar() {

@@ -9,6 +9,103 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.9] — 2026-05-15 — Feature: Globale Server-Einstellungen (ECP)
+
+### Added
+
+- **Neue ECP-Seite „Einstellungen"** (`/ecp/#/settings`) — 4 konfigurierbare Sektionen mit je eigenem Speichern-Button:
+  - **Organisation**: Servername (orgName), Beschreibung, Admin-E-Mail, Logo-URL (mit Live-Vorschau), Sprache (de/en), Zeitzone, Willkommensnachricht
+  - **Mail-Limits**: Max. Nachrichtengröße (MB), Max. Anhangsgröße (MB), Papierkorb-Aufbewahrung (Tage)
+  - **Sicherheitsrichtlinien**: Mindest-Passwortlänge (Schnellauswahl-Buttons), Max. Login-Versuche, Session-Timeout, MFA für Admins erzwingen, Selbstregistrierung erlauben
+  - **Wartungsmodus**: An/Aus-Toggle mit Live-Vorschau der Wartungsmeldung, bearbeitbarer Hinweistext
+- **Wartungsmodus-Banner** — wenn aktiv, erscheint im ECP ein orangefarbenes Warnier-Banner
+- **API `GET /api/v1/admin/settings`** — liest alle Server-Einstellungen (Singleton-Pattern)
+- **API `PUT /api/v1/admin/settings/org`** — Organisations-Einstellungen speichern (Zod-validiert)
+- **API `PUT /api/v1/admin/settings/mail`** — Mail-Limits speichern
+- **API `PUT /api/v1/admin/settings/security`** — Sicherheitsrichtlinien speichern
+- **API `PUT /api/v1/admin/settings/maintenance`** — Wartungsmodus aktivieren/deaktivieren
+- **Prisma-Schema** `ServerSettings` um 15 neue Felder erweitert (org, mail-limits, security, maintenance)
+- **Sidebar-Navigation** Eintrag „Einstellungen" mit Settings2-Icon
+
+---
+
+## [1.2.8] — 2026-05-15 — Feature: Erweitertes Admin-Dashboard
+
+### Added
+
+- **ECP-Dashboard** vollständig überarbeitet — aggregierte Übersichtsseite mit:
+  - **4 KPI-Karten** (Benutzer gesamt/aktiv/neu, Domains, E-Mails gesamt/heute, Gesamt-Speicherverbrauch)
+  - **SMTP-Queue-Status** (Wartend / Aktiv / Fehlerhaft / Verzögert) mit Ampel-Anzeige
+  - **E-Mail-Aktivitäts-Chart** (Area-Chart, letzte 7 Tage, Recharts)
+  - **Speicher-Ranking** (Top-10 Nutzer mit Fortschrittsbalken, grün/gelb/rot je Auslastung)
+  - **Domain-Übersicht** (Balkendiagramm Benutzerverteilung + Tabelle mit Online-Status)
+  - **Letzte Fehler & Warnungen** (System-Logs der letzten 30 Tage, kompakte Liste)
+  - **Admin-Aktions-Protokoll** (letzte 8 Audit-Events mit Erfolg-/Fehler-Indikator)
+  - **Info-Leiste** (Queue-Gesamteinträge, kumulierte Zustellungen, neue Benutzer, Mails heute)
+  - Auto-Refresh alle 30 Sekunden + manueller „Aktualisieren"-Button
+- **API `GET /api/v1/admin/dashboard`** — aggregiert alle Metriken in einem einzigen DB-Aufruf:
+  - Nutzerstatistiken, Domain-Liste, Nachrichtenanzahl (gesamt/Tag/Woche), Speicher-Ranking
+  - BullMQ Job-Counts (waiting/active/failed/delayed/completed)
+  - Letzte Fehler-Logs, letzte Audit-Events
+  - Mail-pro-Tag-Zeitreihe (PostgreSQL `DATE_TRUNC` Aggregation)
+
+---
+
+## [1.2.7] — 2026-05-15 — Feature: Dateianhänge beim E-Mail-Versand
+
+### Added
+
+- **Anhänge im Compose-Fenster** (OWA): Dateien über „Anhang"-Schaltfläche auswählen (mehrere Dateien gleichzeitig möglich, max. 25 MB pro Datei, max. 20 Dateien)
+- **Anhangsliste** über der Aktionsleiste: Dateiname + Größe (KB/MB) + einzeln entfernbar (×-Button)
+- **Anhang-Zähler** am „Anhang"-Button (blauer Badge mit Anzahl)
+- **Drag & Drop** für mehrere Dateien aus dem Dateiexplorer
+- **Backend**: Versand-Endpunkt `POST /api/v1/mail/send` unterstützt jetzt `multipart/form-data` mit `multer` (Speicher im Arbeitsspeicher, danach direkt in MIME-Message eingebettet)
+- **MIME-Aufbau**: Nodemailer baut die vollständige RFC 2822-Nachricht mit Anhängen auf (Inline-Kodierung als Base64/quoted-printable je MIME-Typ)
+- **BullMQ-Fix**: Mail-Versand aus der OWA legte Nachrichten bislang in eine nie verarbeitete Redis-Liste (`smtp:outbound:api`). Jetzt werden sie korrekt in die BullMQ-Queue `smtp:outbound` eingereiht, die der SMTP-Server verarbeitet.
+
+### Fixed
+
+- E-Mail-Versand aus dem OWA-Compose-Fenster war de facto nicht funktionsfähig (Nachrichten landeten in einer unverarbeiteten Redis-Liste). Jetzt korrekte BullMQ-Integration.
+
+---
+
+## [1.2.6] — 2026-05-15 — Feature: Gmail-artiger Rich-Text-Editor im Compose-Fenster
+
+### Added
+
+- **Vollständige Formatierungsleiste** im E-Mail-Verfassen-Fenster (OWA):
+  - **Rückgängig / Wiederholen** (Ctrl+Z / Ctrl+Y)
+  - **Block-Typ-Dropdown**: Normal, Überschrift 1/2/3, Codeblock
+  - **Zeichenformatierung**: Fett, Kursiv, Unterstrichen, Durchgestrichen
+  - **Schriftfarbe** mit 24-Farben-Palette (Popover mit Live-Swatch-Vorschau)
+  - **Markierungsfarbe (Highlight)** mit 12-Farben-Palette
+  - **Link einfügen / bearbeiten** (Ctrl+K)
+  - **Textausrichtung**: Linksbündig, Zentriert, Rechtsbündig, Blocksatz
+  - **Aufzählungsliste** und **Nummerierte Liste**
+  - **Einzug verringern / erhöhen** für Listen-Elemente
+  - **Blockquote** (Zitat), **Inline-Code**, **Horizontale Trennlinie**
+  - **Formatierung entfernen** (Radiergummi)
+- **BCC-Feld**: neben CC jetzt auch BCC per Klick einblendbar
+- **Breites Compose-Fenster**: von 580 px auf 660 px verbreitert für mehr Platz
+
+---
+
+## [1.2.5] — 2026-05-15 — Feature: Echtzeit-Speicherverbrauch pro Postfach im ECP
+
+### Added
+
+- **ECP Postfach-Speicherdetails** — aufklappbare Detailzeile pro Benutzer in der Postfachliste:
+  - Quota-Fortschrittsbalken mit exakter GB/MB-Anzeige (belegt / gesamt)
+  - Ordner-Tabelle: Anzeigename, Nachrichtenanzahl, Ungelesen-Zähler
+  - Benutzer-Metadaten (ID, Erstellt-Datum)
+  - „Speicher aktualisieren"-Schaltfläche zur Neu-Berechnung aller Quotas
+- **API `POST /api/v1/admin/mailboxes/:id/recalculate-quota`** — Speicherverbrauch für einen einzelnen Benutzer neu berechnen (aggregiert `rawSize` aller nicht-gelöschten Nachrichten)
+- **API `POST /api/v1/admin/mailboxes/recalculate-all-quotas`** — Speicherverbrauch für alle Benutzer neu berechnen (Admin-Wartungsfunktion)
+- **Live-Berechnung** — `GET /api/v1/admin/mailboxes` berechnet `usedBytes` jetzt on-the-fly aus den tatsächlichen Nachrichtengrößen und synchronisiert den Wert lazy in die DB
+- **Ordnerdetails** — `GET /api/v1/admin/mailboxes/:id` gibt jetzt `mailbox.folders` (Name, Anzeigename, Nachrichten- und Ungelesen-Zähler) mit zurück
+
+---
+
 ## [1.2.4] — 2026-05-15 — Feature: Vollständige Benutzerverwaltung im ECP
 
 ### Added

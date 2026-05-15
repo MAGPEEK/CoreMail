@@ -1103,8 +1103,31 @@ model ServerSettings {
   smtpHost        String   @default("mail.local")
   smtpPort        Int      @default(587)
   smtpTls         Boolean  @default(true)
-  // Organisation
+  // ── Organisation ─────────────────────────────────────────────────────────
   orgName         String   @default("CoreMail")
+  orgDescription  String   @default("")
+  adminEmail      String   @default("")
+  language        String   @default("de")
+  timezone        String   @default("Europe/Berlin")
+  welcomeMessage  String   @default("")
+  logoUrl         String   @default("")
+
+  // ── Mail-Grenzen ──────────────────────────────────────────────────────────
+  maxMessageSizeMb    Int  @default(25)
+  maxAttachmentSizeMb Int  @default(25)
+  trashRetentionDays  Int  @default(30)
+
+  // ── Sicherheitsrichtlinien ────────────────────────────────────────────────
+  minPasswordLength     Int     @default(8)
+  maxLoginAttempts      Int     @default(5)
+  sessionTimeoutMinutes Int     @default(480)
+  requireMfaForAdmins   Boolean @default(false)
+  allowSelfRegistration Boolean @default(false)
+
+  // ── Wartung ───────────────────────────────────────────────────────────────
+  maintenanceMode    Boolean @default(false)
+  maintenanceMessage String  @default("Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.")
+
   updatedAt       DateTime @updatedAt
 
   @@map("server_settings")

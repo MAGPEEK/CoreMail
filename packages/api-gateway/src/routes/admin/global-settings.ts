@@ -1,0 +1,136 @@
+/**
+ * Admin-API: Globale Servereinstellungen
+ *
+ * GET  /api/v1/admin/settings          — alle Einstellungen lesen
+ * PUT  /api/v1/admin/settings          — alle Einstellungen speichern
+ * PUT  /api/v1/admin/settings/org      — nur Organisations-Sektion
+ * PUT  /api/v1/admin/settings/mail     — nur Mail-Grenzen
+ * PUT  /api/v1/admin/settings/security — nur Sicherheitsrichtlinien
+ * PUT  /api/v1/admin/settings/maintenance — Wartungsmodus an/aus
+ */
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { z } from 'zod';
+import { prisma } from '@coremail/storage';
+import { requireAdmin } from '../../middleware/auth.js';
+import { createLogger } from '@coremail/core';
+
+const log = createLogger('admin:global-settings');
+export const adminGlobalSettingsRouter: RouterType = Router();
+adminGlobalSettingsRouter.use(requireAdmin);
+
+// ── Singleton laden / erstellen ───────────────────────────────────────────────
+async function getOrCreate() {
+  return prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton' },
+    update: {},
+  });
+}
+
+// ── Zod-Schemas pro Sektion ────────────────────────────────────────────────────
+
+const OrgSchema = z.object({
+  orgName:        z.string().min(1).max(100),
+  orgDescription: z.string().max(500).default(''),
+  adminEmail:     z.string().email().or(z.literal('')).default(''),
+  language:       z.enum(['de', 'en']).default('de'),
+  timezone:       z.string().min(1).max(60).default('Europe/Berlin'),
+  welcomeMessage: z.string().max(1000).default(''),
+  logoUrl:        z.string().url().or(z.literal('')).default(''),
+});
+
+const MailSchema = z.object({
+  maxMessageSizeMb:    z.number().int().min(1).max(500).default(25),
+  maxAttachmentSizeMb: z.number().int().min(1).max(500).default(25),
+  trashRetentionDays:  z.number().int().min(1).max(3650).default(30),
+});
+
+const SecuritySchema = z.object({
+  minPasswordLength:     z.number().int().min(4).max(64).default(8),
+  maxLoginAttempts:      z.number().int().min(1).max(100).default(5),
+  sessionTimeoutMinutes: z.number().int().min(5).max(10080).default(480),
+  requireMfaForAdmins:   z.boolean().default(false),
+  allowSelfRegistration: z.boolean().default(false),
+});
+
+const MaintenanceSchema = z.object({
+  maintenanceMode:    z.boolean(),
+  maintenanceMessage: z.string().max(500).default(
+    'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.',
+  ),
+});
+
+// ── GET /api/v1/admin/settings ─────────────────────────────────────────────────
+adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
+  try {
+    const cfg = await getOrCreate();
+    res.json(cfg);
+  } catch (err) {
+    log.error({ err }, 'Fehler beim Lesen der globalen Einstellungen');
+    res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
+  }
+});
+
+// ── PUT /api/v1/admin/settings/org ────────────────────────────────────────────
+adminGlobalSettingsRouter.put('/org', async (req: Request, res: Response) => {
+  const parsed = OrgSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const cfg = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', ...parsed.data },
+    update: parsed.data,
+  });
+  log.info({ orgName: parsed.data.orgName }, 'Organisations-Einstellungen aktualisiert');
+  res.json(cfg);
+});
+
+// ── PUT /api/v1/admin/settings/mail ───────────────────────────────────────────
+adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
+  const parsed = MailSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const cfg = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', ...parsed.data },
+    update: parsed.data,
+  });
+  log.info(parsed.data, 'Mail-Einstellungen aktualisiert');
+  res.json(cfg);
+});
+
+// ── PUT /api/v1/admin/settings/security ───────────────────────────────────────
+adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) => {
+  const parsed = SecuritySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const cfg = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', ...parsed.data },
+    update: parsed.data,
+  });
+  log.info(parsed.data, 'Sicherheitsrichtlinien aktualisiert');
+  res.json(cfg);
+});
+
+// ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────
+adminGlobalSettingsRouter.put('/maintenance', async (req: Request, res: Response) => {
+  const parsed = MaintenanceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const cfg = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', ...parsed.data },
+    update: parsed.data,
+  });
+  log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Wartungsmodus geändert');
+  res.json(cfg);
+});

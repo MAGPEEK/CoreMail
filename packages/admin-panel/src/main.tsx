@@ -13,6 +13,7 @@ import { LogsPage } from './pages/LogsPage.js';
 import { ProtectionPage } from './pages/ProtectionPage.js';
 import { ServersPage } from './pages/ServersPage.js';
 import { ReportsPage } from './pages/ReportsPage.js';
+import { SettingsPage } from './pages/SettingsPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -50,6 +51,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </AdminLayout>

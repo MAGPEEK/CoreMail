@@ -12,6 +12,8 @@ import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
+import { adminDashboardRouter } from './routes/admin/dashboard.js';
+import { adminGlobalSettingsRouter } from './routes/admin/global-settings.js';
 import { adminMailboxesRouter } from './routes/admin/mailboxes.js';
 import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
@@ -176,6 +178,8 @@ app.use('/PowerShell', powershellRouter);
 // Phase 10 — Audit middleware for all mutating admin calls (fire-and-forget)
 app.use('/api/v1/admin', auditMiddleware);
 
+app.use('/api/v1/admin/dashboard', adminDashboardRouter);
+app.use('/api/v1/admin/settings',  adminGlobalSettingsRouter);
 app.use('/api/v1/admin/mailboxes', adminMailboxesRouter);
 app.use('/api/v1/admin/domains', adminDomainsRouter);
 app.use('/api/v1/admin/queues', adminQueuesRouter);

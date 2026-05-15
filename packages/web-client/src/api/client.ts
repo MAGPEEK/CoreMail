@@ -2,10 +2,10 @@ import { useAuthStore } from '../store/auth.js';
 
 const BASE = '/api/v1';
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, skipContentType = false): Promise<T> {
   const token = useAuthStore.getState().accessToken;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(skipContentType ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init.headers as Record<string, string> ?? {}),
   };
@@ -28,11 +28,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
-  put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
-  patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  get:      <T>(path: string)                   => request<T>(path),
+  post:     <T>(path: string, body: unknown)    => request<T>(path, { method: 'POST',  body: JSON.stringify(body) }),
+  postForm: <T>(path: string, form: FormData)   => request<T>(path, { method: 'POST',  body: form }, true),
+  put:      <T>(path: string, body: unknown)    => request<T>(path, { method: 'PUT',   body: JSON.stringify(body) }),
+  patch:    <T>(path: string, body: unknown)    => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  delete:   <T>(path: string)                   => request<T>(path, { method: 'DELETE' }),
 };
 
 export async function login(email: string, password: string): Promise<{ accessToken: string; refreshToken: string }> {

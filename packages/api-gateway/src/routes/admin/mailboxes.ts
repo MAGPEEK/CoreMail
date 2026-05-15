@@ -8,26 +8,86 @@ import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 export const adminMailboxesRouter: RouterType = Router();
 adminMailboxesRouter.use(requireAdmin);
 
+// ── Hilfsfunktion: Echten Speicher aus Nachrichten berechnen ─────────────────
+// Aggregiert rawSize aller nicht-gelöschten Nachrichten eines Users.
+async function calcUsedBytes(userId: string): Promise<number> {
+  const result = await prisma.message.aggregate({
+    where: {
+      deletedAt: null,
+      folder: { mailbox: { userId } },
+    },
+    _sum: { rawSize: true },
+  });
+  return result._sum.rawSize ?? 0;
+}
+
 // GET /api/v1/admin/mailboxes
+// Gibt alle User zurück. usedBytes wird live aus den Nachrichten berechnet
+// und dabei auch im User-Datensatz aktualisiert (lazy sync).
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
-  
   const users = await prisma.user.findMany({
     select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
     orderBy: { email: 'asc' },
   });
-  res.json(users);
+
+  // Echten Speicherverbrauch parallel für alle User berechnen
+  const usageMap = await Promise.all(
+    users.map(async (u) => ({ id: u.id, usedBytes: await calcUsedBytes(u.id) }))
+  );
+
+  // usedBytes im DB aktualisieren (fire-and-forget, nicht auf Ergebnis warten)
+  void Promise.all(
+    usageMap.map(({ id, usedBytes }) =>
+      prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null)
+    )
+  );
+
+  // Antwort mit berechneten Werten
+  const usageById = Object.fromEntries(usageMap.map(({ id, usedBytes }) => [id, usedBytes]));
+  res.json(users.map((u) => ({ ...u, usedBytes: usageById[u.id] ?? 0 })));
 });
 
 // GET /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  
-  const user = await prisma.user.findUnique({
-    where: { id },
-    include: { mailbox: { include: { folders: { select: { id: true, name: true, totalCount: true, unreadCount: true } } } } },
-  });
+
+  const [user, usedBytes] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id },
+      include: { mailbox: { include: { folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } } } } },
+    }),
+    calcUsedBytes(id),
+  ]);
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
-  res.json(user);
+  // DB aktualisieren (fire-and-forget)
+  void prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null);
+  res.json({ ...user, usedBytes });
+});
+
+// POST /api/v1/admin/mailboxes/:id/recalculate-quota
+// Berechnet usedBytes aus tatsächlichen Nachrichten-Größen neu und speichert den Wert.
+adminMailboxesRouter.post('/:id/recalculate-quota', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  const usedBytes = await calcUsedBytes(id);
+  await prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } });
+  res.json({ ok: true, userId: id, email: user.email, usedBytes });
+});
+
+// POST /api/v1/admin/mailboxes/recalculate-all-quotas
+// Berechnet usedBytes für ALLE User neu (Admin-Wartungsfunktion).
+adminMailboxesRouter.post('/recalculate-all-quotas', async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({ select: { id: true, email: true } });
+  const results = await Promise.all(
+    users.map(async (u) => {
+      const usedBytes = await calcUsedBytes(u.id);
+      await prisma.user.update({ where: { id: u.id }, data: { usedBytes: BigInt(usedBytes) } });
+      return { email: u.email, usedBytes };
+    })
+  );
+  res.json({ ok: true, updated: results.length, results });
 });
 
 const CreateMailboxSchema = z.object({
