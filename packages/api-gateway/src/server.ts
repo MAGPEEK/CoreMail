@@ -65,6 +65,26 @@ function internalProxy(targetBase: string): express.RequestHandler {
   return proxy as express.RequestHandler;
 }
 
+// ── Interne Service-Proxies — VOR express.json() registrieren! ───────────────
+// express.json() konsumiert den Body-Stream. Wenn die Proxy-Routen danach kämen,
+// würde http-proxy-middleware einen leeren Body weiterleiten → NetworkError.
+// Reihenfolge: Proxy-Routen zuerst, dann Body-Parser für eigene API-Routen.
+
+const AUTH_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
+const EWS_URL  = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
+const EAS_URL  = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
+const DAV_URL  = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
+
+app.use('/auth',         internalProxy(AUTH_URL));
+app.use('/EWS',          internalProxy(EWS_URL));
+app.use('/mapi',         internalProxy(EWS_URL));
+app.use('/OAB',          internalProxy(EWS_URL));
+app.use('/Autodiscover', internalProxy(EWS_URL));
+app.use('/autodiscover', internalProxy(EWS_URL));
+app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
+app.use('/dav',          internalProxy(DAV_URL));
+
+// ── Body-Parser (nur für eigene API-Routen) ───────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use((_req, res, next) => {
   res.setHeader('X-Powered-By', 'CoreMail');
@@ -161,32 +181,7 @@ app.use('/api/v1/admin/audit-log', adminAuditLogRouter);
 app.use('/api/v1/admin/oauth', adminOAuthClientsRouter);
 app.use('/api/v1/admin/gateway', adminGatewayRouter);
 
-// ── Interne Service-Proxies (ersetzt nginx) ───────────────────────────────────
-// Alle HTTP-Dienste sind über den api-gateway auf einem einzigen Port erreichbar.
-// Kein externer Proxy nötig — perfekt für Heimserver, NAS und einfache Setups.
-
-const AUTH_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
-const EWS_URL  = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
-const EAS_URL  = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
-const DAV_URL  = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
-
-// Auth (login, logout, refresh, MFA, OIDC-Callbacks …)
-app.use('/auth', internalProxy(AUTH_URL));
-
-// Exchange Web Services + MAPI over HTTP + OAB
-app.use('/EWS',          internalProxy(EWS_URL));
-app.use('/mapi',         internalProxy(EWS_URL));
-app.use('/OAB',          internalProxy(EWS_URL));
-
-// Autodiscover v1 + v2
-app.use('/Autodiscover', internalProxy(EWS_URL));
-app.use('/autodiscover', internalProxy(EWS_URL));
-
-// ActiveSync EAS
-app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
-
-// CalDAV / CardDAV
-app.use('/dav',          internalProxy(DAV_URL));
+// (Proxy-Routen wurden vor express.json() verschoben — siehe oben)
 
 // ── Statische Frontend-Dateien (OWA + ECP) ───────────────────────────────────
 // Im monolithischen Container sind die Frontend-Bundles unter /app/www abgelegt.

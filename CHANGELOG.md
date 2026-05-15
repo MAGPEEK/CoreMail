@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.1.8] — 2026-05-15 — Bugfix: NetworkError — Proxy vor express.json() registrieren
+
+### Fixed
+
+- **Middleware-Reihenfolge** — Proxy-Routen (`/auth`, `/EWS`, `/dav`, …) werden jetzt **vor** `express.json()` registriert; `express.json()` konsumiert den Body-Stream — danach konnte `http-proxy-middleware` keinen Body mehr weiterleiten → NetworkError im Browser
+
+---
+
 ## [1.1.7] — 2026-05-14 — Bugfix: NetworkError beim Login (Proxy ersetzt)
 
 ### Fixed
