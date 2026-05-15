@@ -1157,3 +1157,45 @@ model ServiceListener {
 
   @@map("service_listeners")
 }
+
+// ── SSL/TLS Zertifikat-Verwaltung ─────────────────────────────────────────────
+
+enum CertType {
+  LETSENCRYPT  // Automatisch via ACME HTTP-01
+  CUSTOM       // Manuell hochgeladen (PEM)
+  SELF_SIGNED  // Selbstsigniert (intern generiert)
+}
+
+enum CertStatus {
+  PENDING   // Ausstellung läuft / noch nicht ausgestellt
+  ACTIVE    // Gültig
+  EXPIRING  // Läuft in ≤ 30 Tagen ab
+  EXPIRED   // Abgelaufen
+  ERROR     // Fehler beim Ausstellen / Erneuern
+  RENEWING  // Erneuerung läuft
+}
+
+model Certificate {
+  id          String     @id @default(cuid())
+  name        String                          // Anzeigename, z.B. "mail.example.com Wildcard"
+  domains     String[]                        // Primäre Domain + SANs
+  services    String[]                        // Zugewiesene Services: OWA, ECP, SMTP, IMAP, POP3, EWS, DAV
+  type        CertType   @default(LETSENCRYPT)
+  status      CertStatus @default(PENDING)
+  // PEM-Daten (verschlüsselt im Klartext für internen Einsatz)
+  certPem     String?                         // Zertifikat (öffentlich)
+  keyPem      String?                         // Privat-Schlüssel
+  chainPem    String?                         // CA-Chain
+  // Zeitstempel
+  issuedAt    DateTime?
+  expiresAt   DateTime?
+  autoRenew   Boolean    @default(true)
+  // Let's Encrypt Account Key (PEM) — pro Server gespeichert
+  acmeAccount String?                         // ACME Account Key PEM
+  acmeEmail   String?                         // E-Mail für Let's Encrypt Benachrichtigungen
+  lastError   String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("certificates")
+}

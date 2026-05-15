@@ -31,6 +31,7 @@ import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
 import { adminGatewayRouter } from './routes/admin/gateway.js';
 import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
+import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -86,6 +87,14 @@ function internalProxy(targetBase: string): express.RequestHandler {
 const EWS_URL  = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL  = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL  = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
+
+// ── ACME HTTP-01 Challenge (MUSS vor express.json() stehen, kein Auth) ──────────
+app.get('/.well-known/acme-challenge/:token', async (req, res) => {
+  const token = req.params['token'] ?? '';
+  const keyAuth = await getAcmeChallenge(token);
+  if (!keyAuth) { res.status(404).send('Not found'); return; }
+  res.type('text/plain').send(keyAuth);
+});
 
 // Nur echte Proxies vor express.json() (streamen den Body direkt weiter)
 app.use('/EWS',          internalProxy(EWS_URL));
@@ -199,6 +208,7 @@ app.use('/api/v1/admin/oauth', adminOAuthClientsRouter);
 app.use('/api/v1/admin/gateway', adminGatewayRouter);
 app.use('/api/v1/admin/servers', adminServersRouter);
 app.use('/api/v1/admin/services', adminServicesRouter);
+app.use('/api/v1/admin/certificates', adminCertificatesRouter);
 
 // (Proxy-Routen wurden vor express.json() verschoben — siehe oben)
 

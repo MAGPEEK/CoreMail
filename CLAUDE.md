@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `1.3.1`
+**Aktuelle Version**: `1.3.2`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -502,4 +502,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-15 (v1.3.1 — Feature: Manage Domains mit Primary-Domain, Toggle, Suche, Pagination)*
+*Letzte Aktualisierung: 2026-05-15 (v1.3.2 — Feature: SSL/TLS Zertifikat-Verwaltung mit Let's Encrypt ACME HTTP-01, Custom-Upload, Self-Signed)*

@@ -9,6 +9,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.2] — 2026-05-15 — Feature: SSL/TLS Zertifikat-Verwaltung
+
+### Added
+
+- **ECP „Zertifikate"** (`/ecp/#/certificates`) — vollständige SSL/TLS-Verwaltung:
+  - Zertifikatliste mit Name, Domains, Typ-Badge (Let's Encrypt / Eigenes / Self-Signed), Status-Badge (Aktiv + Resttage, Läuft ab, Abgelaufen, Ausstehend, Fehler), Services, Aktionen
+  - Aufklappbare Detailzeile: alle Domains, Ausstell-/Ablaufdatum, Auto-Renew, ACME-E-Mail, Fehlermeldung
+  - **Let's Encrypt (ACME HTTP-01)**: Domains, E-Mail, Services-Auswahl, Auto-Renew-Toggle, Staging-Toggle
+  - **Eigenes Zertifikat hochladen**: Cert-PEM, Key-PEM, Chain-PEM (optional)
+  - **Self-Signed generieren**: Domains, Gültigkeitsdauer in Tagen
+  - **Sofort-Erneuerung** (🔄) für Let's Encrypt-Zertifikate
+  - **Löschen** mit Bestätigungsdialog
+  - Auto-Refresh alle 10 Sekunden (Pending/Renewing-Status sichtbar)
+- **Backend `POST /api/v1/admin/certificates/letsencrypt`** — async ACME HTTP-01-Issuance (202-Antwort sofort, Cert wird im Hintergrund ausgestellt)
+- **Backend `POST /api/v1/admin/certificates/upload`** — Custom-PEM hochladen, expiresAt wird per `X509Certificate` geparst
+- **Backend `POST /api/v1/admin/certificates/self-signed`** — via `node-forge` vollständig generiertes Self-Signed-Zertifikat inkl. SAN
+- **Backend `POST /api/v1/admin/certificates/:id/renew`** — ACME-Erneuerung für bestehende Let's Encrypt Certs
+- **ACME Challenge-Route** `GET /.well-known/acme-challenge/:token` — Redis-basierter Token-Store (TTL 600s), registriert vor allen Body-Parsern
+- **Prisma-Modell `Certificate`** — `id`, `name`, `domains[]`, `services[]`, `type` (LETSENCRYPT/CUSTOM/SELF_SIGNED), `status` (PENDING/ACTIVE/EXPIRING/EXPIRED/ERROR/RENEWING), `certPem`, `keyPem`, `chainPem`, `issuedAt`, `expiresAt`, `autoRenew`, `acmeAccount`, `acmeEmail`, `lastError`
+- **Sidebar-Eintrag „Zertifikate"** (`ShieldCheck`-Icon) zwischen Services und Berichte
+
+### Changed
+
+- `node-forge` + `@types/node-forge` zu `@coremail/api-gateway` dependencies hinzugefügt
+- `packages/api-gateway/src/server.ts`: `adminCertificatesRouter` registriert, ACME-Challenge-Route vor Proxy-Routen
+
+---
+
 ## [1.3.1] — 2026-05-15 — Feature: Manage Domains (komplette Überarbeitung)
 
 ### Added
