@@ -27,6 +27,7 @@ import { adminRetentionRouter } from './routes/admin/retention.js';
 import { adminAuditLogRouter } from './routes/admin/audit-log.js';
 import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
 import { adminGatewayRouter } from './routes/admin/gateway.js';
+import { adminServersRouter } from './routes/admin/servers.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -191,6 +192,7 @@ app.use('/api/v1/admin/compliance/retention', adminRetentionRouter);
 app.use('/api/v1/admin/audit-log', adminAuditLogRouter);
 app.use('/api/v1/admin/oauth', adminOAuthClientsRouter);
 app.use('/api/v1/admin/gateway', adminGatewayRouter);
+app.use('/api/v1/admin/servers', adminServersRouter);
 
 // (Proxy-Routen wurden vor express.json() verschoben — siehe oben)
 

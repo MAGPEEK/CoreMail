@@ -1,17 +1,12 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
+import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v2');
 
-const EWS_URL = process.env['EWS_URL'] ?? 'https://mail.example.com/EWS/Exchange.asmx';
-const OWA_URL = process.env['OWA_URL'] ?? 'https://mail.example.com/owa/';
-const IMAP_HOST = process.env['IMAP_HOST'] ?? 'mail.example.com';
-const SMTP_HOST = process.env['SMTP_HOST'] ?? 'mail.example.com';
-const AUTODISCOVER_BASE = process.env['AUTODISCOVER_BASE'] ?? 'https://mail.example.com';
-
-// Autodiscover v2 — JSON response (Outlook 2019/365 Modern Auth)
-// GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol={EWS|AutodiscoverV1}
-export function handleAutodiscoverV2(req: Request, res: Response): void {
+// Autodiscover v2 — JSON response (Outlook 2019/2022/365)
+// GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol={EWS|AutodiscoverV1|IMAP|SMTP}
+export async function handleAutodiscoverV2(req: Request, res: Response): Promise<void> {
   const email = decodeURIComponent(req.params['email'] ?? '');
   const protocol = (req.query['Protocol'] as string | undefined)?.toLowerCase() ?? 'ews';
 
@@ -22,42 +17,49 @@ export function handleAutodiscoverV2(req: Request, res: Response): void {
     return;
   }
 
-  // Outlook first requests AutodiscoverV1 to find the v1 endpoint
+  const cfg = await getServerConfig();
+
+  // Outlook fragt zuerst AutodiscoverV1 um den v1-Endpunkt zu finden
   if (protocol === 'autodiscoverv1') {
     res.json({
       Protocol: 'AutodiscoverV1',
-      Url: `${AUTODISCOVER_BASE}/Autodiscover/Autodiscover.xml`,
+      Url: `${cfg.autodiscoverBase}/Autodiscover/Autodiscover.xml`,
     });
     return;
   }
 
-  // EWS protocol
   if (protocol === 'ews') {
     res.json({
       Protocol: 'EWS',
-      Url: EWS_URL,
+      Url: cfg.ewsUrl,
     });
     return;
   }
 
-  // IMAP
   if (protocol === 'imap') {
     res.json({
       Protocol: 'IMAP',
-      Hostname: IMAP_HOST,
-      Port: 993,
-      SSL: 'on',
+      Hostname: cfg.imapHost,
+      Port: cfg.imapPort,
+      SSL: cfg.imapSsl ? 'on' : 'off',
     });
     return;
   }
 
-  // SMTP
   if (protocol === 'smtp') {
     res.json({
       Protocol: 'SMTP',
-      Hostname: SMTP_HOST,
-      Port: 587,
-      SSL: 'STARTTLS',
+      Hostname: cfg.smtpHost,
+      Port: cfg.smtpPort,
+      SSL: cfg.smtpTls ? 'STARTTLS' : 'None',
+    });
+    return;
+  }
+
+  if (protocol === 'activesync') {
+    res.json({
+      Protocol: 'ActiveSync',
+      Url: cfg.easUrl,
     });
     return;
   }

@@ -9,6 +9,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.3] — 2026-05-15 — Feature: Serverkonfiguration im ECP (Outlook Autodiscover)
+
+### Added
+
+- **ECP → Server → Virtuelle Verzeichnisse** — neue Einstellungsseite im Admin-Panel: öffentlichen Hostnamen, HTTP-Port, HTTPS-Schalter, EWS-URL, OWA-URL, EAS-URL, Autodiscover-Basis, IMAP/POP3/SMTP-Host und -Port konfigurierbar
+- **Prisma-Modell `ServerSettings`** — Singleton-Tabelle `server_settings` speichert alle Server-URLs persistent in der Datenbank
+- **Admin-API** `GET/PUT /api/v1/admin/servers/settings` — Einstellungen lesen und speichern; `POST /api/v1/admin/servers/settings/derive` — URLs automatisch aus Hostname + Port ableiten
+- **Autodiscover liest URLs aus DB** — `packages/autodiscover/src/settings.ts` mit 60-Sekunden-In-Memory-Cache; fällt auf Umgebungsvariablen zurück wenn noch kein DB-Eintrag existiert
+- **Outlook 2019/2022/365 Einrichtungsanleitung** direkt im ECP angezeigt
+
+---
+
 ## [1.2.2] — 2026-05-15 — Bugfix: BigInt-Serialisierungsfehler crasht api-gateway nach Login
 
 ### Fixed

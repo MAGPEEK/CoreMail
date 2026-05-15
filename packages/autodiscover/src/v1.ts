@@ -1,16 +1,11 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
+import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
 
-const EWS_URL = process.env['EWS_URL'] ?? 'https://mail.example.com/EWS/Exchange.asmx';
-const OWA_URL = process.env['OWA_URL'] ?? 'https://mail.example.com/owa/';
-const IMAP_HOST = process.env['IMAP_HOST'] ?? 'mail.example.com';
-const SMTP_HOST = process.env['SMTP_HOST'] ?? 'mail.example.com';
-const EAS_URL = process.env['EAS_URL'] ?? 'https://mail.example.com/Microsoft-Server-ActiveSync';
-
-function buildAutodiscoverResponse(email: string, displayName: string): string {
+function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awaited<ReturnType<typeof getServerConfig>>): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
   <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
@@ -22,28 +17,28 @@ function buildAutodiscoverResponse(email: string, displayName: string): string {
       <Action>settings</Action>
       <Protocol>
         <Type>EXCH</Type>
-        <EwsUrl>${escapeXml(EWS_URL)}</EwsUrl>
-        <EwsPartnerUrl>${escapeXml(EWS_URL)}</EwsPartnerUrl>
-        <OWAUrl>${escapeXml(OWA_URL)}</OWAUrl>
+        <EwsUrl>${escapeXml(cfg.ewsUrl)}</EwsUrl>
+        <EwsPartnerUrl>${escapeXml(cfg.ewsUrl)}</EwsPartnerUrl>
+        <OWAUrl>${escapeXml(cfg.owaUrl)}</OWAUrl>
       </Protocol>
       <Protocol>
         <Type>IMAP</Type>
-        <Server>${escapeXml(IMAP_HOST)}</Server>
-        <Port>993</Port>
+        <Server>${escapeXml(cfg.imapHost)}</Server>
+        <Port>${cfg.imapPort}</Port>
         <LoginName>${escapeXml(email)}</LoginName>
         <DomainRequired>off</DomainRequired>
         <SPA>off</SPA>
-        <SSL>on</SSL>
+        <SSL>${cfg.imapSsl ? 'on' : 'off'}</SSL>
         <AuthRequired>on</AuthRequired>
       </Protocol>
       <Protocol>
         <Type>SMTP</Type>
-        <Server>${escapeXml(SMTP_HOST)}</Server>
-        <Port>587</Port>
+        <Server>${escapeXml(cfg.smtpHost)}</Server>
+        <Port>${cfg.smtpPort}</Port>
         <LoginName>${escapeXml(email)}</LoginName>
         <DomainRequired>off</DomainRequired>
         <SPA>off</SPA>
-        <Encryption>TLS</Encryption>
+        <Encryption>${cfg.smtpTls ? 'TLS' : 'None'}</Encryption>
         <AuthRequired>on</AuthRequired>
         <UsePOPAuth>off</UsePOPAuth>
         <SMTPLast>off</SMTPLast>
@@ -54,10 +49,10 @@ function buildAutodiscoverResponse(email: string, displayName: string): string {
       <Action>settings</Action>
       <Protocol>
         <Type>ActiveSync</Type>
-        <Server>${escapeXml(EAS_URL)}</Server>
+        <Server>${escapeXml(cfg.easUrl)}</Server>
         <LoginName>${escapeXml(email)}</LoginName>
         <DomainRequired>off</DomainRequired>
-        <SSL>on</SSL>
+        <SSL>${cfg.imapSsl ? 'on' : 'off'}</SSL>
       </Protocol>
     </Account>
   </Response>
@@ -85,7 +80,6 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     email = extractEmailFromXml(body);
   } else {
-    // GET — try query param
     email = (req.query['emailaddress'] as string | undefined) ?? null;
   }
 
@@ -97,14 +91,16 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   log.info({ email }, 'Autodiscover v1 request');
 
-  
-  const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
-    select: { displayName: true, email: true },
-  });
+  const [user, cfg] = await Promise.all([
+    prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      select: { displayName: true, email: true },
+    }),
+    getServerConfig(),
+  ]);
 
   const displayName = user?.displayName ?? email;
 
   res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(buildAutodiscoverResponse(email, displayName));
+  res.send(buildAutodiscoverResponse(email, displayName, cfg));
 }
