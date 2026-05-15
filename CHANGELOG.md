@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.1] — 2026-05-15 — Bugfix: "Invalid request" — express.json() vor Auth-Route
+
+### Fixed
+
+- **"Invalid request" beim Login** — `/auth`-Route wurde vor `express.json()` registriert, sodass `req.body` immer `undefined` war und die Zod-Validierung scheiterte. Auth-Route wird jetzt korrekt **nach** dem Body-Parser gemountet (nur echte Proxy-Routen bleiben vor `express.json()`)
+
+---
+
 ## [1.2.0] — 2026-05-15 — Fix: Auth direkt im api-gateway (kein Proxy)
 
 ### Fixed

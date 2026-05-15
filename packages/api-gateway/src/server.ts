@@ -69,16 +69,14 @@ function internalProxy(targetBase: string): express.RequestHandler {
 // ── Interne Service-Proxies — VOR express.json() registrieren! ───────────────
 // express.json() konsumiert den Body-Stream. Wenn die Proxy-Routen danach kämen,
 // würde http-proxy-middleware einen leeren Body weiterleiten → NetworkError.
-// Reihenfolge: Proxy-Routen zuerst, dann Body-Parser für eigene API-Routen.
+// Reihenfolge: NUR echte Proxy-Routen vor Body-Parser. Auth ist ein direkter
+// Express-Handler und braucht req.body → muss NACH express.json() kommen!
 
-const AUTH_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
 const EWS_URL  = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL  = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL  = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
 
-// Auth direkt im api-gateway (kein Proxy — eliminiert alle Proxy-Probleme)
-app.use('/auth', authRouter);
-
+// Nur echte Proxies vor express.json() (streamen den Body direkt weiter)
 app.use('/EWS',          internalProxy(EWS_URL));
 app.use('/mapi',         internalProxy(EWS_URL));
 app.use('/OAB',          internalProxy(EWS_URL));
@@ -87,8 +85,11 @@ app.use('/autodiscover', internalProxy(EWS_URL));
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
 app.use('/dav',          internalProxy(DAV_URL));
 
-// ── Body-Parser (nur für eigene API-Routen) ───────────────────────────────────
+// ── Body-Parser (für alle direkten API-Routen inkl. /auth) ───────────────────
 app.use(express.json({ limit: '10mb' }));
+
+// Auth direkt im api-gateway (kein Proxy — braucht req.body → nach express.json!)
+app.use('/auth', authRouter);
 app.use((_req, res, next) => {
   res.setHeader('X-Powered-By', 'CoreMail');
   next();
