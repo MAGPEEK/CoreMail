@@ -30,6 +30,7 @@ import { adminGatewayRouter } from './routes/admin/gateway.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
+import { authRouter } from './routes/auth.js';
 import { publicFoldersRouter } from './routes/public-folders.js';
 import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
@@ -75,7 +76,9 @@ const EWS_URL  = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL  = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL  = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
 
-app.use('/auth',         internalProxy(AUTH_URL));
+// Auth direkt im api-gateway (kein Proxy — eliminiert alle Proxy-Probleme)
+app.use('/auth', authRouter);
+
 app.use('/EWS',          internalProxy(EWS_URL));
 app.use('/mapi',         internalProxy(EWS_URL));
 app.use('/OAB',          internalProxy(EWS_URL));

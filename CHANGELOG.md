@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.2.0] — 2026-05-15 — Fix: Auth direkt im api-gateway (kein Proxy)
+
+### Fixed
+
+- **Login NetworkError** — Auth-Routen (`/auth/login`, `/auth/refresh`, `/auth/logout`) werden jetzt **direkt im api-gateway** verarbeitet statt über einen HTTP-Proxy an den auth-service weitergeleitet. Eliminiert alle Proxy-bedingten Verbindungsfehler (NetworkError, Body-Streaming, Path-Strip-Probleme)
+
+---
+
 ## [1.1.9] — 2026-05-15 — Bugfix: Login "Invalid credentials" durch falschen Proxy-Pfad
 
 ### Fixed
