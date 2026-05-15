@@ -1,0 +1,559 @@
+import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Building2, Mail, Shield, Wrench,
+  Save, AlertTriangle, Info,
+  Eye, RefreshCw, Globe,
+  ToggleLeft, ToggleRight,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+import { api } from '../api/client.js';
+
+// ── Typen ─────────────────────────────────────────────────────────────────────
+interface GlobalSettings {
+  id: string;
+  // Organisation
+  orgName:        string;
+  orgDescription: string;
+  adminEmail:     string;
+  language:       string;
+  timezone:       string;
+  welcomeMessage: string;
+  logoUrl:        string;
+  // Mail
+  maxMessageSizeMb:    number;
+  maxAttachmentSizeMb: number;
+  trashRetentionDays:  number;
+  // Sicherheit
+  minPasswordLength:     number;
+  maxLoginAttempts:      number;
+  sessionTimeoutMinutes: number;
+  requireMfaForAdmins:   boolean;
+  allowSelfRegistration: boolean;
+  // Wartung
+  maintenanceMode:    boolean;
+  maintenanceMessage: string;
+  // Server-URLs (read-only in dieser Seite)
+  publicHostname: string;
+  updatedAt: string;
+}
+
+// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleString('de-DE', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+// ── Feldkomponenten ───────────────────────────────────────────────────────────
+function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[220px_1fr] gap-4 py-4 border-b border-gray-100 last:border-0">
+      <div>
+        <label className="text-sm font-medium text-gray-700">{label}</label>
+        {hint && <p className="text-xs text-gray-400 mt-0.5 leading-snug">{hint}</p>}
+      </div>
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function TextInput({
+  value, onChange, placeholder = '', type = 'text', maxLength,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  maxLength?: number;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      maxLength={maxLength}
+      className="input"
+    />
+  );
+}
+
+function NumberInput({
+  value, onChange, min, max, unit,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+  unit?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(parseInt(e.target.value, 10) || min)}
+        min={min}
+        max={max}
+        className="input w-28"
+      />
+      {unit && <span className="text-sm text-gray-500">{unit}</span>}
+    </div>
+  );
+}
+
+function Textarea({
+  value, onChange, placeholder = '', rows = 3,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows}
+      className="input resize-none"
+    />
+  );
+}
+
+function Toggle({ value, onChange, label }: { value: boolean; onChange: (v: boolean) => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={`flex items-center gap-2 text-sm transition-colors ${value ? 'text-accent' : 'text-gray-500'}`}
+    >
+      {value
+        ? <ToggleRight size={26} className="text-accent" />
+        : <ToggleLeft  size={26} className="text-gray-400" />}
+      {label && <span>{label}</span>}
+    </button>
+  );
+}
+
+function Select({
+  value, onChange, options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} className="input w-auto">
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+// ── Sektion-Wrapper ───────────────────────────────────────────────────────────
+function Section({
+  icon: Icon, title, description, children, saving, onSave, dirty,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  saving?: boolean;
+  onSave?: () => void;
+  dirty?: boolean;
+}) {
+  return (
+    <div className="card">
+      <div className="flex items-start justify-between mb-1">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
+            <Icon size={16} className="text-accent" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
+            <p className="text-xs text-gray-400 mt-0.5">{description}</p>
+          </div>
+        </div>
+        {onSave && (
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || !dirty}
+            className={`btn-primary text-xs disabled:opacity-40 ml-4 shrink-0 ${dirty ? '' : 'opacity-40'}`}
+          >
+            {saving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
+            {saving ? 'Speichern…' : 'Speichern'}
+          </button>
+        )}
+      </div>
+      <div className="mt-4">{children}</div>
+    </div>
+  );
+}
+
+// ── Hauptseite ────────────────────────────────────────────────────────────────
+export function SettingsPage() {
+  const qc = useQueryClient();
+
+  const { data: cfg, isLoading } = useQuery({
+    queryKey: ['admin-settings'],
+    queryFn:  () => api.get<GlobalSettings>('/admin/settings'),
+  });
+
+  // ── Lokale State-Kopien pro Sektion ───────────────────────────────────────
+  const [org, setOrg] = useState({
+    orgName: '', orgDescription: '', adminEmail: '',
+    language: 'de', timezone: 'Europe/Berlin',
+    welcomeMessage: '', logoUrl: '',
+  });
+  const [mail, setMail] = useState({
+    maxMessageSizeMb: 25, maxAttachmentSizeMb: 25, trashRetentionDays: 30,
+  });
+  const [sec, setSec] = useState({
+    minPasswordLength: 8, maxLoginAttempts: 5,
+    sessionTimeoutMinutes: 480,
+    requireMfaForAdmins: false, allowSelfRegistration: false,
+  });
+  const [maint, setMaint] = useState({
+    maintenanceMode: false,
+    maintenanceMessage: 'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.',
+  });
+
+  // Dirty-Tracking (ob Änderungen noch nicht gespeichert sind)
+  const [orgDirty,   setOrgDirty]   = useState(false);
+  const [mailDirty,  setMailDirty]  = useState(false);
+  const [secDirty,   setSecDirty]   = useState(false);
+  const [maintDirty, setMaintDirty] = useState(false);
+
+  // Initialisierung wenn Daten geladen
+  useEffect(() => {
+    if (!cfg) return;
+    setOrg({
+      orgName:        cfg.orgName,
+      orgDescription: cfg.orgDescription,
+      adminEmail:     cfg.adminEmail,
+      language:       cfg.language,
+      timezone:       cfg.timezone,
+      welcomeMessage: cfg.welcomeMessage,
+      logoUrl:        cfg.logoUrl,
+    });
+    setMail({
+      maxMessageSizeMb:    cfg.maxMessageSizeMb,
+      maxAttachmentSizeMb: cfg.maxAttachmentSizeMb,
+      trashRetentionDays:  cfg.trashRetentionDays,
+    });
+    setSec({
+      minPasswordLength:     cfg.minPasswordLength,
+      maxLoginAttempts:      cfg.maxLoginAttempts,
+      sessionTimeoutMinutes: cfg.sessionTimeoutMinutes,
+      requireMfaForAdmins:   cfg.requireMfaForAdmins,
+      allowSelfRegistration: cfg.allowSelfRegistration,
+    });
+    setMaint({
+      maintenanceMode:    cfg.maintenanceMode,
+      maintenanceMessage: cfg.maintenanceMessage,
+    });
+    setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
+  }, [cfg]);
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['admin-settings'] });
+
+  const orgMut = useMutation({
+    mutationFn: () => api.put<GlobalSettings>('/admin/settings/org', org),
+    onSuccess: () => { toast.success('Organisations-Einstellungen gespeichert'); setOrgDirty(false); void invalidate(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const mailMut = useMutation({
+    mutationFn: () => api.put<GlobalSettings>('/admin/settings/mail', mail),
+    onSuccess: () => { toast.success('Mail-Einstellungen gespeichert'); setMailDirty(false); void invalidate(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const secMut = useMutation({
+    mutationFn: () => api.put<GlobalSettings>('/admin/settings/security', sec),
+    onSuccess: () => { toast.success('Sicherheitsrichtlinien gespeichert'); setSecDirty(false); void invalidate(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const maintMut = useMutation({
+    mutationFn: () => api.put<GlobalSettings>('/admin/settings/maintenance', maint),
+    onSuccess: () => { toast.success('Wartungsmodus aktualisiert'); setMaintDirty(false); void invalidate(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Helfer: Feld updaten + dirty markieren
+  function updOrg<K extends keyof typeof org>(k: K, v: typeof org[K]) {
+    setOrg((p) => ({ ...p, [k]: v })); setOrgDirty(true);
+  }
+  function updMail<K extends keyof typeof mail>(k: K, v: typeof mail[K]) {
+    setMail((p) => ({ ...p, [k]: v })); setMailDirty(true);
+  }
+  function updSec<K extends keyof typeof sec>(k: K, v: typeof sec[K]) {
+    setSec((p) => ({ ...p, [k]: v })); setSecDirty(true);
+  }
+  function updMaint<K extends keyof typeof maint>(k: K, v: typeof maint[K]) {
+    setMaint((p) => ({ ...p, [k]: v })); setMaintDirty(true);
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="flex items-center gap-2 text-gray-400">
+          <RefreshCw size={16} className="animate-spin" />
+          <span className="text-sm">Einstellungen werden geladen…</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-5 max-w-[860px]">
+
+      {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Globale Einstellungen</h1>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Zuletzt gespeichert: {cfg ? fmtDate(cfg.updatedAt) : '—'}
+            {cfg?.publicHostname && (
+              <span className="ml-3 inline-flex items-center gap-1">
+                <Globe size={11} />
+                {cfg.publicHostname}
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* ── Wartungsmodus-Banner (wenn aktiv) ─────────────────────────────── */}
+      {maint.maintenanceMode && (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-amber-800">
+          <AlertTriangle size={16} className="shrink-0 text-amber-500" />
+          <div>
+            <p className="text-sm font-semibold">Wartungsmodus ist aktiv</p>
+            <p className="text-xs mt-0.5">Normale Benutzer sehen die Wartungsmeldung und können sich nicht anmelden.</p>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          SEKTION 1: ORGANISATION
+         ══════════════════════════════════════════════════════════════════════ */}
+      <Section
+        icon={Building2}
+        title="Organisation"
+        description="Name, Beschreibung und Erscheinungsbild des CoreMail-Servers"
+        saving={orgMut.isPending}
+        dirty={orgDirty}
+        onSave={() => orgMut.mutate()}
+      >
+        <FieldGroup label="Servername *" hint="Wird im Browser-Tab, in E-Mail-Headern und im Login-Formular angezeigt">
+          <TextInput value={org.orgName} onChange={(v) => updOrg('orgName', v)} placeholder="z.B. Musterfirma Mail" maxLength={100} />
+        </FieldGroup>
+
+        <FieldGroup label="Beschreibung" hint="Kurze Beschreibung (optional, für Dokumentation)">
+          <Textarea value={org.orgDescription} onChange={(v) => updOrg('orgDescription', v)} placeholder="Interne Beschreibung des Mail-Servers…" rows={2} />
+        </FieldGroup>
+
+        <FieldGroup label="Administrator-E-Mail" hint="Systembenachrichtigungen werden an diese Adresse gesendet">
+          <TextInput value={org.adminEmail} onChange={(v) => updOrg('adminEmail', v)} type="email" placeholder="admin@example.com" />
+        </FieldGroup>
+
+        <FieldGroup label="Logo-URL" hint="Öffentliche URL zu einem PNG/SVG-Logo (wird im ECP angezeigt)">
+          <TextInput value={org.logoUrl} onChange={(v) => updOrg('logoUrl', v)} placeholder="https://example.com/logo.png" />
+          {org.logoUrl && (
+            <img src={org.logoUrl} alt="Logo-Vorschau" className="h-10 mt-1 object-contain border border-gray-100 rounded p-1" onError={(e) => { (e.target as HTMLImageElement).hidden = true; }} />
+          )}
+        </FieldGroup>
+
+        <FieldGroup label="Sprache" hint="Standard-Sprache der Admin-Oberfläche">
+          <Select
+            value={org.language}
+            onChange={(v) => updOrg('language', v)}
+            options={[{ value: 'de', label: '🇩🇪 Deutsch' }, { value: 'en', label: '🇬🇧 English' }]}
+          />
+        </FieldGroup>
+
+        <FieldGroup label="Zeitzone" hint="Server-Zeitzone für Datum- und Uhrzeitanzeigen">
+          <Select
+            value={org.timezone}
+            onChange={(v) => updOrg('timezone', v)}
+            options={[
+              { value: 'Europe/Berlin',    label: 'Europe/Berlin (CET/CEST)' },
+              { value: 'Europe/Vienna',    label: 'Europe/Vienna (CET/CEST)' },
+              { value: 'Europe/Zurich',    label: 'Europe/Zurich (CET/CEST)' },
+              { value: 'Europe/London',    label: 'Europe/London (GMT/BST)' },
+              { value: 'America/New_York', label: 'America/New_York (EST/EDT)' },
+              { value: 'UTC',              label: 'UTC' },
+            ]}
+          />
+        </FieldGroup>
+
+        <FieldGroup label="Willkommensnachricht" hint="Wird auf der Login-Seite unterhalb des Formulars angezeigt (optional)">
+          <Textarea value={org.welcomeMessage} onChange={(v) => updOrg('welcomeMessage', v)} placeholder="Willkommen beim CoreMail-Server Ihrer Organisation." rows={2} />
+        </FieldGroup>
+      </Section>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          SEKTION 2: MAIL-EINSTELLUNGEN
+         ══════════════════════════════════════════════════════════════════════ */}
+      <Section
+        icon={Mail}
+        title="Mail-Einstellungen"
+        description="Größenbeschränkungen und Aufbewahrungsfristen"
+        saving={mailMut.isPending}
+        dirty={mailDirty}
+        onSave={() => mailMut.mutate()}
+      >
+        <FieldGroup label="Max. Nachrichtengröße" hint="Maximale Gesamtgröße einer eingehenden oder ausgehenden E-Mail (inkl. Anhänge)">
+          <NumberInput value={mail.maxMessageSizeMb} onChange={(v) => updMail('maxMessageSizeMb', v)} min={1} max={500} unit="MB" />
+        </FieldGroup>
+
+        <FieldGroup label="Max. Anhangsgröße" hint="Maximale Größe einer einzelnen angehängten Datei beim Versand aus dem Webmail">
+          <NumberInput value={mail.maxAttachmentSizeMb} onChange={(v) => updMail('maxAttachmentSizeMb', v)} min={1} max={500} unit="MB" />
+        </FieldGroup>
+
+        <FieldGroup label="Papierkorb-Aufbewahrung" hint="Gelöschte E-Mails werden nach dieser Anzahl Tage endgültig aus dem Papierkorb entfernt">
+          <NumberInput value={mail.trashRetentionDays} onChange={(v) => updMail('trashRetentionDays', v)} min={1} max={3650} unit="Tage" />
+          <p className="text-xs text-gray-400">
+            {mail.trashRetentionDays === 1
+              ? '1 Tag — sehr kurz, Vorsicht!'
+              : mail.trashRetentionDays <= 7
+              ? `${mail.trashRetentionDays} Tage`
+              : mail.trashRetentionDays <= 30
+              ? `${mail.trashRetentionDays} Tage (${Math.round(mail.trashRetentionDays / 7)} Wochen)`
+              : `${mail.trashRetentionDays} Tage (ca. ${Math.round(mail.trashRetentionDays / 30)} Monate)`}
+          </p>
+        </FieldGroup>
+      </Section>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          SEKTION 3: SICHERHEITSRICHTLINIEN
+         ══════════════════════════════════════════════════════════════════════ */}
+      <Section
+        icon={Shield}
+        title="Sicherheitsrichtlinien"
+        description="Passwort-Anforderungen, Konto-Sperrung und Session-Einstellungen"
+        saving={secMut.isPending}
+        dirty={secDirty}
+        onSave={() => secMut.mutate()}
+      >
+        <FieldGroup label="Mindest-Passwortlänge" hint="Neue Passwörter müssen mindestens diese Anzahl Zeichen haben">
+          <NumberInput value={sec.minPasswordLength} onChange={(v) => updSec('minPasswordLength', v)} min={4} max={64} unit="Zeichen" />
+          <div className="flex gap-1 mt-1">
+            {[4, 6, 8, 10, 12, 16].map((n) => (
+              <button key={n} type="button" onClick={() => updSec('minPasswordLength', n)}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.minPasswordLength === n ? 'border-accent bg-accent/10 text-accent' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </FieldGroup>
+
+        <FieldGroup label="Konto-Sperrung nach" hint="Das Benutzerkonto wird nach dieser Anzahl fehlgeschlagener Anmeldeversuche gesperrt">
+          <NumberInput value={sec.maxLoginAttempts} onChange={(v) => updSec('maxLoginAttempts', v)} min={1} max={100} unit="Fehlversuchen" />
+        </FieldGroup>
+
+        <FieldGroup label="Session-Timeout" hint="Inaktive Sitzungen werden nach dieser Zeit automatisch abgemeldet">
+          <NumberInput value={sec.sessionTimeoutMinutes} onChange={(v) => updSec('sessionTimeoutMinutes', v)} min={5} max={10080} unit="Minuten" />
+          <p className="text-xs text-gray-400 mt-1">
+            {sec.sessionTimeoutMinutes < 60
+              ? `${sec.sessionTimeoutMinutes} Minuten`
+              : sec.sessionTimeoutMinutes < 1440
+              ? `${Math.round(sec.sessionTimeoutMinutes / 60 * 10) / 10} Stunden`
+              : `${Math.round(sec.sessionTimeoutMinutes / 1440 * 10) / 10} Tage`}
+          </p>
+        </FieldGroup>
+
+        <FieldGroup label="MFA für Administratoren" hint="Administratoren müssen beim Login zwingend einen zweiten Faktor verwenden">
+          <Toggle
+            value={sec.requireMfaForAdmins}
+            onChange={(v) => updSec('requireMfaForAdmins', v)}
+            label={sec.requireMfaForAdmins ? 'Aktiviert — Admins müssen MFA eingerichtet haben' : 'Deaktiviert'}
+          />
+          {sec.requireMfaForAdmins && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+              <AlertTriangle size={12} />
+              Stellen Sie sicher, dass alle Admin-Konten MFA eingerichtet haben, bevor Sie speichern.
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup label="Selbstregistrierung" hint="Erlaubt es neuen Benutzern, sich ohne Admin-Einladung selbst zu registrieren">
+          <Toggle
+            value={sec.allowSelfRegistration}
+            onChange={(v) => updSec('allowSelfRegistration', v)}
+            label={sec.allowSelfRegistration ? 'Aktiviert — jeder kann sich registrieren' : 'Deaktiviert (empfohlen)'}
+          />
+          {sec.allowSelfRegistration && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+              <Info size={12} />
+              Neue Benutzer erhalten automatisch die Rolle „Benutzer" und eine leere Mailbox.
+            </div>
+          )}
+        </FieldGroup>
+      </Section>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          SEKTION 4: WARTUNGSMODUS
+         ══════════════════════════════════════════════════════════════════════ */}
+      <Section
+        icon={Wrench}
+        title="Wartungsmodus"
+        description="Temporär den Zugang für normale Benutzer sperren (Admins können sich weiterhin anmelden)"
+        saving={maintMut.isPending}
+        dirty={maintDirty}
+        onSave={() => maintMut.mutate()}
+      >
+        <FieldGroup label="Wartungsmodus" hint="Wenn aktiviert, sehen nicht-administrative Benutzer nur die Wartungsmeldung">
+          <Toggle
+            value={maint.maintenanceMode}
+            onChange={(v) => { updMaint('maintenanceMode', v); }}
+            label={maint.maintenanceMode ? 'Aktiv — Benutzer können sich nicht anmelden' : 'Inaktiv — Normalbetrieb'}
+          />
+          {maint.maintenanceMode && (
+            <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-100 rounded text-xs text-red-700">
+              <AlertTriangle size={12} className="shrink-0" />
+              <strong>Achtung:</strong>&nbsp;Aktive Benutzersitzungen bleiben bestehen; neue Anmeldungen werden blockiert.
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup label="Wartungsmeldung" hint="Diese Nachricht wird Benutzern angezeigt, die sich während der Wartung anzumelden versuchen">
+          <Textarea
+            value={maint.maintenanceMessage}
+            onChange={(v) => updMaint('maintenanceMessage', v)}
+            placeholder="Der Server befindet sich derzeit in Wartung…"
+            rows={3}
+          />
+          <p className="text-xs text-gray-400">Einfacher Text, kein HTML. Max. 500 Zeichen.</p>
+        </FieldGroup>
+
+        {/* Vorschau */}
+        {maint.maintenanceMessage && (
+          <div className="mt-3 border border-dashed border-amber-200 rounded-lg p-4 bg-amber-50">
+            <p className="text-xs font-medium text-amber-700 mb-2 flex items-center gap-1">
+              <Eye size={12} /> Vorschau — So sehen Benutzer die Meldung:
+            </p>
+            <div className="bg-white rounded p-3 border border-amber-100 text-sm text-gray-700 text-center">
+              <Wrench size={28} className="mx-auto mb-2 text-amber-400" />
+              <p className="font-semibold text-gray-800 mb-1">Wartungsarbeiten</p>
+              <p className="text-gray-600 text-xs">{maint.maintenanceMessage}</p>
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* ── Info-Box: Server-URL-Einstellungen ────────────────────────────── */}
+      <div className="flex items-center gap-3 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-blue-700">
+        <Info size={15} className="shrink-0" />
+        <p className="text-xs">
+          <strong>Server-URLs und Protokoll-Einstellungen</strong> (IMAP, SMTP, EWS, Autodiscover) werden unter{' '}
+          <a href="/ecp/servers" className="underline font-medium">Server &amp; Health → Virtuelle Verzeichnisse</a> konfiguriert.
+        </p>
+      </div>
+
+    </div>
+  );
+}

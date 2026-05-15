@@ -1,0 +1,52 @@
+# Dependencies — werden im Container per pnpm install gebaut
+node_modules
+**/node_modules
+
+# Build-Artefakte — werden im Container per tsc gebaut
+**/dist
+**/.next
+**/build
+**/*.tsbuildinfo
+
+# Logs und temporäre Dateien
+*.log
+*.pid
+*.tmp
+.DS_Store
+
+# Vite / Webpack Cache
+**/.vite
+**/.turbo
+
+# Test-Artefakte
+**/coverage
+**/__snapshots__
+
+# Editor-Metadaten
+.vscode
+.idea
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# Docker selbst
+**/Dockerfile
+**/.dockerignore
+infra/k8s
+infra/observability
+
+# Secrets — nie in den Build-Kontext
+.env
+.env.*
+!.env.example
+**/certs/*.pem
+**/certs/*.key
+**/certs/*.crt
+
+# Dokumentation
+docs
+README.md
+CHANGELOG.md

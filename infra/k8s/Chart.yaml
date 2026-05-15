@@ -1,0 +1,21 @@
+apiVersion: v2
+name: coremail
+description: CoreMail — Open-Source Exchange 2019 Alternative
+type: application
+version: 0.6.0
+appVersion: "0.6.0"
+keywords:
+  - mail
+  - email
+  - exchange
+  - imap
+  - smtp
+  - ews
+home: https://github.com/MAGPEEK/CoreMail
+maintainers:
+  - name: CoreMail Team
+dependencies:
+  - name: redis
+    version: "19.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

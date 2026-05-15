@@ -1,0 +1,37 @@
+{
+  "name": "@coremail/storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./prisma": "./dist/prisma/index.js",
+    "./minio": "./dist/minio/index.js",
+    "./mime": "./dist/mime/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:push": "prisma db push",
+    "prisma:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@coremail/core": "workspace:*",
+    "@prisma/client": "^5.20.0",
+    "express": "^4.21.0",
+    "mailparser": "^3.7.1",
+    "minio": "^8.0.2",
+    "nodemailer": "^6.9.15",
+    "prisma": "^5.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/mailparser": "^3.4.4",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
