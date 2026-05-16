@@ -11,20 +11,24 @@ async function main() {
   await connectDatabase();
   await ensureBuckets();
 
-  const server = createImapServer();
+  // net.Server kann nur auf EINEM Port gleichzeitig lauschen.
+  // Für jeden Port eine eigene Serverinstanz erzeugen.
+  const server143 = createImapServer();
+  const server993 = createImapServer();
 
-  server.listen(IMAP_PORT, () => {
+  server143.listen(IMAP_PORT, () => {
     log.info({ port: IMAP_PORT }, 'IMAP server started (STARTTLS)');
   });
 
   // TLS on port 993 — in production, wrap socket in TLSServer
-  server.listen(IMAP_PORT_TLS, () => {
+  server993.listen(IMAP_PORT_TLS, () => {
     log.info({ port: IMAP_PORT_TLS }, 'IMAPS server started (TLS)');
   });
 
   process.on('SIGTERM', () => {
     log.info('Shutting down IMAP server...');
-    server.close(() => process.exit(0));
+    server143.close();
+    server993.close(() => process.exit(0));
   });
 }
 
