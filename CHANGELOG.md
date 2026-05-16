@@ -9,6 +9,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.5] — 2026-05-16 — Feature: Verteilergruppen + Ressourcenpostfächer im ECP
+
+### Added
+
+- **ECP „Verteilergruppen"** (`/ecp/#/groups`) — vollständige Verwaltung statischer und dynamischer Gruppen:
+  - Tabelle: Anzeigename, E-Mail, Typ-Badge (Statisch/Dynamisch), Mitgliederzahl, Status-Toggle, GAL-Sichtbarkeit
+  - Aufklappbare Mitgliederliste pro Gruppe (Expand/Collapse)
+  - Mitglieder hinzufügen: E-Mail + Typ (User / Shared Mailbox / Gruppe / Extern), Enter-Kürzel
+  - Mitglieder entfernen per Hover-Icon
+  - Dynamische Gruppen: LDAP-Filter-Feld statt manueller Mitgliederliste
+  - Optionen: requireSenderAuth, allowExternal, moderationEnabled, hiddenFromGal
+  - Filter: Alle / Statisch / Dynamisch + Freitextsuche
+  - Erstellen / Bearbeiten / Löschen (mit Bestätigungsdialog)
+- **ECP „Ressourcenpostfächer"** (`/ecp/#/resources`) — Raum- und Geräteverwaltung:
+  - Tab-Umschaltung Räume / Geräte (je mit Anzahl-Badge)
+  - Tabelle: Icon, Name, E-Mail, Standort, Kapazität (Räume), Auto-Accept-Status, Status-Toggle
+  - Aufklappbarer Buchungskalender pro Ressource mit Datumsbereichsfilter
+  - Buchungen anzeigen: Zeitraum, Organisator, Betreff, Status-Badge (ACCEPTED/PENDING/DECLINED)
+  - Buchungen stornieren per Admin
+  - Ressource erstellen: Typ, E-Mail, Domain, Anzeigename, Standort, Kapazität, Telefon, max. Dauer, Buchungsfenster, Auto-Accept/Decline/Recurring/Approval
+  - Ressource bearbeiten / löschen (inkl. alle Buchungen)
+- Sidebar-Eintrag **„Verteilergruppen"** (Users-Icon) und **„Ressourcen"** (Building2-Icon) in der Sektion „Empfänger"
+
+---
+
 ## [1.3.4] — 2026-05-16 — Feature: Nachrichtenfluss-Connectors + Organisation + Adresslisten
 
 ### Added

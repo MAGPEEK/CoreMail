@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
-  ShieldAlert, Smartphone, Search, Cable, Building2,
+  ShieldAlert, Smartphone, Search, Cable, Building2, Users,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -16,6 +16,8 @@ const NAV: (NavItem | NavGroup)[] = [
     items: [
       { path: '/mailboxes',        label: 'Postfächer',          icon: Mail },
       { path: '/shared-mailboxes', label: 'Freigegeben',         icon: Inbox },
+      { path: '/groups',           label: 'Verteilergruppen',    icon: Users },
+      { path: '/resources',        label: 'Ressourcen',          icon: Building2 },
       { path: '/domains',          label: 'Domains',             icon: Globe },
     ],
   },

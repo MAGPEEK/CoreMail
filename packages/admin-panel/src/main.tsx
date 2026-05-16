@@ -23,6 +23,8 @@ import { MobileDevicesPage } from './pages/MobileDevicesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ConnectorsPage } from './pages/ConnectorsPage.js';
 import { OrganisationPage } from './pages/OrganisationPage.js';
+import { GroupsPage } from './pages/GroupsPage.js';
+import { ResourcesPage } from './pages/ResourcesPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -68,6 +70,8 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/message-trace"  element={<MessageTracePage />} />
                   <Route path="/connectors"     element={<ConnectorsPage />} />
                   <Route path="/organisation"   element={<OrganisationPage />} />
+                  <Route path="/groups"         element={<GroupsPage />} />
+                  <Route path="/resources"      element={<ResourcesPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
