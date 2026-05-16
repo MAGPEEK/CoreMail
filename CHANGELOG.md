@@ -9,6 +9,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.9.19] — 2026-05-16 — SSO & LDAP / Active Directory
+
+### Added
+
+- **SSO-Verwaltung (ECP → Infrastruktur → SSO)** — Sub-Navigation mit 3 Bereichen:
+  - **OIDC-Anbieter** — Liste aller konfigurierten OIDC/OAuth2-Provider; Hinzufügen mit Schnellauswahl (Azure AD, Google Workspace, Keycloak, Authentik, Okta, GitHub); Discovery-URL-Test (Verbindung + Issuer-Verifikation); Aktivieren/Deaktivieren; Auto-Provisionierung pro Provider; Bearbeiten + Löschen
+  - **SAML 2.0** — SP-Metadaten (Entity ID, ACS-URL, SLO-URL, Metadata-XML); Liste unterstützter IdPs (Azure Entra, Okta, OneLogin, ADFS, Shibboleth, Google Workspace); Hinweis auf Konfiguration via Umgebungsvariablen
+  - **Einstellungen** — Lokale Anmeldung als Fallback, SSO-Button auf Login-Seite, automatische Weiterleitung, Redirect-URIs-Referenz
+- **LDAP / Active Directory-Verwaltung (ECP → Infrastruktur → LDAP / Active Dir.)** — Sub-Navigation mit 4 Bereichen:
+  - **Verbindungen** — Tabelle aller konfigurierten LDAP-Verbindungen (Domain, Host, BaseDN, Sync-Status, letzter Sync); Neue Verbindung, Bearbeiten, Löschen, manueller Sync je Verbindung
+  - **Konfigurationsformular** — Host/Port/LDAPS, Base DN, Bind DN + Passwort, User DN, Benutzerfilter mit `{{username}}`-Platzhalter, Gruppenfilter, Sync-Toggle; Verbindungstest (TCP-Erreichbarkeit)
+  - **Synchronisation** — Übersicht aller Verbindungen mit Status und letztem Sync; „Jetzt synchronisieren"-Button je Domain
+  - **Attributzuordnung** — Mapping LDAP-Attributname → CoreMail-Feld (mail, displayName, givenName, sn, uid) mit AD/OpenLDAP-Hinweisen
+- **API `GET|POST|PUT|DELETE /api/v1/admin/sso/providers`** — OIDC-Provider-CRUD
+- **API `POST /api/v1/admin/sso/providers/:id/test`** — Discovery-URL + Issuer testen
+- **API `GET /api/v1/admin/sso/domains`** — verfügbare Domains
+- **API `GET|PUT|DELETE /api/v1/admin/ldap/:domainId`** — LDAP-Konfig CRUD
+- **API `POST /api/v1/admin/ldap/:domainId/test`** — TCP-Verbindungstest
+- **API `POST /api/v1/admin/ldap/:domainId/sync`** — manuellen Sync triggern
+- **Sidebar** — SSO und LDAP/Active Dir. als separate Einträge unter Infrastruktur; Info-Eintrag ans Ende der gesamten Navigation verschoben (unterhalb Einstellungen)
+- **README.md** — vollständig aktualisiert: Version 1.9.19, 6-Container-Architektur, aktualisierte Feature-Tabellen, Versionsverlauf-Tabelle, neue API-Beispiele
+
+---
+
 ## [1.8.19] — 2026-05-16 — Message Queue Management
 
 ### Added

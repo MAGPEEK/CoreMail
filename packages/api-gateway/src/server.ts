@@ -51,6 +51,8 @@ import { adminOrganisationRouter } from './routes/admin/organisation.js';
 import { adminExternalContactsRouter } from './routes/admin/external-contacts.js';
 import { adminSecurityRouter } from './routes/admin/security.js';
 import { adminSmtpConfigRouter } from './routes/admin/smtp-config.js';
+import { adminLdapRouter } from './routes/admin/ldap.js';
+import { adminSsoRouter } from './routes/admin/sso.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -249,6 +251,8 @@ app.use('/api/v1/admin/organisation',     adminOrganisationRouter);
 app.use('/api/v1/admin/contacts',         adminExternalContactsRouter);
 app.use('/api/v1/admin/security',         adminSecurityRouter);
 app.use('/api/v1/admin/smtp-config',      adminSmtpConfigRouter);
+app.use('/api/v1/admin/ldap',             adminLdapRouter);
+app.use('/api/v1/admin/sso',              adminSsoRouter);
 
 // ── Statische Frontend-Dateien (OWA + ECP) ───────────────────────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';

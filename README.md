@@ -1,22 +1,23 @@
 # CoreMail
 
-> **Coremail — der OpenSource Mailserver für kleine Umgebungen.**  
+> **Coremail — der OpenSource Mailserver für kleine und mittlere Umgebungen.**  
 > Aufgebaut auf React + Node.js/TypeScript, container-first, vollständig selbst gehostet.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-1.3.8-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-1.9.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
-📄 **[docker-compose.yml](docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
-📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup
+📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
+📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
+📝 **[CHANGELOG.md](CHANGELOG.md)** — Vollständiger Versionsverlauf
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v1.3.8** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/u/magpeek)
+> **Aktuelle Version: v1.9.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/u/magpeek)
 
 ---
 
@@ -87,11 +88,11 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | DNSBL (Spamhaus ZEN, SpamCop, konfigurierbar) | ✅ |
 | Greylisting mit automatischer Whitelist | ✅ |
 | Country-Filtering (MaxMind GeoIP) | ✅ |
-| ClamAV Antivirus | ✅ |
-| rspamd Anti-Spam (Bayes, selbstlernend) | ✅ |
+| ClamAV Antivirus (separater Container) | ✅ |
+| Rspamd 4.0 Anti-Spam (Bayes, selbstlernend, separater Container) | ✅ |
 | Adress-Blacklist (Global / Domain / Benutzer) | ✅ |
 | Attachment-Filter (MIME-Typen, Doppel-Extensions) | ✅ |
-| Quarantäne-Management im Admin-Panel | ✅ |
+| Quarantäne-Management mit Detail-Ansicht und MIME-Vorschau | ✅ |
 | TLS (STARTTLS + Implicit TLS) auf allen Ports | ✅ |
 | eDiscovery & Legal Hold (Cross-Mailbox-Suche) | ✅ |
 
@@ -100,7 +101,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Feature | Status |
 |---------|--------|
 | Lokale Anmeldung (bcrypt + pepper) | ✅ |
-| LDAP / Active Directory | ✅ |
+| LDAP / Active Directory (ECP-Verwaltung, Attributzuordnung, Sync) | ✅ |
 | SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google, Authentik, Okta) | ✅ |
 | SAML 2.0 | ✅ |
 | MFA: TOTP (Authenticator-App) | ✅ |
@@ -114,7 +115,12 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Feature | Status |
 |---------|--------|
 | RBAC mit 7 Rollen | ✅ |
-| SMTP Queue-Monitor mit Mail-Details (Absender / Empfänger) | ✅ |
+| SMTP-Queue-Management (BullMQ-nativ, Retry, Dead Letter, Retention) | ✅ |
+| Quarantäne-Verwaltung mit Detail-Slide-over und MIME-Vorschau | ✅ |
+| SMTP-Infrastruktur-Konfiguration (ESMTP, Banner, Relay, Greylisting) | ✅ |
+| SSO-Provider-Verwaltung (OIDC/OAuth2, SAML, Schnellauswahl) | ✅ |
+| LDAP/AD-Verbindungsverwaltung (Attributzuordnung, Verbindungstest, Sync) | ✅ |
+| Rspamd-Integration (Schwellwerte, Bayes-Training, Modul-Übersicht) | ✅ |
 | Audit-Log (alle Admin-Aktionen nachvollziehbar) | ✅ |
 | Service-Konfiguration (live, kein Neustart nötig) | ✅ |
 | Log-Viewer mit Log-Level pro Service | ✅ |
@@ -194,35 +200,30 @@ curl -s -X POST https://<MAIL_HOSTNAME>/api/v1/admin/setup \
 
 ## Docker Compose
 
-### Was ist Docker Compose?
-
-Docker Compose ist ein Werkzeug, das mehrere Container als einen zusammenhängenden Stack definiert und startet. Statt jeden Container einzeln mit `docker run` zu konfigurieren, beschreibt eine einzige YAML-Datei den gesamten Stack — inklusive Netzwerk, Volumes, Umgebungsvariablen und Abhängigkeiten zwischen den Diensten.
-
-Ein `docker compose up -d` reicht aus, um CoreMail vollständig zu starten.
-
 ### Aufbau des CoreMail-Stacks
 
-CoreMail besteht aus **vier Containern**:
+CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Extern):
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:1.3.8` | Alle Mail-Dienste + Webmail + Admin-Panel |
-| `coremail-postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
-| `coremail-redis` | `redis:7-alpine` | Sessions, SMTP-Queue, Live-Updates |
-| `coremail-minio` | `minio/minio` | Objektspeicher für Anhänge und Backups |
+| `coremail` | `magpeek/coremail-app:1.9.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
+| `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
+| `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
+| `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Updates |
+| `minio` | `minio/minio` | Objektspeicher für Anhänge, Quarantäne und Backups |
 
 Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, EWS, ActiveSync, CalDAV, Webmail und Admin-Panel — verwaltet von `supervisord`. Nach außen ist nur ein einziger HTTP-Port (3000) und die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
 
 ### Die `docker-compose.yml`
 
-Die vollständig kommentierte Datei liegt im Root des Repositories:
-👉 **[docker-compose.yml](docker-compose.yml)**
+Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml`:
 
 ```yaml
-# Auszug — vollständige Datei im Repo-Root
+# Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:1.3.8
+    image: magpeek/coremail-app:1.9.19
     ports:
       - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
       - "25:25"       # SMTP eingehend
@@ -234,60 +235,58 @@ services:
       - "995:995"     # POP3S
     environment:
       MAIL_HOSTNAME: mail.meinedomain.de
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      PEPPER: ${PEPPER}
+      RSPAMD_URL: http://rspamd:11334
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
       # ... vollständige Liste in der docker-compose.yml
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_started }
       minio:    { condition: service_healthy }
+      rspamd:   { condition: service_healthy }
+      clamav:   { condition: service_healthy }
+
+  rspamd:
+    image: rspamd/rspamd:4.0.0
+
+  clamav:
+    image: clamav/clamav:stable
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"
 
   postgres:
     image: postgres:16-alpine
-    volumes:
-      - pgdata:/var/lib/postgresql/data   # Daten überleben Neustarts
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
 
   minio:
     image: minio/minio:latest
-    command: server /data --console-address ":9001"
     ports:
       - "9001:9001"   # MinIO Web-Konsole
-
-volumes:
-  pgdata:     # PostgreSQL-Daten
-  redisdata:  # Redis-Persistenz
-  miniodata:  # Anhänge und Backups
 ```
 
 ### Häufige Befehle
 
 ```bash
 # Stack starten (Images werden automatisch von Docker Hub geladen)
-docker compose up -d
+docker compose -f infra/docker/docker-compose.yml up -d
 
 # Status aller Container prüfen
-docker compose ps
+docker compose -f infra/docker/docker-compose.yml ps
 
 # Logs in Echtzeit verfolgen
-docker compose logs -f coremail
+docker compose -f infra/docker/docker-compose.yml logs -f coremail
 
 # Einzelnen Dienst innerhalb des Containers neu starten
 docker exec coremail supervisorctl restart api-gateway
 
 # Stack stoppen (Daten bleiben erhalten)
-docker compose down
-
-# Stack stoppen und alle Daten löschen (Vorsicht!)
-docker compose down -v
+docker compose -f infra/docker/docker-compose.yml down
 
 # Auf neue Version aktualisieren
-docker compose pull && docker compose up -d
+docker compose -f infra/docker/docker-compose.yml pull && \
+docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
 ### Mit Observability
@@ -295,7 +294,7 @@ docker compose pull && docker compose up -d
 Optional können Prometheus, Grafana, Loki und Tempo mit einem einzigen Flag aktiviert werden:
 
 ```bash
-docker compose --profile observability up -d
+docker compose -f infra/docker/docker-compose.yml --profile observability up -d
 ```
 
 Grafana ist dann unter `http://localhost:3001` erreichbar (Standard-Login: `admin` / `admin`).
@@ -307,7 +306,7 @@ Grafana ist dann unter `http://localhost:3001` erreichbar (Standard-Login: `admi
 | URL | Beschreibung |
 |-----|-------------|
 | `https://<MAIL_HOSTNAME>/owa/` | Webmail (OWA) |
-| `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel |
+| `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel (ECP) |
 | `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS (Outlook Desktop) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
@@ -344,13 +343,20 @@ POSTGRES_PASSWORD=...
 # ── Redis ──────────────────────────────────────────────────
 REDIS_PASSWORD=...
 
-# ── Objektspeicher (Anhänge) ───────────────────────────────
+# ── Objektspeicher (Anhänge, Quarantäne, Backup) ──────────
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=...
 
 # ── Sicherheit ─────────────────────────────────────────────
 JWT_SECRET=...                # mind. 32 Zeichen, zufällig
 PEPPER=...                    # mind. 32 Zeichen, zufällig
+
+# ── Anti-Spam (Rspamd) ─────────────────────────────────────
+RSPAMD_URL=http://rspamd:11334
+
+# ── Antivirus (ClamAV) ─────────────────────────────────────
+CLAMAV_HOST=clamav
+CLAMAV_PORT=3310
 
 # ── WebAuthn (MFA FIDO2) ───────────────────────────────────
 WEBAUTHN_RP_NAME=CoreMail
@@ -443,7 +449,7 @@ Alle wichtigen Befehle für den täglichen Betrieb sind in **[COMMANDS.md](COMMA
 | Admin-Token | Authentifizierung gegen die REST API |
 | Benutzer verwalten | Anlegen, Passwort setzen, Quota, Rolle, Postfach provisionieren |
 | Domains | Domain hinzufügen, DKIM-Key abrufen |
-| Warteschlangen | Queue-Länge, Job-Details, Job löschen, Queue leeren |
+| Warteschlangen | Queue-Stats, Job-Details, Retry, Dead Letter, Queue leeren |
 | Logs & Diagnose | Container-Logs, Audit-Log, Service-Log-Level |
 | Datenbank | PostgreSQL-Abfragen (Benutzer, Mails, Speicher) |
 | Redis | Queue-Längen, Sessions, Greylisting |
@@ -452,27 +458,26 @@ Alle wichtigen Befehle für den täglichen Betrieb sind in **[COMMANDS.md](COMMA
 | Updates | Auf neue Image-Version aktualisieren |
 
 ```bash
-# Beispiele aus COMMANDS.md
-
-# Alle Dienste im Container anzeigen
-docker exec coremail supervisorctl status
+# Beispiele
 
 # Health-Check
 curl -s http://localhost:3000/healthz | jq
 
-# Benutzer anlegen
-TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@domain.de","password":"passwort"}' | jq -r '.accessToken')
+# Queue-Stats (BullMQ-nativ)
+curl -s http://localhost:3000/api/v1/admin/queues/stats \
+  -H "Authorization: Bearer $TOKEN" | jq
 
-curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@domain.de","displayName":"Max Mustermann","password":"pw"}' | jq
+# Dead-Letter-Jobs anzeigen
+curl -s "http://localhost:3000/api/v1/admin/queues/jobs?state=failed" \
+  -H "Authorization: Bearer $TOKEN" | jq '.jobs[].failedReason'
 
-# Queue-Längen prüfen
-curl -s http://localhost:3000/api/v1/admin/queues \
-  -H "Authorization: Bearer $TOKEN" | jq '.[].count'
+# Alle Dead-Letter-Jobs wiederholen
+curl -s -X POST http://localhost:3000/api/v1/admin/queues/retry-failed \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Rspamd-Status prüfen
+curl -s http://localhost:3000/api/v1/admin/security/status \
+  -H "Authorization: Bearer $TOKEN" | jq
 ```
 
 → **[Vollständige Befehlsreferenz in COMMANDS.md](COMMANDS.md)**
@@ -487,17 +492,33 @@ CoreMail besteht aus **einem einzigen Custom-Image** — alle Services in einem 
 |-------|--------|
 | [`magpeek/coremail-app`](https://hub.docker.com/r/magpeek/coremail-app) | Alle Services + OWA/ECP-Frontends |
 
-Datenbank (PostgreSQL, Redis, MinIO) läuft in Standard-Docker-Images — kein eigenes Image notwendig.
+Rspamd und ClamAV laufen in offiziellen Standard-Images — kein eigenes Image notwendig.
 
 ```bash
 # Neueste Version ziehen und starten
+docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:1.3.8
+docker pull magpeek/coremail-app:1.9.19
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
+
+---
+
+## Versionsverlauf
+
+| Version | Highlights |
+|---------|-----------|
+| **v1.9.19** | SSO-Verwaltung (OIDC/OAuth2, SAML), LDAP/AD-Verwaltung (Attributzuordnung, Sync, Verbindungstest) |
+| **v1.8.19** | Message Queue Management: BullMQ-native API, Dead Letter, Retry, Retention-Einstellungen |
+| **v1.7.19** | Quarantäne Detail-View mit MIME-Vorschau, Bulk-Selektion, CleanupModal |
+| **v1.6.19** | SMTP-Infrastruktur-Konfiguration: ESMTP, Banner, Relay, Greylisting, Verbindungslimits |
+| **v1.5.19** | Rspamd 4.0 + ClamAV als separate Container, vollständige Schutzfilter-ECP-Seite |
+| **v1.4.19** | OWA-Signaturen (Tiptap), Abwesenheitsassistent, Speicherübersicht |
+
+→ [Vollständiger Changelog](CHANGELOG.md)
 
 ---
 
@@ -508,7 +529,7 @@ Beiträge sind herzlich willkommen!
 ```bash
 git checkout -b feature/mein-feature
 # Änderungen vornehmen
-pnpm typecheck
+pnpm -r exec tsc --noEmit
 git push origin feature/mein-feature
 # Pull Request öffnen
 ```
@@ -522,6 +543,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail</b> · Der OpenSource Mailserver für kleine Umgebungen<br>
+  <b>CoreMail v1.9.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

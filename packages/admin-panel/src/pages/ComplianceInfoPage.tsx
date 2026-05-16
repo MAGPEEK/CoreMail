@@ -1,19 +1,21 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github } from 'lucide-react';
 
-const VERSION     = '1.7.19';
+const VERSION     = '1.9.19';
 const BUILD_DATE  = '2026-05-16';
 const GITHUB_URL  = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 
 const HIGHLIGHTS = [
-  { version: '1.7.19', date: '2026-05-16', title: 'Quarantine Detail-View & Compliance Info',
-    notes: 'Vollständige Quarantäne-Verwaltung mit Detail-Slide-over, MIME-Vorschau aus MinIO, Massen-Selektion, Bereinigung nach Alter. Compliance-Info-Seite mit Versionsverlauf.' },
+  { version: '1.9.19', date: '2026-05-16', title: 'SSO & LDAP / Active Directory',
+    notes: 'ECP-Verwaltung für OIDC/OAuth2-Provider (Azure AD, Google, Keycloak, Authentik, Okta) mit Schnellauswahl und Discovery-URL-Test. SAML 2.0 Referenz. LDAP/AD-Verbindungsverwaltung mit Attributzuordnung, Sync-Steuerung und Verbindungstest. Info ganz unten in der Navigation.' },
+  { version: '1.8.19', date: '2026-05-16', title: 'Message Queue Management',
+    notes: 'Vollständige SMTP-Queue-Verwaltung mit Sub-Navigation: Übersicht (5 Stat-Cards), Ausgehend, Wiederholung (Retry), Dead Letter (Einzelrestart/Alle wiederholen), Einstellungen (Retention, Backoff, Auto-Flush). BullMQ-native API.' },
+  { version: '1.7.19', date: '2026-05-16', title: 'Quarantine Detail-View',
+    notes: 'Vollständige Quarantäne-Verwaltung mit Detail-Slide-over, MIME-Vorschau aus MinIO, Massen-Selektion, Bereinigung nach Alter, Nummernpagination.' },
   { version: '1.6.19', date: '2026-05-16', title: 'SMTP-Infrastruktur-Konfiguration',
     notes: 'Neue ECP-Seite: Erlaubte ESMTP-Befehle, lokale Zustellung, SMTP-Banner-Override, Greylisting, Relay-Konfiguration, Verbindungslimits. 27 Einstellungsfelder.' },
   { version: '1.5.19', date: '2026-05-16', title: 'Rspamd 4.0 + ClamAV Integration',
     notes: 'Vollständige Sicherheits- & Filterkonfiguration: Rspamd 4.0-Schwellwerte, ClamAV-Status, DNSBL, Greylisting, Länderfilter, Anhänge-Filter.' },
-  { version: '1.4.19', date: '2026-05-16', title: 'OWA Signaturen, Automatische Antworten, Speicher',
-    notes: 'Tiptap-Signatur-Editor, vollständiger OOF-Abwesenheitsassistent mit Kalenderintegration, Speicherübersicht mit Ordner-Leeren-Funktion.' },
 ];
 
 function StatBadge({ label, value }: { label: string; value: string }) {

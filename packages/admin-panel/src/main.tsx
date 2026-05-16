@@ -34,6 +34,8 @@ import { GatewayPage } from './pages/GatewayPage.js';
 import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
+import { LdapPage } from './pages/LdapPage.js';
+import { SsoPage } from './pages/SsoPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -129,6 +131,8 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/compliance-info" element={<ComplianceInfoPage />} />
                   <Route path="/smtp-config" element={<SmtpConfigPage />} />
+                  <Route path="/ldap"        element={<LdapPage />} />
+                  <Route path="/sso"         element={<SsoPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </AdminLayout>

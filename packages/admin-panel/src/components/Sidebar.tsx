@@ -5,6 +5,7 @@ import {
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
   FolderOpen, KeyRound, Network, ClipboardList, Activity, Info, Terminal,
+  Fingerprint, ServerCog,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -47,6 +48,8 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/smtp-config',      label: 'SMTP-Konfiguration',  icon: Terminal },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
+      { path: '/sso',              label: 'SSO',                 icon: Fingerprint },
+      { path: '/ldap',             label: 'LDAP / Active Dir.',  icon: ServerCog },
     ],
   },
   {
@@ -63,7 +66,6 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/ediscovery',      label: 'eDiscovery',          icon: SearchCheck },
       { path: '/journaling',      label: 'Journaling',          icon: BookText },
       { path: '/retention',       label: 'Aufbewahrung',        icon: Archive },
-      { path: '/compliance-info', label: 'Info',                icon: Info },
     ],
   },
   { path: '/rbac',             label: 'Berechtigungen',      icon: ShieldHalf },
@@ -71,6 +73,7 @@ const NAV: (NavItem | NavGroup)[] = [
   { path: '/logs',             label: 'Protokolle',          icon: ScrollText },
   { path: '/reports',         label: 'Berichte',            icon: BarChart3 },
   { path: '/settings',        label: 'Einstellungen',       icon: Settings2 },
+  { path: '/compliance-info', label: 'Info',                icon: Info },
 ];
 
 export function Sidebar() {
