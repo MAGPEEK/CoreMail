@@ -173,7 +173,9 @@ export function MailboxesPage() {
   // Filter
   const filtered = mailboxes.filter((u) => {
     const q = search.toLowerCase();
-    const matchSearch = !search || u.email.toLowerCase().includes(q) || u.displayName.toLowerCase().includes(q);
+    const matchSearch = !search
+      || (u.email ?? '').toLowerCase().includes(q)
+      || (u.displayName ?? '').toLowerCase().includes(q);
     const matchDomain = !domainFilter || u.domainId === domainFilter;
     return matchSearch && matchDomain;
   });

@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.15] — 2026-05-16 — Bugfix: Null-sichere Filter-Funktion in MailboxesPage + GroupsPage
+
+### Fixed
+
+- **`MailboxesPage`: `filter`-Funktion crashte bei null `displayName`/`email`** — `u.displayName.toLowerCase()` und `u.email.toLowerCase()` warfen `TypeError: Cannot read properties of null` wenn ein User-Datensatz null-Felder enthielt. Mit `(u.displayName ?? '').toLowerCase()` und `(u.email ?? '').toLowerCase()` abgesichert
+- **`GroupsPage`: identisches Problem** — `g.displayName.toLowerCase()` und `g.email.toLowerCase()` im Filter ebenfalls null-sicher gemacht
+
+---
+
 ## [1.3.14] — 2026-05-16 — Bugfix: React Error Boundary + Null-sichere MailboxesPage
 
 ### Fixed

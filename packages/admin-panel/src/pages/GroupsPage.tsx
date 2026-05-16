@@ -385,8 +385,8 @@ export function GroupsPage() {
 
   const filtered = groups.filter(g => {
     if (typeFilter !== 'ALL' && g.groupType !== typeFilter) return false;
-    if (search && !g.displayName.toLowerCase().includes(search.toLowerCase()) &&
-        !g.email.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !(g.displayName ?? '').toLowerCase().includes(search.toLowerCase()) &&
+        !(g.email ?? '').toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
