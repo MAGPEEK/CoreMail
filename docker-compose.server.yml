@@ -182,16 +182,9 @@ services:
       # Shared Buffers: ~25% des verfügbaren RAM (hier: 256 MB)
       POSTGRES_SHARED_BUFFERS: ${POSTGRES_SHARED_BUFFERS:-256MB}
 
-    command: >
-      postgres
-        -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
-        -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
-        -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB}
-        -c wal_level=replica
-        -c archive_mode=off
-        -c log_min_duration_statement=1000
-        -c log_connections=off
-        -c log_disconnections=off
+    # Einzeilig — YAML-Folded-Scalar (>) würde bei tieferer Einrückung
+    # Newlines erhalten → Shell würde jeden -c Flag als eigenen Befehl ausführen.
+    command: "postgres -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100} -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB} -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB} -c wal_level=replica -c archive_mode=off -c log_min_duration_statement=1000 -c log_connections=off -c log_disconnections=off"
 
     volumes:
       # Named Volume — Docker verwaltet Speicherort auf dem Host
@@ -238,17 +231,10 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
 
-    command: >
-      redis-server
-        --appendonly yes
-        --appendfsync everysec
-        --requirepass ${REDIS_PASSWORD}
-        --maxmemory ${REDIS_MAX_MEMORY:-512mb}
-        --maxmemory-policy allkeys-lru
-        --save 900 1
-        --save 300 10
-        --save 60 10000
-        --loglevel notice
+    # Einzeilig — YAML-Folded-Scalar (>) würde bei tieferer Einrückung
+    # Newlines erhalten statt falten → Shell würde jeden Flag als eigenen
+    # Befehl ausführen → redis-server startet ohne Optionen oder crasht.
+    command: "redis-server --appendonly yes --appendfsync everysec --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAX_MEMORY:-512mb} --maxmemory-policy allkeys-lru --save 900 1 --save 300 10 --save 60 10000 --loglevel notice"
 
     volumes:
       - redisdata:/data
@@ -264,6 +250,11 @@ services:
 
     cap_drop:
       - ALL
+
+    cap_add:
+      - SETUID    # gosu im Redis-Entrypoint wechselt von root → redis-User
+      - SETGID    # gosu setzt auch die Gruppen-ID
+      - CHOWN     # Redis setzt Datei-Ownership auf /data beim Start
 
     pids_limit: 50
 
