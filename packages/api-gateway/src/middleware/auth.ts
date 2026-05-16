@@ -22,13 +22,23 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Authorization required' });
     return;
   }
-  const payload = verifyAccessToken(header.slice(7));
-  if (!payload) {
-    res.status(401).json({ error: 'Invalid or expired token' });
-    return;
+  try {
+    const payload = verifyAccessToken(header.slice(7));
+    if (!payload) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
+    req.apiUser = { userId: payload.sub, role: payload.role, email: payload.email };
+    next();
+  } catch (err) {
+    // jwt.verify() wirft TokenExpiredError, JsonWebTokenError, NotBeforeError etc.
+    // → immer 401 zurückgeben, nie als unhandled error propagieren
+    const message = err instanceof Error && err.name === 'TokenExpiredError'
+      ? 'Token expired'
+      : 'Invalid or expired token';
+    log.warn({ err }, 'JWT verification failed');
+    res.status(401).json({ error: message });
   }
-  req.apiUser = { userId: payload.sub, role: payload.role, email: payload.email };
-  next();
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {

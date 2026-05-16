@@ -24,7 +24,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (res.status === 401) {
     clearToken();
-    window.location.href = '/login';
+    // Admin-Panel liegt unter /ecp — React Router basename="/ecp"
+    window.location.href = '/ecp/login';
     throw new Error('Unauthorized');
   }
 

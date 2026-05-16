@@ -9,6 +9,45 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.13] — 2026-05-16 — Bugfix: Auth-Middleware 401 + Virtuelle Verzeichnisse Fehlerbehandlung
+
+### Fixed
+
+- **`requireAuth`-Middleware** — `jwt.verify()` kann synchron `TokenExpiredError` werfen; war bislang außerhalb des try-catch-Blocks → Express propagierte den Fehler als unkontrollierter 500-Fehler statt 401. Jetzt vollständig in try-catch gewickelt; abgelaufene Tokens und ungültige Tokens geben immer HTTP 401 zurück
+- **Admin-Panel: Virtuelle Verzeichnisse-Tab** (`ServersPage.tsx`) — zeigte bei HTTP-Fehler (z.B. 500 durch den obigen Auth-Bug) endlos den Lade-Spinner. Jetzt: explizite `isError`-Behandlung mit roter Fehlerkarte, Fehlermeldung und „Erneut versuchen"-Button
+- **Admin-Panel: 401-Redirect** (`client.ts`) — `window.location.href = '/login'` verwies auf einen falschen absoluten Pfad. Korrigiert auf `/ecp/login` (korrekte Basis-URL des BrowserRouter `basename="/ecp"`)
+
+---
+
+## [1.3.12] — 2026-05-16 — Bugfix: SMTP-Server-Crash (BullMQ + Thread-Erschöpfung)
+
+### Fixed
+
+- **Thread-Erschöpfung beim Start** — `pids_limit: 200` war zu niedrig für 12 gleichzeitig startende Node.js-Services (jeder ~10 Threads); führte zu `pthread_create: Resource temporarily unavailable` → Prisma-Tokio-Runtime-Panic (`futures-timer: timer has gone away`). Limit auf 500 erhöht
+- **`CAP_KILL` fehlte** — supervisord (root) konnte kein SIGTERM an node-User-Child-Prozesse senden → `supervisorctl stop` schlug mit `PermissionError: Operation not permitted` fehl. `KILL`-Capability in `cap_add` aufgenommen
+- **BullMQ Worker `maxRetriesPerRequest: null`** — gemeinsam genutzter `getRedisClient()` lieferte IORedis-Instanz mit `maxRetriesPerRequest: 3`; BullMQ-Worker verweigern das. Neue dedizierte `createBullMqConnection()` in `packages/core/src/redis/index.ts` mit `maxRetriesPerRequest: null`, verwendet in `smtp-server/outbound/queue.ts` und `api-gateway/dashboard.ts`
+
+---
+
+## [1.3.11] — 2026-05-16 — Bugfix: BullMQ Queue-Name + Prisma $queryRaw Tabellenname
+
+### Fixed
+
+- **BullMQ Queue-Name** — `smtp:outbound` enthielt einen Doppelpunkt, den BullMQ v5 nicht erlaubt. Der synchrone Fehler in `new Queue()` unterbrach den Async-Flow des SMTP-Servers und hinterließ die Prisma/Tokio-Runtime ohne sauberes Shutdown → Rust-Panic `timer has gone away`. Korrigiert auf `smtp-outbound`
+- **Prisma `$queryRaw` Tabellenname** — `"Message"` (PascalCase) → `"messages"` (snake_case lowercase); Prisma-Migrationen legen Tabellen in Kleinbuchstaben an, PascalCase erzeugte PostgreSQL-Fehler 42P01 (`relation does not exist`)
+
+---
+
+## [1.3.10] — 2026-05-16 — Bugfix: Multi-Port SMTP/IMAP + Auth-Service Portkonflikt
+
+### Fixed
+
+- **SMTP/IMAP Multi-Port** — Startup-Fehler beim Binden mehrerer Ports (25/465/587 bzw. 143/993) behoben
+- **Auth-Service Portkonflikt** — Ports bereinigt, kein Konflikt mehr beim parallelen Start der Services
+- **Redis-Container** — startet jetzt direkt als `redis`-User (UID/GID 999:999); Docker-`command`-Syntax und Capabilities für den Redis-Container korrigiert
+
+---
+
 ## [1.3.9] — 2026-05-16 — Security Hardening (OWASP, Container-Härtung)
 
 ### Added

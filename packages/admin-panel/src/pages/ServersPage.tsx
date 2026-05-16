@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, Server, Settings, Loader2, Save, Wand2 } from 'lucide-react';
+import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 
@@ -44,9 +44,10 @@ export function ServersPage() {
   const [saved, setSaved] = useState(false);
   const qc = useQueryClient();
 
-  const { data: settings, isLoading } = useQuery<ServerSettings>({
+  const { data: settings, isLoading, isError, refetch } = useQuery<ServerSettings>({
     queryKey: ['server-settings'],
     queryFn:  () => api.get<ServerSettings>('/admin/servers/settings'),
+    retry: 1,
   });
 
   // Formular initialisieren sobald Daten geladen
@@ -117,7 +118,22 @@ export function ServersPage() {
       {/* ── Tab: Virtuelle Verzeichnisse ─────────────────────────────────────── */}
       {tab === 'settings' && (
         <div className="space-y-6 max-w-3xl">
-          {isLoading || !current ? (
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-gray-500">
+              <Loader2 size={16} className="animate-spin" /> Lade Einstellungen…
+            </div>
+          ) : isError ? (
+            <div className="card flex items-center gap-3 text-red-700 bg-red-50 border border-red-200">
+              <AlertCircle size={18} className="shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium">Einstellungen konnten nicht geladen werden</p>
+                <p className="text-sm text-red-600 mt-0.5">Session abgelaufen? Bitte neu anmelden oder erneut versuchen.</p>
+              </div>
+              <button onClick={() => void refetch()} className="btn-secondary flex items-center gap-1.5 text-sm">
+                <RefreshCw size={14} /> Erneut versuchen
+              </button>
+            </div>
+          ) : !current ? (
             <div className="flex items-center gap-2 text-gray-500">
               <Loader2 size={16} className="animate-spin" /> Lade Einstellungen…
             </div>
