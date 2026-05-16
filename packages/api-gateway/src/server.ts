@@ -157,7 +157,16 @@ app.use('/auth', authRateLimit, authRouter);
 
 // ── Health ────────────────────────────────────────────────────────────────────
 // Kein Rate-Limit auf /healthz (wird von Docker alle 30s aufgerufen)
-app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'api-gateway' }));
+const PKG_PATH = resolve(process.cwd(), 'packages/api-gateway/package.json');
+const APP_VERSION: string = (() => {
+  try {
+    const raw = readFileSync(PKG_PATH, 'utf8');
+    return (JSON.parse(raw) as { version?: string }).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'api-gateway', version: APP_VERSION }));
 
 // ── Changelog API ─────────────────────────────────────────────────────────────
 const CHANGELOG_PATH = process.env['CHANGELOG_PATH']
