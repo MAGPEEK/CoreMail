@@ -4,6 +4,7 @@ import {
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Smartphone, Search, Cable, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
+  FolderOpen, KeyRound, Network, ClipboardList,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -20,6 +21,7 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/groups',           label: 'Verteilergruppen',    icon: Users },
       { path: '/resources',        label: 'Ressourcen',          icon: Building2 },
       { path: '/ext-contacts',    label: 'Ext. Kontakte',       icon: BookUser },
+      { path: '/public-folders',  label: 'Öffentl. Ordner',    icon: FolderOpen },
       { path: '/domains',          label: 'Domains',             icon: Globe },
     ],
   },
@@ -28,6 +30,7 @@ const NAV: (NavItem | NavGroup)[] = [
     items: [
       { path: '/transport-rules',  label: 'Transportregeln',     icon: Workflow },
       { path: '/connectors',       label: 'Connectors',          icon: Cable },
+      { path: '/gateway',          label: 'SMTP-Gateway',        icon: Network },
       { path: '/queues',           label: 'Warteschlangen',      icon: ListOrdered },
       { path: '/message-trace',    label: 'Nachrichtenfluss',    icon: Search },
     ],
@@ -45,6 +48,7 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/services',         label: 'Services',            icon: Server },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/mobile',           label: 'Mobile Geräte',       icon: Smartphone },
+      { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
     ],
   },
   { path: '/organisation',     label: 'Organisation',        icon: Building2 },
@@ -57,6 +61,7 @@ const NAV: (NavItem | NavGroup)[] = [
     ],
   },
   { path: '/rbac',             label: 'Berechtigungen',      icon: ShieldHalf },
+  { path: '/audit-log',        label: 'Audit-Log',           icon: ClipboardList },
   { path: '/logs',             label: 'Protokolle',          icon: ScrollText },
   { path: '/reports',         label: 'Berichte',            icon: BarChart3 },
   { path: '/settings',        label: 'Einstellungen',       icon: Settings2 },

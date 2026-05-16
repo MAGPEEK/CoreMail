@@ -9,6 +9,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.7] — 2026-05-16 — Feature: Audit-Log + OAuth2-Clients + SMTP-Gateway + Öffentliche Ordner + Notizen (OWA)
+
+### Added
+
+- **ECP „Audit-Log"** (`/ecp/#/audit-log`) — vollständige Admin-Aktionsprotokollierung:
+  - Filterbares Log: Aktion, Zieltyp, Zeitraum (von/bis), Erfolg/Fehlschlag
+  - Farbkodierte Action-Badges (CREATE=grün, DELETE=rot, UPDATE/PUT=blau, LOGIN=violett)
+  - Aufklappbare Detailzeilen: Ziel-ID, Akteur-ID, Fehlermeldung, Änderungen als JSON
+  - Paginierung (100 Einträge/Seite), CSV-Export, Bereinigungsfunktion (>90 Tage)
+- **ECP „OAuth2-Clients"** (`/ecp/#/oauth-clients`) — OAuth2-Client-Verwaltung:
+  - Tabelle: Client-ID, Name, Scopes, Trusted-Badge, Aktionen
+  - Client erstellen: Name, Beschreibung, Redirect-URIs (mehrzeilig), Scope-Auswahl (8 Scopes), Trusted-Flag
+  - Secret-Anzeige als 15s-Toast nach Erstellen und Secret-Rotation
+  - Tab „Aktive Tokens": Token-Übersicht mit User, Scopes, Ablauf, Widerruf-Aktion
+- **ECP „SMTP-Gateway"** (`/ecp/#/gateway`) — ausgehende Mails über vorgelagerten SMTP-Relay:
+  - Toggle: Gateway aktivieren/deaktivieren
+  - Upstream-Konfiguration: Host, Port, TLS, Benutzername, Passwort (leer = unverändert)
+  - Verbindungstest mit Inline-Ergebnis (CheckCircle2 / XCircle)
+  - Relay-Domains (leer = alle Domains), filterBeforeRelay-Option
+- **ECP „Öffentliche Ordner"** (`/ecp/#/public-folders`) — Öffentlicher Ordner-Baum:
+  - Rekursive Baumansicht (bis 3 Ebenen tief), aufklappbar/einklappbar
+  - Stammordner und Unterordner erstellen, bearbeiten, löschen
+  - Pro Ordner: Nachrichten-Zähler, Berechtigungsverwaltung (ACL)
+  - ACL-Dialog: Benutzer per E-Mail hinzufügen, Berechtigung wählen (READ/WRITE/FULL), Einträge entfernen
+- **OWA „Notizen"** (`/owa/#/notes`) — Sticky-Note-Verwaltung:
+  - Farbige Notizkarten (YELLOW / BLUE / GREEN / PINK / PURPLE) im Grid-Layout
+  - Volltext-Suche in Echtzeit (Debounce via Query-Key)
+  - Notiz-Editor: Betreff, Textinhalt (mehrzeilig), Farb-Picker im Header
+  - Erstellen / Bearbeiten / Löschen (Hover-Aktionen)
+- **TopBar (OWA)**: „Notizen"-Tab mit StickyNote-Icon
+- **Sidebar (ECP)**: „Öffentl. Ordner" unter Empfänger, „SMTP-Gateway" unter Nachrichtenfluss, „OAuth2-Clients" unter Infrastruktur, „Audit-Log" als eigenständiger Eintrag
+
+---
+
 ## [1.3.6] — 2026-05-16 — Feature: Externe Kontakte + RBAC + eDiscovery + Journaling + Aufbewahrung im ECP
 
 ### Added

@@ -30,6 +30,10 @@ import { RbacPage } from './pages/RbacPage.js';
 import { EDiscoveryPage } from './pages/EDiscoveryPage.js';
 import { JournalingPage } from './pages/JournalingPage.js';
 import { RetentionPage } from './pages/RetentionPage.js';
+import { AuditLogPage } from './pages/AuditLogPage.js';
+import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
+import { GatewayPage } from './pages/GatewayPage.js';
+import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -82,6 +86,10 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/ediscovery"     element={<EDiscoveryPage />} />
                   <Route path="/journaling"     element={<JournalingPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
+                  <Route path="/audit-log"     element={<AuditLogPage />} />
+                  <Route path="/oauth-clients" element={<OAuthClientsPage />} />
+                  <Route path="/gateway"       element={<GatewayPage />} />
+                  <Route path="/public-folders" element={<PublicFoldersPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />

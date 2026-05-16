@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `1.3.6`
+**Aktuelle Version**: `1.3.7`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -502,4 +502,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-16 (v1.3.4 — Feature: Shared Mailboxes, Quarantäne, Transportregeln, Mobile Geräte, Message Trace, Connectors, Organisation + Adresslisten im ECP; Sidebar mit gruppierten Sektionen)*
+*Letzte Aktualisierung: 2026-05-16 (v1.3.7 — Feature: Audit-Log, OAuth2-Clients, SMTP-Gateway, Öffentliche Ordner im ECP; OWA Notizen-Seite)*

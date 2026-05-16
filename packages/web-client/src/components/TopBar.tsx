@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Calendar, Users, CheckSquare, Search, Bell, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 
 interface Props {
   onSearch: (q: string) => void;
-  currentApp: 'mail' | 'calendar' | 'contacts' | 'tasks';
+  currentApp: 'mail' | 'calendar' | 'contacts' | 'tasks' | 'notes';
 }
 
 export function TopBar({ onSearch, currentApp }: Props) {
@@ -19,6 +19,7 @@ export function TopBar({ onSearch, currentApp }: Props) {
     { id: 'calendar', label: 'Kalender', icon: Calendar, path: '/calendar' },
     { id: 'contacts', label: 'Kontakte', icon: Users, path: '/contacts' },
     { id: 'tasks', label: 'Aufgaben', icon: CheckSquare, path: '/tasks' },
+    { id: 'notes', label: 'Notizen', icon: StickyNote, path: '/notes' },
   ] as const;
 
   const handleSearch = (e: React.FormEvent) => {
