@@ -13,7 +13,7 @@ const log = createLogger('api:admin:dashboard');
 let _queue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_queue) {
-    _queue = new Queue('smtp:outbound', { connection: getRedisClient() });
+    _queue = new Queue('smtp-outbound', { connection: getRedisClient() }); // kein ':' in BullMQ v5
   }
   return _queue;
 }
@@ -103,7 +103,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       // Nachrichten pro Tag (letzte 7 Tage) — Gruppierung in PostgreSQL
       prisma.$queryRaw<{ day: Date; count: bigint }[]>`
         SELECT DATE_TRUNC('day', date) AS day, COUNT(*)::bigint AS count
-        FROM "Message"
+        FROM "messages"
         WHERE "deletedAt" IS NULL AND date >= ${sevenDaysAgo}
         GROUP BY DATE_TRUNC('day', date)
         ORDER BY day ASC

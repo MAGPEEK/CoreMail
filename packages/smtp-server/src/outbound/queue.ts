@@ -18,7 +18,7 @@ export interface OutboundJob {
   dkimPrivateKey?: string;
 }
 
-const QUEUE_NAME = 'smtp:outbound';
+const QUEUE_NAME = 'smtp-outbound'; // BullMQ v5: kein ':' im Queue-Namen erlaubt
 
 let _queue: Queue<OutboundJob> | null = null;
 
