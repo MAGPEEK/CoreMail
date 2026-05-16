@@ -9,6 +9,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.8.19] — 2026-05-16 — Message Queue Management
+
+### Added
+
+- **ECP Warteschlangenverwaltung** — vollständige Neuentwicklung mit dunkler Sub-Navigation (5 Bereiche):
+  - **Übersicht** — 5 Stat-Cards (Wartend/Aktiv/Wiederholung/Dead Letter/Zugestellt), Queue-Verteilung als Balkenchart, klickbare Karten navigieren direkt zum jeweiligen Bereich, Dead-Letter-Warnbanner mit Link
+  - **Ausgehend** — Tabelle wartender + aktiver Nachrichten: Absender, Empfänger, Zeitstempel mit Altersanzeige, Versuche-Badge (farbig), expandierbare Detailzeile (Job-ID, Message-ID, DKIM-Domain, Stacktrace), Löschen
+  - **Wiederholung** — Retry-Queue (exponential Backoff): Nächster-Versuch-Spalte, manuelles Retry und Löschen pro Nachricht
+  - **Dead Letter** — fehlgeschlagene Nachrichten: Fehlerursache + Stacktrace im Detailpanel, Einzelrestart, „Alle wiederholen", Queue leeren
+  - **Einstellungen** — Retention, Retry, Auto-Flush, Benachrichtigung
+- **Einstellungen (QueueSettings)**:
+  - Max. Wiederholungsversuche (1–50, Standard 10) mit Zeitplan-Vorschau (exponential Backoff)
+  - Basis-Backoff-Delay (10–3600 Sek., Standard 60 s) — verdoppelt sich pro Versuch
+  - Dead-Letter-Aufbewahrung (1–365 Tage, Standard 7 Tage)
+  - Ausgehende Queue Aufbewahrung (1–720 Stunden, Standard 48 h)
+  - Zugestellte Nachrichten Aufbewahrung (1–720 Stunden, Standard 24 h)
+  - Automatische Dead-Letter-Bereinigung (Toggle)
+  - Warnung bei neuen Dead Letters (Toggle)
+  - RFC 5321 § 4.5.4.1 Hinweis (min. 120 Stunden / 5 Tage empfohlen)
+- **Prisma-Modell `QueueSettings`** — Singleton-Modell mit 8 Konfigurationsfeldern
+- **BullMQ-Integration in api-gateway** — direkte Queue-Abfragen über BullMQ `Queue`-Klasse (statt Raw-Redis-Listen):
+  - `GET /api/v1/admin/queues/stats` — Zähler je State (waiting/active/delayed/failed/completed)
+  - `GET /api/v1/admin/queues/jobs` — Paginierte Job-Liste filterbar nach State
+  - `POST /api/v1/admin/queues/jobs/:id/retry` — Einzelnen fehlgeschlagenen Job wiederholen
+  - `POST /api/v1/admin/queues/retry-failed` — Alle fehlgeschlagenen Jobs auf einmal wiederholen
+  - `DELETE /api/v1/admin/queues/jobs/:id` — Einzelnen Job entfernen
+  - `POST /api/v1/admin/queues/flush` — Queue nach State leeren (failed/delayed/completed)
+  - `GET/PUT /api/v1/admin/queues/settings` — Queue-Einstellungen CRUD
+
+### Changed
+
+- **QueuesPage** — komplett neu gebaut (ersetzt die einfache Redis-List-Ansicht)
+- **SMTP-Outbound-Queue API** — nutzt jetzt BullMQ `Queue`-Klasse direkt (kein Raw-`LRANGE` mehr)
+
+---
+
 ## [1.7.19] — 2026-05-16 — Quarantine Detail-View & Compliance Info
 
 ### Added
