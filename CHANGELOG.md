@@ -9,6 +9,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.9] — 2026-05-16 — Security Hardening (OWASP, Container-Härtung)
+
+### Added
+
+- **Helmet HTTP-Security-Header** (OWASP A05) — alle Antworten erhalten:
+  - `Content-Security-Policy` (kein eval, kein fremdes CDN, kein iframe)
+  - `Strict-Transport-Security` (HSTS, 1 Jahr, includeSubDomains, preload)
+  - `X-Content-Type-Options: nosniff` — MIME-Sniffing verhindert
+  - `X-Frame-Options: DENY` — Clickjacking verhindert
+  - `Referrer-Policy: strict-origin-when-cross-origin`
+  - `X-DNS-Prefetch-Control: off`, `Permissions-Policy`
+- **Rate-Limiting** (OWASP A07 — Brute Force) — `express-rate-limit`:
+  - Globales Limit: 500 Requests / 15 min / IP
+  - Auth-Endpunkte (`/auth/*`): max. 20 Versuche / 15 min / IP
+  - Setup-Endpunkt: max. 5 Versuche / Stunde
+  - Admin-Mutations: 200 mutierende Calls / 15 min / IP
+- **Suspicious-Input-Guard** — blockt CRLF-Injection (Header-Splitting), Null-Bytes in Headern, Path-Traversal (`../`), Oversized-Headers (> 16 KB)
+- **Request-ID** — jede Antwort erhält `X-Request-Id` (UUID) für Logging/Tracing
+- **trust proxy** in Express konfiguriert — korrektes Rate-Limiting bei Reverse-Proxy-Einsatz
+
+### Security
+
+- **Mass-Assignment verhindert** (OWASP A04) — `PATCH /messages/:id` im Storage-API akzeptiert nur Whitelist-Felder (`flags`, `changeKey`, `modSeq`, `deletedAt`); direkte `req.body → data: req.body`-Übergabe an Prisma vollständig entfernt
+- **Input-Validierung Storage-API** — alle Endpunkte validieren IDs (CUID-Format), Typen und Längen; Path-Traversal in MinIO-Keys geblockt; `PATCH /folders`, `POST /mailboxes`, `POST /messages` mit expliziter Feld-Whitelist
+- **Storage-API bindet auf 127.0.0.1** — nicht mehr auf `0.0.0.0`; von außen unerreichbar
+- **Cache-Control für HTML-Dateien** — `no-cache, no-store, must-revalidate` auf `index.html` (verhindert Caching veralteter SPAs)
+- **ACME-Token-Validierung** — Nur `[a-zA-Z0-9_-]{1,128}` als Token akzeptiert
+- **Dockerfile** — `setcap 'cap_net_bind_service=+eip'` auf dem Node-Binary; Laufzeit-Verzeichnisse gehören `node:node`
+- **supervisord** — alle 11 Node.js-Prozesse laufen jetzt als `user=node` (UID 1000), nicht mehr als root
+- **docker-compose.yml** — Container-Härtung für alle 4 Services:
+  - `cap_drop: ALL` auf allen Containern — keine Capabilities außer den explizit benötigten
+  - `coremail`: `cap_add: [NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE]`
+  - `postgres/minio`: `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]`
+  - `redis`: kein `cap_add` — bindet nur auf Port 6379 (kein privilegierter Port)
+  - `pids_limit` für jeden Container (200 / 100 / 50 / 100)
+  - `tmpfs: /tmp` mit `noexec,nosuid,size=256m` (kein Code-Ausführen aus /tmp)
+  - `no-new-privileges:true` für postgres, redis, minio (und alle Observability-Container)
+  - Observability-Container (Prometheus, Grafana, Loki, Tempo) ebenfalls gehärtet
+
+---
+
 ## [1.3.8] — 2026-05-16 — Cleanup + Status & Monitoring
 
 ### Added

@@ -116,8 +116,20 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# supervisord für Process-Management (kein nginx — api-gateway übernimmt HTTP-Routing)
-RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl
+# ── System-Pakete ─────────────────────────────────────────────────────────────
+# libcap: setcap-Werkzeug — erlaubt dem node-Binary das Binden an Ports < 1024
+#         ohne Root-Rechte (cap_net_bind_service).
+# tini:   Init-Prozess (PID 1) — sauberes Signal-Handling, keine Zombie-Prozesse.
+RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap
+
+# ── setcap: node darf Privilegierte Ports binden (25, 110, 143, …) ────────────
+# cap_net_bind_service=+eip:
+#   e (effective)    — Capability ist beim Ausführen aktiv
+#   i (inheritable)  — Capability wird über setuid() auf Kindprozesse vererbt
+#   p (permitted)    — Capability ist im erlaubten Set
+# Damit können supervisord-Kindprozesse (user=node) trotz Nicht-Root-UID
+# privilegierte Ports binden, wenn no-new-privileges NICHT gesetzt ist.
+RUN setcap 'cap_net_bind_service=+eip' /usr/local/bin/node
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -185,9 +197,13 @@ COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Verzeichnisse für supervisord
-RUN mkdir -p /var/log/supervisor \
- && chown -R node:node /app/www
+# ── Verzeichnisse + Berechtigungen ────────────────────────────────────────────
+# Alle Laufzeit-Verzeichnisse gehören dem node-User (uid 1000, gid 1000).
+# supervisord startet als root (PID 1 via tini) und wechselt via user=node
+# für jeden Kindprozess zu node — dafür braucht es SETUID/SETGID Capability.
+RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail \
+ && chown -R node:node /app /var/log/supervisor /var/run/supervisor /tmp/coremail \
+ && chmod 750 /var/log/supervisor /var/run/supervisor
 
 # Ports:
 #   3000 — HTTP (OWA, ECP, API, Auth, EWS-Proxy, ActiveSync-Proxy)

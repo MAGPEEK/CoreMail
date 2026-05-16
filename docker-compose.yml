@@ -115,6 +115,32 @@ services:
       minio:
         condition: service_healthy
 
+    # ── Container-Hardening ────────────────────────────────────────────────────
+    # Verhindert Privilege-Escalation via setuid-Binaries und exec().
+    # Ausnahme: no-new-privileges ist NICHT gesetzt, damit cap_net_bind_service
+    # via setcap auf dem node-Binary an Kindprozesse (user=node) vererbt werden
+    # kann. Alle anderen Härtungsmaßnahmen kompensieren das.
+    security_opt:
+      - seccomp:unconfined           # Eigenes Seccomp-Profil kann in Prod ergänzt werden
+
+    cap_drop:
+      - ALL                          # Alle Capabilities entfernen …
+
+    cap_add:
+      - NET_BIND_SERVICE             # … nur privilegierte Ports erlauben (25, 110, 143)
+      - SETUID                       # supervisord → setuid zu node-User
+      - SETGID                       # supervisord → setgid zu node-Group
+      - CHOWN                        # Entrypoint-Skript: Datei-Ownership setzen
+      - DAC_OVERRIDE                 # Lesen/Schreiben trotz Dateirechten (root-Prozess)
+      # NICHT enthalten: SYS_ADMIN, NET_ADMIN, SYS_PTRACE, SYS_MODULE, SYS_RAWIO
+
+    # /tmp als tmpfs: kein exec, kein suid, Größe begrenzt
+    tmpfs:
+      - /tmp:noexec,nosuid,size=256m
+
+    # Maximale Anzahl Prozesse im Container (supervisord + ~12 Node-Prozesse)
+    pids_limit: 200
+
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
       interval: 30s
@@ -150,6 +176,22 @@ services:
       timeout: 5s
       retries: 5
 
+    # ── Container-Hardening ────────────────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true       # Keine Privilege-Escalation via execve
+
+    cap_drop:
+      - ALL
+
+    cap_add:
+      - CHOWN                        # PostgreSQL setzt Datei-Ownership beim Init
+      - DAC_OVERRIDE                 # Datei-Zugriff für postgres-User
+      - FOWNER                       # Bypasst Dateirechte-Checks für Owner
+      - SETGID                       # postgres wechselt Gruppen-ID
+      - SETUID                       # postgres wechselt User-ID
+
+    pids_limit: 100
+
     networks: [coremail]
 
   # ┌─────────────────────────────────────────────────────────────────────────┐
@@ -172,6 +214,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+    # ── Container-Hardening ────────────────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+      # Redis bindet nur auf Port 6379 (> 1024) — NET_BIND_SERVICE nicht nötig
+
+    pids_limit: 50
 
     networks: [coremail]
 
@@ -205,6 +257,21 @@ services:
       retries: 3
       start_period: 10s
 
+    # ── Container-Hardening ────────────────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    cap_add:
+      - CHOWN                        # MinIO setzt Datei-Ownership beim Init
+      - DAC_OVERRIDE                 # Datei-Zugriff auf /data
+      - SETGID
+      - SETUID
+
+    pids_limit: 100
+
     networks: [coremail]
 
   # ┌─────────────────────────────────────────────────────────────────────────┐
@@ -226,6 +293,10 @@ services:
     volumes:
       - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose: ["9090"]
     networks: [coremail]
 
@@ -244,6 +315,15 @@ services:
     ports:
       - "3001:3000"
     depends_on: [prometheus]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
     networks: [coremail]
 
   loki:
@@ -255,6 +335,10 @@ services:
     volumes:
       - ./infra/observability/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki-data:/tmp/loki
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose: ["3100"]
     networks: [coremail]
 
@@ -267,6 +351,10 @@ services:
     volumes:
       - ./infra/observability/tempo/tempo.yml:/etc/tempo.yml:ro
       - tempo-data:/tmp/tempo
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose: ["3200"]
     networks: [coremail]
 
