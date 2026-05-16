@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
   Cable, Plus, Trash2, Pencil, X, Loader2, ToggleLeft, ToggleRight,
-  ArrowUpRight, ArrowDownLeft, LayoutGrid, Mail, Send, Inbox, Archive, Lock,
+  ArrowUpRight, ArrowDownLeft, LayoutGrid, Mail, Inbox, Archive, Lock,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
@@ -18,7 +18,7 @@ interface Connector {
 }
 
 // ── Typen — Services ──────────────────────────────────────────────────────────
-type ServiceKey = 'SMTP_RECEIVE' | 'SMTP_SEND' | 'IMAP' | 'POP3';
+type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
 
 interface ServiceListener {
   id: string; service: ServiceKey; address: string; port: number;
@@ -31,11 +31,10 @@ type ServicesOverview = Record<ServiceKey, OverviewEntry>;
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 type NavView =
   | 'conn-all' | 'conn-send' | 'conn-receive'
-  | 'svc-overview' | 'SMTP_RECEIVE' | 'SMTP_SEND' | 'IMAP' | 'POP3';
+  | 'svc-overview' | 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
 
 const SVC_SLUG: Record<ServiceKey, string> = {
   SMTP_RECEIVE: 'smtp-receive',
-  SMTP_SEND:    'smtp-send',
   IMAP:         'imap',
   POP3:         'pop3',
 };
@@ -482,11 +481,10 @@ function ServicesOverview({ onSelect }: { onSelect: (key: ServiceKey) => void })
     queryFn:  () => api.get<ServicesOverview>('/admin/services/overview'),
   });
 
-  const CARDS: { key: ServiceKey; label: string; icon: React.ElementType }[] = [
-    { key: 'SMTP_RECEIVE', label: 'SMTP Receiving', icon: Inbox   },
-    { key: 'SMTP_SEND',    label: 'SMTP Sending',   icon: Send    },
-    { key: 'IMAP',         label: 'IMAP',           icon: Mail    },
-    { key: 'POP3',         label: 'POP3',           icon: Archive },
+  const CARDS: { key: ServiceKey; label: string; icon: React.ElementType; ports: string }[] = [
+    { key: 'SMTP_RECEIVE', label: 'SMTP Inbound',  icon: Inbox,   ports: '25 · 465 · 587' },
+    { key: 'IMAP',         label: 'IMAP',           icon: Mail,    ports: '143 · 993'       },
+    { key: 'POP3',         label: 'POP3',           icon: Archive, ports: '110 · 995'       },
   ];
 
   return (
@@ -498,8 +496,8 @@ function ServicesOverview({ onSelect }: { onSelect: (key: ServiceKey) => void })
       {isLoading ? (
         <div className="flex justify-center py-16 text-gray-400 text-sm">Lade…</div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 max-w-2xl">
-          {CARDS.map(({ key, label, icon: Icon }) => {
+        <div className="grid grid-cols-3 gap-4 max-w-2xl">
+          {CARDS.map(({ key, label, icon: Icon, ports }) => {
             const entry = overview?.[key] ?? { total: 0, active: 0 };
             return (
               <button key={key} onClick={() => onSelect(key)}
@@ -508,7 +506,10 @@ function ServicesOverview({ onSelect }: { onSelect: (key: ServiceKey) => void })
                   <div className="p-2 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
                     <Icon size={18} className="text-blue-600" />
                   </div>
-                  <span className="text-sm font-semibold text-gray-800">{label}</span>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">{label}</p>
+                    <p className="text-xs text-gray-400">{ports}</p>
+                  </div>
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl font-bold text-gray-900">{entry.active}</span>
@@ -560,11 +561,10 @@ export function ConnectorsPage() {
     {
       heading: 'Services',
       items: [
-        { key: 'svc-overview',  label: 'Übersicht',      icon: LayoutGrid },
-        { key: 'SMTP_RECEIVE',  label: 'SMTP Receiving',  icon: Inbox      },
-        { key: 'SMTP_SEND',     label: 'SMTP Sending',    icon: Send       },
-        { key: 'IMAP',          label: 'IMAP',            icon: Mail       },
-        { key: 'POP3',          label: 'POP3',            icon: Archive    },
+        { key: 'svc-overview',  label: 'Übersicht',     icon: LayoutGrid },
+        { key: 'SMTP_RECEIVE',  label: 'SMTP Inbound',  icon: Inbox      },
+        { key: 'IMAP',          label: 'IMAP',          icon: Mail       },
+        { key: 'POP3',          label: 'POP3',          icon: Archive    },
       ],
     },
   ];

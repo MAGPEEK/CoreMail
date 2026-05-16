@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.18] — 2026-05-16 — ECP: Services bereinigt (SMTP Sending entfernt)
+
+### Changed
+
+- **`ConnectorsPage` → Services** — „SMTP Sending" aus den Listener-Services entfernt: Sendeconnectors sind Routing-Regeln, keine Listener. Services zeigen jetzt nur noch die drei echten Protokoll-Listener: **SMTP Inbound** (25/465/587), **IMAP** (143/993), **POP3** (110/995)
+- **Services-Übersicht** — Karten-Layout auf 3 Spalten angepasst, Port-Nummern unter dem Label angezeigt
+
+---
+
 ## [1.3.17] — 2026-05-16 — ECP: Services und Connectors zusammengeführt
 
 ### Changed
