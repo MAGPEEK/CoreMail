@@ -204,6 +204,11 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
 
+    # Direkt als redis-User starten (UID/GID 999 im offiziellen Image).
+    # Das Entrypoint-Skript überspringt setpriv/gosu wenn id -u ≠ 0,
+    # was den Konflikt mit no-new-privileges verhindert (setresuid EPERM).
+    user: "999:999"
+
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
 
     volumes:
@@ -221,7 +226,7 @@ services:
 
     cap_drop:
       - ALL
-      # Redis bindet nur auf Port 6379 (> 1024) — NET_BIND_SERVICE nicht nötig
+      # Keine cap_add — kein Privilege-Drop nötig wenn als redis-User gestartet
 
     pids_limit: 50
 

@@ -231,6 +231,12 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
 
+    # Direkt als redis-User starten (UID/GID 999 im offiziellen Image).
+    # Das Entrypoint-Skript prüft `id -u`: ist es ≠ 0, überspringt es
+    # setpriv/gosu komplett und führt redis-server direkt aus. So wird
+    # der Privilege-Drop umgangen, der mit no-new-privileges kollidiert.
+    user: "999:999"
+
     # Einzeilig — YAML-Folded-Scalar (>) würde bei tieferer Einrückung
     # Newlines erhalten statt falten → Shell würde jeden Flag als eigenen
     # Befehl ausführen → redis-server startet ohne Optionen oder crasht.
@@ -250,11 +256,7 @@ services:
 
     cap_drop:
       - ALL
-
-    cap_add:
-      - SETUID    # gosu im Redis-Entrypoint wechselt von root → redis-User
-      - SETGID    # gosu setzt auch die Gruppen-ID
-      - CHOWN     # Redis setzt Datei-Ownership auf /data beim Start
+      # Keine cap_add nötig — kein setresuid/setpriv wenn als redis-User gestartet
 
     pids_limit: 50
 
