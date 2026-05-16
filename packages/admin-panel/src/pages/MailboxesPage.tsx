@@ -97,7 +97,7 @@ export function MailboxesPage() {
   });
   const { data: domains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains'],
-    queryFn:  () => api.get<Domain[]>('/admin/domains'),
+    queryFn:  () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
   });
 
   // Detail-Abfrage für aufgeklappten User (Ordner + Speicher)

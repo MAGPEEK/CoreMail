@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.16] — 2026-05-16 — Bugfix: API-Response-Mismatch domains (Objekt statt Array)
+
+### Fixed
+
+- **`MailboxesPage`, `GroupsPage`, `ResourcesPage`, `SharedMailboxesPage`** — `GET /admin/domains` gibt ein paginiertes Objekt `{ domains, total, page, limit }` zurück, aber alle vier Pages haben die Antwort direkt als `Domain[]`-Array verwendet → `N.map is not a function`-Crash. Alle Queries verwenden jetzt `.then(r => r.domains)` um das Array korrekt zu extrahieren
+- **`SharedMailboxesPage` User-Suche** — `GET /admin/mailboxes` gibt ein Plain-Array zurück, aber die Query erwartete `{ items: User[] }` und rief `.items` darauf auf → `undefined`. Jetzt mit korrektem Array-Handling + clientseitigem Filter
+
+---
+
 ## [1.3.15] — 2026-05-16 — Bugfix: Null-sichere Filter-Funktion in MailboxesPage + GroupsPage
 
 ### Fixed

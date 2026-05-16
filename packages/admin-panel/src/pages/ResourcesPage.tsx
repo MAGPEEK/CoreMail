@@ -373,7 +373,7 @@ export function ResourcesPage() {
 
   const { data: domains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains-list'],
-    queryFn: () => api.get('/admin/domains?limit=200'),
+    queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
     select: (d: unknown) => {
       if (Array.isArray(d)) return d as Domain[];
       if (d && typeof d === 'object' && 'domains' in d) return (d as { domains: Domain[] }).domains;

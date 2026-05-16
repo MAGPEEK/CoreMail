@@ -174,7 +174,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
 
   const { data: domains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains-list'],
-    queryFn: () => api.get<{ items: Domain[] }>('/api/v1/admin/domains?limit=200').then(r => r.items),
+    queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
   });
 
   const mutation = useMutation({
@@ -246,7 +246,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
 
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ['admin-users-list', userSearch],
-    queryFn: () => api.get<{ items: User[] }>(`/api/v1/admin/mailboxes?search=${encodeURIComponent(userSearch)}&limit=50`).then(r => r.items),
+    queryFn: () => api.get<User[]>(`/admin/mailboxes`).then(r => Array.isArray(r) ? r.filter(u => u.email.includes(userSearch) || (u.displayName ?? '').includes(userSearch)).slice(0, 50) : []),
     enabled: userSearch.length > 1,
   });
 
