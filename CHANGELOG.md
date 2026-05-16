@@ -9,6 +9,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.6] — 2026-05-16 — Feature: Externe Kontakte + RBAC + eDiscovery + Journaling + Aufbewahrung im ECP
+
+### Added
+
+- **ECP „Externe Kontakte"** (`/ecp/#/ext-contacts`) — Admin-verwaltete externe E-Mail-Kontakte in der GAL:
+  - Tabelle: Anzeigename, E-Mail, Unternehmen, Telefon, GAL-Sichtbarkeit
+  - Volltext-Suche über Name, E-Mail, Unternehmen
+  - Erstellen/Bearbeiten: Vor-/Nachname, Anzeigename, E-Mail, Unternehmen, Abteilung, Telefon, Mobil, Notizen, GAL ausblenden
+- **ECP „Berechtigungen (RBAC)"** (`/ecp/#/rbac`) — Rollenzuweisung für alle Benutzer:
+  - Tabelle aller User mit aktueller Rolle und Status
+  - Inline-Dropdown: 8 Exchange-kompatible Rollen (OrganizationManagement, RecipientManagement, ServerManagement, ComplianceManagement, HygieneManagement, HelpDesk, ViewOnlyOrg, User)
+  - Rollenbeschreibungs-Übersicht + Filter nach Rolle/Nur Admins
+- **ECP „eDiscovery"** (`/ecp/#/ediscovery`) — Cross-Mailbox-Suche und Legal Hold:
+  - Suchen: Erstellen, Starten (POST /run), Exportieren (POST /export), Löschen
+  - Suchkriterien: Stichwörter, Betreff, Absender, Empfänger, Datum von/bis
+  - Aufklappbare Kriteriendetails pro Suche, Status-Polling alle 5s
+  - Legal Holds: Erstellen (Name, Postfach-IDs), Aufheben, Status-Anzeige
+- **ECP „Journaling-Regeln"** (`/ecp/#/journaling`) — Compliance-Archivierung nach RFC 3462:
+  - Tabelle: Regelname, Journal-Adresse, Scope, Gilt-für, Status-Toggle
+  - Erstellen/Bearbeiten: Name, Journal-Adresse, Scope (ALL/INBOUND/OUTBOUND/INTERNAL), Empfängertyp, wrapAsReport-Option
+- **ECP „Aufbewahrungsrichtlinien"** (`/ecp/#/retention`) — Automatisches Archivieren/Löschen:
+  - Tabelle: Name, Aufbewahrungsdauer (lesbare Darstellung), Aktion-Badge, Scope, Zuweisungen, Status-Toggle
+  - Erstellen/Bearbeiten: Tage (mit lesbarer Vorschau), Aktion (ARCHIVE/DELETE/MOVE_TO_FOLDER), Scope, Legal-Hold-Beachten
+- **Backend `adminExternalContactsRouter`** — CRUD für externe Mail-Kontakte (`/api/v1/admin/contacts`)
+- **Prisma-Modell `ExternalMailContact`** — `email`, `displayName`, `firstName`, `lastName`, `company`, `department`, `phone`, `mobile`, `hiddenFromGal`, `notes`
+- **Sidebar-Sektion „Compliance"** — eDiscovery, Journaling, Aufbewahrung
+- Sidebar-Eintrag **„Berechtigungen"** (ShieldHalf-Icon) und **„Ext. Kontakte"** (BookUser-Icon)
+
+---
+
 ## [1.3.5] — 2026-05-16 — Feature: Verteilergruppen + Ressourcenpostfächer im ECP
 
 ### Added

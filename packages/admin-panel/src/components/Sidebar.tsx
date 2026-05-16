@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Smartphone, Search, Cable, Building2, Users,
+  BookUser, ShieldHalf, SearchCheck, BookText, Archive,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -18,6 +19,7 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/shared-mailboxes', label: 'Freigegeben',         icon: Inbox },
       { path: '/groups',           label: 'Verteilergruppen',    icon: Users },
       { path: '/resources',        label: 'Ressourcen',          icon: Building2 },
+      { path: '/ext-contacts',    label: 'Ext. Kontakte',       icon: BookUser },
       { path: '/domains',          label: 'Domains',             icon: Globe },
     ],
   },
@@ -46,6 +48,15 @@ const NAV: (NavItem | NavGroup)[] = [
     ],
   },
   { path: '/organisation',     label: 'Organisation',        icon: Building2 },
+  {
+    group: 'Compliance',
+    items: [
+      { path: '/ediscovery',      label: 'eDiscovery',          icon: SearchCheck },
+      { path: '/journaling',      label: 'Journaling',          icon: BookText },
+      { path: '/retention',       label: 'Aufbewahrung',        icon: Archive },
+    ],
+  },
+  { path: '/rbac',             label: 'Berechtigungen',      icon: ShieldHalf },
   { path: '/logs',             label: 'Protokolle',          icon: ScrollText },
   { path: '/reports',         label: 'Berichte',            icon: BarChart3 },
   { path: '/settings',        label: 'Einstellungen',       icon: Settings2 },
