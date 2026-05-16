@@ -16,6 +16,13 @@ import { ServicesPage } from './pages/ServicesPage.js';
 import { ReportsPage } from './pages/ReportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { CertificatesPage } from './pages/CertificatesPage.js';
+import { SharedMailboxesPage } from './pages/SharedMailboxesPage.js';
+import { QuarantinePage } from './pages/QuarantinePage.js';
+import { TransportRulesPage } from './pages/TransportRulesPage.js';
+import { MobileDevicesPage } from './pages/MobileDevicesPage.js';
+import { MessageTracePage } from './pages/MessageTracePage.js';
+import { ConnectorsPage } from './pages/ConnectorsPage.js';
+import { OrganisationPage } from './pages/OrganisationPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -53,7 +60,14 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />
-                  <Route path="/certificates" element={<CertificatesPage />} />
+                  <Route path="/certificates"    element={<CertificatesPage />} />
+                  <Route path="/shared-mailboxes" element={<SharedMailboxesPage />} />
+                  <Route path="/quarantine"      element={<QuarantinePage />} />
+                  <Route path="/transport-rules" element={<TransportRulesPage />} />
+                  <Route path="/mobile"          element={<MobileDevicesPage />} />
+                  <Route path="/message-trace"  element={<MessageTracePage />} />
+                  <Route path="/connectors"     element={<ConnectorsPage />} />
+                  <Route path="/organisation"   element={<OrganisationPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />

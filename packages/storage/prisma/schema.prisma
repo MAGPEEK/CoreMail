@@ -1158,6 +1158,76 @@ model ServiceListener {
   @@map("service_listeners")
 }
 
+// ── Mail-Connectors (Sende- / Empfangsconnectors) ─────────────────────────────
+
+enum ConnectorType {
+  SEND      // Ausgehende Verbindungen zu Relay-/Smarthost
+  RECEIVE   // Eingehende Verbindungen (akzeptierte Quellen)
+}
+
+model MailConnector {
+  id               String        @id @default(cuid())
+  name             String
+  description      String        @default("")
+  type             ConnectorType
+  enabled          Boolean       @default(true)
+  // SEND: Ziel-SMTP-Host / RECEIVE: Quelladressen (CIDR)
+  host             String        @default("")
+  port             Int           @default(25)
+  tls              Boolean       @default(false)
+  requireTls       Boolean       @default(false)
+  // RECEIVE: Erlaubte Quell-IPs/Ranges (CIDR, leer = alle)
+  sourceIps        String[]
+  // SEND: Für welche Domains gilt dieser Connector (leer = Fallback für alle)
+  targetDomains    String[]
+  // Auth-Credentials für SEND
+  username         String?
+  password         String?       // klartext intern (sollte vault-gesichert sein)
+  // Priorität (niedrigerer Wert = höhere Priorität)
+  priority         Int           @default(0)
+  createdBy        String
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([type, enabled])
+  @@map("mail_connectors")
+}
+
+// ── Organisation & Sharing-Richtlinien ────────────────────────────────────────
+
+model SharingPolicy {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  enabled     Boolean  @default(true)
+  // Domains die Kalender-/Kontakt-Freigaben empfangen dürfen
+  // Leer = alle externen Domains erlaubt
+  allowedDomains String[]
+  // Was darf geteilt werden
+  allowCalendar  Boolean @default(true)
+  allowContacts  Boolean @default(false)
+  // FreeBusy vs. volle Kalenderdetails
+  calendarDetail String  @default("FREEBUSY") // FREEBUSY | LIMITED | FULL
+  isDefault      Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("sharing_policies")
+}
+
+model AddressList {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  // LDAP-artiger Filter: {type: "all"|"users"|"groups"|"rooms", domainId?, department?}
+  filter      Json     @default("{}")
+  isGal       Boolean  @default(false) // Globale Adressliste
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("address_lists")
+}
+
 // ── SSL/TLS Zertifikat-Verwaltung ─────────────────────────────────────────────
 
 enum CertType {

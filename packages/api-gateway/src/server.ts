@@ -32,6 +32,13 @@ import { adminGatewayRouter } from './routes/admin/gateway.js';
 import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
 import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
+import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
+import { adminQuarantineRouter } from './routes/admin/quarantine.js';
+import { adminTransportRulesRouter } from './routes/admin/transport-rules.js';
+import { adminMobileRouter } from './routes/admin/mobile.js';
+import { adminMessageTraceRouter } from './routes/admin/message-trace.js';
+import { adminConnectorsRouter } from './routes/admin/connectors.js';
+import { adminOrganisationRouter } from './routes/admin/organisation.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -208,7 +215,14 @@ app.use('/api/v1/admin/oauth', adminOAuthClientsRouter);
 app.use('/api/v1/admin/gateway', adminGatewayRouter);
 app.use('/api/v1/admin/servers', adminServersRouter);
 app.use('/api/v1/admin/services', adminServicesRouter);
-app.use('/api/v1/admin/certificates', adminCertificatesRouter);
+app.use('/api/v1/admin/certificates',    adminCertificatesRouter);
+app.use('/api/v1/admin/shared-mailboxes', adminSharedMailboxesRouter);
+app.use('/api/v1/admin/quarantine',      adminQuarantineRouter);
+app.use('/api/v1/admin/transport-rules', adminTransportRulesRouter);
+app.use('/api/v1/admin/mobile',          adminMobileRouter);
+app.use('/api/v1/admin/message-trace',  adminMessageTraceRouter);
+app.use('/api/v1/admin/connectors',     adminConnectorsRouter);
+app.use('/api/v1/admin/organisation',   adminOrganisationRouter);
 
 // (Proxy-Routen wurden vor express.json() verschoben — siehe oben)
 

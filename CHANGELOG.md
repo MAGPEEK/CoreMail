@@ -9,6 +9,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.4] — 2026-05-16 — Feature: Nachrichtenfluss-Connectors + Organisation + Adresslisten
+
+### Added
+
+- **ECP „Connectors"** (`/ecp/#/connectors`) — Sende-/Empfangsconnectors verwalten:
+  - Separate Tabellen für Send- und Receive-Connectors mit Priority, Host:Port, TLS-Badge, Enabled-Status
+  - Create/Edit-Modal: Name, Typ (SEND/RECEIVE), Host, Port, TLS, Require-TLS, Source-IPs, Ziel-Domains, Benutzername/Passwort, Priorität
+  - PATCH `/:id/toggle` — Aktivieren/Deaktivieren ohne Reload
+  - Passwort nie in API-Antworten enthalten (serverseitig ausgeblendet)
+- **ECP „Organisation"** (`/ecp/#/organisation`) — 3 Tabs:
+  - **Freigaberichtlinien** — Kalender-/Kontaktfreigabe für externe Domains (isDefault-Radio-Semantik, CalendarDetail-Level: FREEBUSY/LIMITED/FULL)
+  - **Adresslisten** — Benutzerdefinierte Adresslisten + GAL-Flag, JSON-Filter
+  - **Globale Adressliste (GAL)** — Live-Abfrage über Users, Shared Mailboxes, Verteilergruppen und Ressourcenpostfächer mit Suche
+- **Backend `adminConnectorsRouter`** — vollständiges CRUD + PATCH toggle (`/api/v1/admin/connectors`)
+- **Backend `adminOrganisationRouter`** — Sharing Policies + Address Lists CRUD + GAL Live-Query (`/api/v1/admin/organisation`)
+- **ECP „Nachrichtenfluss-Trace"** (`/ecp/#/message-trace`) — Bereits in v1.3.3 enthalten, jetzt vollständig verknüpft
+- **Prisma-Modell `MailConnector`** — `id`, `name`, `description`, `type` (SEND/RECEIVE), `enabled`, `host`, `port`, `tls`, `requireTls`, `sourceIps[]`, `targetDomains[]`, `username?`, `password?`, `priority`, `createdBy`
+- **Prisma-Modell `SharingPolicy`** — `id`, `name`, `description`, `enabled`, `allowedDomains[]`, `allowCalendar`, `allowContacts`, `calendarDetail`, `isDefault`
+- **Prisma-Modell `AddressList`** — `id`, `name`, `description`, `filter` (JSON), `isGal`
+
+---
+
+## [1.3.3] — 2026-05-16 — Feature: Shared Mailboxes + Quarantäne + Transportregeln + Mobile Geräte + Nachrichtenfluss-Trace
+
+### Added
+
+- **ECP „Freigegebene Postfächer"** (`/ecp/#/shared-mailboxes`) — Shared Mailbox Verwaltung:
+  - Tabelle: E-Mail, Name, Quota, Status, Mitgliederzahl
+  - Create/Edit-Modal mit Quota-Feld
+  - Berechtigungsmodal: User suchen, Berechtigungstyp (FULL_ACCESS / SEND_AS / SEND_ON_BEHALF / READ_ONLY) zuweisen und entfernen
+- **ECP „Quarantäne"** (`/ecp/#/quarantine`) — Spam- und Virus-Quarantäne:
+  - Stats-Karten: Gesamt, Viren, Spam, Policy, Freigegeben, Ausstehend
+  - Filter nach Grund (Alle/Virus/Spam/Policy) + Freigegebene anzeigen/ausblenden + Suche
+  - Freigabe-Aktion (nur Nicht-Virus), Löschen einzeln, Bulk-Löschen (nach Alter + Filter)
+- **ECP „Transportregeln"** (`/ecp/#/transport-rules`) — E-Mail-Transportregeln:
+  - Regelübersicht mit Bedingungen/Aktionen-Vorschau, Priorität, Enabled-Toggle
+  - Regeleditor-Modal: Name, Beschreibung, Priorität, dynamische Bedingungen (SENDER/RECIPIENT/SUBJECT/HEADER/SIZE/ATTACHMENT) und Aktionen (REDIRECT/COPY/ADD_HEADER/REMOVE_HEADER/REJECT/QUARANTINE/SET_SPAM_SCORE/PREPEND_SUBJECT/APPEND_DISCLAIMER)
+  - POST /reorder — Massenpriorität-Update per Transaction
+  - PATCH /:id/toggle — Aktivieren/Deaktivieren
+- **ECP „Mobile Geräte"** (`/ecp/#/mobile`) — ActiveSync-Geräteverwaltung:
+  - Tabelle: Gerät, User, Typ/OS, Status-Badge (OK/PENDING/BLOCKED/WIPED), zuletzt gesehen
+  - Aktionen: Status ändern (Block/Freigabe), Remote Wipe, Löschen
+  - Filter nach Status + Suche
+- **ECP „Nachrichtenfluss-Trace"** (`/ecp/#/message-trace`) — Mail-Flow-Debugging:
+  - Suchformular: Absender, Empfänger, Betreff, Status, Datum von/bis
+  - Ergebnistabelle mit Zeitstempel, Von, An, Betreff, Status-Badge, Details-Klappzeile
+  - CSV-Export via GET /export mit Content-Disposition-Header
+- **Backend `adminSharedMailboxesRouter`** — CRUD + Berechtigungsverwaltung (`/api/v1/admin/shared-mailboxes`)
+- **Backend `adminQuarantineRouter`** — GET (gefiltert + paginiert), Stats, Release, Delete, Bulk-Delete (`/api/v1/admin/quarantine`)
+- **Backend `adminTransportRulesRouter`** — CRUD + Toggle + Reorder-Transaction (`/api/v1/admin/transport-rules`)
+- **Backend `adminMobileRouter`** — Geräteliste, Status-Patch, Wipe, Delete (`/api/v1/admin/mobile`)
+- **Backend `adminMessageTraceRouter`** — Liest SystemLog `MAIL_FLOW`-Kategorie, In-Memory-Filter, CSV-Export (`/api/v1/admin/message-trace`)
+- **Sidebar-Neustrukturierung** — Gruppierte Navigation mit Sektionen: Empfänger / Nachrichtenfluss / Schutz / Infrastruktur
+
+---
+
 ## [1.3.2] — 2026-05-15 — Feature: SSL/TLS Zertifikat-Verwaltung
 
 ### Added
