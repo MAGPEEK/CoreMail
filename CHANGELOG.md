@@ -9,6 +9,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.0.19] — 2026-05-16 — Passwort ändern & Design-Einstellungen
+
+### Added
+
+- **OWA Passwort ändern (Einstellungen → Konto → Passwort)** — Neuer Abschnitt in den OWA-Benutzereinstellungen:
+  - Formular mit aktuellem Passwort, neuem Passwort und Bestätigung
+  - Echtzeit-Stärkemeter (4-stufig: Schwach / Mittel / Gut / Stark) mit farbiger Balkenanzeige
+  - Passwort-Sichtbarkeit-Toggle für aktuelles und neues Passwort
+  - Inline-Fehlermeldung bei nicht übereinstimmendem Passwort
+  - Schaltfläche nur aktiv wenn Formular vollständig und gültig
+- **OWA Design-Einstellungen (Einstellungen → Allgemein → Design)** — Neuer Abschnitt für Erscheinungsbild:
+  - **Farbschema-Auswahl** — 3 Karten mit Live-Vorschau: Hell / Dunkel / System (folgt OS-Präferenz automatisch)
+  - **6 Akzentfarben** — Microsoft Blau, Teams Lila, Grün, Orange, Türkis, Pink; sofortige Anwendung ohne Reload
+  - Persistente Speicherung in `localStorage` via Zustand `persist` Middleware
+  - Dark-Mode via `dark`-Klasse auf `<html>` (Tailwind `darkMode: 'class'`)
+  - Accent-Farbe über CSS-Variable `--color-accent` auf `<html>`, Tailwind-Config auf RGB-Variable-Muster umgestellt (opacity modifiers `bg-accent/10` bleiben voll funktionsfähig)
+- **API `POST /api/v1/user/change-password`** — Passwort-Änderung mit bcrypt-Verifikation des aktuellen Passworts, Stärkeprüfung (min. 8 Zeichen), bcrypt-Hash (cost 12) des neuen Passworts
+- **`ThemeApplier`-Komponente** in `App.tsx` — setzt `dark`-Klasse und `--color-accent` CSS-Variable bei Laden und bei Änderungen; reagiert auf OS-Farbschema-Änderungen beim `system`-Modus
+
+---
+
 ## [1.9.19] — 2026-05-16 — SSO & LDAP / Active Directory
 
 ### Added

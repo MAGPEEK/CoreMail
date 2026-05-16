@@ -6,11 +6,15 @@ export default {
   theme: {
     extend: {
       colors: {
+        // CSS-Variable-basierter Accent — ermöglicht dynamische Farbwechsel.
+        // RGB-Werte werden via --color-accent auf <html> gesetzt.
+        // Das /[alpha] Opacity-Modifier Pattern (bg-accent/10) funktioniert
+        // mit dem "<channels> / <alpha-value>" Tailwind-Muster.
         accent: {
-          DEFAULT: '#0078D4',
-          hover: '#106EBE',
-          active: '#005A9E',
-          light: '#EFF6FC',
+          DEFAULT: 'rgb(var(--color-accent, 0 120 212) / <alpha-value>)',
+          hover:   'rgb(var(--color-accent, 0 120 212) / 0.85)',
+          active:  'rgb(var(--color-accent, 0 120 212) / 0.7)',
+          light:   'rgb(var(--color-accent, 0 120 212) / 0.08)',
         },
       },
       fontFamily: {

@@ -1,11 +1,13 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github } from 'lucide-react';
 
-const VERSION     = '1.9.19';
+const VERSION     = '2.0.19';
 const BUILD_DATE  = '2026-05-16';
 const GITHUB_URL  = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 
 const HIGHLIGHTS = [
+  { version: '2.0.19', date: '2026-05-16', title: 'Passwort ändern & Design-Einstellungen',
+    notes: 'OWA: Passwort-Änderungsformular mit Stärkemeter. Design-Einstellungen mit Hell/Dunkel/System-Farbschema und 6 Akzentfarben (sofortige Anwendung). Persistenz via localStorage. Dark-Mode via Tailwind-Klasse, Accent-Farbe via CSS-Variable.' },
   { version: '1.9.19', date: '2026-05-16', title: 'SSO & LDAP / Active Directory',
     notes: 'ECP-Verwaltung für OIDC/OAuth2-Provider (Azure AD, Google, Keycloak, Authentik, Okta) mit Schnellauswahl und Discovery-URL-Test. SAML 2.0 Referenz. LDAP/AD-Verbindungsverwaltung mit Attributzuordnung, Sync-Steuerung und Verbindungstest. Info ganz unten in der Navigation.' },
   { version: '1.8.19', date: '2026-05-16', title: 'Message Queue Management',

@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import bcrypt from 'bcrypt';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -283,6 +284,36 @@ userRouter.delete('/rules/:id', async (req: Request, res: Response) => {
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
   await prisma.mailRule.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
+// POST /api/v1/user/change-password
+userRouter.post('/change-password', async (req: Request, res: Response) => {
+  const schema = z.object({
+    currentPassword: z.string().min(1),
+    newPassword:     z.string().min(8, 'Mindestens 8 Zeichen'),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? 'Ungültige Eingabe';
+    res.status(400).json({ error: msg });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where:  { id: req.apiUser!.userId },
+    select: { id: true, passwordHash: true },
+  });
+  if (!user || !user.passwordHash) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
+
+  const valid = await bcrypt.compare(parsed.data.currentPassword, user.passwordHash);
+  if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
+
+  const newHash = await bcrypt.hash(parsed.data.newPassword, 12);
+  await prisma.user.update({
+    where: { id: req.apiUser!.userId },
+    data:  { passwordHash: newHash },
+  });
   res.json({ ok: true });
 });
 

@@ -11,8 +11,34 @@ import { TasksPage } from './pages/TasksPage.js';
 import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { useAuthStore } from './store/auth.js';
-import { useUiStore } from './store/ui.js';
+import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
+
+// ── Theme-Applier ─────────────────────────────────────────────────────────────
+function ThemeApplier() {
+  const { theme, accentRgb } = useThemeStore();
+
+  useEffect(() => {
+    // Accent-Farbe als CSS-Variable setzen
+    document.documentElement.style.setProperty('--color-accent', accentRgb);
+  }, [accentRgb]);
+
+  useEffect(() => {
+    const apply = () => {
+      const isDark = resolveIsDark(theme);
+      document.documentElement.classList.toggle('dark', isDark);
+    };
+    apply();
+
+    // System-Präferenz überwachen
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => { if (theme === 'system') apply(); };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [theme]);
+
+  return null;
+}
 
 const APP_MAP: Record<string, 'mail' | 'calendar' | 'contacts' | 'tasks' | 'notes'> = {
   '/mail': 'mail',
@@ -78,6 +104,8 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 
 export function App() {
   return (
+    <>
+      <ThemeApplier />
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
@@ -99,5 +127,6 @@ export function App() {
         </SetupGuard>
       } />
     </Routes>
+    </>
   );
 }

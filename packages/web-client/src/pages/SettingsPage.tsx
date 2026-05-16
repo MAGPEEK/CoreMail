@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2 } from 'lucide-react';
+import {
+  User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
+  ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
+} from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
+import { useThemeStore, ACCENT_COLORS, type ThemeMode } from '../store/ui.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme';
 
 interface OofData {
   enabled: boolean;
@@ -34,8 +38,23 @@ function fmtBytes(b: number): string {
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function today() { return new Date().toISOString().split('T')[0]!; }
+function today()    { return new Date().toISOString().split('T')[0]!; }
 function tomorrow() { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]!; }
+
+// Passwort-Stärke ─────────────────────────────────────────────────────────────
+function getPasswordStrength(pw: string): { score: 0 | 1 | 2 | 3 | 4; label: string; colorClass: string } {
+  if (!pw) return { score: 0, label: '', colorClass: '' };
+  let score = 0;
+  if (pw.length >= 8)  score++;
+  if (pw.length >= 12) score++;
+  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+  if (/[0-9]/.test(pw)) score++;
+  if (/[^a-zA-Z0-9]/.test(pw)) score++;
+  const s = Math.min(score, 4) as 0 | 1 | 2 | 3 | 4;
+  const labels      = ['', 'Schwach', 'Mittel', 'Gut', 'Stark'];
+  const colorClasses = ['', 'bg-red-500', 'bg-orange-400', 'bg-yellow-400', 'bg-green-500'];
+  return { score: s, label: labels[s] ?? '', colorClass: colorClasses[s] ?? '' };
+}
 
 // ── Toggle ────────────────────────────────────────────────────────────────────
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -95,6 +114,250 @@ function ProfileSection() {
         <button onClick={() => mutation.mutate()} className="btn-primary" disabled={mutation.isPending}>
           {mutation.isPending ? <><Loader2 size={14} className="animate-spin" /> Speichern…</> : 'Speichern'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PASSWORT ÄNDERN
+// ═══════════════════════════════════════════════════════════════════════════════
+function PasswordSection() {
+  const [currentPw,  setCurrentPw]  = useState('');
+  const [newPw,      setNewPw]      = useState('');
+  const [confirmPw,  setConfirmPw]  = useState('');
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew,     setShowNew]     = useState(false);
+
+  const strength = getPasswordStrength(newPw);
+  const mismatch = confirmPw.length > 0 && newPw !== confirmPw;
+
+  const mutation = useMutation({
+    mutationFn: () => api.post<{ ok: boolean }>('/user/change-password', { currentPassword: currentPw, newPassword: newPw }),
+    onSuccess: () => {
+      toast.success('Passwort erfolgreich geändert');
+      setCurrentPw('');
+      setNewPw('');
+      setConfirmPw('');
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const canSubmit = currentPw.length > 0 && newPw.length >= 8 && newPw === confirmPw && !mutation.isPending;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">Passwort ändern</h2>
+        <p className="text-sm text-gray-500 mt-0.5">Legen Sie ein neues Passwort für Ihr Konto fest</p>
+      </div>
+
+      <div className="space-y-4 max-w-md">
+        {/* Aktuelles Passwort */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Aktuelles Passwort</label>
+          <div className="relative">
+            <input
+              type={showCurrent ? 'text' : 'password'}
+              className="input pr-10"
+              value={currentPw}
+              onChange={e => setCurrentPw(e.target.value)}
+              placeholder="Aktuelles Passwort eingeben"
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowCurrent(v => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showCurrent ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          </div>
+        </div>
+
+        {/* Neues Passwort */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Neues Passwort</label>
+          <div className="relative">
+            <input
+              type={showNew ? 'text' : 'password'}
+              className="input pr-10"
+              value={newPw}
+              onChange={e => setNewPw(e.target.value)}
+              placeholder="Mindestens 8 Zeichen"
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowNew(v => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showNew ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          </div>
+
+          {/* Stärkemeter */}
+          {newPw.length > 0 && (
+            <div className="mt-2 space-y-1">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4].map(i => (
+                  <div
+                    key={i}
+                    className={`h-1.5 flex-1 rounded-full transition-colors ${
+                      i <= strength.score ? strength.colorClass : 'bg-gray-200'
+                    }`}
+                  />
+                ))}
+              </div>
+              {strength.label && (
+                <p className={`text-xs font-medium ${
+                  strength.score <= 1 ? 'text-red-500'
+                  : strength.score === 2 ? 'text-orange-500'
+                  : strength.score === 3 ? 'text-yellow-600'
+                  : 'text-green-600'
+                }`}>
+                  Stärke: {strength.label}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Passwort bestätigen */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Passwort bestätigen</label>
+          <input
+            type="password"
+            className={`input ${mismatch ? 'border-red-400 focus:border-red-400 focus:ring-red-200' : ''}`}
+            value={confirmPw}
+            onChange={e => setConfirmPw(e.target.value)}
+            placeholder="Neues Passwort wiederholen"
+            autoComplete="new-password"
+          />
+          {mismatch && (
+            <p className="text-xs text-red-500 mt-1">Die Passwörter stimmen nicht überein</p>
+          )}
+        </div>
+
+        <button
+          onClick={() => mutation.mutate()}
+          className="btn-primary"
+          disabled={!canSubmit}
+        >
+          {mutation.isPending ? <><Loader2 size={14} className="animate-spin" /> Passwort ändern…</> : 'Passwort ändern'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Minimale SVG-Icons für Passwort-Sichtbarkeit ───────────────────────────────
+function EyeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+function EyeOffIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DESIGN (THEME)
+// ═══════════════════════════════════════════════════════════════════════════════
+const THEME_OPTIONS: { id: ThemeMode; label: string; desc: string; icon: React.ElementType }[] = [
+  { id: 'light',  label: 'Hell',     desc: 'Immer helles Design',                          icon: Sun     },
+  { id: 'dark',   label: 'Dunkel',   desc: 'Immer dunkles Design',                         icon: Moon    },
+  { id: 'system', label: 'System',   desc: 'Folgt den Systemeinstellungen automatisch',    icon: Monitor },
+];
+
+function ThemeSection() {
+  const { theme, accentRgb, setTheme, setAccent } = useThemeStore();
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">Design</h2>
+        <p className="text-sm text-gray-500 mt-0.5">Erscheinungsbild und Akzentfarbe des Webclients</p>
+      </div>
+
+      {/* Farbschema */}
+      <div className="space-y-3">
+        <p className="text-sm font-medium text-gray-700">Farbschema</p>
+        <div className="grid grid-cols-3 gap-3 max-w-lg">
+          {THEME_OPTIONS.map(({ id, label, desc, icon: Icon }) => {
+            const active = theme === id;
+            return (
+              <button
+                key={id}
+                onClick={() => setTheme(id)}
+                className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-left ${
+                  active
+                    ? 'border-accent bg-accent/5'
+                    : 'border-gray-200 hover:border-gray-300 bg-white'
+                }`}
+              >
+                {active && (
+                  <span className="absolute top-2 right-2 w-5 h-5 bg-accent rounded-full flex items-center justify-center">
+                    <Check size={11} className="text-white" strokeWidth={3} />
+                  </span>
+                )}
+                {/* Vorschau-Box */}
+                <div className={`w-full h-14 rounded-lg overflow-hidden border ${
+                  id === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
+                }`}>
+                  <div className={`h-4 ${id === 'dark' ? 'bg-gray-700' : 'bg-gray-100'} flex items-center gap-1 px-2`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${id === 'dark' ? 'bg-gray-500' : 'bg-gray-300'}`} />
+                    <span className={`w-8 h-1 rounded ${id === 'dark' ? 'bg-gray-500' : 'bg-gray-200'}`} />
+                  </div>
+                  <div className="flex gap-1 p-1.5">
+                    <span className={`w-8 h-6 rounded ${id === 'dark' ? 'bg-gray-700' : 'bg-gray-100'}`} />
+                    <span className={`flex-1 h-6 rounded ${id === 'dark' ? 'bg-gray-750' : 'bg-white'} border ${id === 'dark' ? 'border-gray-600' : 'border-gray-200'}`} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 w-full">
+                  <Icon size={13} className={active ? 'text-accent' : 'text-gray-500'} />
+                  <span className={`text-xs font-semibold ${active ? 'text-accent' : 'text-gray-700'}`}>{label}</span>
+                </div>
+                <p className="text-[10px] text-gray-400 leading-tight w-full">{desc}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Akzentfarbe */}
+      <div className="space-y-3">
+        <p className="text-sm font-medium text-gray-700">Akzentfarbe</p>
+        <div className="flex flex-wrap gap-3">
+          {ACCENT_COLORS.map(({ name, hex, rgb }) => {
+            const active = accentRgb === rgb;
+            return (
+              <button
+                key={rgb}
+                title={name}
+                onClick={() => setAccent(rgb)}
+                className={`w-9 h-9 rounded-full border-2 transition-all flex items-center justify-center ${
+                  active ? 'border-gray-800 scale-110 shadow-md' : 'border-transparent hover:scale-105'
+                }`}
+                style={{ backgroundColor: hex }}
+              >
+                {active && <Check size={14} className="text-white" strokeWidth={3} />}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-gray-400">
+          Die Akzentfarbe wird für Schaltflächen, Links und Markierungen verwendet.
+        </p>
       </div>
     </div>
   );
@@ -554,25 +817,29 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Konto',
     items: [
-      { id: 'profile',   label: 'E-Mail-Konto',         icon: User     },
-      { id: 'oof',       label: 'Automatische Antworten', icon: BellOff  },
-      { id: 'signature', label: 'Signaturen',            icon: PenLine  },
-      { id: 'storage',   label: 'Speicher',              icon: HardDrive },
+      { id: 'profile',   label: 'E-Mail-Konto',           icon: User      },
+      { id: 'password',  label: 'Passwort',                icon: Lock      },
+      { id: 'oof',       label: 'Automatische Antworten',  icon: BellOff   },
+      { id: 'signature', label: 'Signaturen',              icon: PenLine   },
+      { id: 'storage',   label: 'Speicher',                icon: HardDrive },
     ],
   },
   {
     group: 'Allgemein',
     items: [
-      { id: 'security', label: 'Sicherheit', icon: Shield },
+      { id: 'theme',    label: 'Design',     icon: Palette },
+      { id: 'security', label: 'Sicherheit', icon: Shield  },
     ],
   },
 ];
 
 const SECTION_MAP: Record<Section, React.ComponentType> = {
   profile:   ProfileSection,
+  password:  PasswordSection,
   oof:       OofSection,
   signature: SignatureSection,
   storage:   StorageSection,
+  theme:     ThemeSection,
   security:  SecuritySection,
 };
 
