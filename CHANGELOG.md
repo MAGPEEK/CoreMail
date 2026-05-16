@@ -9,6 +9,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.6.19] — 2026-05-16 — ECP: SMTP-Infrastruktur-Konfiguration
+
+### Added
+
+- **SMTP-Konfiguration** — neue ECP-Seite unter Infrastruktur mit 6 Unterbereichen:
+  - **ESMTP-Befehle** — Tabelle aller ESMTP-Erweiterungen (STARTTLS, AUTH PLAIN/LOGIN/CRAM-MD5, PIPELINING, SIZE, 8BITMIME, ENHANCEDSTATUSCODES, SMTPUTF8, DSN, CHUNKING) mit RFC-Referenz, Risiko-Badge (Standard/Vorsicht/Erweitert) und Einzel-Toggle; Sicherheitshinweise bei Deaktivierung sicherheitsrelevanter Extensions
+  - **Lokale Zustellung** — Allow/Disallow lokal; visuelle Vergleichskarte für aktiviert vs. deaktiviert (Postfächer/Verteilergruppen/Ressourcen vs. reiner Relay-Modus)
+  - **SMTP-Banner** — Override des Standard-Banners (`hostname CoreMail ESMTP`); Freitextfeld, Live-Vorschau als Terminal-Mockup (220-Response + EHLO-Dialog), RFC-Hinweis zu Security through obscurity
+  - **Greylisting** — Aktivierungs-Toggle, Wartezeit (Sek.), Whitelist-TTL (Std.), Ablauf-Illustration (3-Schritte), IP/CIDR-Whitelist mit Quick-Add für lokale Netze
+  - **Relaying** — Allow/Deny Relay; Relay-Domains-Liste; vertrauenswürdige IP-Ranges (Relay ohne Auth); Auth-Pflicht-Toggle; Open-Relay-Warnung; Quick-Add für RFC 1918 Netze
+  - **Verbindungseinstellungen** — Max. Verbindungen gesamt/je IP, Max. Empfänger/Nachricht, Max. Auth-Fehlversuche, Max. Nachrichtengröße (MB), Verbindungs-Timeout (RFC 5321 min. 300s), Greeting Delay (gegen Spam-Bots)
+- **Prisma-Modell `SmtpSettings`** — 27 Felder für alle SMTP-Konfigurationsparameter
+- **API `GET/PUT /api/v1/admin/smtp-config/settings`**
+
+---
+
 ## [1.5.19] — 2026-05-16 — Rspamd 4.0 + ClamAV + Compliance-Info
 
 ### Added

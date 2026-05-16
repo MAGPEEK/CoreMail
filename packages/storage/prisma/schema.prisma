@@ -1078,6 +1078,56 @@ model GatewaySettings {
   @@map("gateway_settings")
 }
 
+// ── SMTP-Server-Einstellungen (Singleton) ────────────────────────────────────
+model SmtpSettings {
+  id                   String   @id @default("singleton")
+
+  // ESMTP-Erweiterungen (disabled = nicht angeboten)
+  extStarttls          Boolean  @default(true)
+  extAuthPlain         Boolean  @default(true)
+  extAuthLogin         Boolean  @default(true)
+  extAuthCramMd5       Boolean  @default(false)
+  extPipelining        Boolean  @default(true)
+  extSize              Boolean  @default(true)
+  ext8bitmime          Boolean  @default(true)
+  extEnhancedStatus    Boolean  @default(true)
+  extSmtputf8          Boolean  @default(false)
+  extDsn               Boolean  @default(true)
+  extChunking          Boolean  @default(false)
+
+  // Lokale Zustellung
+  localDeliveryEnabled Boolean  @default(true)
+
+  // SMTP-Banner
+  bannerOverride       Boolean  @default(false)
+  bannerText           String   @default("")
+
+  // Relaying
+  relayingEnabled      Boolean  @default(false)
+  relayDomains         Json     @default("[]")
+  relayRequireAuth     Boolean  @default(true)
+  relayTrustedIps      Json     @default("[]")
+
+  // Greylisting (SMTP-Ebene)
+  greylistingEnabled   Boolean  @default(true)
+  greylistWaitSec      Int      @default(300)
+  greylistTtlHours     Int      @default(4)
+  greylistWhitelist    Json     @default("[]")
+
+  // Verbindungseinstellungen
+  maxConnections       Int      @default(100)
+  maxConnectionsPerIp  Int      @default(10)
+  maxMessageSizeMb     Int      @default(25)
+  maxRecipients        Int      @default(100)
+  connectionTimeoutSec Int      @default(300)
+  greetingDelaySec     Int      @default(0)
+  maxAuthFailures      Int      @default(5)
+
+  updatedAt            DateTime @updatedAt
+
+  @@map("smtp_settings")
+}
+
 // ── Sicherheitseinstellungen (Singleton) ─────────────────────────────────────
 model SecuritySettings {
   id                    String   @id @default("singleton")

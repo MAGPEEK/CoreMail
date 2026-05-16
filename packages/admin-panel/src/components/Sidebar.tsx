@@ -4,7 +4,7 @@ import {
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
-  FolderOpen, KeyRound, Network, ClipboardList, Activity, Info,
+  FolderOpen, KeyRound, Network, ClipboardList, Activity, Info, Terminal,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -44,6 +44,7 @@ const NAV: (NavItem | NavGroup)[] = [
     group: 'Infrastruktur',
     items: [
       { path: '/services',         label: 'Services',            icon: Server },
+      { path: '/smtp-config',      label: 'SMTP-Konfiguration',  icon: Terminal },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
     ],

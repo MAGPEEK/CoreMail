@@ -33,6 +33,7 @@ import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
 import { GatewayPage } from './pages/GatewayPage.js';
 import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
+import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -127,6 +128,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/compliance-info" element={<ComplianceInfoPage />} />
+                  <Route path="/smtp-config" element={<SmtpConfigPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </AdminLayout>
