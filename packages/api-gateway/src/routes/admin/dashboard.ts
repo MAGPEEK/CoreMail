@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { createBullMqConnection, createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
 export const adminDashboardRouter: RouterType = Router();
@@ -13,7 +13,7 @@ const log = createLogger('api:admin:dashboard');
 let _queue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_queue) {
-    _queue = new Queue('smtp-outbound', { connection: getRedisClient() }); // kein ':' in BullMQ v5
+    _queue = new Queue('smtp-outbound', { connection: createBullMqConnection() }); // BullMQ v5: kein ':', maxRetriesPerRequest: null
   }
   return _queue;
 }

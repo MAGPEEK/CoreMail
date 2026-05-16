@@ -52,7 +52,7 @@ services:
   # └─────────────────────────────────────────────────────────────────────────┘
 
   coremail:
-    image: magpeek/coremail-app:1.3.10
+    image: magpeek/coremail-app:1.3.12
     container_name: coremail
     restart: unless-stopped
 
@@ -143,11 +143,14 @@ services:
       - SETGID                # supervisord → setuid/setgid zu node-User
       - CHOWN
       - DAC_OVERRIDE
+      - KILL                  # supervisord (root) → SIGTERM an node-User-Prozesse
 
     tmpfs:
       - /tmp:noexec,nosuid,size=256m
 
-    pids_limit: 200
+    # 12 Node.js-Services × ~10 Threads (libuv + V8 GC + Prisma-Tokio) = ~120 Threads
+    # Plus Overhead → 500 als komfortabler Puffer
+    pids_limit: 500
 
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]

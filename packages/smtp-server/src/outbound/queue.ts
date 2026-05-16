@@ -1,5 +1,5 @@
 import { Queue, Worker, type Job } from 'bullmq';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
 import { relayMessage } from './relay.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
@@ -25,7 +25,7 @@ let _queue: Queue<OutboundJob> | null = null;
 export function getOutboundQueue(): Queue<OutboundJob> {
   if (!_queue) {
     _queue = new Queue<OutboundJob>(QUEUE_NAME, {
-      connection: getRedisClient(),
+      connection: createBullMqConnection(),
       defaultJobOptions: {
         attempts: 10,
         backoff: {
@@ -86,7 +86,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       log.info({ jobId: job.id, to }, 'Message delivered');
     },
     {
-      connection: getRedisClient(),
+      connection: createBullMqConnection(), // BullMQ Worker braucht maxRetriesPerRequest: null
       concurrency: 10,
     },
   );
