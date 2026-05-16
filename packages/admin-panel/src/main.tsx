@@ -12,7 +12,6 @@ import { QueuesPage } from './pages/QueuesPage.js';
 import { LogsPage } from './pages/LogsPage.js';
 import { ProtectionPage } from './pages/ProtectionPage.js';
 import { ServersPage } from './pages/ServersPage.js';
-import { ServicesPage } from './pages/ServicesPage.js';
 import { ReportsPage } from './pages/ReportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { CertificatesPage } from './pages/CertificatesPage.js';
@@ -105,7 +104,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/logs" element={<LogsPage />} />
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/servers" element={<ServersPage />} />
-                  <Route path="/services" element={<ServicesPage />} />
+                  <Route path="/services" element={<Navigate to="/connectors" replace />} />
                   <Route path="/certificates"    element={<CertificatesPage />} />
                   <Route path="/shared-mailboxes" element={<SharedMailboxesPage />} />
                   <Route path="/quarantine"      element={<QuarantinePage />} />

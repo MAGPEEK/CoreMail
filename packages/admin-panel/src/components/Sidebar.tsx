@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
+  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield,
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Cable, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
@@ -44,7 +44,6 @@ const NAV: (NavItem | NavGroup)[] = [
   {
     group: 'Infrastruktur',
     items: [
-      { path: '/services',         label: 'Services',            icon: Server },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
     ],

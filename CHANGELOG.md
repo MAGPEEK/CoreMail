@@ -9,6 +9,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.17] — 2026-05-16 — ECP: Services und Connectors zusammengeführt
+
+### Changed
+
+- **`ConnectorsPage`** — Services-Verwaltung (Protokoll-Listener) direkt in die Connectors-Seite integriert. Neue linke Sub-Navigation mit zwei Bereichen: **Connectors** (Alle / Sendeconnectors / Empfangsconnectors) und **Services** (Übersicht / SMTP Receiving / SMTP Sending / IMAP / POP3). Standard-Ansicht beim Öffnen ist „Alle Connectors"
+- **`Sidebar`** — Eintrag „Services" aus dem Infrastruktur-Bereich entfernt (Services sind jetzt unter Connectors → Nachrichtenfluss erreichbar)
+- **`/services` Route** — Redirect zu `/connectors` (Rückwärtskompatibilität)
+
+---
+
 ## [1.3.16] — 2026-05-16 — Bugfix: API-Response-Mismatch domains (Objekt statt Array)
 
 ### Fixed
