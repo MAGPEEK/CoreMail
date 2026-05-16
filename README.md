@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-1.9.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-2.0.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -17,7 +17,7 @@
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v1.9.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/u/magpeek)
+> **Aktuelle Version: v2.0.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 
 ---
 
@@ -109,6 +109,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | MFA: Backup-Codes | ✅ |
 | App-Passwörter für Mail-Clients | ✅ |
 | OAuth2 Authorization Server (Modern Auth) | ✅ |
+| Passwort-Änderung im Webclient (OWA) | ✅ |
 
 ### Administration (ECP Admin-Panel)
 
@@ -130,6 +131,18 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | OpenTelemetry + Prometheus + Grafana + Loki + Tempo | ✅ |
 | Web Push / VAPID-Benachrichtigungen | ✅ |
 | Auto-Mailbox-Provisionierung beim ersten Login | ✅ |
+
+### OWA Benutzer-Einstellungen
+
+| Feature | Status |
+|---------|--------|
+| Anzeigename bearbeiten | ✅ |
+| Passwort ändern (Stärkemeter, Sichtbarkeits-Toggle) | ✅ |
+| Signaturen (Rich-Text Editor, Auto-Insert) | ✅ |
+| Abwesenheitsassistent mit Zeitraum-Kalenderintegration | ✅ |
+| Speicherübersicht pro Ordner mit Donut-Chart | ✅ |
+| Design: Hell / Dunkel / System + 6 Akzentfarben | ✅ |
+| Sicherheit: App-Passwörter & 2FA-Verwaltung | ✅ |
 
 ---
 
@@ -206,7 +219,7 @@ CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Ext
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:1.9.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:2.0.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -223,7 +236,7 @@ Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:1.9.19
+    image: magpeek/coremail-app:2.0.19
     ports:
       - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
       - "25:25"       # SMTP eingehend
@@ -500,7 +513,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:1.9.19
+docker pull magpeek/coremail-app:2.0.19
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -511,6 +524,7 @@ docker pull magpeek/coremail-app:1.9.19
 
 | Version | Highlights |
 |---------|-----------|
+| **v2.0.19** | OWA: Passwort ändern (Stärkemeter), Design Hell/Dunkel/System + 6 Akzentfarben, ECP Info mit Docker-Sektion |
 | **v1.9.19** | SSO-Verwaltung (OIDC/OAuth2, SAML), LDAP/AD-Verwaltung (Attributzuordnung, Sync, Verbindungstest) |
 | **v1.8.19** | Message Queue Management: BullMQ-native API, Dead Letter, Retry, Retention-Einstellungen |
 | **v1.7.19** | Quarantäne Detail-View mit MIME-Vorschau, Bulk-Selektion, CleanupModal |
@@ -543,6 +557,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v1.9.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v2.0.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
