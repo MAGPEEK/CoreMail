@@ -9,6 +9,8 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
 [![Version](https://img.shields.io/badge/Version-1.3.8-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
+📄 **[docker-compose.yml](docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten
+
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
@@ -21,12 +23,13 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 
 1. [Features](#features)
 2. [Schnellstart](#schnellstart)
-3. [Zugriff](#zugriff)
-4. [Konfiguration](#konfiguration)
-5. [DNS-Einrichtung](#dns-einrichtung)
-6. [TLS-Zertifikate](#tls-zertifikate)
-7. [Docker Hub](#docker-hub)
-8. [Lizenz](#lizenz)
+3. [Docker Compose](#docker-compose)
+4. [Zugriff](#zugriff)
+5. [Konfiguration](#konfiguration)
+6. [DNS-Einrichtung](#dns-einrichtung)
+7. [TLS-Zertifikate](#tls-zertifikate)
+8. [Docker Hub](#docker-hub)
+9. [Lizenz](#lizenz)
 
 ---
 
@@ -184,6 +187,116 @@ curl -s -X POST https://<MAIL_HOSTNAME>/api/v1/admin/setup \
     "displayName": "Administrator"
   }'
 ```
+
+---
+
+## Docker Compose
+
+### Was ist Docker Compose?
+
+Docker Compose ist ein Werkzeug, das mehrere Container als einen zusammenhängenden Stack definiert und startet. Statt jeden Container einzeln mit `docker run` zu konfigurieren, beschreibt eine einzige YAML-Datei den gesamten Stack — inklusive Netzwerk, Volumes, Umgebungsvariablen und Abhängigkeiten zwischen den Diensten.
+
+Ein `docker compose up -d` reicht aus, um CoreMail vollständig zu starten.
+
+### Aufbau des CoreMail-Stacks
+
+CoreMail besteht aus **vier Containern**:
+
+| Container | Image | Aufgabe |
+|-----------|-------|---------|
+| `coremail` | `magpeek/coremail-app:1.3.8` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail-postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
+| `coremail-redis` | `redis:7-alpine` | Sessions, SMTP-Queue, Live-Updates |
+| `coremail-minio` | `minio/minio` | Objektspeicher für Anhänge und Backups |
+
+Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, EWS, ActiveSync, CalDAV, Webmail und Admin-Panel — verwaltet von `supervisord`. Nach außen ist nur ein einziger HTTP-Port (3000) und die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
+
+### Die `docker-compose.yml`
+
+Die vollständig kommentierte Datei liegt im Root des Repositories:
+👉 **[docker-compose.yml](docker-compose.yml)**
+
+```yaml
+# Auszug — vollständige Datei im Repo-Root
+services:
+  coremail:
+    image: magpeek/coremail-app:1.3.8
+    ports:
+      - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
+      - "25:25"       # SMTP eingehend
+      - "465:465"     # SMTPS (Implizites TLS)
+      - "587:587"     # SMTP Submission (STARTTLS)
+      - "143:143"     # IMAP (STARTTLS)
+      - "993:993"     # IMAPS (Implizites TLS)
+      - "110:110"     # POP3
+      - "995:995"     # POP3S
+    environment:
+      MAIL_HOSTNAME: mail.meinedomain.de
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+      # ... vollständige Liste in der docker-compose.yml
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_started }
+      minio:    { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # Daten überleben Neustarts
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"   # MinIO Web-Konsole
+
+volumes:
+  pgdata:     # PostgreSQL-Daten
+  redisdata:  # Redis-Persistenz
+  miniodata:  # Anhänge und Backups
+```
+
+### Häufige Befehle
+
+```bash
+# Stack starten (Images werden automatisch von Docker Hub geladen)
+docker compose up -d
+
+# Status aller Container prüfen
+docker compose ps
+
+# Logs in Echtzeit verfolgen
+docker compose logs -f coremail
+
+# Einzelnen Dienst innerhalb des Containers neu starten
+docker exec coremail supervisorctl restart api-gateway
+
+# Stack stoppen (Daten bleiben erhalten)
+docker compose down
+
+# Stack stoppen und alle Daten löschen (Vorsicht!)
+docker compose down -v
+
+# Auf neue Version aktualisieren
+docker compose pull && docker compose up -d
+```
+
+### Mit Observability
+
+Optional können Prometheus, Grafana, Loki und Tempo mit einem einzigen Flag aktiviert werden:
+
+```bash
+docker compose --profile observability up -d
+```
+
+Grafana ist dann unter `http://localhost:3001` erreichbar (Standard-Login: `admin` / `admin`).
 
 ---
 

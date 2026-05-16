@@ -1,0 +1,293 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CoreMail — docker-compose.yml
+#
+# Startet den vollständigen CoreMail-Stack mit einem einzigen Befehl:
+#   docker compose up -d
+#
+# Voraussetzungen:
+#   1. .env-Datei anlegen (Vorlage: .env.example oder Abschnitt unten)
+#   2. TLS-Zertifikate ablegen (Produktion) oder gen-dev-certs.sh ausführen
+#
+# Mit Observability (Prometheus, Grafana, Loki, Tempo):
+#   docker compose --profile observability up -d
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: coremail
+
+services:
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │  CoreMail App                                                           │
+  # │                                                                         │
+  # │  Ein einziger Container enthält alle Dienste:                           │
+  # │    • SMTP-Server (Inbound + Outbound, Port 25 / 465 / 587)             │
+  # │    • IMAP-Server (Port 143 / 993)                                       │
+  # │    • POP3-Server (Port 110 / 995)                                       │
+  # │    • EWS — Outlook Desktop (SOAP/XML)                                   │
+  # │    • ActiveSync EAS 14.1 — iOS, Android, Outlook Mobile                │
+  # │    • Autodiscover v1 + v2                                               │
+  # │    • CalDAV / CardDAV                                                   │
+  # │    • REST API + Admin-Panel (ECP) + Webmail (OWA)                      │
+  # │    • Spam- & Virenfilter (rspamd, ClamAV)                               │
+  # │    • Auth-Service (lokal, LDAP, OIDC/SSO, MFA)                         │
+  # │    • Backup-Service                                                     │
+  # │                                                                         │
+  # │  HTTP-Routing erfolgt intern durch den api-gateway auf Port 3000.       │
+  # │  Für HTTPS einen Reverse Proxy vorschalten (Traefik, Caddy, nginx).     │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  coremail:
+    image: magpeek/coremail-app:1.3.8
+    container_name: coremail
+    restart: unless-stopped
+
+    environment:
+      # ── Allgemein ────────────────────────────────────────────────────────────
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Der öffentliche Hostname des Mailservers (FQDN, kein https://)
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      SMTP_HOSTNAME: ${MAIL_HOSTNAME}
+      IMAP_HOSTNAME: ${MAIL_HOSTNAME}
+
+      # ── Datenbank-Verbindungen (zeigen auf die Container unten) ─────────────
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD}@postgres:5432/coremail
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+
+      # ── Objektspeicher für Anhänge und Backups (MinIO) ───────────────────────
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: mail-attachments
+
+      # ── Sicherheitsschlüssel — zufällig, mind. 32 Zeichen ──────────────────
+      # Generieren:  openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET}
+      PEPPER: ${PEPPER}
+
+      # ── WebAuthn / FIDO2 (MFA mit Hardware-Key oder Biometrie) ──────────────
+      WEBAUTHN_RP_NAME: CoreMail
+      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME}
+      WEBAUTHN_ORIGIN: https://${MAIL_HOSTNAME}
+
+      # ── Backup-Zeitplan (cron-Format) ───────────────────────────────────────
+      BACKUP_BUCKET: coremail-backups
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}      # täglich 02:00 Uhr
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}  # 30 Tage aufbewahren
+
+      # ── GeoIP Country-Filter (optional) ─────────────────────────────────────
+      # Kostenlosen Account anlegen: https://www.maxmind.com/en/geolite2/signup
+      MAXMIND_ACCOUNT_ID: ${MAXMIND_ACCOUNT_ID:-}
+      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+
+    ports:
+      # HTTP — Webmail, Admin-Panel, API, EWS, Autodiscover
+      # Für HTTPS: Reverse Proxy (z.B. Traefik) auf Port 3000 zeigen lassen
+      - "3000:3000"
+
+      # SMTP
+      - "25:25"       # Eingehend (MX) — STARTTLS
+      - "465:465"     # Submission — Implizites TLS
+      - "587:587"     # Submission — STARTTLS
+
+      # IMAP
+      - "143:143"     # STARTTLS
+      - "993:993"     # Implizites TLS
+
+      # POP3
+      - "110:110"     # STARTTLS
+      - "995:995"     # Implizites TLS
+
+    volumes:
+      # TLS-Zertifikate für SMTP/IMAP/POP3 (STARTTLS + Implicit TLS)
+      # Produktion:   echte Zertifikate (z.B. Let's Encrypt)
+      # Entwicklung:  bash scripts/gen-dev-certs.sh
+      - ./infra/docker/nginx/certs:/app/certs:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s   # Startup dauert ~60–90s (Prisma migrate + alle Services)
+
+    networks: [coremail]
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │  PostgreSQL 16                                                          │
+  # │  Speichert: Benutzer, Domains, Mails (Metadaten), Kalender, Kontakte   │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: coremail
+      POSTGRES_USER: coremail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Datenbankschema wird beim ersten Start automatisch angelegt:
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks: [coremail]
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │  Redis 7                                                                │
+  # │  Speichert: Sessions, Greylisting, SMTP-Queue, Live-Events (SSE)       │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+
+    volumes:
+      - redisdata:/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks: [coremail]
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │  MinIO (S3-kompatibler Objektspeicher)                                  │
+  # │  Speichert: Mail-Anhänge > 256 KB, Backup-Archive                      │
+  # │  Web-Konsole: http://localhost:9001                                     │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  minio:
+    image: minio/minio:latest
+    container_name: coremail-minio
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+    volumes:
+      - miniodata:/data
+
+    ports:
+      - "9001:9001"   # MinIO Web-Konsole (nur intern zugänglich halten!)
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    networks: [coremail]
+
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │  Observability (optional — mit: docker compose --profile observability) │
+  # │                                                                         │
+  # │  Startet: Prometheus · Grafana · Loki · Tempo · Alertmanager           │
+  # │  Grafana: http://localhost:3001  (admin / admin — bitte ändern!)       │
+  # └─────────────────────────────────────────────────────────────────────────┘
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: coremail-prometheus
+    restart: unless-stopped
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    expose: ["9090"]
+    networks: [coremail]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: coremail-grafana
+    restart: unless-stopped
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on: [prometheus]
+    networks: [coremail]
+
+  loki:
+    image: grafana/loki:latest
+    container_name: coremail-loki
+    restart: unless-stopped
+    profiles: [observability]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./infra/observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/tmp/loki
+    expose: ["3100"]
+    networks: [coremail]
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: coremail-tempo
+    restart: unless-stopped
+    profiles: [observability]
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./infra/observability/tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/tmp/tempo
+    expose: ["3200"]
+    networks: [coremail]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistente Volumes — Daten überleben Container-Neustarts und Updates
+# ─────────────────────────────────────────────────────────────────────────────
+
+volumes:
+  pgdata:       # PostgreSQL-Daten
+  redisdata:    # Redis-Persistenz (AOF)
+  miniodata:    # Anhänge und Backups
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  tempo-data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internes Netzwerk — die Container sind nur untereinander erreichbar
+# (außer den explizit exponierten Ports oben)
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  coremail:
+    driver: bridge
