@@ -9,7 +9,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, downloadBuffer } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
@@ -59,6 +59,45 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     prisma.quarantine.count({ where }),
   ]);
   res.json({ items, total, page: parseInt(page), limit: parseInt(limit) });
+});
+
+// ── GET /:id ──────────────────────────────────────────────────────────────────
+adminQuarantineRouter.get('/:id', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const item = await prisma.quarantine.findUnique({ where: { id } });
+  if (!item) { res.status(404).json({ error: 'Not found' }); return; }
+
+  // Try to fetch a preview of the raw message from MinIO
+  let preview: { headers: Record<string, string>; bodyText: string } | null = null;
+  try {
+    const raw = await downloadBuffer(item.rawPath);
+    const text = raw.toString('utf8');
+
+    // Parse headers (up to blank line)
+    const blankLine = text.indexOf('\r\n\r\n');
+    const headerBlock = blankLine > -1 ? text.slice(0, blankLine) : text.slice(0, 2000);
+    const bodyBlock   = blankLine > -1 ? text.slice(blankLine + 4) : '';
+
+    const headers: Record<string, string> = {};
+    for (const line of headerBlock.split(/\r?\n/)) {
+      const m = /^([\w-]+):\s*(.*)$/.exec(line);
+      if (m) headers[m[1]!] = m[2]!;
+    }
+
+    // Extract plain text body (strip MIME boundaries, base64 etc.)
+    const bodyText = bodyBlock
+      .replace(/--[^\r\n]+(\r?\n)?/g, '')
+      .replace(/Content-[^\r\n]+(\r?\n)?/g, '')
+      .replace(/[A-Za-z0-9+/]{40,}={0,2}/g, '[base64]')
+      .slice(0, 2000)
+      .trim();
+
+    preview = { headers, bodyText };
+  } catch {
+    // MinIO not available or object missing — return without preview
+  }
+
+  res.json({ ...item, preview });
 });
 
 // ── POST /:id/release ─────────────────────────────────────────────────────────

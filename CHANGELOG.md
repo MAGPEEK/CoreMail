@@ -9,6 +9,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.7.19] — 2026-05-16 — Quarantine Detail-View & Compliance Info
+
+### Added
+
+- **Quarantine Detail-Ansicht** — vollständige Quarantäne-Verwaltung mit Slide-over-Panel (600 px):
+  - Klickbare Stat-Cards (Ausstehend/Virus/Spam/Richtlinie/Freigegeben/Gesamt) — filtern direkt die Tabelle
+  - Suchleiste (Absender/Empfänger/Betreff), Reason-Dropdown, Released/Pending/Alle-Tabs
+  - Bulk-Selektion mit Checkboxen + Massen-Lösch-Aktionsleiste
+  - Detailpanel pro Eintrag: E-Mail-Metadaten, Filter-Details als JSON, geparste E-Mail-Header (From/To/Subject/Date/Message-ID/X-Spam-Score/Authentication-Results etc.), Body-Vorschau (2000 Zeichen aus MinIO)
+  - Release/Löschen direkt im Detailpanel; Virus-Nachrichten können nicht freigegeben werden
+  - `CleanupModal` — Massen-Bereinigung nach Alter (1–365 Tage) und optional nur freigegebene Einträge
+  - Nummernpagination (Erste/Zurück/Nummern/Weiter/Letzte)
+- **API `GET /api/v1/admin/quarantine/:id`** — liefert Einzel-Eintrag mit MIME-Vorschau aus MinIO (geparste Header + bereinigter Body-Text)
+- **Compliance → Info** — Versionshistorie auf `1.7.19` aktualisiert, Einträge für v1.6.19 und v1.7.19 ergänzt
+- **`api.deleteWithBody`** — neue Methode im API-Client für DELETE-Anfragen mit Body (für Bulk-Bereinigung)
+
+---
+
 ## [1.6.19] — 2026-05-16 — ECP: SMTP-Infrastruktur-Konfiguration
 
 ### Added

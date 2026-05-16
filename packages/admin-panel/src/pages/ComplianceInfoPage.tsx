@@ -1,17 +1,19 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github } from 'lucide-react';
 
-const VERSION     = '1.5.19';
+const VERSION     = '1.7.19';
 const BUILD_DATE  = '2026-05-16';
 const GITHUB_URL  = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 
 const HIGHLIGHTS = [
+  { version: '1.7.19', date: '2026-05-16', title: 'Quarantine Detail-View & Compliance Info',
+    notes: 'Vollständige Quarantäne-Verwaltung mit Detail-Slide-over, MIME-Vorschau aus MinIO, Massen-Selektion, Bereinigung nach Alter. Compliance-Info-Seite mit Versionsverlauf.' },
+  { version: '1.6.19', date: '2026-05-16', title: 'SMTP-Infrastruktur-Konfiguration',
+    notes: 'Neue ECP-Seite: Erlaubte ESMTP-Befehle, lokale Zustellung, SMTP-Banner-Override, Greylisting, Relay-Konfiguration, Verbindungslimits. 27 Einstellungsfelder.' },
   { version: '1.5.19', date: '2026-05-16', title: 'Rspamd 4.0 + ClamAV Integration',
-    notes: 'Vollständige Sicherheits- & Filterkonfiguration: Rspamd 4.0-Schwellwerte, ClamAV-Status, DNSBL, Greylisting, Länderfilter, Anhänge-Filter. Compliance-Info-Seite.' },
+    notes: 'Vollständige Sicherheits- & Filterkonfiguration: Rspamd 4.0-Schwellwerte, ClamAV-Status, DNSBL, Greylisting, Länderfilter, Anhänge-Filter.' },
   { version: '1.4.19', date: '2026-05-16', title: 'OWA Signaturen, Automatische Antworten, Speicher',
     notes: 'Tiptap-Signatur-Editor, vollständiger OOF-Abwesenheitsassistent mit Kalenderintegration, Speicherübersicht mit Ordner-Leeren-Funktion.' },
-  { version: '1.3.19', date: '2026-05-16', title: 'ECP Services-Verwaltung',
-    notes: 'SMTP Inbound / IMAP / POP3 Listener-Verwaltung. Connectors als eigenständiges Konzept entfernt.' },
 ];
 
 function StatBadge({ label, value }: { label: string; value: string }) {
