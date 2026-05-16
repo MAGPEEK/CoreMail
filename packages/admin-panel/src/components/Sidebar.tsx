@@ -124,7 +124,7 @@ export function Sidebar() {
 
       <div className="p-3 border-t border-gray-700">
         <button
-          onClick={() => { clearToken(); window.location.href = '/login'; }}
+          onClick={() => { clearToken(); window.location.href = '/ecp/login'; }}
           className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors">
           <LogOut size={14} />
           Abmelden

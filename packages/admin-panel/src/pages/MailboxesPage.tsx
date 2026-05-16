@@ -290,11 +290,11 @@ export function MailboxesPage() {
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
                         <span className="text-sm font-semibold text-accent">
-                          {u.displayName.charAt(0).toUpperCase()}
+                          {(u.displayName ?? u.email ?? '?').charAt(0).toUpperCase()}
                         </span>
                       </div>
                       <div>
-                        <p className="font-medium text-gray-800">{u.displayName}</p>
+                        <p className="font-medium text-gray-800">{u.displayName ?? u.email}</p>
                         <p className="text-xs text-gray-400 flex items-center gap-1">
                           <Mail size={10} />{u.email}
                         </p>

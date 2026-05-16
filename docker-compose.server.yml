@@ -52,7 +52,7 @@ services:
   # └─────────────────────────────────────────────────────────────────────────┘
 
   coremail:
-    image: magpeek/coremail-app:1.3.13
+    image: magpeek/coremail-app:1.3.14
     container_name: coremail
     restart: unless-stopped
 

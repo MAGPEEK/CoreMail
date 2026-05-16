@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -38,6 +38,40 @@ import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 
+// ── Error Boundary ───────────────────────────────────────────────────────────
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-8 space-y-4 max-w-2xl mx-auto mt-16">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-6 space-y-3">
+            <h2 className="text-lg font-semibold text-red-800">Seite konnte nicht geladen werden</h2>
+            <p className="text-sm text-red-700">{this.state.error.message}</p>
+            <pre className="text-xs text-red-600 bg-red-100 rounded p-3 overflow-auto max-h-48">
+              {this.state.error.stack}
+            </pre>
+            <button
+              onClick={() => { this.setState({ error: null }); window.location.reload(); }}
+              className="btn-secondary text-sm"
+            >
+              Seite neu laden
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
   return <>{children}</>;
@@ -47,7 +81,9 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="h-full flex">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto bg-gray-50">{children}</main>
+      <main className="flex-1 overflow-y-auto bg-gray-50">
+        <ErrorBoundary>{children}</ErrorBoundary>
+      </main>
     </div>
   );
 }

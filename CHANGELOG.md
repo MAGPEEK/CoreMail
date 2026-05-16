@@ -9,6 +9,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.14] — 2026-05-16 — Bugfix: React Error Boundary + Null-sichere MailboxesPage
+
+### Fixed
+
+- **React Error Boundary** — ohne Error Boundary führt jeder Render-Fehler in einer Seite zu einer komplett weißen Seite (React demontiert den gesamten Baum). Neue `ErrorBoundary`-Klasse um `<main>` im AdminLayout gewickelt: zeigt Fehlermeldung + Stack-Trace + „Seite neu laden"-Button statt Blank-Page
+- **`MailboxesPage`: null-sichere `displayName`-Behandlung** — `u.displayName.charAt(0)` crashte mit `TypeError` wenn `displayName` null war (z.B. ältere Datenbankeinträge). Jetzt mit `(u.displayName ?? u.email ?? '?').charAt(0)` abgesichert
+- **Sidebar Logout-Redirect** — `window.location.href = '/login'` (falscher absoluter Pfad) auf `/ecp/login` korrigiert
+
+---
+
 ## [1.3.13] — 2026-05-16 — Bugfix: Auth-Middleware 401 + Virtuelle Verzeichnisse Fehlerbehandlung
 
 ### Fixed
