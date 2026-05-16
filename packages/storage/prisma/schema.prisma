@@ -1078,6 +1078,35 @@ model GatewaySettings {
   @@map("gateway_settings")
 }
 
+// ── Sicherheitseinstellungen (Singleton) ─────────────────────────────────────
+model SecuritySettings {
+  id                    String   @id @default("singleton")
+  // Greylisting
+  greylistEnabled       Boolean  @default(true)
+  greylistWaitSec       Int      @default(300)
+  greylistTtlHours      Int      @default(4)
+  // DNSBL
+  dnsblEnabled          Boolean  @default(true)
+  dnsblZones            Json     @default("[\"zen.spamhaus.org\",\"bl.spamcop.net\"]")
+  // GeoIP-Länderfilter
+  geoipMode             String   @default("DISABLED")
+  geoipCountries        Json     @default("[]")
+  // Anhänge-Filter
+  attachmentEnabled     Boolean  @default(true)
+  attachmentMaxSizeMb   Int      @default(50)
+  attachmentBlockedExt  Json     @default("[\"exe\",\"vbs\",\"js\",\"bat\",\"cmd\",\"scr\",\"pif\",\"msi\",\"hta\",\"com\"]")
+  // Rspamd
+  rspamdEnabled         Boolean  @default(true)
+  rspamdGreylistScore   Float    @default(4.0)
+  rspamdSpamScore       Float    @default(6.0)
+  rspamdRejectScore     Float    @default(15.0)
+  // ClamAV
+  clamavEnabled         Boolean  @default(true)
+  updatedAt             DateTime @updatedAt
+
+  @@map("security_settings")
+}
+
 // ── Server-Einstellungen (Singleton) ─────────────────────────────────────────
 // Speichert öffentliche URLs für Autodiscover, EWS, OWA, EAS, IMAP, SMTP.
 // Outlook 2019/2022/365 liest diese über Autodiscover automatisch aus.

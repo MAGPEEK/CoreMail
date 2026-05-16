@@ -9,6 +9,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.5.19] — 2026-05-16 — Rspamd 4.0 + ClamAV + Compliance-Info
+
+### Added
+
+- **Rspamd 4.0 als separater Docker-Container** (`rspamd/rspamd:4.0.0`) — vollständige Anti-Spam-Engine mit Bayes-Klassifikator, DKIM/SPF/DMARC, URL-Reputationsprüfung, Fuzzy-Hashing
+- **ClamAV als separater Docker-Container** (`clamav/clamav:stable`) — freie Open-Source Antivirus-Engine (GPL) mit automatischen Signatur-Updates via freshclam
+- **ECP Schutzfilter-Seite** — komplett neu mit Sub-Navigation (7 Bereiche):
+  - **Übersicht**: Live-Container-Status (Rspamd + ClamAV online/offline), Statistiken (gescannt/spam/ham/uptime), Schutzmaßnahmen-Tabelle
+  - **Rspamd 4.0**: Aktions-Schwellwerte (Greylist/Spam/Reject), Echtzeit-Statistiken, Bayes-Training (Spam/Ham), Modul-Übersicht (10 aktive Module)
+  - **Antivirus**: ClamAV-Status, Version, freshclam-Info, Aktivierungs-Toggle
+  - **DNSBL**: Zone-Verwaltung (hinzufügen/entfernen), Quick-Add für bekannte Blacklisten (Spamhaus, SpamCop, Barracuda, SORBS…)
+  - **Greylisting**: Wartezeit, Whitelist-TTL, Erklärung des Ablaufs
+  - **Länderfilter**: Modus (Disabled/Whitelist/Blacklist), Länderauswahl mit Suche (80+ Länder)
+  - **Anhänge-Filter**: Max. Größe, blockierte Dateiendungen (hinzufügen/entfernen), Quick-Add
+- **Prisma-Modell `SecuritySettings`** — 14 Felder für alle Filtereinstellungen (Greylisting, DNSBL, GeoIP, Anhänge, Rspamd-Scores, ClamAV)
+- **API `GET/PUT /api/v1/admin/security/settings`** — CRUD für SecuritySettings
+- **API `GET /api/v1/admin/security/status`** — Live-Status von Rspamd + ClamAV
+- **API `GET /api/v1/admin/security/rspamd/stat`** — Rspamd-Statistiken
+- **API `POST /api/v1/admin/security/rspamd/learn/:type`** — Bayes-Training (spam/ham)
+- **Compliance → Info** — neue Seite mit Versionsnummer, Build-Datum, Links zu GitHub/Changelog/Releases/Issues, Technologie-Stack-Badge, Versionshistorie
+
+### Changed
+
+- **Docker Compose** — Rspamd und ClamAV als Pflicht-Abhängigkeiten des coremail-Containers; eigene Volumes (`rspamd-data`, `clamav-data`)
+- **`coremail`-Image** aktualisiert auf `magpeek/coremail-app:1.5.19`
+
+---
+
 ## [1.4.19] — 2026-05-16 — OWA: Signaturen, Automatische Antworten, Speicher
 
 ### Added

@@ -32,6 +32,7 @@ import { AuditLogPage } from './pages/AuditLogPage.js';
 import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
 import { GatewayPage } from './pages/GatewayPage.js';
 import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
+import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { getToken } from './api/client.js';
 import './index.css';
 
@@ -125,6 +126,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/public-folders" element={<PublicFoldersPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/compliance-info" element={<ComplianceInfoPage />} />
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </AdminLayout>

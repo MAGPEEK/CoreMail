@@ -4,7 +4,7 @@ import {
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
-  FolderOpen, KeyRound, Network, ClipboardList, Activity,
+  FolderOpen, KeyRound, Network, ClipboardList, Activity, Info,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -62,6 +62,7 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/ediscovery',      label: 'eDiscovery',          icon: SearchCheck },
       { path: '/journaling',      label: 'Journaling',          icon: BookText },
       { path: '/retention',       label: 'Aufbewahrung',        icon: Archive },
+      { path: '/compliance-info', label: 'Info',                icon: Info },
     ],
   },
   { path: '/rbac',             label: 'Berechtigungen',      icon: ShieldHalf },

@@ -49,6 +49,7 @@ import { adminMessageTraceRouter } from './routes/admin/message-trace.js';
 import { adminConnectorsRouter } from './routes/admin/connectors.js';
 import { adminOrganisationRouter } from './routes/admin/organisation.js';
 import { adminExternalContactsRouter } from './routes/admin/external-contacts.js';
+import { adminSecurityRouter } from './routes/admin/security.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -245,6 +246,7 @@ app.use('/api/v1/admin/message-trace',    adminMessageTraceRouter);
 app.use('/api/v1/admin/connectors',       adminConnectorsRouter);
 app.use('/api/v1/admin/organisation',     adminOrganisationRouter);
 app.use('/api/v1/admin/contacts',         adminExternalContactsRouter);
+app.use('/api/v1/admin/security',         adminSecurityRouter);
 
 // ── Statische Frontend-Dateien (OWA + ECP) ───────────────────────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';

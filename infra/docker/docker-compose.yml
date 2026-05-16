@@ -27,7 +27,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:1.2.4
+    image: magpeek/coremail-app:1.5.19
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -64,6 +64,11 @@ services:
       EWS_SERVICE_URL: http://localhost:8080
       EAS_SERVICE_URL: http://localhost:3005
       CALDAV_SERVICE_URL: http://localhost:8082
+
+      # Externe Sicherheits-Container
+      RSPAMD_URL: http://rspamd:11334
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
 
       # Service-Ports
       API_PORT: "3000"
@@ -129,12 +134,58 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
       minio: { condition: service_healthy }
+      rspamd: { condition: service_started }
+      clamav: { condition: service_started }
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
+    networks: [coremail]
+
+  # ── Rspamd 4.0 — Anti-Spam ───────────────────────────────────────────────────
+  # Offizielles Rspamd-Image, Controller-API auf Port 11334
+  # Konfiguration: infra/docker/rspamd/local.d/
+
+  rspamd:
+    image: rspamd/rspamd:4.0.0
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    volumes:
+      - ./rspamd/local.d:/etc/rspamd/local.d:ro
+      - rspamd-data:/var/lib/rspamd
+    expose:
+      - "11333"   # Worker (SMTP-Filter)
+      - "11334"   # Controller (Web-API)
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11334/stat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks: [coremail]
+
+  # ── ClamAV — Open-Source Antivirus ───────────────────────────────────────────
+  # Offizielles ClamAV-Image (GPL), inkl. freshclam für Signatur-Updates
+  # Protokoll: INSTREAM über TCP Port 3310
+
+  clamav:
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"   # freshclam für tägliche Signatur-Updates aktivieren
+    volumes:
+      - clamav-data:/var/lib/clamav
+    expose:
+      - "3310"    # clamd INSTREAM
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s   # Erstes Signatur-Update kann länger dauern
     networks: [coremail]
 
   # ── Infrastruktur (Standard-Images) ──────────────────────────────────────────
@@ -291,6 +342,8 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  rspamd-data:
+  clamav-data:
   prometheus-data:
   alertmanager-data:
   grafana-data:
