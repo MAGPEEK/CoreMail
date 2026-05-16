@@ -9,7 +9,8 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
 [![Version](https://img.shields.io/badge/Version-1.3.8-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
-📄 **[docker-compose.yml](docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten
+📄 **[docker-compose.yml](docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
+📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
@@ -28,8 +29,9 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 5. [Konfiguration](#konfiguration)
 6. [DNS-Einrichtung](#dns-einrichtung)
 7. [TLS-Zertifikate](#tls-zertifikate)
-8. [Docker Hub](#docker-hub)
-9. [Lizenz](#lizenz)
+8. [Befehlsreferenz](#befehlsreferenz)
+9. [Docker Hub](#docker-hub)
+10. [Lizenz](#lizenz)
 
 ---
 
@@ -428,6 +430,52 @@ Für die lokale Entwicklung genügen selbstsignierte Zertifikate:
 ```bash
 bash scripts/gen-dev-certs.sh
 ```
+
+---
+
+## Befehlsreferenz
+
+Alle wichtigen Befehle für den täglichen Betrieb sind in **[COMMANDS.md](COMMANDS.md)** zusammengefasst:
+
+| Abschnitt | Inhalt |
+|-----------|--------|
+| Container & Dienste | Stack starten/stoppen, Dienststatus, Health-Check |
+| Admin-Token | Authentifizierung gegen die REST API |
+| Benutzer verwalten | Anlegen, Passwort setzen, Quota, Rolle, Postfach provisionieren |
+| Domains | Domain hinzufügen, DKIM-Key abrufen |
+| Warteschlangen | Queue-Länge, Job-Details, Job löschen, Queue leeren |
+| Logs & Diagnose | Container-Logs, Audit-Log, Service-Log-Level |
+| Datenbank | PostgreSQL-Abfragen (Benutzer, Mails, Speicher) |
+| Redis | Queue-Längen, Sessions, Greylisting |
+| SMTP testen | Verbindungstest, TLS-Check, Testmail senden |
+| Backup | Datenbank-Dump, Restore, MinIO-Backup |
+| Updates | Auf neue Image-Version aktualisieren |
+
+```bash
+# Beispiele aus COMMANDS.md
+
+# Alle Dienste im Container anzeigen
+docker exec coremail supervisorctl status
+
+# Health-Check
+curl -s http://localhost:3000/healthz | jq
+
+# Benutzer anlegen
+TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@domain.de","password":"passwort"}' | jq -r '.accessToken')
+
+curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@domain.de","displayName":"Max Mustermann","password":"pw"}' | jq
+
+# Queue-Längen prüfen
+curl -s http://localhost:3000/api/v1/admin/queues \
+  -H "Authorization: Bearer $TOKEN" | jq '.[].count'
+```
+
+→ **[Vollständige Befehlsreferenz in COMMANDS.md](COMMANDS.md)**
 
 ---
 
