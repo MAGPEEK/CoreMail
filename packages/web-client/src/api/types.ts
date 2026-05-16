@@ -1,6 +1,7 @@
 export interface Folder {
   id: string;
   name: string;
+  displayName?: string;
   parentId: string | null;
   totalCount: number;
   unreadCount: number;

@@ -9,6 +9,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.4.19] — 2026-05-16 — OWA: Signaturen, Automatische Antworten, Speicher
+
+### Added
+
+- **Signaturen (OWA-Einstellungen)** — Tiptap Rich-Text-Editor für die E-Mail-Signatur; Toggles „Automatisch bei neuen E-Mails einfügen" (`autoNew`) und „Automatisch bei Antworten einfügen" (`autoReply`); gespeichert über `PUT /api/v1/user/signature`
+- **Automatische Antworten / OOF (OWA-Einstellungen)** — Vollständiger Abwesenheitsassistent: Aktivierungs-Toggle, optionaler Zeitraum (Start/Ende mit Uhrzeit stündlich), interne Nachricht, externe Nachricht mit „Nur an Kontakte"-Option; bei gesetztem Zeitraum wird automatisch ein Kalender-Event (`oof-<userId>`) erstellt/aktualisiert
+- **Speicher (OWA-Einstellungen)** — Quotaanzeige, gestapeltes farbiges Balkendiagramm pro Ordner, Tabelle mit Ordner/Größe/Nachrichten und „Leeren"-Button mit Inline-Bestätigung
+- **Auto-Signatur im Compose-Fenster** — Signatur wird beim Öffnen einer neuen Mail automatisch eingefügt wenn `autoNew=true`, bei Antworten wenn `autoReply=true`
+- **`GET /api/v1/user/storage`** — Aggregiert Speichernutzung pro Ordner via Prisma `groupBy` (`rawSize`, Nachrichtenanzahl)
+- **`DELETE /api/v1/user/folders/:id/empty`** — Leert einen Ordner (Soft-Delete aller Nachrichten, Counter zurückgesetzt)
+
+### Changed
+
+- **Prisma-Schema `UserSettings`** — 9 neue Felder: `signatureAutoNew`, `signatureAutoReply`, `oofEnabled`, `oofInternal`, `oofExternal`, `oofExternalEnabled`, `oofExternalOnlyContacts`, `oofUseTimeRange`, `oofStart`, `oofEnd`
+- **`FolderTree`** — Feste Reihenfolge der System-Ordner: Posteingang → Entwürfe → Gesendete Elemente → Gelöschte Elemente → Junk-E-Mail → Archiv; deutsche Anzeigenamen
+- **`SettingsPage` (OWA)** — Komplett überarbeitet mit OWA-Stil-Navigation (Konto: E-Mail-Konto / Automatische Antworten / Signaturen / Speicher; Allgemein: Sicherheit)
+
+---
+
 ## [1.3.19] — 2026-05-16 — ECP: Connectors (Send/Receive) entfernt
 
 ### Removed

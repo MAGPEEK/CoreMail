@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   X, Minus, Maximize2, Send, Paperclip, Save,
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
@@ -205,9 +205,15 @@ export function ComposeWindow() {
   const [inReplyTo]           = useState(composeReplyTo?.id);
   const [attachments, setAttachments] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const signatureInserted = useRef(false);
 
   const [showTextColor,  setShowTextColor]  = useState(false);
   const [showHighlight,  setShowHighlight]  = useState(false);
+
+  const { data: sigData } = useQuery({
+    queryKey: ['user', 'signature'],
+    queryFn: () => api.get<{ signature: string; autoNew: boolean; autoReply: boolean }>('/user/signature'),
+  });
 
   const editor = useEditor({
     extensions: [
@@ -224,6 +230,17 @@ export function ComposeWindow() {
       attributes: { class: 'outline-none min-h-[180px] text-sm leading-relaxed' },
     },
   });
+
+  // Auto-Signatur einfügen sobald Editor + Signaturdaten bereit sind
+  useEffect(() => {
+    if (!editor || !sigData || signatureInserted.current) return;
+    signatureInserted.current = true;
+    const isReply = !!composeReplyTo;
+    const shouldInsert = isReply ? sigData.autoReply : sigData.autoNew;
+    if (!shouldInsert || !sigData.signature) return;
+    editor.commands.setContent(`<p></p>${sigData.signature}`);
+    editor.commands.focus('start');
+  }, [editor, sigData, composeReplyTo]);
 
   // Link einfügen / bearbeiten
   const handleLink = useCallback(() => {

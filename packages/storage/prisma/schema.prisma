@@ -448,15 +448,20 @@ model Note {
 // ─────────────────────────────────────────────
 
 model UserSettings {
-  id           String    @id @default(cuid())
-  userId       String    @unique
-  signature    String    @default("")
-  oofEnabled   Boolean   @default(false)
-  oofInternal  String    @default("")
-  oofExternal  String    @default("")
-  oofStart     DateTime?
-  oofEnd       DateTime?
-  updatedAt    DateTime  @updatedAt
+  id                      String    @id @default(cuid())
+  userId                  String    @unique
+  signature               String    @default("")
+  signatureAutoNew        Boolean   @default(true)
+  signatureAutoReply      Boolean   @default(false)
+  oofEnabled              Boolean   @default(false)
+  oofInternal             String    @default("")
+  oofExternal             String    @default("")
+  oofExternalEnabled      Boolean   @default(true)
+  oofExternalOnlyContacts Boolean   @default(false)
+  oofUseTimeRange         Boolean   @default(false)
+  oofStart                DateTime?
+  oofEnd                  DateTime?
+  updatedAt               DateTime  @updatedAt
 
   @@map("user_settings")
 }

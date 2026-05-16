@@ -4,18 +4,30 @@ import { api } from '../api/client.js';
 import type { Folder as FolderType } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
 
+// Reihenfolge + Anzeigenamen der System-Ordner
+const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
+
+const DISPLAY_NAME: Record<string, string> = {
+  INBOX:   'Posteingang',
+  Drafts:  'Entwürfe',
+  Sent:    'Gesendete Elemente',
+  Trash:   'Gelöschte Elemente',
+  Junk:    'Junk-E-Mail',
+  Archive: 'Archiv',
+};
+
 const ICON_MAP: Record<string, React.ElementType> = {
-  INBOX: Inbox,
-  Drafts: FileText,
-  Sent: Send,
-  Trash: Trash2,
-  Junk: AlertTriangle,
+  INBOX:   Inbox,
+  Drafts:  FileText,
+  Sent:    Send,
+  Trash:   Trash2,
+  Junk:    AlertTriangle,
   Archive: Archive,
 };
 
-interface Props {
-  onNewMail: () => void;
-}
+const SYSTEM_SET = new Set(SYSTEM_ORDER as readonly string[]);
+
+interface Props { onNewMail: () => void }
 
 export function FolderTree({ onNewMail }: Props) {
   const { data: folders } = useQuery({
@@ -26,12 +38,20 @@ export function FolderTree({ onNewMail }: Props) {
 
   const { selectedFolderId, setSelectedFolder } = useUiStore();
 
-  const systemFolders = (folders ?? []).filter((f) => Object.keys(ICON_MAP).includes(f.name));
-  const customFolders = (folders ?? []).filter((f) => !Object.keys(ICON_MAP).includes(f.name));
+  const all = folders ?? [];
+
+  // System-Ordner in definierter Reihenfolge
+  const systemFolders = SYSTEM_ORDER
+    .map(name => all.find(f => f.name === name))
+    .filter((f): f is FolderType => f !== undefined);
+
+  // Benutzerdefinierte Ordner (alles andere)
+  const customFolders = all.filter(f => !SYSTEM_SET.has(f.name));
 
   const FolderItem = ({ folder }: { folder: FolderType }) => {
     const Icon = ICON_MAP[folder.name] ?? Folder;
     const isSelected = folder.id === selectedFolderId;
+    const label = DISPLAY_NAME[folder.name] ?? folder.displayName ?? folder.name;
     return (
       <button
         onClick={() => setSelectedFolder(folder.id)}
@@ -40,7 +60,7 @@ export function FolderTree({ onNewMail }: Props) {
         }`}
       >
         <Icon size={15} className="shrink-0" />
-        <span className="flex-1 text-left truncate">{folder.name === 'INBOX' ? 'Posteingang' : folder.name}</span>
+        <span className="flex-1 text-left truncate">{label}</span>
         {folder.unreadCount > 0 && (
           <span className="text-xs font-bold text-accent">{folder.unreadCount}</span>
         )}
@@ -59,7 +79,7 @@ export function FolderTree({ onNewMail }: Props) {
 
       <nav className="flex-1 overflow-y-auto px-1">
         <div className="space-y-0.5">
-          {systemFolders.map((f) => <FolderItem key={f.id} folder={f} />)}
+          {systemFolders.map(f => <FolderItem key={f.id} folder={f} />)}
         </div>
 
         {customFolders.length > 0 && (
@@ -68,7 +88,7 @@ export function FolderTree({ onNewMail }: Props) {
               Meine Ordner
             </div>
             <div className="space-y-0.5">
-              {customFolders.map((f) => <FolderItem key={f.id} folder={f} />)}
+              {customFolders.map(f => <FolderItem key={f.id} folder={f} />)}
             </div>
           </>
         )}

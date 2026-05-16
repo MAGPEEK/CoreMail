@@ -36,70 +36,184 @@ userRouter.put('/profile', async (req: Request, res: Response) => {
 
 // GET /api/v1/user/signature
 userRouter.get('/signature', async (req: Request, res: Response) => {
-  
   const settings = await prisma.userSettings.findUnique({ where: { userId: req.apiUser!.userId } });
-  res.json({ signature: settings?.signature ?? '' });
+  res.json({
+    signature: settings?.signature ?? '',
+    autoNew:   settings?.signatureAutoNew  ?? true,
+    autoReply: settings?.signatureAutoReply ?? false,
+  });
 });
 
 // PUT /api/v1/user/signature
 userRouter.put('/signature', async (req: Request, res: Response) => {
-  const schema = z.object({ signature: z.string() });
+  const schema = z.object({
+    signature: z.string(),
+    autoNew:   z.boolean().optional(),
+    autoReply: z.boolean().optional(),
+  });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  
   await prisma.userSettings.upsert({
-    where: { userId: req.apiUser!.userId },
-    update: { signature: parsed.data.signature },
-    create: { userId: req.apiUser!.userId, signature: parsed.data.signature },
+    where:  { userId: req.apiUser!.userId },
+    update: {
+      signature:          parsed.data.signature,
+      ...(parsed.data.autoNew   !== undefined ? { signatureAutoNew:   parsed.data.autoNew   } : {}),
+      ...(parsed.data.autoReply !== undefined ? { signatureAutoReply: parsed.data.autoReply } : {}),
+    },
+    create: {
+      userId:             req.apiUser!.userId,
+      signature:          parsed.data.signature,
+      signatureAutoNew:   parsed.data.autoNew   ?? true,
+      signatureAutoReply: parsed.data.autoReply ?? false,
+    },
   });
   res.json({ ok: true });
 });
 
 // GET /api/v1/user/oof — Out Of Office
 userRouter.get('/oof', async (req: Request, res: Response) => {
-  
   const settings = await prisma.userSettings.findUnique({ where: { userId: req.apiUser!.userId } });
   res.json({
-    enabled: settings?.oofEnabled ?? false,
-    internalMessage: settings?.oofInternal ?? '',
-    externalMessage: settings?.oofExternal ?? '',
-    startDate: settings?.oofStart ?? null,
-    endDate: settings?.oofEnd ?? null,
+    enabled:              settings?.oofEnabled              ?? false,
+    internalMessage:      settings?.oofInternal             ?? '',
+    externalMessage:      settings?.oofExternal             ?? '',
+    externalEnabled:      settings?.oofExternalEnabled      ?? true,
+    externalOnlyContacts: settings?.oofExternalOnlyContacts ?? false,
+    useTimeRange:         settings?.oofUseTimeRange         ?? false,
+    startDate:            settings?.oofStart                ?? null,
+    endDate:              settings?.oofEnd                  ?? null,
   });
 });
 
 // PUT /api/v1/user/oof
 userRouter.put('/oof', async (req: Request, res: Response) => {
   const schema = z.object({
-    enabled: z.boolean(),
-    internalMessage: z.string().optional().default(''),
-    externalMessage: z.string().optional().default(''),
-    startDate: z.string().optional(),
-    endDate: z.string().optional(),
+    enabled:              z.boolean(),
+    internalMessage:      z.string().optional().default(''),
+    externalMessage:      z.string().optional().default(''),
+    externalEnabled:      z.boolean().optional().default(true),
+    externalOnlyContacts: z.boolean().optional().default(false),
+    useTimeRange:         z.boolean().optional().default(false),
+    startDate:            z.string().optional(),
+    endDate:              z.string().optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  
+  const d = parsed.data;
+  const oofStart = d.startDate ? new Date(d.startDate) : null;
+  const oofEnd   = d.endDate   ? new Date(d.endDate)   : null;
+
   await prisma.userSettings.upsert({
-    where: { userId: req.apiUser!.userId },
+    where:  { userId: req.apiUser!.userId },
     update: {
-      oofEnabled: parsed.data.enabled,
-      oofInternal: parsed.data.internalMessage,
-      oofExternal: parsed.data.externalMessage,
-      oofStart: parsed.data.startDate ? new Date(parsed.data.startDate) : null,
-      oofEnd: parsed.data.endDate ? new Date(parsed.data.endDate) : null,
+      oofEnabled:              d.enabled,
+      oofInternal:             d.internalMessage,
+      oofExternal:             d.externalMessage,
+      oofExternalEnabled:      d.externalEnabled,
+      oofExternalOnlyContacts: d.externalOnlyContacts,
+      oofUseTimeRange:         d.useTimeRange,
+      oofStart,
+      oofEnd,
     },
     create: {
-      userId: req.apiUser!.userId,
-      oofEnabled: parsed.data.enabled,
-      oofInternal: parsed.data.internalMessage,
-      oofExternal: parsed.data.externalMessage,
-      oofStart: parsed.data.startDate ? new Date(parsed.data.startDate) : null,
-      oofEnd: parsed.data.endDate ? new Date(parsed.data.endDate) : null,
+      userId:                  req.apiUser!.userId,
+      oofEnabled:              d.enabled,
+      oofInternal:             d.internalMessage,
+      oofExternal:             d.externalMessage,
+      oofExternalEnabled:      d.externalEnabled,
+      oofExternalOnlyContacts: d.externalOnlyContacts,
+      oofUseTimeRange:         d.useTimeRange,
+      oofStart,
+      oofEnd,
     },
   });
+
+  // Kalender-Event für Abwesenheit anlegen/aktualisieren wenn Zeitraum gesetzt
+  if (d.enabled && d.useTimeRange && oofStart && oofEnd) {
+    const mailbox = await prisma.mailbox.findUnique({ where: { userId: req.apiUser!.userId } });
+    if (mailbox) {
+      const calendar = await prisma.calendar.findFirst({ where: { userId: req.apiUser!.userId } });
+      if (calendar) {
+        const uid = `oof-${req.apiUser!.userId}`;
+        const ical = [
+          'BEGIN:VCALENDAR',
+          'VERSION:2.0',
+          'BEGIN:VEVENT',
+          `UID:${uid}`,
+          `DTSTART:${oofStart.toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+          `DTEND:${oofEnd.toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+          'SUMMARY:Abwesenheit',
+          'TRANSP:TRANSPARENT',
+          'CLASS:PUBLIC',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+
+        const existing = await prisma.calendarEvent.findFirst({ where: { calendarId: calendar.id, uid } });
+        if (existing) {
+          await prisma.calendarEvent.update({
+            where: { id: existing.id },
+            data: { icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd },
+          });
+        } else {
+          await prisma.calendarEvent.create({
+            data: { calendarId: calendar.id, uid, icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd },
+          });
+        }
+      }
+    }
+  }
+
+  res.json({ ok: true });
+});
+
+// GET /api/v1/user/storage — Speichernutzung pro Ordner
+userRouter.get('/storage', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { quotaBytes: true } });
+  const mailbox = await prisma.mailbox.findUnique({ where: { userId }, include: { folders: { select: { id: true, name: true, displayName: true } } } });
+
+  if (!mailbox) { res.json({ quotaBytes: user?.quotaBytes ?? 0, usedBytes: 0, folders: [] }); return; }
+
+  // Größe pro Ordner aggregieren
+  const sizes = await prisma.message.groupBy({
+    by: ['folderId'],
+    where: { folder: { mailboxId: mailbox.id }, deletedAt: null },
+    _sum: { rawSize: true },
+    _count: { id: true },
+  });
+
+  const sizeMap = new Map(sizes.map(s => [s.folderId, { size: s._sum.rawSize ?? 0, count: s._count.id }]));
+  const totalUsed = sizes.reduce((acc, s) => acc + (s._sum.rawSize ?? 0), 0);
+
+  const folders = mailbox.folders.map(f => ({
+    id:           f.id,
+    name:         f.name,
+    displayName:  f.displayName,
+    sizeBytes:    sizeMap.get(f.id)?.size  ?? 0,
+    messageCount: sizeMap.get(f.id)?.count ?? 0,
+  })).filter(f => f.messageCount > 0).sort((a, b) => b.sizeBytes - a.sizeBytes);
+
+  res.json({ quotaBytes: user?.quotaBytes ?? 0, usedBytes: totalUsed, folders });
+});
+
+// DELETE /api/v1/user/folders/:id/empty — Ordner leeren (Soft-Delete aller Nachrichten)
+userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const userId  = req.apiUser!.userId;
+
+  const mailbox = await prisma.mailbox.findUnique({ where: { userId } });
+  if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+
+  const folder = await prisma.folder.findFirst({ where: { id, mailboxId: mailbox.id } });
+  if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
+
+  const now = new Date();
+  await prisma.message.updateMany({ where: { folderId: id, deletedAt: null }, data: { deletedAt: now } });
+  await prisma.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
+
   res.json({ ok: true });
 });
 

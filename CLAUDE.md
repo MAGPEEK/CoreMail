@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `1.3.8`
+**Aktuelle Version**: `1.4.19`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -74,7 +74,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:1.3.4` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:1.4.19` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
 | `redis` | `redis:7-alpine` | Standard-Image |
 | `minio` | `minio/minio` | Standard-Image |
@@ -496,4 +496,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-16 (v1.3.8 — Cleanup + Status & Monitoring)
+*Letzte Aktualisierung: 2026-05-16 (v1.4.19 — OWA Signaturen, OOF, Speicher)
