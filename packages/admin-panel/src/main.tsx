@@ -19,7 +19,6 @@ import { CertificatesPage } from './pages/CertificatesPage.js';
 import { SharedMailboxesPage } from './pages/SharedMailboxesPage.js';
 import { QuarantinePage } from './pages/QuarantinePage.js';
 import { TransportRulesPage } from './pages/TransportRulesPage.js';
-import { MobileDevicesPage } from './pages/MobileDevicesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ConnectorsPage } from './pages/ConnectorsPage.js';
 import { OrganisationPage } from './pages/OrganisationPage.js';
@@ -75,7 +74,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/shared-mailboxes" element={<SharedMailboxesPage />} />
                   <Route path="/quarantine"      element={<QuarantinePage />} />
                   <Route path="/transport-rules" element={<TransportRulesPage />} />
-                  <Route path="/mobile"          element={<MobileDevicesPage />} />
                   <Route path="/message-trace"  element={<MessageTracePage />} />
                   <Route path="/connectors"     element={<ConnectorsPage />} />
                   <Route path="/organisation"   element={<OrganisationPage />} />

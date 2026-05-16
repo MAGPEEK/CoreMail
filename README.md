@@ -1,6 +1,6 @@
 # CoreMail
 
-> Open-Source-Alternative zu Microsoft Exchange 2019 — aufgebaut auf **React + Node.js/TypeScript**, container-first, modular und vollständig selbst gehostet.
+> Coremail der OpenSource Mailserver für kleine Umgebungen — aufgebaut auf **React + Node.js/TypeScript**, container-first, modular und vollständig selbst gehostet.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
@@ -45,13 +45,13 @@
 
 ## Über das Projekt
 
-**CoreMail** bietet vollständige funktionale Parität mit Microsoft Exchange 2019 in den Bereichen **E-Mail, Kalender und Zusammenarbeit** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
+**CoreMail** bietet vollständige funktionale Parität mit Coremail der OpenSource Mailserver für kleine Umgebungen in den Bereichen **E-Mail, Kalender und Zusammenarbeit** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
 Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** ausgelegt und kann sowohl als einzelner Docker-Stack als auch als hochverfügbares Kubernetes-Cluster betrieben werden.
 
 ### Warum CoreMail?
 
-| Kriterium | Microsoft Exchange 2019 | CoreMail |
+| Kriterium | Coremail der OpenSource Mailserver für kleine Umgebungen | CoreMail |
 |-----------|------------------------|---------|
 | Lizenzkosten | Hoch (CAL-Modell) | Kostenlos (MIT) |
 | Datensouveränität | Microsoft-Infrastruktur | Vollständig selbst gehostet |
@@ -72,7 +72,7 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 | SMTP Outbound mit MX-Lookup & DKIM-Signierung | ✅ Implementiert |
 | IMAP4rev1 mit IDLE, CONDSTORE, ESEARCH | ✅ Implementiert |
 | POP3 (Port 110, 995) | ✅ Implementiert |
-| EWS — Exchange Web Services (Outlook Desktop) | ✅ Implementiert |
+| EWS — EWS Web Services (Outlook Desktop) | ✅ Implementiert |
 | Autodiscover v1 + v2 (Outlook-Autokonfiguration) | ✅ Implementiert |
 | **ActiveSync EAS 14.1 (iOS, Android, Outlook Mobile)** | ✅ Implementiert |
 | OWA — Outlook Web Access (Webmail) | ✅ Implementiert |
@@ -143,8 +143,8 @@ Das Projekt ist für Klein- und Mittelunternehmen mit **10–500 Benutzern** aus
 
 | Feature | Status |
 |---------|--------|
-| ECP Admin-Panel (Exchange Control Panel) | ✅ Implementiert |
-| RBAC (7 Rollen, Exchange-kompatibel) | ✅ Implementiert |
+| ECP Admin-Panel (Coremail Admin-Panel (ECP)) | ✅ Implementiert |
+| RBAC (7 Rollen, Coremail-kompatibel) | ✅ Implementiert |
 | SMTP Queue-Monitor (live) | ✅ Implementiert |
 | Service-Konfiguration (live, kein Neustart) | ✅ Implementiert |
 | Log-Viewer mit Log-Level pro Service | ✅ Implementiert |
@@ -166,7 +166,7 @@ CoreMail verwendet eine **2-Container-Architektur** — alle Node.js-Services un
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                    magpeek/coremail-app:0.9.0                                    │
 │                                                                                  │
-│  nginx (80/443)  ←── TLS-Termination + Exchange-URL-Routing + Static Files      │
+│  nginx (80/443)  ←── TLS-Termination + URL-Routing + Static Files      │
 │      │                                                                            │
 │      ├── /owa/      → /app/www/owa/   (React OWA, statisch)                    │
 │      ├── /ecp/      → /app/www/ecp/   (React ECP, statisch)                    │
@@ -374,7 +374,7 @@ docker compose -f infra/docker/docker-compose.yml down -v
 |---------------|-------------|
 | `https://<MAIL_HOSTNAME>/owa/` | Webmail (OWA) |
 | `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel (ECP) |
-| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | Exchange Web Services (Outlook) |
+| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS Web Services (Outlook) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync EAS 14.1 (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover v1 |
 | `https://<MAIL_HOSTNAME>/api/v1/` | REST API |
@@ -557,7 +557,7 @@ AUTODISCOVER_BASE=https://mail.domain.de
 IMAP_HOST=mail.domain.de
 SMTP_HOST=mail.domain.de
 
-# ── ActiveSync (EAS 14.1 — Phase 6) ─────────────────────────────────
+# ── ActiveSync (EAS 14.1) ─────────────────────────────────
 EAS_URL=https://mail.domain.de/Microsoft-Server-ActiveSync  # Autodiscover-URL
 EAS_PORT=3005                                                # Interner Container-Port
 
@@ -618,8 +618,8 @@ SMTP Inbound (Port 25) und Outbound-Queue.
 - **Inbound**: `smtp-server` npm-Paket, prüft Empfänger in PostgreSQL, ruft Security-Filter auf, speichert in PostgreSQL/MinIO, pusht via Redis für IMAP-IDLE
 - **Outbound**: BullMQ-Queue in Redis, 10 Retries mit exponentiellem Backoff (60s Basis), MX-Lookup, nodemailer-Relay, DKIM-Signierung
 - **Quarantäne**: Viren/Policy-Verstöße → MinIO-Upload + DB-Eintrag + Admin-Event
-- **Verteilergruppen-Expansion** *(Phase 7)*: Eingehende E-Mails an Gruppenadresse werden rekursiv zu allen Mitgliedern expandiert (Loop-Schutz via `visited`-Set, Deduplizierung)
-- **Ressourcen-Auto-Accept** *(Phase 7)*: iCal-VEVENT aus Anhängen wird geparst → Buchung automatisch als ACCEPTED/DECLINED/PENDING gespeichert
+- **Verteilergruppen-Expansion** **: Eingehende E-Mails an Gruppenadresse werden rekursiv zu allen Mitgliedern expandiert (Loop-Schutz via `visited`-Set, Deduplizierung)
+- **Ressourcen-Auto-Accept** **: iCal-VEVENT aus Anhängen wird geparst → Buchung automatisch als ACCEPTED/DECLINED/PENDING gespeichert
 
 ### `packages/imap-server`
 IMAP4rev1-Server (Port 143 / 993).
@@ -629,11 +629,11 @@ IMAP4rev1-Server (Port 143 / 993).
 - **CONDSTORE**: HIGHESTMODSEQ-Tracking, MODSEQ in FETCH-Antworten, ENABLE CONDSTORE
 - **Authentifizierung**: Hauptpasswort (bcrypt+pepper) oder App-Passwort (MFA-kompatibel)
 
-### `packages/pop3-server` *(Phase 2 — optional)*
+### `packages/pop3-server` **
 POP3-Server (Port 110 / 995) — RFC 1939 mit UIDL, TOP, CAPA, STLS.
 
 ### `packages/ews-server`
-Exchange Web Services SOAP/XML-Endpunkt (`/EWS/Exchange.asmx`) — die Schnittstelle für Outlook Desktop (2010–2024) und Outlook für Mac.
+EWS Web Services SOAP/XML-Endpunkt (`/EWS/Exchange.asmx`) — die Schnittstelle für Outlook Desktop (2010–2024) und Outlook für Mac.
 
 **Implementierte EWS-Operationen:**
 
@@ -749,24 +749,24 @@ SSO via OIDC/OAuth2 mit `openid-client` (Panva, OIDC-zertifiziert).
 
 State + Nonce in Redis gesichert (10 min TTL), OIDC-Client pro Provider gecacht (Discovery nur einmal).
 
-### `packages/caldav-server` *(Phase 4)*
+### `packages/caldav-server` **
 CalDAV (RFC 4791) + CardDAV (RFC 6352) für mobile Clients (iOS, Android, Thunderbird).
 
-### `packages/api-gateway` *(Phase 4)*
+### `packages/api-gateway` **
 REST-API + SSE + WebSocket-Gateway für den Web-Client.
 
-### `packages/web-client` *(Phase 4)*
-React 19 OWA-UI — identisches Layout wie Exchange 2019 OWA.
+### `packages/web-client` **
+React 19 OWA-UI — identisches Layout wie Coremail OWA.
 
-### `packages/admin-panel` *(Phase 4)*
-React 19 ECP-UI — Exchange Control Panel-ähnliche Admin-Oberfläche.
+### `packages/admin-panel` **
+React 19 ECP-UI — Coremail Admin-Panel (ECP)-ähnliche Admin-Oberfläche.
 
-### `packages/backup-service` *(Phase 5)*
+### `packages/backup-service` **
 Backup- und Wiederherstellungsservice — MBOX/EML-Export, Admin-Vollbackup zu S3.
 
-### `packages/activesync` *(Phase 6 — neu in v0.7.0)*
+### `packages/activesync` **
 
-Microsoft Exchange ActiveSync EAS 14.1-Server (Port 3005) für mobile Clients: iOS Mail, Android Gmail/Outlook, Samsung Email.
+Coremail der OpenSource Mailserver für kleine Umgebungen ActiveSync EAS 14.1-Server (Port 3005) für mobile Clients: iOS Mail, Android Gmail/Outlook, Samsung Email.
 
 **WBXML-Codec** — binäres XML-Format, das EAS für alle Kommunikation verwendet:
 - Vollständige Implementierung der EAS Code Pages: AirSync, Email, FolderHierarchy, Provision, Ping, ComposeMail
@@ -812,7 +812,7 @@ Microsoft Exchange ActiveSync EAS 14.1-Server (Port 3005) für mobile Clients: i
 
 **nginx-Konfiguration:** `/Microsoft-Server-ActiveSync` hat `proxy_read_timeout 600s` — notwendig für den Ping-Befehl (Long-Poll bis 59 Minuten).
 
-### S/MIME API *(Phase 6 — neu in v0.7.0)*
+### S/MIME API **
 
 REST-Endpunkte unter `/api/v1/smime/` für die S/MIME-Zertifikat-Verwaltung im api-gateway:
 
@@ -833,7 +833,7 @@ REST-Endpunkte unter `/api/v1/smime/` für die S/MIME-Zertifikat-Verwaltung im a
 - Binäre PKCS#12-Datei in MinIO (verschlüsselt)
 - `signingDefault` + `encryptDefault` Flags
 
-### Verteilergruppen *(Phase 7 — neu in v0.8.0)*
+### Verteilergruppen **
 
 Statische und dynamische Verteilergruppen für SMTP-Expansion und GAL:
 
@@ -855,7 +855,7 @@ Statische und dynamische Verteilergruppen für SMTP-Expansion und GAL:
 
 **Konfigurierbar:** externe Absender erlauben/sperren, Moderierung (mit Moderatoren), GAL-Sichtbarkeit
 
-### Raum- und Ressourcenpostfächer *(Phase 7 — neu in v0.8.0)*
+### Raum- und Ressourcenpostfächer **
 
 Conference-Rooms und Equipment-Postfächer mit automatischer Buchungsverarbeitung:
 
@@ -878,7 +878,7 @@ Eingehende E-Mail an raum@domain.de
 
 **Buchungsregeln** (ECP-konfigurierbar): maximale Dauer, Buchungsvorlauf in Tagen, Genehmigungspflicht mit Delegierten, wiederkehrende Termine erlauben/sperren.
 
-### Öffentliche Ordner *(Phase 7 — neu in v0.8.0)*
+### Öffentliche Ordner **
 
 Hierarchische Ordnerstruktur für organisationsweite Inhalte:
 
@@ -903,9 +903,9 @@ Hierarchische Ordnerstruktur für organisationsweite Inhalte:
 
 **ACL-Berechtigungen:** `READ` (lesen), `POST` (lesen + schreiben), `OWNER` (vollständig)
 
-### PowerShell-Remoting & EMS REST-Bridge *(Phase 8 — neu in v0.9.0)*
+### PowerShell-Remoting & EMS REST-Bridge **
 
-Vollständiger WSMan/WS-Management-Endpunkt für Exchange Management Shell (EMS):
+Vollständiger WSMan/WS-Management-Endpunkt für Management Shell (EMS):
 
 ```
 GET  /PowerShell/   → WSDL-Beschreibung
@@ -938,7 +938,7 @@ GET    /mailbox-statistics/:identity       → Get-MailboxStatistics
 POST   /cmdlet                             → Universeller Cmdlet-Dispatcher
 ```
 
-### eDiscovery & Legal Hold *(Phase 8 — neu in v0.9.0)*
+### eDiscovery & Legal Hold **
 
 Compliance-Suche über alle Postfächer und rechtliche Aufbewahrungssperren:
 
@@ -964,7 +964,7 @@ Compliance-Suche über alle Postfächer und rechtliche Aufbewahrungssperren:
 
 Legal Hold verhindert die permanente Löschung aller E-Mails der betroffenen Postfächer.
 
-### MAPI over HTTP *(Phase 8 — neu in v0.9.0)*
+### MAPI over HTTP **
 
 Outlook 2013 SP1+ und Outlook 365 nutzen MAPI over HTTP als primären Transport (statt RPC/HTTP). Der EWS-Server implementiert den vollständigen Session-Lifecycle:
 
@@ -1011,7 +1011,7 @@ Outlook → POST /mapi/nspi/   {ResolveNames}→ Namensauflösung
 
 ### ActiveSync EAS 14.1 *(neu in v0.7.0)*
 
-Mobile Clients (iOS Mail, Android Gmail/Outlook, Samsung Email) synchronisieren via Exchange ActiveSync über HTTPS:
+Mobile Clients (iOS Mail, Android Gmail/Outlook, Samsung Email) synchronisieren via ActiveSync (EAS) über HTTPS:
 
 ```
 Endpunkt:  POST https://mail.domain.de/Microsoft-Server-ActiveSync?Cmd=<Befehl>
@@ -1036,7 +1036,7 @@ SSL:           Ja
 - **Push-Benachrichtigungen**: Ping-Befehl hält Verbindung offen — neue Mails werden sofort auf dem Gerät angezeigt (Heartbeat bis 59 Minuten)
 - **Bidirektional**: Lesen/Löschen auf dem Gerät wird sofort ins Postfach übertragen
 
-### EWS (Exchange Web Services)
+### EWS (EWS Web Services)
 
 Outlook Desktop (2010–2024) und Outlook für Mac kommunizieren via EWS — SOAP/XML über HTTPS:
 
@@ -1306,7 +1306,7 @@ DELETE /auth/sessions/admin/{userId}  → Admin: alle Sessions eines Users beend
 
 ## Weboberfläche (OWA)
 
-Die Weboberfläche orientiert sich am Layout von **Exchange 2019 OWA** und ist in **React 19** implementiert.
+Die Weboberfläche orientiert sich am Layout von **Coremail OWA** und ist in **React 19** implementiert.
 
 ### Layout (Webmail)
 
@@ -1348,7 +1348,7 @@ Die Weboberfläche orientiert sich am Layout von **Exchange 2019 OWA** und ist i
 | Paket | Zweck |
 |-------|-------|
 | React 19 + Vite | Framework + Build |
-| TailwindCSS + shadcn/ui | Komponenten (Exchange-ähnlich) |
+| TailwindCSS + shadcn/ui | Komponenten (Coremail-ähnlich) |
 | TanStack Query v5 | Server-State, Caching, Auto-Refetch |
 | TanStack Virtual | Virtualisierte Listen (10.000+ Mails) |
 | Zustand | Client-State (aktiver Ordner, Compose) |
@@ -1360,7 +1360,7 @@ Die Weboberfläche orientiert sich am Layout von **Exchange 2019 OWA** und ist i
 
 ## Admin-Panel (ECP)
 
-Das Admin-Panel unter `/ecp/` orientiert sich an **Exchange 2019 ECP** und bietet dieselbe Gliederung.
+Das Admin-Panel unter `/ecp/` orientiert sich an **Coremail ECP** und bietet dieselbe Gliederung.
 
 ### Sektionen
 
@@ -1562,11 +1562,11 @@ CoreMail/
 │   ├── auth-service/      # Auth: Lokal + LDAP + OIDC + MFA
 │   ├── auth-ldap/         # LDAP/AD-Connector
 │   ├── auth-sso/          # OIDC/OAuth2/SAML-Connector
-│   ├── ews-server/        # EWS (Exchange Web Services)
+│   ├── ews-server/        # EWS (EWS Web Services)
 │   ├── autodiscover/      # Autodiscover v1 + v2 (inkl. ActiveSync)
 │   ├── caldav-server/     # CalDAV + CardDAV
 │   ├── api-gateway/       # REST + SSE + S/MIME API
-│   ├── activesync/        # ActiveSync EAS 14.1 (Phase 6)
+│   ├── activesync/        # ActiveSync EAS 14.1
 │   ├── backup-service/    # Backup + Restore
 │   ├── web-client/        # React OWA-UI
 │   └── admin-panel/       # React ECP-UI
@@ -1696,13 +1696,13 @@ _autodiscover._tcp.domain.de. SRV 0 0 443 mail.domain.de.
 
 ## URL-Struktur
 
-CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook-Konfigurationen funktionieren ohne Änderungen.
+CoreMail verwendet **Coremail-kompatible URL-Pfade** — bestehende Outlook-Konfigurationen funktionieren ohne Änderungen.
 
 | URL | Service | Beschreibung |
 |-----|---------|-------------|
 | `/owa/` | `web-client` | Outlook Web Access (Webmail) |
-| `/ecp/` | `admin-panel` | Exchange Control Panel |
-| `/EWS/Exchange.asmx` | `ews-server` | Exchange Web Services (SOAP) |
+| `/ecp/` | `admin-panel` | Coremail Admin-Panel (ECP) |
+| `/EWS/Exchange.asmx` | `ews-server` | Web Services EWS (SOAP) |
 | `/mapi/` | `ews-server` | MAPI over HTTP (Outlook 2016+) |
 | `/Autodiscover/Autodiscover.xml` | `autodiscover` | Autodiscover v1 |
 | `/autodiscover/autodiscover.json/v1.0/` | `autodiscover` | Autodiscover v2 |
@@ -1728,12 +1728,6 @@ CoreMail verwendet **Exchange 2019-kompatible URL-Pfade** — bestehende Outlook
 | **Phase 2** | Security-Filter (DNSBL/Greylisting/GeoIP/ClamAV/rspamd), SMTP Inbound+Outbound, IMAP4rev1+IDLE+CONDSTORE | — | ✅ Abgeschlossen |
 | **Phase 3** | EWS SOAP/XML (13 Operationen), Autodiscover v1+v2, Auth-Service (Local/LDAP/OIDC/MFA/App-Passwörter) | — | ✅ Abgeschlossen |
 | **Phase 4** | CalDAV (RFC 4791) + CardDAV (RFC 6352), REST API-Gateway (SSE/WebSocket), React OWA-Webclient, React ECP-Admin-Panel | — | ✅ Abgeschlossen |
-| **Phase 5** | Backup-Service (MBOX/EML/S3), Kubernetes Helm Chart (HPA/CloudNativePG), Observability (OpenTelemetry/Prometheus/Grafana) | v0.6.1 | ✅ Abgeschlossen |
-| **Phase 6** | **ActiveSync EAS 14.1** (WBXML, Provision, FolderSync, Sync, SendMail, Ping), **S/MIME** (Zertifikat-API, PKCS#12, MinIO), Autodiscover ActiveSync-Block | v0.7.0 | ✅ Abgeschlossen |
-| **Phase 7** | **Verteilergruppen** (statisch/dynamisch, SMTP-Expansion), **Raum-/Ressourcenpostfächer** (auto-accept iCal), **Öffentliche Ordner** (ACL, Hierarchie), **PowerShell-Remoting-Stub** (WSMan) | v0.8.0 | ✅ Abgeschlossen |
-| **Phase 8** | **EMS REST-Bridge** (20+ Cmdlets, Cmdlet-Dispatcher), **MAPI over HTTP** (Connect/Execute/NSPI/GAL, Outlook 2013+), **eDiscovery & Legal Hold** (Cross-Mailbox-Suche, MBOX-Export) | **v0.9.0** | ✅ **Abgeschlossen** |
-| **Phase 9** | **S/MIME Inline** (Signierung/Verschlüsselung/Verifikation/Entschlüsselung, CMS, node-forge), **Journaling-Regeln** (RFC 3462, multipart/report, Scope/RecipientType), **Aufbewahrungsrichtlinien** (ARCHIVE/DELETE/MOVE, Legal-Hold-Schutz, täglicher Worker) | v0.10.0 | ✅ Abgeschlossen |
-| **Phase 10** | **Automatische Mailbox-Provisionierung**, **Outlook Modern Auth (OAuth2 + PKCE)**, **Audit-Log & Compliance-Reporting**, **VAPID Web Push**, **SMTP-Gateway-Modus (Relay zu Upstream-MTA)** | **v0.11.0** | ✅ **Abgeschlossen** |
 
 ---
 
@@ -1762,5 +1756,5 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <sub>Entwickelt mit ❤️ als Open-Source-Alternative zu Microsoft Exchange</sub>
+  <sub>Entwickelt mit ❤️ als Coremail der OpenSource Mailserver für kleine Umgebungen</sub>
 </div>

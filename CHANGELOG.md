@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.8] — 2026-05-16 — Cleanup + Status & Monitoring
+
+### Added
+
+- **ECP „Status & Monitoring"** — neue Sidebar-Gruppe mit:
+  - **Warteschlangen** — vollständige Queue-Ansicht mit Mail-Details:
+    - Summary-Karten für alle 4 Queues (Ausgehend / Retry / Dead Letter / Eingehend) mit Live-Zähler (5s Refresh)
+    - Klick auf Karte öffnet Detail-Panel mit tabellarischer Mail-Liste
+    - Spalten: Absender, Empfänger, Betreff, Eingestellt, Versuche
+    - Aufklappbare Detailzeile: vollständige Felder inkl. Fehlermeldung
+    - Einzelne Mail löschen, Queue leeren (Dead Letter)
+    - Seitenweise Paginierung (50 Mails/Seite)
+  - **Server & Health** — Server-Status und Einstellungen (ehemals unter Infrastruktur)
+
+### Changed
+
+- **README.md**: Alle Erwähnungen von „Microsoft Exchange" / „Exchange 2019" durch „Coremail der OpenSource Mailserver für kleine Umgebungen" ersetzt; Protokollnamen (EWS, ActiveSync, ECP) behalten aber ohne „Exchange"-Branding
+- **README.md + CLAUDE.md**: Alle „Phase 5" – „Phase 10" Annotationen entfernt
+- **ECP Sidebar**: „Mobile Geräte" entfernt; „Status & Monitoring" als neue Gruppe mit Warteschlangen + Server & Health
+- **Warteschlangen**: Aus Gruppe „Nachrichtenfluss" in neue Gruppe „Status & Monitoring" verschoben
+
+### Removed
+
+- **ECP „Mobile Geräte"** (`/ecp/#/mobile`) — Seite aus Navigation entfernt
+
+---
+
 ## [1.3.7] — 2026-05-16 — Feature: Audit-Log + OAuth2-Clients + SMTP-Gateway + Öffentliche Ordner + Notizen (OWA)
 
 ### Added

@@ -7,13 +7,13 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 
 ## Projektüberblick
 
-**CoreMail** ist eine vollständige Open-Source-Alternative zu Microsoft Exchange 2019, entwickelt in diesem Verzeichnis:
+**CoreMail** ist eine vollständige Open-Source-Alternative zu Coremail, entwickelt in diesem Verzeichnis:
 ```
 /Users/stefan/Library/CloudStorage/SynologyDrive-Data/Mailserver/coremail/
 ```
 
-**Ziel**: Feature-Parität mit Exchange 2019 für 10–500 User (KMU)
-**Aktuelle Version**: `1.3.7`
+**Ziel**: Coremail Mailserver für 10–500 User (KMU)
+**Aktuelle Version**: `1.3.8`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -43,7 +43,7 @@ coremail/
 │   ├── smtp-server/       # SMTP Inbound/Outbound (Port 25, 465, 587)
 │   ├── imap-server/       # IMAP4rev1 + IDLE + CONDSTORE (Port 143, 993)
 │   ├── pop3-server/       # POP3 (Port 110, 995)
-│   ├── ews-server/        # Exchange Web Services SOAP/XML (Port 8080)
+│   ├── ews-server/        # Web Services EWS SOAP/XML (Port 8080)
 │   ├── autodiscover/      # Autodiscover v1 + v2 (Port 8081)
 │   ├── caldav-server/     # CalDAV + CardDAV (Port 8082)
 │   ├── api-gateway/       # REST API + SSE (Port 3000)
@@ -52,7 +52,7 @@ coremail/
 │   ├── auth-sso/          # OIDC/OAuth2/SAML (intern)
 │   ├── backup-service/    # MBOX/EML/S3-Backup (Port 3004)
 │   ├── security-filter/   # SPF/DKIM/DMARC/ClamAV/rspamd (Port 3002)
-│   ├── activesync/        # Exchange ActiveSync EAS 14.1 (Port 3005) — Phase 6
+│   ├── activesync/        # ActiveSync EAS 14.1 (Port 3005)
 │   ├── web-client/        # React OWA Webmail (Port 80)
 │   └── admin-panel/       # React ECP Admin-Panel (Port 80)
 ├── infra/
@@ -131,12 +131,6 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 | Phase 2 | ✅ Fertig | SMTP + IMAP + POP3 + Security-Filter |
 | Phase 3 | ✅ Fertig | EWS + Autodiscover + Auth (LDAP/OIDC/MFA) |
 | Phase 4 | ✅ Fertig | CalDAV/CardDAV + REST API + React OWA + React ECP |
-| Phase 5 | ✅ Fertig | Backup + OpenTelemetry + Observability + Helm Chart |
-| Phase 6 | ✅ Fertig | ActiveSync (EAS 14.1) + S/MIME API |
-| Phase 7 | ✅ Fertig | Verteilergruppen + Raumverwaltung + Öffentliche Ordner + PowerShell-Stub |
-| Phase 8 | ✅ Fertig | EMS REST-Bridge (20+ Cmdlets) + MAPI over HTTP + eDiscovery & Legal Hold |
-| Phase 9 | ✅ Fertig | S/MIME Inline (sign/verify/encrypt/decrypt) + Journaling-Regeln (RFC 3462) + Aufbewahrungsrichtlinien |
-| Phase 10 | ✅ Fertig | Automatische Mailbox-Provisionierung + Outlook Modern Auth (OAuth2/PKCE) + Audit-Log + VAPID Web Push + SMTP-Gateway-Modus |
 | Infra | ✅ Fertig | Minimaler Stack: 1 Custom-Image (coremail-app), Standard-DB-Images, kein nginx/Proxy |
 
 ---
@@ -293,11 +287,11 @@ Alle Endpunkte hinter nginx auf Port 443:
 | Pfad | Service | Beschreibung |
 |------|---------|-------------|
 | `/owa/` | web-client | Outlook Web Access |
-| `/ecp/` | admin-panel | Exchange Control Panel |
-| `/EWS/Exchange.asmx` | ews-server | Exchange Web Services (SOAP) |
+| `/ecp/` | admin-panel | Coremail Admin-Panel (ECP) |
+| `/EWS/Exchange.asmx` | ews-server | EWS Web Services (SOAP) |
 | `/Autodiscover/` | autodiscover | Autodiscover v1 |
 | `/autodiscover/` | autodiscover | Autodiscover v2 |
-| `/Microsoft-Server-ActiveSync` | activesync | EAS 14.1 (Phase 6) |
+| `/Microsoft-Server-ActiveSync` | activesync | EAS 14.1 |
 | `/api/v1/` | api-gateway | REST API |
 | `/auth/` | auth-service | Authentifizierung |
 
@@ -309,28 +303,28 @@ Alle Endpunkte hinter nginx auf Port 443:
 /tasks/                   tasksRouter
 /notes/                   notesRouter
 /user/                    userRouter
-/smime/                   smimeRouter              # Phase 6: S/MIME + Geräteverwaltung
-/public-folders/          publicFoldersRouter      # Phase 7: Öffentliche Ordner (User)
+/smime/                   smimeRouter              S/MIME + Geräteverwaltung
+/public-folders/          publicFoldersRouter      Öffentliche Ordner (User)
 /admin/mailboxes/         adminMailboxesRouter
 /admin/domains/           adminDomainsRouter
 /admin/queues/            adminQueuesRouter
 /admin/logs/              adminLogsRouter
-/admin/groups/            adminGroupsRouter         # Phase 7: Verteilergruppen
-/admin/resources/         adminResourcesRouter      # Phase 7: Raum-/Ressourcenpostfächer
-/admin/public-folders/    adminPublicFoldersRouter  # Phase 7: Öffentliche Ordner (Admin)
-/admin/ediscovery/        adminEDiscoveryRouter     # Phase 8: eDiscovery & Legal Hold
-/admin/ems/               adminEmsRouter            # Phase 8: EMS REST-Bridge (20+ Cmdlets)
-/admin/compliance/journaling/ adminJournalingRouter # Phase 9: Journaling-Regeln
-/admin/compliance/retention/  adminRetentionRouter  # Phase 9: Aufbewahrungsrichtlinien
-/push/                    pushRouter                # Phase 10: VAPID Web Push
-/admin/audit-log/         adminAuditLogRouter       # Phase 10: Audit-Log
-/admin/oauth/             adminOAuthClientsRouter   # Phase 10: OAuth2-Clients
-/admin/gateway/           adminGatewayRouter        # Phase 10: SMTP-Gateway-Modus
-/changelog                inline (server.ts)        # Phase 10: Changelog-API
+/admin/groups/            adminGroupsRouter         Verteilergruppen
+/admin/resources/         adminResourcesRouter      Raum-/Ressourcenpostfächer
+/admin/public-folders/    adminPublicFoldersRouter  Öffentliche Ordner (Admin)
+/admin/ediscovery/        adminEDiscoveryRouter     eDiscovery & Legal Hold
+/admin/ems/               adminEmsRouter            EMS REST-Bridge (20+ Cmdlets)
+/admin/compliance/journaling/ adminJournalingRouter Journaling-Regeln
+/admin/compliance/retention/  adminRetentionRouter  Aufbewahrungsrichtlinien
+/push/                    pushRouter                VAPID Web Push
+/admin/audit-log/         adminAuditLogRouter       Audit-Log
+/admin/oauth/             adminOAuthClientsRouter   OAuth2-Clients
+/admin/gateway/           adminGatewayRouter        SMTP-Gateway-Modus
+/changelog                inline (server.ts)        Changelog-API
 /events                   SSE Live-Events
 ```
 
-**PowerShell Remoting** (Exchange Management Shell — Phase 8):
+**PowerShell Remoting** (Management Shell):
 ```
 GET  /PowerShell/  → WSDL
 POST /PowerShell/  → WSMan-Identify (antwortet) + Cmdlet-Routing zu EMS REST-Bridge
@@ -338,7 +332,7 @@ POST /PowerShell/  → WSMan-Identify (antwortet) + Cmdlet-Routing zu EMS REST-B
                      (unbekannte Cmdlets → SOAP-Fault mit Liste unterstützter Cmdlets)
 ```
 
-**MAPI over HTTP** (ews-server — Phase 8):
+**MAPI over HTTP** (ews-server):
 ```
 GET  /mapi/healthcheck.htm   → "MAPI" (Outlook Connectivity-Probe)
 POST /mapi/emsmdb/           → Connect / Execute (EWS-Fallback) / Disconnect / NotificationWait
@@ -369,7 +363,7 @@ HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
 
 ---
 
-## Phase 6: ActiveSync (EAS 14.1)
+## ActiveSync (EAS 14.1)
 
 **Package**: `packages/activesync/` — Port 3005
 **Docker Image**: `magpeek/coremail-activesync:0.7.0`
@@ -398,7 +392,7 @@ nginx muss `proxy_read_timeout 600s` für `/Microsoft-Server-ActiveSync` haben (
 
 ---
 
-## Phase 6: S/MIME
+## S/MIME
 
 **Router**: `packages/api-gateway/src/routes/smime.ts`
 **Route-Prefix**: `/api/v1/smime/`
@@ -464,7 +458,7 @@ GITHUB_TOKEN=$PAT gh issue close <nr> --comment "..." --repo MAGPEEK/CoreMail
 - `--profile observability`: + Prometheus/Grafana/Tempo/Loki/Alertmanager
 
 ### nginx (infra/docker/nginx/nginx.conf)
-Alle Pfade sind Exchange 2019 kompatibel. ActiveSync braucht 600s Timeout (Ping-Command).
+Alle Pfade sind Coremail-kompatibel. ActiveSync braucht 600s Timeout (Ping-Command).
 
 ### Kubernetes (infra/k8s/)
 - CloudNativePG Operator (3 PostgreSQL-Instanzen, automatisches Failover)
@@ -502,4 +496,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-16 (v1.3.7 — Feature: Audit-Log, OAuth2-Clients, SMTP-Gateway, Öffentliche Ordner im ECP; OWA Notizen-Seite)*
+*Letzte Aktualisierung: 2026-05-16 (v1.3.8 — Cleanup + Status & Monitoring)

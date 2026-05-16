@@ -2,9 +2,9 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
-  ShieldAlert, Smartphone, Search, Cable, Building2, Users,
+  ShieldAlert, Search, Cable, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
-  FolderOpen, KeyRound, Network, ClipboardList,
+  FolderOpen, KeyRound, Network, ClipboardList, Activity,
 } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
@@ -31,7 +31,6 @@ const NAV: (NavItem | NavGroup)[] = [
       { path: '/transport-rules',  label: 'Transportregeln',     icon: Workflow },
       { path: '/connectors',       label: 'Connectors',          icon: Cable },
       { path: '/gateway',          label: 'SMTP-Gateway',        icon: Network },
-      { path: '/queues',           label: 'Warteschlangen',      icon: ListOrdered },
       { path: '/message-trace',    label: 'Nachrichtenfluss',    icon: Search },
     ],
   },
@@ -47,8 +46,14 @@ const NAV: (NavItem | NavGroup)[] = [
     items: [
       { path: '/services',         label: 'Services',            icon: Server },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
-      { path: '/mobile',           label: 'Mobile Geräte',       icon: Smartphone },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
+    ],
+  },
+  {
+    group: 'Status & Monitoring',
+    items: [
+      { path: '/queues',           label: 'Warteschlangen',      icon: ListOrdered },
+      { path: '/servers',          label: 'Server & Health',     icon: Activity },
     ],
   },
   { path: '/organisation',     label: 'Organisation',        icon: Building2 },
