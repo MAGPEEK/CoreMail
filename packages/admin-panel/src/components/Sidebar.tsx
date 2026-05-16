@@ -1,8 +1,8 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield,
+  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
-  ShieldAlert, Search, Cable, Building2, Users,
+  ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
   FolderOpen, KeyRound, Network, ClipboardList, Activity,
 } from 'lucide-react';
@@ -29,7 +29,6 @@ const NAV: (NavItem | NavGroup)[] = [
     group: 'Nachrichtenfluss',
     items: [
       { path: '/transport-rules',  label: 'Transportregeln',     icon: Workflow },
-      { path: '/connectors',       label: 'Connectors',          icon: Cable },
       { path: '/gateway',          label: 'SMTP-Gateway',        icon: Network },
       { path: '/message-trace',    label: 'Nachrichtenfluss',    icon: Search },
     ],
@@ -44,6 +43,7 @@ const NAV: (NavItem | NavGroup)[] = [
   {
     group: 'Infrastruktur',
     items: [
+      { path: '/services',         label: 'Services',            icon: Server },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
     ],

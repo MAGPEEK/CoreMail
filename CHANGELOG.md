@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [1.3.19] — 2026-05-16 — ECP: Connectors (Send/Receive) entfernt
+
+### Removed
+
+- **Send Connectors und Receive Connectors** komplett entfernt — für einen einfachen Mailserver ohne Relay-Infrastruktur nicht nötig; Sendeconnectors = Routing-Regeln, Empfangsconnectors = IP-Autorisierung, beides nicht standard-relevant
+
+### Changed
+
+- **`ServicesPage`** — übernimmt jetzt die Listener-Verwaltung (SMTP Inbound / IMAP / POP3) mit Übersicht und Sub-Navigation
+- **Sidebar** — „Connectors" aus Nachrichtenfluss entfernt, „Services" in Infrastruktur verschoben
+- **`/connectors` Route** — Redirect zu `/services`
+
+---
+
 ## [1.3.18] — 2026-05-16 — ECP: Services bereinigt (SMTP Sending entfernt)
 
 ### Changed
