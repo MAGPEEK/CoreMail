@@ -1,9 +1,13 @@
-import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github } from 'lucide-react';
+import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, Container, Copy, Check as CheckIcon } from 'lucide-react';
+import { useState } from 'react';
 
-const VERSION     = '2.0.19';
-const BUILD_DATE  = '2026-05-16';
-const GITHUB_URL  = 'https://github.com/MAGPEEK/CoreMail';
-const CHANGELOG_URL = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
+const VERSION        = '2.0.19';
+const BUILD_DATE     = '2026-05-16';
+const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
+const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
+const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
+const DOCKER_IMAGE   = `magpeek/coremail-app:${VERSION}`;
+const DOCKER_PULL    = `docker pull ${DOCKER_IMAGE}`;
 
 const HIGHLIGHTS = [
   { version: '2.0.19', date: '2026-05-16', title: 'Passwort ändern & Design-Einstellungen',
@@ -26,6 +30,26 @@ function StatBadge({ label, value }: { label: string; value: string }) {
       <span className="text-xs text-gray-500 mb-0.5">{label}</span>
       <span className="text-base font-semibold text-gray-900">{value}</span>
     </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <button
+      onClick={copy}
+      title="Kopieren"
+      className="p-1.5 rounded hover:bg-gray-700 transition-colors shrink-0"
+    >
+      {copied
+        ? <CheckIcon size={13} className="text-green-400" />
+        : <Copy size={13} className="text-gray-400" />}
+    </button>
   );
 }
 
@@ -110,6 +134,79 @@ export function ComplianceInfoPage() {
             </div>
             <ExternalLink size={13} className="ml-auto text-gray-400 group-hover:text-gray-600" />
           </a>
+          <a
+            href={DOCKERHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50 transition-colors group"
+          >
+            <Container size={18} className="text-gray-600 group-hover:text-gray-900 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-gray-800">Docker Hub</p>
+              <p className="text-xs text-gray-400">magpeek/coremail-app</p>
+            </div>
+            <ExternalLink size={13} className="ml-auto text-gray-400 group-hover:text-gray-600" />
+          </a>
+        </div>
+      </div>
+
+      {/* Docker */}
+      <div className="card p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Container size={15} className="text-gray-500" />
+          <p className="text-sm font-semibold text-gray-700">Docker</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Image</p>
+            <p className="font-mono text-xs text-gray-800">{DOCKER_IMAGE}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Plattformen</p>
+            <p className="text-xs text-gray-800">linux/amd64 · linux/arm64</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Registry</p>
+            <a href={DOCKERHUB_URL} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-accent hover:underline">
+              hub.docker.com/r/magpeek/coremail-app
+            </a>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">GitHub</p>
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-accent hover:underline">
+              MAGPEEK/CoreMail
+            </a>
+          </div>
+        </div>
+
+        {/* Pull-Befehl */}
+        <div>
+          <p className="text-xs text-gray-500 mb-1.5">Pull-Befehl</p>
+          <div className="flex items-center gap-2 bg-gray-900 rounded-lg px-4 py-2.5">
+            <span className="font-mono text-xs text-green-400 flex-1 select-all">{DOCKER_PULL}</span>
+            <CopyButton text={DOCKER_PULL} />
+          </div>
+        </div>
+
+        {/* Docker-Compose-Snippet */}
+        <div>
+          <p className="text-xs text-gray-500 mb-1.5">docker-compose.yml (Auszug)</p>
+          <div className="relative bg-gray-900 rounded-lg px-4 py-3 overflow-x-auto">
+            <CopyButton text={`services:\n  coremail:\n    image: ${DOCKER_IMAGE}\n    restart: unless-stopped\n    ports:\n      - "25:25"\n      - "587:587"\n      - "993:993"\n      - "3000:3000"\n    env_file: .env`} />
+            <pre className="font-mono text-xs text-gray-300 leading-relaxed pr-8">{`services:
+  coremail:
+    image: ${DOCKER_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "25:25"
+      - "587:587"
+      - "993:993"
+      - "3000:3000"
+    env_file: .env`}</pre>
+          </div>
         </div>
       </div>
 
