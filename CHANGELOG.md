@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.28] — 2026-05-17 — Postfach anlegen: nur aktive Domains
+
+### Changed
+
+- **Domain-Dropdown (BCP → Postfächer → Neu anlegen)** — Zeigt ausschließlich aktive Domains. Deaktivierte Domains werden im Dropdown ausgeblendet, damit kein Postfach unter einer inaktiven Domain erstellt werden kann.
+- **Hinweistext** — Wenn alle Domains deaktiviert sind, erscheint statt des generischen "Keine Domains"-Texts der spezifische Hinweis "Alle Domains sind deaktiviert — bitte zuerst eine Domain aktivieren."
+
+---
+
 ## [2.1.27] — 2026-05-17 — SMTP/IMAP/POP3 Port-Toggle zuverlässig
 
 ### Fixed

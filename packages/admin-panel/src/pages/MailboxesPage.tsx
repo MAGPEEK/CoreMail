@@ -17,7 +17,7 @@ interface User {
 interface UserDetail extends User {
   mailbox?: { folders: FolderInfo[] };
 }
-interface Domain { id: string; name: string }
+interface Domain { id: string; name: string; active: boolean }
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 function formatBytes(b: number): string {
@@ -469,10 +469,14 @@ export function MailboxesPage() {
               <label className="field-label">Domain <span className="text-red-500">*</span></label>
               <select className="input w-full" value={form.domainId} onChange={(e) => selectDomain(e.target.value)}>
                 <option value="">Domain wählen…</option>
-                {domains.map((d) => <option key={d.id} value={d.id}>@{d.name}</option>)}
+                {domains.filter(d => d.active).map((d) => <option key={d.id} value={d.id}>@{d.name}</option>)}
               </select>
-              {domains.length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">Keine Domains vorhanden — bitte zuerst eine Domain anlegen.</p>
+              {domains.filter(d => d.active).length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">
+                  {domains.length === 0
+                    ? 'Keine Domains vorhanden — bitte zuerst eine Domain anlegen.'
+                    : 'Alle Domains sind deaktiviert — bitte zuerst eine Domain aktivieren.'}
+                </p>
               )}
             </div>
             <div>
