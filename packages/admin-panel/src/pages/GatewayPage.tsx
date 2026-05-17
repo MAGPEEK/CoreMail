@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Network, Save, Plug, CheckCircle2, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { Toggle } from '../components/Toggle.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,14 +120,7 @@ export function GatewayPage() {
                 Alle ausgehenden Mails werden über den unten konfigurierten SMTP-Relay geleitet
               </p>
             </div>
-            <button onClick={() => set('enabled', !form.enabled)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                form.enabled ? 'bg-accent' : 'bg-gray-200'
-              }`}>
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                form.enabled ? 'translate-x-6' : 'translate-x-1'
-              }`} />
-            </button>
+            <Toggle active={form.enabled} onToggle={() => set('enabled', !form.enabled)} />
           </div>
         </div>
 

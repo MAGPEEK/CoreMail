@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { Toggle } from '../components/Toggle.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
@@ -28,21 +29,6 @@ const SERVICES: { key: ServiceKey; label: string; ports: string; icon: React.Ele
   { key: 'POP3',         label: 'POP3',          ports: '110 · 995',       icon: Archive },
 ];
 
-// ── Toggle ────────────────────────────────────────────────────────────────────
-function Toggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-        active ? 'bg-blue-600' : 'bg-gray-300'
-      }`}
-    >
-      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-        active ? 'translate-x-6' : 'translate-x-1'
-      }`} />
-    </button>
-  );
-}
 
 // ── Listener Modal ─────────────────────────────────────────────────────────────
 interface ListenerFormData { address: string; port: string; ssl: boolean; active: boolean }

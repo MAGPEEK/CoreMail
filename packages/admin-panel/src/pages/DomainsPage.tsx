@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, X, Copy, CheckCircle, ChevronDown } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Toggle } from '../components/Toggle.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -17,21 +18,6 @@ interface Domain {
 interface DomainsResponse { domains: Domain[]; total: number; page: number; limit: number }
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
-// ── Toggle-Schalter ───────────────────────────────────────────────────────────
-function Toggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-        active ? 'bg-blue-600' : 'bg-gray-300'
-      }`}
-    >
-      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-        active ? 'translate-x-6' : 'translate-x-1'
-      }`} />
-    </button>
-  );
-}
 
 // ── Add-Domain-Modal ──────────────────────────────────────────────────────────
 function AddDomainModal({ onClose }: { onClose: () => void }) {

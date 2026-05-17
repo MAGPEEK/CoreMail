@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Toggle } from '../components/Toggle.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -112,16 +113,7 @@ function ToggleRow({ label, desc, value, onChange }:
         <p className="text-sm text-gray-800 font-medium">{label}</p>
         {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
       </div>
-      <button
-        onClick={() => onChange(!value)}
-        className={`relative rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-300'}`}
-        style={{ height: 22, width: 40, flexShrink: 0 }}
-      >
-        <span
-          className={`absolute top-0.5 w-4 h-4 rounded-full shadow transition-transform ${value ? 'translate-x-[22px]' : 'translate-x-0.5'}`}
-          style={{ backgroundColor: '#ffffff' }}
-        />
-      </button>
+      <Toggle active={value} onToggle={() => onChange(!value)} />
     </div>
   );
 }

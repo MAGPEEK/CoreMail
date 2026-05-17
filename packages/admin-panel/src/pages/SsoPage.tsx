@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Toggle } from '../components/Toggle.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,20 +175,14 @@ function ProviderForm({
               <p className="text-sm font-medium text-gray-800">Auto-Provisionierung</p>
               <p className="text-xs text-gray-500">Postfach beim ersten Login anlegen</p>
             </div>
-            <button onClick={() => set('autoProvision', !form.autoProvision)}
-              className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${form.autoProvision ? 'bg-accent' : 'bg-gray-300'}`}>
-              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5 ${form.autoProvision ? 'translate-x-4' : 'translate-x-0.5'}`} />
-            </button>
+            <Toggle active={form.autoProvision} onToggle={() => set('autoProvision', !form.autoProvision)} />
           </div>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-800">Aktiv</p>
               <p className="text-xs text-gray-500">Provider für Anmeldung verfügbar</p>
             </div>
-            <button onClick={() => set('active', !form.active)}
-              className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${form.active ? 'bg-accent' : 'bg-gray-300'}`}>
-              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5 ${form.active ? 'translate-x-4' : 'translate-x-0.5'}`} />
-            </button>
+            <Toggle active={form.active} onToggle={() => set('active', !form.active)} />
           </div>
         </div>
       </div>
@@ -409,9 +404,7 @@ function SettingsSection() {
                 <p className="text-sm font-medium text-gray-800">{s.label}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{s.desc}</p>
               </div>
-              <button className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ml-4 mt-0.5 ${s.default ? 'bg-accent' : 'bg-gray-300'}`}>
-                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5 ${s.default ? 'translate-x-4' : 'translate-x-0.5'}`} />
-              </button>
+              <Toggle active={s.default} onToggle={() => {}} disabled />
             </div>
           ))}
         </div>

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Toggle } from '../components/Toggle.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -79,13 +80,7 @@ function ToggleRow({ label, desc, value, onChange, warn }: {
           </p>
         )}
       </div>
-      <button
-        onClick={() => onChange(!value)}
-        style={{ height: 22, width: 40, flexShrink: 0 }}
-        className={`relative rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-300'}`}
-      >
-        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${value ? 'translate-x-5' : 'translate-x-0.5'}`} />
-      </button>
+      <Toggle active={value} onToggle={() => onChange(!value)} />
     </div>
   );
 }
@@ -233,13 +228,7 @@ function EsmtpSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Par
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-center">
-                    <button
-                      onClick={() => set(ext.key, !active)}
-                      style={{ height: 20, width: 36 }}
-                      className={`relative rounded-full transition-colors ${active ? 'bg-accent' : 'bg-gray-300'}`}
-                    >
-                      <span className={`absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full shadow transition-transform ${active ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                    </button>
+                    <Toggle active={active} onToggle={() => set(ext.key, !active)} />
                   </td>
                 </tr>
               );

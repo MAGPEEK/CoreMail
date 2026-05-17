@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Toggle as ToggleSwitch } from '../components/Toggle.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,14 +57,7 @@ function fmtDt(iso: string | null) {
 }
 
 function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      onClick={() => onChange(!value)}
-      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-300'}`}
-    >
-      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5 ${value ? 'translate-x-4' : 'translate-x-0.5'}`} />
-    </button>
-  );
+  return <ToggleSwitch active={value} onToggle={() => onChange(!value)} />;
 }
 
 // ─── Connection List ──────────────────────────────────────────────────────────

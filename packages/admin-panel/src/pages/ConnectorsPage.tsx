@@ -6,6 +6,7 @@ import {
   ArrowUpRight, ArrowDownLeft, LayoutGrid, Mail, Inbox, Archive, Lock,
 } from 'lucide-react';
 import { api } from '../api/client.js';
+import { Toggle } from '../components/Toggle.js';
 
 // ── Typen — Connectors ────────────────────────────────────────────────────────
 type ConnType = 'SEND' | 'RECEIVE';
@@ -39,21 +40,6 @@ const SVC_SLUG: Record<ServiceKey, string> = {
   POP3:         'pop3',
 };
 
-// ── Toggle ────────────────────────────────────────────────────────────────────
-function Toggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-        active ? 'bg-blue-600' : 'bg-gray-300'
-      }`}
-    >
-      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-        active ? 'translate-x-6' : 'translate-x-1'
-      }`} />
-    </button>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONNECTORS
