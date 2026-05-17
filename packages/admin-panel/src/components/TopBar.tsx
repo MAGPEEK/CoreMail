@@ -51,7 +51,7 @@ export function TopBar() {
       {/* Brand */}
       <div className="flex items-center gap-2">
         <Mail size={17} className="text-accent" />
-        <span className="text-white font-semibold text-sm">CoreMail ECP</span>
+        <span className="text-white font-semibold text-sm">CoreMail BCP</span>
         <span className="text-gray-500 text-xs hidden md:block">Admin-Konsole</span>
       </div>
 
