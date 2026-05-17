@@ -14,9 +14,6 @@ const TLS_CERT   = process.env['TLS_CERT_PATH'];
 const TLS_KEY    = process.env['TLS_KEY_PATH'];
 
 // ── Tracked-Server-Typ ────────────────────────────────────────────────────────
-// net.Server.closeAllConnections() existiert NICHT auf net.Server (nur http.Server).
-// Daher tracken wir Sockets manuell und rufen socket.destroy() beim Schließen.
-
 interface TrackedPop3Server {
   server:  net.Server | tls.Server;
   sockets: Set<net.Socket>;
@@ -25,7 +22,6 @@ interface TrackedPop3Server {
 const servers = new Map<number, TrackedPop3Server>();
 
 // ── Reload-Mutex ──────────────────────────────────────────────────────────────
-
 let _reloading = false;
 let _pendingReload = false;
 
@@ -41,10 +37,7 @@ function scheduleReload(): void {
 
 // ── Server-Lifecycle ──────────────────────────────────────────────────────────
 
-interface ListenerConfig {
-  port: number;
-  ssl:  boolean;
-}
+interface ListenerConfig { port: number; ssl: boolean }
 
 function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   const sockets = new Set<net.Socket>();
@@ -55,7 +48,6 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     const session = new POP3Session(socket as net.Socket | tls.TLSSocket, cfg.ssl);
     session.start();
     socket.on('error', (err) => log.warn({ err }, 'POP3 socket error'));
-    socket.on('close', () => log.debug('POP3 connection closed'));
   };
 
   let server: net.Server | tls.Server;
@@ -65,7 +57,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
       key:        fs.readFileSync(TLS_KEY),
       minVersion: 'TLSv1.2',
     };
-    server = tls.createServer(tlsOptions, onSocket as (socket: tls.TLSSocket) => void);
+    server = tls.createServer(tlsOptions, onSocket as (s: tls.TLSSocket) => void);
   } else {
     server = net.createServer(onSocket);
   }
@@ -73,19 +65,35 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   return { server, sockets };
 }
 
-function closePop3Server(tracked: TrackedPop3Server, port: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      log.warn({ port, remaining: tracked.sockets.size }, 'POP3 close timeout (3 s) — forced');
-      resolve();
-    }, 3_000);
-    const done = () => { clearTimeout(timer); resolve(); };
+/**
+ * Schließt einen POP3-Listener definitiv:
+ *
+ * 1. Alle verfolgten Sockets per .destroy() sofort beenden
+ * 2. server.close() → _handle.close() → OS-Port sofort freigegeben
+ * 3. _handle direkt schließen als Nuklear-Option
+ *
+ * Synchron — kein async/await nötig.
+ */
+function closePop3Server(tracked: TrackedPop3Server, port: number): void {
+  const count = tracked.sockets.size;
 
-    // Alle verfolgten Sockets sofort zerstören → server.close(done) feuert danach direkt.
-    for (const s of tracked.sockets) s.destroy();
-    tracked.sockets.clear();
-    tracked.server.close(done);
-  });
+  // Alle aktiven Verbindungen sofort zerstören
+  for (const s of tracked.sockets) { try { s.destroy(); } catch { /* ignore */ } }
+  tracked.sockets.clear();
+
+  // server.close() → _handle.close() → OS-Port synchron freigegeben
+  try {
+    tracked.server.close(() =>
+      log.debug({ port }, 'POP3 server.close() callback fired'));
+  } catch { /* server may already be closed */ }
+
+  // Nuklear-Option: _handle direkt schließen
+  const handle = (tracked.server as any)._handle;
+  if (handle?.close) {
+    try { handle.close(); (tracked.server as any)._handle = null; } catch { /* ignore */ }
+  }
+
+  log.info({ port, closedConnections: count }, 'POP3 listener stopped');
 }
 
 // ── Listener-Reload ───────────────────────────────────────────────────────────
@@ -94,6 +102,8 @@ async function reloadListeners(): Promise<void> {
   try {
     const listeners = await prisma.serviceListener.findMany({ where: { service: 'POP3' } });
     const activePorts = new Set(listeners.filter(l => l.active).map(l => l.port));
+
+    log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'POP3 reload');
 
     // Neu aktive Ports starten
     for (const l of listeners) {
@@ -105,17 +115,12 @@ async function reloadListeners(): Promise<void> {
       }
     }
 
-    // Deaktivierte/gelöschte Ports schließen
-    const toClose: Array<[number, TrackedPop3Server]> = [];
+    // Deaktivierte/gelöschte Ports schließen (synchron)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);
-        toClose.push([port, tracked]);
+        servers.delete(port);   // Vor dem Close aus Map entfernen
+        closePop3Server(tracked, port);
       }
-    }
-    for (const [port, tracked] of toClose) {
-      await closePop3Server(tracked, port);
-      log.info({ port }, 'POP3 listener stopped');
     }
   } catch (err) {
     log.error({ err }, 'Failed to reload POP3 listeners');
@@ -154,9 +159,10 @@ async function main() {
 
   async function shutdown() {
     log.info('Shutting down POP3 server…');
-    const all = [...servers.entries()];
-    servers.clear();
-    await Promise.all(all.map(([p, t]) => closePop3Server(t, p)));
+    for (const [port, tracked] of servers) {
+      servers.delete(port);
+      closePop3Server(tracked, port);
+    }
     await subscriber.quit();
     await getRedisClient().quit();
     process.exit(0);

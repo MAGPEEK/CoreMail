@@ -9,9 +9,6 @@ const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);
 
 // ── Tracked-Server-Typ ────────────────────────────────────────────────────────
-// net.Server.closeAllConnections() existiert NICHT auf net.Server (nur http.Server).
-// Daher tracken wir Sockets manuell und rufen socket.destroy() beim Schließen.
-
 interface TrackedImapServer {
   server:  ReturnType<typeof createImapServer>;
   sockets: Set<net.Socket>;
@@ -20,7 +17,6 @@ interface TrackedImapServer {
 const servers = new Map<number, TrackedImapServer>();
 
 // ── Reload-Mutex ──────────────────────────────────────────────────────────────
-
 let _reloading = false;
 let _pendingReload = false;
 
@@ -37,11 +33,8 @@ function scheduleReload(): void {
 // ── Server-Lifecycle ──────────────────────────────────────────────────────────
 
 function createTrackedImapServer(): TrackedImapServer {
-  const server = createImapServer();
+  const server = createImapServer(); // gibt net.Server zurück
   const sockets = new Set<net.Socket>();
-  // Listener auf dem net.Server hinzufügen um alle Sockets zu tracken.
-  // createImapServer registriert seinen eigenen Handler via net.createServer((socket) => ...)
-  // — beide 'connection'-Listener werden der Reihe nach aufgerufen, kein Konflikt.
   server.on('connection', (socket: net.Socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
@@ -49,20 +42,36 @@ function createTrackedImapServer(): TrackedImapServer {
   return { server, sockets };
 }
 
-function closeImapServer(tracked: TrackedImapServer, port: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      log.warn({ port, remaining: tracked.sockets.size }, 'IMAP close timeout (3 s) — forced');
-      resolve();
-    }, 3_000);
-    const done = () => { clearTimeout(timer); resolve(); };
+/**
+ * Schließt einen IMAP-Listener definitiv:
+ *
+ * 1. Alle verfolgten Sockets per .destroy() sofort beenden
+ * 2. server.close() aufrufen (OS-Port wird synchron freigegeben)
+ * 3. _handle direkt schließen als Absicherung
+ *
+ * IMAP IDLE-Verbindungen haben 30-min-Timeout — ohne socket.destroy()
+ * würde server.close() ewig warten. Durch destroy() sofortige Freigabe.
+ */
+function closeImapServer(tracked: TrackedImapServer, port: number): void {
+  const count = tracked.sockets.size;
 
-    // Alle verfolgten Sockets sofort zerstören → server.close(done) feuert danach direkt.
-    // IMAP IDLE-Verbindungen hätten sonst bis zu 30 Minuten Idle-Timeout.
-    for (const s of tracked.sockets) s.destroy();
-    tracked.sockets.clear();
-    tracked.server.close(done);
-  });
+  // Alle aktiven Verbindungen sofort zerstören (auch IDLE-Verbindungen)
+  for (const s of tracked.sockets) { try { s.destroy(); } catch { /* ignore */ } }
+  tracked.sockets.clear();
+
+  // server.close() → _handle.close() → OS-Port synchron freigegeben
+  try {
+    tracked.server.close(() =>
+      log.debug({ port }, 'IMAP server.close() callback fired'));
+  } catch { /* server may already be closed */ }
+
+  // Nuklear-Option: _handle direkt schließen
+  const handle = (tracked.server as any)._handle;
+  if (handle?.close) {
+    try { handle.close(); (tracked.server as any)._handle = null; } catch { /* ignore */ }
+  }
+
+  log.info({ port, closedConnections: count }, 'IMAP listener stopped');
 }
 
 // ── Listener-Reload ───────────────────────────────────────────────────────────
@@ -71,6 +80,8 @@ async function reloadListeners(): Promise<void> {
   try {
     const listeners = await prisma.serviceListener.findMany({ where: { service: 'IMAP' } });
     const activePorts = new Set(listeners.filter(l => l.active).map(l => l.port));
+
+    log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'IMAP reload');
 
     // Neu aktive Ports starten
     for (const l of listeners) {
@@ -82,17 +93,12 @@ async function reloadListeners(): Promise<void> {
       }
     }
 
-    // Deaktivierte/gelöschte Ports schließen
-    const toClose: Array<[number, TrackedImapServer]> = [];
+    // Deaktivierte/gelöschte Ports schließen (synchron)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);
-        toClose.push([port, tracked]);
+        servers.delete(port);   // Vor dem Close aus Map entfernen
+        closeImapServer(tracked, port);
       }
-    }
-    for (const [port, tracked] of toClose) {
-      await closeImapServer(tracked, port);
-      log.info({ port }, 'IMAP listener stopped');
     }
   } catch (err) {
     log.error({ err }, 'Failed to reload IMAP listeners');
@@ -134,9 +140,10 @@ async function main() {
 
   process.on('SIGTERM', async () => {
     log.info('Shutting down IMAP server…');
-    const all = [...servers.entries()];
-    servers.clear();
-    await Promise.all(all.map(([p, t]) => closeImapServer(t, p)));
+    for (const [port, tracked] of servers) {
+      servers.delete(port);
+      closeImapServer(tracked, port);
+    }
     await subscriber.quit();
     await getRedisClient().quit();
     process.exit(0);

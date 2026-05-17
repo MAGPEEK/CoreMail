@@ -9,6 +9,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.32] — 2026-05-17 — Postgres Startup-Fix + Definitiver Port-Close
+
+### Fixed
+
+- **coremail-app startet nicht beim Neuaufsetzen (Synology NAS)** — `nc -z` prüft nur TCP-Erreichbarkeit (Port akzeptiert Verbindungen), nicht ob PostgreSQL die DB-Initialisierung abgeschlossen hat. Auf Synology-Volumes (langsames Storage) läuft `initdb` noch bis zu 2 Minuten, nachdem `nc -z` true meldet. `prisma db push` schlug deshalb beim ersten Start fehl — das Skript ignorierte den Fehler und startete supervisord trotzdem. Alle Services crashten, `startretries=10` war nach ~2 Minuten erschöpft, supervisord beendete sich, Docker-Container stoppte. Beim manuellen Neustart war PostgreSQL bereits fertig → alles funktionierte.
+- **Fix**: `entrypoint-app.sh` — `prisma db push` mit Retry-Schleife (60 Versuche × 5 s = 5 min). Erst wenn `db push` erfolgreich ist, startet supervisord. Kein Hard-Timeout für den TCP-Check — unbegrenzte Wartezeit mit Progress-Log alle 10 s.
+- **Ports lassen sich nicht ab/anschalten (definitiver Fix)** — `server.close()` gibt den OS-Port via `_handle.close()` **synchron** frei. Der optionale Callback feuert erst wenn alle `_connections` auf null sinken — was bei IMAP IDLE (30-min-Timeout) oder TLS-Verbindungen nie passierte. Die bisherige Lösung wartete auf den Callback (3-Sekunden-Timeout als Fallback), was zwar `resolve()` aufrief, aber die Ports blieben gebunden wenn Verbindungen existierten.
+- **Fix**: Close-Funktion in allen drei Servern (SMTP, IMAP, POP3) ist jetzt **vollständig synchron**:
+  1. Alle getrackten Sockets per `socket.destroy()` sofort beenden
+  2. `server.close()` aufrufen (gibt OS-Port synchron frei — kein Warten auf Callback)
+  3. `_handle` direkt schließen als Nuklear-Option (falls `server.close()` den Handle nicht freigegeben hat)
+- `reloadListeners()` wartet nicht mehr auf einen async Close-Promise — der Port ist nach dem Funktionsaufruf sofort frei.
+
+---
+
 ## [2.1.31] — 2026-05-17 — Port-Close Root-Cause-Fix: Socket-Tracking + Reload-Mutex
 
 ### Fixed
