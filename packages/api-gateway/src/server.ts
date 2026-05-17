@@ -146,6 +146,13 @@ app.use('/autodiscover', internalProxy(EWS_URL));
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
 app.use('/dav',          internalProxy(DAV_URL));
 
+// Auth-Service-Routen (MFA, App-Passwörter, Sessions) — VOR express.json()!
+// Login/Refresh/Logout sind direkt im authRouter implementiert (kein Proxy nötig).
+const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
+app.use('/auth/mfa',           internalProxy(AUTH_SERVICE_URL));
+app.use('/auth/app-passwords', internalProxy(AUTH_SERVICE_URL));
+app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
+
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
 app.use(express.json({ limit: '10mb' }));
