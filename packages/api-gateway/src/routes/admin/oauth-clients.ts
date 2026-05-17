@@ -31,7 +31,8 @@ adminOAuthClientsRouter.get('/clients', async (_req: Request, res: Response) => 
   const clients = await prisma.oAuthClient.findMany({
     select: {
       id: true, clientId: true, name: true, description: true,
-      redirectUris: true, allowedScopes: true, trusted: true, active: true, createdAt: true,
+      redirectUris: true, allowedScopes: true, trusted: true, pkceRequired: true,
+      active: true, createdAt: true,
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -39,12 +40,13 @@ adminOAuthClientsRouter.get('/clients', async (_req: Request, res: Response) => 
 });
 
 adminOAuthClientsRouter.post('/clients', async (req: Request, res: Response) => {
-  const { name, description, redirectUris, allowedScopes, trusted } = req.body as {
+  const { name, description, redirectUris, allowedScopes, trusted, pkceRequired } = req.body as {
     name?: string;
     description?: string;
     redirectUris?: string[];
     allowedScopes?: string[];
     trusted?: boolean;
+    pkceRequired?: boolean;
   };
 
   if (!name || !redirectUris?.length) {
@@ -58,29 +60,32 @@ adminOAuthClientsRouter.post('/clients', async (req: Request, res: Response) => 
     return;
   }
 
+  const isPublic = pkceRequired ?? false;  // Public clients haben kein Secret
   const clientId = `coremail_${crypto.randomBytes(12).toString('hex')}`;
-  const rawSecret = crypto.randomBytes(32).toString('hex');
-  const clientSecret = await bcrypt.hash(rawSecret, 12);
+  const rawSecret = isPublic ? null : crypto.randomBytes(32).toString('hex');
+  const clientSecret = rawSecret ? await bcrypt.hash(rawSecret, 12) : '';
 
   const client = await prisma.oAuthClient.create({
     data: {
       clientId,
       clientSecret,
       name,
-      description: description ?? '',
+      description:   description ?? '',
       redirectUris,
       allowedScopes: allowedScopes ?? ['openid', 'email', 'mail', 'ews'],
-      trusted: trusted ?? false,
-      createdBy: req.apiUser!.userId,
+      trusted:       trusted ?? false,
+      pkceRequired:  isPublic,
+      createdBy:     req.apiUser!.userId,
     },
     select: {
       id: true, clientId: true, name: true, description: true,
-      redirectUris: true, allowedScopes: true, trusted: true, active: true, createdAt: true,
+      redirectUris: true, allowedScopes: true, trusted: true, pkceRequired: true,
+      active: true, createdAt: true,
     },
   });
 
-  // Return raw secret once — it cannot be recovered afterwards
-  res.status(201).json({ ...client, clientSecret: rawSecret });
+  // Secret einmalig zurückgeben — danach nicht mehr abrufbar
+  res.status(201).json({ ...client, ...(rawSecret ? { clientSecret: rawSecret } : {}) });
 });
 
 adminOAuthClientsRouter.get('/clients/:id', async (req: Request, res: Response) => {
@@ -89,7 +94,8 @@ adminOAuthClientsRouter.get('/clients/:id', async (req: Request, res: Response) 
     where: { id },
     select: {
       id: true, clientId: true, name: true, description: true,
-      redirectUris: true, allowedScopes: true, trusted: true, active: true, createdAt: true,
+      redirectUris: true, allowedScopes: true, trusted: true, pkceRequired: true,
+      active: true, createdAt: true,
     },
   });
   if (!client) { res.status(404).json({ error: 'Client not found' }); return; }
@@ -98,9 +104,9 @@ adminOAuthClientsRouter.get('/clients/:id', async (req: Request, res: Response) 
 
 adminOAuthClientsRouter.put('/clients/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const { name, description, redirectUris, allowedScopes, trusted, active } = req.body as {
+  const { name, description, redirectUris, allowedScopes, trusted, pkceRequired, active } = req.body as {
     name?: string; description?: string; redirectUris?: string[];
-    allowedScopes?: string[]; trusted?: boolean; active?: boolean;
+    allowedScopes?: string[]; trusted?: boolean; pkceRequired?: boolean; active?: boolean;
   };
 
   const existing = await prisma.oAuthClient.findUnique({ where: { id } });
@@ -109,16 +115,17 @@ adminOAuthClientsRouter.put('/clients/:id', async (req: Request, res: Response) 
   const client = await prisma.oAuthClient.update({
     where: { id },
     data: {
-      ...(name !== undefined ? { name } : {}),
-      ...(description !== undefined ? { description } : {}),
-      ...(redirectUris !== undefined ? { redirectUris } : {}),
+      ...(name !== undefined         ? { name }         : {}),
+      ...(description !== undefined  ? { description }  : {}),
+      ...(redirectUris !== undefined  ? { redirectUris }  : {}),
       ...(allowedScopes !== undefined ? { allowedScopes } : {}),
-      ...(trusted !== undefined ? { trusted } : {}),
-      ...(active !== undefined ? { active } : {}),
+      ...(trusted !== undefined       ? { trusted }       : {}),
+      ...(pkceRequired !== undefined  ? { pkceRequired }  : {}),
+      ...(active !== undefined        ? { active }        : {}),
     },
     select: {
       id: true, clientId: true, name: true, description: true,
-      redirectUris: true, allowedScopes: true, trusted: true, active: true,
+      redirectUris: true, allowedScopes: true, trusted: true, pkceRequired: true, active: true,
     },
   });
   res.json(client);
@@ -173,5 +180,40 @@ adminOAuthClientsRouter.delete('/tokens/:id', async (req: Request, res: Response
   const token = await prisma.oAuthToken.findUnique({ where: { id } });
   if (!token) { res.status(404).json({ error: 'Token not found' }); return; }
   await prisma.oAuthToken.update({ where: { id }, data: { revoked: true } });
+  res.json({ ok: true });
+});
+
+// ── Consent Management ────────────────────────────────────────────────────────
+
+/** GET  /api/v1/admin/oauth/consents — Liste aller erteilten Consents */
+adminOAuthClientsRouter.get('/consents', async (req: Request, res: Response) => {
+  const { userId, clientId } = req.query as { userId?: string; clientId?: string };
+  const consents = await prisma.oAuthConsent.findMany({
+    where: {
+      revokedAt: null,
+      ...(userId   ? { userId }   : {}),
+      ...(clientId ? { clientId } : {}),
+    },
+    include: {
+      user:   { select: { email: true, displayName: true } },
+      client: { select: { name: true, clientId: true } },
+    },
+    orderBy: { grantedAt: 'desc' },
+    take: 500,
+  });
+  res.json(consents);
+});
+
+/** DELETE /api/v1/admin/oauth/consents/:id — Consent widerrufen */
+adminOAuthClientsRouter.delete('/consents/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const consent = await prisma.oAuthConsent.findUnique({ where: { id } });
+  if (!consent) { res.status(404).json({ error: 'Consent not found' }); return; }
+  await prisma.oAuthConsent.update({ where: { id }, data: { revokedAt: new Date() } });
+  // Auch alle aktiven Tokens für diesen User+Client widerrufen
+  await prisma.oAuthToken.updateMany({
+    where: { userId: consent.userId, clientId: consent.clientId, revoked: false },
+    data:  { revoked: true },
+  });
   res.json({ ok: true });
 });

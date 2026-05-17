@@ -9,6 +9,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.37] — 2026-05-17 — RFC 6749 OAuth 2.0 vollständige Implementierung
+
+### Added
+
+- **Client Credentials Grant** (RFC 6749 §4.4) — `grant_type=client_credentials`; Server-zu-Server-Auth ohne User-Kontext; client_id + client_secret Pflicht
+- **Resource Owner Password Credentials Grant** (RFC 6749 §4.3) — `grant_type=password`; Benutzer-Credentials direkt an Token-Endpoint; für Legacy-Clients
+- **Client Authentication via HTTP Basic** (RFC 6749 §2.3.1) — `Authorization: Basic base64(client_id:client_secret)` am Token-Endpunkt neben client_secret_post
+- **Token Introspection** (RFC 7662 §2) — `POST /oauth2/token/introspect`; liefert `active`, `scope`, `sub`, `exp`, `iss`, `client_id`; erfordert Client-Authentifizierung
+- **OIDC ID Token** (OIDC Core §3.1.3.3) — im Token-Response enthalten wenn `openid` Scope angefordert; HS256-signiert via `signIdToken()` in `@coremail/core`
+- **CORS-Header** auf allen OAuth-Endpunkten — `Access-Control-Allow-Origin: *`, `Cache-Control: no-store`, `Pragma: no-cache` gemäß RFC 6749 §5.1
+- **Scope-Validierung** (RFC 6749 §3.3) — angeforderte Scopes werden gegen `client.allowedScopes` geprüft; `invalid_scope`-Fehler wenn Schnittmenge leer
+- **Scope-Einschränkung bei Refresh** (RFC 6749 §6) — neuer Scope ≤ ursprünglicher Scope; `invalid_scope` wenn versucht wird, mehr Scopes zu erhalten
+- **Consent-Tracking** — neues Prisma-Modell `OAuthConsent`; nicht-trusted Clients werden beim ersten Aufruf in DB gespeichert; Consent widerrufbar
+- **`POST /oauth2/consent`** — Frontend kann Consent erteilen oder verweigern; Widerruf revoziert alle aktiven Tokens
+- **`GET/DELETE /api/v1/admin/oauth/consents`** — Admin-Verwaltung aller erteilten Consents
+- **`pkceRequired` Flag** auf `OAuthClient` — Public Clients (SPAs, native Apps) ohne Client-Secret; PKCE S256 Pflicht; Secret wird leer gespeichert
+- **`BASE_URL` aus DB** (`ServerSettings.publicHostname`) statt `AUTODISCOVER_BASE` Env-Variable — gilt für Issuer, Discovery Document und ID Token `iss`-Claim
+- **`nonce`-Parameter** in Authorization Code Flow — wird in den Code gespeichert und an OWA weitergegeben (OIDC-Replay-Schutz)
+
+### Changed
+
+- **RFC 6749 §5.2 Fehlerformat** — alle Fehler haben `WWW-Authenticate: Basic realm="CoreMail OAuth2"` Header bei 401; konsistente `{ error, error_description }` Antworten
+- **Token Rotation bei Refresh** — altes Refresh Token wird nach Verwendung widerrufen (Rotation nach RFC 6749 Best Practices)
+- **PKCE-Enforcement** — für Clients mit `pkceRequired=true` ist `code_challenge` Pflicht beim Authorization Request; Fehler wenn fehlend
+- **Admin OAuth-Client Create** — `pkceRequired`-Parameter; Public Clients erhalten kein `clientSecret` (leerer String intern)
+- **Discovery Document** — `grant_types_supported` enthält jetzt `client_credentials` und `password`; `introspection_endpoint` ergänzt
+
+---
+
 ## [2.1.36] — 2026-05-17 — Hostname aus Admin-Panel (DB-backed) + RFC 8314/6409/1730/1939 Ports
 
 ### Changed

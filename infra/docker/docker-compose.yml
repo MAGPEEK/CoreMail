@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.36
+# CoreMail v2.1.37
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:2.1.36
+    image: magpeek/coremail-app:2.1.37
     # Lokaler Build:
     # build:
     #   context: ../..

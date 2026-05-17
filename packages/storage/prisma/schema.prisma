@@ -110,6 +110,7 @@ model User {
   pushSubscriptions PushSubscription[]
   oauthCodes      OAuthAuthorizationCode[]
   oauthTokens     OAuthToken[]
+  oauthConsents   OAuthConsent[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -999,21 +1000,41 @@ model PushSubscription {
 model OAuthClient {
   id           String   @id @default(cuid())
   clientId     String   @unique
-  clientSecret String   // bcrypt hash for confidential clients
+  clientSecret String   // bcrypt hash for confidential clients; empty string for public clients
   name         String
   description  String   @default("")
   redirectUris String[]
-  // Available scopes: "mail" | "calendar" | "contacts" | "ews" | "admin"
+  // Available scopes: "openid" | "profile" | "email" | "mail" | "calendar" | "contacts" | "ews" | "admin"
   allowedScopes String[]
   // Trusted clients skip user consent screen
   trusted      Boolean  @default(false)
+  // Public clients (no clientSecret) must use PKCE
+  pkceRequired Boolean  @default(false)
   active       Boolean  @default(true)
   createdBy    String
   createdAt    DateTime @default(now())
   tokens       OAuthToken[]
   codes        OAuthAuthorizationCode[]
+  consents     OAuthConsent[]
 
   @@map("oauth_clients")
+}
+
+// Tracks which scopes a user has granted to an OAuth2 client (consent).
+// Non-trusted clients must obtain user consent before receiving tokens.
+model OAuthConsent {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  scopes    String[]    // granted scopes
+  grantedAt DateTime    @default(now())
+  revokedAt DateTime?
+
+  @@unique([userId, clientId])
+  @@index([userId])
+  @@map("oauth_consents")
 }
 
 model OAuthAuthorizationCode {

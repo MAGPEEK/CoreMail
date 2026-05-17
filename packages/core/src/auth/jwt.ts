@@ -34,3 +34,22 @@ export function extractTokenFromHeader(authHeader: string | undefined): string {
   }
   return authHeader.slice(7);
 }
+
+/**
+ * Stellt ein OIDC ID Token aus (RFC 6749 / OIDC Core §3.1.3.3).
+ * Signiert mit HS256 via JWT_SECRET.
+ */
+export function signIdToken(payload: {
+  iss: string;
+  sub: string;
+  aud: string;
+  iat: number;
+  exp: number;
+  email?: string;
+  name?: string;
+  preferred_username?: string;
+  nonce?: string;
+  [key: string]: unknown;
+}): string {
+  return jwt.sign(payload, config.JWT_SECRET, { algorithm: 'HS256' });
+}
