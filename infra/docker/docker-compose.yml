@@ -1,33 +1,30 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v0.11.0 — Minimaler Stack
+# CoreMail v2.0.19
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
 #   docker compose up -d           # Images von Docker Hub laden und starten
 #
 # Ports:
-#   3000  — HTTP (OWA Webmail, ECP Admin, REST API, Autodiscover, EWS)
-#           Für HTTPS eigenen Reverse Proxy vorschalten
-#           (Traefik, Caddy, nginx, DSM Application Portal …)
+#   3000        — HTTP (OWA Webmail, ECP Admin, REST API, Autodiscover, EWS)
+#                 Für HTTPS eigenen Reverse Proxy vorschalten
+#                 (Traefik, Caddy, nginx, DSM Application Portal …)
 #   25/465/587  — SMTP
 #   143/993     — IMAP
-#   110/995     — POP3 (optional)
-#   9001        — MinIO Web-Konsole (Dateiinspektion/Backup)
-#
-# Mit Observability:
-#   docker compose --profile observability up -d
+#   110/995     — POP3
+#   9001        — MinIO Web-Konsole (Dateiinspektion / Backup)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── CoreMail Hauptanwendung ───────────────────────────────────────────────────
+  # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
   # Enthält: alle Node.js-Services + OWA/ECP-Frontends (supervisord)
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:2.0.19
+    image: magpeek/coremail-app:2.1.19
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -103,12 +100,12 @@ services:
       # Statische Dateien (OWA/ECP Frontends im Container)
       WWW_DIR: /app/www
 
-      # VAPID Web Push (Phase 10)
+      # VAPID Web Push
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-      # SMTP-Gateway-Modus (Phase 10 — optional)
+      # SMTP-Gateway-Modus (optional)
       GATEWAY_MODE: ${GATEWAY_MODE:-false}
       GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-}
       GATEWAY_UPSTREAM_PORT: ${GATEWAY_UPSTREAM_PORT:-25}
@@ -118,7 +115,7 @@ services:
       GATEWAY_DOMAINS: ${GATEWAY_DOMAINS:-}
       GATEWAY_FILTER: ${GATEWAY_FILTER:-true}
 
-      # Aufbewahrungsrichtlinien-Zeitplan (Phase 9)
+      # Aufbewahrungsrichtlinien-Zeitplan
       RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
 
     ports:
@@ -132,10 +129,10 @@ services:
       - "995:995"     # POP3S (implizites TLS)
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_started }
-      minio: { condition: service_healthy }
-      rspamd: { condition: service_started }
-      clamav: { condition: service_started }
+      redis:    { condition: service_started }
+      minio:    { condition: service_healthy }
+      rspamd:   { condition: service_started }
+      clamav:   { condition: service_started }
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
       interval: 30s
@@ -144,7 +141,7 @@ services:
       start_period: 60s
     networks: [coremail]
 
-  # ── Rspamd 4.0 — Anti-Spam ───────────────────────────────────────────────────
+  # ── Rspamd 4.0 — Anti-Spam ──────────────────────────────────────────────────
   # Offizielles Rspamd-Image, Controller-API auf Port 11334
   # Konfiguration: infra/docker/rspamd/local.d/
 
@@ -166,7 +163,7 @@ services:
       start_period: 15s
     networks: [coremail]
 
-  # ── ClamAV — Open-Source Antivirus ───────────────────────────────────────────
+  # ── ClamAV — Open-Source Antivirus ──────────────────────────────────────────
   # Offizielles ClamAV-Image (GPL), inkl. freshclam für Signatur-Updates
   # Protokoll: INSTREAM über TCP Port 3310
 
@@ -188,7 +185,7 @@ services:
       start_period: 120s   # Erstes Signatur-Update kann länger dauern
     networks: [coremail]
 
-  # ── Infrastruktur (Standard-Images) ──────────────────────────────────────────
+  # ── Infrastruktur (Standard-Images) ─────────────────────────────────────────
 
   postgres:
     image: postgres:16-alpine
@@ -212,13 +209,10 @@ services:
     image: redis:7-alpine
     container_name: coremail-redis
     restart: unless-stopped
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redisdata:/data
     healthcheck:
-      # $$REDIS_PASSWORD → Compose schreibt $REDIS_PASSWORD → Container-Shell expandiert aus env
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
@@ -245,97 +239,6 @@ services:
       start_period: 10s
     networks: [coremail]
 
-  # ── Observability (--profile observability) ───────────────────────────────────
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: coremail-otel
-    restart: unless-stopped
-    profiles: [observability]
-    command: ["--config=/etc/otel/otel-collector.yml"]
-    volumes:
-      - ../observability/otel-collector/otel-collector.yml:/etc/otel/otel-collector.yml:ro
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-    networks: [coremail]
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: coremail-prometheus
-    restart: unless-stopped
-    profiles: [observability]
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=30d
-      - --web.enable-lifecycle
-    volumes:
-      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../observability/prometheus/rules:/etc/prometheus/rules:ro
-      - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
-    networks: [coremail]
-
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: coremail-alertmanager
-    restart: unless-stopped
-    profiles: [observability]
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-      - --storage.path=/alertmanager
-    volumes:
-      - ../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - alertmanager-data:/alertmanager
-    ports:
-      - "9093:9093"
-    networks: [coremail]
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: coremail-grafana
-    restart: unless-stopped
-    profiles: [observability]
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_ANALYTICS_REPORTING_ENABLED: "false"
-    volumes:
-      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    ports:
-      - "3001:3000"
-    depends_on: [prometheus]
-    networks: [coremail]
-
-  tempo:
-    image: grafana/tempo:latest
-    container_name: coremail-tempo
-    restart: unless-stopped
-    profiles: [observability]
-    command: ["-config.file=/etc/tempo.yml"]
-    volumes:
-      - ../observability/tempo/tempo.yml:/etc/tempo.yml:ro
-      - tempo-data:/tmp/tempo
-    expose: ["3200", "4317"]
-    networks: [coremail]
-
-  loki:
-    image: grafana/loki:latest
-    container_name: coremail-loki
-    restart: unless-stopped
-    profiles: [observability]
-    command: ["-config.file=/etc/loki/loki.yml"]
-    volumes:
-      - ../observability/loki/loki.yml:/etc/loki/loki.yml:ro
-      - loki-data:/tmp/loki
-    expose: ["3100"]
-    networks: [coremail]
-
 # ─────────────────────────────────────────────────────────────────────────────
 
 volumes:
@@ -344,11 +247,6 @@ volumes:
   miniodata:
   rspamd-data:
   clamav-data:
-  prometheus-data:
-  alertmanager-data:
-  grafana-data:
-  tempo-data:
-  loki-data:
 
 networks:
   coremail:

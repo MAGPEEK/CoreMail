@@ -1,8 +1,8 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, Container, Copy, Check as CheckIcon } from 'lucide-react';
 import { useState } from 'react';
 
-const VERSION        = '2.0.19';
-const BUILD_DATE     = '2026-05-16';
+const VERSION        = '2.1.19';
+const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
@@ -10,6 +10,8 @@ const DOCKER_IMAGE   = `magpeek/coremail-app:${VERSION}`;
 const DOCKER_PULL    = `docker pull ${DOCKER_IMAGE}`;
 
 const HIGHLIGHTS = [
+  { version: '2.1.19', date: '2026-05-17', title: 'Observability-Stack entfernt',
+    notes: 'Grafana, Prometheus, Alertmanager, Tempo, Loki und OTEL Collector aus dem Docker-Stack entfernt. docker-compose.yml bereinigt. Synology-Compose (docker-compose.synology.yml) auf 2.1.19 aktualisiert und um rspamd + clamav ergänzt.' },
   { version: '2.0.19', date: '2026-05-16', title: 'Passwort ändern & Design-Einstellungen',
     notes: 'OWA: Passwort-Änderungsformular mit Stärkemeter. Design-Einstellungen mit Hell/Dunkel/System-Farbschema und 6 Akzentfarben (sofortige Anwendung). Persistenz via localStorage. Dark-Mode via Tailwind-Klasse, Accent-Farbe via CSS-Variable.' },
   { version: '1.9.19', date: '2026-05-16', title: 'SSO & LDAP / Active Directory',

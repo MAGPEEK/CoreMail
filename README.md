@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-2.0.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-2.1.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -17,7 +17,7 @@
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v2.0.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v2.1.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 
 ---
 
@@ -128,7 +128,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Backup: MBOX/EML-Export (Self-Service pro Benutzer) | ✅ |
 | Backup: Admin-Vollbackup zu S3 (Point-in-Time Recovery) | ✅ |
 | Kubernetes Helm Chart (HPA, HA) | ✅ |
-| OpenTelemetry + Prometheus + Grafana + Loki + Tempo | ✅ |
+| OpenTelemetry Tracing + strukturierte Logs (Loki-kompatibel) | ✅ |
 | Web Push / VAPID-Benachrichtigungen | ✅ |
 | Auto-Mailbox-Provisionierung beim ersten Login | ✅ |
 
@@ -219,7 +219,7 @@ CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Ext
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:2.0.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:2.1.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -236,7 +236,7 @@ Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:2.0.19
+    image: magpeek/coremail-app:2.1.19
     ports:
       - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
       - "25:25"       # SMTP eingehend
@@ -302,15 +302,15 @@ docker compose -f infra/docker/docker-compose.yml pull && \
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
-### Mit Observability
-
-Optional können Prometheus, Grafana, Loki und Tempo mit einem einzigen Flag aktiviert werden:
+### Logs einsehen
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml --profile observability up -d
-```
+# Alle Container live
+docker compose -f infra/docker/docker-compose.yml logs -f
 
-Grafana ist dann unter `http://localhost:3001` erreichbar (Standard-Login: `admin` / `admin`).
+# Nur CoreMail-App
+docker compose -f infra/docker/docker-compose.yml logs -f coremail
+```
 
 ---
 
@@ -324,7 +324,6 @@ Grafana ist dann unter `http://localhost:3001` erreichbar (Standard-Login: `admi
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
 | `http://localhost:9001` | MinIO Web-Konsole |
-| `http://localhost:3001` | Grafana *(Observability-Profil)* |
 
 **Mail-Ports:**
 
@@ -381,15 +380,6 @@ WEBAUTHN_ORIGIN=https://mail.domain.de
 MAXMIND_ACCOUNT_ID=
 MAXMIND_LICENSE_KEY=
 ```
-
-### Observability aktivieren
-
-```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile observability up -d
-```
-
-Startet zusätzlich: Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector.
 
 ---
 
@@ -513,7 +503,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:2.0.19
+docker pull magpeek/coremail-app:2.1.19
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -524,6 +514,7 @@ docker pull magpeek/coremail-app:2.0.19
 
 | Version | Highlights |
 |---------|-----------|
+| **v2.1.19** | Grafana + Prometheus aus Stack entfernt; Synology-Compose um rspamd + clamav ergänzt |
 | **v2.0.19** | OWA: Passwort ändern (Stärkemeter), Design Hell/Dunkel/System + 6 Akzentfarben, ECP Info mit Docker-Sektion |
 | **v1.9.19** | SSO-Verwaltung (OIDC/OAuth2, SAML), LDAP/AD-Verwaltung (Attributzuordnung, Sync, Verbindungstest) |
 | **v1.8.19** | Message Queue Management: BullMQ-native API, Dead Letter, Retry, Retention-Einstellungen |

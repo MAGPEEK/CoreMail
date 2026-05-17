@@ -1,28 +1,30 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v0.11.0 — Synology NAS / Container Manager
+# CoreMail v2.0.19 — Synology NAS / Container Manager
 #
 # Einrichtung per SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
 #
 # Ports (kein Konflikt mit DSM):
-#   8080  — HTTP (OWA, ECP, API)   → DSM Application Portal: *.domain.de → localhost:8080
+#   8080        — HTTP (OWA, ECP, API)
+#                 DSM Application Portal: *.domain.de → localhost:8080
 #   25/465/587  — SMTP
 #   143/993     — IMAP
 #   110/995     — POP3
 #   9001        — MinIO Konsole
 #
 # TLS-Hinweis:
-#   Für HTTPS DSM-eigenen Reverse Proxy nutzen:
 #   DSM → Systemsteuerung → Application Portal → Reverseproxy
 #   Quelle: https://*.domain.de  →  Ziel: http://localhost:8080
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
+  # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
+
   coremail:
-    image: magpeek/coremail-app:1.2.4
+    image: magpeek/coremail-app:2.1.19
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -54,6 +56,11 @@ services:
       EAS_SERVICE_URL: http://localhost:3005
       CALDAV_SERVICE_URL: http://localhost:8082
 
+      # Externe Sicherheits-Container
+      RSPAMD_URL: http://rspamd:11334
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+
       # Service-Ports
       API_PORT: "3000"
       STORAGE_PORT: "3001"
@@ -84,14 +91,13 @@ services:
 
       WWW_DIR: /app/www
 
-      # VAPID Web Push (Phase 10)
+      # VAPID Web Push
       # Schlüssel generieren: npx web-push generate-vapid-keys
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-      # SMTP-Gateway-Modus (Phase 10 — optional)
-      # Aktiviert Relay-Betrieb vor einem bestehenden Mail-Server
+      # SMTP-Gateway-Modus (optional)
       GATEWAY_MODE: ${GATEWAY_MODE:-false}
       GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-}
       GATEWAY_UPSTREAM_PORT: ${GATEWAY_UPSTREAM_PORT:-25}
@@ -112,8 +118,10 @@ services:
       - "995:995"
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_started }
-      minio: { condition: service_healthy }
+      redis:    { condition: service_started }
+      minio:    { condition: service_healthy }
+      rspamd:   { condition: service_started }
+      clamav:   { condition: service_started }
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
       interval: 30s
@@ -121,6 +129,49 @@ services:
       retries: 5
       start_period: 90s
     networks: [coremail]
+
+  # ── Rspamd 4.0 — Anti-Spam ──────────────────────────────────────────────────
+
+  rspamd:
+    image: rspamd/rspamd:4.0.0
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    volumes:
+      - /volume1/docker/coremail/rspamd:/var/lib/rspamd
+    expose:
+      - "11333"
+      - "11334"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11334/stat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks: [coremail]
+
+  # ── ClamAV — Open-Source Antivirus ──────────────────────────────────────────
+
+  clamav:
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"
+    volumes:
+      - /volume1/docker/coremail/clamav:/var/lib/clamav
+    expose:
+      - "3310"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    networks: [coremail]
+
+  # ── Infrastruktur ────────────────────────────────────────────────────────────
+  # Volumes auf Synology-Pfade gemappt (/volume1/docker/coremail/...)
+  # damit Daten auch ohne Docker-Volumes persistent sind
 
   postgres:
     image: postgres:16-alpine
@@ -143,10 +194,8 @@ services:
     image: redis:7-alpine
     container_name: coremail-redis
     restart: unless-stopped
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-RedisSecret2024}
     # Kein --appendonly (erzeugt Unterverzeichnis, Permission-Problem auf Synology)
-    # RDB-Snapshots schreiben nur eine einzelne dump.rdb Datei → keine Permission-Probleme
+    # RDB-Snapshots schreiben nur eine einzelne dump.rdb → keine Permission-Probleme
     command: >
       redis-server
       --save 900 1
@@ -155,9 +204,8 @@ services:
       --requirepass ${REDIS_PASSWORD:-RedisSecret2024}
     volumes:
       - /volume1/docker/coremail/data/redis:/data
-    user: "0:0"  # Als root starten damit dump.rdb auf Synology-Volume geschrieben werden kann
+    user: "0:0"   # Als root starten damit dump.rdb auf Synology-Volume geschrieben werden kann
     healthcheck:
-      # $$REDIS_PASSWORD → Compose schreibt $REDIS_PASSWORD → Container-Shell expandiert aus env
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
       timeout: 5s

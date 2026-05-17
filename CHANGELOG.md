@@ -9,6 +9,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.19] — 2026-05-17 — Observability-Stack entfernt
+
+### Removed
+
+- **Grafana**, **Prometheus**, **Alertmanager**, **Tempo**, **Loki**, **OTEL Collector** vollständig aus dem Docker-Stack entfernt — der `--profile observability` Abschnitt existiert nicht mehr
+- Entsprechende Docker-Volumes (`prometheus-data`, `alertmanager-data`, `grafana-data`, `tempo-data`, `loki-data`) aus `docker-compose.yml` entfernt
+
+### Changed
+
+- `docker-compose.yml` — auf v2.1.19 aktualisiert, Observability-Block entfernt, Kommentar-Header bereinigt
+- `docker-compose.synology.yml` — auf v2.1.19 + Image `magpeek/coremail-app:2.1.19` aktualisiert; **rspamd und clamav ergänzt** (fehlten bisher im Synology-Compose)
+- README.md — Observability-Abschnitt entfernt, Feature-Tabelle angepasst
+- CLAUDE.md — Observability-Sektion durch Logging-Sektion ersetzt
+
+---
+
 ## [2.0.19] — 2026-05-16 — Passwort ändern & Design-Einstellungen
 
 ### Added

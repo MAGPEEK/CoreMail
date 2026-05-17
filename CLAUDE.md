@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `2.0.19`
+**Aktuelle Version**: `2.1.19`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -58,7 +58,7 @@ coremail/
 ├── infra/
 │   ├── docker/            # docker-compose.yml, docker-compose.synology.yml, nginx/, postgres/, rspamd/
 │   ├── k8s/               # Helm Chart (Chart.yaml, values.yaml, templates/)
-│   └── observability/     # Prometheus, Grafana, Tempo, Loki, Alertmanager, OTEL Collector
+│   └── observability/     # (veraltet — nicht mehr Teil des Stacks)
 ├── scripts/               # setup.sh, gen-dev-certs.sh, docker-push.sh
 ├── .github/workflows/     # docker-publish.yml (CI/CD)
 ├── CHANGELOG.md           # Keep a Changelog Format
@@ -454,10 +454,9 @@ GITHUB_TOKEN=$PAT gh issue close <nr> --comment "..." --repo MAGPEEK/CoreMail
 
 ## Infrastruktur-Konfiguration
 
-### Docker Compose Profile
-- Standard: alle Core-Services
-- `--profile full`: + POP3, CalDAV, ActiveSync
-- `--profile observability`: + Prometheus/Grafana/Tempo/Loki/Alertmanager
+### Docker Compose
+- `docker-compose.yml` — Standard-Stack (6 Container: coremail, rspamd, clamav, postgres, redis, minio)
+- `docker-compose.synology.yml` — Synology NAS (Port 8080, /volume1-Pfade, rspamd + clamav enthalten)
 
 ### nginx (infra/docker/nginx/nginx.conf)
 Alle Pfade sind Coremail-kompatibel. ActiveSync braucht 600s Timeout (Ping-Command).
@@ -488,14 +487,12 @@ SMTP Verbindung
 
 ---
 
-## Observability
+## Logging
 
-- **Metriken**: OpenTelemetry SDK → PrometheusExporter `:9464` → Grafana
-- **Traces**: OTLP → Tempo
-- **Logs**: pino (strukturiertes JSON) → Loki
-- **Dashboard**: `coremail-overview` in Grafana
-- **Alerts**: 8 Alert-Rules in Alertmanager (SMTP-Down, Queue-Backlog, High-Spam, etc.)
+- **Logs**: pino (strukturiertes JSON) über alle Services
+- **Log-Level**: pro Service via ECP konfigurierbar (error | warn | info | debug)
+- Grafana/Prometheus/Tempo/Loki/Alertmanager wurden in v2.0.19 aus dem Stack entfernt
 
 ---
 
-*Letzte Aktualisierung: 2026-05-16 (v2.0.19 — Passwort ändern & Design-Einstellungen)
+*Letzte Aktualisierung: 2026-05-17 (v2.1.19 — Observability-Stack entfernt)
