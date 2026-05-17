@@ -9,6 +9,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.44] — 2026-05-18 — Global Einstellungen oben · DE/EN Sprachumschaltung · Services Standards entfernt
+
+### Changed
+
+- **„Einstellungen" → „Global Einstellungen"** direkt unterhalb von „Übersicht" in der Sidebar positioniert (war vorher ganz unten)
+- **Services: „Standards"-Button entfernt** — Default-Ports werden beim Löschen des letzten Listeners automatisch wiederhergestellt; der manuelle Wiederherstellungs-Button ist nicht mehr nötig
+
+### Added
+
+- **Sprachumschaltung DE / EN** im TopBar-Benutzer-Dropdown (unter dem Avatar):
+  - Auswahl zwischen 🇩🇪 Deutsch und 🇬🇧 English mit Flag-Buttons
+  - Der Wechsel wird erst beim Klick auf „Speichern" angewendet (kein Live-Switch)
+  - Persistenz in `localStorage` (bleibt nach Seitenladen erhalten)
+  - Vollständige Übersetzung: Sidebar-Navigation (alle Gruppen + Einträge), TopBar-Texte, Global Einstellungen (alle 4 Sektionen mit Feldbeschriftungen, Hinweisen, Statusmeldungen, Einheiten)
+  - i18n-Infrastruktur: `src/i18n/translations.ts` (DE/EN), `src/store/language.ts` (Zustand-Store mit `pending`-Logik), `src/i18n/useT.ts` (Hook)
+
+---
+
 ## [2.1.43] — 2026-05-17 — Rspamd 4.0 Vollkonfiguration · ClamAV Scan-Optionen · ACME-Zertifikat-Fix
 
 ### Added
