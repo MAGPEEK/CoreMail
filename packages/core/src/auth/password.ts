@@ -1,20 +1,15 @@
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import bcrypt from 'bcryptjs';
 import { config } from '../config/index.js';
 
 const BCRYPT_COST = 12;
 
-// We use Node's built-in crypto for a bcrypt-compatible approach.
-// In production, use the `bcrypt` or `argon2` npm package.
-// This file provides the interface; swap the implementation as needed.
-
 export async function hashPassword(password: string): Promise<string> {
-  const bcrypt = await import('bcryptjs');
   const pepperedPassword = applyPepper(password);
   return bcrypt.hash(pepperedPassword, BCRYPT_COST);
 }
 
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  const bcrypt = await import('bcryptjs');
   const pepperedPassword = applyPepper(password);
   return bcrypt.compare(pepperedPassword, hash);
 }

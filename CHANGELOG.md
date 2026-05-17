@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.26] — 2026-05-17 — bcryptjs statischer Import + smtp-server Property-Fix
+
+### Fixed
+
+- **`bcrypt.hash is not a function`** — `bcryptjs` ist ein CommonJS-Modul; `await import('bcryptjs')` in ESM gibt `{ default: module }` zurück, nicht das Modul direkt. Dynamischer Import durch statischen `import bcrypt from 'bcryptjs'` ersetzt — Postfach anlegen und Login funktionieren wieder.
+- **SMTP Port-Toggle — Port bleibt aktiv** — `smtp-server` (nodemailer) legt den internen `net.Server` unter `this.server` ab (nicht `this._server`). Der Zugriff über `._server` lieferte `undefined` → `closeAllConnections()` wurde nie aufgerufen → Port blieb trotz Toggle aktiv. Property-Name auf `.server` korrigiert. IMAP und POP3 nutzen `net.Server` direkt, `(server as any).closeAllConnections?.()` bleibt unverändert.
+
+---
+
 ## [2.1.25] — 2026-05-17 — bcrypt-Fix + Port-Toggle sofortig wirksam
 
 ### Fixed
