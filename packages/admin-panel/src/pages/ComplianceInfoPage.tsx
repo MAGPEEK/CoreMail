@@ -1,12 +1,18 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '2.1.38';
+const VERSION        = '2.1.41';
 const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '2.1.41', date: '2026-05-17', title: 'SMTP-Banner: benutzerdefinierter Text wird jetzt verwendet',
+    notes: 'session.ts verwendete immer den hardcodierten Text "220 mail.local ESMTP CoreMail"; SmtpSettings.bannerText/bannerOverride wurde nie gelesen. Fix: bannerText zu SmtpSessionConfig ergänzt, SMTP-Session liest den konfigurierten Text. Live-Update ohne Neustart: Banner als Getter implementiert — Änderung im Admin-Panel wirkt sofort bei der nächsten Verbindung via Redis settings:reload.' },
+  { version: '2.1.40', date: '2026-05-17', title: 'Ausgehende Zustellung: MX direkt oder Smarthost',
+    notes: 'Outgoing Delivery Settings in ECP → SMTP & Routing → "Ausgehende Mail": Wahl zwischen direkter MX-Zustellung und Smarthost/Relay. Smarthost-Konfiguration: Host, Port, STARTTLS, Implizites TLS, Benutzername, Passwort (maskiert). Port-Schnellauswahl (25/587/465/2525). 9 Provider-Presets: SendGrid, Mailjet, Mailgun, Postmark, Amazon SES, Gmail, Office 365, IONOS, Strato. Verbindungstest POST /api/v1/admin/smtp-config/test-smarthost. relay.ts: 60s Config-Cache, kein DB-Hit pro Mail.' },
+  { version: '2.1.39', date: '2026-05-17', title: 'SMTP/IMAP/POP3 TLS-Zertifikat Auto-Generierung',
+    notes: 'Fixes: SMTP-Ports 25/465/587 nicht erreichbar (implicitTls ohne Cert brach gesamten Listener ab); IMAP 993 und POP3 995 verwendeten net.createServer() statt tls.createServer() — faktisch Plaintext. Neu: Beim ersten Start wird automatisch ein RSA-2048 Self-Signed-Zertifikat generiert (10 Jahre gültig, SAN: Hostname + localhost) und in ServerSettings.tlsCert/tlsKey gespeichert. generateSelfSignedCert() + tlsPemToBuffers() in @coremail/core. Per-Listener Error-Isolation: ein fehlerhafter Port blockiert nicht mehr andere. TLS-Cert-Reload via CHANNEL_SETTINGS_RELOAD ohne Container-Neustart.' },
   { version: '2.1.38', date: '2026-05-17', title: 'Wartungsmodus: Banner + Login-Enforcement',
     notes: 'Wartungsmodus-Toggle hatte keine Wirkung — jetzt vollständig durchgesetzt. POST /auth/login gibt 503 für Nicht-Admins wenn aktiv. OWA-Login zeigt amber Banner mit dem konfigurierten Wartungstext. Öffentlicher GET /api/v1/maintenance Endpunkt (kein Auth). Admins (ORGANIZATION_MANAGEMENT, SERVER_MANAGEMENT) können sich weiterhin anmelden.' },
   { version: '2.1.37', date: '2026-05-17', title: 'RFC 6749 OAuth 2.0 vollständige Implementierung',
