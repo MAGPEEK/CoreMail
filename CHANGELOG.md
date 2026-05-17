@@ -9,6 +9,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.31] — 2026-05-17 — Port-Close Root-Cause-Fix: Socket-Tracking + Reload-Mutex
+
+### Fixed
+
+- **Root Cause: Ports ließen sich nicht schließen (Toggle, Löschen, Bearbeiten)** — `net.Server.closeAllConnections()` existiert **nicht** auf `net.Server` / `tls.Server` — diese Methode gibt es nur auf `http.Server` / `https.Server`. Der bisherige Aufruf `(server as any).closeAllConnections?.()` war dank optionalem Chaining überall ein stiller No-Op. `server.close(done)` wartete dann auf aktive Verbindungen (z. B. IMAP IDLE mit 30-Minuten-Timeout) — der 3-Sekunden-Fallback feuerte `resolve()`, der Map-Eintrag war bereits davor gelöscht worden, und der Port blieb dauerhaft gebunden.
+- **Fix**: Alle drei Server (SMTP, IMAP, POP3) tracken jetzt jeden eingehenden Socket manuell in einem `Set<net.Socket>`. Beim Schließen eines Listeners werden alle Sockets per `socket.destroy()` sofort beendet — danach feuert `server.close(done)` sofort, da keine Verbindungen mehr existieren.
+- **Reload-Mutex** — Redis-Signal und 10-Sekunden-Poll konnten `reloadListeners()` gleichzeitig starten. Neue `scheduleReload()`-Funktion mit `_reloading`/`_pendingReload`-Flags stellt sicher, dass immer nur ein Reload läuft und ein eventuell eintreffender zweiter direkt im Anschluss ausgeführt wird.
+
+### Changed
+
+- `closeSmtpServer`, `closeImapServer`, `closePop3Server` arbeiten jetzt mit einem `TrackedXxxServer`-Interface (`{ server, sockets }`).
+- `createTrackedXxxServer()`-Fabrikfunktionen bauen das Tracking beim Erstellen jedes Listeners auf:
+  - **SMTP**: `'connection'`-Listener auf dem internen `net.Server` (`(smtp as any).server`)
+  - **IMAP**: `'connection'`-Listener auf dem `net.Server` des `createImapServer()`-Returns
+  - **POP3**: direkte Integration im Socket-Handler (kein zweiter Listener nötig)
+- Alle drei Server verwenden `scheduleReload()` statt `void reloadListeners()` für Mutex-geschützte Reloads.
+- Logging: `remaining: tracked.sockets.size` im Timeout-Warning für bessere Diagnose.
+
+---
+
 ## [2.1.30] — 2026-05-17 — Listener-Reload bei DELETE/PUT/POST + Standard-Ports wiederherstellen
 
 ### Fixed
