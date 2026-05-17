@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.33] — 2026-05-17 — Setup: E-Mail-Feld folgt Domain automatisch
+
+### Fixed
+
+- **Erstkonfiguration: Administrator-E-Mail wird nicht vollständig synchronisiert** — Die bisherige Logik `!email.includes('@')` brach nach dem ersten getippten Zeichen ab: Sobald `admin@s` gesetzt war, enthielt das Feld `@` → Bedingung false → kein weiteres Update. Beim Screenshot war die Domain `stefanwuestner.de`, das E-Mail-Feld zeigte aber nur `admin@s`.
+- **Fix** (`SetupPage.tsx`): Neuer `emailEdited`-State-Flag. Solange der Nutzer das E-Mail-Feld nicht manuell bearbeitet hat, folgt es der Domain in Echtzeit (`admin@<domain>`). Sobald der Nutzer die E-Mail manuell ändert, wird `emailEdited = true` gesetzt und die Auto-Synchronisation stoppt.
+
+---
+
 ## [2.1.32] — 2026-05-17 — Postgres Startup-Fix + Definitiver Port-Close
 
 ### Fixed

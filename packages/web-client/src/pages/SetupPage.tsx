@@ -7,10 +7,11 @@ export function SetupPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const [domain, setDomain]       = useState('');
-  const [email, setEmail]         = useState('');
-  const [password, setPassword]   = useState('');
-  const [confirm, setConfirm]     = useState('');
+  const [domain, setDomain]           = useState('');
+  const [email, setEmail]             = useState('');
+  const [emailEdited, setEmailEdited] = useState(false);
+  const [password, setPassword]       = useState('');
+  const [confirm, setConfirm]         = useState('');
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -105,9 +106,10 @@ export function SetupPage() {
               placeholder="z.B. firma.de"
               value={domain}
               onChange={(e) => {
-                setDomain(e.target.value.toLowerCase());
-                if (e.target.value && !email.includes('@')) {
-                  setEmail(`admin@${e.target.value.toLowerCase()}`);
+                const val = e.target.value.toLowerCase();
+                setDomain(val);
+                if (!emailEdited) {
+                  setEmail(val ? `admin@${val}` : '');
                 }
               }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0078D4] focus:border-transparent"
@@ -127,7 +129,7 @@ export function SetupPage() {
               required
               placeholder="admin@firma.de"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setEmailEdited(true); }}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0078D4] focus:border-transparent"
             />
           </div>
