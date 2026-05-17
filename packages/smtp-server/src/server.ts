@@ -2,29 +2,36 @@ import net from 'node:net';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
 import { createInboundServer } from './inbound/server.js';
+import { createSubmissionServer } from './submission/server.js';
 import { startOutboundWorker } from './outbound/queue.js';
 
 const log = createLogger('smtp:server');
 
+// ── Port-Defaults ─────────────────────────────────────────────────────────────
 const SMTP_PORT_25  = parseInt(process.env['SMTP_PORT_25']  ?? '25',  10);
 const SMTP_PORT_465 = parseInt(process.env['SMTP_PORT_465'] ?? '465', 10);
 const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
 
+/** Submission-Ports (Auth erforderlich) */
+const SUBMISSION_PORTS = new Set([SMTP_PORT_465, SMTP_PORT_587]);
+
 // ── Tracked-Server-Typ ────────────────────────────────────────────────────────
+type AnySmtpServer = ReturnType<typeof createInboundServer> | ReturnType<typeof createSubmissionServer>;
+
 interface TrackedSmtpServer {
-  smtp:    ReturnType<typeof createInboundServer>;
+  smtp:    AnySmtpServer;
   sockets: Set<net.Socket>;
 }
 
 const servers = new Map<number, TrackedSmtpServer>();
 
 // ── Reload-Mutex ──────────────────────────────────────────────────────────────
-let _reloading = false;
+let _reloading    = false;
 let _pendingReload = false;
 
 function scheduleReload(): void {
   if (_reloading) { _pendingReload = true; return; }
-  _reloading = true;
+  _reloading    = true;
   _pendingReload = false;
   void reloadListeners().finally(() => {
     _reloading = false;
@@ -34,11 +41,19 @@ function scheduleReload(): void {
 
 // ── Server-Lifecycle ──────────────────────────────────────────────────────────
 
-function createTrackedSmtpServer(): TrackedSmtpServer {
-  const smtp = createInboundServer();
+/**
+ * Erzeugt den passenden SMTP-Server für den gegebenen Port:
+ *  - Port 25  → Inbound (authOptional, empfängt Mail von anderen MTAs)
+ *  - Port 465 → Submission mit implizitem TLS (authRequired)
+ *  - Port 587 → Submission mit STARTTLS (authRequired)
+ */
+function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
+  const smtp = SUBMISSION_PORTS.has(port)
+    ? createSubmissionServer(ssl /* implicitTls */)
+    : createInboundServer();
+
   const sockets = new Set<net.Socket>();
-  // Sockets über den internen net.Server tracken (smtp-server-Wrapper → .server)
-  const inner = (smtp as any).server as net.Server | undefined;
+  const inner   = (smtp as any).server as net.Server | undefined;
   if (inner) {
     inner.on('connection', (socket: net.Socket) => {
       sockets.add(socket);
@@ -50,28 +65,21 @@ function createTrackedSmtpServer(): TrackedSmtpServer {
 
 /**
  * Schließt einen SMTP-Listener definitiv:
- *
- * 1. Alle verfolgten Sockets per .destroy() sofort beenden
- * 2. server.close() aufrufen (intern: _handle.close() → OS-Port sofort freigegeben)
- * 3. Als Absicherung: _handle direkt schließen falls es noch existiert
- *
- * Kein async/await — der OS-Port wird synchron freigegeben.
+ * 1. Alle Sockets per .destroy() sofort beenden
+ * 2. server.close() → _handle.close() → OS-Port synchron freigegeben
+ * 3. _handle direkt schließen als Nuklear-Option
  */
 function closeSmtpServer(tracked: TrackedSmtpServer, port: number): void {
   const count = tracked.sockets.size;
 
-  // Alle aktiven Verbindungen sofort zerstören
   for (const s of tracked.sockets) { try { s.destroy(); } catch { /* ignore */ } }
   tracked.sockets.clear();
 
-  // server.close() → ruft intern _handle.close() auf → gibt OS-Port synchron frei
   try {
     tracked.smtp.close(() =>
       log.debug({ port }, 'SMTP server.close() callback fired'));
   } catch { /* server may already be closed */ }
 
-  // Nuklear-Option: _handle direkt schließen falls es noch existiert
-  // (deckt Edge-Cases ab in denen _handle.close() im smtp-server-Wrapper nicht aufgerufen wird)
   const inner = (tracked.smtp as any).server as any;
   if (inner?._handle?.close) {
     try { inner._handle.close(); inner._handle = null; } catch { /* ignore */ }
@@ -84,7 +92,7 @@ function closeSmtpServer(tracked: TrackedSmtpServer, port: number): void {
 
 async function reloadListeners(): Promise<void> {
   try {
-    const listeners = await prisma.serviceListener.findMany({ where: { service: 'SMTP_RECEIVE' } });
+    const listeners   = await prisma.serviceListener.findMany({ where: { service: 'SMTP_RECEIVE' } });
     const activePorts = new Set(listeners.filter(l => l.active).map(l => l.port));
 
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'SMTP reload');
@@ -92,17 +100,20 @@ async function reloadListeners(): Promise<void> {
     // Neu aktive Ports starten
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
-        const tracked = createTrackedSmtpServer();
+        const tracked = createTrackedSmtpServer(l.port, l.ssl);
         servers.set(l.port, tracked);
         tracked.smtp.listen(l.port, () =>
-          log.info({ port: l.port }, 'SMTP listener started'));
+          log.info(
+            { port: l.port, ssl: l.ssl, mode: SUBMISSION_PORTS.has(l.port) ? 'submission' : 'inbound' },
+            'SMTP listener started',
+          ));
       }
     }
 
     // Deaktivierte/gelöschte Ports schließen (synchron)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);   // Vor dem Close aus Map entfernen
+        servers.delete(port);
         closeSmtpServer(tracked, port);
       }
     }
@@ -123,7 +134,7 @@ async function main() {
       data: [
         { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_25,  ssl: false, active: true },
         { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_465, ssl: true,  active: true },
-        { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_587, ssl: true,  active: true },
+        { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_587, ssl: false, active: true },
       ],
     });
     log.info('Default SMTP_RECEIVE listeners seeded');

@@ -9,6 +9,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.34] — 2026-05-17 — SMTP AUTH: 535 Authentication not implemented behoben
+
+### Fixed
+
+- **`535: Authentication not implemented`** beim Mailversand mit User + Passwort — Der bisherige `createInboundServer()` hatte `authOptional: true` aber keinen `onAuth`-Handler. Das `smtp-server`-Paket antwortet in diesem Fall mit `535 Authentication not implemented` auf jeden AUTH-Versuch.
+
+### Added
+
+- **Neuer `createSubmissionServer()`** für Ports 465 (SMTPS, implizites TLS) und 587 (STARTTLS). Features:
+  - `onAuth`-Handler mit vollständiger Passwort-Prüfung:
+    1. Reguläres Passwort gegen `User.passwordHash` (bcrypt + Pepper via `verifyPassword`)
+    2. App-Passwörter (für Clients ohne MFA) — `lastUsedAt` wird aktualisiert
+  - Anti-Spoofing in `onMailFrom`: FROM-Adresse muss mit dem authentifizierten User übereinstimmen (Exception: Shared-Mailbox-Berechtigung `SEND_AS` oder `FULL_ACCESS`)
+  - Intelligente Zustellung: lokale Empfänger direkt in Mailbox, externe Empfänger über Outbound-Queue
+- **Port-25-Inbound** bleibt unverändert (`authOptional: true`) — externe MTAs authentifizieren sich nicht
+
+---
+
 ## [2.1.33] — 2026-05-17 — Setup: E-Mail-Feld folgt Domain automatisch
 
 ### Fixed
