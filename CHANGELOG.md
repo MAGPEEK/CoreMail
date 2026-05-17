@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.24] — 2026-05-17 — Postfach-Erstellung Fix + Services Port-Toggle
+
+### Fixed
+
+- **Postfach anlegen (BCP)** — `POST /admin/mailboxes` hatte kein `try-catch`; Prisma-Fehler führten zu hängenden Requests in Express v4. Jetzt werden alle Fehler abgefangen und als verständliche Fehlermeldung zurückgegeben. E-Mail-Adresse wird jetzt beim Erstellen normalisiert (Lowercase).
+- **Services Port-Toggle** — Toggle in der UI speicherte nur den DB-Zustand; der laufende SMTP/IMAP/POP3-Dienst blieb am Port aktiv. Jetzt wird nach dem Toggle ein Redis-Signal (`service:listeners:reload`) publiziert. SMTP-, IMAP- und POP3-Server subscriben diesen Channel und starten/stoppen den entsprechenden Port dynamisch ohne Neustart.
+
+### Changed
+
+- **SMTP/IMAP/POP3-Server** — Listener werden in einer `Map<port, Server>` verwaltet; `reloadListeners()` synchronisiert die laufenden Ports mit der DB-Konfiguration.
+- **`@coremail/core`** — Neuer Pub/Sub-Channel `CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload'` exportiert.
+
+---
+
 ## [2.1.23] — 2026-05-17 — BCP Server-Seite bereinigt
 
 ### Removed

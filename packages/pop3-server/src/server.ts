@@ -2,39 +2,79 @@ import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
 import { createLogger } from '@coremail/core/logger';
-import { getRedisClient } from '@coremail/core/redis';
+import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core/redis';
+import { prisma } from '@coremail/storage';
 import { POP3Session } from './session.js';
 
 const log = createLogger('pop3-server');
 
-const PORT_PLAIN = parseInt(process.env['POP3_PORT'] ?? '110', 10);
-const PORT_TLS = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
-const TLS_CERT = process.env['TLS_CERT_PATH'];
-const TLS_KEY = process.env['TLS_KEY_PATH'];
+const PORT_PLAIN = parseInt(process.env['POP3_PORT']  ?? '110', 10);
+const PORT_TLS   = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
+const TLS_CERT   = process.env['TLS_CERT_PATH'];
+const TLS_KEY    = process.env['TLS_KEY_PATH'];
 
 function createSession(socket: net.Socket | tls.TLSSocket, secure: boolean) {
   const session = new POP3Session(socket, secure);
   session.start();
-
   socket.on('error', (err) => log.warn({ err }, 'socket error'));
   socket.on('close', () => log.debug('connection closed'));
 }
 
-// Plain POP3 on port 110 (STLS upgrade supported)
+// Map port → laufende Server-Instanz
+const servers = new Map<number, net.Server | tls.Server>();
+
+async function reloadListeners() {
+  try {
+    const listeners = await prisma.serviceListener.findMany({ where: { service: 'POP3' } });
+    const activePorts = new Set(listeners.filter(l => l.active).map(l => l.port));
+
+    // Neu aktive Ports starten
+    for (const l of listeners) {
+      if (l.active && !servers.has(l.port)) {
+        let server: net.Server | tls.Server;
+        if (l.ssl && TLS_CERT && TLS_KEY) {
+          const tlsOptions: tls.TlsOptions = {
+            cert: fs.readFileSync(TLS_CERT),
+            key:  fs.readFileSync(TLS_KEY),
+            minVersion: 'TLSv1.2',
+          };
+          server = tls.createServer(tlsOptions, (socket) => createSession(socket, true));
+        } else {
+          server = net.createServer((socket) => createSession(socket, false));
+        }
+        servers.set(l.port, server);
+        server.listen(l.port, '0.0.0.0', () => log.info({ port: l.port }, 'POP3 listener started'));
+      }
+    }
+
+    // Deaktivierte Ports stoppen
+    for (const [port, server] of servers) {
+      if (!activePorts.has(port)) {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        servers.delete(port);
+        log.info({ port }, 'POP3 listener stopped');
+      }
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to reload POP3 listeners');
+  }
+}
+
+// Plain POP3 on port 110
 const plainServer = net.createServer((socket) => {
   log.info({ remote: socket.remoteAddress }, 'POP3 connection');
   createSession(socket, false);
 });
-
 plainServer.listen(PORT_PLAIN, '0.0.0.0', () => {
   log.info(`POP3 listening on :${PORT_PLAIN}`);
 });
+servers.set(PORT_PLAIN, plainServer);
 
 // Implicit TLS on port 995
 if (TLS_CERT && TLS_KEY) {
   const tlsOptions: tls.TlsOptions = {
     cert: fs.readFileSync(TLS_CERT),
-    key: fs.readFileSync(TLS_KEY),
+    key:  fs.readFileSync(TLS_KEY),
     minVersion: 'TLSv1.2',
   };
   const tlsServer = tls.createServer(tlsOptions, (socket) => {
@@ -44,13 +84,27 @@ if (TLS_CERT && TLS_KEY) {
   tlsServer.listen(PORT_TLS, '0.0.0.0', () => {
     log.info(`POP3S listening on :${PORT_TLS}`);
   });
+  servers.set(PORT_TLS, tlsServer);
 } else {
   log.warn('TLS_CERT_PATH/TLS_KEY_PATH not set — POP3S (port 995) disabled');
 }
 
+// Redis-Subscriber für dynamischen Listener-Reload
+const subscriber = getRedisClient().duplicate();
+subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
+void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
+subscriber.on('message', (_ch, message) => {
+  const payload = JSON.parse(message) as { service: string };
+  if (payload.service === 'POP3') {
+    void reloadListeners();
+  }
+});
+
 async function shutdown() {
   log.info('shutting down');
-  plainServer.close();
+  for (const server of servers.values()) server.close();
+  servers.clear();
+  await subscriber.quit();
   await getRedisClient().quit();
   process.exit(0);
 }

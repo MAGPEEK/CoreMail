@@ -12,7 +12,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
 
 const log = createLogger('admin:services');
 export const adminServicesRouter: RouterType = Router();
@@ -142,6 +142,18 @@ adminServicesRouter.patch('/listeners/:id/toggle', async (req: Request, res: Res
       data:  { active: !existing.active },
     });
     log.info({ id, active: listener.active }, 'Listener toggled');
+
+    // Signal den zuständigen Service, seine Listener neu zu laden
+    try {
+      const redis = getRedisClient();
+      await redis.publish(
+        CHANNEL_SERVICE_LISTENERS_RELOAD,
+        JSON.stringify({ service: listener.service, port: listener.port, active: listener.active }),
+      );
+    } catch (err) {
+      log.warn({ err }, 'Failed to publish listener reload signal — service must be restarted manually');
+    }
+
     res.json(listener);
   } catch {
     res.status(404).json({ error: 'Listener not found' });

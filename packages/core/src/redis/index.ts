@@ -68,3 +68,4 @@ export const CHANNEL_MAIL_NEW = 'mail:new';
 export const CHANNEL_MAIL_UPDATE = 'mail:update';
 export const CHANNEL_CALENDAR_UPDATE = 'calendar:update';
 export const CHANNEL_ADMIN_EVENT = 'admin:event';
+export const CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload';

@@ -105,38 +105,42 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { email, displayName, password, domainId, role, quotaBytes } = parsed.data;
-  
 
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) { res.status(409).json({ error: 'Email already in use' }); return; }
+  try {
+    const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (existing) { res.status(409).json({ error: 'E-Mail-Adresse wird bereits verwendet' }); return; }
 
-  const domain = await prisma.domain.findUnique({ where: { id: domainId } });
-  if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+    const domain = await prisma.domain.findUnique({ where: { id: domainId } });
+    if (!domain) { res.status(404).json({ error: 'Domain nicht gefunden' }); return; }
 
-  const passwordHash = await hashPassword(password);
+    const passwordHash = await hashPassword(password);
 
-  const user = await prisma.user.create({
-    data: {
-      email, displayName, passwordHash, role, quotaBytes: BigInt(quotaBytes), domainId,
-      mailbox: {
-        create: {
-          folders: {
-            create: [
-              { name: 'INBOX', displayName: 'Inbox', totalCount: 0, unreadCount: 0 },
-              { name: 'Drafts', displayName: 'Drafts', totalCount: 0, unreadCount: 0 },
-              { name: 'Sent', displayName: 'Sent Items', totalCount: 0, unreadCount: 0 },
-              { name: 'Trash', displayName: 'Deleted Items', totalCount: 0, unreadCount: 0 },
-              { name: 'Junk', displayName: 'Junk Email', totalCount: 0, unreadCount: 0 },
-              { name: 'Archive', displayName: 'Archive', totalCount: 0, unreadCount: 0 },
-            ],
+    const user = await prisma.user.create({
+      data: {
+        email: email.toLowerCase(), displayName, passwordHash, role, quotaBytes: BigInt(quotaBytes), domainId,
+        mailbox: {
+          create: {
+            folders: {
+              create: [
+                { name: 'INBOX',   displayName: 'Inbox',         totalCount: 0, unreadCount: 0 },
+                { name: 'Drafts',  displayName: 'Drafts',        totalCount: 0, unreadCount: 0 },
+                { name: 'Sent',    displayName: 'Sent Items',    totalCount: 0, unreadCount: 0 },
+                { name: 'Trash',   displayName: 'Deleted Items', totalCount: 0, unreadCount: 0 },
+                { name: 'Junk',    displayName: 'Junk Email',    totalCount: 0, unreadCount: 0 },
+                { name: 'Archive', displayName: 'Archive',       totalCount: 0, unreadCount: 0 },
+              ],
+            },
           },
         },
+        calendars: { create: [{ name: 'Kalender', color: '#0078D4' }] },
       },
-      calendars: { create: [{ name: 'Calendar', color: '#0078D4' }] },
-    },
-    select: { id: true, email: true, displayName: true, role: true, createdAt: true },
-  });
-  res.status(201).json(user);
+      select: { id: true, email: true, displayName: true, role: true, createdAt: true },
+    });
+    res.status(201).json(user);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unbekannter Fehler';
+    res.status(500).json({ error: `Postfach konnte nicht erstellt werden: ${msg}` });
+  }
 });
 
 // PUT /api/v1/admin/mailboxes/:id
