@@ -9,6 +9,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.27] — 2026-05-17 — SMTP/IMAP/POP3 Port-Toggle zuverlässig
+
+### Fixed
+
+- **Services Port-Toggle — Port bleibt nach Deaktivierung aktiv** — Drei überlagerte Bugs:
+  1. `server.close(cb)` und `closeAllConnections()` wurden **sequenziell** aufgerufen: `closeAllConnections` lief zuerst, dann `server.close(cb)`. Das Fenster zwischen beiden Aufrufen erlaubte neue Verbindungen, die dann den Callback blockierten. Fix: beide Aufrufe **gleichzeitig** in einer Promise.
+  2. `servers.delete(port)` wurde **nach** dem `await` aufgerufen. Bei parallelen Reload-Aufrufen (Redis-Signal + 10-s-Fallback) versuchten beide Aufrufe denselben Port zu schließen. Fix: Port sofort aus der Map entfernen, **bevor** geclosedt wird.
+  3. Kein Fallback wenn das Redis-Signal verloren geht. Fix: `setInterval` alle 10 Sekunden als Belt-and-Suspenders.
+- **Kein Timeout beim Close** — Wenn `server.close(cb)` dennoch nicht feuerte (z. B. durch eine widerspenstige Verbindung), hing die `async`-Funktion ewig. Fix: 3-Sekunden-Timeout der den Close immer auflöst.
+
+### Changed
+
+- SMTP-, IMAP- und POP3-Server haben jetzt je eine `closeXxxServer()`-Hilfsfunktion für robustes Port-Schließen.
+- Graceful-Shutdown nutzt `Promise.all` statt sequenzielle Schleife.
+
+---
+
 ## [2.1.26] — 2026-05-17 — bcryptjs statischer Import + smtp-server Property-Fix
 
 ### Fixed

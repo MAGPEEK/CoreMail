@@ -47,20 +47,34 @@ async function reloadListeners() {
       }
     }
 
-    // Deaktivierte Ports stoppen
-    for (const [port, server] of servers) {
+    // Deaktivierte Ports: sofort aus Map entfernen, dann schließen
+    const toClose: Array<[number, net.Server | tls.Server]> = [];
+    for (const [port, srv] of servers) {
       if (!activePorts.has(port)) {
-        // Forcefully close all open connections so server.close() resolves immediately
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (server as any).closeAllConnections?.();
-        await new Promise<void>(resolve => server.close(() => resolve()));
         servers.delete(port);
-        log.info({ port }, 'POP3 listener stopped');
+        toClose.push([port, srv]);
       }
+    }
+    for (const [port, srv] of toClose) {
+      await closePop3Server(srv, port);
+      log.info({ port }, 'POP3 listener stopped');
     }
   } catch (err) {
     log.error({ err }, 'Failed to reload POP3 listeners');
   }
+}
+
+function closePop3Server(server: net.Server | tls.Server, port: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      log.warn({ port }, 'POP3 close timeout (3 s) — forced');
+      resolve();
+    }, 3_000);
+    const done = () => { clearTimeout(timer); resolve(); };
+    server.close(done);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (server as any).closeAllConnections?.();
+  });
 }
 
 // Plain POP3 on port 110
@@ -97,16 +111,24 @@ const subscriber = getRedisClient().duplicate();
 subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
 void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
 subscriber.on('message', (_ch, message) => {
-  const payload = JSON.parse(message) as { service: string };
-  if (payload.service === 'POP3') {
-    void reloadListeners();
+  try {
+    const payload = JSON.parse(message) as { service: string };
+    if (payload.service === 'POP3') {
+      void reloadListeners();
+    }
+  } catch (err) {
+    log.error({ err }, 'Invalid listener reload message');
   }
 });
 
+// Fallback-Poll alle 10 s (falls Redis-Signal verpasst wurde)
+setInterval(() => { void reloadListeners(); }, 10_000);
+
 async function shutdown() {
   log.info('shutting down');
-  for (const server of servers.values()) server.close();
+  const all = [...servers.entries()];
   servers.clear();
+  await Promise.all(all.map(([p, s]) => closePop3Server(s, p)));
   await subscriber.quit();
   await getRedisClient().quit();
   process.exit(0);

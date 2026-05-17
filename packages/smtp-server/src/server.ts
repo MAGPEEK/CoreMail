@@ -12,6 +12,30 @@ const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
 // Map port → laufende Server-Instanz
 const servers = new Map<number, ReturnType<typeof createInboundServer>>();
 
+/**
+ * Schließt einen SMTPServer zuverlässig:
+ * - Stoppt neue Verbindungen (server.close)
+ * - Zerstört alle bestehenden Verbindungen (closeAllConnections) gleichzeitig
+ * - Timeout nach 3 s als Fallback (falls kein Callback kommt)
+ */
+function closeSmtpServer(server: ReturnType<typeof createInboundServer>, port: number): Promise<void> {
+  // smtp-server (nodemailer) legt den internen net.Server unter .server ab
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const netSrv = (server as any).server as { closeAllConnections?(): void } | undefined;
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      log.warn({ port }, 'SMTP close timeout (3 s) — forced');
+      resolve();
+    }, 3_000);
+    const done = () => { clearTimeout(timer); resolve(); };
+    // close() und closeAllConnections() GLEICHZEITIG aufrufen:
+    // close() allein wartet auf alle Verbindungen → hängt ewig wenn aktive Verbindungen da sind.
+    // closeAllConnections() zerstört sofort alle Sockets → close()-Callback feuert danach direkt.
+    server.close(done);
+    netSrv?.closeAllConnections?.();
+  });
+}
+
 async function reloadListeners() {
   try {
     const listeners = await prisma.serviceListener.findMany({ where: { service: 'SMTP_RECEIVE' } });
@@ -20,24 +44,24 @@ async function reloadListeners() {
     // Neu aktive Ports starten
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
-        const server = createInboundServer();
-        servers.set(l.port, server);
-        server.listen(l.port, () => log.info({ port: l.port }, 'SMTP listener started'));
+        const srv = createInboundServer();
+        servers.set(l.port, srv);
+        srv.listen(l.port, () => log.info({ port: l.port }, 'SMTP listener started'));
       }
     }
 
-    // Deaktivierte Ports stoppen
-    for (const [port, server] of servers) {
+    // Deaktivierte Ports: zuerst aus Map entfernen (verhindert Doppel-Close
+    // bei parallelen reload-Aufrufen), dann schließen
+    const toClose: Array<[number, ReturnType<typeof createInboundServer>]> = [];
+    for (const [port, srv] of servers) {
       if (!activePorts.has(port)) {
-        // Forcefully close all open connections (Node.js 18.2+)
-        // smtp-server (nodemailer) exposes the underlying net.Server as .server (not ._server)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const netSrv = (server as any).server as { closeAllConnections?(): void } | undefined;
-        netSrv?.closeAllConnections?.();
-        await new Promise<void>(resolve => server.close(() => resolve()));
         servers.delete(port);
-        log.info({ port }, 'SMTP listener stopped');
+        toClose.push([port, srv]);
       }
+    }
+    for (const [port, srv] of toClose) {
+      await closeSmtpServer(srv, port);
+      log.info({ port }, 'SMTP listener stopped');
     }
   } catch (err) {
     log.error({ err }, 'Failed to reload SMTP listeners');
@@ -76,17 +100,25 @@ async function main() {
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
   void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
   subscriber.on('message', (_ch, message) => {
-    const payload = JSON.parse(message) as { service: string };
-    if (payload.service === 'SMTP_RECEIVE') {
-      void reloadListeners();
+    try {
+      const payload = JSON.parse(message) as { service: string };
+      if (payload.service === 'SMTP_RECEIVE') {
+        void reloadListeners();
+      }
+    } catch (err) {
+      log.error({ err }, 'Invalid listener reload message');
     }
   });
+
+  // Fallback-Poll alle 10 s (falls Redis-Signal verpasst wurde)
+  setInterval(() => { void reloadListeners(); }, 10_000);
 
   // Graceful Shutdown
   process.on('SIGTERM', async () => {
     log.info('Shutting down SMTP server...');
-    for (const server of servers.values()) server.close();
+    const all = [...servers.entries()];
     servers.clear();
+    await Promise.all(all.map(([p, s]) => closeSmtpServer(s, p)));
     await worker.close();
     await subscriber.quit();
     const redis = getRedisClient();
