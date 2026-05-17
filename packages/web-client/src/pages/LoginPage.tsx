@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Lock, ShieldCheck, ArrowLeft } from 'lucide-react';
+import { Mail, Lock, ShieldCheck, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { login, verifyMfa } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
 import { api } from '../api/client.js';
@@ -23,6 +23,21 @@ export function LoginPage() {
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Wartungsmodus
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
+
+  // Wartungsstatus beim Laden abrufen (kein Auth nötig)
+  useEffect(() => {
+    fetch('/api/v1/maintenance')
+      .then((r) => r.json())
+      .then((d: { maintenanceMode: boolean; maintenanceMessage: string }) => {
+        setMaintenanceMode(d.maintenanceMode ?? false);
+        setMaintenanceMessage(d.maintenanceMessage ?? '');
+      })
+      .catch(() => { /* ignorieren — kein Banner bei Netzwerkfehler */ });
+  }, []);
 
   // Auto-focus first digit when entering MFA step
   useEffect(() => {
@@ -47,7 +62,13 @@ export function LoginPage() {
         await finalizeLogin(accessToken, refreshToken);
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Anmeldung fehlgeschlagen');
+      // Wartungsmodus-Fehler explizit behandeln
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.startsWith('maintenance:')) {
+        setError(msg.replace('maintenance:', '').trim());
+      } else {
+        setError(msg || 'Anmeldung fehlgeschlagen');
+      }
     } finally {
       setLoading(false);
     }
@@ -105,7 +126,22 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
-      <div className="bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm">
+
+      {/* ── Wartungsmodus-Banner (über der Login-Card) ── */}
+      {maintenanceMode && (
+        <div className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-white px-4 py-3 flex items-start gap-3 shadow-lg">
+          <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+          <div>
+            <span className="font-semibold">Wartungsmodus aktiv — </span>
+            <span className="text-sm">
+              {maintenanceMessage || 'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.'}
+            </span>
+            <span className="ml-2 text-xs opacity-80">(Nur Administratoren können sich anmelden.)</span>
+          </div>
+        </div>
+      )}
+
+      <div className={`bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm${maintenanceMode ? ' mt-14' : ''}`}>
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">

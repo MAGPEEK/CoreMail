@@ -2,7 +2,7 @@ import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { connectDatabase } from '@coremail/storage';
+import { connectDatabase, prisma } from '@coremail/storage';
 import { getRedisClient, createLogger } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
@@ -174,6 +174,23 @@ const APP_VERSION: string = (() => {
   }
 })();
 app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'api-gateway', version: APP_VERSION }));
+
+// ── Öffentlicher Wartungsmodus-Status (kein Auth nötig) ───────────────────────
+// Wird von OWA LoginPage abgefragt, um den Wartungsbanner anzuzeigen.
+app.get('/api/v1/maintenance', async (_req, res) => {
+  try {
+    const cfg = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { maintenanceMode: true, maintenanceMessage: true },
+    });
+    res.json({
+      maintenanceMode:    cfg?.maintenanceMode    ?? false,
+      maintenanceMessage: cfg?.maintenanceMessage ?? '',
+    });
+  } catch {
+    res.json({ maintenanceMode: false, maintenanceMessage: '' });
+  }
+});
 
 // ── Changelog API ─────────────────────────────────────────────────────────────
 const CHANGELOG_PATH = process.env['CHANGELOG_PATH']

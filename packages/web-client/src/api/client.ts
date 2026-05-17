@@ -47,7 +47,11 @@ export async function login(email: string, password: string): Promise<LoginResul
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string };
+    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string; message?: string };
+    // Wartungsmodus: message als Prefix übergeben damit LoginPage ihn erkennt
+    if (body.error === 'maintenance') {
+      throw new Error(`maintenance:${body.message ?? 'Wartungsmodus aktiv'}`);
+    }
     throw new Error(body.error);
   }
   return res.json() as Promise<LoginResult>;

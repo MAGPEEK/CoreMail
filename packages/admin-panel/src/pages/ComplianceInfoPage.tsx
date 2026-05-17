@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '2.1.37';
+const VERSION        = '2.1.38';
 const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '2.1.38', date: '2026-05-17', title: 'Wartungsmodus: Banner + Login-Enforcement',
+    notes: 'Wartungsmodus-Toggle hatte keine Wirkung — jetzt vollständig durchgesetzt. POST /auth/login gibt 503 für Nicht-Admins wenn aktiv. OWA-Login zeigt amber Banner mit dem konfigurierten Wartungstext. Öffentlicher GET /api/v1/maintenance Endpunkt (kein Auth). Admins (ORGANIZATION_MANAGEMENT, SERVER_MANAGEMENT) können sich weiterhin anmelden.' },
   { version: '2.1.37', date: '2026-05-17', title: 'RFC 6749 OAuth 2.0 vollständige Implementierung',
     notes: 'Client Credentials Grant (§4.4), Password Grant (§4.3), Client HTTP-Basic-Auth (§2.3.1), Token Introspection (RFC 7662), OIDC ID Token bei openid-Scope, CORS auf allen OAuth-Endpunkten, Scope-Validierung (§3.3), Consent-Tracking mit OAuthConsent-Modell, pkceRequired-Flag für Public Clients (SPAs/native Apps), BASE_URL aus DB, nonce-Parameter, Token-Rotation bei Refresh.' },
   { version: '2.1.36', date: '2026-05-17', title: 'Hostname aus Admin-Panel (DB) + RFC 8314/6409/1730/1939 Ports',

@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.38] — 2026-05-17 — Wartungsmodus: Banner + Login-Enforcement
+
+### Fixed
+
+- **Wartungsmodus hatte keinerlei Wirkung** — Toggle speicherte zwar in der DB, wurde aber nirgendwo ausgewertet
+
+### Added
+
+- **Login-Enforcement** (`auth-service/router/auth.ts`): Bei aktivem Wartungsmodus wird `POST /auth/login` für alle Nicht-Admin-Rollen mit `503 { error: 'maintenance', message: '...' }` blockiert. Ausnahmen: `ORGANIZATION_MANAGEMENT` und `SERVER_MANAGEMENT` (Admins müssen sich anmelden können, um den Modus wieder zu deaktivieren)
+- **Öffentlicher Maintenance-Endpunkt** `GET /api/v1/maintenance` — kein Auth nötig, gibt `{ maintenanceMode, maintenanceMessage }` zurück; wird von OWA beim Laden abgefragt
+- **Wartungsbanner in OWA-LoginPage** — amber Banner am oberen Bildschirmrand mit dem konfigurierten Wartungstext + Hinweis „Nur Administratoren können sich anmelden"; wird live beim Laden der Seite abgefragt; Login-Fehlermeldung zeigt den Wartungstext statt generischem Fehler
+
+---
+
 ## [2.1.37] — 2026-05-17 — RFC 6749 OAuth 2.0 vollständige Implementierung
 
 ### Added
