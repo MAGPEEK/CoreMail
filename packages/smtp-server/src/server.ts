@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import type { SmtpServerHandle } from './core/factory.js';
@@ -14,7 +14,35 @@ const log = createLogger('smtp:server');
 const SMTP_PORT_25  = parseInt(process.env['SMTP_PORT_25']  ?? '25',  10);
 const SMTP_PORT_465 = parseInt(process.env['SMTP_PORT_465'] ?? '465', 10);
 const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
-const SMTP_HOSTNAME = process.env['SMTP_HOSTNAME'] ?? 'mail.localhost';
+
+// ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
+// Primary source: ServerSettings.publicHostname in DB (set via Admin Panel)
+// Fallback: SMTP_HOSTNAME / MAIL_HOSTNAME env vars (deprecated, for migration)
+let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+
+async function refreshHostname(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    if (settings?.publicHostname) {
+      _hostname = settings.publicHostname;
+      log.debug({ hostname: _hostname }, 'SMTP hostname refreshed from DB');
+    } else {
+      // Seed env fallback into DB on first run so admin panel shows correct value
+      const envHostname = process.env['MAIL_HOSTNAME'] ?? process.env['SMTP_HOSTNAME'];
+      if (envHostname) {
+        await prisma.serverSettings.upsert({
+          where:  { id: 'singleton' },
+          create: { id: 'singleton', publicHostname: envHostname },
+          update: { publicHostname: envHostname },
+        });
+        _hostname = envHostname;
+        log.info({ hostname: _hostname }, 'SMTP hostname seeded from env var into DB');
+      }
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to refresh SMTP hostname from DB');
+  }
+}
 
 /** Submission-Ports (Auth required) */
 const SUBMISSION_PORTS = new Set([SMTP_PORT_465, SMTP_PORT_587]);
@@ -53,17 +81,23 @@ function scheduleReload(): void {
 function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
   const isSubmission = SUBMISSION_PORTS.has(port);
 
-  const handle = createSmtpServer(
+  // Use a getter so that each new session picks up the current hostname.
+  // This allows live hostname updates without restarting listeners.
+  const config = Object.defineProperties(
     {
-      hostname:    SMTP_HOSTNAME,
       maxSize:     52_428_800, // 50 MB
       maxRcpt:     100,
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
+      tls: undefined as { cert: Buffer; key: Buffer } | undefined,
+    } as Parameters<typeof createSmtpServer>[0],
+    {
+      hostname: { get: () => _hostname, enumerable: true, configurable: true },
     },
-    ssl,
   );
+
+  const handle = createSmtpServer(config, ssl);
 
   const sockets = new Set<net.Socket>();
   handle.server.on('connection', (socket: net.Socket) => {
@@ -136,6 +170,7 @@ async function reloadListeners(): Promise<void> {
 async function main(): Promise<void> {
   await connectDatabase();
   await ensureBuckets();
+  await refreshHostname();
 
   const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
   if (existing === 0) {
@@ -156,8 +191,12 @@ async function main(): Promise<void> {
 
   const subscriber = getRedisClient().duplicate();
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
-  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
-  subscriber.on('message', (_ch, message) => {
+  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD);
+  subscriber.on('message', (ch, message) => {
+    if (ch === CHANNEL_SETTINGS_RELOAD) {
+      void refreshHostname();
+      return;
+    }
     try {
       const payload = JSON.parse(message) as { service: string };
       if (payload.service === 'SMTP_RECEIVE') scheduleReload();

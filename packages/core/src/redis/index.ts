@@ -69,3 +69,5 @@ export const CHANNEL_MAIL_UPDATE = 'mail:update';
 export const CHANNEL_CALENDAR_UPDATE = 'calendar:update';
 export const CHANNEL_ADMIN_EVENT = 'admin:event';
 export const CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload';
+/** Fired after ServerSettings.publicHostname (or other global settings) change. */
+export const CHANNEL_SETTINGS_RELOAD = 'settings:reload';

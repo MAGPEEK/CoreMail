@@ -2,9 +2,9 @@ import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
 import { createLogger } from '@coremail/core/logger';
-import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core/redis';
+import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { prisma } from '@coremail/storage';
-import { POP3Session } from './session.js';
+import { POP3Session, setPop3Hostname } from './session.js';
 
 const log = createLogger('pop3-server');
 
@@ -12,6 +12,25 @@ const PORT_PLAIN = parseInt(process.env['POP3_PORT']  ?? '110', 10);
 const PORT_TLS   = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
 const TLS_CERT   = process.env['TLS_CERT_PATH'];
 const TLS_KEY    = process.env['TLS_KEY_PATH'];
+
+// ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
+async function refreshHostname(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    if (settings?.publicHostname) {
+      setPop3Hostname(settings.publicHostname);
+      log.debug({ hostname: settings.publicHostname }, 'POP3 hostname refreshed from DB');
+    } else {
+      const envHostname = process.env['MAIL_HOSTNAME'];
+      if (envHostname) {
+        setPop3Hostname(envHostname);
+        log.debug({ hostname: envHostname }, 'POP3 hostname from env var');
+      }
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to refresh POP3 hostname from DB');
+  }
+}
 
 // ── Tracked-Server-Typ ────────────────────────────────────────────────────────
 interface TrackedPop3Server {
@@ -130,6 +149,8 @@ async function reloadListeners(): Promise<void> {
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  await refreshHostname();
+
   const existing = await prisma.serviceListener.count({ where: { service: 'POP3' } });
   if (existing === 0) {
     await prisma.serviceListener.createMany({
@@ -145,8 +166,12 @@ async function main() {
 
   const subscriber = getRedisClient().duplicate();
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
-  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
-  subscriber.on('message', (_ch, message) => {
+  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD);
+  subscriber.on('message', (ch, message) => {
+    if (ch === CHANNEL_SETTINGS_RELOAD) {
+      void refreshHostname();
+      return;
+    }
     try {
       const payload = JSON.parse(message) as { service: string };
       if (payload.service === 'POP3') scheduleReload();

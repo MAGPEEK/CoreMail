@@ -14,13 +14,22 @@ const log = createLogger('imap:server');
 
 const sessions = new Map<string, ImapSession>();
 
+// Module-level hostname — updated via setImapHostname() when settings change
+let _hostname = 'mail.localhost';
+
+/** Update the IMAP greeting hostname (called by server.ts on DB reload). */
+export function setImapHostname(hostname: string): void {
+  _hostname = hostname;
+}
+
 export function createImapServer(): net.Server {
   const server = net.createServer((socket) => {
     const session = createSession(socket);
     sessions.set(session.id, session);
 
     log.debug({ id: session.id, ip: socket.remoteAddress }, 'IMAP connect');
-    socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] CoreMail IMAP4rev1 ready\r\n`);
+    // RFC 3501 §7.1 — greeting with hostname and capability list
+    socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] ${_hostname} IMAP4rev1 ready\r\n`);
 
     let buffer = '';
 

@@ -13,6 +13,31 @@ import { storeInboundMessage } from '../handlers/message.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
 
+/**
+ * Prepend a RFC 6409 §6.1 compliant Received: header to a message.
+ *
+ * Format:
+ *   Received: from [<ip>] (helo=<ehlo-domain>)
+ *             by <our-hostname> (CoreMail) with ESMTPSA
+ *             for <rcpt>; <RFC 2822 date>
+ *
+ * This traces the submission hop and is required by RFC 6409 §6.1.
+ */
+function prependReceivedHeader(
+  raw: Buffer,
+  submittingIp: string,
+  authUserEmail: string,
+  ourHostname: string,
+  firstRcpt: string,
+): Buffer {
+  const date = new Date().toUTCString().replace('GMT', '+0000');
+  const header =
+    `Received: from [${submittingIp}] (authenticated user ${authUserEmail})\r\n` +
+    `\tby ${ourHostname} (CoreMail) with ESMTPSA\r\n` +
+    `\tfor <${firstRcpt}>; ${date}\r\n`;
+  return Buffer.concat([Buffer.from(header, 'utf8'), raw]);
+}
+
 const log = createLogger('smtp:submission');
 
 // ── onConnect ─────────────────────────────────────────────────────────────────
@@ -65,8 +90,22 @@ async function onMessage(
   from: string,
   to: string[],
   authUser: AuthUser | null,
-  _ip: string,
+  ip: string,
 ): Promise<void> {
+  // RFC 6409 §6.1 — prepend Received: header for submission tracing
+  if (authUser && to.length > 0) {
+    try {
+      const settings = await prisma.serverSettings.findUnique({
+        where: { id: 'singleton' },
+        select: { publicHostname: true },
+      });
+      const hostname = settings?.publicHostname ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+      raw = prependReceivedHeader(raw, ip, authUser.email, hostname, to[0]!);
+    } catch {
+      // Non-fatal: continue without Received header if DB unavailable
+    }
+  }
+
   const localRcpts: string[] = [];
   const externalRcpts: string[] = [];
 

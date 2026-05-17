@@ -6,6 +6,14 @@ import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('pop3-session');
 
+// Module-level hostname — updated via setPop3Hostname() when settings change
+let _hostname = 'mail.localhost';
+
+/** Update the POP3 greeting hostname (called by server.ts on DB reload). */
+export function setPop3Hostname(hostname: string): void {
+  _hostname = hostname;
+}
+
 type State = 'AUTHORIZATION' | 'TRANSACTION' | 'UPDATE';
 
 interface MailDrop {
@@ -30,7 +38,8 @@ export class POP3Session {
   start() {
     this.socket.setEncoding('utf8');
     this.socket.on('data', (chunk: string) => this.onData(chunk));
-    this.send('+OK CoreMail POP3 server ready');
+    // RFC 1939 §3 — greeting with hostname
+    this.send(`+OK ${_hostname} POP3 ready`);
   }
 
   private send(line: string) {

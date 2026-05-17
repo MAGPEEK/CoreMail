@@ -9,7 +9,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 const log = createLogger('admin:servers');
 export const adminServersRouter: RouterType = Router();
@@ -65,6 +65,14 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
       update: parsed.data,
     });
     log.info({ hostname: parsed.data.publicHostname }, 'Server settings updated');
+
+    // Notify SMTP / IMAP / POP3 servers to pick up new hostname
+    try {
+      await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'hostname' }));
+    } catch (pubErr) {
+      log.warn({ pubErr }, 'Failed to publish settings reload signal');
+    }
+
     res.json(settings);
   } catch (err) {
     log.error({ err }, 'Failed to update server settings');

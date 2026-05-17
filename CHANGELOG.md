@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.36] — 2026-05-17 — Hostname aus Admin-Panel (DB-backed) + RFC 8314/6409/1730/1939 Ports
+
+### Changed
+
+- **`MAIL_HOSTNAME` aus `.env` entfernt** — der Mailserver-Hostname wird jetzt primär im Admin-Panel unter „Server-Einstellungen → Hostname" konfiguriert und in `ServerSettings.publicHostname` (Datenbank) gespeichert. Gilt global für SMTP-EHLO-Banner, IMAP-Begrüßung (RFC 3501 §7.1), POP3-Begrüßung (RFC 1939 §3) und Autodiscover.
+  - **Migration**: Falls `MAIL_HOSTNAME` noch in der `.env` gesetzt ist, wird der Wert beim ersten Start automatisch in die DB übernommen — danach kann die Variable entfernt werden.
+- **`SMTP_HOSTNAME`, `IMAP_HOSTNAME` aus `docker-compose.yml` / `docker-compose.synology.yml` entfernt** — Hostname-Routing erfolgt ausschließlich über DB
+- **`WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, `EWS_URL`, `OWA_URL`, `EAS_URL`, `AUTODISCOVER_BASE` aus compose-Dateien entfernt** — diese Werte werden aus `ServerSettings.publicHostname` abgeleitet
+
+### Added
+
+- **`CHANNEL_SETTINGS_RELOAD = 'settings:reload'`** (Redis Pub/Sub) — neuer Channel in `@coremail/core`; wird nach jedem PUT `/api/v1/admin/servers/settings` veröffentlicht; SMTP, IMAP und POP3 subscriben darauf und laden den Hostname sofort live nach (kein Neustart nötig)
+- **Live-Hostname-Update** in SMTP-, IMAP- und POP3-Server:
+  - SMTP: `_hostname`-Variable + `get hostname()` Getter in `SmtpSessionConfig` → neue Verbindungen erhalten sofort den aktualisierten Banner
+  - IMAP: `setImapHostname()` in `server/index.ts` → Greeting `* OK [CAPABILITY …] <hostname> IMAP4rev1 ready`
+  - POP3: `setPop3Hostname()` in `session.ts` → Greeting `+OK <hostname> POP3 ready`
+- **`Received:` Header in `submission/handler.ts`** — RFC 6409 §6.1: jede eingereichte Mail erhält einen `Received:` Header mit IP des Senders, authentifiziertem User, Hostname und RFC 2822 Datum-Zeit
+
+### Fixed
+
+- **RFC 8314**: Port 465 = implizites TLS (SMTPS), Port 587 = STARTTLS (Submission)
+- **RFC 6409**: Port 587 Submission — `Received:` Header Pflicht (§6.1) nun implementiert
+- **RFC 3501/1730**: IMAP-Begrüßung enthält jetzt korrekten Hostname gemäß RFC
+- **RFC 1939**: POP3-Begrüßung enthält jetzt korrekten Hostname gemäß RFC
+
+---
+
 ## [2.1.35] — 2026-05-17 — SMTP: RFC 5321-konformer State Machine (Postfix-Architektur)
 
 ### Changed

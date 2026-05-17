@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.24 — Synology NAS / Container Manager
+# CoreMail v2.1.36 — Synology NAS / Container Manager
 #
 # Einrichtung per SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
@@ -24,7 +24,7 @@ services:
   # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:2.1.35
+    image: magpeek/coremail-app:2.1.36
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -43,10 +43,6 @@ services:
       # ⚠ Vor Produktiveinsatz ersetzen: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-CHANGE-ME-openssl-rand-hex-32}
       PEPPER: ${PEPPER:-CHANGE-ME-openssl-rand-hex-32}
-
-      MAIL_HOSTNAME: ${NAS_HOSTNAME:-mail.local}
-      SMTP_HOSTNAME: ${NAS_HOSTNAME:-mail.local}
-      IMAP_HOSTNAME: ${NAS_HOSTNAME:-mail.local}
 
       # Interne Service-URLs
       STORAGE_API_URL: http://localhost:3001
@@ -72,14 +68,9 @@ services:
       AUTODISCOVER_PORT: "8081"
       CALDAV_PORT: "8082"
 
-      EWS_URL: http://${NAS_HOSTNAME:-mail.local}:8080/EWS/Exchange.asmx
-      OWA_URL: http://${NAS_HOSTNAME:-mail.local}:8080/owa/
-      AUTODISCOVER_BASE: http://${NAS_HOSTNAME:-mail.local}:8080
-      EAS_URL: http://${NAS_HOSTNAME:-mail.local}:8080/Microsoft-Server-ActiveSync
-
+      # WebAuthn (für MFA, optional)
+      # WEBAUTHN_RP_ID und WEBAUTHN_ORIGIN werden aus ServerSettings.publicHostname gelesen
       WEBAUTHN_RP_NAME: CoreMail
-      WEBAUTHN_RP_ID: ${NAS_HOSTNAME:-mail.local}
-      WEBAUTHN_ORIGIN: http://${NAS_HOSTNAME:-mail.local}:8080
 
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}

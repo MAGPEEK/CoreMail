@@ -1,12 +1,31 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
-import { createImapServer } from './server/index.js';
+import { createImapServer, setImapHostname } from './server/index.js';
 
 const log = createLogger('imap:main');
 
 const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);
+
+// ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
+async function refreshHostname(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    if (settings?.publicHostname) {
+      setImapHostname(settings.publicHostname);
+      log.debug({ hostname: settings.publicHostname }, 'IMAP hostname refreshed from DB');
+    } else {
+      const envHostname = process.env['MAIL_HOSTNAME'] ?? process.env['IMAP_HOSTNAME'];
+      if (envHostname) {
+        setImapHostname(envHostname);
+        log.debug({ hostname: envHostname }, 'IMAP hostname from env var');
+      }
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to refresh IMAP hostname from DB');
+  }
+}
 
 // ── Tracked-Server-Typ ────────────────────────────────────────────────────────
 interface TrackedImapServer {
@@ -110,6 +129,7 @@ async function reloadListeners(): Promise<void> {
 async function main() {
   await connectDatabase();
   await ensureBuckets();
+  await refreshHostname();
 
   const existing = await prisma.serviceListener.count({ where: { service: 'IMAP' } });
   if (existing === 0) {
@@ -126,8 +146,12 @@ async function main() {
 
   const subscriber = getRedisClient().duplicate();
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
-  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
-  subscriber.on('message', (_ch, message) => {
+  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD);
+  subscriber.on('message', (ch, message) => {
+    if (ch === CHANNEL_SETTINGS_RELOAD) {
+      void refreshHostname();
+      return;
+    }
     try {
       const payload = JSON.parse(message) as { service: string };
       if (payload.service === 'IMAP') scheduleReload();

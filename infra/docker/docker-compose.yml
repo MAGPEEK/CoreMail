@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.24
+# CoreMail v2.1.36
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:2.1.35
+    image: magpeek/coremail-app:2.1.36
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -48,11 +48,6 @@ services:
       # Sicherheitsschlüssel
       JWT_SECRET: ${JWT_SECRET}
       PEPPER: ${PEPPER}
-
-      # Mailserver-Hostname
-      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
-      SMTP_HOSTNAME: ${MAIL_HOSTNAME}
-      IMAP_HOSTNAME: ${MAIL_HOSTNAME}
 
       # Interne Service-URLs (localhost, gleicher Container)
       STORAGE_API_URL: http://localhost:3001
@@ -78,16 +73,9 @@ services:
       AUTODISCOVER_PORT: "8081"
       CALDAV_PORT: "8082"
 
-      # URLs (für Autodiscover und EWS-Antworten)
-      EWS_URL: http://${MAIL_HOSTNAME}/EWS/Exchange.asmx
-      OWA_URL: http://${MAIL_HOSTNAME}/owa/
-      AUTODISCOVER_BASE: http://${MAIL_HOSTNAME}
-      EAS_URL: http://${MAIL_HOSTNAME}/Microsoft-Server-ActiveSync
-
       # WebAuthn (für MFA, optional)
+      # WEBAUTHN_RP_ID und WEBAUTHN_ORIGIN werden aus ServerSettings.publicHostname gelesen
       WEBAUTHN_RP_NAME: CoreMail
-      WEBAUTHN_RP_ID: ${MAIL_HOSTNAME}
-      WEBAUTHN_ORIGIN: http://${MAIL_HOSTNAME}
 
       # Backup
       S3_ENDPOINT: http://minio:9000
