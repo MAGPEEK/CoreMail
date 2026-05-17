@@ -100,7 +100,7 @@ export function LoginPage() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">CoreMail ECP</h1>
             <p className="text-xs text-gray-500">
-              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Exchange Control Panel'}
+              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Backend Control Panel'}
             </p>
           </div>
         </div>
