@@ -3,33 +3,22 @@ import { persist } from 'zustand/middleware';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-export const ACCENT_COLORS = [
-  { name: 'Microsoft Blau', hex: '#0078D4', rgb: '0 120 212'   },
-  { name: 'Teams Lila',     hex: '#6264A7', rgb: '98 100 167'  },
-  { name: 'Grün',           hex: '#107C10', rgb: '16 124 16'   },
-  { name: 'Orange',         hex: '#D83B01', rgb: '216 59 1'    },
-  { name: 'Türkis',         hex: '#008575', rgb: '0 133 117'   },
-  { name: 'Pink',           hex: '#B4009E', rgb: '180 0 158'   },
-] as const;
+// ECP-Akzentfarbe ist immer Microsoft-Blau — nicht vom OWA-Theme beeinflussbar
+export const ECP_ACCENT_RGB = '0 120 212';
 
 interface ThemeState {
-  theme:     ThemeMode;
-  accentRgb: string;
-  setTheme:  (theme: ThemeMode) => void;
-  setAccent: (rgb: string) => void;
+  theme:    ThemeMode;
+  setTheme: (theme: ThemeMode) => void;
 }
 
-// Geteilter localStorage-Key mit OWA — Theme-Änderungen in einem Tab
-// werden durch den StorageEvent-Listener in ThemeApplier auch im anderen Tab übernommen.
+// Eigener localStorage-Key — unabhängig von OWA (coremail-theme)
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
-      theme:     'system',
-      accentRgb: '0 120 212',
-      setTheme:  (theme) => set({ theme }),
-      setAccent: (rgb)   => set({ accentRgb: rgb }),
+      theme:    'system',
+      setTheme: (theme) => set({ theme }),
     }),
-    { name: 'coremail-theme' },
+    { name: 'coremail-ecp-theme' },
   ),
 );
 

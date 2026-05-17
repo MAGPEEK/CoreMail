@@ -5,7 +5,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
-import { useThemeStore, resolveIsDark, type ThemeMode } from './store/theme.js';
+import { useThemeStore, resolveIsDark, ECP_ACCENT_RGB } from './store/theme.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { MailboxesPage } from './pages/MailboxesPage.js';
@@ -43,15 +43,16 @@ import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 
-// ── ThemeApplier — reagiert auf Store-Änderungen + OWA-Cross-Tab-Sync ────────
+// ── ThemeApplier — reagiert auf Store-Änderungen (kein OWA-Sync!) ───────────
 function ThemeApplier() {
-  const { theme, accentRgb } = useThemeStore();
+  const { theme } = useThemeStore();
 
-  // Theme auf document anwenden wenn sich Store ändert
+  // Dark Mode auf document anwenden wenn sich Store ändert
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolveIsDark(theme));
-    document.documentElement.style.setProperty('--color-accent', accentRgb);
-  }, [theme, accentRgb]);
+    // Akzentfarbe ist im ECP immer Microsoft-Blau — unabhängig vom OWA-Theme
+    document.documentElement.style.setProperty('--color-accent', ECP_ACCENT_RGB);
+  }, [theme]);
 
   // System-Präferenz bei theme==='system' live übernehmen
   useEffect(() => {
@@ -61,22 +62,6 @@ function ThemeApplier() {
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, [theme]);
-
-  // Cross-Tab-Sync: OWA ändert Theme → ECP übernimmt
-  useEffect(() => {
-    const handler = (e: StorageEvent) => {
-      if (e.key !== 'coremail-theme' || !e.newValue) return;
-      try {
-        const parsed = JSON.parse(e.newValue) as { state?: { theme?: ThemeMode; accentRgb?: string } };
-        useThemeStore.setState({
-          theme:     parsed?.state?.theme     ?? 'system',
-          accentRgb: parsed?.state?.accentRgb ?? '0 120 212',
-        });
-      } catch { /* ignore */ }
-    };
-    window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
-  }, []);
 
   return null;
 }

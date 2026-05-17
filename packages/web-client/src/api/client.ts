@@ -36,7 +36,11 @@ export const api = {
   delete:   <T>(path: string)                   => request<T>(path, { method: 'DELETE' }),
 };
 
-export async function login(email: string, password: string): Promise<{ accessToken: string; refreshToken: string }> {
+export type LoginResult =
+  | { accessToken: string; refreshToken: string }
+  | { mfaRequired: true; challengeToken: string; method: string };
+
+export async function login(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,6 +48,22 @@ export async function login(email: string, password: string): Promise<{ accessTo
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string };
+    throw new Error(body.error);
+  }
+  return res.json() as Promise<LoginResult>;
+}
+
+export async function verifyMfa(
+  challengeToken: string,
+  code: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const res = await fetch('/auth/mfa/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challengeToken, code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'MFA failed' })) as { error: string };
     throw new Error(body.error);
   }
   return res.json() as Promise<{ accessToken: string; refreshToken: string }>;

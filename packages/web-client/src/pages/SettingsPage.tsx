@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
+  ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
 import { useThemeStore, ACCENT_COLORS, type ThemeMode } from '../store/ui.js';
+import { useAuthStore } from '../store/auth.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
@@ -777,34 +779,334 @@ function StorageSection() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SICHERHEIT
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── TOTP-Setup-Wizard (integriert) ────────────────────────────────────────────
+type TotpStep = 'idle' | 'setup' | 'confirm' | 'done';
+
+interface MfaStatus {
+  totpEnabled: boolean;
+  webauthnCount: number;
+  backupCodesCount: number;
+}
+
+interface TotpSetupData {
+  secret: string;
+  otpauthUrl: string;
+  qrCodeDataUrl: string;
+}
+
 function SecuritySection() {
+  const qc = useQueryClient();
+  const [totpStep, setTotpStep] = useState<TotpStep>('idle');
+  const [setupData, setSetupData] = useState<TotpSetupData | null>(null);
+  const [confirmDigits, setConfirmDigits] = useState(['', '', '', '', '', '']);
+  const [confirmError, setConfirmError] = useState('');
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+  const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const { data: mfaStatus, isLoading: statusLoading } = useQuery<MfaStatus>({
+    queryKey: ['mfa-status'],
+    queryFn: () => {
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      return fetch('/auth/mfa/status', {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json()) as Promise<MfaStatus>;
+    },
+    staleTime: 0,
+  });
+
+  const setupMutation = useMutation({
+    mutationFn: () => {
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      return fetch('/auth/mfa/totp/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      }).then(r => r.json()) as Promise<TotpSetupData>;
+    },
+    onSuccess: (data) => {
+      setSetupData(data);
+      setTotpStep('setup');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: (code: string) => {
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      return fetch('/auth/mfa/totp/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ code }),
+      }).then(async r => {
+        if (!r.ok) { const b = await r.json() as { error: string }; throw new Error(b.error); }
+        return r.json() as Promise<{ ok: boolean }>;
+      });
+    },
+    onSuccess: async () => {
+      // Generate backup codes right away
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      const resp = await fetch('/auth/mfa/backup-codes/generate', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await resp.json() as { codes: string[] };
+      setBackupCodes(data.codes);
+      setTotpStep('done');
+      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+    },
+    onError: (e: Error) => {
+      setConfirmError(e.message);
+      setConfirmDigits(['', '', '', '', '', '']);
+      setTimeout(() => digitRefs.current[0]?.focus(), 50);
+    },
+  });
+
+  const disableMutation = useMutation({
+    mutationFn: () => {
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      return fetch('/auth/mfa/totp', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json()) as Promise<{ ok: boolean }>;
+    },
+    onSuccess: () => {
+      toast.success('2FA wurde deaktiviert');
+      setTotpStep('idle');
+      setSetupData(null);
+      setBackupCodes(null);
+      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const regenBackupMutation = useMutation({
+    mutationFn: () => {
+      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
+      return fetch('/auth/mfa/backup-codes/generate', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json()) as Promise<{ codes: string[] }>;
+    },
+    onSuccess: (data) => {
+      setBackupCodes(data.codes);
+      toast.success('Neue Backup-Codes generiert');
+      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // OTP digit helpers
+  const handleDigitChange = (i: number, val: string) => {
+    const digit = val.replace(/\D/g, '').slice(-1);
+    const next = [...confirmDigits];
+    next[i] = digit;
+    setConfirmDigits(next);
+    if (digit && i < 5) digitRefs.current[i + 1]?.focus();
+  };
+  const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !confirmDigits[i] && i > 0) digitRefs.current[i - 1]?.focus();
+  };
+  const handleDigitPaste = (e: React.ClipboardEvent) => {
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (pasted.length === 6) { e.preventDefault(); setConfirmDigits(pasted.split('')); digitRefs.current[5]?.focus(); }
+  };
+
+  const copySecret = () => {
+    if (setupData?.secret) { void navigator.clipboard.writeText(setupData.secret); toast.success('Secret kopiert'); }
+  };
+  const copyBackupCodes = () => {
+    if (backupCodes) { void navigator.clipboard.writeText(backupCodes.join('\n')); toast.success('Backup-Codes kopiert'); }
+  };
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-lg">
       <div>
         <h2 className="text-lg font-semibold text-gray-900">Sicherheit</h2>
         <p className="text-sm text-gray-500 mt-0.5">App-Passwörter und Zwei-Faktor-Authentifizierung</p>
       </div>
-      <div className="space-y-3 max-w-md">
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Key size={15} className="text-gray-400" />
-            <span className="text-sm font-medium">App-Passwörter</span>
-          </div>
-          <p className="text-xs text-gray-500 mb-3">Für E-Mail-Clients (Outlook, Thunderbird) ohne Hauptpasswort verbinden.</p>
-          <a href="/auth/app-passwords" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
-            App-Passwörter verwalten
-          </a>
+
+      {/* App-Passwörter (Link bleibt) */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Key size={15} className="text-gray-400" />
+          <span className="text-sm font-medium">App-Passwörter</span>
         </div>
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
+        <p className="text-xs text-gray-500 mb-3">Für E-Mail-Clients (Outlook, Thunderbird) ohne Hauptpasswort verbinden.</p>
+        <a href="/auth/app-passwords" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
+          App-Passwörter verwalten
+        </a>
+      </div>
+
+      {/* ── 2FA Karte ── */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
             <Shield size={15} className="text-gray-400" />
-            <span className="text-sm font-medium">Zwei-Faktor-Authentifizierung</span>
+            <span className="text-sm font-medium">Zwei-Faktor-Authentifizierung (TOTP)</span>
           </div>
-          <p className="text-xs text-gray-500 mb-3">Schützen Sie Ihr Konto mit einem zweiten Faktor (TOTP oder Hardware-Key).</p>
-          <a href="/auth/mfa" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
-            2FA konfigurieren
-          </a>
+          {statusLoading ? (
+            <Loader2 size={14} className="animate-spin text-gray-400" />
+          ) : mfaStatus?.totpEnabled ? (
+            <span className="flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+              <ShieldCheck size={12} /> Aktiv
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-xs font-medium text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
+              <ShieldOff size={12} /> Inaktiv
+            </span>
+          )}
         </div>
+
+        {/* ── Status: inaktiv → Setup starten ── */}
+        {!mfaStatus?.totpEnabled && totpStep === 'idle' && (
+          <>
+            <p className="text-xs text-gray-500">
+              Schützen Sie Ihr Konto mit einer Authenticator-App (z.B. Google Authenticator, Authy, Microsoft Authenticator).
+            </p>
+            <button
+              onClick={() => setupMutation.mutate()}
+              disabled={setupMutation.isPending}
+              className="btn-primary text-xs flex items-center gap-1.5"
+            >
+              {setupMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
+              2FA einrichten
+            </button>
+          </>
+        )}
+
+        {/* ── Schritt 1: QR-Code anzeigen ── */}
+        {totpStep === 'setup' && setupData && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-600 font-medium">
+              1. Scannen Sie den QR-Code mit Ihrer Authenticator-App:
+            </p>
+            <div className="flex justify-center">
+              <img src={setupData.qrCodeDataUrl} alt="TOTP QR Code" className="w-40 h-40 border border-gray-200 rounded" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Oder geben Sie den Secret-Schlüssel manuell ein:</p>
+              <div className="flex items-center gap-2 bg-white border border-gray-200 rounded px-3 py-1.5">
+                <code className="text-xs font-mono text-gray-700 flex-1 select-all break-all">{setupData.secret}</code>
+                <button onClick={copySecret} className="text-gray-400 hover:text-gray-600 shrink-0">
+                  <Copy size={13} />
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => { setTotpStep('confirm'); setTimeout(() => digitRefs.current[0]?.focus(), 50); }}
+              className="btn-primary text-xs"
+            >
+              Weiter → Code eingeben
+            </button>
+          </div>
+        )}
+
+        {/* ── Schritt 2: Code bestätigen ── */}
+        {totpStep === 'confirm' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-600 font-medium">
+              2. Geben Sie den 6-stelligen Code aus Ihrer App ein:
+            </p>
+            <div className="flex gap-2" onPaste={handleDigitPaste}>
+              {confirmDigits.map((d, i) => (
+                <input
+                  key={i}
+                  ref={(el) => { digitRefs.current[i] = el; }}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={d}
+                  onChange={(e) => handleDigitChange(i, e.target.value)}
+                  onKeyDown={(e) => handleDigitKeyDown(i, e)}
+                  className="w-9 h-11 text-center text-lg font-bold border-2 rounded-lg focus:outline-none focus:border-accent transition-colors"
+                  style={{ borderColor: d ? 'var(--color-accent)' : undefined }}
+                />
+              ))}
+            </div>
+            {confirmError && (
+              <p className="text-xs text-red-600 flex items-center gap-1">
+                <AlertTriangle size={12} /> {confirmError}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => confirmMutation.mutate(confirmDigits.join(''))}
+                disabled={confirmMutation.isPending || confirmDigits.join('').length < 6}
+                className="btn-primary text-xs flex items-center gap-1.5"
+              >
+                {confirmMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                Bestätigen
+              </button>
+              <button onClick={() => { setTotpStep('setup'); setConfirmError(''); setConfirmDigits(['', '', '', '', '', '']); }}
+                className="btn-secondary text-xs">
+                Zurück
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Schritt 3: Erfolg + Backup-Codes ── */}
+        {totpStep === 'done' && backupCodes && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
+              <ShieldCheck size={16} /> 2FA erfolgreich aktiviert!
+            </div>
+            <div>
+              <p className="text-xs text-gray-600 font-medium mb-1">Backup-Codes (je einmalig verwendbar):</p>
+              <p className="text-xs text-gray-500 mb-2">Speichern Sie diese Codes sicher. Sie können damit bei verlorenem Gerät einloggen.</p>
+              <div className="grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs">
+                {backupCodes.map((c, i) => <span key={i} className="text-gray-700">{c}</span>)}
+              </div>
+              <button onClick={copyBackupCodes} className="mt-2 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+                <Copy size={11} /> Alle kopieren
+              </button>
+            </div>
+            <button onClick={() => setTotpStep('idle')} className="btn-secondary text-xs">Fertig</button>
+          </div>
+        )}
+
+        {/* ── Aktiv: Verwaltung ── */}
+        {mfaStatus?.totpEnabled && totpStep === 'idle' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
+              <div className="bg-white border border-gray-200 rounded p-2 text-center">
+                <p className="font-semibold text-base text-gray-900">{mfaStatus.backupCodesCount}</p>
+                <p>Backup-Codes verbleibend</p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => regenBackupMutation.mutate()}
+                disabled={regenBackupMutation.isPending}
+                className="btn-secondary text-xs flex items-center gap-1.5"
+              >
+                {regenBackupMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Backup-Codes neu generieren
+              </button>
+              <button
+                onClick={() => { if (confirm('2FA wirklich deaktivieren?')) disableMutation.mutate(); }}
+                disabled={disableMutation.isPending}
+                className="text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50"
+              >
+                {disableMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <ShieldOff size={12} />}
+                2FA deaktivieren
+              </button>
+            </div>
+            {regenBackupMutation.data?.codes && (
+              <div>
+                <p className="text-xs text-gray-600 font-medium mb-1">Neue Backup-Codes:</p>
+                <div className="grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs">
+                  {regenBackupMutation.data.codes.map((c, i) => <span key={i} className="text-gray-700">{c}</span>)}
+                </div>
+                <button
+                  onClick={() => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }}
+                  className="mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  <Copy size={11} /> Alle kopieren
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

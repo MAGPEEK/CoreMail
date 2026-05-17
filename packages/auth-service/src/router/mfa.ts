@@ -22,6 +22,21 @@ function getAuthenticatedUserId(req: Request): string | null {
   return payload?.sub ?? null;
 }
 
+// Status — welche MFA-Methoden sind für den aktuellen User aktiv?
+mfaRouter.get('/status', async (req: Request, res: Response) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+  const { prisma } = await import('@coremail/storage');
+  const mfa = await prisma.userMfa.findUnique({ where: { userId } });
+
+  res.json({
+    totpEnabled:    mfa?.totpEnabled ?? false,
+    webauthnCount:  Array.isArray(mfa?.webAuthnCredentials) ? (mfa?.webAuthnCredentials as unknown[]).length : 0,
+    backupCodesCount: (mfa?.backupCodes?.length ?? 0) - (mfa?.backupCodesUsed ?? 0),
+  });
+});
+
 // TOTP
 mfaRouter.post('/totp/setup', async (req: Request, res: Response) => {
   const userId = getAuthenticatedUserId(req);

@@ -9,6 +9,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.22] — 2026-05-17 — ECP Theme-Unabhängigkeit + MFA TOTP für OWA
+
+### Added
+
+- **MFA TOTP Login-Flow (OWA)** — Zweistufige Anmeldung nach RFC 6238: nach E-Mail/Passwort erscheint bei aktivierter 2FA ein 6-stelliger OTP-Eingabe-Dialog mit Auto-Focus, Paste-Support und Zurück-Button; `login()` in `api/client.ts` gibt nun Union-Typ `{ accessToken, refreshToken } | { mfaRequired, challengeToken, method }` zurück
+- **MFA TOTP Verwaltung (OWA-Einstellungen → Sicherheit)** — Vollständige inline TOTP-Verwaltung ersetzt Platzhalter-Link: QR-Code anzeigen, Secret manuell kopieren, Code bestätigen, Backup-Codes generieren/kopieren, Backup-Codes neu generieren, 2FA deaktivieren; Status-Badge (Aktiv/Inaktiv) mit verbleibendem Backup-Code-Zähler
+- **`GET /auth/mfa/status`** — Neuer Endpunkt im auth-service: gibt `totpEnabled`, `webauthnCount`, `backupCodesCount` zurück (nur für authentifizierte User)
+
+### Changed
+
+- **ECP Akzentfarbe — immer Microsoft Blau** — `--color-accent` im Admin-Panel ist auf `0 120 212` hardcodiert; ändert sich nicht mehr wenn im OWA-Frontend eine andere Akzentfarbe gewählt wird
+- **ECP Dark Mode — unabhängig vom OWA** — Admin-Panel nutzt eigenen `coremail-ecp-theme` localStorage-Key (vorher `coremail-theme`); kein Cross-Tab-Sync mehr mit OWA; Light/Dark/System kann im ECP separat gesteuert werden
+- **ECP Theme-Store** — `accentRgb` und `setAccent` entfernt; nur noch `theme` + `setTheme` im Store; `ACCENT_COLORS` und `ACCENT_RGB`-Konstante aus `store/theme.ts` entfernt
+
+---
+
 ## [2.1.21] — 2026-05-17 — ECP TopBar: Angemeldeter User + Theme-Toggle
 
 ### Added
