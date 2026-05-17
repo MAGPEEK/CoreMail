@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import { dkimSign } from 'mailauth/lib/dkim/sign.js';
 import { promises as dns } from 'dns';
 import { createLogger } from '@coremail/core';
+import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('smtp:relay');
 
@@ -10,6 +11,57 @@ export interface DkimOptions {
   dkimSelector?: string;
   dkimPrivateKey?: string;
 }
+
+// ── Cached outbound settings ─────────────────────────────────────────────────
+// Wird beim ersten Aufruf geladen und für 60s gecacht — kein DB-Lookup pro Mail.
+
+interface OutboundConfig {
+  mode:           'mx' | 'smarthost';
+  smarthostHost:  string;
+  smarthostPort:  number;
+  smarthostTls:   boolean;           // STARTTLS
+  smarthostImplicitTls: boolean;     // Implizites TLS (secure: true)
+  smarthostUsername: string;
+  smarthostPassword: string;
+}
+
+let _cachedConfig: OutboundConfig | null = null;
+let _cacheExpiresAt = 0;
+
+async function getOutboundConfig(): Promise<OutboundConfig> {
+  const now = Date.now();
+  if (_cachedConfig && now < _cacheExpiresAt) return _cachedConfig;
+
+  try {
+    const s = await prisma.smtpSettings.findUnique({ where: { id: 'singleton' } });
+    _cachedConfig = {
+      mode:                 (s?.outboundMode ?? 'mx') as 'mx' | 'smarthost',
+      smarthostHost:        s?.smarthostHost        ?? '',
+      smarthostPort:        s?.smarthostPort        ?? 587,
+      smarthostTls:         s?.smarthostTls         ?? true,
+      smarthostImplicitTls: s?.smarthostImplicitTls ?? false,
+      smarthostUsername:    s?.smarthostUsername    ?? '',
+      smarthostPassword:    s?.smarthostPassword    ?? '',
+    };
+  } catch (err) {
+    log.warn({ err }, 'Could not load outbound config — falling back to MX delivery');
+    _cachedConfig = {
+      mode: 'mx', smarthostHost: '', smarthostPort: 587,
+      smarthostTls: true, smarthostImplicitTls: false,
+      smarthostUsername: '', smarthostPassword: '',
+    };
+  }
+  _cacheExpiresAt = now + 60_000; // 60s TTL
+  return _cachedConfig;
+}
+
+/** Invalidiert den Config-Cache — wird nach PUT /admin/smtp-config/settings aufgerufen. */
+export function invalidateOutboundConfigCache(): void {
+  _cachedConfig = null;
+  _cacheExpiresAt = 0;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 export async function relayMessage(
   rawBuffer: Buffer,
@@ -27,13 +79,58 @@ export async function relayMessage(
     }
   }
 
-  // Group recipients by their MX domain
-  const byDomain = groupByDomain(to);
+  const cfg = await getOutboundConfig();
 
-  for (const [domain, recipients] of byDomain) {
-    await deliverToDomain(signedBuffer, from, recipients, domain);
+  if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
+    await deliverViaSmarthost(signedBuffer, from, to, cfg);
+  } else {
+    // MX direct delivery — group recipients by domain
+    const byDomain = groupByDomain(to);
+    for (const [domain, recipients] of byDomain) {
+      await deliverToDomain(signedBuffer, from, recipients, domain);
+    }
   }
 }
+
+// ── Smarthost delivery ────────────────────────────────────────────────────────
+
+async function deliverViaSmarthost(
+  rawBuffer: Buffer,
+  from: string,
+  to: string[],
+  cfg: OutboundConfig,
+): Promise<void> {
+  const auth = cfg.smarthostUsername
+    ? { user: cfg.smarthostUsername, pass: cfg.smarthostPassword }
+    : undefined;
+
+  const transporter = nodemailer.createTransport({
+    host:               cfg.smarthostHost,
+    port:               cfg.smarthostPort,
+    secure:             cfg.smarthostImplicitTls,   // true = implizites TLS (Port 465)
+    requireTLS:         cfg.smarthostTls && !cfg.smarthostImplicitTls, // STARTTLS erzwingen
+    opportunisticTLS:   cfg.smarthostTls && !cfg.smarthostImplicitTls,
+    auth,
+    tls: { rejectUnauthorized: false }, // Self-signed Certs tolerieren
+    connectionTimeout: 30_000,
+    greetingTimeout:   15_000,
+    socketTimeout:     60_000,
+  });
+
+  await transporter.sendMail({
+    envelope: { from, to },
+    raw:      rawBuffer,
+  });
+
+  log.info({
+    smarthost: cfg.smarthostHost,
+    port:      cfg.smarthostPort,
+    tls:       cfg.smarthostTls || cfg.smarthostImplicitTls,
+    to,
+  }, 'Delivered via smarthost');
+}
+
+// ── MX direct delivery ────────────────────────────────────────────────────────
 
 async function signMessage(rawBuffer: Buffer, dkim: DkimOptions): Promise<Buffer> {
   const signed = await dkimSign(rawBuffer, {

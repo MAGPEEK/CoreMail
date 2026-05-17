@@ -1144,6 +1144,16 @@ model SmtpSettings {
   greetingDelaySec     Int      @default(0)
   maxAuthFailures      Int      @default(5)
 
+  // Ausgehende Zustellung
+  // outboundMode: "mx" = direkte MX-Zustellung (Standard) | "smarthost" = Relay über festen Host
+  outboundMode         String   @default("mx")
+  smarthostHost        String   @default("")
+  smarthostPort        Int      @default(587)
+  smarthostTls         Boolean  @default(true)   // STARTTLS (opportunistisch)
+  smarthostImplicitTls Boolean  @default(false)  // Implizites TLS (Port 465-Stil)
+  smarthostUsername    String   @default("")
+  smarthostPassword    String   @default("")     // Klartext — liegt nur lokal in DB
+
   updatedAt            DateTime @updatedAt
 
   @@map("smtp_settings")
@@ -1252,6 +1262,12 @@ model ServerSettings {
   // ── Wartung ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)
   maintenanceMessage String  @default("Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.")
+
+  // ── TLS-Zertifikat (SMTP/IMAP/POP3 implizites TLS: Ports 465, 993, 995) ──────
+  // Wird beim ersten Start automatisch als selbstsigniertes Zertifikat generiert.
+  // Kann über das Admin-Panel durch ein offizielles Let's-Encrypt-Zertifikat ersetzt werden.
+  tlsCert  String?  // PEM-kodiertes Zertifikat (Certificate)
+  tlsKey   String?  // PEM-kodierter privater Schlüssel (Private Key)
 
   updatedAt       DateTime @updatedAt
 

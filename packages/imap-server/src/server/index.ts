@@ -1,4 +1,5 @@
 import net from 'net';
+import tls from 'node:tls';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import {
   createSession, sendUntagged,
@@ -22,8 +23,13 @@ export function setImapHostname(hostname: string): void {
   _hostname = hostname;
 }
 
-export function createImapServer(): net.Server {
-  const server = net.createServer((socket) => {
+export interface ImapTlsConfig {
+  cert: Buffer;
+  key: Buffer;
+}
+
+export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Server {
+  const onSocket = (socket: net.Socket): void => {
     const session = createSession(socket);
     sessions.set(session.id, session);
 
@@ -67,7 +73,17 @@ export function createImapServer(): net.Server {
       sendUntagged(session, 'BYE Autologout; idle for too long');
       socket.destroy();
     });
-  });
+  };
+
+  let server: net.Server | tls.Server;
+  if (tlsConfig) {
+    server = tls.createServer(
+      { cert: tlsConfig.cert, key: tlsConfig.key, minVersion: 'TLSv1.2' },
+      onSocket as (s: tls.TLSSocket) => void,
+    );
+  } else {
+    server = net.createServer(onSocket);
+  }
 
   // Subscribe to Redis for real-time IDLE push notifications
   setupIdlePush();

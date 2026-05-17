@@ -95,7 +95,10 @@ export class SmtpSession {
     });
 
     this.resetTimer(T_GREETING);
-    this.send(`220 ${this.config.hostname} ESMTP CoreMail`);
+    // RFC 5321 §4.2 — 220 Greeting: "220 <domain> <text>"
+    // bannerText überschreibt den Standard-Text wenn im Admin-Panel konfiguriert.
+    const bannerBody = this.config.bannerText?.trim() || `${this.config.hostname} ESMTP CoreMail`;
+    this.send(`220 ${bannerBody}`);
   }
 
   // ─── Timer ──────────────────────────────────────────────────────────────────

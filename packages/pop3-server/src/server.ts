@@ -1,7 +1,6 @@
 import net from 'node:net';
 import tls from 'node:tls';
-import fs from 'node:fs';
-import { createLogger } from '@coremail/core/logger';
+import { createLogger, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { prisma } from '@coremail/storage';
 import { POP3Session, setPop3Hostname } from './session.js';
@@ -10,8 +9,9 @@ const log = createLogger('pop3-server');
 
 const PORT_PLAIN = parseInt(process.env['POP3_PORT']  ?? '110', 10);
 const PORT_TLS   = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
-const TLS_CERT   = process.env['TLS_CERT_PATH'];
-const TLS_KEY    = process.env['TLS_KEY_PATH'];
+
+// ── TLS-Konfiguration (DB-backed) ─────────────────────────────────────────────
+let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
 
 // ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
 async function refreshHostname(): Promise<void> {
@@ -29,6 +29,32 @@ async function refreshHostname(): Promise<void> {
     }
   } catch (err) {
     log.error({ err }, 'Failed to refresh POP3 hostname from DB');
+  }
+}
+
+async function refreshTlsConfig(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { tlsCert: true, tlsKey: true, publicHostname: true },
+    });
+    if (settings?.tlsCert && settings?.tlsKey) {
+      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
+      log.debug('POP3 TLS cert loaded from DB');
+    } else {
+      const hostname = settings?.publicHostname ?? 'mail.localhost';
+      log.info({ hostname }, 'No TLS cert in DB — generating self-signed certificate for POP3');
+      const { certPem, keyPem } = generateSelfSignedCert(hostname);
+      _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+      await prisma.serverSettings.upsert({
+        where:  { id: 'singleton' },
+        create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
+        update: { tlsCert: certPem, tlsKey: keyPem },
+      });
+      log.info('Self-signed TLS certificate generated and stored in DB (POP3)');
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to load/generate POP3 TLS config — port 995 will use plaintext');
   }
 }
 
@@ -70,14 +96,15 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   };
 
   let server: net.Server | tls.Server;
-  if (cfg.ssl && TLS_CERT && TLS_KEY) {
-    const tlsOptions: tls.TlsOptions = {
-      cert:       fs.readFileSync(TLS_CERT),
-      key:        fs.readFileSync(TLS_KEY),
-      minVersion: 'TLSv1.2',
-    };
-    server = tls.createServer(tlsOptions, onSocket as (s: tls.TLSSocket) => void);
+  if (cfg.ssl && _tlsConfig) {
+    server = tls.createServer(
+      { cert: _tlsConfig.cert, key: _tlsConfig.key, minVersion: 'TLSv1.2' },
+      onSocket as (s: tls.TLSSocket) => void,
+    );
   } else {
+    if (cfg.ssl) {
+      log.warn({ port: cfg.port }, 'POP3 implicit TLS requested but no TLS cert available — falling back to plaintext');
+    }
     server = net.createServer(onSocket);
   }
 
@@ -124,13 +151,18 @@ async function reloadListeners(): Promise<void> {
 
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'POP3 reload');
 
-    // Neu aktive Ports starten
+    // Neu aktive Ports starten — per-listener error isolation
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
-        const tracked = createTrackedPop3Server({ port: l.port, ssl: l.ssl });
-        servers.set(l.port, tracked);
-        tracked.server.listen(l.port, '0.0.0.0', () =>
-          log.info({ port: l.port, ssl: l.ssl }, 'POP3 listener started'));
+        try {
+          const tracked = createTrackedPop3Server({ port: l.port, ssl: l.ssl });
+          servers.set(l.port, tracked);
+          tracked.server.listen(l.port, '0.0.0.0', () =>
+            log.info({ port: l.port, ssl: l.ssl }, 'POP3 listener started'));
+        } catch (portErr) {
+          log.error({ err: portErr, port: l.port, ssl: l.ssl },
+            'Failed to start POP3 listener — port skipped');
+        }
       }
     }
 
@@ -150,6 +182,7 @@ async function reloadListeners(): Promise<void> {
 
 async function main() {
   await refreshHostname();
+  await refreshTlsConfig();
 
   const existing = await prisma.serviceListener.count({ where: { service: 'POP3' } });
   if (existing === 0) {
@@ -170,6 +203,7 @@ async function main() {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
+      void refreshTlsConfig().then(() => scheduleReload());
       return;
     }
     try {

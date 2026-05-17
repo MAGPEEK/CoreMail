@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import nodemailer from 'nodemailer';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../../middleware/auth.js';
 
@@ -16,7 +17,9 @@ async function getOrCreate() {
 
 // GET /admin/smtp-config/settings
 adminSmtpConfigRouter.get('/settings', async (_req: Request, res: Response) => {
-  res.json(await getOrCreate());
+  const s = await getOrCreate();
+  // Passwort für die Antwort maskieren (Sicherheit)
+  res.json({ ...s, smarthostPassword: s.smarthostPassword ? '••••••••' : '' });
 });
 
 // PUT /admin/smtp-config/settings
@@ -57,6 +60,14 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     connectionTimeoutSec: z.number().int().min(30).max(3600).optional(),
     greetingDelaySec:     z.number().int().min(0).max(30).optional(),
     maxAuthFailures:      z.number().int().min(1).max(100).optional(),
+    // Outgoing Delivery
+    outboundMode:         z.enum(['mx', 'smarthost']).optional(),
+    smarthostHost:        z.string().max(253).optional(),
+    smarthostPort:        z.number().int().min(1).max(65535).optional(),
+    smarthostTls:         z.boolean().optional(),
+    smarthostImplicitTls: z.boolean().optional(),
+    smarthostUsername:    z.string().max(255).optional(),
+    smarthostPassword:    z.string().max(255).optional(),
   });
 
   const parsed = schema.safeParse(req.body);
@@ -65,12 +76,62 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     return;
   }
 
+  const data = { ...parsed.data } as Record<string, unknown>;
+
+  // Maskiertes Passwort nicht in die DB schreiben
+  if (data['smarthostPassword'] === '••••••••') {
+    delete data['smarthostPassword'];
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const settings = await prisma.smtpSettings.upsert({
     where:  { id: 'singleton' },
-    update: parsed.data as any,
-    create: { id: 'singleton', ...parsed.data } as any,
+    update: data as any,
+    create: { id: 'singleton', ...data } as any,
   });
 
-  res.json(settings);
+  // Cache im smtp-server invalidieren (via Redis-Pub/Sub nicht nötig — TTL 60s reicht)
+  res.json({ ...settings, smarthostPassword: settings.smarthostPassword ? '••••••••' : '' });
+});
+
+// POST /admin/smtp-config/test-smarthost
+// Testet die Verbindung zu einem Smarthost ohne zu speichern
+adminSmtpConfigRouter.post('/test-smarthost', async (req: Request, res: Response) => {
+  const schema = z.object({
+    host:        z.string().min(1),
+    port:        z.number().int().min(1).max(65535),
+    tls:         z.boolean().default(true),
+    implicitTls: z.boolean().default(false),
+    username:    z.string().optional(),
+    password:    z.string().optional(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Ungültige Parameter' });
+    return;
+  }
+
+  const { host, port, tls, implicitTls, username, password } = parsed.data;
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure:           implicitTls,
+      requireTLS:       tls && !implicitTls,
+      opportunisticTLS: tls && !implicitTls,
+      ...(username ? { auth: { user: username, pass: password ?? '' } } : {}),
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 10_000,
+      greetingTimeout:   10_000,
+      socketTimeout:     10_000,
+    });
+
+    await transporter.verify();
+    res.json({ ok: true, message: `Verbindung zu ${host}:${port} erfolgreich` });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.json({ ok: false, message: msg });
+  }
 });

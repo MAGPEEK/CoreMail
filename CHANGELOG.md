@@ -9,6 +9,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.41] — 2026-05-17 — SMTP-Banner: benutzerdefinierter Text wird jetzt verwendet
+
+### Fixed
+
+- **SMTP-Banner ignoriert Admin-Panel-Einstellung** — `session.ts` verwendete immer den hardcodierten Text `220 mail.local ESMTP CoreMail`; `SmtpSettings.bannerText`/`bannerOverride` wurde nie gelesen
+- `bannerText` in `SmtpSessionConfig` ergänzt; SMTP-Session liest jetzt den konfigurierten Text
+- **Live-Update ohne Neustart**: Banner als Getter implementiert — Änderung im Admin-Panel wirkt sofort bei der nächsten Verbindung
+
+---
+
+## [2.1.40] — 2026-05-17 — Ausgehende Zustellung: MX direkt oder Smarthost
+
+### Added
+
+- **Outgoing Delivery Settings** in ECP → SMTP & Routing → „Ausgehende Mail": Wahl zwischen direkter MX-Zustellung und Smarthost/Relay
+- **Smarthost-Konfiguration**: Host, Port, STARTTLS, Implizites TLS, Benutzername, Passwort (maskiert)
+- **Port-Schnellauswahl**: 25 SMTP, 587 Submission, 465 SMTPS, 2525 Alt — setzt automatisch die passende TLS-Option
+- **9 Provider-Presets** (Schnellauswahl): SendGrid, Mailjet, Mailgun, Postmark, Amazon SES, Gmail, Office 365, IONOS, Strato
+- **Verbindungstest** `POST /api/v1/admin/smtp-config/test-smarthost` — prüft SMTP-Verbindung ohne E-Mails zu senden
+- **`outboundMode`**, **`smarthostHost/Port/Tls/ImplicitTls/Username/Password`** in `SmtpSettings` (Prisma-Schema + DB)
+- **relay.ts** unterstützt jetzt Smarthost-Delivery neben MX-Lookup; Config wird 60s gecacht (kein DB-Hit pro Mail); `invalidateOutboundConfigCache()` für sofortige Aktualisierung nach Settings-Änderung
+
+---
+
+## [2.1.39] — 2026-05-17 — SMTP/IMAP/POP3 TLS-Zertifikat auto-Generierung
+
+### Fixed
+
+- **SMTP-Ports 25, 465, 587 nicht erreichbar** — `createSmtpServer: implicitTls=true but config.tls is not set` — SMTP-Server konnte nicht starten weil kein TLS-Zertifikat konfiguriert war; die Exception brach die gesamte `reloadListeners`-Schleife ab, sodass auch Ports 25 und 587 nicht starteten
+- **IMAP Port 993 ohne TLS** — `createImapServer()` verwendete für alle Ports (inkl. 993) nur `net.createServer()` statt `tls.createServer()`; Port 993 war faktisch Plaintext
+- **POP3 Port 995 ohne TLS** — TLS-Zertifikat wurde nur über `TLS_CERT_PATH` / `TLS_KEY_PATH` Umgebungsvariablen geladen, die nie gesetzt waren; Port 995 fiel auf Plaintext zurück
+
+### Added
+
+- **TLS-Zertifikat DB-Speicherung** — `ServerSettings` um Felder `tlsCert String?` und `tlsKey String?` erweitert (PEM-kodiert); Zertifikat ist über das Admin-Panel austauschbar
+- **Automatische Self-Signed-Zertifikat-Generierung** — beim ersten Start generiert SMTP-Server automatisch ein RSA-2048 Zertifikat (gültig 10 Jahre, SAN: Hostname + localhost) via `openssl req -x509` und speichert es in der DB; IMAP und POP3 laden dasselbe Zertifikat
+- **Per-Listener Error-Isolation** — `reloadListeners()` in SMTP, IMAP und POP3 fängt Fehler einzelner Ports in einem `try/catch` pro Port; ein fehlerhafter Port (z.B. fehlendes Cert) blockiert nicht mehr andere Ports
+- **`generateSelfSignedCert()` + `tlsPemToBuffers()`** — neue Exports in `@coremail/core` (Paket `core/src/tls/index.ts`)
+- **TLS-Cert-Reload bei Settings-Änderung** — `CHANNEL_SETTINGS_RELOAD` Redis-Event lädt nun auch das TLS-Zertifikat neu und startet betroffene Listener neu (Cert-Rotation ohne Container-Neustart)
+
+---
+
 ## [2.1.38] — 2026-05-17 — Wartungsmodus: Banner + Login-Enforcement
 
 ### Fixed

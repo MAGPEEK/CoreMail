@@ -30,6 +30,13 @@ export interface SmtpHandlers {
 
 export interface SmtpSessionConfig {
   hostname: string;
+  /**
+   * Optionaler benutzerdefinierter Banner-Text nach "220 ".
+   * Wenn gesetzt, wird er statt des Standard-Banners „<hostname> ESMTP CoreMail" verwendet.
+   * Konfigurierbar via Admin-Panel → SMTP-Konfiguration → SMTP-Banner.
+   * Wird als Getter übergeben damit Live-Updates ohne Listener-Neustart wirken.
+   */
+  bannerText?: string;
   maxSize: number;
   maxRcpt: number;
   requireAuth: boolean;

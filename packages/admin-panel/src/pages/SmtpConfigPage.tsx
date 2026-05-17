@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Terminal, Package, MessageSquare, Clock, ArrowRightLeft,
-  Network, Plus, Trash2, CheckCircle, Info,
+  Network, Plus, Trash2, CheckCircle, Info, SendHorizonal,
+  Loader2, XCircle,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -40,15 +41,24 @@ interface SmtpSettings {
   connectionTimeoutSec: number;
   greetingDelaySec:     number;
   maxAuthFailures:      number;
+  // Ausgehende Zustellung
+  outboundMode:         'mx' | 'smarthost';
+  smarthostHost:        string;
+  smarthostPort:        number;
+  smarthostTls:         boolean;
+  smarthostImplicitTls: boolean;
+  smarthostUsername:    string;
+  smarthostPassword:    string;
 }
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 
-type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'relaying' | 'connection';
+type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'relaying' | 'connection' | 'outgoing';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'esmtp',       label: 'ESMTP-Befehle',    icon: Terminal },
   { id: 'delivery',    label: 'Lokale Zustellung', icon: Package },
+  { id: 'outgoing',    label: 'Ausgehende Mail',   icon: SendHorizonal },
   { id: 'banner',      label: 'SMTP-Banner',       icon: MessageSquare },
   { id: 'greylisting', label: 'Greylisting',       icon: Clock },
   { id: 'relaying',    label: 'Relaying',          icon: ArrowRightLeft },
@@ -655,6 +665,292 @@ function RelayingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// OutgoingSection — Ausgehende Zustellung: MX direkt oder Smarthost
+// ═════════════════════════════════════════════════════════════════════════════
+
+function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Partial<SmtpSettings>) => void; pending: boolean }) {
+  const [mode, setMode]               = useState<'mx' | 'smarthost'>(s.outboundMode ?? 'mx');
+  const [host, setHost]               = useState(s.smarthostHost ?? '');
+  const [port, setPort]               = useState(s.smarthostPort ?? 587);
+  const [tls, setTls]                 = useState(s.smarthostTls ?? true);
+  const [implicitTls, setImplicitTls] = useState(s.smarthostImplicitTls ?? false);
+  const [username, setUsername]       = useState(s.smarthostUsername ?? '');
+  const [password, setPassword]       = useState('');  // nie vorausgefüllt (Sicherheit)
+
+  const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
+  const [testMsg, setTestMsg]         = useState('');
+
+  // Implizites TLS → STARTTLS deaktivieren (gegenseitig exklusiv)
+  function handleImplicitTls(v: boolean) {
+    setImplicitTls(v);
+    if (v) setTls(false);
+  }
+  function handleStarttls(v: boolean) {
+    setTls(v);
+    if (v) setImplicitTls(false);
+  }
+
+  // Port-Vorschläge je nach TLS-Modus
+  const PORT_PRESETS = [
+    { label: '25 – SMTP', port: 25 },
+    { label: '587 – Submission', port: 587 },
+    { label: '465 – SMTPS', port: 465 },
+    { label: '2525 – Alt', port: 2525 },
+  ];
+
+  async function testConnection() {
+    setTestStatus('testing');
+    setTestMsg('');
+    try {
+      const res = await fetch('/api/v1/admin/smtp-config/test-smarthost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('accessToken') ?? ''}` },
+        body: JSON.stringify({ host, port, tls, implicitTls, username, password: password || undefined }),
+      });
+      const data = await res.json() as { ok: boolean; message: string };
+      setTestStatus(data.ok ? 'ok' : 'err');
+      setTestMsg(data.message);
+    } catch {
+      setTestStatus('err');
+      setTestMsg('Verbindungstest fehlgeschlagen');
+    }
+  }
+
+  function handleSave() {
+    const payload: Partial<SmtpSettings> = {
+      outboundMode:         mode,
+      smarthostHost:        host,
+      smarthostPort:        port,
+      smarthostTls:         tls,
+      smarthostImplicitTls: implicitTls,
+      smarthostUsername:    username,
+    };
+    if (password) payload.smarthostPassword = password;
+    onSave(payload);
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Ausgehende Zustellung</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Wie CoreMail ausgehende E-Mails an externe Empfänger zustellt
+          </p>
+        </div>
+        <SaveBtn onClick={handleSave} pending={pending} />
+      </div>
+
+      {/* Mode Selector */}
+      <div className="grid grid-cols-2 gap-3">
+        {([
+          {
+            value: 'mx' as const,
+            label: 'Direkte MX-Zustellung',
+            desc: 'CoreMail fragt den DNS-MX-Record des Empfängers ab und stellt direkt an dessen Mailserver zu. Standard für öffentliche Mailserver.',
+            icon: '🌐',
+          },
+          {
+            value: 'smarthost' as const,
+            label: 'Smarthost / Relay',
+            desc: 'Alle ausgehenden Mails werden über einen zentralen Relay-Server gesendet. Ideal wenn der ISP Port 25 sperrt oder ein externer SMTP-Dienst (Mailjet, Sendgrid, …) genutzt wird.',
+            icon: '🔀',
+          },
+        ] as const).map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setMode(opt.value)}
+            className={`text-left p-4 rounded-lg border-2 transition-all ${
+              mode === opt.value
+                ? 'border-accent bg-accent/5'
+                : 'border-gray-200 hover:border-gray-300 bg-white'
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-xl">{opt.icon}</span>
+              <span className="font-semibold text-sm text-gray-800">{opt.label}</span>
+              {mode === opt.value && (
+                <CheckCircle size={14} className="ml-auto text-accent" />
+              )}
+            </div>
+            <p className="text-xs text-gray-500 leading-relaxed">{opt.desc}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* MX Info */}
+      {mode === 'mx' && (
+        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-xs text-green-800 flex items-start gap-2">
+          <CheckCircle size={13} className="shrink-0 mt-0.5 text-green-600" />
+          <div>
+            <span className="font-semibold">Direkte MX-Zustellung aktiv</span>
+            <p className="mt-0.5 text-green-700">
+              CoreMail stellt Mails direkt an den Ziel-Mailserver zu. Stelle sicher, dass Port 25
+              ausgehend von deinem Server nicht geblockt ist und ein gültiger PTR-/DMARC-Record gesetzt ist.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Smarthost Settings */}
+      {mode === 'smarthost' && (
+        <div className="space-y-4">
+          {/* Host + Port */}
+          <div className="card p-5 space-y-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2">Verbindung</p>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Smarthost / Relay-Server</label>
+                <input
+                  value={host} onChange={e => setHost(e.target.value)}
+                  placeholder="z.B. smtp.sendgrid.net"
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Port</label>
+                <input
+                  type="number" min={1} max={65535} value={port}
+                  onChange={e => setPort(parseInt(e.target.value, 10) || 587)}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+            </div>
+
+            {/* Port-Schnellauswahl */}
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-xs text-gray-400 self-center">Schnell:</span>
+              {PORT_PRESETS.map(p => (
+                <button
+                  key={p.port}
+                  onClick={() => {
+                    setPort(p.port);
+                    if (p.port === 465) { setImplicitTls(true); setTls(false); }
+                    else if (p.port === 587) { setTls(true); setImplicitTls(false); }
+                    else { setTls(false); setImplicitTls(false); }
+                  }}
+                  className={`text-xs px-2 py-0.5 rounded font-mono border transition-colors ${
+                    port === p.port
+                      ? 'bg-accent text-white border-accent'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* TLS */}
+          <div className="card p-5 space-y-0">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">TLS-Verschlüsselung</p>
+            <ToggleRow
+              label="STARTTLS (opportunistisch)"
+              desc="Verbindung beginnt als Plaintext und wird per STARTTLS auf TLS aufgewertet — Standard für Port 587"
+              value={tls}
+              onChange={handleStarttls}
+            />
+            <ToggleRow
+              label="Implizites TLS (SMTPS)"
+              desc="Verbindung startet sofort als TLS — Standard für Port 465; deaktiviert STARTTLS"
+              value={implicitTls}
+              onChange={handleImplicitTls}
+            />
+          </div>
+
+          {/* Auth */}
+          <div className="card p-5 space-y-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2">Authentifizierung (optional)</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Benutzername</label>
+                <input
+                  value={username} onChange={e => setUsername(e.target.value)}
+                  placeholder="z.B. apikey oder user@domain.de"
+                  autoComplete="off"
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Passwort
+                  {s.smarthostPassword === '••••••••' && (
+                    <span className="ml-1.5 text-gray-400 font-normal">(gespeichert — leer lassen um beizubehalten)</span>
+                  )}
+                </label>
+                <input
+                  type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder={s.smarthostPassword === '••••••••' ? '••••••••' : 'Kein Passwort gesetzt'}
+                  autoComplete="new-password"
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Test Connection */}
+          <div className="card p-4">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={testConnection}
+                disabled={!host || testStatus === 'testing'}
+                className="btn-secondary text-sm gap-2 disabled:opacity-50"
+              >
+                {testStatus === 'testing'
+                  ? <><Loader2 size={13} className="animate-spin" /> Verbinde…</>
+                  : <><SendHorizonal size={13} /> Verbindung testen</>
+                }
+              </button>
+              {testStatus === 'ok' && (
+                <span className="flex items-center gap-1.5 text-sm text-green-700">
+                  <CheckCircle size={14} /> {testMsg}
+                </span>
+              )}
+              {testStatus === 'err' && (
+                <span className="flex items-center gap-1.5 text-sm text-red-600">
+                  <XCircle size={14} /> {testMsg}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              Testet die SMTP-Verbindung ohne E-Mails zu senden. Verwendete Einstellungen: aktueller Formularinhalt (noch nicht gespeichert).
+            </p>
+          </div>
+
+          {/* Provider Presets */}
+          <div className="card p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Bekannte Anbieter</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {[
+                { name: 'SendGrid',    host: 'smtp.sendgrid.net',         port: 587, tls: true,  implTls: false },
+                { name: 'Mailjet',     host: 'in-v3.mailjet.com',         port: 587, tls: true,  implTls: false },
+                { name: 'Mailgun',     host: 'smtp.mailgun.org',          port: 587, tls: true,  implTls: false },
+                { name: 'Postmark',    host: 'smtp.postmarkapp.com',      port: 587, tls: true,  implTls: false },
+                { name: 'Amazon SES',  host: 'email-smtp.eu-west-1.amazonaws.com', port: 587, tls: true, implTls: false },
+                { name: 'Gmail',       host: 'smtp.gmail.com',            port: 465, tls: false, implTls: true  },
+                { name: 'Office 365',  host: 'smtp.office365.com',        port: 587, tls: true,  implTls: false },
+                { name: 'IONOS',       host: 'smtp.ionos.de',             port: 587, tls: true,  implTls: false },
+                { name: 'Strato',      host: 'smtp.strato.de',            port: 465, tls: false, implTls: true  },
+              ].map(p => (
+                <button
+                  key={p.name}
+                  onClick={() => { setHost(p.host); setPort(p.port); setTls(p.tls); setImplicitTls(p.implTls); }}
+                  className="text-left px-3 py-2 rounded border border-gray-200 hover:border-accent hover:bg-accent/5 transition-colors"
+                >
+                  <p className="text-xs font-semibold text-gray-700">{p.name}</p>
+                  <p className="text-[10px] text-gray-400 font-mono">{p.host}:{p.port}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // ConnectionSection
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -796,6 +1092,7 @@ export function SmtpConfigPage() {
           <>
             {section === 'esmtp'       && <EsmtpSection       s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
             {section === 'delivery'    && <DeliverySection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+            {section === 'outgoing'    && <OutgoingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
             {section === 'banner'      && <BannerSection      s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
             {section === 'greylisting' && <GreylistingSection s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
             {section === 'relaying'    && <RelayingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}

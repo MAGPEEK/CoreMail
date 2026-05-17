@@ -1,12 +1,15 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
-import { createImapServer, setImapHostname } from './server/index.js';
+import { createImapServer, setImapHostname, type ImapTlsConfig } from './server/index.js';
 
 const log = createLogger('imap:main');
 
 const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);
+
+// ── TLS-Konfiguration (für Port 993 / implizites TLS) ─────────────────────────
+let _tlsConfig: ImapTlsConfig | null = null;
 
 // ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
 async function refreshHostname(): Promise<void> {
@@ -24,6 +27,33 @@ async function refreshHostname(): Promise<void> {
     }
   } catch (err) {
     log.error({ err }, 'Failed to refresh IMAP hostname from DB');
+  }
+}
+
+async function refreshTlsConfig(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { tlsCert: true, tlsKey: true, publicHostname: true },
+    });
+    if (settings?.tlsCert && settings?.tlsKey) {
+      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
+      log.debug('IMAP TLS cert loaded from DB');
+    } else {
+      // Generiert SMTP-Server normalerweise zuerst — aber als Fallback hier auch
+      const hostname = settings?.publicHostname ?? 'mail.localhost';
+      log.info({ hostname }, 'No TLS cert in DB — generating self-signed certificate for IMAP');
+      const { certPem, keyPem } = generateSelfSignedCert(hostname);
+      _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+      await prisma.serverSettings.upsert({
+        where:  { id: 'singleton' },
+        create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
+        update: { tlsCert: certPem, tlsKey: keyPem },
+      });
+      log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
+    }
+  } catch (err) {
+    log.error({ err }, 'Failed to load/generate IMAP TLS config — port 993 will use plaintext');
   }
 }
 
@@ -51,8 +81,9 @@ function scheduleReload(): void {
 
 // ── Server-Lifecycle ──────────────────────────────────────────────────────────
 
-function createTrackedImapServer(): TrackedImapServer {
-  const server = createImapServer(); // gibt net.Server zurück
+function createTrackedImapServer(ssl: boolean): TrackedImapServer {
+  // TLS für implizites TLS (Port 993) übergeben; Plaintext (Port 143) ohne TLS
+  const server = createImapServer(ssl && _tlsConfig ? _tlsConfig : undefined);
   const sockets = new Set<net.Socket>();
   server.on('connection', (socket: net.Socket) => {
     sockets.add(socket);
@@ -105,10 +136,15 @@ async function reloadListeners(): Promise<void> {
     // Neu aktive Ports starten
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
-        const tracked = createTrackedImapServer();
-        servers.set(l.port, tracked);
-        tracked.server.listen(l.port, '0.0.0.0', () =>
-          log.info({ port: l.port }, 'IMAP listener started'));
+        try {
+          const tracked = createTrackedImapServer(l.ssl);
+          servers.set(l.port, tracked);
+          tracked.server.listen(l.port, '0.0.0.0', () =>
+            log.info({ port: l.port, ssl: l.ssl }, 'IMAP listener started'));
+        } catch (portErr) {
+          log.error({ err: portErr, port: l.port, ssl: l.ssl },
+            'Failed to start IMAP listener — port skipped');
+        }
       }
     }
 
@@ -130,6 +166,7 @@ async function main() {
   await connectDatabase();
   await ensureBuckets();
   await refreshHostname();
+  await refreshTlsConfig();
 
   const existing = await prisma.serviceListener.count({ where: { service: 'IMAP' } });
   if (existing === 0) {
@@ -150,6 +187,7 @@ async function main() {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
+      void refreshTlsConfig().then(() => scheduleReload());
       return;
     }
     try {

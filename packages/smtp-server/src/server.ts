@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import type { SmtpServerHandle } from './core/factory.js';
@@ -19,6 +19,28 @@ const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
 // Primary source: ServerSettings.publicHostname in DB (set via Admin Panel)
 // Fallback: SMTP_HOSTNAME / MAIL_HOSTNAME env vars (deprecated, for migration)
 let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+
+// ── TLS-Konfiguration (für Ports 465 / implizites TLS) ────────────────────────
+// Wird beim Start aus der DB geladen oder als selbstsigniertes Zertifikat generiert.
+// Null = noch nicht geladen; undefined = kein Cert verfügbar (soll nie vorkommen).
+let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
+
+// ── Banner-Konfiguration (SmtpSettings) ───────────────────────────────────────
+// Leer = Standard-Banner ("hostname ESMTP CoreMail"); gesetzt = benutzerdefiniert.
+let _bannerText: string = '';
+
+async function refreshBanner(): Promise<void> {
+  try {
+    const s = await prisma.smtpSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { bannerOverride: true, bannerText: true },
+    });
+    _bannerText = (s?.bannerOverride && s.bannerText) ? s.bannerText : '';
+    log.debug({ bannerText: _bannerText || '(default)' }, 'SMTP banner refreshed');
+  } catch (err) {
+    log.error({ err }, 'Failed to refresh SMTP banner config');
+  }
+}
 
 async function refreshHostname(): Promise<void> {
   try {
@@ -41,6 +63,41 @@ async function refreshHostname(): Promise<void> {
     }
   } catch (err) {
     log.error({ err }, 'Failed to refresh SMTP hostname from DB');
+  }
+}
+
+/**
+ * Lädt das TLS-Zertifikat aus der DB.
+ * Falls keines vorhanden ist, wird ein selbstsigniertes Zertifikat generiert
+ * und für spätere Starts in der DB gespeichert.
+ */
+async function refreshTlsConfig(): Promise<void> {
+  try {
+    const settings = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { tlsCert: true, tlsKey: true },
+    });
+
+    if (settings?.tlsCert && settings?.tlsKey) {
+      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
+      log.debug('SMTP TLS cert loaded from DB');
+      return;
+    }
+
+    // Kein Zertifikat in der DB → selbstsigniertes generieren
+    log.info({ hostname: _hostname }, 'No TLS cert in DB — generating self-signed certificate');
+    const { certPem, keyPem } = generateSelfSignedCert(_hostname);
+    _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+
+    // In DB speichern damit alle anderen Mail-Protokolle dasselbe Zertifikat verwenden
+    await prisma.serverSettings.upsert({
+      where:  { id: 'singleton' },
+      create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: keyPem },
+      update: { tlsCert: certPem, tlsKey: keyPem },
+    });
+    log.info('Self-signed TLS certificate generated and stored in DB');
+  } catch (err) {
+    log.error({ err }, 'Failed to load/generate TLS config — implicit TLS ports (465) will be skipped');
   }
 }
 
@@ -81,8 +138,8 @@ function scheduleReload(): void {
 function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
   const isSubmission = SUBMISSION_PORTS.has(port);
 
-  // Use a getter so that each new session picks up the current hostname.
-  // This allows live hostname updates without restarting listeners.
+  // Hostname und Banner als Getter — jede neue Session bekommt den aktuellen Wert.
+  // Ermöglicht Live-Updates ohne Listener-Neustart.
   const config = Object.defineProperties(
     {
       maxSize:     52_428_800, // 50 MB
@@ -90,10 +147,13 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
-      tls: undefined as { cert: Buffer; key: Buffer } | undefined,
+      // TLS aus dem DB-backed _tlsConfig — zum Erstellungszeitpunkt des Listeners gesetzt.
+      // Für Zertifikat-Rotation werden die betroffenen Listener neu gestartet.
+      tls: _tlsConfig ?? undefined,
     } as Parameters<typeof createSmtpServer>[0],
     {
-      hostname: { get: () => _hostname, enumerable: true, configurable: true },
+      hostname:   { get: () => _hostname,   enumerable: true, configurable: true },
+      bannerText: { get: () => _bannerText, enumerable: true, configurable: true },
     },
   );
 
@@ -138,18 +198,24 @@ function closeSmtpServer(tracked: TrackedSmtpServer, port: number): void {
 async function reloadListeners(): Promise<void> {
   try {
     const listeners   = await prisma.serviceListener.findMany({ where: { service: 'SMTP_RECEIVE' } });
-    const activePorts = new Set(listeners.filter((l) => l.active).map((l) => l.port));
+    const activePorts = new Set(listeners.filter((l: typeof listeners[0]) => l.active).map((l: typeof listeners[0]) => l.port));
 
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'SMTP reload');
 
-    // Start newly active ports
+    // Start newly active ports — per-listener error isolation:
+    // Ein Fehler bei einem Port (z.B. fehlendes TLS-Cert) darf andere Ports nicht blockieren.
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
-        const tracked = createTrackedSmtpServer(l.port, l.ssl);
-        servers.set(l.port, tracked);
-        const mode = SUBMISSION_PORTS.has(l.port) ? 'submission' : 'inbound';
-        tracked.handle.listen(l.port, () =>
-          log.info({ port: l.port, ssl: l.ssl, mode }, 'SMTP listener started'));
+        try {
+          const tracked = createTrackedSmtpServer(l.port, l.ssl);
+          servers.set(l.port, tracked);
+          const mode = SUBMISSION_PORTS.has(l.port) ? 'submission' : 'inbound';
+          tracked.handle.listen(l.port, () =>
+            log.info({ port: l.port, ssl: l.ssl, mode }, 'SMTP listener started'));
+        } catch (portErr) {
+          log.error({ err: portErr, port: l.port, ssl: l.ssl },
+            'Failed to start SMTP listener — port skipped, others continue');
+        }
       }
     }
 
@@ -171,6 +237,8 @@ async function main(): Promise<void> {
   await connectDatabase();
   await ensureBuckets();
   await refreshHostname();
+  await refreshTlsConfig(); // Zertifikat laden oder self-signed generieren
+  await refreshBanner();    // Banner-Text aus SmtpSettings laden
 
   const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
   if (existing === 0) {
@@ -195,6 +263,10 @@ async function main(): Promise<void> {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
+      void refreshBanner(); // Banner sofort updaten — kein Listener-Neustart nötig (Getter)
+      // TLS-Zertifikat neu laden — bei Cert-Rotation müssen laufende Listener
+      // neu gestartet werden (scheduleReload räumt Server aus servers-Map und erstellt neue).
+      void refreshTlsConfig().then(() => scheduleReload());
       return;
     }
     try {
