@@ -9,6 +9,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.35] — 2026-05-17 — SMTP: RFC 5321-konformer State Machine (Postfix-Architektur)
+
+### Changed
+
+- **`smtp-server` npm-Paket entfernt** — vollständig ersetzt durch eigene TCP-Implementierung nach Postfix-Vorgaben und RFC 5321
+
+### Added
+
+- **`SmtpSession` (core/session.ts)** — RFC 5321-konformer State Machine:
+  - States: `INIT → READY → MAIL → RCPT → DATA → QUIT` (+ `AUTH_WAIT` während AUTH)
+  - **EHLO**: korrekte Multiline-Antwort mit `250-` / `250`, Extensions: `SIZE`, `PIPELINING`, `8BITMIME`, `SMTPUTF8`, `ENHANCEDSTATUSCODES`, `STARTTLS` (wenn TLS konfiguriert), `AUTH PLAIN LOGIN` (nur Submission-Ports)
+  - **AUTH PLAIN** (RFC 4954): Inline `AUTH PLAIN <base64>` und zweistufig `AUTH PLAIN` → `334 ` → base64-Antwort; Format `[authzid]\0authcid\0passwd`
+  - **AUTH LOGIN** (mehrstufig): `334 VXNlcm5hbWU6` → Username (base64) → `334 UGFzc3dvcmQ6` → Password (base64)
+  - **AUTH-Abbruch**: `*` → `501 5.7.0 Authentication cancelled`
+  - **STARTTLS** (RFC 3207): `tls.TLSSocket`-Wrapping, State-Reset auf `INIT` nach TLS-Handshake
+  - **MAIL FROM**: RFC 5321 Adresssyntax, `SIZE=`-Parameter, Null-Sender `<>` erlaubt, `530 5.7.0 Authentication required` wenn `requireAuth=true`
+  - **RCPT TO**: Max-Empfänger-Check (100), Adressvalidierung
+  - **DATA**: Dot-Stuffing (RFC 5321 §4.5.2), Size-Tracking, `552 5.3.4` bei Überschreitung
+  - **Timeouts** (RFC 5321 §4.5.3.2): Greeting 5 min, Command 5 min, DATA 10 min → `421 4.4.2 Timeout`
+  - **Max-Line-Length**: 1000 Zeichen (RFC §4.5.3.1) → `500 5.5.6 Line too long`
+  - **RSET**: Reset Transaction (authUser bleibt erhalten per RFC)
+  - **VRFY**: `252 2.5.2 Cannot VRFY user, but will accept message`
+  - **EXPN**: `502 5.5.1 EXPN not supported`
+- **`core/factory.ts`** — `createSmtpServer()`: wrappt `net.createServer` / `tls.createServer`, ruft `onConnect` auf, startet `SmtpSession`
+- **`auth/verifier.ts`** — `verifySmtpCredentials()`: reguläres Passwort (bcrypt + Pepper) + App-Passwörter (`lastUsedAt` Update)
+- **`inbound/handler.ts`** — Port-25-Handlers: Connection-Policy (DNSBL via Security-Filter), Empfänger-Verifikation, Content-Scan, Gruppen-Expansion, Resource-Mailbox Auto-Accept/Decline, Quarantäne
+- **`submission/handler.ts`** — Port-465/587-Handlers: Anti-Spoofing FROM-Check (eigene Adresse oder Shared-Mailbox `SEND_AS`/`FULL_ACCESS`), lokale Zustellung + Outbound-Queue für externe Empfänger
+
+---
+
 ## [2.1.34] — 2026-05-17 — SMTP AUTH: 535 Authentication not implemented behoben
 
 ### Fixed
