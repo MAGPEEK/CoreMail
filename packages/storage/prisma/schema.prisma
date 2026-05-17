@@ -1078,27 +1078,6 @@ model OAuthToken {
   @@map("oauth_tokens")
 }
 
-// ─────────────────────────────────────────────
-// Phase 10 — SMTP Gateway Settings
-// ─────────────────────────────────────────────
-
-model GatewaySettings {
-  id                  String   @id @default("singleton")
-  enabled             Boolean  @default(false)
-  upstreamHost        String   @default("")
-  upstreamPort        Int      @default(25)
-  upstreamTls         Boolean  @default(false)
-  upstreamUsername    String?
-  upstreamPassword    String?
-  // Domains to relay inbound mail for (empty = all accepted domains)
-  relayDomains        String[]
-  // Apply spam/virus filter before relaying
-  filterBeforeRelay   Boolean  @default(true)
-  updatedAt           DateTime @updatedAt
-
-  @@map("gateway_settings")
-}
-
 // ── SMTP-Server-Einstellungen (Singleton) ────────────────────────────────────
 model SmtpSettings {
   id                   String   @id @default("singleton")
@@ -1153,6 +1132,9 @@ model SmtpSettings {
   smarthostImplicitTls Boolean  @default(false)  // Implizites TLS (Port 465-Stil)
   smarthostUsername    String   @default("")
   smarthostPassword    String   @default("")     // Klartext — liegt nur lokal in DB
+
+  // Spam-/Virenfilter vor ausgehender Zustellung (rspamd + ClamAV)
+  outboundFilterEnabled Boolean @default(true)
 
   updatedAt            DateTime @updatedAt
 

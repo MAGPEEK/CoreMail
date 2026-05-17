@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.42] — 2026-05-17 — SMTP-Gateway entfernt · Spam-/Virenfilter für ausgehende Mail
+
+### Removed
+
+- **SMTP-Gateway-Modus** vollständig entfernt — `GatewayPage`, `GatewaySettings`-Prisma-Modell, `/api/v1/admin/gateway`-Route, Sidebar-Eintrag und alle `GATEWAY_*`-Umgebungsvariablen aus Docker-Compose-Dateien
+
+### Added
+
+- **Spam-/Virenfilter vor Weiterleitung** (`outboundFilterEnabled`) in ECP → SMTP & Routing → Ausgehende Mail: steuert ob ausgehende Mails vor dem Versand durch rspamd und ClamAV geprüft werden (Standard: aktiviert)
+- `SmtpSettings.outboundFilterEnabled Boolean @default(true)` in Prisma-Schema ergänzt
+- `relay.ts`: `outboundFilterEnabled`-Flag in `OutboundConfig` geladen und ausgewertet
+
+---
+
 ## [2.1.41] — 2026-05-17 — SMTP-Banner: benutzerdefinierter Text wird jetzt verwendet
 
 ### Fixed

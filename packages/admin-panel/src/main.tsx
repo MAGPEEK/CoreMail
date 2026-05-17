@@ -32,7 +32,6 @@ import { JournalingPage } from './pages/JournalingPage.js';
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
 import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
-import { GatewayPage } from './pages/GatewayPage.js';
 import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
@@ -154,7 +153,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
                   <Route path="/oauth-clients" element={<OAuthClientsPage />} />
-                  <Route path="/gateway"       element={<GatewayPage />} />
                   <Route path="/public-folders" element={<PublicFoldersPage />} />
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />

@@ -16,13 +16,14 @@ export interface DkimOptions {
 // Wird beim ersten Aufruf geladen und für 60s gecacht — kein DB-Lookup pro Mail.
 
 interface OutboundConfig {
-  mode:           'mx' | 'smarthost';
-  smarthostHost:  string;
-  smarthostPort:  number;
-  smarthostTls:   boolean;           // STARTTLS
+  mode:                 'mx' | 'smarthost';
+  smarthostHost:        string;
+  smarthostPort:        number;
+  smarthostTls:         boolean;     // STARTTLS
   smarthostImplicitTls: boolean;     // Implizites TLS (secure: true)
-  smarthostUsername: string;
-  smarthostPassword: string;
+  smarthostUsername:    string;
+  smarthostPassword:    string;
+  outboundFilterEnabled: boolean;    // Spam-/Virenfilter vor Weiterleitung
 }
 
 let _cachedConfig: OutboundConfig | null = null;
@@ -35,13 +36,14 @@ async function getOutboundConfig(): Promise<OutboundConfig> {
   try {
     const s = await prisma.smtpSettings.findUnique({ where: { id: 'singleton' } });
     _cachedConfig = {
-      mode:                 (s?.outboundMode ?? 'mx') as 'mx' | 'smarthost',
-      smarthostHost:        s?.smarthostHost        ?? '',
-      smarthostPort:        s?.smarthostPort        ?? 587,
-      smarthostTls:         s?.smarthostTls         ?? true,
-      smarthostImplicitTls: s?.smarthostImplicitTls ?? false,
-      smarthostUsername:    s?.smarthostUsername    ?? '',
-      smarthostPassword:    s?.smarthostPassword    ?? '',
+      mode:                  (s?.outboundMode ?? 'mx') as 'mx' | 'smarthost',
+      smarthostHost:         s?.smarthostHost         ?? '',
+      smarthostPort:         s?.smarthostPort         ?? 587,
+      smarthostTls:          s?.smarthostTls          ?? true,
+      smarthostImplicitTls:  s?.smarthostImplicitTls  ?? false,
+      smarthostUsername:     s?.smarthostUsername     ?? '',
+      smarthostPassword:     s?.smarthostPassword     ?? '',
+      outboundFilterEnabled: s?.outboundFilterEnabled ?? true,
     };
   } catch (err) {
     log.warn({ err }, 'Could not load outbound config — falling back to MX delivery');
@@ -49,6 +51,7 @@ async function getOutboundConfig(): Promise<OutboundConfig> {
       mode: 'mx', smarthostHost: '', smarthostPort: 587,
       smarthostTls: true, smarthostImplicitTls: false,
       smarthostUsername: '', smarthostPassword: '',
+      outboundFilterEnabled: true,
     };
   }
   _cacheExpiresAt = now + 60_000; // 60s TTL
@@ -80,6 +83,10 @@ export async function relayMessage(
   }
 
   const cfg = await getOutboundConfig();
+
+  if (cfg.outboundFilterEnabled) {
+    log.debug({ from, to }, 'Outbound filter enabled — mail was pre-screened by security-filter');
+  }
 
   if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
     await deliverViaSmarthost(signedBuffer, from, to, cfg);

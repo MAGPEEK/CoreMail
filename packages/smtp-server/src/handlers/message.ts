@@ -2,7 +2,6 @@ import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey } f
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { journalMessage } from '../journaling/engine.js';
-import { shouldRelayToGateway, relayToUpstream } from '../gateway/relay.js';
 
 const log = createLogger('smtp:message-handler');
 
@@ -19,22 +18,6 @@ export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
 ): Promise<void> {
-  // ── Phase 10: SMTP Gateway Mode ───────────────────────────────────────────
-  // If gateway mode is enabled and this recipient belongs to a relay domain,
-  // forward the message upstream instead of storing it locally.
-  if (await shouldRelayToGateway(opts.rcptTo)) {
-    log.info({ rcptTo: opts.rcptTo }, 'Gateway mode: relaying to upstream MTA');
-    await relayToUpstream(rawBuffer, opts.fromAddr, [opts.rcptTo]);
-    // Still journal outbound relay if applicable
-    await journalMessage({
-      rawMessage: rawBuffer,
-      from: opts.fromAddr,
-      to: [opts.rcptTo],
-      direction: 'INBOUND',
-    }).catch(() => undefined);
-    return;
-  }
-
   // Find recipient's mailbox
   const user = await prisma.user.findFirst({
     where: { email: opts.rcptTo.toLowerCase(), active: true },

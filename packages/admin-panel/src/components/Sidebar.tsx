@@ -4,7 +4,7 @@ import {
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
-  FolderOpen, KeyRound, Network, ClipboardList, Activity, Info, Terminal,
+  FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog,
 } from 'lucide-react';
 
@@ -29,7 +29,6 @@ const NAV: (NavItem | NavGroup)[] = [
     group: 'Nachrichtenfluss',
     items: [
       { path: '/transport-rules',  label: 'Transportregeln',     icon: Workflow },
-      { path: '/gateway',          label: 'SMTP-Gateway',        icon: Network },
       { path: '/message-trace',    label: 'Nachrichtenfluss',    icon: Search },
     ],
   },

@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.41 — Synology NAS / Container Manager
+# CoreMail v2.1.42 — Synology NAS / Container Manager
 #
 # Einrichtung per SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
@@ -24,7 +24,7 @@ services:
   # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:2.1.41
+    image: magpeek/coremail-app:2.1.42
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -88,15 +88,6 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-      # SMTP-Gateway-Modus (optional)
-      GATEWAY_MODE: ${GATEWAY_MODE:-false}
-      GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-}
-      GATEWAY_UPSTREAM_PORT: ${GATEWAY_UPSTREAM_PORT:-25}
-      GATEWAY_UPSTREAM_TLS: ${GATEWAY_UPSTREAM_TLS:-false}
-      GATEWAY_UPSTREAM_USER: ${GATEWAY_UPSTREAM_USER:-}
-      GATEWAY_UPSTREAM_PASS: ${GATEWAY_UPSTREAM_PASS:-}
-      GATEWAY_DOMAINS: ${GATEWAY_DOMAINS:-}
-      GATEWAY_FILTER: ${GATEWAY_FILTER:-true}
 
     ports:
       - "8080:3000"   # HTTP (Port 8080 außen → 3000 innen, kein DSM-Konflikt)

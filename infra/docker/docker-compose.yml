@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.41
+# CoreMail v2.1.42
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:2.1.41
+    image: magpeek/coremail-app:2.1.42
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -93,15 +93,6 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-      # SMTP-Gateway-Modus (optional)
-      GATEWAY_MODE: ${GATEWAY_MODE:-false}
-      GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-}
-      GATEWAY_UPSTREAM_PORT: ${GATEWAY_UPSTREAM_PORT:-25}
-      GATEWAY_UPSTREAM_TLS: ${GATEWAY_UPSTREAM_TLS:-false}
-      GATEWAY_UPSTREAM_USER: ${GATEWAY_UPSTREAM_USER:-}
-      GATEWAY_UPSTREAM_PASS: ${GATEWAY_UPSTREAM_PASS:-}
-      GATEWAY_DOMAINS: ${GATEWAY_DOMAINS:-}
-      GATEWAY_FILTER: ${GATEWAY_FILTER:-true}
 
       # Aufbewahrungsrichtlinien-Zeitplan
       RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}

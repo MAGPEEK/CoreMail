@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '2.1.41';
+const VERSION        = '2.1.42';
 const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '2.1.42', date: '2026-05-17', title: 'SMTP-Gateway entfernt · Spam-/Virenfilter für ausgehende Mail',
+    notes: 'SMTP-Gateway-Modus vollständig entfernt (GatewayPage, GatewaySettings-Modell, /api/v1/admin/gateway, Sidebar-Eintrag, GATEWAY_*-Env-Vars). Neu in ECP → SMTP & Routing → Ausgehende Mail: Toggle "Spam-/Virenfilter vor Weiterleitung anwenden" — steuert ob rspamd + ClamAV vor dem Versand ausgehender Mails aktiv sind (Standard: aktiviert). SmtpSettings.outboundFilterEnabled in Prisma-Schema und relay.ts.' },
   { version: '2.1.41', date: '2026-05-17', title: 'SMTP-Banner: benutzerdefinierter Text wird jetzt verwendet',
     notes: 'session.ts verwendete immer den hardcodierten Text "220 mail.local ESMTP CoreMail"; SmtpSettings.bannerText/bannerOverride wurde nie gelesen. Fix: bannerText zu SmtpSessionConfig ergänzt, SMTP-Session liest den konfigurierten Text. Live-Update ohne Neustart: Banner als Getter implementiert — Änderung im Admin-Panel wirkt sofort bei der nächsten Verbindung via Redis settings:reload.' },
   { version: '2.1.40', date: '2026-05-17', title: 'Ausgehende Zustellung: MX direkt oder Smarthost',

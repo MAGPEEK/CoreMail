@@ -66,8 +66,10 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     smarthostPort:        z.number().int().min(1).max(65535).optional(),
     smarthostTls:         z.boolean().optional(),
     smarthostImplicitTls: z.boolean().optional(),
-    smarthostUsername:    z.string().max(255).optional(),
-    smarthostPassword:    z.string().max(255).optional(),
+    smarthostUsername:        z.string().max(255).optional(),
+    smarthostPassword:        z.string().max(255).optional(),
+    // Spam-/Virenfilter vor Weiterleitung
+    outboundFilterEnabled:    z.boolean().optional(),
   });
 
   const parsed = schema.safeParse(req.body);

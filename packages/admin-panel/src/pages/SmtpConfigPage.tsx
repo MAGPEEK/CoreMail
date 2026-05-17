@@ -42,13 +42,14 @@ interface SmtpSettings {
   greetingDelaySec:     number;
   maxAuthFailures:      number;
   // Ausgehende Zustellung
-  outboundMode:         'mx' | 'smarthost';
-  smarthostHost:        string;
-  smarthostPort:        number;
-  smarthostTls:         boolean;
-  smarthostImplicitTls: boolean;
-  smarthostUsername:    string;
-  smarthostPassword:    string;
+  outboundMode:          'mx' | 'smarthost';
+  smarthostHost:         string;
+  smarthostPort:         number;
+  smarthostTls:          boolean;
+  smarthostImplicitTls:  boolean;
+  smarthostUsername:     string;
+  smarthostPassword:     string;
+  outboundFilterEnabled: boolean;
 }
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
@@ -676,6 +677,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
   const [implicitTls, setImplicitTls] = useState(s.smarthostImplicitTls ?? false);
   const [username, setUsername]       = useState(s.smarthostUsername ?? '');
   const [password, setPassword]       = useState('');  // nie vorausgefüllt (Sicherheit)
+  const [filterEnabled, setFilterEnabled] = useState(s.outboundFilterEnabled ?? true);
 
   const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [testMsg, setTestMsg]         = useState('');
@@ -718,12 +720,13 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
 
   function handleSave() {
     const payload: Partial<SmtpSettings> = {
-      outboundMode:         mode,
-      smarthostHost:        host,
-      smarthostPort:        port,
-      smarthostTls:         tls,
-      smarthostImplicitTls: implicitTls,
-      smarthostUsername:    username,
+      outboundMode:          mode,
+      smarthostHost:         host,
+      smarthostPort:         port,
+      smarthostTls:          tls,
+      smarthostImplicitTls:  implicitTls,
+      smarthostUsername:     username,
+      outboundFilterEnabled: filterEnabled,
     };
     if (password) payload.smarthostPassword = password;
     onSave(payload);
@@ -791,6 +794,17 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
           </div>
         </div>
       )}
+
+      {/* Spam-/Virenfilter */}
+      <div className="card p-5 space-y-0">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Sicherheitsfilter</p>
+        <ToggleRow
+          label="Spam-/Virenfilter vor Weiterleitung anwenden"
+          desc="Ausgehende Mails werden vor dem Versand durch rspamd (Anti-Spam) und ClamAV (Antivirus) geprüft. Empfohlen um sicherzustellen, dass kein infizierter oder als Spam eingestufter Inhalt versendet wird."
+          value={filterEnabled}
+          onChange={setFilterEnabled}
+        />
+      </div>
 
       {/* Smarthost Settings */}
       {mode === 'smarthost' && (
