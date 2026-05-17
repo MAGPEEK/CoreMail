@@ -1,4 +1,4 @@
-import { StrictMode, Component, type ErrorInfo, type ReactNode } from 'react';
+import { StrictMode, Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -40,6 +40,46 @@ import { getToken } from './api/client.js';
 import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
+
+// ── ThemeApplier — liest coremail-theme aus localStorage (geteilt mit OWA) ──
+function ThemeApplier() {
+  useEffect(() => {
+    const apply = () => {
+      try {
+        const stored = localStorage.getItem('coremail-theme');
+        const parsed = stored ? (JSON.parse(stored) as { state?: { theme?: string; accentRgb?: string } }) : {};
+        const theme     = parsed?.state?.theme     ?? 'system';
+        const accentRgb = parsed?.state?.accentRgb ?? '0 120 212';
+
+        let isDark = false;
+        if (theme === 'dark')       isDark = true;
+        else if (theme === 'light') isDark = false;
+        else isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+        document.documentElement.classList.toggle('dark', isDark);
+        document.documentElement.style.setProperty('--color-accent', accentRgb);
+      } catch { /* ignore parse errors */ }
+    };
+
+    apply();
+
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const mqHandler = () => apply();
+    mq.addEventListener('change', mqHandler);
+
+    // Sync mit OWA-Tab: wenn dort Theme geändert wird, hier auch anwenden
+    const storageHandler = (e: StorageEvent) => {
+      if (e.key === 'coremail-theme') apply();
+    };
+    window.addEventListener('storage', storageHandler);
+
+    return () => {
+      mq.removeEventListener('change', mqHandler);
+      window.removeEventListener('storage', storageHandler);
+    };
+  }, []);
+  return null;
+}
 
 // ── Error Boundary ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -84,7 +124,7 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="h-full flex">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto bg-gray-50">
+      <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950">
         <ErrorBoundary>{children}</ErrorBoundary>
       </main>
     </div>
@@ -93,6 +133,7 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ThemeApplier />
     <QueryClientProvider client={queryClient}>
       <BrowserRouter basename="/ecp">
         <Routes>
