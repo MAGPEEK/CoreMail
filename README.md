@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-2.1.19-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-2.1.30-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -17,7 +17,7 @@
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v2.1.19** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v2.1.30** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 
 ---
 
@@ -219,7 +219,7 @@ CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Ext
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:2.1.19` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:2.1.30` | Alle Mail-Dienste + Webmail + Admin-Panel |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -236,7 +236,7 @@ Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:2.1.19
+    image: magpeek/coremail-app:2.1.30
     ports:
       - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
       - "25:25"       # SMTP eingehend
@@ -503,7 +503,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:2.1.19
+docker pull magpeek/coremail-app:2.1.30
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -514,8 +514,19 @@ docker pull magpeek/coremail-app:2.1.19
 
 | Version | Highlights |
 |---------|-----------|
+| **v2.1.30** | Listener-Reload bei DELETE/PUT/POST; neuer „Standards"-Button stellt Default-Ports sofort wieder her |
+| **v2.1.29** | Port-Toggle Root-Cause-Fix: Startup liest DB-Zustand statt Ports hardcodiert zu öffnen |
+| **v2.1.28** | Postfach anlegen: Domain-Dropdown zeigt nur aktive Domains |
+| **v2.1.27** | SMTP/IMAP/POP3 Port-Toggle zuverlässig: simultanes close + closeAllConnections, Map-Mutation-Fix, 3-s-Timeout |
+| **v2.1.26** | bcryptjs statischer Import (ESM/CJS-Interop-Fix); smtp-server Property `.server` statt `._server` |
+| **v2.1.25** | bcrypt → bcryptjs (pure JS, kein native build); Port-Toggle mit closeAllConnections() |
+| **v2.1.24** | Postfach-Erstellung try/catch-Fix; Services Port-Toggle via Redis pub/sub |
+| **v2.1.23** | BCP Server-Seite bereinigt (Mail-Protokoll-Felder und doppelter Org-Name entfernt) |
+| **v2.1.22** | ECP Theme-Unabhängigkeit (immer Microsoft-Blau); MFA TOTP für OWA (QR-Code, Backup-Codes) |
+| **v2.1.21** | ECP TopBar: angemeldeter User + Avatar-Dropdown + Theme-Toggle (System/Hell/Dunkel) |
+| **v2.1.20** | Toggle-Fix (Knob + Dark-Mode); Dark Mode im ECP; Navigation SMTP & Routing |
 | **v2.1.19** | Grafana + Prometheus aus Stack entfernt; Synology-Compose um rspamd + clamav ergänzt |
-| **v2.0.19** | OWA: Passwort ändern (Stärkemeter), Design Hell/Dunkel/System + 6 Akzentfarben, ECP Info mit Docker-Sektion |
+| **v2.0.19** | OWA: Passwort ändern (Stärkemeter), Design Hell/Dunkel/System + 6 Akzentfarben |
 | **v1.9.19** | SSO-Verwaltung (OIDC/OAuth2, SAML), LDAP/AD-Verwaltung (Attributzuordnung, Sync, Verbindungstest) |
 | **v1.8.19** | Message Queue Management: BullMQ-native API, Dead Letter, Retry, Retention-Einstellungen |
 | **v1.7.19** | Quarantäne Detail-View mit MIME-Vorschau, Bulk-Selektion, CleanupModal |
@@ -548,6 +559,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v2.1.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v2.1.30</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
