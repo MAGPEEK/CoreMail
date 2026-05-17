@@ -270,10 +270,10 @@ app.use('/api/v1/admin/smtp-config',      adminSmtpConfigRouter);
 app.use('/api/v1/admin/ldap',             adminLdapRouter);
 app.use('/api/v1/admin/sso',              adminSsoRouter);
 
-// ── Statische Frontend-Dateien (OWA + ECP) ───────────────────────────────────
+// ── Statische Frontend-Dateien (OWA + BCP) ───────────────────────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
 const owaDir  = join(WWW_DIR, 'owa');
-const ecpDir  = join(WWW_DIR, 'ecp');
+const bcpDir  = join(WWW_DIR, 'bcp');
 
 if (existsSync(owaDir)) {
   // Cache-Control: statische Assets lange cachen, HTML nicht (SPA-Routing)
@@ -288,8 +288,8 @@ if (existsSync(owaDir)) {
   app.get('/owa/*', (_req, res) => res.sendFile(join(owaDir, 'index.html')));
   log.info({ dir: owaDir }, 'Serving OWA static files');
 }
-if (existsSync(ecpDir)) {
-  app.use('/bcp', express.static(ecpDir, {
+if (existsSync(bcpDir)) {
+  app.use('/bcp', express.static(bcpDir, {
     maxAge: '1y',
     setHeaders(res, filePath) {
       if (filePath.endsWith('.html')) {
@@ -297,8 +297,8 @@ if (existsSync(ecpDir)) {
       }
     },
   }));
-  app.get('/bcp/*', (_req, res) => res.sendFile(join(ecpDir, 'index.html')));
-  log.info({ dir: ecpDir }, 'Serving ECP static files');
+  app.get('/bcp/*', (_req, res) => res.sendFile(join(bcpDir, 'index.html')));
+  log.info({ dir: bcpDir }, 'Serving BCP static files');
 }
 
 // Root → OWA
