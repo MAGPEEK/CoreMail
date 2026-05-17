@@ -77,61 +77,54 @@ function closePop3Server(server: net.Server | tls.Server, port: number): Promise
   });
 }
 
-// Plain POP3 on port 110
-const plainServer = net.createServer((socket) => {
-  log.info({ remote: socket.remoteAddress }, 'POP3 connection');
-  createSession(socket, false);
-});
-plainServer.listen(PORT_PLAIN, '0.0.0.0', () => {
-  log.info(`POP3 listening on :${PORT_PLAIN}`);
-});
-servers.set(PORT_PLAIN, plainServer);
-
-// Implicit TLS on port 995
-if (TLS_CERT && TLS_KEY) {
-  const tlsOptions: tls.TlsOptions = {
-    cert: fs.readFileSync(TLS_CERT),
-    key:  fs.readFileSync(TLS_KEY),
-    minVersion: 'TLSv1.2',
-  };
-  const tlsServer = tls.createServer(tlsOptions, (socket) => {
-    log.info({ remote: socket.remoteAddress }, 'POP3S connection');
-    createSession(socket, true);
-  });
-  tlsServer.listen(PORT_TLS, '0.0.0.0', () => {
-    log.info(`POP3S listening on :${PORT_TLS}`);
-  });
-  servers.set(PORT_TLS, tlsServer);
-} else {
-  log.warn('TLS_CERT_PATH/TLS_KEY_PATH not set — POP3S (port 995) disabled');
-}
-
-// Redis-Subscriber für dynamischen Listener-Reload
-const subscriber = getRedisClient().duplicate();
-subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
-void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
-subscriber.on('message', (_ch, message) => {
-  try {
-    const payload = JSON.parse(message) as { service: string };
-    if (payload.service === 'POP3') {
-      void reloadListeners();
-    }
-  } catch (err) {
-    log.error({ err }, 'Invalid listener reload message');
+async function main() {
+  // Beim ersten Start: Default-Listener anlegen (falls DB noch leer)
+  const existing = await prisma.serviceListener.count({ where: { service: 'POP3' } });
+  if (existing === 0) {
+    await prisma.serviceListener.createMany({
+      data: [
+        { service: 'POP3', address: '0.0.0.0', port: PORT_PLAIN, ssl: false, active: true },
+        { service: 'POP3', address: '0.0.0.0', port: PORT_TLS,   ssl: true,  active: true },
+      ],
+    });
+    log.info('Default POP3 listener seeded');
   }
-});
 
-// Fallback-Poll alle 10 s (falls Redis-Signal verpasst wurde)
-setInterval(() => { void reloadListeners(); }, 10_000);
+  // Ports laut DB starten (respektiert Toggle-Zustand aus vorherigen Sitzungen)
+  await reloadListeners();
 
-async function shutdown() {
-  log.info('shutting down');
-  const all = [...servers.entries()];
-  servers.clear();
-  await Promise.all(all.map(([p, s]) => closePop3Server(s, p)));
-  await subscriber.quit();
-  await getRedisClient().quit();
-  process.exit(0);
+  // Redis-Subscriber für dynamischen Listener-Reload
+  const subscriber = getRedisClient().duplicate();
+  subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
+  void subscriber.subscribe(CHANNEL_SERVICE_LISTENERS_RELOAD);
+  subscriber.on('message', (_ch, message) => {
+    try {
+      const payload = JSON.parse(message) as { service: string };
+      if (payload.service === 'POP3') {
+        void reloadListeners();
+      }
+    } catch (err) {
+      log.error({ err }, 'Invalid listener reload message');
+    }
+  });
+
+  // Fallback-Poll alle 10 s (falls Redis-Signal verpasst wurde)
+  setInterval(() => { void reloadListeners(); }, 10_000);
+
+  async function shutdown() {
+    log.info('shutting down');
+    const all = [...servers.entries()];
+    servers.clear();
+    await Promise.all(all.map(([p, s]) => closePop3Server(s, p)));
+    await subscriber.quit();
+    await getRedisClient().quit();
+    process.exit(0);
+  }
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+
+main().catch((err) => {
+  log.error({ err }, 'Fatal POP3 startup error');
+  process.exit(1);
+});

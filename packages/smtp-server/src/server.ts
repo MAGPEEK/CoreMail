@@ -72,24 +72,21 @@ async function main() {
   await connectDatabase();
   await ensureBuckets();
 
-  // Initiale Server starten
-  const inbound25 = createInboundServer();
-  inbound25.listen(SMTP_PORT_25, () => {
-    log.info({ port: SMTP_PORT_25 }, 'SMTP inbound (port 25) started');
-  });
-  servers.set(SMTP_PORT_25, inbound25);
+  // Beim ersten Start: Default-Listener anlegen (falls DB noch leer)
+  const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
+  if (existing === 0) {
+    await prisma.serviceListener.createMany({
+      data: [
+        { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_25,  ssl: false, active: true },
+        { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_465, ssl: true,  active: true },
+        { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: SMTP_PORT_587, ssl: true,  active: true },
+      ],
+    });
+    log.info('Default SMTP_RECEIVE listener seeded');
+  }
 
-  const inbound465 = createInboundServer();
-  inbound465.listen(SMTP_PORT_465, () => {
-    log.info({ port: SMTP_PORT_465 }, 'SMTP submission (port 465, SMTPS) started');
-  });
-  servers.set(SMTP_PORT_465, inbound465);
-
-  const submission587 = createInboundServer();
-  submission587.listen(SMTP_PORT_587, () => {
-    log.info({ port: SMTP_PORT_587 }, 'SMTP submission (port 587) started');
-  });
-  servers.set(SMTP_PORT_587, submission587);
+  // Ports laut DB starten (respektiert Toggle-Zustand aus vorherigen Sitzungen)
+  await reloadListeners();
 
   // Outbound-Worker starten
   const worker = startOutboundWorker();

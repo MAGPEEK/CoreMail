@@ -9,6 +9,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.29] — 2026-05-17 — Services Port-Toggle: Startup liest DB-Zustand
+
+### Fixed
+
+- **Root Cause des Port-Toggle-Problems** — Startup-Code öffnete Ports **immer** aus Env-Vars (25, 465, 587, 143, 993, 110) ohne DB zu befragen. Der 10-Sekunden-Interval-Poll las dann die DB (alle Ports `active=false` da vom User deaktiviert) und schloss alle Ports sofort wieder. Danach öffnete der nächste Container-Neustart alles erneut → Ping-Pong zwischen Startup und Poll.
+- **Fix**: Startup ruft jetzt `reloadListeners()` auf, statt Ports hardcodiert zu öffnen. Beim absolut ersten Start (keine DB-Einträge vorhanden) werden Defaults automatisch geseedet (`active=true`). Nach dem ersten Start bestimmt ausschließlich die DB welche Ports offen sind.
+- **Geister-Eintrag IMAP Port 994** — Staler DB-Eintrag aus Testsitzungen entfernt. Der Interval-Poll startete diesen Port fälschlicherweise und stoppte gleichzeitig 143/993.
+- **POP3-Server** — Von Top-Level-Code auf `async main()`-Muster umgestellt (konsistent mit SMTP/IMAP).
+
+---
+
 ## [2.1.28] — 2026-05-17 — Postfach anlegen: nur aktive Domains
 
 ### Changed

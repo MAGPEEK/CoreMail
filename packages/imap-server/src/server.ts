@@ -58,18 +58,20 @@ async function main() {
   await connectDatabase();
   await ensureBuckets();
 
-  const server143 = createImapServer();
-  const server993 = createImapServer();
+  // Beim ersten Start: Default-Listener anlegen (falls DB noch leer)
+  const existing = await prisma.serviceListener.count({ where: { service: 'IMAP' } });
+  if (existing === 0) {
+    await prisma.serviceListener.createMany({
+      data: [
+        { service: 'IMAP', address: '0.0.0.0', port: IMAP_PORT,     ssl: false, active: true },
+        { service: 'IMAP', address: '0.0.0.0', port: IMAP_PORT_TLS, ssl: true,  active: true },
+      ],
+    });
+    log.info('Default IMAP listener seeded');
+  }
 
-  server143.listen(IMAP_PORT, () => {
-    log.info({ port: IMAP_PORT }, 'IMAP server started (STARTTLS)');
-  });
-  servers.set(IMAP_PORT, server143);
-
-  server993.listen(IMAP_PORT_TLS, () => {
-    log.info({ port: IMAP_PORT_TLS }, 'IMAPS server started (TLS)');
-  });
-  servers.set(IMAP_PORT_TLS, server993);
+  // Ports laut DB starten (respektiert Toggle-Zustand aus vorherigen Sitzungen)
+  await reloadListeners();
 
   // Redis-Subscriber für dynamischen Listener-Reload
   const subscriber = getRedisClient().duplicate();
