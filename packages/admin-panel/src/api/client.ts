@@ -47,7 +47,11 @@ export const api = {
   deleteWithBody: <T>(path: string, body: unknown) => request<T>(path, { method: 'DELETE', body: JSON.stringify(body) }),
 };
 
-export async function loginAdmin(email: string, password: string): Promise<string> {
+export type LoginResult =
+  | { accessToken: string }
+  | { mfaRequired: true; challengeToken: string; method: string };
+
+export async function loginAdmin(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -55,6 +59,22 @@ export async function loginAdmin(email: string, password: string): Promise<strin
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string };
+    throw new Error(body.error);
+  }
+  return res.json() as Promise<LoginResult>;
+}
+
+export async function verifyMfaAdmin(
+  challengeToken: string,
+  code: string,
+): Promise<string> {
+  const res = await fetch('/auth/mfa/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challengeToken, code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as { error: string };
     throw new Error(body.error);
   }
   const data = await res.json() as { accessToken: string };
