@@ -794,6 +794,25 @@ interface TotpSetupData {
   qrCodeDataUrl: string;
 }
 
+// Auth-Fetch-Helper für /auth/* Routen (außerhalb von /api/v1/)
+async function authFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = useAuthStore.getState().accessToken ?? '';
+  const isGet = !init.method || init.method === 'GET';
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      ...(isGet ? {} : { 'Content-Type': 'application/json' }),
+      Authorization: `Bearer ${token}`,
+      ...(init.headers as Record<string, string> ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText })) as { error: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 function SecuritySection() {
   const qc = useQueryClient();
   const [totpStep, setTotpStep] = useState<TotpStep>('idle');
@@ -805,23 +824,12 @@ function SecuritySection() {
 
   const { data: mfaStatus, isLoading: statusLoading } = useQuery<MfaStatus>({
     queryKey: ['mfa-status'],
-    queryFn: () => {
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      return fetch('/auth/mfa/status', {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.json()) as Promise<MfaStatus>;
-    },
+    queryFn: () => authFetch<MfaStatus>('/auth/mfa/status'),
     staleTime: 0,
   });
 
   const setupMutation = useMutation({
-    mutationFn: () => {
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      return fetch('/auth/mfa/totp/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      }).then(r => r.json()) as Promise<TotpSetupData>;
-    },
+    mutationFn: () => authFetch<TotpSetupData>('/auth/mfa/totp/setup', { method: 'POST' }),
     onSuccess: (data) => {
       setSetupData(data);
       setTotpStep('setup');
@@ -830,25 +838,13 @@ function SecuritySection() {
   });
 
   const confirmMutation = useMutation({
-    mutationFn: (code: string) => {
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      return fetch('/auth/mfa/totp/confirm', {
+    mutationFn: (code: string) =>
+      authFetch<{ ok: boolean }>('/auth/mfa/totp/confirm', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ code }),
-      }).then(async r => {
-        if (!r.ok) { const b = await r.json() as { error: string }; throw new Error(b.error); }
-        return r.json() as Promise<{ ok: boolean }>;
-      });
-    },
+      }),
     onSuccess: async () => {
-      // Generate backup codes right away
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      const resp = await fetch('/auth/mfa/backup-codes/generate', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await resp.json() as { codes: string[] };
+      const data = await authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', { method: 'POST' });
       setBackupCodes(data.codes);
       setTotpStep('done');
       void qc.invalidateQueries({ queryKey: ['mfa-status'] });
@@ -861,13 +857,7 @@ function SecuritySection() {
   });
 
   const disableMutation = useMutation({
-    mutationFn: () => {
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      return fetch('/auth/mfa/totp', {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.json()) as Promise<{ ok: boolean }>;
-    },
+    mutationFn: () => authFetch<{ ok: boolean }>('/auth/mfa/totp', { method: 'DELETE' }),
     onSuccess: () => {
       toast.success('2FA wurde deaktiviert');
       setTotpStep('idle');
@@ -879,13 +869,7 @@ function SecuritySection() {
   });
 
   const regenBackupMutation = useMutation({
-    mutationFn: () => {
-      const token = (useAuthStore?.getState?.()?.accessToken) ?? '';
-      return fetch('/auth/mfa/backup-codes/generate', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.json()) as Promise<{ codes: string[] }>;
-    },
+    mutationFn: () => authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', { method: 'POST' }),
     onSuccess: (data) => {
       setBackupCodes(data.codes);
       toast.success('Neue Backup-Codes generiert');
