@@ -306,10 +306,11 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
   });
   if (!user || !user.passwordHash) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-  const valid = await bcrypt.compare(parsed.data.currentPassword, user.passwordHash);
+  const pepper = process.env['PEPPER'] ?? '';
+  const valid = await bcrypt.compare(parsed.data.currentPassword + pepper, user.passwordHash);
   if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
 
-  const newHash = await bcrypt.hash(parsed.data.newPassword, 12);
+  const newHash = await bcrypt.hash(parsed.data.newPassword + pepper, 12);
   await prisma.user.update({
     where: { id: req.apiUser!.userId },
     data:  { passwordHash: newHash },
