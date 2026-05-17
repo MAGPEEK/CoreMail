@@ -57,8 +57,7 @@ coremail/
 │   └── admin-panel/       # React ECP Admin-Panel (Port 80)
 ├── infra/
 │   ├── docker/            # docker-compose.yml, docker-compose.synology.yml, nginx/, postgres/, rspamd/
-│   ├── k8s/               # Helm Chart (Chart.yaml, values.yaml, templates/)
-│   └── observability/     # (veraltet — nicht mehr Teil des Stacks)
+│   └── k8s/               # Helm Chart (Chart.yaml, values.yaml, templates/)
 ├── scripts/               # setup.sh, gen-dev-certs.sh, docker-push.sh
 ├── .github/workflows/     # docker-publish.yml (CI/CD)
 ├── CHANGELOG.md           # Keep a Changelog Format

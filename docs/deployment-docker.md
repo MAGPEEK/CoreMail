@@ -166,10 +166,6 @@ PEPPER=<mindestens-32-zeichen>
 BACKUP_SCHEDULE=0 2 * * *        # täglich 02:00 UTC
 BACKUP_RETENTION_DAYS=30
 
-# ─── Observability (optional) ─────────────────────────────────────────────────
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=<sicheres-passwort>
-
 # ─── GeoIP (optional — für Länder-Filterung) ──────────────────────────────────
 MAXMIND_ACCOUNT_ID=
 MAXMIND_LICENSE_KEY=
@@ -222,22 +218,6 @@ docker compose -f infra/docker/docker-compose.yml start
 - Konfigurierbar über ECP → Server → Backup
 - Speichert verschlüsselt in MinIO (lokal) oder externem S3-Bucket
 - PITR (Point-in-Time Recovery) mit konfigurierbarer Retention
-
----
-
-## Observability
-
-Optionaler Observability-Stack (Prometheus, Grafana, Loki, Tempo):
-
-```bash
-docker compose -f infra/docker/docker-compose.yml \
-  --profile observability up -d
-```
-
-Zugriff:
-- Grafana: `http://localhost:3001` (Admin-Zugangsdaten aus `.env`)
-- Prometheus: `http://localhost:9090`
-- Alertmanager: `http://localhost:9093`
 
 ---
 
