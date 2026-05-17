@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
-  BarChart3, Mail, Settings2, ShieldCheck, Inbox, Workflow,
+  Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
   FolderOpen, KeyRound, Network, ClipboardList, Activity, Info, Terminal,
@@ -70,7 +70,6 @@ const NAV: (NavItem | NavGroup)[] = [
   { path: '/rbac',             label: 'Berechtigungen',      icon: ShieldHalf },
   { path: '/audit-log',        label: 'Audit-Log',           icon: ClipboardList },
   { path: '/logs',             label: 'Protokolle',          icon: ScrollText },
-  { path: '/reports',         label: 'Berichte',            icon: BarChart3 },
   { path: '/settings',        label: 'Einstellungen',       icon: Settings2 },
   { path: '/compliance-info', label: 'Info',                icon: Info },
 ];
