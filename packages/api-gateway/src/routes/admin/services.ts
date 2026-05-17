@@ -1,12 +1,13 @@
 /**
  * Admin-API: Service-Listeners
  *
- * GET    /api/v1/admin/services/overview             — Übersicht aller Services
- * GET    /api/v1/admin/services/listeners/:service   — Listener eines Services
- * POST   /api/v1/admin/services/listeners/:service   — Listener hinzufügen
- * PUT    /api/v1/admin/services/listeners/:id        — Listener bearbeiten
- * PATCH  /api/v1/admin/services/listeners/:id/toggle — Listener aktivieren/deaktivieren
- * DELETE /api/v1/admin/services/listeners/:id        — Listener löschen
+ * GET    /api/v1/admin/services/overview                          — Übersicht aller Services
+ * GET    /api/v1/admin/services/listeners/:service                — Listener eines Services
+ * POST   /api/v1/admin/services/listeners/:service                — Listener hinzufügen
+ * PUT    /api/v1/admin/services/listeners/:id                     — Listener bearbeiten
+ * PATCH  /api/v1/admin/services/listeners/:id/toggle              — Listener aktivieren/deaktivieren
+ * DELETE /api/v1/admin/services/listeners/:id                     — Listener löschen
+ * POST   /api/v1/admin/services/listeners/:service/restore-defaults — Standard-Ports wiederherstellen
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -56,6 +57,16 @@ async function ensureDefaults(service: SvcType) {
     if (defs.length > 0) {
       await prisma.serviceListener.createMany({ data: defs });
     }
+  }
+}
+
+/** Publiziert ein Redis-Reload-Signal für den zuständigen Service-Prozess. */
+async function publishReload(service: SvcType): Promise<void> {
+  try {
+    const redis = getRedisClient();
+    await redis.publish(CHANNEL_SERVICE_LISTENERS_RELOAD, JSON.stringify({ service }));
+  } catch (err) {
+    log.warn({ err }, 'Failed to publish listener reload signal — service will pick up changes on next poll');
   }
 }
 
@@ -109,6 +120,7 @@ adminServicesRouter.post('/listeners/:service', async (req: Request, res: Respon
     data: { service: svc, ...parsed.data },
   });
   log.info({ service: svc, port: parsed.data.port }, 'Listener added');
+  await publishReload(svc);
   res.status(201).json(listener);
 });
 
@@ -126,6 +138,7 @@ adminServicesRouter.put('/listeners/:id', async (req: Request, res: Response) =>
       data:  parsed.data,
     });
     log.info({ id }, 'Listener updated');
+    await publishReload(listener.service as SvcType);
     res.json(listener);
   } catch {
     res.status(404).json({ error: 'Listener not found' });
@@ -164,11 +177,47 @@ adminServicesRouter.patch('/listeners/:id/toggle', async (req: Request, res: Res
 adminServicesRouter.delete('/listeners/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   try {
+    // Erst lesen (für Service-Typ), dann löschen, dann Reload-Signal
+    const existing = await prisma.serviceListener.findUniqueOrThrow({ where: { id } });
     await prisma.serviceListener.delete({ where: { id } });
-    log.info({ id }, 'Listener deleted');
+    log.info({ id, service: existing.service, port: existing.port }, 'Listener deleted');
+    await publishReload(existing.service as SvcType);
     res.status(204).end();
   } catch {
     res.status(404).json({ error: 'Listener not found' });
+  }
+});
+
+// ── POST /listeners/:service/restore-defaults ────────────────────────────────
+adminServicesRouter.post('/listeners/:service/restore-defaults', async (req: Request, res: Response) => {
+  const svc = slugToEnum(req.params['service'] ?? '');
+  if (!svc) { res.status(400).json({ error: 'Invalid service type' }); return; }
+
+  try {
+    const defs = DEFAULTS.filter(d => d.service === svc);
+    if (defs.length === 0) {
+      res.status(400).json({ error: 'No defaults defined for this service' });
+      return;
+    }
+
+    // Alle bestehenden Listener löschen, dann Defaults mit active=true anlegen
+    await prisma.serviceListener.deleteMany({ where: { service: svc } });
+    await prisma.serviceListener.createMany({
+      data: defs.map(d => ({ ...d, active: true })),
+    });
+    log.info({ service: svc, count: defs.length }, 'Listener defaults restored');
+
+    // Reload-Signal senden damit Ports sofort neu gestartet werden
+    await publishReload(svc);
+
+    const listeners = await prisma.serviceListener.findMany({
+      where:   { service: svc },
+      orderBy: { port: 'asc' },
+    });
+    res.json(listeners);
+  } catch (err) {
+    log.error({ err, service: svc }, 'Failed to restore listener defaults');
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2, RotateCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
@@ -138,6 +138,12 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
     onError:   () => toast.error('Fehler beim Löschen'),
   });
 
+  const restoreMut = useMutation({
+    mutationFn: () => api.post(`/admin/services/listeners/${slug}/restore-defaults`, {}),
+    onSuccess: () => { invalidate(); toast.success('Standard-Ports wiederhergestellt'); },
+    onError:   () => toast.error('Fehler beim Wiederherstellen der Standard-Ports'),
+  });
+
   const svc = SERVICES.find(s => s.key === svcKey)!;
 
   return (
@@ -147,10 +153,28 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
           <h2 className="text-lg font-semibold text-gray-900">{svc.label}</h2>
           <p className="text-xs text-gray-400">Standard-Ports: {svc.ports}</p>
         </div>
-        <button onClick={() => setModal('add')}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-          <Plus size={14} /> Listener hinzufügen
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (confirm(`Standard-Ports für ${svc.label} wiederherstellen?\n\nAlle bestehenden Listener werden gelöscht und durch die Standard-Ports (${svc.ports}) ersetzt.`)) {
+                restoreMut.mutate();
+              }
+            }}
+            disabled={restoreMut.isPending}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors disabled:opacity-50"
+            title="Standard-Ports wiederherstellen"
+          >
+            {restoreMut.isPending
+              ? <Loader2 size={14} className="animate-spin" />
+              : <RotateCcw size={14} />
+            }
+            Standards
+          </button>
+          <button onClick={() => setModal('add')}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            <Plus size={14} /> Listener hinzufügen
+          </button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -274,10 +298,10 @@ function Overview({ onSelect }: { onSelect: (k: ServiceKey) => void }) {
         </div>
       )}
 
-      <div className="mt-6 bg-amber-50 border border-amber-200 rounded-lg p-4 max-w-2xl">
-        <p className="text-xs text-amber-700">
-          <strong>Hinweis:</strong> Diese Konfiguration dokumentiert die geplanten Ports.
-          Die tatsächlich lauschenden Ports werden durch die Container-Konfiguration (supervisord / Docker) bestimmt.
+      <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4 max-w-2xl">
+        <p className="text-xs text-blue-700">
+          <strong>Hinweis:</strong> Änderungen (Hinzufügen, Bearbeiten, Löschen, Toggle) werden sofort wirksam —
+          die Dienste laden ihre Listener-Konfiguration dynamisch neu ohne Container-Neustart.
         </p>
       </div>
     </div>

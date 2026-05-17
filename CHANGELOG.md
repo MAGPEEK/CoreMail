@@ -9,6 +9,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.30] — 2026-05-17 — Listener-Reload bei DELETE/PUT/POST + Standard-Ports wiederherstellen
+
+### Fixed
+
+- **Listener löschen/bearbeiten → Port bleibt aktiv** — `DELETE` und `PUT /listeners/:id` publizierten kein Redis-Reload-Signal. Nur `PATCH /toggle` sendete das Signal. Beim Löschen oder Bearbeiten eines Listeners blieb der Port bis zum nächsten 10-Sekunden-Poll offen. Fix: alle drei Operationen (`POST`, `PUT`, `DELETE`) rufen jetzt nach dem DB-Schreibvorgang `publishReload(service)` auf.
+- **Neuer Listener erscheint in netstat, aber inaktiv deaktivierter Port bleibt offen** — gleiche Ursache. Durch den fehlenden Reload-Trigger bei `POST` wurde ein neu angelegter Listener erst beim Poll aktiviert; beim Löschen blieb er bis zum Poll aktiv.
+
+### Added
+
+- **„Standards"-Button** in der Listener-Tabelle (SMTP Inbound / IMAP / POP3): Stellt die Standard-Ports sofort wieder her, falls Listener gelöscht oder falsch konfiguriert wurden. Bestehende Listener der Service-Gruppe werden komplett ersetzt durch die Defaults (SMTP: 25, 465, 587 · IMAP: 143, 993 · POP3: 110, 995, alle mit `active=true`). Anschließend wird ein Redis-Reload-Signal gesendet, sodass die Ports sofort starten.
+- **Neuer API-Endpunkt** `POST /api/v1/admin/services/listeners/:service/restore-defaults`.
+- **Übersicht-Hinweis** auf korrekte dynamische Beschreibung aktualisiert (v2.1.29 macht Ports wirklich dynamisch).
+
+---
+
 ## [2.1.29] — 2026-05-17 — Services Port-Toggle: Startup liest DB-Zustand
 
 ### Fixed
