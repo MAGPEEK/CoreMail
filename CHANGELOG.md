@@ -9,6 +9,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.20] — 2026-05-17 — Toggle-Fix, Dark Mode ECP, Rspamd-Auth, Navigation
+
+### Fixed
+
+- **Schutzfilter — Toggle-Schalter** — Knob-Position bei aktivem Zustand korrigiert (`translate-x-[22px]` statt `translate-x-5`); Knob bleibt im Dark Mode weiß (inline style verhindert CSS-Override)
+- **Rspamd offline im ECP** — `secure_ip` in `worker-controller.inc` ergänzt: Docker-RFC-1918-Netze dürfen die Controller-API ohne Passwort aufrufen; Status-Check nutzt `/ping` statt `/auth-pflichtigem /stat`
+- **Passwort ändern** — Pepper beim `bcrypt.compare` und `bcrypt.hash` im `change-password`-Endpoint ergänzt
+
+### Added
+
+- **Dark Mode Admin-Panel (ECP)** — `darkMode: 'class'` in Tailwind-Config; `ThemeApplier` liest `coremail-theme` aus localStorage (geteilt mit OWA); CSS-Overrides für alle häufigen Utility-Klassen ohne JSX-Änderungen an den 30+ Seiten
+
+### Changed
+
+- **Navigation** — „SMTP-Konfiguration" umbenannt in „SMTP & Routing"
+
+---
+
 ## [2.1.19] — 2026-05-17 — Observability-Stack entfernt
 
 ### Removed

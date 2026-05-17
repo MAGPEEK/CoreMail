@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `2.1.19`
+**Aktuelle Version**: `2.1.20`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -495,4 +495,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-17 (v2.1.19 — Observability-Stack entfernt)
+*Letzte Aktualisierung: 2026-05-17 (v2.1.20 — Toggle-Fix, Dark Mode ECP, SMTP & Routing)

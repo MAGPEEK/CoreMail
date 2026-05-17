@@ -45,7 +45,7 @@ const NAV: (NavItem | NavGroup)[] = [
     group: 'Infrastruktur',
     items: [
       { path: '/services',         label: 'Services',            icon: Server },
-      { path: '/smtp-config',      label: 'SMTP-Konfiguration',  icon: Terminal },
+      { path: '/smtp-config',      label: 'SMTP & Routing',      icon: Terminal },
       { path: '/certificates',     label: 'Zertifikate',         icon: ShieldCheck },
       { path: '/oauth-clients',    label: 'OAuth2-Clients',      icon: KeyRound },
       { path: '/sso',              label: 'SSO',                 icon: Fingerprint },

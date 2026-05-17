@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.19
+# CoreMail v2.1.20
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:2.1.19
+    image: magpeek/coremail-app:2.1.20
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -129,7 +129,7 @@ services:
       - "995:995"     # POP3S (implizites TLS)
     depends_on:
       postgres: { condition: service_healthy }
-      redis:    { condition: service_started }
+      redis:    { condition: service_healthy }
       minio:    { condition: service_healthy }
       rspamd:   { condition: service_started }
       clamav:   { condition: service_started }
@@ -156,7 +156,7 @@ services:
       - "11333"   # Worker (SMTP-Filter)
       - "11334"   # Controller (Web-API)
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11334/stat"]
+      test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -210,6 +210,8 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - redisdata:/data
     healthcheck:

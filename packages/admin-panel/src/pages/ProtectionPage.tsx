@@ -114,10 +114,13 @@ function ToggleRow({ label, desc, value, onChange }:
       </div>
       <button
         onClick={() => onChange(!value)}
-        className={`relative w-10 h-5.5 rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-300'}`}
-        style={{ height: 22, width: 40 }}
+        className={`relative rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-300'}`}
+        style={{ height: 22, width: 40, flexShrink: 0 }}
       >
-        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${value ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        <span
+          className={`absolute top-0.5 w-4 h-4 rounded-full shadow transition-transform ${value ? 'translate-x-[22px]' : 'translate-x-0.5'}`}
+          style={{ backgroundColor: '#ffffff' }}
+        />
       </button>
     </div>
   );
