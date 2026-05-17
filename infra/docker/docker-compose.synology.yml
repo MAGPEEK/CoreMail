@@ -118,7 +118,7 @@ services:
       - "995:995"
     depends_on:
       postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
+      redis:    { condition: service_started }
       minio:    { condition: service_healthy }
       rspamd:   { condition: service_started }
       clamav:   { condition: service_started }
@@ -142,7 +142,7 @@ services:
       - "11333"
       - "11334"
     healthcheck:
-      test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:11334/stat"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -202,8 +202,6 @@ services:
       --save 300 10
       --save 60 10000
       --requirepass ${REDIS_PASSWORD:-RedisSecret2024}
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-RedisSecret2024}
     volumes:
       - /volume1/docker/coremail/data/redis:/data
     user: "0:0"   # Als root starten damit dump.rdb auf Synology-Volume geschrieben werden kann

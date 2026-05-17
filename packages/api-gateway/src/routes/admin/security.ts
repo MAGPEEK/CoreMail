@@ -103,14 +103,22 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
 
 // ── GET /admin/security/status ────────────────────────────────────────────────
 adminSecurityRouter.get('/status', async (_req: Request, res: Response) => {
+  // /ping benötigt keine Auth und liefert immer "pong" zurück
+  async function pingRspamd(): Promise<void> {
+    const r = await fetch(`${RSPAMD_URL}/ping`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error(`rspamd HTTP ${r.status}`);
+    const text = await r.text();
+    if (!text.includes('pong')) throw new Error('unexpected response');
+  }
+
   const [rspamdResult, clamavResult] = await Promise.allSettled([
-    rspamdFetch<Record<string, unknown>>('/stat'),
+    pingRspamd(),
     checkClamAV(),
   ]);
 
   res.json({
     rspamd: rspamdResult.status === 'fulfilled'
-      ? { online: true,  stat: rspamdResult.value }
+      ? { online: true }
       : { online: false, error: String((rspamdResult.reason as Error).message) },
     clamav: clamavResult.status === 'fulfilled'
       ? { online: true,  ...clamavResult.value }
