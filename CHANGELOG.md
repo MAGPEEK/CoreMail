@@ -9,6 +9,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.25] — 2026-05-17 — bcrypt-Fix + Port-Toggle sofortig wirksam
+
+### Fixed
+
+- **bcrypt fehlende Runtime-Dependency** — `bcrypt` war nur als `@types/bcrypt` in `devDependencies` vorhanden, nie als tatsächliche Laufzeit-Abhängigkeit. Import von `bcrypt` schlug im Container mit `Cannot find package 'bcrypt'` fehl, was Postfach-Erstellung und Login unmöglich machte. Gewechselt auf `bcryptjs` (pure JavaScript, keine nativen Bindings, kein node-gyp nötig) — vollständig API-kompatibel.
+- **Services Port-Toggle — Port blieb laut netstat aktiv** — `server.close()` akzeptiert keine neuen Verbindungen mehr, wartet aber auf bestehende Verbindungen (z. B. Health-Check-Polls) bevor der Callback feuert. Das `await` hing → Port blieb am System registriert. Jetzt wird vor `close()` explizit `closeAllConnections()` (Node.js 18.2+) aufgerufen, das alle offenen Sockets sofort terminiert. SMTP nutzt `server._server.closeAllConnections()` (da `smtp-server`-Paket `net.Server` intern kapselt), IMAP und POP3 direkt.
+
+### Changed
+
+- **`@coremail/core`** — `bcryptjs ^2.4.3` als Runtime-Dependency hinzugefügt, `@types/bcrypt` durch `@types/bcryptjs ^2.4.6` ersetzt.
+
+---
+
 ## [2.1.24] — 2026-05-17 — Postfach-Erstellung Fix + Services Port-Toggle
 
 ### Fixed

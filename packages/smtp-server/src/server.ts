@@ -29,6 +29,11 @@ async function reloadListeners() {
     // Deaktivierte Ports stoppen
     for (const [port, server] of servers) {
       if (!activePorts.has(port)) {
+        // Forcefully close all open connections (Node.js 18.2+)
+        // smtp-server wraps net.Server internally as _server
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const netSrv = (server as any)._server as { closeAllConnections?(): void } | undefined;
+        netSrv?.closeAllConnections?.();
         await new Promise<void>(resolve => server.close(() => resolve()));
         servers.delete(port);
         log.info({ port }, 'SMTP listener stopped');

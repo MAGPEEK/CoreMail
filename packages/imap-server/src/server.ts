@@ -27,6 +27,9 @@ async function reloadListeners() {
     // Deaktivierte Ports stoppen
     for (const [port, server] of servers) {
       if (!activePorts.has(port)) {
+        // Forcefully close all open connections so server.close() resolves immediately
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (server as any).closeAllConnections?.();
         await new Promise<void>(resolve => server.close(() => resolve()));
         servers.delete(port);
         log.info({ port }, 'IMAP listener stopped');
