@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.0.19
+# CoreMail v2.1.19
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen

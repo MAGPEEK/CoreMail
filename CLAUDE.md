@@ -491,7 +491,7 @@ SMTP Verbindung
 
 - **Logs**: pino (strukturiertes JSON) über alle Services
 - **Log-Level**: pro Service via ECP konfigurierbar (error | warn | info | debug)
-- Grafana/Prometheus/Tempo/Loki/Alertmanager wurden in v2.0.19 aus dem Stack entfernt
+- Grafana/Prometheus/Tempo/Loki/Alertmanager wurden in v2.1.19 aus dem Stack entfernt
 
 ---
 
