@@ -289,7 +289,7 @@ if (existsSync(owaDir)) {
   log.info({ dir: owaDir }, 'Serving OWA static files');
 }
 if (existsSync(ecpDir)) {
-  app.use('/ecp', express.static(ecpDir, {
+  app.use('/bcp', express.static(ecpDir, {
     maxAge: '1y',
     setHeaders(res, filePath) {
       if (filePath.endsWith('.html')) {
@@ -297,7 +297,7 @@ if (existsSync(ecpDir)) {
       }
     },
   }));
-  app.get('/ecp/*', (_req, res) => res.sendFile(join(ecpDir, 'index.html')));
+  app.get('/bcp/*', (_req, res) => res.sendFile(join(ecpDir, 'index.html')));
   log.info({ dir: ecpDir }, 'Serving ECP static files');
 }
 

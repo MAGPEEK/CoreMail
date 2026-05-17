@@ -3,7 +3,7 @@ CoreMail {{ .Chart.AppVersion }} deployed successfully!
 Domain: https://{{ .Values.global.domain }}
 
   Webmail (OWA):       https://{{ .Values.global.domain }}/owa/
-  Admin panel (ECP):   https://{{ .Values.global.domain }}/ecp/
+  Admin panel (BCP):   https://{{ .Values.global.domain }}/bcp/
   EWS (Outlook):       https://{{ .Values.global.domain }}/EWS/Exchange.asmx
   REST API:            https://{{ .Values.global.domain }}/api/v1/
 

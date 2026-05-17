@@ -190,7 +190,7 @@ RUN for f in $(find /app/node_modules -name "libquery_engine-linux-musl.so.node"
 # Frontend-Bundles (statische Dateien)
 RUN mkdir -p /app/www
 COPY --from=frontend-builder /app/packages/web-client/dist  /app/www/owa
-COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/ecp
+COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/bcp
 
 # supervisord-Konfiguration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf

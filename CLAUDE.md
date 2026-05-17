@@ -84,7 +84,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 **1 Custom Docker Hub Image**: `magpeek/coremail-app` — nur dieses Image wird gebaut/gepusht.
 
 **HTTP-Routing ohne nginx**: Der `api-gateway` auf Port 3000 übernimmt alle HTTP-Routen:
-- `/owa/` `/ecp/` — Express.static (Frontend-Bundles aus `/app/www/`)
+- `/owa/` `/bcp/` — Express.static (Frontend-Bundles aus `/app/www/`)
 - `/auth/` → proxy zu auth-service (localhost:3003)
 - `/EWS/` `/mapi/` `/Autodiscover/` → proxy zu ews-server (localhost:8080)
 - `/Microsoft-Server-ActiveSync` → proxy zu activesync (localhost:3005)
@@ -221,7 +221,7 @@ pnpm --filter @coremail/storage exec prisma generate
 Drei Stages: `builder` (alle Node.js-Pakete), `frontend-builder` (React-Bundles), `runner` (Alpine + nginx + supervisord).
 - `supervisord-app.conf` verwaltet alle Prozesse im Container
 - nginx-Config: `infra/docker/nginx/nginx.app.conf` (alle Upstreams auf localhost)
-- Frontends als statische Dateien in `/app/www/owa` und `/app/www/ecp`
+- Frontends als statische Dateien in `/app/www/owa` und `/app/www/bcp`
 
 ### Einzel-Service-Dockerfile (Standard für Entwicklung)
 
@@ -289,7 +289,7 @@ Alle Endpunkte hinter nginx auf Port 443:
 | Pfad | Service | Beschreibung |
 |------|---------|-------------|
 | `/owa/` | web-client | Outlook Web Access |
-| `/ecp/` | admin-panel | Coremail Admin-Panel (ECP) |
+| `/bcp/` | admin-panel | Coremail Admin-Panel (ECP) |
 | `/EWS/Exchange.asmx` | ews-server | EWS Web Services (SOAP) |
 | `/Autodiscover/` | autodiscover | Autodiscover v1 |
 | `/autodiscover/` | autodiscover | Autodiscover v2 |

@@ -550,7 +550,7 @@ export function SettingsPage() {
         <Info size={15} className="shrink-0" />
         <p className="text-xs">
           <strong>Server-URLs und Protokoll-Einstellungen</strong> (IMAP, SMTP, EWS, Autodiscover) werden unter{' '}
-          <a href="/ecp/servers" className="underline font-medium">Server &amp; Health → Virtuelle Verzeichnisse</a> konfiguriert.
+          <a href="/bcp/servers" className="underline font-medium">Server &amp; Health → Virtuelle Verzeichnisse</a> konfiguriert.
         </p>
       </div>
 

@@ -1,4 +1,4 @@
-const TOKEN_KEY = 'ecp-token';
+const TOKEN_KEY = 'bcp-token';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -24,8 +24,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (res.status === 401) {
     clearToken();
-    // Admin-Panel liegt unter /ecp — React Router basename="/ecp"
-    window.location.href = '/ecp/login';
+    // Admin-Panel liegt unter /bcp — React Router basename="/bcp"
+    window.location.href = '/bcp/login';
     throw new Error('Unauthorized');
   }
 

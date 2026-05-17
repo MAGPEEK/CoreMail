@@ -18,7 +18,7 @@ export const useThemeStore = create<ThemeState>()(
       theme:    'system',
       setTheme: (theme) => set({ theme }),
     }),
-    { name: 'coremail-ecp-theme' },
+    { name: 'coremail-bcp-theme' },
   ),
 );
 

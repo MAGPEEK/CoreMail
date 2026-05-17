@@ -123,7 +123,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeApplier />
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename="/ecp">
+      <BrowserRouter basename="/bcp">
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/*" element={

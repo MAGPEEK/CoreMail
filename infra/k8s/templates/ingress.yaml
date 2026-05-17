@@ -26,8 +26,8 @@ spec:
                 name: {{ include "coremail.fullname" . }}-web-client
                 port:
                   name: http
-          # Admin panel (ECP)
-          - path: /ecp
+          # Admin panel (BCP)
+          - path: /bcp
             pathType: Prefix
             backend:
               service:
