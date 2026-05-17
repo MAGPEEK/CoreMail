@@ -128,7 +128,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Backup: MBOX/EML-Export (Self-Service pro Benutzer) | ✅ |
 | Backup: Admin-Vollbackup zu S3 (Point-in-Time Recovery) | ✅ |
 | Kubernetes Helm Chart (HPA, HA) | ✅ |
-| OpenTelemetry Tracing + strukturierte Logs (Loki-kompatibel) | ✅ |
+| Strukturierte JSON-Logs (pino) + Log-Level pro Service | ✅ |
 | Web Push / VAPID-Benachrichtigungen | ✅ |
 | Auto-Mailbox-Provisionierung beim ersten Login | ✅ |
 
@@ -548,6 +548,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v2.0.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v2.1.19</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
