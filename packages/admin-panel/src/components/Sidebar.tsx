@@ -1,13 +1,12 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
-  BarChart3, Mail, LogOut, Settings2, ShieldCheck, Inbox, Workflow,
+  BarChart3, Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Building2, Users,
   BookUser, ShieldHalf, SearchCheck, BookText, Archive,
   FolderOpen, KeyRound, Network, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog,
 } from 'lucide-react';
-import { clearToken } from '../api/client.js';
 
 type NavItem = { path: string; label: string; icon: React.ElementType };
 type NavGroup = { group: string; items: NavItem[] };
@@ -79,16 +78,6 @@ const NAV: (NavItem | NavGroup)[] = [
 export function Sidebar() {
   return (
     <aside className="w-52 shrink-0 bg-gray-900 text-gray-300 flex flex-col h-full">
-      <div className="px-4 py-4 border-b border-gray-700">
-        <div className="flex items-center gap-2">
-          <Mail size={18} className="text-accent" />
-          <div>
-            <p className="text-white font-semibold text-sm">CoreMail ECP</p>
-            <p className="text-gray-500 text-xs">Admin-Konsole</p>
-          </div>
-        </div>
-      </div>
-
       <nav className="flex-1 overflow-y-auto py-2">
         {NAV.map(entry => {
           if ('group' in entry) {
@@ -125,15 +114,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-
-      <div className="p-3 border-t border-gray-700">
-        <button
-          onClick={() => { clearToken(); window.location.href = '/ecp/login'; }}
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors">
-          <LogOut size={14} />
-          Abmelden
-        </button>
-      </div>
     </aside>
   );
 }

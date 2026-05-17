@@ -1,7 +1,7 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, Container, Copy, Check as CheckIcon } from 'lucide-react';
 import { useState } from 'react';
 
-const VERSION        = '2.1.20';
+const VERSION        = '2.1.21';
 const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
@@ -10,6 +10,8 @@ const DOCKER_IMAGE   = `magpeek/coremail-app:${VERSION}`;
 const DOCKER_PULL    = `docker pull ${DOCKER_IMAGE}`;
 
 const HIGHLIGHTS = [
+  { version: '2.1.21', date: '2026-05-17', title: 'ECP TopBar: Angemeldeter User + Theme-Toggle',
+    notes: 'Neue TopBar im Admin-Panel: zeigt angemeldeten Benutzer (E-Mail, Rolle) mit Avatar-Dropdown und Abmelden-Button. Theme-Umschalter (System/Hell/Dunkel) direkt in der TopBar. Sidebar-Header und alter Logout-Button entfernt.' },
   { version: '2.1.20', date: '2026-05-17', title: 'Toggle-Fix, Dark Mode ECP, SMTP & Routing',
     notes: 'Schutzfilter-Toggle korrigiert (Knob-Position + Dark-Mode-weiß). Dark Mode im Admin-Panel (ECP) via ThemeApplier + CSS-Overrides. Rspamd-Auth-Fix (secure_ip). Navigation: SMTP-Konfiguration → SMTP & Routing.' },
   { version: '2.1.19', date: '2026-05-17', title: 'Observability-Stack entfernt',

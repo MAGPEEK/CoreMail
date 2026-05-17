@@ -9,6 +9,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.21] — 2026-05-17 — ECP TopBar: Angemeldeter User + Theme-Toggle
+
+### Added
+
+- **TopBar im Admin-Panel (ECP)** — Neue horizontale Kopfzeile über Sidebar + Content: zeigt angemeldeten Benutzer (E-Mail aus JWT-Payload, Rolle als Badge) mit Avatar-Initialen und Dropdown für Abmelden; Theme-Umschalter (System → Hell → Dunkel) als Icon-Button direkt in der TopBar
+- **Theme-Store (ECP)** — Zustand-Store `useThemeStore` in `admin-panel/store/theme.ts`; nutzt denselben `coremail-theme` localStorage-Key wie OWA; Cross-Tab-Sync via StorageEvent; `ThemeApplier` reagiert auf Store-Änderungen statt direktem localStorage-Read
+
+### Changed
+
+- **Sidebar** — Header-Block (Logo + Titel) und Logout-Button entfernt; beides ist jetzt in der TopBar
+
+---
+
 ## [2.1.20] — 2026-05-17 — Toggle-Fix, Dark Mode ECP, Rspamd-Auth, Navigation
 
 ### Fixed

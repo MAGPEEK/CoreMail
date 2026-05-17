@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Sidebar } from './components/Sidebar.js';
+import { TopBar } from './components/TopBar.js';
+import { useThemeStore, resolveIsDark, type ThemeMode } from './store/theme.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { MailboxesPage } from './pages/MailboxesPage.js';
@@ -41,43 +43,41 @@ import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 
-// ── ThemeApplier — liest coremail-theme aus localStorage (geteilt mit OWA) ──
+// ── ThemeApplier — reagiert auf Store-Änderungen + OWA-Cross-Tab-Sync ────────
 function ThemeApplier() {
+  const { theme, accentRgb } = useThemeStore();
+
+  // Theme auf document anwenden wenn sich Store ändert
   useEffect(() => {
-    const apply = () => {
-      try {
-        const stored = localStorage.getItem('coremail-theme');
-        const parsed = stored ? (JSON.parse(stored) as { state?: { theme?: string; accentRgb?: string } }) : {};
-        const theme     = parsed?.state?.theme     ?? 'system';
-        const accentRgb = parsed?.state?.accentRgb ?? '0 120 212';
+    document.documentElement.classList.toggle('dark', resolveIsDark(theme));
+    document.documentElement.style.setProperty('--color-accent', accentRgb);
+  }, [theme, accentRgb]);
 
-        let isDark = false;
-        if (theme === 'dark')       isDark = true;
-        else if (theme === 'light') isDark = false;
-        else isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-        document.documentElement.classList.toggle('dark', isDark);
-        document.documentElement.style.setProperty('--color-accent', accentRgb);
-      } catch { /* ignore parse errors */ }
-    };
-
-    apply();
-
+  // System-Präferenz bei theme==='system' live übernehmen
+  useEffect(() => {
+    if (theme !== 'system') return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const mqHandler = () => apply();
-    mq.addEventListener('change', mqHandler);
+    const handler = () => document.documentElement.classList.toggle('dark', mq.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [theme]);
 
-    // Sync mit OWA-Tab: wenn dort Theme geändert wird, hier auch anwenden
-    const storageHandler = (e: StorageEvent) => {
-      if (e.key === 'coremail-theme') apply();
+  // Cross-Tab-Sync: OWA ändert Theme → ECP übernimmt
+  useEffect(() => {
+    const handler = (e: StorageEvent) => {
+      if (e.key !== 'coremail-theme' || !e.newValue) return;
+      try {
+        const parsed = JSON.parse(e.newValue) as { state?: { theme?: ThemeMode; accentRgb?: string } };
+        useThemeStore.setState({
+          theme:     parsed?.state?.theme     ?? 'system',
+          accentRgb: parsed?.state?.accentRgb ?? '0 120 212',
+        });
+      } catch { /* ignore */ }
     };
-    window.addEventListener('storage', storageHandler);
-
-    return () => {
-      mq.removeEventListener('change', mqHandler);
-      window.removeEventListener('storage', storageHandler);
-    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
   }, []);
+
   return null;
 }
 
@@ -122,11 +122,14 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="h-full flex">
-      <Sidebar />
-      <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950">
-        <ErrorBoundary>{children}</ErrorBoundary>
-      </main>
+    <div className="h-full flex flex-col">
+      <TopBar />
+      <div className="flex-1 flex overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950">
+          <ErrorBoundary>{children}</ErrorBoundary>
+        </main>
+      </div>
     </div>
   );
 }
