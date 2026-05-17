@@ -9,5 +9,6 @@
     { "path": "../core" },
     { "path": "../storage" }
   ],
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/gateway/relay.ts"]
 }

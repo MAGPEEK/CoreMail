@@ -62,11 +62,29 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
     attachmentEnabled:    z.boolean().optional(),
     attachmentMaxSizeMb:  z.number().int().min(1).max(500).optional(),
     attachmentBlockedExt: z.array(z.string()).optional(),
-    rspamdEnabled:        z.boolean().optional(),
-    rspamdGreylistScore:  z.number().min(0).max(100).optional(),
-    rspamdSpamScore:      z.number().min(0).max(100).optional(),
-    rspamdRejectScore:    z.number().min(0).max(100).optional(),
-    clamavEnabled:        z.boolean().optional(),
+    rspamdEnabled:             z.boolean().optional(),
+    rspamdGreylistScore:       z.number().min(0).max(100).optional(),
+    rspamdSpamScore:           z.number().min(0).max(100).optional(),
+    rspamdRejectScore:         z.number().min(0).max(100).optional(),
+    rspamdAutolearn:           z.boolean().optional(),
+    rspamdAutolearnSpam:       z.number().min(0).max(100).optional(),
+    rspamdAutolearnHam:        z.number().min(-10).max(0).optional(),
+    rspamdAddSpamHeader:       z.boolean().optional(),
+    rspamdExtendedHeaders:     z.boolean().optional(),
+    rspamdRewriteSubject:      z.boolean().optional(),
+    rspamdSubjectTag:          z.string().max(32).optional(),
+    rspamdPhishingEnabled:     z.boolean().optional(),
+    rspamdFuzzyEnabled:        z.boolean().optional(),
+    rspamdUrlEnabled:          z.boolean().optional(),
+    rspamdMxCheckEnabled:      z.boolean().optional(),
+    clamavEnabled:             z.boolean().optional(),
+    clamavAction:              z.enum(['quarantine', 'reject', 'pass']).optional(),
+    clamavBlockOnFailure:      z.boolean().optional(),
+    clamavScanArchives:        z.boolean().optional(),
+    clamavScanHtml:            z.boolean().optional(),
+    clamavBlockEncryptedArch:  z.boolean().optional(),
+    clamavMaxFileSizeMb:       z.number().int().min(1).max(500).optional(),
+    clamavMaxScanSizeMb:       z.number().int().min(1).max(2048).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
@@ -78,7 +96,7 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...parsed.data } as any,
   });
 
-  // Sync thresholds to rspamd controller if score values changed
+  // Sync action thresholds to rspamd controller if score values changed
   if (
     parsed.data.rspamdGreylistScore !== undefined ||
     parsed.data.rspamdSpamScore     !== undefined ||
@@ -95,6 +113,28 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
       });
     } catch {
       // non-fatal — rspamd may not be running yet
+    }
+  }
+
+  // Sync autolearn thresholds to rspamd if changed
+  if (
+    parsed.data.rspamdAutolearn    !== undefined ||
+    parsed.data.rspamdAutolearnSpam !== undefined ||
+    parsed.data.rspamdAutolearnHam  !== undefined
+  ) {
+    try {
+      await rspamdFetch('/config/set', {
+        method: 'POST',
+        body: JSON.stringify({
+          'classifier-bayes': {
+            autolearn:                settings.rspamdAutolearn,
+            autolearn_spam_threshold: settings.rspamdAutolearnSpam,
+            autolearn_ham_threshold:  settings.rspamdAutolearnHam,
+          },
+        }),
+      });
+    } catch {
+      // non-fatal — rspamd config/set may not be available in all deployments
     }
   }
 

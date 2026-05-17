@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '2.1.42';
+const VERSION        = '2.1.43';
 const BUILD_DATE     = '2026-05-17';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '2.1.43', date: '2026-05-17', title: 'Rspamd 4.0 Vollkonfiguration · ClamAV Scan-Optionen · ACME-Fix',
+    notes: 'Rspamd 4.0: Bayes Autolearn (mit Spam/Ham-Schwellwerten), E-Mail-Header-Modifikation (X-Spam, X-Rspamd, Betreff-Prefix), Modul-Toggles für Phishing, Fuzzy, URL-Reputation und MX-Check. 19 neue Felder in SecuritySettings. ClamAV: Aktion bei Virenfund (Quarantäne/Ablehnen/Durchlassen), Fail-Closed, Archive/HTML/Encrypted-Archive-Scan, Größenlimits. ACME-Fix: accountKey als Buffer statt String (acme-client v5), verbesserte Fehlerdiagnose mit Port-80-Hinweis.' },
   { version: '2.1.42', date: '2026-05-17', title: 'SMTP-Gateway entfernt · Spam-/Virenfilter für ausgehende Mail',
     notes: 'SMTP-Gateway-Modus vollständig entfernt (GatewayPage, GatewaySettings-Modell, /api/v1/admin/gateway, Sidebar-Eintrag, GATEWAY_*-Env-Vars). Neu in ECP → SMTP & Routing → Ausgehende Mail: Toggle "Spam-/Virenfilter vor Weiterleitung anwenden" — steuert ob rspamd + ClamAV vor dem Versand ausgehender Mails aktiv sind (Standard: aktiviert). SmtpSettings.outboundFilterEnabled in Prisma-Schema und relay.ts.' },
   { version: '2.1.41', date: '2026-05-17', title: 'SMTP-Banner: benutzerdefinierter Text wird jetzt verwendet',

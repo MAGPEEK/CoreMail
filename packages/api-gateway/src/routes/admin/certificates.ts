@@ -142,16 +142,25 @@ async function runAcmeIssuance(
     if (existing?.acmeAccount) {
       accountKeyPem = existing.acmeAccount;
     } else {
-      // Neuen RSA-2048 Account-Key über acme-client generieren (gibt PEM-String zurück)
+      // Neuen RSA-2048 Account-Key über acme-client generieren
       const newKey = await acme.crypto.createPrivateKey(2048);
-      accountKeyPem = newKey.toString();
+      // acme-client v5 gibt KeyObject zurück — als PEM exportieren
+      if (Buffer.isBuffer(newKey)) {
+        accountKeyPem = (newKey as Buffer).toString('utf8');
+      } else {
+        // Node.js crypto.KeyObject
+        const ck = newKey as import('crypto').KeyObject;
+        const exported = ck.export({ type: 'pkcs8', format: 'pem' });
+        accountKeyPem = typeof exported === 'string' ? exported : exported.toString('utf8');
+      }
     }
 
+    // acme-client v5 erwartet Buffer oder KeyObject, keinen String
     const client = new acme.Client({
       directoryUrl: staging
         ? acme.directory.letsencrypt.staging
         : acme.directory.letsencrypt.production,
-      accountKey: accountKeyPem,
+      accountKey: Buffer.from(accountKeyPem),
     });
 
     // ACME Account registrieren
@@ -209,10 +218,15 @@ async function runAcmeIssuance(
 
     log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const raw = err instanceof Error ? err.message : String(err);
+    // Hilfreicher Hinweis bei HTTP-01 Challenge-Fehlern (Port 80 erreichbar?)
+    const hint = /challenge|http-01|connection|ECONNREFUSED|timeout/i.test(raw)
+      ? ' — Hinweis: HTTP-01 ACME Challenge erfordert Port 80 von außen erreichbar (/.well-known/acme-challenge/). Stelle sicher dass Port 80 auf den Server weitergeleitet wird.'
+      : '';
+    const msg = (raw + hint).slice(0, 1000);
     await prisma.certificate.update({
       where: { id: certId },
-      data: { status: 'ERROR', lastError: msg.slice(0, 1000) },
+      data: { status: 'ERROR', lastError: msg },
     }).catch(() => {});
     throw err;
   }

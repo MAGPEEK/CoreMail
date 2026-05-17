@@ -11,21 +11,41 @@ import { Toggle } from '../components/Toggle.js';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface SecuritySettings {
-  greylistEnabled:      boolean;
-  greylistWaitSec:      number;
-  greylistTtlHours:     number;
-  dnsblEnabled:         boolean;
-  dnsblZones:           string[];
-  geoipMode:            'DISABLED' | 'WHITELIST' | 'BLACKLIST';
-  geoipCountries:       string[];
-  attachmentEnabled:    boolean;
-  attachmentMaxSizeMb:  number;
-  attachmentBlockedExt: string[];
-  rspamdEnabled:        boolean;
-  rspamdGreylistScore:  number;
-  rspamdSpamScore:      number;
-  rspamdRejectScore:    number;
-  clamavEnabled:        boolean;
+  greylistEnabled:           boolean;
+  greylistWaitSec:           number;
+  greylistTtlHours:          number;
+  dnsblEnabled:              boolean;
+  dnsblZones:                string[];
+  geoipMode:                 'DISABLED' | 'WHITELIST' | 'BLACKLIST';
+  geoipCountries:            string[];
+  attachmentEnabled:         boolean;
+  attachmentMaxSizeMb:       number;
+  attachmentBlockedExt:      string[];
+  // Rspamd
+  rspamdEnabled:             boolean;
+  rspamdGreylistScore:       number;
+  rspamdSpamScore:           number;
+  rspamdRejectScore:         number;
+  rspamdAutolearn:           boolean;
+  rspamdAutolearnSpam:       number;
+  rspamdAutolearnHam:        number;
+  rspamdAddSpamHeader:       boolean;
+  rspamdExtendedHeaders:     boolean;
+  rspamdRewriteSubject:      boolean;
+  rspamdSubjectTag:          string;
+  rspamdPhishingEnabled:     boolean;
+  rspamdFuzzyEnabled:        boolean;
+  rspamdUrlEnabled:          boolean;
+  rspamdMxCheckEnabled:      boolean;
+  // ClamAV
+  clamavEnabled:             boolean;
+  clamavAction:              'quarantine' | 'reject' | 'pass';
+  clamavBlockOnFailure:      boolean;
+  clamavScanArchives:        boolean;
+  clamavScanHtml:            boolean;
+  clamavBlockEncryptedArch:  boolean;
+  clamavMaxFileSizeMb:       number;
+  clamavMaxScanSizeMb:       number;
 }
 
 interface RspamdStat {
@@ -301,10 +321,25 @@ function OverviewSection() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
+  // Thresholds
+  const [enabled,  setEnabled]  = useState(settings.rspamdEnabled);
   const [greylist, setGreylist] = useState(settings.rspamdGreylistScore);
   const [spam,     setSpam]     = useState(settings.rspamdSpamScore);
   const [reject,   setReject]   = useState(settings.rspamdRejectScore);
-  const [enabled,  setEnabled]  = useState(settings.rspamdEnabled);
+  // Autolearn
+  const [autolearn,        setAutolearn]        = useState(settings.rspamdAutolearn);
+  const [autolearnSpam,    setAutolearnSpam]    = useState(settings.rspamdAutolearnSpam);
+  const [autolearnHam,     setAutolearnHam]     = useState(settings.rspamdAutolearnHam);
+  // Header
+  const [addSpamHeader,    setAddSpamHeader]    = useState(settings.rspamdAddSpamHeader);
+  const [extendedHeaders,  setExtendedHeaders]  = useState(settings.rspamdExtendedHeaders);
+  const [rewriteSubject,   setRewriteSubject]   = useState(settings.rspamdRewriteSubject);
+  const [subjectTag,       setSubjectTag]       = useState(settings.rspamdSubjectTag);
+  // Module
+  const [phishing, setPhishing] = useState(settings.rspamdPhishingEnabled);
+  const [fuzzy,    setFuzzy]    = useState(settings.rspamdFuzzyEnabled);
+  const [url,      setUrl]      = useState(settings.rspamdUrlEnabled);
+  const [mxCheck,  setMxCheck]  = useState(settings.rspamdMxCheckEnabled);
 
   const { data: stat, isLoading } = useQuery({
     queryKey: ['admin', 'security', 'rspamd', 'stat'],
@@ -322,7 +357,23 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
   function save() {
     if (greylist >= spam) { toast.error('Greylisting-Score muss kleiner als Spam-Score sein'); return; }
     if (spam >= reject)   { toast.error('Spam-Score muss kleiner als Reject-Score sein'); return; }
-    onSave({ rspamdEnabled: enabled, rspamdGreylistScore: greylist, rspamdSpamScore: spam, rspamdRejectScore: reject });
+    onSave({
+      rspamdEnabled:         enabled,
+      rspamdGreylistScore:   greylist,
+      rspamdSpamScore:       spam,
+      rspamdRejectScore:     reject,
+      rspamdAutolearn:       autolearn,
+      rspamdAutolearnSpam:   autolearnSpam,
+      rspamdAutolearnHam:    autolearnHam,
+      rspamdAddSpamHeader:   addSpamHeader,
+      rspamdExtendedHeaders: extendedHeaders,
+      rspamdRewriteSubject:  rewriteSubject,
+      rspamdSubjectTag:      subjectTag,
+      rspamdPhishingEnabled: phishing,
+      rspamdFuzzyEnabled:    fuzzy,
+      rspamdUrlEnabled:      url,
+      rspamdMxCheckEnabled:  mxCheck,
+    });
   }
 
   return (
@@ -337,10 +388,10 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
       {stat && (
         <div className="grid grid-cols-4 gap-3">
           {[
-            { label: 'Version',     value: stat.version ?? '—' },
-            { label: 'Gescannt',    value: (stat.scanned ?? 0).toLocaleString() },
-            { label: 'Spam',        value: (stat.spam_count ?? 0).toLocaleString() },
-            { label: 'Uptime',      value: stat.uptime ? `${Math.floor(stat.uptime / 3600)}h` : '—' },
+            { label: 'Version',  value: stat.version ?? '—' },
+            { label: 'Gescannt', value: (stat.scanned ?? 0).toLocaleString() },
+            { label: 'Spam',     value: (stat.spam_count ?? 0).toLocaleString() },
+            { label: 'Uptime',   value: stat.uptime ? `${Math.floor(stat.uptime / 3600)}h` : '—' },
           ].map(s => (
             <div key={s.label} className="card p-3 text-center">
               <p className="text-lg font-bold text-gray-900">{s.value}</p>
@@ -350,58 +401,147 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
         </div>
       )}
 
-      {/* Thresholds */}
+      {/* ── Aktions-Schwellwerte ───────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
-        <p className="text-sm font-semibold text-gray-700 mb-3">Aktions-Schwellwerte</p>
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 mb-3">
-          Score ≥ Greylist → Greylisting · Score ≥ Spam → Header hinzufügen · Score ≥ Reject → Ablehnen
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Aktions-Schwellwerte
+        </p>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 my-2">
+          Score ≥ Greylist → Greylisting &nbsp;·&nbsp; Score ≥ Spam → Header hinzufügen &nbsp;·&nbsp; Score ≥ Reject → Ablehnen
         </div>
         <ToggleRow label="Rspamd aktiviert" value={enabled} onChange={setEnabled} />
-        <NumInput label="Greylisting-Score" value={greylist} onChange={setGreylist} min={0} max={20} step={0.5} />
-        <NumInput label="Spam-Score (Add Header)" value={spam} onChange={setSpam} min={0} max={30} step={0.5} />
-        <NumInput label="Reject-Score" value={reject} onChange={setReject} min={0} max={100} step={0.5} />
+        <NumInput label="Greylisting-Score"       value={greylist} onChange={setGreylist} min={0}  max={20}  step={0.5} />
+        <NumInput label="Spam-Score (Add Header)" value={spam}     onChange={setSpam}     min={0}  max={30}  step={0.5} />
+        <NumInput label="Reject-Score"            value={reject}   onChange={setReject}   min={0}  max={100} step={0.5} />
       </div>
 
-      {/* Bayes training */}
+      {/* ── Autolearn ─────────────────────────────────────────────────── */}
+      <div className="card p-4 space-y-1">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Bayes Autolearn
+        </p>
+        <p className="text-xs text-gray-400 py-1">
+          Rspamd lernt automatisch aus eindeutigen Mails. Nachrichten mit Score über dem Spam-Schwellwert
+          werden als Spam trainiert, unter dem Ham-Schwellwert als Ham.
+        </p>
+        <ToggleRow
+          label="Autolearn aktiviert"
+          desc="Bayes-Klassifikator lernt automatisch ohne manuelles Training"
+          value={autolearn}
+          onChange={setAutolearn}
+        />
+        <NumInput label="Autolearn Spam-Schwellwert" value={autolearnSpam} onChange={setAutolearnSpam} min={6}    max={100} step={0.5} />
+        <NumInput label="Autolearn Ham-Schwellwert"  value={autolearnHam}  onChange={setAutolearnHam}  min={-10}  max={0}   step={0.5} />
+      </div>
+
+      {/* ── E-Mail-Header ─────────────────────────────────────────────── */}
+      <div className="card p-4 space-y-1">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          E-Mail-Header Modifikation
+        </p>
+        <ToggleRow
+          label="X-Spam-Header hinzufügen"
+          desc="Fügt X-Spam-Flag, X-Spam-Score und X-Spam-Status zu verdächtigen Mails hinzu"
+          value={addSpamHeader}
+          onChange={setAddSpamHeader}
+        />
+        <ToggleRow
+          label="Erweiterte Rspamd-Header"
+          desc="X-Rspamd-Score, X-Rspamd-Action und X-Rspamd-Pre-Result bei allen Mails"
+          value={extendedHeaders}
+          onChange={setExtendedHeaders}
+        />
+        <ToggleRow
+          label="Betreff umschreiben"
+          desc="Spam-Mails erhalten einen Präfix im Betreff (z.B. [SPAM])"
+          value={rewriteSubject}
+          onChange={setRewriteSubject}
+        />
+        {rewriteSubject && (
+          <div className="flex items-center justify-between py-2.5 border-b border-gray-100">
+            <span className="text-sm text-gray-700">Betreff-Präfix</span>
+            <input
+              type="text"
+              value={subjectTag}
+              onChange={e => setSubjectTag(e.target.value)}
+              maxLength={32}
+              className="w-32 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ── Module ────────────────────────────────────────────────────── */}
+      <div className="card p-4 space-y-1">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Rspamd-Module
+        </p>
+        <p className="text-xs text-gray-400 py-1">
+          SPF, DKIM, DMARC und ARC sind immer aktiv. Die folgenden Module können einzeln gesteuert werden:
+        </p>
+        <ToggleRow
+          label="Phishing-Erkennung"
+          desc="Analysiert URLs und Header auf Phishing-Merkmale (phishing_detection)"
+          value={phishing}
+          onChange={setPhishing}
+        />
+        <ToggleRow
+          label="Fuzzy-Hash-Matching"
+          desc="Erkennt bekannte Spam-Muster anhand von Fuzzy-Hashes (Rspamd-Fuzzy-Storage)"
+          value={fuzzy}
+          onChange={setFuzzy}
+        />
+        <ToggleRow
+          label="URL-Reputationsprüfung"
+          desc="Prüft Links gegen URIBL und SURBL Blacklisten (rbl-Modul)"
+          value={url}
+          onChange={setUrl}
+        />
+        <ToggleRow
+          label="MX-DNS-Prüfung"
+          desc="Verifiziert ob die Absender-Domain gültige MX-Einträge hat"
+          value={mxCheck}
+          onChange={setMxCheck}
+        />
+        {/* Immer aktive Module */}
+        <div className="pt-2 mt-1 border-t border-gray-100">
+          <p className="text-xs text-gray-400 mb-2">Immer aktiv (nicht deaktivierbar):</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {[
+              ['SPF',     'Sender Policy Framework'],
+              ['DKIM',    'DKIM-Signatur Validierung'],
+              ['DMARC',   'DMARC Policy Auswertung'],
+              ['ARC',     'Authenticated Received Chain'],
+              ['Bayes',   'Bayes-Klassifikator'],
+              ['MIME',    'MIME-Struktur-Analyse'],
+            ].map(([name, desc]) => (
+              <div key={name} className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2.5 py-1.5">
+                <CheckCircle size={12} className="text-green-500 shrink-0" />
+                <span className="font-medium text-gray-700">{name}</span>
+                <span className="text-gray-400 truncate">{desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Bayes manuell trainieren ───────────────────────────────────── */}
       <div className="card p-4">
-        <p className="text-sm font-semibold text-gray-700 mb-2">Bayes-Klassifikator trainieren</p>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100 mb-3">
+          Bayes manuell trainieren
+        </p>
         <p className="text-xs text-gray-400 mb-3">
-          Trainiert den Rspamd Bayes-Filter manuell. Im Normalbetrieb lernt Rspamd automatisch über autolearn.
+          Manuelle Trainingsimpulse für den Bayes-Klassifikator. Im Normalbetrieb übernimmt Autolearn diese Aufgabe automatisch.
         </p>
         <div className="flex gap-2">
           <button onClick={() => learnMut.mutate('spam')} disabled={learnMut.isPending}
             className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50">
-            Als Spam markieren
+            Als Spam trainieren
           </button>
           <button onClick={() => learnMut.mutate('ham')} disabled={learnMut.isPending}
             className="btn-secondary text-sm text-green-600 border-green-200 hover:bg-green-50">
-            Als Ham markieren
+            Als Ham trainieren
           </button>
-        </div>
-      </div>
-
-      {/* Symbol actions info */}
-      <div className="card p-4">
-        <p className="text-sm font-semibold text-gray-700 mb-2">Aktive Module</p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            ['SPF',    'Sender Policy Framework Prüfung'],
-            ['DKIM',   'DKIM-Signatur Validierung'],
-            ['DMARC',  'DMARC Policy Auswertung'],
-            ['ARC',    'Authenticated Received Chain'],
-            ['Bayes',  'Bayes-Spam-Klassifikator'],
-            ['Fuzzy',  'Fuzzy-Hash-Matching'],
-            ['DNSBL',  'DNS Blacklisten'],
-            ['Mime',   'MIME-Struktur-Analyse'],
-            ['URL',    'URL-Reputationsprüfung'],
-            ['Headers','E-Mail-Header-Analyse'],
-          ].map(([name, desc]) => (
-            <div key={name} className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2.5 py-1.5">
-              <CheckCircle size={12} className="text-green-500 shrink-0" />
-              <span className="font-medium text-gray-700">{name}</span>
-              <span className="text-gray-400 truncate">{desc}</span>
-            </div>
-          ))}
         </div>
       </div>
     </div>
@@ -413,7 +553,14 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
 // ═════════════════════════════════════════════════════════════════════════════
 
 function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
-  const [enabled, setEnabled] = useState(settings.clamavEnabled);
+  const [enabled,          setEnabled]          = useState(settings.clamavEnabled);
+  const [action,           setAction]           = useState<'quarantine' | 'reject' | 'pass'>(settings.clamavAction ?? 'quarantine');
+  const [blockOnFailure,   setBlockOnFailure]   = useState(settings.clamavBlockOnFailure ?? false);
+  const [scanArchives,     setScanArchives]     = useState(settings.clamavScanArchives ?? true);
+  const [scanHtml,         setScanHtml]         = useState(settings.clamavScanHtml ?? true);
+  const [blockEncrypted,   setBlockEncrypted]   = useState(settings.clamavBlockEncryptedArch ?? false);
+  const [maxFileSize,      setMaxFileSize]      = useState(settings.clamavMaxFileSizeMb ?? 25);
+  const [maxScanSize,      setMaxScanSize]      = useState(settings.clamavMaxScanSizeMb ?? 100);
 
   const { data: status } = useQuery({
     queryKey: ['admin', 'security', 'status'],
@@ -423,13 +570,33 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
 
   const c = status?.clamav;
 
+  function save() {
+    onSave({
+      clamavEnabled:           enabled,
+      clamavAction:            action,
+      clamavBlockOnFailure:    blockOnFailure,
+      clamavScanArchives:      scanArchives,
+      clamavScanHtml:          scanHtml,
+      clamavBlockEncryptedArch: blockEncrypted,
+      clamavMaxFileSizeMb:     maxFileSize,
+      clamavMaxScanSizeMb:     maxScanSize,
+    });
+  }
+
+  const actionLabels: Record<string, { label: string; desc: string; color: string }> = {
+    quarantine: { label: 'Quarantäne',   desc: 'Virus-Mail in Junk verschieben',       color: 'amber'  },
+    reject:     { label: 'Ablehnen',     desc: 'SMTP-Verbindung mit Fehler abweisen',  color: 'red'    },
+    pass:       { label: 'Durchlassen',  desc: 'Nur markieren, nicht blockieren',       color: 'gray'   },
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-gray-900">Antivirus — ClamAV</h2>
-        <SaveBtn onClick={() => onSave({ clamavEnabled: enabled })} pending={false} />
+        <SaveBtn onClick={save} pending={false} />
       </div>
 
+      {/* Status-Karte */}
       <div className="grid grid-cols-2 gap-4">
         <div className="card p-4 space-y-3">
           <div className="flex items-center gap-2">
@@ -448,24 +615,28 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
           {c?.version && (
             <div className="flex items-start justify-between py-1">
               <span className="text-sm text-gray-600">Version</span>
-              <span className="text-xs font-mono text-gray-700 text-right max-w-[200px]">{c.version}</span>
+              <span className="text-xs font-mono text-gray-700 text-right max-w-[200px] break-all">{c.version}</span>
             </div>
           )}
           <div className="flex items-center justify-between py-1">
             <span className="text-sm text-gray-600">Signaturen</span>
             <span className="text-xs text-gray-500">Täglich via freshclam</span>
           </div>
+          <div className="flex items-center justify-between py-1">
+            <span className="text-sm text-gray-600">Verbindung</span>
+            <span className="text-xs font-mono text-gray-500">clamav:3310 (INSTREAM)</span>
+          </div>
         </div>
 
         <div className="card p-4 space-y-2">
           <p className="text-sm font-semibold text-gray-700">Über ClamAV</p>
           <p className="text-xs text-gray-500 leading-relaxed">
-            ClamAV ist eine freie, plattformübergreifende Anti-Malware Engine.
-            Sie erkennt Viren, Trojaner, Malware und andere schädliche Bedrohungen
-            in E-Mail-Anhängen und Nachrichten.
+            ClamAV ist eine freie, plattformübergreifende Anti-Malware Engine (GPL).
+            Sie erkennt Viren, Trojaner und andere schädliche Bedrohungen in
+            E-Mail-Anhängen via TCP INSTREAM-Protokoll.
           </p>
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {['Open-Source (GPL)', 'ClamDB Signaturen', 'INSTREAM-Protokoll', 'freshclam Updates'].map(t => (
+            {['GPL Open-Source', 'ClamDB Signaturen', 'Archive-Scan', 'freshclam Updates'].map(t => (
               <span key={t} className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">
                 {t}
               </span>
@@ -474,12 +645,88 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         </div>
       </div>
 
-      <div className="card p-4">
+      {/* ── Grundeinstellungen ────────────────────────────────────────── */}
+      <div className="card p-4 space-y-1">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Grundeinstellungen
+        </p>
         <ToggleRow
           label="ClamAV aktiviert"
           desc="Scannt alle eingehenden E-Mail-Anhänge auf Viren und Malware"
           value={enabled}
           onChange={setEnabled}
+        />
+        <ToggleRow
+          label="Bei ClamAV-Ausfall blockieren"
+          desc="Eingehende Mails ablehnen wenn ClamAV nicht erreichbar ist (fail-closed)"
+          value={blockOnFailure}
+          onChange={setBlockOnFailure}
+        />
+      </div>
+
+      {/* ── Aktion bei Fund ───────────────────────────────────────────── */}
+      <div className="card p-4 space-y-3">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Aktion bei Virenfund
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          {(['quarantine', 'reject', 'pass'] as const).map(a => {
+            const meta = actionLabels[a];
+            return (
+              <button key={a} onClick={() => setAction(a)}
+                className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors text-left ${
+                  action === a
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}>
+                <p className="font-semibold">{meta?.label}</p>
+                <p className="text-[10px] mt-0.5 opacity-70">{meta?.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+        {action === 'pass' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            Modus "Durchlassen" schützt nicht vor Viren — nur für Diagnose-Zwecke empfohlen.
+          </div>
+        )}
+      </div>
+
+      {/* ── Scan-Optionen ─────────────────────────────────────────────── */}
+      <div className="card p-4 space-y-1">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+          Scan-Optionen
+        </p>
+        <ToggleRow
+          label="Archive scannen"
+          desc="ZIP, RAR, TAR, GZ und andere Archivformate werden entpackt und gescannt"
+          value={scanArchives}
+          onChange={setScanArchives}
+        />
+        <ToggleRow
+          label="HTML-Inhalt scannen"
+          desc="HTML-Teile der E-Mail auf eingebettete Schadskripte prüfen"
+          value={scanHtml}
+          onChange={setScanHtml}
+        />
+        <ToggleRow
+          label="Verschlüsselte Archive blockieren"
+          desc="Passwortgeschützte Archive ablehnen (können nicht gescannt werden)"
+          value={blockEncrypted}
+          onChange={setBlockEncrypted}
+        />
+        <NumInput
+          label="Max. Dateigröße (je Anhang)"
+          value={maxFileSize}
+          onChange={setMaxFileSize}
+          min={1} max={500} unit="MB"
+        />
+        <NumInput
+          label="Max. Gesamt-Scan-Größe"
+          value={maxScanSize}
+          onChange={setMaxScanSize}
+          min={1} max={2048} unit="MB"
         />
       </div>
 
@@ -487,8 +734,8 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         <AlertTriangle size={13} className="shrink-0 mt-0.5" />
         <span>
           ClamAV läuft als separater Docker-Container (<code className="bg-blue-100 px-1 rounded">clamav/clamav:stable</code>).
-          Der Container startet den freshclam-Daemon automatisch für tägliche Signatur-Updates.
-          Verbindung: <code className="bg-blue-100 px-1 rounded">clamav:3310</code> (INSTREAM-Protokoll).
+          freshclam aktualisiert die Signaturdatenbank täglich automatisch.
+          Signaturdatenbank: <strong>ClamAV DB (CVD)</strong> + optionale 3rd-Party Signaturen.
         </span>
       </div>
     </div>

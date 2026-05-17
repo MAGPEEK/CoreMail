@@ -1158,14 +1158,36 @@ model SecuritySettings {
   attachmentEnabled     Boolean  @default(true)
   attachmentMaxSizeMb   Int      @default(50)
   attachmentBlockedExt  Json     @default("[\"exe\",\"vbs\",\"js\",\"bat\",\"cmd\",\"scr\",\"pif\",\"msi\",\"hta\",\"com\"]")
-  // Rspamd
-  rspamdEnabled         Boolean  @default(true)
-  rspamdGreylistScore   Float    @default(4.0)
-  rspamdSpamScore       Float    @default(6.0)
-  rspamdRejectScore     Float    @default(15.0)
-  // ClamAV
-  clamavEnabled         Boolean  @default(true)
-  updatedAt             DateTime @updatedAt
+  // Rspamd — Grundeinstellungen
+  rspamdEnabled              Boolean  @default(true)
+  rspamdGreylistScore        Float    @default(4.0)
+  rspamdSpamScore            Float    @default(6.0)
+  rspamdRejectScore          Float    @default(15.0)
+  // Rspamd — Autolearn
+  rspamdAutolearn            Boolean  @default(true)
+  rspamdAutolearnSpam        Float    @default(12.0)
+  rspamdAutolearnHam         Float    @default(-0.5)
+  // Rspamd — E-Mail-Header
+  rspamdAddSpamHeader        Boolean  @default(true)
+  rspamdExtendedHeaders      Boolean  @default(true)
+  rspamdRewriteSubject       Boolean  @default(false)
+  rspamdSubjectTag           String   @default("[SPAM]")
+  // Rspamd — Module
+  rspamdPhishingEnabled      Boolean  @default(true)
+  rspamdFuzzyEnabled         Boolean  @default(true)
+  rspamdUrlEnabled           Boolean  @default(true)
+  rspamdMxCheckEnabled       Boolean  @default(true)
+  // ClamAV — Grundeinstellungen
+  clamavEnabled              Boolean  @default(true)
+  clamavAction               String   @default("quarantine")  // quarantine | reject | pass
+  clamavBlockOnFailure       Boolean  @default(false)
+  // ClamAV — Scan-Optionen
+  clamavScanArchives         Boolean  @default(true)
+  clamavScanHtml             Boolean  @default(true)
+  clamavBlockEncryptedArch   Boolean  @default(false)
+  clamavMaxFileSizeMb        Int      @default(25)
+  clamavMaxScanSizeMb        Int      @default(100)
+  updatedAt                  DateTime @updatedAt
 
   @@map("security_settings")
 }

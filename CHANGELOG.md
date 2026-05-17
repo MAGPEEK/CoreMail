@@ -9,6 +9,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.43] — 2026-05-17 — Rspamd 4.0 Vollkonfiguration · ClamAV Scan-Optionen · ACME-Zertifikat-Fix
+
+### Added
+
+- **Rspamd 4.0 erweiterte Konfiguration** (ECP → Schutzfilter → Rspamd 4.0):
+  - Bayes Autolearn: aktivieren/deaktivieren, Spam- und Ham-Schwellwerte (automatisches Training ohne manuellen Eingriff)
+  - E-Mail-Header-Modifikation: X-Spam-Header hinzufügen, erweiterte X-Rspamd-Header, Betreff-Umschreiben mit konfigurierbarem Präfix
+  - Modul-Toggles: Phishing-Erkennung, Fuzzy-Hash-Matching, URL-Reputationsprüfung (URIBL/SURBL), MX-DNS-Prüfung
+  - Autolearn-Schwellwerte werden via `/config/set` live an Rspamd synchronisiert
+- **ClamAV erweiterte Konfiguration** (ECP → Schutzfilter → Antivirus):
+  - Aktion bei Virenfund: Quarantäne (Junk), Ablehnen (SMTP 5xx), Durchlassen (nur für Diagnose)
+  - Fail-Closed-Option: eingehende Mails blockieren wenn ClamAV nicht erreichbar
+  - Scan-Optionen: Archive scannen, HTML-Inhalt scannen, verschlüsselte Archive blockieren
+  - Größenlimits: max. Dateigröße je Anhang, max. Gesamt-Scan-Größe
+- **19 neue Felder** in `SecuritySettings` (Prisma-Schema):
+  `rspamdAutolearn`, `rspamdAutolearnSpam`, `rspamdAutolearnHam`, `rspamdAddSpamHeader`,
+  `rspamdExtendedHeaders`, `rspamdRewriteSubject`, `rspamdSubjectTag`, `rspamdPhishingEnabled`,
+  `rspamdFuzzyEnabled`, `rspamdUrlEnabled`, `rspamdMxCheckEnabled`, `clamavAction`,
+  `clamavBlockOnFailure`, `clamavScanArchives`, `clamavScanHtml`, `clamavBlockEncryptedArch`,
+  `clamavMaxFileSizeMb`, `clamavMaxScanSizeMb` (alle mit sinnvollen Defaults)
+
+### Fixed
+
+- **ACME Let's Encrypt-Zertifikat: „Anfrage fehlgeschlagen"** — `acme.Client` erhielt `accountKey` als String statt `Buffer`; acme-client v5 erwartet `Buffer | KeyObject`. Fix: `accountKey: Buffer.from(accountKeyPem)`. Außerdem: Account-Key-Export bei neu generierten Keys korrigiert (KeyObject.export statt .toString)
+- **ACME Fehlerdiagnose verbessert**: lastError-Feld enthält bei HTTP-01-Challenge-Fehlern einen Hinweis auf Port-80-Erreichbarkeit
+
+---
+
 ## [2.1.42] — 2026-05-17 — SMTP-Gateway entfernt · Spam-/Virenfilter für ausgehende Mail
 
 ### Removed
