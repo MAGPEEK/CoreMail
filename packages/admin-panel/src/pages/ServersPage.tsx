@@ -24,16 +24,6 @@ interface ServerSettings {
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
-  imapHost:         string;
-  imapPort:         number;
-  imapSsl:          boolean;
-  pop3Host:         string;
-  pop3Port:         number;
-  pop3Ssl:          boolean;
-  smtpHost:         string;
-  smtpPort:         number;
-  smtpTls:          boolean;
-  orgName:          string;
 }
 
 type Tab = 'health' | 'settings';
@@ -212,62 +202,6 @@ export function ServersPage() {
                     />
                   </div>
                 ))}
-              </div>
-
-              {/* Mail-Protokolle */}
-              <div className="card space-y-5">
-                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Mail-Protokolle</h2>
-
-                {([
-                  ['imap', 'imapHost', 'imapPort', 'imapSsl', 'IMAP', 'SSL/TLS'] ,
-                  ['pop3', 'pop3Host', 'pop3Port', 'pop3Ssl', 'POP3', 'SSL/TLS'],
-                  ['smtp', 'smtpHost', 'smtpPort', 'smtpTls', 'SMTP Submission', 'STARTTLS'],
-                ] as [string, keyof ServerSettings, keyof ServerSettings, keyof ServerSettings, string, string][]).map(
-                  ([, hostKey, portKey, tlsKey, proto, tlsLabel]) => (
-                  <div key={proto}>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{proto}</p>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="col-span-2">
-                        <label className="block text-xs text-gray-500 mb-1">Server</label>
-                        <input
-                          className="input w-full"
-                          value={current[hostKey] as string}
-                          onChange={(e) => set(hostKey, e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1">Port</label>
-                        <input
-                          className="input w-full"
-                          type="number"
-                          value={current[portKey] as number}
-                          onChange={(e) => set(portKey, parseInt(e.target.value) || 587)}
-                        />
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2 mt-2 cursor-pointer">
-                      <input
-                        type="checkbox" className="w-4 h-4"
-                        checked={current[tlsKey] as boolean}
-                        onChange={(e) => set(tlsKey, e.target.checked)}
-                      />
-                      <span className="text-sm text-gray-700">{tlsLabel}</span>
-                    </label>
-                  </div>
-                ))}
-              </div>
-
-              {/* Organisation */}
-              <div className="card space-y-3">
-                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Organisation</h2>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Organisationsname</label>
-                  <input
-                    className="input w-full max-w-sm"
-                    value={current.orgName}
-                    onChange={(e) => set('orgName', e.target.value)}
-                  />
-                </div>
               </div>
 
               {/* Speichern */}

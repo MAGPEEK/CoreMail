@@ -9,6 +9,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.1.23] — 2026-05-17 — BCP Server-Seite bereinigt
+
+### Removed
+
+- **Mail-Protokolle (BCP → Server → Virtuelle Verzeichnisse)** — Sektion mit IMAP/POP3/SMTP Host, Port und TLS-Toggle entfernt; diese Konfiguration gehört zu den Protokoll-Listenern unter Services, nicht zu den Autodiscover-Einstellungen
+- **Organisationsname (BCP → Server → Virtuelle Verzeichnisse)** — doppeltes Feld entfernt; Organisationsname wird bereits an anderer Stelle verwaltet
+
+---
+
 ## [2.1.22] — 2026-05-17 — ECP Theme-Unabhängigkeit + MFA TOTP für OWA
 
 ### Added
