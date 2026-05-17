@@ -4,14 +4,17 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import bcrypt from 'bcrypt';
 import { prisma } from '@coremail/storage';
-import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger } from '@coremail/core';
+import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger, getRedisClient } from '@coremail/core';
 import type { UserRole } from '@coremail/core/types';
 
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
+
+const MFA_CHALLENGE_TTL    = 10 * 60; // 10 Minuten
+const MFA_CHALLENGE_PREFIX = 'auth:mfa:challenge:';
 
 const LoginSchema = z.object({
   email:    z.string().email(),
@@ -52,6 +55,27 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
+    // ── MFA-Prüfung ────────────────────────────────────────────────────────────
+    const mfa = await prisma.userMfa.findUnique({ where: { userId: user.id } });
+    const mfaEnabled = mfa?.totpEnabled === true ||
+      (Array.isArray(mfa?.webAuthnCredentials) && (mfa?.webAuthnCredentials as unknown[]).length > 0);
+
+    if (mfaEnabled) {
+      const method = (Array.isArray(mfa?.webAuthnCredentials) && (mfa?.webAuthnCredentials as unknown[]).length > 0)
+        ? 'webauthn' : 'totp';
+      const challengeToken = randomBytes(32).toString('hex');
+      const redis = getRedisClient();
+      await redis.setex(
+        `${MFA_CHALLENGE_PREFIX}${challengeToken}`,
+        MFA_CHALLENGE_TTL,
+        JSON.stringify({ userId: user.id, method }),
+      );
+      log.info({ userId: user.id, method }, 'MFA challenge issued');
+      res.status(200).json({ mfaRequired: true, challengeToken, method });
+      return;
+    }
+
+    // ── Kein MFA — direkt Token ausstellen ─────────────────────────────────────
     const sessionId = randomUUID();
     const accessToken = signAccessToken({
       sub:        user.id,
