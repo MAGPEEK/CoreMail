@@ -28,23 +28,24 @@ const SYSTEM_LABEL_KEY = {
     Junk: 'junk',
     Archive: 'archive',
 };
-function FolderItem({ folder, selected, isSystem, hasChildren, expanded, onToggleExpand, onSelect, onContextMenu, label, indent, }) {
+function FolderItem({ folder, selected, isSystem, hasChildren, expanded, onToggleExpand, onSelect, onContextMenu, label, indent, isDragDisabled, contextKey = '', }) {
+    // dnd-kit verlangt eindeutige IDs — Context-Key sorgt dafür dass Favoriten
+    // und Haupt-Render nicht kollidieren
+    const dndId = contextKey ? `${contextKey}|${folder.id}` : folder.id;
+    // Outer = Drop-Target (jeder Folder kann Ziel sein)
     const { isOver, setNodeRef: setDropRef } = useDroppable({
-        id: `folder-drop:${folder.id}`,
+        id: `folder-drop:${dndId}`,
         data: { kind: 'folder', folderId: folder.id, folderName: folder.name },
     });
-    // Nur Custom-Folder sind draggable (System nicht reparent-bar)
+    // Inner = Drag-Source (nur Custom-Folder + nicht im Favoriten-Mirror)
+    const dragDisabled = isSystem || !!isDragDisabled;
     const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-        id: `folder-drag:${folder.id}`,
+        id: `folder-drag:${dndId}`,
         data: { kind: 'folder-source', folderId: folder.id, folderName: folder.name },
-        disabled: isSystem,
+        disabled: dragDisabled,
     });
     const Icon = ICON_MAP[folder.name] ?? Folder;
-    const setRef = (el) => {
-        setDropRef(el);
-        setDragRef(el);
-    };
-    return (_jsxs("div", { ref: setRef, ...(isSystem ? {} : attributes), ...(isSystem ? {} : listeners), onClick: onSelect, onContextMenu: onContextMenu, style: { paddingLeft: 6 + indent * 14 }, className: `group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors cursor-pointer ${selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'} ${isOver ? 'ring-2 ring-accent/60 bg-accent/15' : ''} ${isDragging ? 'opacity-40' : ''}`, role: "button", tabIndex: 0, children: [hasChildren ? (_jsx("button", { onClick: (e) => { e.stopPropagation(); onToggleExpand(); }, className: "w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0", children: expanded ? _jsx(ChevronDown, { size: 12 }) : _jsx(ChevronRight, { size: 12 }) })) : (_jsx("span", { className: "w-4 h-4 shrink-0" })), _jsx(Icon, { size: 15, className: "shrink-0", style: folder.color ? { color: folder.color } : undefined }), _jsx("span", { className: "flex-1 text-left truncate", children: label }), folder.unreadCount > 0 && (_jsx("span", { className: "text-xs font-bold text-accent", children: folder.unreadCount }))] }));
+    return (_jsx("div", { ref: setDropRef, className: `relative rounded-sm transition-colors ${isOver ? 'ring-2 ring-accent ring-inset bg-accent/15' : ''}`, children: _jsxs("div", { ref: setDragRef, ...(dragDisabled ? {} : attributes), ...(dragDisabled ? {} : listeners), onClick: onSelect, onContextMenu: onContextMenu, style: { paddingLeft: 6 + indent * 14 }, className: `group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors ${dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'} ${isDragging ? 'opacity-40' : ''}`, role: "button", tabIndex: 0, children: [hasChildren ? (_jsx("button", { onClick: (e) => { e.stopPropagation(); onToggleExpand(); }, onPointerDown: (e) => e.stopPropagation(), className: "w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0", children: expanded ? _jsx(ChevronDown, { size: 12 }) : _jsx(ChevronRight, { size: 12 }) })) : (_jsx("span", { className: "w-4 h-4 shrink-0" })), _jsx(Icon, { size: 15, className: "shrink-0", style: folder.color ? { color: folder.color } : undefined }), _jsx("span", { className: "flex-1 text-left truncate", children: label }), folder.unreadCount > 0 && (_jsx("span", { className: "text-xs font-bold text-accent", children: folder.unreadCount }))] }) }));
 }
 export function FolderTree({ onNewMail }) {
     const qc = useQueryClient();
@@ -152,11 +153,6 @@ export function FolderTree({ onNewMail }) {
         const isTrashOrJunk = folder.name === 'Trash' || folder.name === 'Junk';
         const items = [
             {
-                label: 'Ordner öffnen',
-                icon: _jsx(Folder, { size: 14 }),
-                onClick: () => setSelectedFolder(folder.id),
-            },
-            {
                 label: t('mark_all_read'),
                 icon: _jsx(CheckCheck, { size: 14 }),
                 disabled: folder.unreadCount === 0,
@@ -234,17 +230,17 @@ export function FolderTree({ onNewMail }) {
         setMenu({ x: e.clientX, y: e.clientY, items: buildFolderMenu(folder) });
     };
     // Rekursives Rendering eines Ordnerbaums
-    const renderFolderTree = (folder, indent, keyPrefix = '') => {
+    const renderFolderTree = (folder, indent, contextKey = 'tree') => {
         const isSystem = folder.isSystem ?? SYSTEM_SET.has(folder.name);
         const children = childrenOf.get(folder.id) ?? [];
         const hasChildren = children.length > 0;
         const expanded = !collapsedNodes.has(folder.id);
-        return (_jsxs("div", { children: [_jsx(FolderItem, { folder: folder, selected: folder.id === selectedFolderId, isSystem: isSystem, hasChildren: hasChildren, expanded: expanded, onToggleExpand: () => toggleExpand(folder.id), onSelect: () => setSelectedFolder(folder.id), onContextMenu: handleContextMenu(folder), label: folderLabel(folder), indent: indent }), hasChildren && expanded && (_jsx("div", { children: children.map((c) => renderFolderTree(c, indent + 1, keyPrefix)) }))] }, `${keyPrefix}${folder.id}`));
+        return (_jsxs("div", { children: [_jsx(FolderItem, { folder: folder, selected: folder.id === selectedFolderId, isSystem: isSystem, hasChildren: hasChildren, expanded: expanded, onToggleExpand: () => toggleExpand(folder.id), onSelect: () => setSelectedFolder(folder.id), onContextMenu: handleContextMenu(folder), label: folderLabel(folder), indent: indent, contextKey: contextKey }), hasChildren && expanded && (_jsx("div", { children: children.map((c) => renderFolderTree(c, indent + 1, contextKey)) }))] }, `${contextKey}|${folder.id}`));
     };
     const SectionHeader = ({ label, collapsed, onToggle, action }) => (_jsxs("div", { className: "flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: [_jsxs("button", { onClick: onToggle, className: "flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 flex-1", children: [collapsed ? _jsx(ChevronRight, { size: 12 }) : _jsx(ChevronDown, { size: 12 }), label] }), action] }));
     // Stelle sicher dass useT bei Sprachwechsel re-rendert
     void lang;
-    return (_jsxs("aside", { className: "w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full", children: [_jsx("div", { className: "p-3", children: _jsxs("button", { onClick: onNewMail, className: "btn-primary w-full justify-center", children: [_jsx(Plus, { size: 15 }), t('new_mail')] }) }), _jsxs("nav", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [favorites.length > 0 && (_jsxs(_Fragment, { children: [_jsx(SectionHeader, { label: t('favorites'), collapsed: favoritesCollapsed, onToggle: toggleFavorites }), !favoritesCollapsed && (_jsx("div", { className: "space-y-0.5", children: favorites.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, isSystem: SYSTEM_SET.has(f.name), hasChildren: false, expanded: false, onToggleExpand: () => { }, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f), label: folderLabel(f), indent: 0 }, `fav-${f.id}`))) }))] })), _jsx(SectionHeader, { label: t('folders'), collapsed: folderTreeCollapsed, onToggle: toggleFolderTree, action: _jsx("button", { onClick: () => setDialog({ kind: 'createRoot' }), className: "text-gray-400 hover:text-gray-700 dark:hover:text-gray-200", title: "Neuer Ordner", children: _jsx(Plus, { size: 12 }) }) }), !folderTreeCollapsed && (_jsxs("div", { className: "space-y-0.5", children: [systemFolders.map((f) => renderFolderTree(f, 0)), rootCustomFolders.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: t('my_folders') }), rootCustomFolders.map((f) => renderFolderTree(f, 0, 'root-'))] }))] }))] }), menu && _jsx(ContextMenu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }), dialog?.kind === 'createRoot' && (_jsx(PromptDialog, { title: "Neuer Ordner", label: "Name", placeholder: "z. B. Wichtige Mails", confirmText: "Erstellen", onCancel: () => setDialog(null), validate: (v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null, onConfirm: async (name) => {
+    return (_jsxs("aside", { className: "w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full", children: [_jsx("div", { className: "p-3", children: _jsxs("button", { onClick: onNewMail, className: "btn-primary w-full justify-center", children: [_jsx(Plus, { size: 15 }), t('new_mail')] }) }), _jsxs("nav", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [favorites.length > 0 && (_jsxs(_Fragment, { children: [_jsx(SectionHeader, { label: t('favorites'), collapsed: favoritesCollapsed, onToggle: toggleFavorites }), !favoritesCollapsed && (_jsx("div", { className: "space-y-0.5", children: favorites.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, isSystem: SYSTEM_SET.has(f.name), hasChildren: false, expanded: false, onToggleExpand: () => { }, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f), label: folderLabel(f), indent: 0, contextKey: "fav", isDragDisabled: true }, `fav-${f.id}`))) }))] })), _jsx(SectionHeader, { label: t('folders'), collapsed: folderTreeCollapsed, onToggle: toggleFolderTree, action: _jsx("button", { onClick: () => setDialog({ kind: 'createRoot' }), className: "text-gray-400 hover:text-gray-700 dark:hover:text-gray-200", title: "Neuer Ordner", children: _jsx(Plus, { size: 12 }) }) }), !folderTreeCollapsed && (_jsxs("div", { className: "space-y-0.5", children: [systemFolders.map((f) => renderFolderTree(f, 0)), rootCustomFolders.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: t('my_folders') }), rootCustomFolders.map((f) => renderFolderTree(f, 0, 'roots'))] }))] }))] }), menu && _jsx(ContextMenu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }), dialog?.kind === 'createRoot' && (_jsx(PromptDialog, { title: "Neuer Ordner", label: "Name", placeholder: "z. B. Wichtige Mails", confirmText: "Erstellen", onCancel: () => setDialog(null), validate: (v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null, onConfirm: async (name) => {
                     // Default: neue Ordner werden als Sub-Ordner des Posteingangs angelegt
                     const inbox = all.find((f) => f.name === 'INBOX');
                     await createFolder.mutateAsync({ name, parentId: inbox?.id ?? null });

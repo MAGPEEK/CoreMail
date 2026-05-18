@@ -62,6 +62,8 @@ function FolderItem({
   onContextMenu,
   label,
   indent,
+  isDragDisabled,
+  contextKey = '',
 }: {
   folder: FolderType;
   selected: boolean;
@@ -73,55 +75,67 @@ function FolderItem({
   onContextMenu: (e: React.MouseEvent) => void;
   label: string;
   indent: number;
+  isDragDisabled?: boolean;
+  contextKey?: string;
 }) {
+  // dnd-kit verlangt eindeutige IDs — Context-Key sorgt dafür dass Favoriten
+  // und Haupt-Render nicht kollidieren
+  const dndId = contextKey ? `${contextKey}|${folder.id}` : folder.id;
+  // Outer = Drop-Target (jeder Folder kann Ziel sein)
   const { isOver, setNodeRef: setDropRef } = useDroppable({
-    id: `folder-drop:${folder.id}`,
+    id: `folder-drop:${dndId}`,
     data: { kind: 'folder', folderId: folder.id, folderName: folder.name },
   });
 
-  // Nur Custom-Folder sind draggable (System nicht reparent-bar)
+  // Inner = Drag-Source (nur Custom-Folder + nicht im Favoriten-Mirror)
+  const dragDisabled = isSystem || !!isDragDisabled;
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-    id: `folder-drag:${folder.id}`,
+    id: `folder-drag:${dndId}`,
     data: { kind: 'folder-source', folderId: folder.id, folderName: folder.name },
-    disabled: isSystem,
+    disabled: dragDisabled,
   });
 
   const Icon = ICON_MAP[folder.name] ?? Folder;
 
-  const setRef = (el: HTMLDivElement | null) => {
-    setDropRef(el);
-    setDragRef(el);
-  };
-
   return (
     <div
-      ref={setRef}
-      {...(isSystem ? {} : attributes)}
-      {...(isSystem ? {} : listeners)}
-      onClick={onSelect}
-      onContextMenu={onContextMenu}
-      style={{ paddingLeft: 6 + indent * 14 }}
-      className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors cursor-pointer ${
-        selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-      } ${isOver ? 'ring-2 ring-accent/60 bg-accent/15' : ''} ${isDragging ? 'opacity-40' : ''}`}
-      role="button"
-      tabIndex={0}
+      ref={setDropRef}
+      className={`relative rounded-sm transition-colors ${
+        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15' : ''
+      }`}
     >
-      {hasChildren ? (
-        <button
-          onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
-          className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
-        >
-          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </button>
-      ) : (
-        <span className="w-4 h-4 shrink-0" />
-      )}
-      <Icon size={15} className="shrink-0" style={folder.color ? { color: folder.color } : undefined} />
-      <span className="flex-1 text-left truncate">{label}</span>
-      {folder.unreadCount > 0 && (
-        <span className="text-xs font-bold text-accent">{folder.unreadCount}</span>
-      )}
+      <div
+        ref={setDragRef}
+        {...(dragDisabled ? {} : attributes)}
+        {...(dragDisabled ? {} : listeners)}
+        onClick={onSelect}
+        onContextMenu={onContextMenu}
+        style={{ paddingLeft: 6 + indent * 14 }}
+        className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors ${
+          dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+        } ${
+          selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
+        } ${isDragging ? 'opacity-40' : ''}`}
+        role="button"
+        tabIndex={0}
+      >
+        {hasChildren ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
+          >
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+        ) : (
+          <span className="w-4 h-4 shrink-0" />
+        )}
+        <Icon size={15} className="shrink-0" style={folder.color ? { color: folder.color } : undefined} />
+        <span className="flex-1 text-left truncate">{label}</span>
+        {folder.unreadCount > 0 && (
+          <span className="text-xs font-bold text-accent">{folder.unreadCount}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -244,11 +258,6 @@ export function FolderTree({ onNewMail }: Props) {
 
     const items: ContextMenuItem[] = [
       {
-        label: 'Ordner öffnen',
-        icon: <Folder size={14} />,
-        onClick: () => setSelectedFolder(folder.id),
-      },
-      {
         label: t('mark_all_read'),
         icon: <CheckCheck size={14} />,
         disabled: folder.unreadCount === 0,
@@ -336,14 +345,14 @@ export function FolderTree({ onNewMail }: Props) {
   };
 
   // Rekursives Rendering eines Ordnerbaums
-  const renderFolderTree = (folder: FolderType, indent: number, keyPrefix = ''): ReactNode => {
+  const renderFolderTree = (folder: FolderType, indent: number, contextKey = 'tree'): ReactNode => {
     const isSystem = folder.isSystem ?? SYSTEM_SET.has(folder.name);
     const children = childrenOf.get(folder.id) ?? [];
     const hasChildren = children.length > 0;
     const expanded = !collapsedNodes.has(folder.id);
 
     return (
-      <div key={`${keyPrefix}${folder.id}`}>
+      <div key={`${contextKey}|${folder.id}`}>
         <FolderItem
           folder={folder}
           selected={folder.id === selectedFolderId}
@@ -355,10 +364,11 @@ export function FolderTree({ onNewMail }: Props) {
           onContextMenu={handleContextMenu(folder)}
           label={folderLabel(folder)}
           indent={indent}
+          contextKey={contextKey}
         />
         {hasChildren && expanded && (
           <div>
-            {children.map((c) => renderFolderTree(c, indent + 1, keyPrefix))}
+            {children.map((c) => renderFolderTree(c, indent + 1, contextKey))}
           </div>
         )}
       </div>
@@ -409,6 +419,8 @@ export function FolderTree({ onNewMail }: Props) {
                     onContextMenu={handleContextMenu(f)}
                     label={folderLabel(f)}
                     indent={0}
+                    contextKey="fav"
+                    isDragDisabled
                   />
                 ))}
               </div>
@@ -441,7 +453,7 @@ export function FolderTree({ onNewMail }: Props) {
                 <div className="mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">
                   {t('my_folders')}
                 </div>
-                {rootCustomFolders.map((f) => renderFolderTree(f, 0, 'root-'))}
+                {rootCustomFolders.map((f) => renderFolderTree(f, 0, 'roots'))}
               </>
             )}
           </div>
