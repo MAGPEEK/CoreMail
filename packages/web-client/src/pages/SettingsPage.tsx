@@ -3,12 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
-  ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe,
+  ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
-import { useThemeStore, ACCENT_COLORS, type ThemeMode } from '../store/ui.js';
+import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
@@ -16,7 +16,7 @@ import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar';
 
 interface OofData {
   enabled: boolean;
@@ -1100,6 +1100,37 @@ function SecuritySection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// KALENDER-SEKTION
+// ═══════════════════════════════════════════════════════════════════════════════
+function CalendarSection() {
+  const t = useT();
+  const { calendarShowWeekNumbers, setCalendarShowWeekNumbers } = useUiPrefs();
+
+  return (
+    <section>
+      <h2 className="text-xl font-semibold text-gray-900 mb-1">{t('calendar')}</h2>
+      <p className="text-sm text-gray-600 mb-6">Einstellungen für die Kalender-Ansicht.</p>
+
+      <label className="flex items-start gap-3 p-4 rounded-md border border-gray-200 hover:border-gray-300 transition-colors cursor-pointer">
+        <input
+          type="checkbox"
+          checked={calendarShowWeekNumbers}
+          onChange={(e) => setCalendarShowWeekNumbers(e.target.checked)}
+          className="mt-0.5 rounded border-gray-300 text-accent focus:ring-accent"
+        />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <CalendarDays size={16} className="text-gray-500" />
+            <span className="text-sm font-medium text-gray-900">{t('show_week_numbers')}</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-0.5">Zeigt eine zusätzliche Spalte mit der ISO-Kalenderwoche im Kalender an.</p>
+        </div>
+      </label>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SPRACH-SEKTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function LanguageSection() {
@@ -1174,9 +1205,10 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Allgemein',
     items: [
-      { id: 'theme',    label: 'Design',          icon: Palette },
-      { id: 'language', label: 'Sprache & Region', icon: Globe  },
-      { id: 'security', label: 'Sicherheit',      icon: Shield  },
+      { id: 'theme',    label: 'Design',           icon: Palette      },
+      { id: 'language', label: 'Sprache & Region', icon: Globe        },
+      { id: 'calendar', label: 'Kalender',         icon: CalendarDays },
+      { id: 'security', label: 'Sicherheit',       icon: Shield       },
     ],
   },
 ];
@@ -1190,6 +1222,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   theme:     ThemeSection,
   security:  SecuritySection,
   language:  LanguageSection,
+  calendar:  CalendarSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

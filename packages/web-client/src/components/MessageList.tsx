@@ -66,13 +66,13 @@ function MessageRow({
       {...listeners}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      className={`w-full text-left px-3 ${py} border-b border-gray-100 dark:border-gray-700 transition-colors relative group cursor-pointer ${
+      className={`w-full text-left px-3 ${py} border-b border-gray-100 dark:border-gray-700 transition-all duration-150 relative group cursor-pointer ${
         selected
-          ? 'bg-accent/10'
+          ? 'bg-accent/10 shadow-sm'
           : checked
             ? 'bg-accent/5'
-            : 'hover:bg-gray-50 dark:hover:bg-gray-800'
-      } ${isDragging ? 'opacity-30' : ''}`}
+            : 'hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-sm'
+      } ${isUnread ? 'border-l-2 border-l-accent' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
       role="button"
       tabIndex={0}
     >
@@ -80,10 +80,10 @@ function MessageRow({
         {/* Checkbox / Unread-Dot */}
         <button
           onClick={onToggleCheck}
-          className={`mt-0.5 w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all ${
+          className={`mt-0.5 w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
             checked
-              ? 'bg-accent border-accent text-white'
-              : 'border-gray-300 dark:border-gray-600 opacity-0 group-hover:opacity-100 hover:border-accent'
+              ? 'bg-accent border-accent text-white scale-100'
+              : 'border-gray-300 dark:border-gray-600 opacity-0 group-hover:opacity-100 hover:border-accent hover:scale-110'
           }`}
           aria-label="Auswählen"
         >
@@ -93,50 +93,55 @@ function MessageRow({
         {/* Flag-Icon (immer sichtbar; klickbar) */}
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
-          className="mt-0.5 shrink-0"
+          className="mt-0.5 shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95"
           aria-label="Kennzeichnen"
         >
           {isFlagged
             ? <Flag size={14} className="fill-red-500 text-red-500" />
-            : <Flag size={14} className="text-gray-300 dark:text-gray-600 hover:text-red-400" />}
+            : <Flag size={14} className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors" />}
         </button>
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className={`text-sm truncate ${isUnread ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-700 dark:text-gray-300'}`}>
-              {isPinned && <Pin size={11} className="inline -mt-0.5 mr-1 text-accent" />}
-              {msg.fromAddr}
+            <span className={`text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-700 dark:text-gray-300'}`}>
+              {isUnread && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft shrink-0" />
+              )}
+              {isPinned && <Pin size={11} className="text-accent shrink-0" />}
+              <span className="truncate">{msg.fromAddr}</span>
             </span>
             <div className="flex items-center gap-1 shrink-0">
               {hasAttachments && <Paperclip size={12} className="text-gray-400" />}
               {isSnoozed && <Clock size={12} className="text-amber-500" />}
-              <span className="text-xs text-gray-400">{formatDate(msg.date)}</span>
+              <span className="text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>
             </div>
           </div>
-          <p className={`text-sm truncate mt-0.5 ${isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'}`}>
+          <p className={`text-sm truncate mt-0.5 transition-colors duration-150 ${
+            isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'
+          } group-hover:text-accent`}>
             {msg.subject || '(kein Betreff)'}
           </p>
         </div>
 
-        {/* Hover-Quick-Actions (Gmail-Style) — überdecken Datum beim Hover */}
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-sm">
+        {/* Hover-Quick-Actions (Gmail-Style) — fade-in mit slight slide */}
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title="Archivieren"
           >
             <Archive size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
-            className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600"
+            className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90"
             title="Löschen"
           >
             <Trash2 size={13} />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
           >
             {isUnread ? <MailOpen size={13} /> : <Mail size={13} />}

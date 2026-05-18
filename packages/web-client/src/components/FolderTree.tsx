@@ -100,10 +100,14 @@ function FolderItem({
   return (
     <div
       ref={setDropRef}
-      className={`relative rounded-sm transition-colors ${
-        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15' : ''
+      className={`relative rounded-sm transition-all duration-150 ${
+        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15 scale-[1.02]' : ''
       }`}
     >
+      {/* Animierter Akzentbalken links bei aktivem Ordner */}
+      {selected && (
+        <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-accent rounded-r animate-slide-in-left" aria-hidden />
+      )}
       <div
         ref={setDragRef}
         {...(dragDisabled ? {} : attributes)}
@@ -111,10 +115,10 @@ function FolderItem({
         onClick={onSelect}
         onContextMenu={onContextMenu}
         style={{ paddingLeft: 6 + indent * 14 }}
-        className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors ${
+        className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-all duration-150 ${
           dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
         } ${
-          selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
+          selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 hover:translate-x-0.5'
         } ${isDragging ? 'opacity-40' : ''}`}
         role="button"
         tabIndex={0}
@@ -130,10 +134,10 @@ function FolderItem({
         ) : (
           <span className="w-4 h-4 shrink-0" />
         )}
-        <Icon size={15} className="shrink-0" style={folder.color ? { color: folder.color } : undefined} />
+        <Icon size={15} className="shrink-0 transition-transform duration-150 group-hover:scale-110" style={folder.color ? { color: folder.color } : undefined} />
         <span className="flex-1 text-left truncate">{label}</span>
         {folder.unreadCount > 0 && (
-          <span className="text-xs font-bold text-accent">{folder.unreadCount}</span>
+          <span className="text-xs font-bold text-accent tabular-nums">{folder.unreadCount}</span>
         )}
       </div>
     </div>

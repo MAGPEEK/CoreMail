@@ -1,11 +1,11 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, } from 'lucide-react';
+import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays, } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
-import { useThemeStore, ACCENT_COLORS } from '../store/ui.js';
+import { useThemeStore, ACCENT_COLORS, useUiPrefs } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
@@ -398,6 +398,14 @@ function SecuritySection() {
                                             disableMutation.mutate(); }, disabled: disableMutation.isPending, className: "text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50", children: [disableMutation.isPending ? _jsx(Loader2, { size: 12, className: "animate-spin" }) : _jsx(ShieldOff, { size: 12 }), "2FA deaktivieren"] })] }), regenBackupMutation.data?.codes && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-gray-600 font-medium mb-1", children: "Neue Backup-Codes:" }), _jsx("div", { className: "grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs", children: regenBackupMutation.data.codes.map((c, i) => _jsx("span", { className: "text-gray-700", children: c }, i)) }), _jsxs("button", { onClick: () => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }, className: "mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700", children: [_jsx(Copy, { size: 11 }), " Alle kopieren"] })] }))] }))] })] }));
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// KALENDER-SEKTION
+// ═══════════════════════════════════════════════════════════════════════════════
+function CalendarSection() {
+    const t = useT();
+    const { calendarShowWeekNumbers, setCalendarShowWeekNumbers } = useUiPrefs();
+    return (_jsxs("section", { children: [_jsx("h2", { className: "text-xl font-semibold text-gray-900 mb-1", children: t('calendar') }), _jsx("p", { className: "text-sm text-gray-600 mb-6", children: "Einstellungen f\u00FCr die Kalender-Ansicht." }), _jsxs("label", { className: "flex items-start gap-3 p-4 rounded-md border border-gray-200 hover:border-gray-300 transition-colors cursor-pointer", children: [_jsx("input", { type: "checkbox", checked: calendarShowWeekNumbers, onChange: (e) => setCalendarShowWeekNumbers(e.target.checked), className: "mt-0.5 rounded border-gray-300 text-accent focus:ring-accent" }), _jsxs("div", { className: "flex-1", children: [_jsxs("div", { className: "flex items-center gap-2", children: [_jsx(CalendarDays, { size: 16, className: "text-gray-500" }), _jsx("span", { className: "text-sm font-medium text-gray-900", children: t('show_week_numbers') })] }), _jsx("p", { className: "text-xs text-gray-500 mt-0.5", children: "Zeigt eine zus\u00E4tzliche Spalte mit der ISO-Kalenderwoche im Kalender an." })] })] })] }));
+}
+// ═══════════════════════════════════════════════════════════════════════════════
 // SPRACH-SEKTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function LanguageSection() {
@@ -433,6 +441,7 @@ const NAV = [
         items: [
             { id: 'theme', label: 'Design', icon: Palette },
             { id: 'language', label: 'Sprache & Region', icon: Globe },
+            { id: 'calendar', label: 'Kalender', icon: CalendarDays },
             { id: 'security', label: 'Sicherheit', icon: Shield },
         ],
     },
@@ -446,6 +455,7 @@ const SECTION_MAP = {
     theme: ThemeSection,
     security: SecuritySection,
     language: LanguageSection,
+    calendar: CalendarSection,
 };
 // ═══════════════════════════════════════════════════════════════════════════════
 // HAUPT-EXPORT
