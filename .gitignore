@@ -17,6 +17,10 @@ Thumbs.db
 .idea/
 .vscode/settings.json
 
+# Claude Code runtime
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
 # Docker — Zertifikate nie ins Repo
 infra/docker/nginx/certs/*.pem
 infra/docker/nginx/certs/*.key
