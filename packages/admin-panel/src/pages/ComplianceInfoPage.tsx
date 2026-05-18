@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.6.6';
+const VERSION        = '3.6.7';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.6.7', date: '2026-05-18', title: 'Mini-Kalender + Filter-Panel + Toolbar-Polish',
+    notes: 'Mini-Kalender in der Kalender-Sidebar oben (wie Outlook): Monatsraster mit Wochentag-Headern, KW-Spalte, Heute mit Ring, ausgewählter Tag mit Akzent-Kreis, Navigation per Pfeile, Klick navigiert Hauptkalender. Hauptkalender-Navigation synct MiniCalendar zurück. Neues Filter-Panel im Toolbar: 8 Outlook-Filter (Termine, Besprechungen, Kalendereinträge für Abstimmungen, Reservierungen, Kategorien, Anzeigen als, Wiederholung, Persönlich) mit Checkboxen + Submenu-Pfeile + Filter-löschen-Button. Counter im Toolbar zeigt Anzahl abweichender Filter. Neuer-Termin-Button aus Sidebar entfernt (war doppelt mit Toolbar). RibbonBtn-Layout 80x62 fix für saubere Ausrichtung; line-clamp-2 für lange Labels; Section-Header uppercase tracking-wide.' },
   { version: '3.6.6', date: '2026-05-18', title: 'Kalender-Toolbar (Outlook-Ribbon) + Farbgrid-Picker',
     notes: 'Neue Ribbon-Toolbar über dem Kalender mit 4 Sections (Neu / Anordnen / Filter / Teilen) und Icon+Label-Buttons im Office-Stil. Buttons: Neues Ereignis (Dropdown), Tag/Arbeitswoche/Woche/Monat/Geteilte Ansicht, Filter, Kalender teilen, Drucken. Aktiver View mit Akzent-Ring. Arbeitswoche versteckt Sa/So. Fix: Farb-Submenu zeigte vorher Hex-Codes neben Farbpunkten — jetzt kompaktes 8x2-Grid via neuem ContextMenu type color-grid (aktive Farbe mit Ring, Hover-Scale).' },
   { version: '3.6.5', date: '2026-05-18', title: 'Kalender-Verwaltung (Outlook-Style) + Folder-Selection-Fix',

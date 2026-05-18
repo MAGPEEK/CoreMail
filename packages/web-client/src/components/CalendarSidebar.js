@@ -9,6 +9,7 @@ import { api } from '../api/client.js';
 import { useUiPrefs } from '../store/ui.js';
 import { ContextMenu } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
+import { MiniCalendar } from './MiniCalendar.js';
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
 export const ICON_MAP = {
     Calendar: CalendarIcon, Home, Briefcase, Plane, Heart, Star, Trophy, Gift,
@@ -36,7 +37,7 @@ const COLOR_PALETTE = [
     '#A2433D', '#E64A19', '#F37E2F', '#FBC02D', '#8B5E3C', '#7CB342', '#388E3C', '#0EA5A4',
     '#06B6D4', '#3B82F6', '#1E40AF', '#5E35B1', '#9333EA', '#D81B60', '#EC4899', '#64748B',
 ];
-export function CalendarSidebar({ onNewEvent, calendars, }) {
+export function CalendarSidebar({ calendars, selectedDate, onSelectDate, }) {
     const qc = useQueryClient();
     const { hiddenCalendarIds, toggleCalendar, showOnlyCalendar } = useUiPrefs();
     const [menu, setMenu] = useState(null);
@@ -162,7 +163,7 @@ export function CalendarSidebar({ onNewEvent, calendars, }) {
             },
         ];
     };
-    return (_jsxs("aside", { className: "w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col", children: [_jsx("div", { className: "p-3", children: _jsxs("button", { onClick: onNewEvent, className: "btn-primary w-full justify-center", children: [_jsx(Plus, { size: 15 }), " Neuer Termin"] }) }), _jsx("div", { className: "px-3 mb-1", children: _jsxs("button", { onClick: () => setDialog({ kind: 'create' }), className: "w-full flex items-center gap-2 px-2 py-1.5 text-sm text-accent hover:bg-accent/10 rounded transition-all duration-150 active:scale-95", children: [_jsx(Plus, { size: 15, className: "transition-transform duration-150 group-hover:rotate-90" }), _jsx("span", { className: "font-medium", children: "Kalender hinzuf\u00FCgen" })] }) }), _jsxs("div", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [_jsxs("button", { onClick: () => setExpanded(!expanded), className: "w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300", children: [expanded ? _jsx(ChevronDown, { size: 12 }) : _jsx(ChevronRight, { size: 12 }), "Meine Kalender"] }), expanded && sorted.map((cal) => {
+    return (_jsxs("aside", { className: "w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col", children: [_jsx(MiniCalendar, { selectedDate: selectedDate, onSelectDate: onSelectDate }), _jsx("div", { className: "border-t border-gray-200 dark:border-gray-700 mx-2" }), _jsx("div", { className: "px-3 my-2", children: _jsxs("button", { onClick: () => setDialog({ kind: 'create' }), className: "w-full flex items-center gap-2 px-2 py-1.5 text-sm text-accent hover:bg-accent/10 rounded transition-all duration-150 active:scale-95", children: [_jsx(Plus, { size: 15 }), _jsx("span", { className: "font-medium", children: "Kalender hinzuf\u00FCgen" })] }) }), _jsxs("div", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [_jsxs("button", { onClick: () => setExpanded(!expanded), className: "w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300", children: [expanded ? _jsx(ChevronDown, { size: 12 }) : _jsx(ChevronRight, { size: 12 }), "Meine Kalender"] }), expanded && sorted.map((cal) => {
                         const isHidden = hiddenCalendarIds.includes(cal.id);
                         const Icon = cal.icon ? ICON_MAP[cal.icon] : null;
                         return (_jsxs("div", { className: "group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors", children: [_jsx("button", { onClick: () => toggleCalendar(cal.id), className: "shrink-0 w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all duration-150 active:scale-90", style: {

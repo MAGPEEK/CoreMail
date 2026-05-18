@@ -21,6 +21,7 @@ import type { Calendar } from '../api/types.js';
 import { useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
+import { MiniCalendar } from './MiniCalendar.js';
 
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
 export const ICON_MAP: Record<string, React.ElementType> = {
@@ -63,11 +64,13 @@ type DialogState =
   | null;
 
 export function CalendarSidebar({
-  onNewEvent,
   calendars,
+  selectedDate,
+  onSelectDate,
 }: {
-  onNewEvent: () => void;
   calendars: Calendar[];
+  selectedDate: Date;
+  onSelectDate: (d: Date) => void;
 }) {
   const qc = useQueryClient();
   const { hiddenCalendarIds, toggleCalendar, showOnlyCalendar } = useUiPrefs();
@@ -209,18 +212,17 @@ export function CalendarSidebar({
 
   return (
     <aside className="w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-      <div className="p-3">
-        <button onClick={onNewEvent} className="btn-primary w-full justify-center">
-          <Plus size={15} /> Neuer Termin
-        </button>
-      </div>
+      {/* Mini-Kalender oben */}
+      <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 
-      <div className="px-3 mb-1">
+      <div className="border-t border-gray-200 dark:border-gray-700 mx-2" />
+
+      <div className="px-3 my-2">
         <button
           onClick={() => setDialog({ kind: 'create' })}
           className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-accent hover:bg-accent/10 rounded transition-all duration-150 active:scale-95"
         >
-          <Plus size={15} className="transition-transform duration-150 group-hover:rotate-90" />
+          <Plus size={15} />
           <span className="font-medium">Kalender hinzufügen</span>
         </button>
       </div>

@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.6.7] — 2026-05-18 — Mini-Kalender + Filter-Panel + Toolbar-Polish
+
+### Added
+
+- **Mini-Kalender** in der Kalender-Sidebar oben (wie Outlook):
+  - Monatsraster mit Wochentag-Headern (M D M D F S S)
+  - Optionale KW-Spalte (gekoppelt an die globale „KW anzeigen"-Einstellung)
+  - Heute mit Akzent-Ring, ausgewählter Tag mit gefülltem Akzent-Kreis
+  - Hoch/Runter-Pfeile für Monatsnavigation
+  - Klick auf Monatsname springt zu „Heute"
+  - Klick auf einen Tag navigiert den Hauptkalender zum Datum (`calendarRef.gotoDate`)
+  - Hauptkalender-Navigation (prev/next/today) synchronisiert MiniCalendar über `datesSet`
+- **Filter-Panel** im Kalender öffnet jetzt ein dediziertes Outlook-ähnliches Popover mit:
+  - „Filter löschen" oben
+  - 8 Filter-Optionen mit Checkboxen: Termine · Besprechungen · Kalendereinträge für Abstimmungen · Reservierungen · Kategorien · Anzeigen als · Wiederholung · Persönlich
+  - Submenu-Pfeile bei Filtern mit weiteren Optionen
+  - Status-Counter im Toolbar-Button: zeigt „Filter angewendet" wenn vom Default abweichend
+
+### Changed
+
+- **„Neuer Termin"-Button** aus der Kalender-Sidebar **entfernt** — war redundant zu „Neues Ereignis" in der Ribbon-Toolbar.
+- **CalendarSidebar-API**: nimmt jetzt `selectedDate` + `onSelectDate` statt `onNewEvent` entgegen.
+- **RibbonBtn-Layout**: feste Größe (80 × 62 px) damit alle Toolbar-Buttons sauber aligned sind; `line-clamp-2` für lange Labels („Geteilte Ansicht", „Kalender teilen").
+- **Section-Header** im Toolbar: `uppercase tracking-wide` und 10 px Größe für klare Section-Trennung.
+
+---
+
 ## [3.6.6] — 2026-05-18 — Kalender-Toolbar (Outlook-Ribbon) + Farbgrid-Picker
 
 ### Added

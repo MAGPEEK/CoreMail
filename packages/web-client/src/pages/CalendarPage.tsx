@@ -36,17 +36,21 @@ export function CalendarPage() {
   const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const calendarRef = useRef<FullCalendar>(null);
 
   const changeView = (v: CalendarView) => {
     setView(v);
     const api = calendarRef.current?.getApi();
     if (!api) return;
-    // workWeek = timeGridWeek mit Mo–Fr; FullCalendar hat keine eigene View, daher
-    // schalten wir auf timeGridWeek und filtern Wochenend-Spalten per hiddenDays
     if (v === 'workWeek') api.changeView('timeGridWeek');
-    else if (v === 'split') return; // disabled
+    else if (v === 'split') return;
     else api.changeView(v);
+  };
+
+  const handleSelectDate = (d: Date) => {
+    setSelectedDate(d);
+    calendarRef.current?.getApi()?.gotoDate(d);
   };
 
   const { data: calendars } = useQuery({
@@ -110,13 +114,8 @@ export function CalendarPage() {
     <div className="flex flex-1 overflow-hidden">
       <CalendarSidebar
         calendars={calendars ?? []}
-        onNewEvent={() => setNewEvent({
-          summary: '',
-          dtStart: '',
-          dtEnd: '',
-          calendarId: calendars?.[0]?.id ?? '',
-          allDay: false,
-        })}
+        selectedDate={selectedDate}
+        onSelectDate={handleSelectDate}
       />
 
       {/* Hauptbereich: Toolbar + FullCalendar */}
@@ -140,6 +139,11 @@ export function CalendarPage() {
             ref={calendarRef}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
+            datesSet={(arg) => {
+              // Synchronisiere MiniCalendar bei prev/next/today im Hauptkalender
+              const mid = new Date((arg.start.getTime() + arg.end.getTime()) / 2);
+              setSelectedDate(mid);
+            }}
             locale={LOCALE_MAP[lang] ?? deLocale}
             weekNumbers={calendarShowWeekNumbers}
             weekNumberCalculation="ISO"
