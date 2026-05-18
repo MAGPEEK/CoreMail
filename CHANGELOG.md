@@ -9,6 +9,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.2.3] — 2026-05-18 — OWA-Polish: Hover-Effekte, größeres Compose, Settings-Konsolidierung, DnD-Fix
+
+### Added
+
+- **Phase-1 Microinteractions im OWA** — globale `.btn`-Klassen mit `transition-all 150ms ease-out`, `active:scale-95`, sichtbarer Focus-Ring (`focus-visible:ring-2 ring-accent ring-offset-1`), eigener Disabled-Stil (`opacity-50 cursor-not-allowed`); `.btn-primary` mit `hover:shadow-md`, `.btn-secondary` mit `hover:border-gray-400 hover:shadow-sm`; `.input` mit `hover:border-gray-400` und `focus:ring-2`.
+- **CSS-Keyframes** `pulse-soft` (2.5 s, sanftes Opacity+Scale) und `slide-in-left` (180 ms, für aktiven Folder-Akzent-Balken).
+- **MessageList-Row-Animationen**:
+  - Hover-Shadow (statt nur Background-Change)
+  - Linke 2-px-Border in Akzent-Farbe für ungelesene Mails
+  - Sanft pulsierender Unread-Dot statt statisches Pünktchen
+  - Subject färbt sich beim Hover akzent
+  - Quick-Actions faden + sliden rein (statt hart hidden→flex)
+  - Datum fadet aus, wenn Quick-Actions erscheinen
+  - Flag-Button `scale-125` beim Hover, `scale-95` beim Klick
+  - Checkbox `scale-110` beim Hover
+  - Quick-Action-Buttons `active:scale-90`
+  - Selected-Row mit zusätzlichem `shadow-sm`
+- **FolderTree-Polish**:
+  - Animierter Akzent-Balken links (slide-in-left) beim aktiven Folder
+  - `hover:translate-x-0.5` auf Folder-Items (subtiler Schub nach rechts)
+  - Folder-Icon `scale-110` beim Hover (Mini-Pop)
+  - Drop-Target zusätzlich mit `scale-[1.02]` für deutliches Feedback
+  - Unread-Count mit `tabular-nums` (kein Layout-Shift beim Hochzählen)
+
+### Changed
+
+- **KW-Toggle umgezogen**: vom Kalender-Sidebar → **Einstellungen → Allgemein → Kalender** (eigene Section mit Icon und beschreibendem Hinweis). Anwendungseinstellungen gehören konsistent in Settings, nicht verstreut in Feature-Pages.
+- **Compose-Fenster vergrößert**: 660 → 880 px breit, Editor-Mindesthöhe 180 → 360 px, Gesamthöhe 78 vh (max 92 vh), `max-w-[calc(100vw-2rem)]` für schmale Screens.
+- **UI-Strings ECP → BCP** umbenannt (29 sichtbare Vorkommen in ComplianceInfoPage, RbacPage, CertificatesPage, SsoPage, Toggle, i18n und main.tsx). Code-Identifier (`ECP_ACCENT_RGB`, localStorage-Key `coremail-ecp-theme`) bleiben — keine Breaking-Changes für persistierte Settings. CHANGELOG-Historie unverändert.
+
+### Fixed
+
+- **Folder-Drag&Drop reparate funktionierte nicht**: Wurzel war eine dnd-kit-ID-Kollision — die Favoriten-Sektion rendert dieselben Folder-IDs wie der Haupt-Baum, sodass `useDraggable`/`useDroppable` doppelte IDs hatten. Fix: neuer `contextKey`-Prop (`fav`/`tree`/`roots`) für eindeutige IDs; Drop- und Drag-Refs auf zwei verschachtelten Divs (war: beide auf demselben Element); Favoriten zusätzlich mit `isDragDisabled` (sind nur ein Mirror).
+- **„Ordner öffnen" aus Rechtsklick-Menü entfernt** — redundant, weil ein Linksklick auf den Ordner ihn ohnehin öffnet.
+- **ChevronToggle stoppt `pointerdown`** — Klick auf den Expand/Collapse-Chevron startet keinen versehentlichen Drag mehr.
+
+---
+
 ## [3.2.2] — 2026-05-18 — OWA-Verbesserungen: 4 Sprachen, Folder-Hierarchie, Kalenderwochen, Dialog-Fixes
 
 ### Added

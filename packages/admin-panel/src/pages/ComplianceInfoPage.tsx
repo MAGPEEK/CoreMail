@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.2.2';
+const VERSION        = '3.2.3';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.2.3', date: '2026-05-18', title: 'OWA-Polish · gröberes Compose · Settings-Konsolidierung · DnD-Fix',
+    notes: 'Phase-1 Microinteractions: globale .btn-Klassen mit transition-all 150ms ease-out, active:scale-95, sichtbarer Focus-Ring, Disabled-Stil; hover:shadow-md auf btn-primary, hover:border + shadow-sm auf btn-secondary. CSS-Keyframes pulse-soft (sanft pulsierender Unread-Dot) und slide-in-left (Akzent-Balken). MessageList-Rows mit Hover-Shadow, linker Akzent-Border für Ungelesene, Subject färbt sich akzent beim Hover, Quick-Actions faden+sliden rein, Datum fadet aus, Flag-/Checkbox-Icons mit subtilen Scale-Effekten. FolderTree mit animiertem Akzentbalken, hover:translate-x-0.5, Icon-Scale beim Hover, Unread-Count tabular-nums. KW-Toggle umgezogen von Kalender-Sidebar → Einstellungen → Allgemein → Kalender (Settings-Konsolidierung). Compose-Fenster vergrößert (880×78vh, Editor min 360px). Folder-DnD-Bug behoben (dnd-kit-ID-Kollision durch contextKey, separate Drop/Drag-Refs). "Ordner öffnen" aus Rechtsklick entfernt. UI-Strings ECP→BCP umbenannt (29 Vorkommen).' },
   { version: '3.2.2', date: '2026-05-18', title: 'OWA: 4 Sprachen · Folder-Hierarchie · Kalenderwochen · Dialog-Fixes',
     notes: '4-Sprachen-Switch im OWA (Deutsch/Englisch/Spanisch/Italienisch) unter Einstellungen → "Sprache & Region" mit Flag-Buttons; i18n-Infrastruktur (translations.ts, language-Store, useT()-Hook). Folder-Hierarchie: rekursiver Baum mit Indentation und Expand/Collapse; Drag&Drop-Reparent für Custom-Ordner (Cycle-Check verhindert Ordner-in-eigenen-Subordner); System-Ordner sind Drop-Target aber keine Drag-Source. Neuer Ordner über "+" defaultet jetzt auf Posteingang als Parent. Kalenderwochen-Toggle (KW) in der Kalender-Sidebar mit ISO-Wochenberechnung; FullCalendar-Locale folgt der OWA-Sprache. PromptDialog-Komponente ersetzt window.prompt (war im OWA-Frame teils blockiert) — alle Folder-Mutations zeigen jetzt onSuccess/onError-Toasts. Backend-Regex-Fix: NUL-Byte aus Folder-Validierung entfernt (Synology-Sync-Schaden), Leerzeichen in Ordnernamen jetzt erlaubt.' },
   { version: '3.0.0', date: '2026-05-18', title: 'OWA Major Upgrade · Rechtsklick-Menüs · Favoriten · Drag&Drop · Bulk-Actions',
