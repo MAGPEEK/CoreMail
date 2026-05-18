@@ -1,6 +1,6 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.0';
+const VERSION        = '3.13.1';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
@@ -284,7 +284,6 @@ export function ComplianceInfoPage() {
             <BookOpen size={18} className="text-gray-600 group-hover:text-gray-900 shrink-0" />
             <div>
               <p className="text-sm font-medium text-gray-800">Changelog</p>
-              <p className="text-xs text-gray-400">Keep a Changelog Format</p>
             </div>
             <ExternalLink size={13} className="ml-auto text-gray-400 group-hover:text-gray-600" />
           </a>
