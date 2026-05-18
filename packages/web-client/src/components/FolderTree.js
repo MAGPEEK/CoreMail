@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu } from './ContextMenu.js';
+import { PromptDialog } from './PromptDialog.js';
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'];
 const DISPLAY_NAME = {
     INBOX: 'Posteingang',
@@ -39,6 +40,7 @@ export function FolderTree({ onNewMail }) {
     const { selectedFolderId, setSelectedFolder } = useUiStore();
     const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
     const [menu, setMenu] = useState(null);
+    const [dialog, setDialog] = useState(null);
     const { data: folders } = useQuery({
         queryKey: ['folders'],
         queryFn: () => api.get('/mail/folders'),
@@ -47,24 +49,33 @@ export function FolderTree({ onNewMail }) {
     const patchFolder = useMutation({
         mutationFn: ({ id, body }) => api.patch(`/mail/folders/${id}`, body),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
+        onError: (e) => toast.error(e.message || 'Aktion fehlgeschlagen'),
     });
     const createFolder = useMutation({
         mutationFn: (body) => api.post('/mail/folders', body),
-        onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
+        onSuccess: (folder) => {
+            qc.invalidateQueries({ queryKey: ['folders'] });
+            toast.success(`Ordner „${folder.displayName ?? folder.name}" angelegt`);
+        },
+        onError: (e) => toast.error(e.message || 'Ordner konnte nicht angelegt werden'),
     });
     const deleteFolder = useMutation({
         mutationFn: (id) => api.delete(`/mail/folders/${id}?force=true`),
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['folders'] });
             qc.invalidateQueries({ queryKey: ['messages'] });
+            toast.success('Ordner gelöscht');
         },
+        onError: (e) => toast.error(e.message || 'Ordner konnte nicht gelöscht werden'),
     });
     const emptyFolder = useMutation({
         mutationFn: (id) => api.post(`/mail/folders/${id}/empty`, {}),
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['folders'] });
             qc.invalidateQueries({ queryKey: ['messages'] });
+            toast.success('Ordner geleert');
         },
+        onError: (e) => toast.error(e.message || 'Ordner konnte nicht geleert werden'),
     });
     const markAllRead = useMutation({
         mutationFn: async (folderId) => {
@@ -115,24 +126,18 @@ export function FolderTree({ onNewMail }) {
             {
                 label: 'Neuer Unterordner …',
                 icon: _jsx(FolderPlus, { size: 14 }),
-                onClick: () => {
-                    const name = window.prompt('Name des neuen Ordners:');
-                    if (!name?.trim())
-                        return;
-                    createFolder.mutate({ name: name.trim(), parentId: folder.id });
-                },
+                onClick: () => setDialog({
+                    kind: 'createChild',
+                    parentId: folder.id,
+                    parentLabel: folder.displayName ?? folder.name,
+                }),
             },
         ];
         if (!isSystem) {
             items.push({
                 label: 'Umbenennen',
                 icon: _jsx(Pencil, { size: 14 }),
-                onClick: () => {
-                    const name = window.prompt('Neuer Name:', folder.displayName ?? folder.name);
-                    if (!name?.trim() || name === folder.name)
-                        return;
-                    patchFolder.mutate({ id: folder.id, body: { name: name.trim() } });
-                },
+                onClick: () => setDialog({ kind: 'rename', folder }),
             }, {
                 label: 'Farbe ändern',
                 icon: _jsx(PaintBucket, { size: 14 }),
@@ -178,10 +183,18 @@ export function FolderTree({ onNewMail }) {
         setMenu({ x: e.clientX, y: e.clientY, items: buildFolderMenu(folder) });
     };
     const SectionHeader = ({ label, collapsed, onToggle, action }) => (_jsxs("div", { className: "flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: [_jsxs("button", { onClick: onToggle, className: "flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 flex-1", children: [collapsed ? _jsx(ChevronRight, { size: 12 }) : _jsx(ChevronDown, { size: 12 }), label] }), action] }));
-    return (_jsxs("aside", { className: "w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full", children: [_jsx("div", { className: "p-3", children: _jsxs("button", { onClick: onNewMail, className: "btn-primary w-full justify-center", children: [_jsx(Plus, { size: 15 }), "Neue E-Mail"] }) }), _jsxs("nav", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [favorites.length > 0 && (_jsxs(_Fragment, { children: [_jsx(SectionHeader, { label: "Favoriten", collapsed: favoritesCollapsed, onToggle: toggleFavorites }), !favoritesCollapsed && (_jsx("div", { className: "space-y-0.5", children: favorites.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, `fav-${f.id}`))) }))] })), _jsx(SectionHeader, { label: "Ordner", collapsed: folderTreeCollapsed, onToggle: toggleFolderTree, action: _jsx("button", { onClick: () => {
-                                const name = window.prompt('Name des neuen Ordners:');
-                                if (!name?.trim())
-                                    return;
-                                createFolder.mutate({ name: name.trim() });
-                            }, className: "text-gray-400 hover:text-gray-700 dark:hover:text-gray-200", title: "Neuer Ordner", children: _jsx(Plus, { size: 12 }) }) }), !folderTreeCollapsed && (_jsxs("div", { className: "space-y-0.5", children: [systemFolders.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, f.id))), customFolders.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: "Meine Ordner" }), customFolders.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, f.id)))] }))] }))] }), menu && _jsx(ContextMenu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) })] }));
+    return (_jsxs("aside", { className: "w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full", children: [_jsx("div", { className: "p-3", children: _jsxs("button", { onClick: onNewMail, className: "btn-primary w-full justify-center", children: [_jsx(Plus, { size: 15 }), "Neue E-Mail"] }) }), _jsxs("nav", { className: "flex-1 overflow-y-auto px-1 pb-3", children: [favorites.length > 0 && (_jsxs(_Fragment, { children: [_jsx(SectionHeader, { label: "Favoriten", collapsed: favoritesCollapsed, onToggle: toggleFavorites }), !favoritesCollapsed && (_jsx("div", { className: "space-y-0.5", children: favorites.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, `fav-${f.id}`))) }))] })), _jsx(SectionHeader, { label: "Ordner", collapsed: folderTreeCollapsed, onToggle: toggleFolderTree, action: _jsx("button", { onClick: () => setDialog({ kind: 'createRoot' }), className: "text-gray-400 hover:text-gray-700 dark:hover:text-gray-200", title: "Neuer Ordner", children: _jsx(Plus, { size: 12 }) }) }), !folderTreeCollapsed && (_jsxs("div", { className: "space-y-0.5", children: [systemFolders.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, f.id))), customFolders.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide", children: "Meine Ordner" }), customFolders.map((f) => (_jsx(FolderItem, { folder: f, selected: f.id === selectedFolderId, onSelect: () => setSelectedFolder(f.id), onContextMenu: handleContextMenu(f) }, f.id)))] }))] }))] }), menu && _jsx(ContextMenu, { x: menu.x, y: menu.y, items: menu.items, onClose: () => setMenu(null) }), dialog?.kind === 'createRoot' && (_jsx(PromptDialog, { title: "Neuer Ordner", label: "Name", placeholder: "z. B. Wichtige Mails", confirmText: "Erstellen", onCancel: () => setDialog(null), validate: (v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null, onConfirm: async (name) => {
+                    await createFolder.mutateAsync({ name });
+                    setDialog(null);
+                } })), dialog?.kind === 'createChild' && (_jsx(PromptDialog, { title: "Neuer Unterordner", label: `Unterhalb von „${dialog.parentLabel}"`, placeholder: "Name", confirmText: "Erstellen", onCancel: () => setDialog(null), validate: (v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null, onConfirm: async (name) => {
+                    await createFolder.mutateAsync({ name, parentId: dialog.parentId });
+                    setDialog(null);
+                } })), dialog?.kind === 'rename' && (_jsx(PromptDialog, { title: "Ordner umbenennen", label: "Neuer Name", initialValue: dialog.folder.displayName ?? dialog.folder.name, confirmText: "Speichern", onCancel: () => setDialog(null), validate: (v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null, onConfirm: async (name) => {
+                    if (name === dialog.folder.name) {
+                        setDialog(null);
+                        return;
+                    }
+                    await patchFolder.mutateAsync({ id: dialog.folder.id, body: { name } });
+                    setDialog(null);
+                } }))] }));
 }

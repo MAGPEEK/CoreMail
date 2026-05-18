@@ -11,6 +11,13 @@ import { api } from '../api/client.js';
 import type { Folder as FolderType } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
+import { PromptDialog } from './PromptDialog.js';
+
+type DialogState =
+  | { kind: 'createRoot' }
+  | { kind: 'createChild'; parentId: string; parentLabel: string }
+  | { kind: 'rename'; folder: FolderType }
+  | null;
 
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 
@@ -86,6 +93,7 @@ export function FolderTree({ onNewMail }: Props) {
   const { selectedFolderId, setSelectedFolder } = useUiStore();
   const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
 
   const { data: folders } = useQuery({
     queryKey: ['folders'],
@@ -97,12 +105,17 @@ export function FolderTree({ onNewMail }: Props) {
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
       api.patch(`/mail/folders/${id}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
+    onError: (e: Error) => toast.error(e.message || 'Aktion fehlgeschlagen'),
   });
 
   const createFolder = useMutation({
     mutationFn: (body: { name: string; parentId?: string | null }) =>
       api.post<FolderType>('/mail/folders', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
+    onSuccess: (folder) => {
+      qc.invalidateQueries({ queryKey: ['folders'] });
+      toast.success(`Ordner „${folder.displayName ?? folder.name}" angelegt`);
+    },
+    onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht angelegt werden'),
   });
 
   const deleteFolder = useMutation({
@@ -110,7 +123,9 @@ export function FolderTree({ onNewMail }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] });
       qc.invalidateQueries({ queryKey: ['messages'] });
+      toast.success('Ordner gelöscht');
     },
+    onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht gelöscht werden'),
   });
 
   const emptyFolder = useMutation({
@@ -118,7 +133,9 @@ export function FolderTree({ onNewMail }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] });
       qc.invalidateQueries({ queryKey: ['messages'] });
+      toast.success('Ordner geleert');
     },
+    onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht geleert werden'),
   });
 
   const markAllRead = useMutation({
@@ -175,11 +192,11 @@ export function FolderTree({ onNewMail }: Props) {
       {
         label: 'Neuer Unterordner …',
         icon: <FolderPlus size={14} />,
-        onClick: () => {
-          const name = window.prompt('Name des neuen Ordners:');
-          if (!name?.trim()) return;
-          createFolder.mutate({ name: name.trim(), parentId: folder.id });
-        },
+        onClick: () => setDialog({
+          kind: 'createChild',
+          parentId: folder.id,
+          parentLabel: folder.displayName ?? folder.name,
+        }),
       },
     ];
 
@@ -188,11 +205,7 @@ export function FolderTree({ onNewMail }: Props) {
         {
           label: 'Umbenennen',
           icon: <Pencil size={14} />,
-          onClick: () => {
-            const name = window.prompt('Neuer Name:', folder.displayName ?? folder.name);
-            if (!name?.trim() || name === folder.name) return;
-            patchFolder.mutate({ id: folder.id, body: { name: name.trim() } });
-          },
+          onClick: () => setDialog({ kind: 'rename', folder }),
         },
         {
           label: 'Farbe ändern',
@@ -294,11 +307,7 @@ export function FolderTree({ onNewMail }: Props) {
           onToggle={toggleFolderTree}
           action={
             <button
-              onClick={() => {
-                const name = window.prompt('Name des neuen Ordners:');
-                if (!name?.trim()) return;
-                createFolder.mutate({ name: name.trim() });
-              }}
+              onClick={() => setDialog({ kind: 'createRoot' })}
               className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               title="Neuer Ordner"
             >
@@ -339,6 +348,52 @@ export function FolderTree({ onNewMail }: Props) {
       </nav>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+
+      {dialog?.kind === 'createRoot' && (
+        <PromptDialog
+          title="Neuer Ordner"
+          label="Name"
+          placeholder="z. B. Wichtige Mails"
+          confirmText="Erstellen"
+          onCancel={() => setDialog(null)}
+          validate={(v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null}
+          onConfirm={async (name) => {
+            await createFolder.mutateAsync({ name });
+            setDialog(null);
+          }}
+        />
+      )}
+
+      {dialog?.kind === 'createChild' && (
+        <PromptDialog
+          title="Neuer Unterordner"
+          label={`Unterhalb von „${dialog.parentLabel}"`}
+          placeholder="Name"
+          confirmText="Erstellen"
+          onCancel={() => setDialog(null)}
+          validate={(v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null}
+          onConfirm={async (name) => {
+            await createFolder.mutateAsync({ name, parentId: dialog.parentId });
+            setDialog(null);
+          }}
+        />
+      )}
+
+      {dialog?.kind === 'rename' && (
+        <PromptDialog
+          title="Ordner umbenennen"
+          label="Neuer Name"
+          initialValue={dialog.folder.displayName ?? dialog.folder.name}
+          confirmText="Speichern"
+          onCancel={() => setDialog(null)}
+          validate={(v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null}
+          onConfirm={async (name) => {
+            if (name === dialog.folder.name) { setDialog(null); return; }
+            await patchFolder.mutateAsync({ id: dialog.folder.id, body: { name } });
+            setDialog(null);
+          }}
+        />
+      )}
     </aside>
   );
 }
