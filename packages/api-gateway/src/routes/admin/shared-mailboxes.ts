@@ -130,34 +130,70 @@ adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Res
 });
 
 // ── POST /:id/permissions ─────────────────────────────────────────────────────
+// Body: { userId, permissions: ['FULL_ACCESS','SEND_AS'] }  oder Legacy { userId, permission: '…' }
+// Setzt für den User alle in `permissions` aufgeführten Berechtigungen (Set-Semantik).
 adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
+  const PERM_VALUES = ['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY'] as const;
   const schema = z.object({
-    userId:     z.string().min(1),
-    permission: z.enum(['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY']),
+    userId:      z.string().min(1),
+    permissions: z.array(z.enum(PERM_VALUES)).min(1).optional(),
+    permission:  z.enum(PERM_VALUES).optional(), // Legacy
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
+  const perms = p.data.permissions ?? (p.data.permission ? [p.data.permission] : []);
+  if (perms.length === 0) { res.status(400).json({ error: 'Keine Berechtigung angegeben' }); return; }
 
   const actorId = (req as Request & { userId?: string }).userId ?? 'system';
   try {
-    const perm = await prisma.sharedMailboxPerm.upsert({
-      where: { sharedMailboxId_userId: { sharedMailboxId, userId: p.data.userId } },
-      create: { sharedMailboxId, userId: p.data.userId, permission: p.data.permission, grantedBy: actorId },
-      update: { permission: p.data.permission, grantedBy: actorId },
+    // Replace-Strategie: alle bestehenden für (mailbox, user) löschen, dann neu setzen
+    await prisma.$transaction([
+      prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId, userId: p.data.userId } }),
+      prisma.sharedMailboxPerm.createMany({
+        data: perms.map((permission) => ({ sharedMailboxId, userId: p.data.userId, permission, grantedBy: actorId })),
+        skipDuplicates: true,
+      }),
+    ]);
+    const updated = await prisma.sharedMailboxPerm.findMany({
+      where: { sharedMailboxId, userId: p.data.userId },
       include: { user: { select: { email: true, displayName: true } } },
     });
-    res.status(201).json(perm);
-  } catch { res.status(400).json({ error: 'Berechtigung konnte nicht gesetzt werden' }); }
+    res.status(201).json(updated);
+  } catch (err) {
+    log.error({ err }, 'Failed to set permissions');
+    res.status(400).json({ error: 'Berechtigung konnte nicht gesetzt werden' });
+  }
 });
 
-// ── DELETE /:id/permissions/:userId ──────────────────────────────────────────
+// ── DELETE /:id/permissions/:userId — entfernt ALLE Berechtigungen des Users ──
 adminSharedMailboxesRouter.delete('/:id/permissions/:userId', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
   const userId = req.params['userId'] ?? '';
   try {
+    const result = await prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId, userId } });
+    if (result.count === 0) { res.status(404).json({ error: 'Not found' }); return; }
+    res.status(204).end();
+  } catch { res.status(404).json({ error: 'Not found' }); }
+});
+
+// ── DELETE /:id/permissions/:userId/:permission — entfernt EINE Berechtigung ──
+adminSharedMailboxesRouter.delete('/:id/permissions/:userId/:permission', async (req: Request, res: Response) => {
+  const sharedMailboxId = req.params['id'] ?? '';
+  const userId = req.params['userId'] ?? '';
+  const permission = req.params['permission'] ?? '';
+  const valid = ['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY'].includes(permission);
+  if (!valid) { res.status(400).json({ error: 'Invalid permission' }); return; }
+  try {
     await prisma.sharedMailboxPerm.delete({
-      where: { sharedMailboxId_userId: { sharedMailboxId, userId } },
+      where: {
+        sharedMailboxId_userId_permission: {
+          sharedMailboxId,
+          userId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          permission: permission as any,
+        },
+      },
     });
     res.status(204).end();
   } catch { res.status(404).json({ error: 'Not found' }); }

@@ -102,18 +102,18 @@ export function CertificatesPage() {
 
   const { data: certs = [], isLoading } = useQuery<Certificate[]>({
     queryKey: ['admin-certificates'],
-    queryFn: () => api.get<Certificate[]>('/api/v1/admin/certificates'),
+    queryFn: () => api.get<Certificate[]>('/admin/certificates'),
     refetchInterval: 10_000,
   });
 
   const renewMutation = useMutation({
-    mutationFn: (id: string) => api.post(`/api/v1/admin/certificates/${id}/renew`),
+    mutationFn: (id: string) => api.post(`/admin/certificates/${id}/renew`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Erneuerung gestartet'); },
     onError: () => toast.error('Erneuerung fehlgeschlagen'),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/v1/admin/certificates/${id}`),
+    mutationFn: (id: string) => api.delete(`/admin/certificates/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Zertifikat gelöscht'); },
     onError: () => toast.error('Löschen fehlgeschlagen'),
   });
@@ -302,7 +302,7 @@ function LetsEncryptModal({ onClose }: { onClose: () => void }) {
   const [staging, setStaging]   = useState(false);
 
   const mutation = useMutation({
-    mutationFn: () => api.post('/api/v1/admin/certificates/letsencrypt', {
+    mutationFn: () => api.post('/admin/certificates/letsencrypt', {
       name,
       domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
       email,
@@ -377,7 +377,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const [chainPem, setChainPem] = useState('');
 
   const mutation = useMutation({
-    mutationFn: () => api.post('/api/v1/admin/certificates/upload', {
+    mutationFn: () => api.post('/admin/certificates/upload', {
       name,
       domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
       services,
@@ -445,7 +445,7 @@ function SelfSignedModal({ onClose }: { onClose: () => void }) {
   const [days, setDays]         = useState(365);
 
   const mutation = useMutation({
-    mutationFn: () => api.post('/api/v1/admin/certificates/self-signed', {
+    mutationFn: () => api.post('/admin/certificates/self-signed', {
       name,
       domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
       services,

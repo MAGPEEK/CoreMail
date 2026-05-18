@@ -23,10 +23,10 @@ export function SharedMailboxesPage() {
     }, [search]);
     const { data, isLoading } = useQuery({
         queryKey: ['admin-shared-mailboxes', debouncedSearch, page, limit],
-        queryFn: () => api.get(`/api/v1/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
+        queryFn: () => api.get(`/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
     });
     const deleteMutation = useMutation({
-        mutationFn: (id) => api.delete(`/api/v1/admin/shared-mailboxes/${id}`),
+        mutationFn: (id) => api.delete(`/admin/shared-mailboxes/${id}`),
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Gelöscht'); },
         onError: () => toast.error('Löschen fehlgeschlagen'),
     });
@@ -51,8 +51,8 @@ function SharedMailboxModal({ item, onClose }) {
     });
     const mutation = useMutation({
         mutationFn: () => item
-            ? api.put(`/api/v1/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
-            : api.post('/api/v1/admin/shared-mailboxes', { email, displayName: name, domainId }),
+            ? api.put(`/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
+            : api.post('/admin/shared-mailboxes', { email, displayName: name, domainId }),
         onSuccess: () => {
             void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
             toast.success(item ? 'Gespeichert' : 'Erstellt');
@@ -62,26 +62,57 @@ function SharedMailboxModal({ item, onClose }) {
     });
     return (_jsx("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", children: _jsxs("div", { className: "bg-white rounded-xl shadow-2xl w-full max-w-md", children: [_jsxs("div", { className: "flex items-center justify-between px-5 py-4 border-b border-gray-200", children: [_jsx("h2", { className: "font-semibold text-gray-900", children: item ? 'Postfach bearbeiten' : 'Neues freigegebenes Postfach' }), _jsx("button", { onClick: onClose, className: "text-gray-400 hover:text-gray-600", children: _jsx(X, { size: 18 }) })] }), _jsxs("div", { className: "p-5 space-y-4", children: [!item && (_jsxs(_Fragment, { children: [_jsxs("div", { children: [_jsx("label", { className: "field-label", children: "E-Mail-Adresse" }), _jsx("input", { value: email, onChange: e => setEmail(e.target.value), className: "input", placeholder: "support@domain.com" })] }), _jsxs("div", { children: [_jsx("label", { className: "field-label", children: "Domain" }), _jsxs("select", { value: domainId, onChange: e => setDomainId(e.target.value), className: "input", children: [_jsx("option", { value: "", children: "Domain w\u00E4hlen\u2026" }), domains.map(d => _jsx("option", { value: d.id, children: d.name }, d.id))] })] })] })), _jsxs("div", { children: [_jsx("label", { className: "field-label", children: "Anzeigename" }), _jsx("input", { value: name, onChange: e => setName(e.target.value), className: "input", placeholder: "Support-Team" })] }), item && (_jsxs("label", { className: "flex items-center gap-2 text-sm cursor-pointer select-none", children: [_jsx("input", { type: "checkbox", checked: active, onChange: e => setActive(e.target.checked), className: "rounded" }), "Aktiv"] })), _jsxs("div", { className: "flex justify-end gap-2 pt-2", children: [_jsx("button", { onClick: onClose, className: "btn-secondary", children: "Abbrechen" }), _jsxs("button", { onClick: () => mutation.mutate(), disabled: mutation.isPending || !name || (!item && (!email || !domainId)), className: "btn-primary flex items-center gap-1.5", children: [mutation.isPending && _jsx(Loader2, { size: 14, className: "animate-spin" }), item ? 'Speichern' : 'Erstellen'] })] })] })] }) }));
 }
-// ── Permissions Modal ─────────────────────────────────────────────────────────
+// ── Permissions Modal — Exchange-Style mit mehreren Permissions pro User ─────
 function PermissionsModal({ item, onClose }) {
     const qc = useQueryClient();
     const [userId, setUserId] = useState('');
-    const [permission, setPerm] = useState('FULL_ACCESS');
+    const [perms, setPerms] = useState(['FULL_ACCESS']);
     const [userSearch, setUserSearch] = useState('');
+    const [editingUser, setEditingUser] = useState(null);
     const { data: users = [] } = useQuery({
         queryKey: ['admin-users-list', userSearch],
         queryFn: () => api.get(`/admin/mailboxes`).then(r => Array.isArray(r) ? r.filter(u => u.email.includes(userSearch) || (u.displayName ?? '').includes(userSearch)).slice(0, 50) : []),
         enabled: userSearch.length > 1,
     });
-    const addMutation = useMutation({
-        mutationFn: () => api.post(`/api/v1/admin/shared-mailboxes/${item.id}/permissions`, { userId, permission }),
-        onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Berechtigung hinzugefügt'); setUserId(''); setUserSearch(''); },
+    // Gruppiere bestehende Berechtigungen pro User
+    const grouped = item.permissions.reduce((acc, p) => {
+        const key = p.userId;
+        if (!acc[key])
+            acc[key] = { user: p.user, perms: [] };
+        acc[key].perms.push({ id: p.id, permission: p.permission });
+        return acc;
+    }, {});
+    const setMutation = useMutation({
+        mutationFn: ({ uid, permissions }) => api.post(`/admin/shared-mailboxes/${item.id}/permissions`, { userId: uid, permissions }),
+        onSuccess: () => {
+            void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
+            toast.success('Berechtigungen gespeichert');
+            setUserId('');
+            setUserSearch('');
+            setPerms(['FULL_ACCESS']);
+            setEditingUser(null);
+        },
+        onError: (e) => toast.error(e.message || 'Fehler'),
+    });
+    const removeAllMutation = useMutation({
+        mutationFn: (uid) => api.delete(`/admin/shared-mailboxes/${item.id}/permissions/${uid}`),
+        onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Alle Berechtigungen entfernt'); },
         onError: () => toast.error('Fehler'),
     });
-    const removeMutation = useMutation({
-        mutationFn: (uid) => api.delete(`/api/v1/admin/shared-mailboxes/${item.id}/permissions/${uid}`),
-        onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Entfernt'); },
-        onError: () => toast.error('Fehler'),
-    });
-    return (_jsx("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", children: _jsxs("div", { className: "bg-white rounded-xl shadow-2xl w-full max-w-lg", children: [_jsxs("div", { className: "flex items-center justify-between px-5 py-4 border-b border-gray-200", children: [_jsxs("div", { children: [_jsx("h2", { className: "font-semibold text-gray-900", children: "Berechtigungen" }), _jsx("p", { className: "text-xs text-gray-500", children: item.email })] }), _jsx("button", { onClick: onClose, className: "text-gray-400 hover:text-gray-600", children: _jsx(X, { size: 18 }) })] }), _jsxs("div", { className: "p-5 space-y-4", children: [_jsxs("div", { className: "space-y-2", children: [item.permissions.length === 0 && (_jsx("p", { className: "text-sm text-gray-400 text-center py-2", children: "Noch keine Berechtigungen" })), item.permissions.map(p => (_jsxs("div", { className: "flex items-center justify-between p-2 bg-gray-50 rounded-lg", children: [_jsxs("div", { children: [_jsx("p", { className: "text-sm font-medium text-gray-900", children: p.user.displayName }), _jsxs("p", { className: "text-xs text-gray-500", children: [p.user.email, " \u00B7 ", PERM_LABELS[p.permission]] })] }), _jsx("button", { onClick: () => removeMutation.mutate(p.userId), className: "p-1 text-gray-400 hover:text-red-600 transition-colors", children: _jsx(X, { size: 14 }) })] }, p.id)))] }), _jsxs("div", { className: "border-t border-gray-200 pt-4", children: [_jsx("p", { className: "text-xs font-semibold text-gray-500 uppercase mb-2", children: "Berechtigung hinzuf\u00FCgen" }), _jsxs("div", { className: "space-y-2", children: [_jsx("input", { value: userSearch, onChange: e => setUserSearch(e.target.value), className: "input", placeholder: "Benutzer suchen\u2026" }), users.length > 0 && (_jsx("select", { size: 4, value: userId, onChange: e => setUserId(e.target.value), className: "input h-auto", children: users.map(u => _jsxs("option", { value: u.id, children: [u.displayName, " (", u.email, ")"] }, u.id)) })), _jsx("select", { value: permission, onChange: e => setPerm(e.target.value), className: "input", children: Object.entries(PERM_LABELS).map(([k, v]) => (_jsx("option", { value: k, children: v }, k))) }), _jsxs("button", { onClick: () => addMutation.mutate(), disabled: !userId || addMutation.isPending, className: "btn-primary w-full flex items-center justify-center gap-1.5", children: [addMutation.isPending ? _jsx(Loader2, { size: 14, className: "animate-spin" }) : _jsx(UserPlus, { size: 14 }), "Hinzuf\u00FCgen"] })] })] })] })] }) }));
+    const togglePerm = (p) => setPerms((cur) => cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]);
+    // Validierung: SEND_AS und SEND_ON_BEHALF schließen sich gegenseitig aus (Exchange-Verhalten)
+    const sendConflict = perms.includes('SEND_AS') && perms.includes('SEND_ON_BEHALF');
+    return (_jsx("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4", children: _jsxs("div", { className: "bg-white rounded-xl shadow-2xl w-full max-w-xl", children: [_jsxs("div", { className: "flex items-center justify-between px-5 py-4 border-b border-gray-200", children: [_jsxs("div", { children: [_jsx("h2", { className: "font-semibold text-gray-900", children: "Berechtigungen" }), _jsx("p", { className: "text-xs text-gray-500", children: item.email })] }), _jsx("button", { onClick: onClose, className: "text-gray-400 hover:text-gray-600", children: _jsx(X, { size: 18 }) })] }), _jsxs("div", { className: "p-5 space-y-4", children: [_jsxs("div", { className: "space-y-2", children: [Object.keys(grouped).length === 0 && !editingUser && (_jsx("p", { className: "text-sm text-gray-400 text-center py-2", children: "Noch keine Berechtigungen" })), Object.entries(grouped).map(([uid, g]) => (_jsx("div", { className: "p-3 bg-gray-50 rounded-lg", children: _jsxs("div", { className: "flex items-start justify-between", children: [_jsxs("div", { className: "flex-1 min-w-0", children: [_jsx("p", { className: "text-sm font-medium text-gray-900", children: g.user.displayName }), _jsx("p", { className: "text-xs text-gray-500 truncate", children: g.user.email }), _jsx("div", { className: "flex flex-wrap gap-1 mt-1.5", children: g.perms.map((p) => (_jsx("span", { className: "text-[10px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded", children: PERM_LABELS[p.permission] }, p.id))) })] }), _jsxs("div", { className: "flex items-center gap-1 shrink-0", children: [_jsx("button", { onClick: () => {
+                                                            setEditingUser(uid);
+                                                            setPerms(g.perms.map((p) => p.permission));
+                                                            setUserId(uid);
+                                                        }, className: "text-xs text-accent hover:underline", children: "Bearbeiten" }), _jsx("button", { onClick: () => removeAllMutation.mutate(uid), className: "p-1 text-gray-400 hover:text-red-600 transition-colors", children: _jsx(X, { size: 14 }) })] })] }) }, uid)))] }), _jsxs("div", { className: "border-t border-gray-200 pt-4 space-y-2", children: [_jsx("p", { className: "text-xs font-semibold text-gray-500 uppercase", children: editingUser ? 'Berechtigungen bearbeiten' : 'Berechtigung hinzufügen' }), !editingUser && (_jsxs(_Fragment, { children: [_jsx("input", { value: userSearch, onChange: e => setUserSearch(e.target.value), className: "input", placeholder: "Benutzer suchen (min. 2 Zeichen)\u2026" }), users.length > 0 && (_jsx("select", { size: 4, value: userId, onChange: e => setUserId(e.target.value), className: "input h-auto", children: users.map(u => _jsxs("option", { value: u.id, children: [u.displayName, " (", u.email, ")"] }, u.id)) }))] })), _jsx("div", { className: "space-y-1.5", children: Object.entries(PERM_LABELS).map(([k, v]) => {
+                                        const description = {
+                                            FULL_ACCESS: 'Vollzugriff auf Mailbox (Lesen, Schreiben, Verschieben, Löschen)',
+                                            SEND_AS: 'Sendet E-Mails direkt unter der Adresse des Postfachs',
+                                            SEND_ON_BEHALF: 'Sendet im Namen — Empfänger sieht „im Auftrag von Postfach"',
+                                            READ_ONLY: 'Nur Lesezugriff — keine Änderungen erlaubt',
+                                        }[k];
+                                        return (_jsxs("label", { className: "flex items-start gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer", children: [_jsx("input", { type: "checkbox", checked: perms.includes(k), onChange: () => togglePerm(k), className: "mt-0.5" }), _jsxs("div", { className: "flex-1", children: [_jsx("p", { className: "text-sm font-medium text-gray-900", children: v }), _jsx("p", { className: "text-xs text-gray-500", children: description })] })] }, k));
+                                    }) }), sendConflict && (_jsx("p", { className: "text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1", children: "\u26A0 \u201ESenden als\" und \u201ESenden im Auftrag\" sollten nicht gleichzeitig gesetzt sein \u2014 Exchange-Konvention." })), _jsxs("div", { className: "flex justify-end gap-2 pt-2", children: [editingUser && (_jsx("button", { onClick: () => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); }, className: "btn-secondary text-sm", children: "Abbrechen" })), _jsxs("button", { onClick: () => userId && setMutation.mutate({ uid: userId, permissions: perms }), disabled: !userId || perms.length === 0 || setMutation.isPending, className: "btn-primary flex items-center justify-center gap-1.5", children: [setMutation.isPending ? _jsx(Loader2, { size: 14, className: "animate-spin" }) : _jsx(UserPlus, { size: 14 }), editingUser ? 'Speichern' : 'Hinzufügen'] })] })] })] })] }) }));
 }

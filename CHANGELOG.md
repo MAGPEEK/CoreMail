@@ -9,6 +9,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.7.9] — 2026-05-18 — Audit: Pfad-Doppel-Bug, SharedMailbox Multi-Permission (Exchange-2019), DNSBL
+
+### Fixed (Audit der Admin-Panel-Features)
+
+- **🐛 Systemischer Pfad-Doppel-Bug** in 5 Admin-Panel-Pages: die `api`-Client-Funktion prefixt schon `/api/v1`, mehrere Pages hatten den Prefix ein zweites Mal hardcoded — der finale URL war `/api/v1/api/v1/…` → 404 → Anlegen, Speichern und Listen funktionierten nicht. Behoben in:
+  - `SharedMailboxesPage.tsx` (POST → 404 → „lässt sich nicht anlegen")
+  - `TransportRulesPage.tsx`
+  - `OrganisationPage.tsx`
+  - `CertificatesPage.tsx`
+  - `ConnectorsPage.tsx`
+- **Audit-Verifikation**:
+  - **Greylisting** — funktional (Backend POST/Pipeline-Stage 1a OK, UI-Section korrekt)
+  - **Message Trace** — funktional (Backend liest aus SystemLog mit Category MAIL_FLOW, UI-Filter + Export OK)
+  - **Transport Rules** — funktional (Full CRUD, RuleModal mit Conditions/Actions; nach Pfad-Fix wieder anlegbar)
+  - **Verteilergruppen** — funktional (Modal war bereits korrekt gerendert)
+  - **Ressourcenpostfächer** — funktional (Modal war bereits korrekt gerendert)
+
+### Changed — Freigegebene Postfächer: Exchange-2019-Berechtigungsmodell
+
+- **Mehrere Berechtigungen pro User** möglich (vorher genau eine):
+  - Prisma `@@unique([sharedMailboxId, userId])` → `@@unique([sharedMailboxId, userId, permission])`
+  - Ein User kann z. B. gleichzeitig `FULL_ACCESS` UND `SEND_AS` haben (Exchange-Standard)
+  - Plus zusätzlicher Index auf `(sharedMailboxId, userId)` für schnelle Lookups
+- **Backend** `POST /api/v1/admin/shared-mailboxes/:id/permissions`:
+  - Akzeptiert jetzt `{ userId, permissions: ['FULL_ACCESS','SEND_AS'] }` (Array, Set-Semantik)
+  - Legacy-Format `{ userId, permission: '…' }` bleibt rückwärtskompatibel
+  - Replace-Strategie: vorhandene Berechtigungen des Users werden ersetzt
+- **Neue Route** `DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId/:permission` — entfernt nur **eine** spezifische Berechtigung statt alle des Users
+- **Admin-Panel PermissionsModal komplett überarbeitet**:
+  - Bestehende Berechtigungen pro User gruppiert mit Permission-Badges (Vollzugriff · Senden als · Im Auftrag · Nur Lesen)
+  - „Bearbeiten"-Button öffnet Inline-Editor mit den aktuellen Permissions als Checkboxen
+  - Multi-Permission-Checkboxen mit Beschreibung (z. B. „Senden als — sendet direkt unter Adresse des Postfachs")
+  - Warnung wenn `SEND_AS` + `SEND_ON_BEHALF` gleichzeitig gesetzt sind (Exchange-Konvention)
+
+### Schema-Migration
+
+- `shared_mailbox_perms` unique-Constraint geändert — Prisma `db push` regeneriert ihn beim Container-Start
+- **Achtung**: falls vor 3.7.9 derselbe User mehrere Permissions angefordert hätte, war das gar nicht möglich — keine Daten-Migration nötig.
+
+---
+
 ## [3.7.0] — 2026-05-18 — DNSBL-Modul ausgebaut: Zonen, Aktionen, Score, IPv6, Cache, Stats
 
 ### Added

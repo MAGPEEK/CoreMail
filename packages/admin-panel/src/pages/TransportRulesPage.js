@@ -29,15 +29,15 @@ export function TransportRulesPage() {
     const [createOpen, setCreateOpen] = useState(false);
     const { data: rules = [], isLoading } = useQuery({
         queryKey: ['admin-transport-rules'],
-        queryFn: () => api.get('/api/v1/admin/transport-rules'),
+        queryFn: () => api.get('/admin/transport-rules'),
     });
     const toggleMutation = useMutation({
-        mutationFn: (id) => api.patch(`/api/v1/admin/transport-rules/${id}/toggle`, {}),
+        mutationFn: (id) => api.patch(`/admin/transport-rules/${id}/toggle`, {}),
         onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }),
         onError: () => toast.error('Fehler'),
     });
     const deleteMutation = useMutation({
-        mutationFn: (id) => api.delete(`/api/v1/admin/transport-rules/${id}`),
+        mutationFn: (id) => api.delete(`/admin/transport-rules/${id}`),
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }); toast.success('Gelöscht'); },
         onError: () => toast.error('Löschen fehlgeschlagen'),
     });
@@ -57,8 +57,8 @@ function RuleModal({ rule, onClose }) {
         mutationFn: () => {
             const body = { name, description, priority, enabled, conditions, actions };
             return rule
-                ? api.put(`/api/v1/admin/transport-rules/${rule.id}`, body)
-                : api.post('/api/v1/admin/transport-rules', body);
+                ? api.put(`/admin/transport-rules/${rule.id}`, body)
+                : api.post('/admin/transport-rules', body);
         },
         onSuccess: () => {
             void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] });

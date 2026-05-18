@@ -40,11 +40,11 @@ export function SharedMailboxesPage() {
 
   const { data, isLoading } = useQuery<{ items: SharedMailbox[]; total: number }>({
     queryKey: ['admin-shared-mailboxes', debouncedSearch, page, limit],
-    queryFn: () => api.get(`/api/v1/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
+    queryFn: () => api.get(`/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/v1/admin/shared-mailboxes/${id}`),
+    mutationFn: (id: string) => api.delete(`/admin/shared-mailboxes/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Gelöscht'); },
     onError: () => toast.error('Löschen fehlgeschlagen'),
   });
@@ -179,8 +179,8 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
 
   const mutation = useMutation({
     mutationFn: () => item
-      ? api.put(`/api/v1/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
-      : api.post('/api/v1/admin/shared-mailboxes', { email, displayName: name, domainId }),
+      ? api.put(`/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
+      : api.post('/admin/shared-mailboxes', { email, displayName: name, domainId }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
       toast.success(item ? 'Gespeichert' : 'Erstellt');
@@ -237,12 +237,13 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   );
 }
 
-// ── Permissions Modal ─────────────────────────────────────────────────────────
+// ── Permissions Modal — Exchange-Style mit mehreren Permissions pro User ─────
 function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () => void }) {
   const qc = useQueryClient();
   const [userId, setUserId]     = useState('');
-  const [permission, setPerm]   = useState<PermType>('FULL_ACCESS');
+  const [perms, setPerms]       = useState<PermType[]>(['FULL_ACCESS']);
   const [userSearch, setUserSearch] = useState('');
+  const [editingUser, setEditingUser] = useState<string | null>(null);
 
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ['admin-users-list', userSearch],
@@ -250,21 +251,40 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
     enabled: userSearch.length > 1,
   });
 
-  const addMutation = useMutation({
-    mutationFn: () => api.post(`/api/v1/admin/shared-mailboxes/${item.id}/permissions`, { userId, permission }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Berechtigung hinzugefügt'); setUserId(''); setUserSearch(''); },
+  // Gruppiere bestehende Berechtigungen pro User
+  const grouped = item.permissions.reduce<Record<string, { user: { email: string; displayName: string }; perms: { id: string; permission: PermType }[] }>>((acc, p) => {
+    const key = p.userId;
+    if (!acc[key]) acc[key] = { user: p.user, perms: [] };
+    acc[key].perms.push({ id: p.id, permission: p.permission });
+    return acc;
+  }, {});
+
+  const setMutation = useMutation({
+    mutationFn: ({ uid, permissions }: { uid: string; permissions: PermType[] }) =>
+      api.post(`/admin/shared-mailboxes/${item.id}/permissions`, { userId: uid, permissions }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
+      toast.success('Berechtigungen gespeichert');
+      setUserId(''); setUserSearch(''); setPerms(['FULL_ACCESS']); setEditingUser(null);
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+  });
+
+  const removeAllMutation = useMutation({
+    mutationFn: (uid: string) => api.delete(`/admin/shared-mailboxes/${item.id}/permissions/${uid}`),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Alle Berechtigungen entfernt'); },
     onError: () => toast.error('Fehler'),
   });
 
-  const removeMutation = useMutation({
-    mutationFn: (uid: string) => api.delete(`/api/v1/admin/shared-mailboxes/${item.id}/permissions/${uid}`),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Entfernt'); },
-    onError: () => toast.error('Fehler'),
-  });
+  const togglePerm = (p: PermType) =>
+    setPerms((cur) => cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]);
+
+  // Validierung: SEND_AS und SEND_ON_BEHALF schließen sich gegenseitig aus (Exchange-Verhalten)
+  const sendConflict = perms.includes('SEND_AS') && perms.includes('SEND_ON_BEHALF');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
             <h2 className="font-semibold text-gray-900">Berechtigungen</h2>
@@ -273,46 +293,110 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
-          {/* Bestehende Berechtigungen */}
+          {/* Bestehende Berechtigungen — gruppiert pro User */}
           <div className="space-y-2">
-            {item.permissions.length === 0 && (
+            {Object.keys(grouped).length === 0 && !editingUser && (
               <p className="text-sm text-gray-400 text-center py-2">Noch keine Berechtigungen</p>
             )}
-            {item.permissions.map(p => (
-              <div key={p.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{p.user.displayName}</p>
-                  <p className="text-xs text-gray-500">{p.user.email} · {PERM_LABELS[p.permission]}</p>
+            {Object.entries(grouped).map(([uid, g]) => (
+              <div key={uid} className="p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900">{g.user.displayName}</p>
+                    <p className="text-xs text-gray-500 truncate">{g.user.email}</p>
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {g.perms.map((p) => (
+                        <span key={p.id} className="text-[10px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded">
+                          {PERM_LABELS[p.permission]}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => {
+                        setEditingUser(uid);
+                        setPerms(g.perms.map((p) => p.permission));
+                        setUserId(uid);
+                      }}
+                      className="text-xs text-accent hover:underline"
+                    >
+                      Bearbeiten
+                    </button>
+                    <button onClick={() => removeAllMutation.mutate(uid)}
+                      className="p-1 text-gray-400 hover:text-red-600 transition-colors">
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
-                <button onClick={() => removeMutation.mutate(p.userId)}
-                  className="p-1 text-gray-400 hover:text-red-600 transition-colors">
-                  <X size={14} />
-                </button>
               </div>
             ))}
           </div>
 
-          {/* Neue Berechtigung */}
-          <div className="border-t border-gray-200 pt-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Berechtigung hinzufügen</p>
-            <div className="space-y-2">
-              <input value={userSearch} onChange={e => setUserSearch(e.target.value)}
-                className="input" placeholder="Benutzer suchen…" />
-              {users.length > 0 && (
-                <select size={4} value={userId} onChange={e => setUserId(e.target.value)}
-                  className="input h-auto">
-                  {users.map(u => <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>)}
-                </select>
+          {/* Neue / Bearbeiten Berechtigung */}
+          <div className="border-t border-gray-200 pt-4 space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase">
+              {editingUser ? 'Berechtigungen bearbeiten' : 'Berechtigung hinzufügen'}
+            </p>
+
+            {!editingUser && (
+              <>
+                <input value={userSearch} onChange={e => setUserSearch(e.target.value)}
+                  className="input" placeholder="Benutzer suchen (min. 2 Zeichen)…" />
+                {users.length > 0 && (
+                  <select size={4} value={userId} onChange={e => setUserId(e.target.value)}
+                    className="input h-auto">
+                    {users.map(u => <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>)}
+                  </select>
+                )}
+              </>
+            )}
+
+            {/* Multi-Permission-Checkboxen */}
+            <div className="space-y-1.5">
+              {(Object.entries(PERM_LABELS) as [PermType, string][]).map(([k, v]) => {
+                const description = {
+                  FULL_ACCESS:    'Vollzugriff auf Mailbox (Lesen, Schreiben, Verschieben, Löschen)',
+                  SEND_AS:        'Sendet E-Mails direkt unter der Adresse des Postfachs',
+                  SEND_ON_BEHALF: 'Sendet im Namen — Empfänger sieht „im Auftrag von Postfach"',
+                  READ_ONLY:      'Nur Lesezugriff — keine Änderungen erlaubt',
+                }[k];
+                return (
+                  <label key={k} className="flex items-start gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={perms.includes(k)}
+                      onChange={() => togglePerm(k)}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">{v}</p>
+                      <p className="text-xs text-gray-500">{description}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            {sendConflict && (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                ⚠ „Senden als" und „Senden im Auftrag" sollten nicht gleichzeitig gesetzt sein — Exchange-Konvention.
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              {editingUser && (
+                <button onClick={() => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); }}
+                  className="btn-secondary text-sm">
+                  Abbrechen
+                </button>
               )}
-              <select value={permission} onChange={e => setPerm(e.target.value as PermType)} className="input">
-                {(Object.entries(PERM_LABELS) as [PermType, string][]).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
-              <button onClick={() => addMutation.mutate()} disabled={!userId || addMutation.isPending}
-                className="btn-primary w-full flex items-center justify-center gap-1.5">
-                {addMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
-                Hinzufügen
+              <button
+                onClick={() => userId && setMutation.mutate({ uid: userId, permissions: perms })}
+                disabled={!userId || perms.length === 0 || setMutation.isPending}
+                className="btn-primary flex items-center justify-center gap-1.5">
+                {setMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
+                {editingUser ? 'Speichern' : 'Hinzufügen'}
               </button>
             </div>
           </div>

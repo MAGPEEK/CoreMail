@@ -24,7 +24,7 @@ services:
   # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:3.7.0
+    image: magpeek/coremail-app:3.7.9
     container_name: coremail
     restart: unless-stopped
     environment:

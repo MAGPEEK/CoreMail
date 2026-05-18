@@ -16,11 +16,11 @@ const SVC_SLUG = {
 function ConnectorTable({ items, type, onEdit, onAdd, }) {
     const qc = useQueryClient();
     const toggleMutation = useMutation({
-        mutationFn: (id) => api.patch(`/api/v1/admin/connectors/${id}/toggle`, {}),
+        mutationFn: (id) => api.patch(`/admin/connectors/${id}/toggle`, {}),
         onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-connectors'] }),
     });
     const deleteMutation = useMutation({
-        mutationFn: (id) => api.delete(`/api/v1/admin/connectors/${id}`),
+        mutationFn: (id) => api.delete(`/admin/connectors/${id}`),
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-connectors'] }); toast.success('Gelöscht'); },
         onError: () => toast.error('Löschen fehlgeschlagen'),
     });
@@ -59,8 +59,8 @@ function ConnectorModal({ type, connector, onClose }) {
                 ...(password ? { password } : {}),
             };
             return connector
-                ? api.put(`/api/v1/admin/connectors/${connector.id}`, body)
-                : api.post('/api/v1/admin/connectors', body);
+                ? api.put(`/admin/connectors/${connector.id}`, body)
+                : api.post('/admin/connectors', body);
         },
         onSuccess: () => {
             void qc.invalidateQueries({ queryKey: ['admin-connectors'] });
@@ -77,7 +77,7 @@ function ConnectorsView() {
     const [createType, setCreateType] = useState(null);
     const { data: connectors = [], isLoading } = useQuery({
         queryKey: ['admin-connectors', typeFilter],
-        queryFn: () => api.get(`/api/v1/admin/connectors?type=${typeFilter}`),
+        queryFn: () => api.get(`/admin/connectors?type=${typeFilter}`),
     });
     const send = connectors.filter(c => c.type === 'SEND');
     const receive = connectors.filter(c => c.type === 'RECEIVE');
@@ -189,7 +189,7 @@ function ConnectorsFilteredView({ filter }) {
     const [createType, setCreateType] = useState(null);
     const { data: connectors = [], isLoading } = useQuery({
         queryKey: ['admin-connectors', filter],
-        queryFn: () => api.get(`/api/v1/admin/connectors?type=${filter}`),
+        queryFn: () => api.get(`/admin/connectors?type=${filter}`),
     });
     if (isLoading)
         return (_jsxs("div", { className: "flex items-center justify-center py-12 text-gray-400 p-6", children: [_jsx(Loader2, { size: 20, className: "animate-spin mr-2" }), " Lade\u2026"] }));

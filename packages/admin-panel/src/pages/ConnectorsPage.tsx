@@ -55,11 +55,11 @@ function ConnectorTable({
   const qc = useQueryClient();
 
   const toggleMutation = useMutation({
-    mutationFn: (id: string) => api.patch(`/api/v1/admin/connectors/${id}/toggle`, {}),
+    mutationFn: (id: string) => api.patch(`/admin/connectors/${id}/toggle`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-connectors'] }),
   });
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/v1/admin/connectors/${id}`),
+    mutationFn: (id: string) => api.delete(`/admin/connectors/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-connectors'] }); toast.success('Gelöscht'); },
     onError: () => toast.error('Löschen fehlgeschlagen'),
   });
@@ -172,8 +172,8 @@ function ConnectorModal({ type, connector, onClose }: { type: ConnType; connecto
         ...(password ? { password } : {}),
       };
       return connector
-        ? api.put(`/api/v1/admin/connectors/${connector.id}`, body)
-        : api.post('/api/v1/admin/connectors', body);
+        ? api.put(`/admin/connectors/${connector.id}`, body)
+        : api.post('/admin/connectors', body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-connectors'] });
@@ -237,7 +237,7 @@ function ConnectorsView() {
 
   const { data: connectors = [], isLoading } = useQuery<Connector[]>({
     queryKey: ['admin-connectors', typeFilter],
-    queryFn: () => api.get<Connector[]>(`/api/v1/admin/connectors?type=${typeFilter}`),
+    queryFn: () => api.get<Connector[]>(`/admin/connectors?type=${typeFilter}`),
   });
 
   const send    = connectors.filter(c => c.type === 'SEND');
@@ -606,7 +606,7 @@ function ConnectorsFilteredView({ filter }: { filter: ConnType }) {
 
   const { data: connectors = [], isLoading } = useQuery<Connector[]>({
     queryKey: ['admin-connectors', filter],
-    queryFn: () => api.get<Connector[]>(`/api/v1/admin/connectors?type=${filter}`),
+    queryFn: () => api.get<Connector[]>(`/admin/connectors?type=${filter}`),
   });
 
   if (isLoading) return (

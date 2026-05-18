@@ -370,7 +370,9 @@ model SharedMailboxPerm {
   grantedAt       DateTime             @default(now())
   grantedBy       String
 
-  @@unique([sharedMailboxId, userId])
+  // Mehrere Permissions pro User möglich (Exchange-Style: Full Access + Send As + …)
+  @@unique([sharedMailboxId, userId, permission])
+  @@index([sharedMailboxId, userId])
   @@map("shared_mailbox_perms")
 }
 

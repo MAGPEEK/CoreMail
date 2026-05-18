@@ -9,28 +9,28 @@ export function OrganisationPage() {
     const qc = useQueryClient();
     const { data: policies = [], isLoading: loadingPolicies } = useQuery({
         queryKey: ['sharing-policies'],
-        queryFn: () => api.get('/api/v1/admin/organisation/sharing-policies'),
+        queryFn: () => api.get('/admin/organisation/sharing-policies'),
         enabled: tab === 'sharing',
     });
     const { data: addressLists = [], isLoading: loadingLists } = useQuery({
         queryKey: ['address-lists'],
-        queryFn: () => api.get('/api/v1/admin/organisation/address-lists'),
+        queryFn: () => api.get('/admin/organisation/address-lists'),
         enabled: tab === 'address-lists',
     });
     const [galSearch, setGalSearch] = useState('');
     const [galDebouncedSearch, setGalDebounced] = useState('');
     const { data: gal } = useQuery({
         queryKey: ['gal', galDebouncedSearch],
-        queryFn: () => api.get(`/api/v1/admin/organisation/gal?search=${encodeURIComponent(galDebouncedSearch)}&limit=100`),
+        queryFn: () => api.get(`/admin/organisation/gal?search=${encodeURIComponent(galDebouncedSearch)}&limit=100`),
         enabled: tab === 'gal',
     });
     const deletePolicyMutation = useMutation({
-        mutationFn: (id) => api.delete(`/api/v1/admin/organisation/sharing-policies/${id}`),
+        mutationFn: (id) => api.delete(`/admin/organisation/sharing-policies/${id}`),
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['sharing-policies'] }); toast.success('Gelöscht'); },
         onError: () => toast.error('Fehler'),
     });
     const deleteListMutation = useMutation({
-        mutationFn: (id) => api.delete(`/api/v1/admin/organisation/address-lists/${id}`),
+        mutationFn: (id) => api.delete(`/admin/organisation/address-lists/${id}`),
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['address-lists'] }); toast.success('Gelöscht'); },
         onError: () => toast.error('Fehler'),
     });
@@ -68,7 +68,7 @@ function SharingPolicyModal({ policy, onClose }) {
     const mutation = useMutation({
         mutationFn: () => {
             const body = { name, description, allowedDomains: allowedDomains.split('\n').map(d => d.trim()).filter(Boolean), allowCalendar, calendarDetail, allowContacts, isDefault };
-            return policy ? api.put(`/api/v1/admin/organisation/sharing-policies/${policy.id}`, body) : api.post('/api/v1/admin/organisation/sharing-policies', body);
+            return policy ? api.put(`/admin/organisation/sharing-policies/${policy.id}`, body) : api.post('/admin/organisation/sharing-policies', body);
         },
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['sharing-policies'] }); toast.success(policy ? 'Gespeichert' : 'Erstellt'); onClose(); },
         onError: () => toast.error('Fehler'),
@@ -83,7 +83,7 @@ function AddressListModal({ list, onClose }) {
     const mutation = useMutation({
         mutationFn: () => {
             const body = { name, description, isGal, filter: {} };
-            return list ? api.put(`/api/v1/admin/organisation/address-lists/${list.id}`, body) : api.post('/api/v1/admin/organisation/address-lists', body);
+            return list ? api.put(`/admin/organisation/address-lists/${list.id}`, body) : api.post('/admin/organisation/address-lists', body);
         },
         onSuccess: () => { void qc.invalidateQueries({ queryKey: ['address-lists'] }); toast.success(list ? 'Gespeichert' : 'Erstellt'); onClose(); },
         onError: () => toast.error('Fehler'),
