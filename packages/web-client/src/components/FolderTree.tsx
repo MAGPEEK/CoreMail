@@ -215,10 +215,21 @@ export function FolderTree({ onNewMail }: Props) {
   const all = folders ?? [];
 
   // ── Hierarchie aufbauen ────────────────────────────────────────────────────
-  const { childrenOf, rootCustomFolders } = useMemo(() => {
+  // Custom-Folder ohne parentId werden virtuell unter INBOX gehängt, damit es
+  // keine separate „Meine Ordner"-Sektion mehr braucht und alte Ordner sichtbar bleiben.
+  const childrenOf = useMemo(() => {
     const byParent = new Map<string, FolderType[]>();
+    const inbox = all.find((f) => f.name === 'INBOX');
     for (const f of all) {
-      const key = f.parentId ?? '__root__';
+      let key: string;
+      if (f.parentId) {
+        key = f.parentId;
+      } else if (!SYSTEM_SET.has(f.name) && inbox) {
+        // Custom-Folder ohne Parent → virtuell unter INBOX
+        key = inbox.id;
+      } else {
+        key = '__root__';
+      }
       const arr = byParent.get(key) ?? [];
       arr.push(f);
       byParent.set(key, arr);
@@ -231,9 +242,7 @@ export function FolderTree({ onNewMail }: Props) {
         return (a.displayName ?? a.name).localeCompare(b.displayName ?? b.name);
       });
     }
-    // Custom-Folder ohne parentId → root-level „Meine Ordner"
-    const rootCustom = (byParent.get('__root__') ?? []).filter((f) => !SYSTEM_SET.has(f.name));
-    return { childrenOf: byParent, rootCustomFolders: rootCustom };
+    return byParent;
   }, [all]);
 
   const favorites = all.filter((f) => f.isFavorite);
@@ -453,16 +462,6 @@ export function FolderTree({ onNewMail }: Props) {
         {!folderTreeCollapsed && (
           <div className="space-y-0.5">
             {systemFolders.map((f) => renderFolderTree(f, 0))}
-
-            {/* Custom-Folder ohne Parent → unter „Meine Ordner" */}
-            {rootCustomFolders.length > 0 && (
-              <>
-                <div className="mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-                  {t('my_folders')}
-                </div>
-                {rootCustomFolders.map((f) => renderFolderTree(f, 0, 'roots'))}
-              </>
-            )}
           </div>
         )}
       </nav>
