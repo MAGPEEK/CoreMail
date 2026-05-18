@@ -103,7 +103,7 @@ const de = {
   settings_org_admin_email:   'Administrator-E-Mail',
   settings_org_admin_hint:    'Systembenachrichtigungen werden an diese Adresse gesendet',
   settings_org_logo:          'Logo-URL',
-  settings_org_logo_hint:     'Öffentliche URL zu einem PNG/SVG-Logo (wird im ECP angezeigt)',
+  settings_org_logo_hint:     'Öffentliche URL zu einem PNG/SVG-Logo (wird im BCP angezeigt)',
   settings_org_lang:          'Sprache',
   settings_org_lang_hint:     'Standard-Sprache der Admin-Oberfläche',
   settings_org_tz:            'Zeitzone',

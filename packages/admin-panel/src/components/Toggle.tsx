@@ -1,4 +1,4 @@
-// Einheitlicher Schalter für das gesamte Admin-Panel (ECP)
+// Einheitlicher Schalter für das gesamte Admin-Panel (BCP)
 // h-6 w-11  — Track 44 × 24 px
 // h-4 w-4   — Knob  16 × 16 px
 // Inactive: translate-x-1 (4 px Abstand links)

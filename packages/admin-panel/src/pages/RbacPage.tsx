@@ -36,7 +36,7 @@ interface MailboxesResponse {
 const ROLE_META: Record<UserRole, { label: string; description: string; color: string }> = {
   ORGANIZATION_MANAGEMENT: {
     label: 'Organization Management',
-    description: 'Vollzugriff auf alle ECP-Bereiche',
+    description: 'Vollzugriff auf alle BCP-Bereiche',
     color: 'bg-red-100 text-red-700',
   },
   RECIPIENT_MANAGEMENT: {

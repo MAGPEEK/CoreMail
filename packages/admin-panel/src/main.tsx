@@ -49,7 +49,7 @@ function ThemeApplier() {
   // Dark Mode auf document anwenden wenn sich Store ändert
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolveIsDark(theme));
-    // Akzentfarbe ist im ECP immer Microsoft-Blau — unabhängig vom OWA-Theme
+    // Akzentfarbe ist im BCP immer Microsoft-Blau — unabhängig vom OWA-Theme
     document.documentElement.style.setProperty('--color-accent', ECP_ACCENT_RGB);
   }, [theme]);
 

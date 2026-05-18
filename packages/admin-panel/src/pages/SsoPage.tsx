@@ -396,7 +396,7 @@ function SettingsSection() {
         <div className="divide-y divide-gray-100">
           {[
             { label: 'Lokale Anmeldung als Fallback', desc: 'Benutzer können sich auch mit lokalem Passwort anmelden, wenn SSO nicht verfügbar ist', default: true },
-            { label: 'SSO-Login auf Login-Seite anzeigen', desc: 'Schaltfläche für SSO-Anmeldung auf der OWA/ECP-Loginseite einblenden', default: true },
+            { label: 'SSO-Login auf Login-Seite anzeigen', desc: 'Schaltfläche für SSO-Anmeldung auf der OWA/BCP-Loginseite einblenden', default: true },
             { label: 'Automatische Weiterleitung', desc: 'Für Domains mit genau einem aktiven Provider automatisch zum IdP weiterleiten', default: false },
           ].map(s => (
             <div key={s.label} className="flex items-start justify-between py-3">
