@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.9.0';
+const VERSION        = '3.10.0';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.10.0', date: '2026-05-18', title: 'eDiscovery komplett umgebaut: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export',
+    notes: 'eDiscovery & Legal Hold gemäß Exchange-2019-Standard ausgebaut. Backend-Bugs behoben: `recipientAddresses` aus der Suchmaske wurde komplett ignoriert (jetzt: To/Cc/Bcc via `hasSome`), `hasAttachment` wurde ignoriert (jetzt: Prisma-Relation `some/none`), die Filter-Logik war im Run- und Results-Endpoint dupliziert und drifte (jetzt: zentrale `buildMessageWhere()`-Helper). De-Duplizierung neu: Erkennung doppelter Mails über RFC-822-Message-ID — wenn dieselbe Mail an mehrere interne User ging, taucht sie pro Postfach einzeln in der DB auf; Dedupe behält nur die älteste Kopie. Preview-Endpoint (`/searches/:id/preview`) ohne RUN-Pflicht zeigt Top-N-Sample mit Dedupe-Toggle. Echter Export neu: MBOX-Stream via `GET /searches/:id/export?dedupe=1` (mboxo-Format mit „From "-Quoting), gestreamt in 1000er-Batches, Hard-Cap 50k Mails, Content-Disposition setzt Dateinamen. UI komplett überarbeitet: Mailbox-Multi-Picker (Suche + Checkbox-Liste statt komma-getrennter cuid-Eingabe), Vorschau-Modal mit Tabelle (Betreff/Von/An/Postfach/Datum/Größe) + Dedup-Toggle + Download-Button, Anhang-Filter als Tri-State-Button (Egal/Mit/Ohne), neue Hilfs-Route `/admin/ediscovery/mailboxes` für den Picker.' },
   { version: '3.9.0', date: '2026-05-18', title: 'Übersicht ausgebaut: konfigurierbare Widgets + Server-Info + Uptime',
     notes: 'Systemübersicht komplett überarbeitet. Neuer „Anzeige"-Button öffnet Popover mit Checkboxen für jedes Widget — User entscheidet selbst, was sichtbar ist (in 4 Gruppen: Kennzahlen, Diagramme & Queue, Listen, Server). Auswahl wird in localStorage persistiert (Key coremail-dashboard-v1). „Alle / Keine / Standard"-Buttons als Schnellaktionen. 3 neue Server-Widgets: (1) Server-Info — Uptime in Tagen/Stunden, Start-Zeitstempel, Coremail-Version, Hostname, Plattform/Arch, Node-Version, PID, aktive Sessions; (2) Ressourcen — CPU-Last (1/5/15 min mit Cores), System-RAM, Node-Heap, RSS, jeweils mit Fortschrittsbalken (grün/gelb/rot); (3) Sicherheit (24h) — DNSBL-Treffer-Counter. Plus „Letzte Anmeldungen" mit IP + User-Agent. Backend (/admin/dashboard): liefert jetzt zusätzlich server{uptime,hostname,memory,cpu,…}, activeSessions, recentLogins, securityHits24h.' },
   { version: '3.8.0', date: '2026-05-18', title: 'Öffentliche Ordner: Crash behoben + ACL vereinheitlicht',

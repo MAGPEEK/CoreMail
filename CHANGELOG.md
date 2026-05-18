@@ -9,6 +9,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.10.0] — 2026-05-18 — eDiscovery komplett: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export
+
+### Fixed
+
+- **🐛 Empfänger-Filter (`recipientAddresses`) wurde komplett ignoriert** in `runSearch()` und `/results`. Die UI sammelte das Feld, der Backend warf es weg. Jetzt: `To/Cc/Bcc hasSome [...]` über einen OR-Block, korrekt mit Keyword-OR zu AND kombiniert.
+- **🐛 Anhang-Filter (`hasAttachment`) wurde komplett ignoriert**. Jetzt: Prisma-Relation `attachments: { some: {} }` / `{ none: {} }`.
+- **🐛 Filter-Logik dupliziert** in `runSearch()` und `/results` — drifte zwangsläufig auseinander. Zentrale Helper-Funktion `buildMessageWhere()` ist jetzt single source of truth.
+- **🐛 Fake-Export** — `/export` schickte nur eine Redis-Publish-Nachricht, hatte aber keinen Consumer. „Download-URL folgt" — folgte nie.
+
+### Added
+
+- **De-Duplizierung über Message-ID** — wenn dieselbe Mail an mehrere interne Empfänger ging, liegt sie pro Postfach einzeln in der DB. Beim Preview/Export werden Duplikate über die RFC-822-`Message-ID` gefiltert (älteste Kopie gewinnt). Hilfsfunktion `dedupeByMessageId()`.
+- **Echter MBOX-Export** als gestreamter HTTP-Download:
+  - `GET /api/v1/admin/ediscovery/searches/:id/export?dedupe=1`
+  - mboxo-Format (Body-Zeilen mit „From " werden zu „>From " quotiert)
+  - Streaming in 1000er-Batches, Hard-Cap 50 000 Mails (mit 413-Fehler darüber)
+  - `Content-Disposition: attachment; filename="<name>.mbox"`
+- **Preview-Endpoint** `GET /api/v1/admin/ediscovery/searches/:id/preview?limit&dedupe` — zeigt Top-N-Sample auch vor dem `RUN`
+- **Mailbox-Picker-Hilfsroute** `GET /api/v1/admin/ediscovery/mailboxes` — liefert aktive User mit Mailbox
+
+### Changed — Admin-UI (`EDiscoveryPage.tsx`)
+
+- **Multi-Mailbox-Picker** mit Live-Suche, Checkbox-Liste, Auswahl-Zähler, „Alle abwählen" — ersetzt das alte komma-getrennte cuid-Textfeld
+- **Vorschau-Modal** zeigt Tabelle (Betreff, Von, An, Postfach, Datum, Größe) mit Dedup-Toggle und Sample-Zähler („Gesamt X · nach De-Duplizierung Y")
+- **MBOX-Download** direkt aus dem Vorschau-Modal (fetch+blob, da `<a download>` keinen Auth-Header sendet)
+- **Anhang-Filter** als Tri-State-Button (Egal / Mit Anhang / Ohne Anhang)
+- Such-Detail-Expansion zeigt jetzt auch die ausgewählten Postfächer als Chips und den Anhang-Filter-Status
+- Legal-Hold-Modal nutzt jetzt denselben Mailbox-Picker statt cuid-Liste
+
+---
+
 ## [3.9.0] — 2026-05-18 — Übersicht ausgebaut: konfigurierbare Widgets + Server-Info + Uptime
 
 ### Added — Systemübersicht ist jetzt konfigurierbar

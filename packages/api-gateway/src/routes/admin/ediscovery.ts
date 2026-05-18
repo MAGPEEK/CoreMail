@@ -1,15 +1,30 @@
 /**
  * Admin routes — eDiscovery & Legal Hold — Phase 8
  *
- * GET/POST/DELETE  /api/v1/admin/ediscovery/searches
- * POST             /api/v1/admin/ediscovery/searches/:id/run
- * POST             /api/v1/admin/ediscovery/searches/:id/export
- * GET/POST/DELETE  /api/v1/admin/ediscovery/holds
+ * Suchen
+ *   GET    /api/v1/admin/ediscovery/searches
+ *   POST   /api/v1/admin/ediscovery/searches
+ *   GET    /api/v1/admin/ediscovery/searches/:id
+ *   DELETE /api/v1/admin/ediscovery/searches/:id
+ *   POST   /api/v1/admin/ediscovery/searches/:id/run
+ *   GET    /api/v1/admin/ediscovery/searches/:id/results?limit&offset&dedupe
+ *   GET    /api/v1/admin/ediscovery/searches/:id/preview?limit&dedupe
+ *   GET    /api/v1/admin/ediscovery/searches/:id/export?dedupe   (MBOX-Stream)
+ *
+ * Legal Hold
+ *   GET    /api/v1/admin/ediscovery/holds
+ *   POST   /api/v1/admin/ediscovery/holds
+ *   GET    /api/v1/admin/ediscovery/holds/:id
+ *   DELETE /api/v1/admin/ediscovery/holds/:id
+ *   GET    /api/v1/admin/ediscovery/holds/check/:userId
+ *
+ * Hilfsroute (für UI-Picker)
+ *   GET    /api/v1/admin/ediscovery/mailboxes
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
 const log = createLogger('api:ediscovery');
@@ -17,10 +32,168 @@ export const adminEDiscoveryRouter: RouterType = Router();
 adminEDiscoveryRouter.use(requireAdmin);
 
 // ──────────────────────────────────────────────────────────────────
+// Hilfsfunktionen
+// ──────────────────────────────────────────────────────────────────
+
+interface EDiscoveryQuery {
+  keywords?: string;
+  senderAddresses?: string[];
+  recipientAddresses?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+  hasAttachment?: boolean;
+  subjectContains?: string;
+}
+
+/**
+ * Baut die Prisma-Where-Klausel für eine eDiscovery-Suche.
+ * Wird sowohl beim Run als auch beim Preview/Export benutzt — single source of truth.
+ */
+async function buildMessageWhere(
+  query: EDiscoveryQuery,
+  mailboxIds: string[],
+): Promise<Record<string, unknown>> {
+  const where: Record<string, unknown> = { deletedAt: null };
+
+  // Mailbox-Scope (falls leer → alle Postfächer)
+  if (mailboxIds.length > 0) {
+    const folders = await prisma.folder.findMany({
+      where: { mailbox: { userId: { in: mailboxIds } } },
+      select: { id: true },
+    });
+    where['folderId'] = { in: folders.map((f) => f.id) };
+  }
+
+  // Absender
+  if (query.senderAddresses?.length) {
+    where['fromAddr'] = { in: query.senderAddresses.map((a) => a.toLowerCase()) };
+  }
+
+  // Empfänger — über To/Cc/Bcc, weil RFC 822 Empfänger in mehreren Headern auftauchen kann
+  if (query.recipientAddresses?.length) {
+    const addrs = query.recipientAddresses.map((a) => a.toLowerCase());
+    where['OR'] = [
+      { toAddrs:  { hasSome: addrs } },
+      { ccAddrs:  { hasSome: addrs } },
+      { bccAddrs: { hasSome: addrs } },
+    ];
+  }
+
+  // Zeitraum
+  if (query.dateFrom || query.dateTo) {
+    const range: Record<string, Date> = {};
+    if (query.dateFrom) range['gte'] = new Date(query.dateFrom);
+    if (query.dateTo)   range['lte'] = new Date(query.dateTo);
+    where['date'] = range;
+  }
+
+  // Betreff
+  if (query.subjectContains) {
+    where['subject'] = { contains: query.subjectContains, mode: 'insensitive' };
+  }
+
+  // Stichwort über Subject + BodyText.
+  // Wenn schon ein recipient-OR gesetzt ist, kombinieren wir per AND.
+  if (query.keywords) {
+    const keywordOr = [
+      { subject:  { contains: query.keywords, mode: 'insensitive' } },
+      { bodyText: { contains: query.keywords, mode: 'insensitive' } },
+    ];
+    if (where['OR']) {
+      where['AND'] = [{ OR: where['OR'] }, { OR: keywordOr }];
+      delete where['OR'];
+    } else {
+      where['OR'] = keywordOr;
+    }
+  }
+
+  // Hat Anhang
+  if (query.hasAttachment === true) {
+    where['attachments'] = { some: {} };
+  } else if (query.hasAttachment === false) {
+    where['attachments'] = { none: {} };
+  }
+
+  return where;
+}
+
+/**
+ * De-Duplizierung anhand des RFC-822-Message-IDs.
+ * Wenn eine Mail an mehrere interne User ging, taucht sie pro Postfach einmal in der DB auf.
+ * messageId ist identisch → wir behalten nur die älteste Kopie.
+ */
+function dedupeByMessageId<T extends { id: string; messageId: string | null; date: Date | string }>(
+  messages: T[],
+): T[] {
+  const seen = new Map<string, T>();
+  const noId: T[] = [];
+  for (const m of messages) {
+    if (!m.messageId) { noId.push(m); continue; }
+    const existing = seen.get(m.messageId);
+    if (!existing || new Date(m.date).getTime() < new Date(existing.date).getTime()) {
+      seen.set(m.messageId, m);
+    }
+  }
+  return [...seen.values(), ...noId];
+}
+
+/**
+ * RFC-4155-konforme „From "-Zeile für MBOX-Format.
+ * Body-Zeilen, die mit "From " beginnen, werden mit ">" maskiert.
+ */
+function buildMboxEntry(args: {
+  fromAddr: string;
+  date: Date;
+  subject: string;
+  toAddrs: string[];
+  messageId: string | null;
+  bodyText: string;
+  bodyHtml: string;
+}): string {
+  const fromLine = `From ${args.fromAddr || 'MAILER-DAEMON'} ${args.date.toUTCString()}\n`;
+  const headers =
+    `From: ${args.fromAddr}\n` +
+    `To: ${args.toAddrs.join(', ')}\n` +
+    `Subject: ${args.subject}\n` +
+    `Date: ${args.date.toUTCString()}\n` +
+    (args.messageId ? `Message-ID: ${args.messageId}\n` : '') +
+    `MIME-Version: 1.0\n`;
+
+  let body: string;
+  let contentType: string;
+  if (args.bodyHtml && !args.bodyText) {
+    contentType = 'text/html; charset=utf-8';
+    body = args.bodyHtml;
+  } else {
+    contentType = 'text/plain; charset=utf-8';
+    body = args.bodyText || '';
+  }
+
+  // Body-Zeilen, die mit "From " beginnen → escapen (mboxo-Style, kompatibel mit Thunderbird et al.)
+  const safeBody = body.replace(/^From /gm, '>From ');
+
+  return fromLine + headers + `Content-Type: ${contentType}\n\n` + safeBody + '\n\n';
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Mailbox-Picker (Hilfsroute für die UI)
+// ──────────────────────────────────────────────────────────────────
+
+adminEDiscoveryRouter.get('/mailboxes', async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({
+    where: { active: true, mailbox: { isNot: null } },
+    select: { id: true, email: true, displayName: true, domain: { select: { name: true } } },
+    orderBy: { email: 'asc' },
+  });
+  res.json(users.map((u) => ({
+    id: u.id, email: u.email, displayName: u.displayName, domainName: u.domain.name,
+  })));
+});
+
+// ──────────────────────────────────────────────────────────────────
 // Searches
 // ──────────────────────────────────────────────────────────────────
 
-// GET /api/v1/admin/ediscovery/searches
 adminEDiscoveryRouter.get('/searches', async (_req: Request, res: Response) => {
   const searches = await prisma.eDiscoverySearch.findMany({
     orderBy: { createdAt: 'desc' },
@@ -28,7 +201,6 @@ adminEDiscoveryRouter.get('/searches', async (_req: Request, res: Response) => {
   res.json(searches);
 });
 
-// GET /api/v1/admin/ediscovery/searches/:id
 adminEDiscoveryRouter.get('/searches/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
@@ -37,23 +209,22 @@ adminEDiscoveryRouter.get('/searches/:id', async (req: Request, res: Response) =
 });
 
 const SearchQuerySchema = z.object({
-  keywords: z.string().optional(),
-  senderAddresses: z.array(z.string().email()).default([]),
+  keywords:           z.string().optional(),
+  senderAddresses:    z.array(z.string().email()).default([]),
   recipientAddresses: z.array(z.string().email()).default([]),
-  dateFrom: z.string().datetime().optional(),
-  dateTo: z.string().datetime().optional(),
-  hasAttachment: z.boolean().optional(),
-  subjectContains: z.string().optional(),
+  dateFrom:           z.string().datetime().optional(),
+  dateTo:             z.string().datetime().optional(),
+  hasAttachment:      z.boolean().optional(),
+  subjectContains:    z.string().optional(),
 });
 
 const CreateSearchSchema = z.object({
-  name: z.string().min(1),
+  name:        z.string().min(1),
   description: z.string().default(''),
-  query: SearchQuerySchema,
-  mailboxIds: z.array(z.string()).default([]), // empty = all mailboxes
+  query:       SearchQuerySchema,
+  mailboxIds:  z.array(z.string()).default([]),
 });
 
-// POST /api/v1/admin/ediscovery/searches
 adminEDiscoveryRouter.post('/searches', async (req: Request, res: Response) => {
   const parsed = CreateSearchSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -63,17 +234,16 @@ adminEDiscoveryRouter.post('/searches', async (req: Request, res: Response) => {
   const createdBy = req.apiUser?.userId ?? '';
   const search = await prisma.eDiscoverySearch.create({
     data: {
-      name: parsed.data.name,
+      name:        parsed.data.name,
       description: parsed.data.description,
-      query: parsed.data.query,
-      mailboxIds: parsed.data.mailboxIds,
+      query:       parsed.data.query,
+      mailboxIds:  parsed.data.mailboxIds,
       createdBy,
     },
   });
   res.status(201).json(search);
 });
 
-// DELETE /api/v1/admin/ediscovery/searches/:id
 adminEDiscoveryRouter.delete('/searches/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
@@ -82,7 +252,7 @@ adminEDiscoveryRouter.delete('/searches/:id', async (req: Request, res: Response
   res.status(204).end();
 });
 
-// POST /api/v1/admin/ediscovery/searches/:id/run  — execute the search
+// POST /searches/:id/run — execute the search and update count
 adminEDiscoveryRouter.post('/searches/:id/run', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
@@ -91,110 +261,40 @@ adminEDiscoveryRouter.post('/searches/:id/run', async (req: Request, res: Respon
     res.status(409).json({ error: 'Search is already running' }); return;
   }
 
-  // Mark as running
   await prisma.eDiscoverySearch.update({ where: { id }, data: { status: 'RUNNING' } });
 
-  // Run search asynchronously via Redis job queue
-  const redis = getRedisClient();
-  await redis.publish('ediscovery:run', JSON.stringify({ searchId: id }));
+  // Asynchron — User bekommt sofort 202, Status pollt die UI
+  void (async () => {
+    try {
+      const where = await buildMessageWhere(search.query as EDiscoveryQuery, search.mailboxIds);
+      const count = await prisma.message.count({ where });
+      await prisma.eDiscoverySearch.update({
+        where: { id },
+        data: { status: 'COMPLETED', resultCount: count },
+      });
+      log.info({ searchId: id, count }, 'eDiscovery search completed');
+    } catch (err) {
+      log.error({ err, searchId: id }, 'eDiscovery search failed');
+      await prisma.eDiscoverySearch.update({
+        where: { id },
+        data: { status: 'FAILED' },
+      });
+    }
+  })();
 
-  // Execute synchronously for now (async worker in production)
-  runSearch(id).catch((err: unknown) => {
-    log.error({ err, searchId: id }, 'eDiscovery search failed');
-    void prisma.eDiscoverySearch.update({
-      where: { id },
-      data: { status: 'FAILED' },
-    });
-  });
-
-  res.json({ message: 'Search started', searchId: id });
+  res.status(202).json({ message: 'Search started', searchId: id });
 });
 
-async function runSearch(searchId: string): Promise<void> {
-  const search = await prisma.eDiscoverySearch.findUnique({ where: { id: searchId } });
-  if (!search) return;
-
-  const q = search.query as {
-    keywords?: string;
-    senderAddresses?: string[];
-    recipientAddresses?: string[];
-    dateFrom?: string;
-    dateTo?: string;
-    hasAttachment?: boolean;
-    subjectContains?: string;
-  };
-
-  // Build WHERE clause for cross-mailbox message search
-  const messageWhere: Record<string, unknown> = { deletedAt: null };
-
-  if (q.senderAddresses && q.senderAddresses.length > 0) {
-    messageWhere['fromAddr'] = { in: q.senderAddresses };
-  }
-  if (q.dateFrom) messageWhere['date'] = { gte: new Date(q.dateFrom) };
-  if (q.dateTo) {
-    const existingDate = messageWhere['date'] as Record<string, Date> | undefined;
-    messageWhere['date'] = { ...existingDate, lte: new Date(q.dateTo) };
-  }
-  if (q.subjectContains) {
-    messageWhere['subject'] = { contains: q.subjectContains, mode: 'insensitive' };
-  }
-  if (q.keywords) {
-    messageWhere['OR'] = [
-      { subject: { contains: q.keywords, mode: 'insensitive' } },
-      { bodyText: { contains: q.keywords, mode: 'insensitive' } },
-    ];
-  }
-
-  // If specific mailboxes are requested, scope to them
-  let folderWhere: Record<string, unknown> = {};
-  if (search.mailboxIds.length > 0) {
-    const mailboxes = await prisma.mailbox.findMany({
-      where: { userId: { in: search.mailboxIds } },
-      select: { id: true },
-    });
-    folderWhere = { mailboxId: { in: mailboxes.map((m) => m.id) } };
-  }
-
-  if (Object.keys(folderWhere).length > 0) {
-    const folders = await prisma.folder.findMany({ where: folderWhere, select: { id: true } });
-    messageWhere['folderId'] = { in: folders.map((f) => f.id) };
-  }
-
-  const count = await prisma.message.count({ where: messageWhere });
-
-  await prisma.eDiscoverySearch.update({
-    where: { id: searchId },
-    data: { status: 'COMPLETED', resultCount: count },
-  });
-
-  log.info({ searchId, count }, 'eDiscovery search completed');
-}
-
-// POST /api/v1/admin/ediscovery/searches/:id/export — export results as MBOX
-adminEDiscoveryRouter.post('/searches/:id/export', async (req: Request, res: Response) => {
-  const { id } = req.params as { id: string };
-  const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
-  if (!search) { res.status(404).json({ error: 'Search not found' }); return; }
-  if (search.status !== 'COMPLETED') {
-    res.status(409).json({ error: 'Search must be completed before export' }); return;
-  }
-
-  // Enqueue export job
-  const redis = getRedisClient();
-  await redis.publish('ediscovery:export', JSON.stringify({ searchId: id }));
-
-  res.json({
-    message: 'Export job queued',
-    searchId: id,
-    note: 'Download URL will be set on the search record once the export is ready.',
-  });
-});
-
-// GET /api/v1/admin/ediscovery/searches/:id/results?limit=50&offset=0
+/**
+ * GET /searches/:id/results — paginiert, optional dedupliziert.
+ * `dedupe=1` filtert Duplikate (gleiche Message-ID in mehreren Postfächern).
+ */
 adminEDiscoveryRouter.get('/searches/:id/results', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const limit = Math.min(parseInt((req.query as Record<string, string>)['limit'] ?? '50', 10), 200);
-  const offset = parseInt((req.query as Record<string, string>)['offset'] ?? '0', 10);
+  const q = req.query as Record<string, string>;
+  const limit  = Math.min(parseInt(q['limit']  ?? '50', 10), 200);
+  const offset = parseInt(q['offset'] ?? '0', 10);
+  const dedupe = q['dedupe'] === '1' || q['dedupe'] === 'true';
 
   const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
   if (!search) { res.status(404).json({ error: 'Search not found' }); return; }
@@ -202,49 +302,176 @@ adminEDiscoveryRouter.get('/searches/:id/results', async (req: Request, res: Res
     res.status(409).json({ error: 'Search not yet completed' }); return;
   }
 
-  const q = search.query as Record<string, unknown>;
-  const messageWhere: Record<string, unknown> = { deletedAt: null };
-  if (q['senderAddresses']) messageWhere['fromAddr'] = { in: q['senderAddresses'] as string[] };
-  if (q['dateFrom']) messageWhere['date'] = { gte: new Date(q['dateFrom'] as string) };
-  if (q['dateTo']) {
-    const d = messageWhere['date'] as Record<string, Date> | undefined;
-    messageWhere['date'] = { ...d, lte: new Date(q['dateTo'] as string) };
-  }
-  if (q['subjectContains']) {
-    messageWhere['subject'] = { contains: q['subjectContains'] as string, mode: 'insensitive' };
-  }
-  if (q['keywords']) {
-    messageWhere['OR'] = [
-      { subject: { contains: q['keywords'] as string, mode: 'insensitive' } },
-      { bodyText: { contains: q['keywords'] as string, mode: 'insensitive' } },
-    ];
+  const where = await buildMessageWhere(search.query as EDiscoveryQuery, search.mailboxIds);
+
+  if (!dedupe) {
+    const [total, messages] = await Promise.all([
+      prisma.message.count({ where }),
+      prisma.message.findMany({
+        where,
+        select: {
+          id: true, subject: true, fromAddr: true, toAddrs: true, date: true,
+          rawSize: true, messageId: true,
+          folder: { select: { name: true, mailbox: { select: { user: { select: { email: true } } } } } },
+        },
+        orderBy: { date: 'desc' },
+        skip: offset, take: limit,
+      }),
+    ]);
+    res.json({ total, dedupedTotal: total, deduped: false, messages });
+    return;
   }
 
-  const messages = await prisma.message.findMany({
-    where: messageWhere,
+  // Dedupe-Modus: alles laden (capped) und in Node deduplizieren — Postgres hat keine
+  // einfache window-distinct-by-messageId-Klausel mit Prisma; bei großen Suchen sollte
+  // der Worker das in einem Batch tun. Für sinnvolle Suchgrößen (< 10000) ist das OK.
+  const HARD_CAP = 10_000;
+  const all = await prisma.message.findMany({
+    where,
     select: {
       id: true, subject: true, fromAddr: true, toAddrs: true, date: true,
-      rawSize: true, folder: { select: { name: true, mailbox: { select: { userId: true } } } },
+      rawSize: true, messageId: true,
+      folder: { select: { name: true, mailbox: { select: { user: { select: { email: true } } } } } },
     },
     orderBy: { date: 'desc' },
-    skip: offset,
-    take: limit,
+    take: HARD_CAP,
+  });
+  const deduped = dedupeByMessageId(all);
+  const slice   = deduped.slice(offset, offset + limit);
+  res.json({
+    total: all.length,
+    dedupedTotal: deduped.length,
+    deduped: true,
+    messages: slice,
+    capped: all.length >= HARD_CAP,
+  });
+});
+
+/**
+ * GET /searches/:id/preview — Top-N-Vorschau (Light-Weight), ohne Run/Status-Pflicht.
+ */
+adminEDiscoveryRouter.get('/searches/:id/preview', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const q = req.query as Record<string, string>;
+  const limit  = Math.min(parseInt(q['limit'] ?? '20', 10), 100);
+  const dedupe = q['dedupe'] === '1' || q['dedupe'] === 'true';
+
+  const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
+  if (!search) { res.status(404).json({ error: 'Search not found' }); return; }
+
+  const where = await buildMessageWhere(search.query as EDiscoveryQuery, search.mailboxIds);
+  const total = await prisma.message.count({ where });
+
+  // Für Preview holen wir bis zu 500 (Dedupe-Sample) bzw. limit (no-Dedupe)
+  const sampleCount = dedupe ? Math.min(500, total) : limit;
+  const messages = await prisma.message.findMany({
+    where,
+    select: {
+      id: true, subject: true, fromAddr: true, toAddrs: true, date: true,
+      rawSize: true, messageId: true,
+      folder: { select: { name: true, mailbox: { select: { user: { select: { email: true } } } } } },
+    },
+    orderBy: { date: 'desc' },
+    take: sampleCount,
   });
 
-  res.json({ total: search.resultCount, messages });
+  const finalMessages = dedupe ? dedupeByMessageId(messages).slice(0, limit) : messages;
+  const dedupedSample = dedupe ? dedupeByMessageId(messages).length : messages.length;
+
+  res.json({
+    total,
+    sample: messages.length,
+    dedupedSample,
+    deduped: dedupe,
+    messages: finalMessages,
+  });
+});
+
+/**
+ * GET /searches/:id/export?dedupe=1 — MBOX-Download
+ * Streamt direkt eine MBOX-Datei als attachment. Funktioniert auch für mehrere Postfächer.
+ */
+adminEDiscoveryRouter.get('/searches/:id/export', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const q = req.query as Record<string, string>;
+  const dedupe = q['dedupe'] === '1' || q['dedupe'] === 'true';
+
+  const search = await prisma.eDiscoverySearch.findUnique({ where: { id } });
+  if (!search) { res.status(404).json({ error: 'Search not found' }); return; }
+  if (search.status !== 'COMPLETED') {
+    res.status(409).json({ error: 'Search must be completed before export' }); return;
+  }
+
+  const where = await buildMessageWhere(search.query as EDiscoveryQuery, search.mailboxIds);
+
+  // Sicherheits-Hard-Cap: keine unbegrenzten MBOX-Streams
+  const HARD_CAP = 50_000;
+  const total = await prisma.message.count({ where });
+  if (total > HARD_CAP) {
+    res.status(413).json({ error: `Zu viele Ergebnisse (${total} > ${HARD_CAP}). Bitte Suche einschränken.` }); return;
+  }
+
+  const filename = `ediscovery-${search.name.replace(/[^a-z0-9-]+/gi, '_')}-${id.slice(0, 6)}.mbox`;
+  res.setHeader('Content-Type', 'application/mbox');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  // Streaming in Batches (1000) — Node-Backpressure-aware
+  const BATCH = 1000;
+  let offset = 0;
+  const seenMessageIds = new Set<string>();
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const batch = await prisma.message.findMany({
+      where,
+      select: {
+        id: true, subject: true, fromAddr: true, toAddrs: true, date: true,
+        messageId: true, bodyText: true, bodyHtml: true,
+      },
+      orderBy: { date: 'asc' },
+      skip: offset, take: BATCH,
+    });
+    if (batch.length === 0) break;
+
+    for (const m of batch) {
+      if (dedupe && m.messageId) {
+        if (seenMessageIds.has(m.messageId)) continue;
+        seenMessageIds.add(m.messageId);
+      }
+      res.write(buildMboxEntry({
+        fromAddr:  m.fromAddr,
+        date:      m.date,
+        subject:   m.subject,
+        toAddrs:   m.toAddrs,
+        messageId: m.messageId,
+        bodyText:  m.bodyText,
+        bodyHtml:  m.bodyHtml,
+      }));
+    }
+
+    if (batch.length < BATCH) break;
+    offset += BATCH;
+  }
+
+  // Export-Pfad-Marker im Datensatz (für UI-Display, kein eigentlicher Speicherort hier)
+  await prisma.eDiscoverySearch.update({
+    where: { id },
+    data:  { exportPath: `direct-stream:${filename}` },
+  }).catch(() => undefined);
+
+  res.end();
+  log.info({ searchId: id, total, dedupe }, 'eDiscovery MBOX export streamed');
 });
 
 // ──────────────────────────────────────────────────────────────────
 // Legal Hold
 // ──────────────────────────────────────────────────────────────────
 
-// GET /api/v1/admin/ediscovery/holds
 adminEDiscoveryRouter.get('/holds', async (_req: Request, res: Response) => {
   const holds = await prisma.legalHold.findMany({ orderBy: { appliedAt: 'desc' } });
   res.json(holds);
 });
 
-// GET /api/v1/admin/ediscovery/holds/:id
 adminEDiscoveryRouter.get('/holds/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const hold = await prisma.legalHold.findUnique({ where: { id } });
@@ -253,12 +480,11 @@ adminEDiscoveryRouter.get('/holds/:id', async (req: Request, res: Response) => {
 });
 
 const CreateHoldSchema = z.object({
-  name: z.string().min(1),
+  name:        z.string().min(1),
   description: z.string().default(''),
-  mailboxIds: z.array(z.string()).min(1),
+  mailboxIds:  z.array(z.string()).min(1),
 });
 
-// POST /api/v1/admin/ediscovery/holds
 adminEDiscoveryRouter.post('/holds', async (req: Request, res: Response) => {
   const parsed = CreateHoldSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -268,9 +494,9 @@ adminEDiscoveryRouter.post('/holds', async (req: Request, res: Response) => {
   const appliedBy = req.apiUser?.userId ?? '';
   const hold = await prisma.legalHold.create({
     data: {
-      name: parsed.data.name,
+      name:        parsed.data.name,
       description: parsed.data.description,
-      mailboxIds: parsed.data.mailboxIds,
+      mailboxIds:  parsed.data.mailboxIds,
       appliedBy,
     },
   });
@@ -278,20 +504,18 @@ adminEDiscoveryRouter.post('/holds', async (req: Request, res: Response) => {
   res.status(201).json(hold);
 });
 
-// DELETE /api/v1/admin/ediscovery/holds/:id  — release hold
 adminEDiscoveryRouter.delete('/holds/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const hold = await prisma.legalHold.findUnique({ where: { id } });
   if (!hold) { res.status(404).json({ error: 'Legal hold not found' }); return; }
   await prisma.legalHold.update({
     where: { id },
-    data: { active: false, releasedAt: new Date() },
+    data:  { active: false, releasedAt: new Date() },
   });
   log.info({ holdId: id }, 'Legal hold released');
   res.status(204).end();
 });
 
-// GET /api/v1/admin/ediscovery/holds/check/:userId  — is user under legal hold?
 adminEDiscoveryRouter.get('/holds/check/:userId', async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string };
   const hold = await prisma.legalHold.findFirst({
