@@ -9,6 +9,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.5.4] — 2026-05-18 — App-Passwörter im OWA + kritischer Pepper-Bug-Fix
+
+### Fixed
+
+- **🐛 Kritisch: App-Passwörter funktionierten nie bei SMTP/IMAP/POP3** — der auth-service hashte App-Passwörter mit `bcrypt.hash(password, 12)` **ohne Pepper**, während die SMTP-/IMAP-/POP3-Verifier `bcrypt.compare(applyPepper(password), hash)` **mit Pepper** verglichen. Folge: Jedes je angelegte App-Passwort war unbenutzbar — selbst bei korrekt eingegebenem Passwort kam `535: 5.7.8 Authentication credentials invalid`. Fix: `auth-service/app-passwords/index.ts` nutzt jetzt `hashPassword()` aus `@coremail/core` (peppered bcrypt) — analog zum regulären User-Passwort.
+  > **Hinweis**: Bestehende App-Passwörter müssen einmalig neu erstellt werden, da die alten Hashes ungepeppert sind und nicht mehr matchen können.
+
+### Added
+
+- **App-Passwörter-UI** in `OWA → Einstellungen → Konto → App-Passwörter`:
+  - Liste aller App-Passwörter mit Name, Erstellungs-Datum, „Zuletzt benutzt"-Zeitstempel
+  - „Neues App-Passwort"-Button mit Inline-Editor (Name eingeben)
+  - Neu generiertes Passwort wird **einmalig** angezeigt mit Akzent-Hervorhebung und Copy-Button (Clipboard-API + ✓-Animation)
+  - Widerruf-Button pro Zeile (mit Bestätigungsdialog) — beim Hover sichtbar
+  - 4 Sprachen (DE / EN / ES / IT) für alle Labels
+- Behebt den vorher leeren `/auth/app-passwords` Bildschirm (das war ein direkter API-Call ohne Auth-Header — jetzt gibt es eine richtige UI-Page).
+
+### Backend
+
+- `POST /auth/app-passwords` legt Hash jetzt korrekt peppered an
+- Format unverändert: `XXXX-XXXX-XXXX-XXXX` (16 zufällige Hex-Zeichen, 4 Gruppen)
+- `lastUsedAt` wird vom SMTP-Verifier nach erfolgreichem Login aktualisiert (war schon implementiert, aber wurde nie erreicht wegen des Bugs)
+
+---
+
 ## [3.5.3] — 2026-05-18 — Kategorien (Outlook-Style), Folder-Color-Fix, ContextMenu-Submenu-Bug
 
 ### Added

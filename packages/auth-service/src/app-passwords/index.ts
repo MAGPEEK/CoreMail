@@ -1,7 +1,6 @@
-import bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
-import { createLogger } from '@coremail/core';
+import { createLogger, hashPassword } from '@coremail/core';
 
 const log = createLogger('auth:app-passwords');
 
@@ -16,9 +15,10 @@ export async function createAppPassword(
   name: string,
 ): Promise<{ id: string; password: string }> {
   const password = generateAppPassword();
-  const hash = await bcrypt.hash(password, 12);
+  // Wichtig: hashPassword() aus @coremail/core nutzt bcrypt + PEPPER
+  // damit verifyPassword() im SMTP-/IMAP-/POP3-Server matcht.
+  const hash = await hashPassword(password);
 
-  
   const record = await prisma.appPassword.create({
     data: { userId, name, hash },
   });

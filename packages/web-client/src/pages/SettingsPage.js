@@ -1,7 +1,8 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays, Tag, Star, Plus, Pencil, X as XIcon, } from 'lucide-react';
+import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays, Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle, } from 'lucide-react';
+import { format as fmtDate } from 'date-fns';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
@@ -405,6 +406,65 @@ function SecuritySection() {
                                             disableMutation.mutate(); }, disabled: disableMutation.isPending, className: "text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50", children: [disableMutation.isPending ? _jsx(Loader2, { size: 12, className: "animate-spin" }) : _jsx(ShieldOff, { size: 12 }), "2FA deaktivieren"] })] }), regenBackupMutation.data?.codes && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-gray-600 font-medium mb-1", children: "Neue Backup-Codes:" }), _jsx("div", { className: "grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs", children: regenBackupMutation.data.codes.map((c, i) => _jsx("span", { className: "text-gray-700", children: c }, i)) }), _jsxs("button", { onClick: () => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }, className: "mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700", children: [_jsx(Copy, { size: 11 }), " Alle kopieren"] })] }))] }))] })] }));
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// APP-PASSWORDS-SEKTION (nutzt authFetch aus SecuritySection)
+// ═══════════════════════════════════════════════════════════════════════════════
+function AppPasswordsSection() {
+    const t = useT();
+    const qc = useQueryClient();
+    const [creating, setCreating] = useState(false);
+    const [newName, setNewName] = useState('');
+    const [createdPw, setCreatedPw] = useState(null);
+    const [copied, setCopied] = useState(false);
+    const { data: list = [], isLoading } = useQuery({
+        queryKey: ['app-passwords'],
+        queryFn: () => authFetch('/auth/app-passwords'),
+    });
+    const createMutation = useMutation({
+        mutationFn: (name) => authFetch('/auth/app-passwords', {
+            method: 'POST',
+            body: JSON.stringify({ name }),
+        }),
+        onSuccess: (data) => {
+            qc.invalidateQueries({ queryKey: ['app-passwords'] });
+            setCreatedPw({ name: newName, password: data.password });
+            setCreating(false);
+            setNewName('');
+        },
+        onError: (e) => toast.error(e.message || 'Fehler beim Erstellen'),
+    });
+    const deleteMutation = useMutation({
+        mutationFn: (id) => authFetch(`/auth/app-passwords/${id}`, { method: 'DELETE' }),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['app-passwords'] });
+            toast.success('App-Passwort widerrufen');
+        },
+        onError: (e) => toast.error(e.message || 'Fehler beim Widerrufen'),
+    });
+    const copyPw = async () => {
+        if (!createdPw)
+            return;
+        try {
+            await navigator.clipboard.writeText(createdPw.password);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }
+        catch { /* noop */ }
+    };
+    return (_jsxs("section", { children: [_jsxs("div", { className: "flex items-start justify-between mb-1", children: [_jsx("h2", { className: "text-xl font-semibold text-gray-900", children: t('app_passwords') }), !createdPw && (_jsxs("button", { onClick: () => setCreating(true), className: "btn-primary text-sm", children: [_jsx(Plus, { size: 14 }), " ", t('app_password_create')] }))] }), _jsx("p", { className: "text-sm text-gray-600 mb-6 max-w-lg", children: t('app_passwords_help') }), createdPw && (_jsxs("div", { className: "mb-6 border-2 border-accent rounded-md p-4 bg-accent/5 animate-fly-in", children: [_jsxs("div", { className: "flex items-start gap-2 mb-3", children: [_jsx(AlertCircle, { size: 18, className: "text-accent shrink-0 mt-0.5" }), _jsxs("div", { className: "flex-1", children: [_jsxs("p", { className: "text-sm font-medium text-gray-900", children: ["\u201E", createdPw.name, "\""] }), _jsx("p", { className: "text-xs text-gray-600 mt-0.5", children: t('app_password_show_once') })] })] }), _jsxs("div", { className: "flex items-center gap-2 bg-white border border-gray-200 rounded p-3", children: [_jsx("code", { className: "flex-1 font-mono text-sm tracking-wider text-gray-900 select-all", children: createdPw.password }), _jsx("button", { onClick: copyPw, className: "btn-secondary text-xs whitespace-nowrap", children: copied ? _jsxs(_Fragment, { children: [_jsx(Check, { size: 12, className: "text-green-600" }), " ", t('app_password_copied')] }) : _jsxs(_Fragment, { children: [_jsx(Copy, { size: 12 }), " ", t('app_password_copy')] }) })] }), _jsx("div", { className: "mt-3 flex justify-end", children: _jsxs("button", { onClick: () => setCreatedPw(null), className: "btn-primary text-xs", children: [_jsx(Check, { size: 12 }), " ", t('app_password_done')] }) })] })), creating && !createdPw && (_jsxs("div", { className: "mb-4 border border-gray-200 rounded-md p-4 bg-blue-50/40 animate-fly-in", children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: t('app_password_name') }), _jsx("input", { type: "text", value: newName, onChange: (e) => setNewName(e.target.value), autoFocus: true, placeholder: "z. B. Thunderbird", className: "input text-sm", onKeyDown: (e) => {
+                            if (e.key === 'Enter' && newName.trim())
+                                createMutation.mutate(newName.trim());
+                            if (e.key === 'Escape') {
+                                setCreating(false);
+                                setNewName('');
+                            }
+                        } }), _jsxs("div", { className: "mt-3 flex items-center gap-2 justify-end", children: [_jsxs("button", { onClick: () => { setCreating(false); setNewName(''); }, className: "btn-ghost text-xs", children: [_jsx(XIcon, { size: 13 }), " Abbrechen"] }), _jsxs("button", { onClick: () => createMutation.mutate(newName.trim()), disabled: !newName.trim() || createMutation.isPending, className: "btn-primary text-xs", children: [createMutation.isPending ? _jsx(Loader2, { size: 13, className: "animate-spin" }) : _jsx(Check, { size: 13 }), "Erstellen"] })] })] })), _jsxs("div", { className: "border border-gray-200 rounded-md divide-y divide-gray-100 bg-white", children: [_jsxs("div", { className: "px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md", children: ["Name \u00B7 ", t('app_password_created'), " \u00B7 ", t('app_password_last_used')] }), isLoading ? (_jsx("div", { className: "px-4 py-6 text-sm text-gray-400", children: "\u2026" })) : list.length === 0 ? (_jsx("div", { className: "px-4 py-6 text-sm text-gray-400 text-center", children: t('app_password_empty') })) : (list.map((ap) => (_jsxs("div", { className: "px-4 py-2.5 flex items-center gap-3 group hover:bg-gray-50 transition-colors", children: [_jsx(Smartphone, { size: 16, className: "text-gray-400 shrink-0" }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsx("p", { className: "text-sm text-gray-800 truncate", children: ap.name }), _jsxs("p", { className: "text-xs text-gray-500", children: [t('app_password_created'), ": ", fmtDate(new Date(ap.createdAt), 'dd.MM.yyyy HH:mm'), ' · ', ap.lastUsedAt
+                                                ? `${t('app_password_last_used')}: ${fmtDate(new Date(ap.lastUsedAt), 'dd.MM.yyyy HH:mm')}`
+                                                : t('app_password_never_used')] })] }), _jsx("button", { onClick: () => {
+                                    if (window.confirm(t('app_password_revoke_q')))
+                                        deleteMutation.mutate(ap.id);
+                                }, className: "p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90 opacity-0 group-hover:opacity-100", title: t('app_password_revoke'), children: _jsx(Trash2, { size: 14 }) })] }, ap.id))))] })] }));
+}
+// ═══════════════════════════════════════════════════════════════════════════════
 // KATEGORIEN-SEKTION (Outlook-Style)
 // ═══════════════════════════════════════════════════════════════════════════════
 function CategoriesSection() {
@@ -495,6 +555,7 @@ const NAV = [
         items: [
             { id: 'profile', label: 'E-Mail-Konto', icon: User },
             { id: 'password', label: 'Passwort', icon: Lock },
+            { id: 'appPasswords', label: 'App-Passwörter', icon: Smartphone },
             { id: 'oof', label: 'Automatische Antworten', icon: BellOff },
             { id: 'signature', label: 'Signaturen', icon: PenLine },
             { id: 'categories', label: 'Kategorien', icon: Tag },
@@ -522,6 +583,7 @@ const SECTION_MAP = {
     language: LanguageSection,
     calendar: CalendarSection,
     categories: CategoriesSection,
+    appPasswords: AppPasswordsSection,
 };
 // ═══════════════════════════════════════════════════════════════════════════════
 // HAUPT-EXPORT

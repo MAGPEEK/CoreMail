@@ -4,8 +4,9 @@ import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
-  Tag, Star, Plus, Pencil, X as XIcon,
+  Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
 } from 'lucide-react';
+import { format as fmtDate } from 'date-fns';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
@@ -17,7 +18,14 @@ import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords';
+
+interface AppPassword {
+  id: string;
+  name: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
 
 interface Category {
   id: string;
@@ -1117,6 +1125,168 @@ function SecuritySection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// APP-PASSWORDS-SEKTION (nutzt authFetch aus SecuritySection)
+// ═══════════════════════════════════════════════════════════════════════════════
+function AppPasswordsSection() {
+  const t = useT();
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [createdPw, setCreatedPw] = useState<{ name: string; password: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const { data: list = [], isLoading } = useQuery({
+    queryKey: ['app-passwords'],
+    queryFn: () => authFetch<AppPassword[]>('/auth/app-passwords'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (name: string) =>
+      authFetch<{ id: string; password: string }>('/auth/app-passwords', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['app-passwords'] });
+      setCreatedPw({ name: newName, password: data.password });
+      setCreating(false);
+      setNewName('');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler beim Erstellen'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => authFetch(`/auth/app-passwords/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['app-passwords'] });
+      toast.success('App-Passwort widerrufen');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler beim Widerrufen'),
+  });
+
+  const copyPw = async () => {
+    if (!createdPw) return;
+    try {
+      await navigator.clipboard.writeText(createdPw.password);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* noop */ }
+  };
+
+  return (
+    <section>
+      <div className="flex items-start justify-between mb-1">
+        <h2 className="text-xl font-semibold text-gray-900">{t('app_passwords')}</h2>
+        {!createdPw && (
+          <button onClick={() => setCreating(true)} className="btn-primary text-sm">
+            <Plus size={14} /> {t('app_password_create')}
+          </button>
+        )}
+      </div>
+      <p className="text-sm text-gray-600 mb-6 max-w-lg">{t('app_passwords_help')}</p>
+
+      {/* „Hier ist dein neues Passwort" — wird einmal angezeigt */}
+      {createdPw && (
+        <div className="mb-6 border-2 border-accent rounded-md p-4 bg-accent/5 animate-fly-in">
+          <div className="flex items-start gap-2 mb-3">
+            <AlertCircle size={18} className="text-accent shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-gray-900">„{createdPw.name}"</p>
+              <p className="text-xs text-gray-600 mt-0.5">{t('app_password_show_once')}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded p-3">
+            <code className="flex-1 font-mono text-sm tracking-wider text-gray-900 select-all">
+              {createdPw.password}
+            </code>
+            <button
+              onClick={copyPw}
+              className="btn-secondary text-xs whitespace-nowrap"
+            >
+              {copied ? <><Check size={12} className="text-green-600" /> {t('app_password_copied')}</> : <><Copy size={12} /> {t('app_password_copy')}</>}
+            </button>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <button onClick={() => setCreatedPw(null)} className="btn-primary text-xs">
+              <Check size={12} /> {t('app_password_done')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Inline-Editor für neue Passwörter */}
+      {creating && !createdPw && (
+        <div className="mb-4 border border-gray-200 rounded-md p-4 bg-blue-50/40 animate-fly-in">
+          <label className="block text-sm font-medium text-gray-700 mb-1">{t('app_password_name')}</label>
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            autoFocus
+            placeholder="z. B. Thunderbird"
+            className="input text-sm"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim());
+              if (e.key === 'Escape') { setCreating(false); setNewName(''); }
+            }}
+          />
+          <div className="mt-3 flex items-center gap-2 justify-end">
+            <button onClick={() => { setCreating(false); setNewName(''); }} className="btn-ghost text-xs">
+              <XIcon size={13} /> Abbrechen
+            </button>
+            <button
+              onClick={() => createMutation.mutate(newName.trim())}
+              disabled={!newName.trim() || createMutation.isPending}
+              className="btn-primary text-xs"
+            >
+              {createMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              Erstellen
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Liste */}
+      <div className="border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
+        <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md">
+          Name · {t('app_password_created')} · {t('app_password_last_used')}
+        </div>
+        {isLoading ? (
+          <div className="px-4 py-6 text-sm text-gray-400">…</div>
+        ) : list.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-gray-400 text-center">{t('app_password_empty')}</div>
+        ) : (
+          list.map((ap) => (
+            <div key={ap.id} className="px-4 py-2.5 flex items-center gap-3 group hover:bg-gray-50 transition-colors">
+              <Smartphone size={16} className="text-gray-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-gray-800 truncate">{ap.name}</p>
+                <p className="text-xs text-gray-500">
+                  {t('app_password_created')}: {fmtDate(new Date(ap.createdAt), 'dd.MM.yyyy HH:mm')}
+                  {' · '}
+                  {ap.lastUsedAt
+                    ? `${t('app_password_last_used')}: ${fmtDate(new Date(ap.lastUsedAt), 'dd.MM.yyyy HH:mm')}`
+                    : t('app_password_never_used')}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (window.confirm(t('app_password_revoke_q'))) deleteMutation.mutate(ap.id);
+                }}
+                className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90 opacity-0 group-hover:opacity-100"
+                title={t('app_password_revoke')}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // KATEGORIEN-SEKTION (Outlook-Style)
 // ═══════════════════════════════════════════════════════════════════════════════
 function CategoriesSection() {
@@ -1402,12 +1572,13 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Konto',
     items: [
-      { id: 'profile',    label: 'E-Mail-Konto',           icon: User      },
-      { id: 'password',   label: 'Passwort',                icon: Lock      },
-      { id: 'oof',        label: 'Automatische Antworten',  icon: BellOff   },
-      { id: 'signature',  label: 'Signaturen',              icon: PenLine   },
-      { id: 'categories', label: 'Kategorien',              icon: Tag       },
-      { id: 'storage',    label: 'Speicher',                icon: HardDrive },
+      { id: 'profile',      label: 'E-Mail-Konto',           icon: User       },
+      { id: 'password',     label: 'Passwort',                icon: Lock       },
+      { id: 'appPasswords', label: 'App-Passwörter',          icon: Smartphone },
+      { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
+      { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
+      { id: 'categories',   label: 'Kategorien',              icon: Tag        },
+      { id: 'storage',      label: 'Speicher',                icon: HardDrive  },
     ],
   },
   {
@@ -1422,16 +1593,17 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
 ];
 
 const SECTION_MAP: Record<Section, React.ComponentType> = {
-  profile:    ProfileSection,
-  password:   PasswordSection,
-  oof:        OofSection,
-  signature:  SignatureSection,
-  storage:    StorageSection,
-  theme:      ThemeSection,
-  security:   SecuritySection,
-  language:   LanguageSection,
-  calendar:   CalendarSection,
-  categories: CategoriesSection,
+  profile:      ProfileSection,
+  password:     PasswordSection,
+  oof:          OofSection,
+  signature:    SignatureSection,
+  storage:      StorageSection,
+  theme:        ThemeSection,
+  security:     SecuritySection,
+  language:     LanguageSection,
+  calendar:     CalendarSection,
+  categories:   CategoriesSection,
+  appPasswords: AppPasswordsSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

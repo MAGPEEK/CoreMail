@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.5.3';
+const VERSION        = '3.5.4';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.5.4', date: '2026-05-18', title: 'App-Passwörter-UI + kritischer Pepper-Bug-Fix',
+    notes: 'Kritisch: App-Passwörter funktionierten nie bei SMTP/IMAP/POP3 — auth-service hashte ohne Pepper, Verifier verglich mit Pepper. Fix: auth-service nutzt jetzt hashPassword() aus @coremail/core. Bestehende App-Passwörter müssen einmalig neu erstellt werden. Neue UI in OWA → Einstellungen → Konto → App-Passwörter: Liste mit Name/Erstellt/Letzte-Benutzung, "Neu erstellen"-Button mit Inline-Editor, einmalige Passwort-Anzeige mit Copy-Button (Clipboard + ✓-Animation), Widerruf-Button beim Hover. 4 Sprachen (DE/EN/ES/IT).' },
   { version: '3.5.3', date: '2026-05-18', title: 'Mail-Kategorien (Outlook-Style) · Folder-Color-Fix · ContextMenu-Submenu-Bug',
     notes: 'Neue Mail-Kategorien wie in Outlook: Tags mit Name, Farbe, Favorit-Flag. Vollständiges CRUD in Einstellungen → Konto → Kategorien (Inline-Editor mit 14-Farben-Palette). Kategorisieren via Rechtsklick auf Mail (Submenu mit Toggle-Check). Kategorie-Pills in der Nachrichtenliste unter Subject. Volltextsuche mit ?categoryId=…-Filter. Backend-Routen: GET/POST/PATCH/DELETE /api/v1/categories, POST /categories/messages/:id und /messages/bulk. Prisma: Category + MessageCategory n:m. Fix: Ordner-Farbe-Picker reagierte nicht — ContextMenu-Submenu-Bug behoben (mousedown im Hauptmenü schloss das Menü beim Klick auf ein Submenu-Item, das im Portal lebt). Lösung: data-coremail-contextmenu Marker auf allen Roots, outside-Check ignoriert Klicks innerhalb. Folder-Color zeigt jetzt zusätzlich einen farbigen Dot. ContextMenu öffnet mit animate-fly-in.' },
   { version: '3.4.3', date: '2026-05-18', title: 'OWA: Microinteractions · Counter-Animationen · TopBar-Polish · Halo-Pulse',
