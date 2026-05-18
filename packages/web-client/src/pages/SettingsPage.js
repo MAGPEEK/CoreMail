@@ -1,7 +1,7 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays, } from 'lucide-react';
+import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays, Tag, Star, Plus, Pencil, X as XIcon, } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
@@ -11,6 +11,13 @@ import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
 import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
+// 14 vorgegebene Pastell-Farben (Outlook-Stil)
+const CATEGORY_PALETTE = [
+    '#EF4444', '#F97316', '#F59E0B', '#EAB308',
+    '#84CC16', '#22C55E', '#10B981', '#14B8A6',
+    '#06B6D4', '#0EA5E9', '#3B82F6', '#6366F1',
+    '#8B5CF6', '#EC4899',
+];
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 function fmtBytes(b) {
     if (b === 0)
@@ -398,6 +405,63 @@ function SecuritySection() {
                                             disableMutation.mutate(); }, disabled: disableMutation.isPending, className: "text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50", children: [disableMutation.isPending ? _jsx(Loader2, { size: 12, className: "animate-spin" }) : _jsx(ShieldOff, { size: 12 }), "2FA deaktivieren"] })] }), regenBackupMutation.data?.codes && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-gray-600 font-medium mb-1", children: "Neue Backup-Codes:" }), _jsx("div", { className: "grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs", children: regenBackupMutation.data.codes.map((c, i) => _jsx("span", { className: "text-gray-700", children: c }, i)) }), _jsxs("button", { onClick: () => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }, className: "mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700", children: [_jsx(Copy, { size: 11 }), " Alle kopieren"] })] }))] }))] })] }));
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// KATEGORIEN-SEKTION (Outlook-Style)
+// ═══════════════════════════════════════════════════════════════════════════════
+function CategoriesSection() {
+    const t = useT();
+    const qc = useQueryClient();
+    const { data: categories = [], isLoading } = useQuery({
+        queryKey: ['categories'],
+        queryFn: () => api.get('/categories'),
+    });
+    const [editing, setEditing] = useState(null);
+    const [creating, setCreating] = useState(false);
+    const createMutation = useMutation({
+        mutationFn: (body) => api.post('/categories', body),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['categories'] });
+            toast.success(t('folder_created'));
+            setCreating(false);
+        },
+        onError: (e) => toast.error(e.message || 'Fehler'),
+    });
+    const updateMutation = useMutation({
+        mutationFn: ({ id, body }) => api.patch(`/categories/${id}`, body),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['categories'] });
+            setEditing(null);
+        },
+        onError: (e) => toast.error(e.message || 'Fehler'),
+    });
+    const deleteMutation = useMutation({
+        mutationFn: (id) => api.delete(`/categories/${id}`),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['categories'] });
+            qc.invalidateQueries({ queryKey: ['messages'] });
+            toast.success(t('folder_deleted'));
+        },
+        onError: (e) => toast.error(e.message || 'Fehler'),
+    });
+    return (_jsxs("section", { children: [_jsxs("div", { className: "flex items-start justify-between mb-1", children: [_jsx("h2", { className: "text-xl font-semibold text-gray-900", children: t('categories') }), _jsxs("button", { onClick: () => setCreating(true), className: "btn-primary text-sm", children: [_jsx(Plus, { size: 14 }), " ", t('new_category')] })] }), _jsx("p", { className: "text-sm text-gray-600 mb-6 max-w-lg", children: t('categories_help') }), _jsxs("div", { className: "border border-gray-200 rounded-md divide-y divide-gray-100 bg-white", children: [_jsx("div", { className: "px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md", children: t('category_name') }), isLoading ? (_jsx("div", { className: "px-4 py-6 text-sm text-gray-400", children: "\u2026" })) : categories.length === 0 && !creating ? (_jsx("div", { className: "px-4 py-6 text-sm text-gray-400 text-center", children: t('no_categories') })) : (_jsxs(_Fragment, { children: [categories.map((cat) => editing?.id === cat.id ? (_jsx(CategoryEditRow, { initial: cat, onCancel: () => setEditing(null), onSave: (body) => updateMutation.mutate({ id: cat.id, body }) }, cat.id)) : (_jsx(CategoryRow, { cat: cat, onEdit: () => setEditing(cat), onDelete: () => {
+                                    if (window.confirm(`Kategorie „${cat.name}" wirklich löschen?`)) {
+                                        deleteMutation.mutate(cat.id);
+                                    }
+                                }, onToggleFavorite: () => updateMutation.mutate({ id: cat.id, body: { isFavorite: !cat.isFavorite } }) }, cat.id))), creating && (_jsx(CategoryEditRow, { initial: { id: '', name: '', color: CATEGORY_PALETTE[10] }, onCancel: () => setCreating(false), onSave: (body) => createMutation.mutate({ name: body.name, color: body.color }) }))] }))] })] }));
+}
+function CategoryRow({ cat, onEdit, onDelete, onToggleFavorite, }) {
+    return (_jsxs("div", { className: "px-4 py-2.5 flex items-center gap-3 group hover:bg-gray-50 transition-colors", children: [_jsx(Tag, { size: 16, style: { color: cat.color, fill: `${cat.color}33` }, className: "shrink-0" }), _jsx("span", { className: "flex-1 text-sm text-gray-800 truncate", children: cat.name }), _jsxs("div", { className: "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity", children: [_jsx("button", { onClick: onToggleFavorite, className: "p-1.5 rounded text-gray-400 hover:text-amber-500 hover:bg-gray-100 transition-all active:scale-90", title: "Favorit", children: _jsx(Star, { size: 14, className: cat.isFavorite ? 'fill-amber-400 text-amber-500' : '' }) }), _jsx("button", { onClick: onEdit, className: "p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90", title: "Bearbeiten", children: _jsx(Pencil, { size: 14 }) }), _jsx("button", { onClick: onDelete, className: "p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90", title: "L\u00F6schen", children: _jsx(Trash2, { size: 14 }) })] })] }));
+}
+function CategoryEditRow({ initial, onCancel, onSave, }) {
+    const [name, setName] = useState(initial.name);
+    const [color, setColor] = useState(initial.color);
+    return (_jsxs("div", { className: "px-4 py-3 bg-blue-50/40", children: [_jsxs("div", { className: "flex items-center gap-3 mb-3", children: [_jsx(Tag, { size: 16, style: { color, fill: `${color}33` }, className: "shrink-0" }), _jsx("input", { type: "text", value: name, onChange: (e) => setName(e.target.value), autoFocus: true, placeholder: "Kategoriename \u2026", className: "input flex-1 text-sm", onKeyDown: (e) => {
+                            if (e.key === 'Enter' && name.trim())
+                                onSave({ name: name.trim(), color });
+                            if (e.key === 'Escape')
+                                onCancel();
+                        } })] }), _jsx("div", { className: "flex flex-wrap gap-1.5 mb-3", children: CATEGORY_PALETTE.map((c) => (_jsx("button", { onClick: () => setColor(c), className: `w-6 h-6 rounded-full transition-all duration-150 ${color === c ? 'ring-2 ring-offset-2 ring-gray-700 scale-110' : 'hover:scale-110'}`, style: { backgroundColor: c }, "aria-label": c }, c))) }), _jsxs("div", { className: "flex items-center gap-2 justify-end", children: [_jsxs("button", { onClick: onCancel, className: "btn-ghost text-xs", children: [_jsx(XIcon, { size: 13 }), " Abbrechen"] }), _jsxs("button", { onClick: () => name.trim() && onSave({ name: name.trim(), color }), disabled: !name.trim(), className: "btn-primary text-xs", children: [_jsx(Check, { size: 13 }), " Speichern"] })] })] }));
+}
+// ═══════════════════════════════════════════════════════════════════════════════
 // KALENDER-SEKTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function CalendarSection() {
@@ -433,6 +497,7 @@ const NAV = [
             { id: 'password', label: 'Passwort', icon: Lock },
             { id: 'oof', label: 'Automatische Antworten', icon: BellOff },
             { id: 'signature', label: 'Signaturen', icon: PenLine },
+            { id: 'categories', label: 'Kategorien', icon: Tag },
             { id: 'storage', label: 'Speicher', icon: HardDrive },
         ],
     },
@@ -456,6 +521,7 @@ const SECTION_MAP = {
     security: SecuritySection,
     language: LanguageSection,
     calendar: CalendarSection,
+    categories: CategoriesSection,
 };
 // ═══════════════════════════════════════════════════════════════════════════════
 // HAUPT-EXPORT

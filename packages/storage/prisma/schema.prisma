@@ -111,6 +111,7 @@ model User {
   oauthCodes      OAuthAuthorizationCode[]
   oauthTokens     OAuthToken[]
   oauthConsents   OAuthConsent[]
+  categories      Category[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -277,6 +278,7 @@ model Message {
   pinnedAt     DateTime?   // user pinned this message (top of list)
   snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
   attachments  Attachment[]
+  categories   MessageCategory[]
   createdAt    DateTime    @default(now())
 
   @@unique([folderId, uid])
@@ -304,6 +306,37 @@ model Attachment {
   @@index([messageId])
   @@index([sha256])
   @@map("attachments")
+}
+
+// ─────────────────────────────────────────────
+// Mail-Kategorien (Outlook-Style Tags)
+// ─────────────────────────────────────────────
+model Category {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  name       String
+  color      String   @default("#3B82F6")
+  isFavorite Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  messages   MessageCategory[]
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("categories")
+}
+
+model MessageCategory {
+  message    Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId  String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String
+  assignedAt DateTime @default(now())
+
+  @@id([messageId, categoryId])
+  @@index([categoryId])
+  @@map("message_categories")
 }
 
 // ─────────────────────────────────────────────

@@ -2,7 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDraggable } from '@dnd-kit/core';
-import { Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff, Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, } from 'lucide-react';
+import { Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff, Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag, } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { api } from '../api/client.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
@@ -44,7 +44,7 @@ function MessageRow({ msg, selected, checked, onClick, onToggleCheck, onContextM
                             ? _jsx(Flag, { size: 14, className: "fill-red-500 text-red-500" })
                             : _jsx(Flag, { size: 14, className: "text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors" }) }), _jsx("div", { ref: avatarRef, onMouseEnter: () => { if (hoverTimer.current)
                             clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(true), 350); }, onMouseLeave: () => { if (hoverTimer.current)
-                            clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(false), 200); }, onClick: (e) => e.stopPropagation(), className: "shrink-0 cursor-default", children: _jsx(Avatar, { seed: msg.fromAddr, size: "sm", className: "transition-transform duration-150 group-hover:scale-105" }) }), showCard && (_jsx(ContactHoverCard, { email: msg.fromAddr, anchorRef: avatarRef, onClose: () => setShowCard(false) })), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsxs("span", { className: `text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-700 dark:text-gray-300'}`, children: [isUnread && (_jsx("span", { className: "inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft shrink-0" })), isPinned && _jsx(Pin, { size: 11, className: "text-accent shrink-0" }), _jsx("span", { className: "truncate", children: msg.fromAddr })] }), _jsxs("div", { className: "flex items-center gap-1 shrink-0", children: [hasAttachments && _jsx(Paperclip, { size: 12, className: "text-gray-400" }), isSnoozed && _jsx(Clock, { size: 12, className: "text-amber-500" }), _jsx("span", { className: "text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0", children: formatDate(msg.date) })] })] }), _jsx("p", { className: `text-sm truncate mt-0.5 transition-colors duration-150 ${isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'} group-hover:text-accent group-hover:underline group-hover:underline-offset-2`, children: msg.subject || '(kein Betreff)' })] }), _jsxs("div", { className: "absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto", children: [_jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('archive'); }, className: "p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90", title: "Archivieren", children: _jsx(Archive, { size: 13 }) }), _jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('delete'); }, className: "p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90", title: "L\u00F6schen", children: _jsx(Trash2, { size: 13 }) }), _jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('read'); }, className: "p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90", title: isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren', children: isUnread ? _jsx(MailOpen, { size: 13 }) : _jsx(Mail, { size: 13 }) })] })] }), _jsx("span", { className: "hidden", children: folders.length })] }));
+                            clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(false), 200); }, onClick: (e) => e.stopPropagation(), className: "shrink-0 cursor-default", children: _jsx(Avatar, { seed: msg.fromAddr, size: "sm", className: "transition-transform duration-150 group-hover:scale-105" }) }), showCard && (_jsx(ContactHoverCard, { email: msg.fromAddr, anchorRef: avatarRef, onClose: () => setShowCard(false) })), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsxs("span", { className: `text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-700 dark:text-gray-300'}`, children: [isUnread && (_jsx("span", { className: "inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft shrink-0" })), isPinned && _jsx(Pin, { size: 11, className: "text-accent shrink-0" }), _jsx("span", { className: "truncate", children: msg.fromAddr })] }), _jsxs("div", { className: "flex items-center gap-1 shrink-0", children: [hasAttachments && _jsx(Paperclip, { size: 12, className: "text-gray-400" }), isSnoozed && _jsx(Clock, { size: 12, className: "text-amber-500" }), _jsx("span", { className: "text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0", children: formatDate(msg.date) })] })] }), _jsx("p", { className: `text-sm truncate mt-0.5 transition-colors duration-150 ${isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'} group-hover:text-accent group-hover:underline group-hover:underline-offset-2`, children: msg.subject || '(kein Betreff)' }), msg.categories && msg.categories.length > 0 && (_jsx("div", { className: "flex flex-wrap gap-1 mt-1", children: msg.categories.map((c) => (_jsxs("span", { className: "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium", style: { backgroundColor: `${c.color}22`, color: c.color, border: `1px solid ${c.color}55` }, children: [_jsx("span", { className: "w-1.5 h-1.5 rounded-full", style: { backgroundColor: c.color } }), c.name] }, c.id))) }))] }), _jsxs("div", { className: "absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto", children: [_jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('archive'); }, className: "p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90", title: "Archivieren", children: _jsx(Archive, { size: 13 }) }), _jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('delete'); }, className: "p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90", title: "L\u00F6schen", children: _jsx(Trash2, { size: 13 }) }), _jsx("button", { onClick: (e) => { e.stopPropagation(); onQuickAction('read'); }, className: "p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90", title: isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren', children: isUnread ? _jsx(MailOpen, { size: 13 }) : _jsx(Mail, { size: 13 }) })] })] }), _jsx("span", { className: "hidden", children: folders.length })] }));
 }
 export function MessageList({ folderId }) {
     const qc = useQueryClient();
@@ -59,6 +59,10 @@ export function MessageList({ folderId }) {
     const { data: folders = [] } = useQuery({
         queryKey: ['folders'],
         queryFn: () => api.get('/mail/folders'),
+    });
+    const { data: categories = [] } = useQuery({
+        queryKey: ['categories'],
+        queryFn: () => api.get('/categories'),
     });
     const currentFolder = folders.find((f) => f.id === folderId);
     const isJunkFolder = currentFolder?.name === 'Junk';
@@ -170,6 +174,32 @@ export function MessageList({ folderId }) {
             { label: isPinned ? 'Lösen' : 'Anheften',
                 icon: _jsx(Pin, { size: 14 }),
                 onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
+            // Kategorien-Submenu
+            categories.length > 0
+                ? {
+                    label: 'Kategorisieren',
+                    icon: _jsx(Tag, { size: 14 }),
+                    children: categories.map((c) => {
+                        const assigned = (msg.categories ?? []).some((mc) => mc.id === c.id);
+                        return {
+                            label: c.name,
+                            icon: _jsx("span", { className: "w-3 h-3 rounded-sm", style: { backgroundColor: c.color } }),
+                            onClick: async () => {
+                                const next = assigned
+                                    ? (msg.categories ?? []).filter((mc) => mc.id !== c.id).map((mc) => mc.id)
+                                    : [...(msg.categories ?? []).map((mc) => mc.id), c.id];
+                                await api.post(`/categories/messages/${msg.id}`, { categoryIds: next });
+                                invalidate();
+                            },
+                            ...(assigned ? { separator: 'after' } : {}),
+                        };
+                    }),
+                }
+                : {
+                    label: 'Kategorien anlegen …',
+                    icon: _jsx(Tag, { size: 14 }),
+                    onClick: () => { window.location.href = '/settings'; },
+                },
             { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
                 icon: _jsx(Clock, { size: 14 }),
                 ...(isSnoozed

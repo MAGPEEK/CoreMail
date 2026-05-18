@@ -3,11 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
-  Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code,
+  Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
 } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { api } from '../api/client.js';
-import type { MessagesResponse, MessageSummary, Folder } from '../api/types.js';
+import type { MessagesResponse, MessageSummary, Folder, Category } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
@@ -143,6 +143,20 @@ function MessageRow({
           } group-hover:text-accent group-hover:underline group-hover:underline-offset-2`}>
             {msg.subject || '(kein Betreff)'}
           </p>
+          {msg.categories && msg.categories.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {msg.categories.map((c) => (
+                <span
+                  key={c.id}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium"
+                  style={{ backgroundColor: `${c.color}22`, color: c.color, border: `1px solid ${c.color}55` }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.color }} />
+                  {c.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Hover-Quick-Actions (Gmail-Style) — fade-in mit slight slide */}
@@ -191,6 +205,11 @@ export function MessageList({ folderId }: Props) {
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
     queryFn: () => api.get<Folder[]>('/mail/folders'),
+  });
+
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api.get<Category[]>('/categories'),
   });
 
   const currentFolder = folders.find((f) => f.id === folderId);
@@ -305,6 +324,32 @@ export function MessageList({ folderId }: Props) {
       { label: isPinned ? 'Lösen' : 'Anheften',
         icon: <Pin size={14} />,
         onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
+      // Kategorien-Submenu
+      categories.length > 0
+        ? {
+            label: 'Kategorisieren',
+            icon: <Tag size={14} />,
+            children: categories.map((c) => {
+              const assigned = (msg.categories ?? []).some((mc) => mc.id === c.id);
+              return {
+                label: c.name,
+                icon: <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: c.color }} />,
+                onClick: async () => {
+                  const next = assigned
+                    ? (msg.categories ?? []).filter((mc) => mc.id !== c.id).map((mc) => mc.id)
+                    : [...(msg.categories ?? []).map((mc) => mc.id), c.id];
+                  await api.post(`/categories/messages/${msg.id}`, { categoryIds: next });
+                  invalidate();
+                },
+                ...(assigned ? { separator: 'after' as const } : {}),
+              };
+            }),
+          }
+        : {
+            label: 'Kategorien anlegen …',
+            icon: <Tag size={14} />,
+            onClick: () => { window.location.href = '/settings'; },
+          },
       { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
         ...(isSnoozed

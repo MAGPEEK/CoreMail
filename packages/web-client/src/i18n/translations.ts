@@ -94,6 +94,17 @@ const de = {
   show_week_numbers:       'Kalenderwochen (KW) anzeigen',
   cw_short:                'KW',
   view_settings:           'Ansicht',
+
+  // Kategorien
+  categories:              'Kategorien',
+  categories_help:         'Mit Kategorien können Sie E-Mails markieren, organisieren und durchsuchen.',
+  category_name:           'Kategoriename',
+  category_color:          'Farbe',
+  new_category:            'Neu erstellen',
+  no_categories:           'Noch keine Kategorien angelegt.',
+  categorize:              'Kategorisieren',
+  remove_category:         'Kategorie entfernen',
+  filter_category:         'Kategorie',
 } as const;
 
 export type TranslationKey = keyof typeof de;
@@ -183,6 +194,16 @@ const en: Record<TranslationKey, string> = {
   show_week_numbers:       'Show week numbers (WN)',
   cw_short:                'WN',
   view_settings:           'View',
+
+  categories:              'Categories',
+  categories_help:         'Use categories to label, organize and search your emails.',
+  category_name:           'Category name',
+  category_color:          'Color',
+  new_category:            'New category',
+  no_categories:           'No categories yet.',
+  categorize:              'Categorize',
+  remove_category:         'Remove category',
+  filter_category:         'Category',
 };
 
 const es: Record<TranslationKey, string> = {
@@ -270,6 +291,16 @@ const es: Record<TranslationKey, string> = {
   show_week_numbers:       'Mostrar números de semana (SM)',
   cw_short:                'SM',
   view_settings:           'Vista',
+
+  categories:              'Categorías',
+  categories_help:         'Use las categorías para etiquetar, organizar y buscar sus correos.',
+  category_name:           'Nombre de categoría',
+  category_color:          'Color',
+  new_category:            'Nueva categoría',
+  no_categories:           'Aún no hay categorías.',
+  categorize:              'Categorizar',
+  remove_category:         'Quitar categoría',
+  filter_category:         'Categoría',
 };
 
 const it: Record<TranslationKey, string> = {
@@ -357,6 +388,16 @@ const it: Record<TranslationKey, string> = {
   show_week_numbers:       'Mostra numeri di settimana (NS)',
   cw_short:                'NS',
   view_settings:           'Vista',
+
+  categories:              'Categorie',
+  categories_help:         'Usa le categorie per etichettare, organizzare e cercare le email.',
+  category_name:           'Nome categoria',
+  category_color:          'Colore',
+  new_category:            'Nuova categoria',
+  no_categories:           'Nessuna categoria ancora.',
+  categorize:              'Categorizza',
+  remove_category:         'Rimuovi categoria',
+  filter_category:         'Categoria',
 };
 
 export const translations = { de, en, es, it } as const;

@@ -11,6 +11,14 @@ export interface Folder {
   isSystem?: boolean;
 }
 
+export interface Category {
+  id: string;
+  name: string;
+  color: string;
+  isFavorite?: boolean;
+  sortOrder?: number;
+}
+
 export interface MessageSummary {
   id: string;
   uid: number;
@@ -24,6 +32,7 @@ export interface MessageSummary {
   pinnedAt?: string | null;
   snoozeUntil?: string | null;
   attachments: { id: string; filename: string; mimeType: string; size: number }[];
+  categories?: Category[];
 }
 
 export type BulkAction =

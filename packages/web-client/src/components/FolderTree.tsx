@@ -136,6 +136,13 @@ function FolderItem({
           <span className="w-4 h-4 shrink-0" />
         )}
         <Icon size={15} className="shrink-0 transition-transform duration-150 group-hover:scale-110" style={folder.color ? { color: folder.color } : undefined} />
+        {folder.color && (
+          <span
+            className="shrink-0 w-1.5 h-1.5 rounded-full"
+            style={{ backgroundColor: folder.color }}
+            aria-hidden
+          />
+        )}
         <span className="flex-1 text-left truncate">{label}</span>
         {folder.unreadCount > 0 && (
           <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent" />

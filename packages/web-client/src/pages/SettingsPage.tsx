@@ -4,6 +4,7 @@ import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
+  Tag, Star, Plus, Pencil, X as XIcon,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -16,7 +17,23 @@ import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories';
+
+interface Category {
+  id: string;
+  name: string;
+  color: string;
+  isFavorite?: boolean;
+  sortOrder?: number;
+}
+
+// 14 vorgegebene Pastell-Farben (Outlook-Stil)
+const CATEGORY_PALETTE = [
+  '#EF4444', '#F97316', '#F59E0B', '#EAB308',
+  '#84CC16', '#22C55E', '#10B981', '#14B8A6',
+  '#06B6D4', '#0EA5E9', '#3B82F6', '#6366F1',
+  '#8B5CF6', '#EC4899',
+];
 
 interface OofData {
   enabled: boolean;
@@ -1100,6 +1117,196 @@ function SecuritySection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// KATEGORIEN-SEKTION (Outlook-Style)
+// ═══════════════════════════════════════════════════════════════════════════════
+function CategoriesSection() {
+  const t = useT();
+  const qc = useQueryClient();
+  const { data: categories = [], isLoading } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api.get<Category[]>('/categories'),
+  });
+
+  const [editing, setEditing] = useState<Category | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const createMutation = useMutation({
+    mutationFn: (body: { name: string; color: string }) =>
+      api.post<Category>('/categories', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] });
+      toast.success(t('folder_created'));
+      setCreating(false);
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<Category> }) =>
+      api.patch(`/categories/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] });
+      setEditing(null);
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/categories/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] });
+      qc.invalidateQueries({ queryKey: ['messages'] });
+      toast.success(t('folder_deleted'));
+    },
+    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+  });
+
+  return (
+    <section>
+      <div className="flex items-start justify-between mb-1">
+        <h2 className="text-xl font-semibold text-gray-900">{t('categories')}</h2>
+        <button
+          onClick={() => setCreating(true)}
+          className="btn-primary text-sm"
+        >
+          <Plus size={14} /> {t('new_category')}
+        </button>
+      </div>
+      <p className="text-sm text-gray-600 mb-6 max-w-lg">{t('categories_help')}</p>
+
+      {/* Liste */}
+      <div className="border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
+        <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md">
+          {t('category_name')}
+        </div>
+        {isLoading ? (
+          <div className="px-4 py-6 text-sm text-gray-400">…</div>
+        ) : categories.length === 0 && !creating ? (
+          <div className="px-4 py-6 text-sm text-gray-400 text-center">{t('no_categories')}</div>
+        ) : (
+          <>
+            {categories.map((cat) =>
+              editing?.id === cat.id ? (
+                <CategoryEditRow
+                  key={cat.id}
+                  initial={cat}
+                  onCancel={() => setEditing(null)}
+                  onSave={(body) => updateMutation.mutate({ id: cat.id, body })}
+                />
+              ) : (
+                <CategoryRow
+                  key={cat.id}
+                  cat={cat}
+                  onEdit={() => setEditing(cat)}
+                  onDelete={() => {
+                    if (window.confirm(`Kategorie „${cat.name}" wirklich löschen?`)) {
+                      deleteMutation.mutate(cat.id);
+                    }
+                  }}
+                  onToggleFavorite={() => updateMutation.mutate({ id: cat.id, body: { isFavorite: !cat.isFavorite } })}
+                />
+              )
+            )}
+            {creating && (
+              <CategoryEditRow
+                initial={{ id: '', name: '', color: CATEGORY_PALETTE[10]! }}
+                onCancel={() => setCreating(false)}
+                onSave={(body) => createMutation.mutate({ name: body.name!, color: body.color! })}
+              />
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CategoryRow({
+  cat, onEdit, onDelete, onToggleFavorite,
+}: {
+  cat: Category;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggleFavorite: () => void;
+}) {
+  return (
+    <div className="px-4 py-2.5 flex items-center gap-3 group hover:bg-gray-50 transition-colors">
+      <Tag size={16} style={{ color: cat.color, fill: `${cat.color}33` }} className="shrink-0" />
+      <span className="flex-1 text-sm text-gray-800 truncate">{cat.name}</span>
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={onToggleFavorite}
+          className="p-1.5 rounded text-gray-400 hover:text-amber-500 hover:bg-gray-100 transition-all active:scale-90"
+          title="Favorit"
+        >
+          <Star size={14} className={cat.isFavorite ? 'fill-amber-400 text-amber-500' : ''} />
+        </button>
+        <button onClick={onEdit} className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90" title="Bearbeiten">
+          <Pencil size={14} />
+        </button>
+        <button onClick={onDelete} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90" title="Löschen">
+          <Trash2 size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CategoryEditRow({
+  initial, onCancel, onSave,
+}: {
+  initial: { id: string; name: string; color: string };
+  onCancel: () => void;
+  onSave: (body: { name?: string; color?: string }) => void;
+}) {
+  const [name, setName]   = useState(initial.name);
+  const [color, setColor] = useState(initial.color);
+
+  return (
+    <div className="px-4 py-3 bg-blue-50/40">
+      <div className="flex items-center gap-3 mb-3">
+        <Tag size={16} style={{ color, fill: `${color}33` }} className="shrink-0" />
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          placeholder="Kategoriename …"
+          className="input flex-1 text-sm"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && name.trim()) onSave({ name: name.trim(), color });
+            if (e.key === 'Escape') onCancel();
+          }}
+        />
+      </div>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {CATEGORY_PALETTE.map((c) => (
+          <button
+            key={c}
+            onClick={() => setColor(c)}
+            className={`w-6 h-6 rounded-full transition-all duration-150 ${color === c ? 'ring-2 ring-offset-2 ring-gray-700 scale-110' : 'hover:scale-110'}`}
+            style={{ backgroundColor: c }}
+            aria-label={c}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2 justify-end">
+        <button onClick={onCancel} className="btn-ghost text-xs">
+          <XIcon size={13} /> Abbrechen
+        </button>
+        <button
+          onClick={() => name.trim() && onSave({ name: name.trim(), color })}
+          disabled={!name.trim()}
+          className="btn-primary text-xs"
+        >
+          <Check size={13} /> Speichern
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // KALENDER-SEKTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function CalendarSection() {
@@ -1195,11 +1402,12 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Konto',
     items: [
-      { id: 'profile',   label: 'E-Mail-Konto',           icon: User      },
-      { id: 'password',  label: 'Passwort',                icon: Lock      },
-      { id: 'oof',       label: 'Automatische Antworten',  icon: BellOff   },
-      { id: 'signature', label: 'Signaturen',              icon: PenLine   },
-      { id: 'storage',   label: 'Speicher',                icon: HardDrive },
+      { id: 'profile',    label: 'E-Mail-Konto',           icon: User      },
+      { id: 'password',   label: 'Passwort',                icon: Lock      },
+      { id: 'oof',        label: 'Automatische Antworten',  icon: BellOff   },
+      { id: 'signature',  label: 'Signaturen',              icon: PenLine   },
+      { id: 'categories', label: 'Kategorien',              icon: Tag       },
+      { id: 'storage',    label: 'Speicher',                icon: HardDrive },
     ],
   },
   {
@@ -1214,15 +1422,16 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
 ];
 
 const SECTION_MAP: Record<Section, React.ComponentType> = {
-  profile:   ProfileSection,
-  password:  PasswordSection,
-  oof:       OofSection,
-  signature: SignatureSection,
-  storage:   StorageSection,
-  theme:     ThemeSection,
-  security:  SecuritySection,
-  language:  LanguageSection,
-  calendar:  CalendarSection,
+  profile:    ProfileSection,
+  password:   PasswordSection,
+  oof:        OofSection,
+  signature:  SignatureSection,
+  storage:    StorageSection,
+  theme:      ThemeSection,
+  security:   SecuritySection,
+  language:   LanguageSection,
+  calendar:   CalendarSection,
+  categories: CategoriesSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

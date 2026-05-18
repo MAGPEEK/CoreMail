@@ -428,12 +428,20 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
         id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
         date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
         attachments: { select: { id: true, filename: true, mimeType: true, size: true } },
+        categories: { select: { category: { select: { id: true, name: true, color: true } } } },
       },
     }),
     prisma.message.count({ where: { folderId, deletedAt: null, ...snoozeFilter } }),
   ]);
 
-  res.json({ messages, total, limit, offset });
+  // Kategorien-Beziehung flach mappen
+  const flat = messages.map((m) => ({
+    ...m,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    categories: (m as any).categories?.map((c: any) => c.category) ?? [],
+  }));
+
+  res.json({ messages: flat, total, limit, offset });
 });
 
 // GET /api/v1/mail/messages/:id — full message
@@ -658,12 +666,12 @@ mailRouter.post(
   },
 );
 
-// GET /api/v1/mail/search
+// GET /api/v1/mail/search?q=foo&categoryId=...
 mailRouter.get('/search', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
-  if (q.length < 2) { res.json({ messages: [], total: 0 }); return; }
+  const categoryId = req.query['categoryId'] ? String(req.query['categoryId']) : null;
+  if (q.length < 2 && !categoryId) { res.json({ messages: [], total: 0 }); return; }
 
-  
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   if (!mailbox) { res.json({ messages: [], total: 0 }); return; }
 
@@ -672,20 +680,38 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
     select: { id: true },
   })).map((f: { id: string }) => f.id);
 
+  const where: Record<string, unknown> = {
+    folderId: { in: folderIds },
+    deletedAt: null,
+  };
+  if (q.length >= 2) {
+    where['OR'] = [
+      { subject:  { contains: q, mode: 'insensitive' } },
+      { fromAddr: { contains: q, mode: 'insensitive' } },
+      { fromName: { contains: q, mode: 'insensitive' } },
+      { bodyText: { contains: q, mode: 'insensitive' } },
+    ];
+  }
+  if (categoryId) {
+    where['categories'] = { some: { categoryId, category: { userId: req.apiUser!.userId } } };
+  }
+
   const messages = await prisma.message.findMany({
-    where: {
-      folderId: { in: folderIds },
-      deletedAt: null,
-      OR: [
-        { subject: { contains: q, mode: 'insensitive' } },
-        { fromAddr: { contains: q, mode: 'insensitive' } },
-        { bodyText: { contains: q, mode: 'insensitive' } },
-      ],
-    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    where: where as any,
     orderBy: { date: 'desc' },
-    take: 50,
-    select: { id: true, subject: true, fromAddr: true, date: true, flags: true, folderId: true },
+    take: 100,
+    select: {
+      id: true, subject: true, fromAddr: true, fromName: true, date: true, flags: true, folderId: true,
+      categories: { select: { category: { select: { id: true, name: true, color: true } } } },
+    },
   });
 
-  res.json({ messages, total: messages.length });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const flat = messages.map((m: any) => ({
+    ...m,
+    categories: m.categories?.map((c: any) => c.category) ?? [],
+  }));
+
+  res.json({ messages: flat, total: flat.length });
 });

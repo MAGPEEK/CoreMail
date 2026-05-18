@@ -9,6 +9,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.5.3] — 2026-05-18 — Kategorien (Outlook-Style), Folder-Color-Fix, ContextMenu-Submenu-Bug
+
+### Added
+
+- **Mail-Kategorien** wie in Outlook — Tags mit Name, Farbe, Favorit-Flag, die an Nachrichten geheftet werden können.
+  - Neue Section **Einstellungen → Konto → Kategorien** mit vollständigem CRUD:
+    - „Neu erstellen"-Button mit Inline-Editor (Name + 14-Farben-Palette)
+    - Pro Zeile: Favorit-Stern · Bearbeiten · Löschen (erscheint beim Hover)
+    - Bearbeiten ändert Name + Farbe in derselben Zeile
+  - **Kategorisieren** via Rechtsklick auf Mail → „Kategorisieren …" Submenu mit allen Kategorien (Checkmark wenn zugewiesen, Toggle); wenn keine Kategorien existieren, Link zu den Einstellungen
+  - **Kategorie-Pills** in der Nachrichtenliste unter dem Subject (Hintergrund, Text-Farbe und Border in Kategorie-Farbe; Mini-Dot)
+  - **Volltextsuche unterstützt Kategorie-Filter** via `?categoryId=…` Query-Param
+- **Backend-Routen**:
+  - `GET    /api/v1/categories` — Liste
+  - `POST   /api/v1/categories` — Anlegen (Name + Hex-Farbe + Favorit + sortOrder)
+  - `PATCH  /api/v1/categories/:id` — Umbenennen / Farbe / Favorit / Sortierung
+  - `DELETE /api/v1/categories/:id` — Löschen (Cascade entfernt MessageCategory-Zuweisungen)
+  - `POST   /api/v1/categories/messages/:messageId` — Set Kategorien (Body: `categoryIds[]`)
+  - `POST   /api/v1/categories/messages/bulk` — Bulk: `add` / `remove` / `set` für N Nachrichten
+- **Prisma-Models** `Category` und `MessageCategory` (n:m); `Folder.color` bestand schon, `Message.categories`-Relation hinzugefügt
+- `GET /api/v1/mail/folders/:id/messages` liefert jetzt zusätzlich die zugewiesenen Kategorien pro Nachricht (flach, ohne Junction)
+
+### Fixed
+
+- **Ordner-Farbe-Picker reagierte nicht** — Ursache war ein ContextMenu-Submenu-Bug: der globale `mousedown`-Listener im Hauptmenü hat das Menü beim Klick auf ein Submenu-Item geschlossen (Submenu lebt in einem eigenen Portal, ist DOM-mäßig nicht im Hauptmenü-Container). Fix: alle ContextMenu-Roots tragen `data-coremail-contextmenu`; der outside-Check ignoriert Klicks innerhalb beliebiger ContextMenu-Elemente. Damit funktioniert nun auch *jedes andere* Submenu (Schlummern, Verschieben nach …, Kategorisieren).
+- **Folder-Farbe visueller**: zusätzlich zum farbigen Icon erscheint nun ein kleiner farbiger Dot rechts vom Icon — die Auswahl ist sofort sichtbar.
+
+### Changed
+
+- ContextMenu öffnet jetzt mit subtilem `animate-fly-in` (Konsistenz mit anderen Popovers).
+
+---
+
 ## [3.4.3] — 2026-05-18 — OWA: Microinteractions, Counter-Animationen, TopBar-Polish, Halo-Pulse
 
 ### Added

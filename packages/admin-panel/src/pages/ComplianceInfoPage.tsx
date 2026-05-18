@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.4.3';
+const VERSION        = '3.5.3';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.5.3', date: '2026-05-18', title: 'Mail-Kategorien (Outlook-Style) · Folder-Color-Fix · ContextMenu-Submenu-Bug',
+    notes: 'Neue Mail-Kategorien wie in Outlook: Tags mit Name, Farbe, Favorit-Flag. Vollständiges CRUD in Einstellungen → Konto → Kategorien (Inline-Editor mit 14-Farben-Palette). Kategorisieren via Rechtsklick auf Mail (Submenu mit Toggle-Check). Kategorie-Pills in der Nachrichtenliste unter Subject. Volltextsuche mit ?categoryId=…-Filter. Backend-Routen: GET/POST/PATCH/DELETE /api/v1/categories, POST /categories/messages/:id und /messages/bulk. Prisma: Category + MessageCategory n:m. Fix: Ordner-Farbe-Picker reagierte nicht — ContextMenu-Submenu-Bug behoben (mousedown im Hauptmenü schloss das Menü beim Klick auf ein Submenu-Item, das im Portal lebt). Lösung: data-coremail-contextmenu Marker auf allen Roots, outside-Check ignoriert Klicks innerhalb. Folder-Color zeigt jetzt zusätzlich einen farbigen Dot. ContextMenu öffnet mit animate-fly-in.' },
   { version: '3.4.3', date: '2026-05-18', title: 'OWA: Microinteractions · Counter-Animationen · TopBar-Polish · Halo-Pulse',
     notes: 'Halo-Pulse am Neue-Mail-Button (box-shadow alle 3s), Plus-Icon rotiert 90° beim Hover. Checkbox-Bounce beim Auswählen (scale 0.5→1.15→1.0, cubic-bezier overshoot 240ms). AnimatedCounter-Komponente für Unread-Counts (FolderTree), Liste-Header und BulkToolbar — Scale + Akzent-Farbblitz beim Wert-Wechsel. BulkToolbar slide-down (200ms ease-out) statt abrupt. Subject-Underline-on-hover zusätzlich zur Akzent-Färbung. Folder-Drop-Pulse: kontinuierlicher box-shadow-Pulse beim Drag-Over. Compose-Send-Button: Loader2-Spinner während Versendung; Send-Icon translate-x-0.5 beim Hover. TopBar-Polish: App-Switcher mit hover:translate-y-[-1px], aktiv mit shadow-sm; Suchfeld bei Focus weiß mit dunkler Schrift + shadow-md; Glocke hover:rotate-12, Zahnrad hover:rotate-45; Avatar mit Avatar-Komponente (hash-Farbe), ring-white/40 beim Hover; Chevron flippt 180°; Profile-Dropdown mit fly-in. Komplette Umsetzung von Phase-1 (Quick Wins) + Phase-2 (Microinteractions) aus dem UX-Polish-Plan.' },
   { version: '3.2.3', date: '2026-05-18', title: 'OWA-Polish · gröberes Compose · Settings-Konsolidierung · DnD-Fix',

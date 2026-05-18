@@ -21,8 +21,12 @@ export function ContextMenu({ x, y, items, onClose }) {
     }, [x, y]);
     useEffect(() => {
         const onDown = (e) => {
-            if (ref.current && !ref.current.contains(e.target))
-                onClose();
+            // Klicks INNERHALB eines ContextMenus (auch in Submenus, die als
+            // eigenes Portal gerendert werden) NICHT als outside-Klick werten.
+            const target = e.target;
+            if (target?.closest('[data-coremail-contextmenu]'))
+                return;
+            onClose();
         };
         const onKey = (e) => {
             if (e.key === 'Escape')
@@ -35,7 +39,7 @@ export function ContextMenu({ x, y, items, onClose }) {
             document.removeEventListener('keydown', onKey);
         };
     }, [onClose]);
-    return createPortal(_jsx("div", { ref: ref, role: "menu", className: "fixed z-[100] min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1 text-sm select-none", style: { left: pos.x, top: pos.y }, onContextMenu: (e) => e.preventDefault(), children: items.map((item, i) => {
+    return createPortal(_jsx("div", { ref: ref, role: "menu", "data-coremail-contextmenu": true, className: "fixed z-[100] min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1 text-sm select-none animate-fly-in", style: { left: pos.x, top: pos.y }, onContextMenu: (e) => e.preventDefault(), children: items.map((item, i) => {
             if (item.type === 'divider') {
                 return _jsx("div", { className: "my-1 border-t border-gray-100 dark:border-gray-700" }, `d-${i}`);
             }
