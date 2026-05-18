@@ -244,6 +244,9 @@ model Folder {
   sortOrder   Int       @default(0)
   color       String?
   createdAt   DateTime  @default(now())
+  // Personal-Tag auf Ordner (User-Zuweisung)
+  retentionTag   RetentionTag? @relation("FolderRetentionTag", fields: [retentionTagId], references: [id])
+  retentionTagId String?
 
   @@unique([mailboxId, name])
   @@index([mailboxId])
@@ -277,6 +280,14 @@ model Message {
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
   snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
+  // ── Retention (Phase 9 / Exchange-2019-konform) ────────────────────────────
+  // Vom MFA berechneter oder vom User gesetzter effektiver Tag
+  retentionTag     RetentionTag? @relation("MessageRetentionTag", fields: [retentionTagId], references: [id])
+  retentionTagId   String?
+  // Berechneter Zeitpunkt, ab dem die Tag-Aktion ausgeführt wird (date + retentionDays)
+  retentionExpiresAt DateTime?
+  // Wann das Item via MFA in „Recoverable Items\Deletions" verschoben wurde (Soft Delete)
+  softDeletedAt    DateTime?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -287,6 +298,9 @@ model Message {
   @@index([messageId])
   @@index([deletedAt])
   @@index([snoozeUntil])
+  @@index([retentionTagId])
+  @@index([retentionExpiresAt])
+  @@index([softDeletedAt])
   @@map("messages")
 }
 
@@ -946,20 +960,103 @@ model RetentionPolicy {
   name        String
   description String               @default("")
   enabled     Boolean              @default(true)
-  // Number of days after which the action is triggered (based on message date)
-  retentionDays Int
-  action      RetentionAction      @default(ARCHIVE)
-  // For MOVE_TO_FOLDER action: target folder name
+  // ── Legacy-Felder (vor Tags) — neue Policies haben hier Defaults und nutzen ausschließlich `tags` ──
+  retentionDays Int                 @default(0)
+  action      RetentionAction       @default(ARCHIVE)
   targetFolder String?
-  scope       RetentionScope       @default(ALL_ITEMS)
+  scope       RetentionScope        @default(ALL_ITEMS)
   // If true, items under Legal Hold are skipped even if they match
   respectLegalHold Boolean         @default(true)
+  // ── Neu (Exchange-2019-konformes Tag-Modell) ──
+  policyTags  RetentionPolicyTag[]
   assignments RetentionPolicyAssignment[]
   createdBy   String
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
   @@map("retention_policies")
+}
+
+// ── Retention Tag — analog zu Exchange 2019: DPT / RPT / Personal ─────────────
+enum RetentionTagType {
+  DPT       // Default Policy Tag — gilt für alle Items, wenn nichts spezifischeres greift
+  RPT       // Retention Policy Tag — bindet an einen Standard-Ordner
+  PERSONAL  // Personal Tag — User wendet ihn manuell auf Items/Ordner an
+}
+
+// Welcher Standard-Ordner ein RPT bindet
+enum RetentionFolderTarget {
+  INBOX
+  SENT_ITEMS
+  DELETED_ITEMS
+  JUNK_EMAIL
+  DRAFTS
+  OUTBOX
+  RECOVERABLE_ITEMS
+  ARCHIVE
+  ALL_OTHER  // für DPT-Bindung "alle anderen Ordner"
+}
+
+// Die drei Exchange-2019-Aktionen
+enum RetentionTagAction {
+  MOVE_TO_ARCHIVE             // → Archiv-Ordner
+  DELETE_AND_ALLOW_RECOVERY   // → Recoverable Items\Deletions (Soft Delete, 14 Tage)
+  PERMANENTLY_DELETE          // → Recoverable Items\Purges (Hard Delete falls kein Hold)
+  MARK_AS_PAST_RETENTION_LIMIT // nur Kennzeichnung, keine Bewegung (für Reporting)
+}
+
+model RetentionTag {
+  id              String                @id @default(cuid())
+  name            String                @unique
+  description     String                @default("")
+  type            RetentionTagType
+  action          RetentionTagAction    @default(DELETE_AND_ALLOW_RECOVERY)
+  retentionDays   Int                   // Tage bis Aktion getriggert wird
+  // Nur für RPT: an welchen Standardordner gebunden
+  folderTarget    RetentionFolderTarget?
+  enabled         Boolean               @default(true)
+  isSystem        Boolean               @default(false) // Built-in (z.B. "Default 2-Year Delete"), nicht löschbar
+  policyTags      RetentionPolicyTag[]
+  messages        Message[]             @relation("MessageRetentionTag")
+  folders         Folder[]              @relation("FolderRetentionTag")
+  createdBy       String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([type])
+  @@map("retention_tags")
+}
+
+// ── M:N — Tags in Policies ────────────────────────────────────────────────────
+model RetentionPolicyTag {
+  policy    RetentionPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policyId  String
+  tag       RetentionTag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId     String
+  createdAt DateTime        @default(now())
+
+  @@id([policyId, tagId])
+  @@map("retention_policy_tags")
+}
+
+// ── Managed Folder Assistant — Run-Historie ───────────────────────────────────
+model ManagedFolderRun {
+  id                 String   @id @default(cuid())
+  startedAt          DateTime @default(now())
+  completedAt        DateTime?
+  // Hartes Limit pro Run (Work-Cycle-Begrenzung); 0 = unbegrenzt
+  workCycleSeconds   Int      @default(0)
+  mailboxesScanned   Int      @default(0)
+  itemsScanned       Int      @default(0)
+  itemsArchived      Int      @default(0)
+  itemsSoftDeleted   Int      @default(0)  // → Deletions
+  itemsHardDeleted   Int      @default(0)  // → Purges / gelöscht
+  itemsSkippedHold   Int      @default(0)
+  throttled          Boolean  @default(false)
+  errorMessage       String?
+
+  @@index([startedAt])
+  @@map("managed_folder_runs")
 }
 
 enum RetentionAssignmentTarget {

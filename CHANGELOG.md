@@ -9,6 +9,61 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.11.0] — 2026-05-18 — Aufbewahrungsrichtlinien Exchange-2019-konform (Tags · MFA · Recoverable Items)
+
+### Added — Retention Tag-System
+
+- **Drei Tag-Typen** analog Exchange 2019:
+  - **DPT (Default Policy Tag)** — gilt fürs ganze Postfach, wenn kein spezifischeres Tag greift
+  - **RPT (Retention Policy Tag)** — bindet an einen Standardordner (Inbox, Sent Items, Deleted Items, Junk Email, Drafts, Outbox, Archive, Recoverable Items)
+  - **PERSONAL** — vom User auf Items/Ordner anwendbar
+- **Vier Tag-Aktionen**:
+  - `MOVE_TO_ARCHIVE` — Verschieben in den Archiv-Ordner
+  - `DELETE_AND_ALLOW_RECOVERY` — Soft Delete in `Recoverable Items\Deletions` (14 Tage Wiederherstellung)
+  - `PERMANENTLY_DELETE` — direkt in `Recoverable Items\Purges` (Hard Delete falls kein Hold)
+  - `MARK_AS_PAST_RETENTION_LIMIT` — nur Kennzeichnung
+- **Tag-Hierarchie pro Item** (Spezifisch schlägt Generisch):
+  - Personal-Tag auf Item → Personal-Tag auf Folder → RPT für Folder-Target → DPT der Policy
+- **Policy ↔ Tag-Bündelung** (m:n) via `RetentionPolicyTag` — eine Policy darf max. 1 DPT haben (validiert)
+
+### Added — Managed Folder Assistant (MFA)
+
+- Neuer Worker in `packages/backup-service/src/retention/worker.ts`:
+  - **Work-Cycle-Throttle** — 24h-Default (Env `RETENTION_WORK_CYCLE_SEC`), bei Überschreitung wird `throttled: true` gesetzt
+  - **Recoverable-Items-Sweep** — Items in Deletions älter als TTL → Purges; Items in Purges ohne Legal Hold → DB-Delete + Quota-Freigabe
+  - **Run-Historie** in neuer Tabelle `managed_folder_runs` (Postfächer, Items, Archiviert, Soft-Del, Hard-Del, Hold-Skip, Throttle, Fehler)
+- **Recoverable Items Non-IPM Subtree** — beim ersten Run pro Mailbox angelegt: `Recoverable Items`, `Recoverable Items/Deletions`, `Recoverable Items/Purges` (subscribed=false → für IMAP versteckt)
+- **Legacy-Modus** — Policies ohne Tags (v3.10-Style) wirken weiter als synthetischer DPT, damit nichts an Wirkung verloren geht
+
+### Added — Backend-Routen
+
+- `GET/POST/PUT/DELETE /api/v1/admin/compliance/retention/tags` — Tag-CRUD
+- `POST/DELETE /api/v1/admin/compliance/retention/:policyId/tags/:tagId` — Tag an Policy hängen/lösen
+- `GET /api/v1/admin/compliance/retention/runs` — MFA-Run-Historie (letzte 30 Läufe)
+
+### Changed — Schema (Prisma)
+
+- **Neu**:
+  - `model RetentionTag` mit `RetentionTagType` (DPT/RPT/PERSONAL), `RetentionTagAction` (4-Werte), `RetentionFolderTarget` (8 Standardordner + ALL_OTHER), `retentionDays`, `isSystem`
+  - `model RetentionPolicyTag` (m:n Policy ↔ Tag)
+  - `model ManagedFolderRun` für MFA-Historie
+- **Erweitert**:
+  - `Folder.retentionTagId` — Personal-Tag auf Ordner
+  - `Message.retentionTagId`, `Message.retentionExpiresAt`, `Message.softDeletedAt` — Tag-Tracking und Soft-Delete
+- **Indizes**: `Message(retentionTagId)`, `Message(retentionExpiresAt)`, `Message(softDeletedAt)`
+
+### Changed — Admin-UI
+
+- **`RetentionPage.tsx`** komplett überarbeitet, zwei Tabs:
+  - **Richtlinien-Tab** — Tag-Chips (gruppiert nach DPT/RPT/Personal), Legacy-Anzeige für Tag-lose Policies
+  - **Tags-Tab** — Übersicht aller Tags mit Typ/Aktion/Frist/Ordner/Verwendung; System-Tags nicht löschbar
+- **Policy-Modal** mit Tag-Picker (gruppiert) + DPT-Max-1-Warnung
+- **Tag-Modal** mit Typ-Auswahl + RPT-Ordner-Dropdown
+- **MFA-Run-Historie** als Modal (Postfächer, Items, Archiviert, Soft-Del, Hard-Del, Hold-Skip, Status)
+- **„MFA jetzt"-Button** für Ad-hoc-Läufe
+
+---
+
 ## [3.10.0] — 2026-05-18 — eDiscovery komplett: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export
 
 ### Fixed

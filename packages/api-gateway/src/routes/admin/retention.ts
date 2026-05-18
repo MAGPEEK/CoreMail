@@ -1,27 +1,180 @@
 /**
- * Admin API — Retention Policies (Phase 9)
+ * Admin API — Retention Policies & Tags (Phase 9, Exchange-2019-konform)
  *
- * ECP → Compliance Management → Retention Policies
+ * Tag-Konzept (analog Exchange 2019):
+ *   • DPT (Default Policy Tag) — gilt fürs ganze Postfach
+ *   • RPT (Retention Policy Tag) — bindet an einen Standardordner (Inbox, Sent, …)
+ *   • PERSONAL — User-zuweisbar an einzelne Items/Ordner
  *
- * Routes:
- *   GET    /api/v1/admin/compliance/retention                       — list policies
- *   POST   /api/v1/admin/compliance/retention                       — create policy
- *   GET    /api/v1/admin/compliance/retention/:id                   — get policy
- *   PUT    /api/v1/admin/compliance/retention/:id                   — update policy
- *   DELETE /api/v1/admin/compliance/retention/:id                   — delete policy
- *   POST   /api/v1/admin/compliance/retention/:id/toggle            — enable/disable
- *   GET    /api/v1/admin/compliance/retention/:id/assignments       — list assignments
- *   POST   /api/v1/admin/compliance/retention/:id/assignments       — add assignment
- *   DELETE /api/v1/admin/compliance/retention/:id/assignments/:aid  — remove assignment
- *   POST   /api/v1/admin/compliance/retention/run                   — trigger manual run
+ * Hierarchie pro Item: Personal > RPT > DPT
+ *
+ * Routes — Tags:
+ *   GET    /api/v1/admin/compliance/retention/tags
+ *   POST   /api/v1/admin/compliance/retention/tags
+ *   PUT    /api/v1/admin/compliance/retention/tags/:id
+ *   DELETE /api/v1/admin/compliance/retention/tags/:id
+ *
+ * Routes — Policies:
+ *   GET    /api/v1/admin/compliance/retention
+ *   POST   /api/v1/admin/compliance/retention
+ *   GET    /api/v1/admin/compliance/retention/:id
+ *   PUT    /api/v1/admin/compliance/retention/:id
+ *   DELETE /api/v1/admin/compliance/retention/:id
+ *   POST   /api/v1/admin/compliance/retention/:id/toggle
+ *   POST   /api/v1/admin/compliance/retention/:id/tags/:tagId    — Tag anhängen
+ *   DELETE /api/v1/admin/compliance/retention/:id/tags/:tagId    — Tag lösen
+ *
+ * Routes — Zuweisungen + Run:
+ *   GET    /api/v1/admin/compliance/retention/:id/assignments
+ *   POST   /api/v1/admin/compliance/retention/:id/assignments
+ *   DELETE /api/v1/admin/compliance/retention/:id/assignments/:aid
+ *   POST   /api/v1/admin/compliance/retention/run                — MFA jetzt ausführen
+ *   GET    /api/v1/admin/compliance/retention/runs               — MFA-Run-Historie
  */
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
+import { z } from 'zod';
 import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 
 export const adminRetentionRouter: RouterType = Router();
 adminRetentionRouter.use(requireAuth, requireAdmin);
+
+// ── Tag-CRUD ─────────────────────────────────────────────────────────────────
+
+const TAG_TYPES   = ['DPT', 'RPT', 'PERSONAL'] as const;
+const TAG_ACTIONS = ['MOVE_TO_ARCHIVE', 'DELETE_AND_ALLOW_RECOVERY', 'PERMANENTLY_DELETE', 'MARK_AS_PAST_RETENTION_LIMIT'] as const;
+const FOLDER_TARGETS = ['INBOX','SENT_ITEMS','DELETED_ITEMS','JUNK_EMAIL','DRAFTS','OUTBOX','RECOVERABLE_ITEMS','ARCHIVE','ALL_OTHER'] as const;
+
+const TagSchema = z.object({
+  name:          z.string().min(1).max(120),
+  description:   z.string().default(''),
+  type:          z.enum(TAG_TYPES),
+  action:        z.enum(TAG_ACTIONS),
+  retentionDays: z.number().int().min(1),
+  folderTarget:  z.enum(FOLDER_TARGETS).optional(),
+  enabled:       z.boolean().default(true),
+});
+
+adminRetentionRouter.get('/tags', async (_req: Request, res: Response) => {
+  const tags = await prisma.retentionTag.findMany({
+    include: { _count: { select: { policyTags: true, messages: true, folders: true } } },
+    orderBy: [{ type: 'asc' }, { name: 'asc' }],
+  });
+  res.json(tags);
+});
+
+adminRetentionRouter.post('/tags', async (req: Request, res: Response) => {
+  const p = TagSchema.safeParse(req.body);
+  if (!p.success) { res.status(400).json({ error: 'Invalid request', details: p.error.issues }); return; }
+
+  // RPT muss einen folderTarget haben
+  if (p.data.type === 'RPT' && !p.data.folderTarget) {
+    res.status(400).json({ error: 'RPT-Tags benötigen einen folderTarget (Inbox, Sent, …)' });
+    return;
+  }
+  // DPT darf keinen folderTarget haben (bzw. nur ALL_OTHER)
+  if (p.data.type === 'DPT' && p.data.folderTarget && p.data.folderTarget !== 'ALL_OTHER') {
+    res.status(400).json({ error: 'DPT-Tags dürfen nur folderTarget=ALL_OTHER haben' });
+    return;
+  }
+
+  try {
+    const tag = await prisma.retentionTag.create({
+      data: {
+        name: p.data.name, description: p.data.description,
+        type: p.data.type, action: p.data.action, retentionDays: p.data.retentionDays,
+        ...(p.data.folderTarget ? { folderTarget: p.data.folderTarget } : {}),
+        enabled: p.data.enabled,
+        createdBy: req.apiUser?.userId ?? '',
+      },
+    });
+    res.status(201).json(tag);
+  } catch (err) {
+    if (String(err).includes('Unique')) { res.status(409).json({ error: 'Tag-Name bereits vergeben' }); return; }
+    throw err;
+  }
+});
+
+adminRetentionRouter.put('/tags/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const tag = await prisma.retentionTag.findUnique({ where: { id } });
+  if (!tag) { res.status(404).json({ error: 'Tag not found' }); return; }
+  if (tag.isSystem) { res.status(403).json({ error: 'System-Tags können nicht geändert werden' }); return; }
+
+  const p = TagSchema.partial().safeParse(req.body);
+  if (!p.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const updated = await prisma.retentionTag.update({
+    where: { id },
+    data: {
+      ...(p.data.name !== undefined ? { name: p.data.name } : {}),
+      ...(p.data.description !== undefined ? { description: p.data.description } : {}),
+      ...(p.data.type !== undefined ? { type: p.data.type } : {}),
+      ...(p.data.action !== undefined ? { action: p.data.action } : {}),
+      ...(p.data.retentionDays !== undefined ? { retentionDays: p.data.retentionDays } : {}),
+      ...(p.data.folderTarget !== undefined ? { folderTarget: p.data.folderTarget } : {}),
+      ...(p.data.enabled !== undefined ? { enabled: p.data.enabled } : {}),
+    },
+  });
+  res.json(updated);
+});
+
+adminRetentionRouter.delete('/tags/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const tag = await prisma.retentionTag.findUnique({ where: { id } });
+  if (!tag) { res.status(404).json({ error: 'Tag not found' }); return; }
+  if (tag.isSystem) { res.status(403).json({ error: 'System-Tags können nicht gelöscht werden' }); return; }
+  await prisma.retentionTag.delete({ where: { id } });
+  res.status(204).end();
+});
+
+// ── Tag ↔ Policy ─────────────────────────────────────────────────────────────
+
+adminRetentionRouter.post('/:id/tags/:tagId', async (req: Request, res: Response) => {
+  const { id, tagId } = req.params as { id: string; tagId: string };
+  const [policy, tag] = await Promise.all([
+    prisma.retentionPolicy.findUnique({ where: { id } }),
+    prisma.retentionTag.findUnique({ where: { id: tagId } }),
+  ]);
+  if (!policy || !tag) { res.status(404).json({ error: 'Policy oder Tag nicht gefunden' }); return; }
+
+  // Eine Policy darf maximal 1 DPT haben
+  if (tag.type === 'DPT') {
+    const existingDpt = await prisma.retentionPolicyTag.findFirst({
+      where: { policyId: id, tag: { type: 'DPT' } },
+    });
+    if (existingDpt && existingDpt.tagId !== tagId) {
+      res.status(409).json({ error: 'Diese Policy hat bereits einen DPT — bitte erst entfernen' });
+      return;
+    }
+  }
+
+  try {
+    await prisma.retentionPolicyTag.create({ data: { policyId: id, tagId } });
+    res.status(201).json({ ok: true });
+  } catch {
+    res.status(409).json({ error: 'Tag ist bereits an diese Policy gehängt' });
+  }
+});
+
+adminRetentionRouter.delete('/:id/tags/:tagId', async (req: Request, res: Response) => {
+  const { id, tagId } = req.params as { id: string; tagId: string };
+  await prisma.retentionPolicyTag.delete({
+    where: { policyId_tagId: { policyId: id, tagId } },
+  }).catch(() => undefined);
+  res.status(204).end();
+});
+
+// ── MFA-Run-Historie ──────────────────────────────────────────────────────────
+
+adminRetentionRouter.get('/runs', async (_req: Request, res: Response) => {
+  const runs = await prisma.managedFolderRun.findMany({
+    orderBy: { startedAt: 'desc' },
+    take: 30,
+  });
+  res.json(runs);
+});
 
 // ── Policy CRUD ───────────────────────────────────────────────────────────────
 
@@ -31,7 +184,10 @@ adminRetentionRouter.use(requireAuth, requireAdmin);
  */
 adminRetentionRouter.get('/', async (_req: Request, res: Response) => {
   const policies = await prisma.retentionPolicy.findMany({
-    include: { _count: { select: { assignments: true } } },
+    include: {
+      _count: { select: { assignments: true } },
+      policyTags: { include: { tag: true } },
+    },
     orderBy: { createdAt: 'asc' },
   });
   res.json(policies);
@@ -115,7 +271,10 @@ adminRetentionRouter.get('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const policy = await prisma.retentionPolicy.findUnique({
     where: { id },
-    include: { assignments: true },
+    include: {
+      assignments: true,
+      policyTags: { include: { tag: true } },
+    },
   });
   if (!policy) {
     res.status(404).json({ error: 'Retention policy not found' });
