@@ -89,9 +89,11 @@ interface UiPrefs {
   density: Density;
   favoritesCollapsed: boolean;
   folderTreeCollapsed: boolean;
+  calendarShowWeekNumbers: boolean;
   setDensity: (d: Density) => void;
   toggleFavorites: () => void;
   toggleFolderTree: () => void;
+  setCalendarShowWeekNumbers: (v: boolean) => void;
 }
 
 export const useUiPrefs = create<UiPrefs>()(
@@ -100,9 +102,11 @@ export const useUiPrefs = create<UiPrefs>()(
       density: 'normal',
       favoritesCollapsed: false,
       folderTreeCollapsed: false,
+      calendarShowWeekNumbers: true,
       setDensity: (d) => set({ density: d }),
       toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
       toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
+      setCalendarShowWeekNumbers: (v) => set({ calendarShowWeekNumbers: v }),
     }),
     { name: 'coremail-ui-prefs' },
   ),

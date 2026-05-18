@@ -43,9 +43,11 @@ export const useUiPrefs = create()(persist((set) => ({
     density: 'normal',
     favoritesCollapsed: false,
     folderTreeCollapsed: false,
+    calendarShowWeekNumbers: true,
     setDensity: (d) => set({ density: d }),
     toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
     toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
+    setCalendarShowWeekNumbers: (v) => set({ calendarShowWeekNumbers: v }),
 }), { name: 'coremail-ui-prefs' }));
 export const ACCENT_COLORS = [
     { name: 'Microsoft Blau', hex: '#0078D4', rgb: '0 120 212' },

@@ -5,11 +5,19 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import deLocale from '@fullcalendar/core/locales/de';
+import enLocale from '@fullcalendar/core/locales/en-gb';
+import esLocale from '@fullcalendar/core/locales/es';
+import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, EventClickArg } from '@fullcalendar/core';
-import { Plus, X } from 'lucide-react';
+import { Plus, X, CalendarRange } from 'lucide-react';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent } from '../api/types.js';
+import { useUiPrefs } from '../store/ui.js';
+import { useLanguageStore } from '../store/language.js';
+import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
+
+const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
 interface NewEventForm {
   summary: string;
@@ -21,6 +29,9 @@ interface NewEventForm {
 
 export function CalendarPage() {
   const qc = useQueryClient();
+  const t = useT();
+  const lang = useLanguageStore((s) => s.lang);
+  const { calendarShowWeekNumbers, setCalendarShowWeekNumbers } = useUiPrefs();
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
 
   const { data: calendars } = useQuery({
@@ -96,6 +107,20 @@ export function CalendarPage() {
             </div>
           ))}
         </div>
+
+        <div className="border-t border-gray-200 pt-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{t('view_settings')}</p>
+          <label className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-100 rounded px-1">
+            <input
+              type="checkbox"
+              checked={calendarShowWeekNumbers}
+              onChange={(e) => setCalendarShowWeekNumbers(e.target.checked)}
+              className="rounded border-gray-300 text-accent focus:ring-accent"
+            />
+            <CalendarRange size={14} className="text-gray-500" />
+            <span className="text-sm text-gray-700">{t('show_week_numbers')}</span>
+          </label>
+        </div>
       </aside>
 
       {/* Calendar */}
@@ -103,7 +128,11 @@ export function CalendarPage() {
         <FullCalendar
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
           initialView="timeGridWeek"
-          locale={deLocale}
+          locale={LOCALE_MAP[lang] ?? deLocale}
+          weekNumbers={calendarShowWeekNumbers}
+          weekNumberCalculation="ISO"
+          weekText={t('cw_short')}
+          firstDay={1}
           headerToolbar={{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }}
           events={fcEvents}
           selectable

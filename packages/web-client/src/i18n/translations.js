@@ -80,6 +80,11 @@ const de = {
     lang_help: 'Wählen Sie die Anzeigesprache der Web-Oberfläche.',
     lang_change_save: 'Speichern',
     lang_changed: 'Sprache geändert',
+    // Kalender
+    calendar: 'Kalender',
+    show_week_numbers: 'Kalenderwochen (KW) anzeigen',
+    cw_short: 'KW',
+    view_settings: 'Ansicht',
 };
 const en = {
     language: 'Language',
@@ -154,6 +159,10 @@ const en = {
     lang_help: 'Choose the display language of the web interface.',
     lang_change_save: 'Save',
     lang_changed: 'Language changed',
+    calendar: 'Calendar',
+    show_week_numbers: 'Show week numbers (WN)',
+    cw_short: 'WN',
+    view_settings: 'View',
 };
 const es = {
     language: 'Idioma',
@@ -228,6 +237,10 @@ const es = {
     lang_help: 'Elija el idioma de visualización de la interfaz web.',
     lang_change_save: 'Guardar',
     lang_changed: 'Idioma cambiado',
+    calendar: 'Calendario',
+    show_week_numbers: 'Mostrar números de semana (SM)',
+    cw_short: 'SM',
+    view_settings: 'Vista',
 };
 const it = {
     language: 'Lingua',
@@ -302,6 +315,10 @@ const it = {
     lang_help: "Scegli la lingua di visualizzazione dell'interfaccia web.",
     lang_change_save: 'Salva',
     lang_changed: 'Lingua cambiata',
+    calendar: 'Calendario',
+    show_week_numbers: 'Mostra numeri di settimana (NS)',
+    cw_short: 'NS',
+    view_settings: 'Vista',
 };
 export const translations = { de, en, es, it };
 export const LANGS = [
