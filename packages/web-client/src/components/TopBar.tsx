@@ -68,11 +68,11 @@ export function TopBar({ onSearch, currentApp }: Props) {
 
       {/* Right actions */}
       <div className="ml-auto flex items-center gap-1">
-        <button className="p-1.5 rounded text-white/80 hover:bg-white/20 transition-all duration-150 active:scale-90 hover:rotate-12" title="Benachrichtigungen">
-          <Bell size={17} />
+        <button className="group/bell p-1.5 rounded text-white/80 hover:bg-white/20 transition-all duration-150 active:scale-90" title="Benachrichtigungen">
+          <Bell size={17} className="transition-transform duration-150 group-hover/bell:rotate-12" />
         </button>
-        <button onClick={() => navigate('/settings')} className="p-1.5 rounded text-white/80 hover:bg-white/20 transition-all duration-150 active:scale-90 hover:rotate-45" title="Einstellungen">
-          <Settings size={17} />
+        <button onClick={() => navigate('/settings')} className="group/gear p-1.5 rounded text-white/80 hover:bg-white/20 transition-all duration-150 active:scale-90" title="Einstellungen">
+          <Settings size={17} className="transition-transform duration-150 group-hover/gear:rotate-45" />
         </button>
 
         {/* Profile */}
