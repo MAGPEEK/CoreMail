@@ -9,6 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.11.1] — 2026-05-18 — UX-Fixes: Shared-Mailbox-Form, Heap-Anzeige, Widget-Labels
+
+### Fixed
+
+- **🐛 Shared Mailbox „Invalid Input" beim Anlegen** — Local-Part-Input + Domain-Dropdown standen nebeneinander aber als zwei getrennte Felder. Wenn der User nur den Local-Part eintippte (was UX-mäßig logisch ist, weil daneben schon eine Domain steht), schickte das Frontend `email: "support"` → Backend-Zod-Validation `z.string().email()` lehnte mit 400 ab. Jetzt: ein zusammengesetztes Eingabefeld mit `localPart @ domain-dropdown`-Layout, Live-Vorschau der vollständigen E-Mail in Monospace, Local-Part-Validierung im Frontend (a-z 0-9 . _ + -), erste verfügbare Domain wird vorausgewählt, Submit-Button bleibt disabled bis Eingabe valide ist
+- **🐛 Node-Heap-Balken fälschlich rot** — die alte Anzeige zeigte `heapUsed / heapTotal`, wobei `heapTotal` aber nur die *aktuell allokierte* Heap-Größe ist (V8 wächst die nur bei Bedarf). In steady state ist sie naturgemäß fast immer zu ~90 % voll, bevor V8 expandiert. Korrekt: `heapUsed / heap_size_limit` (das ist der echte `--max-old-space-size`-Plafond, default ~4 GB). Jetzt zeigt der Balken realistisch ~3 % statt 92 %. „Allokiert"-Wert wandert in die graue Detail-Zeile
+
+### Changed
+
+- **Dashboard-Anzeige-Popover**: Präfix „KPI: " aus den vier oberen Widget-Labels entfernt — jetzt einfach „Benutzer / Domains / E-Mails / Speicher"
+- **Backend `/admin/dashboard`** liefert neu `server.memory.heapLimit` aus `v8.getHeapStatistics().heap_size_limit`
+
+---
+
 ## [3.11.0] — 2026-05-18 — Aufbewahrungsrichtlinien Exchange-2019-konform (Tags · MFA · Recoverable Items)
 
 ### Added — Retention Tag-System

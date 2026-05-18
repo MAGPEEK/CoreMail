@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield } from 'lucide-react';
@@ -167,20 +167,33 @@ export function SharedMailboxesPage() {
 // ── Create/Edit Modal ─────────────────────────────────────────────────────────
 function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: () => void }) {
   const qc = useQueryClient();
-  const [email, setEmail]     = useState(item?.email ?? '');
-  const [name, setName]       = useState(item?.displayName ?? '');
+  const [name, setName]         = useState(item?.displayName ?? '');
+  const [localPart, setLocalPart] = useState(item?.email?.split('@')[0] ?? '');
   const [domainId, setDomainId] = useState(item?.domainId ?? '');
-  const [active, setActive]   = useState(item?.active ?? true);
+  const [active, setActive]     = useState(item?.active ?? true);
 
   const { data: domains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains-list'],
     queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
   });
 
+  // Default-Domain setzen, sobald die Liste da ist
+  useEffect(() => {
+    if (!item && !domainId && domains.length > 0) {
+      setDomainId(domains[0]!.id);
+    }
+  }, [domains, item, domainId]);
+
+  const selectedDomain = domains.find(d => d.id === domainId);
+  // RFC-5321 vereinfacht: a-z, 0-9, Punkt, Dash, Underscore, Plus
+  const localPartTrimmed = localPart.trim().toLowerCase();
+  const localPartValid   = /^[a-z0-9._+-]+$/.test(localPartTrimmed) && !localPartTrimmed.startsWith('.') && !localPartTrimmed.endsWith('.');
+  const fullEmail        = localPartTrimmed && selectedDomain ? `${localPartTrimmed}@${selectedDomain.name}` : '';
+
   const mutation = useMutation({
     mutationFn: () => item
       ? api.put(`/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
-      : api.post('/admin/shared-mailboxes', { email, displayName: name, domainId }),
+      : api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name, domainId }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
       toast.success(item ? 'Gespeichert' : 'Erstellt');
@@ -197,25 +210,42 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
-          {!item && (
-            <>
-              <div>
-                <label className="field-label">E-Mail-Adresse</label>
-                <input value={email} onChange={e => setEmail(e.target.value)} className="input" placeholder="support@domain.com" />
-              </div>
-              <div>
-                <label className="field-label">Domain</label>
-                <select value={domainId} onChange={e => setDomainId(e.target.value)} className="input">
-                  <option value="">Domain wählen…</option>
-                  {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              </div>
-            </>
-          )}
           <div>
             <label className="field-label">Anzeigename</label>
             <input value={name} onChange={e => setName(e.target.value)} className="input" placeholder="Support-Team" />
           </div>
+          {!item && (
+            <div>
+              <label className="field-label">E-Mail-Adresse</label>
+              <div className="flex items-stretch gap-0">
+                <input
+                  value={localPart}
+                  onChange={e => setLocalPart(e.target.value)}
+                  className="input rounded-r-none border-r-0 flex-1 min-w-0"
+                  placeholder="support"
+                  autoComplete="off"
+                />
+                <span className="inline-flex items-center px-2 bg-gray-50 border border-gray-300 text-gray-500 text-sm select-none">@</span>
+                <select
+                  value={domainId}
+                  onChange={e => setDomainId(e.target.value)}
+                  className="input rounded-l-none border-l-0 w-44 flex-shrink-0"
+                >
+                  {domains.length === 0 ? (
+                    <option value="">— keine Domain —</option>
+                  ) : (
+                    domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                  )}
+                </select>
+              </div>
+              {fullEmail && (
+                <p className="mt-1 text-xs text-gray-500 font-mono">{fullEmail}</p>
+              )}
+              {localPart && !localPartValid && (
+                <p className="mt-1 text-xs text-red-600">Local-Part darf nur a-z, 0-9, . _ + - enthalten und nicht mit Punkt beginnen/enden.</p>
+              )}
+            </div>
+          )}
           {item && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
               <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded" />
@@ -225,7 +255,11 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={onClose} className="btn-secondary">Abbrechen</button>
             <button onClick={() => mutation.mutate()}
-              disabled={mutation.isPending || !name || (!item && (!email || !domainId))}
+              disabled={
+                mutation.isPending ||
+                !name.trim() ||
+                (!item && (!localPartValid || !domainId))
+              }
               className="btn-primary flex items-center gap-1.5">
               {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
               {item ? 'Speichern' : 'Erstellen'}

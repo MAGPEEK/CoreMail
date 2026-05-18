@@ -32,7 +32,7 @@ interface DashboardData {
   server: {
     version: string; hostname: string; platform: string; arch: string;
     nodeVersion: string; pid: number; uptimeSeconds: number; startedAt: string;
-    memory: { heapUsed: number; heapTotal: number; rss: number; systemTotal: number; systemFree: number };
+    memory: { heapUsed: number; heapTotal: number; heapLimit?: number; rss: number; systemTotal: number; systemFree: number };
     cpu:    { cores: number; model: string; load1: number; load5: number; load15: number };
   };
   activeSessions: number;
@@ -247,7 +247,10 @@ export function DashboardPage() {
   const totalQueueItems = queues.waiting + queues.active + queues.delayed;
   const hasQueueProblem = queues.failed > 0;
   const uptime = fmtUptime(server.uptimeSeconds);
-  const heapPct = server.memory.heapTotal > 0 ? Math.round((server.memory.heapUsed / server.memory.heapTotal) * 100) : 0;
+  // Heap-Budget = V8 heap_size_limit (--max-old-space-size). Fallback auf heapTotal
+  // für ältere Backends, die heapLimit noch nicht liefern.
+  const heapBudget = server.memory.heapLimit ?? server.memory.heapTotal;
+  const heapPct    = heapBudget > 0 ? Math.round((server.memory.heapUsed / heapBudget) * 100) : 0;
   const sysMemUsed = server.memory.systemTotal - server.memory.systemFree;
   const sysMemPct = server.memory.systemTotal > 0 ? Math.round((sysMemUsed / server.memory.systemTotal) * 100) : 0;
   const cpuPct = server.cpu.cores > 0 ? Math.min(100, Math.round((server.cpu.load1 / server.cpu.cores) * 100)) : 0;
@@ -386,10 +389,10 @@ export function DashboardPage() {
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> Node-Heap</span>
-                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(server.memory.heapTotal)}</span>
+                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(heapBudget)}</span>
                   </div>
                   <MiniBar pct={heapPct} color={barColor(heapPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">RSS: {fmtBytes(server.memory.rss)}</p>
+                  <p className="text-[11px] text-gray-400 mt-1">Allokiert {fmtBytes(server.memory.heapTotal)} · RSS {fmtBytes(server.memory.rss)}</p>
                 </div>
               </div>
             </div>

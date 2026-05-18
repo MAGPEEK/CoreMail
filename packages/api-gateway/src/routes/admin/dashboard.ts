@@ -4,6 +4,7 @@ import { prisma } from '@coremail/storage';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 import os from 'node:os';
+import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
 
 // Boot-Zeit + Coremail-Version einmalig ermitteln
@@ -173,6 +174,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
 
     // ── Server-Metriken aus dem Node-Prozess ────────────────────────────────
     const mem = process.memoryUsage();
+    const heapStats = v8.getHeapStatistics();
     const load = os.loadavg();
     const server = {
       version:        appVersion,
@@ -186,6 +188,8 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       memory: {
         heapUsed:    mem.heapUsed,
         heapTotal:   mem.heapTotal,
+        // V8 heap_size_limit = --max-old-space-size; das ist die echte Obergrenze
+        heapLimit:   heapStats.heap_size_limit,
         rss:         mem.rss,
         systemTotal: os.totalmem(),
         systemFree:  os.freemem(),

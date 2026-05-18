@@ -22,10 +22,10 @@ export type WidgetId =
   | 'security-stats';
 
 export const WIDGET_CATALOG: { id: WidgetId; label: string; group: 'kpi' | 'charts' | 'lists' | 'server' }[] = [
-  { id: 'kpi-users',        label: 'KPI: Benutzer',                group: 'kpi' },
-  { id: 'kpi-domains',      label: 'KPI: Domains',                 group: 'kpi' },
-  { id: 'kpi-messages',     label: 'KPI: E-Mails',                 group: 'kpi' },
-  { id: 'kpi-storage',      label: 'KPI: Speicher',                group: 'kpi' },
+  { id: 'kpi-users',        label: 'Benutzer',                     group: 'kpi' },
+  { id: 'kpi-domains',      label: 'Domains',                      group: 'kpi' },
+  { id: 'kpi-messages',     label: 'E-Mails',                      group: 'kpi' },
+  { id: 'kpi-storage',      label: 'Speicher',                     group: 'kpi' },
   { id: 'queue-status',     label: 'SMTP-Queue-Status',            group: 'charts' },
   { id: 'mails-chart',      label: 'E-Mail-Aktivität (7 Tage)',    group: 'charts' },
   { id: 'storage-ranking',  label: 'Speicher-Ranking (Top 10)',    group: 'lists' },
