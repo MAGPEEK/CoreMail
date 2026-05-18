@@ -5,6 +5,10 @@ export interface Folder {
   parentId: string | null;
   totalCount: number;
   unreadCount: number;
+  isFavorite?: boolean;
+  sortOrder?: number;
+  color?: string | null;
+  isSystem?: boolean;
 }
 
 export interface MessageSummary {
@@ -16,8 +20,19 @@ export interface MessageSummary {
   date: string;
   flags: string[];
   rawSize: number;
+  pinnedAt?: string | null;
+  snoozeUntil?: string | null;
   attachments: { id: string; filename: string; mimeType: string; size: number }[];
 }
+
+export type BulkAction =
+  | 'read' | 'unread'
+  | 'flag' | 'unflag'
+  | 'pin'  | 'unpin'
+  | 'move' | 'delete' | 'archive'
+  | 'spam' | 'notSpam';
+
+export type MessageFilter = 'all' | 'unread' | 'flagged' | 'attachments';
 
 export interface Message extends MessageSummary {
   ccAddrs: string[];

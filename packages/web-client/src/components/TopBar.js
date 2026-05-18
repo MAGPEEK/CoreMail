@@ -1,7 +1,7 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Calendar, Users, CheckSquare, Search, Bell, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 export function TopBar({ onSearch, currentApp }) {
     const navigate = useNavigate();
@@ -13,6 +13,7 @@ export function TopBar({ onSearch, currentApp }) {
         { id: 'calendar', label: 'Kalender', icon: Calendar, path: '/calendar' },
         { id: 'contacts', label: 'Kontakte', icon: Users, path: '/contacts' },
         { id: 'tasks', label: 'Aufgaben', icon: CheckSquare, path: '/tasks' },
+        { id: 'notes', label: 'Notizen', icon: StickyNote, path: '/notes' },
     ];
     const handleSearch = (e) => {
         e.preventDefault();

@@ -9,6 +9,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.0.0] — 2026-05-18 — Major: OWA mit Rechtsklick-Menüs, Favoriten, Drag&Drop, Bulk-Actions
+
+> **Major-Sprung 2.x → 3.0.0**: Das OWA-Frontend wurde grundlegend erweitert. Reine Backend-API-Änderungen sind kompatibel, aber das UI verhält sich für Endnutzer deutlich anders (Mehrfachauswahl, Drag&Drop, neue Kontextmenüs).
+
+### Added
+
+- **Rechtsklick-Kontextmenü auf Ordner** (Posteingang/Junk/eigene Ordner):
+  Alle als gelesen markieren · Zu Favoriten / aus Favoriten · Neuer Unterordner · Umbenennen · Farbe ändern (6 Vorlagen) · Löschen · Papierkorb/Junk leeren
+- **Rechtsklick-Kontextmenü auf Nachricht** (Outlook.com + Gmail-Schnittmenge):
+  Antworten / Allen antworten / Weiterleiten · Als gelesen/ungelesen · Kennzeichnen · Anheften (Pin) · Schlummern (1h, 3h, morgen 8:00, nächster Montag) · Archivieren · Verschieben nach … · Als Junk / Kein Junk · Quelltext anzeigen · Als EML herunterladen · Löschen
+- **Favoriten-Sektion** in der Sidebar oben, persistent zugeklappt/aufgeklappt via localStorage
+- **Mehrfachauswahl** in der Nachrichtenliste:
+  Checkbox-Spalte (erscheint beim Hovern, permanent bei Auswahl) · Shift-Klick = Bereich · Cmd/Ctrl-Klick = einzeln · Header-Checkbox „Alle markieren"
+- **Bulk-Toolbar** bei ≥1 Auswahl: Archivieren · Löschen · Verschieben · Gelesen/Ungelesen · Kennzeichnen · Anheften · Als Junk
+- **Drag & Drop**: Nachricht(en) auf Ordner in Sidebar = verschieben (5 px Aktivierungsschwelle gegen versehentliches Drag). Bei aktiver Mehrfachauswahl werden alle ausgewählten mitbewegt.
+- **Hover-Quick-Actions** in der Nachrichtenliste (Gmail-Style): Archivieren · Löschen · Gelesen-Toggle
+- **Filter-Tabs** über der Nachrichtenliste: Alle / Ungelesen / Markiert / Anhang
+- **Undo-Toast** nach Löschen / Archivieren / Verschieben — 5 Sekunden Rückgängig-Fenster
+- **„Allen antworten" und „Weiterleiten"** sind jetzt verdrahtet (waren reine UI-Buttons) — inkl. zitiertem Vortext mit Datum/Absender
+- **Mehr-Optionen-Menü** im Nachrichten-Reader (Drei-Punkte-Icon)
+- **Snooze**: Nachrichten verschwinden aus dem Posteingang und tauchen zum gewählten Zeitpunkt wieder auf
+- **Anheften (Pin)**: angeheftete Mails erscheinen oben in der Liste
+- **Dichte-Modus**-Persistenz (compact / normal / comfortable) für die Nachrichtenliste
+- **Dark-Mode-Klassen** in allen neuen Komponenten
+- **Neue Backend-Routen**:
+  `POST/PATCH/DELETE /api/v1/mail/folders` · `POST /folders/:id/empty` ·
+  `POST /messages/bulk` · `POST|DELETE /messages/:id/snooze` · `GET /messages/:id/raw`
+
+### Changed
+
+- Prisma-Schema: `Folder.isFavorite`, `Folder.sortOrder`, `Folder.color`, `Message.pinnedAt`, `Message.snoozeUntil`
+- `GET /mail/folders` liefert jetzt `displayName`, `isFavorite`, `sortOrder`, `color`, `isSystem`
+- `GET /mail/folders/:id/messages` sortiert angeheftete Nachrichten zuerst, blendet schlummernde aus
+- Compose-Modus: `composeReplyTo` → `composeCtx` mit Modi `new`/`reply`/`replyAll`/`forward`
+
+---
+
 ## [2.1.44] — 2026-05-18 — Global Einstellungen oben · DE/EN Sprachumschaltung · Services Standards entfernt
 
 ### Changed

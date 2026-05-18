@@ -1,9 +1,9 @@
 import { useAuthStore } from '../store/auth.js';
 const BASE = '/api/v1';
-async function request(path, init = {}) {
+async function request(path, init = {}, skipContentType = false) {
     const token = useAuthStore.getState().accessToken;
     const headers = {
-        'Content-Type': 'application/json',
+        ...(skipContentType ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init.headers ?? {}),
     };
@@ -24,18 +24,35 @@ async function request(path, init = {}) {
 export const api = {
     get: (path) => request(path),
     post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
+    postForm: (path, form) => request(path, { method: 'POST', body: form }, true),
     put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
     patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (path) => request(path, { method: 'DELETE' }),
 };
 export async function login(email, password) {
-    const res = await fetch('http://localhost:3003/auth/login', {
+    const res = await fetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
     });
     if (!res.ok) {
         const body = await res.json().catch(() => ({ error: 'Login failed' }));
+        // Wartungsmodus: message als Prefix übergeben damit LoginPage ihn erkennt
+        if (body.error === 'maintenance') {
+            throw new Error(`maintenance:${body.message ?? 'Wartungsmodus aktiv'}`);
+        }
+        throw new Error(body.error);
+    }
+    return res.json();
+}
+export async function verifyMfa(challengeToken, code) {
+    const res = await fetch('/auth/mfa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken, code }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'MFA failed' }));
         throw new Error(body.error);
     }
     return res.json();

@@ -193,16 +193,30 @@ function ToolBtn({
 // ── ComposeWindow ─────────────────────────────────────────────────────────────
 export function ComposeWindow() {
   const qc = useQueryClient();
-  const { closeCompose, composeReplyTo } = useUiStore();
+  const { closeCompose, composeCtx } = useUiStore();
+
+  // Betreff-Präfix je nach Modus
+  const subjectPrefix =
+    composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? 'Re: ' :
+    composeCtx?.mode === 'forward' ? 'Fwd: ' : '';
+  const initialSubject = composeCtx?.subject
+    ? (composeCtx.subject.match(/^(Re|Fwd|AW|WG):/i) ? composeCtx.subject : `${subjectPrefix}${composeCtx.subject}`)
+    : '';
+
+  const initialTo =
+    composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll'
+      ? composeCtx?.fromAddr ?? ''
+      : (composeCtx?.toAddrs ?? []).join(', ');
+  const initialCc = composeCtx?.mode === 'replyAll' ? (composeCtx?.ccAddrs ?? []).join(', ') : '';
 
   const [minimized, setMinimized] = useState(false);
-  const [to, setTo]           = useState(composeReplyTo?.fromAddr ?? '');
-  const [cc, setCc]           = useState('');
+  const [to, setTo]           = useState(initialTo);
+  const [cc, setCc]           = useState(initialCc);
   const [bcc, setBcc]         = useState('');
-  const [showCc, setShowCc]   = useState(false);
+  const [showCc, setShowCc]   = useState(!!initialCc);
   const [showBcc, setShowBcc] = useState(false);
-  const [subject, setSubject] = useState(composeReplyTo ? `Re: ${composeReplyTo.subject}` : '');
-  const [inReplyTo]           = useState(composeReplyTo?.id);
+  const [subject, setSubject] = useState(initialSubject);
+  const [inReplyTo]           = useState(composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? composeCtx?.id : undefined);
   const [attachments, setAttachments] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signatureInserted = useRef(false);
@@ -231,16 +245,30 @@ export function ComposeWindow() {
     },
   });
 
-  // Auto-Signatur einfügen sobald Editor + Signaturdaten bereit sind
+  // Auto-Signatur + zitierter Vortext einfügen sobald Editor + Signaturdaten bereit sind
   useEffect(() => {
     if (!editor || !sigData || signatureInserted.current) return;
     signatureInserted.current = true;
-    const isReply = !!composeReplyTo;
-    const shouldInsert = isReply ? sigData.autoReply : sigData.autoNew;
-    if (!shouldInsert || !sigData.signature) return;
-    editor.commands.setContent(`<p></p>${sigData.signature}`);
+    const isReply   = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll';
+    const isForward = composeCtx?.mode === 'forward';
+    const shouldInsert = (isReply || isForward) ? sigData.autoReply : sigData.autoNew;
+    const sig = shouldInsert && sigData.signature ? sigData.signature : '';
+
+    let quoted = '';
+    if ((isReply || isForward) && composeCtx?.bodyHtml) {
+      const headerLine = isForward
+        ? `Weitergeleitete Nachricht von ${composeCtx.fromAddr ?? ''}`
+        : `Am ${new Date().toLocaleString('de-DE')} schrieb ${composeCtx.fromAddr ?? ''}:`;
+      quoted = `<blockquote style="border-left:2px solid #ccc;padding-left:12px;margin:0;color:#555">
+        <p style="margin:0 0 8px 0;font-size:0.85em;color:#888">${headerLine}</p>
+        ${composeCtx.bodyHtml}
+      </blockquote>`;
+    }
+
+    if (!sig && !quoted) return;
+    editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
     editor.commands.focus('start');
-  }, [editor, sigData, composeReplyTo]);
+  }, [editor, sigData, composeCtx]);
 
   // Link einfügen / bearbeiten
   const handleLink = useCallback(() => {

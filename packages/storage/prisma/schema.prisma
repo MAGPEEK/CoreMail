@@ -239,6 +239,9 @@ model Folder {
   unreadCount Int       @default(0)
   changeKey   String    @default("")
   subscribed  Boolean   @default(true)
+  isFavorite  Boolean   @default(false)
+  sortOrder   Int       @default(0)
+  color       String?
   createdAt   DateTime  @default(now())
 
   @@unique([mailboxId, name])
@@ -271,6 +274,8 @@ model Message {
   deletedAt    DateTime?   // soft-delete (30 day recovery window)
   // Phase 9: S/MIME metadata JSON — { signed, valid, signerEmail, decrypted, ... }
   smimeMeta    String?
+  pinnedAt     DateTime?   // user pinned this message (top of list)
+  snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
   attachments  Attachment[]
   createdAt    DateTime    @default(now())
 
@@ -279,6 +284,7 @@ model Message {
   @@index([folderId, modSeq])
   @@index([messageId])
   @@index([deletedAt])
+  @@index([snoozeUntil])
   @@map("messages")
 }
 

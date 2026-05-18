@@ -1,32 +1,112 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { MessageFilter } from '../api/types.js';
+
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+export interface ComposeContext {
+  mode: ComposeMode;
+  id?: string;
+  subject?: string;
+  fromAddr?: string;
+  toAddrs?: string[];
+  ccAddrs?: string[];
+  bodyHtml?: string;
+  bodyText?: string;
+}
 
 // ── UI-Zustand (nicht persistent) ─────────────────────────────────────────────
 interface UiState {
   selectedFolderId: string | null;
   selectedMessageId: string | null;
   composeOpen: boolean;
-  composeReplyTo: { id: string; subject: string; fromAddr: string } | null;
+  composeCtx: ComposeContext | null;
   sidebarCollapsed: boolean;
+
+  // Mehrfachauswahl in der Nachrichtenliste
+  selectedIds: Set<string>;
+  lastSelectedId: string | null;
+  filter: MessageFilter;
+
   setSelectedFolder: (id: string | null) => void;
   setSelectedMessage: (id: string | null) => void;
-  openCompose: (replyTo?: { id: string; subject: string; fromAddr: string }) => void;
+  openCompose: (ctx?: Partial<ComposeContext>) => void;
   closeCompose: () => void;
   toggleSidebar: () => void;
+
+  toggleSelection: (id: string, opts?: { range?: boolean; orderedIds?: string[] }) => void;
+  selectOnly: (id: string) => void;
+  selectAll: (ids: string[]) => void;
+  clearSelection: () => void;
+  setFilter: (f: MessageFilter) => void;
 }
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
   selectedFolderId: null,
   selectedMessageId: null,
   composeOpen: false,
-  composeReplyTo: null,
+  composeCtx: null,
   sidebarCollapsed: false,
-  setSelectedFolder: (id) => set({ selectedFolderId: id, selectedMessageId: null }),
+  selectedIds: new Set<string>(),
+  lastSelectedId: null,
+  filter: 'all',
+
+  setSelectedFolder: (id) =>
+    set({ selectedFolderId: id, selectedMessageId: null, selectedIds: new Set(), lastSelectedId: null, filter: 'all' }),
   setSelectedMessage: (id) => set({ selectedMessageId: id }),
-  openCompose: (replyTo) => set({ composeOpen: true, composeReplyTo: replyTo ?? null }),
-  closeCompose: () => set({ composeOpen: false, composeReplyTo: null }),
+  openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', ...ctx } }),
+  closeCompose: () => set({ composeOpen: false, composeCtx: null }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
+  toggleSelection: (id, opts) => {
+    const s = get();
+    const next = new Set(s.selectedIds);
+
+    if (opts?.range && opts.orderedIds && s.lastSelectedId) {
+      const a = opts.orderedIds.indexOf(s.lastSelectedId);
+      const b = opts.orderedIds.indexOf(id);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        for (let i = lo; i <= hi; i++) next.add(opts.orderedIds[i]!);
+        set({ selectedIds: next, lastSelectedId: id });
+        return;
+      }
+    }
+
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    set({ selectedIds: next, lastSelectedId: id });
+  },
+  selectOnly: (id) => set({ selectedIds: new Set([id]), lastSelectedId: id }),
+  selectAll: (ids) => set({ selectedIds: new Set(ids), lastSelectedId: ids[ids.length - 1] ?? null }),
+  clearSelection: () => set({ selectedIds: new Set(), lastSelectedId: null }),
+  setFilter: (f) => set({ filter: f }),
 }));
+
+// ── Persistente UI-Präferenzen ────────────────────────────────────────────────
+export type Density = 'compact' | 'normal' | 'comfortable';
+
+interface UiPrefs {
+  density: Density;
+  favoritesCollapsed: boolean;
+  folderTreeCollapsed: boolean;
+  setDensity: (d: Density) => void;
+  toggleFavorites: () => void;
+  toggleFolderTree: () => void;
+}
+
+export const useUiPrefs = create<UiPrefs>()(
+  persist(
+    (set) => ({
+      density: 'normal',
+      favoritesCollapsed: false,
+      folderTreeCollapsed: false,
+      setDensity: (d) => set({ density: d }),
+      toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
+      toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
+    }),
+    { name: 'coremail-ui-prefs' },
+  ),
+);
 
 // ── Theme-Zustand (persistent via localStorage) ───────────────────────────────
 export type ThemeMode = 'light' | 'dark' | 'system';

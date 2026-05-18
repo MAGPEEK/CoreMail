@@ -14,4 +14,4 @@ const queryClient = new QueryClient({
         },
     },
 });
-createRoot(document.getElementById('root')).render(_jsx(StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsxs(BrowserRouter, { children: [_jsx(App, {}), _jsx(Toaster, { position: "top-right", toastOptions: { duration: 3000 } })] }) }) }));
+createRoot(document.getElementById('root')).render(_jsx(StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsxs(BrowserRouter, { basename: "/owa", children: [_jsx(App, {}), _jsx(Toaster, { position: "top-right", toastOptions: { duration: 3000 } })] }) }) }));

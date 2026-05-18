@@ -1,35 +1,207 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Minus, Maximize2, Send, Paperclip, Save } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { X, Minus, Maximize2, Send, Paperclip, Save, Bold, Italic, Underline as LucideUnderline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Link2, Undo2, Redo2, Eraser, ChevronDown, Quote, Code2, Highlighter, Type, FileIcon, } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Underline from '@tiptap/extension-underline';
-import Link from '@tiptap/extension-link';
+import UnderlineExt from '@tiptap/extension-underline';
+import LinkExt from '@tiptap/extension-link';
+import TextAlignExt from '@tiptap/extension-text-align';
+import { Color } from '@tiptap/extension-color';
+import TextStyle from '@tiptap/extension-text-style';
+import Highlight from '@tiptap/extension-highlight';
 import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
+// ── Farbpaletten ──────────────────────────────────────────────────────────────
+const TEXT_COLORS = [
+    '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#ffffff',
+    '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#0000ff',
+    '#9900ff', '#ff00ff', '#e06666', '#f6b26b', '#ffd966', '#93c47d',
+    '#76d7ea', '#6fa8dc', '#8e7cc3', '#c27ba0', '#cc0000', '#e69138',
+];
+const HIGHLIGHT_COLORS = [
+    '#ffff00', '#00ff00', '#00ffff', '#ff99cc', '#ff9900', '#cc99ff',
+    '#fce5cd', '#fff2cc', '#d9ead3', '#cfe2f3', '#ead1dc', '#f4cccc',
+];
+// ── Farbpaletten-Popover ──────────────────────────────────────────────────────
+function ColorPicker({ colors, onSelect, onClose, currentColor, }) {
+    const ref = useRef(null);
+    useEffect(() => {
+        function handler(e) {
+            if (ref.current && !ref.current.contains(e.target))
+                onClose();
+        }
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [onClose]);
+    return (_jsxs("div", { ref: ref, className: "absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl p-2.5 z-[300]", style: { minWidth: 168 }, children: [_jsx("div", { className: "grid grid-cols-6 gap-1", children: colors.map((c) => (_jsx("button", { onMouseDown: (e) => { e.preventDefault(); onSelect(c); onClose(); }, style: {
+                        backgroundColor: c,
+                        border: c === currentColor ? '2px solid #1a73e8' : '1px solid #e0e0e0',
+                    }, className: "w-5 h-5 rounded cursor-pointer hover:scale-110 transition-transform", title: c }, c))) }), _jsx("button", { onMouseDown: (e) => { e.preventDefault(); onSelect(''); onClose(); }, className: "mt-2 pt-2 border-t border-gray-100 w-full text-xs text-gray-500 hover:text-gray-800 text-center block", children: "Farbe entfernen" })] }));
+}
+// ── Block-Typ-Dropdown (Normal / Überschrift / Code) ──────────────────────────
+const BLOCK_TYPES = [
+    { label: 'Normal', cmd: 'paragraph', size: 'text-sm' },
+    { label: 'Überschrift 1', cmd: 'h1', size: 'text-2xl font-bold' },
+    { label: 'Überschrift 2', cmd: 'h2', size: 'text-xl font-semibold' },
+    { label: 'Überschrift 3', cmd: 'h3', size: 'text-base font-semibold' },
+    { label: 'Codeblock', cmd: 'codeBlock', size: 'font-mono text-xs text-red-600' },
+];
+function BlockTypeDropdown({ editor }) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+        function handler(e) {
+            if (ref.current && !ref.current.contains(e.target))
+                setOpen(false);
+        }
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
+    function getActiveLabel() {
+        if (!editor)
+            return 'Normal';
+        if (editor.isActive('heading', { level: 1 }))
+            return 'Überschrift 1';
+        if (editor.isActive('heading', { level: 2 }))
+            return 'Überschrift 2';
+        if (editor.isActive('heading', { level: 3 }))
+            return 'Überschrift 3';
+        if (editor.isActive('codeBlock'))
+            return 'Codeblock';
+        return 'Normal';
+    }
+    function apply(cmd) {
+        if (!editor)
+            return;
+        setOpen(false);
+        if (cmd === 'paragraph')
+            editor.chain().focus().setParagraph().run();
+        else if (cmd === 'h1')
+            editor.chain().focus().setHeading({ level: 1 }).run();
+        else if (cmd === 'h2')
+            editor.chain().focus().setHeading({ level: 2 }).run();
+        else if (cmd === 'h3')
+            editor.chain().focus().setHeading({ level: 3 }).run();
+        else if (cmd === 'codeBlock')
+            editor.chain().focus().setCodeBlock().run();
+    }
+    const active = getActiveLabel();
+    return (_jsxs("div", { ref: ref, className: "relative", children: [_jsxs("button", { onMouseDown: (e) => { e.preventDefault(); setOpen((o) => !o); }, className: "flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-gray-100 border border-transparent hover:border-gray-200 min-w-[96px]", children: [_jsx("span", { className: "flex-1 text-left text-gray-700", children: active }), _jsx(ChevronDown, { size: 11, className: "shrink-0 text-gray-400" })] }), open && (_jsx("div", { className: "absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-[300] min-w-[156px]", children: BLOCK_TYPES.map(({ label, cmd, size }) => (_jsx("button", { onMouseDown: (e) => { e.preventDefault(); apply(cmd); }, className: `block w-full text-left px-3 py-1.5 hover:bg-gray-50 ${size} ${active === label ? 'text-blue-600' : 'text-gray-700'}`, children: label }, cmd))) }))] }));
+}
+// ── Trennlinie ────────────────────────────────────────────────────────────────
+function Sep() {
+    return _jsx("div", { className: "w-px h-5 bg-gray-200 mx-0.5 shrink-0" });
+}
+// ── Toolbar-Button ────────────────────────────────────────────────────────────
+function ToolBtn({ onClick, active = false, disabled = false, title, children, }) {
+    return (_jsx("button", { onMouseDown: (e) => { e.preventDefault(); if (!disabled)
+            onClick(e); }, title: title, disabled: disabled, className: `w-6 h-6 flex items-center justify-center rounded transition-colors ${active
+            ? 'bg-blue-100 text-blue-700'
+            : 'hover:bg-gray-100 text-gray-700'} disabled:opacity-30 disabled:cursor-default`, children: children }));
+}
+// ── ComposeWindow ─────────────────────────────────────────────────────────────
 export function ComposeWindow() {
     const qc = useQueryClient();
-    const { closeCompose, composeReplyTo } = useUiStore();
+    const { closeCompose, composeCtx } = useUiStore();
+    // Betreff-Präfix je nach Modus
+    const subjectPrefix = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? 'Re: ' :
+        composeCtx?.mode === 'forward' ? 'Fwd: ' : '';
+    const initialSubject = composeCtx?.subject
+        ? (composeCtx.subject.match(/^(Re|Fwd|AW|WG):/i) ? composeCtx.subject : `${subjectPrefix}${composeCtx.subject}`)
+        : '';
+    const initialTo = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll'
+        ? composeCtx?.fromAddr ?? ''
+        : (composeCtx?.toAddrs ?? []).join(', ');
+    const initialCc = composeCtx?.mode === 'replyAll' ? (composeCtx?.ccAddrs ?? []).join(', ') : '';
     const [minimized, setMinimized] = useState(false);
-    const [to, setTo] = useState(composeReplyTo?.fromAddr ?? '');
-    const [cc, setCc] = useState('');
-    const [subject, setSubject] = useState(composeReplyTo ? `Re: ${composeReplyTo.subject}` : '');
-    const [inReplyTo] = useState(composeReplyTo?.id);
-    const editor = useEditor({
-        extensions: [StarterKit, Underline, Link.configure({ openOnClick: false })],
-        content: '',
+    const [to, setTo] = useState(initialTo);
+    const [cc, setCc] = useState(initialCc);
+    const [bcc, setBcc] = useState('');
+    const [showCc, setShowCc] = useState(!!initialCc);
+    const [showBcc, setShowBcc] = useState(false);
+    const [subject, setSubject] = useState(initialSubject);
+    const [inReplyTo] = useState(composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? composeCtx?.id : undefined);
+    const [attachments, setAttachments] = useState([]);
+    const fileInputRef = useRef(null);
+    const signatureInserted = useRef(false);
+    const [showTextColor, setShowTextColor] = useState(false);
+    const [showHighlight, setShowHighlight] = useState(false);
+    const { data: sigData } = useQuery({
+        queryKey: ['user', 'signature'],
+        queryFn: () => api.get('/user/signature'),
     });
+    const editor = useEditor({
+        extensions: [
+            StarterKit,
+            UnderlineExt,
+            LinkExt.configure({ openOnClick: false }),
+            TextAlignExt.configure({ types: ['heading', 'paragraph'] }),
+            TextStyle,
+            Color,
+            Highlight.configure({ multicolor: true }),
+        ],
+        content: '',
+        editorProps: {
+            attributes: { class: 'outline-none min-h-[180px] text-sm leading-relaxed' },
+        },
+    });
+    // Auto-Signatur + zitierter Vortext einfügen sobald Editor + Signaturdaten bereit sind
+    useEffect(() => {
+        if (!editor || !sigData || signatureInserted.current)
+            return;
+        signatureInserted.current = true;
+        const isReply = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll';
+        const isForward = composeCtx?.mode === 'forward';
+        const shouldInsert = (isReply || isForward) ? sigData.autoReply : sigData.autoNew;
+        const sig = shouldInsert && sigData.signature ? sigData.signature : '';
+        let quoted = '';
+        if ((isReply || isForward) && composeCtx?.bodyHtml) {
+            const headerLine = isForward
+                ? `Weitergeleitete Nachricht von ${composeCtx.fromAddr ?? ''}`
+                : `Am ${new Date().toLocaleString('de-DE')} schrieb ${composeCtx.fromAddr ?? ''}:`;
+            quoted = `<blockquote style="border-left:2px solid #ccc;padding-left:12px;margin:0;color:#555">
+        <p style="margin:0 0 8px 0;font-size:0.85em;color:#888">${headerLine}</p>
+        ${composeCtx.bodyHtml}
+      </blockquote>`;
+        }
+        if (!sig && !quoted)
+            return;
+        editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
+        editor.commands.focus('start');
+    }, [editor, sigData, composeCtx]);
+    // Link einfügen / bearbeiten
+    const handleLink = useCallback(() => {
+        if (!editor)
+            return;
+        const prev = editor.getAttributes('link').href;
+        // eslint-disable-next-line no-alert
+        const url = window.prompt('URL eingeben:', prev ?? 'https://');
+        if (url === null)
+            return;
+        if (!url.trim()) {
+            editor.chain().focus().unsetLink().run();
+        }
+        else {
+            editor.chain().focus().setLink({ href: url.trim() }).run();
+        }
+    }, [editor]);
     const sendMutation = useMutation({
-        mutationFn: () => api.post('/mail/send', {
-            to: to.split(',').map((s) => s.trim()).filter(Boolean),
-            cc: cc.split(',').map((s) => s.trim()).filter(Boolean),
-            subject,
-            bodyHtml: editor?.getHTML() ?? '',
-            bodyText: editor?.getText() ?? '',
-            ...(inReplyTo && { inReplyTo }),
-        }),
+        mutationFn: () => {
+            const form = new FormData();
+            form.append('to', to.split(',').map((s) => s.trim()).filter(Boolean).join(','));
+            form.append('cc', cc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
+            form.append('bcc', bcc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
+            form.append('subject', subject);
+            form.append('bodyHtml', editor?.getHTML() ?? '');
+            form.append('bodyText', editor?.getText() ?? '');
+            if (inReplyTo)
+                form.append('inReplyTo', inReplyTo);
+            for (const file of attachments)
+                form.append('attachments', file);
+            return api.postForm('/mail/send', form);
+        },
         onSuccess: () => {
             toast.success('Nachricht gesendet');
             qc.invalidateQueries({ queryKey: ['messages'] });
@@ -37,8 +209,61 @@ export function ComposeWindow() {
         },
         onError: (err) => toast.error(err.message),
     });
+    // ── Minimierter Zustand ────────────────────────────────────────────────────
     if (minimized) {
-        return (_jsx("div", { className: "fixed bottom-0 right-4 w-72 bg-gray-800 text-white rounded-t-lg shadow-xl z-50", children: _jsxs("div", { className: "flex items-center justify-between px-3 py-2", children: [_jsx("span", { className: "text-sm font-medium truncate", children: subject || 'Neue Nachricht' }), _jsxs("div", { className: "flex items-center gap-1", children: [_jsx("button", { onClick: () => setMinimized(false), className: "p-0.5 hover:bg-white/20 rounded", children: _jsx(Maximize2, { size: 13 }) }), _jsx("button", { onClick: closeCompose, className: "p-0.5 hover:bg-white/20 rounded", children: _jsx(X, { size: 13 }) })] })] }) }));
+        return (_jsx("div", { className: "fixed bottom-0 right-4 w-72 bg-gray-800 text-white rounded-t-lg shadow-xl z-50", children: _jsxs("div", { className: "flex items-center justify-between px-3 py-2", children: [_jsx("span", { className: "text-sm font-medium truncate", children: subject || 'Neue Nachricht' }), _jsxs("div", { className: "flex items-center gap-1", children: [_jsx("button", { onClick: () => setMinimized(false), className: "p-0.5 hover:bg-white/20 rounded", title: "Vergr\u00F6\u00DFern", children: _jsx(Maximize2, { size: 13 }) }), _jsx("button", { onClick: closeCompose, className: "p-0.5 hover:bg-white/20 rounded", title: "Schlie\u00DFen", children: _jsx(X, { size: 13 }) })] })] }) }));
     }
-    return (_jsxs("div", { className: "fixed bottom-0 right-4 w-[580px] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col", style: { maxHeight: '70vh' }, children: [_jsxs("div", { className: "flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg cursor-default", children: [_jsx("span", { className: "text-sm font-medium", children: subject || 'Neue Nachricht' }), _jsxs("div", { className: "flex items-center gap-1", children: [_jsx("button", { onClick: () => setMinimized(true), className: "p-0.5 hover:bg-white/20 rounded", children: _jsx(Minus, { size: 13 }) }), _jsx("button", { onClick: closeCompose, className: "p-0.5 hover:bg-white/20 rounded", children: _jsx(X, { size: 13 }) })] })] }), _jsxs("div", { className: "border-b border-gray-100", children: [_jsxs("div", { className: "flex items-center border-b border-gray-100 px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-6 shrink-0", children: "An:" }), _jsx("input", { value: to, onChange: (e) => setTo(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "Empf\u00E4nger..." })] }), _jsxs("div", { className: "flex items-center border-b border-gray-100 px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-6 shrink-0", children: "CC:" }), _jsx("input", { value: cc, onChange: (e) => setCc(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "CC..." })] }), _jsxs("div", { className: "flex items-center px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-16 shrink-0", children: "Betreff:" }), _jsx("input", { value: subject, onChange: (e) => setSubject(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "Betreff..." })] })] }), _jsx("div", { className: "flex items-center gap-0.5 px-2 py-1 border-b border-gray-100", children: [['bold', 'B'], ['italic', 'I'], ['underline', 'U']].map(([cmd, label]) => (_jsx("button", { onMouseDown: (e) => { e.preventDefault(); editor?.chain().focus().toggleMark(cmd).run(); }, className: "w-6 h-6 text-xs font-medium rounded hover:bg-gray-100 transition-colors", children: label }, cmd))) }), _jsx("div", { className: "flex-1 overflow-y-auto", children: _jsx(EditorContent, { editor: editor, className: "min-h-[160px] px-3 py-2 text-sm [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[120px]" }) }), _jsxs("div", { className: "flex items-center justify-between px-3 py-2 border-t border-gray-100 shrink-0", children: [_jsxs("div", { className: "flex items-center gap-1", children: [_jsxs("button", { className: "btn-ghost text-xs", children: [_jsx(Paperclip, { size: 14 }), " Anhang"] }), _jsxs("button", { className: "btn-ghost text-xs", children: [_jsx(Save, { size: 14 }), " Entwurf"] })] }), _jsxs("button", { onClick: () => sendMutation.mutate(), disabled: sendMutation.isPending || !to.trim(), className: "btn-primary text-xs disabled:opacity-50", children: [_jsx(Send, { size: 14 }), sendMutation.isPending ? 'Senden...' : 'Senden'] })] })] }));
+    // Aktive Farben für Swatch-Vorschau
+    const currentTextColor = editor?.getAttributes('textStyle').color;
+    const currentHighlight = editor?.getAttributes('highlight').color;
+    return (_jsxs("div", { className: "fixed bottom-0 right-4 w-[660px] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col", style: { maxHeight: '82vh' }, children: [_jsxs("div", { className: "flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0", children: [_jsx("span", { className: "text-sm font-medium truncate", children: subject || 'Neue Nachricht' }), _jsxs("div", { className: "flex items-center gap-1", children: [_jsx("button", { onClick: () => setMinimized(true), className: "p-0.5 hover:bg-white/20 rounded", title: "Minimieren", children: _jsx(Minus, { size: 13 }) }), _jsx("button", { onClick: closeCompose, className: "p-0.5 hover:bg-white/20 rounded", title: "Schlie\u00DFen", children: _jsx(X, { size: 13 }) })] })] }), _jsxs("div", { className: "border-b border-gray-100 shrink-0", children: [_jsxs("div", { className: "flex items-center border-b border-gray-100 px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-10 shrink-0", children: "An:" }), _jsx("input", { value: to, onChange: (e) => setTo(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "Empf\u00E4nger..." }), _jsxs("div", { className: "flex gap-3 text-xs text-blue-600 shrink-0", children: [!showCc && _jsx("button", { type: "button", onClick: () => setShowCc(true), children: "CC" }), !showBcc && _jsx("button", { type: "button", onClick: () => setShowBcc(true), children: "BCC" })] })] }), showCc && (_jsxs("div", { className: "flex items-center border-b border-gray-100 px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-10 shrink-0", children: "CC:" }), _jsx("input", { value: cc, onChange: (e) => setCc(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "CC...", autoFocus: true })] })), showBcc && (_jsxs("div", { className: "flex items-center border-b border-gray-100 px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-10 shrink-0", children: "BCC:" }), _jsx("input", { value: bcc, onChange: (e) => setBcc(e.target.value), className: "flex-1 text-sm outline-none", placeholder: "BCC...", autoFocus: true })] })), _jsxs("div", { className: "flex items-center px-3 py-1.5 gap-2", children: [_jsx("span", { className: "text-xs text-gray-400 w-10 shrink-0", children: "Betreff:" }), _jsx("input", { value: subject, onChange: (e) => setSubject(e.target.value), className: "flex-1 text-sm outline-none font-medium", placeholder: "Betreff..." })] })] }), _jsxs("div", { className: "flex items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-gray-100 shrink-0 bg-gray-50/60", children: [_jsx(ToolBtn, { title: "R\u00FCckg\u00E4ngig (Ctrl+Z)", disabled: !editor?.can().undo(), onClick: () => editor?.chain().focus().undo().run(), children: _jsx(Undo2, { size: 13 }) }), _jsx(ToolBtn, { title: "Wiederholen (Ctrl+Y)", disabled: !editor?.can().redo(), onClick: () => editor?.chain().focus().redo().run(), children: _jsx(Redo2, { size: 13 }) }), _jsx(Sep, {}), editor && _jsx(BlockTypeDropdown, { editor: editor }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Fett (Ctrl+B)", active: !!editor?.isActive('bold'), onClick: () => editor?.chain().focus().toggleBold().run(), children: _jsx(Bold, { size: 13 }) }), _jsx(ToolBtn, { title: "Kursiv (Ctrl+I)", active: !!editor?.isActive('italic'), onClick: () => editor?.chain().focus().toggleItalic().run(), children: _jsx(Italic, { size: 13 }) }), _jsx(ToolBtn, { title: "Unterstrichen (Ctrl+U)", active: !!editor?.isActive('underline'), onClick: () => editor?.chain().focus().toggleUnderline().run(), children: _jsx(LucideUnderline, { size: 13 }) }), _jsx(ToolBtn, { title: "Durchgestrichen", active: !!editor?.isActive('strike'), onClick: () => editor?.chain().focus().toggleStrike().run(), children: _jsx(Strikethrough, { size: 13 }) }), _jsx(Sep, {}), _jsxs("div", { className: "relative", children: [_jsxs("button", { onMouseDown: (e) => {
+                                    e.preventDefault();
+                                    setShowTextColor((s) => !s);
+                                    setShowHighlight(false);
+                                }, title: "Schriftfarbe", className: "w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-gray-100 px-0.5", children: [_jsx(Type, { size: 11, className: "text-gray-700 shrink-0" }), _jsx("div", { className: "w-5 h-1 rounded-sm", style: { backgroundColor: currentTextColor ?? '#000000' } })] }), showTextColor && (_jsx(ColorPicker, { colors: TEXT_COLORS, currentColor: currentTextColor, onSelect: (c) => {
+                                    if (!c)
+                                        editor?.chain().focus().unsetColor().run();
+                                    else
+                                        editor?.chain().focus().setColor(c).run();
+                                }, onClose: () => setShowTextColor(false) }))] }), _jsxs("div", { className: "relative", children: [_jsxs("button", { onMouseDown: (e) => {
+                                    e.preventDefault();
+                                    setShowHighlight((s) => !s);
+                                    setShowTextColor(false);
+                                }, title: "Markierungsfarbe", className: "w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-gray-100 px-0.5", children: [_jsx(Highlighter, { size: 11, className: "text-gray-700 shrink-0" }), _jsx("div", { className: "w-5 h-1 rounded-sm", style: { backgroundColor: currentHighlight ?? '#ffff00' } })] }), showHighlight && (_jsx(ColorPicker, { colors: HIGHLIGHT_COLORS, currentColor: currentHighlight, onSelect: (c) => {
+                                    if (!c)
+                                        editor?.chain().focus().unsetHighlight().run();
+                                    else
+                                        editor?.chain().focus().toggleHighlight({ color: c }).run();
+                                }, onClose: () => setShowHighlight(false) }))] }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Link einf\u00FCgen / bearbeiten (Ctrl+K)", active: !!editor?.isActive('link'), onClick: handleLink, children: _jsx(Link2, { size: 13 }) }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Linksb\u00FCndig", active: !!editor?.isActive({ textAlign: 'left' }), onClick: () => editor?.chain().focus().setTextAlign('left').run(), children: _jsx(AlignLeft, { size: 13 }) }), _jsx(ToolBtn, { title: "Zentriert", active: !!editor?.isActive({ textAlign: 'center' }), onClick: () => editor?.chain().focus().setTextAlign('center').run(), children: _jsx(AlignCenter, { size: 13 }) }), _jsx(ToolBtn, { title: "Rechtsb\u00FCndig", active: !!editor?.isActive({ textAlign: 'right' }), onClick: () => editor?.chain().focus().setTextAlign('right').run(), children: _jsx(AlignRight, { size: 13 }) }), _jsx(ToolBtn, { title: "Blocksatz", active: !!editor?.isActive({ textAlign: 'justify' }), onClick: () => editor?.chain().focus().setTextAlign('justify').run(), children: _jsx(AlignJustify, { size: 13 }) }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Aufz\u00E4hlungsliste", active: !!editor?.isActive('bulletList'), onClick: () => editor?.chain().focus().toggleBulletList().run(), children: _jsx(List, { size: 13 }) }), _jsx(ToolBtn, { title: "Nummerierte Liste", active: !!editor?.isActive('orderedList'), onClick: () => editor?.chain().focus().toggleOrderedList().run(), children: _jsx(ListOrdered, { size: 13 }) }), _jsx(ToolBtn, { title: "Einzug verringern", onClick: () => editor?.chain().focus().liftListItem('listItem').run(), children: _jsx("svg", { viewBox: "0 0 16 16", width: "13", height: "13", fill: "currentColor", children: _jsx("path", { d: "M2 3h12v1.5H2V3zm5 3.5L3.5 8 7 9.5V7h7V6H7V5L3.5 6.5zm-5 5.5h12V13.5H2V12z" }) }) }), _jsx(ToolBtn, { title: "Einzug erh\u00F6hen", onClick: () => editor?.chain().focus().sinkListItem('listItem').run(), children: _jsx("svg", { viewBox: "0 0 16 16", width: "13", height: "13", fill: "currentColor", children: _jsx("path", { d: "M2 3h12v1.5H2V3zm4 3.5v1H2V9h4v1.5l3.5-1.5L6 6.5zm-4 5.5h12V13.5H2V12z" }) }) }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Zitat (Blockquote)", active: !!editor?.isActive('blockquote'), onClick: () => editor?.chain().focus().toggleBlockquote().run(), children: _jsx(Quote, { size: 13 }) }), _jsx(ToolBtn, { title: "Inline-Code", active: !!editor?.isActive('code'), onClick: () => editor?.chain().focus().toggleCode().run(), children: _jsx(Code2, { size: 13 }) }), _jsx(ToolBtn, { title: "Horizontale Trennlinie einf\u00FCgen", onClick: () => editor?.chain().focus().setHorizontalRule().run(), children: _jsx("svg", { viewBox: "0 0 16 16", width: "13", height: "13", fill: "currentColor", children: _jsx("rect", { x: "1", y: "7", width: "14", height: "2", rx: "1" }) }) }), _jsx(Sep, {}), _jsx(ToolBtn, { title: "Formatierung entfernen", onClick: () => editor?.chain().focus().clearNodes().unsetAllMarks().run(), children: _jsx(Eraser, { size: 13 }) })] }), _jsx("div", { className: "flex-1 overflow-y-auto", children: _jsx(EditorContent, { editor: editor, className: [
+                        'h-full px-4 py-3',
+                        // Headings
+                        '[&_.ProseMirror_h1]:text-2xl [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-3',
+                        '[&_.ProseMirror_h2]:text-xl  [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-2',
+                        '[&_.ProseMirror_h3]:text-base [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h3]:mb-1 [&_.ProseMirror_h3]:mt-2',
+                        // Blockquote
+                        '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-gray-300 [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:text-gray-500 [&_.ProseMirror_blockquote]:italic [&_.ProseMirror_blockquote]:my-2',
+                        // Listen
+                        '[&_.ProseMirror_ul]:list-disc   [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ul]:my-1',
+                        '[&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_ol]:my-1',
+                        '[&_.ProseMirror_li]:my-0.5',
+                        // Inline-Code
+                        '[&_.ProseMirror_:not(pre)>code]:bg-gray-100 [&_.ProseMirror_:not(pre)>code]:text-red-600 [&_.ProseMirror_:not(pre)>code]:font-mono [&_.ProseMirror_:not(pre)>code]:text-xs [&_.ProseMirror_:not(pre)>code]:px-1.5 [&_.ProseMirror_:not(pre)>code]:py-0.5 [&_.ProseMirror_:not(pre)>code]:rounded',
+                        // Codeblock
+                        '[&_.ProseMirror_pre]:bg-gray-100 [&_.ProseMirror_pre]:p-3 [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:font-mono [&_.ProseMirror_pre]:text-xs [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:my-2',
+                        // Links
+                        '[&_.ProseMirror_a]:text-blue-600 [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
+                        // HR
+                        '[&_.ProseMirror_hr]:border-gray-200 [&_.ProseMirror_hr]:my-4',
+                        // Paragraph-Abstand
+                        '[&_.ProseMirror_p]:mb-1',
+                    ].join(' ') }) }), attachments.length > 0 && (_jsx("div", { className: "border-t border-gray-100 px-3 py-2 flex flex-wrap gap-2 shrink-0 bg-gray-50/40", children: attachments.map((file, i) => (_jsxs("div", { className: "flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-2.5 py-1 text-xs text-gray-700 shadow-sm", children: [_jsx(FileIcon, { size: 12, className: "text-blue-500 shrink-0" }), _jsx("span", { className: "max-w-[140px] truncate", title: file.name, children: file.name }), _jsx("span", { className: "text-gray-400 shrink-0", children: file.size >= 1024 * 1024
+                                ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
+                                : `${Math.round(file.size / 1024)} KB` }), _jsx("button", { type: "button", onClick: () => setAttachments((prev) => prev.filter((_, idx) => idx !== i)), className: "text-gray-400 hover:text-red-500 shrink-0", title: "Anhang entfernen", children: _jsx(X, { size: 11 }) })] }, `${file.name}-${i}`))) })), _jsxs("div", { className: "flex items-center justify-between px-3 py-2 border-t border-gray-100 bg-gray-50/60 shrink-0", children: [_jsxs("div", { className: "flex items-center gap-1", children: [_jsx("input", { ref: fileInputRef, type: "file", multiple: true, className: "hidden", onChange: (e) => {
+                                    const newFiles = Array.from(e.target.files ?? []);
+                                    if (newFiles.length) {
+                                        setAttachments((prev) => [...prev, ...newFiles]);
+                                    }
+                                    // Reset so dieselbe Datei erneut gewählt werden kann
+                                    e.target.value = '';
+                                } }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Datei anh\u00E4ngen", onClick: () => fileInputRef.current?.click(), children: [_jsx(Paperclip, { size: 14 }), "Anhang", attachments.length > 0 && (_jsx("span", { className: "ml-0.5 bg-blue-500 text-white rounded-full text-[10px] w-4 h-4 flex items-center justify-center shrink-0", children: attachments.length }))] }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Als Entwurf speichern", children: [_jsx(Save, { size: 14 }), "Entwurf"] })] }), _jsxs("button", { type: "button", onClick: () => sendMutation.mutate(), disabled: sendMutation.isPending || !to.trim(), className: "btn-primary text-xs disabled:opacity-50", children: [_jsx(Send, { size: 14 }), sendMutation.isPending ? 'Senden...' : 'Senden'] })] })] }));
 }
