@@ -9,6 +9,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.0.2] — 2026-05-18 — OWA-Verbesserungen: 4 Sprachen, Folder-Hierarchie, Kalenderwochen, Dialog-Fixes
+
+### Added
+
+- **4-Sprachen-Switch im OWA**: Deutsch / Englisch / Spanisch / Italienisch unter ECP-Einstellungen → „Sprache & Region" mit Flag-Buttons. Sprachwechsel persistiert in localStorage, FolderTree-Labels (Systemordner, Sektionsüberschriften, Kontextmenüs) und Kalender-Locale folgen automatisch.
+- **i18n-Infrastruktur** im web-client: `translations.ts` (90+ Keys × 4 Sprachen), `language`-Store (Zustand, persist), `useT()`-Hook — analog zur Admin-Panel-i18n.
+- **Folder-Hierarchie**: Custom-Ordner werden rekursiv als Baum mit Indentation und Expand/Collapse-Chevron unter ihren Parent-Ordnern gerendert (auch unter System-Ordnern wie Posteingang).
+- **Folder-Drag&Drop-Reparent**: Custom-Ordner können auf andere Ordner gezogen werden, um sie zu Unterordnern zu machen. System-Ordner sind Drop-Target, aber keine Drag-Source. Cycle-Check verhindert, dass ein Ordner in seinen eigenen Unterordner gehängt wird.
+- **Default-Parent für neue Ordner = Posteingang**: Der „+"-Button neben „Ordner" erstellt jetzt direkt Unterordner des Posteingangs (statt root-level). Root-Level-Ordner ohne Parent bleiben als Fallback unter „Meine Ordner".
+- **Kalenderwochen (KW) im Kalender**: Neuer Toggle „Kalenderwochen anzeigen" in der Kalender-Sidebar (persistent, Default: aktiviert). ISO-Wochenberechnung, Montag als erster Wochentag, KW-Spalte mit lokalisiertem Label (KW / WN / SM / NS).
+- **Lokalisierter Kalender**: FullCalendar folgt der OWA-Sprache (de/en/es/it) statt hardcoded deutsch.
+- **PromptDialog-Komponente** (Modal-Overlay mit Auto-Focus, Enter/Escape, Validierungs-Hook, Loading-State) ersetzt alle `window.prompt`-Aufrufe.
+
+### Fixed
+
+- **Rechtsklick → „Neuer Unterordner" reagierte nicht**: `window.prompt()` wurde im OWA-Frame teils blockiert, jetzt durch PromptDialog ersetzt.
+- **Korruptes NUL-Byte (0x00) in der Folder-Regex** im api-gateway (vermutlich durch Synology-Sync) verbot zudem versehentlich Leerzeichen in Ordnernamen. Regex bereinigt: `/^[^/\\]+$/` — Leerzeichen sind jetzt erlaubt.
+- **Folder-Mutations** (Anlegen / Umbenennen / Löschen / Leeren) haben jetzt onSuccess- und onError-Toasts mit der Backend-Fehlermeldung statt stiller Fehler.
+
+### Changed
+
+- `ComplianceInfoPage` (ECP): VERSION-Konstante auf 3.0.2, Highlights-Eintrag ergänzt
+- Docker: `magpeek/coremail-app:3.0.2` (Multi-Arch amd64 + arm64)
+- Compose-Dateien aktualisiert auf Tag 3.0.2
+
+---
+
 ## [3.0.0] — 2026-05-18 — Major: OWA mit Rechtsklick-Menüs, Favoriten, Drag&Drop, Bulk-Actions
 
 > **Major-Sprung 2.x → 3.0.0**: Das OWA-Frontend wurde grundlegend erweitert. Reine Backend-API-Änderungen sind kompatibel, aber das UI verhält sich für Endnutzer deutlich anders (Mehrfachauswahl, Drag&Drop, neue Kontextmenüs).
