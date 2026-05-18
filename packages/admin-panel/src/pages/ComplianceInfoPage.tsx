@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.6.8';
+const VERSION        = '3.6.9';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.6.9', date: '2026-05-18', title: 'Calendar weiße Seite — FullCalendar-Crash behoben',
+    notes: '/calendar zeigte weiße Seite. Ursache: FullCalendar 6.x crasht in React-19, wenn datesSet-Callback setState im Render-Cycle aufruft. Fix: datesSet entfernt (Mini ist Single-Source-of-Truth), hiddenDays + fcLocale in useMemo (verhindert Re-Mount), useRef<FullCalendar | null> mit explizitem null-Type. Variable api in fcApi umbenannt um Shadowing zu vermeiden.' },
   { version: '3.6.8', date: '2026-05-18', title: 'BulkToolbar Outlook-Style + Positions-Fix',
     notes: 'Fix: BulkToolbar überdeckte fälschlich Teile des Readers (left-80 right-0). Korrigiert auf left-52 w-80 — liegt jetzt exakt über der MessageList-Filter-Zeile. Outlook-typisches Design: heller Hintergrund mit Akzent-Border unten statt vollflächig grell akzent-grün. Schrift in normaler Farbe, nur Counter akzent-gefärbt. Aktions-Buttons als Icon-only mit Hover-Akzent.' },
   { version: '3.6.7', date: '2026-05-18', title: 'Mini-Kalender + Filter-Panel + Toolbar-Polish',

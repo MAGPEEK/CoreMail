@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -37,21 +37,25 @@ export function CalendarPage() {
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const calendarRef = useRef<FullCalendar>(null);
+  const calendarRef = useRef<FullCalendar | null>(null);
 
   const changeView = (v: CalendarView) => {
     setView(v);
-    const api = calendarRef.current?.getApi();
-    if (!api) return;
-    if (v === 'workWeek') api.changeView('timeGridWeek');
+    const fcApi = calendarRef.current?.getApi();
+    if (!fcApi) return;
+    if (v === 'workWeek') fcApi.changeView('timeGridWeek');
     else if (v === 'split') return;
-    else api.changeView(v);
+    else fcApi.changeView(v);
   };
 
   const handleSelectDate = (d: Date) => {
     setSelectedDate(d);
     calendarRef.current?.getApi()?.gotoDate(d);
   };
+
+  // hiddenDays/locale memoizen, damit FullCalendar nicht bei jedem Re-Render neue Props bekommt
+  const hiddenDays = useMemo(() => (view === 'workWeek' ? [0, 6] : []), [view]);
+  const fcLocale = useMemo(() => LOCALE_MAP[lang] ?? deLocale, [lang]);
 
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
@@ -139,17 +143,12 @@ export function CalendarPage() {
             ref={calendarRef}
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
             initialView="dayGridMonth"
-            datesSet={(arg) => {
-              // Synchronisiere MiniCalendar bei prev/next/today im Hauptkalender
-              const mid = new Date((arg.start.getTime() + arg.end.getTime()) / 2);
-              setSelectedDate(mid);
-            }}
-            locale={LOCALE_MAP[lang] ?? deLocale}
+            locale={fcLocale}
             weekNumbers={calendarShowWeekNumbers}
             weekNumberCalculation="ISO"
             weekText={t('cw_short')}
             firstDay={1}
-            hiddenDays={view === 'workWeek' ? [0, 6] : []}
+            hiddenDays={hiddenDays}
             headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
             events={fcEvents}
             selectable

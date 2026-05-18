@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -29,20 +29,23 @@ export function CalendarPage() {
     const calendarRef = useRef(null);
     const changeView = (v) => {
         setView(v);
-        const api = calendarRef.current?.getApi();
-        if (!api)
+        const fcApi = calendarRef.current?.getApi();
+        if (!fcApi)
             return;
         if (v === 'workWeek')
-            api.changeView('timeGridWeek');
+            fcApi.changeView('timeGridWeek');
         else if (v === 'split')
             return;
         else
-            api.changeView(v);
+            fcApi.changeView(v);
     };
     const handleSelectDate = (d) => {
         setSelectedDate(d);
         calendarRef.current?.getApi()?.gotoDate(d);
     };
+    // hiddenDays/locale memoizen, damit FullCalendar nicht bei jedem Re-Render neue Props bekommt
+    const hiddenDays = useMemo(() => (view === 'workWeek' ? [0, 6] : []), [view]);
+    const fcLocale = useMemo(() => LOCALE_MAP[lang] ?? deLocale, [lang]);
     const { data: calendars } = useQuery({
         queryKey: ['calendars'],
         queryFn: () => api.get('/calendar'),
@@ -99,9 +102,5 @@ export function CalendarPage() {
                             dtEnd: '',
                             calendarId: calendars?.[0]?.id ?? '',
                             allDay: false,
-                        }), onShare: () => toast('Kalender teilen kommt bald', { icon: 'ℹ️' }), onPrint: () => window.print() }), _jsx("div", { className: "flex-1 overflow-auto p-4", children: _jsx(FullCalendar, { ref: calendarRef, plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin], initialView: "dayGridMonth", datesSet: (arg) => {
-                                // Synchronisiere MiniCalendar bei prev/next/today im Hauptkalender
-                                const mid = new Date((arg.start.getTime() + arg.end.getTime()) / 2);
-                                setSelectedDate(mid);
-                            }, locale: LOCALE_MAP[lang] ?? deLocale, weekNumbers: calendarShowWeekNumbers, weekNumberCalculation: "ISO", weekText: t('cw_short'), firstDay: 1, hiddenDays: view === 'workWeek' ? [0, 6] : [], headerToolbar: { left: 'prev,next today', center: 'title', right: '' }, events: fcEvents, selectable: true, select: handleDateSelect, eventClick: handleEventClick, height: "100%" }) })] }), newEvent && (_jsx("div", { className: "fixed inset-0 bg-black/40 flex items-center justify-center z-50", children: _jsxs("div", { className: "bg-white rounded-lg shadow-2xl w-full max-w-md p-6", children: [_jsxs("div", { className: "flex items-center justify-between mb-4", children: [_jsx("h2", { className: "text-base font-semibold", children: "Neuer Termin" }), _jsx("button", { onClick: () => setNewEvent(null), className: "btn-ghost p-1", children: _jsx(X, { size: 16 }) })] }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Titel" }), _jsx("input", { className: "input", value: newEvent.summary, onChange: (e) => setNewEvent({ ...newEvent, summary: e.target.value }), placeholder: "Terminbezeichnung" })] }), _jsxs("div", { className: "grid grid-cols-2 gap-3", children: [_jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Von" }), _jsx("input", { type: "datetime-local", className: "input", value: newEvent.dtStart.slice(0, 16), onChange: (e) => setNewEvent({ ...newEvent, dtStart: e.target.value }) })] }), _jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Bis" }), _jsx("input", { type: "datetime-local", className: "input", value: newEvent.dtEnd.slice(0, 16), onChange: (e) => setNewEvent({ ...newEvent, dtEnd: e.target.value }) })] })] }), _jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Kalender" }), _jsx("select", { className: "input", value: newEvent.calendarId, onChange: (e) => setNewEvent({ ...newEvent, calendarId: e.target.value }), children: (calendars ?? []).map((c) => _jsx("option", { value: c.id, children: c.name }, c.id)) })] })] }), _jsxs("div", { className: "flex justify-end gap-2 mt-5", children: [_jsx("button", { onClick: () => setNewEvent(null), className: "btn-secondary", children: "Abbrechen" }), _jsx("button", { onClick: () => createMutation.mutate(newEvent), disabled: !newEvent.summary || !newEvent.dtStart || createMutation.isPending, className: "btn-primary disabled:opacity-50", children: createMutation.isPending ? 'Speichern...' : 'Speichern' })] })] }) }))] }));
+                        }), onShare: () => toast('Kalender teilen kommt bald', { icon: 'ℹ️' }), onPrint: () => window.print() }), _jsx("div", { className: "flex-1 overflow-auto p-4", children: _jsx(FullCalendar, { ref: calendarRef, plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin], initialView: "dayGridMonth", locale: fcLocale, weekNumbers: calendarShowWeekNumbers, weekNumberCalculation: "ISO", weekText: t('cw_short'), firstDay: 1, hiddenDays: hiddenDays, headerToolbar: { left: 'prev,next today', center: 'title', right: '' }, events: fcEvents, selectable: true, select: handleDateSelect, eventClick: handleEventClick, height: "100%" }) })] }), newEvent && (_jsx("div", { className: "fixed inset-0 bg-black/40 flex items-center justify-center z-50", children: _jsxs("div", { className: "bg-white rounded-lg shadow-2xl w-full max-w-md p-6", children: [_jsxs("div", { className: "flex items-center justify-between mb-4", children: [_jsx("h2", { className: "text-base font-semibold", children: "Neuer Termin" }), _jsx("button", { onClick: () => setNewEvent(null), className: "btn-ghost p-1", children: _jsx(X, { size: 16 }) })] }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Titel" }), _jsx("input", { className: "input", value: newEvent.summary, onChange: (e) => setNewEvent({ ...newEvent, summary: e.target.value }), placeholder: "Terminbezeichnung" })] }), _jsxs("div", { className: "grid grid-cols-2 gap-3", children: [_jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Von" }), _jsx("input", { type: "datetime-local", className: "input", value: newEvent.dtStart.slice(0, 16), onChange: (e) => setNewEvent({ ...newEvent, dtStart: e.target.value }) })] }), _jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Bis" }), _jsx("input", { type: "datetime-local", className: "input", value: newEvent.dtEnd.slice(0, 16), onChange: (e) => setNewEvent({ ...newEvent, dtEnd: e.target.value }) })] })] }), _jsxs("div", { children: [_jsx("label", { className: "block text-sm font-medium text-gray-700 mb-1", children: "Kalender" }), _jsx("select", { className: "input", value: newEvent.calendarId, onChange: (e) => setNewEvent({ ...newEvent, calendarId: e.target.value }), children: (calendars ?? []).map((c) => _jsx("option", { value: c.id, children: c.name }, c.id)) })] })] }), _jsxs("div", { className: "flex justify-end gap-2 mt-5", children: [_jsx("button", { onClick: () => setNewEvent(null), className: "btn-secondary", children: "Abbrechen" }), _jsx("button", { onClick: () => createMutation.mutate(newEvent), disabled: !newEvent.summary || !newEvent.dtStart || createMutation.isPending, className: "btn-primary disabled:opacity-50", children: createMutation.isPending ? 'Speichern...' : 'Speichern' })] })] }) }))] }));
 }

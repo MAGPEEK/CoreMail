@@ -9,6 +9,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.6.9] — 2026-05-18 — Calendar weiße Seite — FullCalendar-Crash behoben
+
+### Fixed
+
+- **`/calendar` zeigte weiße Seite**: FullCalendar 6.x crasht im React-19-Setup, wenn `datesSet`-Callback `setState` im Render-Cycle aufruft. In React-Strict-Mode (Dev) und auch in Production verursachte das einen unbeholfenen Error, der den gesamten React-Tree zerschlug.
+  - **`datesSet`-Callback entfernt** — Main→Mini-Sync braucht keine setState-Loop (Mini ist Single-Source-of-Truth)
+  - **`hiddenDays` und `fcLocale` in `useMemo`** — verhindert Re-Mount des FullCalendar bei jedem Parent-Re-Render
+  - **`useRef<FullCalendar | null>`** mit explizitem null-Type
+
+### Changed
+
+- `api`-Variable in `changeView()` zu `fcApi` umbenannt, um Shadowing mit dem `api`-Import aus `client.js` zu vermeiden.
+
+---
+
 ## [3.6.8] — 2026-05-18 — BulkToolbar Outlook-Style + Positions-Fix
 
 ### Fixed

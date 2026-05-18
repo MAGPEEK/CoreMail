@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "owa",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@coremail/web-client", "dev"],
+      "port": 4000
+    }
+  ]
+}
