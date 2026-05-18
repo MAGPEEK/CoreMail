@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Users, Globe, Mail, HardDrive, Activity,
   AlertTriangle, CheckCircle, Clock, TrendingUp,
   Inbox, RefreshCw, XCircle, Layers,
   ShieldCheck, UserPlus, Settings, Server, Cpu,
-  MemoryStick, LogIn, ShieldAlert,
+  MemoryStick, LogIn, ShieldAlert, GripVertical,
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar,
@@ -155,13 +155,20 @@ function MiniBar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
-// ── Settings-Popover ─────────────────────────────────────────────────────────
+// ── Settings-Popover mit Drag-Reorder ────────────────────────────────────────
+// Native HTML5 Drag-and-Drop — kein @dnd-kit nötig, weil die Interaktion auf
+// eine simple vertikale Liste begrenzt ist. Die Position innerhalb der globalen
+// `order`-Liste bestimmt die Reihenfolge im Dashboard (per Gruppe sortiert).
 function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
-  const visible = useDashboardStore((s) => s.visible);
-  const toggle  = useDashboardStore((s) => s.toggle);
-  const setAll  = useDashboardStore((s) => s.setAll);
-  const reset   = useDashboardStore((s) => s.resetDefaults);
+  const visible    = useDashboardStore((s) => s.visible);
+  const order      = useDashboardStore((s) => s.order);
+  const toggle     = useDashboardStore((s) => s.toggle);
+  const setAll     = useDashboardStore((s) => s.setAll);
+  const reset      = useDashboardStore((s) => s.resetDefaults);
+  const moveWidget = useDashboardStore((s) => s.moveWidget);
   const ref = useRef<HTMLDivElement | null>(null);
+  const dragIndex = useRef<number | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -171,50 +178,74 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [onClose]);
 
-  const groups = [
-    { key: 'kpi',     label: 'Kennzahlen' },
-    { key: 'charts',  label: 'Diagramme & Queue' },
-    { key: 'lists',   label: 'Listen' },
-    { key: 'server',  label: 'Server' },
-  ] as const;
+  const catalogById = new Map(WIDGET_CATALOG.map((w) => [w.id, w]));
+  const orderedItems = order
+    .map((id) => catalogById.get(id))
+    .filter((w): w is (typeof WIDGET_CATALOG)[number] => w !== undefined);
+
+  const GROUP_LABELS: Record<(typeof WIDGET_CATALOG)[number]['group'], string> = {
+    kpi: 'Kennzahlen', charts: 'Diagramme & Queue', lists: 'Listen', server: 'Server',
+  };
 
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-full mt-2 w-80 bg-white rounded-lg border border-gray-200 shadow-xl z-20"
+      className="absolute right-0 top-full mt-2 w-96 bg-white rounded-lg border border-gray-200 shadow-xl z-20"
     >
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">Widgets anzeigen</h3>
-        <div className="flex items-center gap-1.5">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Widgets anzeigen & anordnen</h3>
+          <p className="text-[11px] text-gray-400 mt-0.5">Per Drag verschieben · Checkbox blendet ein/aus</p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
           <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Alle</button>
           <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Keine</button>
           <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Standard</button>
         </div>
       </div>
-      <div className="max-h-[60vh] overflow-y-auto py-2">
-        {groups.map((g) => {
-          const widgets = WIDGET_CATALOG.filter((w) => w.group === g.key);
-          if (widgets.length === 0) return null;
-          return (
-            <div key={g.key} className="py-1">
-              <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{g.label}</div>
-              {widgets.map((w) => (
-                <label key={w.id} className="flex items-center gap-3 px-4 py-1.5 hover:bg-gray-50 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={visible[w.id] ?? true}
-                    onChange={() => toggle(w.id)}
-                    className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
-                  />
-                  <span className="text-sm text-gray-700">{w.label}</span>
-                </label>
-              ))}
-            </div>
-          );
-        })}
+      <div className="max-h-[60vh] overflow-y-auto py-1">
+        {orderedItems.map((w, i) => (
+          <div
+            key={w.id}
+            draggable
+            onDragStart={() => { dragIndex.current = i; }}
+            onDragEnter={(e) => { e.preventDefault(); setHoverIndex(i); }}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={() => setHoverIndex((h) => (h === i ? null : h))}
+            onDrop={(e) => {
+              e.preventDefault();
+              const from = dragIndex.current;
+              if (from !== null && from !== i) moveWidget(from, i);
+              dragIndex.current = null;
+              setHoverIndex(null);
+            }}
+            onDragEnd={() => { dragIndex.current = null; setHoverIndex(null); }}
+            className={`flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-move ${
+              hoverIndex === i ? 'border-t-2 border-accent' : 'border-t-2 border-transparent'
+            }`}
+          >
+            <GripVertical size={13} className="text-gray-300 shrink-0" />
+            <input
+              type="checkbox"
+              checked={visible[w.id] ?? true}
+              onChange={() => toggle(w.id)}
+              className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent shrink-0"
+            />
+            <span className="text-sm text-gray-700 flex-1 truncate">{w.label}</span>
+            <span className="text-[10px] text-gray-400 uppercase tracking-wide shrink-0">{GROUP_LABELS[w.group]}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
+}
+
+// ── Reorder-Helper für die Dashboard-Sections ────────────────────────────────
+// Sortiert eine Liste von Widget-IDs nach ihrer Position im User-`order`.
+// Unbekannte IDs (nicht in der order-Liste) landen am Ende in Ursprungsreihenfolge.
+function sortByOrder(ids: WidgetId[], order: WidgetId[]): WidgetId[] {
+  const idx = new Map(order.map((id, i) => [id, i] as const));
+  return [...ids].sort((a, b) => (idx.get(a) ?? 9999) - (idx.get(b) ?? 9999));
 }
 
 // ── Hauptkomponente ───────────────────────────────────────────────────────────
@@ -226,6 +257,7 @@ export function DashboardPage() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const visible = useDashboardStore((s) => s.visible);
+  const order   = useDashboardStore((s) => s.order);
   const isVisible = (id: WidgetId) => visible[id] ?? true;
 
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString('de-DE') : '—';
@@ -291,10 +323,10 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── KPI-Karten (Zeile 1) ─────────────────────────────────────────── */}
-      {anyKpi && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {isVisible('kpi-users') && (
+      {/* ── KPI-Karten (Zeile 1) — Reihenfolge gemäß User-`order` ──────────── */}
+      {anyKpi && (() => {
+        const kpiSlots: Partial<Record<WidgetId, ReactElement>> = {
+          'kpi-users': (
             <KpiCard
               icon={Users}  color="bg-blue-500"
               label="Benutzer gesamt"
@@ -302,16 +334,16 @@ export function DashboardPage() {
               sub={`${users.active} aktiv · ${users.inactive} deaktiviert`}
               trend={{ value: users.newWeek, label: 'diese Woche neu' }}
             />
-          )}
-          {isVisible('kpi-domains') && (
+          ),
+          'kpi-domains': (
             <KpiCard
               icon={Globe} color="bg-indigo-500"
               label="Domains"
               value={domains.total}
               sub={`${data.sharedMailboxes} geteilte Postfächer · ${data.groups} Gruppen`}
             />
-          )}
-          {isVisible('kpi-messages') && (
+          ),
+          'kpi-messages': (
             <KpiCard
               icon={Mail}  color="bg-sky-500"
               label="E-Mails gesamt"
@@ -319,24 +351,30 @@ export function DashboardPage() {
               sub={`${fmtNum(messages.newDay)} heute · ${fmtNum(messages.newWeek)} diese Woche`}
               trend={{ value: messages.newDay, label: 'heute' }}
             />
-          )}
-          {isVisible('kpi-storage') && (
+          ),
+          'kpi-storage': (
             <KpiCard
               icon={HardDrive} color="bg-violet-500"
               label="Gesamt-Speicher"
               value={fmtBytes(storage.totalUsedBytes)}
               sub={`Top-Nutzer: ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
             />
-          )}
-        </div>
-      )}
+          ),
+        };
+        const sorted = sortByOrder(['kpi-users','kpi-domains','kpi-messages','kpi-storage'], order);
+        return (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {sorted.map((id) => isVisible(id) && kpiSlots[id]
+              ? <div key={id}>{kpiSlots[id]}</div>
+              : null)}
+          </div>
+        );
+      })()}
 
       {/* ── Server-Sektion ────────────────────────────────────────────────── */}
-      {anyServer && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-          {/* Server-Info: Uptime, Version, Hostname */}
-          {isVisible('server-info') && (
+      {anyServer && (() => {
+        const serverSlots: Partial<Record<WidgetId, ReactElement>> = {
+          'server-info': (
             <div className="card">
               <SectionTitle icon={Server} title="Server" />
               <div className="space-y-3">
@@ -361,10 +399,8 @@ export function DashboardPage() {
                 </div>
               </div>
             </div>
-          )}
-
-          {/* Server-Ressourcen: CPU + RAM */}
-          {isVisible('server-resources') && (
+          ),
+          'server-resources': (
             <div className="card">
               <SectionTitle icon={Cpu} title="Ressourcen" />
               <div className="space-y-4">
@@ -376,7 +412,6 @@ export function DashboardPage() {
                   <MiniBar pct={cpuPct} color={barColor(cpuPct)} />
                   <p className="text-[11px] text-gray-400 mt-1">5 min: {server.cpu.load5.toFixed(2)} · 15 min: {server.cpu.load15.toFixed(2)}</p>
                 </div>
-
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><MemoryStick size={12} className="text-gray-400" /> System-RAM</span>
@@ -385,7 +420,6 @@ export function DashboardPage() {
                   <MiniBar pct={sysMemPct} color={barColor(sysMemPct)} />
                   <p className="text-[11px] text-gray-400 mt-1">Frei: {fmtBytes(server.memory.systemFree)}</p>
                 </div>
-
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> Node-Heap</span>
@@ -396,10 +430,8 @@ export function DashboardPage() {
                 </div>
               </div>
             </div>
-          )}
-
-          {/* Sicherheits-Statistik */}
-          {isVisible('security-stats') && (
+          ),
+          'security-stats': (
             <div className="card">
               <SectionTitle icon={ShieldAlert} title="Sicherheit (24h)" />
               <div className="space-y-3">
@@ -418,9 +450,17 @@ export function DashboardPage() {
                 </div>
               </div>
             </div>
-          )}
-        </div>
-      )}
+          ),
+        };
+        const sorted = sortByOrder(['server-info','server-resources','security-stats'], order);
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {sorted.map((id) => isVisible(id) && serverSlots[id]
+              ? <div key={id}>{serverSlots[id]}</div>
+              : null)}
+          </div>
+        );
+      })()}
 
       {/* ── Queue-Status + Nachrichten-Chart ─────────────────────────────── */}
       {anyQueueOrChart && (

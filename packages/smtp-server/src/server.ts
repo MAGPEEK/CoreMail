@@ -7,6 +7,7 @@ import { inboundHandlers } from './inbound/handler.js';
 import { submissionHandlers } from './submission/handler.js';
 import { verifySmtpCredentials } from './auth/verifier.js';
 import { startOutboundWorker } from './outbound/queue.js';
+import { invalidateOutboundConfigCache } from './outbound/relay.js';
 import { startJournalingRetryLoop } from './journaling/engine.js';
 
 const log = createLogger('smtp:server');
@@ -30,18 +31,50 @@ let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
 // Leer = Standard-Banner ("hostname ESMTP CoreMail"); gesetzt = benutzerdefiniert.
 let _bannerText: string = '';
 
-async function refreshBanner(): Promise<void> {
+// ── ESMTP-Erweiterungen + maxSize + maxRcpt (alle aus SmtpSettings) ──────────
+// Werden als Getter an die Session-Config übergeben → Live-Updates ohne
+// Listener-Neustart wirken.
+import { DEFAULT_ESMTP_EXTENSIONS, type EsmtpExtensions } from './core/types.js';
+let _esmtp: EsmtpExtensions = { ...DEFAULT_ESMTP_EXTENSIONS };
+let _maxSize: number = 25 * 1024 * 1024; // 25 MB Default (matched SmtpSettings.maxMessageSizeMb default)
+let _maxRcpt: number = 100;
+
+async function refreshSmtpSettings(): Promise<void> {
   try {
     const s = await prisma.smtpSettings.findUnique({
       where:  { id: 'singleton' },
-      select: { bannerOverride: true, bannerText: true },
+      select: {
+        bannerOverride: true, bannerText: true,
+        extStarttls: true, extAuthPlain: true, extAuthLogin: true, extAuthCramMd5: true,
+        extPipelining: true, extSize: true, ext8bitmime: true,
+        extEnhancedStatus: true, extSmtputf8: true, extDsn: true, extChunking: true,
+        maxMessageSizeMb: true, maxRecipients: true,
+      },
     });
     _bannerText = (s?.bannerOverride && s.bannerText) ? s.bannerText : '';
-    log.debug({ bannerText: _bannerText || '(default)' }, 'SMTP banner refreshed');
+    _esmtp = {
+      starttls:       s?.extStarttls       ?? true,
+      authPlain:      s?.extAuthPlain      ?? true,
+      authLogin:      s?.extAuthLogin      ?? true,
+      authCramMd5:    s?.extAuthCramMd5    ?? false,
+      pipelining:     s?.extPipelining     ?? true,
+      size:           s?.extSize           ?? true,
+      bit8mime:       s?.ext8bitmime       ?? true,
+      enhancedStatus: s?.extEnhancedStatus ?? true,
+      smtputf8:       s?.extSmtputf8       ?? false,
+      dsn:            s?.extDsn            ?? true,
+      chunking:       s?.extChunking       ?? false,
+    };
+    _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
+    _maxRcpt = Math.max(1, s?.maxRecipients ?? 100);
+    log.info({ banner: _bannerText || '(default)', maxSize: _maxSize, maxRcpt: _maxRcpt, esmtp: _esmtp }, 'SMTP settings refreshed');
   } catch (err) {
-    log.error({ err }, 'Failed to refresh SMTP banner config');
+    log.error({ err }, 'Failed to refresh SMTP settings');
   }
 }
+
+// Backwards-Compat-Alias — alte Aufrufer im server.ts unten
+const refreshBanner = refreshSmtpSettings;
 
 async function refreshHostname(): Promise<void> {
   try {
@@ -139,12 +172,11 @@ function scheduleReload(): void {
 function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
   const isSubmission = SUBMISSION_PORTS.has(port);
 
-  // Hostname und Banner als Getter — jede neue Session bekommt den aktuellen Wert.
+  // Hostname, Banner, maxSize, maxRcpt und ESMTP-Flags als Getter — jede neue
+  // Session bekommt den aktuellen Wert aus _esmtp / _maxSize / _bannerText.
   // Ermöglicht Live-Updates ohne Listener-Neustart.
   const config = Object.defineProperties(
     {
-      maxSize:     52_428_800, // 50 MB
-      maxRcpt:     100,
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
@@ -155,6 +187,9 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
     {
       hostname:   { get: () => _hostname,   enumerable: true, configurable: true },
       bannerText: { get: () => _bannerText, enumerable: true, configurable: true },
+      maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
+      maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
+      esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
     },
   );
 
@@ -268,7 +303,10 @@ async function main(): Promise<void> {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
-      void refreshBanner(); // Banner sofort updaten — kein Listener-Neustart nötig (Getter)
+      void refreshBanner(); // alle SMTP-Settings (Banner, ESMTP-Flags, maxSize, maxRcpt)
+      // Outbound-Smarthost/Relay-Cache invalidieren — neue Provider-Credentials
+      // wirken so direkt beim nächsten Send-Versuch (statt erst nach 60s TTL).
+      invalidateOutboundConfigCache();
       // TLS-Zertifikat neu laden — bei Cert-Rotation müssen laufende Listener
       // neu gestartet werden (scheduleReload räumt Server aus servers-Map und erstellt neue).
       void refreshTlsConfig().then(() => scheduleReload());

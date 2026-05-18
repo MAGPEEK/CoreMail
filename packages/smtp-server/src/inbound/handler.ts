@@ -60,6 +60,14 @@ async function onRcptTo(
   _authUser: AuthUser | null,
 ): Promise<string | null> {
   try {
+    // Lokale Zustellung global deaktivierbar via SmtpSettings.localDeliveryEnabled.
+    // Reject mit 5.7.1 (verboten), damit der externe MTA nicht weiter zustellt.
+    const settings = await prisma.smtpSettings.findUnique({
+      where: { id: 'singleton' }, select: { localDeliveryEnabled: true },
+    });
+    if (settings && settings.localDeliveryEnabled === false) {
+      return '5.7.1 Local delivery is disabled by administrator';
+    }
     const exists = await verifyRecipient(to);
     if (!exists) return '5.1.1 User unknown';
     return null;

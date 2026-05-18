@@ -28,6 +28,30 @@ export interface SmtpHandlers {
   onMessage(raw: Buffer, from: string, to: string[], authUser: AuthUser | null, ip: string): Promise<void>;
 }
 
+/**
+ * ESMTP-Erweiterungen analog `SmtpSettings`-Flags. Werden in der EHLO-Antwort
+ * angeboten oder unterdrückt.
+ */
+export interface EsmtpExtensions {
+  starttls:       boolean;
+  authPlain:      boolean;
+  authLogin:      boolean;
+  authCramMd5:    boolean;
+  pipelining:     boolean;
+  size:           boolean;
+  bit8mime:       boolean;
+  enhancedStatus: boolean;
+  smtputf8:       boolean;
+  dsn:            boolean;
+  chunking:       boolean;
+}
+
+export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
+  starttls: true, authPlain: true, authLogin: true, authCramMd5: false,
+  pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
+  smtputf8: false, dsn: true, chunking: false,
+};
+
 export interface SmtpSessionConfig {
   hostname: string;
   /**
@@ -37,9 +61,12 @@ export interface SmtpSessionConfig {
    * Wird als Getter übergeben damit Live-Updates ohne Listener-Neustart wirken.
    */
   bannerText?: string;
+  /** Max. Nachrichtengröße in Bytes (aus SmtpSettings.maxMessageSizeMb × 1024²). */
   maxSize: number;
   maxRcpt: number;
   requireAuth: boolean;
+  /** ESMTP-Erweiterungen — wenn `undefined`, gelten DEFAULT_ESMTP_EXTENSIONS. */
+  esmtp?: EsmtpExtensions;
   tls?: { cert: Buffer; key: Buffer };
   handlers: SmtpHandlers;
   verifyCredentials?: (username: string, password: string) => Promise<AuthUser | null>;

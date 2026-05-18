@@ -189,7 +189,7 @@ export function ServersPage() {
                 <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Exchange-URLs (Outlook Autodiscover)</h2>
                 {([
                   ['ewsUrl',           'EWS-URL (Outlook Desktop — Exchange Web Services)'],
-                  ['owaUrl',           'OWA-URL (Outlook Web Access)'],
+                  ['owaUrl',           'MWA-URL (Mail Web Access)'],
                   ['easUrl',           'EAS-URL (ActiveSync — Mobil)'],
                   ['autodiscoverBase', 'Autodiscover-Basis-URL'],
                 ] as [keyof ServerSettings, string][]).map(([key, label]) => (

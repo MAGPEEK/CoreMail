@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import nodemailer from 'nodemailer';
 import { prisma } from '@coremail/storage';
+import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireAuth } from '../../middleware/auth.js';
 
 export const adminSmtpConfigRouter: RouterType = Router();
@@ -92,7 +93,10 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...data } as any,
   });
 
-  // Cache im smtp-server invalidieren (via Redis-Pub/Sub nicht nötig — TTL 60s reicht)
+  // SMTP-Server-Cache (Banner, ESMTP-Flags, maxSize, Outbound-Smarthost) sofort
+  // invalidieren — wirkt ohne Wartezeit bis zur TTL.
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'smtp' })).catch(() => undefined);
+
   res.json({ ...settings, smarthostPassword: settings.smarthostPassword ? '••••••••' : '' });
 });
 

@@ -17,6 +17,7 @@ import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig } from './types.js';
+import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
 
 const log = createLogger('smtp:session');
 
@@ -260,23 +261,29 @@ export class SmtpSession {
     this.greeting = clientName;
     this.transaction = null;
 
-    const lines: string[] = [
-      `${this.config.hostname}`,
-      `SIZE ${this.config.maxSize}`,
-      'PIPELINING',
-      '8BITMIME',
-      'SMTPUTF8',
-      'ENHANCEDSTATUSCODES',
-    ];
+    const esmtp = this.config.esmtp ?? DEFAULT_ESMTP_EXTENSIONS;
+    const lines: string[] = [`${this.config.hostname}`];
 
-    // STARTTLS only if TLS configured and not yet upgraded
-    if (this.config.tls && !this.tlsUpgraded) {
+    if (esmtp.size)           lines.push(`SIZE ${this.config.maxSize}`);
+    if (esmtp.pipelining)     lines.push('PIPELINING');
+    if (esmtp.bit8mime)       lines.push('8BITMIME');
+    if (esmtp.smtputf8)       lines.push('SMTPUTF8');
+    if (esmtp.enhancedStatus) lines.push('ENHANCEDSTATUSCODES');
+    if (esmtp.dsn)            lines.push('DSN');
+    if (esmtp.chunking)       lines.push('CHUNKING');
+
+    // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
+    if (esmtp.starttls && this.config.tls && !this.tlsUpgraded) {
       lines.push('STARTTLS');
     }
 
-    // AUTH only if verifyCredentials is configured
+    // AUTH only if verifyCredentials is configured AND at least one mech enabled
     if (this.config.verifyCredentials) {
-      lines.push('AUTH PLAIN LOGIN');
+      const mechs: string[] = [];
+      if (esmtp.authPlain)   mechs.push('PLAIN');
+      if (esmtp.authLogin)   mechs.push('LOGIN');
+      if (esmtp.authCramMd5) mechs.push('CRAM-MD5');
+      if (mechs.length > 0) lines.push(`AUTH ${mechs.join(' ')}`);
     }
 
     // Build multi-line response

@@ -47,6 +47,41 @@ function fmtDate(iso: string) {
   });
 }
 
+// ── IANA-Zeitzonen ────────────────────────────────────────────────────────────
+// Alle vom Runtime unterstützten IANA-Zonen (~400). Label enthält aktuellen
+// UTC-Offset zur Orientierung. Sortiert: UTC oben, dann alphabetisch.
+function buildTimezoneOptions(): { value: string; label: string }[] {
+  type IntlEx = typeof Intl & { supportedValuesOf?: (k: string) => string[] };
+  const intlAny = Intl as IntlEx;
+  const raw = (intlAny.supportedValuesOf?.('timeZone') ?? [
+    // Fallback für ältere Runtimes — kleine kuratierte Liste
+    'UTC', 'Europe/Berlin', 'Europe/Vienna', 'Europe/Zurich', 'Europe/London',
+    'Europe/Madrid', 'Europe/Paris', 'Europe/Rome', 'Europe/Amsterdam', 'Europe/Warsaw',
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'America/Sao_Paulo', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Dubai', 'Asia/Shanghai',
+    'Australia/Sydney', 'Pacific/Auckland',
+  ]);
+
+  function offsetLabel(tz: string): string {
+    try {
+      const fmt = new Intl.DateTimeFormat('en', { timeZone: tz, timeZoneName: 'shortOffset' });
+      const parts = fmt.formatToParts(new Date());
+      const off = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+      return off || '';
+    } catch {
+      return '';
+    }
+  }
+
+  const utcFirst = raw.filter((z) => z === 'UTC');
+  const rest = raw.filter((z) => z !== 'UTC').sort((a, b) => a.localeCompare(b));
+  return [...utcFirst, ...rest].map((z) => {
+    const off = offsetLabel(z);
+    return { value: z, label: off ? `${z} (${off})` : z };
+  });
+}
+const TIMEZONE_OPTIONS = buildTimezoneOptions();
+
 // ── Feldkomponenten ───────────────────────────────────────────────────────────
 function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -300,14 +335,7 @@ export function SettingsPage() {
 
         <FieldGroup label={t('settings_org_tz')} hint={t('settings_org_tz_hint')}>
           <Select value={org.timezone} onChange={(v) => updOrg('timezone', v)}
-            options={[
-              { value: 'Europe/Berlin',    label: 'Europe/Berlin (CET/CEST)' },
-              { value: 'Europe/Vienna',    label: 'Europe/Vienna (CET/CEST)' },
-              { value: 'Europe/Zurich',    label: 'Europe/Zurich (CET/CEST)' },
-              { value: 'Europe/London',    label: 'Europe/London (GMT/BST)'  },
-              { value: 'America/New_York', label: 'America/New_York (EST/EDT)' },
-              { value: 'UTC',              label: 'UTC' },
-            ]} />
+            options={TIMEZONE_OPTIONS} />
         </FieldGroup>
 
         <FieldGroup label={t('settings_org_welcome')} hint={t('settings_org_welcome_hint')}>

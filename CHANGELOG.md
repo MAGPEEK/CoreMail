@@ -9,6 +9,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.0] — 2026-05-18 — SMTP-Audit-Fixes + Drag-Reorder + IANA-Zonen + OWA→MWA
+
+### Fixed — 5 kritische Audit-Befunde
+
+- **🐛 ESMTP-Erweiterungen wurden komplett ignoriert** (`packages/smtp-server/src/core/session.ts`, `server.ts`)
+  - Frontend persistierte 11 Flags (`extStarttls`, `extAuthPlain`, `extAuthLogin`, `extAuthCramMd5`, `extPipelining`, `extSize`, `ext8bitmime`, `extEnhancedStatus`, `extSmtputf8`, `extDsn`, `extChunking`), Server hardcodete sie
+  - **Fix**: `refreshSmtpSettings()` lädt alle Flags aus `SmtpSettings` und macht sie als Getter über `_esmtp` zugänglich; `handleEhlo()` baut die EHLO-Antwort dynamisch (`SIZE`, `PIPELINING`, `8BITMIME`, `SMTPUTF8`, `ENHANCEDSTATUSCODES`, `DSN`, `CHUNKING`, `STARTTLS`, `AUTH PLAIN/LOGIN/CRAM-MD5`)
+- **🐛 `maxMessageSizeMb` wurde ignoriert** (`server.ts:146` hardcoded 50MB)
+  - **Fix**: jetzt aus `SmtpSettings.maxMessageSizeMb × 1024²` via Getter — `SIZE`-EHLO-Wert und 552-Reject-Check sind live
+- **🐛 `localDeliveryEnabled` wurde nie durchgesetzt** (`inbound/handler.ts`)
+  - `onRcptTo()` rief nur `verifyRecipient()` auf, ignorierte das Setting
+  - **Fix**: bei `localDeliveryEnabled === false` antwortet RCPT-TO mit `5.7.1 Local delivery is disabled by administrator`
+- **🐛 Outbound-Smarthost-Cache wurde nach Save nicht invalidiert** (`outbound/relay.ts` 60s TTL)
+  - **Fix**: `api-gateway/routes/admin/smtp-config.ts` publisht `CHANNEL_SETTINGS_RELOAD` nach jedem PUT; smtp-server-Subscriber ruft `invalidateOutboundConfigCache()`. Neue Provider-Credentials wirken sofort
+- **🐛 Greylisting Wait/TTL waren hardcoded** (`security-filter/src/greylisting/index.ts`)
+  - 300s Wait + 4h TTL statt aus `SmtpSettings.greylistWaitSec`/`greylistTtlHours`
+  - **Fix**: 60s-Settings-Cache + Whitelist-Bypass (IP, Sender-E-Mail, Sender-Domain, /24-CIDR-Approx) aus `SmtpSettings.greylistWhitelist`
+
+### Added
+
+- **Dashboard-Drag-Reorder** (`packages/admin-panel/src/store/dashboard.ts` + `pages/DashboardPage.tsx`)
+  - Neuer Drag-Handle (GripVertical) im „Anzeige"-Popover
+  - Native HTML5 Drag-and-Drop — kein @dnd-kit-Dependency nötig
+  - Reihenfolge im localStorage persistiert (`order: WidgetId[]`) mit Auto-Migration für neue Widgets
+  - `sortByOrder()`-Helper rendert KPI-Strip und Server-Sektion in User-Reihenfolge
+- **Alle ~400 IANA-Zeitzonen** in Global-Settings → Zeitzone (`SettingsPage.tsx`)
+  - `Intl.supportedValuesOf('timeZone')` als Quelle, UTC oben, sortiert mit Live-UTC-Offset-Anzeige
+  - Fallback-Liste für ältere Runtimes (21 wichtigste Zonen)
+
+### Changed
+
+- **Servers-Page**: Label `OWA-URL (Outlook Web Access)` → `MWA-URL (Mail Web Access)` — der Begriff OWA war in v3.5.5 schon weg, blieb aber in der Settings-Beschriftung
+- **SMTP-Settings-Refresh** (`smtp-server/src/server.ts`): `refreshBanner()` ersetzt durch `refreshSmtpSettings()`, lädt jetzt Banner + 11 ESMTP-Flags + maxSize + maxRcpt in einem Read
+
+### Notes — Audit-Befunde aus diesem Release
+
+5 parallele Audits via Explore-Agents:
+- **ESMTP-Erweiterungen** — 11 Flags ignoriert (gefixt)
+- **Lokale Zustellung** — `maxMessageSizeMb` ignoriert, `localDeliveryEnabled` nicht durchgesetzt, Quota-Check ist post-save (Overflow möglich) — die ersten beiden gefixt
+- **Ausgehende Zustellung** — Cache-Invalidierung fehlte (gefixt); Outbound-Filter ist Platzhalter (offen)
+- **Greylisting/Relaying** — Wait/TTL hardcoded (gefixt), `greylistWhitelist` jetzt benutzt; `maxConnectionsPerIp`/`maxRecipients`/`connectionTimeoutSec` weiterhin nicht durchgesetzt (offen, Listener-Refactor nötig)
+- **SSL/TLS-Zertifikate** — Cert-Upload publisht keinen Reload (offen), IMAP/POP3 reagiert nur auf Listener-Reload nicht auf Cert-Rotation (offen), keine Cert↔Key-Pair-Validierung beim Upload (offen)
+
+---
+
 ## [3.12.0] — 2026-05-18 — Journaling Exchange-2019-konform (BCC · .eml · Retry · Fallback · Hold)
 
 ### Added — Exchange-2019-Spec-Konformität

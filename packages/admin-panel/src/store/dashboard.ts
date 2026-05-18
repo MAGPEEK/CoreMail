@@ -57,32 +57,52 @@ const DEFAULT_VISIBILITY: Record<WidgetId, boolean> = {
   'security-stats':   true,
 };
 
+const DEFAULT_ORDER: WidgetId[] = WIDGET_CATALOG.map((w) => w.id);
+
 interface DashboardStore {
-  visible:    Record<WidgetId, boolean>;
-  toggle:     (id: WidgetId) => void;
-  setAll:     (value: boolean) => void;
+  visible:       Record<WidgetId, boolean>;
+  order:         WidgetId[]; // flache Reihenfolge — Dashboard sortiert pro Gruppe nach diesem Index
+  toggle:        (id: WidgetId) => void;
+  setAll:        (value: boolean) => void;
   resetDefaults: () => void;
+  moveWidget:    (from: number, to: number) => void;
 }
 
 export const useDashboardStore = create<DashboardStore>()(
   persist(
     (set, get) => ({
       visible: { ...DEFAULT_VISIBILITY },
+      order:   [...DEFAULT_ORDER],
       toggle: (id) => set({ visible: { ...get().visible, [id]: !get().visible[id] } }),
       setAll: (value) => set({
         visible: Object.fromEntries(WIDGET_CATALOG.map((w) => [w.id, value])) as Record<WidgetId, boolean>,
       }),
-      resetDefaults: () => set({ visible: { ...DEFAULT_VISIBILITY } }),
+      resetDefaults: () => set({ visible: { ...DEFAULT_VISIBILITY }, order: [...DEFAULT_ORDER] }),
+      moveWidget: (from, to) => {
+        const current = get().order;
+        if (from < 0 || from >= current.length || to < 0 || to >= current.length || from === to) return;
+        const next = [...current];
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved!);
+        set({ order: next });
+      },
     }),
     {
       name: 'coremail-dashboard-v1',
       // Fehlende Keys (z. B. nach Update mit neuen Widgets) auf Default setzen
       merge: (persisted, current) => {
         const p = persisted as Partial<DashboardStore> | undefined;
+        // Order-Migration: alle bekannten IDs erhalten, in persistierter Reihenfolge zuerst,
+        // dann neue Widgets aus DEFAULT_ORDER hinten anhängen.
+        const validIds = new Set<WidgetId>(DEFAULT_ORDER);
+        const persistedOrder = (p?.order ?? []).filter((id): id is WidgetId => validIds.has(id as WidgetId));
+        const missingFromPersisted = DEFAULT_ORDER.filter((id) => !persistedOrder.includes(id));
+        const mergedOrder: WidgetId[] = [...persistedOrder, ...missingFromPersisted];
         return {
           ...current,
           ...(p ?? {}),
           visible: { ...DEFAULT_VISIBILITY, ...(p?.visible ?? {}) },
+          order:   mergedOrder,
         };
       },
     },
