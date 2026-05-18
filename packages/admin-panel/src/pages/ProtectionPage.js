@@ -202,24 +202,86 @@ function AntivirusSection({ settings, onSave }) {
                                     : 'border-gray-200 text-gray-600 hover:border-gray-300'}`, children: [_jsx("p", { className: "font-semibold", children: meta?.label }), _jsx("p", { className: "text-[10px] mt-0.5 opacity-70", children: meta?.desc })] }, a));
                         }) }), action === 'pass' && (_jsxs("div", { className: "bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5", children: [_jsx(AlertTriangle, { size: 12, className: "shrink-0 mt-0.5" }), "Modus \"Durchlassen\" sch\u00FCtzt nicht vor Viren \u2014 nur f\u00FCr Diagnose-Zwecke empfohlen."] }))] }), _jsxs("div", { className: "card p-4 space-y-1", children: [_jsx("p", { className: "text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100", children: "Scan-Optionen" }), _jsx(ToggleRow, { label: "Archive scannen", desc: "ZIP, RAR, TAR, GZ und andere Archivformate werden entpackt und gescannt", value: scanArchives, onChange: setScanArchives }), _jsx(ToggleRow, { label: "HTML-Inhalt scannen", desc: "HTML-Teile der E-Mail auf eingebettete Schadskripte pr\u00FCfen", value: scanHtml, onChange: setScanHtml }), _jsx(ToggleRow, { label: "Verschl\u00FCsselte Archive blockieren", desc: "Passwortgesch\u00FCtzte Archive ablehnen (k\u00F6nnen nicht gescannt werden)", value: blockEncrypted, onChange: setBlockEncrypted }), _jsx(NumInput, { label: "Max. Dateigr\u00F6\u00DFe (je Anhang)", value: maxFileSize, onChange: setMaxFileSize, min: 1, max: 500, unit: "MB" }), _jsx(NumInput, { label: "Max. Gesamt-Scan-Gr\u00F6\u00DFe", value: maxScanSize, onChange: setMaxScanSize, min: 1, max: 2048, unit: "MB" })] }), _jsxs("div", { className: "bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 flex items-start gap-2", children: [_jsx(AlertTriangle, { size: 13, className: "shrink-0 mt-0.5" }), _jsxs("span", { children: ["ClamAV l\u00E4uft als separater Docker-Container (", _jsx("code", { className: "bg-blue-100 px-1 rounded", children: "clamav/clamav:stable" }), "). freshclam aktualisiert die Signaturdatenbank t\u00E4glich automatisch. Signaturdatenbank: ", _jsx("strong", { children: "ClamAV DB (CVD)" }), " + optionale 3rd-Party Signaturen."] })] })] }));
 }
-// ═════════════════════════════════════════════════════════════════════════════
-// DnsblSection
-// ═════════════════════════════════════════════════════════════════════════════
+function ActionBadge({ action }) {
+    const styles = {
+        REJECT: 'bg-red-50 text-red-700 border-red-200',
+        TAG: 'bg-amber-50 text-amber-700 border-amber-200',
+        SCORE_ONLY: 'bg-blue-50 text-blue-700 border-blue-200',
+    };
+    const labels = { REJECT: 'Ablehnen', TAG: 'Markieren', SCORE_ONLY: 'Score' };
+    return (_jsx("span", { className: `inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${styles[action]}`, children: labels[action] }));
+}
 function DnsblSection({ settings, onSave }) {
+    const qc = useQueryClient();
     const [enabled, setEnabled] = useState(settings.dnsblEnabled);
-    const [zones, setZones] = useState(settings.dnsblZones);
-    const [newZone, setNewZone] = useState('');
-    function addZone() {
-        const z = newZone.trim().toLowerCase();
-        if (!z || zones.includes(z)) {
-            setNewZone('');
-            return;
-        }
-        setZones(prev => [...prev, z]);
-        setNewZone('');
-    }
-    return (_jsxs("div", { className: "space-y-5", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h2", { className: "text-base font-semibold text-gray-900", children: "DNSBL-Konfiguration" }), _jsx(SaveBtn, { onClick: () => onSave({ dnsblEnabled: enabled, dnsblZones: zones }), pending: false })] }), _jsx("div", { className: "card p-4 space-y-1", children: _jsx(ToggleRow, { label: "DNSBL aktiviert", desc: "Pr\u00FCft Absender-IPs gegen DNS-Blacklisten", value: enabled, onChange: setEnabled }) }), _jsxs("div", { className: "card p-4 space-y-3", children: [_jsx("p", { className: "text-sm font-semibold text-gray-700", children: "Aktive Blacklist-Zonen" }), _jsx("div", { className: "space-y-1.5", children: zones.map(z => (_jsxs("div", { className: "flex items-center justify-between bg-gray-50 rounded px-3 py-2", children: [_jsx("span", { className: "text-sm font-mono text-gray-700", children: z }), _jsx("button", { onClick: () => setZones(prev => prev.filter(x => x !== z)), className: "text-gray-400 hover:text-red-500 transition-colors", children: _jsx(Trash2, { size: 13 }) })] }, z))) }), _jsxs("div", { className: "flex gap-2 mt-2", children: [_jsx("input", { value: newZone, onChange: e => setNewZone(e.target.value), onKeyDown: e => e.key === 'Enter' && addZone(), placeholder: "z.B. zen.spamhaus.org", className: "flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" }), _jsxs("button", { onClick: addZone, className: "btn-secondary text-sm gap-1", children: [_jsx(Plus, { size: 13 }), " Hinzuf\u00FCgen"] })] }), _jsxs("div", { className: "pt-2 border-t border-gray-100", children: [_jsx("p", { className: "text-xs text-gray-400 mb-2", children: "Bekannte Blacklisten (klicken zum Hinzuf\u00FCgen):" }), _jsx("div", { className: "flex flex-wrap gap-1.5", children: ['zen.spamhaus.org', 'bl.spamcop.net', 'b.barracudacentral.org', 'dnsbl.sorbs.net',
-                                    'ix.dnsbl.manitu.net', '0spam.fusionzero.com'].filter(z => !zones.includes(z)).map(z => (_jsxs("button", { onClick: () => setZones(prev => [...prev, z]), className: "text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded transition-colors font-mono", children: ["+ ", z] }, z))) })] })] })] }));
+    const [tab, setTab] = useState('zones');
+    // ── Master-Toggle ──────────────────────────────────────────────────────────
+    const masterSave = () => onSave({ dnsblEnabled: enabled });
+    // ── Zonen ──────────────────────────────────────────────────────────────────
+    const { data: zones = [], isLoading: zonesLoading } = useQuery({
+        queryKey: ['admin', 'dnsbl-zones'],
+        queryFn: () => api.get('/admin/security/dnsbl'),
+    });
+    const invalidateZones = () => qc.invalidateQueries({ queryKey: ['admin', 'dnsbl-zones'] });
+    const patchZone = useMutation({
+        mutationFn: ({ id, body }) => api.patch(`/admin/security/dnsbl/${id}`, body),
+        onSuccess: invalidateZones,
+        onError: (e) => toast.error(e.message || 'Fehler beim Speichern'),
+    });
+    const deleteZone = useMutation({
+        mutationFn: (id) => api.delete(`/admin/security/dnsbl/${id}`),
+        onSuccess: () => { invalidateZones(); toast.success('Zone gelöscht'); },
+        onError: (e) => toast.error(e.message || 'Fehler beim Löschen'),
+    });
+    const createZone = useMutation({
+        mutationFn: (body) => api.post('/admin/security/dnsbl', body),
+        onSuccess: () => { invalidateZones(); toast.success('Zone angelegt'); setNewHost(''); setNewName(''); setShowAdd(false); },
+        onError: (e) => toast.error(e.message || 'Fehler beim Anlegen'),
+    });
+    const [showAdd, setShowAdd] = useState(false);
+    const [newHost, setNewHost] = useState('');
+    const [newName, setNewName] = useState('');
+    const [newAction, setNewAction] = useState('REJECT');
+    const [newWeight, setNewWeight] = useState(5);
+    const [newWhitelist, setNewWhitelist] = useState(false);
+    // ── Test ───────────────────────────────────────────────────────────────────
+    const [testIp, setTestIp] = useState('');
+    const testMutation = useMutation({
+        mutationFn: (ip) => api.post('/admin/security/dnsbl/test', { ip }),
+        onError: (e) => toast.error(e.message || 'Test fehlgeschlagen'),
+    });
+    // ── Stats ──────────────────────────────────────────────────────────────────
+    const [statsDays, setStatsDays] = useState(7);
+    const { data: stats } = useQuery({
+        queryKey: ['admin', 'dnsbl-stats', statsDays],
+        queryFn: () => api.get(`/admin/security/dnsbl/stats?days=${statsDays}`),
+        enabled: tab === 'stats',
+        refetchInterval: tab === 'stats' ? 30_000 : false,
+    });
+    return (_jsxs("div", { className: "space-y-5", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h2", { className: "text-base font-semibold text-gray-900", children: "DNSBL-Konfiguration" }), _jsx(SaveBtn, { onClick: masterSave, pending: false })] }), _jsx("div", { className: "card p-4 space-y-1", children: _jsx(ToggleRow, { label: "DNSBL aktiviert", desc: "Pr\u00FCft Absender-IPs gegen DNS-Blacklisten und ggf. Whitelisten (DNSWL)", value: enabled, onChange: setEnabled }) }), _jsx("div", { className: "flex gap-1 border-b border-gray-200", children: [
+                    { id: 'zones', label: 'Zonen', count: zones.length },
+                    { id: 'test', label: 'Test', count: undefined },
+                    { id: 'stats', label: 'Statistik', count: undefined },
+                ].map(({ id, label, count }) => (_jsxs("button", { onClick: () => setTab(id), className: `px-4 py-2 text-sm border-b-2 transition-colors ${tab === id
+                        ? 'border-accent text-accent font-semibold'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'}`, children: [label, count !== undefined && (_jsx("span", { className: "ml-1.5 text-xs bg-gray-100 px-1.5 py-0.5 rounded-full text-gray-600", children: count }))] }, id))) }), tab === 'zones' && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsxs("p", { className: "text-sm text-gray-600", children: [zones.filter(z => z.enabled).length, " aktive von ", zones.length, " Zonen"] }), _jsxs("button", { onClick: () => setShowAdd((v) => !v), className: "btn-secondary text-sm gap-1", children: [_jsx(Plus, { size: 13 }), " Eigene Zone"] })] }), showAdd && (_jsxs("div", { className: "card p-4 border-2 border-accent/30 space-y-3", children: [_jsx("p", { className: "text-sm font-semibold text-gray-700", children: "Neue DNSBL/DNSWL-Zone anlegen" }), _jsxs("div", { className: "grid grid-cols-2 gap-2", children: [_jsx("input", { value: newHost, onChange: (e) => setNewHost(e.target.value), placeholder: "zen.spamhaus.org", className: "border border-gray-300 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" }), _jsx("input", { value: newName, onChange: (e) => setNewName(e.target.value), placeholder: "Anzeigename", className: "border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" })] }), _jsxs("div", { className: "flex items-center gap-3 flex-wrap", children: [_jsxs("select", { value: newAction, onChange: (e) => setNewAction(e.target.value), className: "border border-gray-300 rounded px-2 py-1.5 text-sm", children: [_jsx("option", { value: "REJECT", children: "Ablehnen" }), _jsx("option", { value: "TAG", children: "Als Spam markieren" }), _jsx("option", { value: "SCORE_ONLY", children: "Nur Score (rspamd)" })] }), _jsxs("label", { className: "text-sm text-gray-700 flex items-center gap-1", children: ["Score:", _jsx("input", { type: "number", min: 0, max: 100, value: newWeight, onChange: (e) => setNewWeight(parseInt(e.target.value, 10) || 0), className: "w-16 border border-gray-300 rounded px-2 py-1 text-sm" })] }), _jsxs("label", { className: "text-sm text-gray-700 flex items-center gap-1.5", children: [_jsx("input", { type: "checkbox", checked: newWhitelist, onChange: (e) => setNewWhitelist(e.target.checked) }), "Whitelist (DNSWL)"] })] }), _jsxs("div", { className: "flex justify-end gap-2", children: [_jsx("button", { onClick: () => setShowAdd(false), className: "btn-ghost text-sm", children: "Abbrechen" }), _jsx("button", { onClick: () => createZone.mutate({ host: newHost.trim(), name: newName.trim() || newHost.trim(), action: newAction, weight: newWeight, isWhitelist: newWhitelist, enabled: true }), disabled: !newHost.trim() || createZone.isPending, className: "btn-primary text-sm", children: "Anlegen" })] })] })), _jsxs("div", { className: "space-y-2", children: [zonesLoading && _jsx("p", { className: "text-sm text-gray-400", children: "Lade \u2026" }), zones.map((z) => (_jsx("div", { className: `card p-3 ${!z.enabled ? 'opacity-60' : ''}`, children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx(Toggle, { active: z.enabled, onToggle: () => patchZone.mutate({ id: z.id, body: { enabled: !z.enabled } }) }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center gap-2 flex-wrap", children: [_jsx("span", { className: "text-sm font-semibold text-gray-900", children: z.name }), _jsx("code", { className: "text-xs text-gray-500", children: z.host }), z.isWhitelist && (_jsx("span", { className: "text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded", children: "WHITELIST" })), z.isBuiltin && (_jsx("span", { className: "text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded", children: "Built-in" })), _jsx(ActionBadge, { action: z.action })] }), z.description && (_jsx("p", { className: "text-xs text-gray-500 mt-1", children: z.description })), _jsxs("div", { className: "flex items-center gap-3 mt-2", children: [_jsxs("label", { className: "flex items-center gap-1 text-xs text-gray-600", children: ["Aktion:", _jsxs("select", { value: z.action, onChange: (e) => patchZone.mutate({ id: z.id, body: { action: e.target.value } }), className: "border border-gray-200 rounded px-1.5 py-0.5 text-xs", children: [_jsx("option", { value: "REJECT", children: "Ablehnen" }), _jsx("option", { value: "TAG", children: "Markieren" }), _jsx("option", { value: "SCORE_ONLY", children: "Score" })] })] }), _jsxs("label", { className: "flex items-center gap-1 text-xs text-gray-600", children: ["Score:", _jsx("input", { type: "number", min: 0, max: 100, defaultValue: z.weight, onBlur: (e) => {
+                                                                        const v = parseInt(e.target.value, 10);
+                                                                        if (v !== z.weight)
+                                                                            patchZone.mutate({ id: z.id, body: { weight: v } });
+                                                                    }, className: "w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs" })] })] })] }), !z.isBuiltin && (_jsx("button", { onClick: () => {
+                                                if (window.confirm(`Zone „${z.name}" wirklich löschen?`))
+                                                    deleteZone.mutate(z.id);
+                                            }, className: "text-gray-400 hover:text-red-500 transition-colors p-1", children: _jsx(Trash2, { size: 14 }) }))] }) }, z.id)))] })] })), tab === 'test' && (_jsxs("div", { className: "card p-4 space-y-3", children: [_jsx("p", { className: "text-sm font-semibold text-gray-700", children: "DNSBL-Check f\u00FCr IP testen" }), _jsx("p", { className: "text-xs text-gray-500", children: "Pr\u00FCft die IP gegen alle konfigurierten Zonen (auch deaktivierte). Antwortzeit ca. 2 s pro Zone." }), _jsxs("div", { className: "flex gap-2", children: [_jsx("input", { value: testIp, onChange: (e) => setTestIp(e.target.value), onKeyDown: (e) => e.key === 'Enter' && testIp.trim() && testMutation.mutate(testIp.trim()), placeholder: "z. B. 185.220.101.1 oder 2001:db8::1", className: "flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" }), _jsxs("button", { onClick: () => testIp.trim() && testMutation.mutate(testIp.trim()), disabled: !testIp.trim() || testMutation.isPending, className: "btn-primary text-sm gap-1", children: [testMutation.isPending ? _jsx(RefreshCw, { size: 13, className: "animate-spin" }) : _jsx(Database, { size: 13 }), "Testen"] })] }), testMutation.data && (_jsxs("div", { className: "border-t border-gray-100 pt-3 space-y-1.5", children: [_jsxs("p", { className: "text-xs text-gray-500", children: ["Ergebnis f\u00FCr ", _jsx("code", { className: "font-mono", children: testMutation.data.ip }), ":"] }), testMutation.data.results.map((r) => (_jsxs("div", { className: `flex items-center gap-2 px-3 py-1.5 rounded text-sm ${r.listed
+                                    ? (r.isWhitelist ? 'bg-emerald-50' : 'bg-red-50')
+                                    : 'bg-gray-50'}`, children: [r.listed
+                                        ? _jsx(CheckCircle, { size: 14, className: r.isWhitelist ? 'text-emerald-600' : 'text-red-600' })
+                                        : _jsx(XCircle, { size: 14, className: "text-gray-400" }), _jsx("span", { className: "font-medium", children: r.name }), _jsx("code", { className: "text-xs text-gray-500", children: r.host }), !r.enabled && _jsx("span", { className: "text-[10px] bg-gray-200 px-1.5 rounded", children: "deaktiviert" }), _jsx("span", { className: "ml-auto text-xs", children: r.listed
+                                            ? _jsxs("span", { className: r.isWhitelist ? 'text-emerald-700 font-mono' : 'text-red-700 font-mono', children: ["gelistet \u2192 ", r.response] })
+                                            : _jsx("span", { className: "text-gray-400", children: "nicht gelistet" }) })] }, r.zoneId)))] }))] })), tab === 'stats' && (_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { className: "text-sm text-gray-600", children: "Zeitraum:" }), [1, 7, 30].map((d) => (_jsx("button", { onClick: () => setStatsDays(d), className: `px-3 py-1 text-xs rounded-full transition-colors ${statsDays === d ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`, children: d === 1 ? '24 h' : `${d} Tage` }, d)))] }), stats && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "card p-4", children: [_jsx("p", { className: "text-2xl font-bold text-gray-900", children: stats.total.toLocaleString('de-DE') }), _jsxs("p", { className: "text-xs text-gray-500", children: ["Treffer in den letzten ", stats.days === 1 ? '24 h' : `${stats.days} Tagen`] })] }), _jsxs("div", { className: "card p-4", children: [_jsx("p", { className: "text-sm font-semibold text-gray-700 mb-2", children: "Top-Zonen" }), stats.perZone.length === 0
+                                        ? _jsx("p", { className: "text-xs text-gray-400", children: "Keine Treffer" })
+                                        : stats.perZone.map((p) => (_jsxs("div", { className: "flex items-center gap-2 py-1.5", children: [_jsx("span", { className: "text-sm font-medium text-gray-700", children: p.name }), _jsx("code", { className: "text-xs text-gray-400", children: p.host }), _jsx("div", { className: "flex-1 bg-gray-100 h-2 rounded", children: _jsx("div", { className: "bg-accent h-2 rounded", style: { width: `${stats.perZone[0] ? (p.hits / stats.perZone[0].hits) * 100 : 0}%` } }) }), _jsx("span", { className: "text-sm tabular-nums text-gray-700 w-16 text-right", children: p.hits })] }, p.zoneId)))] }), _jsxs("div", { className: "card p-4", children: [_jsx("p", { className: "text-sm font-semibold text-gray-700 mb-2", children: "Letzte Treffer" }), stats.recent.length === 0
+                                        ? _jsx("p", { className: "text-xs text-gray-400", children: "Keine Treffer" })
+                                        : (_jsx("div", { className: "space-y-1 max-h-80 overflow-y-auto", children: stats.recent.map((h) => (_jsxs("div", { className: "flex items-center gap-2 text-xs py-1 border-b border-gray-50 last:border-0", children: [_jsx(AlertTriangle, { size: 11, className: "text-red-500 shrink-0" }), _jsx("code", { className: "font-mono text-gray-700 w-32 truncate", children: h.ip }), _jsx("span", { className: "text-gray-600", children: h.zoneName }), _jsx("span", { className: "ml-auto text-gray-400", children: new Date(h.hitAt).toLocaleString('de-DE') })] }, h.id))) }))] })] }))] }))] }));
 }
 // ═════════════════════════════════════════════════════════════════════════════
 // GreylistingSection

@@ -9,6 +9,63 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.7.0] — 2026-05-18 — DNSBL-Modul ausgebaut: Zonen, Aktionen, Score, IPv6, Cache, Stats
+
+### Added
+
+- **Eigene DNSBL-Zonen-Verwaltung** mit Prisma-Modell `DnsblZone` (löst die alte String-Array-Konfiguration in `SecuritySettings.dnsblZones` ab):
+  - Pro Zone: `host`, `name`, `description`, `enabled`, `action` (REJECT/TAG/SCORE_ONLY), `weight` (0–100), `isWhitelist`, `sortOrder`
+  - Built-in-Flag schützt Standard-Provider vor Löschung (nur deaktivierbar)
+- **Whitelist-Support (DNSWL)**: `isWhitelist: true` markiert eine Zone; Treffer überspringt alle weiteren Filter-Stages (Greylisting/GeoIP/SPF-DKIM-DMARC/rspamd)
+- **Drei Aktionen pro Zone**:
+  - `REJECT` — SMTP-Reject mit 550
+  - `TAG` — Mail durchlassen, als Spam markieren (rspamd-Score erhöhen)
+  - `SCORE_ONLY` — nur in den Score einfließen, keine eigene Aktion
+- **Stärkste Aktion gewinnt** bei mehreren Treffern: REJECT > TAG > SCORE_ONLY
+- **DNS-Cache** (in-memory, 1 h TTL): wiederholte Abfragen für dieselbe IP gehen aus dem Cache, spart bei hochfrequentem Mail-Empfang massiv DNS-Last
+- **IPv6-Support** im DNSBL-Lookup (`reverseIp` expandiert `::`-Notation, generiert 32-Nibble-Reverse für `.zone.host`)
+- **Hit-Logging** in `DnsblHit`-Tabelle (zone, ip, hitAt, response) — asynchron geschrieben, blockiert nicht die SMTP-Pipeline
+- **8 Built-in-Provider-Presets** mit Beschreibung und sinnvollen Defaults:
+  - Spamhaus ZEN (REJECT, weight 10)
+  - SpamCop (REJECT, weight 6)
+  - Barracuda Reputation (REJECT, weight 7)
+  - SORBS Aggregat (TAG, weight 4)
+  - Manitu NiX Spam (TAG, weight 5)
+  - UCEPROTECT Level 1 (TAG, weight 3)
+  - PSBL (SCORE_ONLY, weight 3)
+  - DNSWL.org Whitelist (Whitelist, weight 0)
+  Werden beim ersten Service-Start in `dnsbl_zones` geseedet (idempotent: `count==0`-Check)
+
+### Backend-Routen
+
+- `GET    /api/v1/admin/security/dnsbl` — alle Zonen
+- `POST   /api/v1/admin/security/dnsbl` — neue Zone anlegen (eigene oder Whitelist)
+- `PATCH  /api/v1/admin/security/dnsbl/:id` — Zone konfigurieren (Built-ins nur `enabled/action/weight/sortOrder`)
+- `DELETE /api/v1/admin/security/dnsbl/:id` — eigene Zone löschen (Built-ins geschützt)
+- `POST   /api/v1/admin/security/dnsbl/test` — Live-Test einer IP gegen alle Zonen (auch deaktivierte) mit 2 s/Zone Timeout
+- `GET    /api/v1/admin/security/dnsbl/stats?days=1|7|30` — Hit-Statistik mit Top-Zonen und Recent-Liste
+
+### Admin-Panel
+
+- **DnsblSection komplett neu** unter Schutzfilter → DNSBL mit 3 Tabs:
+  - **Zonen** — Karten-Layout mit Toggle, Aktion-Dropdown, Score-Input, Built-in-Badge, Whitelist-Badge; „Eigene Zone"-Inline-Editor mit Host/Name/Aktion/Score/Whitelist-Checkbox
+  - **Test** — IP-Eingabefeld + Spinner während Lookup + Ergebnisliste mit grünem Check (Whitelist), rotem X (Blacklist-Hit) oder grauem X (nicht gelistet); zeigt Response-Code
+  - **Statistik** — 24h/7d/30d-Tab; großer Treffer-Counter; Top-Zonen-Balkendiagramm; Recent-Liste (50 letzte Hits mit IP, Zone, Zeitpunkt). Auto-Refresh alle 30 s.
+
+### Changed
+
+- **security-filter** lädt Zonen jetzt zur Laufzeit aus der DB (kein Service-Restart bei Konfig-Änderung mehr nötig)
+- `PipelineConfig.dnsblZones` ist deprecated (wird nicht mehr verwendet — Zonen kommen aus der DB)
+- `SecuritySettings.dnsblEnabled` bleibt der Master-Toggle (Modul global an/aus)
+
+### Migration
+
+- Prisma legt 2 neue Tabellen an: `dnsbl_zones`, `dnsbl_hits`
+- Beim ersten Container-Start nach Update werden die 8 Built-in-Presets automatisch geseedet
+- Alte `SecuritySettings.dnsblZones`-Einträge bleiben in der DB (Spalte unverändert), werden aber nicht mehr gelesen — bei Bedarf manuelle Übernahme über das Admin-Panel
+
+---
+
 ## [3.6.9] — 2026-05-18 — Calendar weiße Seite — FullCalendar-Crash behoben
 
 ### Fixed

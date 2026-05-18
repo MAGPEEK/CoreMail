@@ -1,6 +1,6 @@
 import { createLogger } from '@coremail/core';
 import { parseRawMessage } from '@coremail/storage';
-import { checkDnsbl, DEFAULT_DNSBL_ZONES } from '../dnsbl/index.js';
+import { checkDnsbl } from '../dnsbl/index.js';
 import { checkGreylist } from '../greylisting/index.js';
 import { checkCountry, type CountryConfig } from '../geoip/index.js';
 import { authenticateMail, shouldRejectByDmarc } from '../spf-dkim/index.js';
@@ -14,6 +14,7 @@ const log = createLogger('security-filter:pipeline');
 export type PipelineAction = 'accept' | 'defer' | 'reject' | 'quarantine';
 
 export interface PipelineConfig {
+  /** @deprecated DNSBL-Zonen werden jetzt aus der DB geladen (DnsblZone-Tabelle) */
   dnsblZones?: string[];
   greylistingEnabled?: boolean;
   countryFilter?: CountryConfig | null;
@@ -55,13 +56,19 @@ export async function runConnectionChecks(
   }
 
   // ── Stage 1b: DNSBL ──────────────────────────────────────────────────────
-  const dnsbl = await checkDnsbl(senderIp, config.dnsblZones ?? DEFAULT_DNSBL_ZONES);
-  if (dnsbl.listed) {
+  const dnsbl = await checkDnsbl(senderIp);
+  if (dnsbl.whitelisted) {
+    // DNSWL-Treffer → folgende Stage-1-Filter überspringen
+    log.info({ senderIp, hits: dnsbl.hits.map((h) => h.zone.host) }, 'DNSWL hit — bypassing remaining checks');
+    return { action: 'accept', reason: 'DNSWL whitelisted' };
+  }
+  if (dnsbl.action === 'REJECT') {
     return {
       action: 'reject',
-      reason: `Sender IP listed in DNSBL: ${dnsbl.zones.join(', ')}`,
+      reason: `Sender IP listed in DNSBL: ${dnsbl.hits.map((h) => h.zone.host).join(', ')}`,
     };
   }
+  // TAG- und SCORE_ONLY-Hits fließen weiter unten in den rspamd-Score
 
   // ── Stage 1c: Country filtering ──────────────────────────────────────────
   const geo = await checkCountry(senderIp, config.countryFilter ?? null);

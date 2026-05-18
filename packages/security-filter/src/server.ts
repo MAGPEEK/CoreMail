@@ -103,6 +103,13 @@ const PORT = parseInt(process.env['PORT'] ?? '3002', 10);
 
 async function main() {
   await connectDatabase();
+  // DNSBL-Zonen seeden falls Tabelle noch leer
+  try {
+    const { seedDnsblZonesIfEmpty } = await import('./dnsbl/index.js');
+    await seedDnsblZonesIfEmpty();
+  } catch (err) {
+    log.warn({ err }, 'DNSBL zone seeding failed (non-fatal)');
+  }
   app.listen(PORT, () => {
     log.info({ port: PORT }, 'Security filter service started');
   });

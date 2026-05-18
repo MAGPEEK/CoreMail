@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.6.9';
+const VERSION        = '3.7.0';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.7.0', date: '2026-05-18', title: 'DNSBL-Modul ausgebaut: Zonen, Aktionen, Score, IPv6, Cache, Statistik',
+    notes: 'Eigene DNSBL-Zonen-Verwaltung mit Prisma-Modell DnsblZone statt String-Array. Pro Zone: host, name, description, enabled, action (REJECT/TAG/SCORE_ONLY), weight (0-100), isWhitelist, sortOrder. Built-in-Flag schützt Standard-Provider. Whitelist-Support (DNSWL) — Treffer überspringt alle weiteren Filter. Stärkste Aktion gewinnt bei mehreren Treffern. In-Memory-DNS-Cache (1h TTL) reduziert DNS-Last. IPv6-Support im DNSBL-Lookup. Hit-Logging in DnsblHit-Tabelle asynchron. 8 Built-in-Presets (Spamhaus ZEN, SpamCop, Barracuda, SORBS, Manitu, UCEPROTECT, PSBL, DNSWL.org). Routen: GET/POST/PATCH/DELETE /admin/security/dnsbl, /test (Live-Lookup), /stats (Top-Zonen + Recent-Liste). Admin-Panel: 3 Tabs (Zonen-Karten mit Toggle/Action/Score, Test-Tool mit IP-Eingabe, Statistik mit 24h/7d/30d und Balkendiagramm).' },
   { version: '3.6.9', date: '2026-05-18', title: 'Calendar weiße Seite — FullCalendar-Crash behoben',
     notes: '/calendar zeigte weiße Seite. Ursache: FullCalendar 6.x crasht in React-19, wenn datesSet-Callback setState im Render-Cycle aufruft. Fix: datesSet entfernt (Mini ist Single-Source-of-Truth), hiddenDays + fcLocale in useMemo (verhindert Re-Mount), useRef<FullCalendar | null> mit explizitem null-Type. Variable api in fcApi umbenannt um Shadowing zu vermeiden.' },
   { version: '3.6.8', date: '2026-05-18', title: 'BulkToolbar Outlook-Style + Positions-Fix',

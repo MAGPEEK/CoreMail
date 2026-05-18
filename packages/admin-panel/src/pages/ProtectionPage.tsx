@@ -743,76 +743,366 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// DnsblSection
+// DnsblSection — DB-basierte Zone-Verwaltung mit Aktionen, Score, Test, Stats
 // ═════════════════════════════════════════════════════════════════════════════
 
-function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
-  const [enabled, setEnabled] = useState(settings.dnsblEnabled);
-  const [zones,   setZones]   = useState<string[]>(settings.dnsblZones);
-  const [newZone, setNewZone] = useState('');
+interface DnsblZone {
+  id: string;
+  host: string;
+  name: string;
+  description?: string | null;
+  enabled: boolean;
+  action: 'REJECT' | 'TAG' | 'SCORE_ONLY';
+  weight: number;
+  isWhitelist: boolean;
+  sortOrder: number;
+  isBuiltin: boolean;
+}
 
-  function addZone() {
-    const z = newZone.trim().toLowerCase();
-    if (!z || zones.includes(z)) { setNewZone(''); return; }
-    setZones(prev => [...prev, z]);
-    setNewZone('');
-  }
+interface DnsblTestResult {
+  zoneId: string;
+  host: string;
+  name: string;
+  enabled: boolean;
+  isWhitelist: boolean;
+  listed: boolean;
+  response: string | null;
+}
+
+interface DnsblStats {
+  days: number;
+  total: number;
+  perZone: { zoneId: string; host: string; name: string; hits: number }[];
+  recent: { id: string; ip: string; hitAt: string; response: string | null; zoneHost: string; zoneName: string }[];
+}
+
+function ActionBadge({ action }: { action: DnsblZone['action'] }) {
+  const styles = {
+    REJECT:     'bg-red-50 text-red-700 border-red-200',
+    TAG:        'bg-amber-50 text-amber-700 border-amber-200',
+    SCORE_ONLY: 'bg-blue-50 text-blue-700 border-blue-200',
+  } as const;
+  const labels = { REJECT: 'Ablehnen', TAG: 'Markieren', SCORE_ONLY: 'Score' } as const;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${styles[action]}`}>
+      {labels[action]}
+    </span>
+  );
+}
+
+function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
+  const qc = useQueryClient();
+  const [enabled, setEnabled] = useState(settings.dnsblEnabled);
+  const [tab, setTab] = useState<'zones' | 'test' | 'stats'>('zones');
+
+  // ── Master-Toggle ──────────────────────────────────────────────────────────
+  const masterSave = () => onSave({ dnsblEnabled: enabled });
+
+  // ── Zonen ──────────────────────────────────────────────────────────────────
+  const { data: zones = [], isLoading: zonesLoading } = useQuery({
+    queryKey: ['admin', 'dnsbl-zones'],
+    queryFn: () => api.get<DnsblZone[]>('/admin/security/dnsbl'),
+  });
+
+  const invalidateZones = () => qc.invalidateQueries({ queryKey: ['admin', 'dnsbl-zones'] });
+
+  const patchZone = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<DnsblZone> }) =>
+      api.patch(`/admin/security/dnsbl/${id}`, body),
+    onSuccess: invalidateZones,
+    onError: (e: Error) => toast.error(e.message || 'Fehler beim Speichern'),
+  });
+
+  const deleteZone = useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/security/dnsbl/${id}`),
+    onSuccess: () => { invalidateZones(); toast.success('Zone gelöscht'); },
+    onError: (e: Error) => toast.error(e.message || 'Fehler beim Löschen'),
+  });
+
+  const createZone = useMutation({
+    mutationFn: (body: Partial<DnsblZone>) =>
+      api.post<DnsblZone>('/admin/security/dnsbl', body),
+    onSuccess: () => { invalidateZones(); toast.success('Zone angelegt'); setNewHost(''); setNewName(''); setShowAdd(false); },
+    onError: (e: Error) => toast.error(e.message || 'Fehler beim Anlegen'),
+  });
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newHost, setNewHost] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newAction, setNewAction] = useState<DnsblZone['action']>('REJECT');
+  const [newWeight, setNewWeight] = useState(5);
+  const [newWhitelist, setNewWhitelist] = useState(false);
+
+  // ── Test ───────────────────────────────────────────────────────────────────
+  const [testIp, setTestIp] = useState('');
+  const testMutation = useMutation({
+    mutationFn: (ip: string) => api.post<{ ip: string; results: DnsblTestResult[] }>('/admin/security/dnsbl/test', { ip }),
+    onError: (e: Error) => toast.error(e.message || 'Test fehlgeschlagen'),
+  });
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  const [statsDays, setStatsDays] = useState(7);
+  const { data: stats } = useQuery({
+    queryKey: ['admin', 'dnsbl-stats', statsDays],
+    queryFn: () => api.get<DnsblStats>(`/admin/security/dnsbl/stats?days=${statsDays}`),
+    enabled: tab === 'stats',
+    refetchInterval: tab === 'stats' ? 30_000 : false,
+  });
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-gray-900">DNSBL-Konfiguration</h2>
-        <SaveBtn onClick={() => onSave({ dnsblEnabled: enabled, dnsblZones: zones })} pending={false} />
+        <SaveBtn onClick={masterSave} pending={false} />
       </div>
 
       <div className="card p-4 space-y-1">
         <ToggleRow
           label="DNSBL aktiviert"
-          desc="Prüft Absender-IPs gegen DNS-Blacklisten"
+          desc="Prüft Absender-IPs gegen DNS-Blacklisten und ggf. Whitelisten (DNSWL)"
           value={enabled}
           onChange={setEnabled}
         />
       </div>
 
-      <div className="card p-4 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">Aktive Blacklist-Zonen</p>
-        <div className="space-y-1.5">
-          {zones.map(z => (
-            <div key={z} className="flex items-center justify-between bg-gray-50 rounded px-3 py-2">
-              <span className="text-sm font-mono text-gray-700">{z}</span>
-              <button onClick={() => setZones(prev => prev.filter(x => x !== z))}
-                className="text-gray-400 hover:text-red-500 transition-colors">
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-2">
-          <input
-            value={newZone}
-            onChange={e => setNewZone(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addZone()}
-            placeholder="z.B. zen.spamhaus.org"
-            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-          />
-          <button onClick={addZone} className="btn-secondary text-sm gap-1">
-            <Plus size={13} /> Hinzufügen
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-gray-200">
+        {[
+          { id: 'zones' as const, label: 'Zonen', count: zones.length },
+          { id: 'test'  as const, label: 'Test',  count: undefined },
+          { id: 'stats' as const, label: 'Statistik', count: undefined },
+        ].map(({ id, label, count }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-4 py-2 text-sm border-b-2 transition-colors ${
+              tab === id
+                ? 'border-accent text-accent font-semibold'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {label}
+            {count !== undefined && (
+              <span className="ml-1.5 text-xs bg-gray-100 px-1.5 py-0.5 rounded-full text-gray-600">{count}</span>
+            )}
           </button>
-        </div>
+        ))}
+      </div>
 
-        <div className="pt-2 border-t border-gray-100">
-          <p className="text-xs text-gray-400 mb-2">Bekannte Blacklisten (klicken zum Hinzufügen):</p>
-          <div className="flex flex-wrap gap-1.5">
-            {['zen.spamhaus.org','bl.spamcop.net','b.barracudacentral.org','dnsbl.sorbs.net',
-              'ix.dnsbl.manitu.net','0spam.fusionzero.com'].filter(z => !zones.includes(z)).map(z => (
-              <button key={z} onClick={() => setZones(prev => [...prev, z])}
-                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded transition-colors font-mono">
-                + {z}
+      {/* TAB: Zonen */}
+      {tab === 'zones' && (
+        <>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-600">{zones.filter(z => z.enabled).length} aktive von {zones.length} Zonen</p>
+            <button onClick={() => setShowAdd((v) => !v)} className="btn-secondary text-sm gap-1">
+              <Plus size={13} /> Eigene Zone
+            </button>
+          </div>
+
+          {showAdd && (
+            <div className="card p-4 border-2 border-accent/30 space-y-3">
+              <p className="text-sm font-semibold text-gray-700">Neue DNSBL/DNSWL-Zone anlegen</p>
+              <div className="grid grid-cols-2 gap-2">
+                <input value={newHost} onChange={(e) => setNewHost(e.target.value)} placeholder="zen.spamhaus.org"
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+                <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Anzeigename"
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <select value={newAction} onChange={(e) => setNewAction(e.target.value as DnsblZone['action'])}
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                  <option value="REJECT">Ablehnen</option>
+                  <option value="TAG">Als Spam markieren</option>
+                  <option value="SCORE_ONLY">Nur Score (rspamd)</option>
+                </select>
+                <label className="text-sm text-gray-700 flex items-center gap-1">
+                  Score:
+                  <input type="number" min={0} max={100} value={newWeight} onChange={(e) => setNewWeight(parseInt(e.target.value, 10) || 0)}
+                    className="w-16 border border-gray-300 rounded px-2 py-1 text-sm" />
+                </label>
+                <label className="text-sm text-gray-700 flex items-center gap-1.5">
+                  <input type="checkbox" checked={newWhitelist} onChange={(e) => setNewWhitelist(e.target.checked)} />
+                  Whitelist (DNSWL)
+                </label>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowAdd(false)} className="btn-ghost text-sm">Abbrechen</button>
+                <button
+                  onClick={() => createZone.mutate({ host: newHost.trim(), name: newName.trim() || newHost.trim(), action: newAction, weight: newWeight, isWhitelist: newWhitelist, enabled: true })}
+                  disabled={!newHost.trim() || createZone.isPending}
+                  className="btn-primary text-sm">
+                  Anlegen
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Zonen-Karten */}
+          <div className="space-y-2">
+            {zonesLoading && <p className="text-sm text-gray-400">Lade …</p>}
+            {zones.map((z) => (
+              <div key={z.id} className={`card p-3 ${!z.enabled ? 'opacity-60' : ''}`}>
+                <div className="flex items-start gap-3">
+                  <Toggle active={z.enabled} onToggle={() => patchZone.mutate({ id: z.id, body: { enabled: !z.enabled } })} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-gray-900">{z.name}</span>
+                      <code className="text-xs text-gray-500">{z.host}</code>
+                      {z.isWhitelist && (
+                        <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded">WHITELIST</span>
+                      )}
+                      {z.isBuiltin && (
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Built-in</span>
+                      )}
+                      <ActionBadge action={z.action} />
+                    </div>
+                    {z.description && (
+                      <p className="text-xs text-gray-500 mt-1">{z.description}</p>
+                    )}
+                    <div className="flex items-center gap-3 mt-2">
+                      <label className="flex items-center gap-1 text-xs text-gray-600">
+                        Aktion:
+                        <select value={z.action}
+                          onChange={(e) => patchZone.mutate({ id: z.id, body: { action: e.target.value as DnsblZone['action'] } })}
+                          className="border border-gray-200 rounded px-1.5 py-0.5 text-xs">
+                          <option value="REJECT">Ablehnen</option>
+                          <option value="TAG">Markieren</option>
+                          <option value="SCORE_ONLY">Score</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-gray-600">
+                        Score:
+                        <input type="number" min={0} max={100} defaultValue={z.weight}
+                          onBlur={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (v !== z.weight) patchZone.mutate({ id: z.id, body: { weight: v } });
+                          }}
+                          className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs" />
+                      </label>
+                    </div>
+                  </div>
+                  {!z.isBuiltin && (
+                    <button onClick={() => {
+                      if (window.confirm(`Zone „${z.name}" wirklich löschen?`)) deleteZone.mutate(z.id);
+                    }} className="text-gray-400 hover:text-red-500 transition-colors p-1">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* TAB: Test */}
+      {tab === 'test' && (
+        <div className="card p-4 space-y-3">
+          <p className="text-sm font-semibold text-gray-700">DNSBL-Check für IP testen</p>
+          <p className="text-xs text-gray-500">Prüft die IP gegen alle konfigurierten Zonen (auch deaktivierte). Antwortzeit ca. 2 s pro Zone.</p>
+          <div className="flex gap-2">
+            <input
+              value={testIp}
+              onChange={(e) => setTestIp(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && testIp.trim() && testMutation.mutate(testIp.trim())}
+              placeholder="z. B. 185.220.101.1 oder 2001:db8::1"
+              className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <button onClick={() => testIp.trim() && testMutation.mutate(testIp.trim())}
+              disabled={!testIp.trim() || testMutation.isPending}
+              className="btn-primary text-sm gap-1">
+              {testMutation.isPending ? <RefreshCw size={13} className="animate-spin" /> : <Database size={13} />}
+              Testen
+            </button>
+          </div>
+
+          {testMutation.data && (
+            <div className="border-t border-gray-100 pt-3 space-y-1.5">
+              <p className="text-xs text-gray-500">Ergebnis für <code className="font-mono">{testMutation.data.ip}</code>:</p>
+              {testMutation.data.results.map((r) => (
+                <div key={r.zoneId} className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm ${
+                  r.listed
+                    ? (r.isWhitelist ? 'bg-emerald-50' : 'bg-red-50')
+                    : 'bg-gray-50'
+                }`}>
+                  {r.listed
+                    ? <CheckCircle size={14} className={r.isWhitelist ? 'text-emerald-600' : 'text-red-600'} />
+                    : <XCircle size={14} className="text-gray-400" />}
+                  <span className="font-medium">{r.name}</span>
+                  <code className="text-xs text-gray-500">{r.host}</code>
+                  {!r.enabled && <span className="text-[10px] bg-gray-200 px-1.5 rounded">deaktiviert</span>}
+                  <span className="ml-auto text-xs">
+                    {r.listed
+                      ? <span className={r.isWhitelist ? 'text-emerald-700 font-mono' : 'text-red-700 font-mono'}>gelistet → {r.response}</span>
+                      : <span className="text-gray-400">nicht gelistet</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB: Statistik */}
+      {tab === 'stats' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Zeitraum:</span>
+            {[1, 7, 30].map((d) => (
+              <button key={d}
+                onClick={() => setStatsDays(d)}
+                className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                  statsDays === d ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}>
+                {d === 1 ? '24 h' : `${d} Tage`}
               </button>
             ))}
           </div>
+
+          {stats && (
+            <>
+              <div className="card p-4">
+                <p className="text-2xl font-bold text-gray-900">{stats.total.toLocaleString('de-DE')}</p>
+                <p className="text-xs text-gray-500">Treffer in den letzten {stats.days === 1 ? '24 h' : `${stats.days} Tagen`}</p>
+              </div>
+
+              <div className="card p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Top-Zonen</p>
+                {stats.perZone.length === 0
+                  ? <p className="text-xs text-gray-400">Keine Treffer</p>
+                  : stats.perZone.map((p) => (
+                      <div key={p.zoneId} className="flex items-center gap-2 py-1.5">
+                        <span className="text-sm font-medium text-gray-700">{p.name}</span>
+                        <code className="text-xs text-gray-400">{p.host}</code>
+                        <div className="flex-1 bg-gray-100 h-2 rounded">
+                          <div className="bg-accent h-2 rounded" style={{ width: `${stats.perZone[0] ? (p.hits / stats.perZone[0].hits) * 100 : 0}%` }} />
+                        </div>
+                        <span className="text-sm tabular-nums text-gray-700 w-16 text-right">{p.hits}</span>
+                      </div>
+                    ))}
+              </div>
+
+              <div className="card p-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">Letzte Treffer</p>
+                {stats.recent.length === 0
+                  ? <p className="text-xs text-gray-400">Keine Treffer</p>
+                  : (
+                    <div className="space-y-1 max-h-80 overflow-y-auto">
+                      {stats.recent.map((h) => (
+                        <div key={h.id} className="flex items-center gap-2 text-xs py-1 border-b border-gray-50 last:border-0">
+                          <AlertTriangle size={11} className="text-red-500 shrink-0" />
+                          <code className="font-mono text-gray-700 w-32 truncate">{h.ip}</code>
+                          <span className="text-gray-600">{h.zoneName}</span>
+                          <span className="ml-auto text-gray-400">{new Date(h.hitAt).toLocaleString('de-DE')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

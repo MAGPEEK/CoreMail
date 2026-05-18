@@ -1252,6 +1252,54 @@ model QueueSettings {
   @@map("queue_settings")
 }
 
+// ─────────────────────────────────────────────
+// DNSBL — pro Zone konfigurierbar (statt String-Array)
+// ─────────────────────────────────────────────
+
+enum DnsblAction {
+  REJECT       // direkt ablehnen (550)
+  TAG          // Mail durchlassen, aber als Spam markieren / Score erhöhen
+  SCORE_ONLY   // nur für rspamd-Score, keine eigene Aktion
+}
+
+// DNS-Hostname (z. B. zen.spamhaus.org) als unique; weitere Felder pro Zone
+model DnsblZone {
+  id           String      @id @default(cuid())
+  host         String      @unique
+  name         String
+  description  String?
+  enabled      Boolean     @default(true)
+  action       DnsblAction @default(REJECT)
+  // Score-Gewichtung (0–100) für rspamd-Integration
+  weight       Int         @default(5)
+  // true = DNSWL (Whitelist); Treffer überspringt weitere Filter
+  isWhitelist  Boolean     @default(false)
+  sortOrder    Int         @default(0)
+  // Built-in Preset (nicht löschbar, nur deaktivierbar)
+  isBuiltin    Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  hits         DnsblHit[]
+
+  @@index([enabled])
+  @@map("dnsbl_zones")
+}
+
+model DnsblHit {
+  id        String    @id @default(cuid())
+  zone      DnsblZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  zoneId    String
+  ip        String
+  hitAt     DateTime  @default(now())
+  // Antwort-Code des DNSBL-Servers (z. B. 127.0.0.2)
+  response  String?
+
+  @@index([zoneId, hitAt])
+  @@index([ip])
+  @@index([hitAt])
+  @@map("dnsbl_hits")
+}
+
 // ── Server-Einstellungen (Singleton) ─────────────────────────────────────────
 // Speichert öffentliche URLs für Autodiscover, EWS, OWA, EAS, IMAP, SMTP.
 // Outlook 2019/2022/365 liest diese über Autodiscover automatisch aus.
