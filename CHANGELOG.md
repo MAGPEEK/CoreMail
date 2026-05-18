@@ -9,6 +9,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.6.8] — 2026-05-18 — BulkToolbar Outlook-Style + Positions-Fix
+
+### Fixed
+
+- **BulkToolbar überdeckte fälschlich Teile des Readers**: `left-80 right-0` (= ab 320 px bis Bildschirmrand) deckte die rechte MessageList-Hälfte und den gesamten Reader-Bereich ab. Korrigiert auf `left-52 w-80` — die Bar liegt jetzt exakt über der MessageList-Filter-Zeile (208–528 px) und lässt den Reader sichtbar.
+
+### Changed
+
+- **BulkToolbar-Design** Outlook-typisch statt grell akzent-grün:
+  - Heller Hintergrund (`bg-white` / `dark:bg-gray-800`) statt vollflächig `bg-accent`
+  - **Akzent-Border unten** (`border-b-2 border-accent`) als sichtbare Trennung
+  - Schrift bleibt in normalen Farben; nur `X ausgewählt`-Counter ist akzent-gefärbt
+  - Aktions-Buttons als **Icon-only** (Icons mit Hover-Akzent-Färbung) statt aufgeblasenes „Archivieren · Löschen · Verschieben"-Layout
+  - Konsistente `active:scale-90` + `hover:bg-accent/10` Microinteractions
+
+---
+
 ## [3.6.7] — 2026-05-18 — Mini-Kalender + Filter-Panel + Toolbar-Polish
 
 ### Added

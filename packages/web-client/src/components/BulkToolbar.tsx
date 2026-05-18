@@ -59,57 +59,88 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       onClick: () => run('move', { folderId: f.id }),
     }));
 
+  // BulkToolbar liegt absolut über der MessageList (FolderTree-Breite 208 px = left-52)
+  // und endet bei der MessageList-Breite (320 px + 208 = 528 px = w-[20rem] + left-52).
+  // Damit überdeckt die Bar nur die Filter-Tab-Zeile der MessageList, nicht den Reader.
+
+  const IconBtn = ({
+    icon, onClick, title,
+  }: {
+    icon: React.ReactNode; onClick: () => void; title: string;
+  }) => (
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-1.5 rounded-sm text-gray-600 dark:text-gray-300 hover:bg-accent/10 hover:text-accent transition-all duration-150 active:scale-90"
+    >
+      {icon}
+    </button>
+  );
+
   return (
-    <div className="absolute top-0 left-80 right-0 z-20 bg-accent text-white border-b border-accent/50 flex items-center gap-1 px-3 py-2 shadow-md animate-slide-down">
-      <button onClick={clearSelection} className="p-1 hover:bg-white/10 rounded transition-all duration-150 active:scale-90" title="Auswahl aufheben">
+    <div
+      className="absolute top-0 left-52 w-80 z-20 bg-white dark:bg-gray-800 border-b-2 border-accent flex items-center gap-1 px-2 py-1.5 shadow-sm animate-slide-down"
+    >
+      <button
+        onClick={clearSelection}
+        className="p-1 rounded text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 active:scale-90"
+        title="Auswahl aufheben"
+      >
         <X size={16} />
       </button>
-      <span className="text-sm font-medium ml-1">
+      <span className="text-xs font-semibold text-accent">
         <AnimatedCounter value={count} /> ausgewählt
       </span>
+
       <div className="flex-1" />
 
-      <button onClick={() => run('archive', { undoMsg: `${count} archiviert`, undoFolderId: currentFolderId })}
-        className="px-2 py-1 hover:bg-white/10 rounded flex items-center gap-1.5 text-sm" title="Archivieren">
-        <Archive size={14} /> Archivieren
-      </button>
-      <button onClick={() => run('delete', { undoMsg: `${count} gelöscht`, undoFolderId: currentFolderId })}
-        className="px-2 py-1 hover:bg-white/10 rounded flex items-center gap-1.5 text-sm" title="Löschen">
-        <Trash2 size={14} /> Löschen
-      </button>
-      <button onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMoveMenu({ x: r.left, y: r.bottom }); }}
-        className="px-2 py-1 hover:bg-white/10 rounded flex items-center gap-1.5 text-sm" title="Verschieben">
-        <FolderInput size={14} /> Verschieben
-      </button>
-      <button onClick={() => run('read')}
-        className="p-1.5 hover:bg-white/10 rounded" title="Als gelesen markieren">
-        <MailOpen size={14} />
-      </button>
-      <button onClick={() => run('unread')}
-        className="p-1.5 hover:bg-white/10 rounded" title="Als ungelesen markieren">
-        <Mail size={14} />
-      </button>
-      <button onClick={() => run('flag')}
-        className="p-1.5 hover:bg-white/10 rounded" title="Kennzeichnen">
-        <Flag size={14} />
-      </button>
-      <button onClick={() => run('pin')}
-        className="p-1.5 hover:bg-white/10 rounded" title="Anheften">
-        <Pin size={14} />
-      </button>
-      <button onClick={() => run('spam')}
-        className="p-1.5 hover:bg-white/10 rounded" title="Als Junk markieren">
-        <AlertOctagon size={14} />
-      </button>
+      <IconBtn
+        icon={<Archive size={15} />}
+        title="Archivieren"
+        onClick={() => run('archive', { undoMsg: `${count} archiviert`, undoFolderId: currentFolderId })}
+      />
+      <IconBtn
+        icon={<Trash2 size={15} />}
+        title="Löschen"
+        onClick={() => run('delete', { undoMsg: `${count} gelöscht`, undoFolderId: currentFolderId })}
+      />
+      <IconBtn
+        icon={<FolderInput size={15} />}
+        title="Verschieben"
+        onClick={() => {
+          /* Sub-Menü öffnen via DOM-Anker — Trick: dummy-Button-Ref */
+          setMoveMenu({ x: 0, y: 0 });
+        }}
+      />
+      <IconBtn icon={<MailOpen size={15} />} title="Als gelesen markieren"   onClick={() => run('read')} />
+      <IconBtn icon={<Mail size={15} />}     title="Als ungelesen markieren" onClick={() => run('unread')} />
+      <IconBtn icon={<Flag size={15} />}     title="Kennzeichnen"            onClick={() => run('flag')} />
+      <IconBtn icon={<Pin size={15} />}      title="Anheften"                onClick={() => run('pin')} />
+      <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  onClick={() => run('spam')} />
 
+      {/* unsichtbarer Anchor für das Verschieben-Menü (Position direkt unter der Bar) */}
       {moveMenu && (
-        <ContextMenu
-          x={moveMenu.x}
-          y={moveMenu.y}
+        <MoveMenu
           items={moveItems}
           onClose={() => setMoveMenu(null)}
         />
       )}
+
     </div>
+  );
+}
+
+// Kleiner Wrapper, der das ContextMenu positionsrelativ zum Toolbar-Container öffnet
+function MoveMenu({ items, onClose }: { items: ContextMenuItem[]; onClose: () => void }) {
+  // Ankerpunkt: rechts unten unterhalb der Toolbar (in der Nähe des Verschieben-Buttons)
+  // Wir berechnen das einfach relativ zum Viewport, da BulkToolbar fix sitzt.
+  // Die Toolbar ist links-52 (208 px), w-80 (320 px), Höhe ~36 px.
+  return (
+    <ContextMenu
+      x={208 + 320 - 220}
+      y={42}
+      items={items}
+      onClose={onClose}
+    />
   );
 }
