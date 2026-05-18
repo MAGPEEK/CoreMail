@@ -1,23 +1,122 @@
 /**
- * Admin API — Journaling Rules (Phase 9)
+ * Admin API — Journaling Rules & Settings (Phase 9 / Exchange-2019-konform)
  *
- * ECP → Compliance Management → Journaling
+ * Rules:
+ *   GET    /api/v1/admin/compliance/journaling
+ *   POST   /api/v1/admin/compliance/journaling
+ *   GET    /api/v1/admin/compliance/journaling/:id
+ *   PUT    /api/v1/admin/compliance/journaling/:id
+ *   DELETE /api/v1/admin/compliance/journaling/:id
+ *   POST   /api/v1/admin/compliance/journaling/:id/toggle
  *
- * Routes:
- *   GET    /api/v1/admin/compliance/journaling           — list rules
- *   POST   /api/v1/admin/compliance/journaling           — create rule
- *   GET    /api/v1/admin/compliance/journaling/:id       — get rule
- *   PUT    /api/v1/admin/compliance/journaling/:id       — update rule
- *   DELETE /api/v1/admin/compliance/journaling/:id       — delete rule
- *   POST   /api/v1/admin/compliance/journaling/:id/toggle — enable/disable
+ * Settings:
+ *   GET    /api/v1/admin/compliance/journaling/settings
+ *   PUT    /api/v1/admin/compliance/journaling/settings
+ *
+ * Failures:
+ *   GET    /api/v1/admin/compliance/journaling/failures?status=PENDING|ABANDONED|RESOLVED
+ *   POST   /api/v1/admin/compliance/journaling/failures/:id/retry
+ *   DELETE /api/v1/admin/compliance/journaling/failures/:id
+ *
+ * Test:
+ *   POST   /api/v1/admin/compliance/journaling/:id/test
  */
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
+import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 
 export const adminJournalingRouter: RouterType = Router();
 adminJournalingRouter.use(requireAuth, requireAdmin);
+
+// ── Settings (Singleton) ─────────────────────────────────────────────────────
+// Wichtig: vor /:id-Routen registriert, weil Express sonst "settings" als id matcht.
+
+adminJournalingRouter.get('/settings', async (_req: Request, res: Response) => {
+  let s = await prisma.journalingSettings.findUnique({ where: { id: 'singleton' } });
+  if (!s) {
+    s = await prisma.journalingSettings.create({ data: { id: 'singleton' } });
+  }
+  res.json(s);
+});
+
+adminJournalingRouter.put('/settings', async (req: Request, res: Response) => {
+  const {
+    alternativeJournalAddress, holdOnFailure, maxRetries, initialRetryDelaySec,
+  } = req.body as {
+    alternativeJournalAddress?: string | null;
+    holdOnFailure?:             boolean;
+    maxRetries?:                number;
+    initialRetryDelaySec?:      number;
+  };
+
+  if (alternativeJournalAddress && !alternativeJournalAddress.includes('@')) {
+    res.status(400).json({ error: 'alternativeJournalAddress muss eine gültige E-Mail-Adresse sein' });
+    return;
+  }
+  if (maxRetries !== undefined && (maxRetries < 0 || maxRetries > 50)) {
+    res.status(400).json({ error: 'maxRetries muss zwischen 0 und 50 liegen' });
+    return;
+  }
+  if (initialRetryDelaySec !== undefined && (initialRetryDelaySec < 5 || initialRetryDelaySec > 3600)) {
+    res.status(400).json({ error: 'initialRetryDelaySec muss zwischen 5 und 3600 liegen' });
+    return;
+  }
+
+  const s = await prisma.journalingSettings.upsert({
+    where: { id: 'singleton' },
+    create: {
+      id: 'singleton',
+      ...(alternativeJournalAddress !== undefined ? { alternativeJournalAddress: alternativeJournalAddress || null } : {}),
+      ...(holdOnFailure        !== undefined ? { holdOnFailure }        : {}),
+      ...(maxRetries           !== undefined ? { maxRetries }           : {}),
+      ...(initialRetryDelaySec !== undefined ? { initialRetryDelaySec } : {}),
+    },
+    update: {
+      ...(alternativeJournalAddress !== undefined ? { alternativeJournalAddress: alternativeJournalAddress || null } : {}),
+      ...(holdOnFailure        !== undefined ? { holdOnFailure }        : {}),
+      ...(maxRetries           !== undefined ? { maxRetries }           : {}),
+      ...(initialRetryDelaySec !== undefined ? { initialRetryDelaySec } : {}),
+    },
+  });
+
+  // SMTP-Server-Engines invalidieren ihren Settings-Cache via Redis
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'journaling' })).catch(() => undefined);
+  res.json(s);
+});
+
+// ── Failures ─────────────────────────────────────────────────────────────────
+
+adminJournalingRouter.get('/failures', async (req: Request, res: Response) => {
+  const { status } = req.query as { status?: string };
+  const where = status ? { status: status as 'PENDING'|'RETRYING'|'ALTERNATIVE'|'RESOLVED'|'ABANDONED' } : {};
+  const failures = await prisma.journalingFailure.findMany({
+    where,
+    include: { rule: { select: { id: true, name: true, journalAddress: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+  res.json(failures);
+});
+
+adminJournalingRouter.post('/failures/:id/retry', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const f = await prisma.journalingFailure.findUnique({ where: { id } });
+  if (!f) { res.status(404).json({ error: 'Failure not found' }); return; }
+  // Direkt fällig machen, der Retry-Loop holt es im nächsten Tick
+  await prisma.journalingFailure.update({
+    where: { id },
+    data:  { status: 'PENDING', nextAttemptAt: new Date(), errorMessage: null },
+  });
+  res.json({ ok: true });
+});
+
+adminJournalingRouter.delete('/failures/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  await prisma.journalingFailure.delete({ where: { id } }).catch(() => undefined);
+  res.status(204).end();
+});
 
 /**
  * GET /api/v1/admin/compliance/journaling

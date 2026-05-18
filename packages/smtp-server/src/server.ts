@@ -7,6 +7,7 @@ import { inboundHandlers } from './inbound/handler.js';
 import { submissionHandlers } from './submission/handler.js';
 import { verifySmtpCredentials } from './auth/verifier.js';
 import { startOutboundWorker } from './outbound/queue.js';
+import { startJournalingRetryLoop } from './journaling/engine.js';
 
 const log = createLogger('smtp:server');
 
@@ -239,6 +240,10 @@ async function main(): Promise<void> {
   await refreshHostname();
   await refreshTlsConfig(); // Zertifikat laden oder self-signed generieren
   await refreshBanner();    // Banner-Text aus SmtpSettings laden
+
+  // Phase 9 / v3.12: Journal-Retry-Loop startet einmalig und läuft alle 60s.
+  // Holt PENDING/RETRYING-JournalingFailures und versucht erneut zu zustellen.
+  startJournalingRetryLoop();
 
   const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
   if (existing === 0) {

@@ -932,9 +932,65 @@ model JournalingRule {
   createdBy     String
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
+  failures      JournalingFailure[]
 
   @@index([enabled])
   @@map("journaling_rules")
+}
+
+// ── Globale Journaling-Einstellungen (Singleton id="singleton") ──────────────
+model JournalingSettings {
+  id                          String   @id @default("singleton")
+  // Alternatives Journal-Postfach (Fallback wenn primärer Sink nicht erreichbar)
+  alternativeJournalAddress   String?
+  // Submission-Queue-Hold: wenn alle Versuche (inkl. Fallback) scheitern,
+  // wird die Original-Mail nicht zugestellt — eingehender Mailfluss stoppt.
+  // Default false, weil das für kleine Orgs UX-mäßig fatal ist.
+  holdOnFailure               Boolean  @default(false)
+  // Anzahl Wiederholungsversuche pro Report
+  maxRetries                  Int      @default(3)
+  // Sekunden bis zum ersten Retry (verdoppelt sich mit jedem Versuch)
+  initialRetryDelaySec        Int      @default(30)
+  updatedAt                   DateTime @updatedAt
+
+  @@map("journaling_settings")
+}
+
+// ── Fehlerlog für nicht zustellbare Journal-Reports ──────────────────────────
+enum JournalingFailureStatus {
+  PENDING    // wartet auf Retry
+  RETRYING   // gerade ein Versuch im Gange
+  ALTERNATIVE // primär gescheitert, Fallback in Arbeit / wurde versucht
+  RESOLVED   // erfolgreich (primär oder Fallback) zugestellt
+  ABANDONED  // alle Versuche + Fallback gescheitert
+}
+
+model JournalingFailure {
+  id              String                   @id @default(cuid())
+  rule            JournalingRule           @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleId          String
+  // Envelope-Daten der originalen Nachricht
+  envelopeFrom    String
+  envelopeTo      String[]
+  direction       String                    // INBOUND / OUTBOUND / INTERNAL
+  // MinIO-Pfad zur rohen Original-Mail (für späteres Re-Dispatch)
+  rawStoragePath  String?
+  rawSizeBytes    Int
+  // Wohin der Report gehen sollte
+  targetAddress   String
+  // Welche Adresse zuletzt versucht wurde (primär oder Alternativ)
+  lastTriedAddress String?
+  status          JournalingFailureStatus  @default(PENDING)
+  attempts        Int                      @default(0)
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  resolvedAt      DateTime?
+  errorMessage    String?
+  createdAt       DateTime                 @default(now())
+
+  @@index([status, nextAttemptAt])
+  @@index([ruleId])
+  @@map("journaling_failures")
 }
 
 // ─────────────────────────────────────────────
