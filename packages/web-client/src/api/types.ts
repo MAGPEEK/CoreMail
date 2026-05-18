@@ -62,6 +62,9 @@ export interface Calendar {
   id: string;
   name: string;
   color: string;
+  icon?: string | null;
+  sortOrder?: number;
+  isDefault?: boolean;
 }
 
 export interface CalendarEvent {

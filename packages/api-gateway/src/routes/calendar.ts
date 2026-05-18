@@ -8,25 +8,98 @@ calendarRouter.use(requireAuth);
 
 // GET /api/v1/calendar
 calendarRouter.get('/', async (req: Request, res: Response) => {
-  
   const calendars = await prisma.calendar.findMany({
     where: { userId: req.apiUser!.userId },
-    select: { id: true, name: true, color: true },
+    select: { id: true, name: true, color: true, icon: true, sortOrder: true, isDefault: true },
+    orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
   });
   res.json(calendars);
 });
 
 // POST /api/v1/calendar
+const CreateCalSchema = z.object({
+  name: z.string().min(1).max(80),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#0078D4'),
+  icon: z.string().max(40).optional(),
+});
 calendarRouter.post('/', async (req: Request, res: Response) => {
-  const schema = z.object({ name: z.string().min(1), color: z.string().default('#0078D4') });
-  const parsed = schema.safeParse(req.body);
+  const parsed = CreateCalSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  
+  const userId = req.apiUser!.userId;
+  // sortOrder = letzte Position
+  const maxOrder = await prisma.calendar.aggregate({
+    where: { userId },
+    _max: { sortOrder: true },
+  });
   const calendar = await prisma.calendar.create({
-    data: { userId: req.apiUser!.userId, name: parsed.data.name, color: parsed.data.color },
+    data: {
+      userId,
+      name: parsed.data.name,
+      color: parsed.data.color,
+      sortOrder: (maxOrder._max.sortOrder ?? 0) + 10,
+      ...(parsed.data.icon ? { icon: parsed.data.icon } : {}),
+    },
   });
   res.status(201).json(calendar);
+});
+
+// PATCH /api/v1/calendar/:id
+const PatchCalSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  icon: z.string().max(40).nullable().optional(),
+  sortOrder: z.number().int().optional(),
+});
+calendarRouter.patch('/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const parsed = PatchCalSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const cal = await prisma.calendar.findFirst({ where: { id, userId: req.apiUser!.userId } });
+  if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
+
+  const updates: Record<string, unknown> = {};
+  if (parsed.data.name !== undefined)      updates['name'] = parsed.data.name;
+  if (parsed.data.color !== undefined)     updates['color'] = parsed.data.color;
+  if (parsed.data.icon !== undefined)      updates['icon'] = parsed.data.icon;
+  if (parsed.data.sortOrder !== undefined) updates['sortOrder'] = parsed.data.sortOrder;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updated = await prisma.calendar.update({ where: { id }, data: updates as any });
+  res.json(updated);
+});
+
+// DELETE /api/v1/calendar/:id  (Default-Kalender kann nicht gelöscht werden)
+calendarRouter.delete('/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const cal = await prisma.calendar.findFirst({ where: { id, userId: req.apiUser!.userId } });
+  if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
+  if (cal.isDefault) { res.status(400).json({ error: 'Standard-Kalender kann nicht gelöscht werden' }); return; }
+  await prisma.calendar.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
+// POST /api/v1/calendar/reorder  Body: { ids: string[] }
+const ReorderSchema = z.object({ ids: z.array(z.string()).min(1).max(50) });
+calendarRouter.post('/reorder', async (req: Request, res: Response) => {
+  const parsed = ReorderSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const userId = req.apiUser!.userId;
+  const owned = await prisma.calendar.findMany({
+    where: { id: { in: parsed.data.ids }, userId },
+    select: { id: true },
+  });
+  const ownedSet = new Set(owned.map((c) => c.id));
+  const sequence = parsed.data.ids.filter((id) => ownedSet.has(id));
+
+  await prisma.$transaction(
+    sequence.map((id, idx) =>
+      prisma.calendar.update({ where: { id }, data: { sortOrder: (idx + 1) * 10 } }),
+    ),
+  );
+  res.json({ ok: true, count: sequence.length });
 });
 
 // GET /api/v1/calendar/events?start=&end=&calendarId=

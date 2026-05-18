@@ -384,6 +384,8 @@ model Calendar {
   userId      String
   name        String
   color       String          @default("#0078D4")
+  icon        String?         // lucide-Icon-Name (z. B. "Home", "Plane")
+  sortOrder   Int             @default(0)
   isDefault   Boolean         @default(false)
   acl         Json            @default("{}")
   syncToken   String          @default("")

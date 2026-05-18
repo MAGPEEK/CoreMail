@@ -90,23 +90,34 @@ interface UiPrefs {
   favoritesCollapsed: boolean;
   folderTreeCollapsed: boolean;
   calendarShowWeekNumbers: boolean;
+  hiddenCalendarIds: string[];
   setDensity: (d: Density) => void;
   toggleFavorites: () => void;
   toggleFolderTree: () => void;
   setCalendarShowWeekNumbers: (v: boolean) => void;
+  toggleCalendar: (id: string) => void;
+  showOnlyCalendar: (id: string, allIds: string[]) => void;
 }
 
 export const useUiPrefs = create<UiPrefs>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       density: 'normal',
       favoritesCollapsed: false,
       folderTreeCollapsed: false,
       calendarShowWeekNumbers: true,
+      hiddenCalendarIds: [],
       setDensity: (d) => set({ density: d }),
       toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
       toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
       setCalendarShowWeekNumbers: (v) => set({ calendarShowWeekNumbers: v }),
+      toggleCalendar: (id) => {
+        const cur = get().hiddenCalendarIds;
+        set({ hiddenCalendarIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+      },
+      showOnlyCalendar: (id, allIds) => {
+        set({ hiddenCalendarIds: allIds.filter((cid) => cid !== id) });
+      },
     }),
     { name: 'coremail-ui-prefs' },
   ),

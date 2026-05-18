@@ -9,12 +9,13 @@ import enLocale from '@fullcalendar/core/locales/en-gb';
 import esLocale from '@fullcalendar/core/locales/es';
 import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, EventClickArg } from '@fullcalendar/core';
-import { Plus, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent } from '../api/types.js';
 import { useUiPrefs } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
+import { CalendarSidebar } from '../components/CalendarSidebar.js';
 import toast from 'react-hot-toast';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
@@ -31,7 +32,7 @@ export function CalendarPage() {
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
-  const { calendarShowWeekNumbers } = useUiPrefs();
+  const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
 
   const { data: calendars } = useQuery({
@@ -79,35 +80,30 @@ export function CalendarPage() {
     }
   };
 
-  const fcEvents = (events ?? []).map((ev) => ({
-    id: ev.id,
-    title: ev.summary,
-    start: ev.dtStart,
-    end: ev.dtEnd,
-    allDay: false,
-    backgroundColor: calendars?.find((c) => c.id === ev.calendarId)?.color ?? '#0078D4',
-    borderColor: 'transparent',
-  }));
+  const fcEvents = (events ?? [])
+    .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
+    .map((ev) => ({
+      id: ev.id,
+      title: ev.summary,
+      start: ev.dtStart,
+      end: ev.dtEnd,
+      allDay: false,
+      backgroundColor: calendars?.find((c) => c.id === ev.calendarId)?.color ?? '#0078D4',
+      borderColor: 'transparent',
+    }));
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-52 shrink-0 bg-gray-50 border-r border-gray-200 flex flex-col p-3 gap-3">
-        <button onClick={() => setNewEvent({ summary: '', dtStart: '', dtEnd: '', calendarId: calendars?.[0]?.id ?? '', allDay: false })}
-          className="btn-primary w-full justify-center">
-          <Plus size={15} /> Neuer Termin
-        </button>
-
-        <div>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Meine Kalender</p>
-          {(calendars ?? []).map((cal) => (
-            <div key={cal.id} className="flex items-center gap-2 py-1">
-              <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: cal.color }} />
-              <span className="text-sm text-gray-700">{cal.name}</span>
-            </div>
-          ))}
-        </div>
-      </aside>
+      <CalendarSidebar
+        calendars={calendars ?? []}
+        onNewEvent={() => setNewEvent({
+          summary: '',
+          dtStart: '',
+          dtEnd: '',
+          calendarId: calendars?.[0]?.id ?? '',
+          allDay: false,
+        })}
+      />
 
       {/* Calendar */}
       <div className="flex-1 overflow-auto p-4">

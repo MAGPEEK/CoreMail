@@ -39,15 +39,23 @@ export const useUiStore = create((set, get) => ({
     clearSelection: () => set({ selectedIds: new Set(), lastSelectedId: null }),
     setFilter: (f) => set({ filter: f }),
 }));
-export const useUiPrefs = create()(persist((set) => ({
+export const useUiPrefs = create()(persist((set, get) => ({
     density: 'normal',
     favoritesCollapsed: false,
     folderTreeCollapsed: false,
     calendarShowWeekNumbers: true,
+    hiddenCalendarIds: [],
     setDensity: (d) => set({ density: d }),
     toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
     toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
     setCalendarShowWeekNumbers: (v) => set({ calendarShowWeekNumbers: v }),
+    toggleCalendar: (id) => {
+        const cur = get().hiddenCalendarIds;
+        set({ hiddenCalendarIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+    },
+    showOnlyCalendar: (id, allIds) => {
+        set({ hiddenCalendarIds: allIds.filter((cid) => cid !== id) });
+    },
 }), { name: 'coremail-ui-prefs' }));
 export const ACCENT_COLORS = [
     { name: 'Microsoft Blau', hex: '#0078D4', rgb: '0 120 212' },

@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.5.5';
+const VERSION        = '3.5.6';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.5.6', date: '2026-05-18', title: 'Kalender-Verwaltung · Mehrere Kalender · Farben · Symbole · Sortierung',
+    notes: 'Kalender-Sidebar komplett ausgebaut wie Outlook. "+ Kalender hinzufügen"-Button über "Meine Kalender". Farb-Checkbox pro Kalender für Ein-/Ausblenden (persistent). 3-Punkte-Menü beim Hover: Nur dies anzeigen, Teilen, Farbe (16 Farben), Symbol (35 Lucide-Icons in Grid), Nach oben/unten, Umbenennen, Löschen (geschützt für Standard-Kalender). Backend: Calendar.icon + sortOrder, POST/PATCH/DELETE Routen, POST /calendar/reorder. Versteckte Kalender werden in allen FullCalendar-Ansichten ausgeblendet.' },
   { version: '3.5.5', date: '2026-05-18', title: 'OWA jetzt direkt unter `/` (statt `/owa/`)',
     notes: 'OWA-Frontend läuft jetzt unter Root-URL statt unter /owa/. Alle SPA-Routen direkt erreichbar (/login, /mail, /settings). Behebt 404 beim direkten Aufruf von /login. Vite-Base /owa/ → /. React-Router basename entfernt. API-Gateway: OWA mit express.static unter Root, SPA-Catch-All mit API-Prefix-Filter (schützt /api/, /auth/, /EWS, /mapi, /OAB, /Autodiscover, /Microsoft-Server-ActiveSync, /dav, /PowerShell, /bcp). BCP bleibt unter /bcp/. 301-Redirect von /owa/* → entsprechender Pfad ohne Prefix (Backwards-Compat).' },
   { version: '3.5.4', date: '2026-05-18', title: 'App-Passwörter-UI + kritischer Pepper-Bug-Fix',
