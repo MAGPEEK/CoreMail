@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Mail, Copy, Check } from 'lucide-react';
 import { Avatar } from './Avatar.js';
+import { copyToClipboard } from '../api/clipboard.js';
 
 interface ContactHoverCardProps {
   /** E-Mail-Adresse */
@@ -48,7 +49,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(email);
+      await copyToClipboard(email);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {

@@ -15,6 +15,7 @@ import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
 import { useT } from '../i18n/useT.js';
+import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
@@ -923,10 +924,18 @@ function SecuritySection() {
   };
 
   const copySecret = () => {
-    if (setupData?.secret) { void navigator.clipboard.writeText(setupData.secret); toast.success('Secret kopiert'); }
+    if (setupData?.secret) {
+      copyToClipboard(setupData.secret)
+        .then(() => toast.success('Secret kopiert'))
+        .catch(() => toast.error('Kopieren fehlgeschlagen'));
+    }
   };
   const copyBackupCodes = () => {
-    if (backupCodes) { void navigator.clipboard.writeText(backupCodes.join('\n')); toast.success('Backup-Codes kopiert'); }
+    if (backupCodes) {
+      copyToClipboard(backupCodes.join('\n'))
+        .then(() => toast.success('Backup-Codes kopiert'))
+        .catch(() => toast.error('Kopieren fehlgeschlagen'));
+    }
   };
 
   return (
@@ -1167,10 +1176,12 @@ function AppPasswordsSection() {
   const copyPw = async () => {
     if (!createdPw) return;
     try {
-      await navigator.clipboard.writeText(createdPw.password);
+      await copyToClipboard(createdPw.password);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch { /* noop */ }
+    } catch (e) {
+      toast.error('Kopieren fehlgeschlagen — bitte manuell markieren');
+    }
   };
 
   return (

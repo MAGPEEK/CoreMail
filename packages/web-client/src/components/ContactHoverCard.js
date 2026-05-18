@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Mail, Copy, Check } from 'lucide-react';
 import { Avatar } from './Avatar.js';
+import { copyToClipboard } from '../api/clipboard.js';
 export function ContactHoverCard({ email, name, anchorRef, onClose }) {
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const [copied, setCopied] = useState(false);
@@ -39,7 +40,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }) {
     };
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(email);
+            await copyToClipboard(email);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         }
