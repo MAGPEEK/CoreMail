@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.5.4';
+const VERSION        = '3.5.5';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.5.5', date: '2026-05-18', title: 'OWA jetzt direkt unter `/` (statt `/owa/`)',
+    notes: 'OWA-Frontend läuft jetzt unter Root-URL statt unter /owa/. Alle SPA-Routen direkt erreichbar (/login, /mail, /settings). Behebt 404 beim direkten Aufruf von /login. Vite-Base /owa/ → /. React-Router basename entfernt. API-Gateway: OWA mit express.static unter Root, SPA-Catch-All mit API-Prefix-Filter (schützt /api/, /auth/, /EWS, /mapi, /OAB, /Autodiscover, /Microsoft-Server-ActiveSync, /dav, /PowerShell, /bcp). BCP bleibt unter /bcp/. 301-Redirect von /owa/* → entsprechender Pfad ohne Prefix (Backwards-Compat).' },
   { version: '3.5.4', date: '2026-05-18', title: 'App-Passwörter-UI + kritischer Pepper-Bug-Fix',
     notes: 'Kritisch: App-Passwörter funktionierten nie bei SMTP/IMAP/POP3 — auth-service hashte ohne Pepper, Verifier verglich mit Pepper. Fix: auth-service nutzt jetzt hashPassword() aus @coremail/core. Bestehende App-Passwörter müssen einmalig neu erstellt werden. Neue UI in OWA → Einstellungen → Konto → App-Passwörter: Liste mit Name/Erstellt/Letzte-Benutzung, "Neu erstellen"-Button mit Inline-Editor, einmalige Passwort-Anzeige mit Copy-Button (Clipboard + ✓-Animation), Widerruf-Button beim Hover. 4 Sprachen (DE/EN/ES/IT).' },
   { version: '3.5.3', date: '2026-05-18', title: 'Mail-Kategorien (Outlook-Style) · Folder-Color-Fix · ContextMenu-Submenu-Bug',

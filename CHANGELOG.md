@@ -9,6 +9,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.5.5] — 2026-05-18 — OWA jetzt direkt unter `/` (statt `/owa/`)
+
+### Changed
+
+- **OWA-Frontend läuft jetzt unter Root-URL** statt unter `/owa/`. Alle SPA-Routen sind direkt erreichbar — z. B. `https://server/login`, `https://server/mail`, `https://server/settings`. Das behebt den 404/Fehler beim direkten Aufruf von `/login` aus dem OWA heraus (z. B. nach Logout).
+- **Vite-Base**: `/owa/` → `/`
+- **React-Router**: `basename="/owa"` entfernt
+- **API-Gateway**:
+  - OWA wird mit `express.static` direkt unter Root gemountet
+  - SPA-Catch-All `app.get('*')` schickt alle unbekannten Pfade an `index.html`
+  - **API-Prefix-Filter** im Catch-All schützt `/api/`, `/auth/`, `/EWS`, `/mapi`, `/OAB`, `/Autodiscover`, `/Microsoft-Server-ActiveSync`, `/dav`, `/PowerShell`, `/bcp` — diese gehen niemals an die SPA
+- **BCP bleibt unter `/bcp/`** (Admin-Panel hat eigenes Vite-Base)
+
+### Added
+
+- **301-Redirect** von `/owa/*` → entsprechender Pfad ohne Prefix (Backwards-Compat für alte Lesezeichen / Verknüpfungen)
+  - `/owa`        → `/` (301)
+  - `/owa/login`  → `/login` (301)
+  - `/owa/mail`   → `/mail` (301)
+  - usw.
+
+---
+
 ## [3.5.4] — 2026-05-18 — App-Passwörter im OWA + kritischer Pepper-Bug-Fix
 
 ### Fixed

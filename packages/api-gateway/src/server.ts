@@ -287,24 +287,20 @@ app.use('/api/v1/admin/smtp-config',      adminSmtpConfigRouter);
 app.use('/api/v1/admin/ldap',             adminLdapRouter);
 app.use('/api/v1/admin/sso',              adminSsoRouter);
 
-// ── Statische Frontend-Dateien (OWA + BCP) ───────────────────────────────────
+// ── Statische Frontend-Dateien (OWA unter Root + BCP unter /bcp) ─────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
 const owaDir  = join(WWW_DIR, 'owa');
 const bcpDir  = join(WWW_DIR, 'bcp');
 
-if (existsSync(owaDir)) {
-  // Cache-Control: statische Assets lange cachen, HTML nicht (SPA-Routing)
-  app.use('/owa', express.static(owaDir, {
-    maxAge: '1y',
-    setHeaders(res, filePath) {
-      if (filePath.endsWith('.html')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      }
-    },
-  }));
-  app.get('/owa/*', (_req, res) => res.sendFile(join(owaDir, 'index.html')));
-  log.info({ dir: owaDir }, 'Serving OWA static files');
-}
+// Legacy: alte /owa/*-URLs auf den Root-Pfad umlenken (Backwards-Compat für
+// gespeicherte Lesezeichen aus früheren Versionen)
+app.get('/owa', (_req, res) => res.redirect(301, '/'));
+app.get('/owa/*', (req, res) => {
+  const stripped = req.originalUrl.replace(/^\/owa\/?/, '/');
+  res.redirect(301, stripped);
+});
+
+// BCP behält /bcp-Prefix (Admin-Panel hat eigenes Vite-Base)
 if (existsSync(bcpDir)) {
   app.use('/bcp', express.static(bcpDir, {
     maxAge: '1y',
@@ -318,8 +314,36 @@ if (existsSync(bcpDir)) {
   log.info({ dir: bcpDir }, 'Serving BCP static files');
 }
 
-// Root → OWA
-app.get('/', (_req, res) => res.redirect(302, '/owa/'));
+// OWA-Frontend unter Root — muss NACH allen API-Routen kommen, damit
+// /auth/* /api/* /EWS/* etc. Vorrang haben. Catch-All `app.get('*')` schickt
+// alle unbekannten Routen zurück an index.html (SPA-Routing).
+if (existsSync(owaDir)) {
+  app.use(express.static(owaDir, {
+    maxAge: '1y',
+    index: false, // wir machen index.html manuell, damit der Catch-All greift
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    },
+  }));
+  // SPA-Catch-All: alles, was nicht bisher zugeordnet wurde und KEINE
+  // bekannte API-/Proxy-Route ist, ist eine OWA-Route → index.html zurück.
+  const API_PREFIXES = [
+    '/api/', '/auth/', '/EWS', '/mapi', '/OAB', '/Autodiscover', '/autodiscover',
+    '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
+  ];
+  app.get('*', (req, res, next) => {
+    if (API_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) {
+      return next();
+    }
+    res.sendFile(join(owaDir, 'index.html'));
+  });
+  log.info({ dir: owaDir }, 'Serving OWA static files (root)');
+} else {
+  // Kein OWA-Bundle gemountet — Root auf /bcp oder schlichte Info
+  app.get('/', (_req, res) => res.redirect(302, '/bcp/'));
+}
 
 // ── 404 + Fehler-Handler ──────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
