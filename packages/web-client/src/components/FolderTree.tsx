@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useDroppable } from '@dnd-kit/core';
+import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
   Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
   Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
@@ -12,6 +12,8 @@ import type { Folder as FolderType } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
+import { useT } from '../i18n/useT.js';
+import { useLanguageStore } from '../store/language.js';
 
 type DialogState =
   | { kind: 'createRoot' }
@@ -20,15 +22,6 @@ type DialogState =
   | null;
 
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
-
-const DISPLAY_NAME: Record<string, string> = {
-  INBOX:   'Posteingang',
-  Drafts:  'Entwürfe',
-  Sent:    'Gesendete Elemente',
-  Trash:   'Gelöschte Elemente',
-  Junk:    'Junk-E-Mail',
-  Archive: 'Archiv',
-};
 
 const ICON_MAP: Record<string, React.ElementType> = {
   INBOX:   Inbox,
@@ -41,6 +34,15 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 const SYSTEM_SET = new Set(SYSTEM_ORDER as readonly string[]);
 
+const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'trash' | 'junk' | 'archive'> = {
+  INBOX:   'inbox',
+  Drafts:  'drafts',
+  Sent:    'sent',
+  Trash:   'trash',
+  Junk:    'junk',
+  Archive: 'archive',
+};
+
 interface Props { onNewMail: () => void }
 
 interface MenuState {
@@ -52,48 +54,87 @@ interface MenuState {
 function FolderItem({
   folder,
   selected,
+  isSystem,
+  hasChildren,
+  expanded,
+  onToggleExpand,
   onSelect,
   onContextMenu,
-  indent = 0,
+  label,
+  indent,
 }: {
   folder: FolderType;
   selected: boolean;
+  isSystem: boolean;
+  hasChildren: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  indent?: number;
+  label: string;
+  indent: number;
 }) {
-  const { isOver, setNodeRef } = useDroppable({
-    id: `folder:${folder.id}`,
+  const { isOver, setNodeRef: setDropRef } = useDroppable({
+    id: `folder-drop:${folder.id}`,
     data: { kind: 'folder', folderId: folder.id, folderName: folder.name },
   });
+
+  // Nur Custom-Folder sind draggable (System nicht reparent-bar)
+  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
+    id: `folder-drag:${folder.id}`,
+    data: { kind: 'folder-source', folderId: folder.id, folderName: folder.name },
+    disabled: isSystem,
+  });
+
   const Icon = ICON_MAP[folder.name] ?? Folder;
-  const label = DISPLAY_NAME[folder.name] ?? folder.displayName ?? folder.name;
+
+  const setRef = (el: HTMLDivElement | null) => {
+    setDropRef(el);
+    setDragRef(el);
+  };
 
   return (
-    <button
-      ref={setNodeRef}
+    <div
+      ref={setRef}
+      {...(isSystem ? {} : attributes)}
+      {...(isSystem ? {} : listeners)}
       onClick={onSelect}
       onContextMenu={onContextMenu}
-      style={{ paddingLeft: 12 + indent * 12 }}
-      className={`w-full flex items-center gap-2 pr-3 py-1.5 text-sm rounded-sm transition-colors ${
+      style={{ paddingLeft: 6 + indent * 14 }}
+      className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-colors cursor-pointer ${
         selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-      } ${isOver ? 'ring-2 ring-accent/60 bg-accent/15' : ''}`}
+      } ${isOver ? 'ring-2 ring-accent/60 bg-accent/15' : ''} ${isDragging ? 'opacity-40' : ''}`}
+      role="button"
+      tabIndex={0}
     >
+      {hasChildren ? (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+          className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+      ) : (
+        <span className="w-4 h-4 shrink-0" />
+      )}
       <Icon size={15} className="shrink-0" style={folder.color ? { color: folder.color } : undefined} />
       <span className="flex-1 text-left truncate">{label}</span>
       {folder.unreadCount > 0 && (
         <span className="text-xs font-bold text-accent">{folder.unreadCount}</span>
       )}
-    </button>
+    </div>
   );
 }
 
 export function FolderTree({ onNewMail }: Props) {
   const qc = useQueryClient();
+  const t = useT();
+  const lang = useLanguageStore((s) => s.lang);
   const { selectedFolderId, setSelectedFolder } = useUiStore();
   const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
 
   const { data: folders } = useQuery({
     queryKey: ['folders'],
@@ -113,7 +154,7 @@ export function FolderTree({ onNewMail }: Props) {
       api.post<FolderType>('/mail/folders', body),
     onSuccess: (folder) => {
       qc.invalidateQueries({ queryKey: ['folders'] });
-      toast.success(`Ordner „${folder.displayName ?? folder.name}" angelegt`);
+      toast.success(`${t('folder_created')}: ${folder.displayName ?? folder.name}`);
     },
     onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht angelegt werden'),
   });
@@ -123,7 +164,7 @@ export function FolderTree({ onNewMail }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] });
       qc.invalidateQueries({ queryKey: ['messages'] });
-      toast.success('Ordner gelöscht');
+      toast.success(t('folder_deleted'));
     },
     onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht gelöscht werden'),
   });
@@ -133,7 +174,7 @@ export function FolderTree({ onNewMail }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] });
       qc.invalidateQueries({ queryKey: ['messages'] });
-      toast.success('Ordner geleert');
+      toast.success(t('folder_emptied'));
     },
     onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht geleert werden'),
   });
@@ -155,11 +196,47 @@ export function FolderTree({ onNewMail }: Props) {
 
   const all = folders ?? [];
 
+  // ── Hierarchie aufbauen ────────────────────────────────────────────────────
+  const { childrenOf, rootCustomFolders } = useMemo(() => {
+    const byParent = new Map<string, FolderType[]>();
+    for (const f of all) {
+      const key = f.parentId ?? '__root__';
+      const arr = byParent.get(key) ?? [];
+      arr.push(f);
+      byParent.set(key, arr);
+    }
+    // Sortiere Kinder nach sortOrder, dann Name
+    for (const list of byParent.values()) {
+      list.sort((a, b) => {
+        const so = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+        if (so !== 0) return so;
+        return (a.displayName ?? a.name).localeCompare(b.displayName ?? b.name);
+      });
+    }
+    // Custom-Folder ohne parentId → root-level „Meine Ordner"
+    const rootCustom = (byParent.get('__root__') ?? []).filter((f) => !SYSTEM_SET.has(f.name));
+    return { childrenOf: byParent, rootCustomFolders: rootCustom };
+  }, [all]);
+
   const favorites = all.filter((f) => f.isFavorite);
   const systemFolders = SYSTEM_ORDER
     .map((name) => all.find((f) => f.name === name))
     .filter((f): f is FolderType => f !== undefined);
-  const customFolders = all.filter((f) => !SYSTEM_SET.has(f.name));
+
+  const folderLabel = (folder: FolderType): string => {
+    const sysKey = SYSTEM_LABEL_KEY[folder.name];
+    if (sysKey) return t(sysKey);
+    return folder.displayName ?? folder.name;
+  };
+
+  const toggleExpand = (id: string) => {
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const buildFolderMenu = (folder: FolderType): ContextMenuItem[] => {
     const isSystem = folder.isSystem ?? SYSTEM_SET.has(folder.name);
@@ -172,30 +249,30 @@ export function FolderTree({ onNewMail }: Props) {
         onClick: () => setSelectedFolder(folder.id),
       },
       {
-        label: 'Alle als gelesen markieren',
+        label: t('mark_all_read'),
         icon: <CheckCheck size={14} />,
         disabled: folder.unreadCount === 0,
         onClick: () => {
           toast.promise(markAllRead.mutateAsync(folder.id), {
-            loading: 'Markiere…',
-            success: 'Alle als gelesen markiert',
-            error:   'Fehler beim Markieren',
+            loading: '…',
+            success: t('mark_all_read'),
+            error:   'Fehler',
           });
         },
       },
       { type: 'divider' },
       {
-        label: folder.isFavorite ? 'Aus Favoriten entfernen' : 'Zu Favoriten hinzufügen',
+        label: folder.isFavorite ? t('remove_favorite') : t('add_favorite'),
         icon: <Star size={14} className={folder.isFavorite ? 'fill-yellow-400 text-yellow-500' : ''} />,
         onClick: () => patchFolder.mutate({ id: folder.id, body: { isFavorite: !folder.isFavorite } }),
       },
       {
-        label: 'Neuer Unterordner …',
+        label: t('new_subfolder'),
         icon: <FolderPlus size={14} />,
         onClick: () => setDialog({
           kind: 'createChild',
           parentId: folder.id,
-          parentLabel: folder.displayName ?? folder.name,
+          parentLabel: folderLabel(folder),
         }),
       },
     ];
@@ -203,31 +280,31 @@ export function FolderTree({ onNewMail }: Props) {
     if (!isSystem) {
       items.push(
         {
-          label: 'Umbenennen',
+          label: t('rename'),
           icon: <Pencil size={14} />,
           onClick: () => setDialog({ kind: 'rename', folder }),
         },
         {
-          label: 'Farbe ändern',
+          label: t('folder_color'),
           icon: <PaintBucket size={14} />,
           children: [
-            { label: 'Keine', icon: <Tag size={14} className="text-gray-300" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: null } }) },
-            { label: 'Blau',  icon: <Tag size={14} className="text-blue-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#3B82F6' } }) },
-            { label: 'Grün',  icon: <Tag size={14} className="text-green-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#10B981' } }) },
-            { label: 'Rot',   icon: <Tag size={14} className="text-red-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#EF4444' } }) },
+            { label: '—',     icon: <Tag size={14} className="text-gray-300" />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: null } }) },
+            { label: 'Blau',  icon: <Tag size={14} className="text-blue-500" />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#3B82F6' } }) },
+            { label: 'Grün',  icon: <Tag size={14} className="text-green-500" />,  onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#10B981' } }) },
+            { label: 'Rot',   icon: <Tag size={14} className="text-red-500" />,    onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#EF4444' } }) },
             { label: 'Orange',icon: <Tag size={14} className="text-orange-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#F97316' } }) },
             { label: 'Lila',  icon: <Tag size={14} className="text-purple-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#8B5CF6' } }) },
           ],
         },
         {
-          label: 'Löschen',
+          label: t('delete'),
           icon: <FolderMinus size={14} />,
           danger: true,
           onClick: () => {
             const total = folder.totalCount ?? 0;
             const msg = total > 0
-              ? `Ordner „${folder.displayName ?? folder.name}" mit ${total} Nachricht(en) wirklich löschen?`
-              : `Ordner „${folder.displayName ?? folder.name}" löschen?`;
+              ? `Ordner „${folderLabel(folder)}" mit ${total} Nachricht(en) wirklich löschen?`
+              : `Ordner „${folderLabel(folder)}" löschen?`;
             if (!window.confirm(msg)) return;
             deleteFolder.mutate(folder.id);
           },
@@ -239,7 +316,7 @@ export function FolderTree({ onNewMail }: Props) {
       items.push(
         { type: 'divider' },
         {
-          label: folder.name === 'Trash' ? 'Papierkorb leeren' : 'Junk-Ordner leeren',
+          label: t('empty_folder'),
           icon: <Eraser size={14} />,
           danger: true,
           onClick: () => {
@@ -258,6 +335,36 @@ export function FolderTree({ onNewMail }: Props) {
     setMenu({ x: e.clientX, y: e.clientY, items: buildFolderMenu(folder) });
   };
 
+  // Rekursives Rendering eines Ordnerbaums
+  const renderFolderTree = (folder: FolderType, indent: number, keyPrefix = ''): ReactNode => {
+    const isSystem = folder.isSystem ?? SYSTEM_SET.has(folder.name);
+    const children = childrenOf.get(folder.id) ?? [];
+    const hasChildren = children.length > 0;
+    const expanded = !collapsedNodes.has(folder.id);
+
+    return (
+      <div key={`${keyPrefix}${folder.id}`}>
+        <FolderItem
+          folder={folder}
+          selected={folder.id === selectedFolderId}
+          isSystem={isSystem}
+          hasChildren={hasChildren}
+          expanded={expanded}
+          onToggleExpand={() => toggleExpand(folder.id)}
+          onSelect={() => setSelectedFolder(folder.id)}
+          onContextMenu={handleContextMenu(folder)}
+          label={folderLabel(folder)}
+          indent={indent}
+        />
+        {hasChildren && expanded && (
+          <div>
+            {children.map((c) => renderFolderTree(c, indent + 1, keyPrefix))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const SectionHeader = ({ label, collapsed, onToggle, action }: {
     label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
   }) => (
@@ -270,12 +377,15 @@ export function FolderTree({ onNewMail }: Props) {
     </div>
   );
 
+  // Stelle sicher dass useT bei Sprachwechsel re-rendert
+  void lang;
+
   return (
     <aside className="w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full">
       <div className="p-3">
         <button onClick={onNewMail} className="btn-primary w-full justify-center">
           <Plus size={15} />
-          Neue E-Mail
+          {t('new_mail')}
         </button>
       </div>
 
@@ -283,7 +393,7 @@ export function FolderTree({ onNewMail }: Props) {
         {/* Favoriten */}
         {favorites.length > 0 && (
           <>
-            <SectionHeader label="Favoriten" collapsed={favoritesCollapsed} onToggle={toggleFavorites} />
+            <SectionHeader label={t('favorites')} collapsed={favoritesCollapsed} onToggle={toggleFavorites} />
             {!favoritesCollapsed && (
               <div className="space-y-0.5">
                 {favorites.map((f) => (
@@ -291,8 +401,14 @@ export function FolderTree({ onNewMail }: Props) {
                     key={`fav-${f.id}`}
                     folder={f}
                     selected={f.id === selectedFolderId}
+                    isSystem={SYSTEM_SET.has(f.name)}
+                    hasChildren={false}
+                    expanded={false}
+                    onToggleExpand={() => {}}
                     onSelect={() => setSelectedFolder(f.id)}
                     onContextMenu={handleContextMenu(f)}
+                    label={folderLabel(f)}
+                    indent={0}
                   />
                 ))}
               </div>
@@ -300,9 +416,9 @@ export function FolderTree({ onNewMail }: Props) {
           </>
         )}
 
-        {/* Systemordner */}
+        {/* System-Ordner + Hierarchie */}
         <SectionHeader
-          label="Ordner"
+          label={t('folders')}
           collapsed={folderTreeCollapsed}
           onToggle={toggleFolderTree}
           action={
@@ -317,30 +433,15 @@ export function FolderTree({ onNewMail }: Props) {
         />
         {!folderTreeCollapsed && (
           <div className="space-y-0.5">
-            {systemFolders.map((f) => (
-              <FolderItem
-                key={f.id}
-                folder={f}
-                selected={f.id === selectedFolderId}
-                onSelect={() => setSelectedFolder(f.id)}
-                onContextMenu={handleContextMenu(f)}
-              />
-            ))}
+            {systemFolders.map((f) => renderFolderTree(f, 0))}
 
-            {customFolders.length > 0 && (
+            {/* Custom-Folder ohne Parent → unter „Meine Ordner" */}
+            {rootCustomFolders.length > 0 && (
               <>
                 <div className="mt-2 mb-0.5 px-3 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-                  Meine Ordner
+                  {t('my_folders')}
                 </div>
-                {customFolders.map((f) => (
-                  <FolderItem
-                    key={f.id}
-                    folder={f}
-                    selected={f.id === selectedFolderId}
-                    onSelect={() => setSelectedFolder(f.id)}
-                    onContextMenu={handleContextMenu(f)}
-                  />
-                ))}
+                {rootCustomFolders.map((f) => renderFolderTree(f, 0, 'root-'))}
               </>
             )}
           </div>
@@ -358,7 +459,9 @@ export function FolderTree({ onNewMail }: Props) {
           onCancel={() => setDialog(null)}
           validate={(v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null}
           onConfirm={async (name) => {
-            await createFolder.mutateAsync({ name });
+            // Default: neue Ordner werden als Sub-Ordner des Posteingangs angelegt
+            const inbox = all.find((f) => f.name === 'INBOX');
+            await createFolder.mutateAsync({ name, parentId: inbox?.id ?? null });
             setDialog(null);
           }}
         />

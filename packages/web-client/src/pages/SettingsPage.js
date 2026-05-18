@@ -1,12 +1,15 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, } from 'lucide-react';
+import { User, PenLine, BellOff, Shield, Key, HardDrive, Trash2, ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check, ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
 import { useThemeStore, ACCENT_COLORS } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
+import { useLanguageStore } from '../store/language.js';
+import { LANGS } from '../i18n/translations.js';
+import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 function fmtBytes(b) {
@@ -395,6 +398,23 @@ function SecuritySection() {
                                             disableMutation.mutate(); }, disabled: disableMutation.isPending, className: "text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50", children: [disableMutation.isPending ? _jsx(Loader2, { size: 12, className: "animate-spin" }) : _jsx(ShieldOff, { size: 12 }), "2FA deaktivieren"] })] }), regenBackupMutation.data?.codes && (_jsxs("div", { children: [_jsx("p", { className: "text-xs text-gray-600 font-medium mb-1", children: "Neue Backup-Codes:" }), _jsx("div", { className: "grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs", children: regenBackupMutation.data.codes.map((c, i) => _jsx("span", { className: "text-gray-700", children: c }, i)) }), _jsxs("button", { onClick: () => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }, className: "mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700", children: [_jsx(Copy, { size: 11 }), " Alle kopieren"] })] }))] }))] })] }));
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// SPRACH-SEKTION
+// ═══════════════════════════════════════════════════════════════════════════════
+function LanguageSection() {
+    const t = useT();
+    const { lang, pending, setPending, applyPending } = useLanguageStore();
+    const dirty = pending !== lang;
+    return (_jsxs("section", { children: [_jsx("h2", { className: "text-xl font-semibold text-gray-900 mb-1", children: t('section_language') }), _jsx("p", { className: "text-sm text-gray-600 mb-6", children: t('lang_help') }), _jsx("div", { className: "space-y-2 mb-6", children: LANGS.map(({ code, flag, nameKey }) => {
+                    const selected = pending === code;
+                    return (_jsxs("button", { onClick: () => setPending(code), className: `w-full flex items-center gap-3 px-4 py-3 rounded-md border text-left transition-colors ${selected
+                            ? 'border-accent bg-accent/5 text-gray-900'
+                            : 'border-gray-200 hover:border-gray-300 text-gray-700'}`, children: [_jsx("span", { className: "text-2xl", children: flag }), _jsx("span", { className: "flex-1 font-medium", children: t(nameKey) }), selected && _jsx(Check, { size: 18, className: "text-accent" })] }, code));
+                }) }), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("button", { onClick: () => {
+                            applyPending();
+                            toast.success(t('lang_changed'));
+                        }, disabled: !dirty, className: "px-4 py-2 bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium", children: t('save') }), dirty && (_jsx("button", { onClick: () => setPending(lang), className: "px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md", children: t('cancel') }))] })] }));
+}
+// ═══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 const NAV = [
@@ -412,6 +432,7 @@ const NAV = [
         group: 'Allgemein',
         items: [
             { id: 'theme', label: 'Design', icon: Palette },
+            { id: 'language', label: 'Sprache & Region', icon: Globe },
             { id: 'security', label: 'Sicherheit', icon: Shield },
         ],
     },
@@ -424,6 +445,7 @@ const SECTION_MAP = {
     storage: StorageSection,
     theme: ThemeSection,
     security: SecuritySection,
+    language: LanguageSection,
 };
 // ═══════════════════════════════════════════════════════════════════════════════
 // HAUPT-EXPORT

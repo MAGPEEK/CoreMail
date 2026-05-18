@@ -3,17 +3,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
-  ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle,
+  ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
 import { useThemeStore, ACCENT_COLORS, type ThemeMode } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
+import { useLanguageStore } from '../store/language.js';
+import { LANGS } from '../i18n/translations.js';
+import { useT } from '../i18n/useT.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language';
 
 interface OofData {
   enabled: boolean;
@@ -1097,6 +1100,64 @@ function SecuritySection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SPRACH-SEKTION
+// ═══════════════════════════════════════════════════════════════════════════════
+function LanguageSection() {
+  const t = useT();
+  const { lang, pending, setPending, applyPending } = useLanguageStore();
+  const dirty = pending !== lang;
+
+  return (
+    <section>
+      <h2 className="text-xl font-semibold text-gray-900 mb-1">{t('section_language')}</h2>
+      <p className="text-sm text-gray-600 mb-6">{t('lang_help')}</p>
+
+      <div className="space-y-2 mb-6">
+        {LANGS.map(({ code, flag, nameKey }) => {
+          const selected = pending === code;
+          return (
+            <button
+              key={code}
+              onClick={() => setPending(code)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-md border text-left transition-colors ${
+                selected
+                  ? 'border-accent bg-accent/5 text-gray-900'
+                  : 'border-gray-200 hover:border-gray-300 text-gray-700'
+              }`}
+            >
+              <span className="text-2xl">{flag}</span>
+              <span className="flex-1 font-medium">{t(nameKey)}</span>
+              {selected && <Check size={18} className="text-accent" />}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => {
+            applyPending();
+            toast.success(t('lang_changed'));
+          }}
+          disabled={!dirty}
+          className="px-4 py-2 bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          {t('save')}
+        </button>
+        {dirty && (
+          <button
+            onClick={() => setPending(lang)}
+            className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
+          >
+            {t('cancel')}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
@@ -1113,8 +1174,9 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Allgemein',
     items: [
-      { id: 'theme',    label: 'Design',     icon: Palette },
-      { id: 'security', label: 'Sicherheit', icon: Shield  },
+      { id: 'theme',    label: 'Design',          icon: Palette },
+      { id: 'language', label: 'Sprache & Region', icon: Globe  },
+      { id: 'security', label: 'Sicherheit',      icon: Shield  },
     ],
   },
 ];
@@ -1127,6 +1189,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   storage:   StorageSection,
   theme:     ThemeSection,
   security:  SecuritySection,
+  language:  LanguageSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
 import { MessageReader } from '../components/MessageReader.js';
@@ -36,28 +37,67 @@ export function MailPage() {
     },
   });
 
+  const reparentFolder = useMutation({
+    mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) =>
+      api.patch(`/mail/folders/${id}`, { parentId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
+    onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht verschoben werden'),
+  });
+
   // 5px Bewegung nötig bevor Drag startet — sonst Klicks/Selektion kaputt
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+  // Hilfsfunktion: prüft ob targetId Descendant von rootId ist (Cycle-Check beim Reparent)
+  const isDescendant = (rootId: string, targetId: string, all: Folder[]): boolean => {
+    const stack = [rootId];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (cur === targetId) return true;
+      for (const f of all) {
+        if (f.parentId === cur) stack.push(f.id);
+      }
+    }
+    return false;
+  };
+
   const handleDragEnd = (e: DragEndEvent) => {
     const overData = e.over?.data?.current as { kind?: string; folderId?: string } | undefined;
-    const activeData = e.active.data?.current as { kind?: string; messageId?: string } | undefined;
+    const activeData = e.active.data?.current as { kind?: string; messageId?: string; folderId?: string } | undefined;
     if (!overData || overData.kind !== 'folder' || !overData.folderId) return;
-    if (!activeData || activeData.kind !== 'message') return;
+    if (!activeData) return;
 
-    // Wenn die gedraggte Mail Teil der Selektion ist, alle ausgewählten mitbewegen
-    const draggedId = activeData.messageId!;
-    const ids = selectedIds.has(draggedId) ? Array.from(selectedIds) : [draggedId];
-    const sourceFolderId = selectedFolderId;
-
-    bulkMutation.mutate({ ids, action: 'move', folderId: overData.folderId });
-    if (sourceFolderId) {
-      showUndoToast({
-        message: ids.length === 1 ? 'Nachricht verschoben' : `${ids.length} Nachrichten verschoben`,
-        onUndo: () => bulkMutation.mutateAsync({ ids, action: 'move', folderId: sourceFolderId }),
-      });
+    // Folder auf Folder = Reparent
+    if (activeData.kind === 'folder-source' && activeData.folderId) {
+      const sourceId = activeData.folderId;
+      const targetId = overData.folderId;
+      if (sourceId === targetId) return;
+      const allFolders = folders ?? [];
+      // Aktueller Parent unverändert?
+      const src = allFolders.find((f) => f.id === sourceId);
+      if (src?.parentId === targetId) return;
+      if (isDescendant(sourceId, targetId, allFolders)) {
+        toast.error('Ordner kann nicht in seinen eigenen Unterordner verschoben werden');
+        return;
+      }
+      reparentFolder.mutate({ id: sourceId, parentId: targetId });
+      return;
     }
-    clearSelection();
+
+    // Mail auf Folder = Move
+    if (activeData.kind === 'message' && activeData.messageId) {
+      const draggedId = activeData.messageId;
+      const ids = selectedIds.has(draggedId) ? Array.from(selectedIds) : [draggedId];
+      const sourceFolderId = selectedFolderId;
+
+      bulkMutation.mutate({ ids, action: 'move', folderId: overData.folderId });
+      if (sourceFolderId) {
+        showUndoToast({
+          message: ids.length === 1 ? 'Nachricht verschoben' : `${ids.length} Nachrichten verschoben`,
+          onUndo: () => bulkMutation.mutateAsync({ ids, action: 'move', folderId: sourceFolderId }),
+        });
+      }
+      clearSelection();
+    }
   };
 
   return (
