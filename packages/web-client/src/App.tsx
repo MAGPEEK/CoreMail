@@ -69,7 +69,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="h-full flex flex-col">
       <TopBar onSearch={handleSearch} currentApp={currentApp} />
-      <main className="flex-1 flex overflow-hidden">
+      <main key={location.pathname} className="flex-1 flex overflow-hidden animate-page-in">
         {children}
       </main>
       {composeOpen && <ComposeWindow />}

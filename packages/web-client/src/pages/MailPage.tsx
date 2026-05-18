@@ -1,6 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import {
+  DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
+  type DragEndEvent, type DragStartEvent,
+} from '@dnd-kit/core';
+import { Mail as MailIcon, Folder as FolderIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
@@ -10,10 +14,18 @@ import { useUiStore } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
 import { showUndoToast } from '../components/UndoToast.js';
+import { EmptyReader } from '../components/Skeleton.js';
+
+interface ActiveDrag {
+  kind: 'message' | 'folder-source';
+  label: string;
+  count?: number;
+}
 
 export function MailPage() {
   const qc = useQueryClient();
   const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, openCompose, clearSelection } = useUiStore();
+  const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
   const { data: folders } = useQuery({
     queryKey: ['folders'],
@@ -60,7 +72,19 @@ export function MailPage() {
     return false;
   };
 
+  const handleDragStart = (e: DragStartEvent) => {
+    const d = e.active.data?.current as { kind?: string; messageId?: string; folderId?: string; folderName?: string } | undefined;
+    if (!d) return;
+    if (d.kind === 'message' && d.messageId) {
+      const count = selectedIds.has(d.messageId) ? selectedIds.size : 1;
+      setActiveDrag({ kind: 'message', label: count === 1 ? '1 Nachricht' : `${count} Nachrichten`, count });
+    } else if (d.kind === 'folder-source' && d.folderName) {
+      setActiveDrag({ kind: 'folder-source', label: d.folderName });
+    }
+  };
+
   const handleDragEnd = (e: DragEndEvent) => {
+    setActiveDrag(null);
     const overData = e.over?.data?.current as { kind?: string; folderId?: string } | undefined;
     const activeData = e.active.data?.current as { kind?: string; messageId?: string; folderId?: string } | undefined;
     if (!overData || overData.kind !== 'folder' || !overData.folderId) return;
@@ -101,7 +125,7 @@ export function MailPage() {
   };
 
   return (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       <div className="flex flex-1 overflow-hidden relative">
         <FolderTree onNewMail={() => openCompose()} />
 
@@ -110,10 +134,14 @@ export function MailPage() {
             <MessageList folderId={selectedFolderId} />
             {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
             {selectedMessageId && selectedIds.size === 0 ? (
-              <MessageReader messageId={selectedMessageId} />
+              <div key={selectedMessageId} className="flex-1 animate-page-in flex flex-col overflow-hidden">
+                <MessageReader messageId={selectedMessageId} />
+              </div>
             ) : (
-              <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 text-gray-400 text-sm">
-                {selectedIds.size > 0 ? `${selectedIds.size} Nachrichten ausgewählt` : 'Nachricht auswählen'}
+              <div className="flex-1 bg-gray-50 dark:bg-gray-900 flex">
+                {selectedIds.size > 0
+                  ? <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
+                  : <EmptyReader />}
               </div>
             )}
           </>
@@ -123,6 +151,20 @@ export function MailPage() {
           </div>
         )}
       </div>
+
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'ease-out' }}>
+        {activeDrag ? (
+          <div className="bg-white dark:bg-gray-800 border-2 border-accent shadow-2xl rounded-md px-3 py-2 flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100 cursor-grabbing">
+            {activeDrag.kind === 'message'
+              ? <MailIcon size={14} className="text-accent" />
+              : <FolderIcon size={14} className="text-accent" />}
+            <span>{activeDrag.label}</span>
+            {activeDrag.kind === 'message' && (activeDrag.count ?? 0) > 1 && (
+              <span className="ml-1 bg-accent text-white text-xs px-1.5 py-0.5 rounded-full">{activeDrag.count}</span>
+            )}
+          </div>
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
 }

@@ -425,7 +425,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
       take: limit,
       skip: offset,
       select: {
-        id: true, uid: true, subject: true, fromAddr: true, toAddrs: true,
+        id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
         date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
         attachments: { select: { id: true, filename: true, mimeType: true, size: true } },
       },

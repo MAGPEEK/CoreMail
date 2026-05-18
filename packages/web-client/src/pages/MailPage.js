@@ -1,7 +1,8 @@
-import { jsx as _jsx, Fragment as _Fragment, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect } from 'react';
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, } from '@dnd-kit/core';
+import { Mail as MailIcon, Folder as FolderIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
@@ -10,9 +11,11 @@ import { BulkToolbar } from '../components/BulkToolbar.js';
 import { useUiStore } from '../store/ui.js';
 import { api } from '../api/client.js';
 import { showUndoToast } from '../components/UndoToast.js';
+import { EmptyReader } from '../components/Skeleton.js';
 export function MailPage() {
     const qc = useQueryClient();
     const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, openCompose, clearSelection } = useUiStore();
+    const [activeDrag, setActiveDrag] = useState(null);
     const { data: folders } = useQuery({
         queryKey: ['folders'],
         queryFn: () => api.get('/mail/folders'),
@@ -53,7 +56,20 @@ export function MailPage() {
         }
         return false;
     };
+    const handleDragStart = (e) => {
+        const d = e.active.data?.current;
+        if (!d)
+            return;
+        if (d.kind === 'message' && d.messageId) {
+            const count = selectedIds.has(d.messageId) ? selectedIds.size : 1;
+            setActiveDrag({ kind: 'message', label: count === 1 ? '1 Nachricht' : `${count} Nachrichten`, count });
+        }
+        else if (d.kind === 'folder-source' && d.folderName) {
+            setActiveDrag({ kind: 'folder-source', label: d.folderName });
+        }
+    };
     const handleDragEnd = (e) => {
+        setActiveDrag(null);
         const overData = e.over?.data?.current;
         const activeData = e.active.data?.current;
         if (!overData || overData.kind !== 'folder' || !overData.folderId)
@@ -93,5 +109,9 @@ export function MailPage() {
             clearSelection();
         }
     };
-    return (_jsx(DndContext, { sensors: sensors, onDragEnd: handleDragEnd, children: _jsxs("div", { className: "flex flex-1 overflow-hidden relative", children: [_jsx(FolderTree, { onNewMail: () => openCompose() }), selectedFolderId ? (_jsxs(_Fragment, { children: [_jsx(MessageList, { folderId: selectedFolderId }), selectedIds.size > 0 && _jsx(BulkToolbar, { currentFolderId: selectedFolderId }), selectedMessageId && selectedIds.size === 0 ? (_jsx(MessageReader, { messageId: selectedMessageId })) : (_jsx("div", { className: "flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 text-gray-400 text-sm", children: selectedIds.size > 0 ? `${selectedIds.size} Nachrichten ausgewählt` : 'Nachricht auswählen' }))] })) : (_jsx("div", { className: "flex-1 flex items-center justify-center text-gray-400 text-sm", children: "Ordner ausw\u00E4hlen" }))] }) }));
+    return (_jsxs(DndContext, { sensors: sensors, onDragStart: handleDragStart, onDragEnd: handleDragEnd, onDragCancel: () => setActiveDrag(null), children: [_jsxs("div", { className: "flex flex-1 overflow-hidden relative", children: [_jsx(FolderTree, { onNewMail: () => openCompose() }), selectedFolderId ? (_jsxs(_Fragment, { children: [_jsx(MessageList, { folderId: selectedFolderId }), selectedIds.size > 0 && _jsx(BulkToolbar, { currentFolderId: selectedFolderId }), selectedMessageId && selectedIds.size === 0 ? (_jsx("div", { className: "flex-1 animate-page-in flex flex-col overflow-hidden", children: _jsx(MessageReader, { messageId: selectedMessageId }) }, selectedMessageId)) : (_jsx("div", { className: "flex-1 bg-gray-50 dark:bg-gray-900 flex", children: selectedIds.size > 0
+                                    ? _jsxs("div", { className: "flex-1 flex items-center justify-center text-gray-400 text-sm", children: [selectedIds.size, " Nachrichten ausgew\u00E4hlt"] })
+                                    : _jsx(EmptyReader, {}) }))] })) : (_jsx("div", { className: "flex-1 flex items-center justify-center text-gray-400 text-sm", children: "Ordner ausw\u00E4hlen" }))] }), _jsx(DragOverlay, { dropAnimation: { duration: 180, easing: 'ease-out' }, children: activeDrag ? (_jsxs("div", { className: "bg-white dark:bg-gray-800 border-2 border-accent shadow-2xl rounded-md px-3 py-2 flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100 cursor-grabbing", children: [activeDrag.kind === 'message'
+                            ? _jsx(MailIcon, { size: 14, className: "text-accent" })
+                            : _jsx(FolderIcon, { size: 14, className: "text-accent" }), _jsx("span", { children: activeDrag.label }), activeDrag.kind === 'message' && (activeDrag.count ?? 0) > 1 && (_jsx("span", { className: "ml-1 bg-accent text-white text-xs px-1.5 py-0.5 rounded-full", children: activeDrag.count }))] })) : null })] }));
 }

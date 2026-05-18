@@ -330,7 +330,7 @@ export function ComposeWindow() {
 
   return (
     <div
-      className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col"
+      className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col animate-fly-in"
       style={{ maxHeight: '92vh', height: '78vh' }}
     >
       {/* ── Titelleiste ─────────────────────────────────────────────────────── */}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDraggable } from '@dnd-kit/core';
 import {
@@ -11,6 +11,9 @@ import type { MessagesResponse, MessageSummary, Folder } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
+import { Avatar } from './Avatar.js';
+import { ContactHoverCard } from './ContactHoverCard.js';
+import { MessageListSkeleton, EmptyInbox, EmptySearch } from './Skeleton.js';
 
 interface Props {
   folderId: string;
@@ -51,6 +54,10 @@ function MessageRow({
     data: { kind: 'message', messageId: msg.id, folderId: msg.id /* fallback */ },
   });
 
+  const avatarRef = useRef<HTMLDivElement>(null);
+  const [showCard, setShowCard] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const isUnread = !msg.flags.includes('\\Seen');
   const isFlagged = msg.flags.includes('\\Flagged');
   const hasAttachments = msg.attachments.length > 0;
@@ -76,11 +83,11 @@ function MessageRow({
       role="button"
       tabIndex={0}
     >
-      <div className="flex items-start gap-2.5">
+      <div className="flex items-center gap-2.5">
         {/* Checkbox / Unread-Dot */}
         <button
           onClick={onToggleCheck}
-          className={`mt-0.5 w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
+          className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
             checked
               ? 'bg-accent border-accent text-white scale-100'
               : 'border-gray-300 dark:border-gray-600 opacity-0 group-hover:opacity-100 hover:border-accent hover:scale-110'
@@ -93,13 +100,27 @@ function MessageRow({
         {/* Flag-Icon (immer sichtbar; klickbar) */}
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
-          className="mt-0.5 shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95"
+          className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95"
           aria-label="Kennzeichnen"
         >
           {isFlagged
             ? <Flag size={14} className="fill-red-500 text-red-500" />
             : <Flag size={14} className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors" />}
         </button>
+
+        {/* Avatar mit hash-basierter Farbe */}
+        <div
+          ref={avatarRef}
+          onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(true), 350); }}
+          onMouseLeave={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(false), 200); }}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 cursor-default"
+        >
+          <Avatar seed={msg.fromAddr} size="sm" className="transition-transform duration-150 group-hover:scale-105" />
+        </div>
+        {showCard && (
+          <ContactHoverCard email={msg.fromAddr} anchorRef={avatarRef} onClose={() => setShowCard(false)} />
+        )}
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
@@ -330,8 +351,9 @@ export function MessageList({ folderId }: Props) {
 
   if (isLoading) {
     return (
-      <div className="w-72 shrink-0 flex items-center justify-center text-gray-400 text-sm">
-        Lade Nachrichten…
+      <div className="w-80 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col h-full">
+        <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 h-9" />
+        <MessageListSkeleton rows={8} />
       </div>
     );
   }
@@ -368,9 +390,7 @@ export function MessageList({ folderId }: Props) {
 
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-            Keine Nachrichten
-          </div>
+          filter === 'all' ? <EmptyInbox /> : <EmptySearch />
         ) : (
           filtered.map((msg) => (
             <MessageRow

@@ -59,7 +59,7 @@ function Layout({ children }) {
         if (q)
             navigate(`/mail?q=${encodeURIComponent(q)}`);
     };
-    return (_jsxs("div", { className: "h-full flex flex-col", children: [_jsx(TopBar, { onSearch: handleSearch, currentApp: currentApp }), _jsx("main", { className: "flex-1 flex overflow-hidden", children: children }), composeOpen && _jsx(ComposeWindow, {})] }));
+    return (_jsxs("div", { className: "h-full flex flex-col", children: [_jsx(TopBar, { onSearch: handleSearch, currentApp: currentApp }), _jsx("main", { className: "flex-1 flex overflow-hidden animate-page-in", children: children }, location.pathname), composeOpen && _jsx(ComposeWindow, {})] }));
 }
 // Prüft beim Start ob Setup erforderlich ist
 function SetupGuard({ children }) {

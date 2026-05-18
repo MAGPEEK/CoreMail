@@ -16,6 +16,7 @@ export interface MessageSummary {
   uid: number;
   subject: string;
   fromAddr: string;
+  fromName?: string;
   toAddrs: string[];
   date: string;
   flags: string[];

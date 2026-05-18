@@ -397,8 +397,11 @@ export function FolderTree({ onNewMail }: Props) {
   return (
     <aside className="w-52 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full">
       <div className="p-3">
-        <button onClick={onNewMail} className="btn-primary w-full justify-center">
-          <Plus size={15} />
+        <button
+          onClick={onNewMail}
+          className="btn-primary w-full justify-center group/newmail"
+        >
+          <Plus size={15} className="transition-transform duration-200 group-hover/newmail:rotate-90" />
           {t('new_mail')}
         </button>
       </div>

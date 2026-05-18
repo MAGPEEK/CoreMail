@@ -5,12 +5,15 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
+import { Avatar } from './Avatar.js';
+import { ContactHoverCard } from './ContactHoverCard.js';
+import { MessageReaderSkeleton } from './Skeleton.js';
 
 function sanitize(html: string): string {
   if (typeof window !== 'undefined' && 'DOMPurify' in window) {
@@ -27,6 +30,9 @@ export function MessageReader({ messageId }: Props) {
   const qc = useQueryClient();
   const { openCompose, setSelectedMessage, selectedFolderId } = useUiStore();
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const [showAvatarCard, setShowAvatarCard] = useState(false);
+  const avatarRef = useRef<HTMLDivElement>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: msg, isLoading } = useQuery({
     queryKey: ['message', messageId],
@@ -55,14 +61,7 @@ export function MessageReader({ messageId }: Props) {
     onSuccess: invalidate,
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-        Lade Nachricht…
-      </div>
-    );
-  }
-
+  if (isLoading) return <MessageReaderSkeleton />;
   if (!msg) return null;
 
   const isFlagged = msg.flags.includes('\\Flagged');
@@ -169,32 +168,46 @@ export function MessageReader({ messageId }: Props) {
       </div>
 
       {/* Header */}
-      <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0">
+      <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0 animate-page-in">
         <div className="flex items-start gap-2 mb-3">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex-1">{msg.subject || '(kein Betreff)'}</h2>
           {isFlagged && <Flag size={16} className="fill-red-500 text-red-500 shrink-0 mt-1" />}
           {isPinned && <Pin size={16} className="text-accent shrink-0 mt-1" />}
         </div>
-        <div className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
-          <div className="flex gap-2">
-            <span className="font-medium text-gray-400 w-12">Von:</span>
-            <span>{msg.fromAddr}</span>
+        <div className="flex items-start gap-3">
+          <div
+            ref={avatarRef}
+            onMouseEnter={() => {
+              if (hoverTimer.current) clearTimeout(hoverTimer.current);
+              hoverTimer.current = setTimeout(() => setShowAvatarCard(true), 250);
+            }}
+            onMouseLeave={() => {
+              if (hoverTimer.current) clearTimeout(hoverTimer.current);
+              hoverTimer.current = setTimeout(() => setShowAvatarCard(false), 200);
+            }}
+          >
+            <Avatar seed={msg.fromAddr} size="lg" className="transition-transform duration-150 hover:scale-105 cursor-default" />
           </div>
-          <div className="flex gap-2">
-            <span className="font-medium text-gray-400 w-12">An:</span>
-            <span>{msg.toAddrs.join(', ')}</span>
-          </div>
-          {msg.ccAddrs?.length > 0 && (
-            <div className="flex gap-2">
-              <span className="font-medium text-gray-400 w-12">CC:</span>
-              <span>{msg.ccAddrs.join(', ')}</span>
-            </div>
-          )}
-          <div className="flex gap-2">
-            <span className="font-medium text-gray-400 w-12">Datum:</span>
-            <span>{format(new Date(msg.date), 'dd.MM.yyyy HH:mm')}</span>
+          <div className="flex-1 min-w-0 space-y-0.5 text-sm">
+            <p className="font-medium text-gray-900 dark:text-gray-100">{msg.fromName || msg.fromAddr.split('@')[0]}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">&lt;{msg.fromAddr}&gt;</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              An: <span className="text-gray-700 dark:text-gray-300">{msg.toAddrs.join(', ')}</span>
+              {msg.ccAddrs?.length > 0 && (
+                <> · CC: <span className="text-gray-700 dark:text-gray-300">{msg.ccAddrs.join(', ')}</span></>
+              )}
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500">{format(new Date(msg.date), 'EEEE, dd.MM.yyyy HH:mm')}</p>
           </div>
         </div>
+        {showAvatarCard && (
+          <ContactHoverCard
+            email={msg.fromAddr}
+            name={msg.fromName}
+            anchorRef={avatarRef}
+            onClose={() => setShowAvatarCard(false)}
+          />
+        )}
       </div>
 
       {/* Attachments */}
