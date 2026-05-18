@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -16,6 +16,7 @@ import { useUiPrefs } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
+import { CalendarToolbar, type CalendarView } from '../components/CalendarToolbar.js';
 import toast from 'react-hot-toast';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
@@ -34,6 +35,19 @@ export function CalendarPage() {
   const lang = useLanguageStore((s) => s.lang);
   const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
+  const [view, setView] = useState<CalendarView>('dayGridMonth');
+  const calendarRef = useRef<FullCalendar>(null);
+
+  const changeView = (v: CalendarView) => {
+    setView(v);
+    const api = calendarRef.current?.getApi();
+    if (!api) return;
+    // workWeek = timeGridWeek mit Mo–Fr; FullCalendar hat keine eigene View, daher
+    // schalten wir auf timeGridWeek und filtern Wochenend-Spalten per hiddenDays
+    if (v === 'workWeek') api.changeView('timeGridWeek');
+    else if (v === 'split') return; // disabled
+    else api.changeView(v);
+  };
 
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
@@ -105,23 +119,41 @@ export function CalendarPage() {
         })}
       />
 
-      {/* Calendar */}
-      <div className="flex-1 overflow-auto p-4">
-        <FullCalendar
-          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="timeGridWeek"
-          locale={LOCALE_MAP[lang] ?? deLocale}
-          weekNumbers={calendarShowWeekNumbers}
-          weekNumberCalculation="ISO"
-          weekText={t('cw_short')}
-          firstDay={1}
-          headerToolbar={{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }}
-          events={fcEvents}
-          selectable
-          select={handleDateSelect}
-          eventClick={handleEventClick}
-          height="100%"
+      {/* Hauptbereich: Toolbar + FullCalendar */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <CalendarToolbar
+          view={view}
+          onChangeView={changeView}
+          onNewEvent={() => setNewEvent({
+            summary: '',
+            dtStart: '',
+            dtEnd: '',
+            calendarId: calendars?.[0]?.id ?? '',
+            allDay: false,
+          })}
+          onShare={() => toast('Kalender teilen kommt bald', { icon: 'ℹ️' })}
+          onPrint={() => window.print()}
         />
+
+        <div className="flex-1 overflow-auto p-4">
+          <FullCalendar
+            ref={calendarRef}
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            initialView="dayGridMonth"
+            locale={LOCALE_MAP[lang] ?? deLocale}
+            weekNumbers={calendarShowWeekNumbers}
+            weekNumberCalculation="ISO"
+            weekText={t('cw_short')}
+            firstDay={1}
+            hiddenDays={view === 'workWeek' ? [0, 6] : []}
+            headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+            events={fcEvents}
+            selectable
+            select={handleDateSelect}
+            eventClick={handleEventClick}
+            height="100%"
+          />
+        </div>
       </div>
 
       {/* New event dialog */}

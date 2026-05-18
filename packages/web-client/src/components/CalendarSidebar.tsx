@@ -141,16 +141,17 @@ export function CalendarSidebar({
         icon: <PaletteIcon size={14} />,
         children: [
           {
-            label: '✓ Automatisch',
+            label: 'Automatisch',
+            icon: <span className="w-3.5 h-3.5 rounded-full bg-gray-300 ring-1 ring-inset ring-black/10" />,
             onClick: () => patchCal.mutate({ id: cal.id, body: { color: '#0078D4' } }),
           },
           { type: 'divider' },
-          // 16 Farbpunkte als „Custom Render" via Icon — wir nutzen den onClick-Text als Hint
-          ...COLOR_PALETTE.map((c) => ({
-            label: c,
-            icon: <span className="w-4 h-4 rounded-full block" style={{ backgroundColor: c }} />,
-            onClick: () => patchCal.mutate({ id: cal.id, body: { color: c } }),
-          })),
+          {
+            type: 'color-grid',
+            colors: COLOR_PALETTE,
+            current: cal.color,
+            onPick: (c) => patchCal.mutate({ id: cal.id, body: { color: c } }),
+          },
         ],
       },
       {

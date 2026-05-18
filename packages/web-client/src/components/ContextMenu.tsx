@@ -12,8 +12,12 @@ export interface ContextMenuItem {
   /** Visuell als zerstörerische Aktion (rot) */
   danger?: boolean;
   disabled?: boolean;
-  /** Komplette Trennzeile */
-  type?: 'divider';
+  /** Komplette Trennzeile oder spezieller Render */
+  type?: 'divider' | 'color-grid';
+  /** Nur bei type='color-grid': Farben-Array + Pick-Handler + ggf. aktuelle Auswahl */
+  colors?: string[];
+  current?: string;
+  onPick?: (color: string) => void;
 }
 
 export interface ContextMenuProps {
@@ -70,6 +74,30 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       {items.map((item, i) => {
         if (item.type === 'divider') {
           return <div key={`d-${i}`} className="my-1 border-t border-gray-100 dark:border-gray-700" />;
+        }
+        if (item.type === 'color-grid' && item.colors) {
+          return (
+            <div key={`cg-${i}`} className="px-3 py-2.5">
+              <div className="grid grid-cols-8 gap-1.5">
+                {item.colors.map((c) => {
+                  const isActive = item.current?.toLowerCase() === c.toLowerCase();
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => { item.onPick?.(c); onClose(); }}
+                      className={`w-5 h-5 rounded-full transition-all duration-150 hover:scale-125 active:scale-90 ${
+                        isActive ? 'ring-2 ring-offset-1 ring-gray-700 dark:ring-gray-200' : 'ring-1 ring-inset ring-black/10'
+                      }`}
+                      style={{ backgroundColor: c }}
+                      aria-label={c}
+                      title={c}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
         }
         const hasChildren = !!(item.children && item.children.length);
         const isOpen = submenuFor?.index === i;

@@ -9,6 +9,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.6.6] — 2026-05-18 — Kalender-Toolbar (Outlook-Ribbon) + Farbgrid-Picker
+
+### Added
+
+- **Outlook-Ribbon-Toolbar** über dem Kalender mit 4 Sections und Icon+Label-Buttons:
+  - **Neu**: „Neues Ereignis" (Dropdown: Termin / Besprechung / Ganztägig)
+  - **Anordnen**: Tag · Arbeitswoche · Woche · Monat · Geteilte Ansicht (disabled)
+  - **Filter**: „Filter angewendet" (Dropdown)
+  - **Teilen**: Kalender teilen · Drucken
+- **View-Switching live**: aktiver View wird mit Akzent-Ring hervorgehoben, FullCalendar wechselt programmatisch über `calendarRef.getApi().changeView()`
+- **Arbeitswoche** versteckt automatisch Samstag/Sonntag via `hiddenDays={[0,6]}`
+
+### Fixed
+
+- **Farb-Submenu für Kalender** zeigte vorher den Hex-Code (z. B. „#3B82F6") als Label neben jedem Farbpunkt — sah wie ein Pantone-Listing aus. Jetzt: kompakt als **8×2-Grid** (rendererseitig ein neuer `type: 'color-grid'` im `ContextMenuItem`-Schema). Aktive Farbe bekommt einen Ring; Hover skaliert auf 1.25.
+- ContextMenu unterstützt nun neben `divider` auch `color-grid` als Spezial-Render — wiederverwendbar für andere Color-Picker.
+
+### Removed
+
+- FullCalendar's eigene `headerToolbar`-Buttons rechts (Monat/Woche/Tag) — werden durch die Ribbon-Toolbar ersetzt; `prev/next/today/title` bleiben über dem Grid.
+
+---
+
 ## [3.6.5] — 2026-05-18 — Kalender-Verwaltung (Outlook-Style) + Folder-Selection-Fix
 
 ### Added

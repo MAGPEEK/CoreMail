@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.6.5';
+const VERSION        = '3.6.6';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.6.6', date: '2026-05-18', title: 'Kalender-Toolbar (Outlook-Ribbon) + Farbgrid-Picker',
+    notes: 'Neue Ribbon-Toolbar über dem Kalender mit 4 Sections (Neu / Anordnen / Filter / Teilen) und Icon+Label-Buttons im Office-Stil. Buttons: Neues Ereignis (Dropdown), Tag/Arbeitswoche/Woche/Monat/Geteilte Ansicht, Filter, Kalender teilen, Drucken. Aktiver View mit Akzent-Ring. Arbeitswoche versteckt Sa/So. Fix: Farb-Submenu zeigte vorher Hex-Codes neben Farbpunkten — jetzt kompaktes 8x2-Grid via neuem ContextMenu type color-grid (aktive Farbe mit Ring, Hover-Scale).' },
   { version: '3.6.5', date: '2026-05-18', title: 'Kalender-Verwaltung (Outlook-Style) + Folder-Selection-Fix',
     notes: 'Kalender-Sidebar komplett ausgebaut wie Outlook. "+ Kalender hinzufügen"-Button über "Meine Kalender". Farb-Checkbox pro Kalender für Ein-/Ausblenden (persistent). 3-Punkte-Menü beim Hover: Nur dies anzeigen, Teilen, Farbe (16 Farben), Symbol (35 Lucide-Icons in Grid), Nach oben/unten, Umbenennen, Löschen (geschützt für Standard-Kalender). Backend: Calendar.icon + sortOrder, POST/PATCH/DELETE Routen, POST /calendar/reorder. Versteckte Kalender werden in allen FullCalendar-Ansichten ausgeblendet. Fix: Ein Ordner, der gleichzeitig als Favorit eingerichtet ist, wurde nach Klick sowohl im Favoriten-Bereich als auch im Tree markiert — selectedFolderSource (fav | tree) koppelt die Selection-Markierung an den Render-Kontext.' },
   { version: '3.5.6', date: '2026-05-18', title: 'Kalender-Verwaltung · Mehrere Kalender · Farben · Symbole · Sortierung',
