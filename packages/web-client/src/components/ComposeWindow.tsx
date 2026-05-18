@@ -241,7 +241,7 @@ export function ComposeWindow() {
     ],
     content: '',
     editorProps: {
-      attributes: { class: 'outline-none min-h-[180px] text-sm leading-relaxed' },
+      attributes: { class: 'outline-none min-h-[360px] text-sm leading-relaxed' },
     },
   });
 
@@ -330,8 +330,8 @@ export function ComposeWindow() {
 
   return (
     <div
-      className="fixed bottom-0 right-4 w-[660px] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col"
-      style={{ maxHeight: '82vh' }}
+      className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col"
+      style={{ maxHeight: '92vh', height: '78vh' }}
     >
       {/* ── Titelleiste ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0">
