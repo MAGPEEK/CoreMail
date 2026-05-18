@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '2.1.44';
-const BUILD_DATE     = '2026-05-17';
+const VERSION        = '3.0.0';
+const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.0.0', date: '2026-05-18', title: 'OWA Major Upgrade · Rechtsklick-Menüs · Favoriten · Drag&Drop · Bulk-Actions',
+    notes: 'Major-Sprung 2.x → 3.0.0. End-User-OWA bekommt vollständige Gmail/Outlook.com-typische Interaktion. Rechtsklick auf Ordner: alle gelesen, Favorit, Unterordner, umbenennen, Farbe, löschen, Papierkorb/Junk leeren. Rechtsklick auf Mail: Antworten/Allen/Weiterleiten, Read/Flag/Pin, Schlummern (1h/3h/morgen/Montag), Verschieben, Junk-Toggle, Quelltext, EML-Download. Favoriten-Sektion oben in Sidebar. Mehrfachauswahl mit Shift/Cmd + BulkToolbar. Drag&Drop via @dnd-kit. Hover-Quick-Actions (Archive/Delete/Read). Filter-Tabs (Alle/Ungelesen/Markiert/Anhang). Undo-Toast (5s). ReplyAll/Forward jetzt verdrahtet mit zitiertem Vortext. Backend: neue Routen POST/PATCH/DELETE /mail/folders, POST /folders/:id/empty, POST /messages/bulk, POST|DELETE /messages/:id/snooze, GET /messages/:id/raw. Prisma: Folder.isFavorite/sortOrder/color, Message.pinnedAt/snoozeUntil.' },
   { version: '2.1.44', date: '2026-05-18', title: 'Global Einstellungen oben · DE/EN Sprache · Standards entfernt',
     notes: 'Sidebar: "Einstellungen" direkt unter "Übersicht" verschoben und in "Global Einstellungen" umbenannt. Neues TopBar-Sprachmenü (DE 🇩🇪 / EN 🇬🇧) — Wechsel per Speichern-Button, persistiert in localStorage. i18n-Infrastruktur: translations.ts (180+ Keys DE/EN), language-Store (Zustand, pending-Logik), useT()-Hook. Vollständige Übersetzung: Sidebar-Navigation, TopBar, Global Einstellungen (alle 4 Sektionen). Services: "Standards"-Button entfernt (Defaults werden beim Löschen automatisch wiederhergestellt).' },
   { version: '2.1.43', date: '2026-05-17', title: 'Rspamd 4.0 Vollkonfiguration · ClamAV Scan-Optionen · ACME-Fix',
