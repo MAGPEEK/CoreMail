@@ -333,7 +333,7 @@ export function ComplianceInfoPage() {
       <div className="card p-5 space-y-4">
         <p className="text-sm font-semibold text-gray-700">Letzte Versionen</p>
         <div className="space-y-4">
-          {HIGHLIGHTS.map((h, i) => (
+          {HIGHLIGHTS.slice(0, 3).map((h, i, arr) => (
             <div key={h.version} className="flex gap-3">
               <div className="flex flex-col items-center">
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
@@ -341,7 +341,7 @@ export function ComplianceInfoPage() {
                 }`}>
                   <Tag size={12} />
                 </div>
-                {i < HIGHLIGHTS.length - 1 && <div className="w-px flex-1 bg-gray-200 mt-1" />}
+                {i < arr.length - 1 && <div className="w-px flex-1 bg-gray-200 mt-1" />}
               </div>
               <div className="pb-4">
                 <div className="flex items-center gap-2 mb-0.5">
@@ -356,7 +356,6 @@ export function ComplianceInfoPage() {
                   </span>
                 </div>
                 <p className="text-sm font-medium text-gray-800">{h.title}</p>
-                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{h.notes}</p>
               </div>
             </div>
           ))}
