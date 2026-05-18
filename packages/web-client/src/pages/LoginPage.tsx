@@ -153,7 +153,7 @@ export function LoginPage() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">CoreMail</h1>
             <p className="text-xs text-gray-500">
-              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Outlook Web Access'}
+              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
             </p>
           </div>
         </div>

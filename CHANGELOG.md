@@ -9,11 +9,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.5.5] — 2026-05-18 — OWA jetzt direkt unter `/` (statt `/owa/`)
+## [3.5.5] — 2026-05-18 — OWA jetzt direkt unter `/` · Umbenannt in „Mail Web Access"
 
 ### Changed
 
 - **OWA-Frontend läuft jetzt unter Root-URL** statt unter `/owa/`. Alle SPA-Routen sind direkt erreichbar — z. B. `https://server/login`, `https://server/mail`, `https://server/settings`. Das behebt den 404/Fehler beim direkten Aufruf von `/login` aus dem OWA heraus (z. B. nach Logout).
+- **„Outlook Web Access" → „Mail Web Access"** auf dem Login-Bildschirm (Untertitel unter dem CoreMail-Logo).
 - **Vite-Base**: `/owa/` → `/`
 - **React-Router**: `basename="/owa"` entfernt
 - **API-Gateway**:
