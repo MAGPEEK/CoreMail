@@ -15,8 +15,13 @@ export interface ComposeContext {
 }
 
 // ── UI-Zustand (nicht persistent) ─────────────────────────────────────────────
+/** Wo wurde der aktuelle Ordner ausgewählt — bestimmt, welcher Render-Pfad
+ * die selected-Markierung zeigt (Favoriten-Mirror vs. Hauptbaum). */
+export type FolderSelectionSource = 'fav' | 'tree';
+
 interface UiState {
   selectedFolderId: string | null;
+  selectedFolderSource: FolderSelectionSource;
   selectedMessageId: string | null;
   composeOpen: boolean;
   composeCtx: ComposeContext | null;
@@ -27,7 +32,7 @@ interface UiState {
   lastSelectedId: string | null;
   filter: MessageFilter;
 
-  setSelectedFolder: (id: string | null) => void;
+  setSelectedFolder: (id: string | null, source?: FolderSelectionSource) => void;
   setSelectedMessage: (id: string | null) => void;
   openCompose: (ctx?: Partial<ComposeContext>) => void;
   closeCompose: () => void;
@@ -42,6 +47,7 @@ interface UiState {
 
 export const useUiStore = create<UiState>((set, get) => ({
   selectedFolderId: null,
+  selectedFolderSource: 'tree',
   selectedMessageId: null,
   composeOpen: false,
   composeCtx: null,
@@ -50,8 +56,15 @@ export const useUiStore = create<UiState>((set, get) => ({
   lastSelectedId: null,
   filter: 'all',
 
-  setSelectedFolder: (id) =>
-    set({ selectedFolderId: id, selectedMessageId: null, selectedIds: new Set(), lastSelectedId: null, filter: 'all' }),
+  setSelectedFolder: (id, source = 'tree') =>
+    set({
+      selectedFolderId: id,
+      selectedFolderSource: source,
+      selectedMessageId: null,
+      selectedIds: new Set(),
+      lastSelectedId: null,
+      filter: 'all',
+    }),
   setSelectedMessage: (id) => set({ selectedMessageId: id }),
   openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', ...ctx } }),
   closeCompose: () => set({ composeOpen: false, composeCtx: null }),

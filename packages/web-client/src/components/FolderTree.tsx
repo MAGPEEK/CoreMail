@@ -156,7 +156,7 @@ export function FolderTree({ onNewMail }: Props) {
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
-  const { selectedFolderId, setSelectedFolder } = useUiStore();
+  const { selectedFolderId, selectedFolderSource, setSelectedFolder } = useUiStore();
   const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -376,12 +376,14 @@ export function FolderTree({ onNewMail }: Props) {
       <div key={`${contextKey}|${folder.id}`}>
         <FolderItem
           folder={folder}
-          selected={folder.id === selectedFolderId}
+          // Tree-Marker nur dann, wenn die Auswahl auch im Tree-Kontext getätigt wurde.
+          // Verhindert doppelte Markierung in Favoriten + Haupt-Tree.
+          selected={selectedFolderSource !== 'fav' && folder.id === selectedFolderId}
           isSystem={isSystem}
           hasChildren={hasChildren}
           expanded={expanded}
           onToggleExpand={() => toggleExpand(folder.id)}
-          onSelect={() => setSelectedFolder(folder.id)}
+          onSelect={() => setSelectedFolder(folder.id, 'tree')}
           onContextMenu={handleContextMenu(folder)}
           label={folderLabel(folder)}
           indent={indent}
@@ -434,12 +436,13 @@ export function FolderTree({ onNewMail }: Props) {
                   <FolderItem
                     key={`fav-${f.id}`}
                     folder={f}
-                    selected={f.id === selectedFolderId}
+                    // selected nur, wenn die Auswahl IM Favoriten-Bereich getätigt wurde
+                    selected={selectedFolderSource === 'fav' && f.id === selectedFolderId}
                     isSystem={SYSTEM_SET.has(f.name)}
                     hasChildren={false}
                     expanded={false}
                     onToggleExpand={() => {}}
-                    onSelect={() => setSelectedFolder(f.id)}
+                    onSelect={() => setSelectedFolder(f.id, 'fav')}
                     onContextMenu={handleContextMenu(f)}
                     label={folderLabel(f)}
                     indent={0}

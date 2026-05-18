@@ -9,6 +9,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.6.5] — 2026-05-18 — Kalender-Verwaltung (Outlook-Style) + Folder-Selection-Fix
+
+### Added
+
+- **Kalender hinzufügen** über `+`-Button in der Kalender-Sidebar (über „Meine Kalender")
+- **Kalender-Auswahl an/aus** via Farb-Checkbox vor jedem Kalender (persistent in `localStorage`)
+- **3-Punkte-Menü** beim Hover über jeden Kalender mit:
+  - **Nur dies anzeigen** (verbirgt alle anderen)
+  - **Teilen und Berechtigungen** (Placeholder, kommt später)
+  - **Farbe** → Submenu mit 16 Outlook-inspirierten Farben + „Automatisch"
+  - **Symbol** → Submenu mit 35 kuratierten Lucide-Icons (Plane, Home, Heart, Trophy, …)
+  - **Nach oben / Nach unten** — verschiebt den Kalender in der Reihenfolge
+  - **Umbenennen**
+  - **Löschen** (deaktiviert für Standard-Kalender)
+- Kalender werden sortiert nach `sortOrder` (Standard-Kalender zuerst)
+- Versteckte Kalender werden in der Tages/Wochen/Monatsansicht ausgeblendet (Events filtern)
+
+### Fixed
+
+- **Folder-Doppel-Selection**: Ein Ordner, der gleichzeitig als Favorit eingerichtet war, wurde nach einem Klick sowohl im Favoriten-Bereich **als auch** in der regulären Ordner-Struktur als ausgewählt markiert. Jetzt erscheint die Selection-Markierung nur im jeweiligen Render-Kontext (Favoriten **oder** Hauptbaum).
+  - Neuer UI-Store-State `selectedFolderSource: 'fav' | 'tree'`
+  - `setSelectedFolder(id, 'fav')` beim Klick aus dem Favoriten-Block, `'tree'` aus dem Hauptbaum
+  - Die `selected`-Prop in `FolderItem` wird mit der Source kombiniert: Favoriten-Mirror zeigt nur dann „selected" wenn `source === 'fav'`, der Tree umgekehrt.
+
+### Backend
+
+- Prisma: `Calendar.icon String?`, `Calendar.sortOrder Int @default(0)`
+- `POST   /api/v1/calendar` mit `{ name, color, icon? }` — neuer `sortOrder` wird automatisch ans Ende gehängt
+- `PATCH  /api/v1/calendar/:id` mit `{ name?, color?, icon?, sortOrder? }`
+- `DELETE /api/v1/calendar/:id` — Standard-Kalender (`isDefault`) kann nicht gelöscht werden (400)
+- `POST   /api/v1/calendar/reorder` mit `{ ids: string[] }` — setzt `sortOrder` der Kalender entsprechend der Reihenfolge
+
+### Frontend-Komponenten
+
+- Neue Komponente `CalendarSidebar.tsx` (~280 Zeilen)
+- `ICON_MAP` mit 50+ Lucide-Icons + `ICON_PALETTE` mit 35 ausgewählten Symbolen für das Picker-Grid
+- 16-Farben-`COLOR_PALETTE` orientiert an Outlook
+- Neuer UI-Store-State `hiddenCalendarIds[]` mit `toggleCalendar()` und `showOnlyCalendar()`
+
+---
+
 ## [3.5.6] — 2026-05-18 — Kalender-Verwaltung: Mehrere Kalender, Farben, Symbole, Sortierung
 
 ### Added

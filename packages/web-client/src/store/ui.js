@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 export const useUiStore = create((set, get) => ({
     selectedFolderId: null,
+    selectedFolderSource: 'tree',
     selectedMessageId: null,
     composeOpen: false,
     composeCtx: null,
@@ -9,7 +10,14 @@ export const useUiStore = create((set, get) => ({
     selectedIds: new Set(),
     lastSelectedId: null,
     filter: 'all',
-    setSelectedFolder: (id) => set({ selectedFolderId: id, selectedMessageId: null, selectedIds: new Set(), lastSelectedId: null, filter: 'all' }),
+    setSelectedFolder: (id, source = 'tree') => set({
+        selectedFolderId: id,
+        selectedFolderSource: source,
+        selectedMessageId: null,
+        selectedIds: new Set(),
+        lastSelectedId: null,
+        filter: 'all',
+    }),
     setSelectedMessage: (id) => set({ selectedMessageId: id }),
     openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', ...ctx } }),
     closeCompose: () => set({ composeOpen: false, composeCtx: null }),
