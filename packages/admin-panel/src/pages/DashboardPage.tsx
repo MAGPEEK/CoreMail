@@ -1,9 +1,11 @@
+import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Users, Globe, Mail, HardDrive, Activity,
   AlertTriangle, CheckCircle, Clock, TrendingUp,
   Inbox, RefreshCw, XCircle, Layers,
-  ShieldCheck, UserPlus,
+  ShieldCheck, UserPlus, Settings, Server, Cpu,
+  MemoryStick, LogIn, ShieldAlert,
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar,
@@ -11,6 +13,7 @@ import {
   ResponsiveContainer, Cell,
 } from 'recharts';
 import { api } from '../api/client.js';
+import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
@@ -26,6 +29,15 @@ interface DashboardData {
   queues:  { waiting: number; active: number; failed: number; delayed: number; completed: number };
   recentErrors: { id: string; timestamp: string; level: string; service: string; message: string }[];
   recentAuditEvents: { id: string; timestamp: string; actorEmail: string; action: string; targetType: string; targetName: string; success: boolean }[];
+  server: {
+    version: string; hostname: string; platform: string; arch: string;
+    nodeVersion: string; pid: number; uptimeSeconds: number; startedAt: string;
+    memory: { heapUsed: number; heapTotal: number; rss: number; systemTotal: number; systemFree: number };
+    cpu:    { cores: number; model: string; load1: number; load5: number; load15: number };
+  };
+  activeSessions: number;
+  recentLogins:   { id: string; timestamp: string; actorEmail: string; ipAddress: string | null; userAgent: string }[];
+  securityHits24h: number;
   generatedAt: string;
 }
 
@@ -48,6 +60,15 @@ function timeAgo(iso: string): string {
   if (diff < 3600)  return `vor ${Math.floor(diff / 60)}min`;
   if (diff < 86400) return `vor ${Math.floor(diff / 3600)}h`;
   return `vor ${Math.floor(diff / 86400)}d`;
+}
+
+function fmtUptime(sec: number): { primary: string; secondary: string } {
+  const days = Math.floor(sec / 86400);
+  const hours = Math.floor((sec % 86400) / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  if (days > 0) return { primary: `${days} ${days === 1 ? 'Tag' : 'Tage'}`, secondary: `${hours} h ${mins} min` };
+  if (hours > 0) return { primary: `${hours} h`, secondary: `${mins} min` };
+  return { primary: `${mins} min`, secondary: `${sec % 60} s` };
 }
 
 function barColor(pct: number): string {
@@ -125,13 +146,87 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   );
 }
 
+// ── Mini-Bar (für RAM/CPU-Anzeige) ────────────────────────────────────────────
+function MiniBar({ pct, color }: { pct: number; color: string }) {
+  return (
+    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+      <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+    </div>
+  );
+}
+
+// ── Settings-Popover ─────────────────────────────────────────────────────────
+function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
+  const visible = useDashboardStore((s) => s.visible);
+  const toggle  = useDashboardStore((s) => s.toggle);
+  const setAll  = useDashboardStore((s) => s.setAll);
+  const reset   = useDashboardStore((s) => s.resetDefaults);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [onClose]);
+
+  const groups = [
+    { key: 'kpi',     label: 'Kennzahlen' },
+    { key: 'charts',  label: 'Diagramme & Queue' },
+    { key: 'lists',   label: 'Listen' },
+    { key: 'server',  label: 'Server' },
+  ] as const;
+
+  return (
+    <div
+      ref={ref}
+      className="absolute right-0 top-full mt-2 w-80 bg-white rounded-lg border border-gray-200 shadow-xl z-20"
+    >
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-900">Widgets anzeigen</h3>
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Alle</button>
+          <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Keine</button>
+          <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Standard</button>
+        </div>
+      </div>
+      <div className="max-h-[60vh] overflow-y-auto py-2">
+        {groups.map((g) => {
+          const widgets = WIDGET_CATALOG.filter((w) => w.group === g.key);
+          if (widgets.length === 0) return null;
+          return (
+            <div key={g.key} className="py-1">
+              <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{g.label}</div>
+              {widgets.map((w) => (
+                <label key={w.id} className="flex items-center gap-3 px-4 py-1.5 hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={visible[w.id] ?? true}
+                    onChange={() => toggle(w.id)}
+                    className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
+                  />
+                  <span className="text-sm text-gray-700">{w.label}</span>
+                </label>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Hauptkomponente ───────────────────────────────────────────────────────────
 export function DashboardPage() {
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn:  () => api.get<DashboardData>('/admin/dashboard'),
-    refetchInterval: 30_000, // alle 30 Sekunden automatisch aktualisieren
+    refetchInterval: 30_000,
   });
+  const [showSettings, setShowSettings] = useState(false);
+  const visible = useDashboardStore((s) => s.visible);
+  const isVisible = (id: WidgetId) => visible[id] ?? true;
 
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString('de-DE') : '—';
 
@@ -148,9 +243,20 @@ export function DashboardPage() {
 
   if (!data) return null;
 
-  const { users, domains, messages, storage, queues, recentErrors, recentAuditEvents } = data;
+  const { users, domains, messages, storage, queues, recentErrors, recentAuditEvents, server, activeSessions, recentLogins, securityHits24h } = data;
   const totalQueueItems = queues.waiting + queues.active + queues.delayed;
   const hasQueueProblem = queues.failed > 0;
+  const uptime = fmtUptime(server.uptimeSeconds);
+  const heapPct = server.memory.heapTotal > 0 ? Math.round((server.memory.heapUsed / server.memory.heapTotal) * 100) : 0;
+  const sysMemUsed = server.memory.systemTotal - server.memory.systemFree;
+  const sysMemPct = server.memory.systemTotal > 0 ? Math.round((sysMemUsed / server.memory.systemTotal) * 100) : 0;
+  const cpuPct = server.cpu.cores > 0 ? Math.min(100, Math.round((server.cpu.load1 / server.cpu.cores) * 100)) : 0;
+
+  const anyKpi = isVisible('kpi-users') || isVisible('kpi-domains') || isVisible('kpi-messages') || isVisible('kpi-storage');
+  const anyQueueOrChart = isVisible('queue-status') || isVisible('mails-chart');
+  const anyRankOrDomain = isVisible('storage-ranking') || isVisible('domains-chart');
+  const anyErrorOrAudit = isVisible('recent-errors') || isVisible('recent-audit');
+  const anyServer = isVisible('server-info') || isVisible('server-resources') || isVisible('security-stats');
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px]">
@@ -161,283 +267,439 @@ export function DashboardPage() {
           <h1 className="text-xl font-semibold text-gray-900">Systemübersicht</h1>
           <p className="text-xs text-gray-400 mt-0.5">Letzte Aktualisierung: {lastUpdate} · Auto-Refresh alle 30s</p>
         </div>
-        <button
-          onClick={() => void refetch()}
-          className="btn-secondary text-xs"
-          title="Jetzt aktualisieren"
-        >
-          <RefreshCw size={13} />
-          Aktualisieren
-        </button>
+        <div className="flex items-center gap-2 relative">
+          <button
+            onClick={() => void refetch()}
+            className="btn-secondary text-xs"
+            title="Jetzt aktualisieren"
+          >
+            <RefreshCw size={13} />
+            Aktualisieren
+          </button>
+          <button
+            onClick={() => setShowSettings((v) => !v)}
+            className="btn-secondary text-xs"
+            title="Widgets ein-/ausblenden"
+          >
+            <Settings size={13} />
+            Anzeige
+          </button>
+          {showSettings && <WidgetSettingsPopover onClose={() => setShowSettings(false)} />}
+        </div>
       </div>
 
       {/* ── KPI-Karten (Zeile 1) ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          icon={Users}  color="bg-blue-500"
-          label="Benutzer gesamt"
-          value={users.total}
-          sub={`${users.active} aktiv · ${users.inactive} deaktiviert`}
-          trend={{ value: users.newWeek, label: 'diese Woche neu' }}
-        />
-        <KpiCard
-          icon={Globe} color="bg-indigo-500"
-          label="Domains"
-          value={domains.total}
-          sub={`${data.sharedMailboxes} geteilte Postfächer · ${data.groups} Gruppen`}
-        />
-        <KpiCard
-          icon={Mail}  color="bg-sky-500"
-          label="E-Mails gesamt"
-          value={messages.total}
-          sub={`${fmtNum(messages.newDay)} heute · ${fmtNum(messages.newWeek)} diese Woche`}
-          trend={{ value: messages.newDay, label: 'heute' }}
-        />
-        <KpiCard
-          icon={HardDrive} color="bg-violet-500"
-          label="Gesamt-Speicher"
-          value={fmtBytes(storage.totalUsedBytes)}
-          sub={`Top-Nutzer: ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
-        />
-      </div>
-
-      {/* ── Queue-Status + Nachrichten-Chart ─────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {/* Queue-Status */}
-        <div className="card">
-          <SectionTitle icon={Layers} title="SMTP-Queue-Status" />
-          <div className="grid grid-cols-2 gap-3">
-            <QueueBadge label="Wartend" value={queues.waiting}
-              variant={queues.waiting > 100 ? 'warn' : 'default'} />
-            <QueueBadge label="Aktiv" value={queues.active}
-              variant={queues.active > 0 ? 'success' : 'default'} />
-            <QueueBadge label="Fehlerhaft" value={queues.failed}
-              variant={queues.failed > 0 ? 'error' : 'success'} />
-            <QueueBadge label="Verzögert" value={queues.delayed}
-              variant={queues.delayed > 0 ? 'warn' : 'default'} />
-          </div>
-          <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
-            hasQueueProblem
-              ? 'bg-red-50 text-red-700'
-              : totalQueueItems > 200
-              ? 'bg-yellow-50 text-yellow-700'
-              : 'bg-green-50 text-green-700'
-          }`}>
-            {hasQueueProblem
-              ? <><XCircle size={13} /> {queues.failed} fehlerhafte Jobs — Überprüfung empfohlen</>
-              : totalQueueItems > 200
-              ? <><AlertTriangle size={13} /> Hohe Queue-Last ({totalQueueItems} Jobs)</>
-              : <><CheckCircle size={13} /> Alle Queues im Normalbetrieb</>
-            }
-          </div>
+      {anyKpi && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {isVisible('kpi-users') && (
+            <KpiCard
+              icon={Users}  color="bg-blue-500"
+              label="Benutzer gesamt"
+              value={users.total}
+              sub={`${users.active} aktiv · ${users.inactive} deaktiviert`}
+              trend={{ value: users.newWeek, label: 'diese Woche neu' }}
+            />
+          )}
+          {isVisible('kpi-domains') && (
+            <KpiCard
+              icon={Globe} color="bg-indigo-500"
+              label="Domains"
+              value={domains.total}
+              sub={`${data.sharedMailboxes} geteilte Postfächer · ${data.groups} Gruppen`}
+            />
+          )}
+          {isVisible('kpi-messages') && (
+            <KpiCard
+              icon={Mail}  color="bg-sky-500"
+              label="E-Mails gesamt"
+              value={messages.total}
+              sub={`${fmtNum(messages.newDay)} heute · ${fmtNum(messages.newWeek)} diese Woche`}
+              trend={{ value: messages.newDay, label: 'heute' }}
+            />
+          )}
+          {isVisible('kpi-storage') && (
+            <KpiCard
+              icon={HardDrive} color="bg-violet-500"
+              label="Gesamt-Speicher"
+              value={fmtBytes(storage.totalUsedBytes)}
+              sub={`Top-Nutzer: ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
+            />
+          )}
         </div>
+      )}
 
-        {/* Mail-Aktivitäts-Chart */}
-        <div className="card lg:col-span-2">
-          <SectionTitle icon={TrendingUp} title="E-Mail-Aktivität (letzte 7 Tage)" />
-          <ResponsiveContainer width="100%" height={160}>
-            <AreaChart data={messages.mailsChart} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="mailGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}   />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Area
-                type="monotone" dataKey="count"
-                stroke="#3b82f6" strokeWidth={2}
-                fill="url(#mailGrad)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      {/* ── Server-Sektion ────────────────────────────────────────────────── */}
+      {anyServer && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-      {/* ── Speicher-Ranking + Domain-Übersicht ──────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-        {/* Top-10 Speichernutzer */}
-        <div className="card">
-          <SectionTitle icon={HardDrive} title="Speicher-Ranking (Top 10)" />
-          <div className="space-y-3">
-            {storage.topUsers.length === 0 && (
-              <p className="text-xs text-gray-400 text-center py-4">Keine Daten</p>
-            )}
-            {storage.topUsers.map((u, i) => (
-              <div key={u.id}>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs text-gray-400 w-4 shrink-0">#{i + 1}</span>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-800 truncate">{u.displayName}</p>
-                      <p className="text-[11px] text-gray-400 truncate">{u.email}</p>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0 ml-2">
-                    <p className="text-xs font-semibold text-gray-700">{fmtBytes(u.usedBytes)}</p>
-                    <p className="text-[11px] text-gray-400">{u.usedPercent}%</p>
-                  </div>
+          {/* Server-Info: Uptime, Version, Hostname */}
+          {isVisible('server-info') && (
+            <div className="card">
+              <SectionTitle icon={Server} title="Server" />
+              <div className="space-y-3">
+                <div className="flex items-end gap-2">
+                  <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{uptime.primary}</p>
+                  <p className="text-sm text-gray-400 mb-0.5">{uptime.secondary}</p>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${barColor(u.usedPercent)}`}
-                    style={{ width: `${Math.min(u.usedPercent, 100)}%` }}
-                  />
+                <p className="text-xs text-gray-500">Uptime seit {new Date(server.startedAt).toLocaleString('de-DE')}</p>
+                <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+                  <span className="text-gray-400">Version</span>
+                  <span className="text-gray-700 font-mono">v{server.version}</span>
+                  <span className="text-gray-400">Hostname</span>
+                  <span className="text-gray-700 font-mono truncate" title={server.hostname}>{server.hostname}</span>
+                  <span className="text-gray-400">Plattform</span>
+                  <span className="text-gray-700 font-mono">{server.platform}/{server.arch}</span>
+                  <span className="text-gray-400">Node.js</span>
+                  <span className="text-gray-700 font-mono">{server.nodeVersion}</span>
+                  <span className="text-gray-400">PID</span>
+                  <span className="text-gray-700 font-mono">{server.pid}</span>
+                  <span className="text-gray-400">Sessions aktiv</span>
+                  <span className="text-gray-700 tabular-nums">{fmtNum(activeSessions)}</span>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          )}
 
-        {/* Domain-Übersicht */}
-        <div className="card">
-          <SectionTitle icon={Globe} title="Domains & Benutzerverteilung" />
-          {domains.list.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-4">Keine Domains konfiguriert</p>
-          ) : (
-            <>
-              <ResponsiveContainer width="100%" height={120}>
-                <BarChart data={domains.list} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
+          {/* Server-Ressourcen: CPU + RAM */}
+          {isVisible('server-resources') && (
+            <div className="card">
+              <SectionTitle icon={Cpu} title="Ressourcen" />
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Cpu size={12} className="text-gray-400" /> CPU-Last (1 min)</span>
+                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{server.cpu.load1.toFixed(2)} / {server.cpu.cores} Cores</span>
+                  </div>
+                  <MiniBar pct={cpuPct} color={barColor(cpuPct)} />
+                  <p className="text-[11px] text-gray-400 mt-1">5 min: {server.cpu.load5.toFixed(2)} · 15 min: {server.cpu.load15.toFixed(2)}</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><MemoryStick size={12} className="text-gray-400" /> System-RAM</span>
+                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(sysMemUsed)} / {fmtBytes(server.memory.systemTotal)}</span>
+                  </div>
+                  <MiniBar pct={sysMemPct} color={barColor(sysMemPct)} />
+                  <p className="text-[11px] text-gray-400 mt-1">Frei: {fmtBytes(server.memory.systemFree)}</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> Node-Heap</span>
+                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(server.memory.heapTotal)}</span>
+                  </div>
+                  <MiniBar pct={heapPct} color={barColor(heapPct)} />
+                  <p className="text-[11px] text-gray-400 mt-1">RSS: {fmtBytes(server.memory.rss)}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sicherheits-Statistik */}
+          {isVisible('security-stats') && (
+            <div className="card">
+              <SectionTitle icon={ShieldAlert} title="Sicherheit (24h)" />
+              <div className="space-y-3">
+                <div className="flex items-end gap-2">
+                  <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{fmtNum(securityHits24h)}</p>
+                  <p className="text-sm text-gray-400 mb-0.5">DNSBL-Treffer</p>
+                </div>
+                <p className="text-xs text-gray-500">Anzahl blockierter oder markierter IPs in den letzten 24 Stunden</p>
+                <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+                  <span className="text-gray-400">Letzte Fehler</span>
+                  <span className="text-gray-700 tabular-nums">{recentErrors.length}</span>
+                  <span className="text-gray-400">Audit-Events</span>
+                  <span className="text-gray-700 tabular-nums">{recentAuditEvents.length}</span>
+                  <span className="text-gray-400">Anmeldungen</span>
+                  <span className="text-gray-700 tabular-nums">{recentLogins.length}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Queue-Status + Nachrichten-Chart ─────────────────────────────── */}
+      {anyQueueOrChart && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+          {/* Queue-Status */}
+          {isVisible('queue-status') && (
+            <div className="card">
+              <SectionTitle icon={Layers} title="SMTP-Queue-Status" />
+              <div className="grid grid-cols-2 gap-3">
+                <QueueBadge label="Wartend" value={queues.waiting}
+                  variant={queues.waiting > 100 ? 'warn' : 'default'} />
+                <QueueBadge label="Aktiv" value={queues.active}
+                  variant={queues.active > 0 ? 'success' : 'default'} />
+                <QueueBadge label="Fehlerhaft" value={queues.failed}
+                  variant={queues.failed > 0 ? 'error' : 'success'} />
+                <QueueBadge label="Verzögert" value={queues.delayed}
+                  variant={queues.delayed > 0 ? 'warn' : 'default'} />
+              </div>
+              <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
+                hasQueueProblem
+                  ? 'bg-red-50 text-red-700'
+                  : totalQueueItems > 200
+                  ? 'bg-yellow-50 text-yellow-700'
+                  : 'bg-green-50 text-green-700'
+              }`}>
+                {hasQueueProblem
+                  ? <><XCircle size={13} /> {queues.failed} fehlerhafte Jobs — Überprüfung empfohlen</>
+                  : totalQueueItems > 200
+                  ? <><AlertTriangle size={13} /> Hohe Queue-Last ({totalQueueItems} Jobs)</>
+                  : <><CheckCircle size={13} /> Alle Queues im Normalbetrieb</>
+                }
+              </div>
+            </div>
+          )}
+
+          {/* Mail-Aktivitäts-Chart */}
+          {isVisible('mails-chart') && (
+            <div className={`card ${isVisible('queue-status') ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
+              <SectionTitle icon={TrendingUp} title="E-Mail-Aktivität (letzte 7 Tage)" />
+              <ResponsiveContainer width="100%" height={160}>
+                <AreaChart data={messages.mailsChart} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="mailGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}   />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip
-                    formatter={(v: number) => [`${v} Benutzer`, '']}
-                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Area
+                    type="monotone" dataKey="count"
+                    stroke="#3b82f6" strokeWidth={2}
+                    fill="url(#mailGrad)"
                   />
-                  <Bar dataKey="userCount" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                    {domains.list.map((d, i) => (
-                      <Cell key={d.id} fill={['#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899'][i % 5]} />
-                    ))}
-                  </Bar>
-                </BarChart>
+                </AreaChart>
               </ResponsiveContainer>
-              <div className="mt-3 divide-y divide-gray-50">
-                {domains.list.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between py-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${d.active ? 'bg-green-400' : 'bg-gray-300'}`} />
-                      <span className="text-xs font-mono text-gray-700">{d.name}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Speicher-Ranking + Domain-Übersicht ──────────────────────────── */}
+      {anyRankOrDomain && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Top-10 Speichernutzer */}
+          {isVisible('storage-ranking') && (
+            <div className="card">
+              <SectionTitle icon={HardDrive} title="Speicher-Ranking (Top 10)" />
+              <div className="space-y-3">
+                {storage.topUsers.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-4">Keine Daten</p>
+                )}
+                {storage.topUsers.map((u, i) => (
+                  <div key={u.id}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs text-gray-400 w-4 shrink-0">#{i + 1}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-gray-800 truncate">{u.displayName}</p>
+                          <p className="text-[11px] text-gray-400 truncate">{u.email}</p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0 ml-2">
+                        <p className="text-xs font-semibold text-gray-700">{fmtBytes(u.usedBytes)}</p>
+                        <p className="text-[11px] text-gray-400">{u.usedPercent}%</p>
+                      </div>
                     </div>
-                    <span className="text-xs text-gray-500">{d.userCount} Benutzer</span>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${barColor(u.usedPercent)}`}
+                        style={{ width: `${Math.min(u.usedPercent, 100)}%` }}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
-            </>
+            </div>
+          )}
+
+          {/* Domain-Übersicht */}
+          {isVisible('domains-chart') && (
+            <div className="card">
+              <SectionTitle icon={Globe} title="Domains & Benutzerverteilung" />
+              {domains.list.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-4">Keine Domains konfiguriert</p>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <BarChart data={domains.list} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip
+                        formatter={(v: number) => [`${v} Benutzer`, '']}
+                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                      />
+                      <Bar dataKey="userCount" radius={[4, 4, 0, 0]} maxBarSize={40}>
+                        {domains.list.map((d, i) => (
+                          <Cell key={d.id} fill={['#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899'][i % 5]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="mt-3 divide-y divide-gray-50">
+                    {domains.list.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between py-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${d.active ? 'bg-green-400' : 'bg-gray-300'}`} />
+                          <span className="text-xs font-mono text-gray-700">{d.name}</span>
+                        </div>
+                        <span className="text-xs text-gray-500">{d.userCount} Benutzer</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
-      </div>
+      )}
 
       {/* ── Fehler-Log + Audit-Trail ─────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {anyErrorOrAudit && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-        {/* Letzte Fehler */}
-        <div className="card">
-          <SectionTitle icon={AlertTriangle} title="Letzte Fehler & Warnungen (30 Tage)" />
-          {recentErrors.length === 0 ? (
-            <div className="flex items-center gap-2 py-6 justify-center text-green-600">
-              <CheckCircle size={16} />
-              <span className="text-sm">Keine Fehler in den letzten 30 Tagen</span>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {recentErrors.map((e) => (
-                <div key={e.id} className="flex items-start gap-2.5 p-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <span className={`shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                    e.level === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
-                  }`}>
-                    {e.level}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs text-gray-700 truncate">{e.message}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      <span className="font-mono">{e.service}</span> · {timeAgo(e.timestamp)}
-                    </p>
-                  </div>
+          {/* Letzte Fehler */}
+          {isVisible('recent-errors') && (
+            <div className="card">
+              <SectionTitle icon={AlertTriangle} title="Letzte Fehler & Warnungen (30 Tage)" />
+              {recentErrors.length === 0 ? (
+                <div className="flex items-center gap-2 py-6 justify-center text-green-600">
+                  <CheckCircle size={16} />
+                  <span className="text-sm">Keine Fehler in den letzten 30 Tagen</span>
                 </div>
-              ))}
+              ) : (
+                <div className="space-y-2">
+                  {recentErrors.map((e) => (
+                    <div key={e.id} className="flex items-start gap-2.5 p-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
+                      <span className={`shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        e.level === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {e.level}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs text-gray-700 truncate">{e.message}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          <span className="font-mono">{e.service}</span> · {timeAgo(e.timestamp)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Audit-Trail */}
+          {isVisible('recent-audit') && (
+            <div className="card">
+              <SectionTitle icon={ShieldCheck} title="Letzte Admin-Aktionen" />
+              {recentAuditEvents.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-6">Noch keine Aktionen protokolliert</p>
+              ) : (
+                <div className="divide-y divide-gray-50">
+                  {recentAuditEvents.map((e) => (
+                    <div key={e.id} className="flex items-start gap-2.5 py-2.5">
+                      <div className={`shrink-0 mt-0.5 w-5 h-5 rounded-full flex items-center justify-center ${
+                        e.success ? 'bg-green-100' : 'bg-red-100'
+                      }`}>
+                        {e.success
+                          ? <CheckCircle size={11} className="text-green-600" />
+                          : <XCircle    size={11} className="text-red-600"   />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs text-gray-700">
+                          <span className="font-medium">{e.actorEmail}</span>
+                          <span className="text-gray-400"> · </span>
+                          <span className="font-mono text-gray-600">{e.action}</span>
+                          {e.targetName && (
+                            <span className="text-gray-400"> → {e.targetName}</span>
+                          )}
+                        </p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{e.targetType} · {timeAgo(e.timestamp)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
+      )}
 
-        {/* Audit-Trail */}
+      {/* ── Letzte Anmeldungen ───────────────────────────────────────────── */}
+      {isVisible('recent-logins') && (
         <div className="card">
-          <SectionTitle icon={ShieldCheck} title="Letzte Admin-Aktionen" />
-          {recentAuditEvents.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-6">Noch keine Aktionen protokolliert</p>
+          <SectionTitle icon={LogIn} title="Letzte Anmeldungen" />
+          {recentLogins.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-6">Keine Anmeldungen protokolliert</p>
           ) : (
             <div className="divide-y divide-gray-50">
-              {recentAuditEvents.map((e) => (
-                <div key={e.id} className="flex items-start gap-2.5 py-2.5">
-                  <div className={`shrink-0 mt-0.5 w-5 h-5 rounded-full flex items-center justify-center ${
-                    e.success ? 'bg-green-100' : 'bg-red-100'
-                  }`}>
-                    {e.success
-                      ? <CheckCircle size={11} className="text-green-600" />
-                      : <XCircle    size={11} className="text-red-600"   />}
-                  </div>
+              {recentLogins.map((l) => (
+                <div key={l.id} className="flex items-center justify-between py-2.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-gray-700">
-                      <span className="font-medium">{e.actorEmail}</span>
-                      <span className="text-gray-400"> · </span>
-                      <span className="font-mono text-gray-600">{e.action}</span>
-                      {e.targetName && (
-                        <span className="text-gray-400"> → {e.targetName}</span>
-                      )}
+                    <p className="text-xs text-gray-700 font-medium truncate">{l.actorEmail}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                      {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || 'unbekannt'}{l.userAgent.length > 60 ? '…' : ''}
                     </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{e.targetType} · {timeAgo(e.timestamp)}</p>
                   </div>
+                  <span className="text-[11px] text-gray-400 shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
-      </div>
+      )}
 
       {/* ── System-Info-Leiste ────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="card flex items-center gap-3 py-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-            <Inbox size={14} className="text-blue-600" />
+      {isVisible('system-strip') && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="card flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+              <Inbox size={14} className="text-blue-600" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Queue-Einträge</p>
+              <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-500">Queue-Einträge</p>
-            <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
+          <div className="card flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
+              <Activity size={14} className="text-green-600" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Geliefert (kumuliert)</p>
+              <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
+            </div>
+          </div>
+          <div className="card flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
+              <UserPlus size={14} className="text-purple-600" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Neue Benutzer (7 Tage)</p>
+              <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
+            </div>
+          </div>
+          <div className="card flex items-center gap-3 py-3">
+            <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
+              <Clock size={14} className="text-orange-600" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Mails heute eingegangen</p>
+              <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
+            </div>
           </div>
         </div>
-        <div className="card flex items-center gap-3 py-3">
-          <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
-            <Activity size={14} className="text-green-600" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Geliefert (kumuliert)</p>
-            <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
-          </div>
-        </div>
-        <div className="card flex items-center gap-3 py-3">
-          <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-            <UserPlus size={14} className="text-purple-600" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Neue Benutzer (7 Tage)</p>
-            <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
-          </div>
-        </div>
-        <div className="card flex items-center gap-3 py-3">
-          <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
-            <Clock size={14} className="text-orange-600" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500">Mails heute eingegangen</p>
-            <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
-          </div>
-        </div>
-      </div>
+      )}
 
     </div>
   );

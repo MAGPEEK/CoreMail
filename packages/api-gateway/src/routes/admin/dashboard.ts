@@ -3,6 +3,22 @@ import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
+import os from 'node:os';
+import { readFile } from 'node:fs/promises';
+
+// Boot-Zeit + Coremail-Version einmalig ermitteln
+const PROCESS_STARTED_AT = new Date();
+let _appVersion: string | null = null;
+async function getAppVersion(): Promise<string> {
+  if (_appVersion !== null) return _appVersion;
+  try {
+    const raw = await readFile(new URL('../../../../../package.json', import.meta.url), 'utf-8');
+    _appVersion = (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
+  } catch {
+    _appVersion = process.env['COREMAIL_VERSION'] ?? 'unknown';
+  }
+  return _appVersion;
+}
 
 export const adminDashboardRouter: RouterType = Router();
 adminDashboardRouter.use(requireAdmin);
@@ -44,6 +60,10 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       recentAuditEvents,
       mailsPerDay,
       queueCounts,
+      activeSessions,
+      recentLogins,
+      securityHits24h,
+      appVersion,
     ] = await Promise.all([
       // Benutzer
       prisma.user.count(),
@@ -113,6 +133,23 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       getOutboundQueue().getJobCounts('waiting', 'active', 'failed', 'delayed', 'completed').catch(() => ({
         waiting: 0, active: 0, failed: 0, delayed: 0, completed: 0,
       })),
+
+      // Aktive Sessions (nicht abgelaufen)
+      prisma.session.count({ where: { expiresAt: { gt: now } } }).catch(() => 0),
+
+      // Letzte erfolgreiche Logins (aus AuditLog mit action LIKE login)
+      prisma.auditLog.findMany({
+        where: { action: { contains: 'login', mode: 'insensitive' }, success: true },
+        orderBy: { timestamp: 'desc' },
+        take: 5,
+        select: { id: true, timestamp: true, actorEmail: true, ipAddress: true, userAgent: true },
+      }).catch(() => [] as never[]),
+
+      // DNSBL-Hits in den letzten 24h
+      prisma.dnsblHit.count({ where: { hitAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } } }).catch(() => 0),
+
+      // Coremail-App-Version
+      getAppVersion(),
     ]);
 
     // ── Mails-pro-Tag-Daten normalisieren ─────────────────────────────────────
@@ -133,6 +170,34 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
 
     // ── Speicher gesamt ───────────────────────────────────────────────────────
     const totalUsedBytes  = Number(userStorageAgg._sum.usedBytes ?? 0);
+
+    // ── Server-Metriken aus dem Node-Prozess ────────────────────────────────
+    const mem = process.memoryUsage();
+    const load = os.loadavg();
+    const server = {
+      version:        appVersion,
+      hostname:       os.hostname(),
+      platform:       os.platform(),
+      arch:           os.arch(),
+      nodeVersion:    process.version,
+      pid:            process.pid,
+      uptimeSeconds:  Math.floor(process.uptime()),
+      startedAt:      PROCESS_STARTED_AT.toISOString(),
+      memory: {
+        heapUsed:    mem.heapUsed,
+        heapTotal:   mem.heapTotal,
+        rss:         mem.rss,
+        systemTotal: os.totalmem(),
+        systemFree:  os.freemem(),
+      },
+      cpu: {
+        cores:  os.cpus().length,
+        model:  os.cpus()[0]?.model ?? 'unknown',
+        load1:  Math.round(load[0]! * 100) / 100,
+        load5:  Math.round(load[1]! * 100) / 100,
+        load15: Math.round(load[2]! * 100) / 100,
+      },
+    };
 
     // ── Antwort zusammenbauen ─────────────────────────────────────────────────
     res.json({
@@ -182,6 +247,10 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       },
       recentErrors,
       recentAuditEvents,
+      server,
+      activeSessions,
+      recentLogins,
+      securityHits24h,
       generatedAt: now.toISOString(),
     });
   } catch (err) {

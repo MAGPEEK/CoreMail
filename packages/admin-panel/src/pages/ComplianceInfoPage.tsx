@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.8.0';
+const VERSION        = '3.9.0';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.9.0', date: '2026-05-18', title: 'Übersicht ausgebaut: konfigurierbare Widgets + Server-Info + Uptime',
+    notes: 'Systemübersicht komplett überarbeitet. Neuer „Anzeige"-Button öffnet Popover mit Checkboxen für jedes Widget — User entscheidet selbst, was sichtbar ist (in 4 Gruppen: Kennzahlen, Diagramme & Queue, Listen, Server). Auswahl wird in localStorage persistiert (Key coremail-dashboard-v1). „Alle / Keine / Standard"-Buttons als Schnellaktionen. 3 neue Server-Widgets: (1) Server-Info — Uptime in Tagen/Stunden, Start-Zeitstempel, Coremail-Version, Hostname, Plattform/Arch, Node-Version, PID, aktive Sessions; (2) Ressourcen — CPU-Last (1/5/15 min mit Cores), System-RAM, Node-Heap, RSS, jeweils mit Fortschrittsbalken (grün/gelb/rot); (3) Sicherheit (24h) — DNSBL-Treffer-Counter. Plus „Letzte Anmeldungen" mit IP + User-Agent. Backend (/admin/dashboard): liefert jetzt zusätzlich server{uptime,hostname,memory,cpu,…}, activeSessions, recentLogins, securityHits24h.' },
   { version: '3.8.0', date: '2026-05-18', title: 'Öffentliche Ordner: Crash behoben + ACL vereinheitlicht',
     notes: 'Öffentliche Ordner — Page warf "Cannot read properties of undefined" beim Laden. Ursache: Backend lieferte `_count.messages` und nur 3 Tree-Ebenen, Frontend erwartete aber `messageCount` und beliebig tiefe `children`-Arrays. Fix: Backend baut den Baum jetzt aus Flat-Fetch (alle Folder + _count) zusammen, garantiert `messageCount: number` und `children: []` auf jeder Ebene. ACL vereinheitlicht: Backend speicherte `READ/POST/OWNER`, Frontend zeigte `READ/WRITE/FULL` (Labels „Lesen / Lesen & Schreiben / Vollzugriff"). Komplette Migration auf READ/WRITE/FULL inkl. user-facing Permission-Check. GET /acl liefert jetzt `{id, userId, userEmail, permission}` mit aufgelöster E-Mail. POST /acl akzeptiert `{userEmail, permission}` (User-Lookup serverseitig). Bonus: Build-Failure 3.7.9 in mailboxes.ts behoben (alter `sharedMailboxId_userId`-Upsert nach Schema-Wechsel ungültig — auf Replace-Strategie umgestellt).' },
   { version: '3.7.9', date: '2026-05-18', title: 'Admin-Panel-Audit: Pfad-Doppel-Bug + Exchange-2019-Permissions',

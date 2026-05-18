@@ -9,6 +9,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.9.0] — 2026-05-18 — Übersicht ausgebaut: konfigurierbare Widgets + Server-Info + Uptime
+
+### Added — Systemübersicht ist jetzt konfigurierbar
+
+- **Anzeige-Popover** in der Kopfzeile (Zahnrad „Anzeige") öffnet Checkboxen für jedes Widget. Auswahl persistiert in `localStorage` (`coremail-dashboard-v1`)
+  - Gruppiert nach **Kennzahlen / Diagramme & Queue / Listen / Server**
+  - Schnellaktionen: **Alle / Keine / Standard wiederherstellen**
+  - Neue Widgets, die in späteren Versionen dazukommen, sind by-default sichtbar (`merge`-Logik im persist-Middleware)
+- **Drei neue Server-Widgets**:
+  - **Server-Info** — Uptime in Tagen + Stunden + Minuten (formatiert), Start-Zeitstempel, Coremail-Version, Hostname, `platform/arch`, Node-Version, PID, aktive Sessions
+  - **Ressourcen** — CPU-Last (1/5/15 min) mit `load / cores`-Anzeige + Prozentbalken, System-RAM benutzt/total, Node-Heap, RSS — alle Balken farbcodiert (grün < 75 %, gelb < 90 %, rot ≥ 90 %)
+  - **Sicherheit (24h)** — DNSBL-Treffer-Counter der letzten 24 h plus Mini-Kennzahlen (letzte Fehler, Audit-Events, Anmeldungen)
+- **Letzte Anmeldungen** als eigenes Widget (Top 5 aus `AuditLog` mit `action LIKE 'login'`) — zeigt E-Mail, IP, User-Agent, relative Zeit
+
+### Changed — Backend `/api/v1/admin/dashboard`
+
+- Antwort erweitert um:
+  - `server` — `{ version, hostname, platform, arch, nodeVersion, pid, uptimeSeconds, startedAt, memory: {heapUsed, heapTotal, rss, systemTotal, systemFree}, cpu: {cores, model, load1, load5, load15} }`
+  - `activeSessions: number` — aktive (nicht abgelaufene) Sessions
+  - `recentLogins: AuditLog[]` — Top 5 erfolgreiche Login-Audit-Events
+  - `securityHits24h: number` — DNSBL-Treffer der letzten 24 h
+- Coremail-Version wird einmalig aus dem Root-`package.json` gelesen (Fallback `COREMAIL_VERSION`-Env)
+- `PROCESS_STARTED_AT` als Modul-Konstante gesetzt — Uptime-Anzeige startet ab API-Gateway-Start
+
+### Files
+
+- `packages/admin-panel/src/store/dashboard.ts` — neuer Zustand-Store mit Widget-Katalog + persist
+- `packages/admin-panel/src/pages/DashboardPage.tsx` — refaktoriert auf Widget-Toggle-Logik, 3 neue Server-Widgets, neues Login-Widget
+- `packages/api-gateway/src/routes/admin/dashboard.ts` — Server-Metriken + 3 neue Promise-Queries (Sessions, Logins, DNSBL)
+
+---
+
 ## [3.8.0] — 2026-05-18 — Öffentliche Ordner: Crash behoben + ACL vereinheitlicht (READ/WRITE/FULL)
 
 ### Fixed
