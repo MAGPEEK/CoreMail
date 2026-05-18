@@ -7,6 +7,7 @@ import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
+import { AnimatedCounter } from './AnimatedCounter.js';
 import type { Folder } from '../api/types.js';
 
 export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
@@ -59,11 +60,13 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
     }));
 
   return (
-    <div className="absolute top-0 left-80 right-0 z-20 bg-accent text-white border-b border-accent/50 flex items-center gap-1 px-3 py-2 shadow-md">
-      <button onClick={clearSelection} className="p-1 hover:bg-white/10 rounded" title="Auswahl aufheben">
+    <div className="absolute top-0 left-80 right-0 z-20 bg-accent text-white border-b border-accent/50 flex items-center gap-1 px-3 py-2 shadow-md animate-slide-down">
+      <button onClick={clearSelection} className="p-1 hover:bg-white/10 rounded transition-all duration-150 active:scale-90" title="Auswahl aufheben">
         <X size={16} />
       </button>
-      <span className="text-sm font-medium ml-1">{count} ausgewählt</span>
+      <span className="text-sm font-medium ml-1">
+        <AnimatedCounter value={count} /> ausgewählt
+      </span>
       <div className="flex-1" />
 
       <button onClick={() => run('archive', { undoMsg: `${count} archiviert`, undoFolderId: currentFolderId })}

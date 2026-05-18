@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.2.3';
+const VERSION        = '3.4.3';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.4.3', date: '2026-05-18', title: 'OWA: Microinteractions · Counter-Animationen · TopBar-Polish · Halo-Pulse',
+    notes: 'Halo-Pulse am Neue-Mail-Button (box-shadow alle 3s), Plus-Icon rotiert 90° beim Hover. Checkbox-Bounce beim Auswählen (scale 0.5→1.15→1.0, cubic-bezier overshoot 240ms). AnimatedCounter-Komponente für Unread-Counts (FolderTree), Liste-Header und BulkToolbar — Scale + Akzent-Farbblitz beim Wert-Wechsel. BulkToolbar slide-down (200ms ease-out) statt abrupt. Subject-Underline-on-hover zusätzlich zur Akzent-Färbung. Folder-Drop-Pulse: kontinuierlicher box-shadow-Pulse beim Drag-Over. Compose-Send-Button: Loader2-Spinner während Versendung; Send-Icon translate-x-0.5 beim Hover. TopBar-Polish: App-Switcher mit hover:translate-y-[-1px], aktiv mit shadow-sm; Suchfeld bei Focus weiß mit dunkler Schrift + shadow-md; Glocke hover:rotate-12, Zahnrad hover:rotate-45; Avatar mit Avatar-Komponente (hash-Farbe), ring-white/40 beim Hover; Chevron flippt 180°; Profile-Dropdown mit fly-in. Komplette Umsetzung von Phase-1 (Quick Wins) + Phase-2 (Microinteractions) aus dem UX-Polish-Plan.' },
   { version: '3.2.3', date: '2026-05-18', title: 'OWA-Polish · gröberes Compose · Settings-Konsolidierung · DnD-Fix',
     notes: 'Phase-1 Microinteractions: globale .btn-Klassen mit transition-all 150ms ease-out, active:scale-95, sichtbarer Focus-Ring, Disabled-Stil; hover:shadow-md auf btn-primary, hover:border + shadow-sm auf btn-secondary. CSS-Keyframes pulse-soft (sanft pulsierender Unread-Dot) und slide-in-left (Akzent-Balken). MessageList-Rows mit Hover-Shadow, linker Akzent-Border für Ungelesene, Subject färbt sich akzent beim Hover, Quick-Actions faden+sliden rein, Datum fadet aus, Flag-/Checkbox-Icons mit subtilen Scale-Effekten. FolderTree mit animiertem Akzentbalken, hover:translate-x-0.5, Icon-Scale beim Hover, Unread-Count tabular-nums. KW-Toggle umgezogen von Kalender-Sidebar → Einstellungen → Allgemein → Kalender (Settings-Konsolidierung). Compose-Fenster vergrößert (880×78vh, Editor min 360px). Folder-DnD-Bug behoben (dnd-kit-ID-Kollision durch contextKey, separate Drop/Drag-Refs). "Ordner öffnen" aus Rechtsklick entfernt. UI-Strings ECP→BCP umbenannt (29 Vorkommen).' },
   { version: '3.2.2', date: '2026-05-18', title: 'OWA: 4 Sprachen · Folder-Hierarchie · Kalenderwochen · Dialog-Fixes',

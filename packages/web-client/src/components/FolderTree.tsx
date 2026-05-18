@@ -12,6 +12,7 @@ import type { Folder as FolderType } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
+import { AnimatedCounter } from './AnimatedCounter.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 
@@ -101,7 +102,7 @@ function FolderItem({
     <div
       ref={setDropRef}
       className={`relative rounded-sm transition-all duration-150 ${
-        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15 scale-[1.02]' : ''
+        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
       }`}
     >
       {/* Animierter Akzentbalken links bei aktivem Ordner */}
@@ -137,7 +138,7 @@ function FolderItem({
         <Icon size={15} className="shrink-0 transition-transform duration-150 group-hover:scale-110" style={folder.color ? { color: folder.color } : undefined} />
         <span className="flex-1 text-left truncate">{label}</span>
         {folder.unreadCount > 0 && (
-          <span className="text-xs font-bold text-accent tabular-nums">{folder.unreadCount}</span>
+          <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent" />
         )}
       </div>
     </div>
@@ -408,7 +409,7 @@ export function FolderTree({ onNewMail }: Props) {
       <div className="p-3">
         <button
           onClick={onNewMail}
-          className="btn-primary w-full justify-center group/newmail"
+          className="btn-primary w-full justify-center group/newmail animate-halo"
         >
           <Plus size={15} className="transition-transform duration-200 group-hover/newmail:rotate-90" />
           {t('new_mail')}

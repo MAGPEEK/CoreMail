@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  X, Minus, Maximize2, Send, Paperclip, Save,
+  X, Minus, Maximize2, Send, Paperclip, Save, Loader2,
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   List, ListOrdered, Link2, Undo2, Redo2, Eraser,
@@ -743,10 +743,19 @@ export function ComposeWindow() {
           type="button"
           onClick={() => sendMutation.mutate()}
           disabled={sendMutation.isPending || !to.trim()}
-          className="btn-primary text-xs disabled:opacity-50"
+          className="btn-primary text-xs min-w-[100px] justify-center"
         >
-          <Send size={14} />
-          {sendMutation.isPending ? 'Senden...' : 'Senden'}
+          {sendMutation.isPending ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              Senden…
+            </>
+          ) : (
+            <>
+              <Send size={14} className="transition-transform duration-150 group-hover:translate-x-0.5" />
+              Senden
+            </>
+          )}
         </button>
       </div>
     </div>

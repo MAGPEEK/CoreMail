@@ -1,7 +1,7 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { X, Minus, Maximize2, Send, Paperclip, Save, Bold, Italic, Underline as LucideUnderline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Link2, Undo2, Redo2, Eraser, ChevronDown, Quote, Code2, Highlighter, Type, FileIcon, } from 'lucide-react';
+import { X, Minus, Maximize2, Send, Paperclip, Save, Loader2, Bold, Italic, Underline as LucideUnderline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Link2, Undo2, Redo2, Eraser, ChevronDown, Quote, Code2, Highlighter, Type, FileIcon, } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import UnderlineExt from '@tiptap/extension-underline';
@@ -265,5 +265,5 @@ export function ComposeWindow() {
                                     }
                                     // Reset so dieselbe Datei erneut gewählt werden kann
                                     e.target.value = '';
-                                } }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Datei anh\u00E4ngen", onClick: () => fileInputRef.current?.click(), children: [_jsx(Paperclip, { size: 14 }), "Anhang", attachments.length > 0 && (_jsx("span", { className: "ml-0.5 bg-blue-500 text-white rounded-full text-[10px] w-4 h-4 flex items-center justify-center shrink-0", children: attachments.length }))] }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Als Entwurf speichern", children: [_jsx(Save, { size: 14 }), "Entwurf"] })] }), _jsxs("button", { type: "button", onClick: () => sendMutation.mutate(), disabled: sendMutation.isPending || !to.trim(), className: "btn-primary text-xs disabled:opacity-50", children: [_jsx(Send, { size: 14 }), sendMutation.isPending ? 'Senden...' : 'Senden'] })] })] }));
+                                } }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Datei anh\u00E4ngen", onClick: () => fileInputRef.current?.click(), children: [_jsx(Paperclip, { size: 14 }), "Anhang", attachments.length > 0 && (_jsx("span", { className: "ml-0.5 bg-blue-500 text-white rounded-full text-[10px] w-4 h-4 flex items-center justify-center shrink-0", children: attachments.length }))] }), _jsxs("button", { type: "button", className: "btn-ghost text-xs", title: "Als Entwurf speichern", children: [_jsx(Save, { size: 14 }), "Entwurf"] })] }), _jsx("button", { type: "button", onClick: () => sendMutation.mutate(), disabled: sendMutation.isPending || !to.trim(), className: "btn-primary text-xs min-w-[100px] justify-center", children: sendMutation.isPending ? (_jsxs(_Fragment, { children: [_jsx(Loader2, { size: 14, className: "animate-spin" }), "Senden\u2026"] })) : (_jsxs(_Fragment, { children: [_jsx(Send, { size: 14, className: "transition-transform duration-150 group-hover:translate-x-0.5" }), "Senden"] })) })] })] }));
 }

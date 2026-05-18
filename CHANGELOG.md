@@ -9,6 +9,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.4.3] — 2026-05-18 — OWA: Microinteractions, Counter-Animationen, TopBar-Polish, Halo-Pulse
+
+### Added
+
+- **Halo-Pulse am „Neue E-Mail"-Button** — `box-shadow`-Ring pulsiert alle 3 s (Akzent-Farbe → transparent) und lockt das Auge auf die wichtigste Aktion. Plus-Icon rotiert 90° beim Hover.
+- **Checkbox-Bounce** beim Auswählen einer Nachricht — `scale 0.5 → 1.15 → 1.0` (cubic-bezier overshoot, 240 ms). Spürbares „pop"-Feedback.
+- **AnimatedCounter**-Komponente — Zahlen-Pop-Animation (Scale 1 → 1.35 → 1, Farbe wechselt kurz zu Akzent, 380 ms). Verwendet für:
+  - Unread-Count pro Ordner im FolderTree
+  - Nachrichten-Count im Filter-Header der MessageList
+  - „X ausgewählt" in der BulkToolbar
+- **BulkToolbar slide-down** — fadet und gleitet von oben rein (200 ms ease-out) statt abrupt zu erscheinen.
+- **Subject-Underline-on-hover** in der Nachrichtenliste (zusätzlich zur Akzent-Färbung) — klare „klickbar"-Indikation.
+- **Folder-Drop-Pulse** — beim Drag-Over über einen Ordner pulsiert ein `box-shadow`-Ring kontinuierlich (1.2 s), zusätzlich zu Ring + Scale.
+- **Compose-Send-Spinner** — beim Versenden zeigt der Button einen rotierenden `Loader2` statt nur Textänderung; Send-Icon hat zudem `translate-x-0.5` beim Hover (subtiles „Abflug"-Feeling).
+- **TopBar-Polish**:
+  - App-Switcher: aktive Buttons mit `shadow-sm`, inaktive mit `hover:translate-y-[-1px]` (subtiler Lift) und Icon-Scale
+  - Suchfeld: beim Focus weißer Hintergrund mit dunkler Schrift + `shadow-md` statt `bg-white/30`; Such-Icon färbt sich beim Focus weiß
+  - Glocke (Benachrichtigungen) `hover:rotate-12`, Zahnrad `hover:rotate-45`, beide `active:scale-90`
+  - Avatar im TopBar nutzt jetzt die Avatar-Komponente (hash-Farbe) mit `ring-2 ring-transparent → ring-white/40` beim Hover
+  - Chevron im Profile-Dropdown flippt 180° beim Öffnen
+  - Profile-Dropdown: `animate-fly-in` von oben-rechts, Avatar (md) + Name + E-Mail in Card-Layout
+
+### Changed
+
+- **Phase-1- und Phase-2-Microinteractions abgeschlossen** — alle vorgeschlagenen Punkte aus „Quick Wins" und „Microinteractions" umgesetzt.
+
+---
+
 ## [3.2.3] — 2026-05-18 — OWA-Polish: Hover-Effekte, größeres Compose, Settings-Konsolidierung, DnD-Fix
 
 ### Added

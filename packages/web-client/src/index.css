@@ -117,12 +117,51 @@
     animation: coremail-page-in 180ms ease-out;
   }
 
-  /* New-Mail-Button: subtler Pulse-Halo (alle 4 s) */
+  /* New-Mail-Button: subtler Pulse-Halo (alle 3 s) */
   @keyframes coremail-halo {
-    0%, 100% { box-shadow: 0 0 0 0 rgb(var(--color-accent) / 0.4); }
+    0%, 100% { box-shadow: 0 0 0 0 rgb(var(--color-accent) / 0.45); }
     50%      { box-shadow: 0 0 0 6px rgb(var(--color-accent) / 0); }
   }
   .animate-halo {
     animation: coremail-halo 3s ease-out infinite;
+  }
+
+  /* Checkbox Bounce-In (scale 0.5 → 1.15 → 1.0) */
+  @keyframes coremail-bounce-in {
+    0%   { transform: scale(0.5); opacity: 0.6; }
+    60%  { transform: scale(1.15); opacity: 1;   }
+    100% { transform: scale(1);    opacity: 1;   }
+  }
+  .animate-bounce-in {
+    animation: coremail-bounce-in 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* Counter-Pop: kleiner Scale-Bounce wenn sich die Zahl ändert */
+  @keyframes coremail-count-pop {
+    0%   { transform: scale(1);    }
+    40%  { transform: scale(1.35); color: rgb(var(--color-accent)); }
+    100% { transform: scale(1);    }
+  }
+  .animate-count-pop {
+    animation: coremail-count-pop 380ms ease-out;
+    display: inline-block;
+  }
+
+  /* Slide-down (BulkToolbar) */
+  @keyframes coremail-slide-down {
+    from { opacity: 0; transform: translateY(-12px); }
+    to   { opacity: 1; transform: translateY(0);    }
+  }
+  .animate-slide-down {
+    animation: coremail-slide-down 200ms ease-out;
+  }
+
+  /* Drag-Over-Pulse für Drop-Targets (Folder beim DragOver) */
+  @keyframes coremail-drop-pulse {
+    0%, 100% { box-shadow: 0 0 0 0   rgb(var(--color-accent) / 0.45); }
+    50%      { box-shadow: 0 0 0 4px rgb(var(--color-accent) / 0);    }
+  }
+  .animate-drop-pulse {
+    animation: coremail-drop-pulse 1.2s ease-out infinite;
   }
 }

@@ -13,6 +13,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
+import { AnimatedCounter } from './AnimatedCounter.js';
 import { MessageListSkeleton, EmptyInbox, EmptySearch } from './Skeleton.js';
 
 interface Props {
@@ -89,7 +90,7 @@ function MessageRow({
           onClick={onToggleCheck}
           className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
             checked
-              ? 'bg-accent border-accent text-white scale-100'
+              ? 'bg-accent border-accent text-white animate-bounce-in'
               : 'border-gray-300 dark:border-gray-600 opacity-0 group-hover:opacity-100 hover:border-accent hover:scale-110'
           }`}
           aria-label="Auswählen"
@@ -139,7 +140,7 @@ function MessageRow({
           </div>
           <p className={`text-sm truncate mt-0.5 transition-colors duration-150 ${
             isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'
-          } group-hover:text-accent`}>
+          } group-hover:text-accent group-hover:underline group-hover:underline-offset-2`}>
             {msg.subject || '(kein Betreff)'}
           </p>
         </div>
@@ -385,7 +386,9 @@ export function MessageList({ folderId }: Props) {
         <FilterTab value="unread" label="Ungelesen" />
         <FilterTab value="flagged" label="Markiert" />
         <FilterTab value="attachments" label="Anhang" />
-        <span className="ml-auto text-xs text-gray-500">{filtered.length}</span>
+        <span className="ml-auto text-xs text-gray-500">
+          <AnimatedCounter value={filtered.length} />
+        </span>
       </div>
 
       <div className="flex-1 overflow-y-auto">
