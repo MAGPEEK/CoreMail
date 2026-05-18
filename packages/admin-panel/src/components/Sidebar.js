@@ -1,17 +1,75 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server, BarChart3, Mail, LogOut, } from 'lucide-react';
-import { clearToken } from '../api/client.js';
-const NAV = [
-    { path: '/dashboard', label: 'Übersicht', icon: LayoutDashboard },
-    { path: '/mailboxes', label: 'Postfächer', icon: Mail },
-    { path: '/domains', label: 'Domains', icon: Globe },
-    { path: '/queues', label: 'Warteschlangen', icon: ListOrdered },
-    { path: '/logs', label: 'Protokolle', icon: ScrollText },
-    { path: '/protection', label: 'Schutz', icon: Shield },
-    { path: '/servers', label: 'Server & Health', icon: Server },
-    { path: '/reports', label: 'Berichte', icon: BarChart3 },
-];
+import { LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server, Mail, Settings2, ShieldCheck, Inbox, Workflow, ShieldAlert, Search, Building2, Users, BookUser, ShieldHalf, SearchCheck, BookText, Archive, FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal, Fingerprint, ServerCog, } from 'lucide-react';
+import { useT } from '../i18n/useT.js';
 export function Sidebar() {
-    return (_jsxs("aside", { className: "w-52 shrink-0 bg-gray-900 text-gray-300 flex flex-col h-full", children: [_jsx("div", { className: "px-4 py-4 border-b border-gray-700", children: _jsxs("div", { className: "flex items-center gap-2", children: [_jsx(Mail, { size: 18, className: "text-accent" }), _jsxs("div", { children: [_jsx("p", { className: "text-white font-semibold text-sm", children: "CoreMail ECP" }), _jsx("p", { className: "text-gray-500 text-xs", children: "Admin-Konsole" })] })] }) }), _jsx("nav", { className: "flex-1 overflow-y-auto py-2", children: NAV.map(({ path, label, icon: Icon }) => (_jsxs(NavLink, { to: path, className: ({ isActive }) => `flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors ${isActive ? 'bg-gray-800 text-white border-l-2 border-accent' : 'hover:bg-gray-800 hover:text-white'}`, children: [_jsx(Icon, { size: 15 }), label] }, path))) }), _jsx("div", { className: "p-3 border-t border-gray-700", children: _jsxs("button", { onClick: () => { clearToken(); window.location.href = '/login'; }, className: "w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors", children: [_jsx(LogOut, { size: 14 }), "Abmelden"] }) })] }));
+    const t = useT();
+    const NAV = [
+        { path: '/dashboard', labelKey: 'nav_overview', icon: LayoutDashboard },
+        { path: '/settings', labelKey: 'nav_global_settings', icon: Settings2 },
+        {
+            groupKey: 'nav_group_recipients',
+            items: [
+                { path: '/mailboxes', labelKey: 'nav_mailboxes', icon: Mail },
+                { path: '/shared-mailboxes', labelKey: 'nav_shared_mailboxes', icon: Inbox },
+                { path: '/groups', labelKey: 'nav_groups', icon: Users },
+                { path: '/resources', labelKey: 'nav_resources', icon: Building2 },
+                { path: '/ext-contacts', labelKey: 'nav_ext_contacts', icon: BookUser },
+                { path: '/public-folders', labelKey: 'nav_public_folders', icon: FolderOpen },
+                { path: '/domains', labelKey: 'nav_domains', icon: Globe },
+            ],
+        },
+        {
+            groupKey: 'nav_group_mailflow',
+            items: [
+                { path: '/transport-rules', labelKey: 'nav_transport_rules', icon: Workflow },
+                { path: '/message-trace', labelKey: 'nav_message_trace', icon: Search },
+            ],
+        },
+        {
+            groupKey: 'nav_group_protection',
+            items: [
+                { path: '/protection', labelKey: 'nav_protection', icon: Shield },
+                { path: '/quarantine', labelKey: 'nav_quarantine', icon: ShieldAlert },
+            ],
+        },
+        {
+            groupKey: 'nav_group_infra',
+            items: [
+                { path: '/services', labelKey: 'nav_services', icon: Server },
+                { path: '/smtp-config', labelKey: 'nav_smtp_config', icon: Terminal },
+                { path: '/certificates', labelKey: 'nav_certificates', icon: ShieldCheck },
+                { path: '/oauth-clients', labelKey: 'nav_oauth_clients', icon: KeyRound },
+                { path: '/sso', labelKey: 'nav_sso', icon: Fingerprint },
+                { path: '/ldap', labelKey: 'nav_ldap', icon: ServerCog },
+            ],
+        },
+        {
+            groupKey: 'nav_group_monitoring',
+            items: [
+                { path: '/queues', labelKey: 'nav_queues', icon: ListOrdered },
+                { path: '/servers', labelKey: 'nav_servers', icon: Activity },
+            ],
+        },
+        { path: '/organisation', labelKey: 'nav_organisation', icon: Building2 },
+        {
+            groupKey: 'nav_group_compliance',
+            items: [
+                { path: '/ediscovery', labelKey: 'nav_ediscovery', icon: SearchCheck },
+                { path: '/journaling', labelKey: 'nav_journaling', icon: BookText },
+                { path: '/retention', labelKey: 'nav_retention', icon: Archive },
+            ],
+        },
+        { path: '/rbac', labelKey: 'nav_rbac', icon: ShieldHalf },
+        { path: '/audit-log', labelKey: 'nav_audit_log', icon: ClipboardList },
+        { path: '/logs', labelKey: 'nav_logs', icon: ScrollText },
+        { path: '/compliance-info', labelKey: 'nav_info', icon: Info },
+    ];
+    return (_jsx("aside", { className: "w-52 shrink-0 bg-gray-900 text-gray-300 flex flex-col h-full", children: _jsx("nav", { className: "flex-1 overflow-y-auto py-2", children: NAV.map(entry => {
+                if ('groupKey' in entry) {
+                    return (_jsxs("div", { children: [_jsx("p", { className: "px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500", children: t(entry.groupKey) }), entry.items.map(({ path, labelKey, icon: Icon }) => (_jsxs(NavLink, { to: path, className: ({ isActive }) => `flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${isActive ? 'bg-gray-800 text-white border-l-2 border-accent' : 'hover:bg-gray-800 hover:text-white'}`, children: [_jsx(Icon, { size: 14 }), t(labelKey)] }, path)))] }, entry.groupKey));
+                }
+                const { path, labelKey, icon: Icon } = entry;
+                return (_jsxs(NavLink, { to: path, className: ({ isActive }) => `flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors ${isActive ? 'bg-gray-800 text-white border-l-2 border-accent' : 'hover:bg-gray-800 hover:text-white'}`, children: [_jsx(Icon, { size: 15 }), t(labelKey)] }, path));
+            }) }) }));
 }
