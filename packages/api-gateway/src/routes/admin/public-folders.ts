@@ -13,19 +13,29 @@ adminPublicFoldersRouter.use(requireAdmin);
 
 // GET /api/v1/admin/public-folders  — full tree
 adminPublicFoldersRouter.get('/', async (_req: Request, res: Response) => {
-  // Return root folders (no parent) with children included recursively
-  const roots = await prisma.publicFolder.findMany({
-    where: { parentId: null },
-    include: {
-      children: {
-        include: {
-          children: { include: { children: true } },
-        },
-      },
-      _count: { select: { messages: true } },
-    },
+  // Flat-Fetch + Tree-Build, damit beliebig tief geschachtelt werden kann
+  // und jedes Frontend-Feld (messageCount, children) garantiert vorhanden ist.
+  const all = await prisma.publicFolder.findMany({
+    include: { _count: { select: { messages: true } } },
     orderBy: { displayName: 'asc' },
   });
+
+  type Node = {
+    id: string; name: string; displayName: string; description: string;
+    parentId: string | null; messageCount: number; children: Node[];
+  };
+  const byId = new Map<string, Node>();
+  for (const f of all) {
+    byId.set(f.id, {
+      id: f.id, name: f.name, displayName: f.displayName, description: f.description,
+      parentId: f.parentId, messageCount: f._count.messages, children: [],
+    });
+  }
+  const roots: Node[] = [];
+  for (const n of byId.values()) {
+    if (n.parentId && byId.has(n.parentId)) byId.get(n.parentId)!.children.push(n);
+    else roots.push(n);
+  }
   res.json(roots);
 });
 
@@ -118,27 +128,45 @@ adminPublicFoldersRouter.delete('/:id', async (req: Request, res: Response) => {
 
 // ──────────────────────────────────────────────────────────
 // ACL management
+//
+// Frontend-Vertrag:
+//   GET  → AclEntry[] = { id, userId, userEmail, permission: 'READ'|'WRITE'|'FULL' }
+//   POST body: { userEmail, permission } → User-Lookup, dann grant
+//   DELETE /:userId — entfernt den ACL-Eintrag eines Users
 // ──────────────────────────────────────────────────────────
 
-type AclEntry = { userId: string; permission: 'READ' | 'POST' | 'OWNER' };
+type StoredAclEntry = { userId: string; permission: 'READ' | 'WRITE' | 'FULL' };
 
 // GET /api/v1/admin/public-folders/:id/acl
 adminPublicFoldersRouter.get('/:id/acl', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const folder = await prisma.publicFolder.findUnique({ where: { id }, select: { acl: true } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
-  res.json(folder.acl);
+
+  const entries = (folder.acl as StoredAclEntry[]) ?? [];
+  const userIds = entries.map((e) => e.userId);
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true } })
+    : [];
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+
+  res.json(entries.map((e) => ({
+    id: e.userId,
+    userId: e.userId,
+    userEmail: emailById.get(e.userId) ?? '(gelöschter Benutzer)',
+    permission: e.permission,
+  })));
 });
 
-const AclPatchSchema = z.object({
-  userId: z.string(),
-  permission: z.enum(['READ', 'POST', 'OWNER']),
+const AclGrantSchema = z.object({
+  userEmail: z.string().email(),
+  permission: z.enum(['READ', 'WRITE', 'FULL']),
 });
 
 // POST /api/v1/admin/public-folders/:id/acl — add or update an ACL entry
 adminPublicFoldersRouter.post('/:id/acl', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const parsed = AclPatchSchema.safeParse(req.body);
+  const parsed = AclGrantSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
@@ -147,12 +175,15 @@ adminPublicFoldersRouter.post('/:id/acl', async (req: Request, res: Response) =>
   const folder = await prisma.publicFolder.findUnique({ where: { id } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
 
-  const currentAcl = (folder.acl as AclEntry[]);
-  const updated = currentAcl.filter((e) => e.userId !== parsed.data.userId);
-  updated.push(parsed.data);
+  const user = await prisma.user.findUnique({ where: { email: parsed.data.userEmail.toLowerCase() }, select: { id: true } });
+  if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
+
+  const currentAcl = (folder.acl as StoredAclEntry[]) ?? [];
+  const updated: StoredAclEntry[] = currentAcl.filter((e) => e.userId !== user.id);
+  updated.push({ userId: user.id, permission: parsed.data.permission });
 
   await prisma.publicFolder.update({ where: { id }, data: { acl: updated } });
-  res.json(updated);
+  res.status(201).json({ ok: true });
 });
 
 // DELETE /api/v1/admin/public-folders/:id/acl/:userId
@@ -161,7 +192,7 @@ adminPublicFoldersRouter.delete('/:id/acl/:userId', async (req: Request, res: Re
   const folder = await prisma.publicFolder.findUnique({ where: { id } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
 
-  const updated = (folder.acl as AclEntry[]).filter((e) => e.userId !== userId);
+  const updated = ((folder.acl as StoredAclEntry[]) ?? []).filter((e) => e.userId !== userId);
   await prisma.publicFolder.update({ where: { id }, data: { acl: updated } });
-  res.json(updated);
+  res.status(204).end();
 });

@@ -9,6 +9,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.8.0] — 2026-05-18 — Öffentliche Ordner: Crash behoben + ACL vereinheitlicht (READ/WRITE/FULL)
+
+### Fixed
+
+- **🐛 Öffentliche Ordner — Page crashte beim Laden** mit `Cannot read properties of undefined`
+  - Backend `GET /admin/public-folders` lieferte `_count.messages` und nur 3 Tree-Ebenen
+  - Frontend rief aber `f.messageCount.toLocaleString('de-DE')` auf → `undefined.toLocaleString` throw
+  - Außerdem fehlten `children`-Arrays auf der tiefsten Ebene → Recursion crashte
+  - **Fix**: Backend baut den Baum jetzt aus einem Flat-Fetch (`findMany` mit `_count`) zusammen, garantiert auf jeder Ebene `messageCount: number` und `children: Node[]`
+- **🐛 Build-Failure v3.7.9 in `mailboxes.ts`**
+  - Legacy-POST `/shared/:id/permissions` benutzte noch das alte Prisma-Unique `sharedMailboxId_userId` (vor Schema-Wechsel)
+  - TS-Error TS2561 nach Erweiterung auf `(sharedMailboxId, userId, permission)`
+  - **Fix**: Endpoint nutzt jetzt Replace-Strategie (deleteMany + create) — passt zur neuen 3-Spalten-Unique
+
+### Changed — ACL der öffentlichen Ordner einheitlich auf `READ` / `WRITE` / `FULL`
+
+- Bisher inkonsistent: Backend speicherte `READ`/`POST`/`OWNER`, Admin-UI zeigte `READ`/`WRITE`/`FULL` mit Labels „Lesen / Lesen & Schreiben / Vollzugriff" — Berechtigung war praktisch tot, weil Werte nie zusammenpassten
+- **Backend** (`packages/api-gateway/src/routes/admin/public-folders.ts` + `public-folders.ts`):
+  - Storage-Werte vereinheitlicht auf `READ` / `WRITE` / `FULL`
+  - `GET /admin/public-folders/:id/acl` liefert jetzt `[{id, userId, userEmail, permission}]` (E-Mail aus User-Tabelle aufgelöst)
+  - `POST /admin/public-folders/:id/acl` akzeptiert `{userEmail, permission}` — User-Lookup serverseitig, Anti-Duplikat
+  - `DELETE /admin/public-folders/:id/acl/:userId` (204)
+  - User-Facing `hasPermission()`-Hierarchie: `FULL ⊃ WRITE ⊃ READ`
+- Prisma-Schema-Kommentar an `PublicFolder.acl` aktualisiert
+- Keine Daten-Migration nötig — vorherige `POST`/`OWNER`-Einträge sind dadurch tatsächlich revoked (gewollt, weil sie sowieso nie evaluiert wurden)
+
+---
+
 ## [3.7.9] — 2026-05-18 — Audit: Pfad-Doppel-Bug, SharedMailbox Multi-Permission (Exchange-2019), DNSBL
 
 ### Fixed (Audit der Admin-Panel-Features)

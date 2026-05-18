@@ -13,14 +13,15 @@ import { requireAuth } from '../middleware/auth.js';
 export const publicFoldersRouter: RouterType = Router();
 publicFoldersRouter.use(requireAuth);
 
-type AclEntry = { userId: string; permission: 'READ' | 'POST' | 'OWNER' };
+type AclEntry = { userId: string; permission: 'READ' | 'WRITE' | 'FULL' };
 
-function hasPermission(acl: AclEntry[], userId: string, required: 'READ' | 'POST' | 'OWNER'): boolean {
-  const entry = acl.find((e) => e.userId === userId);
+// Hierarchie: FULL > WRITE > READ
+function hasPermission(acl: AclEntry[], userId: string, required: 'READ' | 'WRITE' | 'FULL'): boolean {
+  const entry = acl?.find((e) => e.userId === userId);
   if (!entry) return false;
-  if (required === 'READ') return true;
-  if (required === 'POST') return entry.permission === 'POST' || entry.permission === 'OWNER';
-  return entry.permission === 'OWNER';
+  if (required === 'READ') return true; // alle drei erlauben Lesen
+  if (required === 'WRITE') return entry.permission === 'WRITE' || entry.permission === 'FULL';
+  return entry.permission === 'FULL';
 }
 
 // GET /api/v1/public-folders
@@ -96,7 +97,7 @@ publicFoldersRouter.post('/:id/messages', async (req: Request, res: Response) =>
 
   const folder = await prisma.publicFolder.findUnique({ where: { id } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
-  if (!hasPermission(folder.acl as AclEntry[], userId, 'POST')) {
+  if (!hasPermission(folder.acl as AclEntry[], userId, 'WRITE')) {
     res.status(403).json({ error: 'Posting not permitted' }); return;
   }
 

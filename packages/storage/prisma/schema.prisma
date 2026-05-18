@@ -769,7 +769,7 @@ model PublicFolder {
   parentId    String?
   children    PublicFolder[]        @relation("PublicFolderTree")
   messages    PublicFolderMessage[]
-  // ACL: [{userId: string, permission: "READ"|"POST"|"OWNER"}]
+  // ACL: [{userId: string, permission: "READ"|"WRITE"|"FULL"}]
   acl         Json                  @default("[]")
   totalCount  Int                   @default(0)
   createdBy   String?

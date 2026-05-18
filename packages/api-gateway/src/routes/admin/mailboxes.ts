@@ -227,16 +227,20 @@ adminMailboxesRouter.post('/shared/:id/permissions', async (req: Request, res: R
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  
-  const perm = await prisma.sharedMailboxPerm.upsert({
-    where: { sharedMailboxId_userId: { sharedMailboxId: id, userId: parsed.data.userId } },
-    update: { permission: parsed.data.permission },
-    create: {
-      sharedMailboxId: id,
-      userId: parsed.data.userId,
-      permission: parsed.data.permission,
-      grantedBy: req.apiUser!.userId,
-    },
+  // Replace-Strategie: alle bestehenden Permissions für (mailbox, user) löschen, dann diese eine setzen
+  await prisma.$transaction([
+    prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId: id, userId: parsed.data.userId } }),
+    prisma.sharedMailboxPerm.create({
+      data: {
+        sharedMailboxId: id,
+        userId: parsed.data.userId,
+        permission: parsed.data.permission,
+        grantedBy: req.apiUser!.userId,
+      },
+    }),
+  ]);
+  const perm = await prisma.sharedMailboxPerm.findFirst({
+    where: { sharedMailboxId: id, userId: parsed.data.userId, permission: parsed.data.permission },
   });
   res.status(201).json(perm);
 });

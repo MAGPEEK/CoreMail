@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.7.9';
+const VERSION        = '3.8.0';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.8.0', date: '2026-05-18', title: 'Öffentliche Ordner: Crash behoben + ACL vereinheitlicht',
+    notes: 'Öffentliche Ordner — Page warf "Cannot read properties of undefined" beim Laden. Ursache: Backend lieferte `_count.messages` und nur 3 Tree-Ebenen, Frontend erwartete aber `messageCount` und beliebig tiefe `children`-Arrays. Fix: Backend baut den Baum jetzt aus Flat-Fetch (alle Folder + _count) zusammen, garantiert `messageCount: number` und `children: []` auf jeder Ebene. ACL vereinheitlicht: Backend speicherte `READ/POST/OWNER`, Frontend zeigte `READ/WRITE/FULL` (Labels „Lesen / Lesen & Schreiben / Vollzugriff"). Komplette Migration auf READ/WRITE/FULL inkl. user-facing Permission-Check. GET /acl liefert jetzt `{id, userId, userEmail, permission}` mit aufgelöster E-Mail. POST /acl akzeptiert `{userEmail, permission}` (User-Lookup serverseitig). Bonus: Build-Failure 3.7.9 in mailboxes.ts behoben (alter `sharedMailboxId_userId`-Upsert nach Schema-Wechsel ungültig — auf Replace-Strategie umgestellt).' },
   { version: '3.7.9', date: '2026-05-18', title: 'Admin-Panel-Audit: Pfad-Doppel-Bug + Exchange-2019-Permissions',
     notes: 'Systemischer /api/v1-Doppel-Prefix-Bug in 5 Admin-Pages behoben (SharedMailboxes, TransportRules, Organisation, Certificates, Connectors) — Anlegen funktioniert wieder. Audit zeigt: Greylisting, Message-Trace, Transport-Rules, Verteilergruppen, Ressourcenpostfächer alle funktional. Freigegebene Postfächer: Mehrere Berechtigungen pro User möglich (Exchange-2019-Style FULL_ACCESS+SEND_AS+SEND_ON_BEHALF+READ_ONLY kombinierbar). Prisma-Unique-Constraint erweitert auf (sharedMailboxId, userId, permission). Backend akzeptiert Array {permissions:[...]}. UI: PermissionsModal mit Multi-Checkboxen + Beschreibungen + Konflikt-Warnung bei SEND_AS+SEND_ON_BEHALF.' },
   { version: '3.7.0', date: '2026-05-18', title: 'DNSBL-Modul ausgebaut: Zonen, Aktionen, Score, IPv6, Cache, Statistik',
