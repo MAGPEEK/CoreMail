@@ -1,13 +1,13 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.0.2';
+const VERSION        = '3.2.2';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
-  { version: '3.0.2', date: '2026-05-18', title: 'OWA: 4 Sprachen · Folder-Hierarchie · Kalenderwochen · Dialog-Fixes',
+  { version: '3.2.2', date: '2026-05-18', title: 'OWA: 4 Sprachen · Folder-Hierarchie · Kalenderwochen · Dialog-Fixes',
     notes: '4-Sprachen-Switch im OWA (Deutsch/Englisch/Spanisch/Italienisch) unter Einstellungen → "Sprache & Region" mit Flag-Buttons; i18n-Infrastruktur (translations.ts, language-Store, useT()-Hook). Folder-Hierarchie: rekursiver Baum mit Indentation und Expand/Collapse; Drag&Drop-Reparent für Custom-Ordner (Cycle-Check verhindert Ordner-in-eigenen-Subordner); System-Ordner sind Drop-Target aber keine Drag-Source. Neuer Ordner über "+" defaultet jetzt auf Posteingang als Parent. Kalenderwochen-Toggle (KW) in der Kalender-Sidebar mit ISO-Wochenberechnung; FullCalendar-Locale folgt der OWA-Sprache. PromptDialog-Komponente ersetzt window.prompt (war im OWA-Frame teils blockiert) — alle Folder-Mutations zeigen jetzt onSuccess/onError-Toasts. Backend-Regex-Fix: NUL-Byte aus Folder-Validierung entfernt (Synology-Sync-Schaden), Leerzeichen in Ordnernamen jetzt erlaubt.' },
   { version: '3.0.0', date: '2026-05-18', title: 'OWA Major Upgrade · Rechtsklick-Menüs · Favoriten · Drag&Drop · Bulk-Actions',
     notes: 'Major-Sprung 2.x → 3.0.0. End-User-OWA bekommt vollständige Gmail/Outlook.com-typische Interaktion. Rechtsklick auf Ordner: alle gelesen, Favorit, Unterordner, umbenennen, Farbe, löschen, Papierkorb/Junk leeren. Rechtsklick auf Mail: Antworten/Allen/Weiterleiten, Read/Flag/Pin, Schlummern (1h/3h/morgen/Montag), Verschieben, Junk-Toggle, Quelltext, EML-Download. Favoriten-Sektion oben in Sidebar. Mehrfachauswahl mit Shift/Cmd + BulkToolbar. Drag&Drop via @dnd-kit. Hover-Quick-Actions (Archive/Delete/Read). Filter-Tabs (Alle/Ungelesen/Markiert/Anhang). Undo-Toast (5s). ReplyAll/Forward jetzt verdrahtet mit zitiertem Vortext. Backend: neue Routen POST/PATCH/DELETE /mail/folders, POST /folders/:id/empty, POST /messages/bulk, POST|DELETE /messages/:id/snooze, GET /messages/:id/raw. Prisma: Folder.isFavorite/sortOrder/color, Message.pinnedAt/snoozeUntil.' },

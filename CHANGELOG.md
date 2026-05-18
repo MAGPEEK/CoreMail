@@ -9,7 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.0.2] — 2026-05-18 — OWA-Verbesserungen: 4 Sprachen, Folder-Hierarchie, Kalenderwochen, Dialog-Fixes
+## [3.2.2] — 2026-05-18 — OWA-Verbesserungen: 4 Sprachen, Folder-Hierarchie, Kalenderwochen, Dialog-Fixes
 
 ### Added
 
@@ -30,9 +30,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
-- `ComplianceInfoPage` (ECP): VERSION-Konstante auf 3.0.2, Highlights-Eintrag ergänzt
-- Docker: `magpeek/coremail-app:3.0.2` (Multi-Arch amd64 + arm64)
-- Compose-Dateien aktualisiert auf Tag 3.0.2
+- `ComplianceInfoPage` (ECP): VERSION-Konstante auf 3.2.2, Highlights-Eintrag ergänzt
+- Docker: `magpeek/coremail-app:3.2.2` (Multi-Arch amd64 + arm64)
+- Compose-Dateien aktualisiert auf Tag 3.2.2
 
 ---
 
