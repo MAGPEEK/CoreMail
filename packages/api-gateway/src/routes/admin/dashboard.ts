@@ -7,16 +7,19 @@ import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
 
-// Boot-Zeit + Coremail-Version einmalig ermitteln
+// Boot-Zeit + Coremail-Version einmalig ermitteln.
+// Reihenfolge: COREMAIL_VERSION-Env (Runtime-Override) → root package.json → 'unknown'.
 const PROCESS_STARTED_AT = new Date();
 let _appVersion: string | null = null;
 async function getAppVersion(): Promise<string> {
   if (_appVersion !== null) return _appVersion;
+  const envVersion = process.env['COREMAIL_VERSION'];
+  if (envVersion) { _appVersion = envVersion; return _appVersion; }
   try {
     const raw = await readFile(new URL('../../../../../package.json', import.meta.url), 'utf-8');
     _appVersion = (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
   } catch {
-    _appVersion = process.env['COREMAIL_VERSION'] ?? 'unknown';
+    _appVersion = 'unknown';
   }
   return _appVersion;
 }
