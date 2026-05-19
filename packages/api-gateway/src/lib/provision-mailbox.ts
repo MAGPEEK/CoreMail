@@ -108,3 +108,70 @@ export async function ensureMailboxProvisioned(userId: string): Promise<Provisio
     alreadyExisted: !mailboxCreated && foldersCreated === 0 && !calendarCreated,
   };
 }
+
+/**
+ * Ensure a SharedMailbox has the same fully-provisioned folder structure
+ * as a regular user mailbox. Idempotent — safe to call repeatedly.
+ *
+ * Erstellt:
+ *   - `Mailbox`-Record (verknüpft via sharedBoxId), falls fehlend
+ *   - DEFAULT_FOLDERS (Inbox / Drafts / Sent / Trash / Junk / Archive / Notes / Tasks)
+ *     — Backfill von fehlenden Standard-Ordnern bei bestehenden Mailboxen
+ *
+ * Kein Kalender für Shared Mailboxes (Resource Mailboxes haben den separat).
+ */
+export async function ensureSharedMailboxProvisioned(sharedMailboxId: string): Promise<ProvisionResult> {
+  const sm = await prisma.sharedMailbox.findUnique({
+    where: { id: sharedMailboxId },
+    include: { mailbox: { include: { folders: { select: { name: true } } } } },
+  });
+  if (!sm) throw new Error(`SharedMailbox ${sharedMailboxId} not found`);
+
+  let mailboxCreated = false;
+  let foldersCreated = 0;
+  let mailbox = sm.mailbox;
+
+  if (!mailbox) {
+    log.info({ sharedMailboxId, email: sm.email }, 'Provisioning shared mailbox');
+    mailbox = await prisma.mailbox.create({
+      data: {
+        sharedBoxId: sharedMailboxId,
+        folders: {
+          create: DEFAULT_FOLDERS.map((f) => ({
+            name: f.name,
+            displayName: f.displayName,
+            totalCount: 0,
+            unreadCount: 0,
+          })),
+        },
+      },
+      include: { folders: { select: { name: true } } },
+    });
+    mailboxCreated = true;
+    foldersCreated = DEFAULT_FOLDERS.length;
+  } else {
+    const existingNames = new Set(mailbox.folders.map((f) => f.name));
+    const missingFolders = DEFAULT_FOLDERS.filter((f) => !existingNames.has(f.name));
+    if (missingFolders.length > 0) {
+      await prisma.folder.createMany({
+        data: missingFolders.map((f) => ({
+          mailboxId: mailbox!.id,
+          name: f.name,
+          displayName: f.displayName,
+          totalCount: 0,
+          unreadCount: 0,
+        })),
+        skipDuplicates: true,
+      });
+      foldersCreated = missingFolders.length;
+      log.info({ sharedMailboxId, foldersCreated }, 'Backfilled missing default folders');
+    }
+  }
+
+  return {
+    mailboxCreated,
+    foldersCreated,
+    calendarCreated: false, // keine Kalender für Shared Mailboxes
+    alreadyExisted: !mailboxCreated && foldersCreated === 0,
+  };
+}

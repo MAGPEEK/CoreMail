@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
+import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -76,12 +77,31 @@ adminSharedMailboxesRouter.post('/', async (req: Request, res: Response) => {
       },
       select: SELECT,
     });
-    log.info({ id: item.id, email: item.email }, 'Shared mailbox created');
+    // Mailbox + Default-Ordner sofort provisionieren (analog zu regulären User-Mailboxen)
+    const prov = await ensureSharedMailboxProvisioned(item.id).catch((e: unknown) => {
+      log.error({ err: e, sharedMailboxId: item.id }, 'Shared mailbox folder provisioning failed');
+      return null;
+    });
+    log.info({ id: item.id, email: item.email, foldersCreated: prov?.foldersCreated ?? 0 }, 'Shared mailbox created');
     res.status(201).json(item);
   } catch (err) {
     const msg = String(err);
     if (msg.includes('Unique constraint')) { res.status(409).json({ error: 'E-Mail-Adresse bereits vergeben' }); return; }
     throw err;
+  }
+});
+
+// ── POST /:id/provision — repair/backfill (idempotent) ────────────────────────
+adminSharedMailboxesRouter.post('/:id/provision', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const existing = await prisma.sharedMailbox.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
+  try {
+    const result = await ensureSharedMailboxProvisioned(id);
+    res.json(result);
+  } catch (err) {
+    log.error({ err, id }, 'Shared mailbox provisioning failed');
+    res.status(500).json({ error: 'Provisioning fehlgeschlagen' });
   }
 });
 

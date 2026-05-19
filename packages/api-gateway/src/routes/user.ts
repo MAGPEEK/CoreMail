@@ -454,3 +454,168 @@ userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request,
   if (!message) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
   res.json(message);
 });
+
+// ── Folder-CRUD für Shared Mailboxes (nur mit FULL_ACCESS) ───────────────────
+
+/** Wie getReadableSharedMailbox, aber erfordert FULL_ACCESS für Schreiboperationen. */
+async function getWritableSharedMailbox(userId: string, sharedMailboxId: string) {
+  const perm = await prisma.sharedMailboxPerm.findFirst({
+    where: { userId, sharedMailboxId, permission: 'FULL_ACCESS' },
+    include: { sharedMailbox: { select: { id: true, active: true } } },
+  });
+  if (!perm || !perm.sharedMailbox.active) return null;
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { sharedBoxId: sharedMailboxId }, select: { id: true },
+  });
+  if (!mailbox) return null;
+  return { mailboxId: mailbox.id };
+}
+
+// Geschützte System-Ordner, die nicht umbenannt/gelöscht werden dürfen
+const PROTECTED_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Outbox']);
+
+// POST /api/v1/user/shared-mailboxes/:id/folders — Ordner anlegen
+userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Vollzugriff erforderlich' }); return; }
+
+  const { displayName, parentId, color } = req.body as { displayName?: string; parentId?: string; color?: string };
+  if (!displayName || displayName.trim().length === 0) {
+    res.status(400).json({ error: 'displayName erforderlich' }); return;
+  }
+  // `name` ist der interne IMAP-Name — wir nutzen den displayName und ersetzen problematische Zeichen
+  const safeName = displayName.trim().replace(/[/\\\0]/g, '_').slice(0, 100);
+
+  // Parent muss zur gleichen Mailbox gehören
+  if (parentId) {
+    const parent = await prisma.folder.findFirst({
+      where: { id: parentId, mailboxId: access.mailboxId },
+      select: { id: true },
+    });
+    if (!parent) { res.status(400).json({ error: 'Übergeordneter Ordner gehört nicht zu dieser Mailbox' }); return; }
+  }
+
+  try {
+    const folder = await prisma.folder.create({
+      data: {
+        mailboxId: access.mailboxId,
+        name: safeName,
+        displayName: displayName.trim(),
+        ...(parentId ? { parentId } : {}),
+        ...(color ? { color } : {}),
+      },
+      select: {
+        id: true, name: true, displayName: true, parentId: true,
+        totalCount: true, unreadCount: true, isFavorite: true, sortOrder: true, color: true,
+      },
+    });
+    res.status(201).json(folder);
+  } catch (err) {
+    if (String(err).includes('Unique constraint')) {
+      res.status(409).json({ error: 'Ordner mit diesem Namen existiert bereits' });
+      return;
+    }
+    throw err;
+  }
+});
+
+// PATCH /api/v1/user/shared-mailboxes/:id/folders/:folderId — Umbenennen/Verschieben/Farbe
+userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request, res: Response) => {
+  const { id, folderId } = req.params as { id: string; folderId: string };
+  const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Vollzugriff erforderlich' }); return; }
+
+  const folder = await prisma.folder.findFirst({
+    where: { id: folderId, mailboxId: access.mailboxId },
+  });
+  if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
+
+  const { displayName, parentId, color, isFavorite, sortOrder } = req.body as {
+    displayName?: string; parentId?: string | null; color?: string | null;
+    isFavorite?: boolean; sortOrder?: number;
+  };
+
+  // System-Ordner darf nicht umbenannt oder reparented werden
+  if (PROTECTED_FOLDER_NAMES.has(folder.name)) {
+    if (displayName !== undefined || parentId !== undefined) {
+      res.status(403).json({ error: `Standard-Ordner „${folder.name}" kann nicht umbenannt oder verschoben werden` });
+      return;
+    }
+  }
+
+  // Cycle-Check: parentId darf nicht in eigener Unterbaum sein
+  if (parentId) {
+    if (parentId === folderId) { res.status(400).json({ error: 'Ordner kann sich nicht selbst sein' }); return; }
+    let cursor: string | null = parentId;
+    const visited = new Set<string>([folderId]);
+    while (cursor) {
+      if (visited.has(cursor)) { res.status(400).json({ error: 'Cycle in Ordner-Hierarchie' }); return; }
+      visited.add(cursor);
+      const next: { parentId: string | null; mailboxId: string } | null = await prisma.folder.findUnique({
+        where: { id: cursor }, select: { parentId: true, mailboxId: true },
+      });
+      if (!next) break;
+      if (next.mailboxId !== access.mailboxId) {
+        res.status(400).json({ error: 'Übergeordneter Ordner gehört nicht zu dieser Mailbox' });
+        return;
+      }
+      cursor = next.parentId;
+    }
+  }
+
+  const updated = await prisma.folder.update({
+    where: { id: folderId },
+    data: {
+      ...(displayName !== undefined ? { displayName, name: displayName.trim().replace(/[/\\\0]/g, '_').slice(0, 100) } : {}),
+      ...(parentId !== undefined ? { parentId } : {}),
+      ...(color !== undefined ? { color } : {}),
+      ...(isFavorite !== undefined ? { isFavorite } : {}),
+      ...(sortOrder !== undefined ? { sortOrder } : {}),
+    },
+    select: {
+      id: true, name: true, displayName: true, parentId: true,
+      totalCount: true, unreadCount: true, isFavorite: true, sortOrder: true, color: true,
+    },
+  });
+  res.json(updated);
+});
+
+// DELETE /api/v1/user/shared-mailboxes/:id/folders/:folderId
+userRouter.delete('/shared-mailboxes/:id/folders/:folderId', async (req: Request, res: Response) => {
+  const { id, folderId } = req.params as { id: string; folderId: string };
+  const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Vollzugriff erforderlich' }); return; }
+
+  const folder = await prisma.folder.findFirst({
+    where: { id: folderId, mailboxId: access.mailboxId },
+    include: { _count: { select: { children: true } } },
+  });
+  if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
+  if (PROTECTED_FOLDER_NAMES.has(folder.name)) {
+    res.status(403).json({ error: `Standard-Ordner „${folder.name}" kann nicht gelöscht werden` });
+    return;
+  }
+  if (folder._count.children > 0) {
+    res.status(409).json({ error: 'Ordner hat Unter-Ordner — bitte erst diese entfernen' });
+    return;
+  }
+
+  await prisma.folder.delete({ where: { id: folderId } });
+  res.status(204).end();
+});
+
+// POST /api/v1/user/shared-mailboxes/:id/folders/:folderId/empty — alle Nachrichten löschen
+userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Request, res: Response) => {
+  const { id, folderId } = req.params as { id: string; folderId: string };
+  const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Vollzugriff erforderlich' }); return; }
+
+  const folder = await prisma.folder.findFirst({
+    where: { id: folderId, mailboxId: access.mailboxId }, select: { id: true },
+  });
+  if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
+
+  const result = await prisma.message.deleteMany({ where: { folderId } });
+  res.json({ deleted: result.count });
+});

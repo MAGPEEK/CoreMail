@@ -8,11 +8,12 @@
  */
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Inbox, ArrowLeft, Folder as FolderIcon, Star, Trash2, Send,
-  FileText, AlertCircle, Paperclip,
+  FileText, AlertCircle, Paperclip, FolderPlus, Pencil, X,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 
 interface SharedMailbox {
@@ -82,9 +83,14 @@ function fmtDate(iso: string) {
   });
 }
 
+// Standard-Folder, die nicht umbenannt/gelöscht werden dürfen (Backend enforced
+// das auch — wir blenden hier aber schon Lösch/Rename-Buttons aus für saubere UX).
+const PROTECTED_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Outbox']);
+
 export function SharedMailboxPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   // ── Mailbox-Metadaten ──────────────────────────────────────────────────────
   const { data: mailbox, isLoading: loadingMailbox, error: mailboxError } = useQuery<SharedMailbox>({
@@ -102,6 +108,49 @@ export function SharedMailboxPage() {
 
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+
+  // ── Folder-Aktionen (nur für FULL_ACCESS sichtbar/erlaubt) ────────────────
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const invalidateFolders = () => qc.invalidateQueries({ queryKey: ['shared-mailbox-folders', id] });
+
+  const createFolder = useMutation({
+    mutationFn: (displayName: string) =>
+      api.post(`/user/shared-mailboxes/${id}/folders`, { displayName }),
+    onSuccess: () => {
+      void invalidateFolders();
+      setShowNewFolder(false);
+      setNewFolderName('');
+      toast.success('Ordner erstellt');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Konnte Ordner nicht erstellen'),
+  });
+
+  const renameFolder = useMutation({
+    mutationFn: ({ folderId, displayName }: { folderId: string; displayName: string }) =>
+      api.patch(`/user/shared-mailboxes/${id}/folders/${folderId}`, { displayName }),
+    onSuccess: () => {
+      void invalidateFolders();
+      setRenamingId(null);
+      setRenameValue('');
+      toast.success('Ordner umbenannt');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Konnte nicht umbenennen'),
+  });
+
+  const deleteFolder = useMutation({
+    mutationFn: (folderId: string) =>
+      api.delete(`/user/shared-mailboxes/${id}/folders/${folderId}`),
+    onSuccess: () => {
+      void invalidateFolders();
+      if (selectedFolderId === renamingId) setSelectedFolderId(null);
+      toast.success('Ordner gelöscht');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Konnte nicht löschen'),
+  });
 
   // Auto-select Inbox als erstes
   useEffect(() => {
@@ -182,7 +231,48 @@ export function SharedMailboxPage() {
       <div className="flex-1 flex min-h-0">
 
         {/* Folder-Liste */}
-        <div className="w-52 bg-white border-r border-gray-200 overflow-y-auto shrink-0">
+        <div className="w-56 bg-white border-r border-gray-200 overflow-y-auto shrink-0 flex flex-col">
+          {/* Header mit "Neuer Ordner"-Button (nur bei Vollzugriff) */}
+          {!isReadOnly && (
+            <div className="px-3 py-2 border-b border-gray-100 shrink-0">
+              {showNewFolder ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newFolderName.trim()) createFolder.mutate(newFolderName.trim());
+                      if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName(''); }
+                    }}
+                    placeholder="Name des Ordners"
+                    className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => newFolderName.trim() && createFolder.mutate(newFolderName.trim())}
+                    disabled={createFolder.isPending || !newFolderName.trim()}
+                    className="text-xs text-white bg-accent rounded px-2 py-1 disabled:opacity-50"
+                  >OK</button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}
+                    className="text-gray-400 hover:text-gray-700"
+                  ><X size={12} /></button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowNewFolder(true)}
+                  className="w-full flex items-center justify-center gap-1.5 text-xs text-gray-600 hover:text-accent hover:bg-accent/5 rounded py-1 border border-dashed border-gray-300 hover:border-accent"
+                >
+                  <FolderPlus size={12} /> Neuer Ordner
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto">
           {loadingFolders ? (
             <p className="text-xs text-gray-400 p-3">Lade Ordner…</p>
           ) : sortedFolders.length === 0 ? (
@@ -192,29 +282,77 @@ export function SharedMailboxPage() {
               {sortedFolders.map((f) => {
                 const Icon = folderIcon(f.name);
                 const active = f.id === selectedFolderId;
+                const protectedFolder = PROTECTED_FOLDER_NAMES.has(f.name);
+                const isRenaming = renamingId === f.id;
                 return (
-                  <li key={f.id}>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedFolderId(f.id); setSelectedMessageId(null); }}
-                      className={`w-full text-left flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${
-                        active ? 'bg-accent/15 text-accent font-medium border-r-2 border-accent' : 'text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      {f.isFavorite && <Star size={11} className="text-amber-400 shrink-0" />}
-                      <Icon size={14} className="shrink-0" />
-                      <span className="flex-1 truncate">{f.displayName}</span>
-                      {f.unreadCount > 0 && (
-                        <span className={`text-[10px] tabular-nums ${active ? 'text-accent' : 'text-gray-500 font-medium'}`}>
-                          {f.unreadCount}
-                        </span>
-                      )}
-                    </button>
+                  <li key={f.id} className="group">
+                    {isRenaming ? (
+                      <div className="flex items-center gap-1 px-3 py-1.5">
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && renameValue.trim()) renameFolder.mutate({ folderId: f.id, displayName: renameValue.trim() });
+                            if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
+                          }}
+                          className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => renameValue.trim() && renameFolder.mutate({ folderId: f.id, displayName: renameValue.trim() })}
+                          disabled={renameFolder.isPending || !renameValue.trim()}
+                          className="text-[10px] text-white bg-accent rounded px-1.5 py-0.5"
+                        >OK</button>
+                        <button type="button" onClick={() => { setRenamingId(null); setRenameValue(''); }}
+                          className="text-gray-400"><X size={11} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center pr-2">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedFolderId(f.id); setSelectedMessageId(null); }}
+                          className={`flex-1 min-w-0 text-left flex items-center gap-2 px-3 py-1.5 text-sm transition-colors ${
+                            active ? 'bg-accent/15 text-accent font-medium border-r-2 border-accent' : 'text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {f.isFavorite && <Star size={11} className="text-amber-400 shrink-0" />}
+                          <Icon size={14} className="shrink-0" />
+                          <span className="flex-1 truncate">{f.displayName}</span>
+                          {f.unreadCount > 0 && (
+                            <span className={`text-[10px] tabular-nums ${active ? 'text-accent' : 'text-gray-500 font-medium'}`}>
+                              {f.unreadCount}
+                            </span>
+                          )}
+                        </button>
+                        {!isReadOnly && !protectedFolder && (
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={() => { setRenamingId(f.id); setRenameValue(f.displayName); }}
+                              title="Umbenennen"
+                              className="p-1 text-gray-400 hover:text-accent rounded"
+                            ><Pencil size={11} /></button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(`Ordner „${f.displayName}" löschen? Alle enthaltenen Nachrichten gehen verloren.`)) {
+                                  deleteFolder.mutate(f.id);
+                                }
+                              }}
+                              title="Löschen"
+                              className="p-1 text-gray-400 hover:text-red-500 rounded"
+                            ><Trash2 size={11} /></button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </li>
                 );
               })}
             </ul>
           )}
+          </div>
         </div>
 
         {/* Messages-Liste */}

@@ -13,6 +13,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.8] — 2026-05-19 — Shared Mailboxes mit voller Ordnerstruktur + User-Folder-CRUD
+
+### Added — Provisioning
+
+- **`ensureSharedMailboxProvisioned(sharedMailboxId)`** in `packages/api-gateway/src/lib/provision-mailbox.ts`
+  - Idempotent — analog zur User-Variante
+  - Erstellt `Mailbox`-Record (via `sharedBoxId`) und die 8 Default-Folders: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`, `Notes`, `Tasks`
+  - Backfill: fehlende Standard-Ordner werden bei bestehenden Mailboxen ergänzt
+- **Auto-Call** in `POST /admin/shared-mailboxes` — neue Postfächer haben sofort die volle Ordnerstruktur
+- **Repair-Endpoint** `POST /admin/shared-mailboxes/:id/provision` — Backfill auf Bestand
+
+### Added — Folder-CRUD für Shared Mailboxes (nur FULL_ACCESS)
+
+In `packages/api-gateway/src/routes/user.ts`:
+
+- `POST   /user/shared-mailboxes/:id/folders` — Ordner anlegen (mit optionalem `parentId` für Unterordner)
+- `PATCH  /user/shared-mailboxes/:id/folders/:folderId` — Umbenennen, verschieben (`parentId`), Farbe, Favorit, Sortierung
+- `DELETE /user/shared-mailboxes/:id/folders/:folderId` — Löschen (mit Children-Check)
+- `POST   /user/shared-mailboxes/:id/folders/:folderId/empty` — alle Nachrichten im Ordner löschen
+- Cycle-Check beim Reparenten — Ordner kann nicht in seinen eigenen Subtree verschoben werden
+- **Standard-Ordner geschützt**: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Outbox` lassen sich nicht umbenennen, verschieben oder löschen (403)
+
+### Added — Web-Client UI (`SharedMailboxPage.tsx`)
+
+- **„+ Neuer Ordner"-Inline-Eingabe** oben in der Folder-Sidebar (nur bei FULL_ACCESS), gestrichelter Akzent-Border
+- **Hover-Aktionen** pro User-Folder rechts: Bleistift (Umbenennen) + Mülleimer (Löschen)
+- **Inline-Rename** mit Enter/Esc, OK-Button, Validierungs-State
+- Standard-Ordner zeigen keine Action-Icons (Frontend + Backend stimmen überein)
+- Lösch-Confirm-Dialog mit Datenverlust-Warnung
+- `READ_ONLY`-User sehen weder „Neuer Ordner" noch Action-Icons
+
+---
+
 ## [3.13.7] — 2026-05-19 — Transportregeln aus Vorlagen (Exchange-2019-Templates)
 
 ### Added
@@ -78,44 +111,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.5] — 2026-05-19 — E-Mail-Aliase für User- und Shared-Mailboxes
 
-### Added — Schema
-
-- **`model EmailAlias`** in `packages/storage/prisma/schema.prisma`:
-  - `address` (unique, lowercase), `localPart`, `domainId`
-  - Optionales Target: entweder `targetUserId` ODER `targetSharedId` (XOR, App-Level-validiert — Prisma kann das nicht direkt ausdrücken)
-  - `active`, `description`, Timestamps
-  - Cascade-Delete vom Target und der Domain
-- `User.aliases` + `SharedMailbox.aliases` + `Domain.aliases` als Back-Relations
-
-### Added — Backend-Routen (`packages/api-gateway/src/routes/admin/aliases.ts`)
-
-- `GET    /api/v1/admin/aliases` — alle Aliase listen (mit Target + Domain joinable)
-- `GET    /api/v1/admin/mailboxes/:id/aliases` + `POST` — User-Aliase
-- `GET    /api/v1/admin/shared-mailboxes/:id/aliases` + `POST` — SharedMailbox-Aliase
-- `PATCH  /api/v1/admin/aliases/:aliasId` — `active` / `description` ändern
-- `DELETE /api/v1/admin/aliases/:aliasId` — Alias löschen
-- POST akzeptiert entweder `address` ODER `localPart + domainId` (LocalPart-Validierung: `a-z 0-9 . _ + -`, nicht mit Punkt beginnen/enden)
-- **Adress-Kollisions-Check** verhindert Doppel-Zuordnung gegen User-Mails, Shared-Mailbox-Mails und andere Aliase
-
-### Added — SMTP-Inbound (`packages/smtp-server/src/inbound/handler.ts`)
-
-- `verifyRecipient()` akzeptiert jetzt Alias-Adressen — Mails an aktive Aliase mit aktivem Target werden NICHT mehr mit 5.1.1 abgelehnt
-- `expandRecipients()` löst Aliase **vor der Zustellung** zur Target-Primäradresse auf (User-E-Mail oder SharedMailbox-E-Mail). Die Mail wird in das Ziel-Postfach ausgeliefert, der Alias selbst hat kein eigenes Postfach
-- `visited`-Set bricht Alias-Schleifen ab (z. B. wenn Alias A → User X → ungültige Konfig)
-
-### Added — Admin-UI
-
-- **`MailboxAliasesSection`** (`packages/admin-panel/src/components/MailboxAliasesSection.tsx`) — wiederverwendbare Komponente:
-  - Liste vorhandener Aliase mit Aktiv/Inaktiv-Toggle und Lösch-Confirm
-  - Eingabe: `localPart` + Domain-Dropdown (Default = Domain der Mailbox)
-  - Live-Vorschau `info@firma.com`, Validierungs-Hint, disabled-Tooltip am Button
-- Integriert in **MailboxesPage**-Edit-Modal (User) und **SharedMailboxesPage**-Edit-Modal (Shared)
-- Für Shared-Mailbox-Aliase nur im Edit-Mode sichtbar (das Postfach muss erst angelegt sein)
-
----
-
-
-> Ältere Releases (v3.13.4 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.5 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.
