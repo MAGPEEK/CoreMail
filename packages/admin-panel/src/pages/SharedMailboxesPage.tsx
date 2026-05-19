@@ -279,11 +279,26 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   const [userSearch, setUserSearch] = useState('');
   const [editingUser, setEditingUser] = useState<string | null>(null);
 
-  const { data: users = [] } = useQuery<User[]>({
-    queryKey: ['admin-users-list', userSearch],
-    queryFn: () => api.get<User[]>(`/admin/mailboxes`).then(r => Array.isArray(r) ? r.filter(u => u.email.includes(userSearch) || (u.displayName ?? '').includes(userSearch)).slice(0, 50) : []),
-    enabled: userSearch.length > 1,
+  // Komplette User-Liste einmalig laden (kleines KMU-Setup, <500 User).
+  // Filterung passiert client-seitig case-insensitive.
+  const { data: allUsers = [], isLoading: usersLoading } = useQuery<User[]>({
+    queryKey: ['admin-users-list-all'],
+    queryFn: () => api.get<User[]>('/admin/mailboxes').then(r => Array.isArray(r) ? r : []),
+    staleTime: 60_000,
   });
+
+  const searchLc = userSearch.trim().toLowerCase();
+  const filteredUsers = searchLc.length > 0
+    ? allUsers.filter(u =>
+        u.email.toLowerCase().includes(searchLc) ||
+        (u.displayName ?? '').toLowerCase().includes(searchLc),
+      ).slice(0, 30)
+    : [];
+
+  // Bereits berechtigte UserIDs ausblenden, damit man dieselbe Person nicht
+  // doppelt zur „neuen" Berechtigung hinzufügen kann (für Edit gibt's „Bearbeiten").
+  const alreadyGrantedIds = new Set(item.permissions.map((p) => p.userId));
+  const visibleUsers = editingUser ? filteredUsers : filteredUsers.filter(u => !alreadyGrantedIds.has(u.id));
 
   // Gruppiere bestehende Berechtigungen pro User
   const grouped = item.permissions.reduce<Record<string, { user: { email: string; displayName: string }; perms: { id: string; permission: PermType }[] }>>((acc, p) => {
@@ -375,13 +390,42 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
 
             {!editingUser && (
               <>
-                <input value={userSearch} onChange={e => setUserSearch(e.target.value)}
-                  className="input" placeholder="Benutzer suchen (min. 2 Zeichen)…" />
-                {users.length > 0 && (
-                  <select size={4} value={userId} onChange={e => setUserId(e.target.value)}
-                    className="input h-auto">
-                    {users.map(u => <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>)}
-                  </select>
+                <input
+                  value={userSearch}
+                  onChange={e => { setUserSearch(e.target.value); setUserId(''); }}
+                  className="input"
+                  placeholder="Benutzer suchen — E-Mail oder Name…"
+                  autoFocus
+                />
+                {searchLc.length === 0 ? (
+                  <p className="text-xs text-gray-400 px-2 py-1.5">Tippe einen Namen oder eine E-Mail, um Benutzer zu finden.</p>
+                ) : usersLoading ? (
+                  <p className="text-xs text-gray-400 px-2 py-1.5">Lade Benutzerliste…</p>
+                ) : visibleUsers.length === 0 ? (
+                  <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    {filteredUsers.length === 0
+                      ? `Kein Benutzer gefunden für „${userSearch}".`
+                      : `Alle gefundenen Benutzer (${filteredUsers.length}) haben bereits Berechtigungen — zum Ändern „Bearbeiten" oben klicken.`}
+                  </p>
+                ) : (
+                  <div className="border border-gray-200 rounded max-h-44 overflow-y-auto">
+                    {visibleUsers.map(u => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => setUserId(u.id)}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent/10 border-b border-gray-100 last:border-b-0 ${
+                          userId === u.id ? 'bg-accent/15 ring-1 ring-accent' : ''
+                        }`}
+                      >
+                        <span className="font-medium text-gray-900">{u.displayName || u.email}</span>
+                        <span className="text-xs text-gray-500 ml-2">{u.email}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!userId && visibleUsers.length > 0 && (
+                  <p className="text-xs text-gray-500 px-2">Wähle einen Benutzer aus der Liste oben.</p>
                 )}
               </>
             )}
@@ -426,9 +470,15 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                 </button>
               )}
               <button
-                onClick={() => userId && setMutation.mutate({ uid: userId, permissions: perms })}
+                type="button"
+                onClick={() => userId && perms.length > 0 && setMutation.mutate({ uid: userId, permissions: perms })}
                 disabled={!userId || perms.length === 0 || setMutation.isPending}
-                className="btn-primary flex items-center justify-center gap-1.5">
+                title={
+                  !userId ? 'Bitte erst einen Benutzer aus der Liste auswählen'
+                  : perms.length === 0 ? 'Bitte mindestens eine Berechtigung anhaken'
+                  : ''
+                }
+                className="btn-primary flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
                 {setMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
                 {editingUser ? 'Speichern' : 'Hinzufügen'}
               </button>

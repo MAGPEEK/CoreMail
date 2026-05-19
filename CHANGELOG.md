@@ -13,7 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.3] — 2026-05-19 — Drag&Drop REPARIERT (inline-Komponenten-Anti-Pattern behoben)
+## [3.13.3] — 2026-05-19 — Drag&Drop REPARIERT + Shared-Mailbox-Permissions-UX
 
 ### Fixed
 
@@ -22,6 +22,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   - **Fix**: `DraggableCard` auf Modul-Ebene extrahiert (außerhalb von `DashboardPage`), nimmt drag state als Props (`cardDrag`, `cardHover`, `setCardDrag`, `setCardHover`, `order`, `moveWidget`)
 - **🐛 Text-Selektion statt Drag** — wenn Mousedown auf Text-Inhalt der Karte erfolgte, startete Chrome/Firefox Text-Selektion statt Drag
   - **Fix**: `select-none` Klasse am Drag-Wrapper
+- **🐛 Shared-Mailbox-Permissions ließen sich nicht hinzufügen** (`packages/admin-panel/src/pages/SharedMailboxesPage.tsx`)
+  - User-Suche war case-sensitive (`u.email.includes(userSearch)`) — „stefan" matchte „Stefan@…" nicht
+  - `<select size={4}>`-Listbox war verwirrend: ohne expliziten Klick blieb `userId` leer → „Hinzufügen"-Button blieb disabled, ohne Hinweis warum
+  - **Fix**: case-insensitive Filter, ganze User-Liste einmalig geladen mit 60s `staleTime`, klickbare Listenelemente statt Listbox (`<button>`-basiert mit Akzent-Ring auf Selection), „Kein Benutzer gefunden"-Meldung in Amber, bereits berechtigte User werden in der Liste ausgeblendet (für Änderungen gibt's „Bearbeiten" am bestehenden Eintrag), `disabled`-Tooltip am Button erklärt warum er nicht klickbar ist, `type="button"` explizit gesetzt
 
 ### Notes
 
