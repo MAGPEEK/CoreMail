@@ -13,6 +13,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.7] — 2026-05-19 — Transportregeln aus Vorlagen (Exchange-2019-Templates)
+
+### Added
+
+- **„Aus Vorlage"-Button** auf `TransportRulesPage` (neben „Neue Regel")
+- **`TemplatePickerModal`** mit 9 vorgefertigten Regel-Vorlagen, in 4 Kategorien filterbar
+- Pro Vorlage: Icon + Beschreibung + Conditions/Actions vorbefüllt
+- Klick auf Vorlage → `RuleModal` öffnet vorbefüllt; Admin passt Platzhalter (`@DEINE-DOMAIN.com`) an und speichert
+
+### Mitgelieferte Vorlagen
+
+| Kategorie | Vorlage | Conditions → Actions |
+|---|---|---|
+| **Kennzeichnung** | [EXTERN]-Markierung im Betreff | `from notContains @firma.com` → Subject-Präfix |
+| **Compliance** | Disclaimer für ausgehende Mails | `to notContains @firma.com` → addDisclaimer |
+| **Compliance** | BCC an Compliance-Postfach | `to contains @firma.com` → addRecipient compliance@ |
+| **Compliance** | Kreditkarten-Detection (PCI-DSS) | `body regex \b\d{13,16}\b` → quarantine |
+| **Sicherheit** | Spam-Score > 5 quarantänieren | `spamScore > 5` → quarantine |
+| **Sicherheit** | Malware-Endungen | `subject regex \.(exe|bat|scr|cmd|vbs|js|jar|hta)\b` → quarantine |
+| **Sicherheit** | CEO-Phishing-Schutz | `from regex (ceo|geschäftsführer|chef).*@(?!firma)` → Subject-Präfix „⚠ MÖGLICHES PHISHING" |
+| **Governance** | Größenlimit 25 MB | `size > 26214400` → reject |
+| **Governance** | DLP-Marker für externe Anhänge | `hasAttachment is true` + `to notContains @firma.com` → addHeader X-Coremail-External-Attachment |
+
+### Changed — `RuleModal`
+
+- Neuer optionaler `initial`-Prop: nimmt eine Template-Rule-Struktur und prefilled `name`, `description`, `priority`, `conditions`, `actions`
+- Bei `rule`-Prop (Edit-Modus) wird `initial` ignoriert
+- Eigene Regeln „from scratch" weiterhin via „Neue Regel"-Button (ohne Template)
+
+---
+
 ## [3.13.6] — 2026-05-19 — Journaling-Feature komplett entfernt
 
 ### Removed
@@ -85,41 +116,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.4] — 2026-05-19 — OWA: „Weiteres Postfach öffnen" (Shared-Mailbox-Reader)
 
-### Added
-
-- **Konto-Dropdown → „Weiteres Postfach öffnen"** (`packages/web-client/src/components/TopBar.tsx`)
-  - Neuer Menüeintrag oberhalb von „Abmelden"
-  - Öffnet ein Modal mit allen freigegebenen Postfächern, auf die der User Zugriff hat
-- **`OpenSharedMailboxModal`** (`packages/web-client/src/components/OpenSharedMailboxModal.tsx`)
-  - Live-Suche nach E-Mail oder Display-Name
-  - Permission-Badges pro Postfach (Vollzugriff / Senden als / Im Auftrag / Nur Lesen)
-  - „Öffnen"-Button — disabled wenn keine Lese-Berechtigung (FULL_ACCESS oder READ_ONLY)
-  - Klick navigiert zur Read-Only-Ansicht
-- **`SharedMailboxPage`** (`packages/web-client/src/pages/SharedMailboxPage.tsx`)
-  - Route `/shared-mailbox/:id`
-  - 3-Spalten-Layout (Ordner / Nachrichten / Reader) im klassischen Mail-Style
-  - Banner oben: „Du siehst gerade: support@firma.com" mit „Zurück zu meinem Postfach"-Button
-  - HTML- oder Text-Body, Attachment-Chips, From/To/Date/Folder-Metadata
-  - Hinweis am Mail-Ende bei Read-Only: „Antworten oder Verschieben ist nicht möglich"
-
-### Added — Backend-Routen (`packages/api-gateway/src/routes/user.ts`)
-
-- `GET /api/v1/user/shared-mailboxes` — **erweitert**: aggregiert mehrere Permissions pro Postfach in `permissions[]` (vorher: ein Eintrag pro Permission)
-- `GET /api/v1/user/shared-mailboxes/:id` — Detail mit `permissions[]`
-- `GET /api/v1/user/shared-mailboxes/:id/folders` — Ordnerliste der freigegebenen Mailbox (404/403 ohne Lese-Berechtigung)
-- `GET /api/v1/user/shared-mailboxes/:id/folders/:folderId/messages?limit&offset` — Nachrichtenliste
-- `GET /api/v1/user/shared-mailboxes/:id/messages/:messageId` — Detail mit Folder + Attachments
-- Helper `getReadableSharedMailbox(userId, sharedId)` prüft `FULL_ACCESS` ODER `READ_ONLY` + Active-Status + auflöst die zugehörige `Mailbox`-ID
-
-### Notes
-
-- Schreib-Operationen (Antworten, Verschieben, Löschen) sind bewusst nicht implementiert — der User-Wunsch war explizit „öffnen können", und Read-only ist sicherer als Default. Schreib-Support folgt wenn nachgefragt
-- Backend prüft `permission IN ('FULL_ACCESS', 'READ_ONLY')` pro Request; ohne passende Permission → 403
-
----
-
-
-> Ältere Releases (v3.13.3 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.4 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

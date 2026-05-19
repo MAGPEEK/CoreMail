@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.6';
+const VERSION        = '3.13.7';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.7', date: '2026-05-19', title: 'Transportregeln aus Vorlagen — 9 Exchange-2019-typische Templates',
+    notes: 'Neuer „Aus Vorlage"-Button neben „Neue Regel" auf der Transportregeln-Seite. Picker zeigt 9 Exchange-2019-typische Vorlagen in 4 Kategorien: Kennzeichnung ([EXTERN]-Subject-Präfix), Compliance (Outgoing-Disclaimer, BCC an Compliance, Kreditkarten-Detection), Sicherheit (Spam-Score>5 Quarantäne, Malware-Endungen .exe/.bat/.scr…, CEO-Phishing-Schutz), Governance (Größenlimit 25 MB, DLP-Marker für externe Anhänge). Filter-Buttons pro Kategorie. Klick auf eine Vorlage → RuleModal öffnet sich vorbefüllt mit den Conditions+Actions+Default-Namen — Admin passt Platzhalter wie @DEINE-DOMAIN.com an und speichert. Eigene Regeln „from scratch" weiterhin via „Neue Regel" möglich.' },
   { version: '3.13.6', date: '2026-05-19', title: 'Journaling-Feature komplett entfernt',
     notes: 'Das Journaling-Feature (RFC-3462 Journal Reports, Retry-Worker, Failure-Log) wurde auf Wunsch komplett aus dem System entfernt. Gelöschte Komponenten: SMTP-Engine (packages/smtp-server/src/journaling/engine.ts), Admin-API (packages/api-gateway/src/routes/admin/journaling.ts), Admin-UI (JournalingPage.tsx), Sidebar-Eintrag, Translation-Keys, Aufrufe in handlers/message.ts (Inbound) und outbound/queue.ts (Outbound), startJournalingRetryLoop()-Bootstrap. Prisma-Schema bereinigt: JournalingRule, JournalingSettings, JournalingFailure-Modelle plus JournalScope/JournalRecipientType/JournalingFailureStatus-Enums entfernt. Datenbank-Migration läuft mit prisma db push beim Deploy — die Tabellen journaling_rules, journaling_settings und journaling_failures werden in der DB gedroppt (mit --accept-data-loss, falls vorhanden). Mail-Flow läuft normal weiter — Journal-Hook war ein „best effort"-Nachzustellungs-Sidecar, nicht im kritischen Pfad.' },
   { version: '3.13.5', date: '2026-05-19', title: 'E-Mail-Aliase für User- und Shared-Mailboxes',

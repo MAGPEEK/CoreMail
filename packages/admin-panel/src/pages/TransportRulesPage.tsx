@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Workflow, Plus, Trash2, Pencil, X, Loader2, GripVertical, ToggleLeft, ToggleRight } from 'lucide-react';
+import {
+  Workflow, Plus, Trash2, Pencil, X, Loader2, GripVertical, ToggleLeft, ToggleRight,
+  Sparkles, ShieldAlert, ShieldCheck, FileWarning, Mail, AlertTriangle,
+  CreditCard, BookOpen, Forward, Ban,
+} from 'lucide-react';
 import { api } from '../api/client.js';
 
 interface Condition { field: string; op: string; value: string }
@@ -32,10 +36,251 @@ const ACTION_TYPES = [
   { value: 'addDisclaimer', label: 'Haftungsausschluss anhängen' },
 ];
 
+// ── Vorlagen (Exchange-2019-typische „Aus Vorlage"-Optionen) ────────────────
+// Jede Vorlage prefilled die Conditions + Actions. Platzhalter wie
+// @firma.com muss der Admin nach Auswahl anpassen.
+interface RuleTemplate {
+  id:          string;
+  category:    'tagging' | 'compliance' | 'security' | 'governance';
+  icon:        React.ElementType;
+  iconClass:   string;
+  name:        string;
+  description: string;
+  rule: {
+    name:        string;
+    description: string;
+    priority:    number;
+    conditions:  Condition[];
+    actions:     Action[];
+  };
+}
+
+const RULE_TEMPLATES: RuleTemplate[] = [
+  {
+    id: 'external-prefix',
+    category: 'tagging',
+    icon: ShieldAlert, iconClass: 'text-amber-600 bg-amber-50',
+    name: '[EXTERN]-Markierung im Betreff',
+    description: 'Hängt „[EXTERN] " vor den Betreff aller Mails, die nicht aus der eigenen Domain kommen.',
+    rule: {
+      name: '[EXTERN]-Markierung',
+      description: 'Markiert eingehende Mails von externen Absendern',
+      priority: 100,
+      conditions: [{ field: 'from', op: 'notContains', value: '@DEINE-DOMAIN.com' }],
+      actions:    [{ type: 'setSubjectPrefix', value: '[EXTERN] ' }],
+    },
+  },
+  {
+    id: 'outgoing-disclaimer',
+    category: 'compliance',
+    icon: BookOpen, iconClass: 'text-blue-600 bg-blue-50',
+    name: 'Disclaimer für ausgehende Mails',
+    description: 'Hängt einen Standard-Haftungsausschluss an alle Mails an externe Empfänger an.',
+    rule: {
+      name: 'Outgoing Disclaimer',
+      description: 'Compliance-Haftungsausschluss für externe Empfänger',
+      priority: 200,
+      conditions: [{ field: 'to', op: 'notContains', value: '@DEINE-DOMAIN.com' }],
+      actions:    [{ type: 'addDisclaimer', value: 'Diese E-Mail enthält vertrauliche Informationen. Wenn Sie nicht der beabsichtigte Empfänger sind, informieren Sie uns bitte und löschen Sie die Mail.' }],
+    },
+  },
+  {
+    id: 'spam-quarantine',
+    category: 'security',
+    icon: ShieldCheck, iconClass: 'text-red-600 bg-red-50',
+    name: 'Spam-Score > 5 quarantänieren',
+    description: 'Verschiebt Mails mit hoher Spam-Bewertung direkt in die Quarantäne.',
+    rule: {
+      name: 'Spam-Quarantäne (Score > 5)',
+      description: 'rspamd-Score über Schwellwert → Quarantäne',
+      priority: 50,
+      conditions: [{ field: 'spamScore', op: 'greaterThan', value: '5' }],
+      actions:    [{ type: 'quarantine', value: '' }],
+    },
+  },
+  {
+    id: 'oversize-reject',
+    category: 'governance',
+    icon: FileWarning, iconClass: 'text-orange-600 bg-orange-50',
+    name: 'Mails > 25 MB ablehnen',
+    description: 'Lehnt eingehende Mails ab, die größer als 25 MB sind. Schützt vor Quota-Verbrauch.',
+    rule: {
+      name: 'Größenlimit 25 MB',
+      description: 'Lehnt zu große eingehende Mails ab',
+      priority: 150,
+      conditions: [{ field: 'size', op: 'greaterThan', value: '26214400' }],
+      actions:    [{ type: 'reject', value: 'Nachricht zu groß — max. 25 MB erlaubt.' }],
+    },
+  },
+  {
+    id: 'malware-extensions',
+    category: 'security',
+    icon: Ban, iconClass: 'text-red-700 bg-red-100',
+    name: 'Verdächtige Anhang-Endungen quarantänieren',
+    description: 'Quarantäne bei Subject- oder Body-Treffer auf .exe, .bat, .scr, .cmd, .vbs, .js, .jar, .hta.',
+    rule: {
+      name: 'Malware-Endungen',
+      description: 'Klassische ausführbare Dateinamen im Betreff oder Body',
+      priority: 30,
+      conditions: [{ field: 'subject', op: 'regex', value: '\\.(exe|bat|scr|cmd|vbs|js|jar|hta)\\b' }],
+      actions:    [{ type: 'quarantine', value: '' }],
+    },
+  },
+  {
+    id: 'credit-card-detect',
+    category: 'compliance',
+    icon: CreditCard, iconClass: 'text-purple-600 bg-purple-50',
+    name: 'Kreditkartennummern erkennen',
+    description: 'Quarantäne bei Body-Treffer auf 13–16-stellige Zahlenfolgen (möglicher PAN). Hilft bei PCI-DSS.',
+    rule: {
+      name: 'Kreditkarten-Detection',
+      description: 'Quarantäne bei vermuteter PAN im Body',
+      priority: 40,
+      conditions: [{ field: 'body', op: 'regex', value: '\\b(?:\\d[ -]*?){13,16}\\b' }],
+      actions:    [{ type: 'quarantine', value: '' }],
+    },
+  },
+  {
+    id: 'compliance-bcc',
+    category: 'compliance',
+    icon: Mail, iconClass: 'text-indigo-600 bg-indigo-50',
+    name: 'BCC an Compliance-Postfach',
+    description: 'Kopiert alle Mails an einen festen Compliance-Empfänger zur Aufbewahrung.',
+    rule: {
+      name: 'Compliance-BCC',
+      description: 'Alle Mails als BCC an Compliance-Adresse',
+      priority: 500,
+      conditions: [{ field: 'to', op: 'contains', value: '@DEINE-DOMAIN.com' }],
+      actions:    [{ type: 'addRecipient', value: 'compliance@DEINE-DOMAIN.com' }],
+    },
+  },
+  {
+    id: 'ceo-phishing',
+    category: 'security',
+    icon: AlertTriangle, iconClass: 'text-rose-600 bg-rose-50',
+    name: 'CEO-Phishing-Schutz',
+    description: 'Markiert verdächtige Mails, deren Absendername „CEO/Geschäftsführer/Chef" enthält, aber von außerhalb der Domain stammt.',
+    rule: {
+      name: 'CEO-Phishing-Warnung',
+      description: 'Klassischer Business-Email-Compromise-Indikator',
+      priority: 25,
+      conditions: [{ field: 'from', op: 'regex', value: '(ceo|geschäftsführer|chef|director).*@(?!DEINE-DOMAIN\\.com).+' }],
+      actions:    [{ type: 'setSubjectPrefix', value: '⚠ MÖGLICHES PHISHING — ' }],
+    },
+  },
+  {
+    id: 'block-attachments-external',
+    category: 'governance',
+    icon: Forward, iconClass: 'text-teal-600 bg-teal-50',
+    name: 'Anhänge an Externe X-Header markieren',
+    description: 'Setzt einen X-Coremail-External-Attachment-Header wenn Mail mit Anhang an externe Empfänger geht (zur DLP-Auswertung).',
+    rule: {
+      name: 'DLP-Marker für externe Anhänge',
+      description: 'Hilfs-Header für nachgelagertes DLP-Tracking',
+      priority: 600,
+      conditions: [
+        { field: 'hasAttachment', op: 'is',          value: 'true' },
+        { field: 'to',            op: 'notContains', value: '@DEINE-DOMAIN.com' },
+      ],
+      actions: [{ type: 'addHeader', value: 'X-Coremail-External-Attachment: true' }],
+    },
+  },
+];
+
+const CATEGORY_LABELS: Record<RuleTemplate['category'], string> = {
+  tagging:    'Kennzeichnung',
+  compliance: 'Compliance',
+  security:   'Sicherheit',
+  governance: 'Governance',
+};
+
+// ── Template Picker Modal ────────────────────────────────────────────────────
+function TemplatePickerModal({
+  onSelect, onClose,
+}: {
+  onSelect: (tpl: RuleTemplate) => void;
+  onClose:  () => void;
+}) {
+  const [filter, setFilter] = useState<'all' | RuleTemplate['category']>('all');
+  const visible = filter === 'all' ? RULE_TEMPLATES : RULE_TEMPLATES.filter((t) => t.category === filter);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+          <div>
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <Sparkles size={17} className="text-blue-600" /> Regel aus Vorlage erstellen
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Wähle eine Vorlage als Ausgangsbasis — Bedingungen und Aktionen werden vorgefüllt, du passt sie danach an.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+
+        <div className="px-5 py-2 border-b border-gray-100 shrink-0 flex items-center gap-1.5 text-xs flex-wrap">
+          <span className="text-gray-500 mr-1">Filter:</span>
+          {(['all', 'tagging', 'compliance', 'security', 'governance'] as const).map((c) => (
+            <button key={c} type="button" onClick={() => setFilter(c)}
+              className={`px-2.5 py-1 rounded border ${
+                filter === c ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}>
+              {c === 'all' ? `Alle (${RULE_TEMPLATES.length})` : `${CATEGORY_LABELS[c]} (${RULE_TEMPLATES.filter((t) => t.category === c).length})`}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {visible.map((t) => {
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => onSelect(t)}
+                  className="text-left p-3 border border-gray-200 rounded-lg hover:border-blue-400 hover:bg-blue-50/30 transition-colors group"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${t.iconClass}`}>
+                      <Icon size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-blue-700">{t.name}</p>
+                      </div>
+                      <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{CATEGORY_LABELS[t.category]}</p>
+                      <p className="text-xs text-gray-600 leading-relaxed">{t.description}</p>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between shrink-0">
+          <p className="text-xs text-gray-400">
+            Platzhalter wie <code className="bg-gray-100 px-1 rounded">@DEINE-DOMAIN.com</code> bitte nach Auswahl anpassen.
+          </p>
+          <button onClick={onClose}
+            className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+            Abbrechen
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TransportRulesPage() {
   const qc = useQueryClient();
   const [editItem, setEditItem] = useState<TransportRule | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Initial-State, wenn die Regel aus einer Vorlage gestartet wird:
+  const [createInitial, setCreateInitial] = useState<RuleTemplate['rule'] | null>(null);
 
   const { data: rules = [], isLoading } = useQuery<TransportRule[]>({
     queryKey: ['admin-transport-rules'],
@@ -64,10 +309,16 @@ export function TransportRulesPage() {
             <p className="text-sm text-gray-500">{rules.length} Regel{rules.length !== 1 ? 'n' : ''}</p>
           </div>
         </div>
-        <button onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
-          <Plus size={14} /> Neue Regel
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setPickerOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-2 text-blue-700 bg-blue-50 border border-blue-200 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors">
+            <Sparkles size={14} /> Aus Vorlage
+          </button>
+          <button onClick={() => { setCreateInitial(null); setCreateOpen(true); }}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
+            <Plus size={14} /> Neue Regel
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -149,21 +400,45 @@ export function TransportRulesPage() {
         )}
       </div>
 
-      {createOpen && <RuleModal onClose={() => setCreateOpen(false)} />}
-      {editItem   && <RuleModal rule={editItem} onClose={() => setEditItem(null)} />}
+      {pickerOpen && (
+        <TemplatePickerModal
+          onSelect={(tpl) => {
+            setCreateInitial(tpl.rule);
+            setPickerOpen(false);
+            setCreateOpen(true);
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+      {createOpen && (
+        <RuleModal
+          initial={createInitial}
+          onClose={() => { setCreateOpen(false); setCreateInitial(null); }}
+        />
+      )}
+      {editItem && <RuleModal rule={editItem} onClose={() => setEditItem(null)} />}
     </div>
   );
 }
 
 // ── Rule Modal ────────────────────────────────────────────────────────────────
-function RuleModal({ rule, onClose }: { rule?: TransportRule; onClose: () => void }) {
+function RuleModal({ rule, initial, onClose }: {
+  rule?: TransportRule;
+  /** Vorbefüllt aus einer Template-Auswahl. Wird ignoriert wenn `rule` (Edit-Modus) gesetzt ist. */
+  initial?: RuleTemplate['rule'] | null;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
-  const [name, setName]         = useState(rule?.name ?? '');
-  const [description, setDesc]  = useState(rule?.description ?? '');
-  const [priority, setPriority] = useState(rule?.priority ?? 0);
+  const [name, setName]         = useState(rule?.name ?? initial?.name ?? '');
+  const [description, setDesc]  = useState(rule?.description ?? initial?.description ?? '');
+  const [priority, setPriority] = useState(rule?.priority ?? initial?.priority ?? 0);
   const [enabled, setEnabled]   = useState(rule?.enabled ?? true);
-  const [conditions, setConds]  = useState<Condition[]>(rule?.conditions ?? [{ field: 'from', op: 'contains', value: '' }]);
-  const [actions, setActions]   = useState<Action[]>(rule?.actions ?? [{ type: 'addHeader', value: '' }]);
+  const [conditions, setConds]  = useState<Condition[]>(
+    rule?.conditions ?? initial?.conditions ?? [{ field: 'from', op: 'contains', value: '' }],
+  );
+  const [actions, setActions]   = useState<Action[]>(
+    rule?.actions ?? initial?.actions ?? [{ type: 'addHeader', value: '' }],
+  );
 
   const mutation = useMutation({
     mutationFn: () => {
