@@ -26,6 +26,7 @@ import { categoriesRouter } from './routes/categories.js';
 import { adminDashboardRouter } from './routes/admin/dashboard.js';
 import { adminGlobalSettingsRouter } from './routes/admin/global-settings.js';
 import { adminMailboxesRouter } from './routes/admin/mailboxes.js';
+import { adminAliasesRouter } from './routes/admin/aliases.js';
 import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
 import { adminLogsRouter } from './routes/admin/logs.js';
@@ -259,6 +260,10 @@ app.use('/api/v1/admin', adminMutationRateLimit);
 app.use('/api/v1/admin/dashboard',       adminDashboardRouter);
 app.use('/api/v1/admin/settings',        adminGlobalSettingsRouter);
 app.use('/api/v1/admin/mailboxes',       adminMailboxesRouter);
+// Alias-Router mountet auf /admin — die internen Routes sind /mailboxes/:id/aliases,
+// /shared-mailboxes/:id/aliases, /aliases, /aliases/:id. Wird nach den spezifischeren
+// Routern angehängt — Express fällt durch, wenn die anderen keine Treffer haben.
+app.use('/api/v1/admin',                 adminAliasesRouter);
 app.use('/api/v1/admin/domains',         adminDomainsRouter);
 app.use('/api/v1/admin/queues',          adminQueuesRouter);
 app.use('/api/v1/admin/logs',            adminLogsRouter);

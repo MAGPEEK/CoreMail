@@ -13,6 +13,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.5] — 2026-05-19 — E-Mail-Aliase für User- und Shared-Mailboxes
+
+### Added — Schema
+
+- **`model EmailAlias`** in `packages/storage/prisma/schema.prisma`:
+  - `address` (unique, lowercase), `localPart`, `domainId`
+  - Optionales Target: entweder `targetUserId` ODER `targetSharedId` (XOR, App-Level-validiert — Prisma kann das nicht direkt ausdrücken)
+  - `active`, `description`, Timestamps
+  - Cascade-Delete vom Target und der Domain
+- `User.aliases` + `SharedMailbox.aliases` + `Domain.aliases` als Back-Relations
+
+### Added — Backend-Routen (`packages/api-gateway/src/routes/admin/aliases.ts`)
+
+- `GET    /api/v1/admin/aliases` — alle Aliase listen (mit Target + Domain joinable)
+- `GET    /api/v1/admin/mailboxes/:id/aliases` + `POST` — User-Aliase
+- `GET    /api/v1/admin/shared-mailboxes/:id/aliases` + `POST` — SharedMailbox-Aliase
+- `PATCH  /api/v1/admin/aliases/:aliasId` — `active` / `description` ändern
+- `DELETE /api/v1/admin/aliases/:aliasId` — Alias löschen
+- POST akzeptiert entweder `address` ODER `localPart + domainId` (LocalPart-Validierung: `a-z 0-9 . _ + -`, nicht mit Punkt beginnen/enden)
+- **Adress-Kollisions-Check** verhindert Doppel-Zuordnung gegen User-Mails, Shared-Mailbox-Mails und andere Aliase
+
+### Added — SMTP-Inbound (`packages/smtp-server/src/inbound/handler.ts`)
+
+- `verifyRecipient()` akzeptiert jetzt Alias-Adressen — Mails an aktive Aliase mit aktivem Target werden NICHT mehr mit 5.1.1 abgelehnt
+- `expandRecipients()` löst Aliase **vor der Zustellung** zur Target-Primäradresse auf (User-E-Mail oder SharedMailbox-E-Mail). Die Mail wird in das Ziel-Postfach ausgeliefert, der Alias selbst hat kein eigenes Postfach
+- `visited`-Set bricht Alias-Schleifen ab (z. B. wenn Alias A → User X → ungültige Konfig)
+
+### Added — Admin-UI
+
+- **`MailboxAliasesSection`** (`packages/admin-panel/src/components/MailboxAliasesSection.tsx`) — wiederverwendbare Komponente:
+  - Liste vorhandener Aliase mit Aktiv/Inaktiv-Toggle und Lösch-Confirm
+  - Eingabe: `localPart` + Domain-Dropdown (Default = Domain der Mailbox)
+  - Live-Vorschau `info@firma.com`, Validierungs-Hint, disabled-Tooltip am Button
+- Integriert in **MailboxesPage**-Edit-Modal (User) und **SharedMailboxesPage**-Edit-Modal (Shared)
+- Für Shared-Mailbox-Aliase nur im Edit-Mode sichtbar (das Postfach muss erst angelegt sein)
+
+---
+
 ## [3.13.4] — 2026-05-19 — OWA: „Weiteres Postfach öffnen" (Shared-Mailbox-Reader)
 
 ### Added
@@ -69,34 +107,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.2] — 2026-05-19 — Dashboard-Drag&Drop direkt auf den Karten + Bugfixes
-
-### Fixed
-
-- **🐛 `moveWidget` Index-Shift-Bug** (`packages/admin-panel/src/store/dashboard.ts`)
-  - Wenn `from < to`, schiebt `splice(from, 1)` alle nachfolgenden Indices um 1 runter — beim anschließenden `splice(to, 0, …)` wurde das Item dann eine Position zu weit hinten eingefügt
-  - Fix: `insertAt = from < to ? to - 1 : to` korrigiert die Verschiebung. „Drop-vor-Index"-Semantik ist jetzt konsistent
-- **🐛 Firefox-Drag brach sofort ab** — ohne `e.dataTransfer.setData(...)` in `dragStart` ignoriert Firefox den Drag
-  - Fix: `setData('text/plain', widgetId)` + `effectAllowed = 'move'` gesetzt
-- **🐛 Checkbox triggerte Drag** im Popover — Klick wurde als dragStart interpretiert
-  - Fix: `onClick={(e) => e.stopPropagation()}` + `draggable={false}` an der Checkbox
-
-### Added — Drag-and-Drop direkt auf den Dashboard-Karten
-
-- **Karten in der Übersicht sind jetzt selber draggable** (`packages/admin-panel/src/pages/DashboardPage.tsx`)
-  - Neue Hüllen-Komponente `DraggableCard` umschließt jede KPI- und Server-Widget-Karte
-  - Drag-Cursor (`cursor-move`) + Tooltip „Per Drag verschieben"
-  - Visuelles Feedback: Quelle wird halb-transparent + leicht skaliert (`opacity-40 scale-[0.98]`), Drop-Target bekommt Akzent-Ring (`ring-2 ring-accent ring-offset-2`)
-  - Ring-Highlight erscheint nur bei Same-Group-Drops (KPI ↔ KPI, Server ↔ Server) — Cross-Group-Drag ist technisch erlaubt, modifiziert aber nur die relative Reihenfolge in der eigenen Section
-- **End-of-list Drop-Zone im Popover** — ermöglicht „ans Ende ziehen" durch eine 12 px hohe Drop-Zone unter dem letzten Listenelement
-
-### Changed
-
-- **`moveWidget(from, to)`**: Drop-Semantik dokumentiert. `to === length` ist erlaubt = „ans Ende anhängen". Adjacent-No-Op (`from + 1 === to`) wird sauber abgefangen
-- **`onDragOver`-Handler**: dropEffect explizit auf `'move'` gesetzt für korrekten Cursor
-
----
-
-
-> Ältere Releases (v3.13.1 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.2 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

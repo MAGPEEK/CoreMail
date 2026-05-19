@@ -157,14 +157,26 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 
   const email = rcptTo.toLowerCase();
 
-  const [user, sharedMailbox, distGroup, resourceMailbox] = await Promise.all([
+  const [user, sharedMailbox, distGroup, resourceMailbox, alias] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.distributionGroup.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.resourceMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
+    // Alias muss aktiv sein und Target ebenfalls aktiv
+    prisma.emailAlias.findFirst({
+      where: {
+        address: email,
+        active: true,
+        OR: [
+          { targetUser:   { active: true } },
+          { targetShared: { active: true } },
+        ],
+      },
+      select: { id: true },
+    }),
   ]);
 
-  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox);
+  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox ?? alias);
 }
 
 // ── Helper: expandRecipients ──────────────────────────────────────────────────
@@ -182,20 +194,47 @@ async function expandRecipients(
   for (const email of rcptTo) {
     const normalised = email.toLowerCase();
 
-    // Check if this is a distribution group
+    // 1. Distribution Group?
     const group = await prisma.distributionGroup.findFirst({
       where: { email: normalised, active: true },
       include: { members: true },
     });
-
     if (group && !visited.has(normalised)) {
       visited.add(normalised);
       const memberEmails = group.members.map((m) => m.memberEmail);
-      // Recurse to handle nested groups
       const expanded = await expandRecipients(memberEmails, visited);
       result.push(...expanded);
-    } else if (!group) {
-      // Regular recipient (user / shared mailbox / resource mailbox)
+      continue;
+    }
+
+    // 2. E-Mail-Alias? → ersetzen durch Target-Primäradresse
+    if (!group) {
+      const alias = await prisma.emailAlias.findFirst({
+        where: { address: normalised, active: true },
+        include: {
+          targetUser:   { select: { email: true, active: true } },
+          targetShared: { select: { email: true, active: true } },
+        },
+      });
+      if (alias) {
+        const targetEmail = alias.targetUser?.active
+          ? alias.targetUser.email
+          : alias.targetShared?.active
+            ? alias.targetShared.email
+            : null;
+        if (targetEmail) {
+          // Dedupe-Schutz: nicht in einer Schleife alias→alias→alias
+          if (!visited.has(normalised)) {
+            visited.add(normalised);
+            result.push(targetEmail.toLowerCase());
+            continue;
+          }
+        }
+      }
+    }
+
+    // 3. Regulärer Empfänger (User / SharedMailbox / ResourceMailbox)
+    if (!group) {
       result.push(normalised);
     }
   }

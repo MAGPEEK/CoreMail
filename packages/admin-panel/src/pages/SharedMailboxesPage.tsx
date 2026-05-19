@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield } from 'lucide-react';
 import { api } from '../api/client.js';
+import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 
 type PermType = 'FULL_ACCESS' | 'SEND_AS' | 'SEND_ON_BEHALF' | 'READ_ONLY';
 
@@ -265,6 +266,18 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
               {item ? 'Speichern' : 'Erstellen'}
             </button>
           </div>
+
+          {/* Aliases — nur im Edit-Mode (Postfach muss schon angelegt sein) */}
+          {item && (
+            <div className="border-t border-gray-200 pt-4 mt-2">
+              <MailboxAliasesSection
+                mailboxType="shared"
+                mailboxId={item.id}
+                defaultDomainId={item.domainId}
+                allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

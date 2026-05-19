@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 
 // ── Typen ────────────────────────────────────────────────────────────────────
 interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
@@ -631,6 +632,15 @@ function EditForm({ user, domains, onSave, isPending }:
           {isPending && <Loader2 size={14} className="animate-spin" />}
           Speichern
         </button>
+      </div>
+
+      <div className="border-t border-gray-200 pt-4 mt-2">
+        <MailboxAliasesSection
+          mailboxType="user"
+          mailboxId={user.id}
+          defaultDomainId={user.domainId}
+          allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
+        />
       </div>
     </div>
   );

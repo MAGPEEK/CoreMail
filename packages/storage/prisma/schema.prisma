@@ -79,6 +79,7 @@ model Domain {
   oidcProviders      OidcProvider[]
   distributionGroups DistributionGroup[]
   resourceMailboxes  ResourceMailbox[]
+  aliases            EmailAlias[]
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -112,6 +113,7 @@ model User {
   oauthTokens     OAuthToken[]
   oauthConsents   OAuthConsent[]
   categories      Category[]
+  aliases         EmailAlias[]   @relation("UserAliases")
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -368,10 +370,42 @@ model SharedMailbox {
   active      Boolean             @default(true)
   permissions SharedMailboxPerm[]
   mailbox     Mailbox?
+  aliases     EmailAlias[]        @relation("SharedMailboxAliases")
   createdAt   DateTime            @default(now())
 
   @@index([domainId])
   @@map("shared_mailboxes")
+}
+
+// ── E-Mail-Aliase ────────────────────────────────────────────────────────────
+// Ein Alias ist eine zusätzliche Empfangs-Adresse, deren Mails an ein bestehendes
+// Postfach (User oder Shared Mailbox) ausgeliefert werden. Exakt EIN Target muss
+// gesetzt sein (targetUserId XOR targetSharedId) — wird in Application-Code
+// validiert, Prisma kann das nicht direkt ausdrücken.
+model EmailAlias {
+  id              String         @id @default(cuid())
+  // Vollständige E-Mail-Adresse, z.B. "info@firma.com" — case-insensitive unique
+  address         String         @unique
+  // Local-Part vor dem @ (für UI-Anzeige, Sortierung)
+  localPart       String
+  // Die Domain, die der Alias-Adresse gehört (FK)
+  domain          Domain         @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  domainId        String
+  // Target: User-Postfach
+  targetUser      User?          @relation("UserAliases", fields: [targetUserId], references: [id], onDelete: Cascade)
+  targetUserId    String?
+  // Target: Shared Mailbox
+  targetShared    SharedMailbox? @relation("SharedMailboxAliases", fields: [targetSharedId], references: [id], onDelete: Cascade)
+  targetSharedId  String?
+  description     String         @default("")
+  active          Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([targetUserId])
+  @@index([targetSharedId])
+  @@index([domainId])
+  @@map("email_aliases")
 }
 
 model SharedMailboxPerm {

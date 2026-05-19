@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.4';
+const VERSION        = '3.13.5';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.5', date: '2026-05-19', title: 'E-Mail-Aliase für User- und Shared-Mailboxes',
+    notes: 'Zusätzliche Empfangs-Adressen für Postfächer: ein Alias wie info@firma.com kann auf eine bestehende User- oder Shared-Mailbox zeigen, eingehende Mails werden ins Haupt-Postfach ausgeliefert. Schema-neu: EmailAlias-Model mit XOR-Target (User oder Shared, Application-Level-Validierung). Backend: neue Admin-Routen GET/POST /admin/mailboxes/:id/aliases und /admin/shared-mailboxes/:id/aliases, plus PATCH/DELETE /admin/aliases/:id und globales GET /admin/aliases. Adress-Kollisions-Check verhindert Doppel-Zuordnung gegen User-Mails, Shared-Mailbox-Mails und andere Aliase. SMTP-Inbound erweitert: verifyRecipient akzeptiert jetzt Alias-Adressen, expandRecipients() löst Aliase zur Target-Primäradresse auf — vor dem Speichern wird die Mail also an die Haupt-Mailbox geroutet (Visited-Set bricht Alias-Schleifen). Admin-UI: neue Aliases-Section in beiden Edit-Modals (User-Mailbox + Shared-Mailbox) mit Live-Local-Part-Validation, Domain-Dropdown, Aktiv/Inaktiv-Toggle pro Alias, Lösch-Confirm.' },
   { version: '3.13.4', date: '2026-05-19', title: 'OWA: „Weiteres Postfach öffnen" — freigegebene Postfächer im Web-Client öffnen',
     notes: 'Neue Funktion im OWA: über das Konto-Dropdown rechts oben gibt es jetzt „Weiteres Postfach öffnen" (analog zu Outlook on the Web). Modal listet alle freigegebenen Postfächer, auf die der angemeldete User Zugriff hat (FULL_ACCESS oder READ_ONLY zum Lesen). Klick auf „Öffnen" navigiert zu einer 3-Spalten-Ansicht (Ordner / Nachrichten / Reader) im Read-Only-Mode mit Banner oben („Du siehst gerade: support@firma.com"). Drei neue Backend-Routen: GET /api/v1/user/shared-mailboxes/:id (Detail), /folders, /folders/:folderId/messages, /messages/:id — Berechtigungs-Check pro Aufruf. Bestehende /user/shared-mailboxes-Route aggregiert mehrere Permissions pro Postfach jetzt in ein permissions[]-Array (vorher: Duplikate pro Permission-Eintrag).' },
   { version: '3.13.3', date: '2026-05-19', title: 'Dashboard-Drag&Drop REPARIERT + Shared-Mailbox-Permissions-UX',
