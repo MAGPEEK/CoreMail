@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.1';
+const VERSION        = '3.13.2';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.2', date: '2026-05-19', title: 'Dashboard-Drag&Drop direkt auf den Karten — Index-Shift-Bug behoben',
+    notes: 'Drag-and-Drop für Dashboard-Widgets funktioniert jetzt direkt auf den Karten (vorher nur im Popover). KPI-Karten und Server-Widgets lassen sich per Maus in der gewünschten Reihenfolge anordnen. Bugfixes: moveWidget hatte einen Index-Shift-Bug bei from<to (Insert-Index wurde nicht korrigiert nachdem splice die nachfolgenden Indices runtergeschoben hat). Firefox-Kompatibilität: dataTransfer.setData war nicht gesetzt, Firefox brach Drag sofort ab. Visuelles Feedback: Karte wird beim Ziehen halb-transparent + skaliert, Drop-Target bekommt Akzent-Ring. End-of-list Drop-Zone im Popover ermöglicht „ans Ende ziehen".' },
   { version: '3.13.1', date: '2026-05-18', title: 'Info-Page schlanker — nur Top-3-Changelogs + Notes-Subtext entfernt',
     notes: 'Die „Letzte Versionen"-Karte zeigt jetzt nur noch die drei jüngsten Releases (statt der kompletten Historie). Pro Eintrag werden nur Version-Badge, Datum und Titel angezeigt — der ausführliche Notes-Text ist gestrichen. Die volle Historie bleibt im GitHub-CHANGELOG. Außerdem: kleiner Sub-Text „Keep a Changelog Format" unter dem Changelog-Link entfernt.' },
   { version: '3.13.0', date: '2026-05-18', title: 'SMTP/Greylisting/Cert-Audit: 5 kritische Bugs gefixt + Drag-Reorder + alle IANA-Zonen + OWA→MWA',

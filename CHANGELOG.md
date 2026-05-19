@@ -13,6 +13,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.2] — 2026-05-19 — Dashboard-Drag&Drop direkt auf den Karten + Bugfixes
+
+### Fixed
+
+- **🐛 `moveWidget` Index-Shift-Bug** (`packages/admin-panel/src/store/dashboard.ts`)
+  - Wenn `from < to`, schiebt `splice(from, 1)` alle nachfolgenden Indices um 1 runter — beim anschließenden `splice(to, 0, …)` wurde das Item dann eine Position zu weit hinten eingefügt
+  - Fix: `insertAt = from < to ? to - 1 : to` korrigiert die Verschiebung. „Drop-vor-Index"-Semantik ist jetzt konsistent
+- **🐛 Firefox-Drag brach sofort ab** — ohne `e.dataTransfer.setData(...)` in `dragStart` ignoriert Firefox den Drag
+  - Fix: `setData('text/plain', widgetId)` + `effectAllowed = 'move'` gesetzt
+- **🐛 Checkbox triggerte Drag** im Popover — Klick wurde als dragStart interpretiert
+  - Fix: `onClick={(e) => e.stopPropagation()}` + `draggable={false}` an der Checkbox
+
+### Added — Drag-and-Drop direkt auf den Dashboard-Karten
+
+- **Karten in der Übersicht sind jetzt selber draggable** (`packages/admin-panel/src/pages/DashboardPage.tsx`)
+  - Neue Hüllen-Komponente `DraggableCard` umschließt jede KPI- und Server-Widget-Karte
+  - Drag-Cursor (`cursor-move`) + Tooltip „Per Drag verschieben"
+  - Visuelles Feedback: Quelle wird halb-transparent + leicht skaliert (`opacity-40 scale-[0.98]`), Drop-Target bekommt Akzent-Ring (`ring-2 ring-accent ring-offset-2`)
+  - Ring-Highlight erscheint nur bei Same-Group-Drops (KPI ↔ KPI, Server ↔ Server) — Cross-Group-Drag ist technisch erlaubt, modifiziert aber nur die relative Reihenfolge in der eigenen Section
+- **End-of-list Drop-Zone im Popover** — ermöglicht „ans Ende ziehen" durch eine 12 px hohe Drop-Zone unter dem letzten Listenelement
+
+### Changed
+
+- **`moveWidget(from, to)`**: Drop-Semantik dokumentiert. `to === length` ist erlaubt = „ans Ende anhängen". Adjacent-No-Op (`from + 1 === to`) wird sauber abgefangen
+- **`onDragOver`-Handler**: dropEffect explizit auf `'move'` gesetzt für korrekten Cursor
+
+---
+
 ## [3.13.1] — 2026-05-18 — Info-Page schlanker (Top-3 + ohne Notes-Subtext)
 
 ### Changed
@@ -70,60 +98,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.12.0] — 2026-05-18 — Journaling Exchange-2019-konform (BCC · .eml · Retry · Fallback · Hold)
-
-### Added — Exchange-2019-Spec-Konformität
-
-- **Transport-Agent-Logik**: `journalMessage()` ist in den SMTP-Pfad eingehängt — Aufruf erfolgt mit den **Envelope-Empfängern** (RCPT TO), nicht den Header-Empfängern. Damit sind expandierte Verteilerlisten und BCC-Adressen automatisch im Report enthalten
-- **BCC-Auflösung im Journal-Report** — Engine vergleicht Envelope-To gegen To/Cc-Header der Original-Mail; alle Envelope-To-Adressen, die NICHT in den Headern stehen, werden explizit als BCC ausgewiesen (im Summary-Teil und mit `(BCC)`-Suffix im `Original-Envelope-To`-Header)
-- **Original-Mail als `.eml`-Attachment**: Teil 3 des Reports trägt jetzt `Content-Type: message/rfc822` plus `Content-Disposition: attachment; filename="original.eml"` (vorher inline)
-- **Submission-Queue-Hold** (Non-Repudiation):
-  - Neue Setting `holdOnFailure: boolean` (Default OFF, in Settings-UI aktivierbar)
-  - Wenn aktiv UND primär + Fallback scheitern → Engine wirft `JournalingHoldError` → SMTP-Pipeline blockiert die Mail
-  - Bei OFF (Default für KMUs) → Failure persistiert, Mailfluss läuft weiter
-- **Alternatives Journal-Postfach** (`alternativeJournalAddress` in den globalen Settings):
-  - Wird automatisch versucht wenn primäres Sink-Postfach fehlschlägt
-  - Im Retry-Loop kommt es als zweite Adresse zum Einsatz (jeder Failure wird einmal über das Fallback versucht, wenn die primäre Adresse nicht antwortet)
-
-### Added — Engine-Resilienz
-
-- **Failure-Persistierung**: nicht zustellbare Reports landen in der Tabelle `journaling_failures` mit Status `PENDING`/`RETRYING`/`ALTERNATIVE`/`RESOLVED`/`ABANDONED`
-- **Original-Mail in MinIO**: pro Failure wird die rohe Mail unter `journal-failures/<ruleId>/<id>.eml` gespeichert — der Retry-Worker baut den Report aus der Original-Mail neu (statt nur den Report-Buffer zu speichern, der schon eine Empfänger-Adresse enthält)
-- **Exponentielles Backoff** im Retry-Loop: `initialRetryDelaySec × 2^(n-1)` (default 30s, 60s, 120s, …) bis `maxRetries` erreicht → `ABANDONED`
-- **Retry-Worker** läuft alle 60 s im SMTP-Server-Prozess (`startJournalingRetryLoop()`), startet auch sofort nach Bootstrap (5 s Delay um Backlog aufzuholen)
-- **Settings-Cache** mit 60 s TTL plus Redis-`CHANNEL_SETTINGS_RELOAD`-Invalidierung — nach Settings-Update greifen neue Werte ohne Restart
-
-### Added — Schema (Prisma)
-
-- **Neu**:
-  - `model JournalingSettings` (Singleton id="singleton") — `alternativeJournalAddress`, `holdOnFailure`, `maxRetries`, `initialRetryDelaySec`
-  - `model JournalingFailure` mit Relation zu `JournalingRule` — speichert Envelope-From/To, Direction, MinIO-Pfad, Target-Address, lastTriedAddress, Status, Attempts, NextAttemptAt, ErrorMessage
-  - `enum JournalingFailureStatus { PENDING, RETRYING, ALTERNATIVE, RESOLVED, ABANDONED }`
-- **Erweitert**:
-  - `JournalingRule.failures` Relation
-
-### Added — Backend-Routen
-
-- `GET/PUT /api/v1/admin/compliance/journaling/settings`
-- `GET /api/v1/admin/compliance/journaling/failures?status=…`
-- `POST /api/v1/admin/compliance/journaling/failures/:id/retry` — sofortigen Retry triggern
-- `DELETE /api/v1/admin/compliance/journaling/failures/:id` — Failure aus Log entfernen
-
-### Changed — Admin-UI
-
-- **`JournalingPage.tsx`** komplett überarbeitet, 3 Tabs:
-  - **Regeln** — bestehende Tabelle, erweitert um Empfänger-Count
-  - **Einstellungen** — Alternativ-Postfach, Hold-on-Failure (mit Amber-Warning bei Aktivierung), Max-Retries + initiales Backoff-Intervall
-  - **Fehler** — Failure-Tabelle mit Status-Filter (Alle/Wartend/Wiederholung/Fallback/Zugestellt/Abgebrochen), Manual-Retry- und Dismiss-Aktionen, Live-Refresh alle 15 s
-- **Tab-Badge** auf „Fehler" zeigt Anzahl offener Failures (PENDING + RETRYING + ABANDONED) in Rot
-- **Rule-Modal** erweitert — `SPECIFIC_USERS` und `DOMAIN` zeigen jetzt das passende komma-getrennte Eingabefeld
-
-### Notes
-
-- Defaults sind so gewählt, dass kein bestehender Mailfluss bricht: `holdOnFailure=false`, `maxRetries=3`, `initialRetryDelaySec=30`. Strict-Compliance-Setups können `holdOnFailure=true` setzen (Banner warnt vor möglichem Mailflow-Stop)
-- Engine wirft Fehler nur bei aktivem Hold weiter; sonst ist Journaling sauber „best effort" (Failure-Log gibt Auditspur)
-
 ---
 
-> Ältere Releases (v3.11.1 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.12.0 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

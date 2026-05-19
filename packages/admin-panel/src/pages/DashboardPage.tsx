@@ -169,6 +169,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const dragIndex = useRef<number | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -208,33 +209,72 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
           <div
             key={w.id}
             draggable
-            onDragStart={() => { dragIndex.current = i; }}
-            onDragEnter={(e) => { e.preventDefault(); setHoverIndex(i); }}
-            onDragOver={(e) => e.preventDefault()}
-            onDragLeave={() => setHoverIndex((h) => (h === i ? null : h))}
+            onDragStart={(e) => {
+              dragIndex.current = i;
+              setDraggingIndex(i);
+              // Firefox: ohne setData wird drag sofort abgebrochen
+              e.dataTransfer.setData('text/plain', w.id);
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnter={(e) => { e.preventDefault(); if (dragIndex.current !== null) setHoverIndex(i); }}
+            onDragOver={(e) => {
+              if (dragIndex.current === null) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+            }}
+            onDragLeave={(e) => {
+              // Nur leeren, wenn cursor wirklich die ganze Zeile verlässt
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              setHoverIndex((h) => (h === i ? null : h));
+            }}
             onDrop={(e) => {
               e.preventDefault();
               const from = dragIndex.current;
               if (from !== null && from !== i) moveWidget(from, i);
               dragIndex.current = null;
               setHoverIndex(null);
+              setDraggingIndex(null);
             }}
-            onDragEnd={() => { dragIndex.current = null; setHoverIndex(null); }}
-            className={`flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-move ${
+            onDragEnd={() => { dragIndex.current = null; setHoverIndex(null); setDraggingIndex(null); }}
+            className={`flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-move transition-opacity ${
               hoverIndex === i ? 'border-t-2 border-accent' : 'border-t-2 border-transparent'
-            }`}
+            } ${draggingIndex === i ? 'opacity-40' : ''}`}
           >
             <GripVertical size={13} className="text-gray-300 shrink-0" />
             <input
               type="checkbox"
               checked={visible[w.id] ?? true}
               onChange={() => toggle(w.id)}
+              onClick={(e) => e.stopPropagation()}
+              draggable={false}
               className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent shrink-0"
             />
             <span className="text-sm text-gray-700 flex-1 truncate">{w.label}</span>
             <span className="text-[10px] text-gray-400 uppercase tracking-wide shrink-0">{GROUP_LABELS[w.group]}</span>
           </div>
         ))}
+        {/* End-of-list Drop-Zone — erlaubt "ans Ende ziehen" */}
+        <div
+          onDragEnter={(e) => { e.preventDefault(); if (dragIndex.current !== null) setHoverIndex(orderedItems.length); }}
+          onDragOver={(e) => {
+            if (dragIndex.current === null) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+            setHoverIndex((h) => (h === orderedItems.length ? null : h));
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const from = dragIndex.current;
+            if (from !== null) moveWidget(from, orderedItems.length);
+            dragIndex.current = null;
+            setHoverIndex(null);
+            setDraggingIndex(null);
+          }}
+          className={`h-3 ${hoverIndex === orderedItems.length ? 'border-t-2 border-accent' : 'border-t-2 border-transparent'}`}
+        />
       </div>
     </div>
   );
@@ -256,9 +296,72 @@ export function DashboardPage() {
     refetchInterval: 30_000,
   });
   const [showSettings, setShowSettings] = useState(false);
-  const visible = useDashboardStore((s) => s.visible);
-  const order   = useDashboardStore((s) => s.order);
-  const isVisible = (id: WidgetId) => visible[id] ?? true;
+  const visible    = useDashboardStore((s) => s.visible);
+  const order      = useDashboardStore((s) => s.order);
+  const moveWidget = useDashboardStore((s) => s.moveWidget);
+  const isVisible  = (id: WidgetId) => visible[id] ?? true;
+
+  // ── Drag-State für direktes Reordern auf den Dashboard-Karten ──────────────
+  const [cardDrag, setCardDrag]   = useState<WidgetId | null>(null);
+  const [cardHover, setCardHover] = useState<WidgetId | null>(null);
+
+  /**
+   * Hüllen-Komponente um eine Dashboard-Karte. Stellt Drag-Quelle + Drop-Target.
+   * Section-Local-Hint: das visuelle Highlight wird nur gezeigt, wenn Source und
+   * Target zur selben Gruppe gehören. Der Move arbeitet aber auf der globalen
+   * `order`-Liste — Cross-Gruppen-Moves sind technisch erlaubt und beeinflussen
+   * nur die relative Reihenfolge in den eigenen Sections.
+   */
+  function DraggableCard({ id, children }: { id: WidgetId; children: React.ReactNode }) {
+    const myCatalogEntry = WIDGET_CATALOG.find((w) => w.id === id);
+    const myGroup = myCatalogEntry?.group;
+    const sourceEntry = cardDrag ? WIDGET_CATALOG.find((w) => w.id === cardDrag) : null;
+    const sameGroup = sourceEntry?.group === myGroup;
+
+    return (
+      <div
+        key={id}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', id);
+          e.dataTransfer.effectAllowed = 'move';
+          setCardDrag(id);
+        }}
+        onDragEnter={(e) => {
+          if (!cardDrag || cardDrag === id) return;
+          e.preventDefault();
+          setCardHover(id);
+        }}
+        onDragOver={(e) => {
+          if (!cardDrag || cardDrag === id) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setCardHover((h) => (h === id ? null : h));
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (!cardDrag || cardDrag === id) return;
+          const fromIdx = order.indexOf(cardDrag);
+          const toIdx   = order.indexOf(id);
+          if (fromIdx >= 0 && toIdx >= 0) moveWidget(fromIdx, toIdx);
+          setCardDrag(null);
+          setCardHover(null);
+        }}
+        onDragEnd={() => { setCardDrag(null); setCardHover(null); }}
+        className={`cursor-move transition-all relative ${
+          cardDrag === id ? 'opacity-40 scale-[0.98]' : ''
+        } ${
+          cardHover === id && sameGroup ? 'ring-2 ring-accent ring-offset-2 rounded-xl' : ''
+        }`}
+        title="Per Drag verschieben"
+      >
+        {children}
+      </div>
+    );
+  }
 
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString('de-DE') : '—';
 
@@ -365,7 +468,7 @@ export function DashboardPage() {
         return (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {sorted.map((id) => isVisible(id) && kpiSlots[id]
-              ? <div key={id}>{kpiSlots[id]}</div>
+              ? <DraggableCard key={id} id={id}>{kpiSlots[id]}</DraggableCard>
               : null)}
           </div>
         );
@@ -456,7 +559,7 @@ export function DashboardPage() {
         return (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {sorted.map((id) => isVisible(id) && serverSlots[id]
-              ? <div key={id}>{serverSlots[id]}</div>
+              ? <DraggableCard key={id} id={id}>{serverSlots[id]}</DraggableCard>
               : null)}
           </div>
         );

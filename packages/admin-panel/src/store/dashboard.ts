@@ -78,12 +78,19 @@ export const useDashboardStore = create<DashboardStore>()(
         visible: Object.fromEntries(WIDGET_CATALOG.map((w) => [w.id, value])) as Record<WidgetId, boolean>,
       }),
       resetDefaults: () => set({ visible: { ...DEFAULT_VISIBILITY }, order: [...DEFAULT_ORDER] }),
+      // Semantik: `to` ist die "Insert-vor-diesem-Index"-Position.
+      // Wert `to === length` = ans Ende anhängen.
+      // Wichtig: wenn `from < to`, schiebt das `splice(from,1)` alle nachfolgenden
+      // Indices um 1 runter, daher Korrektur per `to - 1`.
       moveWidget: (from, to) => {
         const current = get().order;
-        if (from < 0 || from >= current.length || to < 0 || to >= current.length || from === to) return;
+        if (from < 0 || from >= current.length) return;
+        if (to < 0 || to > current.length) return;
+        if (from === to || from + 1 === to) return; // kein No-Op-Move
         const next = [...current];
         const [moved] = next.splice(from, 1);
-        next.splice(to, 0, moved!);
+        const insertAt = from < to ? to - 1 : to;
+        next.splice(insertAt, 0, moved!);
         set({ order: next });
       },
     }),
