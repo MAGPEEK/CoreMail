@@ -1,7 +1,7 @@
 import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
-import { journalMessage } from '../journaling/engine.js';
+// Journaling-Feature komplett entfernt in v3.13.6
 
 const log = createLogger('smtp:message-handler');
 
@@ -179,14 +179,6 @@ export async function storeInboundMessage(
       isJunk: opts.toJunk,
     }),
   );
-
-  // ── Phase 9: Journaling (inbound) ─────────────────────────────────────────
-  await journalMessage({
-    rawMessage: effectiveBuffer,
-    from: opts.fromAddr,
-    to: [opts.rcptTo],
-    direction: 'INBOUND',
-  });
 
   log.info(
     { rcptTo: opts.rcptTo, folder: folder.name, uid, size: effectiveBuffer.length },

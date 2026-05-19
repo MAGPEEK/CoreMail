@@ -28,7 +28,7 @@ import { ResourcesPage } from './pages/ResourcesPage.js';
 import { ExternalContactsPage } from './pages/ExternalContactsPage.js';
 import { RbacPage } from './pages/RbacPage.js';
 import { EDiscoveryPage } from './pages/EDiscoveryPage.js';
-import { JournalingPage } from './pages/JournalingPage.js';
+// Journaling-Feature komplett entfernt in v3.13.6
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
 import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
@@ -149,7 +149,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/ext-contacts"   element={<ExternalContactsPage />} />
                   <Route path="/rbac"           element={<RbacPage />} />
                   <Route path="/ediscovery"     element={<EDiscoveryPage />} />
-                  <Route path="/journaling"     element={<JournalingPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
                   <Route path="/oauth-clients" element={<OAuthClientsPage />} />

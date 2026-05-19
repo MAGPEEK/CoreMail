@@ -35,7 +35,7 @@ import { adminResourcesRouter } from './routes/admin/resources.js';
 import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
 import { adminEDiscoveryRouter } from './routes/admin/ediscovery.js';
 import { adminEmsRouter } from './routes/admin/ems.js';
-import { adminJournalingRouter } from './routes/admin/journaling.js';
+// Journaling-Feature komplett entfernt in v3.13.6
 import { adminRetentionRouter } from './routes/admin/retention.js';
 import { adminAuditLogRouter } from './routes/admin/audit-log.js';
 import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
@@ -272,7 +272,7 @@ app.use('/api/v1/admin/resources',       adminResourcesRouter);
 app.use('/api/v1/admin/public-folders',  adminPublicFoldersRouter);
 app.use('/api/v1/admin/ediscovery',      adminEDiscoveryRouter);
 app.use('/api/v1/admin/ems',             adminEmsRouter);
-app.use('/api/v1/admin/compliance/journaling', adminJournalingRouter);
+// Journaling-Route entfernt in v3.13.6
 app.use('/api/v1/admin/compliance/retention',  adminRetentionRouter);
 app.use('/api/v1/admin/audit-log',        adminAuditLogRouter);
 app.use('/api/v1/admin/oauth',            adminOAuthClientsRouter);

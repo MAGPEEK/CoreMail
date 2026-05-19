@@ -13,6 +13,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.6] — 2026-05-19 — Journaling-Feature komplett entfernt
+
+### Removed
+
+- **SMTP-Server** (`packages/smtp-server/src/`):
+  - `journaling/engine.ts` (Engine + Retry-Loop + BCC-Detection + Report-Builder)
+  - `journalMessage()`-Aufruf in `handlers/message.ts` (Inbound nach Storage)
+  - `journalMessage()`-Aufruf in `outbound/queue.ts` (Outbound vor Relay)
+  - `startJournalingRetryLoop()`-Bootstrap in `server.ts`
+- **API-Gateway** (`packages/api-gateway/src/`):
+  - `routes/admin/journaling.ts` (alle 9 Routen — Rules-CRUD, Settings, Failures-Liste/Retry/Delete)
+  - Route-Registrierung in `server.ts`
+- **Admin-Panel** (`packages/admin-panel/src/`):
+  - `pages/JournalingPage.tsx` + `.js` Stale-Datei
+  - Route `/journaling` in `main.tsx`
+  - Sidebar-Eintrag (`Sidebar.tsx`) + `BookText`-Icon-Import
+  - Translation-Keys `nav_journaling` (de + en) in `i18n/translations.ts`
+  - „Journaling"-Referenz in `RbacPage.tsx` Compliance-Management-Beschreibung
+- **Prisma-Schema** (`packages/storage/prisma/schema.prisma`):
+  - `model JournalingRule`, `model JournalingSettings`, `model JournalingFailure`
+  - `enum JournalScope`, `enum JournalRecipientType`, `enum JournalingFailureStatus`
+
+### Database Migration
+
+- `prisma db push --accept-data-loss` beim Deploy droppt die Tabellen `journaling_rules`, `journaling_settings`, `journaling_failures` aus der DB
+- Eventuell vorhandene Journal-Failure-Exports unter MinIO-Pfad `journal-failures/*` bleiben erhalten (manuelles Cleanup falls gewünscht)
+
+### Notes
+
+- Mail-Flow läuft normal weiter — Journal-Hook war ein „best effort"-Sidecar, nicht im kritischen Zustellungs-Pfad
+- Wer Journaling als Compliance-Funktion benötigt, kann es via externem MTA-Relay oder Mail-Server-Konfiguration auf SMTP-Ebene nachbauen (z. B. Postfix `always_bcc`)
+
+---
+
 ## [3.13.5] — 2026-05-19 — E-Mail-Aliase für User- und Shared-Mailboxes
 
 ### Added — Schema
@@ -86,26 +120,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.3] — 2026-05-19 — Drag&Drop REPARIERT + Shared-Mailbox-Permissions-UX
 
-### Fixed
-
-- **🐛 Dashboard-Drag funktionierte nicht** — der Refactor in v3.13.2 hatte `DraggableCard` als innere Funktion innerhalb von `DashboardPage` definiert
-  - **Bug**: Bei jedem Re-Render von DashboardPage (z. B. nach `setCardDrag(id)` im dragStart-Handler) entsteht eine neue Funktion-Referenz für `DraggableCard`. React reconciliation sieht „neuen Komponenten-Typ" und unmountet/mountet alle Karten neu. Mid-Drag werden die DOM-Nodes vernichtet → laufender Drag bricht sofort ab
-  - **Fix**: `DraggableCard` auf Modul-Ebene extrahiert (außerhalb von `DashboardPage`), nimmt drag state als Props (`cardDrag`, `cardHover`, `setCardDrag`, `setCardHover`, `order`, `moveWidget`)
-- **🐛 Text-Selektion statt Drag** — wenn Mousedown auf Text-Inhalt der Karte erfolgte, startete Chrome/Firefox Text-Selektion statt Drag
-  - **Fix**: `select-none` Klasse am Drag-Wrapper
-- **🐛 Shared-Mailbox-Permissions ließen sich nicht hinzufügen** (`packages/admin-panel/src/pages/SharedMailboxesPage.tsx`)
-  - User-Suche war case-sensitive (`u.email.includes(userSearch)`) — „stefan" matchte „Stefan@…" nicht
-  - `<select size={4}>`-Listbox war verwirrend: ohne expliziten Klick blieb `userId` leer → „Hinzufügen"-Button blieb disabled, ohne Hinweis warum
-  - **Fix**: case-insensitive Filter, ganze User-Liste einmalig geladen mit 60s `staleTime`, klickbare Listenelemente statt Listbox (`<button>`-basiert mit Akzent-Ring auf Selection), „Kein Benutzer gefunden"-Meldung in Amber, bereits berechtigte User werden in der Liste ausgeblendet (für Änderungen gibt's „Bearbeiten" am bestehenden Eintrag), `disabled`-Tooltip am Button erklärt warum er nicht klickbar ist, `type="button"` explizit gesetzt
-
-### Notes
-
-- Dies ist der canonical React-Anti-Pattern „Komponenten dürfen niemals innerhalb anderer Komponenten definiert werden", weil jede neue Funktion-Referenz von React als neuer Komponenten-Typ behandelt wird (Reconciliation per Reference Equality)
-- Die Popover-Drag-Funktion war nicht betroffen — dort waren die Drag-Handler direkt auf `<div>`-Elementen, nicht in einer wrapping component
-
----
-
-> Ältere Releases (v3.13.2 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.3 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

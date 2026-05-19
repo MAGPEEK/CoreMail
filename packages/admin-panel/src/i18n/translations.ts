@@ -50,7 +50,6 @@ const de = {
 
   // ── Navigation — Compliance ──────────────────────────────────────────────
   nav_ediscovery:         'eDiscovery',
-  nav_journaling:         'Journaling',
   nav_retention:          'Aufbewahrung',
 
   // ── TopBar ───────────────────────────────────────────────────────────────
@@ -222,7 +221,6 @@ const en: { [K in keyof DE]: string } = {
 
   // ── Navigation — Compliance ──────────────────────────────────────────────
   nav_ediscovery:         'eDiscovery',
-  nav_journaling:         'Journaling',
   nav_retention:          'Retention',
 
   // ── TopBar ───────────────────────────────────────────────────────────────

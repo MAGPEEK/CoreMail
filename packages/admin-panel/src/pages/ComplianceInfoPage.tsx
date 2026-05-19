@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.5';
+const VERSION        = '3.13.6';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.6', date: '2026-05-19', title: 'Journaling-Feature komplett entfernt',
+    notes: 'Das Journaling-Feature (RFC-3462 Journal Reports, Retry-Worker, Failure-Log) wurde auf Wunsch komplett aus dem System entfernt. Gelöschte Komponenten: SMTP-Engine (packages/smtp-server/src/journaling/engine.ts), Admin-API (packages/api-gateway/src/routes/admin/journaling.ts), Admin-UI (JournalingPage.tsx), Sidebar-Eintrag, Translation-Keys, Aufrufe in handlers/message.ts (Inbound) und outbound/queue.ts (Outbound), startJournalingRetryLoop()-Bootstrap. Prisma-Schema bereinigt: JournalingRule, JournalingSettings, JournalingFailure-Modelle plus JournalScope/JournalRecipientType/JournalingFailureStatus-Enums entfernt. Datenbank-Migration läuft mit prisma db push beim Deploy — die Tabellen journaling_rules, journaling_settings und journaling_failures werden in der DB gedroppt (mit --accept-data-loss, falls vorhanden). Mail-Flow läuft normal weiter — Journal-Hook war ein „best effort"-Nachzustellungs-Sidecar, nicht im kritischen Pfad.' },
   { version: '3.13.5', date: '2026-05-19', title: 'E-Mail-Aliase für User- und Shared-Mailboxes',
     notes: 'Zusätzliche Empfangs-Adressen für Postfächer: ein Alias wie info@firma.com kann auf eine bestehende User- oder Shared-Mailbox zeigen, eingehende Mails werden ins Haupt-Postfach ausgeliefert. Schema-neu: EmailAlias-Model mit XOR-Target (User oder Shared, Application-Level-Validierung). Backend: neue Admin-Routen GET/POST /admin/mailboxes/:id/aliases und /admin/shared-mailboxes/:id/aliases, plus PATCH/DELETE /admin/aliases/:id und globales GET /admin/aliases. Adress-Kollisions-Check verhindert Doppel-Zuordnung gegen User-Mails, Shared-Mailbox-Mails und andere Aliase. SMTP-Inbound erweitert: verifyRecipient akzeptiert jetzt Alias-Adressen, expandRecipients() löst Aliase zur Target-Primäradresse auf — vor dem Speichern wird die Mail also an die Haupt-Mailbox geroutet (Visited-Set bricht Alias-Schleifen). Admin-UI: neue Aliases-Section in beiden Edit-Modals (User-Mailbox + Shared-Mailbox) mit Live-Local-Part-Validation, Domain-Dropdown, Aktiv/Inaktiv-Toggle pro Alias, Lösch-Confirm.' },
   { version: '3.13.4', date: '2026-05-19', title: 'OWA: „Weiteres Postfach öffnen" — freigegebene Postfächer im Web-Client öffnen',

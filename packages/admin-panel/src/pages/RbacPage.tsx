@@ -51,7 +51,7 @@ const ROLE_META: Record<UserRole, { label: string; description: string; color: s
   },
   COMPLIANCE_MANAGEMENT: {
     label: 'Compliance Management',
-    description: 'eDiscovery, Journaling, Aufbewahrung',
+    description: 'eDiscovery, Aufbewahrung',
     color: 'bg-purple-100 text-purple-700',
   },
   HYGIENE_MANAGEMENT: {

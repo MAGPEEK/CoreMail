@@ -3,7 +3,7 @@ import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
 import { relayMessage } from './relay.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
-import { journalMessage } from '../journaling/engine.js';
+// Journaling-Feature komplett entfernt in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
 
@@ -79,9 +79,6 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         ...(dkimSelector ? { dkimSelector } : {}),
         ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
       });
-
-      // ── Phase 9: Journaling (outbound) ────────────────────────────────────
-      await journalMessage({ rawMessage: buffer, from, to, direction: 'OUTBOUND' });
 
       log.info({ jobId: job.id, to }, 'Message delivered');
     },
