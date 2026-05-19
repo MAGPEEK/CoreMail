@@ -10,6 +10,7 @@ import { ContactsPage } from './pages/ContactsPage.js';
 import { TasksPage } from './pages/TasksPage.js';
 import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
+import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
@@ -115,6 +116,7 @@ export function App() {
             <Layout>
               <Routes>
                 <Route path="/mail" element={<MailPage />} />
+                <Route path="/shared-mailbox/:id" element={<SharedMailboxPage />} />
                 <Route path="/calendar" element={<CalendarPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/tasks" element={<TasksPage />} />

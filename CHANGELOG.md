@@ -13,6 +13,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.4] — 2026-05-19 — OWA: „Weiteres Postfach öffnen" (Shared-Mailbox-Reader)
+
+### Added
+
+- **Konto-Dropdown → „Weiteres Postfach öffnen"** (`packages/web-client/src/components/TopBar.tsx`)
+  - Neuer Menüeintrag oberhalb von „Abmelden"
+  - Öffnet ein Modal mit allen freigegebenen Postfächern, auf die der User Zugriff hat
+- **`OpenSharedMailboxModal`** (`packages/web-client/src/components/OpenSharedMailboxModal.tsx`)
+  - Live-Suche nach E-Mail oder Display-Name
+  - Permission-Badges pro Postfach (Vollzugriff / Senden als / Im Auftrag / Nur Lesen)
+  - „Öffnen"-Button — disabled wenn keine Lese-Berechtigung (FULL_ACCESS oder READ_ONLY)
+  - Klick navigiert zur Read-Only-Ansicht
+- **`SharedMailboxPage`** (`packages/web-client/src/pages/SharedMailboxPage.tsx`)
+  - Route `/shared-mailbox/:id`
+  - 3-Spalten-Layout (Ordner / Nachrichten / Reader) im klassischen Mail-Style
+  - Banner oben: „Du siehst gerade: support@firma.com" mit „Zurück zu meinem Postfach"-Button
+  - HTML- oder Text-Body, Attachment-Chips, From/To/Date/Folder-Metadata
+  - Hinweis am Mail-Ende bei Read-Only: „Antworten oder Verschieben ist nicht möglich"
+
+### Added — Backend-Routen (`packages/api-gateway/src/routes/user.ts`)
+
+- `GET /api/v1/user/shared-mailboxes` — **erweitert**: aggregiert mehrere Permissions pro Postfach in `permissions[]` (vorher: ein Eintrag pro Permission)
+- `GET /api/v1/user/shared-mailboxes/:id` — Detail mit `permissions[]`
+- `GET /api/v1/user/shared-mailboxes/:id/folders` — Ordnerliste der freigegebenen Mailbox (404/403 ohne Lese-Berechtigung)
+- `GET /api/v1/user/shared-mailboxes/:id/folders/:folderId/messages?limit&offset` — Nachrichtenliste
+- `GET /api/v1/user/shared-mailboxes/:id/messages/:messageId` — Detail mit Folder + Attachments
+- Helper `getReadableSharedMailbox(userId, sharedId)` prüft `FULL_ACCESS` ODER `READ_ONLY` + Active-Status + auflöst die zugehörige `Mailbox`-ID
+
+### Notes
+
+- Schreib-Operationen (Antworten, Verschieben, Löschen) sind bewusst nicht implementiert — der User-Wunsch war explizit „öffnen können", und Read-only ist sicherer als Default. Schreib-Support folgt wenn nachgefragt
+- Backend prüft `permission IN ('FULL_ACCESS', 'READ_ONLY')` pro Request; ohne passende Permission → 403
+
+---
+
 ## [3.13.3] — 2026-05-19 — Drag&Drop REPARIERT + Shared-Mailbox-Permissions-UX
 
 ### Fixed
@@ -62,19 +97,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.1] — 2026-05-18 — Info-Page schlanker (Top-3 + ohne Notes-Subtext)
 
-### Changed
-
-- **Info-Page**: Die „Letzte Versionen"-Karte zeigt jetzt nur noch die drei jüngsten Releases (statt der kompletten Historie). Pro Eintrag bleiben nur Version-Badge, Datum und Titel sichtbar — der ausführliche Notes-Text ist entfernt.
-- **CHANGELOG.md**: ebenfalls auf die drei jüngsten Einträge gekürzt; ältere Releases bleiben über die git history erreichbar.
-- **Info-Page „Changelog"-Resource-Karte**: Sub-Text „Keep a Changelog Format" entfernt.
-
-### Fixed
-
-- **`getAppVersion()`** liest jetzt `COREMAIL_VERSION`-Env **bevor** das root `package.json` als Fallback — erlaubt Runtime-Override des Version-Labels ohne Image-Rebuild.
-
----
-
-> Ältere Releases (v3.13.0 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.1 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

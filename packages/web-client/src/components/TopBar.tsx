@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown, Inbox } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 import { Avatar } from './Avatar.js';
+import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 
 interface Props {
   onSearch: (q: string) => void;
@@ -14,6 +15,7 @@ export function TopBar({ onSearch, currentApp }: Props) {
   const { displayName, email, logout } = useAuthStore();
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
+  const [sharedOpen, setSharedOpen]   = useState(false);
 
   const apps = [
     { id: 'mail', label: 'Mail', icon: Mail, path: '/mail' },
@@ -97,6 +99,14 @@ export function TopBar({ onSearch, currentApp }: Props) {
                 </div>
               </div>
               <button
+                onClick={() => { setProfileOpen(false); setSharedOpen(true); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <Inbox size={14} />
+                Weiteres Postfach öffnen
+              </button>
+              <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
+              <button
                 onClick={() => { logout(); navigate('/login'); }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
@@ -107,6 +117,7 @@ export function TopBar({ onSearch, currentApp }: Props) {
           )}
         </div>
       </div>
+      {sharedOpen && <OpenSharedMailboxModal onClose={() => setSharedOpen(false)} />}
     </header>
   );
 }

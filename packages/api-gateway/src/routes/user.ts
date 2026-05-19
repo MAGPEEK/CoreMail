@@ -319,11 +319,138 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/user/shared-mailboxes
+// Listet alle freigegebenen Postfächer, auf die der User Zugriff hat.
+// Aggregiert mehrere Berechtigungen pro Mailbox in ein `permissions[]`-Array.
 userRouter.get('/shared-mailboxes', async (req: Request, res: Response) => {
-  
   const perms = await prisma.sharedMailboxPerm.findMany({
     where: { userId: req.apiUser!.userId },
-    include: { sharedMailbox: { select: { id: true, email: true, displayName: true } } },
+    include: { sharedMailbox: { select: { id: true, email: true, displayName: true, active: true } } },
   });
-  res.json(perms.map((p: { sharedMailbox: { id: string; email: string; displayName: string }; permission: string }) => ({ ...p.sharedMailbox, permission: p.permission })));
+  // Aggregieren: ein Eintrag pro shared mailbox mit allen perms
+  const map = new Map<string, { id: string; email: string; displayName: string; active: boolean; permissions: string[] }>();
+  for (const p of perms) {
+    if (!p.sharedMailbox.active) continue;
+    const existing = map.get(p.sharedMailbox.id);
+    if (existing) {
+      existing.permissions.push(p.permission);
+    } else {
+      map.set(p.sharedMailbox.id, {
+        id:          p.sharedMailbox.id,
+        email:       p.sharedMailbox.email,
+        displayName: p.sharedMailbox.displayName,
+        active:      p.sharedMailbox.active,
+        permissions: [p.permission],
+      });
+    }
+  }
+  res.json([...map.values()].sort((a, b) => a.email.localeCompare(b.email)));
+});
+
+// ── Helper: prüft Lese-Zugriff auf eine Shared-Mailbox + holt Mailbox-Record ──
+async function getReadableSharedMailbox(userId: string, sharedMailboxId: string) {
+  const perm = await prisma.sharedMailboxPerm.findFirst({
+    where: {
+      userId,
+      sharedMailboxId,
+      permission: { in: ['FULL_ACCESS', 'READ_ONLY'] },
+    },
+    include: {
+      sharedMailbox: {
+        select: { id: true, email: true, displayName: true, active: true },
+      },
+    },
+  });
+  if (!perm || !perm.sharedMailbox.active) return null;
+  // Die Mailbox-Tabelle ist 1:1 mit SharedMailbox via sharedBoxId
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { sharedBoxId: sharedMailboxId },
+    select: { id: true },
+  });
+  if (!mailbox) return null;
+  return { mailboxId: mailbox.id, shared: perm.sharedMailbox, permission: perm.permission };
+}
+
+// GET /api/v1/user/shared-mailboxes/:id — Detail (inkl. permissions[])
+userRouter.get('/shared-mailboxes/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const perms = await prisma.sharedMailboxPerm.findMany({
+    where: { userId: req.apiUser!.userId, sharedMailboxId: id },
+    include: { sharedMailbox: { select: { id: true, email: true, displayName: true, active: true } } },
+  });
+  if (perms.length === 0 || !perms[0]!.sharedMailbox.active) {
+    res.status(404).json({ error: 'Nicht gefunden oder kein Zugriff' });
+    return;
+  }
+  const sm = perms[0]!.sharedMailbox;
+  res.json({
+    id: sm.id, email: sm.email, displayName: sm.displayName, active: sm.active,
+    permissions: perms.map((p) => p.permission),
+  });
+});
+
+// GET /api/v1/user/shared-mailboxes/:id/folders
+userRouter.get('/shared-mailboxes/:id/folders', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Kein Lese-Zugriff auf diese Mailbox' }); return; }
+
+  const folders = await prisma.folder.findMany({
+    where: { mailboxId: access.mailboxId },
+    select: {
+      id: true, name: true, displayName: true, parentId: true,
+      totalCount: true, unreadCount: true, isFavorite: true, sortOrder: true, color: true,
+    },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+  res.json(folders);
+});
+
+// GET /api/v1/user/shared-mailboxes/:id/folders/:folderId/messages?limit&offset
+userRouter.get('/shared-mailboxes/:id/folders/:folderId/messages', async (req: Request, res: Response) => {
+  const { id, folderId } = req.params as { id: string; folderId: string };
+  const q = req.query as Record<string, string>;
+  const limit  = Math.min(parseInt(q['limit']  ?? '50', 10), 200);
+  const offset = parseInt(q['offset'] ?? '0', 10);
+
+  const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Kein Lese-Zugriff auf diese Mailbox' }); return; }
+
+  // Folder muss zur Shared-Mailbox gehören
+  const folder = await prisma.folder.findFirst({
+    where: { id: folderId, mailboxId: access.mailboxId },
+    select: { id: true },
+  });
+  if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
+
+  const [total, messages] = await Promise.all([
+    prisma.message.count({ where: { folderId, deletedAt: null } }),
+    prisma.message.findMany({
+      where: { folderId, deletedAt: null },
+      select: {
+        id: true, subject: true, fromAddr: true, fromName: true,
+        toAddrs: true, date: true, flags: true, rawSize: true,
+        bodyText: true,
+      },
+      orderBy: { date: 'desc' },
+      skip: offset, take: limit,
+    }),
+  ]);
+  res.json({ total, messages });
+});
+
+// GET /api/v1/user/shared-mailboxes/:id/messages/:messageId — komplette Nachricht
+userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request, res: Response) => {
+  const { id, messageId } = req.params as { id: string; messageId: string };
+  const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Kein Lese-Zugriff auf diese Mailbox' }); return; }
+
+  const message = await prisma.message.findFirst({
+    where: { id: messageId, folder: { mailboxId: access.mailboxId }, deletedAt: null },
+    include: {
+      folder:      { select: { id: true, name: true, displayName: true } },
+      attachments: { select: { id: true, filename: true, mimeType: true, size: true } },
+    },
+  });
+  if (!message) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
+  res.json(message);
 });

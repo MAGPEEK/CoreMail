@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.3';
+const VERSION        = '3.13.4';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.4', date: '2026-05-19', title: 'OWA: „Weiteres Postfach öffnen" — freigegebene Postfächer im Web-Client öffnen',
+    notes: 'Neue Funktion im OWA: über das Konto-Dropdown rechts oben gibt es jetzt „Weiteres Postfach öffnen" (analog zu Outlook on the Web). Modal listet alle freigegebenen Postfächer, auf die der angemeldete User Zugriff hat (FULL_ACCESS oder READ_ONLY zum Lesen). Klick auf „Öffnen" navigiert zu einer 3-Spalten-Ansicht (Ordner / Nachrichten / Reader) im Read-Only-Mode mit Banner oben („Du siehst gerade: support@firma.com"). Drei neue Backend-Routen: GET /api/v1/user/shared-mailboxes/:id (Detail), /folders, /folders/:folderId/messages, /messages/:id — Berechtigungs-Check pro Aufruf. Bestehende /user/shared-mailboxes-Route aggregiert mehrere Permissions pro Postfach jetzt in ein permissions[]-Array (vorher: Duplikate pro Permission-Eintrag).' },
   { version: '3.13.3', date: '2026-05-19', title: 'Dashboard-Drag&Drop REPARIERT + Shared-Mailbox-Permissions-UX',
     notes: 'Zwei Bugfixes. (1) Dashboard-Drag&Drop war in v3.13.2 funktional defekt: DraggableCard war als innere Funktion innerhalb von DashboardPage definiert. Bei jedem Re-Render entstand eine neue Funktion-Referenz, React reconciliation sah einen „neuen Komponenten-Typ" → unmount/remount aller Karten → laufender Drag wurde gekillt. Fix: DraggableCard auf Modul-Ebene extrahiert mit explizitem Props-Interface. Plus `select-none` damit Mousedown auf Text-Inhalt nicht Text-Selektion statt Drag startet. (2) Shared-Mailbox-Permissions ließen sich nicht hinzufügen: die User-Suche war case-sensitive (kein Treffer wenn man „stefan" statt „Stefan" tippte) und die `<select size={4}>`-Listbox war verwirrend — User musste explizit klicken, sonst blieb userId leer und der Button bleibt disabled, ohne Hinweis warum. Fix: case-insensitive Suche, ganze User-Liste einmalig geladen (60s Cache), klickbare Listenelemente statt Listbox, „Kein Benutzer gefunden"-Meldung, bereits berechtigte User werden ausgeblendet (für „Bearbeiten" gibt es den Button oben), Disabled-Tooltip am Button erklärt warum er nicht klickbar ist.' },
   { version: '3.13.2', date: '2026-05-19', title: 'Dashboard-Drag&Drop direkt auf den Karten — Index-Shift-Bug behoben',
