@@ -13,6 +13,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.3] — 2026-05-19 — Drag&Drop REPARIERT (inline-Komponenten-Anti-Pattern behoben)
+
+### Fixed
+
+- **🐛 Dashboard-Drag funktionierte nicht** — der Refactor in v3.13.2 hatte `DraggableCard` als innere Funktion innerhalb von `DashboardPage` definiert
+  - **Bug**: Bei jedem Re-Render von DashboardPage (z. B. nach `setCardDrag(id)` im dragStart-Handler) entsteht eine neue Funktion-Referenz für `DraggableCard`. React reconciliation sieht „neuen Komponenten-Typ" und unmountet/mountet alle Karten neu. Mid-Drag werden die DOM-Nodes vernichtet → laufender Drag bricht sofort ab
+  - **Fix**: `DraggableCard` auf Modul-Ebene extrahiert (außerhalb von `DashboardPage`), nimmt drag state als Props (`cardDrag`, `cardHover`, `setCardDrag`, `setCardHover`, `order`, `moveWidget`)
+- **🐛 Text-Selektion statt Drag** — wenn Mousedown auf Text-Inhalt der Karte erfolgte, startete Chrome/Firefox Text-Selektion statt Drag
+  - **Fix**: `select-none` Klasse am Drag-Wrapper
+
+### Notes
+
+- Dies ist der canonical React-Anti-Pattern „Komponenten dürfen niemals innerhalb anderer Komponenten definiert werden", weil jede neue Funktion-Referenz von React als neuer Komponenten-Typ behandelt wird (Reconciliation per Reference Equality)
+- Die Popover-Drag-Funktion war nicht betroffen — dort waren die Drag-Handler direkt auf `<div>`-Elementen, nicht in einer wrapping component
+
+---
+
 ## [3.13.2] — 2026-05-19 — Dashboard-Drag&Drop direkt auf den Karten + Bugfixes
 
 ### Fixed
@@ -55,50 +72,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.13.0] — 2026-05-18 — SMTP-Audit-Fixes + Drag-Reorder + IANA-Zonen + OWA→MWA
-
-### Fixed — 5 kritische Audit-Befunde
-
-- **🐛 ESMTP-Erweiterungen wurden komplett ignoriert** (`packages/smtp-server/src/core/session.ts`, `server.ts`)
-  - Frontend persistierte 11 Flags (`extStarttls`, `extAuthPlain`, `extAuthLogin`, `extAuthCramMd5`, `extPipelining`, `extSize`, `ext8bitmime`, `extEnhancedStatus`, `extSmtputf8`, `extDsn`, `extChunking`), Server hardcodete sie
-  - **Fix**: `refreshSmtpSettings()` lädt alle Flags aus `SmtpSettings` und macht sie als Getter über `_esmtp` zugänglich; `handleEhlo()` baut die EHLO-Antwort dynamisch (`SIZE`, `PIPELINING`, `8BITMIME`, `SMTPUTF8`, `ENHANCEDSTATUSCODES`, `DSN`, `CHUNKING`, `STARTTLS`, `AUTH PLAIN/LOGIN/CRAM-MD5`)
-- **🐛 `maxMessageSizeMb` wurde ignoriert** (`server.ts:146` hardcoded 50MB)
-  - **Fix**: jetzt aus `SmtpSettings.maxMessageSizeMb × 1024²` via Getter — `SIZE`-EHLO-Wert und 552-Reject-Check sind live
-- **🐛 `localDeliveryEnabled` wurde nie durchgesetzt** (`inbound/handler.ts`)
-  - `onRcptTo()` rief nur `verifyRecipient()` auf, ignorierte das Setting
-  - **Fix**: bei `localDeliveryEnabled === false` antwortet RCPT-TO mit `5.7.1 Local delivery is disabled by administrator`
-- **🐛 Outbound-Smarthost-Cache wurde nach Save nicht invalidiert** (`outbound/relay.ts` 60s TTL)
-  - **Fix**: `api-gateway/routes/admin/smtp-config.ts` publisht `CHANNEL_SETTINGS_RELOAD` nach jedem PUT; smtp-server-Subscriber ruft `invalidateOutboundConfigCache()`. Neue Provider-Credentials wirken sofort
-- **🐛 Greylisting Wait/TTL waren hardcoded** (`security-filter/src/greylisting/index.ts`)
-  - 300s Wait + 4h TTL statt aus `SmtpSettings.greylistWaitSec`/`greylistTtlHours`
-  - **Fix**: 60s-Settings-Cache + Whitelist-Bypass (IP, Sender-E-Mail, Sender-Domain, /24-CIDR-Approx) aus `SmtpSettings.greylistWhitelist`
-
-### Added
-
-- **Dashboard-Drag-Reorder** (`packages/admin-panel/src/store/dashboard.ts` + `pages/DashboardPage.tsx`)
-  - Neuer Drag-Handle (GripVertical) im „Anzeige"-Popover
-  - Native HTML5 Drag-and-Drop — kein @dnd-kit-Dependency nötig
-  - Reihenfolge im localStorage persistiert (`order: WidgetId[]`) mit Auto-Migration für neue Widgets
-  - `sortByOrder()`-Helper rendert KPI-Strip und Server-Sektion in User-Reihenfolge
-- **Alle ~400 IANA-Zeitzonen** in Global-Settings → Zeitzone (`SettingsPage.tsx`)
-  - `Intl.supportedValuesOf('timeZone')` als Quelle, UTC oben, sortiert mit Live-UTC-Offset-Anzeige
-  - Fallback-Liste für ältere Runtimes (21 wichtigste Zonen)
-
-### Changed
-
-- **Servers-Page**: Label `OWA-URL (Outlook Web Access)` → `MWA-URL (Mail Web Access)`
-- **SMTP-Settings-Refresh** (`smtp-server/src/server.ts`): `refreshBanner()` ersetzt durch `refreshSmtpSettings()`, lädt jetzt Banner + 11 ESMTP-Flags + maxSize + maxRcpt in einem Read
-
-### Notes — offene Audit-Befunde aus diesem Release
-
-- **Lokale Zustellung** — Quota-Check ist post-save (Overflow theoretisch möglich)
-- **Ausgehende Zustellung** — Outbound-Filter ist Platzhalter (rspamd/ClamAV-Wiring offen)
-- **Greylisting/Relaying** — `maxConnectionsPerIp`/`maxRecipients`/`connectionTimeoutSec` weiterhin nicht durchgesetzt (Listener-Refactor nötig)
-- **SSL/TLS-Zertifikate** — Cert-Upload publisht keinen Reload, IMAP/POP3 reagiert nicht auf Cert-Rotation, keine Cert↔Key-Pair-Validierung beim Upload
-
----
-
----
-
-> Ältere Releases (v3.12.0 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.0 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

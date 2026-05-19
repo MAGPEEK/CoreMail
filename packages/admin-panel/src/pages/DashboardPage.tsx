@@ -288,6 +288,78 @@ function sortByOrder(ids: WidgetId[], order: WidgetId[]): WidgetId[] {
   return [...ids].sort((a, b) => (idx.get(a) ?? 9999) - (idx.get(b) ?? 9999));
 }
 
+// ── DraggableCard ───────────────────────────────────────────────────────────
+// WICHTIG: muss auf Modul-Ebene definiert sein. Inline in DashboardPage führt
+// dazu, dass jeder Re-Render eine neue Funktion-Referenz erzeugt → React mountet
+// die Karten beim ersten setState-Aufruf neu → laufender Drag bricht ab.
+//
+// `select-none` verhindert Text-Selektion beim Mousedown auf Text in der Karte
+// (sonst startet Chrome/Firefox Text-Selektion statt Drag).
+interface DraggableCardProps {
+  id:            WidgetId;
+  children:      React.ReactNode;
+  cardDrag:      WidgetId | null;
+  cardHover:     WidgetId | null;
+  setCardDrag:   (id: WidgetId | null) => void;
+  setCardHover:  (id: WidgetId | null) => void;
+  order:         WidgetId[];
+  moveWidget:    (from: number, to: number) => void;
+}
+
+function DraggableCard({
+  id, children, cardDrag, cardHover, setCardDrag, setCardHover, order, moveWidget,
+}: DraggableCardProps): ReactElement {
+  const myGroup     = WIDGET_CATALOG.find((w) => w.id === id)?.group;
+  const sourceGroup = cardDrag ? WIDGET_CATALOG.find((w) => w.id === cardDrag)?.group : null;
+  const sameGroup   = sourceGroup === myGroup;
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', id);
+        e.dataTransfer.effectAllowed = 'move';
+        setCardDrag(id);
+      }}
+      onDragEnter={(e) => {
+        if (!cardDrag || cardDrag === id) return;
+        e.preventDefault();
+        setCardHover(id);
+      }}
+      onDragOver={(e) => {
+        if (!cardDrag || cardDrag === id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        if (cardHover === id) setCardHover(null);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        if (!cardDrag || cardDrag === id) {
+          setCardDrag(null); setCardHover(null);
+          return;
+        }
+        const fromIdx = order.indexOf(cardDrag);
+        const toIdx   = order.indexOf(id);
+        if (fromIdx >= 0 && toIdx >= 0) moveWidget(fromIdx, toIdx);
+        setCardDrag(null);
+        setCardHover(null);
+      }}
+      onDragEnd={() => { setCardDrag(null); setCardHover(null); }}
+      className={`cursor-move select-none transition-all relative rounded-xl ${
+        cardDrag === id ? 'opacity-40 scale-[0.98]' : ''
+      } ${
+        cardHover === id && sameGroup ? 'ring-2 ring-accent ring-offset-2' : ''
+      }`}
+      title="Per Drag verschieben"
+    >
+      {children}
+    </div>
+  );
+}
+
 // ── Hauptkomponente ───────────────────────────────────────────────────────────
 export function DashboardPage() {
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
@@ -304,64 +376,6 @@ export function DashboardPage() {
   // ── Drag-State für direktes Reordern auf den Dashboard-Karten ──────────────
   const [cardDrag, setCardDrag]   = useState<WidgetId | null>(null);
   const [cardHover, setCardHover] = useState<WidgetId | null>(null);
-
-  /**
-   * Hüllen-Komponente um eine Dashboard-Karte. Stellt Drag-Quelle + Drop-Target.
-   * Section-Local-Hint: das visuelle Highlight wird nur gezeigt, wenn Source und
-   * Target zur selben Gruppe gehören. Der Move arbeitet aber auf der globalen
-   * `order`-Liste — Cross-Gruppen-Moves sind technisch erlaubt und beeinflussen
-   * nur die relative Reihenfolge in den eigenen Sections.
-   */
-  function DraggableCard({ id, children }: { id: WidgetId; children: React.ReactNode }) {
-    const myCatalogEntry = WIDGET_CATALOG.find((w) => w.id === id);
-    const myGroup = myCatalogEntry?.group;
-    const sourceEntry = cardDrag ? WIDGET_CATALOG.find((w) => w.id === cardDrag) : null;
-    const sameGroup = sourceEntry?.group === myGroup;
-
-    return (
-      <div
-        key={id}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('text/plain', id);
-          e.dataTransfer.effectAllowed = 'move';
-          setCardDrag(id);
-        }}
-        onDragEnter={(e) => {
-          if (!cardDrag || cardDrag === id) return;
-          e.preventDefault();
-          setCardHover(id);
-        }}
-        onDragOver={(e) => {
-          if (!cardDrag || cardDrag === id) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-          setCardHover((h) => (h === id ? null : h));
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          if (!cardDrag || cardDrag === id) return;
-          const fromIdx = order.indexOf(cardDrag);
-          const toIdx   = order.indexOf(id);
-          if (fromIdx >= 0 && toIdx >= 0) moveWidget(fromIdx, toIdx);
-          setCardDrag(null);
-          setCardHover(null);
-        }}
-        onDragEnd={() => { setCardDrag(null); setCardHover(null); }}
-        className={`cursor-move transition-all relative ${
-          cardDrag === id ? 'opacity-40 scale-[0.98]' : ''
-        } ${
-          cardHover === id && sameGroup ? 'ring-2 ring-accent ring-offset-2 rounded-xl' : ''
-        }`}
-        title="Per Drag verschieben"
-      >
-        {children}
-      </div>
-    );
-  }
 
   const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString('de-DE') : '—';
 
@@ -468,7 +482,10 @@ export function DashboardPage() {
         return (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {sorted.map((id) => isVisible(id) && kpiSlots[id]
-              ? <DraggableCard key={id} id={id}>{kpiSlots[id]}</DraggableCard>
+              ? <DraggableCard key={id} id={id}
+                  cardDrag={cardDrag} cardHover={cardHover}
+                  setCardDrag={setCardDrag} setCardHover={setCardHover}
+                  order={order} moveWidget={moveWidget}>{kpiSlots[id]}</DraggableCard>
               : null)}
           </div>
         );
@@ -559,7 +576,10 @@ export function DashboardPage() {
         return (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {sorted.map((id) => isVisible(id) && serverSlots[id]
-              ? <DraggableCard key={id} id={id}>{serverSlots[id]}</DraggableCard>
+              ? <DraggableCard key={id} id={id}
+                  cardDrag={cardDrag} cardHover={cardHover}
+                  setCardDrag={setCardDrag} setCardHover={setCardHover}
+                  order={order} moveWidget={moveWidget}>{serverSlots[id]}</DraggableCard>
               : null)}
           </div>
         );
