@@ -506,7 +506,7 @@ SMTP Verbindung
 - **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
 - **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
 - **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
-- **Live-Server**: `magpeek/coremail-app:3.15.0` deployed auf `84.247.191.198`
+- **Live-Server**: `84.247.191.198` — läuft noch v3.14.0; Deploy von v3.15.0 via Netcup-Konsole (SSH-Port 22 durch iptables gesperrt): `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 
 ## Wichtige technische Entscheidungen seit 3.x
 
