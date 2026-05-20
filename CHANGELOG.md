@@ -13,6 +13,80 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.8] — 2026-05-20 — Nachrichtenablaufverfolgung fix + RFC 822 Quelltext
+
+### Fixed
+
+- **Nachrichtenablaufverfolgung (Message Trace)**: Suche lieferte keine Ergebnisse, weil der
+  SMTP-Server niemals `SystemLog`-Einträge mit `category='MAIL_FLOW'` schrieb.
+  - SMTP-Inbound (`handlers/message.ts`): schreibt jetzt `DELIVERED` / `JUNK` nach jeder Zustellung
+  - SMTP-Inbound (`inbound/handler.ts`): schreibt `REJECTED` (Spamfilter-Ablehnung) und
+    `QUARANTINE` (Virenquarantäne) mit Sender, Empfänger, Betreff, Größe, SpamScore, Grund
+  - SMTP-Submission (`submission/handler.ts`): schreibt `ACCEPTED` nach Annahme einer Ausgangsmail
+  - SMTP-Outbound (`outbound/queue.ts`): schreibt `DELIVERED` nach erfolgreicher Zustellung,
+    `DEFERRED` bei vorübergehendem Fehler (Retry ausstehend), `REJECTED` bei endgültigem Fehlschlag
+  - Alle Events sind in BCP → Verwaltung → Nachrichtenablaufverfolgung suchbar und filterbar
+
+### Added
+
+- **RFC 822 Quelltext-Ansicht** in MWA-Nachrichtenleser:
+  - „Quelltext anzeigen" öffnet jetzt einen modalen Dialog statt eines neuen Browser-Tabs
+  - Zeigt vollständiges RFC 822-konformes MIME-Format (Header + Body) mit Monospace-Schrift
+  - Download-Button `.eml herunterladen` direkt im Quelltext-Modal
+  - Backend `GET /api/v1/mail/messages/:id/raw`: serviert jetzt das originale RFC 822-Dokument
+    aus MinIO wenn vorhanden (grosse Nachrichten); Fallback rekonstruiert `multipart/alternative`
+    (Text + HTML) gemäß RFC 2045 korrekt mit MIME-Boundary
+
+---
+
+## [3.17.7] — 2026-05-20 — DNS-Reiter: Tabellen-UI, grüne/gelbe Statusampeln
+
+### Changed
+
+- **BCP → SMTP → DNS-Einträge**: Komplettes UI-Redesign — von Karten zu sauberer Tabellenansicht
+  - **● grüner Punkt** = Eintrag im DNS gesetzt (Existenzprüfung)
+  - **● gelber Punkt** = Eintrag nicht gefunden
+  - **● blauer Punkt** = PTR — manuell beim Hosting-Anbieter zu setzen
+  - Legende unten: grün / gelb / blau erklärt
+  - Status-Banner: „X von 5 Einträgen gesetzt"
+  - Jede Zeile: Name-Feld + Wert-Feld, je mit Kopier-Button
+  - Gefundener DNS-Wert wird grün (gesetzt) oder gelb (abweichend) angezeigt
+- **Backend `dns-check`**: MX-Check nutzt jetzt reinen Existenzcheck (`records.length > 0`);
+  Autodiscover-Check prüft ob CNAME überhaupt vorhanden ist (nicht mehr Hostnamen-Vergleich)
+
+---
+
+## [3.17.6] — 2026-05-20 — DNS-Reiter in SMTP-Konfiguration
+
+### Added
+
+- **BCP → SMTP-Konfiguration → DNS-Einträge**: Neuer Reiter zeigt alle für den Mailbetrieb
+  erforderlichen DNS-Records an — MX, SPF, DKIM, DMARC, Autodiscover, PTR.
+  - Domain-Auswahl via Pill-Tabs (bei mehreren Domains)
+  - Jeder Eintrag zeigt DNS-Typ, erwarteten Wert, Kopier-Button
+  - **Live-DNS-Prüfung** via `GET /api/v1/admin/domains/:id/dns-check` — grünes Häkchen wenn
+    Eintrag gesetzt, gelbes Warnsymbol wenn fehlend; zeigt aktuell gesetzten Wert aus DNS
+  - Status-Zusammenfassung: „X von 5 Einträgen korrekt"
+  - Schaltfläche „DNS neu prüfen" für manuelle Aktualisierung
+  - PTR-Karte mit Hinweis zum Setzen beim Hosting-Anbieter
+- **Backend** `GET /api/v1/admin/domains/:id/dns-check`: Prüft MX, SPF (TXT), DKIM (TXT),
+  DMARC (TXT), Autodiscover (CNAME) parallel via Node.js `dns/promises`; generiert je einen
+  erwarteten und den tatsächlich gefundenen Wert
+
+---
+
+## [3.17.5] — 2026-05-20 — Fix: BullMQ Queue-Name enthält keinen Doppelpunkt
+
+### Fixed
+
+- **Senden schlägt fehl ("Nachricht konnte nicht in die Warteschlange eingereiht werden")**:
+  BullMQ v5 verbietet Doppelpunkte (`:`) in Queue-Namen. Die Outbound-Queue in
+  `api-gateway/routes/mail.ts` hieß `'smtp:outbound'` — BullMQ warf sofort beim
+  Erstellen des Queue-Objekts `Error: Queue name cannot contain :`.
+  Fix: Queue-Name auf `'smtp-outbound'` geändert (wie bereits korrekt im `smtp-server`).
+
+---
+
 ## [3.17.4] — 2026-05-20 — Fix: BullMQ-Verbindung in api-gateway (NetworkError beim Senden)
 
 ### Fixed

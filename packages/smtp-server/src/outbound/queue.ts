@@ -80,6 +80,27 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
       });
 
+      // MAIL_FLOW — external delivery confirmed
+      void prisma.systemLog.create({
+        data: {
+          level: 'INFO',
+          service: 'smtp-server',
+          category: 'MAIL_FLOW',
+          message: `Delivered: ${from} → ${to.join(', ')}`,
+          messageId: job.data.messageId,
+          ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
+          metadata: {
+            sender: from,
+            recipient: to.join(', '),
+            subject: '',
+            status: 'DELIVERED',
+            messageId: job.data.messageId,
+            size: String(buffer.length),
+            direction: 'OUTBOUND',
+          },
+        },
+      }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log failed'));
+
       log.info({ jobId: job.id, to }, 'Message delivered');
     },
     {
@@ -90,6 +111,30 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
   worker.on('failed', (job, err) => {
     log.error({ jobId: job?.id, err }, 'Delivery failed');
+    if (job?.data) {
+      const attemptsMax = job.opts.attempts ?? 10;
+      const isPermanent = job.attemptsMade >= attemptsMax;
+      void prisma.systemLog.create({
+        data: {
+          level: isPermanent ? 'ERROR' : 'WARN',
+          service: 'smtp-server',
+          category: 'MAIL_FLOW',
+          message: `${isPermanent ? 'Failed' : 'Deferred'}: ${job.data.from} → ${job.data.to.join(', ')}`,
+          messageId: job.data.messageId,
+          ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
+          metadata: {
+            sender: job.data.from,
+            recipient: job.data.to.join(', '),
+            subject: '',
+            status: isPermanent ? 'REJECTED' : 'DEFERRED',
+            messageId: job.data.messageId,
+            reason: (err as Error).message,
+            attempt: String(job.attemptsMade),
+            direction: 'OUTBOUND',
+          },
+        },
+      }).catch(() => {});
+    }
   });
 
   worker.on('completed', (job) => {

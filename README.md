@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-3.13.9-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-3.17.8-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -17,7 +17,7 @@
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v3.13.9** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v3.17.8** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 
 ---
 
@@ -32,7 +32,8 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 7. [TLS-Zertifikate](#tls-zertifikate)
 8. [Befehlsreferenz](#befehlsreferenz)
 9. [Docker Hub](#docker-hub)
-10. [Lizenz](#lizenz)
+10. [Versionsverlauf](#versionsverlauf)
+11. [Lizenz](#lizenz)
 
 ---
 
@@ -51,6 +52,9 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Autodiscover v1 + v2 (automatische Outlook-Konfiguration) | ✅ |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
 | MWA — Mail Web Access (React, Exchange-ähnliches Layout) | ✅ |
+| RFC 822 Quelltext-Ansicht (Modal im MWA) | ✅ |
+| Empfänger-Autocomplete im Compose (An/CC/BCC, Keyboard-Nav) | ✅ |
+| Resizable Panels im MWA (Ordnerstruktur / Liste / Lesebereich) | ✅ |
 | Freigegebene Postfächer mit voller Ordner-Struktur (Inbox, Sent, Trash, …) | ✅ |
 | Shared Mailbox-Reader im MWA — „Weiteres Postfach öffnen" über Konto-Dropdown | ✅ |
 | Folder-CRUD in Shared Mailboxes (Neuer Ordner, Umbenennen, Löschen, Standard-Folder geschützt) | ✅ |
@@ -97,7 +101,11 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Attachment-Filter (MIME-Typen, Doppel-Extensions) | ✅ |
 | Quarantäne-Management mit Detail-Ansicht und MIME-Vorschau | ✅ |
 | TLS (STARTTLS + Implicit TLS) auf allen Ports | ✅ |
-| eDiscovery & Legal Hold (Cross-Mailbox-Suche) | ✅ |
+| Integrierter HTTPS-Proxy (Port 443, Hot-Reload, BCP-Verwaltung) | ✅ |
+| DNS-Hardening (trusted Resolver, Cross-Validation, Integrity-Check) | ✅ |
+| eDiscovery & Legal Hold (Cross-Mailbox-Suche, MBOX-Export) | ✅ |
+| Nachrichtenablaufverfolgung (Message Trace) mit CSV-Export | ✅ |
+| SMTP Brute-Force-Schutz & Rate-Limiting | ✅ |
 
 ### Authentifizierung
 
@@ -120,8 +128,12 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 |---------|--------|
 | RBAC mit 7 Rollen | ✅ |
 | SMTP-Queue-Management (BullMQ-nativ, Retry, Dead Letter, Retention) | ✅ |
+| DNS-Check in BCP SMTP-Konfiguration (MX, SPF, DKIM, DMARC, Autodiscover, PTR live) | ✅ |
+| DNS-Einträge Tabellen-UI mit Statusampeln (grün/gelb) | ✅ |
+| Nachrichtenablaufverfolgung (Message Trace) mit Filtern & CSV-Export | ✅ |
 | Quarantäne-Verwaltung mit Detail-Slide-over und MIME-Vorschau | ✅ |
 | SMTP-Infrastruktur-Konfiguration (ESMTP, Banner, Relay, Greylisting) | ✅ |
+| SSL/TLS-Verwaltung (integrierter HTTPS-Proxy, Zertifikats-Upload) | ✅ |
 | SSO-Provider-Verwaltung (OIDC/OAuth2, SAML, Schnellauswahl) | ✅ |
 | LDAP/AD-Verbindungsverwaltung (Attributzuordnung, Verbindungstest, Sync) | ✅ |
 | Rspamd-Integration (Schwellwerte, Bayes-Training, Modul-Übersicht) | ✅ |
@@ -144,6 +156,9 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Signaturen (Rich-Text Editor, Auto-Insert) | ✅ |
 | Abwesenheitsassistent mit Zeitraum-Kalenderintegration | ✅ |
 | Speicherübersicht pro Ordner mit Donut-Chart | ✅ |
+| Lesebereich-Layout (rechts / unten / aus) | ✅ |
+| Nachrichtendichte (kompakt / normal / komfortabel) | ✅ |
+| Konversationsansicht (ein/aus) | ✅ |
 | Design: Hell / Dunkel / System + 6 Akzentfarben | ✅ |
 | Sicherheit: App-Passwörter & 2FA-Verwaltung | ✅ |
 
@@ -167,11 +182,10 @@ cd CoreMail
 bash scripts/setup.sh
 ```
 
-Das Skript erstellt die `.env`-Datei und generiert selbstsignierte TLS-Zertifikate für die lokale Entwicklung. Alternativ manuell:
+Das Skript erstellt die `.env`-Datei mit zufällig generierten Schlüsseln. Alternativ manuell:
 
 ```bash
 cp .env.example .env
-bash scripts/gen-dev-certs.sh
 ```
 
 ### 3. `.env` anpassen
@@ -188,7 +202,16 @@ JWT_SECRET=<openssl rand -hex 32>
 PEPPER=<openssl rand -hex 32>
 ```
 
-### 4. Stack starten
+### 4. TLS konfigurieren
+
+**Option A — Integrierter HTTPS-Proxy (Standard):**  
+CoreMail terminiert TLS selbst. Zertifikat nach dem Start im BCP unter **SSL/TLS** hochladen. Port `443` ist in der `docker-compose.yml` bereits gemappt.
+
+**Option B — Externer Reverse Proxy:**  
+Traefik, Caddy, nginx oder Synology DSM Application Portal übernehmen TLS.  
+`HTTPS_PROXY_ENABLED=false` in `.env` setzen und `"443:443"` in der `docker-compose.yml` auskommentieren.
+
+### 5. Stack starten
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up -d
@@ -196,7 +219,7 @@ docker compose -f infra/docker/docker-compose.yml up -d
 
 Nach ca. 60–90 Sekunden sind alle Services bereit.
 
-### 5. Ersten Admin-Account anlegen
+### 6. Ersten Admin-Account anlegen
 
 Beim ersten Aufruf von `https://<MAIL_HOSTNAME>/bcp/` erscheint automatisch der Setup-Assistent zum Anlegen des ersten Admin-Accounts.
 
@@ -218,18 +241,18 @@ curl -s -X POST https://<MAIL_HOSTNAME>/api/v1/admin/setup \
 
 ### Aufbau des CoreMail-Stacks
 
-CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Extern):
+CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Images):
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:3.13.9` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:3.17.8` | Alle Mail-Dienste + Webmail + Admin-Panel |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
 | `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Updates |
 | `minio` | `minio/minio` | Objektspeicher für Anhänge, Quarantäne und Backups |
 
-Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, EWS, ActiveSync, CalDAV, Webmail und Admin-Panel — verwaltet von `supervisord`. Nach außen ist nur ein einziger HTTP-Port (3000) und die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
+Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, EWS, ActiveSync, CalDAV, Webmail und Admin-Panel — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP/API), Port 443 (HTTPS, optional) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
 
 ### Die `docker-compose.yml`
 
@@ -239,9 +262,10 @@ Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:3.13.9
+    image: magpeek/coremail-app:3.17.8
     ports:
-      - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
+      - "3000:3000"   # HTTP (API, Webmail, Admin-Panel, EWS, Autodiscover)
+      - "443:443"     # HTTPS (integrierter TLS-Proxy, deaktivierbar via .env)
       - "25:25"       # SMTP eingehend
       - "465:465"     # SMTPS (Implizites TLS)
       - "587:587"     # SMTP Submission (STARTTLS)
@@ -279,7 +303,7 @@ services:
   minio:
     image: minio/minio:latest
     ports:
-      - "9001:9001"   # MinIO Web-Konsole
+      - "9001:9001"   # MinIO Web-Konsole (nur lokal erreichbar!)
 ```
 
 ### Häufige Befehle
@@ -321,12 +345,12 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 
 | URL | Beschreibung |
 |-----|-------------|
-| `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access, seit v3.5.5 direkt unter Root) |
-| `https://<MAIL_HOSTNAME>/bcp/` | Admin-Panel (BCP — Backend Control Panel, seit v3.2.3 umbenannt) |
+| `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access) |
+| `https://<MAIL_HOSTNAME>/bcp/` | Admin-Panel (BCP — Backend Control Panel) |
 | `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS (Outlook Desktop) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
-| `http://localhost:9001` | MinIO Web-Konsole |
+| `http://localhost:9001` | MinIO Web-Konsole (nur lokal) |
 
 **Mail-Ports:**
 
@@ -349,7 +373,6 @@ Alle Einstellungen erfolgen über die `.env`-Datei. Die vollständige Referenz:
 ```env
 # ── Allgemein ──────────────────────────────────────────────
 NODE_ENV=production           # development | production
-MAIL_HOSTNAME=mail.domain.de  # Vollqualifizierter Hostname
 LOG_LEVEL=info                # error | warn | info | debug
 
 # ── Datenbank ──────────────────────────────────────────────
@@ -365,6 +388,10 @@ MINIO_ROOT_PASSWORD=...
 # ── Sicherheit ─────────────────────────────────────────────
 JWT_SECRET=...                # mind. 32 Zeichen, zufällig
 PEPPER=...                    # mind. 32 Zeichen, zufällig
+
+# ── TLS ────────────────────────────────────────────────────
+# HTTPS_PROXY_ENABLED=true    # Standard: true (integrierter Proxy)
+# HTTPS_PORT=443              # Alternativer Port falls 443 belegt
 
 # ── Anti-Spam (Rspamd) ─────────────────────────────────────
 RSPAMD_URL=http://rspamd:11334
@@ -412,30 +439,40 @@ _autodiscover._tcp.domain.de. SRV 0 0 443 mail.domain.de.
 
 Den DKIM-Public-Key findet man im BCP unter **Domains → Domain auswählen → DKIM**.
 
+Ab v3.17.6 prüft CoreMail alle DNS-Einträge live im BCP unter **SMTP-Konfiguration → DNS-Check** — inklusive Statusampeln für MX, SPF, DKIM, DMARC, Autodiscover und PTR.
+
 ---
 
 ## TLS-Zertifikate
 
-Für die Produktion echte Zertifikate unter `infra/docker/nginx/certs/` ablegen:
+CoreMail unterstützt zwei TLS-Betriebsmodi:
 
-```
-infra/docker/nginx/certs/
-├── fullchain.pem   ← Zertifikat + Zwischenzertifikate
-└── privkey.pem     ← Privater Schlüssel
+### Option A — Integrierter HTTPS-Proxy (Standard)
+
+Ab v3.17.0 terminiert CoreMail TLS selbst (Node.js HTTPS auf Port 443).  
+Zertifikat im BCP unter **Server → SSL/TLS** hochladen und aktivieren. Hot-Reload ohne Neustart.
+
+```env
+# .env — Standard, kann weggelassen werden
+HTTPS_PROXY_ENABLED=true
 ```
 
-**Let's Encrypt mit Certbot:**
+### Option B — Externer Reverse Proxy
+
+Für Betrieb hinter Traefik, Caddy, nginx, DSM Application Portal o.ä.:
+
+```env
+# .env
+HTTPS_PROXY_ENABLED=false
+```
+
+In der `docker-compose.yml` die Zeile `"443:443"` auskommentieren. CoreMail läuft dann nur auf Port 3000 (HTTP).
+
+**Let's Encrypt mit Certbot (für Option B mit eigenem nginx):**
 
 ```bash
 certbot certonly --standalone -d mail.meinedomain.de
-
-cp /etc/letsencrypt/live/mail.meinedomain.de/fullchain.pem \
-   infra/docker/nginx/certs/fullchain.pem
-cp /etc/letsencrypt/live/mail.meinedomain.de/privkey.pem \
-   infra/docker/nginx/certs/privkey.pem
 ```
-
-Für automatische Erneuerung einen Cron-Job mit `certbot renew` und anschließendem `docker compose restart` einrichten.
 
 Für die lokale Entwicklung genügen selbstsignierte Zertifikate:
 
@@ -457,6 +494,7 @@ Alle wichtigen Befehle für den täglichen Betrieb sind in **[COMMANDS.md](COMMA
 | Domains | Domain hinzufügen, DKIM-Key abrufen |
 | Warteschlangen | Queue-Stats, Job-Details, Retry, Dead Letter, Queue leeren |
 | Logs & Diagnose | Container-Logs, Audit-Log, Service-Log-Level |
+| Nachrichtenablaufverfolgung | Message Trace, Filterung, CSV-Export |
 | Datenbank | PostgreSQL-Abfragen (Benutzer, Mails, Speicher) |
 | Redis | Queue-Längen, Sessions, Greylisting |
 | SMTP testen | Verbindungstest, TLS-Check, Testmail senden |
@@ -506,7 +544,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:3.13.9
+docker pull magpeek/coremail-app:3.17.8
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -517,43 +555,30 @@ docker pull magpeek/coremail-app:3.13.9
 
 | Version | Highlights |
 |---------|-----------|
-| **v3.13.9** | Aufbewahrungsrichtlinien — 8 Vorlagen (1-Klick erstellt Tag + Policy + GLOBAL-Zuweisung); MFA-jetzt/Historie-Buttons aus Hauptansicht entfernt |
-| **v3.13.8** | Shared Mailboxes mit voller Ordnerstruktur (INBOX/Drafts/Sent/…); Folder-CRUD im OWA (Neuer Ordner, Umbenennen, Löschen) — Standard-Folder geschützt |
+| **v3.17.8** | Fix: Nachrichtenablaufverfolgung (MAIL_FLOW-Logging im SMTP-Server); RFC 822 Quelltext-Ansicht (Modal im MWA) |
+| **v3.17.7** | DNS-Einträge Tabellen-UI in BCP SMTP (grün/gelb Statusampeln für alle Records) |
+| **v3.17.6** | DNS-Reiter in BCP SMTP-Konfiguration — MX, SPF, DKIM, DMARC, Autodiscover, PTR live-check |
+| **v3.17.5** | Fix: BullMQ Queue-Name `smtp:outbound` → `smtp-outbound` (BullMQ v5 verbietet Doppelpunkte) |
+| **v3.17.0** | Integrierter HTTPS-Proxy (Port 443, Hot-Reload via Redis, BCP → SSL/TLS-Verwaltung) |
+| **v3.16.6** | Empfänger-Autocomplete im Compose (RecipientInput, Keyboard-Nav, Multi-Empfänger); Resizable Panels; Ansicht-Einstellungen (Lesebereich, Dichte, Konversationen) |
+| **v3.16.0** | DraggableCard BCP-Dashboard; Tiptap-Schriftarten (Arial, Calibri, Georgia, …); erweiterte Kontaktfelder (email2, mobile, department); erweiterte Mailsuche (Scope-Umschalter, Typeahead) |
+| **v3.15.0** | DNS-Hardening: trusted Resolver (8.8.8.8/1.1.1.1/9.9.9.9), Cross-Validation, Startup-Integrity-Check |
+| **v3.14.0** | Pentest-Fixes: SMTP Brute-Force-Schutz, Rate-Limiting, Fail2Ban-Integration, Firewall-Hardening |
+| **v3.13.9** | Aufbewahrungsrichtlinien — 8 Vorlagen (1-Klick erstellt Tag + Policy + GLOBAL-Zuweisung) |
+| **v3.13.8** | Shared Mailboxes mit voller Ordnerstruktur (INBOX/Drafts/Sent/…); Folder-CRUD im MWA |
 | **v3.13.7** | Transportregeln aus Vorlagen — 9 Exchange-2019-typische Templates ([EXTERN]-Markierung, CEO-Phishing, PCI-DSS, …) |
-| **v3.13.6** | Journaling-Feature komplett entfernt (−1 533 LOC) — DB-Tabellen `journaling_*` gedroppt |
+| **v3.13.6** | Journaling-Feature komplett entfernt (−1.533 LOC) — DB-Tabellen `journaling_*` gedroppt |
 | **v3.13.5** | E-Mail-Aliase pro User + Shared-Mailbox (XOR-Target, Adress-Kollisions-Check, SMTP-Resolution) |
-| **v3.13.4** | „Weiteres Postfach öffnen" im MWA — Shared-Mailbox-Reader (3-Spalten Read-Only) über Konto-Dropdown |
-| **v3.13.3** | Drag&Drop-Reparatur (React-Anti-Pattern); Shared-Mailbox-Permissions-UX |
-| **v3.13.1–.2** | KPI-Drag-Reorder direkt auf den Karten; Info-Page schlanker (Top-3 Changelogs) |
-| **v3.13.0** | SMTP-Audit: 5 kritische Bugs gefixt (ESMTP-Flags aus DB, maxMessageSize, localDelivery, Greylisting); IANA-Zeitzonen; OWA→MWA |
-| **v3.12.0** | Journaling Exchange-2019-konform (BCC-Auflösung, .eml-Attachment, Retry, Hold) — *entfernt in 3.13.6* |
+| **v3.13.4** | „Weiteres Postfach öffnen" im MWA — Shared-Mailbox-Reader über Konto-Dropdown |
+| **v3.13.0** | SMTP-Audit: 5 kritische Bugs gefixt (ESMTP-Flags, maxMessageSize, localDelivery, Greylisting); IANA-Zeitzonen; OWA → MWA Umbenennung |
 | **v3.11.0** | Aufbewahrungsrichtlinien Exchange-2019: DPT/RPT/Personal-Tags + Managed Folder Assistant + Recoverable Items |
-| **v3.10.0** | eDiscovery komplett: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export |
-| **v3.9.0** | Übersicht mit Server-Info (Uptime, RAM, CPU), konfigurierbare Widgets, Drag-Reorder im Popover |
-| **v3.8.0** | Öffentliche Ordner Crash-Fix + ACL READ/WRITE/FULL |
-| **v3.7.9** | Admin-Panel-Audit: Pfad-Doppel-Prefix-Bug + Exchange-2019-Mailbox-Permissions |
+| **v3.10.0** | eDiscovery komplett: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export (Streaming, 50k-Cap) |
+| **v3.9.0** | BCP-Dashboard mit Server-Info (Uptime, RAM, CPU), konfigurierbare Widgets, Drag-Reorder |
+| **v3.8.0** | Öffentliche Ordner mit ACL READ/WRITE/FULL |
 | **v3.7.0** | DNSBL-Modul: Zonen + Aktionen + Score + IPv6 + Cache + Statistik |
-| **v3.5.5** | OWA jetzt direkt unter `/` (statt `/owa/`) — Login wieder erreichbar, umbenannt zu MWA |
-| **v3.2.3** | UI-Strings ECP → BCP umbenannt |
-| **v2.1.30** | Listener-Reload bei DELETE/PUT/POST; neuer „Standards"-Button stellt Default-Ports sofort wieder her |
-| **v2.1.29** | Port-Toggle Root-Cause-Fix: Startup liest DB-Zustand statt Ports hardcodiert zu öffnen |
-| **v2.1.28** | Postfach anlegen: Domain-Dropdown zeigt nur aktive Domains |
-| **v2.1.27** | SMTP/IMAP/POP3 Port-Toggle zuverlässig: simultanes close + closeAllConnections, Map-Mutation-Fix, 3-s-Timeout |
-| **v2.1.26** | bcryptjs statischer Import (ESM/CJS-Interop-Fix); smtp-server Property `.server` statt `._server` |
-| **v2.1.25** | bcrypt → bcryptjs (pure JS, kein native build); Port-Toggle mit closeAllConnections() |
-| **v2.1.24** | Postfach-Erstellung try/catch-Fix; Services Port-Toggle via Redis pub/sub |
-| **v2.1.23** | BCP Server-Seite bereinigt (Mail-Protokoll-Felder und doppelter Org-Name entfernt) |
-| **v2.1.22** | ECP Theme-Unabhängigkeit (immer Microsoft-Blau); MFA TOTP für OWA (QR-Code, Backup-Codes) |
-| **v2.1.21** | ECP TopBar: angemeldeter User + Avatar-Dropdown + Theme-Toggle (System/Hell/Dunkel) |
-| **v2.1.20** | Toggle-Fix (Knob + Dark-Mode); Dark Mode im ECP; Navigation SMTP & Routing |
+| **v3.5.5** | MWA jetzt direkt unter `/` (statt `/owa/`) |
+| **v3.2.3** | Admin-Panel umbenannt: ECP → BCP, Pfad `/ecp/` → `/bcp/` |
 | **v2.1.19** | Grafana + Prometheus aus Stack entfernt; Synology-Compose um rspamd + clamav ergänzt |
-| **v2.0.19** | OWA: Passwort ändern (Stärkemeter), Design Hell/Dunkel/System + 6 Akzentfarben |
-| **v1.9.19** | SSO-Verwaltung (OIDC/OAuth2, SAML), LDAP/AD-Verwaltung (Attributzuordnung, Sync, Verbindungstest) |
-| **v1.8.19** | Message Queue Management: BullMQ-native API, Dead Letter, Retry, Retention-Einstellungen |
-| **v1.7.19** | Quarantäne Detail-View mit MIME-Vorschau, Bulk-Selektion, CleanupModal |
-| **v1.6.19** | SMTP-Infrastruktur-Konfiguration: ESMTP, Banner, Relay, Greylisting, Verbindungslimits |
-| **v1.5.19** | Rspamd 4.0 + ClamAV als separate Container, vollständige Schutzfilter-ECP-Seite |
-| **v1.4.19** | OWA-Signaturen (Tiptap), Abwesenheitsassistent, Speicherübersicht |
 
 → [Vollständiger Changelog](CHANGELOG.md)
 
@@ -580,6 +605,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v3.13.9</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v3.17.8</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Terminal, Package, MessageSquare, Clock, ArrowRightLeft,
   Network, Plus, Trash2, CheckCircle, Info, SendHorizonal,
-  Loader2, XCircle,
+  Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -54,7 +54,7 @@ interface SmtpSettings {
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 
-type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'relaying' | 'connection' | 'outgoing';
+type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'relaying' | 'connection' | 'outgoing' | 'dns';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'esmtp',       label: 'ESMTP-Befehle',    icon: Terminal },
@@ -64,6 +64,7 @@ const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'greylisting', label: 'Greylisting',       icon: Clock },
   { id: 'relaying',    label: 'Relaying',          icon: ArrowRightLeft },
   { id: 'connection',  label: 'Verbindung',        icon: Network },
+  { id: 'dns',         label: 'DNS-Einträge',      icon: Globe },
 ];
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -1054,6 +1055,351 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// DnsSection — DNS-Einträge für Mail-Betrieb
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface DomainItem { id: string; name: string; primary: boolean; dkimSelector: string }
+interface DomainsResp { domains: DomainItem[] }
+
+interface DnsRecord {
+  type: string;
+  name: string;
+  expected: string;
+  ok: boolean;
+  found: string | null;
+}
+interface DnsCheckResult {
+  domain: string;
+  hostname: string;
+  records: {
+    mx:           DnsRecord;
+    spf:          DnsRecord;
+    dkim:         DnsRecord;
+    dmarc:        DnsRecord;
+    autodiscover: DnsRecord;
+  };
+}
+
+// ── CopyBtn ───────────────────────────────────────────────────────────────────
+function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [text]);
+  return (
+    <button
+      onClick={handleCopy}
+      title="Kopieren"
+      className="shrink-0 p-1 rounded text-gray-400 hover:text-accent hover:bg-accent/10 transition-colors"
+    >
+      {copied
+        ? <Check size={size} className="text-green-500" />
+        : <Copy size={size} />}
+    </button>
+  );
+}
+
+// ── StatusDot — gefüllter Kreis: grün = gesetzt, gelb = fehlt ────────────────
+function StatusDot({ ok, checking }: { ok: boolean; checking: boolean }) {
+  if (checking) return <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />;
+  return (
+    <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${
+      ok ? 'bg-green-500' : 'bg-yellow-400'
+    }`} />
+  );
+}
+
+// ── DnsRow — eine Zeile in der DNS-Tabelle ────────────────────────────────────
+interface DnsRowProps {
+  label:       string;
+  description: string;
+  record:      DnsRecord;
+  checking:    boolean;
+  isLast?:     boolean;
+}
+function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
+  return (
+    <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
+      {/* Status-Punkt (linke Spalte, zwei Zeilen hoch) */}
+      <div className="flex items-start pt-0.5">
+        <StatusDot ok={record.ok} checking={checking} />
+      </div>
+
+      {/* Rechte Spalte: alles */}
+      <div className="space-y-2 min-w-0">
+        {/* Labelzeile */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-gray-900">{label}</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">
+            {record.type}
+          </span>
+          {!checking && (
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              record.ok
+                ? 'bg-green-100 text-green-700'
+                : 'bg-yellow-100 text-yellow-700'
+            }`}>
+              {record.ok ? '● Gesetzt' : '○ Nicht gefunden'}
+            </span>
+          )}
+        </div>
+
+        <p className="text-xs text-gray-400 leading-relaxed">{description}</p>
+
+        {/* DNS-Name + Kopieren */}
+        <div className="flex items-center gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
+          <span className="text-[10px] text-gray-400 font-medium mr-1 shrink-0">Name</span>
+          <code className="flex-1 text-xs text-gray-600 font-mono break-all">{record.name}</code>
+          <CopyBtn text={record.name} />
+        </div>
+
+        {/* Erwarteter Wert + Kopieren */}
+        <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
+          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Wert</span>
+          <code className="flex-1 text-xs text-gray-800 font-mono break-all leading-relaxed">{record.expected}</code>
+          <CopyBtn text={record.expected} />
+        </div>
+
+        {/* Aktuell in DNS gefunden */}
+        {!checking && record.ok && record.found && (
+          <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
+            <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
+            <code className="text-[11px] text-green-800 font-mono break-all leading-relaxed">{record.found}</code>
+          </div>
+        )}
+        {!checking && !record.ok && record.found && (
+          <div className="flex items-start gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-yellow-600 shrink-0 mt-0.5" />
+            <span className="text-[11px] text-yellow-800">
+              Gefunden, aber abweichend: <code className="font-mono">{record.found}</code>
+            </span>
+          </div>
+        )}
+        {!checking && !record.ok && !record.found && (
+          <div className="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-yellow-500 shrink-0" />
+            <span className="text-[11px] text-yellow-700">Kein Eintrag gefunden — beim DNS-Anbieter eintragen</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── PTR-Zeile (kein API-Check, immer manuell beim Hoster) ────────────────────
+function PtrRow({ hostname }: { hostname: string }) {
+  return (
+    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4">
+      <div className="flex items-start pt-0.5">
+        <span className="inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 bg-blue-400" />
+      </div>
+      <div className="space-y-2 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-gray-900">Reverse DNS (PTR)</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">PTR</span>
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+            Beim Hosting-Anbieter setzen
+          </span>
+        </div>
+        <p className="text-xs text-gray-400 leading-relaxed">
+          Wird im Server-Panel des Hosters (Hetzner, Contabo, Netcup …) gesetzt — nicht beim DNS-Provider.
+          Ohne PTR lehnen GMail und viele andere Mailserver eingehende Verbindungen ab.
+        </p>
+        <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
+          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Wert</span>
+          <code className="flex-1 text-xs text-gray-800 font-mono break-all">{hostname}</code>
+          <CopyBtn text={hostname} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DnsSection (Hauptkomponente) ──────────────────────────────────────────────
+function DnsSection() {
+  const [selectedDomainId, setSelectedDomainId] = useState<string>('');
+  const [checkKey, setCheckKey] = useState(0);
+
+  // Alle Domains laden
+  const { data: domainsData } = useQuery({
+    queryKey: ['admin-domains-dns'],
+    queryFn:  () => api.get<DomainsResp>('/admin/domains?limit=100'),
+    select:   d => d.domains,
+  });
+
+  const domains            = domainsData ?? [];
+  const effectiveDomainId  = selectedDomainId || (domains.find(d => d.primary)?.id ?? domains[0]?.id ?? '');
+  const selectedDomain     = domains.find(d => d.id === effectiveDomainId);
+
+  // DNS-Check für gewählte Domain
+  const { data: dnsCheck, isFetching: checking } = useQuery({
+    queryKey:  ['dns-check', effectiveDomainId, checkKey],
+    queryFn:   () => api.get<DnsCheckResult>(`/admin/domains/${effectiveDomainId}/dns-check`),
+    enabled:   !!effectiveDomainId,
+    staleTime: 0,
+    gcTime:    0,
+  });
+
+  const okCount = dnsCheck ? Object.values(dnsCheck.records).filter(r => r.ok).length : 0;
+  const allOk   = okCount === 5;
+
+  // Skeleton-Records für Ladestand
+  const emptyRecord = (type: string, name: string, expected: string): DnsRecord =>
+    ({ type, name, expected, ok: false, found: null });
+
+  const rows: { label: string; description: string; key: keyof DnsCheckResult['records']; fallback: DnsRecord }[] = [
+    {
+      key:         'mx',
+      label:       'MX — Mailrouting',
+      description: `Leitet eingehende E-Mails an @${selectedDomain?.name ?? '…'} zu diesem Mailserver weiter`,
+      fallback:    emptyRecord('MX',    selectedDomain?.name ?? '', `10 ${dnsCheck?.hostname ?? '…'}`),
+    },
+    {
+      key:         'spf',
+      label:       'SPF — Sender Policy Framework',
+      description: 'Legt fest welche Server im Namen der Domain senden dürfen — verhindert E-Mail-Spoofing',
+      fallback:    emptyRecord('TXT',   selectedDomain?.name ?? '', 'v=spf1 a:… mx ~all'),
+    },
+    {
+      key:         'dkim',
+      label:       `DKIM — Signatur (Selektor: ${selectedDomain?.dkimSelector ?? 'coremail'})`,
+      description: 'Kryptografische Signatur — beweist Absenderauthentizität und verhindert Manipulation',
+      fallback:    emptyRecord('TXT',   `${selectedDomain?.dkimSelector ?? 'coremail'}._domainkey.${selectedDomain?.name ?? '…'}`, 'v=DKIM1; k=rsa; p=…'),
+    },
+    {
+      key:         'dmarc',
+      label:       'DMARC — Richtlinie bei Fehlern',
+      description: 'Gibt Empfänger-Servern an wie sie mit Mails umgehen sollen, die SPF/DKIM nicht bestehen',
+      fallback:    emptyRecord('TXT',   `_dmarc.${selectedDomain?.name ?? '…'}`, 'v=DMARC1; p=quarantine; rua=mailto:dmarc@…'),
+    },
+    {
+      key:         'autodiscover',
+      label:       'Autodiscover — Client-Konfiguration',
+      description: 'Ermöglicht Outlook und iOS Mail die automatische Server-Konfiguration per E-Mail-Adresse',
+      fallback:    emptyRecord('CNAME', `autodiscover.${selectedDomain?.name ?? '…'}`, dnsCheck?.hostname ?? '…'),
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">DNS-Einträge</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Notwendige Einträge beim DNS-Anbieter für zuverlässigen Mail-Betrieb
+          </p>
+        </div>
+        <button
+          onClick={() => setCheckKey(k => k + 1)}
+          disabled={!effectiveDomainId || checking}
+          className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+        >
+          <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
+          Prüfen
+        </button>
+      </div>
+
+      {/* ── Domain-Tabs (nur bei mehreren Domains) ─────────────────────── */}
+      {domains.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {domains.map(d => (
+            <button
+              key={d.id}
+              onClick={() => { setSelectedDomainId(d.id); setCheckKey(k => k + 1); }}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                d.id === effectiveDomainId
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-accent/40'
+              }`}
+            >
+              {d.name}
+              {d.primary && <span className="ml-1.5 text-[10px] opacity-70">primär</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Keine Domains ──────────────────────────────────────────────── */}
+      {domains.length === 0 && (
+        <div className="card p-8 text-center text-sm text-gray-400">
+          Keine Domains — bitte zuerst eine Domain unter <strong>Domains</strong> anlegen.
+        </div>
+      )}
+
+      {/* ── Status-Banner ──────────────────────────────────────────────── */}
+      {dnsCheck && !checking && (
+        <div className={`rounded-lg px-4 py-3 flex items-center gap-3 border ${
+          allOk ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
+        }`}>
+          <span className={`w-3 h-3 rounded-full shrink-0 ${allOk ? 'bg-green-500' : 'bg-yellow-400'}`} />
+          <div>
+            <p className={`text-sm font-semibold ${allOk ? 'text-green-800' : 'text-yellow-800'}`}>
+              {allOk
+                ? `Alle 5 Einträge für ${dnsCheck.domain} sind gesetzt ✓`
+                : `${okCount} von 5 Einträgen gesetzt — ${5 - okCount} ${5 - okCount === 1 ? 'fehlt' : 'fehlen'} noch`}
+            </p>
+            <p className={`text-xs mt-0.5 ${allOk ? 'text-green-700' : 'text-yellow-700'}`}>
+              Mailserver: <strong className="font-mono">{dnsCheck.hostname}</strong>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── DNS-Tabelle ─────────────────────────────────────────────────── */}
+      {(domains.length > 0) && (
+        <div className="card divide-y divide-gray-100 overflow-hidden">
+          {/* Tabellen-Header */}
+          <div className="px-4 py-2 bg-gray-50 flex items-center gap-2">
+            <Globe size={12} className="text-gray-400" />
+            <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+              {selectedDomain?.name ?? '…'}
+            </span>
+            {checking && <Loader2 size={11} className="animate-spin text-gray-400 ml-auto" />}
+          </div>
+
+          {/* Zeilen */}
+          <div className="px-4">
+            {rows.map((row, i) => (
+              <DnsRow
+                key={row.key}
+                label={row.label}
+                description={row.description}
+                record={dnsCheck?.records[row.key] ?? row.fallback}
+                checking={checking && !dnsCheck}
+                isLast={i === rows.length - 1}
+              />
+            ))}
+
+            {/* PTR-Zeile (immer, sobald hostname bekannt) */}
+            {(dnsCheck || selectedDomain) && (
+              <PtrRow hostname={dnsCheck?.hostname ?? selectedDomain?.name ?? '…'} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Legende ────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-5 text-xs text-gray-500 px-1">
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Eintrag gesetzt
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Nicht gefunden
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-blue-400 inline-block" /> Manuell beim Hoster
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // SmtpConfigPage (root)
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -1100,18 +1446,23 @@ export function SmtpConfigPage() {
 
       {/* ── Main content ────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-6">
-        {!settings ? (
-          <div className="text-sm text-gray-400">Lade SMTP-Einstellungen…</div>
-        ) : (
-          <>
-            {section === 'esmtp'       && <EsmtpSection       s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'delivery'    && <DeliverySection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'outgoing'    && <OutgoingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'banner'      && <BannerSection      s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'greylisting' && <GreylistingSection s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'relaying'    && <RelayingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            {section === 'connection'  && <ConnectionSection  s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-          </>
+        {/* DNS-Reiter braucht keine SmtpSettings — immer renderfähig */}
+        {section === 'dns' && <DnsSection />}
+
+        {section !== 'dns' && (
+          !settings ? (
+            <div className="text-sm text-gray-400">Lade SMTP-Einstellungen…</div>
+          ) : (
+            <>
+              {section === 'esmtp'       && <EsmtpSection       s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'delivery'    && <DeliverySection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'outgoing'    && <OutgoingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'banner'      && <BannerSection      s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'greylisting' && <GreylistingSection s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'relaying'    && <RelayingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+              {section === 'connection'  && <ConnectionSection  s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
+            </>
+          )
         )}
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
-  AlertOctagon, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock,
+  AlertOctagon, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
@@ -31,6 +31,8 @@ export function MessageReader({ messageId }: Props) {
   const { openCompose, setSelectedMessage, selectedFolderId } = useUiStore();
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
+  const [showRawSource, setShowRawSource] = useState(false);
+  const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -120,7 +122,14 @@ export function MessageReader({ messageId }: Props) {
       onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); } },
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
-      onClick: () => window.open(`/api/v1/mail/messages/${msg.id}/raw`, '_blank') },
+      onClick: () => {
+        void fetch(`/api/v1/mail/messages/${msg.id}/raw`, {
+          headers: { 'Accept': 'text/plain, message/rfc822, */*' },
+        }).then(r => r.text()).then(text => {
+          setRawSource(text);
+          setShowRawSource(true);
+        });
+      } },
     { label: 'Als EML herunterladen', icon: <Download size={14} />,
       onClick: () => {
         const a = document.createElement('a');
@@ -238,6 +247,34 @@ export function MessageReader({ messageId }: Props) {
       </div>
 
       {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} items={moreItems} onClose={() => setMoreMenu(null)} />}
+
+      {/* RFC 822 Quelltext-Modal */}
+      {showRawSource && rawSource !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowRawSource(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                <Code size={14} /> RFC 822 Quelltext
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`/api/v1/mail/messages/${msg.id}/raw`}
+                  download={`${msg.subject || 'message'}.eml`}
+                  className="btn-secondary text-xs"
+                >
+                  <Download size={12} /> .eml herunterladen
+                </a>
+                <button className="btn-ghost p-1" onClick={() => setShowRawSource(false)}>
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-all">
+              {rawSource}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
