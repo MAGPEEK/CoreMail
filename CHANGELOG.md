@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.11] — 2026-05-20 — Automatischer Logout bei Inaktivität
+
+### Added
+
+- **Neues Sicherheitsfeld „Automatischer Logout bei Inaktivität"** in den Global Settings (Sicherheitsrichtlinien-Sektion)
+  - Wert in Minuten: `0` = deaktiviert, `1`–`1440` Minuten konfigurierbar
+  - Standard: 30 Minuten
+  - Schnell-Buttons: Deaktiviert / 5 / 10 / 15 / 30 / 60 / 120 min
+  - Warnung bei < 5 Minuten (könnte Benutzer stören)
+- **`GET /api/v1/admin/settings/public`** — neuer öffentlicher Endpoint (kein Auth), liefert `orgName`, `logoUrl`, `language`, `inactivityTimeoutMinutes`, `maintenanceMode`, `maintenanceMessage` — für MWA/BCP vor dem Login abrufbar
+- **`useInactivityLogout`-Hook** — implementiert Browser-seitige Inaktivitätserkennung in BCP und MWA:
+  - Hört auf `mousemove`, `mousedown`, `keydown`, `touchstart`, `scroll`, `visibilitychange`
+  - Timer wird bei jeder Aktivität zurückgesetzt
+  - 60-Sekunden-Vorwarnung via Toast bevor der Logout ausgelöst wird
+  - Automatische Weiterleitung zur Login-Seite nach Ablauf
+
+### Changed
+
+- Session-Timeout-Feld in den Einstellungen in „Session-Timeout (Token)" umbenannt und Hinweistext präzisiert — verdeutlicht den Unterschied zu Inaktivitäts-Timeout
+
+---
+
 ## [3.13.10] — 2026-05-20 — Bugfix: Vorlage anwenden schlug fehl (retentionDays-Validierung)
 
 ### Fixed

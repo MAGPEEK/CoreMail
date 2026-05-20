@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.10';
+const VERSION        = '3.13.11';
 const BUILD_DATE     = '2026-05-20';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.11', date: '2026-05-20', title: 'Automatischer Logout bei Inaktivität — Global Settings',
+    notes: 'Neues Sicherheitsfeld in den Global Settings: „Automatischer Logout bei Inaktivität" (Minuten). 0 = deaktiviert, Standard 30 Minuten. Schnell-Buttons 0/5/10/15/30/60/120 min. Warnung bei < 5 Minuten. Neuer öffentlicher Endpoint GET /admin/settings/public (kein Auth) — liefert nicht-sensible Einstellungen wie orgName, inactivityTimeout, maintenanceMode. useInactivityLogout-Hook in BCP und MWA eingebunden: hört auf Maus-/Tastatureingaben, setzt Timer zurück, gibt 60-Sekunden-Toast-Vorwarnung bevor der Logout ausgelöst wird. Session-Timeout-Feld in „Session-Timeout (Token)" umbenannt um den Unterschied zum Inaktivitäts-Timeout zu verdeutlichen.' },
   { version: '3.13.10', date: '2026-05-20', title: 'Bugfix: Vorlage anwenden schlug fehl (retentionDays-Validierung zu streng)',
     notes: 'Kritischer Bugfix: Das Anwenden einer Aufbewahrungsrichtlinie aus einer Vorlage schlug mit „retentionDays must be at least 1" fehl. Im tag-basierten System (DPT/RPT/Personal-Tags) hält die Policy selbst keine Frist — die Tags tun das. Die Policy-Erstellung sendet deshalb korrekt retentionDays: 0. Die Backend-Validierung war zu streng und ließ 0 nicht zu. Fix: Validierung erlaubt jetzt 0 (= Frist wird durch Tags gesteuert), negierte Werte werden wie bisher abgelehnt. Beide betroffenen Stellen (POST und PUT /admin/compliance/retention) korrigiert.' },
   { version: '3.13.9', date: '2026-05-20', title: 'Aufbewahrungsrichtlinien aus Vorlagen — 8 Exchange-typische Szenarien, MFA-Buttons raus',
