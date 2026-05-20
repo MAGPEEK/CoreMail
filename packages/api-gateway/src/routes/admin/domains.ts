@@ -177,3 +177,117 @@ adminDomainsRouter.get('/:id/dkim-record', async (req: Request, res: Response) =
     dnsValue: `v=DKIM1; k=rsa; p=${pubKeyB64}`,
   });
 });
+
+// ── GET /:id/dns-check ────────────────────────────────────────────────────────
+// Prüft alle relevanten DNS-Einträge für eine Mail-Domain live via DNS
+adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+
+  const [domain, settings] = await Promise.all([
+    prisma.domain.findUnique({ where: { id } }),
+    prisma.serverSettings.findUnique({ where: { id: 'singleton' } }),
+  ]);
+  if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+
+  const { createPublicKey } = await import('crypto');
+  const { promises: dns }   = await import('dns');
+
+  const hostname  = settings?.publicHostname ?? 'mail.local';
+  const domainName = domain.name;
+
+  // DKIM expected value
+  const pubKey    = createPublicKey(domain.dkimPrivateKey);
+  const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+  const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
+  const dkimExpected = `v=DKIM1; k=rsa; p=${pubKeyB64}`;
+  const dkimName     = `${domain.dkimSelector}._domainkey.${domainName}`;
+
+  // Expected records
+  const spfExpected   = `v=spf1 a:${hostname} mx ~all`;
+  const dmarcExpected = `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domainName}; adkim=r; aspf=r`;
+
+  // Helper: ok = Eintrag EXISTIERT (beliebiger Wert), grün = gesetzt, gelb = nicht gefunden
+  async function checkMx(): Promise<{ ok: boolean; found: string | null }> {
+    try {
+      const records = await dns.resolveMx(domainName);
+      const found   = records.map(r => `${r.priority} ${r.exchange}`).join(', ') || null;
+      return { ok: records.length > 0, found };
+    } catch { return { ok: false, found: null }; }
+  }
+
+  async function checkSpf(): Promise<{ ok: boolean; found: string | null }> {
+    try {
+      const records = await dns.resolveTxt(domainName);
+      const flat    = records.map(chunks => chunks.join(''));
+      const spf     = flat.find(r => r.startsWith('v=spf1'));
+      return { ok: !!spf, found: spf ?? null };
+    } catch { return { ok: false, found: null }; }
+  }
+
+  async function checkDkim(): Promise<{ ok: boolean; found: string | null }> {
+    try {
+      const records = await dns.resolveTxt(dkimName);
+      const flat    = records.map(chunks => chunks.join(''));
+      const dkim    = flat.find(r => r.startsWith('v=DKIM1'));
+      return { ok: !!dkim, found: dkim ?? null };
+    } catch { return { ok: false, found: null }; }
+  }
+
+  async function checkDmarc(): Promise<{ ok: boolean; found: string | null }> {
+    try {
+      const records = await dns.resolveTxt(`_dmarc.${domainName}`);
+      const flat    = records.map(chunks => chunks.join(''));
+      const dmarc   = flat.find(r => r.startsWith('v=DMARC1'));
+      return { ok: !!dmarc, found: dmarc ?? null };
+    } catch { return { ok: false, found: null }; }
+  }
+
+  async function checkAutodiscover(): Promise<{ ok: boolean; found: string | null }> {
+    try {
+      const cnames = await dns.resolveCname(`autodiscover.${domainName}`);
+      const found  = cnames[0]?.replace(/\.$/, '') ?? null;
+      return { ok: !!found, found };
+    } catch { return { ok: false, found: null }; }
+  }
+
+  const [mx, spf, dkim, dmarc, autodiscover] = await Promise.all([
+    checkMx(), checkSpf(), checkDkim(), checkDmarc(), checkAutodiscover(),
+  ]);
+
+  res.json({
+    domain:    domainName,
+    hostname,
+    records: {
+      mx: {
+        type:     'MX',
+        name:     domainName,
+        expected: `10 ${hostname}`,
+        ...mx,
+      },
+      spf: {
+        type:     'TXT',
+        name:     domainName,
+        expected: spfExpected,
+        ...spf,
+      },
+      dkim: {
+        type:     'TXT',
+        name:     dkimName,
+        expected: dkimExpected,
+        ...dkim,
+      },
+      dmarc: {
+        type:     'TXT',
+        name:     `_dmarc.${domainName}`,
+        expected: dmarcExpected,
+        ...dmarc,
+      },
+      autodiscover: {
+        type:     'CNAME',
+        name:     `autodiscover.${domainName}`,
+        expected: hostname,
+        ...autodiscover,
+      },
+    },
+  });
+});

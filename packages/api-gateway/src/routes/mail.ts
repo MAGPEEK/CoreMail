@@ -4,7 +4,7 @@ import { Readable } from 'stream';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
-import { prisma } from '@coremail/storage';
+import { prisma, downloadBuffer } from '@coremail/storage';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -25,7 +25,8 @@ function getOutboundQueue(): Queue {
     // BullMQ v5 erfordert maxRetriesPerRequest: null — createBullMqConnection() liefert das.
     // getRedisClient() (shared, maxRetriesPerRequest: 3) crasht den Prozess wenn BullMQ
     // interne Blocking-Commands ausführt → unhandled rejection → NetworkError im Browser.
-    _outboundQueue = new Queue('smtp:outbound', {
+    // BullMQ v5: Kein ':' im Queue-Namen erlaubt — smtp-server nutzt 'smtp-outbound'
+    _outboundQueue = new Queue('smtp-outbound', {
       connection: createBullMqConnection(),
       defaultJobOptions: {
         attempts: 10,
@@ -375,7 +376,7 @@ mailRouter.delete('/messages/:id/snooze', async (req: Request, res: Response) =>
   res.json({ ok: true });
 });
 
-// GET /api/v1/mail/messages/:id/raw — raw EML / source view
+// GET /api/v1/mail/messages/:id/raw — RFC 822 raw EML / source view
 mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const msg = await prisma.message.findFirst({
@@ -384,23 +385,70 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  // Wenn rohes MIME in MinIO liegt, später aus storage holen.
-  // Fallback: reconstructed plain headers + body (best-effort)
-  const headers = [
-    `From: ${msg.fromName ? `"${msg.fromName}" ` : ''}<${msg.fromAddr}>`,
+  // Originales RFC 822 MIME aus MinIO (für große Nachrichten, die dort abgelegt sind)
+  if (msg.storagePath) {
+    try {
+      const raw = await downloadBuffer(msg.storagePath);
+      res.setHeader('Content-Type', 'message/rfc822');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(msg.subject || 'message')}.eml"`);
+      res.send(raw);
+      return;
+    } catch {
+      // MinIO-Fehler → Fallback auf Rekonstruktion
+    }
+  }
+
+  // ── RFC 822 Rekonstruktion aus DB-Feldern ─────────────────────────────────
+  // Gemäß RFC 822 §3: Header-Zeilen + Leerzeile + Body
+  // Gemäß RFC 2045: MIME-Version + Content-Type
+  const boundary = `=_CoreMail_${crypto.randomUUID().replace(/-/g, '')}`;
+  const hasHtml  = !!msg.bodyHtml;
+  const hasText  = !!msg.bodyText;
+  const multipart = hasHtml && hasText;
+
+  const headerLines = [
+    `From: ${msg.fromName ? `"${msg.fromName.replace(/"/g, '\\"')}" ` : ''}<${msg.fromAddr}>`,
     `To: ${msg.toAddrs.join(', ')}`,
-    msg.ccAddrs.length ? `Cc: ${msg.ccAddrs.join(', ')}` : '',
-    `Subject: ${msg.subject}`,
-    `Date: ${msg.date.toUTCString()}`,
+    msg.ccAddrs.length  ? `Cc: ${msg.ccAddrs.join(', ')}`   : '',
+    msg.bccAddrs?.length ? `Bcc: ${msg.bccAddrs.join(', ')}` : '',
+    `Subject: ${msg.subject ?? ''}`,
+    `Date: ${msg.date.toUTCString().replace('GMT', '+0000')}`,
     msg.messageId ? `Message-ID: ${msg.messageId}` : '',
     msg.inReplyTo ? `In-Reply-To: ${msg.inReplyTo}` : '',
+    msg.replyTo   ? `Reply-To: ${msg.replyTo}`      : '',
     'MIME-Version: 1.0',
-    msg.bodyHtml ? 'Content-Type: text/html; charset=utf-8' : 'Content-Type: text/plain; charset=utf-8',
+    'X-Mailer: CoreMail (reconstructed)',
+    multipart
+      ? `Content-Type: multipart/alternative; boundary="${boundary}"`
+      : hasHtml
+        ? 'Content-Type: text/html; charset=utf-8'
+        : 'Content-Type: text/plain; charset=utf-8',
+    `Content-Transfer-Encoding: 8bit`,
   ].filter(Boolean).join('\r\n');
 
-  const body = msg.bodyHtml || msg.bodyText;
+  let body: string;
+  if (multipart) {
+    body = [
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      msg.bodyText,
+      `--${boundary}`,
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      msg.bodyHtml,
+      `--${boundary}--`,
+    ].join('\r\n');
+  } else {
+    body = hasHtml ? msg.bodyHtml : msg.bodyText;
+  }
+
+  const rawEml = `${headerLines}\r\n\r\n${body}`;
   res.setHeader('Content-Type', 'message/rfc822; charset=utf-8');
-  res.send(`${headers}\r\n\r\n${body}`);
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(msg.subject || 'message')}.eml"`);
+  res.send(rawEml);
 });
 
 // GET /api/v1/mail/folders/:folderId/messages

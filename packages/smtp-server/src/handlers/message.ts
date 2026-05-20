@@ -180,6 +180,28 @@ export async function storeInboundMessage(
     }),
   );
 
+  // MAIL_FLOW — Nachrichtenablaufverfolgung
+  void prisma.systemLog.create({
+    data: {
+      level: 'INFO',
+      service: 'smtp-server',
+      category: 'MAIL_FLOW',
+      message: `Inbound: ${opts.fromAddr} → ${opts.rcptTo}`,
+      userId: user.id,
+      ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
+      metadata: {
+        sender: opts.fromAddr,
+        recipient: opts.rcptTo,
+        subject: parsed.subject ?? '',
+        status: opts.toJunk ? 'JUNK' : 'DELIVERED',
+        messageId: parsed.messageId ?? '',
+        size: String(effectiveBuffer.length),
+        spamScore: opts.spamScore !== undefined ? String(opts.spamScore) : '',
+        direction: 'INBOUND',
+      },
+    },
+  }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
+
   log.info(
     { rcptTo: opts.rcptTo, folder: folder.name, uid, size: effectiveBuffer.length },
     'Message stored',

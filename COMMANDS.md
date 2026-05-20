@@ -13,11 +13,12 @@ Alle `curl`-Befehle setzen einen laufenden Stack voraus und benötigen einen Adm
 4. [Domains verwalten](#4-domains-verwalten)
 5. [Warteschlangen (SMTP-Queue)](#5-warteschlangen-smtp-queue)
 6. [Logs & Diagnose](#6-logs--diagnose)
-7. [Datenbank direkt abfragen](#7-datenbank-direkt-abfragen)
-8. [Redis abfragen](#8-redis-abfragen)
-9. [SMTP testen](#9-smtp-testen)
-10. [Backup & Wiederherstellung](#10-backup--wiederherstellung)
-11. [Updates](#11-updates)
+7. [Nachrichtenablaufverfolgung (Message Trace)](#7-nachrichtenablaufverfolgung-message-trace)
+8. [Datenbank direkt abfragen](#8-datenbank-direkt-abfragen)
+9. [Redis abfragen](#9-redis-abfragen)
+10. [SMTP testen](#10-smtp-testen)
+11. [Backup & Wiederherstellung](#11-backup--wiederherstellung)
+12. [Updates](#12-updates)
 
 ---
 
@@ -221,23 +222,25 @@ curl -s "http://localhost:3000/api/v1/admin/domains/$DOMAIN_ID/dkim-record" \
 
 ## 5. Warteschlangen (SMTP-Queue)
 
-### Queue-Übersicht (Anzahl je Queue)
+Die SMTP-Queue verwendet **BullMQ v5**. Queue-Name: `smtp-outbound` (kein Doppelpunkt — BullMQ v5 verbietet Doppelpunkte in Queue-Namen).
+
+### Queue-Übersicht (Anzahl je Status)
 
 ```bash
 curl -s http://localhost:3000/api/v1/admin/queues \
   -H "Authorization: Bearer $TOKEN" | jq '.[] | {name, count}'
 ```
 
-### Nachrichten in einer Queue anzeigen (mit Absender & Empfänger)
+### Nachrichten in der ausgehenden Queue anzeigen
 
 ```bash
-# Ausgehende Queue
-curl -s "http://localhost:3000/api/v1/admin/queues/smtp:outbound/jobs?limit=20" \
+# Ausgehende Queue (aktive Jobs)
+curl -s "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs?limit=20" \
   -H "Authorization: Bearer $TOKEN" \
   | jq '.jobs[] | {index, from: .data.envelope.from, to: .data.envelope.to, subject: .data.subject}'
 
-# Dead-Letter (dauerhaft fehlgeschlagen)
-curl -s "http://localhost:3000/api/v1/admin/queues/smtp:outbound:dead/jobs?limit=20" \
+# Fehlgeschlagene Jobs (Dead Letter)
+curl -s "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs?state=failed&limit=20" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
@@ -245,14 +248,14 @@ curl -s "http://localhost:3000/api/v1/admin/queues/smtp:outbound:dead/jobs?limit
 
 ```bash
 # Index aus der Jobsliste entnehmen
-curl -s -X DELETE "http://localhost:3000/api/v1/admin/queues/smtp:outbound:dead/jobs/0" \
+curl -s -X DELETE "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs/0" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Queue leeren (alle Nachrichten löschen)
+### Queue leeren (alle fehlgeschlagenen Nachrichten löschen)
 
 ```bash
-curl -s -X POST "http://localhost:3000/api/v1/admin/queues/smtp:outbound:dead/flush" \
+curl -s -X POST "http://localhost:3000/api/v1/admin/queues/smtp-outbound/flush" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
@@ -309,7 +312,65 @@ curl -s http://localhost:3000/api/v1/admin/dashboard \
 
 ---
 
-## 7. Datenbank direkt abfragen
+## 7. Nachrichtenablaufverfolgung (Message Trace)
+
+Die Nachrichtenablaufverfolgung (Message Trace) protokolliert den vollständigen Weg jeder E-Mail durch den CoreMail-Stack — von der SMTP-Annahme über Spam-/Virenfilter bis zur Zustellung oder Ablehnung.
+
+### Nachrichten suchen
+
+```bash
+# Alle Filter sind optional — kombinierbar nach Bedarf
+
+# Nach Absender filtern
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=absender@domain.de" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Nach Empfänger filtern
+curl -s "http://localhost:3000/api/v1/admin/message-trace?recipient=empfaenger@domain.de" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Nach Status filtern (DELIVERED | REJECTED | SPAM | QUARANTINED | FAILED | DEFERRED)
+curl -s "http://localhost:3000/api/v1/admin/message-trace?status=REJECTED" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Zeitraum eingrenzen (ISO 8601)
+curl -s "http://localhost:3000/api/v1/admin/message-trace?from=2026-05-01T00:00:00Z&to=2026-05-20T23:59:59Z" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Kombination: Absender + Status + Zeitraum
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=absender@domain.de&status=DELIVERED&from=2026-05-01T00:00:00Z" \
+  -H "Authorization: Bearer $TOKEN" | jq '.messages[] | {timestamp, sender, recipient, subject, status, reason}'
+```
+
+### Verfügbare Filterparameter
+
+| Parameter | Beschreibung | Beispiel |
+|-----------|-------------|---------|
+| `sender` | Absender-Adresse (exakt oder Partial-Match) | `sender=user@domain.de` |
+| `recipient` | Empfänger-Adresse | `recipient=user@domain.de` |
+| `status` | Zustellstatus | `status=DELIVERED` |
+| `from` | Zeitraum von (ISO 8601) | `from=2026-05-01T00:00:00Z` |
+| `to` | Zeitraum bis (ISO 8601) | `to=2026-05-31T23:59:59Z` |
+| `limit` | Maximale Anzahl Treffer | `limit=100` |
+| `offset` | Pagination | `offset=100` |
+
+### CSV-Export
+
+```bash
+# Vollständiger Export (alle Felder) als CSV-Datei
+curl -s "http://localhost:3000/api/v1/admin/message-trace/export?sender=absender@domain.de" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o "message-trace-$(date +%Y%m%d).csv"
+
+# Export mit Zeitraum
+curl -s "http://localhost:3000/api/v1/admin/message-trace/export?from=2026-05-01T00:00:00Z&to=2026-05-31T23:59:59Z" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o "message-trace-mai-2026.csv"
+```
+
+---
+
+## 8. Datenbank direkt abfragen
 
 ```bash
 # PostgreSQL-Shell öffnen
@@ -345,7 +406,7 @@ docker exec coremail-postgres psql -U coremail -d coremail -c \
 
 ---
 
-## 8. Redis abfragen
+## 9. Redis abfragen
 
 ```bash
 # Redis-CLI öffnen (Passwort aus .env)
@@ -358,11 +419,18 @@ docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" <BEFEHL>
 ### Nützliche Redis-Befehle
 
 ```bash
-# Alle Queue-Längen auf einen Blick
+# BullMQ Queue-Längen (Queue-Name: smtp-outbound)
+# BullMQ v5 speichert Jobs unter: bull:{queuename}:*
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
-  LLEN smtp:outbound && \
-  docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" LLEN smtp:outbound:retry && \
-  docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" LLEN smtp:outbound:dead
+  KEYS "bull:smtp-outbound:*" | wc -l
+
+# Wartende Jobs zählen
+docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
+  LLEN "bull:smtp-outbound:wait"
+
+# Fehlgeschlagene Jobs zählen
+docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
+  ZCARD "bull:smtp-outbound:failed"
 
 # Aktive Sessions zählen
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" KEYS "session:*" | wc -l
@@ -379,7 +447,7 @@ docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" INFO memory | grep u
 
 ---
 
-## 9. SMTP testen
+## 10. SMTP testen
 
 ### Einfacher Verbindungstest (ohne Tool)
 
@@ -423,7 +491,7 @@ docker exec coremail-postgres psql -U coremail -d coremail -c \
 
 ---
 
-## 10. Backup & Wiederherstellung
+## 11. Backup & Wiederherstellung
 
 ### Datenbankbackup manuell erstellen
 
@@ -465,7 +533,7 @@ curl -s -X POST http://localhost:3000/api/v1/admin/backup/trigger \
 
 ---
 
-## 11. Updates
+## 12. Updates
 
 ### Auf neue Version aktualisieren
 
@@ -486,7 +554,7 @@ curl -s http://localhost:3000/healthz | jq
 
 ```bash
 # In docker-compose.yml die Image-Zeile anpassen:
-#   image: magpeek/coremail-app:1.3.8
+#   image: magpeek/coremail-app:3.17.8
 # Dann:
 docker compose up -d --pull always
 ```
@@ -535,8 +603,15 @@ curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes \
 # Queue-Status
 curl -s http://localhost:3000/api/v1/admin/queues -H "Authorization: Bearer $TOKEN" | jq
 
+# Message Trace
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=user@domain.de&status=REJECTED" \
+  -H "Authorization: Bearer $TOKEN" | jq '.messages[] | {timestamp, recipient, subject, reason}'
+
 # Datenbank-Shell
 docker exec -it coremail-postgres psql -U coremail -d coremail
+
+# BullMQ Queue-Länge (smtp-outbound)
+docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" LLEN "bull:smtp-outbound:wait"
 
 # Update
 docker compose pull && docker compose up -d

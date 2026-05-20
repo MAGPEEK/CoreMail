@@ -13,6 +13,18 @@ import { storeInboundMessage } from '../handlers/message.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
 
+// ── RFC 822 lightweight header extraction ─────────────────────────────────────
+function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
+  const end = raw.indexOf('\r\n\r\n');
+  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('binary');
+  const subjectMatch = /^Subject:\s*(.+?)(?=\r?\n\S|\r?\n\r?\n|$)/im.exec(text);
+  const msgIdMatch   = /^Message-ID:\s*([^\r\n]+)/im.exec(text);
+  return {
+    subject:   (subjectMatch?.[1] ?? '').replace(/\r?\n[ \t]/g, ' ').trim(),
+    messageId: (msgIdMatch?.[1] ?? '').trim(),
+  };
+}
+
 /**
  * Prepend a RFC 6409 §6.1 compliant Received: header to a message.
  *
@@ -143,6 +155,30 @@ async function onMessage(
       ...(authUser ? { senderUserId: authUser.id } : {}),
     });
   }
+
+  // MAIL_FLOW — Nachrichtenablaufverfolgung (Outbound ACCEPTED)
+  const headers = extractRawHeaders(raw);
+  void prisma.systemLog.create({
+    data: {
+      level: 'INFO',
+      service: 'smtp-server',
+      category: 'MAIL_FLOW',
+      message: `Sent: ${from} → ${to.join(', ')}`,
+      ...(authUser ? { userId: authUser.id } : {}),
+      ...(headers.messageId ? { messageId: headers.messageId } : {}),
+      metadata: {
+        sender: from,
+        recipient: to.join(', '),
+        subject: headers.subject,
+        status: 'ACCEPTED',
+        messageId: headers.messageId,
+        size: String(raw.length),
+        localCount: String(localRcpts.length),
+        externalCount: String(externalRcpts.length),
+        direction: 'OUTBOUND',
+      },
+    },
+  }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
 
   log.info(
     { from, local: localRcpts.length, external: externalRcpts.length },

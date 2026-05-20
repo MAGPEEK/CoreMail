@@ -17,6 +17,18 @@ const log = createLogger('smtp:inbound');
 const SECURITY_FILTER_URL =
   process.env['SECURITY_FILTER_URL'] ?? 'http://security-filter:3002';
 
+// ── RFC 822 lightweight header extraction (regex, no full parse) ──────────────
+function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
+  const end = raw.indexOf('\r\n\r\n');
+  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('binary');
+  const subjectMatch = /^Subject:\s*(.+?)(?=\r?\n\S|\r?\n\r?\n|$)/im.exec(text);
+  const msgIdMatch   = /^Message-ID:\s*([^\r\n]+)/im.exec(text);
+  return {
+    subject:   (subjectMatch?.[1] ?? '').replace(/\r?\n[ \t]/g, ' ').trim(),
+    messageId: (msgIdMatch?.[1] ?? '').trim(),
+  };
+}
+
 // ── onConnect ─────────────────────────────────────────────────────────────────
 
 async function onConnect(ip: string): Promise<boolean> {
@@ -115,11 +127,32 @@ async function onMessage(
   );
 
   if (filterResult.action === 'reject') {
+    const headers = extractRawHeaders(raw);
+    void prisma.systemLog.create({
+      data: {
+        level: 'WARN',
+        service: 'smtp-server',
+        category: 'MAIL_FLOW',
+        message: `Rejected: ${from} → ${to[0] ?? ''}`,
+        ...(headers.messageId ? { messageId: headers.messageId } : {}),
+        metadata: {
+          sender: from,
+          recipient: to.join(', '),
+          subject: headers.subject,
+          status: 'REJECTED',
+          messageId: headers.messageId,
+          size: String(raw.length),
+          spamScore: filterResult.spamScore !== undefined ? String(filterResult.spamScore) : '',
+          reason: filterResult.reason ?? 'Message rejected',
+          direction: 'INBOUND',
+        },
+      },
+    }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
     throw new Error(`550 5.7.1 ${filterResult.reason ?? 'Message rejected'}`);
   }
 
   if (filterResult.action === 'quarantine') {
-    await quarantineMessage(raw, from, to, filterResult.virusName ?? 'unknown');
+    await quarantineMessage(raw, from, to, filterResult.virusName ?? 'unknown', filterResult.spamScore);
     return;
   }
 
@@ -396,8 +429,10 @@ async function quarantineMessage(
   mailFrom: string,
   rcptTo: string[],
   virusName: string,
+  spamScore?: number,
 ): Promise<void> {
   const { uploadBuffer, quarantineKey } = await import('@coremail/storage');
+  const headers = extractRawHeaders(rawMessage);
 
   const qId = crypto.randomUUID();
   const storagePath = quarantineKey(qId);
@@ -407,12 +442,34 @@ async function quarantineMessage(
     data: {
       fromAddr: mailFrom,
       toAddr: rcptTo[0] ?? '',
-      subject: '',
+      subject: headers.subject,
       reason: 'VIRUS',
       details: { virusName },
       rawPath: storagePath,
     },
   });
+
+  // MAIL_FLOW — Nachrichtenablaufverfolgung
+  void prisma.systemLog.create({
+    data: {
+      level: 'WARN',
+      service: 'smtp-server',
+      category: 'MAIL_FLOW',
+      message: `Quarantined: ${mailFrom} → ${rcptTo[0] ?? ''}`,
+      ...(headers.messageId ? { messageId: headers.messageId } : {}),
+      metadata: {
+        sender: mailFrom,
+        recipient: rcptTo.join(', '),
+        subject: headers.subject,
+        status: 'QUARANTINE',
+        messageId: headers.messageId,
+        size: String(rawMessage.length),
+        spamScore: spamScore !== undefined ? String(spamScore) : '',
+        reason: virusName,
+        direction: 'INBOUND',
+      },
+    },
+  }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
 
   log.warn({ virusName, from: mailFrom }, 'Message quarantined');
 
