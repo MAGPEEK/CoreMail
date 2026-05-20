@@ -13,6 +13,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.4] — 2026-05-20 — Fix: BullMQ-Verbindung in api-gateway (NetworkError beim Senden)
+
+### Fixed
+
+- **Senden schlägt fehl (NetworkError)**: Die Outbound-Queue in `api-gateway/routes/mail.ts` nutzte
+  `getRedisClient()` (shared, `maxRetriesPerRequest: 3`) statt `createBullMqConnection()` (`null`).
+  BullMQ v5 erfordert `maxRetriesPerRequest: null` für interne Blocking-Befehle — mit der falschen
+  Verbindung crashte `queue.add()` den api-gateway-Prozess (Node.js 22: `--unhandled-rejections=throw`),
+  was im Browser als `NetworkError when attempting to fetch resource` erschien.
+  Fix: `createBullMqConnection()` wie in `smtp-server/outbound/queue.ts` korrekt verwendet.
+- **Zusätzlich**: `queue.add()` in try/catch — bei echten Queue-Fehlern gibt der Server jetzt
+  `500 { error: '...' }` zurück statt die Verbindung zu droppen.
+
+---
+
 ## [3.17.3] — 2026-05-20 — Service-TLS-Binding: SMTP/IMAP/POP3 echte Zertifikate, HTTPS-Proxy nur MWA+BCP
 
 ### Added
