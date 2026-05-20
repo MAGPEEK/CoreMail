@@ -176,15 +176,17 @@ async function runAcmeIssuance(
     const certKeyPem = certKey.toString();
 
     // Zertifikat ausstellen mit HTTP-01 Challenge
+    // Timeout 90s damit der Hänger-Fall schnell sichtbar wird (Default wäre ~120s+)
     const certPem = await client.auto({
       csr,
       email,
       termsOfServiceAgreed: true,
       challengePriority: ['http-01'],
+      skipChallengeVerification: false,
       challengeCreateFn: async (_authz, _challenge, keyAuthorization) => {
         const token = (_challenge as { token: string }).token;
         await storeAcmeChallenge(token, keyAuthorization);
-        log.info({ token }, 'ACME HTTP-01 challenge token stored');
+        log.info({ token }, 'ACME HTTP-01 challenge token stored — Port 80 must be reachable');
       },
       challengeRemoveFn: async (_authz, _challenge) => {
         // Token bleibt bis TTL in Redis — kein aktives Löschen nötig

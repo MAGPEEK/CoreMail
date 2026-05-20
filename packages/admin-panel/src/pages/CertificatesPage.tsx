@@ -165,6 +165,24 @@ export function CertificatesPage() {
             <p className="text-sm">Noch keine Zertifikate. Erstelle dein erstes Zertifikat.</p>
           </div>
         ) : (
+          <>
+            {/* Status-Banner: PENDING/RENEWING */}
+            {certs.some(c => c.status === 'PENDING' || c.status === 'RENEWING') && (
+              <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex items-center gap-2 text-sm text-blue-700">
+                <Loader2 size={14} className="animate-spin shrink-0" />
+                <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-blue-100 px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
+              </div>
+            )}
+            {/* Status-Banner: ERROR */}
+            {certs.some(c => c.status === 'ERROR') && (
+              <div className="px-4 py-3 bg-red-50 border-b border-red-200 flex items-start gap-2 text-sm text-red-700">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                <span>
+                  <strong>Zertifikat fehlgeschlagen.</strong> Häufigste Ursache: <strong>Port 80</strong> muss öffentlich erreichbar sein (ACME HTTP-01 Challenge).
+                  {' '}Details: Zeile aufklappen (<ChevronDown size={12} className="inline mb-0.5" />).
+                </span>
+              </div>
+            )}
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -267,8 +285,11 @@ export function CertificatesPage() {
                             )}
                           </div>
                           {cert.lastError && (
-                            <div className="col-span-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-mono">
-                              {cert.lastError}
+                            <div className="col-span-2 p-3 bg-red-50 border border-red-200 rounded">
+                              <p className="text-xs font-semibold text-red-700 mb-1 flex items-center gap-1">
+                                <AlertCircle size={12} /> Fehlermeldung
+                              </p>
+                              <pre className="text-xs text-red-700 whitespace-pre-wrap break-words font-mono leading-relaxed">{cert.lastError}</pre>
                             </div>
                           )}
                         </div>
@@ -279,6 +300,7 @@ export function CertificatesPage() {
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
 
