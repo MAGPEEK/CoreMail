@@ -64,7 +64,7 @@ function TypeBadge({ type }: { type: CertType }) {
   return <span className={`${base} bg-gray-100 text-gray-600`}>Self-Signed</span>;
 }
 
-const ALL_SERVICES = ['OWA', 'BCP', 'SMTP', 'IMAP', 'POP3', 'EWS', 'CALDAV', 'AUTODISCOVER'];
+const ALL_SERVICES = ['MWA', 'BCP', 'SMTP', 'IMAP', 'POP3', 'EWS', 'CALDAV', 'AUTODISCOVER'];
 
 function ServiceSelector({
   selected, onChange,
