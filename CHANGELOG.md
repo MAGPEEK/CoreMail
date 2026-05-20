@@ -13,6 +13,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.3] — 2026-05-20 — Service-TLS-Binding: SMTP/IMAP/POP3 echte Zertifikate, HTTPS-Proxy nur MWA+BCP
+
+### Added
+
+- **Protokoll-TLS-Binding**: Wenn ein Zertifikat den Services `SMTP`, `IMAP` oder `POP3` zugeordnet wird,
+  werden `certPem`/`keyPem` automatisch in `ServerSettings.tlsCert/tlsKey` geschrieben und alle drei
+  Protokoll-Server laden das Zertifikat sofort via `CHANNEL_SETTINGS_RELOAD` neu — kein Container-Neustart nötig.
+  Gilt für: Let's Encrypt (nach Ausstellung), Upload, Self-Signed, PUT-Services-Änderung.
+- **`applyProtocolCert()` Helper** in `certificates.ts` — zentraler Binding-Punkt für SMTP/IMAP/POP3-TLS
+- **BCP: Service-Farben** in der Zertifikat-Tabelle — blau: MWA/BCP (HTTPS-Proxy), grün: SMTP/IMAP/POP3 (Protokoll-TLS), grau: EWS/CALDAV/AUTODISCOVER
+- **BCP: „Protokoll-TLS"-Zeile** in der Detailansicht — zeigt welche Protokoll-Services aktiv gebunden sind
+- **BCP: ServiceSelector-Hinweis** — erklärt MWA+BCP = HTTPS-Proxy vs. SMTP/IMAP/POP3 = Protokoll-TLS
+
+### Changed
+
+- **`activate-https` Guard**: HTTPS-Proxy kann nur aktiviert werden wenn das Zertifikat sowohl `MWA` als
+  auch `BCP` im `services`-Array hat — gibt klare 400-Fehlermeldung wenn Services fehlen
+- **BCP: LockOpen-Button** erscheint nur noch bei Zertifikaten mit MWA+BCP (vorher bei allen ACTIVE/EXPIRING)
+- **BCP: Grauer Status-Banner** erklärt jetzt explizit "MWA + BCP zuweisen" statt nur "Schloss klicken"
+- **BCP: HTTPS (Port 443) Detailzeile** zeigt drei Zustände: Aktiv / Bereit (MWA+BCP) / MWA+BCP benötigt
+
+---
+
 ## [3.17.2] — 2026-05-20 — HTTPS-Proxy: explizit deaktivierbar für externen Reverse Proxy
 
 ### Added

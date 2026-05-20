@@ -16,7 +16,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 import { isTlsProxyEnabled } from '../../tls-proxy.js';
 
@@ -54,6 +54,40 @@ function deriveStatus(expiresAt: Date | null): CertStatus {
 function safe(cert: Record<string, unknown>) {
   const { keyPem: _, acmeAccount: __, ...rest } = cert;
   return rest;
+}
+
+// ── Protokoll-TLS-Binding ──────────────────────────────────────────────────────
+// SMTP, IMAP und POP3 lesen ihr TLS-Zertifikat aus ServerSettings.tlsCert/tlsKey.
+// Wenn ein Zertifikat diesen Services zugeordnet wird, schreiben wir die PEM-Daten
+// dort rein und senden CHANNEL_SETTINGS_RELOAD — die Server laden das Cert sofort
+// neu (ohne Container-Neustart) und binden die neuen TLS-Sockets.
+const PROTOCOL_SERVICES = new Set(['SMTP', 'IMAP', 'POP3']);
+
+// Services die den integrierten HTTPS-Reverse-Proxy steuern
+const HTTPS_PROXY_SERVICES = new Set(['MWA', 'BCP']);
+
+async function applyProtocolCert(
+  certId:   string,
+  services: string[],
+  certPem:  string,
+  keyPem:   string,
+): Promise<void> {
+  const hasProtocol = services.some(s => PROTOCOL_SERVICES.has(s));
+  if (!hasProtocol) return;
+
+  // Cert in ServerSettings schreiben → alle Protokoll-Server lesen von dort
+  await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', tlsCert: certPem, tlsKey: keyPem },
+    update: { tlsCert: certPem, tlsKey: keyPem },
+  });
+
+  // CHANNEL_SETTINGS_RELOAD → smtp-server, imap-server, pop3-server rufen
+  // refreshTlsConfig() + scheduleReload() auf (Listener-Neustart mit neuem Cert)
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, certId);
+
+  const bound = services.filter(s => PROTOCOL_SERVICES.has(s));
+  log.info({ certId, services: bound }, 'Protocol TLS cert applied — servers reloading');
 }
 
 // ── GET /tls-proxy-info ───────────────────────────────────────────────────────
@@ -225,8 +259,8 @@ async function runAcmeIssuance(
       expiresAt = new Date(Date.now() + 90 * 24 * 3600 * 1000);
     }
 
-    // In DB speichern
-    await prisma.certificate.update({
+    // In DB speichern (services für Protokoll-TLS-Binding zurücklesen)
+    const issued = await prisma.certificate.update({
       where: { id: certId },
       data: {
         status:      deriveStatus(expiresAt),
@@ -237,7 +271,11 @@ async function runAcmeIssuance(
         expiresAt,
         lastError:   null,
       },
+      select: { services: true },
     });
+
+    // Protokoll-TLS binden (SMTP / IMAP / POP3) falls zugeordnet
+    await applyProtocolCert(certId, issued.services, certPem.toString(), certKeyPem);
 
     log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
   } catch (err) {
@@ -298,6 +336,11 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
       autoRenew: parsed.data.autoRenew,
     },
   });
+
+  // Protokoll-TLS sofort anwenden wenn SMTP/IMAP/POP3 im Service-Array
+  if (cert.certPem && cert.keyPem) {
+    void applyProtocolCert(cert.id, cert.services, cert.certPem, cert.keyPem);
+  }
 
   log.info({ id: cert.id, name: cert.name, expiresAt }, 'Custom certificate uploaded');
   res.status(201).json(safe(cert as unknown as Record<string, unknown>));
@@ -389,6 +432,9 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
       },
     });
 
+    // Protokoll-TLS sofort anwenden wenn SMTP/IMAP/POP3 im Service-Array
+    void applyProtocolCert(cert.id, cert.services, certPem, keyPem);
+
     log.info({ id: cert.id, domains, days }, 'Self-signed certificate generated');
     res.status(201).json(safe(cert as unknown as Record<string, unknown>));
   } catch (err) {
@@ -418,7 +464,24 @@ adminCertificatesRouter.put('/:id', async (req: Request, res: Response) => {
         ...(parsed.data.services  !== undefined ? { services: parsed.data.services }   : {}),
         ...(parsed.data.autoRenew !== undefined ? { autoRenew: parsed.data.autoRenew } : {}),
       },
+      // Protokoll-TLS-Binding braucht certPem/keyPem + status
+      select: {
+        id: true, name: true, domains: true, services: true, type: true,
+        status: true, issuedAt: true, expiresAt: true, autoRenew: true,
+        isActiveHttps: true, acmeEmail: true, lastError: true, createdAt: true,
+        certPem: true, keyPem: true,
+      },
     });
+
+    // Wenn Services geändert → ggf. Protokoll-TLS sofort anwenden
+    if (
+      parsed.data.services !== undefined &&
+      cert.certPem && cert.keyPem &&
+      (cert.status === 'ACTIVE' || cert.status === 'EXPIRING')
+    ) {
+      void applyProtocolCert(id, cert.services, cert.certPem, cert.keyPem);
+    }
+
     res.json(safe(cert as unknown as Record<string, unknown>));
   } catch {
     res.status(404).json({ error: 'Certificate not found' });
@@ -455,7 +518,7 @@ adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Re
   const id = req.params['id'] ?? '';
   const cert = await prisma.certificate.findUnique({
     where: { id },
-    select: { id: true, name: true, status: true, certPem: true, keyPem: true },
+    select: { id: true, name: true, status: true, certPem: true, keyPem: true, services: true },
   });
   if (!cert) { res.status(404).json({ error: 'Certificate not found' }); return; }
   if (!cert.certPem || !cert.keyPem) {
@@ -465,6 +528,16 @@ adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Re
   if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
     res.status(400).json({
       error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used for HTTPS`,
+    });
+    return;
+  }
+
+  // HTTPS-Proxy nur aktivieren wenn MWA UND BCP im Service-Array —
+  // beide Web-Interfaces müssen über den Proxy erreichbar sein.
+  const missingServices = [...HTTPS_PROXY_SERVICES].filter(s => !cert.services.includes(s));
+  if (missingServices.length > 0) {
+    res.status(400).json({
+      error: `Der integrierte HTTPS-Proxy erfordert die Services "MWA" und "BCP". Fehlend: ${missingServices.join(', ')}. Bitte das Zertifikat bearbeiten und beide Services hinzufügen.`,
     });
     return;
   }

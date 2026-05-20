@@ -66,6 +66,18 @@ function TypeBadge({ type }: { type: CertType }) {
 
 const ALL_SERVICES = ['MWA', 'BCP', 'SMTP', 'IMAP', 'POP3', 'EWS', 'CALDAV', 'AUTODISCOVER'];
 
+// Farbgebung je Service-Gruppe
+const SERVICE_COLORS: Record<string, string> = {
+  MWA:         'bg-blue-100 text-blue-700',
+  BCP:         'bg-blue-100 text-blue-700',
+  SMTP:        'bg-green-100 text-green-700',
+  IMAP:        'bg-green-100 text-green-700',
+  POP3:        'bg-green-100 text-green-700',
+  EWS:         'bg-gray-100 text-gray-600',
+  CALDAV:      'bg-gray-100 text-gray-600',
+  AUTODISCOVER:'bg-gray-100 text-gray-600',
+};
+
 function ServiceSelector({
   selected, onChange,
 }: { selected: string[]; onChange: (s: string[]) => void }) {
@@ -73,20 +85,27 @@ function ServiceSelector({
     onChange(selected.includes(svc) ? selected.filter(s => s !== svc) : [...selected, svc]);
   }
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {ALL_SERVICES.map(svc => (
-        <button
-          key={svc}
-          type="button"
-          onClick={() => toggle(svc)}
-          className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
-            selected.includes(svc)
-              ? 'bg-blue-600 border-blue-600 text-white'
-              : 'bg-white border-gray-300 text-gray-600 hover:border-blue-400'
-          }`}>
-          {svc}
-        </button>
-      ))}
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {ALL_SERVICES.map(svc => (
+          <button
+            key={svc}
+            type="button"
+            onClick={() => toggle(svc)}
+            className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
+              selected.includes(svc)
+                ? 'bg-blue-600 border-blue-600 text-white'
+                : 'bg-white border-gray-300 text-gray-600 hover:border-blue-400'
+            }`}>
+            {svc}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-gray-400">
+        <span className="text-blue-600 font-medium">MWA + BCP</span>: HTTPS-Proxy (Port 443)
+        {' · '}
+        <span className="text-green-600 font-medium">SMTP / IMAP / POP3</span>: Protokoll-TLS (465, 993, 995)
+      </p>
     </div>
   );
 }
@@ -224,8 +243,10 @@ export function CertificatesPage() {
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
           <LockOpen size={16} className="shrink-0" />
           <span>
-            Integrierter HTTPS-Proxy <strong>bereit</strong> — Klicke bei einem gültigen Zertifikat auf das{' '}
-            <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss-Symbol</strong>, um HTTPS auf Port {tlsInfo?.port ?? 443} zu starten.
+            Integrierter HTTPS-Proxy <strong>bereit</strong> — Weise einem gültigen Zertifikat die Services{' '}
+            <strong className="text-blue-600">MWA</strong> und <strong className="text-blue-600">BCP</strong> zu,
+            dann klicke auf das <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss-Symbol</strong>,
+            um HTTPS auf Port {tlsInfo?.port ?? 443} zu starten.
             {' '}Für externen Reverse Proxy:{' '}
             <code className="font-mono text-xs bg-gray-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code> setzen.
           </span>
@@ -304,7 +325,7 @@ export function CertificatesPage() {
                         {cert.services.length === 0
                           ? <span className="text-xs text-gray-400">–</span>
                           : cert.services.map(s => (
-                              <span key={s} className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{s}</span>
+                              <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>
                             ))
                         }
                       </div>
@@ -312,20 +333,23 @@ export function CertificatesPage() {
                     {/* Aktionen */}
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {/* HTTPS aktivieren / deaktivieren */}
+                        {/* HTTPS-Proxy: Lock-Button nur wenn MWA + BCP zugeordnet */}
                         {cert.isActiveHttps ? (
+                          /* Aktiv → grünes Schloss, Klick deaktiviert */
                           <button
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
-                            title="HTTPS deaktivieren"
+                            title="HTTPS-Proxy deaktivieren"
                             className="p-1.5 text-green-600 hover:text-gray-500 hover:bg-gray-50 rounded transition-colors disabled:opacity-40">
                             <Lock size={14} />
                           </button>
-                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
+                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') &&
+                            cert.services.includes('MWA') && cert.services.includes('BCP') ? (
+                          /* Bereit → graues offenes Schloss, Klick aktiviert */
                           <button
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
-                            title="Als HTTPS aktivieren (Port 443)"
+                            title="Als HTTPS aktivieren — MWA + BCP über Port 443"
                             className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-40">
                             <LockOpen size={14} />
                           </button>
@@ -375,14 +399,26 @@ export function CertificatesPage() {
                               <p className="text-gray-700">{cert.autoRenew ? 'Ja' : 'Nein'}</p>
                             </div>
                             <div>
-                              <p className="text-xs text-gray-500">HTTPS (Port 443)</p>
+                              <p className="text-xs text-gray-500">HTTPS-Proxy (Port 443)</p>
                               <p className="flex items-center gap-1 text-gray-700">
                                 {cert.isActiveHttps
                                   ? <><Lock size={12} className="text-green-600" /> <span className="text-green-700 font-medium">Aktiv</span></>
-                                  : <><LockOpen size={12} className="text-gray-400" /> Inaktiv</>
+                                  : cert.services.includes('MWA') && cert.services.includes('BCP')
+                                    ? <><LockOpen size={12} className="text-blue-400" /> <span className="text-blue-600">Bereit (MWA+BCP)</span></>
+                                    : <><LockOpen size={12} className="text-gray-400" /> <span className="text-gray-400">MWA+BCP benötigt</span></>
                                 }
                               </p>
                             </div>
+                            {/* Protokoll-TLS: SMTP / IMAP / POP3 */}
+                            {(cert.services.includes('SMTP') || cert.services.includes('IMAP') || cert.services.includes('POP3')) && (
+                              <div>
+                                <p className="text-xs text-gray-500">Protokoll-TLS</p>
+                                <p className="flex items-center gap-1 text-green-700 font-medium">
+                                  <Lock size={12} className="text-green-600" />
+                                  {['SMTP', 'IMAP', 'POP3'].filter(s => cert.services.includes(s)).join(', ')}
+                                </p>
+                              </div>
+                            )}
                             {cert.acmeEmail && (
                               <div>
                                 <p className="text-xs text-gray-500">ACME E-Mail</p>
