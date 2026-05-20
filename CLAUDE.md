@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.16.6`
+**Aktuelle Version**: `3.16.7`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.16.6` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.16.7` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -521,7 +521,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.16.6; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.16.7; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
 ## Wichtige technische Entscheidungen seit 3.x
@@ -537,4 +537,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-20 (v3.16.6 — MWA: Empfänger-Autocomplete in Compose (An/CC/BCC), resizable Panels per Maus, Einstellungen → Ansicht (Lesebereich rechts/unten/aus, Dichte, Konversationen); Aufgaben-Erinnerung mit Kalender+Popup+E-Mail-Option; Default-Kalender Lazy-Provisioning)*
+*Letzte Aktualisierung: 2026-05-20 (v3.16.7 — BCP Info-Fenster: VERSION auf 3.16.6 aktualisiert, 6 neue HIGHLIGHTS-Einträge 3.16.6→3.14.0)*
