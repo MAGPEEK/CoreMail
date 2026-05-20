@@ -38,6 +38,7 @@ import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
 import { getToken } from './api/client.js';
+import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
@@ -105,6 +106,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AdminLayout({ children }: { children: React.ReactNode }) {
+  // Automatischer Logout bei Inaktivität — konfigurierbar in Global Settings
+  useInactivityLogout();
+
   return (
     <div className="h-full flex flex-col">
       <TopBar />

@@ -16,6 +16,26 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('admin:global-settings');
 export const adminGlobalSettingsRouter: RouterType = Router();
+
+// ── GET /api/v1/admin/settings/public ─────────────────────────────────────────
+// Öffentlicher Endpunkt (kein Auth-Erfordernis) — gibt nur nicht-sensible
+// Einstellungen zurück, die Frontend-Apps (MWA + BCP) vor dem Login brauchen.
+adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) => {
+  try {
+    const cfg = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    res.json({
+      orgName:                  cfg?.orgName                 ?? 'CoreMail',
+      logoUrl:                  cfg?.logoUrl                 ?? '',
+      language:                 cfg?.language                ?? 'de',
+      inactivityTimeoutMinutes: cfg?.inactivityTimeoutMinutes ?? 30,
+      maintenanceMode:          cfg?.maintenanceMode         ?? false,
+      maintenanceMessage:       cfg?.maintenanceMessage      ?? '',
+    });
+  } catch {
+    res.json({ orgName: 'CoreMail', logoUrl: '', language: 'de', inactivityTimeoutMinutes: 30, maintenanceMode: false, maintenanceMessage: '' });
+  }
+});
+
 adminGlobalSettingsRouter.use(requireAdmin);
 
 // ── Singleton laden / erstellen ───────────────────────────────────────────────
@@ -46,11 +66,13 @@ const MailSchema = z.object({
 });
 
 const SecuritySchema = z.object({
-  minPasswordLength:     z.number().int().min(4).max(64).default(8),
-  maxLoginAttempts:      z.number().int().min(1).max(100).default(5),
-  sessionTimeoutMinutes: z.number().int().min(5).max(10080).default(480),
-  requireMfaForAdmins:   z.boolean().default(false),
-  allowSelfRegistration: z.boolean().default(false),
+  minPasswordLength:          z.number().int().min(4).max(64).default(8),
+  maxLoginAttempts:           z.number().int().min(1).max(100).default(5),
+  sessionTimeoutMinutes:      z.number().int().min(5).max(10080).default(480),
+  // 0 = deaktiviert; 1–1440 = Minuten bis automatischer Logout bei Browser-Inaktivität
+  inactivityTimeoutMinutes:   z.number().int().min(0).max(1440).default(30),
+  requireMfaForAdmins:        z.boolean().default(false),
+  allowSelfRegistration:      z.boolean().default(false),
 });
 
 const MaintenanceSchema = z.object({

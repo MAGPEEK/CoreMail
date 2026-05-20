@@ -1443,11 +1443,13 @@ model ServerSettings {
   trashRetentionDays  Int  @default(30)
 
   // ── Sicherheitsrichtlinien ────────────────────────────────────────────────
-  minPasswordLength     Int     @default(8)
-  maxLoginAttempts      Int     @default(5)
-  sessionTimeoutMinutes Int     @default(480)
-  requireMfaForAdmins   Boolean @default(false)
-  allowSelfRegistration Boolean @default(false)
+  minPasswordLength          Int     @default(8)
+  maxLoginAttempts           Int     @default(5)
+  sessionTimeoutMinutes      Int     @default(480)
+  // 0 = deaktiviert; > 0 = Minuten bis automatischer Logout bei Inaktivität im Browser
+  inactivityTimeoutMinutes   Int     @default(30)
+  requireMfaForAdmins        Boolean @default(false)
+  allowSelfRegistration      Boolean @default(false)
 
   // ── Wartung ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)

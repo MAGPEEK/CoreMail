@@ -14,6 +14,7 @@ import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
+import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -60,6 +61,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { composeOpen } = useUiStore();
   useMailEvents();
+  useInactivityLogout();
 
   const currentApp = APP_MAP[location.pathname] ?? 'mail';
 

@@ -26,11 +26,12 @@ interface GlobalSettings {
   maxAttachmentSizeMb: number;
   trashRetentionDays:  number;
   // Sicherheit
-  minPasswordLength:     number;
-  maxLoginAttempts:      number;
-  sessionTimeoutMinutes: number;
-  requireMfaForAdmins:   boolean;
-  allowSelfRegistration: boolean;
+  minPasswordLength:           number;
+  maxLoginAttempts:            number;
+  sessionTimeoutMinutes:       number;
+  inactivityTimeoutMinutes:    number;
+  requireMfaForAdmins:         boolean;
+  allowSelfRegistration:       boolean;
   // Wartung
   maintenanceMode:    boolean;
   maintenanceMessage: string;
@@ -199,6 +200,7 @@ export function SettingsPage() {
   const [sec, setSec] = useState({
     minPasswordLength: 8, maxLoginAttempts: 5,
     sessionTimeoutMinutes: 480,
+    inactivityTimeoutMinutes: 30,
     requireMfaForAdmins: false, allowSelfRegistration: false,
   });
   const [maint, setMaint] = useState({
@@ -217,7 +219,9 @@ export function SettingsPage() {
              language: cfg.language, timezone: cfg.timezone, welcomeMessage: cfg.welcomeMessage, logoUrl: cfg.logoUrl });
     setMail({ maxMessageSizeMb: cfg.maxMessageSizeMb, maxAttachmentSizeMb: cfg.maxAttachmentSizeMb, trashRetentionDays: cfg.trashRetentionDays });
     setSec({ minPasswordLength: cfg.minPasswordLength, maxLoginAttempts: cfg.maxLoginAttempts,
-             sessionTimeoutMinutes: cfg.sessionTimeoutMinutes, requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration });
+             sessionTimeoutMinutes: cfg.sessionTimeoutMinutes,
+             inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
+             requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
     setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
   }, [cfg]);
@@ -384,6 +388,28 @@ export function SettingsPage() {
         <FieldGroup label={t('settings_sec_session')} hint={t('settings_sec_session_hint')}>
           <NumberInput value={sec.sessionTimeoutMinutes} onChange={(v) => updSec('sessionTimeoutMinutes', v)} min={5} max={10080} unit={t('unit_minutes')} />
           <p className="text-xs text-gray-400 mt-1">{fmtSession(sec.sessionTimeoutMinutes)}</p>
+        </FieldGroup>
+
+        <FieldGroup label={t('settings_sec_inactivity')} hint={t('settings_sec_inactivity_hint')}>
+          <NumberInput value={sec.inactivityTimeoutMinutes} onChange={(v) => updSec('inactivityTimeoutMinutes', v)} min={0} max={1440} unit={t('unit_minutes')} />
+          <div className="flex gap-1 mt-1 flex-wrap">
+            {[0, 5, 10, 15, 30, 60, 120].map((n) => (
+              <button key={n} type="button" onClick={() => updSec('inactivityTimeoutMinutes', n)}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.inactivityTimeoutMinutes === n ? 'border-accent bg-accent/10 text-accent' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                {n === 0 ? t('settings_sec_inactivity_off') : `${n} min`}
+              </button>
+            ))}
+          </div>
+          {sec.inactivityTimeoutMinutes === 0 ? (
+            <p className="text-xs text-gray-400 mt-1">{t('settings_sec_inactivity_off')} — Benutzer werden nur beim Token-Ablauf abgemeldet</p>
+          ) : (
+            <p className="text-xs text-gray-400 mt-1">
+              Automatischer Logout nach {sec.inactivityTimeoutMinutes} {sec.inactivityTimeoutMinutes === 1 ? 'Minute' : 'Minuten'} Inaktivität
+              {sec.inactivityTimeoutMinutes < 5 && (
+                <span className="text-amber-500 ml-2">⚠ Sehr kurze Zeit — könnte Benutzer stören</span>
+              )}
+            </p>
+          )}
         </FieldGroup>
 
         <FieldGroup label={t('settings_sec_mfa')} hint={t('settings_sec_mfa_hint')}>
