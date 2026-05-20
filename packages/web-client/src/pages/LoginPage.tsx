@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Mail, Lock, ShieldCheck, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { login, verifyMfa } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
@@ -28,7 +28,9 @@ export function LoginPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
-  // Wartungsstatus beim Laden abrufen (kein Auth nötig)
+  const [selfServicePasswordReset, setSelfServicePasswordReset] = useState(true);
+
+  // Wartungsstatus + öffentliche Einstellungen beim Laden abrufen (kein Auth nötig)
   useEffect(() => {
     fetch('/api/v1/maintenance')
       .then((r) => r.json())
@@ -37,6 +39,13 @@ export function LoginPage() {
         setMaintenanceMessage(d.maintenanceMessage ?? '');
       })
       .catch(() => { /* ignorieren — kein Banner bei Netzwerkfehler */ });
+
+    fetch('/api/v1/admin/settings/public')
+      .then((r) => r.json())
+      .then((d: { selfServicePasswordReset?: boolean }) => {
+        setSelfServicePasswordReset(d.selfServicePasswordReset !== false);
+      })
+      .catch(() => undefined);
   }, []);
 
   // Auto-focus first digit when entering MFA step
@@ -202,6 +211,14 @@ export function LoginPage() {
             <button type="submit" disabled={loading} className="btn-primary w-full justify-center py-2 disabled:opacity-60">
               {loading ? 'Anmelden...' : 'Anmelden'}
             </button>
+
+            {selfServicePasswordReset && (
+              <div className="text-center pt-1">
+                <Link to="/forgot-password" className="text-xs text-accent hover:underline">
+                  Passwort vergessen?
+                </Link>
+              </div>
+            )}
           </form>
         )}
 

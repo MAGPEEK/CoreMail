@@ -71,3 +71,5 @@ export const CHANNEL_ADMIN_EVENT = 'admin:event';
 export const CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload';
 /** Fired after ServerSettings.publicHostname (or other global settings) change. */
 export const CHANNEL_SETTINGS_RELOAD = 'settings:reload';
+/** Fired whenever a security attack event is detected (brute-force, relay, DNSBL, etc.). */
+export const CHANNEL_ADMIN_ATTACK = 'admin:attack';

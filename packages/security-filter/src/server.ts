@@ -99,10 +99,36 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', service: 'security-filter' });
 });
 
+// ── GET /dns-integrity ────────────────────────────────────────────────────────
+// Führt DNS-Poisoning-Integritätscheck durch (für Admin-Panel).
+app.get('/dns-integrity', async (_req, res) => {
+  try {
+    const { runDnsIntegrityCheck, getDnsHardeningStatus } = await import('./dns-hardened.js');
+    const [results, status] = await Promise.all([
+      runDnsIntegrityCheck(),
+      getDnsHardeningStatus(),
+    ]);
+    const anyPoisoning = results.some((r) => r.poisoningSuspected);
+    res.json({ status, results, anyPoisoning, checkedAt: new Date().toISOString() });
+  } catch (err) {
+    log.error({ err }, 'DNS integrity check failed');
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 const PORT = parseInt(process.env['PORT'] ?? '3002', 10);
 
 async function main() {
   await connectDatabase();
+
+  // DNS-Hardening initialisieren (trusted resolvers + Integrity-Check)
+  try {
+    const { initDnsHardening } = await import('./dns-hardened.js');
+    await initDnsHardening();
+  } catch (err) {
+    log.warn({ err }, 'DNS hardening init failed (non-fatal) — using system resolver');
+  }
+
   // DNSBL-Zonen seeden falls Tabelle noch leer
   try {
     const { seedDnsblZonesIfEmpty } = await import('./dnsbl/index.js');

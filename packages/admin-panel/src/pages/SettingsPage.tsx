@@ -32,6 +32,7 @@ interface GlobalSettings {
   inactivityTimeoutMinutes:    number;
   requireMfaForAdmins:         boolean;
   allowSelfRegistration:       boolean;
+  selfServicePasswordReset:    boolean;
   // Wartung
   maintenanceMode:    boolean;
   maintenanceMessage: string;
@@ -202,6 +203,7 @@ export function SettingsPage() {
     sessionTimeoutMinutes: 480,
     inactivityTimeoutMinutes: 30,
     requireMfaForAdmins: false, allowSelfRegistration: false,
+    selfServicePasswordReset: true,
   });
   const [maint, setMaint] = useState({
     maintenanceMode: false,
@@ -221,7 +223,8 @@ export function SettingsPage() {
     setSec({ minPasswordLength: cfg.minPasswordLength, maxLoginAttempts: cfg.maxLoginAttempts,
              sessionTimeoutMinutes: cfg.sessionTimeoutMinutes,
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
-             requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration });
+             requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration,
+             selfServicePasswordReset: cfg.selfServicePasswordReset ?? true });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
     setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
   }, [cfg]);
@@ -430,6 +433,23 @@ export function SettingsPage() {
             <div className="flex items-center gap-2 mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
               <Info size={12} />
               {t('settings_sec_selfreg_info')}
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup
+          label="Passwort-Selbstzurücksetzung"
+          hint="Erlaubt Benutzern, ihr Passwort eigenständig per E-Mail-Link zurückzusetzen (Vergessen-Funktion im Login)."
+        >
+          <Toggle
+            value={sec.selfServicePasswordReset}
+            onChange={(v) => updSec('selfServicePasswordReset', v)}
+            label={sec.selfServicePasswordReset ? 'Aktiviert — Benutzer können Passwort selbst zurücksetzen' : 'Deaktiviert — nur Administratoren können Passwörter zurücksetzen'}
+          />
+          {!sec.selfServicePasswordReset && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+              <AlertTriangle size={12} />
+              Der „Passwort vergessen?"-Link wird im Login-Formular ausgeblendet.
             </div>
           )}
         </FieldGroup>

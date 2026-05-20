@@ -23,15 +23,29 @@ export function useInactivityLogout() {
   const limitMsRef     = useRef<number>(0); // 0 = deaktiviert
 
   useEffect(() => {
-    // Public-Config laden (kein Auth nötig)
-    void fetch('/api/v1/admin/settings/public')
-      .then((r) => r.ok ? r.json() as Promise<{ inactivityTimeoutMinutes?: number }> : null)
-      .then((cfg) => {
-        const minutes = cfg?.inactivityTimeoutMinutes ?? 0;
-        limitMsRef.current = minutes > 0 ? minutes * 60_000 : 0;
-        if (limitMsRef.current > 0) scheduleLogout();
+    // 1. Globale Einstellung laden
+    // 2. Persönliche Benutzer-Einstellung laden (überschreibt global, wenn gesetzt)
+    void Promise.all([
+      fetch('/api/v1/admin/settings/public')
+        .then((r) => r.ok ? r.json() as Promise<{ inactivityTimeoutMinutes?: number }> : null)
+        .catch(() => null),
+      fetch('/api/v1/user/preferences', {
+        headers: { Authorization: `Bearer ${useAuthStore.getState().accessToken ?? ''}` },
       })
-      .catch(() => { /* Fehler ignorieren — kein auto-logout */ });
+        .then((r) => r.ok ? r.json() as Promise<{ inactivityTimeoutMinutes: number | null; inactivityTimeoutMinutesGlobal: number }> : null)
+        .catch(() => null),
+    ]).then(([globalCfg, userPrefs]) => {
+      let minutes: number;
+      if (userPrefs?.inactivityTimeoutMinutes !== null && userPrefs?.inactivityTimeoutMinutes !== undefined) {
+        // Persönliche Einstellung des Users hat Vorrang
+        minutes = userPrefs.inactivityTimeoutMinutes;
+      } else {
+        // Global-Fallback
+        minutes = globalCfg?.inactivityTimeoutMinutes ?? userPrefs?.inactivityTimeoutMinutesGlobal ?? 0;
+      }
+      limitMsRef.current = minutes > 0 ? minutes * 60_000 : 0;
+      if (limitMsRef.current > 0) scheduleLogout();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

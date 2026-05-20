@@ -1,18 +1,18 @@
 import { useState, useRef, useEffect, type ReactElement } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Users, Globe, Mail, HardDrive, Activity,
   AlertTriangle, CheckCircle, Clock, TrendingUp,
   Inbox, RefreshCw, XCircle, Layers,
   ShieldCheck, UserPlus, Settings, Server, Cpu,
-  MemoryStick, LogIn, ShieldAlert, GripVertical,
+  MemoryStick, LogIn, ShieldAlert, GripVertical, Siren,
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
 } from 'recharts';
-import { api } from '../api/client.js';
+import { api, getToken } from '../api/client.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
@@ -39,6 +39,19 @@ interface DashboardData {
   recentLogins:   { id: string; timestamp: string; actorEmail: string; ipAddress: string | null; userAgent: string }[];
   securityHits24h: number;
   generatedAt: string;
+}
+
+interface AttackSummary {
+  total24h:    number;
+  total1h:     number;
+  byType:      { type: string; count: number }[];
+  topIps:      { ip: string;   count: number }[];
+  latestEvents: {
+    id: string; timestamp: string; type: string;
+    ip: string; target: string | null; service: string;
+    detail: Record<string, unknown>;
+  }[];
+  isUnderAttack: boolean;
 }
 
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
@@ -360,6 +373,132 @@ function DraggableCard({
   );
 }
 
+// ── Angriffs-Erkennungs-Widget ────────────────────────────────────────────────
+// Pollt /admin/security/attacks/summary alle 30s und lauscht auf SSE-Events
+// vom Typ `security:attack` für Echtzeit-Updates.
+function AttackEventsWidget() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['attack-summary'],
+    queryFn:  () => api.get<AttackSummary>('/admin/security/attacks/summary'),
+    refetchInterval: 30_000,
+  });
+
+  // SSE-Subscription für Live-Updates
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    const url = `/api/v1/events?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+
+    es.addEventListener('security:attack', () => {
+      // Invalidieren reicht — Query holt sich die neuen Daten
+      void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
+    });
+
+    es.onerror = () => { /* reconnect handled by browser */ };
+    return () => es.close();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const typeLabel: Record<string, string> = {
+    AUTH_BRUTE_FORCE: 'Brute-Force',
+    IP_RATE_LIMIT:    'IP-Rate-Limit',
+    OPEN_RELAY:       'Open-Relay',
+    SPAM:             'Spam',
+  };
+
+  if (isLoading || !data) {
+    return (
+      <div className="card">
+        <SectionTitle icon={Siren} title="Angriffs-Erkennung (Live)" />
+        <p className="text-xs text-gray-400 text-center py-4">Lade…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`card border-2 transition-colors ${data.isUnderAttack ? 'border-red-400 bg-red-50/30' : 'border-transparent'}`}>
+      <div className="flex items-center justify-between mb-3">
+        <SectionTitle icon={Siren} title="Angriffs-Erkennung (Live)" />
+        {data.isUnderAttack && (
+          <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-100 px-2.5 py-1 rounded-full animate-pulse">
+            <AlertTriangle size={12} />
+            UNTER ANGRIFF
+          </span>
+        )}
+      </div>
+
+      {/* Zähler */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className={`rounded-lg p-3 text-center ${data.total1h > 0 ? 'bg-red-50 border border-red-100' : 'bg-gray-50'}`}>
+          <p className={`text-2xl font-bold tabular-nums ${data.total1h > 0 ? 'text-red-700' : 'text-gray-700'}`}>{data.total1h}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">letzte Stunde</p>
+        </div>
+        <div className="rounded-lg p-3 text-center bg-gray-50">
+          <p className="text-2xl font-bold tabular-nums text-gray-700">{data.total24h}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">letzte 24 h</p>
+        </div>
+      </div>
+
+      {/* Top-Angriffstypen */}
+      {data.byType.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Angriffstypen</p>
+          <div className="space-y-1.5">
+            {data.byType.map((b) => (
+              <div key={b.type} className="flex items-center justify-between">
+                <span className="text-xs text-gray-600 font-mono">{typeLabel[b.type] ?? b.type}</span>
+                <span className="text-xs font-semibold text-gray-800 tabular-nums">{b.count}×</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Top-IPs */}
+      {data.topIps.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Top-IPs</p>
+          <div className="space-y-1.5">
+            {data.topIps.slice(0, 5).map((t) => (
+              <div key={t.ip} className="flex items-center justify-between">
+                <span className="text-xs font-mono text-gray-700">{t.ip}</span>
+                <span className="text-xs font-semibold text-red-600 tabular-nums">{t.count}×</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Jüngste Ereignisse */}
+      {data.latestEvents.length === 0 ? (
+        <div className="flex items-center gap-2 justify-center text-green-600 py-2">
+          <CheckCircle size={14} />
+          <span className="text-xs">Keine Angriffe erkannt</span>
+        </div>
+      ) : (
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Letzte Ereignisse</p>
+          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            {data.latestEvents.slice(0, 10).map((e) => (
+              <div key={e.id} className="flex items-start gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 transition-colors">
+                <span className="shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 whitespace-nowrap">
+                  {typeLabel[e.type] ?? e.type}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-mono text-gray-700 truncate">{e.ip}</p>
+                  <p className="text-[10px] text-gray-400">{e.service} · {timeAgo(e.timestamp)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Hauptkomponente ───────────────────────────────────────────────────────────
 export function DashboardPage() {
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
@@ -407,7 +546,7 @@ export function DashboardPage() {
   const anyKpi = isVisible('kpi-users') || isVisible('kpi-domains') || isVisible('kpi-messages') || isVisible('kpi-storage');
   const anyQueueOrChart = isVisible('queue-status') || isVisible('mails-chart');
   const anyRankOrDomain = isVisible('storage-ranking') || isVisible('domains-chart');
-  const anyErrorOrAudit = isVisible('recent-errors') || isVisible('recent-audit');
+  const anyErrorOrAudit = isVisible('recent-errors') || isVisible('recent-audit') || isVisible('attack-events');
   const anyServer = isVisible('server-info') || isVisible('server-resources') || isVisible('security-stats');
 
   return (
@@ -729,9 +868,19 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* ── Fehler-Log + Audit-Trail ─────────────────────────────────────── */}
+      {/* ── Fehler-Log + Audit-Trail + Angriffs-Erkennung ───────────────── */}
       {anyErrorOrAudit && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Angriffs-Erkennung */}
+          {isVisible('attack-events') && (
+            <DraggableCard key="attack-events" id="attack-events"
+              cardDrag={cardDrag} cardHover={cardHover}
+              setCardDrag={setCardDrag} setCardHover={setCardHover}
+              order={order} moveWidget={moveWidget}>
+              <AttackEventsWidget />
+            </DraggableCard>
+          )}
 
           {/* Letzte Fehler */}
           {isVisible('recent-errors') && (

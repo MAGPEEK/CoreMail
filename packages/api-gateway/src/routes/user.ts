@@ -619,3 +619,47 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
   const result = await prisma.message.deleteMany({ where: { folderId } });
   res.json({ deleted: result.count });
 });
+
+// ── GET /api/v1/user/preferences ─────────────────────────────────────────────
+// Persönliche Benutzereinstellungen (inkl. inactivityTimeoutMinutes)
+userRouter.get('/preferences', async (req: Request, res: Response) => {
+  const settings = await prisma.userSettings.findUnique({
+    where: { userId: req.apiUser!.userId },
+    select: { inactivityTimeoutMinutes: true },
+  });
+  // Global-Fallback aus ServerSettings
+  const global = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { inactivityTimeoutMinutes: true },
+  });
+  res.json({
+    inactivityTimeoutMinutes:       settings?.inactivityTimeoutMinutes ?? null,
+    inactivityTimeoutMinutesGlobal: global?.inactivityTimeoutMinutes ?? 30,
+  });
+});
+
+// ── PUT /api/v1/user/preferences ─────────────────────────────────────────────
+userRouter.put('/preferences', async (req: Request, res: Response) => {
+  const PreferencesSchema = z.object({
+    // null = globale Einstellung verwenden; 0 = deaktiviert; 1-1440 = eigene Vorgabe
+    inactivityTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
+  });
+  const parsed = PreferencesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+
+  const data: { inactivityTimeoutMinutes?: number | null } = {};
+  if ('inactivityTimeoutMinutes' in parsed.data) {
+    data.inactivityTimeoutMinutes = parsed.data.inactivityTimeoutMinutes ?? null;
+  }
+
+  await prisma.userSettings.upsert({
+    where: { userId: req.apiUser!.userId },
+    create: { userId: req.apiUser!.userId, ...data },
+    update: data,
+  });
+
+  res.json({ ok: true });
+});

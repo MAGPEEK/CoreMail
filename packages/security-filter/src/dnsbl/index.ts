@@ -1,6 +1,6 @@
-import { promises as dns } from 'dns';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
+import { resolveHardened } from '../dns-hardened.js';
 
 const log = createLogger('security-filter:dnsbl');
 
@@ -120,10 +120,7 @@ async function queryZone(reversed: string, zone: string, ip: string): Promise<{ 
 
   const fqdn = `${reversed}.${zone}`;
   try {
-    const addresses = await Promise.race([
-      dns.resolve4(fqdn),
-      new Promise<string[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
-    ]);
+    const addresses = await resolveHardened(fqdn);
     const result = addresses[0]
       ? { listed: true as const, response: addresses[0] }
       : { listed: true as const };

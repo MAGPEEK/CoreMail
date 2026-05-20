@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, CHANNEL_ADMIN_ATTACK, createLogger } from '@coremail/core';
 import { sendPushToUser } from './lib/push.js';
 
 const log = createLogger('api:sse');
@@ -25,12 +25,23 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
     res.write(':heartbeat\n\n');
   }, 25_000);
 
+  const isAdmin = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'COMPLIANCE_MANAGEMENT', 'VIEW_ONLY_ORG', 'RECIPIENT_MANAGEMENT', 'HELP_DESK'].includes(req.apiUser!.role);
+
   const subscriber = getRedisClient().duplicate();
-  await subscriber.subscribe(CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, `user:${userId}:events`);
+  const channels: string[] = [CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, `user:${userId}:events`];
+  if (isAdmin) channels.push(CHANNEL_ADMIN_ATTACK);
+  await subscriber.subscribe(...channels);
 
   subscriber.on('message', (channel: string, message: string) => {
     try {
       const payload = JSON.parse(message) as { userId?: string; [key: string]: unknown };
+
+      if (channel === CHANNEL_ADMIN_ATTACK) {
+        // Attack events werden nur an Admin-SSE-Verbindungen weitergeleitet
+        send('security:attack', payload);
+        return;
+      }
+
       // Only forward events for this user
       if (payload.userId && payload.userId !== userId) return;
 

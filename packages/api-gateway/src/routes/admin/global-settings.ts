@@ -30,9 +30,10 @@ adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) =>
       inactivityTimeoutMinutes: cfg?.inactivityTimeoutMinutes ?? 30,
       maintenanceMode:          cfg?.maintenanceMode         ?? false,
       maintenanceMessage:       cfg?.maintenanceMessage      ?? '',
+      selfServicePasswordReset: cfg?.selfServicePasswordReset ?? true,
     });
   } catch {
-    res.json({ orgName: 'CoreMail', logoUrl: '', language: 'de', inactivityTimeoutMinutes: 30, maintenanceMode: false, maintenanceMessage: '' });
+    res.json({ orgName: 'CoreMail', logoUrl: '', language: 'de', inactivityTimeoutMinutes: 30, maintenanceMode: false, maintenanceMessage: '', selfServicePasswordReset: true });
   }
 });
 
@@ -73,6 +74,7 @@ const SecuritySchema = z.object({
   inactivityTimeoutMinutes:   z.number().int().min(0).max(1440).default(30),
   requireMfaForAdmins:        z.boolean().default(false),
   allowSelfRegistration:      z.boolean().default(false),
+  selfServicePasswordReset:   z.boolean().default(true),
 });
 
 const MaintenanceSchema = z.object({

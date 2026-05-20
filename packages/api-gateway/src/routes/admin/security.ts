@@ -387,3 +387,24 @@ adminSecurityRouter.get('/dnsbl/stats', async (req: Request, res: Response) => {
     })),
   });
 });
+
+// ── GET /admin/security/dns-check ─────────────────────────────────────────────
+// Führt einen DNS-Poisoning-Integritätscheck durch und gibt die Ergebnisse zurück.
+// Proxied zum security-filter-Dienst (localhost:3002/dns-integrity).
+adminSecurityRouter.get('/dns-check', async (_req: Request, res: Response) => {
+  const SECURITY_FILTER_URL = process.env['SECURITY_FILTER_URL'] ?? 'http://localhost:3002';
+  try {
+    const r = await fetch(`${SECURITY_FILTER_URL}/dns-integrity`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      res.json(data);
+    } else {
+      res.status(502).json({ error: `security-filter HTTP ${r.status}` });
+    }
+  } catch (err) {
+    res.status(503).json({ error: 'DNS check service unavailable', detail: String(err) });
+  }
+});
+

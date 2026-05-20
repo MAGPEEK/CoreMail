@@ -13,6 +13,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.15.0] — 2026-05-20 — Security+ (Passwort-Reset, Angriffserkennung, DNS-Hardening)
+
+### Added
+
+- **Passwort-Selbstzurücksetzung (OWASP A07-konform)**  
+  – `POST /auth/forgot-password`: Rate-limitiert (3 req/h pro IP + E-Mail), SHA-256-Hashing, keine User-Enumeration (immer `{ok:true}`)  
+  – `POST /auth/reset-password`: Atomare Transaktion (Token markiert + Passwort gesetzt + alle Sessions gelöscht)  
+  – `GET /auth/reset-password/verify?token=...`: Schnellprüfung für Frontend  
+  – Token-TTL: 15 min; SHA-256-Hash im DB-gespeichert (Klartext nie persistiert)  
+  – Admin-Toggle in BCP: Einstellungen → Sicherheit → „Passwort-Selbstzurücksetzung" (de-/aktiviert den Flow global)  
+  – MWA Login-Seite: „Passwort vergessen?"-Link (nur sichtbar wenn Feature aktiv)  
+  – MWA: `ForgotPasswordPage` + `ResetPasswordPage` mit Passwortstärke-Indikator
+- **Angriffserkennung Live-Dashboard (BCP)**  
+  – Neues Prisma-Modell `AttackEvent` (ip, type, detail, service, timestamp) — persistent in PostgreSQL  
+  – Redis-Kanal `admin:attack` → SSE-Broadcast an alle Admin-Verbindungen in Echtzeit  
+  – BCP-Dashboard-Widget „Angriffs-Erkennung (Live)": Zähler letzte 1h/24h, Top-IPs, Top-Angriffstypen, letzte 10 Events, „UNTER ANGRIFF"-Banner bei ≥10 Events/h  
+  – Admin-API `GET /api/v1/admin/security/attacks` (paginiert/filterbar), `/summary`, `DELETE` (Purge vor Datum)  
+  – `ip-limiter` im SMTP publiziert bei jedem Auth-Fehlschlag und Ban ein Attack-Event
+- **DNS-Poisoning-Schutz (MITRE T1584.002)**  
+  – Neues Modul `security-filter/src/dns-hardened.ts`: Erzwingt Trusted Resolver (8.8.8.8, 1.1.1.1, 9.9.9.9) statt System-/Container-DNS  
+  – Cross-Resolver-Validation: Zwei unabhängige Resolver werden verglichen; Divergenz → Warnung im Log  
+  – Startup-Integritäts-Check: Bekannte stable A-Records (example.com) werden gegen hartcodierte Erwartungen validiert  
+  – DNSBL-Modul nutzt jetzt `resolveHardened()` statt `dns.promises.resolve4()`  
+  – Admin-API `GET /api/v1/admin/security/dns-check` → Echtzeit-Integritätsreport via security-filter-Proxy  
+  – Konfigurierbar via `TRUSTED_DNS_SERVERS` (kommagetrennte IP-Liste)
+- **Per-User-Inaktivitäts-Timeout (MWA)**  
+  – Benutzer können unter MWA → Einstellungen → Allgemein → „Automatischer Logout" einen persönlichen Timeout (Minuten) setzen  
+  – Eigene Einstellung überschreibt die globale Admin-Vorgabe; 0 = deaktiviert; null = global übernehmen  
+  – Backend: `GET/PUT /api/v1/user/preferences` liefert/speichert `inactivityTimeoutMinutes`  
+  – Prisma-Modell `UserSettings.inactivityTimeoutMinutes (Int?)` ergänzt  
+  – MWA `useInactivityLogout`-Hook lädt beide Einstellungen parallel und respektiert User-Override
+
+### Security
+
+- **Angriffsereignisse** werden persistent in `AttackEvent`-Tabelle gespeichert (Forensik/Audit-Trail)  
+- **Redis-Pub/Sub** für Attack-Events entkoppelt SMTP-Lockout von Dashboard ohne Performance-Impact  
+- **Passwort-Reset-Tokens**: Einfacher Rate-Limiter verhindert Token-Flooding; SHA-256 schützt DB vor Plaintext-Leak  
+- **SSE-Endpoint** prüft Admin-Rolle bevor Attack-Events gebrodcastet werden (`ORGANIZATION_MANAGEMENT` / `SERVER_MANAGEMENT` / …)
+
+---
+
 ## [3.14.0] — 2026-05-20 — Security Hardening (Pentest-Auswertung)
 
 ### Security

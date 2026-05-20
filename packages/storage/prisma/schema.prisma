@@ -112,10 +112,11 @@ model User {
   oauthCodes      OAuthAuthorizationCode[]
   oauthTokens     OAuthToken[]
   oauthConsents   OAuthConsent[]
-  categories      Category[]
-  aliases         EmailAlias[]   @relation("UserAliases")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  categories          Category[]
+  aliases             EmailAlias[]        @relation("UserAliases")
+  passwordResetTokens PasswordResetToken[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([domainId])
   @@index([externalId])
@@ -125,6 +126,25 @@ model User {
 // ─────────────────────────────────────────────
 // Authentication
 // ─────────────────────────────────────────────
+
+// Passwort-Reset-Token (Self-Service)
+// - Token wird als SHA-256-Hash gespeichert (nie im Klartext)
+// - Ablauf nach 15 Minuten (konfigurierbar via ServerSettings)
+// - Einmalig verwendbar (usedAt wird beim Einlösen gesetzt)
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique  // SHA-256(token) — Klartext-Token nur per E-Mail
+  expiresAt DateTime
+  usedAt    DateTime?           // null = noch nicht eingelöst
+  ipAddress String    @default("")
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
 
 model Session {
   id          String   @id @default(cuid())
@@ -553,6 +573,8 @@ model UserSettings {
   oofUseTimeRange         Boolean   @default(false)
   oofStart                DateTime?
   oofEnd                  DateTime?
+  // Persönlicher Inaktivitäts-Timeout (null = globale Einstellung verwenden)
+  inactivityTimeoutMinutes Int?
   updatedAt               DateTime  @updatedAt
 
   @@map("user_settings")
@@ -1110,6 +1132,32 @@ model AuditLog {
 }
 
 // ─────────────────────────────────────────────
+// Security Attack Events (MITRE ATT&CK Logging)
+// ─────────────────────────────────────────────
+
+// Angriffsereeignis-Log — persistiert Sicherheitsvorfälle für Admin-Dashboard
+// + historische Auswertung. Wird von SMTP-IP-Limiter, Security-Filter, etc. befüllt.
+model AttackEvent {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  // Angriffstyp: AUTH_BRUTE_FORCE | IP_RATE_LIMIT | DNSBL_HIT | VIRUS | SPAM | DMARC_FAIL | RELAY_ATTEMPT
+  type      String
+  // Quell-IP des Angreifers
+  ip        String
+  // Optionaler Ziel-Benutzer / E-Mail-Adresse
+  target    String?
+  // Zusatz-Details (JSON: count, zone, score, etc.)
+  detail    Json?
+  // Dienst, der den Angriff erkannte
+  service   String   @default("smtp")
+
+  @@index([timestamp])
+  @@index([ip, timestamp])
+  @@index([type, timestamp])
+  @@map("attack_events")
+}
+
+// ─────────────────────────────────────────────
 // Phase 10 — VAPID Push Subscriptions
 // ─────────────────────────────────────────────
 
@@ -1450,6 +1498,8 @@ model ServerSettings {
   inactivityTimeoutMinutes   Int     @default(30)
   requireMfaForAdmins        Boolean @default(false)
   allowSelfRegistration      Boolean @default(false)
+  // Erlaubt Benutzern, ihr Passwort selbst per E-Mail-Link zurückzusetzen
+  selfServicePasswordReset   Boolean @default(true)
 
   // ── Wartung ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)

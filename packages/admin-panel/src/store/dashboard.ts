@@ -19,7 +19,8 @@ export type WidgetId =
   | 'server-info'
   | 'server-resources'
   | 'recent-logins'
-  | 'security-stats';
+  | 'security-stats'
+  | 'attack-events';
 
 export const WIDGET_CATALOG: { id: WidgetId; label: string; group: 'kpi' | 'charts' | 'lists' | 'server' }[] = [
   { id: 'kpi-users',        label: 'Benutzer',                     group: 'kpi' },
@@ -37,6 +38,7 @@ export const WIDGET_CATALOG: { id: WidgetId; label: string; group: 'kpi' | 'char
   { id: 'server-resources', label: 'Server-Ressourcen (RAM, CPU)', group: 'server' },
   { id: 'recent-logins',    label: 'Letzte Anmeldungen',           group: 'lists' },
   { id: 'security-stats',   label: 'Sicherheits-Statistik (24h)',  group: 'server' },
+  { id: 'attack-events',    label: 'Angriffs-Erkennung (Live)',    group: 'lists'  },
 ];
 
 const DEFAULT_VISIBILITY: Record<WidgetId, boolean> = {
@@ -55,6 +57,7 @@ const DEFAULT_VISIBILITY: Record<WidgetId, boolean> = {
   'server-resources': true,
   'recent-logins':    true,
   'security-stats':   true,
+  'attack-events':    true,
 };
 
 const DEFAULT_ORDER: WidgetId[] = WIDGET_CATALOG.map((w) => w.id);

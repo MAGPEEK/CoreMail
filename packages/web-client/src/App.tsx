@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
+import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { MailPage } from './pages/MailPage.js';
 import { CalendarPage } from './pages/CalendarPage.js';
@@ -112,6 +114,8 @@ export function App() {
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/*" element={
         <SetupGuard>
           <AuthGuard>

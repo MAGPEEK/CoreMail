@@ -11,6 +11,7 @@ import {
   checkAndTrackConnection,
   releaseConnection,
   isAuthBanned,
+  publishConnectionLimitEvent,
 } from './ip-limiter.js';
 
 const log = createLogger('smtp:factory');
@@ -37,6 +38,7 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
         socket.write('421 4.7.1 Too many connections from your IP\r\n');
       }
       socket.end();
+      publishConnectionLimitEvent(ip, { reason: 'connection_limit', port: (socket.localPort ?? 0) });
       return;
     }
 

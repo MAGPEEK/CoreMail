@@ -19,7 +19,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity';
 
 interface AppPassword {
   id: string;
@@ -1577,6 +1577,152 @@ function LanguageSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// INAKTIVITÄTS-TIMEOUT — persönliche Überschreibung des globalen Wertes
+// ═══════════════════════════════════════════════════════════════════════════════
+function InactivitySection() {
+  interface Prefs { inactivityTimeoutMinutes: number | null; inactivityTimeoutMinutesGlobal: number }
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<Prefs>({
+    queryKey: ['user-preferences'],
+    queryFn: () => api.get<Prefs>('/user/preferences'),
+  });
+
+  const [localVal, setLocalVal] = useState<string>('');
+  const [usePersonal, setUsePersonal] = useState(false);
+
+  useEffect(() => {
+    if (!data) return;
+    const personal = data.inactivityTimeoutMinutes;
+    setUsePersonal(personal !== null);
+    setLocalVal(personal !== null ? String(personal) : String(data.inactivityTimeoutMinutesGlobal));
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: (val: number | null) => api.put('/user/preferences', { inactivityTimeoutMinutes: val }),
+    onSuccess: () => {
+      toast.success('Einstellung gespeichert');
+      void qc.invalidateQueries({ queryKey: ['user-preferences'] });
+    },
+    onError: () => toast.error('Fehler beim Speichern'),
+  });
+
+  const globalVal = data?.inactivityTimeoutMinutesGlobal ?? 30;
+
+  const QUICK = [
+    { label: 'Deaktiviert', value: 0 },
+    { label: '5 min', value: 5 },
+    { label: '15 min', value: 15 },
+    { label: '30 min', value: 30 },
+    { label: '1 h', value: 60 },
+    { label: '2 h', value: 120 },
+  ];
+
+  const numVal = parseInt(localVal, 10);
+  const isValid = !Number.isNaN(numVal) && numVal >= 0 && numVal <= 1440;
+
+  function handleSave() {
+    if (!isValid) return;
+    if (!usePersonal) {
+      saveMutation.mutate(null); // null = globale Einstellung verwenden
+    } else {
+      saveMutation.mutate(numVal);
+    }
+  }
+
+  if (isLoading) return <div className="py-8 text-center text-sm text-gray-500">Wird geladen…</div>;
+
+  return (
+    <section className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">Automatischer Logout bei Inaktivität</h2>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Legt fest, nach wie vielen Minuten ohne Interaktion Sie automatisch abgemeldet werden.
+        </p>
+      </div>
+
+      {/* Globale Einstellung anzeigen */}
+      <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-800">
+        <span className="font-medium">Globale Einstellung des Servers:</span>{' '}
+        {globalVal === 0 ? 'Deaktiviert' : `${globalVal} Minuten`}
+      </div>
+
+      {/* Persönliche Überschreibung */}
+      <div className="space-y-3">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={usePersonal}
+            onChange={(e) => {
+              setUsePersonal(e.target.checked);
+              if (!e.target.checked) setLocalVal(String(globalVal));
+            }}
+            className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent"
+          />
+          <span className="text-sm font-medium text-gray-700">Eigenen Wert festlegen (überschreibt globale Einstellung)</span>
+        </label>
+
+        {usePersonal && (
+          <div className="space-y-3 pl-6">
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                value={localVal}
+                onChange={(e) => setLocalVal(e.target.value)}
+                min={0}
+                max={1440}
+                className="input w-24"
+              />
+              <span className="text-sm text-gray-500">Minuten (0 = deaktiviert)</span>
+            </div>
+
+            {/* Schnell-Buttons */}
+            <div className="flex flex-wrap gap-2">
+              {QUICK.map(({ label, value }) => (
+                <button
+                  key={value}
+                  onClick={() => setLocalVal(String(value))}
+                  className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                    parseInt(localVal, 10) === value
+                      ? 'bg-accent text-white border-accent'
+                      : 'border-gray-300 text-gray-600 hover:border-accent hover:text-accent'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {isValid && numVal > 0 && numVal < 5 && (
+              <p className="text-xs text-amber-600">
+                ⚠ Sehr kurze Zeitspannen können störend sein.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-2 pt-2">
+        <button
+          onClick={handleSave}
+          disabled={saveMutation.isPending || (usePersonal && !isValid)}
+          className="px-4 py-2 bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-50 text-sm font-medium"
+        >
+          {saveMutation.isPending ? 'Speichern…' : 'Speichern'}
+        </button>
+        {usePersonal && (
+          <button
+            onClick={() => { setUsePersonal(false); setLocalVal(String(globalVal)); saveMutation.mutate(null); }}
+            className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
+          >
+            Auf Serverstandard zurücksetzen
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
@@ -1595,10 +1741,11 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Allgemein',
     items: [
-      { id: 'theme',    label: 'Design',           icon: Palette      },
-      { id: 'language', label: 'Sprache & Region', icon: Globe        },
-      { id: 'calendar', label: 'Kalender',         icon: CalendarDays },
-      { id: 'security', label: 'Sicherheit',       icon: Shield       },
+      { id: 'theme',      label: 'Design',                   icon: Palette      },
+      { id: 'language',  label: 'Sprache & Region',          icon: Globe        },
+      { id: 'calendar',  label: 'Kalender',                  icon: CalendarDays },
+      { id: 'inactivity', label: 'Automatischer Logout',     icon: Shield       },
+      { id: 'security',  label: 'Sicherheit',                icon: ShieldCheck  },
     ],
   },
 ];
@@ -1615,6 +1762,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   calendar:     CalendarSection,
   categories:   CategoriesSection,
   appPasswords: AppPasswordsSection,
+  inactivity:   InactivitySection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

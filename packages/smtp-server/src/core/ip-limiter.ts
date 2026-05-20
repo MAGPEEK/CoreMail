@@ -17,7 +17,8 @@
  *    — Schützt gegen SYN-Flooding des SMTP-Stacks.
  */
 
-import { getRedisClient, createLogger } from '@coremail/core';
+import { getRedisClient, createLogger, CHANNEL_ADMIN_ATTACK } from '@coremail/core';
+import { prisma } from '@coremail/storage';
 
 const log = createLogger('smtp:ip-limiter');
 
@@ -141,6 +142,9 @@ export async function recordAuthFailure(rawIp: string): Promise<void> {
 
     log.info({ ip, count, threshold: AUTH_FAIL_THRESHOLD }, 'SMTP: auth failure recorded');
 
+    // Angriffsereeignis speichern + broadcasten
+    void publishAttackEvent(ip, 'AUTH_BRUTE_FORCE', { count, threshold: AUTH_FAIL_THRESHOLD });
+
     if (count >= AUTH_FAIL_THRESHOLD) {
       // IP sperren
       const banKey = `${KEY_AUTH_BAN}${ip}`;
@@ -148,10 +152,46 @@ export async function recordAuthFailure(rawIp: string): Promise<void> {
       // Zähler zurücksetzen (für nächste Runde nach Ban-Ablauf)
       await redis.del(key);
       log.warn({ ip, count, banSeconds: AUTH_BAN_S }, 'SMTP: IP auth-banned');
+      void publishAttackEvent(ip, 'AUTH_BRUTE_FORCE', { count, banSeconds: AUTH_BAN_S, banned: true });
     }
   } catch (err) {
     log.error({ err, ip }, 'Redis error in recordAuthFailure');
   }
+}
+
+// ── Attack-Event-Publisher ────────────────────────────────────────────────────
+
+/**
+ * Publiziert ein Angriffsereignis an:
+ * 1. Redis CHANNEL_ADMIN_ATTACK (für SSE Live-Dashboard im BCP)
+ * 2. PostgreSQL AttackEvent-Tabelle (für historische Auswertung)
+ */
+async function publishAttackEvent(
+  ip: string,
+  type: string,
+  detail: Record<string, unknown>,
+  target?: string,
+): Promise<void> {
+  try {
+    const event = { ip, type, detail, target: target ?? null, service: 'smtp', timestamp: new Date().toISOString() };
+    const redis = getRedisClient();
+    await redis.publish(CHANNEL_ADMIN_ATTACK, JSON.stringify(event));
+
+    // In DB persistieren (fire-and-forget — kein Await im kritischen Pfad)
+    type DbDetail = Exclude<Parameters<typeof prisma.attackEvent.create>[0]['data']['detail'], undefined>;
+    prisma.attackEvent.create({
+      data: { ip, type, ...(target ? { target } : {}), detail: detail as DbDetail, service: 'smtp' },
+    }).catch((err) => {
+      log.error({ err, ip, type }, 'Failed to persist attack event to DB');
+    });
+  } catch (err) {
+    log.error({ err, ip, type }, 'Failed to publish attack event');
+  }
+}
+
+/** Publiziert ein Verbindungs-Rate-Limit-Ereignis (für externe Aufrufer). */
+export function publishConnectionLimitEvent(ip: string, detail: Record<string, unknown>): void {
+  void publishAttackEvent(ip, 'IP_RATE_LIMIT', detail);
 }
 
 /** Löscht den Auth-Fehlzähler nach erfolgreichem Login. */
