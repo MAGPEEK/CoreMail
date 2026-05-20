@@ -246,7 +246,9 @@ export function TasksPage() {
                       </span>
                     )}
                     {task.reminder && (
-                      <Bell size={11} className="text-amber-400" title={`Erinnerung: ${format(new Date(task.reminder), 'dd.MM.yy HH:mm')}`} />
+                      <span title={`Erinnerung: ${format(new Date(task.reminder), 'dd.MM.yy HH:mm')}`}>
+                        <Bell size={11} className="text-amber-400" />
+                      </span>
                     )}
                     <button
                       onClick={() => {
