@@ -7,6 +7,11 @@ import tls from 'node:tls';
 import { createLogger } from '@coremail/core';
 import { SmtpSession } from './session.js';
 import type { SmtpSessionConfig } from './types.js';
+import {
+  checkAndTrackConnection,
+  releaseConnection,
+  isAuthBanned,
+} from './ip-limiter.js';
 
 const log = createLogger('smtp:factory');
 
@@ -25,18 +30,40 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
       log.debug({ ip, err }, 'Pre-session socket error');
     });
 
-    config.handlers
-      .onConnect(ip)
-      .then((allowed) => {
-        if (!allowed) {
+    // ── IP-Level-Checks (synchron + async) ─────────────────────────────────
+    // 1. Per-IP connection limit + new-connection rate (in-memory, synchronous)
+    if (!checkAndTrackConnection(ip)) {
+      if (socket.writable) {
+        socket.write('421 4.7.1 Too many connections from your IP\r\n');
+      }
+      socket.end();
+      return;
+    }
+
+    // Track connection release on socket close
+    socket.once('close', () => releaseConnection(ip));
+
+    // 2. Auth-ban check (Redis, async) — runs before onConnect handler
+    isAuthBanned(ip)
+      .then((banned) => {
+        if (banned) {
           if (socket.writable) {
-            socket.write('421 4.7.1 Access denied\r\n');
+            socket.write('421 4.7.1 Your IP is temporarily blocked due to too many failed authentication attempts\r\n');
           }
           socket.end();
-          log.info({ ip }, 'Connection rejected by onConnect');
           return;
         }
-        new SmtpSession(socket, config).start();
+        return config.handlers.onConnect(ip).then((allowed) => {
+          if (!allowed) {
+            if (socket.writable) {
+              socket.write('421 4.7.1 Access denied\r\n');
+            }
+            socket.end();
+            log.info({ ip }, 'Connection rejected by onConnect');
+            return;
+          }
+          new SmtpSession(socket, config).start();
+        });
       })
       .catch((err) => {
         log.error({ ip, err }, 'onConnect handler threw — rejecting connection');

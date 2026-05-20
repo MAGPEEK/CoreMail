@@ -247,7 +247,7 @@ export class SmtpSession {
       case 'DATA': this.handleDataCommand(); break;
       case 'RSET': this.handleRset(); break;
       case 'NOOP': this.send('250 2.0.0 OK'); break;
-      case 'VRFY': this.send('252 2.5.2 Cannot VRFY user, but will accept message and attempt delivery'); break;
+      case 'VRFY': this.send('502 5.5.1 VRFY not supported'); break;
       case 'EXPN': this.send('502 5.5.1 EXPN not supported'); break;
       case 'QUIT': this.handleQuit(); break;
       default:
@@ -433,7 +433,7 @@ export class SmtpSession {
     }
 
     try {
-      const user = await this.config.verifyCredentials(username.toLowerCase().trim(), password);
+      const user = await this.config.verifyCredentials(username.toLowerCase().trim(), password, this.ip);
       if (user) {
         this.authUser = user;
         this.send('235 2.7.0 Authentication successful');

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.13.12`
+**Aktuelle Version**: `3.14.0`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.13.12` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.14.0` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -506,7 +506,7 @@ SMTP Verbindung
 - **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
 - **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
 - **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
-- **Live-Server**: `magpeek/coremail-app:3.13.12` deployed auf `84.247.191.198`
+- **Live-Server**: `magpeek/coremail-app:3.14.0` deployed auf `84.247.191.198`
 
 ## Wichtige technische Entscheidungen seit 3.x
 
@@ -517,4 +517,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-20 (v3.13.12 — Tasks-Invalid-Fix, doppelte Ordner entfernt, SharedMailbox-Sprache/Reihenfolge vereinheitlicht)*
+*Letzte Aktualisierung: 2026-05-20 (v3.14.0 — Security Hardening: SMTP Brute-Force-Lockout, Per-IP-Limits, MinIO geschützt)*

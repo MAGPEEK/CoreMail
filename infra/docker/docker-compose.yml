@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:3.13.12
+    image: magpeek/coremail-app:3.14.0
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -106,6 +106,13 @@ services:
       - "993:993"     # IMAPS (implizites TLS)
       - "110:110"     # POP3 (STARTTLS)
       - "995:995"     # POP3S (implizites TLS)
+    # ── Ressourcenlimits (DoS-Schutz) ─────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: '${COREMAIL_CPU_LIMIT:-2}'
+          memory: ${COREMAIL_MEM_LIMIT:-2g}
+    # Standalone (ohne Swarm): docker update --memory 2g --cpus 2 coremail
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -211,7 +218,7 @@ services:
     volumes:
       - miniodata:/data
     ports:
-      - "9001:9001"   # MinIO Web-Konsole
+      - "127.0.0.1:9001:9001"   # MinIO Web-Konsole — NUR localhost (kein WAN-Zugriff!)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 30s

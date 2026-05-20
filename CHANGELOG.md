@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.14.0] — 2026-05-20 — Security Hardening (Pentest-Auswertung)
+
+### Security
+
+- **SMTP — Brute-Force-Lockout (OWASP A07 / MITRE T1110)**: Neues `ip-limiter`-Modul  
+  – Redis-backed: Nach 5 fehlgeschlagenen Auth-Versuchen in 5 min wird die IP für 10 min gesperrt (421)  
+  – Konfigurierbar via Env: `SMTP_AUTH_FAIL_THRESHOLD`, `SMTP_AUTH_WINDOW_S`, `SMTP_AUTH_BAN_S`  
+  – Erfolgreicher Login löscht den Fehlzähler
+- **SMTP — Per-IP-Verbindungslimit (MITRE T1499)**: Max. 10 gleichzeitige Verbindungen + Max. 30 neue Verbindungen/min pro IP (Sliding Window)  
+  – Konfigurierbar via `SMTP_MAX_CONNS_PER_IP`, `SMTP_NEW_CONN_PER_MIN`  
+  – Private/Loopback-IPs ausgenommen
+- **SMTP — VRFY-Command deaktiviert**: Antwortet jetzt mit `502 5.5.1 VRFY not supported` statt dem mehrdeutigen `252` (verhindert User-Enumeration)
+- **MinIO-Konsole (Port 9001) nur noch auf localhost gebunden**: In beiden `docker-compose`-Dateien auf `127.0.0.1:9001:9001` geändert — kein WAN-Zugriff mehr möglich
+- **Container-Ressourcenlimits** in `docker-compose.yml` ergänzt: `cpus: 2`, `memory: 2g` (via `deploy.resources.limits`) — DoS-Schutz auf Host-Ebene
+- **SMTP-Auth-IP-Weitergabe**: Client-IP wird jetzt an `verifyCredentials` durchgereicht, damit Brute-Force-Zähler korrekt pro IP zählen
+
+### Fixed
+
+- **SMTP-Banner** enthüllt jetzt keine interne Hostname-Fehlkonfiguration mehr (`mail.localhost`) — Hostname wird immer aus DB-`publicHostname` gelesen, Env-Fallback als Seed
+
+---
+
 ## [3.13.12] — 2026-05-20 — Tasks-Fehler, doppelte Ordner, SharedMailbox-Sprache
 
 ### Fixed

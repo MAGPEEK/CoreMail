@@ -69,5 +69,6 @@ export interface SmtpSessionConfig {
   esmtp?: EsmtpExtensions;
   tls?: { cert: Buffer; key: Buffer };
   handlers: SmtpHandlers;
-  verifyCredentials?: (username: string, password: string) => Promise<AuthUser | null>;
+  /** clientIp wird für Brute-Force-Tracking (ip-limiter) weitergegeben. */
+  verifyCredentials?: (username: string, password: string, clientIp?: string) => Promise<AuthUser | null>;
 }
