@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.2] — 2026-05-20 — HTTPS-Proxy: explizit deaktivierbar für externen Reverse Proxy
+
+### Added
+
+- **`HTTPS_PROXY_ENABLED=false`** — neuer Env-Schalter deaktiviert den integrierten TLS-Proxy vollständig.
+  Setzen wenn ein externer Reverse Proxy (Traefik, Caddy, nginx, DSM Application Portal …) TLS terminiert.
+  Dann kann Port `443:443` aus `docker-compose.yml` entfernt / auskommentiert werden.
+- **`GET /api/v1/admin/certificates/tls-proxy-info`** — neuer Admin-Endpoint gibt `{ enabled, port, activeCert }` zurück
+- **`docker-compose.synology.yml`**: `HTTPS_PROXY_ENABLED: "false"` voreingestellt (DSM übernimmt TLS)
+- **`.env.example`**: Abschnitt für `HTTPS_PROXY_ENABLED` + `HTTPS_PORT` ergänzt
+
+### Changed
+
+- **BCP Zertifikate — dreizustandiger Status-Banner**:
+  - 🟡 Gelb: Proxy deaktiviert (`HTTPS_PROXY_ENABLED=false`) — externer Reverse Proxy aktiv
+  - 🟢 Grün: Proxy aktiv + Zertifikat gewählt — zeigt Port + Domain
+  - ⬜ Grau: Proxy bereit, aber noch kein Zertifikat aktiviert — mit Hinweis auf `HTTPS_PROXY_ENABLED=false`
+- **`docker-compose.yml`**: `HTTPS_PROXY_ENABLED`-Variable und Kommentar „OPTION A / OPTION B" für klare Wahl
+- **`tls-proxy.ts`**: `isTlsProxyEnabled()` exportiert; startup-Log bei deaktiviertem Proxy
+
+---
+
 ## [3.17.0] — 2026-05-20 — Integrierter HTTPS-Reverse-Proxy (TLS-Termination)
 
 ### Added

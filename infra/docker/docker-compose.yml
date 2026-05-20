@@ -1,20 +1,32 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v3.17.0
+# CoreMail v3.17.2
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
 #   docker compose up -d           # Images von Docker Hub laden und starten
 #
 # Ports:
-#   3000        — HTTP (OWA Webmail, ECP Admin, REST API, Autodiscover, EWS)
-#                 Für HTTPS eigenen Reverse Proxy vorschalten
-#                 (Traefik, Caddy, nginx, DSM Application Portal …)
+#   3000        — HTTP (MWA Webmail, BCP Admin, REST API, Autodiscover, EWS)
+#   80          — HTTP für ACME HTTP-01 (Let's Encrypt)
+#   443         — HTTPS integrierter TLS-Proxy (OPTIONAL — siehe unten)
 #   25/465/587  — SMTP
 #   143/993     — IMAP
 #   110/995     — POP3
 #   9001        — MinIO Web-Konsole (Dateiinspektion / Backup)
+#
+# ── Integrierter HTTPS-Proxy vs. externer Reverse Proxy ──────────────────────
+#
+#   OPTION A — Integrierter TLS-Proxy (Standard, kein separater Proxy nötig):
+#     • HTTPS_PROXY_ENABLED=true (Standard)
+#     • Port 443 bleibt gemappt
+#     • Zertifikat in BCP → SSL/TLS → Schloss-Symbol aktivieren
+#
+#   OPTION B — Externer Reverse Proxy (Traefik, Caddy, nginx, DSM …):
+#     • HTTPS_PROXY_ENABLED=false setzen
+#     • Port "443:443" auskommentieren (Zeile unten)
+#     • Externer Proxy leitet HTTPS auf http://localhost:3000 weiter
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -24,7 +36,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:3.17.1
+    image: magpeek/coremail-app:3.17.2
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -97,10 +109,20 @@ services:
       # Aufbewahrungsrichtlinien-Zeitplan
       RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
 
+      # ── Integrierter HTTPS-Proxy ────────────────────────────────────────────
+      # true  (Standard) — CoreMail terminiert TLS selbst auf Port 443
+      # false — Externer Reverse Proxy (Traefik/Caddy/nginx/DSM) übernimmt TLS
+      #         → Port "443:443" unten auskommentieren!
+      HTTPS_PROXY_ENABLED: ${HTTPS_PROXY_ENABLED:-true}
+      # Alternativer HTTPS-Port (Standard: 443)
+      # HTTPS_PORT: "8443"
+
     ports:
-      - "3000:3000"   # HTTP — OWA, ECP, API, Auth, EWS, Autodiscover
+      - "3000:3000"   # HTTP — MWA, BCP, API, Auth, EWS, Autodiscover
       - "80:3000"     # HTTP Port 80 — ACME HTTP-01 Challenge (Let's Encrypt)
-      - "443:443"     # HTTPS — integrierter TLS-Proxy (aktiv wenn Zertifikat in BCP aktiviert)
+      # HTTPS — integrierter TLS-Proxy (OPTION A).
+      # Auskommentieren wenn externer Reverse Proxy genutzt wird (OPTION B).
+      - "443:443"
       - "25:25"       # SMTP Inbound
       - "465:465"     # SMTPS (implizites TLS)
       - "587:587"     # Submission (STARTTLS)
