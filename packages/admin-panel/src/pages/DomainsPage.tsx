@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Plus, X, Copy, CheckCircle, ChevronDown } from 'lucide-react';
+import { Pencil, Plus, X, Copy, CheckCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
@@ -95,6 +95,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   const [name, setName] = useState(domain.name);
   const [selector, setSelector] = useState(domain.dkimSelector);
   const [dkimRecord, setDkimRecord] = useState<DkimRecord | null>(null);
+  const [dkimLoading, setDkimLoading] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: () => api.put<Domain>(`/admin/domains/${domain.id}`, { name: name.trim(), dkimSelector: selector }),
@@ -117,11 +118,28 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   });
 
   const loadDkim = async () => {
+    setDkimLoading(true);
     try {
       const r = await api.get<DkimRecord>(`/admin/domains/${domain.id}/dkim-record`);
       setDkimRecord(r);
     } catch {
       toast.error('DKIM-Record konnte nicht geladen werden');
+    } finally {
+      setDkimLoading(false);
+    }
+  };
+
+  const regenerateDkim = async () => {
+    if (!confirm('DKIM-Schlüsselpaar neu generieren?\n\nDer bestehende DNS-TXT-Eintrag wird ungültig — danach muss ein neuer Eintrag beim DNS-Anbieter gesetzt werden.')) return;
+    setDkimLoading(true);
+    try {
+      const r = await api.post<DkimRecord>(`/admin/domains/${domain.id}/regenerate-dkim`, {});
+      setDkimRecord(r);
+      toast.success('Neues DKIM-Schlüsselpaar generiert — DNS-Eintrag aktualisieren!');
+    } catch {
+      toast.error('DKIM-Schlüssel konnte nicht neu generiert werden');
+    } finally {
+      setDkimLoading(false);
     }
   };
 
@@ -160,14 +178,26 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
           </div>
 
           {/* DKIM DNS Record */}
-          <div className="pt-1">
+          <div className="pt-1 flex items-center gap-3">
             <button
-              onClick={loadDkim}
-              className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
+              onClick={() => void loadDkim()}
+              disabled={dkimLoading}
+              className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline disabled:opacity-50"
             >
               <CheckCircle size={13} />
-              DKIM DNS-Eintrag anzeigen
+              {dkimLoading ? 'Lädt…' : 'DKIM DNS-Eintrag anzeigen'}
             </button>
+            {dkimRecord && (
+              <button
+                onClick={() => void regenerateDkim()}
+                disabled={dkimLoading}
+                className="flex items-center gap-1.5 text-xs text-amber-600 hover:underline disabled:opacity-50"
+                title="Neues RSA-2048-Schlüsselpaar generieren — bestehender DNS-Eintrag wird ungültig"
+              >
+                <RefreshCw size={12} />
+                Neu generieren
+              </button>
+            )}
           </div>
 
           {dkimRecord && (

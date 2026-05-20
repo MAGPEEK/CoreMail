@@ -13,6 +13,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.9] — 2026-05-20 — Fix: DKIM-Record laden schlägt fehl wenn kein Schlüssel vorhanden
+
+### Fixed
+
+- **BCP → Domains → DKIM DNS-Eintrag anzeigen**: Fehler „DKIM-Record konnte nicht geladen werden"
+  wenn `dkimPrivateKey` in der Datenbank leer war (Domains die vor der automatischen
+  Schlüssel-Generierung angelegt wurden hatten einen leeren Eintrag).
+  - Backend `GET /:id/dkim-record` generiert jetzt automatisch ein RSA-2048-Schlüsselpaar
+    und speichert es wenn keines vorhanden ist — Fehler tritt nicht mehr auf
+  - Backend `GET /:id/dns-check` ist ebenfalls abgesichert (try/catch + `ensureDkimKey`)
+  - Neuer Endpoint `POST /:id/regenerate-dkim` — explizites Neu-Generieren des Schlüsselpaares
+
+### Added
+
+- **BCP → Domains → DKIM**: Schaltfläche „Neu generieren" (erscheint nach dem ersten Laden)
+  — generiert ein neues RSA-2048-Schlüsselpaar mit Bestätigungsdialog (Warnung: DNS-Eintrag
+  muss danach aktualisiert werden); Lade-Spinner während Fetch/Generierung
+- Ladeindikator im DKIM-Button („Lädt…") während API-Aufruf
+
+---
+
 ## [3.17.8] — 2026-05-20 — Nachrichtenablaufverfolgung fix + RFC 822 Quelltext
 
 ### Fixed

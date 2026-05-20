@@ -160,17 +160,72 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ── Helper: DKIM-Schlüssel sicherstellen (auto-generieren falls leer) ─────────
+async function ensureDkimKey(id: string): Promise<typeof import('@coremail/storage').prisma.domain extends never ? never : Awaited<ReturnType<typeof prisma.domain.findUnique>> & { dkimPrivateKey: string }> {
+  let domain = await prisma.domain.findUnique({ where: { id } });
+  if (!domain) return null as never;
+
+  if (!domain.dkimPrivateKey || domain.dkimPrivateKey.trim() === '') {
+    // Kein Schlüssel vorhanden — RSA-2048-Paar generieren und speichern
+    const { generateKeyPairSync } = await import('crypto');
+    const { privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      publicKeyEncoding:  { type: 'spki',  format: 'pem' },
+    });
+    domain = await prisma.domain.update({
+      where: { id },
+      data:  { dkimPrivateKey: privateKey },
+    });
+    log.info({ id, name: domain.name }, 'DKIM private key auto-generated (was empty)');
+  }
+
+  return domain as typeof domain & { dkimPrivateKey: string };
+}
+
 // ── GET /:id/dkim-record ──────────────────────────────────────────────────────
 adminDomainsRouter.get('/:id/dkim-record', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const domain = await ensureDkimKey(id);
+  if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+
+  try {
+    const { createPublicKey } = await import('crypto');
+    const pubKey    = createPublicKey(domain.dkimPrivateKey);
+    const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+    const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
+
+    res.json({
+      selector: domain.dkimSelector,
+      dnsName:  `${domain.dkimSelector}._domainkey.${domain.name}`,
+      dnsValue: `v=DKIM1; k=rsa; p=${pubKeyB64}`,
+    });
+  } catch (err) {
+    log.error({ err, id }, 'DKIM public key derivation failed');
+    res.status(500).json({ error: 'DKIM key invalid — please regenerate', code: 'DKIM_KEY_INVALID' });
+  }
+});
+
+// ── POST /:id/regenerate-dkim ─────────────────────────────────────────────────
+adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
 
-  const { createPublicKey } = await import('crypto');
-  const pubKey    = createPublicKey(domain.dkimPrivateKey);
+  const { generateKeyPairSync, createPublicKey } = await import('crypto');
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding:  { type: 'spki',  format: 'pem' },
+  });
+
+  await prisma.domain.update({ where: { id }, data: { dkimPrivateKey: privateKey } });
+
+  const pubKey    = createPublicKey(privateKey);
   const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
   const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
 
+  log.info({ id, name: domain.name }, 'DKIM key pair regenerated');
   res.json({
     selector: domain.dkimSelector,
     dnsName:  `${domain.dkimSelector}._domainkey.${domain.name}`,
@@ -183,23 +238,29 @@ adminDomainsRouter.get('/:id/dkim-record', async (req: Request, res: Response) =
 adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
 
-  const [domain, settings] = await Promise.all([
-    prisma.domain.findUnique({ where: { id } }),
+  const [rawDomain, settings] = await Promise.all([
+    ensureDkimKey(id),
     prisma.serverSettings.findUnique({ where: { id: 'singleton' } }),
   ]);
-  if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+  if (!rawDomain) { res.status(404).json({ error: 'Domain not found' }); return; }
+  const domain = rawDomain;
 
   const { createPublicKey } = await import('crypto');
   const { promises: dns }   = await import('dns');
 
-  const hostname  = settings?.publicHostname ?? 'mail.local';
+  const hostname   = settings?.publicHostname ?? 'mail.local';
   const domainName = domain.name;
 
-  // DKIM expected value
-  const pubKey    = createPublicKey(domain.dkimPrivateKey);
-  const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
-  const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
-  const dkimExpected = `v=DKIM1; k=rsa; p=${pubKeyB64}`;
+  // DKIM expected value — sicher ableiten (Key wurde von ensureDkimKey gesichert)
+  let dkimExpected = '';
+  try {
+    const pubKey    = createPublicKey(domain.dkimPrivateKey);
+    const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+    const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
+    dkimExpected = `v=DKIM1; k=rsa; p=${pubKeyB64}`;
+  } catch {
+    dkimExpected = '';
+  }
   const dkimName     = `${domain.dkimSelector}._domainkey.${domainName}`;
 
   // Expected records
