@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.16.6';
+const VERSION        = '3.17.0';
 const BUILD_DATE     = '2026-05-20';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.0', date: '2026-05-20', title: 'Integrierter HTTPS-Reverse-Proxy (Port 443) — kein externer Proxy nötig',
+    notes: 'CoreMail kann HTTPS nun direkt terminieren ohne externen Reverse Proxy (Traefik, Caddy, nginx). Nach Ausstellung eines Let\'s Encrypt- oder eigenen Zertifikats in BCP → SSL/TLS einfach auf das Schloss-Icon klicken → TLS-Proxy startet sofort auf Port 443 (Hot-Reload via Redis, kein Container-Neustart). Genau ein Zertifikat kann gleichzeitig aktiv sein, Wechsel per Klick. Grüner Status-Banner zeigt aktive Domain. Deaktivierung durch erneuten Klick. Services-Bezeichnung in BCP: OWA → MWA.' },
   { version: '3.16.6', date: '2026-05-20', title: 'MWA: Empfänger-Autocomplete, resizable Panels, Ansicht-Einstellungen',
     notes: 'Drei neue MWA-Features. (1) Empfänger-Autocomplete in Compose: Beim Tippen in An/CC/BCC werden Kontakte vorgeschlagen (Debounce 220 ms, GET /contacts?q=, max. 8 Treffer), Tastaturnavigation ↑↓/Enter/Tab/Escape, Multi-Empfänger via Komma. (2) Resizable Panels: Trennlinien zwischen Ordnerstruktur ↔ Nachrichtenliste ↔ Lesebereich per Maus verschiebbar, Breiten persistent in localStorage (coremail:panel-widths). (3) Einstellungen → Ansicht: Lesebereich (rechts/unten/aus), Nachrichtendichte (kompakt/normal/komfortabel), Konversationen-Toggle — alle Werte persistent via useUiPrefs-Store.' },
   { version: '3.16.5', date: '2026-05-20', title: 'Bugfixes: Erinnerungs-Mail, Default-Kalender, reminderByMail-Feature',
