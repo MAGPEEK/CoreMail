@@ -34,12 +34,15 @@ const TRUSTED_RESOLVERS: string[] = (
 /** Timeout für einzelne DNS-Anfragen in ms */
 const DNS_TIMEOUT_MS = 3_000;
 
-/** Bekannte stabile Records für den Integrity-Check */
+/** Bekannte stabile Records für den Integrity-Check.
+ *  Wir nutzen INFRA-Records die direkt zu bekannten Diensten gehören:
+ *  - one.one.one.one  → Cloudflare DNS Anycast (1.1.1.1)  — seit 2018 stabil
+ *  - dns.google       → Google DNS Anycast  (8.8.8.8)     — seit 2009 stabil
+ *  Diese IPs sind Teil der öffentlichen Infrastruktur und ändern sich nicht.
+ */
 const INTEGRITY_CHECKS: { fqdn: string; expectedIps: string[] }[] = [
-  // IANA example.com — seit Jahren stabil; Abweichung = Poisoning
-  { fqdn: 'example.com',  expectedIps: ['93.184.216.34'] },
-  // cloudflare.com — sehr stabil
-  { fqdn: 'cloudflare.com', expectedIps: [] }, // leer = nur Erreichbarkeit prüfen
+  { fqdn: 'one.one.one.one', expectedIps: ['1.1.1.1', '1.0.0.1'] },
+  { fqdn: 'dns.google',      expectedIps: ['8.8.8.8', '8.8.4.4'] },
 ];
 
 // ── Resolver-Instanzen ────────────────────────────────────────────────────────
