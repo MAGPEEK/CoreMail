@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.9';
-const BUILD_DATE     = '2026-05-18';
+const VERSION        = '3.13.10';
+const BUILD_DATE     = '2026-05-20';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.10', date: '2026-05-20', title: 'Bugfix: Vorlage anwenden schlug fehl (retentionDays-Validierung zu streng)',
+    notes: 'Kritischer Bugfix: Das Anwenden einer Aufbewahrungsrichtlinie aus einer Vorlage schlug mit „retentionDays must be at least 1" fehl. Im tag-basierten System (DPT/RPT/Personal-Tags) hält die Policy selbst keine Frist — die Tags tun das. Die Policy-Erstellung sendet deshalb korrekt retentionDays: 0. Die Backend-Validierung war zu streng und ließ 0 nicht zu. Fix: Validierung erlaubt jetzt 0 (= Frist wird durch Tags gesteuert), negierte Werte werden wie bisher abgelehnt. Beide betroffenen Stellen (POST und PUT /admin/compliance/retention) korrigiert.' },
   { version: '3.13.9', date: '2026-05-20', title: 'Aufbewahrungsrichtlinien aus Vorlagen — 8 Exchange-typische Szenarien, MFA-Buttons raus',
     notes: 'Aufbewahrungsrichtlinien-Seite umstrukturiert. Verwirrende „MFA jetzt" und „MFA-Historie"-Buttons aus der Hauptansicht entfernt (Worker läuft sowieso automatisch — der Admin muss nichts manuell triggern). Neuer „Aus Vorlage"-Button öffnet einen Picker mit 8 fertigen Szenarien: Papierkorb 30 Tage leeren, Junk 14 Tage löschen, Posteingang 1 Jahr archivieren, Gesendet 2 Jahre archivieren, Entwürfe 90 Tage löschen, Compliance 7 Jahre Markierung, Standard 3 Jahre Archiv, 5 Jahre wiederherstellbar löschen. Klick auf eine Vorlage erzeugt atomar Tag + Richtlinie + GLOBAL-Zuweisung (auf alle Postfächer) in einem Schritt. Damit kann der Admin sofort produktive Regeln einsetzen ohne erst Tags + Policies + Zuweisungen einzeln zu konfigurieren — eigene Regeln „from scratch" weiterhin via „Neue Richtlinie".' },
   { version: '3.13.8', date: '2026-05-19', title: 'Shared Mailboxes mit voller Ordnerstruktur — Inbox/Sent/… + eigene Unterordner',

@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.44 — Synology NAS / Container Manager
+# CoreMail v3.13.10 — Synology NAS / Container Manager
 #
 # Einrichtung per SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
@@ -24,7 +24,7 @@ services:
   # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:3.13.9
+    image: magpeek/coremail-app:3.13.10
     container_name: coremail
     restart: unless-stopped
     environment:

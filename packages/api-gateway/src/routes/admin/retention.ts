@@ -223,8 +223,9 @@ adminRetentionRouter.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  if (retentionDays < 1) {
-    res.status(400).json({ error: 'retentionDays must be at least 1' });
+  // 0 ist erlaubt — bei Tag-basierten Policies steuern die Tags die Frist, nicht die Policy selbst
+  if (retentionDays < 0) {
+    res.status(400).json({ error: 'retentionDays muss 0 oder größer sein (0 = Frist wird durch Tags gesteuert)' });
     return;
   }
 
@@ -308,8 +309,8 @@ adminRetentionRouter.put('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  if (retentionDays !== undefined && retentionDays < 1) {
-    res.status(400).json({ error: 'retentionDays must be at least 1' });
+  if (retentionDays !== undefined && retentionDays < 0) {
+    res.status(400).json({ error: 'retentionDays muss 0 oder größer sein (0 = Frist wird durch Tags gesteuert)' });
     return;
   }
 
