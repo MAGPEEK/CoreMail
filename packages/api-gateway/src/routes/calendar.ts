@@ -8,11 +8,25 @@ calendarRouter.use(requireAuth);
 
 // GET /api/v1/calendar
 calendarRouter.get('/', async (req: Request, res: Response) => {
-  const calendars = await prisma.calendar.findMany({
-    where: { userId: req.apiUser!.userId },
-    select: { id: true, name: true, color: true, icon: true, sortOrder: true, isDefault: true },
+  const userId = req.apiUser!.userId;
+  const sel    = { id: true, name: true, color: true, icon: true, sortOrder: true, isDefault: true } as const;
+
+  let calendars = await prisma.calendar.findMany({
+    where:   { userId },
+    select:  sel,
     orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
   });
+
+  // Lazy provisioning: falls noch kein Kalender existiert → Default-Kalender anlegen.
+  // Gilt für bestehende Accounts die vor der Provisioning-Logik erstellt wurden.
+  if (calendars.length === 0) {
+    const defaultCal = await prisma.calendar.create({
+      data:   { userId, name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 },
+      select: sel,
+    });
+    calendars = [defaultCal];
+  }
+
   res.json(calendars);
 });
 

@@ -97,14 +97,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 
 // ── Persistente UI-Präferenzen ────────────────────────────────────────────────
 export type Density = 'compact' | 'normal' | 'comfortable';
+export type ReadingPane = 'right' | 'bottom' | 'off';
 
 interface UiPrefs {
   density: Density;
+  readingPane: ReadingPane;
+  groupByConversation: boolean;
   favoritesCollapsed: boolean;
   folderTreeCollapsed: boolean;
   calendarShowWeekNumbers: boolean;
   hiddenCalendarIds: string[];
   setDensity: (d: Density) => void;
+  setReadingPane: (p: ReadingPane) => void;
+  setGroupByConversation: (v: boolean) => void;
   toggleFavorites: () => void;
   toggleFolderTree: () => void;
   setCalendarShowWeekNumbers: (v: boolean) => void;
@@ -116,11 +121,15 @@ export const useUiPrefs = create<UiPrefs>()(
   persist(
     (set, get) => ({
       density: 'normal',
+      readingPane: 'right',
+      groupByConversation: false,
       favoritesCollapsed: false,
       folderTreeCollapsed: false,
       calendarShowWeekNumbers: true,
       hiddenCalendarIds: [],
       setDensity: (d) => set({ density: d }),
+      setReadingPane: (p) => set({ readingPane: p }),
+      setGroupByConversation: (v) => set({ groupByConversation: v }),
       toggleFavorites: () => set((s) => ({ favoritesCollapsed: !s.favoritesCollapsed })),
       toggleFolderTree: () => set((s) => ({ folderTreeCollapsed: !s.folderTreeCollapsed })),
       setCalendarShowWeekNumbers: (v) => set({ calendarShowWeekNumbers: v }),

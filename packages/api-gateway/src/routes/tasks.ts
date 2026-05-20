@@ -7,12 +7,13 @@ export const tasksRouter: RouterType = Router();
 tasksRouter.use(requireAuth);
 
 const TaskSchema = z.object({
-  subject: z.string().min(1),
-  body: z.string().optional().default(''),
-  dueDate: z.string().optional(),
-  priority: z.enum(['LOW', 'NORMAL', 'HIGH']).default('NORMAL'),
-  status: z.enum(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'DEFERRED']).default('NOT_STARTED'),
-  reminder: z.string().optional(),
+  subject:       z.string().min(1),
+  body:          z.string().optional().default(''),
+  dueDate:       z.string().optional(),
+  priority:      z.enum(['LOW', 'NORMAL', 'HIGH']).default('NORMAL'),
+  status:        z.enum(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'DEFERRED']).default('NOT_STARTED'),
+  reminder:      z.string().optional(),
+  reminderByMail: z.boolean().optional().default(false),
 });
 
 // GET /api/v1/tasks
@@ -44,7 +45,7 @@ tasksRouter.post('/', async (req: Request, res: Response) => {
   const parsed = TaskSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const { subject, body, dueDate, priority, status, reminder } = parsed.data;
+  const { subject, body, dueDate, priority, status, reminder, reminderByMail } = parsed.data;
 
   const task = await prisma.task.create({
     data: {
@@ -53,7 +54,8 @@ tasksRouter.post('/', async (req: Request, res: Response) => {
       body,
       priority,
       status,
-      ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+      reminderByMail: reminderByMail ?? false,
+      ...(dueDate  ? { dueDate:  new Date(dueDate)  } : {}),
       ...(reminder ? { reminder: new Date(reminder) } : {}),
     },
   });
@@ -70,15 +72,16 @@ tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const task = await prisma.task.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
-  const { subject, body, dueDate, priority, status, reminder } = parsed.data;
+  const { subject, body, dueDate, priority, status, reminder, reminderByMail } = parsed.data;
   const updated = await prisma.task.update({
     where: { id },
     data: {
-      ...(subject !== undefined ? { subject } : {}),
-      ...(body !== undefined ? { body } : {}),
-      ...(priority !== undefined ? { priority } : {}),
-      ...(status !== undefined ? { status } : {}),
-      ...(dueDate !== undefined ? { dueDate: dueDate ? new Date(dueDate) : null } : {}),
+      ...(subject       !== undefined ? { subject } : {}),
+      ...(body          !== undefined ? { body } : {}),
+      ...(priority      !== undefined ? { priority } : {}),
+      ...(status        !== undefined ? { status } : {}),
+      ...(reminderByMail !== undefined ? { reminderByMail } : {}),
+      ...(dueDate  !== undefined ? { dueDate:  dueDate  ? new Date(dueDate)  : null } : {}),
       ...(reminder !== undefined ? { reminder: reminder ? new Date(reminder) : null } : {}),
       ...(status === 'COMPLETED' ? { completedAt: new Date() } : {}),
     },

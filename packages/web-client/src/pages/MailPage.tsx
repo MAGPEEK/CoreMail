@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -10,11 +10,72 @@ import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
 import { MessageReader } from '../components/MessageReader.js';
 import { BulkToolbar } from '../components/BulkToolbar.js';
-import { useUiStore } from '../store/ui.js';
+import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
 import { showUndoToast } from '../components/UndoToast.js';
 import { EmptyReader } from '../components/Skeleton.js';
+
+// ── Persistente Panel-Breiten ─────────────────────────────────────────────────
+const PANEL_STORAGE_KEY = 'coremail:panel-widths';
+const DEFAULT_FOLDER_W  = 208; // w-52
+const DEFAULT_LIST_W    = 320; // w-80
+const MIN_FOLDER_W      = 140;
+const MAX_FOLDER_W      = 360;
+const MIN_LIST_W        = 220;
+const MAX_LIST_W        = 520;
+
+function loadPanelWidths(): { folderW: number; listW: number } {
+  try {
+    const raw = localStorage.getItem(PANEL_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as { folderW: number; listW: number };
+  } catch { /* ignore */ }
+  return { folderW: DEFAULT_FOLDER_W, listW: DEFAULT_LIST_W };
+}
+
+// ── Resize-Handle ─────────────────────────────────────────────────────────────
+function ResizeHandle({
+  onResize,
+}: {
+  onResize: (delta: number) => void;
+}) {
+  const dragging = useRef(false);
+  const startX   = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    startX.current   = e.clientX;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = ev.clientX - startX.current;
+      startX.current = ev.clientX;
+      onResize(delta);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [onResize]);
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/30 active:bg-accent/50 transition-colors group relative z-10"
+      title="Breite anpassen"
+    >
+      <div className="absolute inset-y-0 -left-0.5 -right-0.5 group-hover:bg-accent/20 rounded transition-colors" />
+    </div>
+  );
+}
 
 interface ActiveDrag {
   kind: 'message' | 'folder-source';
@@ -25,7 +86,29 @@ interface ActiveDrag {
 export function MailPage() {
   const qc = useQueryClient();
   const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, openCompose, clearSelection } = useUiStore();
+  const { readingPane } = useUiPrefs();
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
+
+  // ── Panel-Breiten (resizable) ────────────────────────────────────────────────
+  const [folderW, setFolderW] = useState(() => loadPanelWidths().folderW);
+  const [listW,   setListW]   = useState(() => loadPanelWidths().listW);
+
+  // Persist widths on change (debounced via ref)
+  const saveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (saveRef.current) clearTimeout(saveRef.current);
+    saveRef.current = setTimeout(() => {
+      localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify({ folderW, listW }));
+    }, 300);
+  }, [folderW, listW]);
+
+  const resizeFolder = useCallback((delta: number) => {
+    setFolderW((w) => Math.max(MIN_FOLDER_W, Math.min(MAX_FOLDER_W, w + delta)));
+  }, []);
+
+  const resizeList = useCallback((delta: number) => {
+    setListW((w) => Math.max(MIN_LIST_W, Math.min(MAX_LIST_W, w + delta)));
+  }, []);
 
   const { data: folders } = useQuery({
     queryKey: ['folders'],
@@ -124,27 +207,57 @@ export function MailPage() {
     }
   };
 
+  // ── Reader-Panel ─────────────────────────────────────────────────────────────
+  const readerPanel = selectedMessageId && selectedIds.size === 0 ? (
+    <div key={selectedMessageId} className="flex-1 animate-page-in flex flex-col overflow-hidden min-w-0 min-h-0">
+      <MessageReader messageId={selectedMessageId} />
+    </div>
+  ) : (
+    <div className="flex-1 bg-gray-50 dark:bg-gray-900 flex min-w-0 min-h-0">
+      {selectedIds.size > 0
+        ? <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
+        : readingPane !== 'off' ? <EmptyReader /> : null}
+    </div>
+  );
+
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       <div className="flex flex-1 overflow-hidden relative">
-        <FolderTree onNewMail={() => openCompose()} />
 
+        {/* ── Ordnerstruktur ──────────────────────────────────────────────── */}
+        <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
+          <FolderTree onNewMail={() => openCompose()} />
+        </div>
+
+        <ResizeHandle onResize={resizeFolder} />
+
+        {/* ── Nachrichtenliste + Reader ────────────────────────────────────── */}
         {selectedFolderId ? (
-          <>
-            <MessageList folderId={selectedFolderId} />
-            {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
-            {selectedMessageId && selectedIds.size === 0 ? (
-              <div key={selectedMessageId} className="flex-1 animate-page-in flex flex-col overflow-hidden">
-                <MessageReader messageId={selectedMessageId} />
+          readingPane === 'bottom' ? (
+            /* Lesebereich unten: Liste oben, Reader unten */
+            <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+              <div style={{ width: '100%', height: '50%', flexShrink: 0 }} className="overflow-hidden relative">
+                <MessageList folderId={selectedFolderId} />
+                {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
               </div>
-            ) : (
-              <div className="flex-1 bg-gray-50 dark:bg-gray-900 flex">
-                {selectedIds.size > 0
-                  ? <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
-                  : <EmptyReader />}
+              <div className="h-px bg-gray-200 dark:bg-gray-700 shrink-0 cursor-row-resize" />
+              {readerPanel}
+            </div>
+          ) : (
+            /* Lesebereich rechts (Standard) oder aus */
+            <>
+              <div style={{ width: listW, flexShrink: 0 }} className="h-full overflow-hidden relative">
+                <MessageList folderId={selectedFolderId} />
+                {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
               </div>
-            )}
-          </>
+              {readingPane !== 'off' && (
+                <>
+                  <ResizeHandle onResize={resizeList} />
+                  {readerPanel}
+                </>
+              )}
+            </>
+          )
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
             Ordner auswählen

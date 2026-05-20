@@ -132,7 +132,7 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
             },
           },
         },
-        calendars: { create: [{ name: 'Kalender', color: '#0078D4' }] },
+        calendars: { create: [{ name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 }] },
       },
       select: { id: true, email: true, displayName: true, role: true, createdAt: true },
     });

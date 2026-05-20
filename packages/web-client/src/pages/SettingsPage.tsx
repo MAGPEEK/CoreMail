@@ -5,12 +5,13 @@ import {
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
+  Layout, PanelRight, PanelBottom, EyeOff, Rows3,
 } from 'lucide-react';
 import { format as fmtDate } from 'date-fns';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
-import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode } from '../store/ui.js';
+import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
@@ -19,7 +20,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view';
 
 interface AppPassword {
   id: string;
@@ -1725,6 +1726,116 @@ function InactivitySection() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANSICHT
+// ═══════════════════════════════════════════════════════════════════════════════
+function ViewSection() {
+  const { density, setDensity, readingPane, setReadingPane, groupByConversation, setGroupByConversation } = useUiPrefs();
+
+  // Lesebereich-Optionen
+  const paneOptions: { value: ReadingPane; label: string; desc: string; Icon: React.ElementType }[] = [
+    { value: 'right',  label: 'Rechts',   desc: 'Lesebereich rechts neben der Nachrichtenliste (Standard)', Icon: PanelRight  },
+    { value: 'bottom', label: 'Unten',    desc: 'Lesebereich unterhalb der Nachrichtenliste',               Icon: PanelBottom },
+    { value: 'off',    label: 'Aus',      desc: 'Kein Lesebereich — Nachrichten im Vollbildmodus öffnen',  Icon: EyeOff      },
+  ];
+
+  // Dichte-Optionen
+  const densityOptions: { value: Density; label: string; desc: string }[] = [
+    { value: 'compact',     label: 'Kompakt',      desc: 'Schmale Zeilen — mehr Nachrichten auf einen Blick' },
+    { value: 'normal',      label: 'Normal',       desc: 'Ausgeglichene Darstellung (Standard)' },
+    { value: 'comfortable', label: 'Komfortabel',  desc: 'Großzügige Abstände — mehr Luft zwischen den Zeilen' },
+  ];
+
+  return (
+    <section className="space-y-8">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 mb-1">Ansicht</h2>
+        <p className="text-sm text-gray-600">Layout und Darstellungsoptionen anpassen — wie in Outlook oder Thunderbird.</p>
+      </div>
+
+      {/* ── Lesebereich ─────────────────────────────────────────────────────── */}
+      <div>
+        <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+          <Layout size={15} className="text-gray-500" />
+          Lesebereich
+        </h3>
+        <div className="space-y-2">
+          {paneOptions.map(({ value, label, desc, Icon }) => (
+            <label
+              key={value}
+              className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                readingPane === value
+                  ? 'border-accent bg-accent/5'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="readingPane"
+                value={value}
+                checked={readingPane === value}
+                onChange={() => setReadingPane(value)}
+                className="text-accent focus:ring-accent"
+              />
+              <Icon size={16} className={readingPane === value ? 'text-accent' : 'text-gray-500'} />
+              <div className="flex-1">
+                <div className="text-sm font-medium text-gray-900">{label}</div>
+                <div className="text-xs text-gray-500">{desc}</div>
+              </div>
+              {readingPane === value && <Check size={14} className="text-accent shrink-0" />}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Nachrichtendichte ────────────────────────────────────────────────── */}
+      <div>
+        <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+          <Rows3 size={15} className="text-gray-500" />
+          Nachrichtendichte
+        </h3>
+        <div className="space-y-2">
+          {densityOptions.map(({ value, label, desc }) => (
+            <label
+              key={value}
+              className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                density === value
+                  ? 'border-accent bg-accent/5'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <input
+                type="radio"
+                name="density"
+                value={value}
+                checked={density === value}
+                onChange={() => setDensity(value)}
+                className="text-accent focus:ring-accent"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-medium text-gray-900">{label}</div>
+                <div className="text-xs text-gray-500">{desc}</div>
+              </div>
+              {density === value && <Check size={14} className="text-accent shrink-0" />}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Konversationsansicht ─────────────────────────────────────────────── */}
+      <div>
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">Konversationen</h3>
+        <Toggle
+          checked={groupByConversation}
+          onChange={setGroupByConversation}
+          label="Nachrichten nach Konversation gruppieren"
+        />
+        <p className="text-xs text-gray-500 mt-2 ml-14">Zusammengehörige Nachrichten (gleicher Betreff) werden gebündelt angezeigt.</p>
+      </div>
+    </section>
+  );
+}
+
 const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
   {
     group: 'Konto',
@@ -1741,6 +1852,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
   {
     group: 'Allgemein',
     items: [
+      { id: 'view',       label: 'Ansicht',                  icon: Layout       },
       { id: 'theme',      label: 'Design',                   icon: Palette      },
       { id: 'language',  label: 'Sprache & Region',          icon: Globe        },
       { id: 'calendar',  label: 'Kalender',                  icon: CalendarDays },
@@ -1763,6 +1875,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   categories:   CategoriesSection,
   appPasswords: AppPasswordsSection,
   inactivity:   InactivitySection,
+  view:         ViewSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

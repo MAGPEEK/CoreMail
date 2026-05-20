@@ -95,7 +95,7 @@ export async function ensureMailboxProvisioned(userId: string): Promise<Provisio
   let calendarCreated = false;
   if (user.calendars.length === 0) {
     await prisma.calendar.create({
-      data: { userId, name: 'Calendar', color: '#0078D4' },
+      data: { userId, name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 },
     });
     calendarCreated = true;
     log.info({ userId }, 'Default calendar created');
