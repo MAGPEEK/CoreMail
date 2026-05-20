@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.16.3`
+**Aktuelle Version**: `3.16.6`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.16.3` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.16.6` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -514,11 +514,14 @@ SMTP Verbindung
   - Checkbox **„per E-Mail"** — sendet bei Auslösung zusätzlich eine Mail an den eigenen Posteingang (`POST /mail/send`)
   - Popup-Tracking via `localStorage` (Key = `taskId:reminderISO`) — feuert exakt einmal pro Zeitstempel, auch nach Page-Reload
   - Prisma-Feld `reminderByMail Boolean @default(false)` in `tasks`-Tabelle
+- **MWA Compose — Empfänger-Autocomplete** (v3.16.6): `RecipientInput`-Komponente in An/CC/BCC ersetzt `<input>`; debounced `GET /contacts?q=` ab 1 Zeichen; Dropdown mit Name+Mail+Firma; Keyboard-Nav ↑↓/Enter/Tab/Escape; Multi-Empfänger via Komma
+- **MWA Mail — Resizable Panels** (v3.16.6): Drag-Handle zwischen Ordnerstruktur ↔ Liste ↔ Lesebereich; Breiten in `localStorage:coremail:panel-widths`; FolderTree/MessageList nutzen `w-full` statt px-Breite
+- **Einstellungen → Ansicht** (v3.16.6): Lesebereich (rechts/unten/aus), Dichte (kompakt/normal/komfortabel), Konversationen-Toggle — alle persistent via `useUiPrefs` (Zustand + localStorage)
 - **MWA Kontakte**: Erweiterte Felder (email2, mobile, department, jobTitle, notes) — Outlook-kompatibel (v3.16.0)
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.16.3; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.16.6; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
 ## Wichtige technische Entscheidungen seit 3.x
@@ -529,7 +532,9 @@ SMTP Verbindung
 - **Settings-Caches** (60s TTL, Greylisting + Outbound-Relay) invalidieren via Redis-`CHANNEL_SETTINGS_RELOAD` nach jedem Settings-Save
 - **Erinnerungs-Popup-Tracking**: `localStorage`-Key `coremail:notified-reminders` (JSON-Array von `taskId:reminderISO`-Strings) — verhindert Doppel-Popups über Page-Reloads hinweg; `useCallback` + `useRef` statt direkter Closure im `setInterval` (kein stale-closure-Bug)
 - **checkDueDates-Pattern**: stabile Callback-Referenz via `useCallback(fn, [])` + `allTasksRef` für stets aktuelle Daten im 30-Sekunden-Interval — kein `eslint-disable react-hooks/exhaustive-deps` mehr nötig
+- **Resizable Panels**: `ResizeHandle`-Komponente auf Modul-Ebene (nicht inline!) — `mousemove`/`mouseup` auf `window`, `cursor: col-resize` + `userSelect: none` auf `document.body` während Drag; FolderTree/MessageList nutzen `w-full` und Breite kommt vom Parent-Div via `style.width`
+- **RecipientInput-Autocomplete**: `useCallback` für `pickSuggestion` nötig (Closure über `value`); `onMouseDown` + `e.preventDefault()` in Dropdown-Buttons verhindert Fokus-Verlust des Inputs beim Klick
 
 ---
 
-*Letzte Aktualisierung: 2026-05-20 (v3.16.3 — MWA: Aufgaben-Erinnerung mit Kalender+Popup+E-Mail-Option, Popup-Persistenz via localStorage, Kontakte Outlook-Felder, Mail-Suche Scope+Typeahead, Schriftarten-Picker; BCP: alle Widgets draggable; DNS-Hardening-Fix)*
+*Letzte Aktualisierung: 2026-05-20 (v3.16.6 — MWA: Empfänger-Autocomplete in Compose (An/CC/BCC), resizable Panels per Maus, Einstellungen → Ansicht (Lesebereich rechts/unten/aus, Dichte, Konversationen); Aufgaben-Erinnerung mit Kalender+Popup+E-Mail-Option; Default-Kalender Lazy-Provisioning)*
