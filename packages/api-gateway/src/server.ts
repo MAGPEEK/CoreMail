@@ -42,6 +42,7 @@ import { adminOAuthClientsRouter } from './routes/admin/oauth-clients.js';
 import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
 import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
+import { startTlsProxy } from './tls-proxy.js';
 import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
 import { adminQuarantineRouter } from './routes/admin/quarantine.js';
 import { adminTransportRulesRouter } from './routes/admin/transport-rules.js';
@@ -367,6 +368,13 @@ async function start() {
   getRedisClient();
   log.info({ port: PORT }, 'API Gateway listening');
   app.listen(PORT);
+
+  // Integrierter HTTPS-Reverse-Proxy — startet automatisch wenn ein Zertifikat
+  // in BCP → SSL/TLS → "Als HTTPS aktivieren" gesetzt wurde.
+  // Hot-Reload bei Zertifikats-Aktivierung über Redis (kein Neustart nötig).
+  void startTlsProxy(app).catch(err =>
+    log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
+  );
 }
 
 start().catch((err) => { log.error({ err }, 'Startup failed'); process.exit(1); });

@@ -13,6 +13,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.0] — 2026-05-20 — Integrierter HTTPS-Reverse-Proxy (TLS-Termination)
+
+### Added
+
+- **Integrierter HTTPS-Reverse-Proxy (Port 443)**  
+  – CoreMail kann HTTPS nun direkt ohne externen Reverse Proxy (Traefik, Caddy, nginx) terminieren  
+  – Nach Ausstellung eines Let's Encrypt- oder eigenen Zertifikats in BCP → SSL/TLS: Button
+    **„Als HTTPS aktivieren"** (Schloss-Symbol) startet den TLS-Proxy sofort per Hot-Reload  
+  – Genau ein Zertifikat kann gleichzeitig aktiv sein; Hot-Swap ohne Container-Neustart via
+    Redis-Kanal `coremail:tls:reload`  
+  – Deaktivierung durch erneuten Klick auf das grüne Schloss-Symbol  
+  – `docker-compose.yml`: Port `443:443` hinzugefügt  
+- **BCP Zertifikate — HTTPS-Status-Banner**  
+  – Grünes Banner zeigt aktives Zertifikat + Domain; graues Banner wenn kein HTTPS aktiv  
+  – Detailzeile (ausgeklappt) zeigt „HTTPS (Port 443): Aktiv / Inaktiv" mit Lock-Icon  
+- **`packages/api-gateway/src/tls-proxy.ts`** — neues Modul für HTTPS-Server-Lifecycle
+  (start, graceful stop 5 s, hot-reload via Redis-Subscription)  
+- **Prisma-Schema**: `Certificate.isActiveHttps Boolean @default(false)`
+
+### Changed
+
+- **BCP Zertifikate**: Aktionen-Spalte zeigt `LockOpen`-Icon (grau) für aktivierbare Certs
+  und `Lock`-Icon (grün) für das aktive HTTPS-Zertifikat
+
+---
+
 ## [3.16.9] — 2026-05-20 — Bugfix: Let's Encrypt Port 80 + besseres UI-Feedback
 
 ### Fixed

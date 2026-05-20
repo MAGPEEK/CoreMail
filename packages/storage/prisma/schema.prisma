@@ -1642,7 +1642,9 @@ model Certificate {
   // Zeitstempel
   issuedAt    DateTime?
   expiresAt   DateTime?
-  autoRenew   Boolean    @default(true)
+  autoRenew      Boolean    @default(true)
+  // Integrierter HTTPS-Reverse-Proxy (nur ein Zertifikat gleichzeitig aktiv)
+  isActiveHttps  Boolean    @default(false)
   // Let's Encrypt Account Key (PEM) — pro Server gespeichert
   acmeAccount String?                         // ACME Account Key PEM
   acmeEmail   String?                         // E-Mail für Let's Encrypt Benachrichtigungen

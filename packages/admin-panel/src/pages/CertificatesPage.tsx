@@ -13,6 +13,7 @@ import toast from 'react-hot-toast';
 import {
   ShieldCheck, Plus, RefreshCw, Trash2, Upload,
   ChevronDown, ChevronUp, X, Loader2, AlertCircle,
+  Lock, LockOpen,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
@@ -22,18 +23,19 @@ type CertType   = 'LETSENCRYPT' | 'CUSTOM' | 'SELF_SIGNED';
 type CertStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'ERROR' | 'RENEWING';
 
 interface Certificate {
-  id:        string;
-  name:      string;
-  domains:   string[];
-  services:  string[];
-  type:      CertType;
-  status:    CertStatus;
-  issuedAt:  string | null;
-  expiresAt: string | null;
-  autoRenew: boolean;
-  acmeEmail: string | null;
-  lastError: string | null;
-  createdAt: string;
+  id:            string;
+  name:          string;
+  domains:       string[];
+  services:      string[];
+  type:          CertType;
+  status:        CertStatus;
+  issuedAt:      string | null;
+  expiresAt:     string | null;
+  autoRenew:     boolean;
+  isActiveHttps: boolean;
+  acmeEmail:     string | null;
+  lastError:     string | null;
+  createdAt:     string;
 }
 
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
@@ -118,10 +120,33 @@ export function CertificatesPage() {
     onError: () => toast.error('Löschen fehlgeschlagen'),
   });
 
+  const activateHttpsMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-https`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
+      toast.success('HTTPS aktiviert — TLS-Kontext wird neu geladen');
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { message?: string })?.message ?? 'Aktivierung fehlgeschlagen';
+      toast.error(msg);
+    },
+  });
+
+  const deactivateHttpsMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/certificates/${id}/activate-https`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
+      toast.success('HTTPS deaktiviert');
+    },
+    onError: () => toast.error('Deaktivierung fehlgeschlagen'),
+  });
+
   function confirmDelete(cert: Certificate) {
     if (!window.confirm(`Zertifikat "${cert.name}" wirklich löschen?`)) return;
     deleteMutation.mutate(cert.id);
   }
+
+  const activeHttpsCert = certs.find(c => c.isActiveHttps);
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -152,6 +177,28 @@ export function CertificatesPage() {
           </button>
         </div>
       </div>
+
+      {/* HTTPS-Status-Banner */}
+      {activeHttpsCert ? (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
+          <Lock size={16} className="text-green-600 shrink-0" />
+          <span>
+            <strong>HTTPS aktiv</strong> — Port 443 verwendet Zertifikat{' '}
+            <span className="font-mono">{activeHttpsCert.name}</span>
+            {activeHttpsCert.domains[0] && (
+              <> für <span className="font-mono">{activeHttpsCert.domains[0]}</span></>
+            )}
+          </span>
+        </div>
+      ) : (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
+          <LockOpen size={16} className="shrink-0" />
+          <span>
+            Kein HTTPS aktiv — Klicke bei einem gültigen Zertifikat auf{' '}
+            <strong>Als HTTPS aktivieren</strong>, um den integrierten TLS-Proxy zu starten.
+          </span>
+        </div>
+      )}
 
       {/* Tabelle */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -233,6 +280,24 @@ export function CertificatesPage() {
                     {/* Aktionen */}
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        {/* HTTPS aktivieren / deaktivieren */}
+                        {cert.isActiveHttps ? (
+                          <button
+                            onClick={() => deactivateHttpsMutation.mutate(cert.id)}
+                            disabled={deactivateHttpsMutation.isPending}
+                            title="HTTPS deaktivieren"
+                            className="p-1.5 text-green-600 hover:text-gray-500 hover:bg-gray-50 rounded transition-colors disabled:opacity-40">
+                            <Lock size={14} />
+                          </button>
+                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
+                          <button
+                            onClick={() => activateHttpsMutation.mutate(cert.id)}
+                            disabled={activateHttpsMutation.isPending}
+                            title="Als HTTPS aktivieren (Port 443)"
+                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-40">
+                            <LockOpen size={14} />
+                          </button>
+                        ) : null}
                         {cert.type === 'LETSENCRYPT' && (
                           <button
                             onClick={() => renewMutation.mutate(cert.id)}
@@ -276,6 +341,15 @@ export function CertificatesPage() {
                             <div>
                               <p className="text-xs text-gray-500">Auto-Renew</p>
                               <p className="text-gray-700">{cert.autoRenew ? 'Ja' : 'Nein'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500">HTTPS (Port 443)</p>
+                              <p className="flex items-center gap-1 text-gray-700">
+                                {cert.isActiveHttps
+                                  ? <><Lock size={12} className="text-green-600" /> <span className="text-green-700 font-medium">Aktiv</span></>
+                                  : <><LockOpen size={12} className="text-gray-400" /> Inaktiv</>
+                                }
+                              </p>
                             </div>
                             {cert.acmeEmail && (
                               <div>

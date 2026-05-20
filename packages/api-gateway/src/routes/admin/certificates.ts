@@ -62,7 +62,7 @@ adminCertificatesRouter.get('/', async (_req: Request, res: Response) => {
     select: {
       id: true, name: true, domains: true, services: true,
       type: true, status: true, issuedAt: true, expiresAt: true,
-      autoRenew: true, acmeEmail: true, lastError: true, createdAt: true,
+      autoRenew: true, isActiveHttps: true, acmeEmail: true, lastError: true, createdAt: true,
       certPem: false, keyPem: false, chainPem: false, acmeAccount: false,
     },
   });
@@ -425,6 +425,57 @@ adminCertificatesRouter.post('/:id/renew', async (req: Request, res: Response) =
   ).catch(err => log.error({ err, id }, 'Renewal failed'));
 
   res.status(202).json({ message: 'Certificate renewal started' });
+});
+
+// ── POST /:id/activate-https ──────────────────────────────────────────────────
+// Aktiviert dieses Zertifikat als HTTPS-Server-Zertifikat (integrierter Reverse Proxy).
+// Nur ein Zertifikat kann gleichzeitig aktiv sein — alle anderen werden deaktiviert.
+adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const cert = await prisma.certificate.findUnique({
+    where: { id },
+    select: { id: true, name: true, status: true, certPem: true, keyPem: true },
+  });
+  if (!cert) { res.status(404).json({ error: 'Certificate not found' }); return; }
+  if (!cert.certPem || !cert.keyPem) {
+    res.status(400).json({ error: 'Certificate has no PEM data yet — wait for issuance to complete' });
+    return;
+  }
+  if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
+    res.status(400).json({
+      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used for HTTPS`,
+    });
+    return;
+  }
+
+  // Nur dieses Zertifikat aktivieren, alle anderen deaktivieren (atomare Transaktion)
+  await prisma.$transaction([
+    prisma.certificate.updateMany({ data: { isActiveHttps: false } }),
+    prisma.certificate.update({ where: { id }, data: { isActiveHttps: true } }),
+  ]);
+
+  // HTTPS-Server im api-gateway neu laden
+  const redis = getRedisClient();
+  await redis.publish('coremail:tls:reload', id);
+
+  log.info({ id, name: cert.name }, 'Certificate activated for HTTPS — TLS reload triggered');
+  res.json({ message: 'Certificate activated for HTTPS — server reloading TLS context', certId: id });
+});
+
+// ── DELETE /:id/activate-https ────────────────────────────────────────────────
+// Deaktiviert HTTPS (integrierter Proxy stoppt).
+adminCertificatesRouter.delete('/:id/activate-https', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  await prisma.certificate.update({
+    where: { id },
+    data: { isActiveHttps: false },
+  }).catch(() => {});
+
+  const redis = getRedisClient();
+  await redis.publish('coremail:tls:reload', '');
+
+  log.info({ id }, 'HTTPS deactivated');
+  res.json({ message: 'HTTPS deactivated — server stopped' });
 });
 
 // ── DELETE /:id ───────────────────────────────────────────────────────────────
