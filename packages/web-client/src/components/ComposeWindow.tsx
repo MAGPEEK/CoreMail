@@ -15,6 +15,7 @@ import TextAlignExt from '@tiptap/extension-text-align';
 import { Color } from '@tiptap/extension-color';
 import TextStyle from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
+import FontFamilyExt from '@tiptap/extension-font-family';
 import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
@@ -155,6 +156,72 @@ function BlockTypeDropdown({ editor }: { editor: ReturnType<typeof useEditor> })
   );
 }
 
+// ── Schriftarten-Dropdown ─────────────────────────────────────────────────────
+const FONT_FAMILIES = [
+  { label: 'Standard',        value: '' },
+  { label: 'Arial',           value: 'Arial, sans-serif' },
+  { label: 'Calibri',         value: 'Calibri, sans-serif' },
+  { label: 'Georgia',         value: 'Georgia, serif' },
+  { label: 'Times New Roman', value: '"Times New Roman", serif' },
+  { label: 'Courier New',     value: '"Courier New", monospace' },
+  { label: 'Verdana',         value: 'Verdana, sans-serif' },
+  { label: 'Trebuchet MS',    value: '"Trebuchet MS", sans-serif' },
+] as const;
+
+function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentFont = editor?.getAttributes('textStyle').fontFamily as string | undefined;
+  const activeLabel = FONT_FAMILIES.find((f) => f.value === currentFont)?.label ?? 'Schriftart';
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
+        className="flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-gray-100 border border-transparent hover:border-gray-200 min-w-[88px]"
+      >
+        <span className="flex-1 text-left text-gray-700 truncate" style={currentFont ? { fontFamily: currentFont } : undefined}>
+          {activeLabel}
+        </span>
+        <ChevronDown size={11} className="shrink-0 text-gray-400" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-[300] min-w-[160px]">
+          {FONT_FAMILIES.map(({ label, value }) => (
+            <button
+              key={label}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setOpen(false);
+                if (!value) {
+                  editor?.chain().focus().unsetFontFamily().run();
+                } else {
+                  editor?.chain().focus().setFontFamily(value).run();
+                }
+              }}
+              className={`block w-full text-left px-3 py-1.5 hover:bg-gray-50 text-sm ${
+                currentFont === value ? 'text-blue-600' : 'text-gray-700'
+              }`}
+              style={value ? { fontFamily: value } : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Trennlinie ────────────────────────────────────────────────────────────────
 function Sep() {
   return <div className="w-px h-5 bg-gray-200 mx-0.5 shrink-0" />;
@@ -238,6 +305,7 @@ export function ComposeWindow() {
       TextStyle,
       Color,
       Highlight.configure({ multicolor: true }),
+      FontFamilyExt,
     ],
     content: '',
     editorProps: {
@@ -426,6 +494,11 @@ export function ComposeWindow() {
 
         {/* Block-Typ */}
         {editor && <BlockTypeDropdown editor={editor} />}
+
+        <Sep />
+
+        {/* Schriftart */}
+        {editor && <FontFamilyDropdown editor={editor} />}
 
         <Sep />
 

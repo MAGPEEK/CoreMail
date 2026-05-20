@@ -81,8 +81,14 @@ export interface Contact {
   id: string;
   displayName: string;
   email: string;
+  email2: string;
   company: string;
-  phone?: string;
+  phone: string;
+  mobile: string;
+  department: string;
+  jobTitle: string;
+  notes: string;
+  photoUrl?: string | null;
   vcardData?: string;
 }
 

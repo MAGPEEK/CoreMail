@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.15.0`
+**Aktuelle Version**: `3.16.0`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -494,7 +494,7 @@ SMTP Verbindung
 
 ---
 
-## Aktuelle Architektur-Highlights (3.13.x)
+## Aktuelle Architektur-Highlights (3.15.x)
 
 - **MWA** (Mail Web Access) unter Root-URL `/` seit v3.5.5 — vorher `/owa/` (Redirect bleibt)
 - **BCP** (Backend Control Panel) unter `/bcp/` seit v3.2.3 — vorher `/ecp/`
@@ -506,7 +506,14 @@ SMTP Verbindung
 - **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
 - **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
 - **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
-- **Live-Server**: `84.247.191.198` — läuft noch v3.14.0; Deploy von v3.15.0 via Netcup-Konsole (SSH-Port 22 durch iptables gesperrt): `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **BCP-Dashboard** alle Widgets mit DraggableCard umhüllt (v3.15.1) — queue-status, mails-chart, storage-ranking, domains-chart, recent-errors, recent-audit, recent-logins, system-strip sind jetzt ebenfalls per Drag verschiebbar
+- **MWA Aufgaben**: Doppelklick öffnet Bearbeitungsmodal; Aufgaben mit Fälligkeitsdatum erscheinen im Kalender (amber); Popup-Benachrichtigung wenn Aufgabe fällig
+- **MWA Kontakte**: Erweiterte Felder (email2, mobile, department, jobTitle, notes) — Outlook-kompatibel
+- **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen
+- **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster
+- **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.15.1; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
 ## Wichtige technische Entscheidungen seit 3.x
 
@@ -517,4 +524,4 @@ SMTP Verbindung
 
 ---
 
-*Letzte Aktualisierung: 2026-05-20 (v3.15.0 — Security+: Passwort-Zurücksetzung, Angriffserkennung-Live-Dashboard, DNS-Poisoning-Schutz, Per-User-Inaktivitäts-Timeout)*
+*Letzte Aktualisierung: 2026-05-20 (v3.15.1 — MWA: Aufgaben-Edit+Kalender+Popup, Kontakte Outlook-Felder, Mail-Suche mit Scope+Typeahead, Schriftarten-Picker; BCP: alle Widgets draggable; DNS-Hardening-Fix)*

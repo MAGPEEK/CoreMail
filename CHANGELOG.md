@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.16.0] — 2026-05-20 — MWA/BCP Feature-Update (Aufgaben, Kontakte, Suche, Schriftarten, Dashboard)
+
+### Added
+
+- **MWA Aufgaben — Bearbeitung per Doppelklick**  
+  – Doppelklick auf eine Aufgabe öffnet ein Modal mit vorausgefüllten Feldern (Betreff, Notizen, Priorität, Fälligkeitsdatum, Erinnerung)  
+  – Separates `updateMutation` schreibt vollständige Änderungen via `PUT /tasks/:id`
+- **MWA Aufgaben → Kalender-Synchronisation**  
+  – Neu erstellte Aufgaben mit Fälligkeitsdatum werden automatisch als Kalender-Termin eingetragen (`POST /calendar/events`)  
+  – Invalidiert `calendar-events`-Query; Fehler werden best-effort verschluckt (kein Task-Create-Failure)
+- **MWA Aufgaben — Fälligkeitspopup**  
+  – `useEffect` prüft alle 60 Sekunden, ob Aufgaben heute fällig sind  
+  – Zeigt `toast` mit Aufgabentitel; jede Aufgabe wird nur einmal je Session benachrichtigt (via `useRef<Set>`)
+- **MWA Kalender — Aufgaben als Ereignisse**  
+  – Aufgaben mit `dueDate` erscheinen im FullCalendar als ganztägige Ereignisse (amber `#f59e0b` / grau für erledigt)  
+  – Klick auf Aufgaben-Event zeigt Toast statt Löschdialog; Prefix `📋` / `✓` im Titel
+- **MWA Kontakte — Outlook-kompatible Felder**  
+  – Neue Felder: `email2`, `mobile`, `department`, `jobTitle`, `notes`  
+  – Edit-Formular in Sektionen: „Allgemein" (2-Spalten-Grid), „E-Mail & Telefon" (2-Spalten-Grid), „Notizen" (Textarea)  
+  – Detailansicht zeigt alle ausgefüllten Felder mit Icon + Label; Emails/Telefon clickable  
+  – Kontaktliste zeigt `jobTitle` als zweite Zeile (statt nur E-Mail)  
+  – `Contact`-Interface in `api/types.ts` um alle neuen Felder erweitert
+- **MWA E-Mail-Suche — Scope-Auswahl + Typeahead**  
+  – Neue Suchleiste oberhalb der Filterliste in `MessageList`  
+  – Scope-Umschalter: „Ordner" (client-seitige Filterung) / „Alle" (API-Query `/mail/folders/search?q=...`)  
+  – Typeahead: ab 2 Zeichen Eingabe werden bis zu 5 Treffer aus dem geladenen Ordner als Vorschläge angezeigt  
+  – Löschen-Button (`×`) leert die Suche; `Alle`-Scope deaktiviert den lokalen Filter
+- **MWA E-Mail-Verfassen — Schriftart-Auswahl**  
+  – Neues Tiptap-Extension `@tiptap/extension-font-family` (v2.27.2, passt zur bestehenden Tiptap-v2-Stack)  
+  – Dropdown mit 8 Schriftarten: Standard, Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS  
+  – Dropdown-Label und -Einträge werden jeweils in der entsprechenden Schrift dargestellt  
+  – Positioniert zwischen Block-Typ und Fett/Kursiv in der Formatierungsleiste
+- **BCP Dashboard — Alle Widgets draggable**  
+  – Alle 8 bisher fehlenden Widgets (`queue-status`, `mails-chart`, `storage-ranking`, `domains-chart`, `recent-errors`, `recent-audit`, `recent-logins`, `system-strip`) jetzt in `<DraggableCard>` eingebettet  
+  – IIFE-Slot-Pattern für Queue+Mails, Speicher+Domains und Fehler+Audit+Angriff (konsistent mit KPI- und Server-Sektion)  
+  – `recent-logins` und `system-strip` als einzelne draggable Einheiten
+
+### Fixed
+
+- **DNS-Hardening Startup-Check**: Integrity-Check-Ziele von `example.com` (IANA-IP nicht mehr gültig, jetzt Cloudflare CDN) auf stabile Infra-Records umgestellt: `one.one.one.one → 1.1.1.1` und `dns.google → 8.8.8.8`
+
+---
+
 ## [3.15.0] — 2026-05-20 — Security+ (Passwort-Reset, Angriffserkennung, DNS-Hardening)
 
 ### Added

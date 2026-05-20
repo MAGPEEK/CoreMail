@@ -11,7 +11,7 @@ import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, EventClickArg } from '@fullcalendar/core';
 import { X } from 'lucide-react';
 import { api } from '../api/client.js';
-import type { Calendar, CalendarEvent } from '../api/types.js';
+import type { Calendar, CalendarEvent, Task } from '../api/types.js';
 import { useUiPrefs } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
@@ -67,6 +67,11 @@ export function CalendarPage() {
     queryFn: () => api.get<CalendarEvent[]>('/calendar/events?start=2020-01-01&end=2030-12-31'),
   });
 
+  const { data: tasks } = useQuery({
+    queryKey: ['tasks', 'all'],
+    queryFn: () => api.get<Task[]>('/tasks'),
+  });
+
   const createMutation = useMutation({
     mutationFn: (data: NewEventForm) => api.post('/calendar/events', data),
     onSuccess: () => {
@@ -97,22 +102,42 @@ export function CalendarPage() {
   };
 
   const handleEventClick = (info: EventClickArg) => {
+    if (info.event.id.startsWith('task-')) {
+      toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
+      return;
+    }
     if (confirm(`Termin "${info.event.title}" löschen?`)) {
       deleteMutation.mutate(info.event.id);
     }
   };
 
-  const fcEvents = (events ?? [])
-    .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
-    .map((ev) => ({
-      id: ev.id,
-      title: ev.summary,
-      start: ev.dtStart,
-      end: ev.dtEnd,
-      allDay: false,
-      backgroundColor: calendars?.find((c) => c.id === ev.calendarId)?.color ?? '#0078D4',
+  const taskEvents = (tasks ?? [])
+    .filter((t) => !!t.dueDate)
+    .map((t) => ({
+      id: `task-${t.id}`,
+      title: (t.status === 'COMPLETED' ? '✓ ' : '📋 ') + t.subject,
+      start: t.dueDate as string,
+      allDay: true,
+      backgroundColor: t.status === 'COMPLETED' ? '#9ca3af' : '#f59e0b',
       borderColor: 'transparent',
+      textColor: '#ffffff',
+      classNames: t.status === 'COMPLETED' ? ['opacity-60'] : [],
     }));
+
+  const fcEvents = [
+    ...(events ?? [])
+      .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
+      .map((ev) => ({
+        id: ev.id,
+        title: ev.summary,
+        start: ev.dtStart,
+        end: ev.dtEnd,
+        allDay: false,
+        backgroundColor: calendars?.find((c) => c.id === ev.calendarId)?.color ?? '#0078D4',
+        borderColor: 'transparent',
+      })),
+    ...taskEvents,
+  ];
 
   return (
     <div className="flex flex-1 overflow-hidden">
