@@ -99,6 +99,7 @@ services:
 
     ports:
       - "3000:3000"   # HTTP — OWA, ECP, API, Auth, EWS, Autodiscover
+      - "80:3000"     # HTTP Port 80 — ACME HTTP-01 Challenge (Let's Encrypt)
       - "25:25"       # SMTP Inbound
       - "465:465"     # SMTPS (implizites TLS)
       - "587:587"     # Submission (STARTTLS)
