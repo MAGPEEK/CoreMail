@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, CheckCircle2, Circle, Flag, Calendar, Trash2,
-  ChevronDown, ChevronRight, AlignLeft, Bell,
+  ChevronDown, ChevronRight, AlignLeft, Bell, X, Save,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { api } from '../api/client.js';
@@ -21,8 +21,16 @@ const PRIORITY_LABEL: Record<string, string> = {
   HIGH:   'Hoch',
 };
 
-// ── Erweiterungsformular für neue Aufgaben ─────────────────────────────────────
+// ── Formular-Typen ─────────────────────────────────────────────────────────────
 interface NewTaskForm {
+  subject:  string;
+  body:     string;
+  priority: 'LOW' | 'NORMAL' | 'HIGH';
+  dueDate:  string;
+  reminder: string;
+}
+
+interface EditTaskForm {
   subject:  string;
   body:     string;
   priority: 'LOW' | 'NORMAL' | 'HIGH';
@@ -34,12 +42,23 @@ const EMPTY_FORM: NewTaskForm = {
   subject: '', body: '', priority: 'NORMAL', dueDate: '', reminder: '',
 };
 
+const EMPTY_EDIT_FORM: EditTaskForm = {
+  subject: '', body: '', priority: 'NORMAL', dueDate: '', reminder: '',
+};
+
 export function TasksPage() {
   const qc = useQueryClient();
   const [filter, setFilter]       = useState<'all' | 'pending' | 'completed'>('pending');
   const [expanded, setExpanded]   = useState<Set<string>>(new Set());
   const [form, setForm]           = useState<NewTaskForm>(EMPTY_FORM);
   const [showForm, setShowForm]   = useState(false);
+
+  // Feature 1 – Edit-Modal
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editForm, setEditForm]       = useState<EditTaskForm>(EMPTY_EDIT_FORM);
+
+  // Feature 3 – Fälligkeits-Benachrichtigungen: bereits notifizierte IDs
+  const notifiedIds = useRef<Set<string>>(new Set());
 
   const statusFilter = filter === 'pending'
     ? ['NOT_STARTED', 'IN_PROGRESS', 'DEFERRED']
@@ -49,6 +68,18 @@ export function TasksPage() {
     queryKey: ['tasks', filter],
     queryFn:  () => api.get<Task[]>('/tasks'),
     select:   (all) => statusFilter ? all.filter((t) => statusFilter.includes(t.status)) : all,
+  });
+
+  // Alle Aufgaben (ungefiltert) für Fälligkeitsprüfung
+  const { data: allTasks } = useQuery({
+    queryKey: ['tasks', 'all'],
+    queryFn:  () => api.get<Task[]>('/tasks'),
+  });
+
+  // Feature 2 – Kalender-Sync: Standard-Kalender ermitteln
+  const { data: calendars } = useQuery({
+    queryKey: ['calendars'],
+    queryFn:  () => api.get<{ id: string; name: string }[]>('/calendar'),
   });
 
   // ── Aufgabe erstellen ─────────────────────────────────────────────────────────
@@ -62,11 +93,29 @@ export function TasksPage() {
         ...(data.dueDate  ? { dueDate:  data.dueDate  } : {}),
         ...(data.reminder ? { reminder: data.reminder } : {}),
       }),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
       setForm(EMPTY_FORM);
       setShowForm(false);
       toast.success('Aufgabe erstellt');
+
+      // Feature 2 – best-effort Kalender-Sync wenn dueDate gesetzt
+      if (variables.dueDate) {
+        const calendarId = calendars?.[0]?.id;
+        if (calendarId) {
+          api.post('/calendar/events', {
+            summary:    variables.subject,
+            dtStart:    `${variables.dueDate}T00:00`,
+            dtEnd:      `${variables.dueDate}T01:00`,
+            calendarId,
+            allDay:     false,
+          }).then(() => {
+            qc.invalidateQueries({ queryKey: ['calendar-events'] });
+          }).catch(() => {
+            // best-effort: Kalender-Fehler still ignorieren
+          });
+        }
+      }
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -77,6 +126,25 @@ export function TasksPage() {
       api.put(`/tasks/${id}`, { status: completed ? 'COMPLETED' : 'NOT_STARTED' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
     onError:   (err: Error) => toast.error(err.message),
+  });
+
+  // Feature 1 – Aufgabe vollständig bearbeiten
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<EditTaskForm> }) =>
+      api.put(`/tasks/${id}`, {
+        ...(data.subject  !== undefined                    ? { subject:  data.subject  } : {}),
+        ...(data.body     !== undefined                    ? { body:     data.body     } : {}),
+        ...(data.priority !== undefined                    ? { priority: data.priority } : {}),
+        ...(data.dueDate  !== undefined && data.dueDate  !== '' ? { dueDate:  data.dueDate  } : {}),
+        ...(data.reminder !== undefined && data.reminder !== '' ? { reminder: data.reminder } : {}),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      setEditingTask(null);
+      setEditForm(EMPTY_EDIT_FORM);
+      toast.success('Aufgabe gespeichert');
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   // ── Aufgabe löschen ───────────────────────────────────────────────────────────
@@ -92,6 +160,39 @@ export function TasksPage() {
     createMutation.mutate({ ...form, subject: form.subject.trim() });
   };
 
+  // Feature 1 – Doppelklick öffnet Edit-Modal
+  const handleRowDoubleClick = (task: Task) => {
+    setEditingTask(task);
+    setEditForm({
+      subject:  task.subject,
+      body:     task.body     ?? '',
+      priority: (task.priority as 'LOW' | 'NORMAL' | 'HIGH') ?? 'NORMAL',
+      dueDate:  task.dueDate  ? task.dueDate.slice(0, 10)  : '',
+      reminder: task.reminder ? task.reminder.slice(0, 16) : '',
+    });
+  };
+
+  const handleEditSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    if (!editForm.subject.trim()) return;
+    updateMutation.mutate({
+      id:   editingTask.id,
+      data: {
+        subject:  editForm.subject.trim(),
+        body:     editForm.body,
+        priority: editForm.priority,
+        ...(editForm.dueDate  ? { dueDate:  editForm.dueDate  } : {}),
+        ...(editForm.reminder ? { reminder: editForm.reminder } : {}),
+      },
+    });
+  };
+
+  const handleEditClose = () => {
+    setEditingTask(null);
+    setEditForm(EMPTY_EDIT_FORM);
+  };
+
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -99,6 +200,29 @@ export function TasksPage() {
       return next;
     });
   };
+
+  // Feature 3 – Fälligkeitsprüfung
+  const checkDueDates = () => {
+    if (!allTasks) return;
+    const today = format(new Date(), 'yyyy-MM-dd');
+    for (const task of allTasks) {
+      if (task.status === 'COMPLETED') continue;
+      if (!task.dueDate) continue;
+      if (notifiedIds.current.has(task.id)) continue;
+      const taskDate = task.dueDate.slice(0, 10);
+      if (taskDate === today) {
+        notifiedIds.current.add(task.id);
+        toast(`⏰ Aufgabe fällig: ${task.subject}`, { icon: '📋', duration: 8000 });
+      }
+    }
+  };
+
+  useEffect(() => {
+    checkDueDates(); // sofort beim Mount prüfen
+    const interval = setInterval(checkDueDates, 60_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTasks]);
 
   return (
     <div className="flex flex-1 overflow-hidden bg-gray-50">
@@ -204,16 +328,21 @@ export function TasksPage() {
             <div className="py-10 text-center text-gray-400 text-sm">Keine Aufgaben</div>
           )}
           {(tasks ?? []).map((task) => {
-            const done     = task.status === 'COMPLETED';
-            const isOpen   = expanded.has(task.id);
-            const hasBody  = !!task.body;
-            const overdue  = !done && task.dueDate && new Date(task.dueDate) < new Date();
+            const done    = task.status === 'COMPLETED';
+            const isOpen  = expanded.has(task.id);
+            const hasBody = !!task.body;
+            const overdue = !done && task.dueDate && new Date(task.dueDate) < new Date();
             return (
               <div key={task.id}>
-                <div className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-50 transition-colors">
+                {/* Doppelklick öffnet Edit-Modal (Feature 1) */}
+                <div
+                  className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-50 transition-colors cursor-default"
+                  onDoubleClick={() => handleRowDoubleClick(task)}
+                  title="Doppelklick zum Bearbeiten"
+                >
                   {/* Checkbox */}
                   <button
-                    onClick={() => toggleMutation.mutate({ id: task.id, completed: !done })}
+                    onClick={(e) => { e.stopPropagation(); toggleMutation.mutate({ id: task.id, completed: !done }); }}
                     className="shrink-0 transition-colors"
                     title={done ? 'Als offen markieren' : 'Als erledigt markieren'}
                   >
@@ -229,7 +358,10 @@ export function TasksPage() {
                         {task.subject}
                       </p>
                       {hasBody && (
-                        <button onClick={() => toggleExpand(task.id)} className="text-gray-300 hover:text-gray-500 shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
+                          className="text-gray-300 hover:text-gray-500 shrink-0"
+                        >
                           <AlignLeft size={12} />
                         </button>
                       )}
@@ -251,7 +383,8 @@ export function TasksPage() {
                       </span>
                     )}
                     <button
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         if (window.confirm(`Aufgabe „${task.subject}" löschen?`)) {
                           deleteMutation.mutate(task.id);
                         }
@@ -262,7 +395,7 @@ export function TasksPage() {
                     </button>
                     {hasBody && (
                       <button
-                        onClick={() => toggleExpand(task.id)}
+                        onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
                         className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-600 transition-all"
                       >
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -282,6 +415,117 @@ export function TasksPage() {
           })}
         </div>
       </div>
+
+      {/* ── Feature 1: Edit-Modal ─────────────────────────────────────────────── */}
+      {editingTask && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={(e) => { if (e.target === e.currentTarget) handleEditClose(); }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+
+            {/* Modal-Kopfzeile */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-900">Aufgabe bearbeiten</h2>
+              <button
+                onClick={handleEditClose}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+                title="Schließen"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal-Formular */}
+            <form onSubmit={handleEditSave} className="p-5 flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Betreff *</label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={editForm.subject}
+                  onChange={(e) => setEditForm((f) => ({ ...f, subject: e.target.value }))}
+                  className="input w-full"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Notizen</label>
+                <textarea
+                  value={editForm.body}
+                  onChange={(e) => setEditForm((f) => ({ ...f, body: e.target.value }))}
+                  rows={3}
+                  className="input w-full resize-none text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Priorität</label>
+                  <div className="flex items-center gap-1.5">
+                    <Flag size={13} className={PRIORITY_COLOR[editForm.priority]} />
+                    <select
+                      value={editForm.priority}
+                      onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value as 'LOW' | 'NORMAL' | 'HIGH' }))}
+                      className="input py-0.5 text-xs flex-1"
+                    >
+                      {(['LOW', 'NORMAL', 'HIGH'] as const).map((p) => (
+                        <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Fälligkeit</label>
+                  <div className="flex items-center gap-1.5">
+                    <Calendar size={13} className="text-gray-400 shrink-0" />
+                    <input
+                      type="date"
+                      value={editForm.dueDate}
+                      onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))}
+                      className="input py-0.5 text-xs flex-1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Erinnerung</label>
+                <div className="flex items-center gap-1.5">
+                  <Bell size={13} className="text-gray-400 shrink-0" />
+                  <input
+                    type="datetime-local"
+                    value={editForm.reminder}
+                    onChange={(e) => setEditForm((f) => ({ ...f, reminder: e.target.value }))}
+                    className="input py-0.5 text-xs flex-1"
+                  />
+                </div>
+              </div>
+
+              {/* Aktionen */}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleEditClose}
+                  className="btn-secondary text-xs"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  disabled={!editForm.subject.trim() || updateMutation.isPending}
+                  className="btn-primary text-xs disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <Save size={13} />
+                  {updateMutation.isPending ? 'Speichern…' : 'Speichern'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

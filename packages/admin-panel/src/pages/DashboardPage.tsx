@@ -725,11 +725,9 @@ export function DashboardPage() {
       })()}
 
       {/* ── Queue-Status + Nachrichten-Chart ─────────────────────────────── */}
-      {anyQueueOrChart && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-          {/* Queue-Status */}
-          {isVisible('queue-status') && (
+      {anyQueueOrChart && (() => {
+        const queueSlots: Partial<Record<WidgetId, ReactElement>> = {
+          'queue-status': (
             <div className="card">
               <SectionTitle icon={Layers} title="SMTP-Queue-Status" />
               <div className="grid grid-cols-2 gap-3">
@@ -757,10 +755,8 @@ export function DashboardPage() {
                 }
               </div>
             </div>
-          )}
-
-          {/* Mail-Aktivitäts-Chart */}
-          {isVisible('mails-chart') && (
+          ),
+          'mails-chart': (
             <div className={`card ${isVisible('queue-status') ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
               <SectionTitle icon={TrendingUp} title="E-Mail-Aktivität (letzte 7 Tage)" />
               <ResponsiveContainer width="100%" height={160}>
@@ -783,16 +779,25 @@ export function DashboardPage() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          )}
-        </div>
-      )}
+          ),
+        };
+        const sorted = sortByOrder(['queue-status', 'mails-chart'], order);
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {sorted.map((id) => isVisible(id) && queueSlots[id]
+              ? <DraggableCard key={id} id={id}
+                  cardDrag={cardDrag} cardHover={cardHover}
+                  setCardDrag={setCardDrag} setCardHover={setCardHover}
+                  order={order} moveWidget={moveWidget}>{queueSlots[id]}</DraggableCard>
+              : null)}
+          </div>
+        );
+      })()}
 
       {/* ── Speicher-Ranking + Domain-Übersicht ──────────────────────────── */}
-      {anyRankOrDomain && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-          {/* Top-10 Speichernutzer */}
-          {isVisible('storage-ranking') && (
+      {anyRankOrDomain && (() => {
+        const rankSlots: Partial<Record<WidgetId, ReactElement>> = {
+          'storage-ranking': (
             <div className="card">
               <SectionTitle icon={HardDrive} title="Speicher-Ranking (Top 10)" />
               <div className="space-y-3">
@@ -824,10 +829,8 @@ export function DashboardPage() {
                 ))}
               </div>
             </div>
-          )}
-
-          {/* Domain-Übersicht */}
-          {isVisible('domains-chart') && (
+          ),
+          'domains-chart': (
             <div className="card">
               <SectionTitle icon={Globe} title="Domains & Benutzerverteilung" />
               {domains.list.length === 0 ? (
@@ -864,26 +867,28 @@ export function DashboardPage() {
                 </>
               )}
             </div>
-          )}
-        </div>
-      )}
+          ),
+        };
+        const sorted = sortByOrder(['storage-ranking', 'domains-chart'], order);
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {sorted.map((id) => isVisible(id) && rankSlots[id]
+              ? <DraggableCard key={id} id={id}
+                  cardDrag={cardDrag} cardHover={cardHover}
+                  setCardDrag={setCardDrag} setCardHover={setCardHover}
+                  order={order} moveWidget={moveWidget}>{rankSlots[id]}</DraggableCard>
+              : null)}
+          </div>
+        );
+      })()}
 
       {/* ── Fehler-Log + Audit-Trail + Angriffs-Erkennung ───────────────── */}
-      {anyErrorOrAudit && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-          {/* Angriffs-Erkennung */}
-          {isVisible('attack-events') && (
-            <DraggableCard key="attack-events" id="attack-events"
-              cardDrag={cardDrag} cardHover={cardHover}
-              setCardDrag={setCardDrag} setCardHover={setCardHover}
-              order={order} moveWidget={moveWidget}>
-              <AttackEventsWidget />
-            </DraggableCard>
-          )}
-
-          {/* Letzte Fehler */}
-          {isVisible('recent-errors') && (
+      {anyErrorOrAudit && (() => {
+        const errorSlots: Partial<Record<WidgetId, ReactElement>> = {
+          'attack-events': (
+            <AttackEventsWidget />
+          ),
+          'recent-errors': (
             <div className="card">
               <SectionTitle icon={AlertTriangle} title="Letzte Fehler & Warnungen (30 Tage)" />
               {recentErrors.length === 0 ? (
@@ -911,10 +916,8 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-          )}
-
-          {/* Audit-Trail */}
-          {isVisible('recent-audit') && (
+          ),
+          'recent-audit': (
             <div className="card">
               <SectionTitle icon={ShieldCheck} title="Letzte Admin-Aktionen" />
               {recentAuditEvents.length === 0 ? (
@@ -946,74 +949,91 @@ export function DashboardPage() {
                 </div>
               )}
             </div>
-          )}
-        </div>
-      )}
+          ),
+        };
+        const sorted = sortByOrder(['attack-events', 'recent-errors', 'recent-audit'], order);
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {sorted.map((id) => isVisible(id) && errorSlots[id]
+              ? <DraggableCard key={id} id={id}
+                  cardDrag={cardDrag} cardHover={cardHover}
+                  setCardDrag={setCardDrag} setCardHover={setCardHover}
+                  order={order} moveWidget={moveWidget}>{errorSlots[id]}</DraggableCard>
+              : null)}
+          </div>
+        );
+      })()}
 
       {/* ── Letzte Anmeldungen ───────────────────────────────────────────── */}
       {isVisible('recent-logins') && (
-        <div className="card">
-          <SectionTitle icon={LogIn} title="Letzte Anmeldungen" />
-          {recentLogins.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-6">Keine Anmeldungen protokolliert</p>
-          ) : (
-            <div className="divide-y divide-gray-50">
-              {recentLogins.map((l) => (
-                <div key={l.id} className="flex items-center justify-between py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs text-gray-700 font-medium truncate">{l.actorEmail}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5 truncate">
-                      {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || 'unbekannt'}{l.userAgent.length > 60 ? '…' : ''}
-                    </p>
+        <DraggableCard id="recent-logins" cardDrag={cardDrag} cardHover={cardHover}
+          setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>
+          <div className="card">
+            <SectionTitle icon={LogIn} title="Letzte Anmeldungen" />
+            {recentLogins.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6">Keine Anmeldungen protokolliert</p>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {recentLogins.map((l) => (
+                  <div key={l.id} className="flex items-center justify-between py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-700 font-medium truncate">{l.actorEmail}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                        {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || 'unbekannt'}{l.userAgent.length > 60 ? '…' : ''}
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-gray-400 shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
                   </div>
-                  <span className="text-[11px] text-gray-400 shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DraggableCard>
       )}
 
       {/* ── System-Info-Leiste ────────────────────────────────────────────── */}
       {isVisible('system-strip') && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="card flex items-center gap-3 py-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-              <Inbox size={14} className="text-blue-600" />
+        <DraggableCard id="system-strip" cardDrag={cardDrag} cardHover={cardHover}
+          setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="card flex items-center gap-3 py-3">
+              <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                <Inbox size={14} className="text-blue-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Queue-Einträge</p>
+                <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-gray-500">Queue-Einträge</p>
-              <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
+            <div className="card flex items-center gap-3 py-3">
+              <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
+                <Activity size={14} className="text-green-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Geliefert (kumuliert)</p>
+                <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
+              </div>
+            </div>
+            <div className="card flex items-center gap-3 py-3">
+              <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
+                <UserPlus size={14} className="text-purple-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Neue Benutzer (7 Tage)</p>
+                <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
+              </div>
+            </div>
+            <div className="card flex items-center gap-3 py-3">
+              <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
+                <Clock size={14} className="text-orange-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Mails heute eingegangen</p>
+                <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
+              </div>
             </div>
           </div>
-          <div className="card flex items-center gap-3 py-3">
-            <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
-              <Activity size={14} className="text-green-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Geliefert (kumuliert)</p>
-              <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 py-3">
-            <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-              <UserPlus size={14} className="text-purple-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Neue Benutzer (7 Tage)</p>
-              <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 py-3">
-            <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
-              <Clock size={14} className="text-orange-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Mails heute eingegangen</p>
-              <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
-            </div>
-          </div>
-        </div>
+        </DraggableCard>
       )}
 
     </div>

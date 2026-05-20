@@ -4,6 +4,7 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
+  Search, X,
 } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { api } from '../api/client.js';
@@ -195,6 +196,9 @@ export function MessageList({ folderId }: Props) {
   const { selectedMessageId, setSelectedMessage, selectedIds, toggleSelection, selectAll, clearSelection, filter, setFilter, openCompose } = useUiStore();
   const { density } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [searchText, setSearchText] = useState('');
+  const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['messages', folderId],
@@ -212,6 +216,13 @@ export function MessageList({ folderId }: Props) {
     queryFn: () => api.get<Category[]>('/categories'),
   });
 
+  const { data: allMessages } = useQuery({
+    queryKey: ['messages-search', searchText],
+    queryFn: () => api.get<MessagesResponse>(`/mail/folders/search?q=${encodeURIComponent(searchText)}&limit=50`),
+    enabled: searchScope === 'all' && searchText.length >= 2,
+    staleTime: 10_000,
+  });
+
   const currentFolder = folders.find((f) => f.id === folderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
   const isTrashFolder = currentFolder?.name === 'Trash';
@@ -225,7 +236,26 @@ export function MessageList({ folderId }: Props) {
     return list;
   }, [data, filter]);
 
-  const orderedIds = useMemo(() => filtered.map((m) => m.id), [filtered]);
+  const displayMessages = useMemo(() => {
+    if (searchText.length < 2) return filtered;
+    const q = searchText.toLowerCase();
+    const source = searchScope === 'all' ? (allMessages?.messages ?? []) : filtered;
+    return source.filter((m) =>
+      m.subject.toLowerCase().includes(q) ||
+      m.fromAddr.toLowerCase().includes(q) ||
+      (m.fromName ?? '').toLowerCase().includes(q)
+    );
+  }, [searchText, searchScope, filtered, allMessages]);
+
+  const suggestions = useMemo(() => {
+    if (searchText.length < 2) return [];
+    const q = searchText.toLowerCase();
+    return (data?.messages ?? [])
+      .filter((m) => m.subject.toLowerCase().includes(q) || m.fromAddr.toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [searchText, data]);
+
+  const orderedIds = useMemo(() => displayMessages.map((m) => m.id), [displayMessages]);
   const allChecked = orderedIds.length > 0 && orderedIds.every((id) => selectedIds.has(id));
 
   const invalidate = () => {
@@ -419,6 +449,51 @@ export function MessageList({ folderId }: Props) {
 
   return (
     <div className="w-80 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col h-full">
+      {/* Search row */}
+      <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2 relative">
+        <div className="relative flex-1">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 outline-none focus:border-accent dark:text-gray-100"
+            placeholder="Suchen…"
+          />
+          {searchText && (
+            <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={12} />
+            </button>
+          )}
+          {/* Typeahead suggestions */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
+              {suggestions.map((m) => (
+                <button key={m.id}
+                  onMouseDown={() => { setSelectedMessage(m.id); setSearchText(''); setShowSuggestions(false); }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-50 dark:border-gray-700 last:border-0">
+                  <p className="font-medium text-gray-800 dark:text-gray-200 truncate">{m.subject || '(kein Betreff)'}</p>
+                  <p className="text-gray-400 truncate">{m.fromAddr}</p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Scope toggle */}
+        <div className="flex text-[10px] rounded border border-gray-200 dark:border-gray-600 overflow-hidden shrink-0">
+          <button
+            onClick={() => setSearchScope('folder')}
+            className={`px-1.5 py-1 ${searchScope === 'folder' ? 'bg-accent text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+            title="Diesen Ordner durchsuchen"
+          >Ordner</button>
+          <button
+            onClick={() => setSearchScope('all')}
+            className={`px-1.5 py-1 ${searchScope === 'all' ? 'bg-accent text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+            title="Gesamtes Postfach durchsuchen"
+          >Alle</button>
+        </div>
+      </div>
       <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
         <input
           type="checkbox"
@@ -432,15 +507,15 @@ export function MessageList({ folderId }: Props) {
         <FilterTab value="flagged" label="Markiert" />
         <FilterTab value="attachments" label="Anhang" />
         <span className="ml-auto text-xs text-gray-500">
-          <AnimatedCounter value={filtered.length} />
+          <AnimatedCounter value={displayMessages.length} />
         </span>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
-          filter === 'all' ? <EmptyInbox /> : <EmptySearch />
+        {displayMessages.length === 0 ? (
+          filter === 'all' && !searchText ? <EmptyInbox /> : <EmptySearch />
         ) : (
-          filtered.map((msg) => (
+          displayMessages.map((msg) => (
             <MessageRow
               key={msg.id}
               msg={msg}
