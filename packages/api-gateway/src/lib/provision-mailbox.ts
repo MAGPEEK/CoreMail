@@ -15,6 +15,8 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('provision-mailbox');
 
+// Nur echte Mail-Ordner — Notes und Tasks sind eigenständige Datenbankmodelle
+// (prisma.Note, prisma.Task) und KEINE Mail-Ordner.
 export const DEFAULT_FOLDERS = [
   { name: 'INBOX',   displayName: 'Inbox' },
   { name: 'Drafts',  displayName: 'Drafts' },
@@ -22,8 +24,6 @@ export const DEFAULT_FOLDERS = [
   { name: 'Trash',   displayName: 'Deleted Items' },
   { name: 'Junk',    displayName: 'Junk Email' },
   { name: 'Archive', displayName: 'Archive' },
-  { name: 'Notes',   displayName: 'Notes' },
-  { name: 'Tasks',   displayName: 'Tasks' },
 ];
 
 export interface ProvisionResult {

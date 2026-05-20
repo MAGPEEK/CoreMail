@@ -24,6 +24,10 @@ type DialogState =
 
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 
+// Ordner-Namen die nicht als Mail-Ordner angezeigt werden sollen —
+// Tasks und Notes sind eigenständige Pages mit eigenen Datenmodellen.
+const HIDDEN_FOLDER_NAMES = new Set(['Tasks', 'Notes']);
+
 const ICON_MAP: Record<string, React.ElementType> = {
   INBOX:   Inbox,
   Drafts:  FileText,
@@ -220,7 +224,9 @@ export function FolderTree({ onNewMail }: Props) {
     },
   });
 
-  const all = folders ?? [];
+  // Tasks/Notes herausfiltern — diese werden als eigenständige Pages gerendert,
+  // nicht als Mail-Ordner in der Sidebar.
+  const all = (folders ?? []).filter((f) => !HIDDEN_FOLDER_NAMES.has(f.name));
 
   // ── Hierarchie aufbauen ────────────────────────────────────────────────────
   // Custom-Folder ohne parentId werden virtuell unter INBOX gehängt, damit es

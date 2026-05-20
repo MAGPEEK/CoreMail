@@ -88,11 +88,12 @@ export interface Contact {
 
 export interface Task {
   id: string;
-  title: string;
-  notes: string;
+  subject: string;
+  body: string;
   status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'DEFERRED';
   priority: 'LOW' | 'NORMAL' | 'HIGH';
   dueDate: string | null;
+  reminder: string | null;
   completedAt: string | null;
   createdAt: string;
 }
