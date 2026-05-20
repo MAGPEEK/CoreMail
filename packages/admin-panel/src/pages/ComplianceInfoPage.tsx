@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.11';
+const VERSION        = '3.13.12';
 const BUILD_DATE     = '2026-05-20';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.12', date: '2026-05-20', title: 'Bugfixes: Tasks-Fehler, doppelte Ordner, SharedMailbox-Sprache/Reihenfolge',
+    notes: 'Drei Bugfixes + eine UX-Verbesserung. (1) Aufgaben-Seite: „Invalid"-Fehler beim Erstellen behoben — Frontend sendete title statt subject (Prisma-Feldname). Task-Interface in types.ts korrigiert (subject/body statt title/notes). TasksPage komplett ausgebaut: erweitertes Formular mit Priorität, Fälligkeitsdatum, Erinnerung, aufklappbare Notizen, Überfällig-Rot-Markierung. (2) Posteingang: doppelte „Aufgaben"- und „Task"-Ordner entfernt — Notes/Tasks wurden fälschlich als Mail-Ordner provisioniert; aus DEFAULT_FOLDERS entfernt und per FolderTree-Filter für Bestandsbenutzer ausgeblendet. (3) Shared Mailbox: Ordner-Labels jetzt in der vom User eingestellten Sprache via useT() statt hartem Deutsch/Englisch. Datumformat passt sich der Benutzersprache an. Ordner-Reihenfolge identisch zur normalen Mailbox (INBOX→Entwürfe→Gesendet→Papierkorb→Junk→Archiv→Custom). Sidebar-Stil mit Akzentbalken identisch zur FolderTree-Sidebar.' },
   { version: '3.13.11', date: '2026-05-20', title: 'Automatischer Logout bei Inaktivität — Global Settings',
     notes: 'Neues Sicherheitsfeld in den Global Settings: „Automatischer Logout bei Inaktivität" (Minuten). 0 = deaktiviert, Standard 30 Minuten. Schnell-Buttons 0/5/10/15/30/60/120 min. Warnung bei < 5 Minuten. Neuer öffentlicher Endpoint GET /admin/settings/public (kein Auth) — liefert nicht-sensible Einstellungen wie orgName, inactivityTimeout, maintenanceMode. useInactivityLogout-Hook in BCP und MWA eingebunden: hört auf Maus-/Tastatureingaben, setzt Timer zurück, gibt 60-Sekunden-Toast-Vorwarnung bevor der Logout ausgelöst wird. Session-Timeout-Feld in „Session-Timeout (Token)" umbenannt um den Unterschied zum Inaktivitäts-Timeout zu verdeutlichen.' },
   { version: '3.13.10', date: '2026-05-20', title: 'Bugfix: Vorlage anwenden schlug fehl (retentionDays-Validierung zu streng)',

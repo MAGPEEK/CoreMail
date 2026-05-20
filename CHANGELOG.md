@@ -13,6 +13,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.12] — 2026-05-20 — Tasks-Fehler, doppelte Ordner, SharedMailbox-Sprache
+
+### Fixed
+
+- **Aufgaben — „Invalid"-Fehler beim Erstellen**: Frontend sendete `title`, Backend erwartet `subject` (Prisma-Schema-Feldname). `Task`-Interface in `types.ts` auf `subject`/`body` korrigiert; `TasksPage` sendet jetzt korrekte Felder
+- **Posteingang — doppelte Ordner „Aufgaben"/„Task"**: `Notes` und `Tasks` wurden fälschlicherweise als reguläre Mail-Ordner provisioniert. Beide aus `DEFAULT_FOLDERS` in `provision-mailbox.ts` entfernt (sind eigenständige Datenmodelle). `FolderTree` filtert sie für Bestandsbenutzer heraus
+- **SharedMailbox — falsche Sprache**: Ordner-Labels waren hardcodiert englisch/deutsch gemischt; jetzt via `useT()` in der vom User eingestellten Sprache (DE/EN/ES/IT)
+- **SharedMailbox — Datumformat**: `fmtDate()` nutzt jetzt die Benutzersprache statt hartem `'de-DE'`
+- **SharedMailbox — Ordner-Reihenfolge**: Folder-Sidebar folgt jetzt der gleichen Reihenfolge wie die normale Mailbox (`INBOX → Entwürfe → Gesendet → Papierkorb → Junk → Archiv`, dann benutzerdefinierte Ordner) statt nur `sortOrder + displayName`
+
+### Changed
+
+- **Aufgaben-Seite ausgebaut**: Erweitertes Formular mit Priorität, Fälligkeitsdatum, Erinnerung, Notiz-Textfeld; aufklappbare Body-Anzeige pro Aufgabe; Überfällig-Markierung in Rot; Löschen nur mit Bestätigung
+- **SharedMailbox-Sidebar-Stil** angepasst: Aktiver Akzentbalken links, Hover-Effekte und Icon-Größen identisch zur normalen FolderTree-Sidebar
+
+---
+
 ## [3.13.11] — 2026-05-20 — Automatischer Logout bei Inaktivität
 
 ### Added
