@@ -100,6 +100,7 @@ export interface Task {
   priority: 'LOW' | 'NORMAL' | 'HIGH';
   dueDate: string | null;
   reminder: string | null;
+  reminderByMail: boolean;
   completedAt: string | null;
   createdAt: string;
 }

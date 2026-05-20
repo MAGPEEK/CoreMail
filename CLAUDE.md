@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.16.0`
+**Aktuelle Version**: `3.16.3`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.15.0` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.16.3` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -171,7 +171,7 @@ Häufige Fallstricke (historische Fehler):
 | `Session` | `tokenHash` | ~~`token`~~ |
 | `User` | `mailbox` (1:1) | ~~`mailboxes`~~ |
 | `Note` | `subject` | ~~`title`~~ |
-| `Task` | `subject`, `body`, `reminder` | ~~`title`~~, ~~`notes`~~, ~~`reminderAt`~~ |
+| `Task` | `subject`, `body`, `reminder`, `reminderByMail` | ~~`title`~~, ~~`notes`~~, ~~`reminderAt`~~ |
 | `LdapConfig` | `lastSyncAt` | ~~`lastSync`~~ |
 | `Folder` | `displayName` (required!) | — |
 | `CalendarEvent` | `uid` (required!) | — |
@@ -494,7 +494,7 @@ SMTP Verbindung
 
 ---
 
-## Aktuelle Architektur-Highlights (3.15.x)
+## Aktuelle Architektur-Highlights (3.16.x)
 
 - **MWA** (Mail Web Access) unter Root-URL `/` seit v3.5.5 — vorher `/owa/` (Redirect bleibt)
 - **BCP** (Backend Control Panel) unter `/bcp/` seit v3.2.3 — vorher `/ecp/`
@@ -506,13 +506,19 @@ SMTP Verbindung
 - **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
 - **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
 - **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
-- **BCP-Dashboard** alle Widgets mit DraggableCard umhüllt (v3.15.1) — queue-status, mails-chart, storage-ranking, domains-chart, recent-errors, recent-audit, recent-logins, system-strip sind jetzt ebenfalls per Drag verschiebbar
-- **MWA Aufgaben**: Doppelklick öffnet Bearbeitungsmodal; Aufgaben mit Fälligkeitsdatum erscheinen im Kalender (amber); Popup-Benachrichtigung wenn Aufgabe fällig
-- **MWA Kontakte**: Erweiterte Felder (email2, mobile, department, jobTitle, notes) — Outlook-kompatibel
-- **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen
-- **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster
+- **BCP-Dashboard** alle Widgets mit DraggableCard umhüllt (v3.16.0) — queue-status, mails-chart, storage-ranking, domains-chart, recent-errors, recent-audit, recent-logins, system-strip per Drag verschiebbar
+- **MWA Aufgaben** (v3.16.x):
+  - Doppelklick öffnet vollständiges Bearbeitungsmodal
+  - Aufgaben mit Fälligkeitsdatum → automatischer Kalender-Termin (amber im FullCalendar)
+  - Erinnerung (Datum + Uhrzeit) → Kalender-Termin `🔔 Erinnerung: …` + Popup-Benachrichtigung zum gesetzten Zeitpunkt
+  - Checkbox **„per E-Mail"** — sendet bei Auslösung zusätzlich eine Mail an den eigenen Posteingang (`POST /mail/send`)
+  - Popup-Tracking via `localStorage` (Key = `taskId:reminderISO`) — feuert exakt einmal pro Zeitstempel, auch nach Page-Reload
+  - Prisma-Feld `reminderByMail Boolean @default(false)` in `tasks`-Tabelle
+- **MWA Kontakte**: Erweiterte Felder (email2, mobile, department, jobTitle, notes) — Outlook-kompatibel (v3.16.0)
+- **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
+- **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.15.1; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.16.3; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
 ## Wichtige technische Entscheidungen seit 3.x
@@ -521,7 +527,9 @@ SMTP Verbindung
 - **DraggableCard-Pattern**: React-Komponenten NIE inline in anderen Komponenten definieren (Reconciliation per Reference Equality → Re-Mount-Killer)
 - **`prisma db push --accept-data-loss`** in `entrypoint-app.sh` — Schema-Migrations beim Container-Start, auch destruktive (z. B. Journaling-Drop)
 - **Settings-Caches** (60s TTL, Greylisting + Outbound-Relay) invalidieren via Redis-`CHANNEL_SETTINGS_RELOAD` nach jedem Settings-Save
+- **Erinnerungs-Popup-Tracking**: `localStorage`-Key `coremail:notified-reminders` (JSON-Array von `taskId:reminderISO`-Strings) — verhindert Doppel-Popups über Page-Reloads hinweg; `useCallback` + `useRef` statt direkter Closure im `setInterval` (kein stale-closure-Bug)
+- **checkDueDates-Pattern**: stabile Callback-Referenz via `useCallback(fn, [])` + `allTasksRef` für stets aktuelle Daten im 30-Sekunden-Interval — kein `eslint-disable react-hooks/exhaustive-deps` mehr nötig
 
 ---
 
-*Letzte Aktualisierung: 2026-05-20 (v3.15.1 — MWA: Aufgaben-Edit+Kalender+Popup, Kontakte Outlook-Felder, Mail-Suche mit Scope+Typeahead, Schriftarten-Picker; BCP: alle Widgets draggable; DNS-Hardening-Fix)*
+*Letzte Aktualisierung: 2026-05-20 (v3.16.3 — MWA: Aufgaben-Erinnerung mit Kalender+Popup+E-Mail-Option, Popup-Persistenz via localStorage, Kontakte Outlook-Felder, Mail-Suche Scope+Typeahead, Schriftarten-Picker; BCP: alle Widgets draggable; DNS-Hardening-Fix)*

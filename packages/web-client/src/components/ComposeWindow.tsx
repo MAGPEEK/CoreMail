@@ -257,6 +257,145 @@ function ToolBtn({
   );
 }
 
+// ── Empfänger-Autocomplete ────────────────────────────────────────────────────
+interface ContactSuggest {
+  id: string;
+  displayName: string;
+  email: string;
+  company?: string;
+}
+
+function RecipientInput({
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  const [debouncedQ, setDebouncedQ] = useState('');
+  const [showSug, setShowSug]       = useState(false);
+  const [activeIdx, setActiveIdx]   = useState(0);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const inputRef      = useRef<HTMLInputElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Last typed fragment (after the final comma)
+  const getFragment = (v: string) => {
+    const parts = v.split(',');
+    return (parts[parts.length - 1] ?? '').trimStart();
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.value;
+    onChange(newVal);
+    const frag = getFragment(newVal);
+    setActiveIdx(0);
+    if (frag.length >= 1) {
+      setShowSug(true);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => setDebouncedQ(frag), 220);
+    } else {
+      setShowSug(false);
+      setDebouncedQ('');
+    }
+  };
+
+  const { data: contacts } = useQuery({
+    queryKey: ['contact-suggest', debouncedQ],
+    queryFn: () => api.get<ContactSuggest[]>(`/contacts?q=${encodeURIComponent(debouncedQ)}`),
+    enabled: debouncedQ.length >= 1,
+    staleTime: 30_000,
+  });
+
+  const suggestions = (contacts ?? []).filter((c) => !!c.email).slice(0, 8);
+
+  const pickSuggestion = useCallback((c: ContactSuggest) => {
+    const display = c.displayName ? `${c.displayName} <${c.email}>` : c.email;
+    // Replace last fragment with selected contact
+    const parts = value.split(',').map((p) => p.trimStart());
+    parts[parts.length - 1] = display;
+    onChange(parts.filter(Boolean).join(', ') + ', ');
+    setShowSug(false);
+    setDebouncedQ('');
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [value, onChange]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showSug || suggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      const s = suggestions[activeIdx];
+      if (s) { e.preventDefault(); pickSuggestion(s); }
+    } else if (e.key === 'Escape') {
+      setShowSug(false);
+    }
+  };
+
+  // Close on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowSug(false);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative flex-1 min-w-0">
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onFocus={() => {
+          const frag = getFragment(value);
+          if (frag.length >= 1 && suggestions.length > 0) setShowSug(true);
+        }}
+        className="w-full text-sm outline-none bg-transparent"
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+      />
+      {showSug && suggestions.length > 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-[400] max-h-52 overflow-y-auto">
+          {suggestions.map((c, i) => (
+            <button
+              key={c.id}
+              onMouseDown={(e) => { e.preventDefault(); pickSuggestion(c); }}
+              className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
+                i === activeIdx ? 'bg-blue-50' : 'hover:bg-gray-50'
+              }`}
+            >
+              <div className="w-7 h-7 rounded-full bg-accent/15 flex items-center justify-center text-xs font-semibold text-accent shrink-0 uppercase">
+                {(c.displayName || c.email)[0]}
+              </div>
+              <div className="min-w-0 flex-1">
+                {c.displayName && (
+                  <div className="text-sm font-medium text-gray-900 truncate">{c.displayName}</div>
+                )}
+                <div className={`truncate ${c.displayName ? 'text-xs text-gray-500' : 'text-sm text-gray-900'}`}>{c.email}</div>
+                {c.company && (
+                  <div className="text-xs text-gray-400 truncate">{c.company}</div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ComposeWindow ─────────────────────────────────────────────────────────────
 export function ComposeWindow() {
   const qc = useQueryClient();
@@ -419,12 +558,7 @@ export function ComposeWindow() {
         {/* An */}
         <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
           <span className="text-xs text-gray-400 w-10 shrink-0">An:</span>
-          <input
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="flex-1 text-sm outline-none"
-            placeholder="Empfänger..."
-          />
+          <RecipientInput value={to} onChange={setTo} placeholder="Empfänger..." />
           <div className="flex gap-3 text-xs text-blue-600 shrink-0">
             {!showCc  && <button type="button" onClick={() => setShowCc(true)}>CC</button>}
             {!showBcc && <button type="button" onClick={() => setShowBcc(true)}>BCC</button>}
@@ -435,13 +569,7 @@ export function ComposeWindow() {
         {showCc && (
           <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
             <span className="text-xs text-gray-400 w-10 shrink-0">CC:</span>
-            <input
-              value={cc}
-              onChange={(e) => setCc(e.target.value)}
-              className="flex-1 text-sm outline-none"
-              placeholder="CC..."
-              autoFocus
-            />
+            <RecipientInput value={cc} onChange={setCc} placeholder="CC..." autoFocus />
           </div>
         )}
 
@@ -449,13 +577,7 @@ export function ComposeWindow() {
         {showBcc && (
           <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
             <span className="text-xs text-gray-400 w-10 shrink-0">BCC:</span>
-            <input
-              value={bcc}
-              onChange={(e) => setBcc(e.target.value)}
-              className="flex-1 text-sm outline-none"
-              placeholder="BCC..."
-              autoFocus
-            />
+            <RecipientInput value={bcc} onChange={setBcc} placeholder="BCC..." autoFocus />
           </div>
         )}
 

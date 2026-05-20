@@ -532,8 +532,9 @@ model Task {
   priority    String   @default("NORMAL")       // LOW | NORMAL | HIGH
   dueDate     DateTime?
   completedAt DateTime?
-  reminder    DateTime?
-  changeKey   String   @default("")
+  reminder       DateTime?
+  reminderByMail Boolean   @default(false)
+  changeKey      String    @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
