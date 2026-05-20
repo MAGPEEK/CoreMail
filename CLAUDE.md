@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `2.1.44`
+**Aktuelle Version**: `3.13.9`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:1.9.19` | Alle Node.js-Services + OWA/ECP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.13.9` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -489,9 +489,32 @@ SMTP Verbindung
 ## Logging
 
 - **Logs**: pino (strukturiertes JSON) über alle Services
-- **Log-Level**: pro Service via ECP konfigurierbar (error | warn | info | debug)
+- **Log-Level**: pro Service via BCP konfigurierbar (error | warn | info | debug)
 - Grafana/Prometheus/Tempo/Loki/Alertmanager wurden in v2.1.19 aus dem Stack entfernt
 
 ---
 
-*Letzte Aktualisierung: 2026-05-18 (v2.1.44 — Global Einstellungen oben, DE/EN Sprache, Standards-Button entfernt)
+## Aktuelle Architektur-Highlights (3.13.x)
+
+- **MWA** (Mail Web Access) unter Root-URL `/` seit v3.5.5 — vorher `/owa/` (Redirect bleibt)
+- **BCP** (Backend Control Panel) unter `/bcp/` seit v3.2.3 — vorher `/ecp/`
+- **Journaling-Feature komplett entfernt** in v3.13.6 (war Phase 9 / RFC 3462) — DB-Tabellen `journaling_*` gedroppt, Routen 404
+- **Aufbewahrungsrichtlinien** Exchange-2019-konform mit DPT/RPT/Personal-Tags + Managed Folder Assistant (Background-Worker, 24h Work-Cycle) + Recoverable Items Non-IPM Subtree
+- **Shared Mailboxes** haben dieselbe Standard-Ordnerstruktur wie User-Postfächer (auto-provisioniert, INBOX/Drafts/Sent/Trash/Junk/Archive/Notes/Tasks) — Folder-CRUD im MWA für User mit FULL_ACCESS
+- **E-Mail-Aliase** seit v3.13.5 pro User-Postfach + Shared-Mailbox; SMTP-Inbound löst Aliase zur Target-Primäradresse auf bevor sie ins Postfach geschrieben werden
+- **Templates für Compliance**: 8 Retention-Vorlagen (Papierkorb 30d, Junk 14d, …) + 9 Transport-Rule-Vorlagen ([EXTERN], CEO-Phishing, PCI-DSS Detection, …)
+- **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
+- **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
+- **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
+- **Live-Server**: `magpeek/coremail-app:3.13.9` deployed auf `84.247.191.198`
+
+## Wichtige technische Entscheidungen seit 3.x
+
+- **`getAppVersion()`** liest `COREMAIL_VERSION`-Env BEVOR root `package.json` als Fallback — Runtime-Override ohne Image-Rebuild möglich
+- **DraggableCard-Pattern**: React-Komponenten NIE inline in anderen Komponenten definieren (Reconciliation per Reference Equality → Re-Mount-Killer)
+- **`prisma db push --accept-data-loss`** in `entrypoint-app.sh` — Schema-Migrations beim Container-Start, auch destruktive (z. B. Journaling-Drop)
+- **Settings-Caches** (60s TTL, Greylisting + Outbound-Relay) invalidieren via Redis-`CHANNEL_SETTINGS_RELOAD` nach jedem Settings-Save
+
+---
+
+*Letzte Aktualisierung: 2026-05-20 (v3.13.9 — Aufbewahrungsrichtlinien-Vorlagen, MFA-Buttons aus Hauptansicht entfernt)*

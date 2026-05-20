@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-2.1.30-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-3.13.9-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -17,7 +17,7 @@
 
 Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMAP/POP3/SMTP-Clients verbinden sich nativ. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v2.1.30** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v3.13.9** — [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 
 ---
 
@@ -50,18 +50,21 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | MAPI over HTTP — Outlook 2013+ native Transport | ✅ |
 | Autodiscover v1 + v2 (automatische Outlook-Konfiguration) | ✅ |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
-| OWA — Webmail (React, Exchange-ähnliches Layout) | ✅ |
-| Freigegebene Postfächer (Shared Mailboxen) | ✅ |
-| Öffentliche Ordner mit Berechtigungsverwaltung | ✅ |
+| MWA — Mail Web Access (React, Exchange-ähnliches Layout) | ✅ |
+| Freigegebene Postfächer mit voller Ordner-Struktur (Inbox, Sent, Trash, …) | ✅ |
+| Shared Mailbox-Reader im MWA — „Weiteres Postfach öffnen" über Konto-Dropdown | ✅ |
+| Folder-CRUD in Shared Mailboxes (Neuer Ordner, Umbenennen, Löschen, Standard-Folder geschützt) | ✅ |
+| E-Mail-Aliase pro User-Postfach und Shared-Mailbox | ✅ |
+| Öffentliche Ordner mit ACL (READ / WRITE / FULL) | ✅ |
 | Verteilergruppen (statisch & dynamisch via LDAP-Filter) | ✅ |
 | Raum- und Gerätepostfächer mit Auto-Accept | ✅ |
 | Abwesenheitsassistent | ✅ |
-| Posteingangsregeln & Transportregeln | ✅ |
+| Posteingangsregeln & Transportregeln + 9 Exchange-Vorlagen (Disclaimer, CEO-Phishing, PCI-DSS, …) | ✅ |
 | Volltextsuche (< 200 ms, PostgreSQL GIN-Index) | ✅ |
 | S/MIME — Signierung, Verschlüsselung, Verifikation | ✅ |
 | SMTP-Gateway-Modus (Relay zu Upstream-MTA) | ✅ |
-| Journaling-Regeln (RFC 3462) | ✅ |
-| Aufbewahrungsrichtlinien (ARCHIVE / DELETE / MOVE) | ✅ |
+| Aufbewahrungsrichtlinien Exchange-2019-konform (DPT/RPT/Personal Tags · 8 Vorlagen · Recoverable Items) | ✅ |
+| Managed Folder Assistant (Tag-Hierarchie, Soft/Hard Delete, Legal-Hold-aware) | ✅ |
 | Outlook Modern Auth (OAuth2 / PKCE) | ✅ |
 | PowerShell-Remoting (EMS mit 20+ Cmdlets) | ✅ |
 
@@ -101,7 +104,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Feature | Status |
 |---------|--------|
 | Lokale Anmeldung (bcrypt + pepper) | ✅ |
-| LDAP / Active Directory (ECP-Verwaltung, Attributzuordnung, Sync) | ✅ |
+| LDAP / Active Directory (BCP-Verwaltung, Attributzuordnung, Sync) | ✅ |
 | SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google, Authentik, Okta) | ✅ |
 | SAML 2.0 | ✅ |
 | MFA: TOTP (Authenticator-App) | ✅ |
@@ -109,9 +112,9 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | MFA: Backup-Codes | ✅ |
 | App-Passwörter für Mail-Clients | ✅ |
 | OAuth2 Authorization Server (Modern Auth) | ✅ |
-| Passwort-Änderung im Webclient (OWA) | ✅ |
+| Passwort-Änderung im Webclient (MWA) | ✅ |
 
-### Administration (ECP Admin-Panel)
+### Administration (BCP Admin-Panel)
 
 | Feature | Status |
 |---------|--------|
@@ -132,7 +135,7 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Web Push / VAPID-Benachrichtigungen | ✅ |
 | Auto-Mailbox-Provisionierung beim ersten Login | ✅ |
 
-### OWA Benutzer-Einstellungen
+### MWA Benutzer-Einstellungen
 
 | Feature | Status |
 |---------|--------|
@@ -195,7 +198,7 @@ Nach ca. 60–90 Sekunden sind alle Services bereit.
 
 ### 5. Ersten Admin-Account anlegen
 
-Beim ersten Aufruf von `https://<MAIL_HOSTNAME>/ecp/` erscheint automatisch der Setup-Assistent zum Anlegen des ersten Admin-Accounts.
+Beim ersten Aufruf von `https://<MAIL_HOSTNAME>/bcp/` erscheint automatisch der Setup-Assistent zum Anlegen des ersten Admin-Accounts.
 
 Alternativ per API:
 
@@ -219,7 +222,7 @@ CoreMail besteht aus **sechs Containern** (drei Standard-Images, drei Custom/Ext
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:2.1.30` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:3.13.9` | Alle Mail-Dienste + Webmail + Admin-Panel |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -236,7 +239,7 @@ Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:2.1.30
+    image: magpeek/coremail-app:3.13.9
     ports:
       - "3000:3000"   # Webmail, Admin-Panel, API, EWS, Autodiscover
       - "25:25"       # SMTP eingehend
@@ -318,8 +321,8 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 
 | URL | Beschreibung |
 |-----|-------------|
-| `https://<MAIL_HOSTNAME>/owa/` | Webmail (OWA) |
-| `https://<MAIL_HOSTNAME>/ecp/` | Admin-Panel (ECP) |
+| `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access, seit v3.5.5 direkt unter Root) |
+| `https://<MAIL_HOSTNAME>/bcp/` | Admin-Panel (BCP — Backend Control Panel, seit v3.2.3 umbenannt) |
 | `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS (Outlook Desktop) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
@@ -397,7 +400,7 @@ domain.de.                MX 10 mail.domain.de.
 ; SPF
 domain.de.                TXT   "v=spf1 mx -all"
 
-; DKIM (Public Key aus dem ECP Admin-Panel kopieren)
+; DKIM (Public Key aus dem BCP Admin-Panel kopieren)
 coremail._domainkey.domain.de. TXT "v=DKIM1; k=rsa; p=<public-key>"
 
 ; DMARC
@@ -407,7 +410,7 @@ _dmarc.domain.de.         TXT   "v=DMARC1; p=reject; rua=mailto:dmarc@domain.de"
 _autodiscover._tcp.domain.de. SRV 0 0 443 mail.domain.de.
 ```
 
-Den DKIM-Public-Key findet man im ECP unter **Domains → Domain auswählen → DKIM**.
+Den DKIM-Public-Key findet man im BCP unter **Domains → Domain auswählen → DKIM**.
 
 ---
 
@@ -493,7 +496,7 @@ CoreMail besteht aus **einem einzigen Custom-Image** — alle Services in einem 
 
 | Image | Inhalt |
 |-------|--------|
-| [`magpeek/coremail-app`](https://hub.docker.com/r/magpeek/coremail-app) | Alle Services + OWA/ECP-Frontends |
+| [`magpeek/coremail-app`](https://hub.docker.com/r/magpeek/coremail-app) | Alle Services + MWA/BCP-Frontends |
 
 Rspamd und ClamAV laufen in offiziellen Standard-Images — kein eigenes Image notwendig.
 
@@ -503,7 +506,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:2.1.30
+docker pull magpeek/coremail-app:3.13.9
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -514,6 +517,24 @@ docker pull magpeek/coremail-app:2.1.30
 
 | Version | Highlights |
 |---------|-----------|
+| **v3.13.9** | Aufbewahrungsrichtlinien — 8 Vorlagen (1-Klick erstellt Tag + Policy + GLOBAL-Zuweisung); MFA-jetzt/Historie-Buttons aus Hauptansicht entfernt |
+| **v3.13.8** | Shared Mailboxes mit voller Ordnerstruktur (INBOX/Drafts/Sent/…); Folder-CRUD im OWA (Neuer Ordner, Umbenennen, Löschen) — Standard-Folder geschützt |
+| **v3.13.7** | Transportregeln aus Vorlagen — 9 Exchange-2019-typische Templates ([EXTERN]-Markierung, CEO-Phishing, PCI-DSS, …) |
+| **v3.13.6** | Journaling-Feature komplett entfernt (−1 533 LOC) — DB-Tabellen `journaling_*` gedroppt |
+| **v3.13.5** | E-Mail-Aliase pro User + Shared-Mailbox (XOR-Target, Adress-Kollisions-Check, SMTP-Resolution) |
+| **v3.13.4** | „Weiteres Postfach öffnen" im MWA — Shared-Mailbox-Reader (3-Spalten Read-Only) über Konto-Dropdown |
+| **v3.13.3** | Drag&Drop-Reparatur (React-Anti-Pattern); Shared-Mailbox-Permissions-UX |
+| **v3.13.1–.2** | KPI-Drag-Reorder direkt auf den Karten; Info-Page schlanker (Top-3 Changelogs) |
+| **v3.13.0** | SMTP-Audit: 5 kritische Bugs gefixt (ESMTP-Flags aus DB, maxMessageSize, localDelivery, Greylisting); IANA-Zeitzonen; OWA→MWA |
+| **v3.12.0** | Journaling Exchange-2019-konform (BCC-Auflösung, .eml-Attachment, Retry, Hold) — *entfernt in 3.13.6* |
+| **v3.11.0** | Aufbewahrungsrichtlinien Exchange-2019: DPT/RPT/Personal-Tags + Managed Folder Assistant + Recoverable Items |
+| **v3.10.0** | eDiscovery komplett: Empfänger-Filter, Anhang-Filter, De-Duplizierung, MBOX-Export |
+| **v3.9.0** | Übersicht mit Server-Info (Uptime, RAM, CPU), konfigurierbare Widgets, Drag-Reorder im Popover |
+| **v3.8.0** | Öffentliche Ordner Crash-Fix + ACL READ/WRITE/FULL |
+| **v3.7.9** | Admin-Panel-Audit: Pfad-Doppel-Prefix-Bug + Exchange-2019-Mailbox-Permissions |
+| **v3.7.0** | DNSBL-Modul: Zonen + Aktionen + Score + IPv6 + Cache + Statistik |
+| **v3.5.5** | OWA jetzt direkt unter `/` (statt `/owa/`) — Login wieder erreichbar, umbenannt zu MWA |
+| **v3.2.3** | UI-Strings ECP → BCP umbenannt |
 | **v2.1.30** | Listener-Reload bei DELETE/PUT/POST; neuer „Standards"-Button stellt Default-Ports sofort wieder her |
 | **v2.1.29** | Port-Toggle Root-Cause-Fix: Startup liest DB-Zustand statt Ports hardcodiert zu öffnen |
 | **v2.1.28** | Postfach anlegen: Domain-Dropdown zeigt nur aktive Domains |
@@ -559,6 +580,6 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v2.1.30</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v3.13.9</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
