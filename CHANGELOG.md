@@ -13,6 +13,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.16.9] — 2026-05-20 — Bugfix: Let's Encrypt Port 80 + besseres UI-Feedback
+
+### Fixed
+
+- **docker-compose.yml**: Port `80:3000` ergänzt — ACME HTTP-01 Challenge jetzt
+  von Let's Encrypt erreichbar (vorher hängte der Prozess bis Timeout)
+- **BCP Zertifikate**: Sichtbarer Status-Banner bei PENDING (blau) und ERROR (rot)
+  direkt über der Tabelle — kein stilles "nichts passiert" mehr
+- **BCP Zertifikate**: Fehlermeldung im Expand-Panel jetzt mit Titel + lesbarem
+  `pre`-Block statt rohem Mono-Text
+- **certificates.ts**: Log-Hinweis bei ACME-Challenge: "Port 80 must be reachable"
+
+---
+
 ## [3.16.8] — 2026-05-20 — Bugfix: MessageList-Panel lässt sich nicht verschieben
 
 ### Fixed
