@@ -13,6 +13,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.16.8] — 2026-05-20 — Bugfix: MessageList-Panel lässt sich nicht verschieben
+
+### Fixed
+
+- **MWA Mail — Resizable Panel (MessageList)**: `w-80 shrink-0` im Haupt-Return überschrieb
+  das `style={{ width }}` des Parent-Div → Panel war nicht verschiebbar und zeigte nur den
+  leeren Nachrichtenzähler. Korrigiert auf `w-full h-full overflow-hidden`.
+
+---
+
 ## [3.16.7] — 2026-05-20 — BCP: Info-Fenster auf v3.16.6 aktualisiert
 
 ### Changed
