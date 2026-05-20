@@ -5,7 +5,7 @@ import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
+import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
 const log = createLogger('api:mail');
@@ -22,8 +22,11 @@ const uploadMiddleware = multer({
 let _outboundQueue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_outboundQueue) {
+    // BullMQ v5 erfordert maxRetriesPerRequest: null — createBullMqConnection() liefert das.
+    // getRedisClient() (shared, maxRetriesPerRequest: 3) crasht den Prozess wenn BullMQ
+    // interne Blocking-Commands ausführt → unhandled rejection → NetworkError im Browser.
     _outboundQueue = new Queue('smtp:outbound', {
-      connection: getRedisClient(),
+      connection: createBullMqConnection(),
       defaultJobOptions: {
         attempts: 10,
         backoff: { type: 'exponential', delay: 60_000 },
@@ -648,18 +651,24 @@ mailRouter.post(
     const smtpRecipients = [...to, ...cc, ...bcc];
     const jobId = crypto.randomUUID();
 
-    await getOutboundQueue().add('send', {
-      messageId: jobId,
-      from: user.email,
-      to: smtpRecipients,
-      rawMessage: rawBuffer.toString('base64'),
-      senderUserId: user.id,
-      ...(user.domain.dkimPrivateKey ? {
-        dkimDomain:      user.domain.name,
-        dkimSelector:    user.domain.dkimSelector,
-        dkimPrivateKey:  user.domain.dkimPrivateKey,
-      } : {}),
-    }, { jobId: `api-${jobId}` });
+    try {
+      await getOutboundQueue().add('send', {
+        messageId: jobId,
+        from: user.email,
+        to: smtpRecipients,
+        rawMessage: rawBuffer.toString('base64'),
+        senderUserId: user.id,
+        ...(user.domain.dkimPrivateKey ? {
+          dkimDomain:      user.domain.name,
+          dkimSelector:    user.domain.dkimSelector,
+          dkimPrivateKey:  user.domain.dkimPrivateKey,
+        } : {}),
+      }, { jobId: `api-${jobId}` });
+    } catch (queueErr) {
+      log.error({ err: queueErr }, 'Outbound queue add failed');
+      res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
+      return;
+    }
 
     log.info({ userId: user.id, to, attachments: files.length }, 'Nachricht in Queue eingereiht');
     res.json({ ok: true, jobId });
