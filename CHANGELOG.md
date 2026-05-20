@@ -13,6 +13,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.16.7] — 2026-05-20 — BCP: Info-Fenster auf v3.16.6 aktualisiert
+
+### Changed
+
+- **BCP Info-Fenster** — VERSION auf 3.16.6 aktualisiert, BUILD_DATE 2026-05-20  
+  – 6 neue HIGHLIGHTS-Einträge (3.16.6 → 3.14.0) mit vollständigen Release-Notes  
+  – Zeigt damit alle Releases seit 3.13.12 korrekt an
+
+---
+
 ## [3.16.6] — 2026-05-20 — MWA: Empfänger-Autocomplete, resizable Panels, Ansicht-Einstellungen
 
 ### Added
