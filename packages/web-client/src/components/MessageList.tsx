@@ -448,7 +448,7 @@ export function MessageList({ folderId }: Props) {
   );
 
   return (
-    <div className="w-80 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col h-full">
+    <div className="w-full h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col overflow-hidden">
       {/* Search row */}
       <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2 relative">
         <div className="relative flex-1">
