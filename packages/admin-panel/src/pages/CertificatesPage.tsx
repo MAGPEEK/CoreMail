@@ -13,7 +13,7 @@ import toast from 'react-hot-toast';
 import {
   ShieldCheck, Plus, RefreshCw, Trash2, Upload,
   ChevronDown, ChevronUp, X, Loader2, AlertCircle,
-  Lock, LockOpen,
+  Lock, LockOpen, ExternalLink,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
@@ -95,6 +95,14 @@ function ServiceSelector({
 
 type ModalMode = 'letsencrypt' | 'upload' | 'selfsigned' | null;
 
+// ── TLS-Proxy-Status-Typen ────────────────────────────────────────────────────
+
+interface TlsProxyInfo {
+  enabled:    boolean;
+  port:       number;
+  activeCert: { id: string; name: string; domains: string[]; status: string } | null;
+}
+
 // ── Haupt-Komponente ──────────────────────────────────────────────────────────
 
 export function CertificatesPage() {
@@ -106,6 +114,12 @@ export function CertificatesPage() {
     queryKey: ['admin-certificates'],
     queryFn: () => api.get<Certificate[]>('/admin/certificates'),
     refetchInterval: 10_000,
+  });
+
+  const { data: tlsInfo } = useQuery<TlsProxyInfo>({
+    queryKey: ['admin-certificates-tls-info'],
+    queryFn: () => api.get<TlsProxyInfo>('/admin/certificates/tls-proxy-info'),
+    refetchInterval: 15_000,
   });
 
   const renewMutation = useMutation({
@@ -146,7 +160,6 @@ export function CertificatesPage() {
     deleteMutation.mutate(cert.id);
   }
 
-  const activeHttpsCert = certs.find(c => c.isActiveHttps);
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -178,24 +191,43 @@ export function CertificatesPage() {
         </div>
       </div>
 
-      {/* HTTPS-Status-Banner */}
-      {activeHttpsCert ? (
+      {/* HTTPS-Status-Banner — drei Zustände */}
+      {tlsInfo?.enabled === false ? (
+        /* ── Externer Reverse Proxy (HTTPS_PROXY_ENABLED=false) ── */
+        <div className="mb-4 flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          <ExternalLink size={16} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Integrierter HTTPS-Proxy deaktiviert</p>
+            <p className="text-amber-700 mt-0.5">
+              <code className="font-mono text-xs bg-amber-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code>
+              {' '}— TLS wird vom externen Reverse Proxy (Traefik, Caddy, nginx, DSM …) terminiert.
+              Port 443 kann aus <code className="font-mono text-xs bg-amber-100 px-1 rounded">docker-compose.yml</code> entfernt werden.
+            </p>
+          </div>
+        </div>
+      ) : tlsInfo?.activeCert ? (
+        /* ── Integrierter Proxy läuft ── */
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
           <Lock size={16} className="text-green-600 shrink-0" />
           <span>
-            <strong>HTTPS aktiv</strong> — Port 443 verwendet Zertifikat{' '}
-            <span className="font-mono">{activeHttpsCert.name}</span>
-            {activeHttpsCert.domains[0] && (
-              <> für <span className="font-mono">{activeHttpsCert.domains[0]}</span></>
+            <strong>HTTPS aktiv</strong> — Port {tlsInfo.port} verwendet{' '}
+            <span className="font-mono font-medium">{tlsInfo.activeCert.name}</span>
+            {tlsInfo.activeCert.domains[0] && (
+              <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
             )}
+            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken oder{' '}
+            <code className="font-mono text-xs bg-green-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code> setzen.
           </span>
         </div>
       ) : (
+        /* ── Proxy aktiv, aber kein Zertifikat gewählt ── */
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
           <LockOpen size={16} className="shrink-0" />
           <span>
-            Kein HTTPS aktiv — Klicke bei einem gültigen Zertifikat auf{' '}
-            <strong>Als HTTPS aktivieren</strong>, um den integrierten TLS-Proxy zu starten.
+            Integrierter HTTPS-Proxy <strong>bereit</strong> — Klicke bei einem gültigen Zertifikat auf das{' '}
+            <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss-Symbol</strong>, um HTTPS auf Port {tlsInfo?.port ?? 443} zu starten.
+            {' '}Für externen Reverse Proxy:{' '}
+            <code className="font-mono text-xs bg-gray-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code> setzen.
           </span>
         </div>
       )}
