@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.13.8';
+const VERSION        = '3.13.9';
 const BUILD_DATE     = '2026-05-18';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.13.9', date: '2026-05-20', title: 'Aufbewahrungsrichtlinien aus Vorlagen — 8 Exchange-typische Szenarien, MFA-Buttons raus',
+    notes: 'Aufbewahrungsrichtlinien-Seite umstrukturiert. Verwirrende „MFA jetzt" und „MFA-Historie"-Buttons aus der Hauptansicht entfernt (Worker läuft sowieso automatisch — der Admin muss nichts manuell triggern). Neuer „Aus Vorlage"-Button öffnet einen Picker mit 8 fertigen Szenarien: Papierkorb 30 Tage leeren, Junk 14 Tage löschen, Posteingang 1 Jahr archivieren, Gesendet 2 Jahre archivieren, Entwürfe 90 Tage löschen, Compliance 7 Jahre Markierung, Standard 3 Jahre Archiv, 5 Jahre wiederherstellbar löschen. Klick auf eine Vorlage erzeugt atomar Tag + Richtlinie + GLOBAL-Zuweisung (auf alle Postfächer) in einem Schritt. Damit kann der Admin sofort produktive Regeln einsetzen ohne erst Tags + Policies + Zuweisungen einzeln zu konfigurieren — eigene Regeln „from scratch" weiterhin via „Neue Richtlinie".' },
   { version: '3.13.8', date: '2026-05-19', title: 'Shared Mailboxes mit voller Ordnerstruktur — Inbox/Sent/… + eigene Unterordner',
     notes: 'Freigegebene Postfächer haben jetzt dieselbe Standard-Ordnerstruktur wie reguläre User-Postfächer: INBOX, Drafts, Sent, Trash, Junk, Archive, Notes, Tasks. Neuer Helper ensureSharedMailboxProvisioned() in lib/provision-mailbox.ts — idempotent, wird automatisch bei POST /admin/shared-mailboxes aufgerufen und kann via POST /admin/shared-mailboxes/:id/provision auch nachträglich für Backfill auf alte Postfächer angewendet werden. Frontend (web-client SharedMailboxPage): neue Folder-Action-Buttons in der linken Sidebar — „Neuer Ordner"-Inline-Eingabe oben mit gestricheltem Border, beim Hover über einen User-Folder erscheinen Bleistift (umbenennen) und Mülleimer (löschen) als Icons rechts. Standard-Ordner (INBOX/Drafts/Sent/Trash/Junk/Outbox) sind protected und zeigen die Action-Icons nicht; Backend lehnt Umbenennen/Löschen/Reparenten für diese ebenfalls mit 403 ab. Inline-Rename mit Enter zum Speichern, Esc zum Abbrechen. Lösch-Confirm mit Hinweis auf Datenverlust. Backend-Routen neu: POST/PATCH/DELETE /user/shared-mailboxes/:id/folders[/:folderId] mit Cycle-Check für Reparenting, plus POST /folders/:folderId/empty zum Massenlöschen. Vollzugriff (FULL_ACCESS) wird pro Schreiboperation geprüft; READ_ONLY-User sehen die Action-Buttons gar nicht und bekommen vom Backend 403.' },
   { version: '3.13.7', date: '2026-05-19', title: 'Transportregeln aus Vorlagen — 9 Exchange-2019-typische Templates',

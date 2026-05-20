@@ -13,6 +13,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.13.9] — 2026-05-20 — Aufbewahrungsrichtlinien aus Vorlagen + MFA-Buttons entfernt
+
+### Removed — Hauptansicht entrümpelt
+
+- **„MFA jetzt"-Button** aus dem Header der `RetentionPage` entfernt — der Worker läuft automatisch im 24h-Work-Cycle, kein Admin muss manuell triggern
+- **„MFA-Historie"-Button** raus + `RunsModal`-Komponente komplett gelöscht — interne Worker-Telemetrie gehört nicht in die Compliance-Konfiguration
+- `runNow`-Mutation und `ManagedFolderRun`-Interface aus dem Component-State entfernt
+
+### Added — 1-Klick-Vorlagen
+
+- **„Aus Vorlage"-Button** neben „Neue Richtlinie" (nur im Policies-Tab)
+- **`TemplatePickerModal`** mit 8 fertigen Szenarien:
+
+| Szenario | Tag-Typ · Folder · Aktion · Frist |
+|---|---|
+| Papierkorb nach 30 Tagen leeren | RPT · DELETED_ITEMS · DELETE_AND_ALLOW_RECOVERY · 30 d |
+| Junk nach 14 Tagen endgültig löschen | RPT · JUNK_EMAIL · PERMANENTLY_DELETE · 14 d |
+| Posteingang nach 1 Jahr archivieren | RPT · INBOX · MOVE_TO_ARCHIVE · 365 d |
+| Gesendet nach 2 Jahren archivieren | RPT · SENT_ITEMS · MOVE_TO_ARCHIVE · 730 d |
+| Entwürfe nach 90 Tagen löschen | RPT · DRAFTS · DELETE_AND_ALLOW_RECOVERY · 90 d |
+| Compliance 7 Jahre (Markierung) | DPT · ALL_OTHER · MARK_AS_PAST_RETENTION_LIMIT · 2555 d |
+| Standard 3 Jahre → Archiv | DPT · ALL_OTHER · MOVE_TO_ARCHIVE · 1095 d |
+| 5 Jahre wiederherstellbar löschen | DPT · ALL_OTHER · DELETE_AND_ALLOW_RECOVERY · 1825 d |
+
+- Klick auf eine Vorlage löst **atomar** aus (Frontend-Orchestrierung):
+  1. `POST /admin/compliance/retention/tags` — Tag anlegen
+  2. `POST /admin/compliance/retention` — Policy anlegen (Legacy-Felder leer)
+  3. `POST /admin/compliance/retention/:policyId/tags/:tagId` — Tag an Policy hängen
+  4. `POST /admin/compliance/retention/:policyId/assignments` — GLOBAL-Zuweisung
+- Damit ist eine produktive Regel in **einem Klick** einsatzbereit
+- Eigene Regeln „from scratch" weiterhin via „Neue Richtlinie"-Button verfügbar
+
+### Changed — Page-Header
+
+- Subtitle umformuliert: „Definiere, wann E-Mails automatisch archiviert oder gelöscht werden — per Vorlage oder eigener Regel" (vorher: technische Beschreibung mit „Managed Folder Assistant · Recoverable Items")
+
+---
+
 ## [3.13.8] — 2026-05-19 — Shared Mailboxes mit voller Ordnerstruktur + User-Folder-CRUD
 
 ### Added — Provisioning
@@ -77,40 +115,6 @@ In `packages/api-gateway/src/routes/user.ts`:
 
 ---
 
-## [3.13.6] — 2026-05-19 — Journaling-Feature komplett entfernt
 
-### Removed
-
-- **SMTP-Server** (`packages/smtp-server/src/`):
-  - `journaling/engine.ts` (Engine + Retry-Loop + BCC-Detection + Report-Builder)
-  - `journalMessage()`-Aufruf in `handlers/message.ts` (Inbound nach Storage)
-  - `journalMessage()`-Aufruf in `outbound/queue.ts` (Outbound vor Relay)
-  - `startJournalingRetryLoop()`-Bootstrap in `server.ts`
-- **API-Gateway** (`packages/api-gateway/src/`):
-  - `routes/admin/journaling.ts` (alle 9 Routen — Rules-CRUD, Settings, Failures-Liste/Retry/Delete)
-  - Route-Registrierung in `server.ts`
-- **Admin-Panel** (`packages/admin-panel/src/`):
-  - `pages/JournalingPage.tsx` + `.js` Stale-Datei
-  - Route `/journaling` in `main.tsx`
-  - Sidebar-Eintrag (`Sidebar.tsx`) + `BookText`-Icon-Import
-  - Translation-Keys `nav_journaling` (de + en) in `i18n/translations.ts`
-  - „Journaling"-Referenz in `RbacPage.tsx` Compliance-Management-Beschreibung
-- **Prisma-Schema** (`packages/storage/prisma/schema.prisma`):
-  - `model JournalingRule`, `model JournalingSettings`, `model JournalingFailure`
-  - `enum JournalScope`, `enum JournalRecipientType`, `enum JournalingFailureStatus`
-
-### Database Migration
-
-- `prisma db push --accept-data-loss` beim Deploy droppt die Tabellen `journaling_rules`, `journaling_settings`, `journaling_failures` aus der DB
-- Eventuell vorhandene Journal-Failure-Exports unter MinIO-Pfad `journal-failures/*` bleiben erhalten (manuelles Cleanup falls gewünscht)
-
-### Notes
-
-- Mail-Flow läuft normal weiter — Journal-Hook war ein „best effort"-Sidecar, nicht im kritischen Zustellungs-Pfad
-- Wer Journaling als Compliance-Funktion benötigt, kann es via externem MTA-Relay oder Mail-Server-Konfiguration auf SMTP-Ebene nachbauen (z. B. Postfix `always_bcc`)
-
----
-
-
-> Ältere Releases (v3.13.5 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
+> Ältere Releases (v3.13.6 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
 > oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.

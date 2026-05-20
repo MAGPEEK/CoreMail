@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Archive, Plus, Pencil, Trash2, Tag, ListChecks, History,
-  X, Folder as FolderIcon, AlertCircle, Check, Play,
+  Archive, Plus, Pencil, Trash2, Tag, ListChecks,
+  X, Folder as FolderIcon, AlertCircle,
+  Sparkles, Inbox, Send, Mail as MailIcon, ShieldCheck, FileText, Clock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -40,20 +41,6 @@ interface RetentionPolicy {
   createdAt: string;
   _count?: { assignments: number };
   policyTags?: { policyId: string; tagId: string; tag: RetentionTag }[];
-}
-
-interface ManagedFolderRun {
-  id: string;
-  startedAt: string;
-  completedAt: string | null;
-  mailboxesScanned: number;
-  itemsScanned: number;
-  itemsArchived: number;
-  itemsSoftDeleted: number;
-  itemsHardDeleted: number;
-  itemsSkippedHold: number;
-  throttled: boolean;
-  errorMessage: string | null;
 }
 
 // ─── Labels ──────────────────────────────────────────────────────────────────
@@ -95,8 +82,236 @@ function daysLabel(d: number): string {
   return `${d} Tag${d !== 1 ? 'e' : ''}`;
 }
 
-function fmtDateTime(iso: string | null) {
-  return iso ? new Date(iso).toLocaleString('de-DE') : '—';
+// ─── Vorlagen (Exchange-2019-typische Aufbewahrungs-Szenarien) ─────────────
+// Jede Vorlage besteht aus: einem Tag + einer Policy (die diesen Tag bündelt)
+// + GLOBAL-Assignment auf alle Postfächer. Wird per 1-Klick atomar via
+// Frontend-Orchestrierung angelegt.
+
+interface RetentionTemplate {
+  id:          string;
+  icon:        React.ElementType;
+  iconClass:   string;
+  name:        string;
+  description: string;
+  policyName:  string;
+  tag: {
+    name:          string;
+    description:   string;
+    type:          TagType;
+    action:        TagAction;
+    retentionDays: number;
+    folderTarget:  FolderTarget;
+  };
+}
+
+const RETENTION_TEMPLATES: RetentionTemplate[] = [
+  {
+    id: 'trash-30d',
+    icon: Trash2, iconClass: 'text-red-600 bg-red-50',
+    name: 'Papierkorb nach 30 Tagen leeren',
+    description: 'Verschiebt Items aus „Gelöschte Elemente" nach 30 Tagen in Recoverable Items.',
+    policyName: 'Standard — Papierkorb 30 Tage',
+    tag: {
+      name: 'Auto-Cleanup Papierkorb (30 Tage)',
+      description: 'RPT für Gelöschte Elemente',
+      type: 'RPT', action: 'DELETE_AND_ALLOW_RECOVERY',
+      retentionDays: 30, folderTarget: 'DELETED_ITEMS',
+    },
+  },
+  {
+    id: 'junk-14d',
+    icon: ShieldCheck, iconClass: 'text-amber-600 bg-amber-50',
+    name: 'Junk nach 14 Tagen endgültig löschen',
+    description: 'Spam wird nach 14 Tagen direkt in Purges verschoben — Speicherplatz frei.',
+    policyName: 'Standard — Junk 14 Tage',
+    tag: {
+      name: 'Auto-Purge Junk (14 Tage)',
+      description: 'RPT für Junk-E-Mail',
+      type: 'RPT', action: 'PERMANENTLY_DELETE',
+      retentionDays: 14, folderTarget: 'JUNK_EMAIL',
+    },
+  },
+  {
+    id: 'inbox-archive-1y',
+    icon: Inbox, iconClass: 'text-blue-600 bg-blue-50',
+    name: 'Posteingang nach 1 Jahr archivieren',
+    description: 'Mails im Posteingang werden nach 365 Tagen ins Archiv-Postfach verschoben.',
+    policyName: 'Standard — Posteingang 1 Jahr → Archiv',
+    tag: {
+      name: 'Posteingang 1 Jahr → Archiv',
+      description: 'RPT für Inbox',
+      type: 'RPT', action: 'MOVE_TO_ARCHIVE',
+      retentionDays: 365, folderTarget: 'INBOX',
+    },
+  },
+  {
+    id: 'sent-archive-2y',
+    icon: Send, iconClass: 'text-indigo-600 bg-indigo-50',
+    name: 'Gesendet nach 2 Jahren archivieren',
+    description: 'Items aus „Gesendet" werden nach 2 Jahren ins Archiv-Postfach verschoben.',
+    policyName: 'Standard — Gesendet 2 Jahre → Archiv',
+    tag: {
+      name: 'Gesendet 2 Jahre → Archiv',
+      description: 'RPT für Sent Items',
+      type: 'RPT', action: 'MOVE_TO_ARCHIVE',
+      retentionDays: 730, folderTarget: 'SENT_ITEMS',
+    },
+  },
+  {
+    id: 'drafts-90d',
+    icon: FileText, iconClass: 'text-gray-600 bg-gray-100',
+    name: 'Entwürfe nach 90 Tagen löschen',
+    description: 'Nicht-abgesendete Entwürfe werden nach 90 Tagen in Deletions verschoben.',
+    policyName: 'Standard — Entwürfe 90 Tage',
+    tag: {
+      name: 'Entwürfe-Cleanup 90 Tage',
+      description: 'RPT für Drafts',
+      type: 'RPT', action: 'DELETE_AND_ALLOW_RECOVERY',
+      retentionDays: 90, folderTarget: 'DRAFTS',
+    },
+  },
+  {
+    id: 'dpt-7y-compliance',
+    icon: Clock, iconClass: 'text-purple-600 bg-purple-50',
+    name: 'Compliance: 7 Jahre Aufbewahrung (Markierung)',
+    description: 'DPT — markiert alle Items nach 7 Jahren als „über Aufbewahrungsfrist" (keine Bewegung).',
+    policyName: 'Compliance — 7 Jahre Aufbewahrung',
+    tag: {
+      name: 'Compliance 7 Jahre',
+      description: 'DPT für alle Items',
+      type: 'DPT', action: 'MARK_AS_PAST_RETENTION_LIMIT',
+      retentionDays: 2555, folderTarget: 'ALL_OTHER',
+    },
+  },
+  {
+    id: 'dpt-3y-archive',
+    icon: Archive, iconClass: 'text-emerald-600 bg-emerald-50',
+    name: 'Standard 3 Jahre → Archiv (alle Items)',
+    description: 'DPT — verschiebt alle Items nach 3 Jahren ins Archiv-Postfach.',
+    policyName: 'Standard — Alle Items 3 Jahre → Archiv',
+    tag: {
+      name: 'Mailbox-Default 3 Jahre → Archiv',
+      description: 'DPT für alle Items',
+      type: 'DPT', action: 'MOVE_TO_ARCHIVE',
+      retentionDays: 1095, folderTarget: 'ALL_OTHER',
+    },
+  },
+  {
+    id: 'dpt-5y-delete',
+    icon: MailIcon, iconClass: 'text-rose-600 bg-rose-50',
+    name: '5 Jahre wiederherstellbar löschen',
+    description: 'DPT — alle Items nach 5 Jahren in Recoverable Items\\Deletions. Compliance-tauglich.',
+    policyName: 'Standard — Alle Items 5 Jahre löschen',
+    tag: {
+      name: 'Mailbox-Default 5 Jahre Delete',
+      description: 'DPT für alle Items',
+      type: 'DPT', action: 'DELETE_AND_ALLOW_RECOVERY',
+      retentionDays: 1825, folderTarget: 'ALL_OTHER',
+    },
+  },
+];
+
+// ─── Template Picker ──────────────────────────────────────────────────────────
+function TemplatePickerModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function applyTemplate(tpl: RetentionTemplate) {
+    setBusyId(tpl.id);
+    try {
+      // 1. Tag anlegen
+      const tag = await api.post<{ id: string }>('/admin/compliance/retention/tags', {
+        ...tpl.tag,
+        enabled: true,
+      });
+      // 2. Policy anlegen (legacy-Felder leer, Tags steuern alles)
+      const policy = await api.post<{ id: string }>('/admin/compliance/retention', {
+        name: tpl.policyName,
+        description: tpl.description,
+        respectLegalHold: true,
+        enabled: true,
+        retentionDays: 0,
+        action: 'ARCHIVE',
+        scope: 'ALL_ITEMS',
+      });
+      // 3. Tag an Policy hängen
+      await api.post(`/admin/compliance/retention/${policy.id}/tags/${tag.id}`, {});
+      // 4. GLOBAL-Assignment auf alle Postfächer
+      await api.post(`/admin/compliance/retention/${policy.id}/assignments`, {
+        target: 'GLOBAL', targetId: '',
+      });
+
+      void qc.invalidateQueries({ queryKey: ['admin-retention'] });
+      void qc.invalidateQueries({ queryKey: ['admin-retention-tags'] });
+      toast.success(`Vorlage „${tpl.name}" angewendet — Richtlinie + Tag + Zuweisung erstellt.`);
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Konnte Vorlage nicht anwenden: ${msg}`);
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+          <div>
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <Sparkles size={17} className="text-accent" /> Aufbewahrungsrichtlinie aus Vorlage
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Wähle eine Vorlage — Tag + Richtlinie + Zuweisung auf alle Postfächer werden in einem Schritt erstellt.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {RETENTION_TEMPLATES.map((t) => {
+              const Icon = t.icon;
+              const isBusy = busyId === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  disabled={busyId !== null}
+                  onClick={() => applyTemplate(t)}
+                  className="text-left p-3 border border-gray-200 rounded-lg hover:border-accent hover:bg-accent/5 transition-colors group disabled:opacity-50"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${t.iconClass}`}>
+                      <Icon size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-900 mb-0.5 group-hover:text-accent">{t.name}</p>
+                      <p className="text-xs text-gray-600 leading-relaxed mb-1.5">{t.description}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${TAG_TYPE_COLORS[t.tag.type]}`}>{t.tag.type}</span>
+                        <span className="text-[10px] text-gray-500">
+                          {TAG_ACTION_LABELS[t.tag.action]} · nach {daysLabel(t.tag.retentionDays)}
+                        </span>
+                      </div>
+                    </div>
+                    {isBusy && <div className="text-xs text-gray-400">Erstelle…</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between shrink-0">
+          <p className="text-xs text-gray-400">
+            Du kannst die erstellte Richtlinie danach beliebig anpassen.
+          </p>
+          <button onClick={onClose}
+            className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+            Schließen
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Tag Modal ────────────────────────────────────────────────────────────────
@@ -381,80 +596,6 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
   );
 }
 
-// ─── Runs Modal ──────────────────────────────────────────────────────────────
-
-function RunsModal({ onClose }: { onClose: () => void }) {
-  const { data: runs = [], isLoading } = useQuery<ManagedFolderRun[]>({
-    queryKey: ['admin-retention-runs'],
-    queryFn:  () => api.get('/admin/compliance/retention/runs'),
-  });
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Managed Folder Assistant — Run-Historie</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Letzte 30 MFA-Läufe</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {isLoading ? (
-            <p className="text-center text-sm text-gray-400 py-12">Laden…</p>
-          ) : runs.length === 0 ? (
-            <p className="text-center text-sm text-gray-400 py-12">Noch keine MFA-Läufe</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  <th className="text-left px-4 py-2.5">Start</th>
-                  <th className="text-left px-4 py-2.5">Dauer</th>
-                  <th className="text-right px-4 py-2.5">Postfächer</th>
-                  <th className="text-right px-4 py-2.5">Items</th>
-                  <th className="text-right px-4 py-2.5">Archiviert</th>
-                  <th className="text-right px-4 py-2.5">Soft-Del</th>
-                  <th className="text-right px-4 py-2.5">Hard-Del</th>
-                  <th className="text-right px-4 py-2.5">Hold-Skip</th>
-                  <th className="text-left px-4 py-2.5">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((r) => {
-                  const dur = r.completedAt ? Math.round((new Date(r.completedAt).getTime() - new Date(r.startedAt).getTime()) / 1000) : null;
-                  return (
-                    <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-4 py-2 text-xs text-gray-700 whitespace-nowrap">{fmtDateTime(r.startedAt)}</td>
-                      <td className="px-4 py-2 text-xs text-gray-600">{dur !== null ? `${dur}s` : 'läuft…'}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums">{r.mailboxesScanned}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums">{r.itemsScanned}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums text-blue-600">{r.itemsArchived}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums text-amber-600">{r.itemsSoftDeleted}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums text-red-600">{r.itemsHardDeleted}</td>
-                      <td className="px-4 py-2 text-xs text-right tabular-nums text-purple-600">{r.itemsSkippedHold}</td>
-                      <td className="px-4 py-2 text-xs">
-                        {r.errorMessage ? (
-                          <span className="inline-flex items-center gap-1 text-red-600" title={r.errorMessage}><AlertCircle size={12} /> Fehler</span>
-                        ) : r.throttled ? (
-                          <span className="inline-flex items-center gap-1 text-amber-600"><AlertCircle size={12} /> Gedrosselt</span>
-                        ) : r.completedAt ? (
-                          <span className="inline-flex items-center gap-1 text-green-600"><Check size={12} /> OK</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-blue-600">läuft…</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function RetentionPage() {
@@ -462,7 +603,7 @@ export function RetentionPage() {
   const [tab, setTab] = useState<'policies' | 'tags'>('policies');
   const [policyModal, setPolicyModal] = useState<'create' | RetentionPolicy | null>(null);
   const [tagModal, setTagModal] = useState<'create' | RetentionTag | null>(null);
-  const [showRuns, setShowRuns] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [deletePolicyConfirm, setDeletePolicyConfirm] = useState<RetentionPolicy | null>(null);
   const [deleteTagConfirm, setDeleteTagConfirm] = useState<RetentionTag | null>(null);
 
@@ -503,16 +644,6 @@ export function RetentionPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const runNow = useMutation({
-    mutationFn: () => api.post('/admin/compliance/retention/run', {}),
-    onSuccess: (data: unknown) => {
-      const r = data as { mailboxesScanned?: number; itemsScanned?: number };
-      toast.success(`MFA-Lauf abgeschlossen — ${r.mailboxesScanned ?? 0} Postfächer, ${r.itemsScanned ?? 0} Items`);
-      void qc.invalidateQueries({ queryKey: ['admin-retention-runs'] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -520,18 +651,18 @@ export function RetentionPage() {
           <Archive size={22} className="text-accent" />
           <div>
             <h1 className="text-xl font-semibold text-gray-900">Aufbewahrungsrichtlinien</h1>
-            <p className="text-sm text-gray-500">Tag-basiert (DPT/RPT/Personal) · Managed Folder Assistant · Recoverable Items</p>
+            <p className="text-sm text-gray-500">
+              Definiere, wann E-Mails automatisch archiviert oder gelöscht werden — per Vorlage oder eigener Regel.
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowRuns(true)}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
-            <History size={14} /> MFA-Historie
-          </button>
-          <button onClick={() => runNow.mutate()} disabled={runNow.isPending}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-amber-700 border border-amber-300 bg-amber-50 rounded hover:bg-amber-100 disabled:opacity-50">
-            <Play size={14} /> {runNow.isPending ? 'MFA läuft…' : 'MFA jetzt'}
-          </button>
+          {tab === 'policies' && (
+            <button onClick={() => setTemplatePickerOpen(true)}
+              className="flex items-center gap-1.5 px-4 py-2 text-blue-700 bg-blue-50 border border-blue-200 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors">
+              <Sparkles size={14} /> Aus Vorlage
+            </button>
+          )}
           <button onClick={() => tab === 'policies' ? setPolicyModal('create') : setTagModal('create')}
             className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent/90">
             <Plus size={15} /> {tab === 'policies' ? 'Neue Richtlinie' : 'Neuer Tag'}
@@ -691,7 +822,7 @@ export function RetentionPage() {
 
       {policyModal !== null && <PolicyModal policy={policyModal === 'create' ? null : policyModal} allTags={tags} onClose={() => setPolicyModal(null)} />}
       {tagModal !== null && <TagModal tag={tagModal === 'create' ? null : tagModal} onClose={() => setTagModal(null)} />}
-      {showRuns && <RunsModal onClose={() => setShowRuns(false)} />}
+      {templatePickerOpen && <TemplatePickerModal onClose={() => setTemplatePickerOpen(false)} />}
 
       {deletePolicyConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
