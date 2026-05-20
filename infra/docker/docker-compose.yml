@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail v2.1.44
+# CoreMail v3.17.0
 #
 # Schnellstart:
 #   cp .env.example .env           # Hostname und Passwörter anpassen
@@ -24,7 +24,7 @@ services:
   # Kein nginx — api-gateway übernimmt HTTP-Routing auf Port 3000
 
   coremail:
-    image: magpeek/coremail-app:3.16.9
+    image: magpeek/coremail-app:3.17.0
     # Lokaler Build:
     # build:
     #   context: ../..
@@ -100,6 +100,7 @@ services:
     ports:
       - "3000:3000"   # HTTP — OWA, ECP, API, Auth, EWS, Autodiscover
       - "80:3000"     # HTTP Port 80 — ACME HTTP-01 Challenge (Let's Encrypt)
+      - "443:443"     # HTTPS — integrierter TLS-Proxy (aktiv wenn Zertifikat in BCP aktiviert)
       - "25:25"       # SMTP Inbound
       - "465:465"     # SMTPS (implizites TLS)
       - "587:587"     # Submission (STARTTLS)
