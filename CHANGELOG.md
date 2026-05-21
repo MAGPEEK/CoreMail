@@ -13,9 +13,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.17.12] — 2026-05-21 — BCP Vollständige Übersetzung (EN/DE)
+## [3.17.12] — 2026-05-21 — BCP Vollständige Übersetzung (EN/DE) + Versionsabgleich
 
 ### Changed
+
+- **Alle Package-Versionen synchronisiert**: Alle 17 `packages/*/package.json` hatten
+  noch Version `3.7.9` — jetzt einheitlich `3.17.12`. `/healthz`-Endpoint und
+  BCP → System-Informationen zeigen jetzt die korrekte Version
 
 - **BCP vollständig übersetzt (Englisch/Deutsch)**: Alle verbleibenden Seiten verwenden jetzt
   `useT()` und `t()`-Keys statt hartkodierten deutschen Strings:
