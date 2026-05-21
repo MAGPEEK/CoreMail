@@ -4,7 +4,7 @@ import { Readable } from 'stream';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
-import { prisma, downloadBuffer } from '@coremail/storage';
+import { prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey } from '@coremail/storage';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -40,8 +40,12 @@ function getOutboundQueue(): Queue {
 }
 
 // ── Nodemailer: MIME-Rohmessage aufbauen ──────────────────────────────────────
+// WICHTIG: newline: 'crlf' — SMTP-Protokoll (RFC 5321) erfordert CRLF (\r\n).
+// nodemailer's smtp-connection normalisiert Buffer-Inhalte NICHT automatisch
+// (nur String-Inhalte). Mit 'unix' (LF-only) kann der empfangende MTA den
+// Header/Body-Separator (\r\n\r\n) nicht erkennen → roher MIME-Text im Body.
 async function buildRawMime(options: nodemailer.SendMailOptions): Promise<Buffer> {
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'unix' });
+  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
   const chunks: Buffer[] = [];
@@ -717,6 +721,85 @@ mailRouter.post(
       res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
       return;
     }
+
+    // ── MAIL_FLOW — ACCEPTED-Log für Nachrichtenablaufverfolgung ────────────
+    void prisma.systemLog.create({
+      data: {
+        level: 'INFO',
+        service: 'api-gateway',
+        category: 'MAIL_FLOW',
+        message: `Sent: ${user.email} → ${smtpRecipients.join(', ')}`,
+        userId: user.id,
+        metadata: {
+          sender:    user.email,
+          recipient: smtpRecipients.join(', '),
+          subject,
+          status:    'ACCEPTED',
+          messageId: jobId,
+          size:      String(rawBuffer.length),
+          direction: 'OUTBOUND',
+        },
+      },
+    }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log failed'));
+
+    // ── Kopie in Gesendete Elemente speichern ────────────────────────────────
+    void (async () => {
+      try {
+        const mailbox = await prisma.mailbox.findFirst({
+          where: { userId: user.id },
+          include: { folders: true },
+        });
+        const sentFolder = mailbox?.folders.find(
+          (f: { name: string }) => f.name === 'Sent',
+        );
+        if (!sentFolder || !mailbox) return;
+
+        const parsed = await parseRawMessage(rawBuffer);
+        const updatedMbx = await prisma.mailbox.update({
+          where: { id: mailbox.id },
+          data: { uidNext: { increment: 1 }, highestModSeq: { increment: 1 } },
+        });
+        const uid    = updatedMbx.uidNext - 1;
+        const modSeq = updatedMbx.highestModSeq;
+
+        const LARGE = 256 * 1024;
+        let storagePath: string | null = null;
+        if (rawBuffer.length > LARGE) {
+          const msgId = crypto.randomUUID();
+          storagePath = rawMessageKey(msgId);
+          await uploadBuffer(storagePath, rawBuffer, 'message/rfc822');
+        }
+
+        await prisma.message.create({
+          data: {
+            folderId:  sentFolder.id,
+            uid, modSeq,
+            flags:     ['\\Seen'], // Gesendete Mails als gelesen markieren
+            subject:   parsed.subject,
+            fromAddr:  parsed.fromAddr,
+            fromName:  parsed.fromName,
+            toAddrs:   parsed.toAddrs,
+            ccAddrs:   parsed.ccAddrs,
+            bccAddrs:  parsed.bccAddrs,
+            replyTo:   parsed.replyTo,
+            messageId: parsed.messageId,
+            inReplyTo: parsed.inReplyTo,
+            date:      parsed.date,
+            bodyText:  storagePath ? '' : parsed.bodyText,
+            bodyHtml:  storagePath ? '' : parsed.bodyHtml,
+            rawSize:   rawBuffer.length,
+            storagePath,
+            changeKey: modSeq.toString(),
+          },
+        });
+        await prisma.folder.update({
+          where: { id: sentFolder.id },
+          data: { totalCount: { increment: 1 }, changeKey: modSeq.toString() },
+        });
+      } catch (e) {
+        log.warn({ err: e }, 'Sent-Kopie konnte nicht gespeichert werden');
+      }
+    })();
 
     log.info({ userId: user.id, to, attachments: files.length }, 'Nachricht in Queue eingereiht');
     res.json({ ok: true, jobId });
