@@ -7,6 +7,7 @@ import {
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Typen ────────────────────────────────────────────────────────────────────
 interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
@@ -51,6 +52,7 @@ const QUOTA_OPTIONS = [
 
 // ── Quota-Balken ─────────────────────────────────────────────────────────────
 function QuotaBar({ used, total, showLabel = false }: { used: number; total: number; showLabel?: boolean }) {
+  const t = useT();
   const pct = Math.min(100, total > 0 ? (used / total) * 100 : 0);
   const color = pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-yellow-500' : 'bg-accent';
   return (
@@ -58,7 +60,7 @@ function QuotaBar({ used, total, showLabel = false }: { used: number; total: num
       {showLabel && (
         <div className="flex justify-between text-xs text-gray-500">
           <span className="font-medium">{formatBytes(used)}</span>
-          <span className="text-gray-400">von {formatBytes(total)}</span>
+          <span className="text-gray-400">{t('mbox_storage_of')} {formatBytes(total)}</span>
         </div>
       )}
       <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -81,6 +83,7 @@ const EMPTY_FORM = {
 
 // ── Hauptkomponente ──────────────────────────────────────────────────────────
 export function MailboxesPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [search, setSearch]             = useState('');
   const [domainFilter, setDomainFilter] = useState('');
@@ -114,7 +117,7 @@ export function MailboxesPage() {
   const createMutation = useMutation({
     mutationFn: () => api.post('/admin/mailboxes', form),
     onSuccess: () => {
-      toast.success(`Postfach ${form.email} erstellt`);
+      toast.success(`${t('mbox_created_toast')} ${form.email}`);
       void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
       setShowCreate(false); setForm({ ...EMPTY_FORM }); setLocalPart('');
     },
@@ -126,7 +129,7 @@ export function MailboxesPage() {
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/admin/mailboxes/${id}`, data),
     onSuccess: () => {
-      toast.success('Gespeichert');
+      toast.success(t('mbox_saved_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
       setEditUser(null);
     },
@@ -145,7 +148,7 @@ export function MailboxesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/mailboxes/${id}`),
     onSuccess: () => {
-      toast.success('Postfach gelöscht');
+      toast.success(t('mbox_deleted_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
       setExpandedId(null);
     },
@@ -156,7 +159,7 @@ export function MailboxesPage() {
   const resetPwMutation = useMutation({
     mutationFn: ({ id, password }: { id: string; password: string }) =>
       api.put(`/admin/mailboxes/${id}`, { password }),
-    onSuccess: () => { toast.success('Passwort geändert'); setShowResetPw(null); setNewPassword(''); },
+    onSuccess: () => { toast.success(t('mbox_pw_changed')); setShowResetPw(null); setNewPassword(''); },
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -164,7 +167,7 @@ export function MailboxesPage() {
   const recalcAllMutation = useMutation({
     mutationFn: () => api.post('/admin/mailboxes/recalculate-all-quotas', {}),
     onSuccess: () => {
-      toast.success('Speicherverbrauch aktualisiert');
+      toast.success(t('mbox_storage_updated'));
       void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
       void qc.invalidateQueries({ queryKey: ['admin-mailbox-detail'] });
     },
@@ -202,24 +205,24 @@ export function MailboxesPage() {
       {/* Kopfzeile */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Benutzerverwaltung</h1>
-          <p className="text-xs text-gray-400 mt-0.5">{mailboxes.length} Postfächer gesamt</p>
+          <h1 className="text-xl font-semibold text-gray-900">{t('mbox_page_title')}</h1>
+          <p className="text-xs text-gray-400 mt-0.5">{mailboxes.length} {t('mbox_total')}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => recalcAllMutation.mutate()}
             disabled={recalcAllMutation.isPending}
             className="btn-secondary flex items-center gap-1.5 text-xs"
-            title="Speicherverbrauch aller Postfächer neu berechnen"
+            title={t('mbox_recalc_title')}
           >
             <RefreshCw size={13} className={recalcAllMutation.isPending ? 'animate-spin' : ''} />
-            Speicher aktualisieren
+            {t('mbox_recalc_storage')}
           </button>
           <button
             onClick={() => { setForm({ ...EMPTY_FORM }); setLocalPart(''); setShowCreate(true); }}
             className="btn-primary flex items-center gap-1.5"
           >
-            <Plus size={15} /> Neuer Benutzer
+            <Plus size={15} /> {t('mbox_new_user')}
           </button>
         </div>
       </div>
@@ -229,12 +232,12 @@ export function MailboxesPage() {
         <div className="relative">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)}
-            className="input pl-8 w-60" placeholder="Name oder E-Mail…" />
+            className="input pl-8 w-60" placeholder={t('mbox_filter_placeholder')} />
         </div>
         <div className="relative">
           <select value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)}
             className="input pr-8 appearance-none cursor-pointer">
-            <option value="">Alle Domains</option>
+            <option value="">{t('mbox_filter_all_domains')}</option>
             {domains.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name} ({mailboxes.filter((u) => u.domainId === d.id).length})
@@ -246,7 +249,7 @@ export function MailboxesPage() {
         {(search || domainFilter) && (
           <button onClick={() => { setSearch(''); setDomainFilter(''); }}
             className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-            <X size={12} /> Filter löschen
+            <X size={12} /> {t('mbox_filter_clear')}
           </button>
         )}
       </div>
@@ -257,7 +260,7 @@ export function MailboxesPage() {
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="w-8 px-2 py-2.5" />
-              {['Benutzer', 'Domain', 'Rolle', 'Speicherverbrauch', 'Status', 'Aktionen'].map((h) => (
+              {[t('mbox_col_user'), t('mbox_col_domain'), t('mbox_col_role'), t('mbox_col_storage'), t('mbox_col_status'), t('mbox_col_actions')].map((h) => (
                 <th key={h} className="text-left px-4 py-2.5 font-medium text-gray-500 text-xs">{h}</th>
               ))}
             </tr>
@@ -335,7 +338,7 @@ export function MailboxesPage() {
                           style={{ width: `${pct}%` }}
                         />
                       </div>
-                      <p className="text-xs text-gray-400">{pct.toFixed(1)} % genutzt</p>
+                      <p className="text-xs text-gray-400">{pct.toFixed(1)} {t('mbox_storage_used')}</p>
                     </div>
                   </td>
 
@@ -349,23 +352,23 @@ export function MailboxesPage() {
                           : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
                       }`}
                     >
-                      {u.active ? <><UserCheck size={11} /> Aktiv</> : <><UserX size={11} /> Deaktiviert</>}
+                      {u.active ? <><UserCheck size={11} /> {t('status_active')}</> : <><UserX size={11} /> {t('status_disabled')}</>}
                     </button>
                   </td>
 
                   {/* Aktionen */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title="Bearbeiten">
+                      <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')}>
                         <Pencil size={13} className="text-gray-500" />
                       </button>
                       <button onClick={() => { setShowResetPw(u); setNewPassword(''); }}
-                        className="btn-ghost p-1.5 rounded" title="Passwort zurücksetzen">
+                        className="btn-ghost p-1.5 rounded" title={t('mbox_reset_pw_title_btn')}>
                         <KeyRound size={13} className="text-blue-500" />
                       </button>
                       <button
-                        onClick={() => { if (confirm(`Postfach "${u.email}" wirklich löschen?`)) deleteMutation.mutate(u.id); }}
-                        className="btn-ghost p-1.5 rounded" title="Löschen">
+                        onClick={() => { if (confirm(`${t('mbox_delete_confirm')} "${u.email}"`)) deleteMutation.mutate(u.id); }}
+                        className="btn-ghost p-1.5 rounded" title={t('mbox_btn_delete_title')}>
                         <Trash2 size={13} className="text-red-500" />
                       </button>
                     </div>
@@ -378,7 +381,7 @@ export function MailboxesPage() {
                     <td colSpan={7} className="px-6 py-4">
                       {detailLoading && expandedId === u.id ? (
                         <div className="flex items-center gap-2 text-gray-500 text-sm">
-                          <Loader2 size={14} className="animate-spin" /> Lade Postfach-Details…
+                          <Loader2 size={14} className="animate-spin" /> {t('mbox_detail_loading')}
                         </div>
                       ) : detail && detail.id === u.id ? (
                         <div className="space-y-3">
@@ -387,10 +390,10 @@ export function MailboxesPage() {
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
                                 <HardDrive size={14} className="text-accent" />
-                                Gesamt-Speicher
+                                {t('mbox_detail_total_storage')}
                               </span>
                               <span className="text-xs text-gray-500">
-                                {formatBytes(detail.usedBytes)} von {formatBytes(detail.quotaBytes)} belegt
+                                {formatBytes(detail.usedBytes)} {t('mbox_detail_used_of')} {formatBytes(detail.quotaBytes)} {t('mbox_detail_occupied')}
                               </span>
                             </div>
                             <QuotaBar used={detail.usedBytes} total={detail.quotaBytes} showLabel />
@@ -400,14 +403,14 @@ export function MailboxesPage() {
                           {detail.mailbox?.folders && detail.mailbox.folders.length > 0 && (
                             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
                               <p className="text-xs font-medium text-gray-500 px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
-                                <Folder size={12} /> Ordner
+                                <Folder size={12} /> {t('mbox_detail_folders')}
                               </p>
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="border-b border-gray-100">
-                                    <th className="text-left px-4 py-1.5 text-gray-400 font-medium">Ordner</th>
-                                    <th className="text-right px-4 py-1.5 text-gray-400 font-medium">Nachrichten</th>
-                                    <th className="text-right px-4 py-1.5 text-gray-400 font-medium">Ungelesen</th>
+                                    <th className="text-left px-4 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_folder')}</th>
+                                    <th className="text-right px-4 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_messages')}</th>
+                                    <th className="text-right px-4 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_unread')}</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
@@ -428,7 +431,7 @@ export function MailboxesPage() {
                                 </tbody>
                                 <tfoot className="border-t border-gray-200 bg-gray-50">
                                   <tr>
-                                    <td className="px-4 py-1.5 text-gray-500 font-medium">Gesamt</td>
+                                    <td className="px-4 py-1.5 text-gray-500 font-medium">{t('mbox_detail_total')}</td>
                                     <td className="px-4 py-1.5 text-right text-gray-600 font-medium">
                                       {detail.mailbox.folders.reduce((s, f) => s + f.totalCount, 0)}
                                     </td>
@@ -443,8 +446,8 @@ export function MailboxesPage() {
 
                           {/* Metadaten */}
                           <div className="flex gap-4 text-xs text-gray-400">
-                            <span>ID: <code className="bg-gray-100 px-1 rounded">{detail.id}</code></span>
-                            <span>Erstellt: {new Date(detail.createdAt).toLocaleDateString('de-DE')}</span>
+                            <span>{t('mbox_detail_id')}: <code className="bg-gray-100 px-1 rounded">{detail.id}</code></span>
+                            <span>{t('mbox_detail_created')}: {new Date(detail.createdAt).toLocaleDateString('de-DE')}</span>
                           </div>
                         </div>
                       ) : null}
@@ -455,7 +458,7 @@ export function MailboxesPage() {
             })}
             {!isLoading && filtered.length === 0 && (
               <tr><td colSpan={7} className="py-10 text-center text-gray-400 text-sm">
-                {search || domainFilter ? 'Keine Treffer für diesen Filter' : 'Noch keine Benutzer angelegt'}
+                {search || domainFilter ? t('mbox_no_results') : t('mbox_no_users')}
               </td></tr>
             )}
           </tbody>
@@ -464,24 +467,24 @@ export function MailboxesPage() {
 
       {/* ── Dialog: Neuer Benutzer ──────────────────────────────────────────── */}
       {showCreate && (
-        <Modal title="Neuen Benutzer anlegen" onClose={() => setShowCreate(false)}>
+        <Modal title={t('mbox_create_title')} onClose={() => setShowCreate(false)}>
           <div className="space-y-4">
             <div>
-              <label className="field-label">Domain <span className="text-red-500">*</span></label>
+              <label className="field-label">{t('mbox_create_domain')} <span className="text-red-500">*</span></label>
               <select className="input w-full" value={form.domainId} onChange={(e) => selectDomain(e.target.value)}>
-                <option value="">Domain wählen…</option>
+                <option value="">{t('mbox_create_domain_select')}</option>
                 {domains.filter(d => d.active).map((d) => <option key={d.id} value={d.id}>@{d.name}</option>)}
               </select>
               {domains.filter(d => d.active).length === 0 && (
                 <p className="text-xs text-amber-600 mt-1">
                   {domains.length === 0
-                    ? 'Keine Domains vorhanden — bitte zuerst eine Domain anlegen.'
-                    : 'Alle Domains sind deaktiviert — bitte zuerst eine Domain aktivieren.'}
+                    ? t('mbox_create_domain_none')
+                    : t('mbox_create_domain_inactive')}
                 </p>
               )}
             </div>
             <div>
-              <label className="field-label">E-Mail-Adresse <span className="text-red-500">*</span></label>
+              <label className="field-label">{t('mbox_create_email')} <span className="text-red-500">*</span></label>
               <div className="flex">
                 <input className="input rounded-r-none flex-1" placeholder="benutzername"
                   value={localPart} onChange={(e) => setLocal(e.target.value)} />
@@ -492,27 +495,27 @@ export function MailboxesPage() {
               {form.email && <p className="text-xs text-gray-400 mt-1">→ {form.email}</p>}
             </div>
             <div>
-              <label className="field-label">Anzeigename <span className="text-red-500">*</span></label>
+              <label className="field-label">{t('mbox_create_displayname')} <span className="text-red-500">*</span></label>
               <input className="input w-full" placeholder="Max Mustermann"
                 value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
             </div>
             <div>
-              <label className="field-label">Passwort <span className="text-red-500">*</span></label>
-              <input type="password" className="input w-full" placeholder="Mindestens 8 Zeichen"
+              <label className="field-label">{t('mbox_create_password')} <span className="text-red-500">*</span></label>
+              <input type="password" className="input w-full" placeholder={t('mbox_create_pw_hint')}
                 value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
               {form.password && form.password.length < 8 && (
-                <p className="text-xs text-red-500 mt-1">Zu kurz (min. 8 Zeichen)</p>
+                <p className="text-xs text-red-500 mt-1">{t('mbox_create_pw_short')}</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="field-label">Rolle</label>
+                <label className="field-label">{t('mbox_create_role')}</label>
                 <select className="input w-full" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   {Object.entries(ROLES).map(([v, { label }]) => <option key={v} value={v}>{label}</option>)}
                 </select>
               </div>
               <div>
-                <label className="field-label flex items-center gap-1"><HardDrive size={12} /> Kontingent</label>
+                <label className="field-label flex items-center gap-1"><HardDrive size={12} /> {t('mbox_create_quota')}</label>
                 <select className="input w-full" value={form.quotaBytes}
                   onChange={(e) => setForm({ ...form, quotaBytes: parseInt(e.target.value) })}>
                   {QUOTA_OPTIONS.map((q) => <option key={q.value} value={q.value}>{q.label}</option>)}
@@ -521,14 +524,14 @@ export function MailboxesPage() {
             </div>
           </div>
           <div className="flex justify-end gap-2 mt-6">
-            <button onClick={() => setShowCreate(false)} className="btn-secondary">Abbrechen</button>
+            <button onClick={() => setShowCreate(false)} className="btn-secondary">{t('action_cancel')}</button>
             <button
               onClick={() => createMutation.mutate()}
               disabled={!form.email || !form.password || form.password.length < 8 || !form.domainId || !form.displayName || createMutation.isPending}
               className="btn-primary disabled:opacity-50 flex items-center gap-2"
             >
               {createMutation.isPending && <Loader2 size={14} className="animate-spin" />}
-              Benutzer erstellen
+              {t('mbox_create_btn')}
             </button>
           </div>
         </Modal>
@@ -536,7 +539,7 @@ export function MailboxesPage() {
 
       {/* ── Dialog: Bearbeiten ─────────────────────────────────────────────── */}
       {editUser && (
-        <Modal title={`${editUser.displayName} bearbeiten`} onClose={() => setEditUser(null)}>
+        <Modal title={`${editUser.displayName} ${t('mbox_edit_title')}`} onClose={() => setEditUser(null)}>
           <EditForm user={editUser} domains={domains}
             onSave={(data) => updateMutation.mutate({ id: editUser.id, data })}
             isPending={updateMutation.isPending} />
@@ -545,24 +548,24 @@ export function MailboxesPage() {
 
       {/* ── Dialog: Passwort-Reset ─────────────────────────────────────────── */}
       {showResetPw && (
-        <Modal title={`Passwort — ${showResetPw.email}`} onClose={() => setShowResetPw(null)}>
+        <Modal title={`${t('mbox_reset_pw_title')} — ${showResetPw.email}`} onClose={() => setShowResetPw(null)}>
           <div className="space-y-3">
-            <p className="text-sm text-gray-600">Neues Passwort für <strong>{showResetPw.displayName}</strong>:</p>
-            <input type="password" className="input w-full" placeholder="Neues Passwort (min. 8 Zeichen)"
+            <p className="text-sm text-gray-600">{t('mbox_reset_pw_for')} <strong>{showResetPw.displayName}</strong>:</p>
+            <input type="password" className="input w-full" placeholder={t('mbox_reset_pw_placeholder')}
               value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoFocus />
             {newPassword && newPassword.length < 8 && (
-              <p className="text-xs text-red-500">Zu kurz (min. 8 Zeichen)</p>
+              <p className="text-xs text-red-500">{t('mbox_create_pw_short')}</p>
             )}
           </div>
           <div className="flex justify-end gap-2 mt-5">
-            <button onClick={() => setShowResetPw(null)} className="btn-secondary">Abbrechen</button>
+            <button onClick={() => setShowResetPw(null)} className="btn-secondary">{t('action_cancel')}</button>
             <button
               onClick={() => resetPwMutation.mutate({ id: showResetPw.id, password: newPassword })}
               disabled={newPassword.length < 8 || resetPwMutation.isPending}
               className="btn-primary disabled:opacity-50 flex items-center gap-2"
             >
               {resetPwMutation.isPending && <Loader2 size={14} className="animate-spin" />}
-              Passwort setzen
+              {t('mbox_reset_pw_btn')}
             </button>
           </div>
         </Modal>
@@ -590,6 +593,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 function EditForm({ user, domains, onSave, isPending }:
   { user: User; domains: Domain[]; onSave: (d: Record<string, unknown>) => void; isPending: boolean }
 ) {
+  const t = useT();
   const [displayName, setDisplayName] = useState(user.displayName);
   const [role, setRole]               = useState(user.role);
   const [quotaBytes, setQuotaBytes]   = useState(user.quotaBytes);
@@ -598,26 +602,26 @@ function EditForm({ user, domains, onSave, isPending }:
   return (
     <div className="space-y-4">
       <div>
-        <label className="field-label">E-Mail</label>
+        <label className="field-label">{t('mbox_edit_email')}</label>
         <input className="input w-full bg-gray-50 cursor-not-allowed" value={user.email} disabled />
       </div>
       <div>
-        <label className="field-label">Domain</label>
+        <label className="field-label">{t('mbox_edit_domain')}</label>
         <input className="input w-full bg-gray-50 cursor-not-allowed" value={domainLabel} disabled />
       </div>
       <div>
-        <label className="field-label">Anzeigename</label>
+        <label className="field-label">{t('mbox_edit_displayname')}</label>
         <input className="input w-full" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="field-label">Rolle</label>
+          <label className="field-label">{t('mbox_create_role')}</label>
           <select className="input w-full" value={role} onChange={(e) => setRole(e.target.value)}>
             {Object.entries(ROLES).map(([v, { label }]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </div>
         <div>
-          <label className="field-label flex items-center gap-1"><HardDrive size={12} /> Kontingent</label>
+          <label className="field-label flex items-center gap-1"><HardDrive size={12} /> {t('mbox_create_quota')}</label>
           <select className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value))}>
             {QUOTA_OPTIONS.map((q) => <option key={q.value} value={q.value}>{q.label}</option>)}
           </select>
@@ -630,7 +634,7 @@ function EditForm({ user, domains, onSave, isPending }:
           className="btn-primary disabled:opacity-50 flex items-center gap-2"
         >
           {isPending && <Loader2 size={14} className="animate-spin" />}
-          Speichern
+          {t('action_save')}
         </button>
       </div>
 

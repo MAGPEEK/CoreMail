@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -22,6 +23,7 @@ interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
 // ── Add-Domain-Modal ──────────────────────────────────────────────────────────
 function AddDomainModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const qc = useQueryClient();
   const [name, setName] = useState('');
   const [selector, setSelector] = useState('coremail');
@@ -29,18 +31,18 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
   const createMutation = useMutation({
     mutationFn: () => api.post<Domain>('/admin/domains', { name: name.trim(), dkimSelector: selector }),
     onSuccess: () => {
-      toast.success('Domain wurde hinzugefügt');
+      toast.success(t('domain_added_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
       onClose();
     },
-    onError: (err: Error) => toast.error(err.message || 'Fehler beim Anlegen'),
+    onError: (err: Error) => toast.error(err.message || t('domain_add_error')),
   });
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">Domain hinzufügen</h2>
+          <h2 className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
             <X size={16} />
           </button>
@@ -48,7 +50,7 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Domain-Name <span className="text-red-500">*</span></label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_add_name_label')} <span className="text-red-500">*</span></label>
             <input
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={name}
@@ -59,14 +61,14 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">DKIM-Selektor</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_add_dkim_label')}</label>
             <input
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={selector}
               onChange={e => setSelector(e.target.value)}
               placeholder="coremail"
             />
-            <p className="text-xs text-gray-400 mt-1">DKIM-Schlüsselpaar wird automatisch generiert</p>
+            <p className="text-xs text-gray-400 mt-1">{t('domain_add_dkim_hint')}</p>
           </div>
         </div>
 
@@ -75,14 +77,14 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
             onClick={onClose}
             className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
           >
-            Abbrechen
+            {t('action_cancel')}
           </button>
           <button
             onClick={() => createMutation.mutate()}
             disabled={!name.trim() || createMutation.isPending}
             className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
           >
-            {createMutation.isPending ? 'Hinzufügen…' : 'Hinzufügen'}
+            {createMutation.isPending ? t('domain_add_btn_adding') : t('domain_add_btn_add')}
           </button>
         </div>
       </div>
@@ -92,6 +94,7 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
 
 // ── Edit-Domain-Modal ─────────────────────────────────────────────────────────
 function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => void }) {
+  const t = useT();
   const qc = useQueryClient();
   const [name, setName] = useState(domain.name);
   const [selector, setSelector] = useState(domain.dkimSelector);
@@ -101,7 +104,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   const updateMutation = useMutation({
     mutationFn: () => api.put<Domain>(`/admin/domains/${domain.id}`, { name: name.trim(), dkimSelector: selector }),
     onSuccess: () => {
-      toast.success('Domain aktualisiert');
+      toast.success(t('domain_updated_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
       onClose();
     },
@@ -111,11 +114,11 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/admin/domains/${domain.id}`),
     onSuccess: () => {
-      toast.success('Domain gelöscht');
+      toast.success(t('domain_deleted_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
       onClose();
     },
-    onError: (err: Error) => toast.error(err.message || 'Fehler beim Löschen'),
+    onError: (err: Error) => toast.error(err.message),
   });
 
   const loadDkim = async () => {
@@ -124,21 +127,21 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
       const r = await api.get<DkimRecord>(`/admin/domains/${domain.id}/dkim-record`);
       setDkimRecord(r);
     } catch {
-      toast.error('DKIM-Record konnte nicht geladen werden');
+      toast.error(t('domain_dkim_load_error'));
     } finally {
       setDkimLoading(false);
     }
   };
 
   const regenerateDkim = async () => {
-    if (!confirm('DKIM-Schlüsselpaar neu generieren?\n\nDer bestehende DNS-TXT-Eintrag wird ungültig — danach muss ein neuer Eintrag beim DNS-Anbieter gesetzt werden.')) return;
+    if (!confirm(t('domain_dkim_regen_confirm'))) return;
     setDkimLoading(true);
     try {
       const r = await api.post<DkimRecord>(`/admin/domains/${domain.id}/regenerate-dkim`, {});
       setDkimRecord(r);
-      toast.success('Neues DKIM-Schlüsselpaar generiert — DNS-Eintrag aktualisieren!');
+      toast.success(t('domain_dkim_regen_success'));
     } catch {
-      toast.error('DKIM-Schlüssel konnte nicht neu generiert werden');
+      toast.error(t('domain_dkim_regen_error'));
     } finally {
       setDkimLoading(false);
     }
@@ -148,13 +151,13 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg p-6">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">Domain bearbeiten</h2>
+          <h2 className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Domain-Name</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_edit_name_label')}</label>
             <input
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={name}
@@ -162,7 +165,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">DKIM-Selektor</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_edit_dkim_label')}</label>
             <input
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={selector}
@@ -173,9 +176,9 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
           {/* Info */}
           <div className="flex items-center gap-4 pt-1">
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${domain.primary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
-              {domain.primary ? 'Primäre Domain' : 'Sekundäre Domain'}
+              {domain.primary ? t('domain_edit_primary') : t('domain_edit_secondary')}
             </span>
-            <span className="text-xs text-gray-400">{domain._count.users} Postfach/Postfächer</span>
+            <span className="text-xs text-gray-400">{domain._count.users} {t('domain_edit_mailbox_count')}</span>
           </div>
 
           {/* DKIM DNS Record */}
@@ -186,7 +189,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline disabled:opacity-50"
             >
               <CheckCircle size={13} />
-              {dkimLoading ? 'Lädt…' : 'DKIM DNS-Eintrag anzeigen'}
+              {dkimLoading ? t('domain_dkim_loading') : t('domain_dkim_show')}
             </button>
             {dkimRecord && (
               <button
@@ -196,7 +199,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                 title="Neues RSA-2048-Schlüsselpaar generieren — bestehender DNS-Eintrag wird ungültig"
               >
                 <RefreshCw size={12} />
-                Neu generieren
+                {t('domain_dkim_regenerate')}
               </button>
             )}
           </div>
@@ -204,17 +207,17 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
           {dkimRecord && (
             <div className="bg-gray-50 rounded-lg p-3 space-y-2 border border-gray-200">
               <div>
-                <label className="text-xs text-gray-500 font-medium">DNS-Name</label>
+                <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_dns_name')}</label>
                 <div className="flex items-center gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success('Kopiert')).catch(() => toast.error('Kopieren fehlgeschlagen')); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
+                  <button onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
                 </div>
               </div>
               <div>
-                <label className="text-xs text-gray-500 font-medium">TXT-Wert</label>
+                <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_txt_value')}</label>
                 <div className="flex items-start gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success('Kopiert')).catch(() => toast.error('Kopieren fehlgeschlagen')); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
+                  <button onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
                 </div>
               </div>
             </div>
@@ -225,24 +228,24 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
           {/* Löschen nur wenn nicht primär und keine User */}
           <button
             onClick={() => {
-              if (confirm(`Domain "${domain.name}" wirklich löschen?`)) deleteMutation.mutate();
+              if (confirm(`${t('domain_delete_confirm')} "${domain.name}"`)) deleteMutation.mutate();
             }}
             disabled={domain.primary || deleteMutation.isPending}
             className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={domain.primary ? 'Primäre Domain kann nicht gelöscht werden' : undefined}
+            title={domain.primary ? t('domain_delete_primary_title') : undefined}
           >
-            Löschen
+            {t('action_delete')}
           </button>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors">
-              Abbrechen
+              {t('action_cancel')}
             </button>
             <button
               onClick={() => updateMutation.mutate()}
               disabled={!name.trim() || updateMutation.isPending}
               className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
-              {updateMutation.isPending ? 'Speichern…' : 'Speichern'}
+              {updateMutation.isPending ? t('action_saving') : t('action_save')}
             </button>
           </div>
         </div>
@@ -253,6 +256,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
 
 // ── Haupt-Komponente ──────────────────────────────────────────────────────────
 export function DomainsPage() {
+  const t = useT();
   const qc = useQueryClient();
 
   const [search, setSearch]       = useState('');
@@ -289,10 +293,10 @@ export function DomainsPage() {
   const makePrimaryMutation = useMutation({
     mutationFn: (id: string) => api.post(`/admin/domains/${id}/make-primary`, {}),
     onSuccess: () => {
-      toast.success('Primäre Domain gesetzt');
+      toast.success(t('domain_primary_set_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
     },
-    onError: () => toast.error('Fehler beim Setzen der primären Domain'),
+    onError: () => toast.error('Fehler beim Setzen der primären Domain'),  // no key exists for this
   });
 
   return (
@@ -300,7 +304,7 @@ export function DomainsPage() {
       {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 px-8 py-5">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">Manage Domains</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('domain_page_title')}</h1>
         </div>
       </div>
 
@@ -309,7 +313,7 @@ export function DomainsPage() {
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           {/* ── Toolbar ──────────────────────────────────────── */}
           <div className="flex items-center gap-4 p-5 border-b border-gray-200">
-            <h2 className="text-lg font-bold text-gray-900 shrink-0">Domains</h2>
+            <h2 className="text-lg font-bold text-gray-900 shrink-0">{t('domain_section_title')}</h2>
 
             {/* Suche */}
             <div className="flex-1 max-w-lg">
@@ -317,7 +321,7 @@ export function DomainsPage() {
                 type="text"
                 value={search}
                 onChange={e => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Search domains"
+                placeholder={t('domain_search_placeholder')}
                 className="w-full border border-gray-300 rounded px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-center placeholder-gray-400"
               />
             </div>
@@ -330,7 +334,7 @@ export function DomainsPage() {
               className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors uppercase tracking-wide"
             >
               <Plus size={15} />
-              ADD DOMAIN
+              {t('domain_add_btn')}
             </button>
           </div>
 
@@ -339,22 +343,22 @@ export function DomainsPage() {
             <thead>
               <tr className="border-b border-gray-200">
                 <th className="text-left px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide w-12">#</th>
-                <th className="text-left px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">DOMAIN NAME</th>
+                <th className="text-left px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_domain')}</th>
                 <th className="px-6 py-3 w-44"></th>
-                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">STATUS</th>
-                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">ACTIONS</th>
+                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_status')}</th>
+                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {isLoading && (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">Lade…</td>
+                  <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">{t('domain_loading')}</td>
                 </tr>
               )}
               {!isLoading && domains.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">
-                    {search ? 'Keine Domains gefunden' : 'Noch keine Domains angelegt'}
+                    {search ? t('domain_no_results') : t('domain_empty')}
                   </td>
                 </tr>
               )}
@@ -369,14 +373,14 @@ export function DomainsPage() {
                   {/* MAKE PRIMARY / Primary Domain label */}
                   <td className="px-6 py-4">
                     {d.primary ? (
-                      <span className="text-sm text-gray-500">Primary Domain</span>
+                      <span className="text-sm text-gray-500">{t('domain_primary_label')}</span>
                     ) : (
                       <button
                         onClick={() => makePrimaryMutation.mutate(d.id)}
                         disabled={makePrimaryMutation.isPending}
                         className="px-4 py-1.5 text-xs font-bold text-blue-600 border border-blue-300 rounded hover:bg-blue-50 transition-colors uppercase tracking-wide disabled:opacity-50"
                       >
-                        MAKE PRIMARY
+                        {t('domain_make_primary')}
                       </button>
                     )}
                   </td>
@@ -394,7 +398,7 @@ export function DomainsPage() {
                     <button
                       onClick={() => setEditing(d)}
                       className="p-1.5 text-blue-500 hover:text-blue-700 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
-                      title="Domain bearbeiten"
+                      title={t('domain_edit_title_btn')}
                     >
                       <Pencil size={14} />
                     </button>
@@ -417,7 +421,7 @@ export function DomainsPage() {
               </select>
               <ChevronDown size={12} className="absolute right-2 text-gray-400 pointer-events-none" />
             </div>
-            <span className="text-sm text-gray-500">domains per page</span>
+            <span className="text-sm text-gray-500">{t('domain_per_page')}</span>
 
             <div className="flex-1" />
 
@@ -442,7 +446,7 @@ export function DomainsPage() {
               </div>
             )}
 
-            <span className="text-xs text-gray-400">{total} Domain{total !== 1 ? 's' : ''} gesamt</span>
+            <span className="text-xs text-gray-400">{total} Domain{total !== 1 ? 's' : ''} {t('domain_total')}</span>
           </div>
         </div>
       </div>

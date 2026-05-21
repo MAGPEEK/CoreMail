@@ -13,6 +13,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.12] — 2026-05-21 — BCP Vollständige Übersetzung (EN/DE)
+
+### Changed
+
+- **BCP vollständig übersetzt (Englisch/Deutsch)**: Alle verbleibenden Seiten verwenden jetzt
+  `useT()` und `t()`-Keys statt hartkodierten deutschen Strings:
+  - **MailboxesPage** — Tabelle, Modals (Neu, Bearbeiten, Löschen), Quota-Balken, Rollen
+  - **DomainsPage** — DNS-Einträge, DKIM-Schlüssel-Modal, Domains-Tabelle, alle Aktionen
+  - **QueuesPage** — Übersicht, Jobs-Tabelle, Einstellungen, alle Status-Labels
+  - **DashboardPage** — KPI-Karten, Widget-Einstellungen, Server-Info, Angriffs-Events-Widget
+  - **QuarantinePage** — Statistikkarten, Filter, Tabelle, Detail-Panel, Cleanup-Modal
+
+- **translations.ts** erweitert auf ~1288 Schlüssel (vorher ~350):
+  Neue Sektionen für Postfächer, Domains, Logs, Queues, Dashboard, Quarantäne, Schutzfilter
+
+---
+
 ## [3.17.11] — 2026-05-21 — Multi-Fix: Mail-Body, lokale Zustellung, MessageTrace, Queue-Refresh, Übersetzungen
 
 ### Fixed

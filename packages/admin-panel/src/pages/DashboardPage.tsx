@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { api, getToken } from '../api/client.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
@@ -173,6 +174,7 @@ function MiniBar({ pct, color }: { pct: number; color: string }) {
 // eine simple vertikale Liste begrenzt ist. Die Position innerhalb der globalen
 // `order`-Liste bestimmt die Reihenfolge im Dashboard (per Gruppe sortiert).
 function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const visible    = useDashboardStore((s) => s.visible);
   const order      = useDashboardStore((s) => s.order);
   const toggle     = useDashboardStore((s) => s.toggle);
@@ -198,7 +200,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
     .filter((w): w is (typeof WIDGET_CATALOG)[number] => w !== undefined);
 
   const GROUP_LABELS: Record<(typeof WIDGET_CATALOG)[number]['group'], string> = {
-    kpi: 'Kennzahlen', charts: 'Diagramme & Queue', lists: 'Listen', server: 'Server',
+    kpi: t('dash_widget_group_kpi'), charts: t('dash_widget_group_charts'), lists: t('dash_widget_group_lists'), server: t('dash_widget_group_server'),
   };
 
   return (
@@ -208,13 +210,13 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
     >
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900">Widgets anzeigen & anordnen</h3>
-          <p className="text-[11px] text-gray-400 mt-0.5">Per Drag verschieben · Checkbox blendet ein/aus</p>
+          <h3 className="text-sm font-semibold text-gray-900">{t('dash_widget_settings')}</h3>
+          <p className="text-[11px] text-gray-400 mt-0.5">{t('dash_widget_drag_hint')}</p>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Alle</button>
-          <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Keine</button>
-          <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Standard</button>
+          <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_all')}</button>
+          <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_none')}</button>
+          <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_reset')}</button>
         </div>
       </div>
       <div className="max-h-[60vh] overflow-y-auto py-1">
@@ -366,7 +368,7 @@ function DraggableCard({
       } ${
         cardHover === id && sameGroup ? 'ring-2 ring-accent ring-offset-2' : ''
       }`}
-      title="Per Drag verschieben"
+      title=""
     >
       {children}
     </div>
@@ -377,6 +379,7 @@ function DraggableCard({
 // Pollt /admin/security/attacks/summary alle 30s und lauscht auf SSE-Events
 // vom Typ `security:attack` für Echtzeit-Updates.
 function AttackEventsWidget() {
+  const t = useT();
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['attack-summary'],
@@ -411,8 +414,8 @@ function AttackEventsWidget() {
   if (isLoading || !data) {
     return (
       <div className="card">
-        <SectionTitle icon={Siren} title="Angriffs-Erkennung (Live)" />
-        <p className="text-xs text-gray-400 text-center py-4">Lade…</p>
+        <SectionTitle icon={Siren} title={t('dash_attack_title')} />
+        <p className="text-xs text-gray-400 text-center py-4">{t('dash_attack_loading')}</p>
       </div>
     );
   }
@@ -420,11 +423,11 @@ function AttackEventsWidget() {
   return (
     <div className={`card border-2 transition-colors ${data.isUnderAttack ? 'border-red-400 bg-red-50/30' : 'border-transparent'}`}>
       <div className="flex items-center justify-between mb-3">
-        <SectionTitle icon={Siren} title="Angriffs-Erkennung (Live)" />
+        <SectionTitle icon={Siren} title={t('dash_attack_title')} />
         {data.isUnderAttack && (
           <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-100 px-2.5 py-1 rounded-full animate-pulse">
             <AlertTriangle size={12} />
-            UNTER ANGRIFF
+            {t('dash_attack_under')}
           </span>
         )}
       </div>
@@ -433,18 +436,18 @@ function AttackEventsWidget() {
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className={`rounded-lg p-3 text-center ${data.total1h > 0 ? 'bg-red-50 border border-red-100' : 'bg-gray-50'}`}>
           <p className={`text-2xl font-bold tabular-nums ${data.total1h > 0 ? 'text-red-700' : 'text-gray-700'}`}>{data.total1h}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">letzte Stunde</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">{t('dash_attack_last_hour')}</p>
         </div>
         <div className="rounded-lg p-3 text-center bg-gray-50">
           <p className="text-2xl font-bold tabular-nums text-gray-700">{data.total24h}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">letzte 24 h</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">{t('dash_attack_last_24h')}</p>
         </div>
       </div>
 
       {/* Top-Angriffstypen */}
       {data.byType.length > 0 && (
         <div className="mb-4">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Angriffstypen</p>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_types')}</p>
           <div className="space-y-1.5">
             {data.byType.map((b) => (
               <div key={b.type} className="flex items-center justify-between">
@@ -459,7 +462,7 @@ function AttackEventsWidget() {
       {/* Top-IPs */}
       {data.topIps.length > 0 && (
         <div className="mb-4">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Top-IPs</p>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_top_ips')}</p>
           <div className="space-y-1.5">
             {data.topIps.slice(0, 5).map((t) => (
               <div key={t.ip} className="flex items-center justify-between">
@@ -475,11 +478,11 @@ function AttackEventsWidget() {
       {data.latestEvents.length === 0 ? (
         <div className="flex items-center gap-2 justify-center text-green-600 py-2">
           <CheckCircle size={14} />
-          <span className="text-xs">Keine Angriffe erkannt</span>
+          <span className="text-xs">{t('dash_attack_none')}</span>
         </div>
       ) : (
         <div>
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Letzte Ereignisse</p>
+          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_events')}</p>
           <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
             {data.latestEvents.slice(0, 10).map((e) => (
               <div key={e.id} className="flex items-start gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 transition-colors">
@@ -501,6 +504,7 @@ function AttackEventsWidget() {
 
 // ── Hauptkomponente ───────────────────────────────────────────────────────────
 export function DashboardPage() {
+  const t = useT();
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn:  () => api.get<DashboardData>('/admin/dashboard'),
@@ -523,7 +527,7 @@ export function DashboardPage() {
       <div className="flex items-center justify-center h-64">
         <div className="flex items-center gap-2 text-gray-400">
           <RefreshCw size={16} className="animate-spin" />
-          <span className="text-sm">Dashboard wird geladen…</span>
+          <span className="text-sm">{t('dash_loading')}</span>
         </div>
       </div>
     );
@@ -555,25 +559,25 @@ export function DashboardPage() {
       {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Systemübersicht</h1>
-          <p className="text-xs text-gray-400 mt-0.5">Letzte Aktualisierung: {lastUpdate} · Auto-Refresh alle 30s</p>
+          <h1 className="text-xl font-semibold text-gray-900">{t('dash_title')}</h1>
+          <p className="text-xs text-gray-400 mt-0.5">{t('dash_last_update')} {lastUpdate} · {t('dash_auto_refresh')}</p>
         </div>
         <div className="flex items-center gap-2 relative">
           <button
             onClick={() => void refetch()}
             className="btn-secondary text-xs"
-            title="Jetzt aktualisieren"
+            title={t('dash_refresh')}
           >
             <RefreshCw size={13} />
-            Aktualisieren
+            {t('dash_refresh')}
           </button>
           <button
             onClick={() => setShowSettings((v) => !v)}
             className="btn-secondary text-xs"
-            title="Widgets ein-/ausblenden"
+            title={t('dash_display')}
           >
             <Settings size={13} />
-            Anzeige
+            {t('dash_display')}
           </button>
           {showSettings && <WidgetSettingsPopover onClose={() => setShowSettings(false)} />}
         </div>
@@ -585,35 +589,35 @@ export function DashboardPage() {
           'kpi-users': (
             <KpiCard
               icon={Users}  color="bg-blue-500"
-              label="Benutzer gesamt"
+              label={t('dash_kpi_users')}
               value={users.total}
-              sub={`${users.active} aktiv · ${users.inactive} deaktiviert`}
-              trend={{ value: users.newWeek, label: 'diese Woche neu' }}
+              sub={`${users.active} ${t('dash_kpi_users_sub')} · ${users.inactive} ${t('dash_kpi_users_sub2')}`}
+              trend={{ value: users.newWeek, label: t('dash_kpi_users_trend') }}
             />
           ),
           'kpi-domains': (
             <KpiCard
               icon={Globe} color="bg-indigo-500"
-              label="Domains"
+              label={t('dash_kpi_domains')}
               value={domains.total}
-              sub={`${data.sharedMailboxes} geteilte Postfächer · ${data.groups} Gruppen`}
+              sub={`${data.sharedMailboxes} ${t('dash_kpi_domains_sub')} · ${data.groups} ${t('dash_kpi_domains_sub2')}`}
             />
           ),
           'kpi-messages': (
             <KpiCard
               icon={Mail}  color="bg-sky-500"
-              label="E-Mails gesamt"
+              label={t('dash_kpi_messages')}
               value={messages.total}
-              sub={`${fmtNum(messages.newDay)} heute · ${fmtNum(messages.newWeek)} diese Woche`}
-              trend={{ value: messages.newDay, label: 'heute' }}
+              sub={`${fmtNum(messages.newDay)} ${t('dash_kpi_messages_today')} · ${fmtNum(messages.newWeek)} ${t('dash_kpi_messages_week')}`}
+              trend={{ value: messages.newDay, label: t('dash_kpi_messages_today') }}
             />
           ),
           'kpi-storage': (
             <KpiCard
               icon={HardDrive} color="bg-violet-500"
-              label="Gesamt-Speicher"
+              label={t('dash_kpi_storage')}
               value={fmtBytes(storage.totalUsedBytes)}
-              sub={`Top-Nutzer: ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
+              sub={`${t('dash_kpi_storage_top')} ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
             />
           ),
         };
@@ -641,19 +645,19 @@ export function DashboardPage() {
                   <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{uptime.primary}</p>
                   <p className="text-sm text-gray-400 mb-0.5">{uptime.secondary}</p>
                 </div>
-                <p className="text-xs text-gray-500">Uptime seit {new Date(server.startedAt).toLocaleString('de-DE')}</p>
+                <p className="text-xs text-gray-500">{t('dash_server_uptime')} {new Date(server.startedAt).toLocaleString('de-DE')}</p>
                 <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-                  <span className="text-gray-400">Version</span>
+                  <span className="text-gray-400">{t('dash_server_version')}</span>
                   <span className="text-gray-700 font-mono">v{server.version}</span>
-                  <span className="text-gray-400">Hostname</span>
+                  <span className="text-gray-400">{t('dash_server_hostname')}</span>
                   <span className="text-gray-700 font-mono truncate" title={server.hostname}>{server.hostname}</span>
-                  <span className="text-gray-400">Plattform</span>
+                  <span className="text-gray-400">{t('dash_server_platform')}</span>
                   <span className="text-gray-700 font-mono">{server.platform}/{server.arch}</span>
-                  <span className="text-gray-400">Node.js</span>
+                  <span className="text-gray-400">{t('dash_server_nodejs')}</span>
                   <span className="text-gray-700 font-mono">{server.nodeVersion}</span>
-                  <span className="text-gray-400">PID</span>
+                  <span className="text-gray-400">{t('dash_server_pid')}</span>
                   <span className="text-gray-700 font-mono">{server.pid}</span>
-                  <span className="text-gray-400">Sessions aktiv</span>
+                  <span className="text-gray-400">{t('dash_server_sessions')}</span>
                   <span className="text-gray-700 tabular-nums">{fmtNum(activeSessions)}</span>
                 </div>
               </div>
@@ -665,7 +669,7 @@ export function DashboardPage() {
               <div className="space-y-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Cpu size={12} className="text-gray-400" /> CPU-Last (1 min)</span>
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Cpu size={12} className="text-gray-400" /> {t('dash_server_cpu')}</span>
                     <span className="text-xs font-semibold text-gray-700 tabular-nums">{server.cpu.load1.toFixed(2)} / {server.cpu.cores} Cores</span>
                   </div>
                   <MiniBar pct={cpuPct} color={barColor(cpuPct)} />
@@ -673,19 +677,19 @@ export function DashboardPage() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><MemoryStick size={12} className="text-gray-400" /> System-RAM</span>
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><MemoryStick size={12} className="text-gray-400" /> {t('dash_server_ram')}</span>
                     <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(sysMemUsed)} / {fmtBytes(server.memory.systemTotal)}</span>
                   </div>
                   <MiniBar pct={sysMemPct} color={barColor(sysMemPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">Frei: {fmtBytes(server.memory.systemFree)}</p>
+                  <p className="text-[11px] text-gray-400 mt-1">{t('dash_server_free')} {fmtBytes(server.memory.systemFree)}</p>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> Node-Heap</span>
+                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> {t('dash_server_heap')}</span>
                     <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(heapBudget)}</span>
                   </div>
                   <MiniBar pct={heapPct} color={barColor(heapPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">Allokiert {fmtBytes(server.memory.heapTotal)} · RSS {fmtBytes(server.memory.rss)}</p>
+                  <p className="text-[11px] text-gray-400 mt-1">{t('dash_server_allocated')} {fmtBytes(server.memory.heapTotal)} · {t('dash_server_rss')} {fmtBytes(server.memory.rss)}</p>
                 </div>
               </div>
             </div>
@@ -696,15 +700,15 @@ export function DashboardPage() {
               <div className="space-y-3">
                 <div className="flex items-end gap-2">
                   <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{fmtNum(securityHits24h)}</p>
-                  <p className="text-sm text-gray-400 mb-0.5">DNSBL-Treffer</p>
+                  <p className="text-sm text-gray-400 mb-0.5">{t('dash_security_hits')}</p>
                 </div>
-                <p className="text-xs text-gray-500">Anzahl blockierter oder markierter IPs in den letzten 24 Stunden</p>
+                <p className="text-xs text-gray-500">{t('dash_security_blocked')}</p>
                 <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-                  <span className="text-gray-400">Letzte Fehler</span>
+                  <span className="text-gray-400">{t('dash_security_errors')}</span>
                   <span className="text-gray-700 tabular-nums">{recentErrors.length}</span>
-                  <span className="text-gray-400">Audit-Events</span>
+                  <span className="text-gray-400">{t('dash_security_audit')}</span>
                   <span className="text-gray-700 tabular-nums">{recentAuditEvents.length}</span>
-                  <span className="text-gray-400">Anmeldungen</span>
+                  <span className="text-gray-400">{t('dash_security_logins')}</span>
                   <span className="text-gray-700 tabular-nums">{recentLogins.length}</span>
                 </div>
               </div>
@@ -731,13 +735,13 @@ export function DashboardPage() {
             <div className="card">
               <SectionTitle icon={Layers} title="SMTP-Queue-Status" />
               <div className="grid grid-cols-2 gap-3">
-                <QueueBadge label="Wartend" value={queues.waiting}
+                <QueueBadge label={t('dash_queue_waiting')} value={queues.waiting}
                   variant={queues.waiting > 100 ? 'warn' : 'default'} />
-                <QueueBadge label="Aktiv" value={queues.active}
+                <QueueBadge label={t('dash_queue_active')} value={queues.active}
                   variant={queues.active > 0 ? 'success' : 'default'} />
-                <QueueBadge label="Fehlerhaft" value={queues.failed}
+                <QueueBadge label={t('dash_queue_failed')} value={queues.failed}
                   variant={queues.failed > 0 ? 'error' : 'success'} />
-                <QueueBadge label="Verzögert" value={queues.delayed}
+                <QueueBadge label={t('dash_queue_delayed')} value={queues.delayed}
                   variant={queues.delayed > 0 ? 'warn' : 'default'} />
               </div>
               <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
@@ -748,17 +752,17 @@ export function DashboardPage() {
                   : 'bg-green-50 text-green-700'
               }`}>
                 {hasQueueProblem
-                  ? <><XCircle size={13} /> {queues.failed} fehlerhafte Jobs — Überprüfung empfohlen</>
+                  ? <><XCircle size={13} /> {queues.failed} {t('dash_queue_jobs_error')}</>
                   : totalQueueItems > 200
-                  ? <><AlertTriangle size={13} /> Hohe Queue-Last ({totalQueueItems} Jobs)</>
-                  : <><CheckCircle size={13} /> Alle Queues im Normalbetrieb</>
+                  ? <><AlertTriangle size={13} /> {t('dash_queue_high_load')} ({totalQueueItems} Jobs)</>
+                  : <><CheckCircle size={13} /> {t('dash_queue_normal')}</>
                 }
               </div>
             </div>
           ),
           'mails-chart': (
             <div className={`card ${isVisible('queue-status') ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
-              <SectionTitle icon={TrendingUp} title="E-Mail-Aktivität (letzte 7 Tage)" />
+              <SectionTitle icon={TrendingUp} title={t('dash_mails_chart_title')} />
               <ResponsiveContainer width="100%" height={160}>
                 <AreaChart data={messages.mailsChart} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <defs>
@@ -799,10 +803,10 @@ export function DashboardPage() {
         const rankSlots: Partial<Record<WidgetId, ReactElement>> = {
           'storage-ranking': (
             <div className="card">
-              <SectionTitle icon={HardDrive} title="Speicher-Ranking (Top 10)" />
+              <SectionTitle icon={HardDrive} title={t('dash_storage_ranking')} />
               <div className="space-y-3">
                 {storage.topUsers.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-4">Keine Daten</p>
+                  <p className="text-xs text-gray-400 text-center py-4">{t('dash_storage_no_data')}</p>
                 )}
                 {storage.topUsers.map((u, i) => (
                   <div key={u.id}>
@@ -832,9 +836,9 @@ export function DashboardPage() {
           ),
           'domains-chart': (
             <div className="card">
-              <SectionTitle icon={Globe} title="Domains & Benutzerverteilung" />
+              <SectionTitle icon={Globe} title={t('dash_domains_chart')} />
               {domains.list.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-4">Keine Domains konfiguriert</p>
+                <p className="text-xs text-gray-400 text-center py-4">{t('dash_domains_no_domains')}</p>
               ) : (
                 <>
                   <ResponsiveContainer width="100%" height={120}>
@@ -843,7 +847,7 @@ export function DashboardPage() {
                       <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
                       <Tooltip
-                        formatter={(v: number) => [`${v} Benutzer`, '']}
+                        formatter={(v: number) => [`${v} ${t('dash_domains_users')}`, '']}
                         contentStyle={{ fontSize: 12, borderRadius: 8 }}
                       />
                       <Bar dataKey="userCount" radius={[4, 4, 0, 0]} maxBarSize={40}>
@@ -860,7 +864,7 @@ export function DashboardPage() {
                           <span className={`w-2 h-2 rounded-full shrink-0 ${d.active ? 'bg-green-400' : 'bg-gray-300'}`} />
                           <span className="text-xs font-mono text-gray-700">{d.name}</span>
                         </div>
-                        <span className="text-xs text-gray-500">{d.userCount} Benutzer</span>
+                        <span className="text-xs text-gray-500">{d.userCount} {t('dash_domains_users')}</span>
                       </div>
                     ))}
                   </div>
@@ -890,11 +894,11 @@ export function DashboardPage() {
           ),
           'recent-errors': (
             <div className="card">
-              <SectionTitle icon={AlertTriangle} title="Letzte Fehler & Warnungen (30 Tage)" />
+              <SectionTitle icon={AlertTriangle} title={t('dash_errors_title')} />
               {recentErrors.length === 0 ? (
                 <div className="flex items-center gap-2 py-6 justify-center text-green-600">
                   <CheckCircle size={16} />
-                  <span className="text-sm">Keine Fehler in den letzten 30 Tagen</span>
+                  <span className="text-sm">{t('dash_errors_empty')}</span>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -919,9 +923,9 @@ export function DashboardPage() {
           ),
           'recent-audit': (
             <div className="card">
-              <SectionTitle icon={ShieldCheck} title="Letzte Admin-Aktionen" />
+              <SectionTitle icon={ShieldCheck} title={t('dash_audit_title')} />
               {recentAuditEvents.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-6">Noch keine Aktionen protokolliert</p>
+                <p className="text-xs text-gray-400 text-center py-6">{t('dash_audit_empty')}</p>
               ) : (
                 <div className="divide-y divide-gray-50">
                   {recentAuditEvents.map((e) => (
@@ -969,9 +973,9 @@ export function DashboardPage() {
         <DraggableCard id="recent-logins" cardDrag={cardDrag} cardHover={cardHover}
           setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>
           <div className="card">
-            <SectionTitle icon={LogIn} title="Letzte Anmeldungen" />
+            <SectionTitle icon={LogIn} title={t('dash_logins_title')} />
             {recentLogins.length === 0 ? (
-              <p className="text-xs text-gray-400 text-center py-6">Keine Anmeldungen protokolliert</p>
+              <p className="text-xs text-gray-400 text-center py-6">{t('dash_logins_empty')}</p>
             ) : (
               <div className="divide-y divide-gray-50">
                 {recentLogins.map((l) => (
@@ -979,7 +983,7 @@ export function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-gray-700 font-medium truncate">{l.actorEmail}</p>
                       <p className="text-[11px] text-gray-400 mt-0.5 truncate">
-                        {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || 'unbekannt'}{l.userAgent.length > 60 ? '…' : ''}
+                        {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || t('dash_logins_unknown')}{l.userAgent.length > 60 ? '…' : ''}
                       </p>
                     </div>
                     <span className="text-[11px] text-gray-400 shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
@@ -1001,7 +1005,7 @@ export function DashboardPage() {
                 <Inbox size={14} className="text-blue-600" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">Queue-Einträge</p>
+                <p className="text-xs text-gray-500">{t('dash_strip_queue')}</p>
                 <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
               </div>
             </div>
@@ -1010,7 +1014,7 @@ export function DashboardPage() {
                 <Activity size={14} className="text-green-600" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">Geliefert (kumuliert)</p>
+                <p className="text-xs text-gray-500">{t('dash_strip_delivered')}</p>
                 <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
               </div>
             </div>
@@ -1019,7 +1023,7 @@ export function DashboardPage() {
                 <UserPlus size={14} className="text-purple-600" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">Neue Benutzer (7 Tage)</p>
+                <p className="text-xs text-gray-500">{t('dash_strip_new_users')}</p>
                 <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
               </div>
             </div>
@@ -1028,7 +1032,7 @@ export function DashboardPage() {
                 <Clock size={14} className="text-orange-600" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">Mails heute eingegangen</p>
+                <p className="text-xs text-gray-500">{t('dash_strip_mails_today')}</p>
                 <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
               </div>
             </div>
