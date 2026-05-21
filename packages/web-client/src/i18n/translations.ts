@@ -37,6 +37,8 @@ const de = {
   favorites:               'Favoriten',
   folders:                 'Ordner',
   my_folders:              'Meine Ordner',
+  refresh_folders:         'Ordner aktualisieren',
+  refresh_done:            'Aktualisiert',
 
   // Aktionen
   reply:                   'Antworten',
@@ -159,6 +161,8 @@ const en: Record<TranslationKey, string> = {
   favorites:               'Favorites',
   folders:                 'Folders',
   my_folders:              'My folders',
+  refresh_folders:         'Refresh folders',
+  refresh_done:            'Refreshed',
 
   reply:                   'Reply',
   reply_all:               'Reply all',
@@ -271,6 +275,8 @@ const es: Record<TranslationKey, string> = {
   favorites:               'Favoritos',
   folders:                 'Carpetas',
   my_folders:              'Mis carpetas',
+  refresh_folders:         'Actualizar carpetas',
+  refresh_done:            'Actualizado',
 
   reply:                   'Responder',
   reply_all:               'Responder a todos',
@@ -383,6 +389,8 @@ const it: Record<TranslationKey, string> = {
   favorites:               'Preferiti',
   folders:                 'Cartelle',
   my_folders:              'Le mie cartelle',
+  refresh_folders:         'Aggiorna cartelle',
+  refresh_done:            'Aggiornato',
 
   reply:                   'Rispondi',
   reply_all:               'Rispondi a tutti',

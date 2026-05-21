@@ -17,13 +17,21 @@ declare module 'express' {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // Bevorzugt: Authorization-Header. Fallback: ?token=… in Query
+  // (für EventSource/SSE, das keine Header senden kann)
   const header = req.get('Authorization') ?? '';
-  if (!header.startsWith('Bearer ')) {
+  let rawToken: string | null = null;
+  if (header.startsWith('Bearer ')) {
+    rawToken = header.slice(7);
+  } else if (typeof req.query['token'] === 'string' && req.query['token']) {
+    rawToken = req.query['token'];
+  }
+  if (!rawToken) {
     res.status(401).json({ error: 'Authorization required' });
     return;
   }
   try {
-    const payload = verifyAccessToken(header.slice(7));
+    const payload = verifyAccessToken(rawToken);
     if (!payload) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;

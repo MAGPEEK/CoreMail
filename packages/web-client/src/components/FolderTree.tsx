@@ -4,7 +4,7 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
   Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
   Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
-  CheckCheck, Eraser, Tag, PaintBucket,
+  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -421,13 +421,25 @@ export function FolderTree({ onNewMail }: Props) {
 
   return (
     <aside className="w-full h-full bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden">
-      <div className="p-3">
+      <div className="p-3 flex items-center gap-2">
         <button
           onClick={onNewMail}
-          className="btn-primary w-full justify-center group/newmail animate-halo"
+          className="btn-primary flex-1 justify-center group/newmail animate-halo"
         >
           <Plus size={15} className="transition-transform duration-200 group-hover/newmail:rotate-90" />
           {t('new_mail')}
+        </button>
+        <button
+          onClick={() => {
+            void qc.refetchQueries({ queryKey: ['folders'] });
+            void qc.refetchQueries({ queryKey: ['messages'] });
+            toast.success(t('refresh_done'), { duration: 1500 });
+          }}
+          title={t('refresh_folders')}
+          aria-label={t('refresh_folders')}
+          className="shrink-0 p-2 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95 transition-all"
+        >
+          <RefreshCw size={15} />
         </button>
       </div>
 
