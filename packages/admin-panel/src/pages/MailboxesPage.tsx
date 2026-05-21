@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Search, Pencil, Trash2, X, KeyRound, ChevronDown, ChevronRight,
-  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Folder,
+  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Folder, Users,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -20,6 +20,10 @@ interface UserDetail extends User {
   mailbox?: { folders: FolderInfo[] };
 }
 interface Domain { id: string; name: string; active: boolean }
+interface DelegateGrantee { id: string; email: string; displayName: string }
+interface Delegate { id: string; granteeId: string; permission: string; grantedAt: string; grantee: DelegateGrantee }
+
+type PermType = 'FULL_ACCESS' | 'READ_ONLY' | 'SEND_AS' | 'SEND_ON_BEHALF';
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 function formatBytes(b: number): string {
@@ -94,6 +98,7 @@ export function MailboxesPage() {
   const [newPassword, setNewPassword]   = useState('');
   const [form, setForm]                 = useState({ ...EMPTY_FORM });
   const [localPart, setLocalPart]       = useState('');
+  const [delegateForm, setDelegateForm] = useState<Record<string, { granteeId: string; permission: PermType }>>({});
 
   const { data: mailboxes = [], isLoading } = useQuery<User[]>({
     queryKey: ['admin-mailboxes'],
@@ -170,6 +175,34 @@ export function MailboxesPage() {
       toast.success(t('mbox_storage_updated'));
       void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
       void qc.invalidateQueries({ queryKey: ['admin-mailbox-detail'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // Delegate-Queries: pro expandiertem User
+  const { data: delegates = [], refetch: refetchDelegates } = useQuery<Delegate[]>({
+    queryKey: ['admin-mailbox-delegates', expandedId],
+    queryFn:  () => api.get<Delegate[]>(`/admin/mailboxes/${expandedId}/delegates`),
+    enabled:  !!expandedId,
+  });
+
+  const grantDelegateMutation = useMutation({
+    mutationFn: ({ userId, granteeId, permission }: { userId: string; granteeId: string; permission: string }) =>
+      api.post(`/admin/mailboxes/${userId}/delegates`, { granteeId, permission }),
+    onSuccess: (_data, vars) => {
+      toast.success(t('delegate_saved'));
+      setDelegateForm((prev) => ({ ...prev, [vars.userId]: { granteeId: '', permission: 'READ_ONLY' } }));
+      void refetchDelegates();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const revokeDelegateMutation = useMutation({
+    mutationFn: ({ userId, granteeId }: { userId: string; granteeId: string }) =>
+      api.delete(`/admin/mailboxes/${userId}/delegates/${granteeId}`),
+    onSuccess: () => {
+      toast.success(t('delegate_revoked'));
+      void refetchDelegates();
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -444,6 +477,21 @@ export function MailboxesPage() {
                             </div>
                           )}
 
+                          {/* Delegate Access */}
+                          <DelegateSection
+                            userId={u.id}
+                            allUsers={mailboxes}
+                            delegates={delegates}
+                            delegateForm={delegateForm[u.id] ?? { granteeId: '', permission: 'READ_ONLY' }}
+                            onFormChange={(f) => setDelegateForm((prev) => ({ ...prev, [u.id]: f }))}
+                            onGrant={() => {
+                              const f = delegateForm[u.id];
+                              if (f?.granteeId) grantDelegateMutation.mutate({ userId: u.id, granteeId: f.granteeId, permission: f.permission });
+                            }}
+                            onRevoke={(granteeId) => revokeDelegateMutation.mutate({ userId: u.id, granteeId })}
+                            isPending={grantDelegateMutation.isPending || revokeDelegateMutation.isPending}
+                          />
+
                           {/* Metadaten */}
                           <div className="flex gap-4 text-xs text-gray-400">
                             <span>{t('mbox_detail_id')}: <code className="bg-gray-100 px-1 rounded">{detail.id}</code></span>
@@ -645,6 +693,108 @@ function EditForm({ user, domains, onSave, isPending }:
           defaultDomainId={user.domainId}
           allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
         />
+      </div>
+    </div>
+  );
+}
+
+// ── Delegate Section ─────────────────────────────────────────────────────────
+const PERM_LABELS: Record<string, string> = {
+  FULL_ACCESS:     'delegate_perm_full',
+  READ_ONLY:       'delegate_perm_readonly',
+  SEND_AS:         'delegate_perm_sendas',
+  SEND_ON_BEHALF:  'delegate_perm_sendonbehalf',
+};
+
+function DelegateSection({
+  userId, allUsers, delegates, delegateForm, onFormChange, onGrant, onRevoke, isPending,
+}: {
+  userId: string;
+  allUsers: User[];
+  delegates: Delegate[];
+  delegateForm: { granteeId: string; permission: PermType };
+  onFormChange: (f: { granteeId: string; permission: PermType }) => void;
+  onGrant: () => void;
+  onRevoke: (granteeId: string) => void;
+  isPending: boolean;
+}) {
+  const t = useT();
+  // All users except the mailbox owner and those already delegated
+  const alreadyGranted = new Set(delegates.map((d) => d.granteeId));
+  const available = allUsers.filter((u) => u.id !== userId && !alreadyGranted.has(u.id));
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <p className="text-xs font-medium text-gray-500 px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
+        <Users size={12} /> {t('delegate_section')}
+      </p>
+
+      {/* Existing delegates */}
+      {delegates.length === 0 ? (
+        <p className="px-4 py-3 text-xs text-gray-400">{t('delegate_no_delegates')}</p>
+      ) : (
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-left px-4 py-1.5 text-gray-400 font-medium">{t('delegate_user')}</th>
+              <th className="text-left px-4 py-1.5 text-gray-400 font-medium">{t('delegate_permission')}</th>
+              <th className="px-4 py-1.5" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {delegates.map((d) => (
+              <tr key={d.id} className="hover:bg-gray-50">
+                <td className="px-4 py-1.5">
+                  <span className="font-medium text-gray-700">{d.grantee.displayName}</span>
+                  <span className="text-gray-400 ml-1">({d.grantee.email})</span>
+                </td>
+                <td className="px-4 py-1.5 text-gray-600">
+                  {t((PERM_LABELS[d.permission] ?? d.permission) as Parameters<typeof t>[0])}
+                </td>
+                <td className="px-4 py-1.5 text-right">
+                  <button
+                    onClick={() => onRevoke(d.granteeId)}
+                    disabled={isPending}
+                    className="text-red-500 hover:text-red-700 disabled:opacity-40 text-xs"
+                  >
+                    {t('delegate_revoke')}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* Grant access form */}
+      <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50 flex items-center gap-2 flex-wrap">
+        <select
+          className="input text-xs flex-1 min-w-40"
+          value={delegateForm.granteeId}
+          onChange={(e) => onFormChange({ ...delegateForm, granteeId: e.target.value })}
+        >
+          <option value="">{t('delegate_user')}…</option>
+          {available.map((u) => (
+            <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>
+          ))}
+        </select>
+        <select
+          className="input text-xs w-44"
+          value={delegateForm.permission}
+          onChange={(e) => onFormChange({ ...delegateForm, permission: e.target.value as PermType })}
+        >
+          {Object.entries(PERM_LABELS).map(([val, key]) => (
+            <option key={val} value={val}>{t(key as Parameters<typeof t>[0])}</option>
+          ))}
+        </select>
+        <button
+          onClick={onGrant}
+          disabled={!delegateForm.granteeId || isPending}
+          className="btn-primary text-xs py-1.5 px-3 disabled:opacity-40 flex items-center gap-1"
+        >
+          {isPending && <Loader2 size={11} className="animate-spin" />}
+          {t('delegate_add')}
+        </button>
       </div>
     </div>
   );

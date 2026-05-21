@@ -253,6 +253,68 @@ adminMailboxesRouter.delete('/shared/:id/permissions/:userId', async (req: Reque
   res.json({ ok: true });
 });
 
+// ── Mailbox-Delegierung (User-Postfach-Zugriffsrechte) ──────────────────────
+
+// GET /api/v1/admin/mailboxes/:id/delegates
+adminMailboxesRouter.get('/:id/delegates', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  const mailbox = await prisma.mailbox.findUnique({
+    where: { userId: id },
+    include: {
+      delegates: {
+        include: { grantee: { select: { id: true, email: true, displayName: true } } },
+        orderBy: { grantedAt: 'asc' },
+      },
+    },
+  });
+  res.json(mailbox?.delegates ?? []);
+});
+
+// POST /api/v1/admin/mailboxes/:id/delegates — Zugriff gewähren / aktualisieren
+adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const schema = z.object({
+    granteeId: z.string(),
+    permission: z.enum(['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY']),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (parsed.data.granteeId === id) { res.status(400).json({ error: 'User cannot delegate to themselves' }); return; }
+
+  const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
+  if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+
+  // Upsert: update if exists, create if not
+  const delegate = await prisma.mailboxDelegate.upsert({
+    where: { mailboxId_granteeId: { mailboxId: mailbox.id, granteeId: parsed.data.granteeId } },
+    update: { permission: parsed.data.permission, grantedBy: req.apiUser!.userId },
+    create: {
+      mailboxId: mailbox.id,
+      granteeId: parsed.data.granteeId,
+      permission: parsed.data.permission,
+      grantedBy: req.apiUser!.userId,
+    },
+  });
+  res.status(201).json(delegate);
+});
+
+// DELETE /api/v1/admin/mailboxes/:id/delegates/:granteeId — Zugriff entziehen
+adminMailboxesRouter.delete('/:id/delegates/:granteeId', async (req: Request, res: Response) => {
+  const { id, granteeId } = req.params as { id: string; granteeId: string };
+
+  const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
+  if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+
+  await prisma.mailboxDelegate.deleteMany({ where: { mailboxId: mailbox.id, granteeId } });
+  res.json({ ok: true });
+});
+
 // ── Phase 10: Mailbox Provisioning ───────────────────────────────────────────
 
 /**

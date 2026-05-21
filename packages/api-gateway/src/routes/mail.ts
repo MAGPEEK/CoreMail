@@ -855,3 +855,29 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
 
   res.json({ messages: flat, total: flat.length });
 });
+
+// GET /api/v1/mail/delegated-mailboxes
+// Gibt alle Postfächer zurück auf die der aktuelle User Zugriff hat
+mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const delegates = await prisma.mailboxDelegate.findMany({
+    where: { granteeId: userId },
+    include: {
+      mailbox: {
+        include: {
+          user: { select: { id: true, email: true, displayName: true } },
+          folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } },
+        },
+      },
+    },
+    orderBy: { grantedAt: 'asc' },
+  });
+  res.json(delegates.map((d) => ({
+    id: d.id,
+    permission: d.permission,
+    grantedAt: d.grantedAt,
+    mailboxOwner: d.mailbox.user,
+    mailboxId: d.mailbox.id,
+    folders: d.mailbox.folders,
+  })));
+});

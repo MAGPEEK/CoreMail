@@ -695,6 +695,21 @@ const de = {
   prot_attach_quick_add:     'Schnell hinzufügen:',
   prot_attach_placeholder:   'z.B. exe',
   prot_attach_add:           'Hinzufügen',
+
+  // ── Mailbox-Delegierung ───────────────────────────────────────────────────
+  delegate_section:          'Zugriffsrechte / Delegate Access',
+  delegate_granted_to:       'Zugriff gewährt an',
+  delegate_no_delegates:     'Kein Benutzer hat Zugriff auf dieses Postfach',
+  delegate_add:              'Zugriff gewähren',
+  delegate_user:             'Benutzer',
+  delegate_permission:       'Berechtigung',
+  delegate_revoke:           'Entziehen',
+  delegate_perm_full:        'Vollzugriff',
+  delegate_perm_readonly:    'Nur lesen',
+  delegate_perm_sendas:      'Senden als',
+  delegate_perm_sendonbehalf:'Senden im Auftrag',
+  delegate_saved:            'Zugriff gewährt',
+  delegate_revoked:          'Zugriff entzogen',
 } as const;
 
 type DE = typeof de;
@@ -1393,6 +1408,21 @@ const en: { [K in keyof DE]: string } = {
   prot_attach_quick_add:     'Quick add:',
   prot_attach_placeholder:   'e.g. exe',
   prot_attach_add:           'Add',
+
+  // ── Mailbox-Delegierung ───────────────────────────────────────────────────
+  delegate_section:          'Delegate Access',
+  delegate_granted_to:       'Access granted to',
+  delegate_no_delegates:     'No users have access to this mailbox',
+  delegate_add:              'Grant Access',
+  delegate_user:             'User',
+  delegate_permission:       'Permission',
+  delegate_revoke:           'Revoke',
+  delegate_perm_full:        'Full Access',
+  delegate_perm_readonly:    'Read Only',
+  delegate_perm_sendas:      'Send As',
+  delegate_perm_sendonbehalf:'Send on Behalf',
+  delegate_saved:            'Access granted',
+  delegate_revoked:          'Access revoked',
 };
 
 export type TranslationKey = keyof DE;
