@@ -5,10 +5,9 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
-import bcrypt from 'bcrypt';
 import { createTransport } from 'nodemailer';
 import { prisma } from '@coremail/storage';
-import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger, getRedisClient } from '@coremail/core';
+import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger, getRedisClient, verifyPassword } from '@coremail/core';
 import type { UserRole } from '@coremail/core/types';
 
 const log = createLogger('api:auth');
@@ -82,8 +81,8 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const pepper = process.env['PEPPER'] ?? '';
-    const valid = await bcrypt.compare(password + pepper, user.passwordHash);
+    // verifyPassword nutzt sha256(password + PEPPER) → bcrypt — gleiche Logik wie hashPassword
+    const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
       log.warn({ email }, 'Login failed: wrong password');
       res.status(401).json({ error: 'Invalid credentials' });
@@ -329,9 +328,9 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. Neues Passwort hashen
-    const pepper = process.env['PEPPER'] ?? '';
-    const passwordHash = await bcrypt.hash(newPassword + pepper, 12);
+    // 3. Neues Passwort hashen — hashPassword nutzt sha256(password + PEPPER) → bcrypt
+    const { hashPassword } = await import('@coremail/core');
+    const passwordHash = await hashPassword(newPassword);
 
     // 4. Token als benutzt markieren + Passwort setzen + alle Sessions löschen (atomar via Transaction)
     await prisma.$transaction([

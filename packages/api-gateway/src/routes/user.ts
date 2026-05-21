@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import bcrypt from 'bcrypt';
+import { hashPassword, verifyPassword } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -306,11 +306,11 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
   });
   if (!user || !user.passwordHash) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-  const pepper = process.env['PEPPER'] ?? '';
-  const valid = await bcrypt.compare(parsed.data.currentPassword + pepper, user.passwordHash);
+  // verifyPassword/hashPassword nutzen sha256(password + PEPPER) → bcrypt
+  const valid = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
   if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
 
-  const newHash = await bcrypt.hash(parsed.data.newPassword + pepper, 12);
+  const newHash = await hashPassword(parsed.data.newPassword);
   await prisma.user.update({
     where: { id: req.apiUser!.userId },
     data:  { passwordHash: newHash },
