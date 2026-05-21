@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
-  ShieldAlert, Search, Building2, Users,
+  ShieldAlert, Search, Users,
   BookUser, ShieldHalf, SearchCheck, Archive,
   FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog,
@@ -24,7 +24,6 @@ export function Sidebar() {
         { path: '/mailboxes',        labelKey: 'nav_mailboxes',        icon: Mail },
         { path: '/shared-mailboxes', labelKey: 'nav_shared_mailboxes', icon: Inbox },
         { path: '/groups',           labelKey: 'nav_groups',           icon: Users },
-        { path: '/resources',        labelKey: 'nav_resources',        icon: Building2 },
         { path: '/ext-contacts',     labelKey: 'nav_ext_contacts',     icon: BookUser },
         { path: '/public-folders',   labelKey: 'nav_public_folders',   icon: FolderOpen },
         { path: '/domains',          labelKey: 'nav_domains',          icon: Globe },
@@ -62,7 +61,6 @@ export function Sidebar() {
         { path: '/servers',          labelKey: 'nav_servers',          icon: Activity },
       ],
     },
-    { path: '/organisation',     labelKey: 'nav_organisation',     icon: Building2 },
     {
       groupKey: 'nav_group_compliance',
       items: [

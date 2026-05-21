@@ -13,6 +13,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.15] — 2026-05-21 — Verteilergruppen-Fix, Token-Refresh, BCP-Bereinigung
+
+### Fixed
+
+- **Verteilergruppen „Invalid request"**: Formular sendete komplette E-Mail-Adresse
+  als Freitext (z.B. nur „verteilung" ohne @domain) → Zod-Validierung scheiterte.
+  Formular jetzt wie Benutzerverwaltung: lokaler Teil + `@` + Domain-Dropdown nebeneinander.
+  E-Mail wird aus `localPart@domain.name` zusammengesetzt bevor sie ans Backend geht
+
+- **Auto-Logout trotz aktiver Nutzung**: JWT Access Token hat 15 Minuten TTL.
+  BCP und MWA speicherten nur das Access Token, nie das Refresh Token.
+  Bei 401 wurde sofort zur Login-Seite weitergeleitet.
+  Fix in `admin-panel/src/api/client.ts` und `web-client/src/api/client.ts`:
+  - Refresh Token wird bei Login in localStorage gespeichert
+  - Proaktive Erneuerung wenn Token < 120s vor Ablauf steht (JWT exp dekodiert ohne Library)
+  - Bei 401 wird erst einmal Refresh versucht + Request wiederholt, nur bei erneutem Fehler → Login
+
+### Added
+
+- **Verteilergruppen in MWA Empfänger-Autocomplete**: Beim Tippen einer Adresse im
+  Compose-Fenster werden jetzt auch Verteilergruppen vorgeschlagen (via `GET /admin/groups/gal`),
+  parallel zu Kontakten. Gruppen werden mit lila Avatar und `[Gruppe]`-Badge angezeigt
+
+### Removed
+
+- **BCP → Ressourcenpostfächer** (`/resources`): Seite und Navigation entfernt
+- **BCP → Organisation** (`/organisation`): Seite und Navigation entfernt
+- Beide zugehörigen Page-Dateien gelöscht (`ResourcesPage.tsx`, `OrganisationPage.tsx`)
+
+---
+
 ## [3.17.14] — 2026-05-21 — Mailbox-Delegierung + User aktiv/inaktiv
 
 ### Added

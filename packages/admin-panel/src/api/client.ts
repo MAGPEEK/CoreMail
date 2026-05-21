@@ -1,4 +1,5 @@
-const TOKEN_KEY = 'bcp-token';
+const TOKEN_KEY   = 'bcp-token';
+const REFRESH_KEY = 'bcp-refresh-token';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -10,10 +11,80 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
 }
 
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function setRefreshToken(token: string) {
+  localStorage.setItem(REFRESH_KEY, token);
+}
+
+export function clearRefreshToken() {
+  localStorage.removeItem(REFRESH_KEY);
+}
+
+/** Decode JWT exp claim without a library (returns seconds since epoch or null). */
+function getJwtExp(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]!)) as { exp?: number };
+    return payload.exp ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Attempt to refresh the access token. Returns new access token or null on failure. */
+async function tryRefresh(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch('/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { accessToken: string };
+    if (data.accessToken) {
+      setToken(data.accessToken);
+      return data.accessToken;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+let isRefreshing = false;
+let refreshPromise: Promise<string | null> | null = null;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getToken();
+  let token = getToken();
+
+  // Proactive refresh: if token expires within 120 seconds, refresh first
+  if (token) {
+    const exp = getJwtExp(token);
+    const nowSecs = Math.floor(Date.now() / 1000);
+    if (exp !== null && exp - nowSecs < 120) {
+      if (!isRefreshing) {
+        isRefreshing = true;
+        refreshPromise = tryRefresh().finally(() => { isRefreshing = false; refreshPromise = null; });
+      }
+      const newToken = await refreshPromise;
+      if (newToken) {
+        token = newToken;
+      } else {
+        // Refresh token also expired — clear and redirect
+        clearToken();
+        window.location.href = '/bcp/login';
+        throw new Error('Session expired');
+      }
+    }
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -23,6 +94,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api/v1${path}`, { ...init, headers });
 
   if (res.status === 401) {
+    // Fallback: attempt refresh once before redirecting
+    const newToken = await tryRefresh();
+    if (newToken) {
+      // Retry the original request with the new token
+      const retryHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${newToken}`,
+        ...(init.headers as Record<string, string> ?? {}),
+      };
+      const retryRes = await fetch(`/api/v1${path}`, { ...init, headers: retryHeaders });
+      if (retryRes.ok) {
+        if (retryRes.status === 204) return undefined as T;
+        return retryRes.json() as Promise<T>;
+      }
+    }
     clearToken();
     // Admin-Panel liegt unter /bcp — React Router basename="/bcp"
     window.location.href = '/bcp/login';
@@ -48,7 +134,7 @@ export const api = {
 };
 
 export type LoginResult =
-  | { accessToken: string }
+  | { accessToken: string; refreshToken?: string }
   | { mfaRequired: true; challengeToken: string; method: string };
 
 export async function loginAdmin(email: string, password: string): Promise<LoginResult> {
@@ -61,7 +147,11 @@ export async function loginAdmin(email: string, password: string): Promise<Login
     const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string };
     throw new Error(body.error);
   }
-  return res.json() as Promise<LoginResult>;
+  const data = await res.json() as LoginResult;
+  if ('accessToken' in data && data.refreshToken) {
+    setRefreshToken(data.refreshToken);
+  }
+  return data;
 }
 
 export async function verifyMfaAdmin(
@@ -77,6 +167,9 @@ export async function verifyMfaAdmin(
     const body = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as { error: string };
     throw new Error(body.error);
   }
-  const data = await res.json() as { accessToken: string };
+  const data = await res.json() as { accessToken: string; refreshToken?: string };
+  if (data.refreshToken) {
+    setRefreshToken(data.refreshToken);
+  }
   return data.accessToken;
 }
