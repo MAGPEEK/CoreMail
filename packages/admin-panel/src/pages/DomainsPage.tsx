@@ -4,6 +4,7 @@ import { Pencil, Plus, X, Copy, CheckCircle, ChevronDown, RefreshCw } from 'luci
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
+import { copyToClipboard } from '../utils/clipboard.js';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -206,14 +207,14 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                 <label className="text-xs text-gray-500 font-medium">DNS-Name</label>
                 <div className="flex items-center gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
-                  <button onClick={() => { void navigator.clipboard.writeText(dkimRecord.dnsName); toast.success('Kopiert'); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
+                  <button onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success('Kopiert')).catch(() => toast.error('Kopieren fehlgeschlagen')); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-500 font-medium">TXT-Wert</label>
                 <div className="flex items-start gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
-                  <button onClick={() => { void navigator.clipboard.writeText(dkimRecord.dnsValue); toast.success('Kopiert'); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
+                  <button onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success('Kopiert')).catch(() => toast.error('Kopieren fehlgeschlagen')); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
                 </div>
               </div>
             </div>

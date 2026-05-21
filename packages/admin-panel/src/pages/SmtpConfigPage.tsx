@@ -8,6 +8,7 @@ import {
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
+import { copyToClipboard } from '../utils/clipboard.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1084,10 +1085,12 @@ interface DnsCheckResult {
 function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    copyToClipboard(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => toast.error('Kopieren fehlgeschlagen'));
   }, [text]);
   return (
     <button
