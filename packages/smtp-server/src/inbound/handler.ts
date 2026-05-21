@@ -10,6 +10,7 @@
 import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
+import { expandRecipients } from '../handlers/expand.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
 
 const log = createLogger('smtp:inbound');
@@ -212,69 +213,9 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
   return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox ?? alias);
 }
 
-// ── Helper: expandRecipients ──────────────────────────────────────────────────
-
-/**
- * Recursively expand distribution group addresses to individual member addresses.
- * Prevents infinite loops by tracking visited groups.
- */
-async function expandRecipients(
-  rcptTo: string[],
-  visited = new Set<string>(),
-): Promise<string[]> {
-  const result: string[] = [];
-
-  for (const email of rcptTo) {
-    const normalised = email.toLowerCase();
-
-    // 1. Distribution Group?
-    const group = await prisma.distributionGroup.findFirst({
-      where: { email: normalised, active: true },
-      include: { members: true },
-    });
-    if (group && !visited.has(normalised)) {
-      visited.add(normalised);
-      const memberEmails = group.members.map((m) => m.memberEmail);
-      const expanded = await expandRecipients(memberEmails, visited);
-      result.push(...expanded);
-      continue;
-    }
-
-    // 2. E-Mail-Alias? → ersetzen durch Target-Primäradresse
-    if (!group) {
-      const alias = await prisma.emailAlias.findFirst({
-        where: { address: normalised, active: true },
-        include: {
-          targetUser:   { select: { email: true, active: true } },
-          targetShared: { select: { email: true, active: true } },
-        },
-      });
-      if (alias) {
-        const targetEmail = alias.targetUser?.active
-          ? alias.targetUser.email
-          : alias.targetShared?.active
-            ? alias.targetShared.email
-            : null;
-        if (targetEmail) {
-          // Dedupe-Schutz: nicht in einer Schleife alias→alias→alias
-          if (!visited.has(normalised)) {
-            visited.add(normalised);
-            result.push(targetEmail.toLowerCase());
-            continue;
-          }
-        }
-      }
-    }
-
-    // 3. Regulärer Empfänger (User / SharedMailbox / ResourceMailbox)
-    if (!group) {
-      result.push(normalised);
-    }
-  }
-
-  // Deduplicate
-  return [...new Set(result)];
-}
+// expandRecipients-Helper wurde nach handlers/expand.ts verschoben damit sie auch
+// vom Outbound-Queue-Worker und vom Submission-Handler genutzt werden kann
+// (lokale Zustellung braucht Alias-/Gruppen-Auflösung VOR storeInboundMessage).
 
 // ── Helper: processResourceMailboxes ─────────────────────────────────────────
 

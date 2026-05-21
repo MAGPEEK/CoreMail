@@ -1,6 +1,6 @@
 {
   "name": "@coremail/admin-panel",
-  "version": "3.17.21",
+  "version": "3.17.22",
   "private": true,
   "type": "module",
   "scripts": {

@@ -18,51 +18,58 @@ export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
 ): Promise<void> {
-  // Find recipient's mailbox
-  const user = await prisma.user.findFirst({
-    where: { email: opts.rcptTo.toLowerCase(), active: true },
-    include: {
-      mailbox: {
-        include: { folders: true },
-      },
-    },
-  });
+  // Find recipient — kann User (Postfach) oder SharedMailbox sein
+  const [user, sharedMailbox] = await Promise.all([
+    prisma.user.findFirst({
+      where: { email: opts.rcptTo.toLowerCase(), active: true },
+      include: { mailbox: { include: { folders: true } } },
+    }),
+    prisma.sharedMailbox.findFirst({
+      where: { email: opts.rcptTo.toLowerCase(), active: true },
+      include: { mailbox: { include: { folders: true } } },
+    }),
+  ]);
 
-  if (!user?.mailbox) {
+  // Common-Mode: User-Postfach. Fallback: SharedMailbox (für lokale Zustellung).
+  // Wenn beides null → unbekannter Empfänger (Mail wird verworfen).
+  let mailbox = user?.mailbox ?? sharedMailbox?.mailbox ?? null;
+  const ownerType: 'user' | 'shared' = user?.mailbox ? 'user' : 'shared';
+
+  if (!mailbox) {
     log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — dropping message');
     return;
   }
 
-  // ── Phase 9: S/MIME — decrypt + verify ────────────────────────────────────
-  const smimeSettings = await prisma.smimeSettings.findUnique({
-    where: { userId: user.id },
-  });
-
-  // Attempt decryption if user has decryptIncoming enabled (default true)
+  // ── Phase 9: S/MIME — decrypt + verify (NUR User-Postfächer, nicht SharedMailbox)
   let processedBuffer = rawBuffer;
   let smimeDecrypted = false;
-  if (smimeSettings?.decryptIncoming !== false) {
-    const decryptResult = await decryptIncomingSmime(rawBuffer, user.id);
-    if (decryptResult.encrypted && decryptResult.decrypted && decryptResult.plaintext) {
-      processedBuffer = decryptResult.plaintext;
-      smimeDecrypted = true;
-      log.debug({ rcptTo: opts.rcptTo }, 'S/MIME message decrypted for storage');
+  let smimeVerifyResult: Record<string, unknown> = {};
+  if (ownerType === 'user' && user) {
+    const smimeSettings = await prisma.smimeSettings.findUnique({
+      where: { userId: user.id },
+    });
+    if (smimeSettings?.decryptIncoming !== false) {
+      const decryptResult = await decryptIncomingSmime(rawBuffer, user.id);
+      if (decryptResult.encrypted && decryptResult.decrypted && decryptResult.plaintext) {
+        processedBuffer = decryptResult.plaintext;
+        smimeDecrypted = true;
+        log.debug({ rcptTo: opts.rcptTo }, 'S/MIME message decrypted for storage');
+      }
     }
-  }
-
-  // Verify signature (on the decrypted or original buffer)
-  let smimeVerifyResult = {};
-  if (smimeSettings?.verifyIncoming !== false) {
-    const verifyResult = await verifyIncomingSmime(processedBuffer);
-    if (verifyResult.signed) {
-      smimeVerifyResult = verifyResult;
-      log.debug({ rcptTo: opts.rcptTo, valid: verifyResult.valid }, 'S/MIME signature verified');
+    if (smimeSettings?.verifyIncoming !== false) {
+      const verifyResult = await verifyIncomingSmime(processedBuffer);
+      if (verifyResult.signed) {
+        smimeVerifyResult = verifyResult as unknown as Record<string, unknown>;
+        log.debug({ rcptTo: opts.rcptTo, valid: verifyResult.valid }, 'S/MIME signature verified');
+      }
     }
   }
 
   // Use decrypted buffer (or original) for parsing and storage
   const effectiveBuffer = smimeDecrypted ? processedBuffer : rawBuffer;
-  const mailbox = user.mailbox;
+  // mailbox wurde oben aus user?.mailbox bzw. sharedMailbox?.mailbox aufgelöst
+  // → muss als non-null behandelt werden (early-return-check oben)
+  mailbox = mailbox!;
 
   // Find the target folder (INBOX or Junk)
   // WICHTIG: Ordner heißt 'Junk' (nicht 'Junk E-Mail') und 'INBOX' (nicht 'Inbox')
@@ -160,28 +167,52 @@ export async function storeInboundMessage(
     },
   });
 
-  // Update user quota usage
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { usedBytes: { increment: effectiveBuffer.length } },
-  });
+  // Update quota usage — entweder User- oder SharedMailbox-Tabelle
+  if (ownerType === 'user' && user) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { usedBytes: { increment: effectiveBuffer.length } },
+    });
+  } else if (ownerType === 'shared' && sharedMailbox) {
+    await prisma.sharedMailbox.update({
+      where: { id: sharedMailbox.id },
+      data: { usedBytes: { increment: effectiveBuffer.length } },
+    });
+  }
 
   // Publish real-time notification
+  // Für SharedMailbox: an alle User mit Permission FULL_ACCESS/READ_ONLY publishen,
+  // damit Empfänger in MWA Live-Update sehen
   const redis = getRedisClient();
-  await redis.publish(
-    CHANNEL_MAIL_NEW,
-    JSON.stringify({
-      userId: user.id,
-      folderId: folder.id,
-      messageId: message.id,
-      uid,
-      subject: parsed.subject,
-      fromAddr: parsed.fromAddr,
-      fromName: parsed.fromName,
-      date: parsed.date.toISOString(),
-      isJunk: opts.toJunk,
-    }),
-  );
+  const notifyUserIds: string[] = [];
+  if (ownerType === 'user' && user) {
+    notifyUserIds.push(user.id);
+  } else if (ownerType === 'shared' && sharedMailbox) {
+    const perms = await prisma.sharedMailboxPerm.findMany({
+      where: {
+        sharedMailboxId: sharedMailbox.id,
+        permission: { in: ['FULL_ACCESS', 'READ_ONLY'] },
+      },
+      select: { userId: true },
+    });
+    notifyUserIds.push(...perms.map((p) => p.userId));
+  }
+  for (const notifyUserId of notifyUserIds) {
+    await redis.publish(
+      CHANNEL_MAIL_NEW,
+      JSON.stringify({
+        userId: notifyUserId,
+        folderId: folder.id,
+        messageId: message.id,
+        uid,
+        subject: parsed.subject,
+        fromAddr: parsed.fromAddr,
+        fromName: parsed.fromName,
+        date: parsed.date.toISOString(),
+        isJunk: opts.toJunk,
+      }),
+    );
+  }
 
   // MAIL_FLOW — Nachrichtenablaufverfolgung
   void prisma.systemLog.create({
@@ -190,7 +221,7 @@ export async function storeInboundMessage(
       service: 'smtp-server',
       category: 'MAIL_FLOW',
       message: `Inbound: ${opts.fromAddr} → ${opts.rcptTo}`,
-      userId: user.id,
+      ...(ownerType === 'user' && user ? { userId: user.id } : {}),
       ...(parsed.messageId ? { messageId: parsed.messageId } : {}),
       metadata: {
         sender: opts.fromAddr,
