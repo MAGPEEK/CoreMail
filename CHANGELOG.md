@@ -13,6 +13,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.22] — 2026-05-21 — Fix: Lokale Zustellung — Aliase, Verteilergruppen + SharedMailbox
+
+### Fixed
+
+Audit der lokalen Zustellung (Outbound-Queue + Submission-Port) deckte zwei
+strukturelle Bugs auf. Mails an lokale Adressen wurden in mehreren Fällen
+**silent verworfen** ohne Bounce-Nachricht oder Logging über „Mailbox not found".
+
+- **Outbound-Queue (`smtp-server/outbound/queue.ts`) löste keine Aliase auf**:
+  Beim Versand aus der MWA (POST /api/v1/mail/send) ging die Mail in die BullMQ-
+  Queue. Der Worker prüfte zwar die Domain (local vs. external) aber rief
+  `storeInboundMessage()` direkt mit der Original-Adresse auf. Bei einem
+  E-Mail-Alias (z.B. `vertrieb@stefanwuestner.de` → `info@stefanwuestner.de`)
+  oder einer Verteilergruppe konnte storeInboundMessage den User nicht finden
+  → "Mailbox not found — dropping message".
+
+- **Submission-Handler (Port 587/465) hatte denselben Bug**:
+  Mail-Clients (Thunderbird/Apple Mail) die direkt an die Submission-Ports
+  senden umgingen ebenfalls die Alias-Auflösung.
+
+- **`storeInboundMessage()` kannte nur User-Postfächer, keine SharedMailbox**:
+  Selbst nach Alias-Auflösung: wenn der Alias auf eine SharedMailbox zeigt,
+  wurde die Mail verworfen weil die Funktion nur `prisma.user.findFirst(...)`
+  abfragte. Jetzt parallel auch `prisma.sharedMailbox.findFirst(...)`.
+
+### Changed
+
+- **`expandRecipients()` aus `inbound/handler.ts` in `handlers/expand.ts` extrahiert**
+  damit alle drei Eintrittspfade (Port 25 inbound, Port 587/465 submission,
+  BullMQ outbound queue) dieselbe Logik nutzen
+- **SharedMailbox-Quota** wird jetzt auch bei lokaler Zustellung inkrementiert
+- **SSE `mail:new`-Event** wird bei SharedMailbox an alle User mit
+  `FULL_ACCESS` oder `READ_ONLY` Permission publiziert → Live-Update im
+  Posteingang aller Berechtigten
+
+---
+
 ## [3.17.21] — 2026-05-21 — ESMTP-Audit: Stub-only Extensions entfernt
 
 ### Removed

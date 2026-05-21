@@ -4,6 +4,7 @@ import { prisma } from '@coremail/storage/prisma';
 import { relayMessage } from './relay.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
+import { expandRecipients } from '../handlers/expand.js';
 // Journaling-Feature komplett entfernt in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
@@ -92,8 +93,15 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         }
       }
 
+      // Lokale Empfänger erst auflösen (Aliase + Verteilergruppen + Shared-Mailbox-Aliase
+      // → Target-Primäradressen). Sonst würde z.B. eine Mail an alias@local.de oder
+      // an eine Verteilergruppe silent in storeInboundMessage verworfen ("Mailbox not found").
+      const expandedLocalRcpts = localRcpts.length > 0
+        ? await expandRecipients(localRcpts)
+        : [];
+
       // Lokale Zustellung (Postfach direkt schreiben)
-      for (const rcpt of localRcpts) {
+      for (const rcpt of expandedLocalRcpts) {
         await storeInboundMessage(buffer, {
           fromAddr: from,
           rcptTo:   rcpt,

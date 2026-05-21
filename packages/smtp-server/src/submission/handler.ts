@@ -10,6 +10,7 @@
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
+import { expandRecipients } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
 
@@ -136,8 +137,13 @@ async function onMessage(
     }
   }
 
+  // Lokale Empfänger erst auflösen (Aliase, Verteilergruppen, Shared-Mailbox-Aliase)
+  const expandedLocalRcpts = localRcpts.length > 0
+    ? await expandRecipients(localRcpts)
+    : [];
+
   // Local delivery — store directly in mailbox
-  for (const rcpt of localRcpts) {
+  for (const rcpt of expandedLocalRcpts) {
     await storeInboundMessage(raw, {
       fromAddr: from,
       rcptTo: rcpt,
