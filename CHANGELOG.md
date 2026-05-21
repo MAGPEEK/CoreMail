@@ -13,6 +13,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.17] — 2026-05-21 — Fix: Autodiscover-URL nutzt jetzt eigene CNAME
+
+### Fixed
+
+- **Autodiscover-URL nutzte denselben Hostnamen wie alle anderen Pfade**:
+  Bei `mail.stefanwuestner.de` als Hostname generierte „URLs ableiten" auch
+  `http://mail.stefanwuestner.de:8080` für Autodiscover. Outlook erwartet aber
+  nach **Microsoft Exchange Spec** IMMER `autodiscover.{primary-domain}` zuerst —
+  also `http://autodiscover.stefanwuestner.de:8080`.
+
+  Fix in `routes/admin/servers.ts` `/settings/derive`-Endpoint:
+  - Hostname mit ≥ 3 Labels (z.B. `mail.stefanwuestner.de`) → erste Subdomain
+    abschneiden → `autodiscover.stefanwuestner.de`
+  - Hostname mit 2 Labels (z.B. `stefanwuestner.de`) → `autodiscover.stefanwuestner.de`
+  - Hostname beginnt bereits mit `autodiscover.` → unverändert (kein Doppel-Präfix)
+
+  DNS-Hinweis im BCP (Outlook-Anleitung) verwendet jetzt dieselbe Logik:
+  zeigt `autodiscover.{root-domain} CNAME {publicHostname}` korrekt an
+
+---
+
 ## [3.17.16] — 2026-05-21 — Fix: Login schlägt fehl (api-gateway hatte Duplikat-Auth mit altem Pepper-Bug)
 
 ### Fixed

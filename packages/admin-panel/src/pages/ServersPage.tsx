@@ -243,9 +243,18 @@ export function ServersPage() {
                   <strong>Voraussetzung:</strong>{' '}
                   <code className="bg-blue-100 px-1 rounded">{current.autodiscoverBase}/Autodiscover/Autodiscover.xml</code>{' '}
                   muss von Outlook erreichbar sein.
-                  {current.publicHostname && (
-                    <> DNS: <code className="bg-blue-100 px-1 rounded">autodiscover.{current.publicHostname} CNAME {current.publicHostname}</code></>
-                  )}
+                  {current.publicHostname && (() => {
+                    // Microsoft Exchange Spec: Outlook sucht IMMER autodiscover.{primary-domain}
+                    // mail.stefanwuestner.de → autodiscover.stefanwuestner.de CNAME mail.stefanwuestner.de
+                    const labels = current.publicHostname.split('.');
+                    const rootDomain = labels.length >= 3 ? labels.slice(1).join('.') : current.publicHostname;
+                    const adHost = current.publicHostname.startsWith('autodiscover.')
+                      ? current.publicHostname
+                      : `autodiscover.${rootDomain}`;
+                    return adHost !== current.publicHostname
+                      ? <> DNS: <code className="bg-blue-100 px-1 rounded">{adHost} CNAME {current.publicHostname}</code></>
+                      : null;
+                  })()}
                 </p>
               </div>
             </>
