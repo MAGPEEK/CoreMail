@@ -22,7 +22,7 @@ interface SmtpSettings {
   ext8bitmime:          boolean;
   extEnhancedStatus:    boolean;
   extSmtputf8:          boolean;
-  extDsn:               boolean;
+  // extDsn entfernt — DSN ist im Server nicht implementiert (RFC 3461 stub-only)
   extChunking:          boolean;
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
@@ -152,8 +152,9 @@ const EXT_DEFS: ExtDef[] = [
     desc: 'Erweiterte SMTP-Statuscodes (z.B. 5.7.1) für bessere Fehlerdiagnose' },
   { key: 'extSmtputf8',       label: 'SMTPUTF8',         rfc: 'RFC 6531',  risk: 'advanced',
     desc: 'Internationalisierte E-Mail-Adressen (UTF-8 in Envelope/Header)' },
-  { key: 'extDsn',            label: 'DSN',              rfc: 'RFC 3461',  risk: 'safe',
-    desc: 'Delivery Status Notifications — Zustellbenachrichtigungen anfordern' },
+  // DSN (RFC 3461) — bewusst NICHT verfügbar: Server hat keine Implementierung
+  // (kein Parsing von NOTIFY/ORCPT/ENVID/RET, keine multipart/report-Generierung).
+  // Wenn DSN beworben wird ohne Implementierung verstößt der Server gegen RFC 3461.
   { key: 'extChunking',       label: 'CHUNKING (BDAT)',  rfc: 'RFC 3030',  risk: 'advanced',
     desc: 'Nachrichten in Chunks übertragen (BDAT-Befehl) anstatt DATA' },
 ];

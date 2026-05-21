@@ -36,7 +36,7 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     ext8bitmime:          z.boolean().optional(),
     extEnhancedStatus:    z.boolean().optional(),
     extSmtputf8:          z.boolean().optional(),
-    extDsn:               z.boolean().optional(),
+    // extDsn entfernt — DSN nicht implementiert; siehe smtp-server/core/session.ts
     extChunking:          z.boolean().optional(),
     // Local delivery
     localDeliveryEnabled: z.boolean().optional(),

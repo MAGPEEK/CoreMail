@@ -13,6 +13,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.20] — 2026-05-21 — Remove: DSN-Werbung entfernt (war ungenutzt)
+
+### Removed
+
+- **DSN (Delivery Status Notifications, RFC 3461)**: Der SMTP-Server hat DSN
+  in der EHLO-Antwort beworben aber NICHT implementiert:
+  - Keine Verarbeitung von `NOTIFY=`, `ORCPT=`, `ENVID=`, `RET=` Parametern
+    in MAIL FROM / RCPT TO (wurden vom Regex stillschweigend weggeworfen)
+  - Keine `multipart/report` + `message/delivery-status` Generierung beim Bounce
+  - Keine SUCCESS/FAILURE/DELAY-Reports
+
+  RFC 3461 verbietet das Bewerben einer Capability ohne Implementierung.
+  Entfernt:
+  - `DSN` aus EHLO-Response (`packages/smtp-server/src/core/session.ts`)
+  - `DEFAULT_ESMTP_EXTENSIONS.dsn` jetzt `false` (Standard hard-codiert)
+  - Toggle aus BCP → SMTP & Routing → ESMTP-Erweiterungen entfernt
+  - Zod-Schema für `extDsn` in `routes/admin/smtp-config.ts` entfernt
+  - DB-Feld `extDsn` bleibt erhalten (Backwards-Compat, wird aber ignoriert)
+
+  Wenn DSN in einer späteren Version implementiert wird, kann der Toggle
+  zurückkommen — solange aber stub-only: weg.
+
+---
+
 ## [3.17.19] — 2026-05-21 — Fix: STARTTLS auf Port 25 mit self-signed Cert (Outlook 503)
 
 ### Fixed

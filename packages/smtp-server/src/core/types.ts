@@ -49,7 +49,9 @@ export interface EsmtpExtensions {
 export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
   starttls: true, authPlain: true, authLogin: true, authCramMd5: false,
   pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
-  smtputf8: false, dsn: true, chunking: false,
+  // dsn: false — DSN (RFC 3461) ist nicht implementiert (kein NOTIFY/ORCPT/ENVID-Parsing,
+  // keine multipart/report-Generierung beim Bounce). Wir bewerben es daher nicht.
+  smtputf8: false, dsn: false, chunking: false,
 };
 
 export interface SmtpSessionConfig {

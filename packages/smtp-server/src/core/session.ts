@@ -269,7 +269,8 @@ export class SmtpSession {
     if (esmtp.bit8mime)       lines.push('8BITMIME');
     if (esmtp.smtputf8)       lines.push('SMTPUTF8');
     if (esmtp.enhancedStatus) lines.push('ENHANCEDSTATUSCODES');
-    if (esmtp.dsn)            lines.push('DSN');
+    // DSN (RFC 3461) ist NICHT implementiert — kein Parsing von NOTIFY/ORCPT/ENVID/RET,
+    // keine multipart/report-Generierung bei Bounces. Bewusst NICHT beworben.
     if (esmtp.chunking)       lines.push('CHUNKING');
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
