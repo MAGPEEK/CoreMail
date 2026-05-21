@@ -102,6 +102,21 @@ adminServersRouter.post('/settings/derive', async (req: Request, res: Response) 
     : `:${httpPort}`;
   const base = `${proto}://${publicHostname}${portSuffix}`;
 
+  // Autodiscover MUSS auf eigener CNAME laufen (Microsoft Exchange Spec):
+  // Outlook sucht IMMER zuerst `autodiscover.{primary-domain}` ab.
+  // Hostname `mail.stefanwuestner.de` → autodiscover-Host `autodiscover.stefanwuestner.de`
+  // Hostname `stefanwuestner.de` (kein Subdomain) → `autodiscover.stefanwuestner.de`
+  // Falls Hostname schon mit `autodiscover.` beginnt → unverändert
+  const autodiscoverHost = (() => {
+    if (publicHostname.startsWith('autodiscover.')) return publicHostname;
+    const labels = publicHostname.split('.');
+    // ≥ 3 Labels → erste Subdomain abschneiden (mail.stefanwuestner.de → stefanwuestner.de)
+    // ≤ 2 Labels → Root-Domain direkt verwenden
+    const rootDomain = labels.length >= 3 ? labels.slice(1).join('.') : publicHostname;
+    return `autodiscover.${rootDomain}`;
+  })();
+  const autodiscoverBase = `${proto}://${autodiscoverHost}${portSuffix}`;
+
   res.json({
     publicHostname,
     useHttps,
@@ -109,7 +124,7 @@ adminServersRouter.post('/settings/derive', async (req: Request, res: Response) 
     ewsUrl:           `${base}/EWS/Exchange.asmx`,
     owaUrl:           `${base}/owa/`,
     easUrl:           `${base}/Microsoft-Server-ActiveSync`,
-    autodiscoverBase: base,
+    autodiscoverBase,
     imapHost:         publicHostname,
     imapPort:         useHttps ? 993 : 993,
     imapSsl:          true,
