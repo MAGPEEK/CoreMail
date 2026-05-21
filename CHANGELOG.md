@@ -13,6 +13,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.18] — 2026-05-21 — Posteingang Auto-Refresh + manueller Refresh-Button
+
+### Fixed
+
+- **SSE-Events kamen nie an** (Posteingang aktualisierte sich nicht selbst):
+  EventSource kann keine `Authorization`-Header senden, der api-gateway hat aber
+  nur Bearer-Token aus dem Header gelesen → SSE-Verbindung schlug 401 fehl.
+  Fix: `requireAuth`-Middleware akzeptiert jetzt zusätzlich `?token=…` als
+  Query-Parameter (Fallback nur wenn kein Header). Frontend übergibt Token
+  als Query in der EventSource-URL.
+
+### Added
+
+- **Live-Aktualisierung im Posteingang**: Sobald eine neue Mail eingeht
+  (SSE-Event `mail:new` aus Redis-Channel `mail:new`), wird die Folder- und
+  Messages-Liste automatisch neu geladen. Dezenter Toast zeigt
+  Absender + Betreff der neuen Nachricht.
+- **Manueller Refresh-Button**: Neben „Neue E-Mail" im Ordnerbaum erscheint
+  ein 🔄 Icon-Button (mit Tooltip „Ordner aktualisieren") der Folders +
+  Messages sofort neu lädt (`refetchQueries`, kein Hintergrund-Refetch)
+- i18n-Keys `refresh_folders` / `refresh_done` in DE/EN/ES/IT
+
+---
+
 ## [3.17.17] — 2026-05-21 — Fix: Autodiscover-URL nutzt jetzt eigene CNAME
 
 ### Fixed
