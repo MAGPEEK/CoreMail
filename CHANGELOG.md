@@ -13,6 +13,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.10] — 2026-05-21 — Fix: Kopier-Buttons bei DNS-Einträgen
+
+### Fixed
+
+- **BCP → Domains → DKIM DNS-Eintrag / BCP → SMTP & Routing → DNS-Einträge**: Kopier-Buttons
+  funktionierten nicht — `navigator.clipboard` ist im HTTP-Kontext (non-secure, z. B. DSM
+  Application Portal) `undefined` und wirft einen Fehler.
+  - Neuer gemeinsamer Helper `packages/admin-panel/src/utils/clipboard.ts`:
+    `copyToClipboard()` versucht zuerst `navigator.clipboard.writeText()` (Secure Context)
+    und fällt automatisch auf `document.execCommand('copy')` zurück (HTTP-Kompatibilität)
+  - `DomainsPage.tsx`: beide Copy-Buttons (DNS-Name + TXT-Wert) nutzen jetzt `copyToClipboard()`
+    mit korrektem `await` und `toast.error('Kopieren fehlgeschlagen')` im Fehlerfall
+  - `SmtpConfigPage.tsx`: `CopyBtn`-Komponente nutzt `copyToClipboard()` statt direktem
+    `navigator.clipboard.writeText()`; Fehlerfall zeigt Toast statt lautlosem Versagen
+
+---
+
 ## [3.17.9] — 2026-05-20 — Fix: DKIM-Record laden schlägt fehl wenn kein Schlüssel vorhanden
 
 ### Fixed
