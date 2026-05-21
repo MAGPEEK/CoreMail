@@ -540,4 +540,50 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-*Letzte Aktualisierung: 2026-05-21 (v3.17.16 — BCP vollständig übersetzt EN/DE: MailboxesPage, DomainsPage, QueuesPage, DashboardPage, QuarantinePage + ~1288 i18n-Keys)*
+## Aktuelle Version 3.17.16 — Highlights
+
+**v3.17.16** — Fix: api-gateway `/auth/login` hatte denselben Pepper-Bug wie v3.17.13
+(direkter `bcrypt.compare(password + pepper, hash)` statt `verifyPassword()` mit
+sha256+pepper). Login funktionierte am Port 3003 (auth-service) aber nicht am
+Port 3000 (api-gateway). Gefixt in `routes/auth.ts`, `routes/setup.ts`, `routes/user.ts`.
+
+**v3.17.15** — Verteilergruppen-Formular (E-Mail + Domain nebeneinander wie Benutzeranlage),
+JWT Token-Refresh in BCP + MWA (verhindert Auto-Logout bei aktiver Nutzung),
+Verteilergruppen in MWA Empfänger-Autocomplete, BCP-Bereinigung (ResourcesPage +
+OrganisationPage entfernt)
+
+**v3.17.14** — Mailbox-Delegierung (User B kann auf Postfach von User A zugreifen via
+neuem `MailboxDelegate` Prisma-Modell, Admin-API `GET/POST/DELETE /admin/mailboxes/:id/delegates`,
+User-API `GET /mail/delegated-mailboxes`, BCP-UI in aufgeklappter Postfach-Zeile)
+
+**v3.17.13** — Fix: `auth-service/local/index.ts` Pepper-Mismatch (sha256 + pepper vs
+direkter Pepper-Append) — Login schlug fehl trotz korrektem Passwort
+
+**v3.17.12** — BCP vollständig übersetzt EN/DE: MailboxesPage, DomainsPage, QueuesPage,
+DashboardPage, QuarantinePage + ~1288 i18n-Keys; alle package.json Versionen auf 3.17.12
+synchronisiert
+
+## Auth-Architektur (KRITISCH — historische Fallstricke)
+
+Passwort-Hashing nutzt **immer** `hashPassword()` und `verifyPassword()` aus
+`@coremail/core`. Beide nutzen die **gleiche** Logik:
+```
+bcrypt(sha256(password + PEPPER))
+```
+
+❌ **NIEMALS** `bcrypt.compare(password + PEPPER, hash)` direkt — das überspringt
+den sha256-Schritt und macht Hash und Verify inkompatibel.
+
+Login-Routen die diese Funktionen verwenden (alle gleichzeitig gefixt in v3.17.13/v3.17.16):
+- `packages/auth-service/src/local/index.ts` — IMAP/SMTP/POP3 + auth-service Port 3003
+- `packages/api-gateway/src/routes/auth.ts` — REST API /auth/login (Port 3000)
+- `packages/api-gateway/src/routes/setup.ts` — Initial-Setup
+- `packages/api-gateway/src/routes/user.ts` — Passwort-Änderung
+- `packages/smtp-server/src/auth/verifier.ts` — SMTP AUTH
+- `packages/pop3-server/src/session.ts` — POP3 AUTH
+
+Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie direkt in
+Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
+und MFA-Backup-Codes — die brauchen keinen Pepper).
+
+*Letzte Aktualisierung: 2026-05-21 (v3.17.16 — Fix: api-gateway duplicate /auth/login Pepper-Bug behoben — Login funktioniert jetzt durch das Frontend)*
