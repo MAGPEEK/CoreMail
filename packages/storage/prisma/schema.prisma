@@ -105,6 +105,7 @@ model User {
   mfa             UserMfa?
   appPasswords    AppPassword[]
   sharedPerms     SharedMailboxPerm[]
+  delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
   activeSyncDevices ActiveSyncDevice[]
   certificates    UserCertificate[]
   smimeSettings   SmimeSettings?
@@ -243,6 +244,7 @@ model Mailbox {
   uidNext         Int              @default(1)
   highestModSeq   BigInt           @default(0)
   folders         Folder[]
+  delegates       MailboxDelegate[]
   createdAt       DateTime         @default(now())
 
   @@map("mailboxes")
@@ -442,6 +444,26 @@ model SharedMailboxPerm {
   @@unique([sharedMailboxId, userId, permission])
   @@index([sharedMailboxId, userId])
   @@map("shared_mailbox_perms")
+}
+
+// ─────────────────────────────────────────────
+// Mailbox-Delegierung (User-Postfach-Zugriffsrechte)
+// ─────────────────────────────────────────────
+// Ermöglicht User B Zugriff auf das Postfach von User A (Exchange Delegate Access)
+// Permissions analog zu SharedMailboxPerm: FULL_ACCESS / SEND_AS / SEND_ON_BEHALF / READ_ONLY
+model MailboxDelegate {
+  id          String               @id @default(cuid())
+  mailbox     Mailbox              @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId   String
+  grantee     User                 @relation("MailboxDelegateGrantee", fields: [granteeId], references: [id], onDelete: Cascade)
+  granteeId   String
+  permission  SharedMailboxPermType
+  grantedAt   DateTime             @default(now())
+  grantedBy   String
+
+  @@unique([mailboxId, granteeId])
+  @@index([granteeId])
+  @@map("mailbox_delegates")
 }
 
 // ─────────────────────────────────────────────

@@ -13,6 +13,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.14] — 2026-05-21 — Mailbox-Delegierung + User aktiv/inaktiv
+
+### Added
+
+- **Mailbox-Delegierung (Delegate Access)**: User B kann auf das Postfach von User A zugreifen —
+  analog zur Shared-Mailbox-Logik (Exchange Delegate Access):
+  - Neues Prisma-Modell `MailboxDelegate` mit `SharedMailboxPermType`-Enum:
+    `FULL_ACCESS` / `READ_ONLY` / `SEND_AS` / `SEND_ON_BEHALF`
+  - Admin-API `GET/POST/DELETE /api/v1/admin/mailboxes/:id/delegates`
+  - User-API `GET /api/v1/mail/delegated-mailboxes` — gibt alle Postfächer zurück
+    auf die der angemeldete User delegierten Zugriff hat
+  - **BCP → Postfächer** — aufgeklappte Zeile zeigt jetzt Abschnitt „Delegate Access":
+    bestehende Delegierungen mit Berechtigung + Entziehen-Button,
+    Formular zum Gewähren (User-Dropdown + Berechtigungs-Dropdown)
+
+- **User aktiv/inaktiv** (BCP → Postfächer): Bereits implementiert (Toggle-Button
+  war schon vorhanden), explizit verifiziert: `active: false` blockiert Login
+  in `authenticateLocal()` und `authenticateAppPassword()` vollständig
+
+---
+
 ## [3.17.13] — 2026-05-21 — Fix: Login schlägt fehl (Passwort-Pepper-Mismatch)
 
 ### Fixed
