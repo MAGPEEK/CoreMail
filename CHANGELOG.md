@@ -13,6 +13,73 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.23] — 2026-05-21 — Audit-Log: Komplettüberarbeitung mit PDF-Export + Statistik
+
+### Fixed
+
+- **CSV-Export schlug mit 401 fehl**: `window.open(…/export…)` öffnete neuen Tab
+  ohne `Authorization`-Header. Fix: neuer Helper `exportUrl()` in api/client.ts
+  hängt `?token=…` an die URL — `requireAuth` akzeptiert Token via Query bereits
+  seit v3.17.18 (SSE-Fix).
+
+- **Datums-Filter zeigte keine Daten**: `new Date('2026-05-20T23:59:59')` wurde
+  als **lokale Zeit** interpretiert → in Berlin CEST (UTC+2) lag der UTC-Wert
+  vor dem Tagesbeginn des From-Datums. Fix: explizit UTC mit
+  `…T00:00:00.000Z` / `…T23:59:59.999Z`.
+
+- **Purge-Route inkonsistent**: Frontend sendete `?olderThanDays=`, Backend las
+  `req.body.before` — `400 Bad Request` bei jeder Bereinigung. **Komplett entfernt**
+  — Audit-Logs sind per Compliance schreibgeschützt (siehe „Removed").
+
+- **React Fragment key-Warning**: `<>...</>` ohne key bei Listen-Render durch
+  `<React.Fragment key={e.id}>` ersetzt.
+
+### Added
+
+- **PDF-Export** (`GET /api/v1/admin/audit-log/export.pdf`): A4 quer mit Header,
+  Filter-Zusammenfassung, Tabelle (Zeitpunkt/Akteur/Aktion/Ziel/Status),
+  Seitennummern. Cap 1000 Einträge (größere Mengen → CSV). Verwendet `pdfkit`.
+
+- **Statistik-Dashboard** (oben auf der Audit-Log-Seite, auto-refresh 30s):
+  - 4 KPI-Karten: Gesamt-Einträge, letzte 24h, letzte 7 Tage, Fehlerquote
+  - Top-10 Akteure (Balkendiagramm)
+  - Top-10 Aktionen (Balkendiagramm)
+  - Neuer Endpunkt: `GET /api/v1/admin/audit-log/stats`
+
+- **Erweiterte Filter**:
+  - `actorEmail` (Substring-Suche)
+  - `ipAddress` (exakt)
+  - `searchText` (durchsucht `action`, `targetName`, `errorMsg`)
+  - 2-zeilen-Layout im Frontend mit Reset-Button
+
+- **CSV-Export mit allen Spalten + UTF-8-BOM** (Excel-kompatibel):
+  timestamp, actorId, actorEmail, action, targetType, targetId, targetName,
+  ipAddress, userAgent, success, errorMsg, changes (JSON)
+
+- **Schreibgeschützt-Banner** im BCP (dismissible, persistiert in localStorage):
+  „Audit-Log ist schreibgeschützt — Einträge können auch von Admins nicht gelöscht
+  oder verändert werden (Compliance-Anforderung)"
+
+- **userAgent in Detail-Ansicht** der ausgeklappten Zeile
+
+### Removed
+
+- **`DELETE /api/v1/admin/audit-log/purge`**: Audit-Logs sind **immutable**
+  (DSGVO, SOX, HIPAA, ISO 27001 Anforderung — Non-Repudiation).
+  Frontend „Bereinigen"-Button entfernt. Bei späteren Retention-Bedürfnissen
+  läuft das über die System-`RetentionPolicy` (außerhalb Admin-API).
+
+### Auditlog — Kernfunktionen (siehe BCP → Compliance → Audit-Log):
+
+| Säule | Umsetzung |
+|---|---|
+| **Accountability** | `actorId` + `actorEmail` + `ipAddress` + `userAgent` pro Eintrag |
+| **Forensik** | Volltext-Suche, Zeitraum-Filter, JSON-`changes`-Diff |
+| **Compliance** | Schreibgeschützt, kein Delete-Endpoint, CSV/PDF-Export |
+| **Systemüberwachung** | Live-Statistik (24h/7d), Top-Akteure + Top-Aktionen |
+
+---
+
 ## [3.17.22] — 2026-05-21 — Fix: Lokale Zustellung — Aliase, Verteilergruppen + SharedMailbox
 
 ### Fixed

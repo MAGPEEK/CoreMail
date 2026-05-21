@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.22`
+**Aktuelle Version**: `3.17.23`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.17.22` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.17.23` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -521,7 +521,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.17.22; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.17.23; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -540,9 +540,34 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.22 — Highlights
+## Aktuelle Version 3.17.23 — Highlights
 
-**v3.17.22** — Fix: api-gateway `/auth/login` hatte denselben Pepper-Bug wie v3.17.13
+**v3.17.23** — Audit-Log-Komplettüberarbeitung: PDF-Export, Statistik-Dashboard
+(KPI-Karten, Top-Akteure, Top-Aktionen — auto-refresh 30s), erweiterte Filter
+(actorEmail/ipAddress/searchText), CSV-Bug fix (Token via query), Datums-Bug fix
+(UTC), Purge-Route entfernt (Compliance-Immutability DSGVO/SOX/HIPAA)
+
+**v3.17.23** — Lokale Zustellung: `expandRecipients()` aus inbound nach
+`handlers/expand.ts` extrahiert; jetzt in allen Pfaden (inbound/submission/outbound-queue)
+aufgerufen. `storeInboundMessage()` unterstützt jetzt auch SharedMailbox.
+Verteilergruppen + Aliase werden bei lokaler Zustellung korrekt aufgelöst.
+
+**v3.17.21** — ESMTP-Audit: CRAM-MD5, SMTPUTF8, CHUNKING aus EHLO + BCP entfernt
+(waren Stub-only ohne Implementierung). Bleiben aktiv: STARTTLS, AUTH PLAIN+LOGIN,
+PIPELINING, SIZE, 8BITMIME, ENHANCEDSTATUSCODES.
+
+**v3.17.20** — DSN-Stub aus EHLO entfernt (RFC 3461 nicht implementiert).
+
+**v3.17.19** — STARTTLS auf Port 25 bei self-signed Cert deaktiviert
+(X509Certificate.issuer === subject Erkennung) — Outlook/Exchange ECONNRESET fix.
+
+**v3.17.18** — SSE Live-Update bei neuer Mail (Posteingang) + manueller
+Refresh-Button im FolderTree (MWA). SSE-Auth via `?token=` query param.
+
+**v3.17.17** — Autodiscover-URL nutzt jetzt `autodiscover.{root-domain}` statt
+identischem Hostname (Microsoft Exchange Spec).
+
+**v3.17.16** — Fix: api-gateway `/auth/login` hatte denselben Pepper-Bug wie v3.17.13
 (direkter `bcrypt.compare(password + pepper, hash)` statt `verifyPassword()` mit
 sha256+pepper). Login funktionierte am Port 3003 (auth-service) aber nicht am
 Port 3000 (api-gateway). Gefixt in `routes/auth.ts`, `routes/setup.ts`, `routes/user.ts`.
@@ -574,7 +599,7 @@ bcrypt(sha256(password + PEPPER))
 ❌ **NIEMALS** `bcrypt.compare(password + PEPPER, hash)` direkt — das überspringt
 den sha256-Schritt und macht Hash und Verify inkompatibel.
 
-Login-Routen die diese Funktionen verwenden (alle gleichzeitig gefixt in v3.17.13/v3.17.22):
+Login-Routen die diese Funktionen verwenden (alle gleichzeitig gefixt in v3.17.13/v3.17.23):
 - `packages/auth-service/src/local/index.ts` — IMAP/SMTP/POP3 + auth-service Port 3003
 - `packages/api-gateway/src/routes/auth.ts` — REST API /auth/login (Port 3000)
 - `packages/api-gateway/src/routes/setup.ts` — Initial-Setup
@@ -586,4 +611,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-21 (v3.17.22 — Fix: api-gateway duplicate /auth/login Pepper-Bug behoben — Login funktioniert jetzt durch das Frontend)*
+*Letzte Aktualisierung: 2026-05-21 (v3.17.23 — Fix: api-gateway duplicate /auth/login Pepper-Bug behoben — Login funktioniert jetzt durch das Frontend)*
