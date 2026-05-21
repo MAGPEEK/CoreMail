@@ -13,6 +13,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.24] — 2026-05-21 — BCP Compliance-Info-Seite aktualisiert
+
+### Changed
+
+- **BCP → Compliance → Info**: Highlights-Liste um v3.17.12 bis v3.17.23
+  ergänzt (12 neue Einträge mit detaillierten Beschreibungen jeder Version).
+  Version-Anzeige im Header aktualisiert (3.17.23 → 3.17.24).
+
+---
+
 ## [3.17.23] — 2026-05-21 — Audit-Log: Komplettüberarbeitung mit PDF-Export + Statistik
 
 ### Fixed
