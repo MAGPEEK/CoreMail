@@ -177,7 +177,7 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
 });
 
 // ── ACME HTTP-01 Issuance ─────────────────────────────────────────────────────
-async function runAcmeIssuance(
+export async function runAcmeIssuance(
   certId: string,
   domains: string[],
   email: string,

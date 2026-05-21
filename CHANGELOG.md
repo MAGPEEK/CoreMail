@@ -13,6 +13,45 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.27] — 2026-05-21 — Auto-Let's-Encrypt beim Container-Start + STARTTLS-Revert
+
+### Fixed
+
+- **Outlook 365 lieferte wieder 503 mit v3.17.26**: Das STARTTLS-Advertise mit
+  self-signed Cert hatte Outlook-365-Bounces erneut ausgelöst. Self-signed +
+  STARTTLS ist NICHT kompatibel mit strikten MTAs — kein graceful Plain-Fallback.
+  Fix: Self-signed → STARTTLS auf Port 25 wieder OFF (Verhalten von v3.17.19).
+
+### Added
+
+- **Automatische Let's Encrypt-Anforderung beim Container-Start**:
+  Neuer Helper `packages/api-gateway/src/lib/auto-letsencrypt.ts`.
+  30 Sekunden nach Server-Start wird geprüft:
+  1. `ServerSettings.publicHostname` ist gesetzt UND nicht-lokal (kein `*.local`/`*.lan`/`localhost`)
+  2. Kein aktives `LETSENCRYPT`- oder `CUSTOM`-Cert deckt den Hostname ab
+  3. Email aus `ServerSettings.adminEmail` ODER Fallback `admin@{root-domain}`
+
+  Wenn alle Bedingungen erfüllt → ACME HTTP-01 Challenge gestartet (production,
+  nicht staging). Bei Erfolg: Cert wird ACTIVE, `ServerSettings.tlsCert`/`tlsKey`
+  werden gesetzt, `CHANNEL_SETTINGS_RELOAD` wird gepublisht — alle Protokolle
+  (SMTP/IMAP/POP3) laden den neuen Cert. **STARTTLS wird automatisch aktiviert**
+  weil `isCertSelfSigned()` nun `false` zurückgibt.
+
+  Bei Fehler: Log-Warning, kein Crash. Manuelle Anforderung via
+  BCP → SSL/TLS → „Let's Encrypt anfordern" weiterhin möglich.
+
+  **Voraussetzungen für Erfolg:**
+  - Port 80 von außen erreichbar (HTTP-01 Challenge)
+  - DNS-A-Record für `publicHostname` zeigt auf Server-IP
+  - Keine Let's-Encrypt-Rate-Limit-Sperre (50 Certs/Domain/Woche)
+
+### Refactored
+
+- `runAcmeIssuance()` in `routes/admin/certificates.ts` als `export` markiert
+  damit sie auch vom Auto-LE-Bootstrap genutzt werden kann
+
+---
+
 ## [3.17.26] — 2026-05-21 — Fix: MX-Tools "Does not support TLS" — STARTTLS wieder aktiv
 
 ### Fixed

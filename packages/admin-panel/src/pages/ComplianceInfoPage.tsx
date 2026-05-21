@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.26';
+const VERSION        = '3.17.27';
 const BUILD_DATE     = '2026-05-21';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.27', date: '2026-05-21', title: 'Auto-Let\'s-Encrypt beim Container-Start (löst Outlook-365 + MX-Tools dauerhaft)',
+    notes: 'Echte Lösung statt Workaround: 30 Sekunden nach Container-Start prüft der api-gateway ob (a) publicHostname gesetzt + nicht-lokal ist, (b) kein aktives CA-signiertes Cert existiert, (c) eine Admin-Email konfiguriert ist. Wenn ja → automatische ACME HTTP-01 Challenge gegen Let\'s Encrypt production. Bei Erfolg wird das Cert in ServerSettings gespeichert, CHANNEL_SETTINGS_RELOAD publisht — alle Mail-Protokolle laden den neuen Cert, STARTTLS wird automatisch aktiv. Damit lösen sich BEIDE Probleme auf einen Schlag: MX-Tools sieht TLS, Outlook 365 akzeptiert das Cert. Voraussetzungen: Port 80 von außen erreichbar (HTTP-01), DNS-A für publicHostname zeigt auf Server-IP, keine LE-Rate-Limit-Sperre. Bei Fehler: Log-Warning, kein Crash. Manuelle Anforderung via BCP → SSL/TLS weiterhin möglich. Zusätzlich: STARTTLS für self-signed Cert wieder deaktiviert (v3.17.26 Re-Enable führte zu Outlook-365-Bounces — kein graceful Plain-Fallback).' },
   { version: '3.17.26', date: '2026-05-21', title: 'Fix: MX-Tools "Does not support TLS" — STARTTLS auf Port 25 wieder aktiv',
     notes: 'MX-Tools warnte „SMTP TLS Warning - Does not support TLS" weil v3.17.19 STARTTLS für self-signed Certs hart deaktiviert hatte (Outlook-365-Schutz). Opportunistic TLS ist aber immer besser als kein TLS — ~95% der MTAs (Gmail, Apple, ProtonMail, AOL) akzeptieren self-signed im opportunistic-Modus. Strikte MTAs (Microsoft 365) fallen bei TLS-Handshake-Fehler auf Plain zurück (kein Bounce). Fix: advertiseStarttls jetzt immer true. Für dauerhafte Outlook-365-Kompatibilität: Let\'s Encrypt-Cert in BCP → SSL/TLS anfordern (Port 80 muss von außen erreichbar sein, DNS-A für mail.{domain} muss korrekt sein).' },
   { version: '3.17.25', date: '2026-05-21', title: 'MWA: Aufbewahrungsrichtlinien per Rechtsklick + Einstellungs-Übersicht',
