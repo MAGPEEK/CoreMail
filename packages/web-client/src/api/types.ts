@@ -1,3 +1,25 @@
+export type RetentionTagAction =
+  | 'MOVE_TO_ARCHIVE'
+  | 'DELETE_AND_ALLOW_RECOVERY'
+  | 'PERMANENTLY_DELETE'
+  | 'MARK_AS_PAST_RETENTION_LIMIT';
+
+export interface RetentionTag {
+  id: string;
+  name: string;
+  description: string;
+  retentionDays: number;
+  action: RetentionTagAction;
+  isSystem: boolean;
+}
+
+export interface FolderRetentionTag {
+  id: string;
+  name: string;
+  retentionDays: number;
+  action?: RetentionTagAction;
+}
+
 export interface Folder {
   id: string;
   name: string;
@@ -9,6 +31,8 @@ export interface Folder {
   sortOrder?: number;
   color?: string | null;
   isSystem?: boolean;
+  retentionTagId?: string | null;
+  retentionTag?: FolderRetentionTag | null;
 }
 
 export interface Category {

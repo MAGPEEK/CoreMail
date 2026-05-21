@@ -4,11 +4,11 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
   Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
   Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
-  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw,
+  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
-import type { Folder as FolderType } from '../api/types.js';
+import type { Folder as FolderType, RetentionTag } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
@@ -148,6 +148,14 @@ function FolderItem({
           />
         )}
         <span className="flex-1 text-left truncate">{label}</span>
+        {folder.retentionTag && (
+          <span
+            title={`${folder.retentionTag.name} (${folder.retentionTag.retentionDays}d)`}
+            className="shrink-0 inline-flex items-center text-[10px] text-gray-400 dark:text-gray-500"
+          >
+            <Clock size={11} />
+          </span>
+        )}
         {folder.unreadCount > 0 && (
           <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent" />
         )}
@@ -170,6 +178,28 @@ export function FolderTree({ onNewMail }: Props) {
     queryKey: ['folders'],
     queryFn: () => api.get<FolderType[]>('/mail/folders'),
     refetchInterval: 60_000,
+  });
+
+  // Verfügbare PERSONAL-Aufbewahrungstags (vom Admin konfiguriert)
+  const { data: retentionTags } = useQuery({
+    queryKey: ['retention-tags'],
+    queryFn: () => api.get<RetentionTag[]>('/retention-tags'),
+    staleTime: 5 * 60_000,
+  });
+
+  const assignRetentionTag = useMutation({
+    mutationFn: ({ folderId, tagId }: { folderId: string; tagId: string | null }) =>
+      api.patch(`/mail/folders/${folderId}/retention-tag`, { tagId }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['folders'] });
+      if (vars.tagId) {
+        const name = retentionTags?.find((tg) => tg.id === vars.tagId)?.name ?? '';
+        toast.success(name ? `${t('retention_assigned_toast')}: ${name}` : t('retention_assigned_toast'));
+      } else {
+        toast.success(t('retention_removed_toast'));
+      }
+    },
+    onError: (e: Error) => toast.error(e.message || 'Aktion fehlgeschlagen'),
   });
 
   const patchFolder = useMutation({
@@ -332,20 +362,54 @@ export function FolderTree({ onNewMail }: Props) {
             { label: 'Lila',  icon: <Tag size={14} className="text-purple-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#8B5CF6' } }) },
           ],
         },
+      );
+    }
+
+    // Aufbewahrungsrichtlinie zuweisen — auch für System-Ordner verfügbar
+    // (Exchange-Verhalten: Personal Tags können an jeden Ordner gehängt werden)
+    const tagChildren: ContextMenuItem[] = (retentionTags ?? []).map((tg) => {
+      const isCurrent = folder.retentionTagId === tg.id;
+      return {
+        label: `${tg.name} · ${tg.retentionDays} ${t('retention_days')}`,
+        icon: isCurrent ? <Check size={14} className="text-accent" /> : <Clock size={14} />,
+        onClick: () => assignRetentionTag.mutate({ folderId: folder.id, tagId: tg.id }),
+      };
+    });
+    if (folder.retentionTagId) {
+      tagChildren.push(
+        { type: 'divider' },
         {
-          label: t('delete'),
-          icon: <FolderMinus size={14} />,
+          label: t('retention_remove'),
+          icon: <Eraser size={14} />,
           danger: true,
-          onClick: () => {
-            const total = folder.totalCount ?? 0;
-            const msg = total > 0
-              ? `Ordner „${folderLabel(folder)}" mit ${total} Nachricht(en) wirklich löschen?`
-              : `Ordner „${folderLabel(folder)}" löschen?`;
-            if (!window.confirm(msg)) return;
-            deleteFolder.mutate(folder.id);
-          },
+          onClick: () => assignRetentionTag.mutate({ folderId: folder.id, tagId: null }),
         },
       );
+    }
+    items.push({
+      label: t('retention_assign'),
+      icon: <Clock size={14} />,
+      disabled: !retentionTags || retentionTags.length === 0,
+      children: tagChildren.length > 0 ? tagChildren : [{
+        label: t('retention_no_tags'),
+        disabled: true,
+      }],
+    });
+
+    if (!isSystem) {
+      items.push({
+        label: t('delete'),
+        icon: <FolderMinus size={14} />,
+        danger: true,
+        onClick: () => {
+          const total = folder.totalCount ?? 0;
+          const msg = total > 0
+            ? `Ordner „${folderLabel(folder)}" mit ${total} Nachricht(en) wirklich löschen?`
+            : `Ordner „${folderLabel(folder)}" löschen?`;
+          if (!window.confirm(msg)) return;
+          deleteFolder.mutate(folder.id);
+        },
+      });
     }
 
     if (isTrashOrJunk) {
