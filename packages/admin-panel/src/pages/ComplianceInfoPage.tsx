@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.25';
+const VERSION        = '3.17.26';
 const BUILD_DATE     = '2026-05-21';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.26', date: '2026-05-21', title: 'Fix: MX-Tools "Does not support TLS" — STARTTLS auf Port 25 wieder aktiv',
+    notes: 'MX-Tools warnte „SMTP TLS Warning - Does not support TLS" weil v3.17.19 STARTTLS für self-signed Certs hart deaktiviert hatte (Outlook-365-Schutz). Opportunistic TLS ist aber immer besser als kein TLS — ~95% der MTAs (Gmail, Apple, ProtonMail, AOL) akzeptieren self-signed im opportunistic-Modus. Strikte MTAs (Microsoft 365) fallen bei TLS-Handshake-Fehler auf Plain zurück (kein Bounce). Fix: advertiseStarttls jetzt immer true. Für dauerhafte Outlook-365-Kompatibilität: Let\'s Encrypt-Cert in BCP → SSL/TLS anfordern (Port 80 muss von außen erreichbar sein, DNS-A für mail.{domain} muss korrekt sein).' },
   { version: '3.17.25', date: '2026-05-21', title: 'MWA: Aufbewahrungsrichtlinien per Rechtsklick + Einstellungs-Übersicht',
     notes: 'Exchange-typische „Personal Tags" jetzt im MWA-Frontend nutzbar. (1) Backend: Neue User-API GET /api/v1/retention-tags listet alle vom Admin aktivierten PERSONAL-Aufbewahrungstags (Schema-Typen DPT/RPT/PERSONAL existieren bereits). Neue Endpunkte PATCH /api/v1/mail/folders/:id/retention-tag und PATCH /api/v1/mail/messages/:id/retention-tag mit Owner-Verifikation. (2) MWA Settings: Neue Sektion „Aufbewahrungsrichtlinien" unter Konto zeigt alle verfügbaren PERSONAL-Tags mit Name, Beschreibung, Aufbewahrungstagen und Aktion (Löschen mit Wiederherstellung / Endgültig / Kennzeichnen / Archiv). (3) FolderTree: Rechtsklick auf einen Ordner → neues Submenu „Aufbewahrungsrichtlinie zuweisen" mit allen verfügbaren Tags + ✓ bei aktiver Zuweisung + „Entfernen"-Eintrag. Bei Ordnern mit aktiver Richtlinie erscheint ein kleines 🕒-Badge. i18n DE/EN/ES/IT. Folder-Liste-API liefert jetzt retentionTag-Relation mit (id, name, retentionDays, action).' },
   { version: '3.17.23', date: '2026-05-21', title: 'Audit-Log: Komplettüberarbeitung mit PDF-Export + Statistik',

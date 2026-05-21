@@ -13,6 +13,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.26] — 2026-05-21 — Fix: MX-Tools "Does not support TLS" — STARTTLS wieder aktiv
+
+### Fixed
+
+- **MX-Tools-Warnung „SMTP TLS Warning - Does not support TLS"**:
+  In v3.17.19 wurde STARTTLS auf Port 25 für self-signed Certs hart deaktiviert
+  um Outlook-365-Handshake-Fehler zu vermeiden. Resultat: MX-Tools sah kein TLS
+  → Warning. Auch wenn die meisten MTAs (Gmail, Apple, ProtonMail, AOL …)
+  Opportunistic TLS mit self-signed Certs akzeptieren.
+
+  **Korrekter Trade-off**: Opportunistic TLS ist **immer besser** als kein TLS:
+  - ~95% der MTAs akzeptieren self-signed im opportunistic-Modus
+  - Strikte MTAs (Microsoft 365) fallen auf Plain zurück bei TLS-Handshake-Fehler
+    (kein Bounce, nur kein TLS für diese Verbindung)
+  - MX-Tools-Scoring belohnt TLS-Verfügbarkeit
+
+  Fix: `advertiseStarttls: true` immer (statt `!_tlsCertSelfSigned`).
+  STARTTLS wird jetzt auch mit self-signed Cert in EHLO beworben.
+
+### Dauerhafte Lösung für Outlook-365-Kompatibilität
+
+Für vollständige TLS-Validierung in strikten MTAs (Microsoft 365, manche
+Banken) ein **Let's Encrypt-Zertifikat** über BCP → SSL/TLS → Zertifikate →
+„Let's Encrypt anfordern" für `mail.{domain}` ausstellen. Sobald aktiv:
+- MX-Tools: ✅ TLS-Score voll
+- Outlook 365: ✅ akzeptiert Cert ohne Probleme
+- Self-signed Fallback wird nicht mehr genutzt
+
+**Voraussetzungen für Let's Encrypt**:
+- Port 80 von außen erreichbar (HTTP-01 Challenge)
+- DNS-A-Record `mail.{domain}` zeigt auf Server-IP
+
+---
+
 ## [3.17.25] — 2026-05-21 — MWA: Aufbewahrungsrichtlinien per Rechtsklick
 
 ### Added
