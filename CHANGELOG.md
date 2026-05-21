@@ -13,6 +13,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.19] — 2026-05-21 — Fix: STARTTLS auf Port 25 mit self-signed Cert (Outlook 503)
+
+### Fixed
+
+- **Mails von Microsoft Outlook / Exchange werden mit `503 5.5.1 Bad sequence
+  of commands` abgewiesen**: Der SMTP-Server bewarb STARTTLS auf Port 25 mit
+  einem self-signed Zertifikat. Strikte MTAs wie Microsoft Exchange initiieren
+  daraufhin den TLS-Handshake, lehnen das self-signed Cert ab (ECONNRESET) und
+  geben einen 503-Fehler zurück.
+
+  Fix: Self-signed Erkennung via `X509Certificate.issuer === subject`. Auf
+  **Port 25 (Inbound)** wird STARTTLS NICHT mehr beworben wenn Cert self-signed
+  ist — MTAs stellen dann in Plain zu (immer noch RFC-konform, opportunistic
+  TLS wird übersprungen). Submission-Ports (465/587) bewerben STARTTLS weiterhin
+  (eigene Clients akzeptieren self-signed mit `tls.rejectUnauthorized: false`).
+
+  Nach Installation eines CA-signed Zertifikats (z.B. Let's Encrypt über BCP →
+  SSL/TLS) wird STARTTLS auf Port 25 automatisch aktiviert.
+
+---
+
 ## [3.17.18] — 2026-05-21 — Posteingang Auto-Refresh + manueller Refresh-Button
 
 ### Fixed
