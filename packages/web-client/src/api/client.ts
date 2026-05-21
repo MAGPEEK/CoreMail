@@ -2,8 +2,65 @@ import { useAuthStore } from '../store/auth.js';
 
 const BASE = '/api/v1';
 
+/** Decode JWT exp claim without a library (returns seconds since epoch or null). */
+function getJwtExp(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]!)) as { exp?: number };
+    return payload.exp ?? null;
+  } catch {
+    return null;
+  }
+}
+
+let isRefreshing = false;
+let refreshPromise: Promise<string | null> | null = null;
+
+/** Attempt to refresh the access token. Returns new access token or null on failure. */
+async function tryRefresh(): Promise<string | null> {
+  const refreshToken = useAuthStore.getState().refreshToken;
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch('/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { accessToken: string; refreshToken?: string };
+    if (data.accessToken) {
+      useAuthStore.getState().setTokens(data.accessToken, data.refreshToken ?? refreshToken);
+      return data.accessToken;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}, skipContentType = false): Promise<T> {
-  const token = useAuthStore.getState().accessToken;
+  let token = useAuthStore.getState().accessToken;
+
+  // Proactive refresh: if token expires within 120 seconds, refresh first
+  if (token) {
+    const exp = getJwtExp(token);
+    const nowSecs = Math.floor(Date.now() / 1000);
+    if (exp !== null && exp - nowSecs < 120) {
+      if (!isRefreshing) {
+        isRefreshing = true;
+        refreshPromise = tryRefresh().finally(() => { isRefreshing = false; refreshPromise = null; });
+      }
+      const newToken = await refreshPromise;
+      if (newToken) {
+        token = newToken;
+      } else {
+        // Refresh token also expired — clear and redirect to login
+        useAuthStore.getState().logout();
+        window.location.href = '/login';
+        throw new Error('Session expired');
+      }
+    }
+  }
+
   const headers: Record<string, string> = {
     ...(skipContentType ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -13,6 +70,21 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
 
   if (res.status === 401) {
+    // Fallback: attempt refresh once before redirecting
+    const newToken = await tryRefresh();
+    if (newToken) {
+      // Retry original request with new token
+      const retryHeaders: Record<string, string> = {
+        ...(skipContentType ? {} : { 'Content-Type': 'application/json' }),
+        Authorization: `Bearer ${newToken}`,
+        ...(init.headers as Record<string, string> ?? {}),
+      };
+      const retryRes = await fetch(`${BASE}${path}`, { ...init, headers: retryHeaders });
+      if (retryRes.ok) {
+        if (retryRes.status === 204) return undefined as T;
+        return retryRes.json() as Promise<T>;
+      }
+    }
     useAuthStore.getState().logout();
     window.location.href = '/login';
     throw new Error('Unauthorized');

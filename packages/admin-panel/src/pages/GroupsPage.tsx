@@ -73,7 +73,7 @@ function MemberTypeBadge({ type }: { type: Member['memberType'] }) {
 // ─── Group Form Modal ─────────────────────────────────────────────────────────
 
 interface GroupFormData {
-  email: string;
+  localPart: string;
   displayName: string;
   description: string;
   domainId: string;
@@ -96,7 +96,7 @@ function GroupModal({
   const isEdit = group !== null;
 
   const [form, setForm] = useState<GroupFormData>({
-    email: group?.email ?? '',
+    localPart: group?.email?.split('@')[0] ?? '',
     displayName: group?.displayName ?? '',
     description: group?.description ?? '',
     domainId: group?.domainId ?? (domains[0]?.id ?? ''),
@@ -120,7 +120,7 @@ function GroupModal({
           ...(form.groupType === 'DYNAMIC' ? { ldapFilter: form.ldapFilter } : {}),
         })
       : api.post('/admin/groups', {
-          email: form.email,
+          email: `${form.localPart.toLowerCase()}@${domains.find(d => d.id === form.domainId)?.name ?? ''}`,
           displayName: form.displayName,
           description: form.description,
           domainId: form.domainId,
@@ -169,24 +169,26 @@ function GroupModal({
             </div>
           )}
 
-          {/* E-Mail (nur bei Neu) */}
+          {/* E-Mail + Domain (nur bei Neu) — side-by-side */}
           {!isEdit && (
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">E-Mail-Adresse</label>
-              <input value={form.email} onChange={e => set('email', e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-                placeholder="verteilung@domain.com" />
-            </div>
-          )}
-
-          {/* Domain (nur bei Neu) */}
-          {!isEdit && (
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Domain</label>
-              <select value={form.domainId} onChange={e => set('domainId', e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
-                {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
+              <div className="flex items-center gap-1">
+                <input
+                  value={form.localPart}
+                  onChange={e => set('localPart', e.target.value)}
+                  className="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                  placeholder="verteilung"
+                />
+                <span className="text-sm text-gray-500 shrink-0">@</span>
+                <select
+                  value={form.domainId}
+                  onChange={e => set('domainId', e.target.value)}
+                  className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                >
+                  {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
             </div>
           )}
 

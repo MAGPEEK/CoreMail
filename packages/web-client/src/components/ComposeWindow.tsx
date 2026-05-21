@@ -263,6 +263,13 @@ interface ContactSuggest {
   displayName: string;
   email: string;
   company?: string;
+  isGroup?: boolean;
+}
+
+interface GalGroup {
+  id: string;
+  displayName: string;
+  email: string;
 }
 
 function RecipientInput({
@@ -311,7 +318,24 @@ function RecipientInput({
     staleTime: 30_000,
   });
 
-  const suggestions = (contacts ?? []).filter((c) => !!c.email).slice(0, 8);
+  const { data: galGroups } = useQuery({
+    queryKey: ['gal-groups-suggest', debouncedQ],
+    queryFn: () => api.get<GalGroup[]>('/admin/groups/gal'),
+    enabled: debouncedQ.length >= 1,
+    staleTime: 60_000,
+  });
+
+  const matchingGroups: ContactSuggest[] = (galGroups ?? [])
+    .filter((g) => {
+      const q = debouncedQ.toLowerCase();
+      return g.email.toLowerCase().includes(q) || g.displayName.toLowerCase().includes(q);
+    })
+    .map((g) => ({ id: g.id, displayName: g.displayName, email: g.email, isGroup: true }));
+
+  const suggestions = [
+    ...(contacts ?? []).filter((c) => !!c.email),
+    ...matchingGroups,
+  ].slice(0, 8);
 
   const pickSuggestion = useCallback((c: ContactSuggest) => {
     const display = c.displayName ? `${c.displayName} <${c.email}>` : c.email;
@@ -370,21 +394,28 @@ function RecipientInput({
         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-[400] max-h-52 overflow-y-auto">
           {suggestions.map((c, i) => (
             <button
-              key={c.id}
+              key={c.id + (c.isGroup ? '-grp' : '')}
               onMouseDown={(e) => { e.preventDefault(); pickSuggestion(c); }}
               className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
                 i === activeIdx ? 'bg-blue-50' : 'hover:bg-gray-50'
               }`}
             >
-              <div className="w-7 h-7 rounded-full bg-accent/15 flex items-center justify-center text-xs font-semibold text-accent shrink-0 uppercase">
-                {(c.displayName || c.email)[0]}
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 uppercase ${
+                c.isGroup ? 'bg-purple-100 text-purple-700' : 'bg-accent/15 text-accent'
+              }`}>
+                {c.isGroup ? '⊕' : (c.displayName || c.email)[0]}
               </div>
               <div className="min-w-0 flex-1">
-                {c.displayName && (
-                  <div className="text-sm font-medium text-gray-900 truncate">{c.displayName}</div>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {c.displayName && (
+                    <span className="text-sm font-medium text-gray-900 truncate">{c.displayName}</span>
+                  )}
+                  {c.isGroup && (
+                    <span className="text-[10px] bg-purple-100 text-purple-600 px-1 py-0.5 rounded shrink-0">[Gruppe]</span>
+                  )}
+                </div>
                 <div className={`truncate ${c.displayName ? 'text-xs text-gray-500' : 'text-sm text-gray-900'}`}>{c.email}</div>
-                {c.company && (
+                {c.company && !c.isGroup && (
                   <div className="text-xs text-gray-400 truncate">{c.company}</div>
                 )}
               </div>
