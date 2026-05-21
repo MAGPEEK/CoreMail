@@ -8,6 +8,7 @@ import {
   Info, Clock, Download,
 } from 'lucide-react';
 import { api } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
   onRelease: (id: string) => void;
   onDelete:  (id: string) => void;
 }) {
+  const t = useT();
   const { data, isLoading } = useQuery({
     queryKey: ['quarantine-detail', id],
     queryFn:  () => api.get<QuarantineDetail>(`/admin/quarantine/${id}`),
@@ -94,7 +96,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50 shrink-0">
           <div className="flex items-center gap-2">
             <Eye size={16} className="text-gray-500" />
-            <span className="font-semibold text-gray-900 text-sm">Nachricht prüfen</span>
+            <span className="font-semibold text-gray-900 text-sm">{t('quar_detail_title')}</span>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded">
             <X size={16} />
@@ -103,7 +105,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
         {isLoading && (
           <div className="flex-1 flex items-center justify-center text-gray-400">
-            <Loader2 size={20} className="animate-spin mr-2" /> Lade Details…
+            <Loader2 size={20} className="animate-spin mr-2" /> {t('quar_detail_loading')}
           </div>
         )}
 
@@ -114,7 +116,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <h2 className="font-semibold text-gray-900 text-base leading-tight truncate">
-                    {data.subject || '(kein Betreff)'}
+                    {data.subject || t('quar_no_subject')}
                   </h2>
                 </div>
                 <ReasonBadge reason={data.reason} size="lg" />
@@ -122,10 +124,10 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
               <div className="grid grid-cols-1 gap-2">
                 {[
-                  { icon: User,     label: 'Von',      val: data.fromAddr },
-                  { icon: ArrowRight, label: 'An',     val: data.toAddr },
-                  { icon: Clock,    label: 'Empfangen', val: new Date(data.createdAt).toLocaleString('de-DE') },
-                  ...(data.messageId ? [{ icon: Mail, label: 'Message-ID', val: data.messageId }] : []),
+                  { icon: User,     label: t('quar_detail_from'),    val: data.fromAddr },
+                  { icon: ArrowRight, label: t('quar_detail_to'),    val: data.toAddr },
+                  { icon: Clock,    label: t('quar_detail_received'), val: new Date(data.createdAt).toLocaleString('de-DE') },
+                  ...(data.messageId ? [{ icon: Mail, label: t('quar_detail_msgid'), val: data.messageId }] : []),
                 ].map(({ icon: Icon, label, val }) => (
                   <div key={label} className="flex items-start gap-2 text-sm">
                     <Icon size={13} className="text-gray-400 mt-0.5 shrink-0" />
@@ -139,13 +141,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
               {data.released ? (
                 <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-700">
                   <CheckCircle size={13} />
-                  Freigegeben am {data.releasedAt ? new Date(data.releasedAt).toLocaleString('de-DE') : '—'}
+                  {t('quar_detail_released_at')} {data.releasedAt ? new Date(data.releasedAt).toLocaleString('de-DE') : '—'}
                   {data.releasedBy && ` · ${data.releasedBy}`}
                 </div>
               ) : (
                 <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
                   <Clock size={13} />
-                  Ausstehend — noch nicht freigegeben
+                  {t('quar_detail_pending_msg')}
                 </div>
               )}
             </div>
@@ -153,7 +155,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
             {/* Reason details */}
             {Object.keys(data.details).length > 0 && (
               <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Filter-Details</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_filter')}</p>
                 <div className="space-y-1.5">
                   {Object.entries(data.details).map(([k, v]) => (
                     <div key={k} className="flex gap-2 text-xs">
@@ -168,7 +170,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
             {/* E-Mail Headers */}
             {filteredHdrs.length > 0 && (
               <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">E-Mail-Header</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_headers')}</p>
                 <div className="bg-gray-50 rounded-lg p-3 space-y-1 text-xs font-mono max-h-52 overflow-y-auto">
                   {filteredHdrs.map(([h, v]) => (
                     <div key={h} className="flex gap-2">
@@ -183,13 +185,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
             {/* Body Preview */}
             {body && (
               <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Nachrichteninhalt (Vorschau)</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_body')}</p>
                 <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-700 whitespace-pre-wrap max-h-48 overflow-y-auto font-mono leading-relaxed">
                   {body}
                 </div>
                 {body.length >= 2000 && (
                   <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                    <Info size={10} /> Vorschau auf 2000 Zeichen begrenzt
+                    <Info size={10} /> {t('quar_detail_body_limit')}
                   </p>
                 )}
               </div>
@@ -199,7 +201,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
               <div className="px-5 py-4">
                 <div className="bg-gray-50 rounded-lg p-4 text-xs text-gray-400 text-center flex items-center justify-center gap-2">
                   <Download size={13} />
-                  Keine Vorschau verfügbar — Nachricht befindet sich im Objektspeicher
+                  {t('quar_detail_no_preview')}
                 </div>
               </div>
             )}
@@ -214,19 +216,19 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
                 onClick={() => { onRelease(data.id); onClose(); }}
                 className="btn-primary text-sm gap-1.5 flex-1 justify-center"
               >
-                <CheckCircle size={14} /> Freigeben & Zustellen
+                <CheckCircle size={14} /> {t('quar_detail_release_btn')}
               </button>
             )}
             {data.reason === 'VIRUS' && !data.released && (
               <div className="flex-1 text-xs text-red-600 flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                <Bug size={13} /> Virus-Nachrichten können nicht freigegeben werden
+                <Bug size={13} /> {t('quar_detail_virus_block')}
               </div>
             )}
             <button
               onClick={() => { onDelete(data.id); onClose(); }}
               className="btn-secondary text-sm gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
             >
-              <Trash2 size={14} /> Löschen
+              <Trash2 size={14} /> {t('quar_detail_delete_btn')}
             </button>
           </div>
         )}
@@ -238,6 +240,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 // ── Bulk Cleanup Modal ────────────────────────────────────────────────────────
 
 function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: (days: number, onlyReleased: boolean) => void }) {
+  const t = useT();
   const [days, setDays]               = useState(30);
   const [onlyReleased, setOnlyReleased] = useState(true);
 
@@ -247,13 +250,13 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
       <div className="relative bg-white rounded-xl shadow-2xl w-[400px] p-6 space-y-5">
         <div className="flex items-center gap-2">
           <Trash2 size={18} className="text-red-500" />
-          <h2 className="text-base font-semibold text-gray-900">Quarantäne bereinigen</h2>
+          <h2 className="text-base font-semibold text-gray-900">{t('quar_cleanup_title')}</h2>
         </div>
 
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Einträge älter als
+              {t('quar_cleanup_older_than')}
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -261,7 +264,7 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
                 onChange={e => setDays(parseInt(e.target.value, 10) || 1)}
                 className="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               />
-              <span className="text-sm text-gray-600">Tage</span>
+              <span className="text-sm text-gray-600">{t('quar_cleanup_warn_days')}</span>
             </div>
           </div>
 
@@ -270,27 +273,27 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
               type="checkbox" checked={onlyReleased} onChange={e => setOnlyReleased(e.target.checked)}
               className="rounded border-gray-300 text-accent"
             />
-            <span className="text-sm text-gray-700">Nur bereits freigegebene Einträge</span>
+            <span className="text-sm text-gray-700">{t('quar_cleanup_only_released')}</span>
           </label>
 
           <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>
               {onlyReleased
-                ? `Freigegebene Quarantäne-Einträge älter als ${days} Tage werden endgültig gelöscht.`
-                : `ALLE Quarantäne-Einträge älter als ${days} Tage werden endgültig gelöscht.`}
-              {' '}Diese Aktion kann nicht rückgängig gemacht werden.
+                ? `${t('quar_cleanup_warn_released')} ${days} ${t('quar_cleanup_warn_days')}`
+                : `${t('quar_cleanup_warn_all')} ${days} ${t('quar_cleanup_warn_days')}`}
+              {' '}{t('quar_cleanup_warn_undo')}
             </span>
           </div>
         </div>
 
         <div className="flex gap-2 pt-1">
-          <button onClick={onClose} className="btn-secondary text-sm flex-1 justify-center">Abbrechen</button>
+          <button onClick={onClose} className="btn-secondary text-sm flex-1 justify-center">{t('action_cancel')}</button>
           <button
             onClick={() => { onConfirm(days, onlyReleased); onClose(); }}
             className="flex-1 justify-center btn-primary text-sm bg-red-600 hover:bg-red-700 border-red-600"
           >
-            <Trash2 size={13} /> Bereinigen
+            <Trash2 size={13} /> {t('quar_cleanup_btn')}
           </button>
         </div>
       </div>
@@ -303,6 +306,7 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
 // ═════════════════════════════════════════════════════════════════════════════
 
 export function QuarantinePage() {
+  const t = useT();
   const qc = useQueryClient();
 
   // Filter state
@@ -345,28 +349,28 @@ export function QuarantinePage() {
 
   const releaseMut = useMutation({
     mutationFn: (id: string) => api.post(`/admin/quarantine/${id}/release`, {}),
-    onSuccess: () => { invalidate(); toast.success('Freigegeben und zugestellt'); },
-    onError:   () => toast.error('Fehler bei Freigabe'),
+    onSuccess: () => { invalidate(); toast.success(t('quar_released_toast')); },
+    onError:   () => toast.error(t('quar_release_error')),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/quarantine/${id}`),
-    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success('Gelöscht'); },
-    onError:   () => toast.error('Löschen fehlgeschlagen'),
+    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success(t('quar_deleted_toast')); },
+    onError:   () => toast.error(t('quar_delete_error')),
   });
 
   const bulkDeleteMut = useMutation({
     mutationFn: (ids: string[]) =>
       Promise.all(ids.map(id => api.delete(`/admin/quarantine/${id}`))),
-    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success(`${selectedRows.size} Einträge gelöscht`); },
-    onError:   () => toast.error('Fehler beim Löschen'),
+    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success(`${selectedRows.size} ${t('quar_deleted_toast')}`); },
+    onError:   () => toast.error(t('quar_delete_error')),
   });
 
   const cleanupMut = useMutation({
     mutationFn: ({ days, onlyReleased }: { days: number; onlyReleased: boolean }) =>
       api.deleteWithBody<{ deleted: number }>('/admin/quarantine', { olderThanDays: days, onlyReleased }),
-    onSuccess: (res) => { invalidate(); toast.success(`${res.deleted} Einträge bereinigt`); },
-    onError:   () => toast.error('Bereinigung fehlgeschlagen'),
+    onSuccess: (res) => { invalidate(); toast.success(`${res.deleted} ${t('quar_cleanup_success')}`); },
+    onError:   () => toast.error(t('quar_cleanup_error')),
   });
 
   // ── Selection helpers ────────────────────────────────────────────────────
@@ -394,12 +398,12 @@ export function QuarantinePage() {
   // ── Stat cards config ────────────────────────────────────────────────────
 
   const STAT_CARDS = [
-    { label: 'Ausstehend', value: stats?.pending ?? '—',  color: 'text-amber-600', bg: 'bg-amber-50',  icon: Clock },
-    { label: 'Virus',      value: stats?.virus   ?? '—',  color: 'text-red-600',   bg: 'bg-red-50',    icon: Bug },
-    { label: 'Spam',       value: stats?.spam    ?? '—',  color: 'text-yellow-600',bg: 'bg-yellow-50', icon: AlertTriangle },
-    { label: 'Richtlinie', value: stats?.policy  ?? '—',  color: 'text-blue-600',  bg: 'bg-blue-50',   icon: FileWarning },
-    { label: 'Freigegeben',value: stats?.released ?? '—', color: 'text-green-600', bg: 'bg-green-50',  icon: CheckCircle },
-    { label: 'Gesamt',     value: stats?.total   ?? '—',  color: 'text-gray-700',  bg: 'bg-gray-50',   icon: ShieldAlert },
+    { label: t('quar_stat_pending'),  value: stats?.pending  ?? '—', color: 'text-amber-600', bg: 'bg-amber-50',  icon: Clock },
+    { label: t('quar_stat_virus'),    value: stats?.virus    ?? '—', color: 'text-red-600',   bg: 'bg-red-50',    icon: Bug },
+    { label: t('quar_stat_spam'),     value: stats?.spam     ?? '—', color: 'text-yellow-600',bg: 'bg-yellow-50', icon: AlertTriangle },
+    { label: t('quar_stat_policy'),   value: stats?.policy   ?? '—', color: 'text-blue-600',  bg: 'bg-blue-50',   icon: FileWarning },
+    { label: t('quar_stat_released'), value: stats?.released ?? '—', color: 'text-green-600', bg: 'bg-green-50',  icon: CheckCircle },
+    { label: t('quar_stat_total'),    value: stats?.total    ?? '—', color: 'text-gray-700',  bg: 'bg-gray-50',   icon: ShieldAlert },
   ];
 
   return (
@@ -412,20 +416,20 @@ export function QuarantinePage() {
               <ShieldAlert size={18} className="text-amber-600" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-900">Quarantäne</h1>
+              <h1 className="text-lg font-bold text-gray-900">{t('quar_page_title')}</h1>
               <p className="text-xs text-gray-400">
-                {statsLoading ? '…' : `${stats?.pending ?? 0} ausstehend · ${stats?.total ?? 0} gesamt`}
+                {statsLoading ? '…' : `${stats?.pending ?? 0} ${t('quar_pending')} · ${stats?.total ?? 0} ${t('quar_total')}`}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowCleanup(true)}
               className="btn-secondary text-xs gap-1.5">
-              <Trash2 size={13} /> Bereinigen
+              <Trash2 size={13} /> {t('quar_cleanup')}
             </button>
             <button onClick={() => { invalidate(); void qc.invalidateQueries({ queryKey: ['quarantine-stats'] }); }}
               className="btn-ghost text-xs gap-1">
-              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} /> Aktualisieren
+              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} /> {t('quar_refresh')}
             </button>
           </div>
         </div>
@@ -436,11 +440,11 @@ export function QuarantinePage() {
             <button
               key={label}
               onClick={() => {
-                if (label === 'Virus')       { setReason('VIRUS');  setReleased('false'); setPage(1); }
-                else if (label === 'Spam')   { setReason('SPAM');   setReleased('false'); setPage(1); }
-                else if (label === 'Richtlinie') { setReason('POLICY'); setReleased('false'); setPage(1); }
-                else if (label === 'Freigegeben') { setReleased('true'); setReason(''); setPage(1); }
-                else if (label === 'Ausstehend')  { setReleased('false'); setReason(''); setPage(1); }
+                if (label === t('quar_stat_virus'))    { setReason('VIRUS');  setReleased('false'); setPage(1); }
+                else if (label === t('quar_stat_spam'))    { setReason('SPAM');   setReleased('false'); setPage(1); }
+                else if (label === t('quar_stat_policy'))  { setReason('POLICY'); setReleased('false'); setPage(1); }
+                else if (label === t('quar_stat_released')) { setReleased('true'); setReason(''); setPage(1); }
+                else if (label === t('quar_stat_pending'))  { setReleased('false'); setReason(''); setPage(1); }
                 else resetFilters();
               }}
               className={`${bg} rounded-xl p-3 text-left border border-transparent hover:border-gray-200 transition-colors`}
@@ -462,7 +466,7 @@ export function QuarantinePage() {
           <input
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); setSelectedRows(new Set()); }}
-            placeholder="Suche: Von, An, Betreff…"
+            placeholder={t('quar_search_placeholder')}
             className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-accent"
           />
           {search && (
@@ -475,14 +479,14 @@ export function QuarantinePage() {
 
         <select value={reason} onChange={e => { setReason(e.target.value); setPage(1); setSelectedRows(new Set()); }}
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
-          <option value="">Alle Gründe</option>
-          <option value="VIRUS">Virus</option>
-          <option value="SPAM">Spam</option>
-          <option value="POLICY">Richtlinie</option>
+          <option value="">{t('quar_filter_all_reasons')}</option>
+          <option value="VIRUS">{t('quar_stat_virus')}</option>
+          <option value="SPAM">{t('quar_stat_spam')}</option>
+          <option value="POLICY">{t('quar_stat_policy')}</option>
         </select>
 
         <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-          {[['false','Ausstehend'],['true','Freigegeben'],['','Alle']].map(([val, label]) => (
+          {([[`false`, t('quar_filter_pending')],[`true`, t('quar_filter_released')],[``, t('quar_filter_all')]] as [string, string][]).map(([val, label]) => (
             <button
               key={val}
               onClick={() => { setReleased(val); setPage(1); setSelectedRows(new Set()); }}
@@ -495,25 +499,25 @@ export function QuarantinePage() {
 
         {(search || reason || released !== 'false') && (
           <button onClick={resetFilters} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-            <X size={12} /> Zurücksetzen
+            <X size={12} /> {t('quar_filter_clear')}
           </button>
         )}
 
-        <span className="ml-auto text-xs text-gray-400">{total} Einträge</span>
+        <span className="ml-auto text-xs text-gray-400">{total} {t('quar_entries')}</span>
       </div>
 
       {/* ── Bulk action bar ───────────────────────────────────────────── */}
       {selectedRows.size > 0 && (
         <div className="px-6 py-2 bg-accent/10 border-b border-accent/20 flex items-center gap-3 shrink-0">
-          <span className="text-sm font-medium text-accent">{selectedRows.size} ausgewählt</span>
+          <span className="text-sm font-medium text-accent">{selectedRows.size} {t('quar_bulk_selected')}</span>
           <button
             onClick={() => bulkDeleteMut.mutate([...selectedRows])}
             disabled={bulkDeleteMut.isPending}
             className="btn-secondary text-xs text-red-600 border-red-200 hover:bg-red-50 gap-1">
-            <Trash2 size={12} /> Alle löschen
+            <Trash2 size={12} /> {t('quar_bulk_delete')}
           </button>
           <button onClick={() => setSelectedRows(new Set())} className="text-xs text-gray-500 hover:text-gray-700 ml-auto">
-            Auswahl aufheben
+            {t('quar_bulk_deselect')}
           </button>
         </div>
       )}
@@ -522,14 +526,14 @@ export function QuarantinePage() {
       <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="flex items-center justify-center py-24 text-gray-400">
-            <Loader2 size={22} className="animate-spin mr-2" /> Lade Quarantäne…
+            <Loader2 size={22} className="animate-spin mr-2" /> {t('quar_loading')}
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-gray-400 gap-3">
             <ShieldAlert size={36} className="text-gray-200" />
-            <p className="text-sm">Keine Einträge gefunden</p>
+            <p className="text-sm">{t('quar_empty')}</p>
             {(search || reason) && (
-              <button onClick={resetFilters} className="text-xs text-accent hover:underline">Filter zurücksetzen</button>
+              <button onClick={resetFilters} className="text-xs text-accent hover:underline">{t('quar_reset_filter')}</button>
             )}
           </div>
         ) : (
@@ -544,14 +548,14 @@ export function QuarantinePage() {
                     className="rounded border-gray-300 text-accent focus:ring-accent"
                   />
                 </th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Von / An</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Betreff</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Grund</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_from_to')}</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_subject')}</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_reason')}</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  <Calendar size={11} className="inline mr-1" />Datum
+                  <Calendar size={11} className="inline mr-1" />{t('quar_col_date')}
                 </th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Aktionen</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_status')}</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_actions')}</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
@@ -579,7 +583,7 @@ export function QuarantinePage() {
                       </p>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="text-gray-700 truncate max-w-[220px]">{item.subject || <span className="italic text-gray-400">(kein Betreff)</span>}</p>
+                      <p className="text-gray-700 truncate max-w-[220px]">{item.subject || <span className="italic text-gray-400">{t('quar_no_subject')}</span>}</p>
                     </td>
                     <td className="px-4 py-3">
                       <ReasonBadge reason={item.reason} />
@@ -591,11 +595,11 @@ export function QuarantinePage() {
                     <td className="px-4 py-3">
                       {item.released ? (
                         <span className="inline-flex items-center gap-1 text-xs text-green-600">
-                          <CheckCircle size={11} /> Freigegeben
+                          <CheckCircle size={11} /> {t('quar_status_released')}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs text-amber-600">
-                          <Clock size={11} /> Ausstehend
+                          <Clock size={11} /> {t('quar_status_pending')}
                         </span>
                       )}
                     </td>
@@ -603,7 +607,7 @@ export function QuarantinePage() {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => setSelectedId(item.id === selectedId ? null : item.id)}
-                          title="Vorschau"
+                          title={t('quar_btn_preview')}
                           className={`p-1.5 rounded transition-colors ${isActive ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-accent hover:bg-accent/10'}`}
                         >
                           <Eye size={14} />
@@ -611,15 +615,15 @@ export function QuarantinePage() {
                         {!item.released && item.reason !== 'VIRUS' && (
                           <button
                             onClick={() => releaseMut.mutate(item.id)}
-                            title="Freigeben"
+                            title={t('quar_btn_release')}
                             className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
                           >
                             <CheckCircle size={14} />
                           </button>
                         )}
                         <button
-                          onClick={() => { if (window.confirm('Eintrag endgültig löschen?')) deleteMut.mutate(item.id); }}
-                          title="Löschen"
+                          onClick={() => { if (window.confirm(t('quar_delete_confirm'))) deleteMut.mutate(item.id); }}
+                          title={t('quar_btn_delete')}
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                         >
                           <Trash2 size={14} />
@@ -637,7 +641,7 @@ export function QuarantinePage() {
       {/* ── Pagination ────────────────────────────────────────────────── */}
       {pages > 1 && (
         <div className="px-6 py-3 bg-white border-t border-gray-200 flex items-center justify-between text-sm text-gray-500 shrink-0">
-          <span>{total} Einträge · Seite {page} von {pages}</span>
+          <span>{total} {t('quar_entries')} · {t('quar_page_info')} {page} {t('quar_page_of')} {pages}</span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setPage(1)} disabled={page === 1}
@@ -678,7 +682,7 @@ export function QuarantinePage() {
           id={selectedId}
           onClose={() => setSelectedId(null)}
           onRelease={id => releaseMut.mutate(id)}
-          onDelete={id => { if (window.confirm('Eintrag endgültig löschen?')) deleteMut.mutate(id); }}
+          onDelete={id => { if (window.confirm(t('quar_delete_confirm'))) deleteMut.mutate(id); }}
         />
       )}
 
