@@ -133,6 +133,18 @@ export const api = {
   deleteWithBody: <T>(path: string, body: unknown) => request<T>(path, { method: 'DELETE', body: JSON.stringify(body) }),
 };
 
+/**
+ * Build a download URL with the auth token appended as a query parameter.
+ * Required for `window.open()`/`<a href>` style downloads where we can't
+ * set the Authorization header. The `requireAuth` middleware accepts
+ * `?token=…` as a fallback.
+ */
+export function exportUrl(path: string, params: URLSearchParams): string {
+  const token = getToken();
+  if (token) params.set('token', token);
+  return `/api/v1${path}?${params.toString()}`;
+}
+
 export type LoginResult =
   | { accessToken: string; refreshToken?: string }
   | { mfaRequired: true; challengeToken: string; method: string };

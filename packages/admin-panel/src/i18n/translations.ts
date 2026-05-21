@@ -710,6 +710,20 @@ const de = {
   delegate_perm_sendonbehalf:'Senden im Auftrag',
   delegate_saved:            'Zugriff gewährt',
   delegate_revoked:          'Zugriff entzogen',
+
+  // ── Audit-Log ────────────────────────────────────────────────────────────
+  audit_immutable_notice:    'Audit-Log ist schreibgeschützt — Einträge können auch von Admins nicht gelöscht oder verändert werden (Compliance-Anforderung)',
+  audit_export_csv:          'CSV exportieren',
+  audit_export_pdf:          'PDF exportieren',
+  audit_stat_total:          'Gesamt-Einträge',
+  audit_stat_24h:            'Letzte 24h',
+  audit_stat_7d:             'Letzte 7 Tage',
+  audit_stat_failure_rate:   'Fehlerquote',
+  audit_top_actors:          'Top Akteure',
+  audit_top_actions:         'Top Aktionen',
+  audit_filter_actor_email:  'Akteur (E-Mail)…',
+  audit_filter_ip:           'IP-Adresse…',
+  audit_filter_search:       'Volltextsuche…',
 } as const;
 
 type DE = typeof de;
@@ -1423,6 +1437,20 @@ const en: { [K in keyof DE]: string } = {
   delegate_perm_sendonbehalf:'Send on Behalf',
   delegate_saved:            'Access granted',
   delegate_revoked:          'Access revoked',
+
+  // ── Audit Log ─────────────────────────────────────────────────────────────
+  audit_immutable_notice:    'Audit log is read-only — entries cannot be deleted or modified, even by admins (compliance requirement)',
+  audit_export_csv:          'Export CSV',
+  audit_export_pdf:          'Export PDF',
+  audit_stat_total:          'Total entries',
+  audit_stat_24h:            'Last 24h',
+  audit_stat_7d:             'Last 7 days',
+  audit_stat_failure_rate:   'Failure rate',
+  audit_top_actors:          'Top actors',
+  audit_top_actions:         'Top actions',
+  audit_filter_actor_email:  'Actor (email)…',
+  audit_filter_ip:           'IP address…',
+  audit_filter_search:       'Full-text search…',
 };
 
 export type TranslationKey = keyof DE;
