@@ -68,6 +68,12 @@ export interface SmtpSessionConfig {
   /** ESMTP-Erweiterungen — wenn `undefined`, gelten DEFAULT_ESMTP_EXTENSIONS. */
   esmtp?: EsmtpExtensions;
   tls?: { cert: Buffer; key: Buffer };
+  /**
+   * Wenn true (Default), wird STARTTLS in der EHLO-Antwort beworben (sofern TLS-Config vorhanden).
+   * Auf Port 25 mit self-signed Cert: false setzen damit strikte MTAs (Microsoft Exchange)
+   * in Plain zustellen können statt am gescheiterten TLS-Handshake hängenzubleiben.
+   */
+  advertiseStarttls?: boolean;
   handlers: SmtpHandlers;
   /** clientIp wird für Brute-Force-Tracking (ip-limiter) weitergegeben. */
   verifyCredentials?: (username: string, password: string, clientIp?: string) => Promise<AuthUser | null>;

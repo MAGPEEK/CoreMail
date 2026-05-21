@@ -26,6 +26,9 @@ let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNA
 // Wird beim Start aus der DB geladen oder als selbstsigniertes Zertifikat generiert.
 // Null = noch nicht geladen; undefined = kein Cert verfügbar (soll nie vorkommen).
 let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
+// Self-signed Certs werden von strikten MTAs (z.B. Microsoft Exchange) abgelehnt.
+// Auf Port 25 (Inbound) wird STARTTLS deshalb NICHT beworben wenn Cert self-signed.
+let _tlsCertSelfSigned: boolean = true;
 
 // ── Banner-Konfiguration (SmtpSettings) ───────────────────────────────────────
 // Leer = Standard-Banner ("hostname ESMTP CoreMail"); gesetzt = benutzerdefiniert.
@@ -105,6 +108,24 @@ async function refreshHostname(): Promise<void> {
  * Falls keines vorhanden ist, wird ein selbstsigniertes Zertifikat generiert
  * und für spätere Starts in der DB gespeichert.
  */
+/**
+ * Erkennt ob ein PEM-Zertifikat self-signed ist (Issuer == Subject).
+ * Self-signed Certs werden von strikten MTAs (Microsoft Exchange, Google) abgelehnt
+ * → wir bewerben STARTTLS dann nicht auf Port 25 damit MTAs in Plain zustellen.
+ */
+function isCertSelfSigned(certPem: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
+    const cert = new X509Certificate(certPem);
+    // X509Certificate.issuer und subject sind RFC2253 strings — vergleichen sich exakt
+    return cert.issuer === cert.subject;
+  } catch {
+    // Im Fehlerfall pessimistisch annehmen self-signed (sicherer Default)
+    return true;
+  }
+}
+
 async function refreshTlsConfig(): Promise<void> {
   try {
     const settings = await prisma.serverSettings.findUnique({
@@ -114,7 +135,8 @@ async function refreshTlsConfig(): Promise<void> {
 
     if (settings?.tlsCert && settings?.tlsKey) {
       _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
-      log.debug('SMTP TLS cert loaded from DB');
+      _tlsCertSelfSigned = isCertSelfSigned(settings.tlsCert);
+      log.debug({ selfSigned: _tlsCertSelfSigned }, 'SMTP TLS cert loaded from DB');
       return;
     }
 
@@ -122,6 +144,7 @@ async function refreshTlsConfig(): Promise<void> {
     log.info({ hostname: _hostname }, 'No TLS cert in DB — generating self-signed certificate');
     const { certPem, keyPem } = generateSelfSignedCert(_hostname);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+    _tlsCertSelfSigned = true;
 
     // In DB speichern damit alle anderen Mail-Protokolle dasselbe Zertifikat verwenden
     await prisma.serverSettings.upsert({
@@ -190,6 +213,10 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
+      // Port 25 (Inbound) mit self-signed Cert: STARTTLS NICHT bewerben — strikte MTAs
+      // (Microsoft Exchange, Google) brechen sonst am TLS-Handshake ab → 503 Bad sequence.
+      // Submission-Ports (465/587) bieten STARTTLS immer an (Clients akzeptieren self-signed).
+      advertiseStarttls: { get: () => isSubmission || !_tlsCertSelfSigned, enumerable: true, configurable: true },
     },
   );
 

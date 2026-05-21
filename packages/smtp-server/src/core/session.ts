@@ -273,7 +273,10 @@ export class SmtpSession {
     if (esmtp.chunking)       lines.push('CHUNKING');
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
-    if (esmtp.starttls && this.config.tls && !this.tlsUpgraded) {
+    // AND advertiseStarttls != false. Auf Port 25 mit self-signed Cert wird das vom Server
+    // unterdrückt damit strikte MTAs (Microsoft Exchange) nicht am TLS-Handshake hängen.
+    const advertise = this.config.advertiseStarttls !== false;
+    if (esmtp.starttls && this.config.tls && !this.tlsUpgraded && advertise) {
       lines.push('STARTTLS');
     }
 
@@ -451,7 +454,7 @@ export class SmtpSession {
   // ─── STARTTLS ────────────────────────────────────────────────────────────────
 
   private async handleStarttls(): Promise<void> {
-    if (!this.config.tls) {
+    if (!this.config.tls || this.config.advertiseStarttls === false) {
       this.send('502 5.5.1 STARTTLS not supported');
       return;
     }
