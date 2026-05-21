@@ -13,6 +13,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.16] — 2026-05-21 — Fix: Login schlägt fehl (api-gateway hatte Duplikat-Auth mit altem Pepper-Bug)
+
+### Fixed
+
+- **Login funktioniert immer noch nicht** trotz Fix in v3.17.13: Der `api-gateway`
+  hat eine EIGENE `/auth/login`-Route (`packages/api-gateway/src/routes/auth.ts`),
+  die NICHT zum auth-service proxyed wird. Diese Route hatte exakt denselben
+  Pepper-Bug: `bcrypt.compare(password + pepper, hash)` statt sha256+pepper.
+  Damit verifizierte die Login-Route am Port 3000 niemals korrekt — am Port 3003
+  direkt (auth-service) funktioniert es bereits seit v3.17.13.
+
+  Fix: `verifyPassword()` und `hashPassword()` aus `@coremail/core` verwendet in:
+  - `routes/auth.ts` — Login + Passwort-Reset
+  - `routes/setup.ts` — Initial-Setup Admin-User
+  - `routes/user.ts` — Passwort-Änderung (current + new password)
+
+  Alle bcrypt-Direktimporte in diesen Dateien entfernt.
+
+---
+
 ## [3.17.15] — 2026-05-21 — Verteilergruppen-Fix, Token-Refresh, BCP-Bereinigung
 
 ### Fixed

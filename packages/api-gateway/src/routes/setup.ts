@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import bcrypt from 'bcrypt';
+import { hashPassword } from '@coremail/core';
 
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
@@ -56,8 +56,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       return;
     }
 
-    const pepper = process.env['PEPPER'] ?? '';
-    const passwordHash = await bcrypt.hash(password + pepper, 12);
+    // hashPassword nutzt sha256(password + PEPPER) → bcrypt
+    const passwordHash = await hashPassword(password);
 
     // Domain + Admin-User in einer Transaktion anlegen
     await prisma.$transaction(async (tx) => {
