@@ -219,16 +219,12 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
-      // STARTTLS IMMER bewerben (auch mit self-signed Cert) — Opportunistic TLS
-      // ist immer besser als kein TLS:
-      //   - 95% der MTAs (Gmail, Apple, ProtonMail, AOL) akzeptieren self-signed im
-      //     opportunistic-Modus (keine strikte Cert-Validierung)
-      //   - Strikte MTAs (Microsoft 365) fallen auf Plain zurück wenn TLS-Handshake
-      //     scheitert (keine Bounce, nur kein TLS für diesen Empfänger)
-      //   - MX-Tools-Scoring belohnt TLS-Verfügbarkeit
-      // Für Outlook-365 Kompatibilität: Let's Encrypt Cert über BCP → SSL/TLS
-      // anfordern. Das löst sowohl MX-Tools-Warning als auch Outlook-Probleme dauerhaft.
-      advertiseStarttls: { get: () => true, enumerable: true, configurable: true },
+      // Port 25 mit self-signed Cert: STARTTLS NICHT bewerben.
+      // Outlook 365 lehnt self-signed strikt ab → ECONNRESET → 503 in NDR (kein Plain-Fallback).
+      // Submission-Ports 465/587 bewerben STARTTLS immer (eigene Clients akzeptieren self-signed).
+      // Sobald ein Let's Encrypt-Zertifikat aktiv ist (cert.issuer !== subject), wird STARTTLS
+      // automatisch aktiviert — siehe auto-LE in api-gateway/src/lib/auto-letsencrypt.ts
+      advertiseStarttls: { get: () => isSubmission || !_tlsCertSelfSigned, enumerable: true, configurable: true },
     },
   );
 
