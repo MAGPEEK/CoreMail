@@ -3,6 +3,7 @@ import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
 import { relayMessage } from './relay.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
+import { storeInboundMessage } from '../handlers/message.js';
 // Journaling-Feature komplett entfernt in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
@@ -74,28 +75,61 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         }
       }
 
-      await relayMessage(buffer, from, to, {
-        ...(dkimDomain ? { dkimDomain } : {}),
-        ...(dkimSelector ? { dkimSelector } : {}),
-        ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
-      });
+      // ── Local-Domain-Check: Lokale Empfänger direkt zustellen, externe via MX ──
+      const localRcpts: string[] = [];
+      const externalRcpts: string[] = [];
 
-      // MAIL_FLOW — external delivery confirmed
+      for (const rcpt of to) {
+        const domain = rcpt.split('@')[1]?.toLowerCase();
+        if (!domain) { externalRcpts.push(rcpt); continue; }
+        const localDomain = await prisma.domain.findFirst({
+          where: { name: domain, active: true },
+        });
+        if (localDomain) {
+          localRcpts.push(rcpt);
+        } else {
+          externalRcpts.push(rcpt);
+        }
+      }
+
+      // Lokale Zustellung (Postfach direkt schreiben)
+      for (const rcpt of localRcpts) {
+        await storeInboundMessage(buffer, {
+          fromAddr: from,
+          rcptTo:   rcpt,
+          toJunk:   false, // Ausgehende Mails werden nicht als Spam markiert
+        });
+        log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
+      }
+
+      // Externe Zustellung via MX / Smarthost
+      if (externalRcpts.length > 0) {
+        await relayMessage(buffer, from, externalRcpts, {
+          ...(dkimDomain ? { dkimDomain } : {}),
+          ...(dkimSelector ? { dkimSelector } : {}),
+          ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
+        });
+      }
+
+      // MAIL_FLOW — delivery confirmed (local + external)
+      const allDelivered = [...localRcpts, ...externalRcpts];
       void prisma.systemLog.create({
         data: {
           level: 'INFO',
           service: 'smtp-server',
           category: 'MAIL_FLOW',
-          message: `Delivered: ${from} → ${to.join(', ')}`,
+          message: `Delivered: ${from} → ${allDelivered.join(', ')}`,
           messageId: job.data.messageId,
           ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
           metadata: {
-            sender: from,
-            recipient: to.join(', '),
-            subject: '',
-            status: 'DELIVERED',
+            sender:    from,
+            recipient: allDelivered.join(', '),
+            subject:   '',
+            status:    'DELIVERED',
             messageId: job.data.messageId,
-            size: String(buffer.length),
+            size:      String(buffer.length),
+            localRcpts: localRcpts.join(', '),
+            externalRcpts: externalRcpts.join(', '),
             direction: 'OUTBOUND',
           },
         },

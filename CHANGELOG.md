@@ -13,6 +13,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.11] — 2026-05-21 — Multi-Fix: Mail-Body, lokale Zustellung, MessageTrace, Queue-Refresh, Übersetzungen
+
+### Fixed
+
+- **Mail-Body enthält rohe MIME-Header**: `buildRawMime()` verwendete `newline: 'unix'` (LF-only).
+  nodemailer's `smtp-connection` normalisiert Buffer-Inhalte im DATA-Kanal NICHT (nur Strings).
+  Der empfangende MTA konnte den Header/Body-Separator `\r\n\r\n` nicht finden → gesamter
+  MIME-Inhalt wurde als Klartext-Body angezeigt. Fix: `newline: 'crlf'` (RFC 5321 konform)
+
+- **Mails an lokale Adressen (admin@stefanwuestner.de) kommen nicht an**: MWA-Send-Endpoint
+  (`POST /api/v1/mail/send`) schickte ALLE Empfänger in die Outbound-Queue ohne Local-Domain-Check.
+  Queue-Worker versuchte MX-Delivery nach außen — scheiterte. Fix: Queue-Worker prüft jetzt
+  vor `relayMessage()` ob die Empfänger-Domain in der lokalen Domain-Tabelle ist; lokale
+  Empfänger werden direkt via `storeInboundMessage()` ins Postfach geschrieben
+
+- **MessageTrace zeigt nie Ergebnisse**: API-Client fügt `/api/v1` automatisch als Präfix hinzu.
+  `MessageTracePage` verwendete als Pfad `/api/v1/admin/message-trace` → doppelter Präfix `/api/v1/api/v1/...`
+  → 404. Fix: Pfad korrigiert zu `/admin/message-trace` (ohne Präfix)
+
+- **Queue-Refresh-Button geht nicht**: Page-Level-Button rief `invalidateQueries` (background
+  refetch, kein visuelles Feedback) statt `refetchQueries` (sofortiger aktiver Refetch) auf.
+  Fix: `qc.refetchQueries({ queryKey: ['admin-queue-jobs'] })` und `['admin-queue-stats']`
+
+- **Spam landet im Posteingang statt im Junk-Ordner**: `storeInboundMessage()` suchte nach
+  Ordner `'Junk E-Mail'` (Outlook-Sprache) — der Ordner heißt `'Junk'`. Fallback war INBOX.
+  Fix: `'Junk'` und `'INBOX'` als korrekte Ordnernamen
+
+- **MessageTrace: JUNK-Status fehlte** in Statusfilter und Badge-Anzeige. Hinzugefügt.
+
+### Added
+
+- **Gesendete Elemente (Sent-Ordner)**: Beim Senden über MWA wird jetzt automatisch eine Kopie
+  im Sent-Ordner des Absenders gespeichert (war bisher nie implementiert). Große Mails (>256 KB)
+  werden in MinIO abgelegt, kleine direkt in der DB. Flags: `\\Seen` (bereits gelesen markiert)
+
+- **MessageTrace Auto-Load**: Öffnet jetzt mit den letzten Einträgen — kein manuelles Klicken
+  auf "Suchen" mehr nötig. Reset-Button setzt alle Filter zurück und zeigt alle Einträge
+
+- **MAIL_FLOW-Log im API-Gateway**: `POST /api/v1/mail/send` schreibt jetzt sofort einen
+  `ACCEPTED`-SystemLog-Eintrag, damit Mails die über MWA gesendet werden sofort in der
+  MessageTrace sichtbar sind (auch bevor die Queue sie verarbeitet)
+
+---
+
 ## [3.17.10] — 2026-05-21 — Fix: Kopier-Buttons bei DNS-Einträgen
 
 ### Fixed

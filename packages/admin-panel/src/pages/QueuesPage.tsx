@@ -703,7 +703,10 @@ export function QueuesPage() {
             <button
               onClick={() => {
                 void refetch();
-                void qc.invalidateQueries({ queryKey: ['admin-queue-jobs'] });
+                // refetchQueries löst sofortigen Refetch aller aktiven Queries aus
+                // (invalidateQueries = nur background refetch, kein visueller Reload)
+                void qc.refetchQueries({ queryKey: ['admin-queue-jobs'] });
+                void qc.refetchQueries({ queryKey: ['admin-queue-stats'] });
               }}
               className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
             >
