@@ -30,14 +30,13 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     extStarttls:          z.boolean().optional(),
     extAuthPlain:         z.boolean().optional(),
     extAuthLogin:         z.boolean().optional(),
-    extAuthCramMd5:       z.boolean().optional(),
     extPipelining:        z.boolean().optional(),
     extSize:              z.boolean().optional(),
     ext8bitmime:          z.boolean().optional(),
     extEnhancedStatus:    z.boolean().optional(),
-    extSmtputf8:          z.boolean().optional(),
-    // extDsn entfernt — DSN nicht implementiert; siehe smtp-server/core/session.ts
-    extChunking:          z.boolean().optional(),
+    // Folgende Felder bleiben für Backwards-Compat akzeptiert, werden aber im
+    // SMTP-Server hardcoded ignoriert (nicht implementiert):
+    // extAuthCramMd5, extSmtputf8, extDsn, extChunking
     // Local delivery
     localDeliveryEnabled: z.boolean().optional(),
     // Banner

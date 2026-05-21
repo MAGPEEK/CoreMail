@@ -47,11 +47,14 @@ export interface EsmtpExtensions {
 }
 
 export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
-  starttls: true, authPlain: true, authLogin: true, authCramMd5: false,
+  starttls: true, authPlain: true, authLogin: true,
   pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
-  // dsn: false — DSN (RFC 3461) ist nicht implementiert (kein NOTIFY/ORCPT/ENVID-Parsing,
-  // keine multipart/report-Generierung beim Bounce). Wir bewerben es daher nicht.
-  smtputf8: false, dsn: false, chunking: false,
+  // Bewusst false — diese Extensions sind im Server NICHT implementiert:
+  //   CRAM-MD5 (RFC 4954) — handleAuth erkennt nur PLAIN + LOGIN
+  //   SMTPUTF8 (RFC 6531) — UTF-8 Adressen werden nicht gesondert behandelt
+  //   DSN (RFC 3461)      — kein NOTIFY/ORCPT/ENVID-Parsing, kein multipart/report
+  //   CHUNKING (RFC 3030) — BDAT-Command wird vom Parser nicht erkannt
+  authCramMd5: false, smtputf8: false, dsn: false, chunking: false,
 };
 
 export interface SmtpSessionConfig {

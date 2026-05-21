@@ -16,14 +16,13 @@ interface SmtpSettings {
   extStarttls:          boolean;
   extAuthPlain:         boolean;
   extAuthLogin:         boolean;
-  extAuthCramMd5:       boolean;
   extPipelining:        boolean;
   extSize:              boolean;
   ext8bitmime:          boolean;
   extEnhancedStatus:    boolean;
-  extSmtputf8:          boolean;
-  // extDsn entfernt — DSN ist im Server nicht implementiert (RFC 3461 stub-only)
-  extChunking:          boolean;
+  // Folgende DB-Felder bleiben aus Backwards-Compat erhalten werden aber im Server
+  // hardcoded ignoriert (siehe smtp-server/server.ts), da nicht implementiert:
+  //   extAuthCramMd5, extSmtputf8, extDsn, extChunking
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
   bannerText:           string;
@@ -140,8 +139,6 @@ const EXT_DEFS: ExtDef[] = [
     desc: 'Anmeldung mit Base64-kodiertem Benutzernamen + Passwort (nur über TLS sicher)' },
   { key: 'extAuthLogin',      label: 'AUTH LOGIN',       rfc: 'RFC draft', risk: 'safe',
     desc: 'Legacy-Authentifizierungsmethode — von vielen älteren Mail-Clients verwendet' },
-  { key: 'extAuthCramMd5',    label: 'AUTH CRAM-MD5',    rfc: 'RFC 2195',  risk: 'caution',
-    desc: 'Challenge-Response-Authentifizierung mit HMAC-MD5 (veraltet, MD5 gebrochen)' },
   { key: 'extPipelining',     label: 'PIPELINING',       rfc: 'RFC 2920',  risk: 'safe',
     desc: 'Mehrere SMTP-Befehle in einem TCP-Paket senden — beschleunigt Verbindungen' },
   { key: 'extSize',           label: 'SIZE',             rfc: 'RFC 1870',  risk: 'safe',
@@ -150,13 +147,12 @@ const EXT_DEFS: ExtDef[] = [
     desc: '8-Bit-Daten in SMTP-Nachrichten ohne MIME-Encoding erlauben' },
   { key: 'extEnhancedStatus', label: 'ENHANCEDSTATUSCODES', rfc: 'RFC 2034', risk: 'safe',
     desc: 'Erweiterte SMTP-Statuscodes (z.B. 5.7.1) für bessere Fehlerdiagnose' },
-  { key: 'extSmtputf8',       label: 'SMTPUTF8',         rfc: 'RFC 6531',  risk: 'advanced',
-    desc: 'Internationalisierte E-Mail-Adressen (UTF-8 in Envelope/Header)' },
-  // DSN (RFC 3461) — bewusst NICHT verfügbar: Server hat keine Implementierung
-  // (kein Parsing von NOTIFY/ORCPT/ENVID/RET, keine multipart/report-Generierung).
-  // Wenn DSN beworben wird ohne Implementierung verstößt der Server gegen RFC 3461.
-  { key: 'extChunking',       label: 'CHUNKING (BDAT)',  rfc: 'RFC 3030',  risk: 'advanced',
-    desc: 'Nachrichten in Chunks übertragen (BDAT-Befehl) anstatt DATA' },
+  // Bewusst NICHT als Toggles verfügbar — diese Extensions sind im Server nicht implementiert
+  // und würden bei Aktivierung gegen die jeweilige RFC verstoßen (Server lügt über Capability):
+  //   CRAM-MD5 (RFC 2195/4954) — handleAuth kennt nur PLAIN+LOGIN, 504 bei CRAM-MD5
+  //   SMTPUTF8 (RFC 6531)      — UTF-8 in Envelope-Adressen wird nicht gesondert behandelt
+  //   DSN (RFC 3461)           — kein NOTIFY/ORCPT/ENVID/RET-Parsing, kein multipart/report
+  //   CHUNKING (RFC 3030)      — BDAT-Command wird vom Parser nicht erkannt
 ];
 
 const RISK_BADGE: Record<Risk, string> = {

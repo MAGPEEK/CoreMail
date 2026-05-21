@@ -48,9 +48,10 @@ async function refreshSmtpSettings(): Promise<void> {
       where:  { id: 'singleton' },
       select: {
         bannerOverride: true, bannerText: true,
-        extStarttls: true, extAuthPlain: true, extAuthLogin: true, extAuthCramMd5: true,
+        extStarttls: true, extAuthPlain: true, extAuthLogin: true,
         extPipelining: true, extSize: true, ext8bitmime: true,
-        extEnhancedStatus: true, extSmtputf8: true, extDsn: true, extChunking: true,
+        extEnhancedStatus: true,
+        // extAuthCramMd5, extSmtputf8, extDsn, extChunking nicht mehr gelesen — hardcoded false
         maxMessageSizeMb: true, maxRecipients: true,
       },
     });
@@ -59,15 +60,19 @@ async function refreshSmtpSettings(): Promise<void> {
       starttls:       s?.extStarttls       ?? true,
       authPlain:      s?.extAuthPlain      ?? true,
       authLogin:      s?.extAuthLogin      ?? true,
-      authCramMd5:    s?.extAuthCramMd5    ?? false,
       pipelining:     s?.extPipelining     ?? true,
       size:           s?.extSize           ?? true,
       bit8mime:       s?.ext8bitmime       ?? true,
       enhancedStatus: s?.extEnhancedStatus ?? true,
-      smtputf8:       s?.extSmtputf8       ?? false,
-      // DSN bewusst hardcoded false — Server hat keine Implementierung (RFC 3461 stub-only)
+      // Bewusst hardcoded false — Server hat keine Implementierung dieser Extensions:
+      //   CRAM-MD5 (RFC 4954) — handleAuth kennt nur PLAIN+LOGIN, würde 504 zurückgeben
+      //   SMTPUTF8 (RFC 6531) — UTF-8 in Envelope-Adressen nicht gesondert behandelt
+      //   DSN (RFC 3461)      — kein NOTIFY/ORCPT/ENVID/RET-Parsing, kein multipart/report
+      //   CHUNKING (RFC 3030) — BDAT-Command wird vom Parser nicht erkannt
+      authCramMd5:    false,
+      smtputf8:       false,
       dsn:            false,
-      chunking:       s?.extChunking       ?? false,
+      chunking:       false,
     };
     _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
     _maxRcpt = Math.max(1, s?.maxRecipients ?? 100);

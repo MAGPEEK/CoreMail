@@ -13,6 +13,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.21] — 2026-05-21 — ESMTP-Audit: Stub-only Extensions entfernt
+
+### Removed
+
+Audit aller ESMTP-Erweiterungen — entfernt wurden alle die in EHLO beworben aber
+**nicht implementiert** waren (Server hätte gegen die jeweilige RFC verstoßen):
+
+- **AUTH CRAM-MD5 (RFC 4954/2195)** — `handleAuth` erkennt nur `PLAIN` und `LOGIN`,
+  CRAM-MD5-Anfragen wurden mit `504 Unrecognized authentication type` abgewiesen.
+  Toggle aus BCP entfernt, Default hardcoded `false`.
+
+- **SMTPUTF8 (RFC 6531)** — UTF-8 in Envelope-Adressen wurde nicht gesondert behandelt
+  (kein puny-Code-Mapping, kein Unicode-Normalization). Wenn beworben, hätten internationale
+  Adressen (z.B. `用户@例子.公司`) zu inkonsistentem Verhalten geführt.
+
+- **CHUNKING / BDAT (RFC 3030)** — Der Befehl `BDAT` wurde vom Command-Parser nicht
+  erkannt und mit `500 Command not recognized: BDAT` abgewiesen.
+
+### Verifizierte Implementierungen (bleiben aktiv)
+
+| Extension | RFC | Status |
+|---|---|---|
+| STARTTLS | 3207 | ✅ Voll funktional, TLS-Upgrade implementiert |
+| AUTH PLAIN | 4954 | ✅ `handleAuthPlain` |
+| AUTH LOGIN | 4954 | ✅ `handleAuthLoginStart` |
+| PIPELINING | 2920 | ✅ Buffer-basiertes Parsing (`lineBuffer`-Schleife in `onData`) |
+| SIZE | 1870 | ✅ `SIZE=` Parameter geparst + `maxSize`-Check |
+| 8BITMIME | 6152 | ✅ Buffer-basiert (binary encoding) — kein 7-bit-Downgrade |
+| ENHANCEDSTATUSCODES | 2034 | ✅ Alle Codes folgen `x.y.z`-Format |
+
+DB-Felder `extAuthCramMd5`, `extSmtputf8`, `extDsn`, `extChunking` bleiben aus
+Backwards-Compat in der Datenbank, werden aber im Server hardcoded ignoriert.
+
+---
+
 ## [3.17.20] — 2026-05-21 — Remove: DSN-Werbung entfernt (war ungenutzt)
 
 ### Removed

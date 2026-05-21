@@ -267,11 +267,11 @@ export class SmtpSession {
     if (esmtp.size)           lines.push(`SIZE ${this.config.maxSize}`);
     if (esmtp.pipelining)     lines.push('PIPELINING');
     if (esmtp.bit8mime)       lines.push('8BITMIME');
-    if (esmtp.smtputf8)       lines.push('SMTPUTF8');
     if (esmtp.enhancedStatus) lines.push('ENHANCEDSTATUSCODES');
-    // DSN (RFC 3461) ist NICHT implementiert — kein Parsing von NOTIFY/ORCPT/ENVID/RET,
-    // keine multipart/report-Generierung bei Bounces. Bewusst NICHT beworben.
-    if (esmtp.chunking)       lines.push('CHUNKING');
+    // Bewusst nicht beworben (Stub-only / nicht implementiert):
+    //   DSN (RFC 3461)       — kein Parsing von NOTIFY/ORCPT/ENVID/RET, keine multipart/report
+    //   SMTPUTF8 (RFC 6531)  — UTF-8 Envelope-Adressen werden nicht gesondert behandelt
+    //   CHUNKING (RFC 3030)  — BDAT-Command wird vom Parser nicht erkannt
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
     // AND advertiseStarttls != false. Auf Port 25 mit self-signed Cert wird das vom Server
@@ -282,11 +282,12 @@ export class SmtpSession {
     }
 
     // AUTH only if verifyCredentials is configured AND at least one mech enabled
+    // CRAM-MD5 wird nicht beworben — handleAuth erkennt nur PLAIN + LOGIN, CRAM-MD5
+    // würde mit 504 Unrecognized abgewiesen werden.
     if (this.config.verifyCredentials) {
       const mechs: string[] = [];
       if (esmtp.authPlain)   mechs.push('PLAIN');
       if (esmtp.authLogin)   mechs.push('LOGIN');
-      if (esmtp.authCramMd5) mechs.push('CRAM-MD5');
       if (mechs.length > 0) lines.push(`AUTH ${mechs.join(' ')}`);
     }
 
