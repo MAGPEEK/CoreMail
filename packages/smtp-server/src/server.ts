@@ -132,6 +132,30 @@ function isCertSelfSigned(certPem: string): boolean {
   }
 }
 
+/**
+ * Prüft ob das Cert für `expectedHostname` ausgestellt wurde (CN oder SAN match).
+ * Wenn nicht: Cert-Hostname-Mismatch → strikte MTAs (Outlook 365) lehnen ab.
+ * Liefert true wenn match, false wenn mismatch.
+ */
+function certMatchesHostname(certPem: string, expectedHostname: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
+    const cert = new X509Certificate(certPem);
+    const lower = expectedHostname.toLowerCase();
+    // Subject CN extrahieren (z.B. "CN=mail.example.com, O=...")
+    const subjectMatch = /CN=([^,]+)/i.exec(cert.subject);
+    if (subjectMatch && subjectMatch[1]?.toLowerCase().trim() === lower) return true;
+    // SAN durchsuchen (X509Certificate.subjectAltName: "DNS:foo.com, DNS:bar.com")
+    const san = cert.subjectAltName ?? '';
+    const sanEntries = san.split(',').map((s) => s.trim().toLowerCase());
+    if (sanEntries.includes(`dns:${lower}`)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function refreshTlsConfig(): Promise<void> {
   try {
     const settings = await prisma.serverSettings.findUnique({
@@ -140,9 +164,29 @@ async function refreshTlsConfig(): Promise<void> {
     });
 
     if (settings?.tlsCert && settings?.tlsKey) {
+      const isSelfSigned = isCertSelfSigned(settings.tlsCert);
+      // Self-signed Cert: Hostname MUSS zum aktuellen publicHostname passen.
+      // Häufiger Bug: Cert wurde beim ersten Container-Start mit Default-Hostname
+      // 'mail.localhost' generiert bevor publicHostname in DB gesetzt war —
+      // bleibt dann auf ewig falsch. Outlook 365 etc. lehnen wegen CN-Mismatch ab.
+      // Fix: bei Mismatch das self-signed Cert NEU generieren mit korrektem Hostname.
+      // CA-signierte Certs (LE/Custom) NIE neu generieren — könnten gültig für mehrere Hostnames sein.
+      if (isSelfSigned && !certMatchesHostname(settings.tlsCert, _hostname)) {
+        log.warn({ hostname: _hostname }, 'Self-signed cert hostname mismatch — regenerating');
+        const { certPem, keyPem } = generateSelfSignedCert(_hostname);
+        _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+        _tlsCertSelfSigned = true;
+        await prisma.serverSettings.upsert({
+          where:  { id: 'singleton' },
+          create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: keyPem },
+          update: { tlsCert: certPem, tlsKey: keyPem },
+        });
+        log.info({ hostname: _hostname }, 'Self-signed cert regenerated with correct hostname');
+        return;
+      }
       _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
-      _tlsCertSelfSigned = isCertSelfSigned(settings.tlsCert);
-      log.debug({ selfSigned: _tlsCertSelfSigned }, 'SMTP TLS cert loaded from DB');
+      _tlsCertSelfSigned = isSelfSigned;
+      log.debug({ selfSigned: _tlsCertSelfSigned, hostname: _hostname }, 'SMTP TLS cert loaded from DB');
       return;
     }
 
@@ -219,12 +263,12 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
-      // Port 25 mit self-signed Cert: STARTTLS NICHT bewerben.
-      // Outlook 365 lehnt self-signed strikt ab → ECONNRESET → 503 in NDR (kein Plain-Fallback).
-      // Submission-Ports 465/587 bewerben STARTTLS immer (eigene Clients akzeptieren self-signed).
-      // Sobald ein Let's Encrypt-Zertifikat aktiv ist (cert.issuer !== subject), wird STARTTLS
-      // automatisch aktiviert — siehe auto-LE in api-gateway/src/lib/auto-letsencrypt.ts
-      advertiseStarttls: { get: () => isSubmission || !_tlsCertSelfSigned, enumerable: true, configurable: true },
+      // STARTTLS IMMER bewerben (auf allen Ports inkl. 25 Inbound). MX-Tools-Scoring
+      // belohnt TLS-Verfügbarkeit. Opportunistic TLS funktioniert für die meisten MTAs.
+      // Voraussetzung: self-signed Cert hat KORREKTE Hostname-CN (wird in refreshTlsConfig
+      // automatisch geprüft und bei Mismatch neu generiert). Für vollständige Outlook-365-
+      // Kompatibilität: Let's Encrypt-Cert via BCP → SSL/TLS anfordern.
+      advertiseStarttls: { get: () => true, enumerable: true, configurable: true },
     },
   );
 

@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.27';
+const VERSION        = '3.17.28';
 const BUILD_DATE     = '2026-05-21';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.28', date: '2026-05-21', title: 'Fix: Self-Signed-Cert mit falscher CN — Outlook 503 root cause behoben',
+    notes: 'Outlook 365 lehnte alle Mails an stefanwuestner.de mit "503 Bad sequence of commands" ab. Root cause: Das self-signed TLS-Zertifikat hatte CN=mail.localhost statt CN=mail.stefanwuestner.de. Beim ersten Container-Start war publicHostname noch leer in der DB, deshalb wurde das Cert mit Default-Hostname mail.localhost generiert und gespeichert. Outlook 365 validiert die CN gegen den verbundenen Hostname → Mismatch → ECONNRESET. Fix: refreshTlsConfig() prüft jetzt bei jedem Container-Start ob das self-signed Cert die korrekte CN hat (via certMatchesHostname() Helper). Bei Mismatch wird das Cert automatisch neu generiert mit aktuellem Hostname. CA-signierte Certs (LE/Custom) werden NICHT neu generiert. Zusätzlich: STARTTLS auf Port 25 wieder aktiviert (MX-Tools "Supports TLS" ✅). Auto-LE-Bootstrap aus v3.17.27 entfernt — Admin fordert manuell via BCP → SSL/TLS an.' },
   { version: '3.17.27', date: '2026-05-21', title: 'Auto-Let\'s-Encrypt beim Container-Start (löst Outlook-365 + MX-Tools dauerhaft)',
     notes: 'Echte Lösung statt Workaround: 30 Sekunden nach Container-Start prüft der api-gateway ob (a) publicHostname gesetzt + nicht-lokal ist, (b) kein aktives CA-signiertes Cert existiert, (c) eine Admin-Email konfiguriert ist. Wenn ja → automatische ACME HTTP-01 Challenge gegen Let\'s Encrypt production. Bei Erfolg wird das Cert in ServerSettings gespeichert, CHANNEL_SETTINGS_RELOAD publisht — alle Mail-Protokolle laden den neuen Cert, STARTTLS wird automatisch aktiv. Damit lösen sich BEIDE Probleme auf einen Schlag: MX-Tools sieht TLS, Outlook 365 akzeptiert das Cert. Voraussetzungen: Port 80 von außen erreichbar (HTTP-01), DNS-A für publicHostname zeigt auf Server-IP, keine LE-Rate-Limit-Sperre. Bei Fehler: Log-Warning, kein Crash. Manuelle Anforderung via BCP → SSL/TLS weiterhin möglich. Zusätzlich: STARTTLS für self-signed Cert wieder deaktiviert (v3.17.26 Re-Enable führte zu Outlook-365-Bounces — kein graceful Plain-Fallback).' },
   { version: '3.17.26', date: '2026-05-21', title: 'Fix: MX-Tools "Does not support TLS" — STARTTLS auf Port 25 wieder aktiv',

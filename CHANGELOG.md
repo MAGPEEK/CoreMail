@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.28] — 2026-05-21 — Fix: Self-Signed-Cert mit falscher CN (Outlook 503 root cause)
+
+### Fixed
+
+- **🎯 Outlook-365 503-Bounce — root cause gefunden**: Das gespeicherte self-signed
+  Zertifikat hatte `CN=mail.localhost` statt `CN=mail.stefanwuestner.de`. Beim
+  ersten Container-Start war `publicHostname` in der DB noch leer, also wurde das
+  Cert mit Default-`mail.localhost` generiert und gespeichert. Spätere Restarts
+  haben dieses Cert wiederverwendet → ewiger CN-Mismatch.
+
+  TLS-Handshake klappte (OpenSSL bestätigt das), aber Outlook 365 validiert die
+  **CN gegen den verbundenen Hostname** und lehnt bei Mismatch ab → ECONNRESET
+  → NDR mit „503 5.5.1 Bad sequence of commands".
+
+  **Fix in `smtp-server/src/server.ts`** `refreshTlsConfig()`:
+  - Beim Cert-Load wird `certMatchesHostname()` geprüft (neue Helper-Funktion)
+  - Self-signed Cert mit Mismatch → automatisch neu generiert mit aktuellem
+    `_hostname` und in DB gespeichert
+  - CA-signierte Certs (LE/Custom) werden NICHT neu generiert (könnten gültige
+    SAN-Listen für mehrere Domains haben)
+
+  Beim nächsten Container-Restart (oder Hostname-Änderung via BCP) wird das
+  Cert automatisch korrigiert.
+
+- **STARTTLS auf Port 25 wieder aktiviert**: Da das Cert jetzt die korrekte CN
+  hat, akzeptieren auch Outlook 365 / strikte MTAs den TLS-Handshake. MX-Tools
+  zeigt „Supports TLS" ✅.
+
+### Removed
+
+- **Auto-Let's-Encrypt-Bootstrap aus v3.17.27 entfernt**: Admin fordert LE
+  manuell via BCP → SSL/TLS → „Let's Encrypt anfordern" an. Datei
+  `packages/api-gateway/src/lib/auto-letsencrypt.ts` gelöscht.
+
+### Hinweis: Self-Signed vs. Let's Encrypt
+
+Das self-signed Cert ist jetzt **kompatibel** (korrekte CN/SAN). Aber:
+- MTAs die **strict cert chain validation** machen (manche Banken) lehnen
+  weiterhin ab — die brauchen einen vertrauenswürdigen Issuer
+- Für 100% MTA-Kompatibilität: Let's Encrypt-Cert in BCP manuell anfordern
+
+---
+
 ## [3.17.27] — 2026-05-21 — Auto-Let's-Encrypt beim Container-Start + STARTTLS-Revert
 
 ### Fixed

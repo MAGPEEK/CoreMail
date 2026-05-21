@@ -43,7 +43,7 @@ import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
 import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
 import { startTlsProxy } from './tls-proxy.js';
-import { tryAutoLetsEncrypt } from './lib/auto-letsencrypt.js';
+// auto-letsencrypt entfernt — Admin fordert LE manuell via BCP → SSL/TLS an
 import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
 import { adminQuarantineRouter } from './routes/admin/quarantine.js';
 import { adminTransportRulesRouter } from './routes/admin/transport-rules.js';
@@ -379,14 +379,7 @@ async function start() {
     log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
   );
 
-  // Nach Server-Start: 30 s warten, dann automatische LE-Anforderung wenn nötig.
-  // Port 80 muss von außen erreichbar sein für HTTP-01 Challenge.
-  // tryAutoLetsEncrypt() loggt selbst und wirft niemals — defensiver Catch trotzdem.
-  setTimeout(() => {
-    void tryAutoLetsEncrypt().catch((err: unknown) => {
-      log.warn({ err }, 'Auto-LE unexpected error');
-    });
-  }, 30_000);
+  // Kein Auto-LE — Admin fordert Let's Encrypt manuell via BCP → SSL/TLS an.
 }
 
 start().catch((err) => { log.error({ err }, 'Startup failed'); process.exit(1); });
