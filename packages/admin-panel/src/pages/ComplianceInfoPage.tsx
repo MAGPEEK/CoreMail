@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.24';
+const VERSION        = '3.17.25';
 const BUILD_DATE     = '2026-05-21';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.25', date: '2026-05-21', title: 'MWA: Aufbewahrungsrichtlinien per Rechtsklick + Einstellungs-Übersicht',
+    notes: 'Exchange-typische „Personal Tags" jetzt im MWA-Frontend nutzbar. (1) Backend: Neue User-API GET /api/v1/retention-tags listet alle vom Admin aktivierten PERSONAL-Aufbewahrungstags (Schema-Typen DPT/RPT/PERSONAL existieren bereits). Neue Endpunkte PATCH /api/v1/mail/folders/:id/retention-tag und PATCH /api/v1/mail/messages/:id/retention-tag mit Owner-Verifikation. (2) MWA Settings: Neue Sektion „Aufbewahrungsrichtlinien" unter Konto zeigt alle verfügbaren PERSONAL-Tags mit Name, Beschreibung, Aufbewahrungstagen und Aktion (Löschen mit Wiederherstellung / Endgültig / Kennzeichnen / Archiv). (3) FolderTree: Rechtsklick auf einen Ordner → neues Submenu „Aufbewahrungsrichtlinie zuweisen" mit allen verfügbaren Tags + ✓ bei aktiver Zuweisung + „Entfernen"-Eintrag. Bei Ordnern mit aktiver Richtlinie erscheint ein kleines 🕒-Badge. i18n DE/EN/ES/IT. Folder-Liste-API liefert jetzt retentionTag-Relation mit (id, name, retentionDays, action).' },
   { version: '3.17.23', date: '2026-05-21', title: 'Audit-Log: Komplettüberarbeitung mit PDF-Export + Statistik',
     notes: 'Audit-Log um die vier Compliance-Säulen erweitert: (1) Accountability — actorId/actorEmail/ipAddress/userAgent pro Eintrag; (2) Forensik — Volltext-Suche, Zeitraum-Filter, JSON-Diff in Detail-Ansicht; (3) Compliance — Schreibgeschützt (DSGVO/SOX/HIPAA/ISO 27001), DELETE-Endpoint entfernt; (4) Systemüberwachung — Live-Statistik 24h/7d, Top-10-Akteure + Top-10-Aktionen, auto-refresh 30s. Bugfixes: CSV-Export 401 (Token via ?token= statt nur Header), Datumsfilter UTC-Konvertierung, React-Fragment-key-Warning. Neu: PDF-Export via pdfkit (A4 quer, Header+Tabelle+Paginierung), CSV mit UTF-8-BOM für Excel, alle 12 Spalten inkl. userAgent + changes-JSON. Schreibgeschützt-Banner (dismissible, localStorage). Erweiterte Filter: actorEmail, ipAddress, searchText.' },
   { version: '3.17.22', date: '2026-05-21', title: 'Lokale Zustellung: Aliase + Verteilergruppen + SharedMailbox vollständig',

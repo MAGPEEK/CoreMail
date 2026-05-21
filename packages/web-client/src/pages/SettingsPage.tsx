@@ -5,7 +5,7 @@ import {
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
-  Layout, PanelRight, PanelBottom, EyeOff, Rows3,
+  Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock,
 } from 'lucide-react';
 import { format as fmtDate } from 'date-fns';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -20,7 +20,16 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention';
+
+interface RetentionTagDto {
+  id: string;
+  name: string;
+  description: string;
+  retentionDays: number;
+  action: 'MOVE_TO_ARCHIVE' | 'DELETE_AND_ALLOW_RECOVERY' | 'PERMANENTLY_DELETE' | 'MARK_AS_PAST_RETENTION_LIMIT';
+  isSystem: boolean;
+}
 
 interface AppPassword {
   id: string;
@@ -1836,6 +1845,59 @@ function ViewSection() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUFBEWAHRUNGSRICHTLINIEN — Read-only Übersicht der PERSONAL-Tags
+// ═══════════════════════════════════════════════════════════════════════════════
+function RetentionSection() {
+  const t = useT();
+  const { data: tags = [], isLoading } = useQuery({
+    queryKey: ['retention-tags'],
+    queryFn: () => api.get<RetentionTagDto[]>('/retention-tags'),
+  });
+
+  const actionLabel = (a: RetentionTagDto['action']): string => {
+    switch (a) {
+      case 'MOVE_TO_ARCHIVE':              return t('retention_action_archive');
+      case 'DELETE_AND_ALLOW_RECOVERY':    return t('retention_action_delete_recover');
+      case 'PERMANENTLY_DELETE':           return t('retention_action_delete_permanent');
+      case 'MARK_AS_PAST_RETENTION_LIMIT': return t('retention_action_mark');
+    }
+  };
+
+  return (
+    <section>
+      <h2 className="text-xl font-semibold text-gray-900 mb-1">{t('retention_section_title')}</h2>
+      <p className="text-sm text-gray-600 mb-6 max-w-lg">{t('retention_section_desc')}</p>
+
+      <div className="border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
+        {isLoading ? (
+          <div className="px-4 py-6 text-sm text-gray-400">…</div>
+        ) : tags.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-gray-400 text-center">{t('retention_no_tags')}</div>
+        ) : (
+          tags.map((tg) => (
+            <div key={tg.id} className="px-4 py-3 flex items-center gap-3">
+              <Clock size={16} className="shrink-0 text-gray-400" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-gray-900 truncate">{tg.name}</div>
+                {tg.description && (
+                  <div className="text-xs text-gray-500 truncate">{tg.description}</div>
+                )}
+              </div>
+              <div className="shrink-0 text-xs text-gray-700 tabular-nums">
+                {tg.retentionDays} {t('retention_days')}
+              </div>
+              <div className="shrink-0 text-xs text-gray-500 w-44 text-right truncate">
+                {actionLabel(tg.action)}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
   {
     group: 'Konto',
@@ -1846,6 +1908,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
       { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
       { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
       { id: 'categories',   label: 'Kategorien',              icon: Tag        },
+      { id: 'retention',    label: 'Aufbewahrungsrichtlinien', icon: Clock      },
       { id: 'storage',      label: 'Speicher',                icon: HardDrive  },
     ],
   },
@@ -1873,6 +1936,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   language:     LanguageSection,
   calendar:     CalendarSection,
   categories:   CategoriesSection,
+  retention:    RetentionSection,
   appPasswords: AppPasswordsSection,
   inactivity:   InactivitySection,
   view:         ViewSection,

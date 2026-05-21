@@ -61,6 +61,7 @@ import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
 import { authRouter } from './routes/auth.js';
 import { publicFoldersRouter } from './routes/public-folders.js';
+import { retentionTagsRouter } from './routes/retention-tags.js';
 import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
@@ -247,6 +248,7 @@ app.use('/api/v1/user',           userRouter);
 app.use('/api/v1/categories',     categoriesRouter);
 app.use('/api/v1/smime',          smimeRouter);
 app.use('/api/v1/public-folders', publicFoldersRouter);
+app.use('/api/v1/retention-tags', retentionTagsRouter);
 app.use('/api/v1/push',           pushRouter);
 
 // PowerShell Remoting

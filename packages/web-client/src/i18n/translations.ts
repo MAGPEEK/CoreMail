@@ -123,6 +123,20 @@ const de = {
   categorize:              'Kategorisieren',
   remove_category:         'Kategorie entfernen',
   filter_category:         'Kategorie',
+
+  // Aufbewahrungsrichtlinien (Retention Policies)
+  retention_section_title:           'Aufbewahrungsrichtlinien',
+  retention_section_desc:            'Diese Richtlinien können Sie per Rechtsklick auf einen Ordner zuweisen.',
+  retention_no_tags:                 'Der Administrator hat noch keine persönlichen Aufbewahrungsrichtlinien konfiguriert.',
+  retention_assign:                  'Aufbewahrungsrichtlinie zuweisen',
+  retention_remove:                  'Entfernen',
+  retention_assigned_toast:          'Aufbewahrungsrichtlinie zugewiesen',
+  retention_removed_toast:           'Aufbewahrungsrichtlinie entfernt',
+  retention_days:                    'Tage',
+  retention_action_delete_recover:   'Löschen (Wiederherstellung möglich)',
+  retention_action_delete_permanent: 'Endgültig löschen',
+  retention_action_mark:             'Nur kennzeichnen',
+  retention_action_archive:          'In Archiv verschieben',
 } as const;
 
 export type TranslationKey = keyof typeof de;
@@ -239,6 +253,19 @@ const en: Record<TranslationKey, string> = {
   categorize:              'Categorize',
   remove_category:         'Remove category',
   filter_category:         'Category',
+
+  retention_section_title:           'Retention policies',
+  retention_section_desc:            'Assign these policies to a folder via right-click.',
+  retention_no_tags:                 'The administrator has not configured any personal retention policies yet.',
+  retention_assign:                  'Assign retention policy',
+  retention_remove:                  'Remove',
+  retention_assigned_toast:          'Retention policy assigned',
+  retention_removed_toast:           'Retention policy removed',
+  retention_days:                    'days',
+  retention_action_delete_recover:   'Delete (recovery possible)',
+  retention_action_delete_permanent: 'Delete permanently',
+  retention_action_mark:             'Mark only',
+  retention_action_archive:          'Move to archive',
 };
 
 const es: Record<TranslationKey, string> = {
@@ -353,6 +380,19 @@ const es: Record<TranslationKey, string> = {
   categorize:              'Categorizar',
   remove_category:         'Quitar categoría',
   filter_category:         'Categoría',
+
+  retention_section_title:           'Políticas de retención',
+  retention_section_desc:            'Asigne estas políticas a una carpeta haciendo clic con el botón derecho.',
+  retention_no_tags:                 'El administrador aún no ha configurado políticas de retención personales.',
+  retention_assign:                  'Asignar política de retención',
+  retention_remove:                  'Quitar',
+  retention_assigned_toast:          'Política de retención asignada',
+  retention_removed_toast:           'Política de retención quitada',
+  retention_days:                    'días',
+  retention_action_delete_recover:   'Eliminar (recuperación posible)',
+  retention_action_delete_permanent: 'Eliminar permanentemente',
+  retention_action_mark:             'Solo marcar',
+  retention_action_archive:          'Mover al archivo',
 };
 
 const it: Record<TranslationKey, string> = {
@@ -467,6 +507,19 @@ const it: Record<TranslationKey, string> = {
   categorize:              'Categorizza',
   remove_category:         'Rimuovi categoria',
   filter_category:         'Categoria',
+
+  retention_section_title:           'Criteri di conservazione',
+  retention_section_desc:            'Assegna questi criteri a una cartella tramite clic destro.',
+  retention_no_tags:                 "L'amministratore non ha ancora configurato criteri di conservazione personali.",
+  retention_assign:                  'Assegna criterio di conservazione',
+  retention_remove:                  'Rimuovi',
+  retention_assigned_toast:          'Criterio di conservazione assegnato',
+  retention_removed_toast:           'Criterio di conservazione rimosso',
+  retention_days:                    'giorni',
+  retention_action_delete_recover:   'Elimina (recupero possibile)',
+  retention_action_delete_permanent: 'Elimina definitivamente',
+  retention_action_mark:             'Solo contrassegna',
+  retention_action_archive:          "Sposta nell'archivio",
 };
 
 export const translations = { de, en, es, it } as const;

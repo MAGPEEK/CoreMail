@@ -13,6 +13,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.25] — 2026-05-21 — MWA: Aufbewahrungsrichtlinien per Rechtsklick
+
+### Added
+
+- **MWA → Settings → Aufbewahrungsrichtlinien** (neue Sektion unter „Konto"):
+  Zeigt alle vom Administrator aktivierten PERSONAL-Aufbewahrungstags mit Name,
+  Beschreibung, Aufbewahrungstagen und Aktion. Read-only — Tags werden vom Admin
+  in BCP angelegt; User wählen sie per Rechtsklick auf Ordner aus.
+
+- **MWA → Ordnerbaum Rechtsklick → „Aufbewahrungsrichtlinie zuweisen"**:
+  Submenu mit allen verfügbaren PERSONAL-Tags. Aktuell zugewiesener Tag
+  bekommt ✓-Häkchen. Unten „Entfernen"-Eintrag um Zuweisung zu löschen.
+  Funktioniert für System- UND Custom-Ordner (Exchange-Verhalten).
+
+- **🕒-Badge** im Ordnerbaum: Ordner mit aktiver Aufbewahrungsrichtlinie zeigen
+  ein kleines Uhr-Icon nach dem Ordnernamen — Tooltip mit Tag-Name + Tagen.
+
+### Backend
+
+- **`GET /api/v1/retention-tags`** (neu, `requireAuth`): Listet aktivierte
+  PERSONAL-Tags sortiert nach Aufbewahrungstagen.
+- **`PATCH /api/v1/mail/folders/:id/retention-tag`** (neu): Body `{ tagId: string | null }`.
+  Owner-Verifikation; Tag muss PERSONAL und enabled sein.
+- **`PATCH /api/v1/mail/messages/:id/retention-tag`** (neu): Wie oben für Messages.
+- **`GET /api/v1/mail/folders`** erweitert: Liefert jetzt `retentionTagId` +
+  `retentionTag { id, name, retentionDays, action }` Relation mit.
+
+### Frontend
+
+- 11 neue i18n-Keys (`retention_*`) in DE/EN/ES/IT
+- `Folder`-Type um `retentionTagId` + `retentionTag` erweitert
+- ContextMenu unterstützte bereits Submenus — nur Nutzung erweitert
+
+---
+
 ## [3.17.24] — 2026-05-21 — BCP Compliance-Info-Seite aktualisiert
 
 ### Changed

@@ -74,6 +74,8 @@ mailRouter.get('/folders', async (req: Request, res: Response) => {
       id: true, name: true, displayName: true, parentId: true,
       totalCount: true, unreadCount: true,
       isFavorite: true, sortOrder: true, color: true,
+      retentionTagId: true,
+      retentionTag: { select: { id: true, name: true, retentionDays: true, action: true } },
     },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
@@ -184,6 +186,72 @@ mailRouter.delete('/folders/:id', async (req: Request, res: Response) => {
 
   await prisma.folder.delete({ where: { id } });
   res.json({ ok: true });
+});
+
+// PATCH /api/v1/mail/folders/:id/retention-tag — assign / clear PERSONAL retention tag
+// Body: { tagId: string | null }
+const FolderRetentionTagSchema = z.object({ tagId: z.string().nullable() });
+mailRouter.patch('/folders/:id/retention-tag', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const parsed = FolderRetentionTagSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  // Verify folder belongs to authenticated user's mailbox
+  const folder = await prisma.folder.findFirst({
+    where: { id, mailbox: { userId: req.apiUser!.userId } },
+  });
+  if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
+
+  // If tagId given, verify it's an assignable PERSONAL tag and enabled
+  if (parsed.data.tagId) {
+    const tag = await prisma.retentionTag.findFirst({
+      where: { id: parsed.data.tagId, type: 'PERSONAL', enabled: true },
+    });
+    if (!tag) { res.status(404).json({ error: 'Retention tag not found or not assignable' }); return; }
+  }
+
+  const updated = await prisma.folder.update({
+    where: { id },
+    data: { retentionTagId: parsed.data.tagId },
+    include: { retentionTag: { select: { id: true, name: true, retentionDays: true, action: true } } },
+  });
+  res.json({
+    id: updated.id,
+    retentionTagId: updated.retentionTagId,
+    retentionTag: updated.retentionTag,
+  });
+});
+
+// PATCH /api/v1/mail/messages/:id/retention-tag — assign / clear PERSONAL retention tag on a single message
+// Body: { tagId: string | null }
+mailRouter.patch('/messages/:id/retention-tag', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const parsed = FolderRetentionTagSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  // Verify message belongs to a folder in the user's mailbox
+  const msg = await prisma.message.findFirst({
+    where: { id, folder: { mailbox: { userId: req.apiUser!.userId } } },
+  });
+  if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
+
+  if (parsed.data.tagId) {
+    const tag = await prisma.retentionTag.findFirst({
+      where: { id: parsed.data.tagId, type: 'PERSONAL', enabled: true },
+    });
+    if (!tag) { res.status(404).json({ error: 'Retention tag not found or not assignable' }); return; }
+  }
+
+  const updated = await prisma.message.update({
+    where: { id },
+    data: { retentionTagId: parsed.data.tagId, modSeq: BigInt(Date.now()) },
+    include: { retentionTag: { select: { id: true, name: true, retentionDays: true, action: true } } },
+  });
+  res.json({
+    id: updated.id,
+    retentionTagId: updated.retentionTagId,
+    retentionTag: updated.retentionTag,
+  });
 });
 
 // POST /api/v1/mail/folders/:id/empty — delete all messages in folder (hard-delete for Trash/Junk, soft for others)
