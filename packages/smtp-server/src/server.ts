@@ -65,7 +65,8 @@ async function refreshSmtpSettings(): Promise<void> {
       bit8mime:       s?.ext8bitmime       ?? true,
       enhancedStatus: s?.extEnhancedStatus ?? true,
       smtputf8:       s?.extSmtputf8       ?? false,
-      dsn:            s?.extDsn            ?? true,
+      // DSN bewusst hardcoded false — Server hat keine Implementierung (RFC 3461 stub-only)
+      dsn:            false,
       chunking:       s?.extChunking       ?? false,
     };
     _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
