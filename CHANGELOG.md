@@ -13,6 +13,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.13] — 2026-05-21 — Fix: Login schlägt fehl (Passwort-Pepper-Mismatch)
+
+### Fixed
+
+- **Login schlägt fehl mit „Invalid credentials"** obwohl Passwort korrekt gesetzt ist:
+  `auth-service/src/local/index.ts` verwendete eine eigene Pepper-Logik
+  (`password + PEPPER` → direkt bcrypt.compare) während `@coremail/core`'s `hashPassword()`
+  beim Anlegen des Users `sha256(password + PEPPER)` → bcrypt verwendet.
+  Beide Funktionen unterschieden sich → Hash und Verify kamen nie überein.
+
+  Fix: `authenticateLocal()` und `authenticateAppPassword()` nutzen jetzt
+  `verifyPassword()` aus `@coremail/core` — dieselbe sha256+pepper Logik wie `hashPassword()`.
+  `bcrypt`-Direktimport in `local/index.ts` entfernt.
+
+- **App-Passwörter (IMAP/SMTP/POP3)** waren vom selben Bug betroffen:
+  `bcrypt.compare(rawPassword, hash)` statt `verifyPassword()` → IMAP/SMTP-Auth mit
+  App-Passwort schlug ebenfalls fehl. Ebenfalls auf `verifyPassword()` umgestellt.
+
+---
+
 ## [3.17.12] — 2026-05-21 — BCP Vollständige Übersetzung (EN/DE) + Versionsabgleich
 
 ### Changed

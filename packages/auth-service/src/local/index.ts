@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import { verifyPassword } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import type { AuthResult } from '../types.js';
 
@@ -6,7 +6,6 @@ export async function authenticateLocal(
   email: string,
   password: string,
 ): Promise<AuthResult | null> {
-  
 
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
@@ -15,9 +14,8 @@ export async function authenticateLocal(
 
   if (!user || !user.active || !user.passwordHash) return null;
 
-  const pepper = process.env['PEPPER'] ?? '';
-  const pepperedPassword = password + pepper;
-  const valid = await bcrypt.compare(pepperedPassword, user.passwordHash);
+  // verifyPassword verwendet dieselbe sha256+pepper Logik wie hashPassword in @coremail/core
+  const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) return null;
 
   return {
@@ -47,7 +45,8 @@ export async function authenticateAppPassword(
   });
 
   for (const ap of appPasswords) {
-    const valid = await bcrypt.compare(password, ap.hash);
+    // App-Passwords werden mit hashPassword() (sha256+pepper+bcrypt) erstellt → verifyPassword verwenden
+    const valid = await verifyPassword(password, ap.hash);
     if (valid) {
       await prisma.appPassword.update({
         where: { id: ap.id },
