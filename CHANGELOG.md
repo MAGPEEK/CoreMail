@@ -13,6 +13,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.36] — 2026-05-22 — HTTPS_PROXY_ENABLED entfernt — integrierter Proxy immer aktiv
+
+### Removed
+
+- **`HTTPS_PROXY_ENABLED`-Umgebungsvariable** vollständig entfernt aus `tls-proxy.ts`,
+  `routes/admin/certificates.ts`, `docker-compose.yml` und `docker-compose.synology.yml`.
+  Der integrierte HTTPS-Proxy ist immer aktiv — er startet Port 443 nur wenn ein
+  Zertifikat mit `isActiveHttps: true` vorhanden ist, ansonsten bleibt Port 443 geschlossen.
+  Kein Konfigurations-Toggle mehr nötig.
+
+- **`isTlsProxyEnabled()`-Export** aus `tls-proxy.ts` entfernt.
+
+- **`enabled`-Feld** aus der `/tls-proxy-info`-API-Response entfernt.
+
+- **„Integrierter HTTPS-Proxy deaktiviert"-Banner** aus BCP → SSL/TLS entfernt.
+  Der Banner zeigt jetzt nur noch zwei Zustände: HTTPS aktiv (grün) oder kein
+  HTTPS-Zertifikat aktiv (grau mit Hinweis).
+
+---
+
 ## [3.17.35] — 2026-05-22 — Zertifikat-Logik: Vollständige Entkopplung HTTPS/Protokoll + Self-Signed-Default
 
 ### Changed

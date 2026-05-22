@@ -3,6 +3,7 @@
  *
  * Startet einen Node.js-HTTPS-Server auf Port 443 (oder HTTPS_PORT), wenn
  * ein Zertifikat in der Datenbank als "isActiveHttps = true" markiert ist.
+ * Ist kein HTTPS-Zertifikat aktiviert, bleibt Port 443 geschlossen.
  *
  * Hot-Reload: Redis-Channel "coremail:tls:reload" löst automatischen
  * Neustart des HTTPS-Servers mit dem aktuellen Zertifikat aus.
@@ -21,30 +22,11 @@ const log  = createLogger('tls-proxy');
 const PORT = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
 const REDIS_CHANNEL = 'coremail:tls:reload';
 
-// HTTPS_PROXY_ENABLED=false → Feature vollständig deaktiviert.
-// Setze diesen Wert wenn ein externer Reverse Proxy (Traefik, Caddy, nginx,
-// DSM Application Portal …) TLS terminiert — dann darf Port 443 auch
-// aus docker-compose.yml entfernt / auskommentiert werden.
-const PROXY_ENABLED = process.env['HTTPS_PROXY_ENABLED'] !== 'false';
-
 let activeServer: https.Server | null = null;
-
-/** Gibt zurück ob der integrierte HTTPS-Proxy per Konfiguration aktiv ist. */
-export function isTlsProxyEnabled(): boolean {
-  return PROXY_ENABLED;
-}
 
 // ── Öffentlicher Einstiegspunkt ──────────────────────────────────────────────
 
 export async function startTlsProxy(app: Application): Promise<void> {
-  if (!PROXY_ENABLED) {
-    log.info(
-      'Integrierter HTTPS-Proxy deaktiviert (HTTPS_PROXY_ENABLED=false). ' +
-      'Verwende externen Reverse Proxy für TLS-Terminierung.',
-    );
-    return;
-  }
-
   // Initial laden
   await reloadServer(app);
 
