@@ -176,8 +176,13 @@ COPY --from=builder /app/packages/security-filter/dist         ./packages/securi
 COPY --from=builder /app/packages/activesync/package.json     ./packages/activesync/
 COPY --from=builder /app/packages/activesync/dist             ./packages/activesync/dist
 
-# Nur Produktions-Abhängigkeiten installieren
-RUN pnpm install --frozen-lockfile --prod
+# Nur Produktions-Abhängigkeiten installieren.
+# python3 + make + g++ werden für native Module (bcrypt) benötigt die keine
+# prebuilt-Binary für alpine/arm64 haben — werden danach wieder entfernt.
+RUN apk add --no-cache python3 make g++ \
+ && pnpm install --frozen-lockfile --prod \
+ && apk del python3 make g++ \
+ && rm -rf /root/.cache /tmp/pnpm-*
 # Altes Prisma-Engine-Binary löschen damit BuildKit-Cache nicht greift
 RUN find /app/node_modules -path "*/.prisma/client/libquery_engine*" -delete 2>/dev/null || true
 RUN pnpm --filter @coremail/storage exec prisma generate
