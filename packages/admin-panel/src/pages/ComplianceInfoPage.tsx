@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.28';
-const BUILD_DATE     = '2026-05-21';
+const VERSION        = '3.17.29';
+const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.29', date: '2026-05-22', title: 'Fix: RFC 5322 Compliance — From & Message-ID Header fehlend (Gmail 550 5.7.1)',
+    notes: 'Gmail lehnte alle ausgehenden Mails ab: „550 5.7.1 From header is missing" + „Messages missing a valid Message-ID header". Root cause: api-gateway baute den From-Header als Template-Literal "\\${displayName}" <email>. Wenn displayName leer ist → "" <email> (leerer Quoted-String, RFC 5322 §3.4 verletzt). Wenn displayName null ist → "null" <email> (semantisch ungültig). Gmail interpretiert beides als „From-Header fehlt". Fix 1 (api-gateway/routes/mail.ts): Wechsel auf Nodemailer-Objekt-Format { name: displayName.trim(), address: email } — leerer name → nodemailer lässt Quotes komplett weg → From: <email> (sauber). Date-Header jetzt explizit als Pflichtfeld (RFC 5322 §3.6.1). Fix 2 (smtp-server/outbound/relay.ts): Neue ensureRfc5322Headers()-Funktion als Sicherheitsnetz — prüft vor jeder MX-/Smarthost-Zustellung ob From, Message-ID und Date im Buffer vorhanden sind. Fehlende Header werden automatisch vorangestellt + als WARN geloggt. Schützt alle Outbound-Pfade (REST-API + SMTP-Submission).' },
   { version: '3.17.28', date: '2026-05-21', title: 'Fix: Self-Signed-Cert mit falscher CN — Outlook 503 root cause behoben',
     notes: 'Outlook 365 lehnte alle Mails an stefanwuestner.de mit "503 Bad sequence of commands" ab. Root cause: Das self-signed TLS-Zertifikat hatte CN=mail.localhost statt CN=mail.stefanwuestner.de. Beim ersten Container-Start war publicHostname noch leer in der DB, deshalb wurde das Cert mit Default-Hostname mail.localhost generiert und gespeichert. Outlook 365 validiert die CN gegen den verbundenen Hostname → Mismatch → ECONNRESET. Fix: refreshTlsConfig() prüft jetzt bei jedem Container-Start ob das self-signed Cert die korrekte CN hat (via certMatchesHostname() Helper). Bei Mismatch wird das Cert automatisch neu generiert mit aktuellem Hostname. CA-signierte Certs (LE/Custom) werden NICHT neu generiert. Zusätzlich: STARTTLS auf Port 25 wieder aktiviert (MX-Tools "Supports TLS" ✅). Auto-LE-Bootstrap aus v3.17.27 entfernt — Admin fordert manuell via BCP → SSL/TLS an.' },
   { version: '3.17.27', date: '2026-05-21', title: 'Auto-Let\'s-Encrypt beim Container-Start (löst Outlook-365 + MX-Tools dauerhaft)',
