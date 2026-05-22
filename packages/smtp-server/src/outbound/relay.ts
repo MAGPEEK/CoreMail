@@ -6,6 +6,58 @@ import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('smtp:relay');
 
+// ── RFC 5322 Compliance Guard ─────────────────────────────────────────────────
+//
+// Stellt sicher, dass ein ausgehender Nachrichten-Buffer die RFC 5322 Pflicht-
+// Header enthält (From, Message-ID, Date).  Fehlen sie, werden sie eingefügt,
+// damit strenge MTAs (z. B. Gmail) die Nachricht nicht mit
+//   "550 5.7.1 'From' header is missing"
+// ablehnen.
+//
+// Der Buffer kommt vom api-gateway (buildRawMime/nodemailer streamTransport)
+// oder vom smtp-server (Submission-Pfad).  In beiden Fällen sollten die Header
+// vorhanden sein — diese Funktion ist eine Sicherheitsnetz.
+
+function ensureRfc5322Headers(
+  buffer: Buffer,
+  senderAddr: string,
+  senderDomain: string,
+): Buffer {
+  // Header-Block endet bei CRLFCRLF (\r\n\r\n)
+  const sep = buffer.indexOf('\r\n\r\n');
+  if (sep === -1) {
+    // Malformierte Nachricht: komplett ohne Trenner — alle Pflicht-Header voranstellen
+    log.warn({ size: buffer.length }, 'RFC 5322: kein Header-Body-Trenner gefunden — Header werden vorangestellt');
+    const injected =
+      `From: <${senderAddr}>\r\n` +
+      `Message-ID: <${crypto.randomUUID()}@${senderDomain}>\r\n` +
+      `Date: ${new Date().toUTCString().replace('GMT', '+0000')}\r\n`;
+    return Buffer.concat([Buffer.from(injected, 'utf8'), Buffer.from('\r\n', 'utf8'), buffer]);
+  }
+
+  const headerText = buffer.subarray(0, sep).toString('utf8');
+  const toInject: string[] = [];
+
+  if (!/^from\s*:/im.test(headerText)) {
+    toInject.push(`From: <${senderAddr}>`);
+    log.warn({ senderAddr }, 'RFC 5322: From-Header fehlt — wird eingefügt');
+  }
+  if (!/^message-id\s*:/im.test(headerText)) {
+    toInject.push(`Message-ID: <${crypto.randomUUID()}@${senderDomain}>`);
+    log.warn({ senderDomain }, 'RFC 5322: Message-ID-Header fehlt — wird eingefügt');
+  }
+  if (!/^date\s*:/im.test(headerText)) {
+    toInject.push(`Date: ${new Date().toUTCString().replace('GMT', '+0000')}`);
+    log.warn({}, 'RFC 5322: Date-Header fehlt — wird eingefügt');
+  }
+
+  if (toInject.length === 0) return buffer; // Alle Pflicht-Header vorhanden ✓
+
+  // Fehlende Header VOR dem bestehenden Header-Block einfügen
+  const prefix = Buffer.from(toInject.join('\r\n') + '\r\n', 'utf8');
+  return Buffer.concat([prefix, buffer]);
+}
+
 export interface DkimOptions {
   dkimDomain?: string;
   dkimSelector?: string;
@@ -81,6 +133,11 @@ export async function relayMessage(
       log.warn({ err }, 'DKIM signing failed — sending unsigned');
     }
   }
+
+  // RFC 5322 Compliance: Pflicht-Header sicherstellen (From, Message-ID, Date)
+  // Schützt vor fehlerhaften Upstream-Buffern — Gmail lehnt mit 550 5.7.1 ab wenn From fehlt.
+  const senderDomain = from.split('@')[1] ?? 'mail.localhost';
+  signedBuffer = ensureRfc5322Headers(signedBuffer, from, senderDomain);
 
   const cfg = await getOutboundConfig();
 
