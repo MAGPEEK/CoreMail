@@ -13,6 +13,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.35] — 2026-05-22 — Zertifikat-Logik: Vollständige Entkopplung HTTPS/Protokoll + Self-Signed-Default
+
+### Changed
+
+- **Zertifikat-Aktivierung entkoppelt** (`api-gateway` → `routes/admin/certificates.ts`):
+  HTTPS-Proxy (Schloss-Symbol) und Protokoll-TLS (Server-Symbol) für SMTP/IMAP/POP3 sind
+  vollständig **unabhängig** — ein Zertifikat kann nur für HTTPS, nur für Protokolle, oder
+  für beides aktiv sein. `activate-https` berührt `isActiveProtocol` nicht mehr.
+
+- **Self-Signed-Standard**: `server_settings.tlsCert/tlsKey = NULL` ist der Normalzustand.
+  SMTP/IMAP/POP3 generieren automatisch ein Self-Signed-Cert aus `publicHostname` wenn
+  keine explizite Aktivierung erfolgt ist. Kein implizites Auto-Aktivieren beim Erstellen
+  oder Hochladen eines Zertifikats.
+
+- **Startup-Sync** (`syncProtocolCertState()`): Ersetzt die alte `migrateCertProtocolBinding()`
+  — prüft beim Container-Start ob `server_settings.tlsCert` vorhanden aber kein
+  `isActiveProtocol: true`-Cert in der DB existiert (verwaistes Cert) und bereinigt dies.
+
+- **Zertifikat löschen — vollständige Bereinigung**: Wird ein Zertifikat gelöscht das
+  `isActiveProtocol: true` ist, werden `server_settings.tlsCert/tlsKey` auf NULL gesetzt
+  und SMTP/IMAP/POP3 laden sofort das Self-Signed-Fallback. War das Cert für HTTPS aktiv,
+  wird der HTTPS-Proxy ebenfalls deaktiviert.
+
+- **BCP — Zertifikate-Seite** (`admin-panel` → `CertificatesPage.tsx`):
+  Server-Symbol (SMTP/IMAP/POP3) ist jetzt **immer** für alle ACTIVE/EXPIRING-Certs
+  sichtbar — unabhängig vom HTTPS-Status. Toast-Meldungen und Tooltips korrekt getrennt.
+  Lösch-Bestätigung warnt wenn das Cert für HTTPS oder Protokoll-TLS aktiv ist.
+  Info-Banner erklärt die Unabhängigkeit beider Aktivierungsarten.
+
+---
+
 ## [3.17.34] — 2026-05-22 — DNS-Check: Lokaler Resolver, kein Resolver-Banner/Badges/Details
 
 ### Changed

@@ -1,6 +1,6 @@
 {
   "name": "@coremail/backup-service",
-  "version": "3.17.34",
+  "version": "3.17.35",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

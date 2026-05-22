@@ -379,60 +379,48 @@ async function start() {
     log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
   );
 
-  // ── Einmalige Migration v3.17.32: isActiveProtocol sync ──────────────────
-  // Wenn ein Cert isActiveHttps: true hat aber isActiveProtocol: false ist
-  // (Upgrade von < 3.17.32), wird das Cert automatisch in ServerSettings
-  // geschrieben → SMTP/IMAP/POP3 nutzen ab sofort das CA-signierte Cert.
-  void migrateCertProtocolBinding().catch(err =>
-    log.warn({ err }, 'Protocol cert migration failed — check certificates manually'),
+  // ── Startup-Konsistenzprüfung: server_settings.tlsCert mit certificates-Tabelle abgleichen ──
+  // Wenn server_settings.tlsCert gesetzt ist aber kein Cert mit isActiveProtocol: true
+  // in der certificates-Tabelle existiert (z.B. nach manueller Löschung ohne API),
+  // wird server_settings.tlsCert/tlsKey auf NULL gesetzt → Self-Signed-Fallback.
+  void syncProtocolCertState().catch(err =>
+    log.warn({ err }, 'Protocol cert state sync failed — check certificates manually'),
   );
 
   // Kein Auto-LE — Admin fordert Let's Encrypt manuell via BCP → SSL/TLS an.
 }
 
-async function migrateCertProtocolBinding(): Promise<void> {
+async function syncProtocolCertState(): Promise<void> {
   try {
-    // Prüfen ob ein HTTPS-aktives Cert noch nicht als Protocol-Cert markiert ist
-    const httpsCert = await prisma.certificate.findFirst({
-      where: { isActiveHttps: true, isActiveProtocol: false },
-      select: { id: true, certPem: true, keyPem: true, name: true, domains: true },
-    });
-    if (!httpsCert?.certPem || !httpsCert?.keyPem) return;
-
-    // Prüfen ob ServerSettings schon ein CA-signiertes Cert hat
     const settings = await prisma.serverSettings.findUnique({
-      where: { id: 'singleton' },
+      where:  { id: 'singleton' },
       select: { tlsCert: true },
     });
 
-    // Migrieren nur wenn ServerSettings kein Cert hat ODER ein self-signed Cert
-    let needsMigration = !settings?.tlsCert;
-    if (!needsMigration && settings?.tlsCert) {
-      try {
-        const { X509Certificate } = await import('crypto');
-        const x = new X509Certificate(settings.tlsCert);
-        needsMigration = x.issuer === x.subject; // self-signed
-      } catch { needsMigration = true; }
+    // Kein TLS-Cert in ServerSettings → kein Handlungsbedarf
+    if (!settings?.tlsCert) return;
+
+    // Gibt es ein Cert mit isActiveProtocol: true?
+    const activeProtocolCert = await prisma.certificate.findFirst({
+      where:  { isActiveProtocol: true },
+      select: { id: true, name: true },
+    });
+
+    if (activeProtocolCert) {
+      // Alles konsistent
+      log.debug({ certId: activeProtocolCert.id }, 'Protocol TLS cert state: consistent');
+      return;
     }
 
-    if (!needsMigration) return;
-
-    // CA-signiertes Cert in ServerSettings schreiben + isActiveProtocol setzen
-    await prisma.serverSettings.upsert({
-      where:  { id: 'singleton' },
-      create: { id: 'singleton', tlsCert: httpsCert.certPem, tlsKey: httpsCert.keyPem },
-      update: { tlsCert: httpsCert.certPem, tlsKey: httpsCert.keyPem },
+    // Orphaned: server_settings hat TLS-Daten aber kein isActiveProtocol-Cert → bereinigen
+    await prisma.serverSettings.update({
+      where: { id: 'singleton' },
+      data:  { tlsCert: null, tlsKey: null },
     });
-    await prisma.$transaction([
-      prisma.certificate.updateMany({ data: { isActiveProtocol: false } }),
-      prisma.certificate.update({ where: { id: httpsCert.id }, data: { isActiveProtocol: true } }),
-    ]);
-    const redis = getRedisClient();
-    await redis.publish(CHANNEL_SETTINGS_RELOAD, httpsCert.id);
-    log.info({ certId: httpsCert.id, name: httpsCert.name, domains: httpsCert.domains },
-      'Migration v3.17.32: HTTPS cert applied to SMTP/IMAP/POP3 protocol TLS');
+    await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '');
+    log.info('Startup sync: orphaned server_settings.tlsCert cleared — SMTP/IMAP/POP3 using self-signed');
   } catch (err) {
-    log.error({ err }, 'Migration v3.17.32: protocol cert binding failed');
+    log.error({ err }, 'syncProtocolCertState failed');
   }
 }
 
