@@ -65,18 +65,13 @@ function TypeBadge({ type }: { type: CertType }) {
   return <span className={`${base} bg-gray-100 text-gray-600`}>Self-Signed</span>;
 }
 
-const ALL_SERVICES = ['MWA', 'BCP', 'SMTP', 'IMAP', 'POP3', 'EWS', 'CALDAV', 'AUTODISCOVER'];
+// Nur Mail-Protokolle — HTTPS wird per Schloss-Symbol aktiviert, nicht über Services
+const ALL_SERVICES = ['SMTP', 'IMAP', 'POP3'];
 
-// Farbgebung je Service-Gruppe
 const SERVICE_COLORS: Record<string, string> = {
-  MWA:         'bg-blue-100 text-blue-700',
-  BCP:         'bg-blue-100 text-blue-700',
-  SMTP:        'bg-green-100 text-green-700',
-  IMAP:        'bg-green-100 text-green-700',
-  POP3:        'bg-green-100 text-green-700',
-  EWS:         'bg-gray-100 text-gray-600',
-  CALDAV:      'bg-gray-100 text-gray-600',
-  AUTODISCOVER:'bg-gray-100 text-gray-600',
+  SMTP: 'bg-green-100 text-green-700',
+  IMAP: 'bg-green-100 text-green-700',
+  POP3: 'bg-green-100 text-green-700',
 };
 
 function ServiceSelector({
@@ -226,9 +221,8 @@ export function CertificatesPage() {
         </div>
       </div>
 
-      {/* HTTPS-Status-Banner — zwei Zustände */}
-      {tlsInfo?.activeCert ? (
-        /* ── HTTPS aktiv ── */
+      {/* HTTPS-Status-Banner — nur wenn aktiv */}
+      {tlsInfo?.activeCert && (
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
           <Lock size={16} className="text-green-600 shrink-0" />
           <span>
@@ -238,18 +232,6 @@ export function CertificatesPage() {
               <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
             )}
             {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken.
-          </span>
-        </div>
-      ) : (
-        /* ── Kein HTTPS-Zertifikat aktiv ── */
-        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
-          <LockOpen size={16} className="shrink-0" />
-          <span>
-            Kein HTTPS-Zertifikat aktiv —{' '}
-            <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss:</strong>{' '}
-            HTTPS (Port {tlsInfo?.port ?? 443}) aktivieren.{' '}
-            <Server size={12} className="inline mb-0.5" /> <strong>Server:</strong>{' '}
-            Protokoll-TLS für SMTP/IMAP/POP3 (unabhängig von HTTPS).
           </span>
         </div>
       )}

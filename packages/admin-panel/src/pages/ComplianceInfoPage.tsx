@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.36';
+const VERSION        = '3.17.37';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.37', date: '2026-05-22', title: 'BCP SSL/TLS: Leerer Banner entfernt, Service-Auswahl auf SMTP/IMAP/POP3 reduziert',
+    notes: 'Grauer "kein Zertifikat aktiv"-Banner in BCP → SSL/TLS entfernt. Service-Auswahl in Zertifikat-Formularen auf SMTP, IMAP, POP3 beschränkt (MWA, BCP, EWS, CalDAV, Autodiscover entfernt — HTTPS wird ausschließlich über das Schloss-Symbol verwaltet).' },
   { version: '3.17.36', date: '2026-05-22', title: 'HTTPS_PROXY_ENABLED entfernt — integrierter HTTPS-Proxy immer aktiv (startet nur mit aktivem Cert)',
     notes: 'HTTPS_PROXY_ENABLED-Umgebungsvariable vollständig entfernt. Der integrierte HTTPS-Proxy startet Port 443 nur wenn ein Zertifikat mit isActiveHttps=true vorhanden ist — sonst bleibt Port 443 geschlossen. Kein Konfigurations-Toggle mehr nötig. isTlsProxyEnabled() aus tls-proxy.ts entfernt. BCP-Banner reduziert auf zwei Zustände: HTTPS aktiv (grün) oder kein Zertifikat aktiv (grau).' },
   { version: '3.17.35', date: '2026-05-22', title: 'Zertifikat-Logik: Vollständige Entkopplung HTTPS/Protokoll + Self-Signed-Default',

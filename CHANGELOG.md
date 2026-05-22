@@ -13,6 +13,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.37] — 2026-05-22 — BCP SSL/TLS: Banner entfernt, Services auf SMTP/IMAP/POP3 reduziert
+
+### Changed
+
+- **BCP → SSL/TLS → Zertifikate**: Grauer Info-Banner bei fehlendem HTTPS-Zertifikat entfernt —
+  die Seite zeigt keinen Banner wenn kein Cert aktiv ist (grüner Banner bleibt bei aktivem HTTPS).
+
+- **Service-Auswahl in Zertifikat-Formularen** (Let's Encrypt, Upload, Self-Signed): Reduziert
+  auf `SMTP`, `IMAP`, `POP3` — Web-Services (MWA, BCP, EWS, CalDAV, Autodiscover) entfernt,
+  da HTTPS ausschließlich über das Schloss-Symbol aktiviert wird und nicht über die Services-Liste.
+
+---
+
 ## [3.17.36] — 2026-05-22 — HTTPS_PROXY_ENABLED entfernt — integrierter Proxy immer aktiv
 
 ### Removed
