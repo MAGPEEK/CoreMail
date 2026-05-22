@@ -746,11 +746,24 @@ mailRouter.post(
     }));
 
     // Rohe MIME-Nachricht aufbauen
+    // RFC 5322 §3.6.2: From-Header muss vorhanden und wohlgeformt sein.
+    // Nodemailer-Objekt-Format: leerer displayName → From: <email> (kein leerer Quoted-String)
+    // Template-Literal wie `"${null}" <email>` erzeugt `"null" <email>` (ungültig bei Gmail)
+    // RFC 5322 §3.4: Quoted-String darf nicht leer sein — { name: '', address } ist sauberer
+    // als '"" <email>' (leerer Quoted-String → Gmail meldet "From header missing").
+    const displayName = (user.displayName ?? '').trim();
+    const fromAddress: nodemailer.SendMailOptions['from'] = {
+      name:    displayName,   // Leer-String → nodemailer lässt Quoted-String komplett weg
+      address: user.email,
+    };
+
+    const msgId = `<${crypto.randomUUID()}@${user.domain.name}>`;
     const mailOptions: nodemailer.SendMailOptions = {
-      messageId: `<${crypto.randomUUID()}@${user.domain.name}>`,
-      from: `"${user.displayName}" <${user.email}>`,
+      messageId: msgId,
+      from:      fromAddress,
       to,
       subject,
+      date: new Date(),   // RFC 5322 §3.6.1: Date-Header ist Pflicht
       ...(cc.length  ? { cc }  : {}),
       ...(bcc.length ? { bcc } : {}),
       ...(bodyHtml   ? { html: bodyHtml } : {}),

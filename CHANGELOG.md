@@ -13,6 +13,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.29] — 2026-05-22 — Fix: RFC 5322 Compliance — From & Message-ID Header
+
+### Fixed
+
+- **🎯 Gmail 550 5.7.1 — From Header & Message-ID Header missing**: Ausgehende
+  E-Mails wurden von Gmail mit folgenden Fehlern abgelehnt:
+  - `550 5.7.1 ... 'From' header is missing`
+  - `550 5.7.1 Messages missing a valid Message-ID header are not accepted`
+
+  **Root Cause (api-gateway `routes/mail.ts`)**: Der `From`-Header wurde als
+  Template-Literal gebaut: `"${user.displayName}" <${user.email}>`.
+  - Wenn `displayName = null` → `"null" <email>` (ungültige Anzeige-Name-Zeichenfolge)
+  - Wenn `displayName = ""` → `"" <email>` — leerer Quoted-String verletzt RFC 5322
+    §3.4 (quoted-string MUSS mindestens ein Zeichen enthalten). Strenge Parser
+    wie Gmail werten das als „From-Header fehlt".
+
+  **Fix 1 — `api-gateway/routes/mail.ts`**: Wechsel auf Nodemailer-Objekt-Format:
+  ```
+  from: displayName ? { name: displayName, address: user.email } : { address: user.email }
+  ```
+  Nodemailer kodiert den Anzeige-Namen korrekt per RFC 2047 (falls Non-ASCII)
+  und lässt ihn weg wenn er leer ist → `From: <email>` (sauber und gültig).
+  Außerdem `date: new Date()` explizit gesetzt (RFC 5322 §3.6.1 Pflicht-Header).
+
+  **Fix 2 — `smtp-server/outbound/relay.ts`**: Neue `ensureRfc5322Headers()`-
+  Funktion als Sicherheitsnetz: Prüft vor jeder MX-/Smarthost-Zustellung ob
+  `From`, `Message-ID` und `Date` im Header-Block vorhanden sind. Fehlen sie,
+  werden sie automatisch vorangestellt und der Vorgang wird als WARN geloggt.
+  Schützt alle Outbound-Pfade (REST-API + SMTP-Submission).
+
+---
+
 ## [3.17.28] — 2026-05-21 — Fix: Self-Signed-Cert mit falscher CN (Outlook 503 root cause)
 
 ### Fixed
