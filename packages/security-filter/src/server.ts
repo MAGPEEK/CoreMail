@@ -3,8 +3,8 @@
  * Exposes the pipeline as a REST API consumed by smtp-server and other modules.
  */
 import express from 'express';
-import { createLogger } from '@coremail/core';
-import { connectDatabase } from '@coremail/storage';
+import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { connectDatabase, prisma } from '@coremail/storage';
 import {
   runConnectionChecks,
   runContentChecks,
@@ -17,12 +17,39 @@ const app = express();
 app.use(express.json({ limit: '52mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '52mb' }));
 
-// Shared pipeline config (loaded from DB on startup, reloaded periodically)
+// Shared pipeline config (loaded from DB on startup, reloaded via Redis)
 let pipelineConfig: PipelineConfig = {
   greylistingEnabled: true,
-  spamScoreJunk: 3.0,
-  spamScoreReject: 6.0,
+  rspamdEnabled:      true,
+  clamavEnabled:      true,
+  spamScoreJunk:      3.0,
+  spamScoreReject:    6.0,
 };
+
+/**
+ * Loads SecuritySettings from DB and merges them into pipelineConfig.
+ * Called on startup and on Redis settings:reload event.
+ */
+async function loadSecuritySettings(): Promise<void> {
+  try {
+    const s = await prisma.securitySettings.findUnique({ where: { id: 'singleton' } });
+    if (!s) return;
+    pipelineConfig = {
+      ...pipelineConfig,
+      greylistingEnabled: s.greylistEnabled,
+      rspamdEnabled:      s.rspamdEnabled,
+      clamavEnabled:      s.clamavEnabled,
+      spamScoreJunk:      s.rspamdSpamScore,
+      spamScoreReject:    s.rspamdRejectScore,
+    };
+    log.info(
+      { rspamdEnabled: s.rspamdEnabled, clamavEnabled: s.clamavEnabled },
+      'Security settings loaded from DB',
+    );
+  } catch (err) {
+    log.warn({ err }, 'Failed to load security settings from DB — using defaults');
+  }
+}
 
 /**
  * POST /check/connection
@@ -120,6 +147,21 @@ const PORT = parseInt(process.env['PORT'] ?? '3002', 10);
 
 async function main() {
   await connectDatabase();
+
+  // Load security settings from DB
+  await loadSecuritySettings();
+
+  // Subscribe to settings:reload for hot-reload of rspamdEnabled / clamavEnabled
+  try {
+    const sub = getRedisClient().duplicate();
+    await sub.subscribe(CHANNEL_SETTINGS_RELOAD);
+    sub.on('message', (_ch, _msg) => {
+      log.info('Security settings reload triggered via Redis');
+      void loadSecuritySettings();
+    });
+  } catch (err) {
+    log.warn({ err }, 'Redis subscription failed — security settings will not hot-reload');
+  }
 
   // DNS-Hardening initialisieren (trusted resolvers + Integrity-Check)
   try {

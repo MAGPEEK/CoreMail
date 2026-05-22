@@ -13,6 +13,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.38] — 2026-05-22 — Auto-Self-Signed-Cert bei Setup + Spam-Filter aktivierbar/deaktivierbar
+
+### Added
+
+- **Auto Self-Signed-Cert bei Setup** (`api-gateway` → `routes/setup.ts`):
+  Nach erfolgreichem Initial-Setup (`POST /api/v1/setup/complete`) wird automatisch ein
+  selbstsigniertes Zertifikat (RSA-2048, 10 Jahre) für den `publicHostname` generiert
+  und in die `certificates`-Tabelle geschrieben. Das Cert ist sofort in BCP → SSL/TLS
+  sichtbar, als Standard-Protokoll-TLS (`isActiveProtocol: true`) für SMTP/IMAP/POP3
+  aktiviert und wird in `server_settings.tlsCert/tlsKey` geschrieben — SMTP/IMAP/POP3
+  übernehmen es sofort via Redis-`settings:reload`.
+
+- **Spam-Filter-Toggle mit Hot-Reload** (`security-filter` → `server.ts`, `pipeline/index.ts`):
+  `rspamdEnabled` und `clamavEnabled` aus `SecuritySettings` werden beim Start aus der DB
+  geladen. Bei Änderung in BCP → Schutzfilter → Rspamd/Antivirus und anschließendem
+  Speichern löst `settings:reload` über Redis einen sofortigen Reload im Security-Filter
+  aus — kein Container-Neustart nötig. Pipeline-Stages 4c (ClamAV) und 4d (rspamd)
+  werden bei `enabled: false` vollständig übersprungen.
+
+### Changed
+
+- **`PipelineConfig`-Interface** (`security-filter/pipeline/index.ts`): Neue optionale
+  Felder `rspamdEnabled?: boolean` und `clamavEnabled?: boolean` — Default `true`
+  (kompatibel mit bestehenden Aufrufen).
+
+- **`security-filter/server.ts`**: Lädt SecuritySettings beim Start aus DB und
+  abonniert Redis-Channel `settings:reload` für Hot-Reload. Neue Funktion
+  `loadSecuritySettings()`.
+
+---
+
 ## [3.17.37] — 2026-05-22 — BCP SSL/TLS: Banner entfernt, Services auf SMTP/IMAP/POP3 reduziert
 
 ### Changed
