@@ -74,31 +74,72 @@ const SERVICE_COLORS: Record<string, string> = {
   POP3: 'bg-green-100 text-green-700',
 };
 
+/**
+ * Service-Auswahl mit Exklusivitäts-Anzeige.
+ * Jeder Service kann nur einem Zertifikat gleichzeitig zugeordnet sein.
+ * Services die bereits von einem anderen Cert beansprucht sind, werden orange markiert.
+ */
 function ServiceSelector({
-  selected, onChange,
-}: { selected: string[]; onChange: (s: string[]) => void }) {
+  selected, onChange, allCerts, currentCertId,
+}: {
+  selected:       string[];
+  onChange:       (s: string[]) => void;
+  allCerts?:      Certificate[];
+  currentCertId?: string; // undefined = neues Cert
+}) {
+  // Ermitteln welche Services schon von anderen Certs beansprucht werden
+  const takenBy: Record<string, string> = {};
+  if (allCerts) {
+    for (const cert of allCerts) {
+      if (cert.id === currentCertId) continue;
+      for (const svc of cert.services) {
+        takenBy[svc] = cert.name;
+      }
+    }
+  }
+
+  // Services die gerade ausgewählt sind UND von einem anderen Cert übernommen werden
+  const beingTransferred = ALL_SERVICES.filter(s => selected.includes(s) && takenBy[s]);
+
   function toggle(svc: string) {
     onChange(selected.includes(svc) ? selected.filter(s => s !== svc) : [...selected, svc]);
   }
+
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
-        {ALL_SERVICES.map(svc => (
-          <button
-            key={svc}
-            type="button"
-            onClick={() => toggle(svc)}
-            className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
-              selected.includes(svc)
-                ? 'bg-blue-600 border-blue-600 text-white'
-                : 'bg-white border-gray-300 text-gray-600 hover:border-blue-400'
-            }`}>
-            {svc}
-          </button>
-        ))}
+        {ALL_SERVICES.map(svc => {
+          const isSelected  = selected.includes(svc);
+          const takenByName = !isSelected ? takenBy[svc] : undefined;
+          return (
+            <button
+              key={svc}
+              type="button"
+              onClick={() => toggle(svc)}
+              title={takenByName
+                ? `Aktuell bei „${takenByName}" — wird übernommen wenn gespeichert`
+                : undefined}
+              className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
+                isSelected
+                  ? 'bg-blue-600 border-blue-600 text-white'
+                  : takenByName
+                  ? 'bg-amber-50 border-amber-300 text-amber-700 hover:border-blue-400'
+                  : 'bg-white border-gray-300 text-gray-600 hover:border-blue-400'
+              }`}>
+              {svc}
+              {takenByName && !isSelected && <span className="ml-1 opacity-70">⚠</span>}
+            </button>
+          );
+        })}
       </div>
+      {/* Hinweis wenn Services von anderen Certs übernommen werden */}
+      {beingTransferred.length > 0 && (
+        <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          ⚠️ {beingTransferred.map(s => `${s} (von „${takenBy[s]}")`).join(', ')} {beingTransferred.length === 1 ? 'wird' : 'werden'} diesem Zertifikat übertragen und beim anderen entfernt.
+        </p>
+      )}
       <p className="mt-2 text-xs text-gray-400">
-        Nur zur Dokumentation — die Aktivierung (Schloss-Symbol) entscheidet über den tatsächlichen Einsatz.
+        Jeder Service kann nur einem Zertifikat gleichzeitig zugeordnet sein.
       </p>
     </div>
   );
@@ -439,17 +480,17 @@ export function CertificatesPage() {
         )}
       </div>
 
-      {/* Modals */}
-      {modal === 'letsencrypt' && <LetsEncryptModal onClose={() => setModal(null)} />}
-      {modal === 'upload'      && <UploadModal      onClose={() => setModal(null)} />}
-      {modal === 'selfsigned'  && <SelfSignedModal  onClose={() => setModal(null)} />}
+      {/* Modals — certs weitergeben für Exklusivitäts-Anzeige */}
+      {modal === 'letsencrypt' && <LetsEncryptModal onClose={() => setModal(null)} allCerts={certs} />}
+      {modal === 'upload'      && <UploadModal      onClose={() => setModal(null)} allCerts={certs} />}
+      {modal === 'selfsigned'  && <SelfSignedModal  onClose={() => setModal(null)} allCerts={certs} />}
     </div>
   );
 }
 
 // ── Let's Encrypt Modal ───────────────────────────────────────────────────────
 
-function LetsEncryptModal({ onClose }: { onClose: () => void }) {
+function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts: Certificate[] }) {
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
@@ -492,7 +533,7 @@ function LetsEncryptModal({ onClose }: { onClose: () => void }) {
             className="input" placeholder="admin@company.com" />
         </Field>
         <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} />
+          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
         </Field>
         <div className="flex gap-6">
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -524,7 +565,7 @@ function LetsEncryptModal({ onClose }: { onClose: () => void }) {
 
 // ── Upload Modal ──────────────────────────────────────────────────────────────
 
-function UploadModal({ onClose }: { onClose: () => void }) {
+function UploadModal({ onClose, allCerts }: { onClose: () => void; allCerts: Certificate[] }) {
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
@@ -562,7 +603,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
             rows={2} className="input font-mono text-sm" placeholder="mail.company.com" />
         </Field>
         <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} />
+          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
         </Field>
         <Field label="Zertifikat (PEM)">
           <textarea value={certPem} onChange={e => setCertPem(e.target.value)}
@@ -594,7 +635,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
 
 // ── Self-Signed Modal ─────────────────────────────────────────────────────────
 
-function SelfSignedModal({ onClose }: { onClose: () => void }) {
+function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts: Certificate[] }) {
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
@@ -631,7 +672,7 @@ function SelfSignedModal({ onClose }: { onClose: () => void }) {
             rows={2} className="input font-mono text-sm" placeholder="localhost" />
         </Field>
         <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} />
+          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
         </Field>
         <Field label="Gültigkeit (Tage)">
           <input type="number" value={days} onChange={e => setDays(Number(e.target.value))}

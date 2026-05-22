@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.39`
+**Aktuelle Version**: `3.17.40`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -540,7 +540,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.39 — Highlights
+## Aktuelle Version 3.17.40 — Highlights
+
+**v3.17.40** — Fix: Exklusive Service-Zuordnung bei Zertifikaten. SMTP/IMAP/POP3 können jeweils nur einem Cert gleichzeitig zugeordnet sein. `claimServices()` in `certificates.ts` entfernt Services automatisch aus anderen Certs beim Erstellen/Aktualisieren. BCP-UI zeigt belegte Services orange mit Tooltip und Übernahme-Hinweis.
 
 **v3.17.39** — Fix: `applyProtocolCert()` aktualisiert jetzt automatisch `server_settings.publicHostname` auf die primäre Domain des aktivierten Zertifikats. SMTP-Banner zeigte bisher immer `mail.localhost` auch wenn ein CA-Zert für `mail.example.de` aktiviert war. ACME-Zertifikate mit SMTP/IMAP/POP3 in Services werden jetzt automatisch nach der Ausstellung aktiviert.
 

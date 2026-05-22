@@ -13,6 +13,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.40] — 2026-05-22 — Fix: Exklusive Service-Zuordnung bei Zertifikaten
+
+### Fixed
+
+- **Exklusive Service-Zuordnung** (`routes/admin/certificates.ts` + `CertificatesPage.tsx`):
+  SMTP, IMAP und POP3 können jeweils nur einem Zertifikat gleichzeitig zugeordnet sein.
+  Beim Erstellen oder Aktualisieren eines Zertifikats mit Services werden diese Services
+  automatisch aus allen anderen Zertifikaten entfernt (`claimServices()`-Funktion).
+
+- **BCP SSL/TLS UI — Service-Selector**: Bereits von einem anderen Cert beanspruchte Services
+  werden orange markiert (⚠ Warnsymbol + Tooltip „Aktuell bei ‚Cert X' — wird übernommen").
+  Bei Auswahl erscheint ein Hinweis-Banner welche Services beim Speichern übertragen werden.
+
+---
+
 ## [3.17.39] — 2026-05-22 — Fix: publicHostname automatisch bei Zertifikat-Aktivierung aktualisieren
 
 ### Fixed

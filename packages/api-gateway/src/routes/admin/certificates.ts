@@ -125,6 +125,30 @@ async function clearProtocolCert(): Promise<void> {
   log.info('Protocol TLS cert cleared — SMTP/IMAP/POP3 reverting to self-signed');
 }
 
+/**
+ * Stellt Exklusivität der Services-Zuordnung sicher:
+ * Entfernt die angegebenen Services aus ALLEN anderen Zertifikaten.
+ * Wird beim Erstellen und Aktualisieren eines Zertifikats aufgerufen.
+ */
+async function claimServices(certId: string, services: string[]): Promise<void> {
+  if (services.length === 0) return;
+  const others = await prisma.certificate.findMany({
+    where:  { id: { not: certId } },
+    select: { id: true, services: true },
+  });
+  for (const other of others) {
+    const remaining = (other.services as string[]).filter(s => !services.includes(s));
+    if (remaining.length !== (other.services as string[]).length) {
+      await prisma.certificate.update({
+        where: { id: other.id },
+        data:  { services: remaining },
+      });
+      log.info({ fromCertId: other.id, toCertId: certId, services },
+        'Services transferred to new certificate (exclusivity enforced)');
+    }
+  }
+}
+
 // ── GET /tls-proxy-info ───────────────────────────────────────────────────────
 // Gibt das aktuell aktive HTTPS-Zertifikat zurück.
 // Wird vom BCP verwendet um den Status-Banner zu rendern.
@@ -192,6 +216,9 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
       autoRenew,
     },
   });
+
+  // Services exklusiv zuordnen (aus anderen Certs entfernen)
+  if (services.length > 0) await claimServices(cert.id, services);
 
   log.info({ id: cert.id, domains, staging }, 'Let\'s Encrypt certificate requested');
 
@@ -372,6 +399,9 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
     },
   });
 
+  // Services exklusiv zuordnen
+  if (parsed.data.services.length > 0) await claimServices(cert.id, parsed.data.services);
+
   log.info({ id: cert.id, name: cert.name, expiresAt }, 'Custom certificate uploaded');
   res.status(201).json(safe(cert as unknown as Record<string, unknown>));
 });
@@ -462,6 +492,9 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
       },
     });
 
+    // Services exklusiv zuordnen
+    if (services.length > 0) await claimServices(cert.id, services);
+
     log.info({ id: cert.id, domains, days }, 'Self-signed certificate generated');
     res.status(201).json(safe(cert as unknown as Record<string, unknown>));
   } catch (err) {
@@ -499,6 +532,11 @@ adminCertificatesRouter.put('/:id', async (req: Request, res: Response) => {
         certPem: true, keyPem: true,
       },
     });
+
+    // Services exklusiv zuordnen (aus anderen Certs entfernen)
+    if (parsed.data.services !== undefined && parsed.data.services.length > 0) {
+      await claimServices(id, parsed.data.services);
+    }
 
     res.json(safe(cert as unknown as Record<string, unknown>));
   } catch {
