@@ -58,23 +58,28 @@ function safe(cert: Record<string, unknown>) {
 
 // ── Protokoll-TLS-Binding ──────────────────────────────────────────────────────
 // SMTP, IMAP und POP3 lesen ihr TLS-Zertifikat aus ServerSettings.tlsCert/tlsKey.
-// Wenn ein Zertifikat diesen Services zugeordnet wird, schreiben wir die PEM-Daten
-// dort rein und senden CHANNEL_SETTINGS_RELOAD — die Server laden das Cert sofort
-// neu (ohne Container-Neustart) und binden die neuen TLS-Sockets.
-const PROTOCOL_SERVICES = new Set(['SMTP', 'IMAP', 'POP3']);
+// applyProtocolCert() schreibt die PEM-Daten dort rein und sendet CHANNEL_SETTINGS_RELOAD —
+// die Server laden das Cert sofort neu (ohne Container-Neustart).
+// Das Zertifikat muss NICHT explizit SMTP/IMAP/POP3 in services haben —
+// activate-https aktiviert IMMER auch die Protokoll-TLS (ein Cert für alles).
 
 // Services die den integrierten HTTPS-Reverse-Proxy steuern
 const HTTPS_PROXY_SERVICES = new Set(['MWA', 'BCP']);
 
-async function applyProtocolCert(
-  certId:   string,
-  services: string[],
-  certPem:  string,
-  keyPem:   string,
-): Promise<void> {
-  const hasProtocol = services.some(s => PROTOCOL_SERVICES.has(s));
-  if (!hasProtocol) return;
+// Services, die Protokoll-TLS (ServerSettings.tlsCert) steuern
+const PROTOCOL_SERVICES = new Set(['SMTP', 'IMAP', 'POP3']);
 
+/**
+ * Schreibt certPem/keyPem in ServerSettings.tlsCert/tlsKey und triggert
+ * SMTP/IMAP/POP3-Server-Reload via CHANNEL_SETTINGS_RELOAD.
+ * Setzt isActiveProtocol: true auf diesem Cert (und false auf allen anderen).
+ * Wird von activate-https und activate-protocol aufgerufen.
+ */
+async function applyProtocolCert(
+  certId:  string,
+  certPem: string,
+  keyPem:  string,
+): Promise<void> {
   // Cert in ServerSettings schreiben → alle Protokoll-Server lesen von dort
   await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
@@ -82,12 +87,33 @@ async function applyProtocolCert(
     update: { tlsCert: certPem, tlsKey: keyPem },
   });
 
+  // isActiveProtocol Flag setzen (nur eines gleichzeitig aktiv)
+  await prisma.$transaction([
+    prisma.certificate.updateMany({ data: { isActiveProtocol: false } }),
+    prisma.certificate.update({ where: { id: certId }, data: { isActiveProtocol: true } }),
+  ]);
+
   // CHANNEL_SETTINGS_RELOAD → smtp-server, imap-server, pop3-server rufen
   // refreshTlsConfig() + scheduleReload() auf (Listener-Neustart mit neuem Cert)
   await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, certId);
 
-  const bound = services.filter(s => PROTOCOL_SERVICES.has(s));
-  log.info({ certId, services: bound }, 'Protocol TLS cert applied — servers reloading');
+  log.info({ certId }, 'Protocol TLS cert applied (SMTP/IMAP/POP3) — servers reloading');
+}
+
+/**
+ * Wurde das Cert beim Erstellen Services SMTP/IMAP/POP3 zugewiesen,
+ * wird es auch ohne Schloss-Klick sofort für die Protokolle aktiviert.
+ * (Rückwärtskompatibilität — direktes Erstellen mit services=[SMTP, ...])
+ */
+async function applyProtocolCertIfAssigned(
+  certId:   string,
+  services: string[],
+  certPem:  string,
+  keyPem:   string,
+): Promise<void> {
+  const hasProtocol = services.some(s => PROTOCOL_SERVICES.has(s));
+  if (!hasProtocol) return;
+  await applyProtocolCert(certId, certPem, keyPem);
 }
 
 // ── GET /tls-proxy-info ───────────────────────────────────────────────────────
@@ -117,7 +143,8 @@ adminCertificatesRouter.get('/', async (_req: Request, res: Response) => {
     select: {
       id: true, name: true, domains: true, services: true,
       type: true, status: true, issuedAt: true, expiresAt: true,
-      autoRenew: true, isActiveHttps: true, acmeEmail: true, lastError: true, createdAt: true,
+      autoRenew: true, isActiveHttps: true, isActiveProtocol: true,
+      acmeEmail: true, lastError: true, createdAt: true,
       certPem: false, keyPem: false, chainPem: false, acmeAccount: false,
     },
   });
@@ -274,8 +301,8 @@ export async function runAcmeIssuance(
       select: { services: true },
     });
 
-    // Protokoll-TLS binden (SMTP / IMAP / POP3) falls zugeordnet
-    await applyProtocolCert(certId, issued.services, certPem.toString(), certKeyPem);
+    // Protokoll-TLS binden wenn services SMTP/IMAP/POP3 enthalten
+    await applyProtocolCertIfAssigned(certId, issued.services, certPem.toString(), certKeyPem);
 
     log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
   } catch (err) {
@@ -339,7 +366,7 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
 
   // Protokoll-TLS sofort anwenden wenn SMTP/IMAP/POP3 im Service-Array
   if (cert.certPem && cert.keyPem) {
-    void applyProtocolCert(cert.id, cert.services, cert.certPem, cert.keyPem);
+    void applyProtocolCertIfAssigned(cert.id, cert.services, cert.certPem, cert.keyPem);
   }
 
   log.info({ id: cert.id, name: cert.name, expiresAt }, 'Custom certificate uploaded');
@@ -433,7 +460,7 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
     });
 
     // Protokoll-TLS sofort anwenden wenn SMTP/IMAP/POP3 im Service-Array
-    void applyProtocolCert(cert.id, cert.services, certPem, keyPem);
+    void applyProtocolCertIfAssigned(cert.id, cert.services, certPem, keyPem);
 
     log.info({ id: cert.id, domains, days }, 'Self-signed certificate generated');
     res.status(201).json(safe(cert as unknown as Record<string, unknown>));
@@ -479,7 +506,7 @@ adminCertificatesRouter.put('/:id', async (req: Request, res: Response) => {
       cert.certPem && cert.keyPem &&
       (cert.status === 'ACTIVE' || cert.status === 'EXPIRING')
     ) {
-      void applyProtocolCert(id, cert.services, cert.certPem, cert.keyPem);
+      void applyProtocolCertIfAssigned(id, cert.services, cert.certPem, cert.keyPem);
     }
 
     res.json(safe(cert as unknown as Record<string, unknown>));
@@ -512,8 +539,9 @@ adminCertificatesRouter.post('/:id/renew', async (req: Request, res: Response) =
 });
 
 // ── POST /:id/activate-https ──────────────────────────────────────────────────
-// Aktiviert dieses Zertifikat als HTTPS-Server-Zertifikat (integrierter Reverse Proxy).
-// Nur ein Zertifikat kann gleichzeitig aktiv sein — alle anderen werden deaktiviert.
+// Aktiviert dieses Zertifikat für den integrierten HTTPS-Proxy (Port 443) UND
+// automatisch für alle Mail-Protokolle (SMTP/IMAP/POP3).
+// Ein Zertifikat gilt für den gesamten Server — keine separate Service-Auswahl nötig.
 adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const cert = await prisma.certificate.findUnique({
@@ -527,49 +555,83 @@ adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Re
   }
   if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
     res.status(400).json({
-      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used for HTTPS`,
+      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used`,
     });
     return;
   }
 
-  // HTTPS-Proxy nur aktivieren wenn MWA UND BCP im Service-Array —
-  // beide Web-Interfaces müssen über den Proxy erreichbar sein.
-  const missingServices = [...HTTPS_PROXY_SERVICES].filter(s => !cert.services.includes(s));
-  if (missingServices.length > 0) {
-    res.status(400).json({
-      error: `Der integrierte HTTPS-Proxy erfordert die Services "MWA" und "BCP". Fehlend: ${missingServices.join(', ')}. Bitte das Zertifikat bearbeiten und beide Services hinzufügen.`,
-    });
-    return;
-  }
+  // ── Schritt 1: SMTP / IMAP / POP3 — Cert in ServerSettings schreiben ─────
+  // applyProtocolCert() schreibt ServerSettings.tlsCert/tlsKey, setzt isActiveProtocol: true
+  // und publisht CHANNEL_SETTINGS_RELOAD → alle Mail-Protokoll-Server laden Cert neu.
+  await applyProtocolCert(id, cert.certPem, cert.keyPem);
 
-  // Nur dieses Zertifikat aktivieren, alle anderen deaktivieren (atomare Transaktion)
+  // ── Schritt 2: HTTPS-Proxy — Cert aktivieren ──────────────────────────────
+  // isActiveHttps: true → tls-proxy.ts lädt das Cert via Redis-Kanal coremail:tls:reload.
+  // Alle anderen Certs bekommen isActiveHttps: false (atomare Transaktion).
+  // isActiveProtocol wurde bereits in applyProtocolCert() gesetzt.
   await prisma.$transaction([
     prisma.certificate.updateMany({ data: { isActiveHttps: false } }),
-    prisma.certificate.update({ where: { id }, data: { isActiveHttps: true } }),
+    prisma.certificate.update({ where: { id }, data: { isActiveHttps: true, isActiveProtocol: true } }),
   ]);
 
-  // HTTPS-Server im api-gateway neu laden
+  // HTTPS-Server im api-gateway neu laden (tls-proxy.ts lauscht auf coremail:tls:reload)
   const redis = getRedisClient();
   await redis.publish('coremail:tls:reload', id);
 
-  log.info({ id, name: cert.name }, 'Certificate activated for HTTPS — TLS reload triggered');
-  res.json({ message: 'Certificate activated for HTTPS — server reloading TLS context', certId: id });
+  log.info({ id, name: cert.name }, 'Certificate activated — HTTPS + SMTP/IMAP/POP3 TLS reloading');
+  res.json({
+    message: 'Certificate activated for HTTPS and all mail protocols (SMTP/IMAP/POP3) — TLS reloading',
+    certId: id,
+  });
+});
+
+// ── POST /:id/activate-protocol ───────────────────────────────────────────────
+// Aktiviert dieses Zertifikat NUR für Mail-Protokolle (SMTP/IMAP/POP3).
+// Für Setups mit externem Reverse Proxy (Traefik, Caddy, DSM) wo der integrierte
+// HTTPS-Proxy deaktiviert ist, aber der Mailserver ein CA-signiertes Cert braucht.
+adminCertificatesRouter.post('/:id/activate-protocol', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const cert = await prisma.certificate.findUnique({
+    where: { id },
+    select: { id: true, name: true, status: true, certPem: true, keyPem: true },
+  });
+  if (!cert) { res.status(404).json({ error: 'Certificate not found' }); return; }
+  if (!cert.certPem || !cert.keyPem) {
+    res.status(400).json({ error: 'Certificate has no PEM data yet' });
+    return;
+  }
+  if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
+    res.status(400).json({
+      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used`,
+    });
+    return;
+  }
+
+  await applyProtocolCert(id, cert.certPem, cert.keyPem);
+
+  log.info({ id, name: cert.name }, 'Certificate activated for mail protocols (SMTP/IMAP/POP3)');
+  res.json({
+    message: 'Certificate activated for SMTP/IMAP/POP3 — servers reloading TLS',
+    certId: id,
+  });
 });
 
 // ── DELETE /:id/activate-https ────────────────────────────────────────────────
-// Deaktiviert HTTPS (integrierter Proxy stoppt).
+// Deaktiviert den integrierten HTTPS-Proxy für dieses Zertifikat.
+// isActiveProtocol bleibt erhalten — SMTP/IMAP/POP3 nutzen das Cert weiterhin.
 adminCertificatesRouter.delete('/:id/activate-https', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   await prisma.certificate.update({
     where: { id },
     data: { isActiveHttps: false },
+    // isActiveProtocol wird NICHT zurückgesetzt — Protokoll-TLS läuft weiter.
   }).catch(() => {});
 
   const redis = getRedisClient();
   await redis.publish('coremail:tls:reload', '');
 
-  log.info({ id }, 'HTTPS deactivated');
-  res.json({ message: 'HTTPS deactivated — server stopped' });
+  log.info({ id }, 'HTTPS proxy deactivated — protocol TLS (SMTP/IMAP/POP3) unchanged');
+  res.json({ message: 'HTTPS proxy deactivated. Mail protocols (SMTP/IMAP/POP3) continue using the certificate.' });
 });
 
 // ── DELETE /:id ───────────────────────────────────────────────────────────────

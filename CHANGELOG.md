@@ -13,6 +13,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.32] — 2026-05-22 — Fix: TLS-Cert Logik — ein Cert für alle Protokolle (SMTP 503 behoben)
+
+### Fixed
+
+- **🔒 503 5.5.1 Bad sequence of commands — Root Cause behoben**: Das Zertifikat
+  für `mail.stefanwuestner.de` wurde NUR für den HTTPS-Proxy (MWA/BCP) aktiviert,
+  SMTP/IMAP/POP3 nutzten weiterhin das alte selbstsignierte Zertifikat aus
+  `ServerSettings.tlsCert/tlsKey`. Externe MTAs (Google, Outlook) lehnten den
+  STARTTLS-Handshake ab → 503.
+
+- **🏗️ `activate-https` aktiviert jetzt IMMER auch SMTP/IMAP/POP3**: Wenn das
+  Schloss-Symbol angeklickt wird, schreibt der Server das Zertifikat ATOMAR in
+  `ServerSettings.tlsCert/tlsKey` UND sendet `CHANNEL_SETTINGS_RELOAD` — alle
+  Mail-Protokoll-Server laden das neue Cert sofort ohne Neustart.
+
+- **🛑 Entfernt: MWA+BCP Services-Pflicht für Schloss-Button**: Der Lock-Button
+  war bisher nur sichtbar wenn das Cert explizit die Services `MWA` und `BCP`
+  hatte — eine willkürliche Hürde ohne technischen Grund. Jetzt zeigt jedes
+  gültige Zertifikat (ACTIVE/EXPIRING) den Lock-Button.
+
+### Added
+
+- **`isActiveProtocol` Feld** (`Certificate`-Prisma-Modell): Zeigt im BCP an welches
+  Zertifikat aktuell für SMTP/IMAP/POP3 (Ports 465/993/995) aktiv ist —
+  unabhängig vom HTTPS-Proxy-Status.
+
+- **`POST /admin/certificates/:id/activate-protocol`**: Neuer Endpunkt für Setups
+  mit externem Reverse Proxy (Traefik, Caddy, Synology DSM) wo der integrierte
+  HTTPS-Proxy deaktiviert ist, aber der Mailserver ein CA-signiertes Cert für
+  SMTP/IMAP/POP3 benötigt.
+
+- **Server-Icon im BCP** (`CertificatesPage`): Neues <Server>-Symbol neben dem
+  Schloss — klickt man darauf, wird das Cert nur für Protokoll-TLS aktiviert
+  (ohne HTTPS-Proxy). Zeigt blaue Farbe wenn `isActiveProtocol: true`.
+
+- **Detail-Ansicht** (aufgeklappte Zeile): Zeigt jetzt BEIDE Status separat —
+  _HTTPS-Proxy (Port 443)_ und _Protokoll-TLS (SMTP/IMAP/POP3)_ mit eigenem
+  Icon, damit der Admin sofort sieht was wo aktiv ist.
+
+### Changed
+
+- **`deactivate-https`**: Stoppt nur den HTTPS-Proxy, berührt `isActiveProtocol`
+  NICHT — SMTP/IMAP/POP3 laufen mit dem gleichen Cert weiter wenn der Admin
+  von integriertem Proxy auf externen Traefik/Caddy wechselt.
+
+---
+
 ## [3.17.31] — 2026-05-22 — DNS-Prüfung: Echte Multi-Resolver-Verifikation
 
 ### Added

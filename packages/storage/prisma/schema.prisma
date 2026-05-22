@@ -1666,7 +1666,10 @@ model Certificate {
   expiresAt   DateTime?
   autoRenew      Boolean    @default(true)
   // Integrierter HTTPS-Reverse-Proxy (nur ein Zertifikat gleichzeitig aktiv)
-  isActiveHttps  Boolean    @default(false)
+  isActiveHttps    Boolean    @default(false)
+  // Protokoll-TLS: SMTP / IMAP / POP3 lesen aus ServerSettings.tlsCert/tlsKey.
+  // isActiveProtocol markiert welches Zertifikat gerade dort hinterlegt ist (nur eines).
+  isActiveProtocol Boolean    @default(false)
   // Let's Encrypt Account Key (PEM) — pro Server gespeichert
   acmeAccount String?                         // ACME Account Key PEM
   acmeEmail   String?                         // E-Mail für Let's Encrypt Benachrichtigungen
