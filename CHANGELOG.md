@@ -13,6 +13,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.31] — 2026-05-22 — DNS-Prüfung: Echte Multi-Resolver-Verifikation
+
+### Added
+
+- **🔍 Echte DNS-Verifikation via externe Resolver** (`api-gateway` → `routes/admin/domains.ts`):
+  Anstatt den Docker-internen Resolver (127.0.0.11, oft gecacht/veraltet) zu befragen,
+  werden MX, SPF, DKIM, DMARC, Autodiscover und PTR/FCrDNS jetzt direkt bei
+  **Google (8.8.8.8)**, **Cloudflare (1.1.1.1)** und **Quad9 (9.9.9.9)** geprüft.
+  `dns.promises.Resolver.setServers()` — kein Umweg über das System-DNS.
+
+- **🌐 PTR / FCrDNS-Prüfung**: Reverse-DNS `A → PTR → Rück-A` wird automatisch auf
+  echten öffentlichen Resolvern verifiziert. Status grün nur wenn PTR zum eigenen
+  Hostnamen auflöst (Forward-confirmed, Pflicht für Gmail).
+
+- **⚠️ SPF-Mehrfach-Record-Erkennung**: RFC 7208 §3.2 erlaubt genau einen SPF-TXT-
+  Record. Wenn zwei vorhanden sind → `permerror` bei allen Empfängern. Das BCP
+  zeigt jetzt eine explizite rote Warnung + Korrekturhinweis.
+
+- **📊 Per-Resolver-Badges im BCP** (`admin-panel` → `SmtpConfigPage.tsx`):
+  Jede DNS-Zeile zeigt farbige Badges für Google/Cloudflare/Quad9 mit Latenz
+  (grün = gefunden, rot = nicht gefunden/Fehler). Aufklappbare Detailansicht
+  pro Resolver mit exaktem Befund und Fehlermeldung.
+
+- **🔄 Konsistenz-Warnung**: Wenn zwei Resolver unterschiedliche Werte zurückgeben
+  (z. B. frisch propagierende Einträge) → orangene „Inkonsistenz"-Warnung.
+
+- **🕐 Zeitstempel + Resolver-Info-Banner**: DNS-Ergebnis zeigt Prüfzeitpunkt und
+  welche öffentlichen Resolver befragt wurden.
+
+### Fixed
+
+- **Docker-DNS-Phantom**: Interne DNS-Ergebnisse stimmten nicht mit dem überein,
+  was externe MTAs (Gmail, Outlook) tatsächlich sehen. Die neue Multi-Resolver-
+  Prüfung spiegelt die Realität der öffentlichen DNS-Infrastruktur wider.
+
+---
+
 ## [3.17.30] — 2026-05-22 — Outbound E-Mail-Pipeline komplett neu gebaut (Google-konform)
 
 ### Changed
