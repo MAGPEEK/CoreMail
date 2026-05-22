@@ -71,24 +71,40 @@ function safe(cert: Record<string, unknown>) {
  * Schreibt certPem/keyPem in ServerSettings.tlsCert/tlsKey und triggert
  * SMTP/IMAP/POP3-Server-Reload via CHANNEL_SETTINGS_RELOAD.
  * Setzt isActiveProtocol: true auf diesem Cert (und false auf allen anderen).
- * Wird NUR von activate-protocol und activate-https aufgerufen (explizit durch Admin).
+ * Aktualisiert auch publicHostname auf die primäre Domain des Zertifikats,
+ * damit SMTP/IMAP/POP3 sofort den korrekten Banner-Hostnamen verwenden.
+ * Wird NUR von activate-protocol aufgerufen (explizit durch Admin).
  */
 async function applyProtocolCert(
   certId:  string,
   certPem: string,
   keyPem:  string,
+  domains: string[],
 ): Promise<void> {
+  // Primäre Domain: erstes nicht-Wildcard-Eintrag der Domains-Liste
+  // wird als neuer publicHostname verwendet — SMTP/IMAP/POP3 Banner + Self-Signed-Fallback
+  const primaryDomain = domains.find(d => !d.startsWith('*') && d !== 'localhost') ?? null;
+
   await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', tlsCert: certPem, tlsKey: keyPem },
-    update: { tlsCert: certPem, tlsKey: keyPem },
+    create: {
+      id: 'singleton',
+      tlsCert: certPem,
+      tlsKey: keyPem,
+      ...(primaryDomain ? { publicHostname: primaryDomain } : {}),
+    },
+    update: {
+      tlsCert: certPem,
+      tlsKey: keyPem,
+      ...(primaryDomain ? { publicHostname: primaryDomain } : {}),
+    },
   });
   await prisma.$transaction([
     prisma.certificate.updateMany({ data: { isActiveProtocol: false } }),
     prisma.certificate.update({ where: { id: certId }, data: { isActiveProtocol: true } }),
   ]);
   await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, certId);
-  log.info({ certId }, 'Protocol TLS cert applied (SMTP/IMAP/POP3) — servers reloading');
+  log.info({ certId, primaryDomain }, 'Protocol TLS cert applied (SMTP/IMAP/POP3) — servers reloading');
 }
 
 /**
@@ -273,7 +289,7 @@ export async function runAcmeIssuance(
       expiresAt = new Date(Date.now() + 90 * 24 * 3600 * 1000);
     }
 
-    // In DB speichern (services für Protokoll-TLS-Binding zurücklesen)
+    // In DB speichern (services + domains für optionales Auto-Aktivieren zurücklesen)
     const issued = await prisma.certificate.update({
       where: { id: certId },
       data: {
@@ -285,10 +301,18 @@ export async function runAcmeIssuance(
         expiresAt,
         lastError:   null,
       },
-      select: { services: true },
+      select: { services: true, domains: true },
     });
 
     log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
+
+    // Auto-activate for SMTP/IMAP/POP3 if services list includes mail protocols
+    const mailProtocols = ['SMTP', 'IMAP', 'POP3'];
+    const hasMailProtocol = (issued.services as string[]).some(s => mailProtocols.includes(s));
+    if (hasMailProtocol) {
+      await applyProtocolCert(certId, certPem.toString(), certKeyPem, issued.domains as string[]);
+      log.info({ id: certId }, 'Protocol TLS auto-activated after ACME issuance');
+    }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     // Hilfreicher Hinweis bei HTTP-01 Challenge-Fehlern (Port 80 erreichbar?)
@@ -551,7 +575,7 @@ adminCertificatesRouter.post('/:id/activate-protocol', async (req: Request, res:
   const id = req.params['id'] ?? '';
   const cert = await prisma.certificate.findUnique({
     where: { id },
-    select: { id: true, name: true, status: true, certPem: true, keyPem: true },
+    select: { id: true, name: true, status: true, certPem: true, keyPem: true, domains: true },
   });
   if (!cert) { res.status(404).json({ error: 'Certificate not found' }); return; }
   if (!cert.certPem || !cert.keyPem) {
@@ -565,9 +589,9 @@ adminCertificatesRouter.post('/:id/activate-protocol', async (req: Request, res:
     return;
   }
 
-  await applyProtocolCert(id, cert.certPem, cert.keyPem);
+  await applyProtocolCert(id, cert.certPem, cert.keyPem, cert.domains);
 
-  log.info({ id, name: cert.name }, 'Certificate activated for mail protocols (SMTP/IMAP/POP3)');
+  log.info({ id, name: cert.name, domains: cert.domains }, 'Certificate activated for mail protocols (SMTP/IMAP/POP3)');
   res.json({
     message: 'Certificate activated for SMTP/IMAP/POP3 — servers reloading TLS',
     certId: id,

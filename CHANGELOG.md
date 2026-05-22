@@ -13,6 +13,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.39] — 2026-05-22 — Fix: publicHostname automatisch bei Zertifikat-Aktivierung aktualisieren
+
+### Fixed
+
+- **`applyProtocolCert()` aktualisiert jetzt `publicHostname`** (`routes/admin/certificates.ts`):
+  Beim Aktivieren eines Zertifikats für SMTP/IMAP/POP3 (Server-Symbol) wird
+  `server_settings.publicHostname` auf die primäre Domain des Zertifikats gesetzt.
+  Zuvor zeigte der SMTP-Banner weiterhin den alten Hostnamen (`mail.localhost`) auch
+  wenn ein CA-signiertes Zertifikat für `mail.example.de` aktiviert war.
+
+- **`activate-protocol`-Route** selektiert jetzt auch `domains` und übergibt sie an
+  `applyProtocolCert()` — zuvor fehlte dieses Feld im `select`.
+
+- **ACME Auto-Aktivierung** (`runAcmeIssuance`): Wenn ein Let's Encrypt-Zertifikat
+  erfolgreich ausgestellt wurde und `services` SMTP/IMAP/POP3 enthält, wird
+  `applyProtocolCert()` automatisch nach der Ausstellung aufgerufen. Bisher musste
+  der Admin nach jeder ACME-Ausstellung manuell das Server-Symbol klicken.
+
+---
+
 ## [3.17.38] — 2026-05-22 — Auto-Self-Signed-Cert bei Setup + Spam-Filter aktivierbar/deaktivierbar
 
 ### Added
