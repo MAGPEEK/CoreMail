@@ -1,6 +1,6 @@
 {
   "name": "@coremail/imap-server",
-  "version": "3.17.38",
+  "version": "3.17.39",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
