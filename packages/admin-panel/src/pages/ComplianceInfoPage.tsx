@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.31';
+const VERSION        = '3.17.32';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.32', date: '2026-05-22', title: 'Fix: TLS-Cert Logik — ein Cert für alle Protokolle (HTTPS + SMTP/IMAP/POP3), 503 5.5.1 behoben',
+    notes: 'Root cause des SMTP-503-Fehlers: Das Let\'s Encrypt-Zertifikat für mail.stefanwuestner.de wurde mit activate-https NUR für den HTTPS-Proxy (Port 443/MWA/BCP) aktiviert. SMTP/IMAP/POP3 nutzten weiterhin das alte selbstsignierte Zertifikat in ServerSettings.tlsCert/tlsKey. Externe MTAs (Google, Outlook) lehnten den STARTTLS-Handshake beim self-signed Cert ab → 503 5.5.1 Bad sequence of commands. Fix: activate-https schreibt das Cert jetzt atomar AUCH in ServerSettings.tlsCert/tlsKey + CHANNEL_SETTINGS_RELOAD → alle Mail-Protokoll-Server laden Cert sofort neu. Neu: isActiveProtocol-Feld im Certificate-Modell zeigt welches Cert für SMTP/IMAP/POP3 aktiv ist. Neuer Endpunkt POST /:id/activate-protocol für Setups mit externem Reverse Proxy. Server-Icon im BCP für Protokoll-only-Aktivierung. MWA+BCP Services-Pflicht für Lock-Button entfernt (war willkürlich).' },
   { version: '3.17.31', date: '2026-05-22', title: 'DNS-Prüfung: Echte Multi-Resolver-Verifikation (Google/Cloudflare/Quad9), PTR/FCrDNS, SPF-Mehrfach-Record-Erkennung',
     notes: 'Die DNS-Eintragsüberprüfung im BCP (SMTP & Routing → DNS-Einträge) befragt jetzt direkt die öffentlichen Resolver Google (8.8.8.8), Cloudflare (1.1.1.1) und Quad9 (9.9.9.9) statt des Docker-internen DNS (127.0.0.11). Der Docker-Resolver liefert gecachte/veraltete Ergebnisse und unterscheidet sich von dem, was externe MTAs (Gmail, Outlook) sehen — das führte dazu, dass MX-Einträge als gesetzt galten, obwohl sie noch nicht propagiert waren. Neu: (1) Multi-Resolver parallel prüfen via dns.promises.Resolver.setServers(). (2) Per-Resolver farbige Badges (grün/rot) mit Latenzanzeige. (3) Konsistenz-Warnung wenn Resolver unterschiedliche Werte melden. (4) PTR/FCrDNS-Check (A→PTR→Rück-A) auf echten Resolvern. (5) SPF-Mehrfach-Record-Erkennung: RFC 7208 §3.2 erlaubt genau einen SPF-TXT-Record — zwei Records → permerror bei allen Empfängern → explizite rote Warnung im BCP. (6) Prüfzeitpunkt-Anzeige und Info-Banner mit verwendeten Resolvern.' },
   { version: '3.17.30', date: '2026-05-22', title: 'Outbound E-Mail-Pipeline komplett neu (Google-konform): strukturierter Queue-Job, nodemailer Transport-DKIM, MinIO-Anhänge',
