@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.32';
+const VERSION        = '3.17.33';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.33', date: '2026-05-22', title: 'Fix: Redis-Kanal CHANNEL_SETTINGS_RELOAD in Startup-Migration (Protokoll-TLS geladen)',
+    notes: 'Die Startup-Migration migrateCertProtocolBinding() in api-gateway/server.ts verwendete fälschlicherweise den hartcodierten Channel-Namen \'coremail:settings:reload\' statt der korrekten Konstante CHANNEL_SETTINGS_RELOAD (\'settings:reload\') aus @coremail/core. SMTP/IMAP/POP3-Server abonnieren nur den korrekten Kanal — der falsche Name führte dazu, dass nach einem Container-Start (Upgrade von <3.17.32) die Migration zwar die DB korrekt befüllte (isActiveProtocol gesetzt, ServerSettings.tlsCert geschrieben), aber kein RELOAD-Signal bei den Protokoll-Servern ankam. Die Protokoll-Server liefen weiter mit dem alten selbstsignierten Zertifikat bis zum nächsten manuellen Neustart. Fix: CHANNEL_SETTINGS_RELOAD direkt aus @coremail/core importieren und in der Migration verwenden.' },
   { version: '3.17.32', date: '2026-05-22', title: 'Fix: TLS-Cert Logik — ein Cert für alle Protokolle (HTTPS + SMTP/IMAP/POP3), 503 5.5.1 behoben',
     notes: 'Root cause des SMTP-503-Fehlers: Das Let\'s Encrypt-Zertifikat für mail.stefanwuestner.de wurde mit activate-https NUR für den HTTPS-Proxy (Port 443/MWA/BCP) aktiviert. SMTP/IMAP/POP3 nutzten weiterhin das alte selbstsignierte Zertifikat in ServerSettings.tlsCert/tlsKey. Externe MTAs (Google, Outlook) lehnten den STARTTLS-Handshake beim self-signed Cert ab → 503 5.5.1 Bad sequence of commands. Fix: activate-https schreibt das Cert jetzt atomar AUCH in ServerSettings.tlsCert/tlsKey + CHANNEL_SETTINGS_RELOAD → alle Mail-Protokoll-Server laden Cert sofort neu. Neu: isActiveProtocol-Feld im Certificate-Modell zeigt welches Cert für SMTP/IMAP/POP3 aktiv ist. Neuer Endpunkt POST /:id/activate-protocol für Setups mit externem Reverse Proxy. Server-Icon im BCP für Protokoll-only-Aktivierung. MWA+BCP Services-Pflicht für Lock-Button entfernt (war willkürlich).' },
   { version: '3.17.31', date: '2026-05-22', title: 'DNS-Prüfung: Echte Multi-Resolver-Verifikation (Google/Cloudflare/Quad9), PTR/FCrDNS, SPF-Mehrfach-Record-Erkennung',

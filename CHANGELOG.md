@@ -13,6 +13,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.33] — 2026-05-22 — Fix: Redis-Kanal in Startup-Migration (CHANNEL_SETTINGS_RELOAD)
+
+### Fixed
+
+- **🔧 Startup-Migration `migrateCertProtocolBinding()`**: Falsche Redis-Channel-
+  Bezeichnung `'coremail:settings:reload'` wurde durch die korrekte Konstante
+  `CHANNEL_SETTINGS_RELOAD` (`'settings:reload'`) aus `@coremail/core` ersetzt.
+  Ohne diesen Fix wurden SMTP/IMAP/POP3-Server beim ersten Container-Start nach
+  dem Upgrade nicht über das neue TLS-Zertifikat informiert — die Protokoll-Server
+  liefen trotz korrekter DB-Einträge weiter mit dem alten selbstsignierten Cert.
+
+---
+
 ## [3.17.32] — 2026-05-22 — Fix: TLS-Cert Logik — ein Cert für alle Protokolle (SMTP 503 behoben)
 
 ### Fixed
