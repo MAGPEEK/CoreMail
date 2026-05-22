@@ -13,6 +13,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.44] — 2026-05-22 — Fix: eDiscovery-Suchmaske verliert Fokus nach jedem Buchstaben
+
+### Fixed
+
+- **BCP eDiscovery — Eingabefeld-Fokus-Bug** (`EDiscoveryPage.tsx`): Die interne
+  `Field`-Hilfskomponente war innerhalb der `CreateSearchModal`-Funktion definiert.
+  React erzeugt bei jeder Render-Phase eine neue Komponenten-Referenz → Input wird
+  unmounted/remounted → Fokus geht verloren → nach jedem eingetippten Zeichen musste
+  erneut ins Feld geklickt werden.
+
+  Fix: `Field` auf Modul-Ebene als `SearchField` ausgelagert (explizite `value` +
+  `onChange`-Props statt `k: keyof typeof form`). Alle 8 Verwendungen im Modal
+  aktualisiert. React behält jetzt die DOM-Referenz über Re-Renders hinweg.
+
+---
+
 ## [3.17.43] — 2026-05-22 — Fix: Audit-Log schreibt keine Einträge
 
 ### Fixed

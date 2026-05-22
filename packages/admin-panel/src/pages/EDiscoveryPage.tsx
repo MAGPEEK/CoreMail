@@ -166,6 +166,31 @@ function MailboxPicker({
   );
 }
 
+// ─── SearchField (module-level — MUST NOT be defined inside another component) ─
+// Defining a component inside a render function creates a new type on every
+// render → React unmounts + remounts the input → focus lost after each keystroke.
+
+function SearchField({ label, value, onChange, placeholder, type = 'text' }: {
+  label:        string;
+  value:        string;
+  onChange:     (v: string) => void;
+  placeholder?: string;
+  type?:        string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
 // ─── Create / Edit Search Modal ───────────────────────────────────────────────
 
 function CreateSearchModal({ onClose, mailboxes }: { onClose: () => void; mailboxes: MailboxOption[] }) {
@@ -203,17 +228,6 @@ function CreateSearchModal({ onClose, mailboxes }: { onClose: () => void; mailbo
     onError: (e: Error) => toast.error(e.message),
   });
 
-  function Field({ label, k, placeholder, type = 'text' }: { label: string; k: keyof typeof form; placeholder?: string; type?: string }) {
-    return (
-      <div>
-        <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
-        <input type={type} value={form[k]} onChange={(e) => set(k, e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-          placeholder={placeholder} />
-      </div>
-    );
-  }
-
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-xl max-h-[90vh] flex flex-col">
@@ -222,8 +236,8 @@ function CreateSearchModal({ onClose, mailboxes }: { onClose: () => void; mailbo
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
-          <Field label="Name *" k="name" placeholder="Projekt Gamma Untersuchung" />
-          <Field label="Beschreibung" k="description" placeholder="Optionale Beschreibung" />
+          <SearchField label="Name *" value={form.name} onChange={(v) => set('name', v)} placeholder="Projekt Gamma Untersuchung" />
+          <SearchField label="Beschreibung" value={form.description} onChange={(v) => set('description', v)} placeholder="Optionale Beschreibung" />
 
           <div className="border-t border-gray-100 pt-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Postfächer</p>
@@ -234,13 +248,13 @@ function CreateSearchModal({ onClose, mailboxes }: { onClose: () => void; mailbo
           <div className="border-t border-gray-100 pt-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Suchkriterien</p>
           </div>
-          <Field label="Stichwörter (Betreff & Body)" k="keywords" placeholder="Vertrag, Kündigung, …" />
-          <Field label="Betreff enthält" k="subjectContains" placeholder="Re: Vertrag" />
-          <Field label="Absender (kommagetrennt)" k="senderAddresses" placeholder="user@domain.com, …" />
-          <Field label="Empfänger — To/Cc/Bcc (kommagetrennt)" k="recipientAddresses" placeholder="user@domain.com, …" />
+          <SearchField label="Stichwörter (Betreff & Body)" value={form.keywords} onChange={(v) => set('keywords', v)} placeholder="Vertrag, Kündigung, …" />
+          <SearchField label="Betreff enthält" value={form.subjectContains} onChange={(v) => set('subjectContains', v)} placeholder="Re: Vertrag" />
+          <SearchField label="Absender (kommagetrennt)" value={form.senderAddresses} onChange={(v) => set('senderAddresses', v)} placeholder="user@domain.com, …" />
+          <SearchField label="Empfänger — To/Cc/Bcc (kommagetrennt)" value={form.recipientAddresses} onChange={(v) => set('recipientAddresses', v)} placeholder="user@domain.com, …" />
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Datum von" k="dateFrom" type="date" />
-            <Field label="Datum bis" k="dateTo" type="date" />
+            <SearchField label="Datum von" value={form.dateFrom} onChange={(v) => set('dateFrom', v)} type="date" />
+            <SearchField label="Datum bis" value={form.dateTo} onChange={(v) => set('dateTo', v)} type="date" />
           </div>
 
           <div>
