@@ -13,6 +13,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.34] — 2026-05-22 — DNS-Check: Lokaler Resolver, kein Resolver-Banner/Badges/Details
+
+### Changed
+
+- **DNS-Eintragscheck** (`api-gateway` → `routes/admin/domains.ts`): Verwendet jetzt den
+  **lokalen DNS-Resolver** des Servers (`dns.promises`) statt drei externen Resolvern
+  (Google/Cloudflare/Quad9). API-Response vereinfacht: nur noch `ok`, `found`, `warning?`
+  pro Eintrag — kein `resolvers[]`, `consistent`, `checkedAt`, `resolversUsed` mehr.
+
+### Removed
+
+- **Externe-Resolver-Banner** (BCP → SMTP & Routing → DNS-Einträge): Der blaue
+  Info-Banner „Externe Resolver: Google (8.8.8.8) Cloudflare (1.1.1.1) Quad9 (9.9.9.9)"
+  wurde entfernt.
+
+- **Per-Resolver-Badges**: Die farbigen Google/Cloudflare/Quad9-Badges mit Latenzanzeige
+  unter jedem DNS-Eintrag wurden entfernt.
+
+- **Aufklappbare Resolver-Detailansicht**: Der „▼ Resolver-Details anzeigen"-Link mit
+  IP, Latenz und gefundenem Wert pro Resolver wurde entfernt.
+
+- **Inkonsistenz-Warnung**: Der orangene „Resolver-Inkonsistenz"-Hinweis wurde entfernt
+  (nicht mehr relevant ohne Multi-Resolver-Abfrage).
+
+- **„Geprüft um HH:MM:SS"-Zeitstempel** im DNS-Header entfernt (keine `checkedAt`-
+  Information mehr in der API-Antwort).
+
+---
+
 ## [3.17.33] — 2026-05-22 — Fix: Redis-Kanal in Startup-Migration (CHANNEL_SETTINGS_RELOAD)
 
 ### Fixed

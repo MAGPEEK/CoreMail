@@ -234,13 +234,7 @@ adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Respon
 });
 
 // ── GET /:id/dns-check ────────────────────────────────────────────────────────
-// Prüft alle relevanten DNS-Einträge über drei öffentliche Resolver gleichzeitig.
-//
-// WICHTIG: Wir benutzen NICHT dns.promises (System-DNS) — im Docker-Container
-// würde das den internen Resolver (127.0.0.11) nutzen, der gecachte oder
-// abweichende Ergebnisse liefert.  Stattdessen werden drei externe Resolver
-// direkt befragt: Google 8.8.8.8, Cloudflare 1.1.1.1, Quad9 9.9.9.9.
-// Das liefert das selbe Bild wie der DNS-Anbieter des Empfängers sieht.
+// Prüft alle relevanten DNS-Einträge über den lokalen DNS-Resolver des Servers.
 adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
 
@@ -251,8 +245,8 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   if (!rawDomain) { res.status(404).json({ error: 'Domain not found' }); return; }
   const domain = rawDomain;
 
-  const { createPublicKey }  = await import('crypto');
-  const { promises: dnsP }   = await import('dns');
+  const { createPublicKey } = await import('crypto');
+  const { promises: dns }   = await import('dns');
 
   const hostname   = settings?.publicHostname ?? 'mail.local';
   const domainName = domain.name;
@@ -267,125 +261,61 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     dkimExpected = `v=DKIM1; k=rsa; p=${pubKeyB64}`;
   } catch { dkimExpected = ''; }
 
-  // ── Drei öffentliche Resolver ─────────────────────────────────────────────
-  const RESOLVERS = [
-    { name: 'Google',     ip: '8.8.8.8' },
-    { name: 'Cloudflare', ip: '1.1.1.1' },
-    { name: 'Quad9',      ip: '9.9.9.9' },
-  ] as const;
+  interface DnsEntry { ok: boolean; found: string | null; warning?: string }
 
-  interface ResolverResult {
-    resolver:  string;
-    ip:        string;
-    ok:        boolean;
-    found:     string | null;
-    latencyMs: number;
-    error?:    string;
-  }
-  interface CheckSummary {
-    ok:         boolean;
-    found:      string | null;
-    resolvers:  ResolverResult[];
-    consistent: boolean;
-    warning?:   string;
-  }
-
-  type ResolverFn = (r: InstanceType<typeof dnsP.Resolver>) => Promise<string | null>;
-
-  /**
-   * Fragt alle drei Resolver parallel an und liefert:
-   *  - ok:         mind. ein Resolver hat den Eintrag gefunden
-   *  - found:      Wert vom ersten erfolgreichen Resolver
-   *  - resolvers:  Ergebnis pro Resolver (für die UI)
-   *  - consistent: alle Resolver sind einig
-   */
-  async function checkWithResolvers(fn: ResolverFn): Promise<CheckSummary> {
-    const results: ResolverResult[] = await Promise.all(
-      RESOLVERS.map(async (r) => {
-        const resolver = new dnsP.Resolver({ timeout: 5000, tries: 1 });
-        resolver.setServers([r.ip]);
-        const t0 = Date.now();
-        try {
-          const found = await fn(resolver);
-          return { resolver: r.name, ip: r.ip, ok: found !== null, found, latencyMs: Date.now() - t0 };
-        } catch (err) {
-          return { resolver: r.name, ip: r.ip, ok: false, found: null, latencyMs: Date.now() - t0, error: (err as Error).message };
-        }
-      })
-    );
-
-    const ok       = results.some(r => r.ok);
-    const found    = results.find(r => r.ok)?.found ?? null;
-    const okVals   = results.filter(r => r.ok).map(r => r.found);
-    const consistent = okVals.length === 0 || okVals.every(v => v === okVals[0]);
-
-    return { ok, found, resolvers: results, consistent };
+  async function check(fn: () => Promise<string | null>): Promise<DnsEntry> {
+    try {
+      const found = await fn();
+      return { ok: found !== null, found };
+    } catch {
+      return { ok: false, found: null };
+    }
   }
 
   // ── MX ──────────────────────────────────────────────────────────────────────
-  const mx = await checkWithResolvers(async (r) => {
-    const recs = await r.resolveMx(domainName);
+  const mx = await check(async () => {
+    const recs = await dns.resolveMx(domainName);
     if (!recs.length) return null;
-    return recs.sort((a, b) => a.priority - b.priority).map(rx => `${rx.priority} ${rx.exchange}`).join(', ');
+    return recs.sort((a, b) => a.priority - b.priority).map(r => `${r.priority} ${r.exchange}`).join(', ');
   });
 
   // ── SPF — mit Mehrfach-Record-Erkennung (RFC 7208 §3.2 Verletzung) ─────────
-  const spfRaw = await checkWithResolvers(async (r) => {
-    const recs = await r.resolveTxt(domainName);
+  const spfRaw = await check(async () => {
+    const recs = await dns.resolveTxt(domainName);
     const flat = recs.map(c => c.join(''));
     const spfs = flat.filter(s => s.startsWith('v=spf1'));
     if (spfs.length === 0) return null;
     if (spfs.length === 1) return spfs[0]!;
-    // Mehrere SPF-Records: RFC-Verletzung → Sondermarkierung
     return `__MULTI__${spfs.join('\n')}`;
   });
-
-  // SPF nachkorrigieren: Mehrfach-Record → ok=false + Warnung
   const spfIsMulti = spfRaw.ok && (spfRaw.found ?? '').startsWith('__MULTI__');
-  const spf: CheckSummary = spfIsMulti
-    ? {
-        ok:        false,
-        found:     (spfRaw.found ?? '').replace('__MULTI__', ''),
-        warning:   'RFC 7208 §3.2 Verletzung: Mehrere SPF-TXT-Records (→ permerror bei allen Empfängern). Nur einen einzigen SPF-Record behalten!',
-        consistent: spfRaw.consistent,
-        resolvers: spfRaw.resolvers.map((res) => {
-          const isMultiRes = (res.found ?? '').startsWith('__MULTI__');
-          const cleanFound = (res.found ?? '').replace('__MULTI__', '');
-          return {
-            resolver:  res.resolver,
-            ip:        res.ip,
-            ok:        false,
-            found:     cleanFound || null,
-            latencyMs: res.latencyMs,
-            ...(isMultiRes ? { error: 'Mehrere SPF-Records' } : res.error !== undefined ? { error: res.error } : {}),
-          } satisfies ResolverResult;
-        }),
-      }
+  const spf: DnsEntry = spfIsMulti
+    ? { ok: false, found: (spfRaw.found ?? '').replace('__MULTI__', ''),
+        warning: 'RFC 7208 §3.2 Verletzung: Mehrere SPF-TXT-Records (→ permerror bei allen Empfängern). Nur einen einzigen SPF-Record behalten!' }
     : spfRaw;
 
   // ── DKIM ────────────────────────────────────────────────────────────────────
-  const dkim = await checkWithResolvers(async (r) => {
-    const recs = await r.resolveTxt(dkimName);
+  const dkim = await check(async () => {
+    const recs = await dns.resolveTxt(dkimName);
     const flat = recs.map(c => c.join(''));
     return flat.find(s => s.startsWith('v=DKIM1')) ?? null;
   });
 
   // ── DMARC ───────────────────────────────────────────────────────────────────
-  const dmarc = await checkWithResolvers(async (r) => {
-    const recs = await r.resolveTxt(`_dmarc.${domainName}`);
+  const dmarc = await check(async () => {
+    const recs = await dns.resolveTxt(`_dmarc.${domainName}`);
     const flat = recs.map(c => c.join(''));
     return flat.find(s => s.startsWith('v=DMARC1')) ?? null;
   });
 
   // ── Autodiscover ─────────────────────────────────────────────────────────────
-  const autodiscover = await checkWithResolvers(async (r) => {
+  const autodiscover = await check(async () => {
     try {
-      const cnames = await r.resolveCname(`autodiscover.${domainName}`);
+      const cnames = await dns.resolveCname(`autodiscover.${domainName}`);
       return cnames[0]?.replace(/\.$/, '') ?? null;
     } catch {
-      // Manche Domains setzen einen A-Record statt CNAME — auch das ist gültig
       try {
-        const as = await r.resolve4(`autodiscover.${domainName}`);
+        const as = await dns.resolve4(`autodiscover.${domainName}`);
         return as[0] ?? null;
       } catch { return null; }
     }
@@ -393,66 +323,32 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
 
   // ── PTR / FCrDNS ─────────────────────────────────────────────────────────────
   // Forward-confirmed reverse DNS: hostname → IP(A) → PTR → muss auf hostname zeigen.
-  // Das ist ein Muss für Google, Microsoft und die meisten Anti-Spam-Systeme.
-  const ptrResults: ResolverResult[] = await Promise.all(
-    RESOLVERS.map(async (r) => {
-      const resolver = new dnsP.Resolver({ timeout: 5000, tries: 1 });
-      resolver.setServers([r.ip]);
-      const t0 = Date.now();
-      try {
-        // 1. A-Record des Hostnamens
-        const ips = await resolver.resolve4(hostname);
-        const ip  = ips[0];
-        if (!ip) return { resolver: r.name, ip: r.ip, ok: false, found: null, latencyMs: Date.now() - t0, error: `Kein A-Record für ${hostname}` };
-        // 2. Reverse-Lookup (PTR)
-        const ptrs    = await resolver.reverse(ip);
-        const cleaned = ptrs.map(p => p.replace(/\.$/, ''));
-        const matched = cleaned.find(p => p === hostname || hostname.endsWith(`.${p}`));
-        const found   = `${ip} → ${cleaned.join(', ')}`;
-        return { resolver: r.name, ip: r.ip, ok: !!matched, found, latencyMs: Date.now() - t0 };
-      } catch (err) {
-        return { resolver: r.name, ip: r.ip, ok: false, found: null, latencyMs: Date.now() - t0, error: (err as Error).message };
-      }
-    })
-  );
-
-  const ptrOk         = ptrResults.some(r => r.ok);
-  const ptrFound      = ptrResults.find(r => r.found)?.found ?? null;
-  const ptrOkVals     = ptrResults.filter(r => r.ok).map(r => r.found);
-  const ptrConsistent = ptrOkVals.length === 0 || ptrOkVals.every(v => v === ptrOkVals[0]);
-  const ptr: CheckSummary = {
-    ok: ptrOk, found: ptrFound, resolvers: ptrResults, consistent: ptrConsistent,
-    ...(!ptrOk ? { warning: 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers setzen.' } : {}),
-  };
+  const ptr = await check(async () => {
+    const ips  = await dns.resolve4(hostname);
+    const ip   = ips[0];
+    if (!ip) return null;
+    const ptrs    = await dns.reverse(ip);
+    const cleaned = ptrs.map(p => p.replace(/\.$/, ''));
+    const matched = cleaned.find(p => p === hostname || hostname.endsWith(`.${p}`));
+    if (!matched) throw new Error(`PTR ${cleaned.join(', ')} ≠ ${hostname}`);
+    return `${ip} → ${cleaned.join(', ')}`;
+  });
+  if (!ptr.ok) ptr.warning = 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers setzen.';
 
   // ── Antwort ─────────────────────────────────────────────────────────────────
   const spfExpected   = `v=spf1 ip4:<ServerIP> -all  (oder a:${hostname} mx ~all)`;
   const dmarcExpected = `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domainName}; adkim=r; aspf=r`;
 
   res.json({
-    domain:    domainName,
+    domain:   domainName,
     hostname,
-    checkedAt: new Date().toISOString(),
-    resolversUsed: RESOLVERS.map(r => ({ name: r.name, ip: r.ip })),
     records: {
-      mx: {
-        type: 'MX', name: domainName, expected: `10 ${hostname}`, ...mx,
-      },
-      spf: {
-        type: 'TXT', name: domainName, expected: spfExpected, ...spf,
-      },
-      dkim: {
-        type: 'TXT', name: dkimName, expected: dkimExpected, ...dkim,
-      },
-      dmarc: {
-        type: 'TXT', name: `_dmarc.${domainName}`, expected: dmarcExpected, ...dmarc,
-      },
-      autodiscover: {
-        type: 'CNAME', name: `autodiscover.${domainName}`, expected: hostname, ...autodiscover,
-      },
-      ptr: {
-        type: 'PTR', name: hostname, expected: hostname, ...ptr,
-      },
+      mx:           { type: 'MX',    name: domainName,                       expected: `10 ${hostname}`, ...mx },
+      spf:          { type: 'TXT',   name: domainName,                       expected: spfExpected,      ...spf },
+      dkim:         { type: 'TXT',   name: dkimName,                         expected: dkimExpected,     ...dkim },
+      dmarc:        { type: 'TXT',   name: `_dmarc.${domainName}`,           expected: dmarcExpected,    ...dmarc },
+      autodiscover: { type: 'CNAME', name: `autodiscover.${domainName}`,     expected: hostname,         ...autodiscover },
+      ptr:          { type: 'PTR',   name: hostname,                         expected: hostname,         ...ptr },
     },
   });
 });
