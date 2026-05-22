@@ -3,7 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { connectDatabase, prisma } from '@coremail/storage';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
 import {
@@ -379,7 +379,61 @@ async function start() {
     log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
   );
 
+  // ── Einmalige Migration v3.17.32: isActiveProtocol sync ──────────────────
+  // Wenn ein Cert isActiveHttps: true hat aber isActiveProtocol: false ist
+  // (Upgrade von < 3.17.32), wird das Cert automatisch in ServerSettings
+  // geschrieben → SMTP/IMAP/POP3 nutzen ab sofort das CA-signierte Cert.
+  void migrateCertProtocolBinding().catch(err =>
+    log.warn({ err }, 'Protocol cert migration failed — check certificates manually'),
+  );
+
   // Kein Auto-LE — Admin fordert Let's Encrypt manuell via BCP → SSL/TLS an.
+}
+
+async function migrateCertProtocolBinding(): Promise<void> {
+  try {
+    // Prüfen ob ein HTTPS-aktives Cert noch nicht als Protocol-Cert markiert ist
+    const httpsCert = await prisma.certificate.findFirst({
+      where: { isActiveHttps: true, isActiveProtocol: false },
+      select: { id: true, certPem: true, keyPem: true, name: true, domains: true },
+    });
+    if (!httpsCert?.certPem || !httpsCert?.keyPem) return;
+
+    // Prüfen ob ServerSettings schon ein CA-signiertes Cert hat
+    const settings = await prisma.serverSettings.findUnique({
+      where: { id: 'singleton' },
+      select: { tlsCert: true },
+    });
+
+    // Migrieren nur wenn ServerSettings kein Cert hat ODER ein self-signed Cert
+    let needsMigration = !settings?.tlsCert;
+    if (!needsMigration && settings?.tlsCert) {
+      try {
+        const { X509Certificate } = await import('crypto');
+        const x = new X509Certificate(settings.tlsCert);
+        needsMigration = x.issuer === x.subject; // self-signed
+      } catch { needsMigration = true; }
+    }
+
+    if (!needsMigration) return;
+
+    // CA-signiertes Cert in ServerSettings schreiben + isActiveProtocol setzen
+    await prisma.serverSettings.upsert({
+      where:  { id: 'singleton' },
+      create: { id: 'singleton', tlsCert: httpsCert.certPem, tlsKey: httpsCert.keyPem },
+      update: { tlsCert: httpsCert.certPem, tlsKey: httpsCert.keyPem },
+    });
+    await prisma.$transaction([
+      prisma.certificate.updateMany({ data: { isActiveProtocol: false } }),
+      prisma.certificate.update({ where: { id: httpsCert.id }, data: { isActiveProtocol: true } }),
+    ]);
+    const redis = getRedisClient();
+    await redis.publish(CHANNEL_SETTINGS_RELOAD, httpsCert.id);
+    log.info({ certId: httpsCert.id, name: httpsCert.name, domains: httpsCert.domains },
+      'Migration v3.17.32: HTTPS cert applied to SMTP/IMAP/POP3 protocol TLS');
+  } catch (err) {
+    log.error({ err }, 'Migration v3.17.32: protocol cert binding failed');
+  }
 }
 
 start().catch((err) => { log.error({ err }, 'Startup failed'); process.exit(1); });
