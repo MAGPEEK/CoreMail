@@ -70,3 +70,12 @@ export function quarantineKey(quarantineId: string): string {
 export function backupKey(jobId: string, format: string): string {
   return `backups/${jobId}.${format}`;
 }
+
+/**
+ * MinIO-Pfad für Anhänge eines ausgehenden Queue-Jobs.
+ * Diese Objekte werden beim Aufbau der MIME-Nachricht im Worker heruntergeladen
+ * und nach erfolgreicher Zustellung bereinigt.
+ */
+export function outboundAttachKey(jobId: string, filename: string): string {
+  return `outbound-queue/${jobId}/${filename}`;
+}

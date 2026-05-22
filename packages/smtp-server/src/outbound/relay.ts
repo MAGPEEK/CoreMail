@@ -1,81 +1,65 @@
 import nodemailer from 'nodemailer';
-import { dkimSign } from 'mailauth/lib/dkim/sign.js';
 import { promises as dns } from 'dns';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('smtp:relay');
 
-// ── RFC 5322 Compliance Guard ─────────────────────────────────────────────────
+// ── Google-RFC-5322-Compliance ────────────────────────────────────────────────
 //
-// Stellt sicher, dass ein ausgehender Nachrichten-Buffer die RFC 5322 Pflicht-
-// Header enthält (From, Message-ID, Date).  Fehlen sie, werden sie eingefügt,
-// damit strenge MTAs (z. B. Gmail) die Nachricht nicht mit
-//   "550 5.7.1 'From' header is missing"
-// ablehnen.
+// Ausgehende Nachrichten müssen für Gmail-Zustellung folgende Bedingungen
+// erfüllen (https://support.google.com/a/answer/81126):
 //
-// Der Buffer kommt vom api-gateway (buildRawMime/nodemailer streamTransport)
-// oder vom smtp-server (Submission-Pfad).  In beiden Fällen sollten die Header
-// vorhanden sein — diese Funktion ist eine Sicherheitsnetz.
+//  ✓  From:        Genau eine RFC-5322-konforme Adresse
+//  ✓  Message-ID:  <uuid@domain> — jede Nachricht eindeutig
+//  ✓  Date:        RFC-5322-konformes Datum
+//  ✓  MIME-Version: 1.0
+//  ✓  SPF:         IP 84.247.191.198 muss im SPF-Record stehen
+//  ✓  DKIM:        Mindestens 1024-Bit-Schlüssel (2048 empfohlen)
+//  ✓  DMARC:       p=quarantine oder p=reject empfohlen
+//
+// DKIM-Signierung erfolgt über nodemailer's eingebauten Mechanismus im Transport
+// (Option `dkim` in createTransport) — kein manuelles Voranstellen von Headern.
+// Dies garantiert, dass die Signatur korrekt ist und nicht durch spätere
+// Header-Transformationen ungültig wird.
 
-function ensureRfc5322Headers(
-  buffer: Buffer,
-  senderAddr: string,
-  senderDomain: string,
-): Buffer {
-  // Header-Block endet bei CRLFCRLF (\r\n\r\n)
-  const sep = buffer.indexOf('\r\n\r\n');
-  if (sep === -1) {
-    // Malformierte Nachricht: komplett ohne Trenner — alle Pflicht-Header voranstellen
-    log.warn({ size: buffer.length }, 'RFC 5322: kein Header-Body-Trenner gefunden — Header werden vorangestellt');
-    const injected =
-      `From: <${senderAddr}>\r\n` +
-      `Message-ID: <${crypto.randomUUID()}@${senderDomain}>\r\n` +
-      `Date: ${new Date().toUTCString().replace('GMT', '+0000')}\r\n`;
-    return Buffer.concat([Buffer.from(injected, 'utf8'), Buffer.from('\r\n', 'utf8'), buffer]);
-  }
-
-  const headerText = buffer.subarray(0, sep).toString('utf8');
-  const toInject: string[] = [];
-
-  if (!/^from\s*:/im.test(headerText)) {
-    toInject.push(`From: <${senderAddr}>`);
-    log.warn({ senderAddr }, 'RFC 5322: From-Header fehlt — wird eingefügt');
-  }
-  if (!/^message-id\s*:/im.test(headerText)) {
-    toInject.push(`Message-ID: <${crypto.randomUUID()}@${senderDomain}>`);
-    log.warn({ senderDomain }, 'RFC 5322: Message-ID-Header fehlt — wird eingefügt');
-  }
-  if (!/^date\s*:/im.test(headerText)) {
-    toInject.push(`Date: ${new Date().toUTCString().replace('GMT', '+0000')}`);
-    log.warn({}, 'RFC 5322: Date-Header fehlt — wird eingefügt');
-  }
-
-  if (toInject.length === 0) return buffer; // Alle Pflicht-Header vorhanden ✓
-
-  // Fehlende Header VOR dem bestehenden Header-Block einfügen
-  const prefix = Buffer.from(toInject.join('\r\n') + '\r\n', 'utf8');
-  return Buffer.concat([prefix, buffer]);
-}
+// ── DKIM-Konfiguration ────────────────────────────────────────────────────────
 
 export interface DkimOptions {
-  dkimDomain?: string;
-  dkimSelector?: string;
-  dkimPrivateKey?: string;
+  dkimDomain?:      string;
+  dkimSelector?:    string;
+  dkimPrivateKey?:  string;
+}
+
+type NmDkim = {
+  domainName:  string;
+  keySelector: string;
+  privateKey:  string;
+};
+
+function buildDkim(opts: DkimOptions): NmDkim | undefined {
+  if (opts.dkimDomain && opts.dkimSelector && opts.dkimPrivateKey) {
+    return {
+      domainName:  opts.dkimDomain,
+      keySelector: opts.dkimSelector,
+      privateKey:  opts.dkimPrivateKey,
+    };
+  }
+  return undefined;
 }
 
 // ── Cached outbound settings ─────────────────────────────────────────────────
-// Wird beim ersten Aufruf geladen und für 60s gecacht — kein DB-Lookup pro Mail.
+// Beim ersten Aufruf aus DB geladen, 60 Sekunden gecacht — kein DB-Lookup pro Mail.
 
 interface OutboundConfig {
   mode:                 'mx' | 'smarthost';
   smarthostHost:        string;
   smarthostPort:        number;
   smarthostTls:         boolean;     // STARTTLS
-  smarthostImplicitTls: boolean;     // Implizites TLS (secure: true)
+  smarthostImplicitTls: boolean;     // Implizites TLS (port 465)
   smarthostUsername:    string;
   smarthostPassword:    string;
-  outboundFilterEnabled: boolean;    // Spam-/Virenfilter vor Weiterleitung
+  outboundFilterEnabled: boolean;
 }
 
 let _cachedConfig: OutboundConfig | null = null;
@@ -98,7 +82,7 @@ async function getOutboundConfig(): Promise<OutboundConfig> {
       outboundFilterEnabled: s?.outboundFilterEnabled ?? true,
     };
   } catch (err) {
-    log.warn({ err }, 'Could not load outbound config — falling back to MX delivery');
+    log.warn({ err }, 'Outbound-Config nicht ladbar — MX-Zustellung als Fallback');
     _cachedConfig = {
       mode: 'mx', smarthostHost: '', smarthostPort: 587,
       smarthostTls: true, smarthostImplicitTls: false,
@@ -106,7 +90,7 @@ async function getOutboundConfig(): Promise<OutboundConfig> {
       outboundFilterEnabled: true,
     };
   }
-  _cacheExpiresAt = now + 60_000; // 60s TTL
+  _cacheExpiresAt = now + 60_000;
   return _cachedConfig;
 }
 
@@ -118,122 +102,122 @@ export function invalidateOutboundConfigCache(): void {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Stellt eine ausgehende Nachricht zu.
+ *
+ * @param rawBuffer  Vollständige RFC-5322-Nachricht als Buffer (inkl. aller Header).
+ *                   Muss From, Message-ID und Date enthalten — api-gateway und SMTP-
+ *                   Submission-Handler stellen dies sicher.
+ * @param from       SMTP-Envelope-Absender (MAIL FROM)
+ * @param to         SMTP-Envelope-Empfänger (RCPT TO) — nur externe Adressen
+ * @param dkim       Optionale DKIM-Schlüsseldaten der Absender-Domain
+ */
 export async function relayMessage(
   rawBuffer: Buffer,
   from: string,
   to: string[],
   dkim: DkimOptions,
 ): Promise<void> {
-  // DKIM-sign the message if key is available
-  let signedBuffer = rawBuffer;
-  if (dkim.dkimDomain && dkim.dkimSelector && dkim.dkimPrivateKey) {
-    try {
-      signedBuffer = await signMessage(rawBuffer, dkim);
-    } catch (err) {
-      log.warn({ err }, 'DKIM signing failed — sending unsigned');
-    }
+  const cfg    = await getOutboundConfig();
+  const dkimCfg = buildDkim(dkim);
+
+  if (dkimCfg) {
+    log.debug({ domain: dkimCfg.domainName, selector: dkimCfg.keySelector },
+      'DKIM-Signierung aktiv');
+  } else {
+    log.warn({ from }, 'Kein DKIM-Schlüssel konfiguriert — Nachricht wird unsigniert versendet');
   }
 
-  // RFC 5322 Compliance: Pflicht-Header sicherstellen (From, Message-ID, Date)
-  // Schützt vor fehlerhaften Upstream-Buffern — Gmail lehnt mit 550 5.7.1 ab wenn From fehlt.
-  const senderDomain = from.split('@')[1] ?? 'mail.localhost';
-  signedBuffer = ensureRfc5322Headers(signedBuffer, from, senderDomain);
-
-  const cfg = await getOutboundConfig();
-
   if (cfg.outboundFilterEnabled) {
-    log.debug({ from, to }, 'Outbound filter enabled — mail was pre-screened by security-filter');
+    log.debug({ from, to }, 'Ausgehender Filter aktiviert — Mail wurde vorab geprüft');
   }
 
   if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
-    await deliverViaSmarthost(signedBuffer, from, to, cfg);
+    await deliverViaSmarthost(rawBuffer, from, to, cfg, dkimCfg);
   } else {
-    // MX direct delivery — group recipients by domain
+    // MX-Direktzustellung — Empfänger nach Domain gruppieren
     const byDomain = groupByDomain(to);
     for (const [domain, recipients] of byDomain) {
-      await deliverToDomain(signedBuffer, from, recipients, domain);
+      await deliverToDomain(rawBuffer, from, recipients, domain, dkimCfg);
     }
   }
 }
 
-// ── Smarthost delivery ────────────────────────────────────────────────────────
+// ── Smarthost-Zustellung ──────────────────────────────────────────────────────
 
 async function deliverViaSmarthost(
   rawBuffer: Buffer,
   from: string,
   to: string[],
   cfg: OutboundConfig,
+  dkimCfg: NmDkim | undefined,
 ): Promise<void> {
   const auth = cfg.smarthostUsername
     ? { user: cfg.smarthostUsername, pass: cfg.smarthostPassword }
     : undefined;
 
+  // nodemailer DKIM-Signierung direkt im Transport konfiguriert.
+  // Bei raw-Modus wird der Buffer als Stream übergeben und durch den
+  // DKIM-Transform geleitet — kein manuelles Voranstellen von Headern.
   const transporter = nodemailer.createTransport({
-    host:               cfg.smarthostHost,
-    port:               cfg.smarthostPort,
-    secure:             cfg.smarthostImplicitTls,   // true = implizites TLS (Port 465)
-    requireTLS:         cfg.smarthostTls && !cfg.smarthostImplicitTls, // STARTTLS erzwingen
-    opportunisticTLS:   cfg.smarthostTls && !cfg.smarthostImplicitTls,
+    host:             cfg.smarthostHost,
+    port:             cfg.smarthostPort,
+    secure:           cfg.smarthostImplicitTls,
+    requireTLS:       cfg.smarthostTls && !cfg.smarthostImplicitTls,
+    opportunisticTLS: cfg.smarthostTls && !cfg.smarthostImplicitTls,
     auth,
-    tls: { rejectUnauthorized: false }, // Self-signed Certs tolerieren
+    tls: { rejectUnauthorized: false },
     connectionTimeout: 30_000,
     greetingTimeout:   15_000,
     socketTimeout:     60_000,
+    ...(dkimCfg ? { dkim: dkimCfg } : {}),
   });
 
   await transporter.sendMail({
     envelope: { from, to },
-    raw:      rawBuffer,
+    raw: rawBuffer,
   });
 
   log.info({
     smarthost: cfg.smarthostHost,
-    port:      cfg.smarthostPort,
-    tls:       cfg.smarthostTls || cfg.smarthostImplicitTls,
+    port: cfg.smarthostPort,
+    tls: cfg.smarthostTls || cfg.smarthostImplicitTls,
+    dkim: !!dkimCfg,
     to,
-  }, 'Delivered via smarthost');
+  }, 'Zugestellt via Smarthost');
 }
 
-// ── MX direct delivery ────────────────────────────────────────────────────────
-
-async function signMessage(rawBuffer: Buffer, dkim: DkimOptions): Promise<Buffer> {
-  const signed = await dkimSign(rawBuffer, {
-    canonicalization: 'relaxed/relaxed',
-    algorithm: 'rsa-sha256',
-    signingDomain: dkim.dkimDomain!,
-    selector: dkim.dkimSelector!,
-    privateKey: dkim.dkimPrivateKey!,
-  });
-
-  // dkimSign returns the DKIM-Signature header — prepend to original message
-  return Buffer.concat([Buffer.from(signed.signatures), rawBuffer]);
-}
+// ── MX-Direktzustellung ───────────────────────────────────────────────────────
 
 async function deliverToDomain(
   rawBuffer: Buffer,
   from: string,
   recipients: string[],
   domain: string,
+  dkimCfg: NmDkim | undefined,
 ): Promise<void> {
   const mxRecords = await resolveMx(domain);
   if (mxRecords.length === 0) {
-    throw new Error(`No MX records found for ${domain}`);
+    throw new Error(`Keine MX-Records für ${domain} gefunden`);
   }
 
-  // Try MX hosts in priority order
   let lastError: Error | null = null;
+
   for (const mx of mxRecords) {
     try {
+      // DKIM wird durch den Transport-eigenen DKIM-Mechanismus signiert.
+      // Der rawBuffer durchläuft den DKIM-Transform-Stream vor der SMTP-Übertragung.
       const transporter = nodemailer.createTransport({
         host: mx.exchange,
         port: 25,
         secure: false,
         requireTLS: false,
-        opportunisticTLS: true,
+        opportunisticTLS: true,   // STARTTLS opportunistisch (Gmail, etc.)
         tls: { rejectUnauthorized: false },
         connectionTimeout: 30_000,
-        greetingTimeout: 15_000,
-        socketTimeout: 60_000,
+        greetingTimeout:   15_000,
+        socketTimeout:     60_000,
+        ...(dkimCfg ? { dkim: dkimCfg } : {}),
       });
 
       await transporter.sendMail({
@@ -241,16 +225,20 @@ async function deliverToDomain(
         raw: rawBuffer,
       });
 
-      log.info({ domain, mx: mx.exchange, to: recipients }, 'Delivered via MX');
+      log.info({ domain, mx: mx.exchange, dkim: !!dkimCfg, to: recipients },
+        'Zugestellt via MX');
       return;
+
     } catch (err) {
       lastError = err as Error;
-      log.warn({ domain, mx: mx.exchange, err }, 'MX delivery failed, trying next');
+      log.warn({ domain, mx: mx.exchange, err }, 'MX-Zustellung fehlgeschlagen — nächster MX');
     }
   }
 
-  throw lastError ?? new Error(`Delivery failed to ${domain}`);
+  throw lastError ?? new Error(`Zustellung fehlgeschlagen für ${domain}`);
 }
+
+// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
 async function resolveMx(domain: string): Promise<{ exchange: string; priority: number }[]> {
   try {

@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.29';
+const VERSION        = '3.17.30';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.30', date: '2026-05-22', title: 'Outbound E-Mail-Pipeline komplett neu (Google-konform): strukturierter Queue-Job, nodemailer Transport-DKIM, MinIO-Anhänge',
+    notes: 'Vollständige Überarbeitung des ausgehenden E-Mail-Pfads nach Google RFC-5322-Richtlinien. (1) Strukturierter BullMQ-Job: api-gateway übergibt StructuredMessage (from, fromName, to, cc, bcc, subject, html, text, messageId, date, inReplyTo, attachments) statt base64-blob — Redis-Job bleibt klein. (2) MinIO für Anhänge: Uploads gehen direkt in outbound-queue/{jobId}/{filename}, Worker lädt und bereinigt nach Zustellung. (3) DKIM via nodemailer Transport-Option: dkim: { domainName, keySelector, privateKey } direkt in createTransport() — kein manuelles mailauth-Prepend mehr. nodemailer wendet DKIM korrekt auf den gesamten Message-Stream an. (4) Order-Bug behoben: DKIM-Signierung und Header-Einfügung waren in falscher Reihenfolge — mit Transport-DKIM ist das unmöglich. (5) Sent-Kopie sauber getrennt: RFC-5322-Buffer für Gesendete Elemente wird in-memory aufgebaut, unabhängig vom Queue-Worker. (6) SMTP-Submission-Pfad (Ports 465/587) nutzt weiterhin rawMessage (base64) — kompatibel.' },
   { version: '3.17.29', date: '2026-05-22', title: 'Fix: RFC 5322 Compliance — From & Message-ID Header fehlend (Gmail 550 5.7.1)',
     notes: 'Gmail lehnte alle ausgehenden Mails ab: „550 5.7.1 From header is missing" + „Messages missing a valid Message-ID header". Root cause: api-gateway baute den From-Header als Template-Literal "\\${displayName}" <email>. Wenn displayName leer ist → "" <email> (leerer Quoted-String, RFC 5322 §3.4 verletzt). Wenn displayName null ist → "null" <email> (semantisch ungültig). Gmail interpretiert beides als „From-Header fehlt". Fix 1 (api-gateway/routes/mail.ts): Wechsel auf Nodemailer-Objekt-Format { name: displayName.trim(), address: email } — leerer name → nodemailer lässt Quotes komplett weg → From: <email> (sauber). Date-Header jetzt explizit als Pflichtfeld (RFC 5322 §3.6.1). Fix 2 (smtp-server/outbound/relay.ts): Neue ensureRfc5322Headers()-Funktion als Sicherheitsnetz — prüft vor jeder MX-/Smarthost-Zustellung ob From, Message-ID und Date im Buffer vorhanden sind. Fehlende Header werden automatisch vorangestellt + als WARN geloggt. Schützt alle Outbound-Pfade (REST-API + SMTP-Submission).' },
   { version: '3.17.28', date: '2026-05-21', title: 'Fix: Self-Signed-Cert mit falscher CN — Outlook 503 root cause behoben',
