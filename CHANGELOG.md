@@ -13,6 +13,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.45] — 2026-05-22 — Feature: Queue-Übersicht kompakt + Verwerfen-Funktion
+
+### Changed
+
+- **BCP Queue-Übersicht komplett überarbeitet** (`QueuesPage.tsx`):
+  - Stats-Karten (5 große Cards) → kompakter horizontaler Strip mit Zahlen + Icon
+  - Verbose Zustandserklärungskarten am Ende entfernt
+  - Verteilungs-Balkendiagramm entfernt (redundant mit Inline-Stats)
+  - **Direkte Queue-Tabelle in der Übersicht**: Zeigt alle ausstehenden Nachrichten
+    (waiting / active / delayed / failed) mit Status-Badge, Absender, Empfänger,
+    Alter und Versuche — kein Navigieren in Unterabschnitte nötig
+
+### Added
+
+- **„Verwerfen"-Schaltfläche direkt in der Übersicht**: Jede ausstehende Nachricht
+  kann mit einem Klick endgültig verworfen werden (Bestätigungsdialog). Für
+  Retry- und Dead-Letter-Einträge zusätzlich „Jetzt wiederholen"-Schaltfläche.
+- **„Verwerfen" in allen Job-Tabellen** jetzt als beschrifteter Button statt Icon,
+  deutlich besser erkennbar.
+- Zeigt bis zu 25 Einträge in der Übersicht; bei mehr → Links zu Unterabschnitten.
+
+### Fixed
+
+- **Zwei Refresh-Buttons auf einen reduziert**: Der Refresh-Button in jedem
+  Unterabschnitt (`JobsSection`) wurde entfernt. Nur noch ein globaler Refresh im
+  Seitenheader — aktualisiert Stats, Jobs und Übersicht gleichzeitig.
+
+---
+
 ## [3.17.44] — 2026-05-22 — Fix: eDiscovery-Suchmaske verliert Fokus nach jedem Buchstaben
 
 ### Fixed

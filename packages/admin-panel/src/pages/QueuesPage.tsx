@@ -101,49 +101,6 @@ function NumInput({
   );
 }
 
-// ─── Sparkline component ──────────────────────────────────────────────────────
-
-function Sparkbar({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-  return (
-    <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-      <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-// ─── Stat Card ────────────────────────────────────────────────────────────────
-
-function StatCard({
-  label, value, icon, color, onClick, active,
-}: {
-  label: string; value: number; icon: React.ReactNode;
-  color: string; onClick?: () => void; active?: boolean;
-}) {
-  const colors: Record<string, { bg: string; text: string; border: string; bar: string }> = {
-    blue:   { bg: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-blue-200',   bar: 'bg-blue-400' },
-    green:  { bg: 'bg-green-50',  text: 'text-green-700',  border: 'border-green-200',  bar: 'bg-green-400' },
-    yellow: { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200', bar: 'bg-yellow-400' },
-    red:    { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200',    bar: 'bg-red-400' },
-    gray:   { bg: 'bg-gray-50',   text: 'text-gray-600',   border: 'border-gray-200',   bar: 'bg-gray-300' },
-  };
-  const c = colors[color] ?? colors.gray;
-  return (
-    <button
-      onClick={onClick}
-      className={`text-left rounded-xl border p-4 transition-all hover:shadow-md w-full ${c.bg} ${c.border} ${
-        active ? 'ring-2 ring-accent ring-offset-1' : ''
-      }`}
-    >
-      <div className="flex items-start justify-between mb-3">
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${c.bg} ${c.text}`}>{icon}</div>
-        <span className={`text-2xl font-bold ${c.text}`}>{value.toLocaleString('de-DE')}</span>
-      </div>
-      <p className="text-xs font-semibold text-gray-600">{label}</p>
-    </button>
-  );
-}
-
 // ─── Job Table ────────────────────────────────────────────────────────────────
 
 function JobTable({
@@ -220,23 +177,25 @@ function JobTable({
                     </td>
                   )}
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                       {showRetry && onRetry && (
                         <button
                           title={t('queue_retry_now')}
-                          onClick={e => { e.stopPropagation(); onRetry(job.id); }}
-                          className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                          onClick={() => onRetry(job.id)}
+                          className="px-2 py-1 text-xs text-blue-600 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
                         >
-                          <RotateCcw size={13} />
+                          <RotateCcw size={11} className="inline mr-1" />
+                          {t('queue_retry_now')}
                         </button>
                       )}
                       {showDelete && onDelete && (
                         <button
-                          title={t('action_delete')}
-                          onClick={e => { e.stopPropagation(); onDelete(job.id); }}
-                          className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                          title={t('queue_discard')}
+                          onClick={() => onDelete(job.id)}
+                          className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 transition-colors"
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={11} className="inline mr-1" />
+                          {t('queue_discard')}
                         </button>
                       )}
                     </div>
@@ -286,84 +245,188 @@ function OverviewSection({
   stats?: QueueStats; onSectionChange: (s: Section) => void;
 }) {
   const t = useT();
-  const total = (stats?.waiting ?? 0) + (stats?.active ?? 0) + (stats?.delayed ?? 0);
-  const maxBar = Math.max(stats?.waiting ?? 0, stats?.active ?? 0, stats?.delayed ?? 0, stats?.failed ?? 0, 1);
+  const qc = useQueryClient();
+
+  // Fetch all pending jobs for inline overview
+  const { data: allJobsData, isLoading: jobsLoading } = useQuery<JobsResponse>({
+    queryKey: ['admin-queue-overview-jobs'],
+    queryFn:  () => api.get('/admin/queues/jobs?state=all&page=1&limit=25'),
+    refetchInterval: 10_000,
+  });
+
+  const invalidateAll = () => {
+    void qc.invalidateQueries({ queryKey: ['admin-queue-overview-jobs'] });
+    void qc.invalidateQueries({ queryKey: ['admin-queue-jobs'] });
+    void qc.invalidateQueries({ queryKey: ['admin-queue-stats'] });
+  };
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.delete<unknown>(`/admin/queues/jobs/${id}`),
+    onSuccess: () => { invalidateAll(); toast.success(t('queue_msg_deleted')); },
+    onError:   (e: Error) => toast.error(e.message),
+  });
+
+  const retryMut = useMutation({
+    mutationFn: (id: string) => api.post<unknown>(`/admin/queues/jobs/${id}/retry`),
+    onSuccess: () => { invalidateAll(); toast.success(t('queue_msg_retried')); },
+    onError:   (e: Error) => toast.error(e.message),
+  });
+
+  const jobs = allJobsData?.jobs ?? [];
+  const totalPending = allJobsData?.total ?? 0;
+
+  // Determine state badge for a job
+  function jobStateBadge(job: QueueJob): { label: string; cls: string } {
+    if (job.failedReason)                         return { label: t('queue_stat_failed'),  cls: 'bg-red-100 text-red-700' };
+    if (job.delay > 0 && !job.processedAt)        return { label: t('queue_stat_retry'),   cls: 'bg-yellow-100 text-yellow-700' };
+    if (job.processedAt && !job.finishedAt)       return { label: t('queue_stat_active'),  cls: 'bg-green-100 text-green-700' };
+    return                                               { label: t('queue_stat_waiting'), cls: 'bg-blue-100 text-blue-700' };
+  }
+
+  const statItems = [
+    { label: t('queue_stat_waiting'),   value: stats?.waiting   ?? 0, color: 'text-blue-700',   ring: 'hover:ring-2 hover:ring-blue-200',   click: () => onSectionChange('outbound'),   icon: <Hourglass size={14} /> },
+    { label: t('queue_stat_active'),    value: stats?.active    ?? 0, color: 'text-green-700',  ring: 'hover:ring-2 hover:ring-green-200',  click: () => onSectionChange('outbound'),   icon: <Play size={14} /> },
+    { label: t('queue_stat_retry'),     value: stats?.delayed   ?? 0, color: 'text-yellow-700', ring: 'hover:ring-2 hover:ring-yellow-200', click: () => onSectionChange('retry'),      icon: <Clock size={14} /> },
+    { label: t('queue_stat_failed'),    value: stats?.failed    ?? 0, color: 'text-red-700',    ring: 'hover:ring-2 hover:ring-red-200',    click: () => onSectionChange('deadletter'), icon: <XCircle size={14} /> },
+    { label: t('queue_stat_delivered'), value: stats?.completed ?? 0, color: 'text-gray-500',   ring: '',                                  click: undefined,                           icon: <CheckCircle2 size={14} /> },
+  ];
 
   return (
-    <div className="space-y-6">
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <StatCard label={t('queue_stat_waiting')}   value={stats?.waiting   ?? 0} color="blue"   icon={<Hourglass size={16} />} onClick={() => onSectionChange('outbound')} />
-        <StatCard label={t('queue_stat_active')}    value={stats?.active    ?? 0} color="green"  icon={<Play size={16} />}      onClick={() => onSectionChange('outbound')} />
-        <StatCard label={t('queue_stat_retry')}     value={stats?.delayed   ?? 0} color="yellow" icon={<Clock size={16} />}     onClick={() => onSectionChange('retry')} />
-        <StatCard label={t('queue_stat_failed')}    value={stats?.failed    ?? 0} color="red"    icon={<XCircle size={16} />}   onClick={() => onSectionChange('deadletter')} />
-        <StatCard label={t('queue_stat_delivered')} value={stats?.completed ?? 0} color="gray"   icon={<CheckCircle2 size={16} />} />
+    <div className="space-y-4">
+
+      {/* ── Compact Stats Strip ─────────────────────────────────────── */}
+      <div className="grid grid-cols-5 bg-white rounded-xl border border-gray-200 divide-x divide-gray-100 overflow-hidden">
+        {statItems.map((s, i) => (
+          <button
+            key={i}
+            onClick={s.click}
+            disabled={!s.click}
+            className={`flex flex-col items-center justify-center py-4 px-2 transition-all ${s.ring} disabled:cursor-default group`}
+          >
+            <div className={`flex items-center gap-1.5 ${s.color} mb-1`}>
+              {s.icon}
+              <span className="text-xl font-bold">{s.value.toLocaleString('de-DE')}</span>
+            </div>
+            <span className="text-[11px] text-gray-500 group-hover:text-gray-700">{s.label}</span>
+          </button>
+        ))}
       </div>
 
-      {/* Dead-letter warning */}
+      {/* ── Dead-Letter Warning ─────────────────────────────────────── */}
       {(stats?.failed ?? 0) > 0 && (
-        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg p-4">
-          <AlertCircle size={16} className="shrink-0 text-red-500 mt-0.5" />
-          <div className="flex-1">
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg p-3">
+          <AlertCircle size={15} className="shrink-0 text-red-500 mt-0.5" />
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-red-800">
               {stats!.failed} {t('queue_dead_warning')}
             </p>
-            <p className="text-xs text-red-600 mt-0.5">
-              {t('queue_dead_hint')}
-            </p>
+            <p className="text-xs text-red-600 mt-0.5">{t('queue_dead_hint')}</p>
           </div>
           <button
             onClick={() => onSectionChange('deadletter')}
-            className="shrink-0 text-xs font-medium text-red-700 border border-red-200 rounded px-3 py-1.5 hover:bg-red-100"
+            className="shrink-0 text-xs font-medium text-red-700 border border-red-200 rounded px-3 py-1.5 hover:bg-red-100 whitespace-nowrap"
           >
             {t('queue_dead_open')}
           </button>
         </div>
       )}
 
-      {/* Queue distribution */}
-      <div className="card p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-gray-700">{t('queue_distribution')}</p>
-          <p className="text-xs text-gray-400">{total} {t('queue_pending_total')}</p>
+      {/* ── Pending Messages Table ──────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+          <p className="text-sm font-semibold text-gray-700">{t('queue_overview_pending')}</p>
+          <span className="text-xs text-gray-400">{totalPending} {t('queue_messages')}</span>
         </div>
-        <div className="space-y-3">
-          {[
-            { label: t('queue_stat_waiting'),   value: stats?.waiting ?? 0,   bar: 'bg-blue-400' },
-            { label: t('queue_stat_active'),    value: stats?.active ?? 0,    bar: 'bg-green-400' },
-            { label: t('queue_stat_retry'),     value: stats?.delayed ?? 0,   bar: 'bg-yellow-400' },
-            { label: t('queue_stat_failed'),    value: stats?.failed ?? 0,    bar: 'bg-red-400' },
-          ].map(row => (
-            <div key={row.label} className="flex items-center gap-3">
-              <span className="text-xs text-gray-500 w-28">{row.label}</span>
-              <div className="flex-1">
-                <Sparkbar value={row.value} max={maxBar} color={row.bar} />
-              </div>
-              <span className="text-xs font-semibold text-gray-700 w-8 text-right">{row.value}</span>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-gray-400 pt-1 border-t border-gray-100">
-          {t('queue_last_updated')} {stats ? fmtDt(stats.timestamp) : '—'}
-        </p>
-      </div>
 
-      {/* State explanation */}
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          { icon: <Hourglass size={15} className="text-blue-500" />,  title: t('queue_state_waiting_title'), text: t('queue_state_waiting_text') },
-          { icon: <Play size={15} className="text-green-500" />,       title: t('queue_state_active_title'),  text: t('queue_state_active_text') },
-          { icon: <Clock size={15} className="text-yellow-500" />,     title: t('queue_state_retry_title'),   text: t('queue_state_retry_text') },
-          { icon: <XCircle size={15} className="text-red-500" />,      title: t('queue_state_dead_title'),    text: t('queue_state_dead_text') },
-        ].map(c => (
-          <div key={c.title} className="card p-4 flex gap-3">
-            <div className="shrink-0 mt-0.5">{c.icon}</div>
-            <div>
-              <p className="text-sm font-semibold text-gray-800">{c.title}</p>
-              <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{c.text}</p>
-            </div>
+        {jobsLoading ? (
+          <div className="py-10 text-center text-sm text-gray-400">{t('queue_job_loading')}</div>
+        ) : jobs.length === 0 ? (
+          <div className="py-10 text-center">
+            <CheckCircle2 size={28} className="mx-auto text-gray-300 mb-2" />
+            <p className="text-sm text-gray-400">{t('queue_overview_all_ok')}</p>
           </div>
-        ))}
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                <th className="text-left px-4 py-2">Status</th>
+                <th className="text-left px-4 py-2">{t('queue_job_from')}</th>
+                <th className="text-left px-4 py-2">{t('queue_job_to')}</th>
+                <th className="text-left px-4 py-2">Alter</th>
+                <th className="text-center px-4 py-2">{t('queue_job_attempts')}</th>
+                <th className="px-4 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map(job => {
+                const badge = jobStateBadge(job);
+                const isFailed  = !!job.failedReason;
+                const isDelayed = job.delay > 0 && !job.processedAt;
+                const attempts  = `${job.attemptsMade}/${job.maxAttempts}`;
+                const attCls    = job.attemptsMade >= job.maxAttempts ? 'bg-red-100 text-red-700'
+                  : job.attemptsMade > 2 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600';
+                return (
+                  <tr key={job.id} className="border-t border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-2.5">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap ${badge.cls}`}>
+                        {badge.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className="text-xs font-mono text-gray-700 truncate block max-w-[150px]">{job.from ?? '—'}</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className="text-xs font-mono text-gray-700 truncate block max-w-[150px]">{(job.to ?? []).join(', ') || '—'}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtAge(job.createdAt)}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${attCls}`}>{attempts}</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1.5 justify-end">
+                        {(isFailed || isDelayed) && (
+                          <button
+                            onClick={() => retryMut.mutate(job.id)}
+                            disabled={retryMut.isPending}
+                            className="px-2 py-1 text-xs text-blue-600 border border-blue-200 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
+                          >
+                            <RotateCcw size={11} className="inline mr-1" />
+                            {t('queue_retry_now')}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { if (confirm(t('queue_discard_confirm'))) deleteMut.mutate(job.id); }}
+                          disabled={deleteMut.isPending}
+                          className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                        >
+                          <Trash2 size={11} className="inline mr-1" />
+                          {t('queue_discard')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {totalPending > 25 && (
+          <div className="px-4 py-2 border-t border-gray-100 text-xs text-gray-400 bg-gray-50 text-center">
+            {t('queue_overview_more')} ·&nbsp;
+            <button onClick={() => onSectionChange('outbound')} className="text-accent hover:underline">
+              {t('queue_section_outbound')}
+            </button>
+            {' / '}
+            <button onClick={() => onSectionChange('retry')} className="text-accent hover:underline">
+              {t('queue_section_retry')}
+            </button>
+            {' / '}
+            <button onClick={() => onSectionChange('deadletter')} className="text-accent hover:underline">
+              {t('queue_section_deadletter')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -382,7 +445,7 @@ function JobsSection({
   const [page, setPage] = useState(1);
   const LIMIT = 50;
 
-  const { data, isLoading, refetch } = useQuery<JobsResponse>({
+  const { data, isLoading } = useQuery<JobsResponse>({
     queryKey: ['admin-queue-jobs', stateFilter, page],
     queryFn:  () => api.get(`/admin/queues/jobs?state=${stateFilter}&page=${page}&limit=${LIMIT}`),
     refetchInterval: 10_000,
@@ -391,6 +454,7 @@ function JobsSection({
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['admin-queue-jobs'] });
     void qc.invalidateQueries({ queryKey: ['admin-queue-stats'] });
+    void qc.invalidateQueries({ queryKey: ['admin-queue-overview-jobs'] });
   };
 
   const retryMut = useMutation({
@@ -452,9 +516,6 @@ function JobsSection({
               <Trash2 size={12} /> {t('queue_flush')}
             </button>
           )}
-          <button onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
-            <RefreshCw size={12} /> {t('action_refresh')}
-          </button>
         </div>
       </div>
 
@@ -463,7 +524,7 @@ function JobsSection({
         jobs={jobs} loading={isLoading}
         showRetry={showRetry} showDelete
         onRetry={id => retryMut.mutate(id)}
-        onDelete={id => { if (confirm(t('queue_delete_msg'))) deleteMut.mutate(id); }}
+        onDelete={id => { if (confirm(t('queue_discard_confirm'))) deleteMut.mutate(id); }}
         emptyText={emptyText}
       />
 
@@ -691,7 +752,7 @@ export function QueuesPage() {
       {/* ── Content ───────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-6 max-w-5xl">
-          {/* Page header */}
+          {/* Page header — single Refresh button */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <Inbox size={20} className="text-accent" />
@@ -705,10 +766,9 @@ export function QueuesPage() {
             <button
               onClick={() => {
                 void refetch();
-                // refetchQueries löst sofortigen Refetch aller aktiven Queries aus
-                // (invalidateQueries = nur background refetch, kein visueller Reload)
                 void qc.refetchQueries({ queryKey: ['admin-queue-jobs'] });
                 void qc.refetchQueries({ queryKey: ['admin-queue-stats'] });
+                void qc.refetchQueries({ queryKey: ['admin-queue-overview-jobs'] });
               }}
               className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
             >
