@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.43`
+**Aktuelle Version**: `3.17.44`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -540,7 +540,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.43 — Highlights
+## Aktuelle Version 3.17.44 — Highlights
+
+**v3.17.44** — Fix: BCP eDiscovery-Suchmaske verlor Fokus nach jedem Buchstaben. `Field`-Hilfskomponente war inline in `CreateSearchModal` definiert → neue Komponenten-Referenz pro Render → React unmount/remount des Inputs → Fokus verloren. Fix: `SearchField` auf Modul-Ebene ausgelagert, alle 8 Verwendungen aktualisiert.
 
 **v3.17.43** — Fix: Audit-Log schreibt seit Einführung (Phase 10) keine Einträge. `auditMiddleware` ist auf `/api/v1/admin` gemountet — Express liefert `req.path` OHNE Mount-Prefix. Bedingung `req.path.startsWith('/api/v1/admin/')` war niemals wahr. Fix: Prefix-Check + `replace('/api/v1/admin/', '')` entfernt, relativer Pfad korrekt geparst.
 
@@ -672,4 +674,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-22 (v3.17.43 — Audit-Log Fix: req.path ohne Mount-Prefix; v3.17.42 — EditCertModal + PUT isActiveProtocol fix; v3.17.41 — ACME-Timeout 5 min, Startup-Cleanup stale Certs, 409-Guard; v3.17.40 — exklusive Service-Zuordnung claimServices())*
+*Letzte Aktualisierung: 2026-05-22 (v3.17.44 — eDiscovery SearchField inline component focus bug; v3.17.43 — Audit-Log Fix: req.path ohne Mount-Prefix; v3.17.42 — EditCertModal + PUT isActiveProtocol fix; v3.17.41 — ACME-Timeout 5 min, Startup-Cleanup stale Certs, 409-Guard)*

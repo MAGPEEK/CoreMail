@@ -1,6 +1,6 @@
 {
   "name": "@coremail/ews-server",
-  "version": "3.17.43",
+  "version": "3.17.44",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",
