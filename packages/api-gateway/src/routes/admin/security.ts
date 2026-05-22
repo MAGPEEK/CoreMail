@@ -3,6 +3,7 @@ import { createConnection } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../../middleware/auth.js';
+import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 export const adminSecurityRouter: RouterType = Router();
 adminSecurityRouter.use(requireAuth);
@@ -137,6 +138,9 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
       // non-fatal — rspamd config/set may not be available in all deployments
     }
   }
+
+  // Notify security-filter to reload settings from DB (hot-reload)
+  void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '').catch(() => {});
 
   res.json(settings);
 });
