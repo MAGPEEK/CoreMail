@@ -77,11 +77,16 @@ export function auditMiddleware(
   _res: import('express').Response,
   next: import('express').NextFunction,
 ): void {
-  // Only audit mutating operations
+  // Only audit mutating operations.
+  // NOTE: This middleware is mounted at app.use('/api/v1/admin', auditMiddleware).
+  // Express strips the mount prefix from req.path — so req.path is already relative,
+  // e.g. '/mailboxes/123' NOT '/api/v1/admin/mailboxes/123'.
+  // Checking req.path.startsWith('/api/v1/admin/') would NEVER match here.
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'];
-  if (mutating.includes(req.method) && req.path.startsWith('/api/v1/admin/')) {
+  if (mutating.includes(req.method)) {
     const user = (req as Request & { apiUser?: { userId: string; email: string } }).apiUser;
-    const pathParts = req.path.replace('/api/v1/admin/', '').split('/');
+    // Strip leading slash, split into segments: '/mailboxes/123' → ['mailboxes', '123']
+    const pathParts = req.path.replace(/^\//, '').split('/');
     const resource = pathParts[0] ?? 'unknown';
     const verb = req.method.toLowerCase();
 

@@ -1,6 +1,6 @@
 {
   "name": "@coremail/auth-ldap",
-  "version": "3.17.42",
+  "version": "3.17.43",
   "private": true,
   "type": "module",
   "exports": {
