@@ -209,7 +209,7 @@ CoreMail terminiert TLS selbst. Zertifikat nach dem Start im BCP unter **SSL/TLS
 
 **Option B — Externer Reverse Proxy:**  
 Traefik, Caddy, nginx oder Synology DSM Application Portal übernehmen TLS.  
-`HTTPS_PROXY_ENABLED=false` in `.env` setzen und `"443:443"` in der `docker-compose.yml` auskommentieren.
+`"443:443"` in der `docker-compose.yml` auskommentieren.
 
 ### 5. Stack starten
 
@@ -390,7 +390,6 @@ JWT_SECRET=...                # mind. 32 Zeichen, zufällig
 PEPPER=...                    # mind. 32 Zeichen, zufällig
 
 # ── TLS ────────────────────────────────────────────────────
-# HTTPS_PROXY_ENABLED=true    # Standard: true (integrierter Proxy)
 # HTTPS_PORT=443              # Alternativer Port falls 443 belegt
 
 # ── Anti-Spam (Rspamd) ─────────────────────────────────────
@@ -452,20 +451,9 @@ CoreMail unterstützt zwei TLS-Betriebsmodi:
 Ab v3.17.0 terminiert CoreMail TLS selbst (Node.js HTTPS auf Port 443).  
 Zertifikat im BCP unter **Server → SSL/TLS** hochladen und aktivieren. Hot-Reload ohne Neustart.
 
-```env
-# .env — Standard, kann weggelassen werden
-HTTPS_PROXY_ENABLED=true
-```
-
 ### Option B — Externer Reverse Proxy
 
-Für Betrieb hinter Traefik, Caddy, nginx, DSM Application Portal o.ä.:
-
-```env
-# .env
-HTTPS_PROXY_ENABLED=false
-```
-
+Für Betrieb hinter Traefik, Caddy, nginx, DSM Application Portal o.ä.:  
 In der `docker-compose.yml` die Zeile `"443:443"` auskommentieren. CoreMail läuft dann nur auf Port 3000 (HTTP).
 
 **Let's Encrypt mit Certbot (für Option B mit eigenem nginx):**
