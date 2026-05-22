@@ -28,6 +28,7 @@ WORKDIR /app
 # Nur den JS-Client generieren (für TypeScript-Typen). Die echte Engine wird im Runner-Stage geladen.
 ENV PRISMA_CLI_QUERY_ENGINE_TYPE=library
 RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN apk add --no-cache python3 make g++
 
 # Workspace-Konfiguration zuerst (Layer-Caching)
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc tsconfig.base.json ./
