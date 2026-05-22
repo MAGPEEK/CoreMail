@@ -24,7 +24,7 @@ services:
   # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:3.17.35
+    image: magpeek/coremail-app:3.17.36
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -88,8 +88,6 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-      # DSM Application Portal übernimmt TLS → integrierter Proxy deaktiviert
-      HTTPS_PROXY_ENABLED: "false"
 
 
     ports:

@@ -18,7 +18,6 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
-import { isTlsProxyEnabled } from '../../tls-proxy.js';
 
 // String-Literal-Typ — spiegelt das Prisma-Enum CertStatus, ohne @prisma/client zu importieren
 type CertStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'ERROR' | 'RENEWING';
@@ -111,23 +110,17 @@ async function clearProtocolCert(): Promise<void> {
 }
 
 // ── GET /tls-proxy-info ───────────────────────────────────────────────────────
-// Gibt zurück ob der integrierte HTTPS-Proxy aktiv ist und welches Zertifikat
-// gerade genutzt wird. Wird vom BCP verwendet um den Status-Banner zu rendern.
+// Gibt das aktuell aktive HTTPS-Zertifikat zurück.
+// Wird vom BCP verwendet um den Status-Banner zu rendern.
 adminCertificatesRouter.get('/tls-proxy-info', async (_req: Request, res: Response) => {
-  const enabled = isTlsProxyEnabled();
-  const port    = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
-
-  if (!enabled) {
-    res.json({ enabled: false, port, activeCert: null });
-    return;
-  }
+  const port = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
 
   const activeCert = await prisma.certificate.findFirst({
     where: { isActiveHttps: true },
     select: { id: true, name: true, domains: true, status: true },
   });
 
-  res.json({ enabled: true, port, activeCert: activeCert ?? null });
+  res.json({ port, activeCert: activeCert ?? null });
 });
 
 // ── GET / ─────────────────────────────────────────────────────────────────────

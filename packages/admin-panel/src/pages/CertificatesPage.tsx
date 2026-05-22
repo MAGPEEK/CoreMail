@@ -13,7 +13,7 @@ import toast from 'react-hot-toast';
 import {
   ShieldCheck, Plus, RefreshCw, Trash2, Upload,
   ChevronDown, ChevronUp, X, Loader2, AlertCircle,
-  Lock, LockOpen, ExternalLink, Server,
+  Lock, LockOpen, Server,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
@@ -116,7 +116,6 @@ type ModalMode = 'letsencrypt' | 'upload' | 'selfsigned' | null;
 // ── TLS-Proxy-Status-Typen ────────────────────────────────────────────────────
 
 interface TlsProxyInfo {
-  enabled:    boolean;
   port:       number;
   activeCert: { id: string; name: string; domains: string[]; status: string } | null;
 }
@@ -227,22 +226,9 @@ export function CertificatesPage() {
         </div>
       </div>
 
-      {/* HTTPS-Status-Banner — drei Zustände */}
-      {tlsInfo?.enabled === false ? (
-        /* ── Externer Reverse Proxy (HTTPS_PROXY_ENABLED=false) ── */
-        <div className="mb-4 flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-          <ExternalLink size={16} className="text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold">Integrierter HTTPS-Proxy deaktiviert</p>
-            <p className="text-amber-700 mt-0.5">
-              <code className="font-mono text-xs bg-amber-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code>
-              {' '}— TLS wird vom externen Reverse Proxy (Traefik, Caddy, nginx, DSM …) terminiert.
-              Port 443 kann aus <code className="font-mono text-xs bg-amber-100 px-1 rounded">docker-compose.yml</code> entfernt werden.
-            </p>
-          </div>
-        </div>
-      ) : tlsInfo?.activeCert ? (
-        /* ── Integrierter Proxy läuft ── */
+      {/* HTTPS-Status-Banner — zwei Zustände */}
+      {tlsInfo?.activeCert ? (
+        /* ── HTTPS aktiv ── */
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
           <Lock size={16} className="text-green-600 shrink-0" />
           <span>
@@ -251,22 +237,19 @@ export function CertificatesPage() {
             {tlsInfo.activeCert.domains[0] && (
               <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
             )}
-            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken oder{' '}
-            <code className="font-mono text-xs bg-green-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code> setzen.
+            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken.
           </span>
         </div>
       ) : (
-        /* ── Proxy aktiv, aber kein Zertifikat gewählt ── */
+        /* ── Kein HTTPS-Zertifikat aktiv ── */
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
           <LockOpen size={16} className="shrink-0" />
           <span>
-            Integrierter HTTPS-Proxy <strong>bereit</strong> —{' '}
+            Kein HTTPS-Zertifikat aktiv —{' '}
             <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss:</strong>{' '}
             HTTPS (Port {tlsInfo?.port ?? 443}) aktivieren.{' '}
             <Server size={12} className="inline mb-0.5" /> <strong>Server:</strong>{' '}
-            Protokoll-TLS für SMTP/IMAP/POP3 aktivieren. Beide Dienste sind unabhängig voneinander.
-            {' '}Für externen Reverse Proxy:{' '}
-            <code className="font-mono text-xs bg-gray-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code>.
+            Protokoll-TLS für SMTP/IMAP/POP3 (unabhängig von HTTPS).
           </span>
         </div>
       )}
