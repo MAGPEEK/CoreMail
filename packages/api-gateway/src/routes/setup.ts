@@ -1,8 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { createLogger } from '@coremail/core';
-import { hashPassword } from '@coremail/core';
+import { createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
@@ -108,6 +107,57 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
         });
       }
     });
+
+    // ── Auto self-signed cert ────────────────────────────────────────────────
+    // Read current publicHostname from ServerSettings (set during initial setup
+    // or defaulting to 'mail.local').  A self-signed cert is generated and
+    // written to the certificates table so it immediately appears in BCP → SSL/TLS.
+    try {
+      const serverSettings = await prisma.serverSettings.findUnique({
+        where: { id: 'singleton' },
+        select: { publicHostname: true },
+      });
+      const hostname = serverSettings?.publicHostname ?? domain;
+
+      const { certPem, keyPem } = generateSelfSignedCert(hostname);
+      const tenYears = new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000);
+
+      // Remove any existing self-signed cert that may be left over
+      await prisma.certificate.deleteMany({ where: { type: 'SELF_SIGNED' } });
+
+      // Create visible cert entry in the certificates table
+      await prisma.certificate.create({
+        data: {
+          name:             hostname,
+          domains:          [hostname],
+          services:         ['SMTP', 'IMAP', 'POP3'],
+          type:             'SELF_SIGNED',
+          status:           'ACTIVE',
+          certPem,
+          keyPem,
+          isActiveProtocol: true,
+          isActiveHttps:    false,
+          autoRenew:        false,
+          issuedAt:         new Date(),
+          expiresAt:        tenYears,
+        },
+      });
+
+      // Also persist to server_settings so SMTP/IMAP/POP3 pick it up immediately
+      await prisma.serverSettings.upsert({
+        where:  { id: 'singleton' },
+        update: { tlsCert: certPem, tlsKey: keyPem },
+        create: { id: 'singleton', tlsCert: certPem, tlsKey: keyPem },
+      });
+
+      // Notify protocol servers to reload TLS
+      void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '').catch(() => {});
+
+      log.info({ hostname }, 'Self-signed certificate created and activated for SMTP/IMAP/POP3');
+    } catch (certErr) {
+      // Non-fatal — user can still log in and configure certs manually in BCP
+      log.warn({ err: certErr }, 'Auto self-signed cert creation failed (non-fatal)');
+    }
 
     log.info({ email, domain }, 'Initial setup completed — admin user created');
     res.json({ success: true, email, message: 'Setup abgeschlossen. Du kannst dich jetzt anmelden.' });

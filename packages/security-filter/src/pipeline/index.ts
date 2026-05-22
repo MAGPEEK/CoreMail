@@ -22,6 +22,10 @@ export interface PipelineConfig {
   spamScoreReject?: number;  // score threshold → reject (default 6.0)
   maxAttachmentBytes?: number;
   hostname?: string;
+  /** Whether rspamd anti-spam scanning is enabled (default: true) */
+  rspamdEnabled?: boolean;
+  /** Whether ClamAV antivirus scanning is enabled (default: true) */
+  clamavEnabled?: boolean;
 }
 
 export interface PipelineResult {
@@ -122,41 +126,56 @@ export async function runContentChecks(
   }
 
   // ── Stage 4c: ClamAV antivirus ───────────────────────────────────────────
-  const clamav = await clamavScan(rawMessage);
-  if (!clamav.clean) {
-    log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected');
-    return {
-      action: 'quarantine',
-      reason: `Virus detected: ${clamav.virusName ?? 'unknown'}`,
-      ...(clamav.virusName ? { virusName: clamav.virusName } : {}),
-    };
+  if (config.clamavEnabled !== false) {
+    const clamav = await clamavScan(rawMessage);
+    if (!clamav.clean) {
+      log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected');
+      return {
+        action: 'quarantine',
+        reason: `Virus detected: ${clamav.virusName ?? 'unknown'}`,
+        ...(clamav.virusName ? { virusName: clamav.virusName } : {}),
+      };
+    }
+  } else {
+    log.debug('ClamAV scan skipped (disabled in settings)');
   }
 
   // ── Stage 4d: rspamd anti-spam ───────────────────────────────────────────
-  const spam = await rspamdScan(rawMessage);
+  if (config.rspamdEnabled !== false) {
+    const spam = await rspamdScan(rawMessage);
 
-  if (spam.score >= spamReject) {
-    return {
-      action: 'reject',
-      reason: `Spam score too high: ${spam.score.toFixed(2)}`,
-      spamScore: spam.score,
-    };
-  }
+    if (spam.score >= spamReject) {
+      return {
+        action: 'reject',
+        reason: `Spam score too high: ${spam.score.toFixed(2)}`,
+        spamScore: spam.score,
+      };
+    }
 
-  if (spam.score >= spamJunk) {
+    if (spam.score >= spamJunk) {
+      return {
+        action: 'accept',
+        reason: 'Spam — deliver to Junk folder',
+        spamScore: spam.score,
+        junkFolder: true,
+        authSummary: auth.summary,
+      };
+    }
+
     return {
       action: 'accept',
-      reason: 'Spam — deliver to Junk folder',
+      reason: 'All checks passed',
       spamScore: spam.score,
-      junkFolder: true,
       authSummary: auth.summary,
+      junkFolder: false,
     };
   }
 
+  // rspamd disabled — accept directly
+  log.debug('Rspamd scan skipped (disabled in settings)');
   return {
     action: 'accept',
-    reason: 'All checks passed',
-    spamScore: spam.score,
+    reason: 'All checks passed (rspamd disabled)',
     authSummary: auth.summary,
     junkFolder: false,
   };
