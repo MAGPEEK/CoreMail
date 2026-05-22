@@ -156,7 +156,7 @@ export function CertificatesPage() {
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-https`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      toast.success('Zertifikat aktiviert — HTTPS + SMTP/IMAP/POP3 laden neu');
+      toast.success('HTTPS-Proxy (Port 443) aktiviert');
     },
     onError: (err: unknown) => {
       const msg = (err as { message?: string })?.message ?? 'Aktivierung fehlgeschlagen';
@@ -186,7 +186,13 @@ export function CertificatesPage() {
   });
 
   function confirmDelete(cert: Certificate) {
-    if (!window.confirm(`Zertifikat "${cert.name}" wirklich löschen?`)) return;
+    const activeFor: string[] = [];
+    if (cert.isActiveHttps)    activeFor.push('HTTPS-Proxy (Port 443)');
+    if (cert.isActiveProtocol) activeFor.push('Protokoll-TLS (SMTP/IMAP/POP3)');
+    const warning = activeFor.length > 0
+      ? `\n\n⚠️ Aktiv für: ${activeFor.join(', ')}.\nDie betroffenen Dienste nutzen danach wieder das selbstsignierte Zertifikat.`
+      : '';
+    if (!window.confirm(`Zertifikat "${cert.name}" wirklich löschen?${warning}`)) return;
     deleteMutation.mutate(cert.id);
   }
 
@@ -254,13 +260,13 @@ export function CertificatesPage() {
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-500">
           <LockOpen size={16} className="shrink-0" />
           <span>
-            Integrierter HTTPS-Proxy <strong>bereit</strong> — Klicke auf das{' '}
-            <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss-Symbol</strong>{' '}
-            eines gültigen Zertifikats um HTTPS auf Port {tlsInfo?.port ?? 443} zu aktivieren.
-            Das Zertifikat wird dabei automatisch auch für SMTP/IMAP/POP3 (Ports 465/993/995) gesetzt.
+            Integrierter HTTPS-Proxy <strong>bereit</strong> —{' '}
+            <LockOpen size={12} className="inline mb-0.5" /> <strong>Schloss:</strong>{' '}
+            HTTPS (Port {tlsInfo?.port ?? 443}) aktivieren.{' '}
+            <Server size={12} className="inline mb-0.5" /> <strong>Server:</strong>{' '}
+            Protokoll-TLS für SMTP/IMAP/POP3 aktivieren. Beide Dienste sind unabhängig voneinander.
             {' '}Für externen Reverse Proxy:{' '}
-            <code className="font-mono text-xs bg-gray-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code>{' '}
-            setzen und dann <Server size={12} className="inline mb-0.5" /> <strong>Server-Symbol</strong> klicken.
+            <code className="font-mono text-xs bg-gray-100 px-1 rounded">HTTPS_PROXY_ENABLED=false</code>.
           </span>
         </div>
       )}
@@ -350,7 +356,7 @@ export function CertificatesPage() {
                           <button
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
-                            title="HTTPS-Proxy deaktivieren (SMTP/IMAP/POP3 bleiben aktiv)"
+                            title="HTTPS-Proxy deaktivieren"
                             className="p-1.5 text-green-600 hover:text-gray-500 hover:bg-gray-50 rounded transition-colors disabled:opacity-40">
                             <Lock size={14} />
                           </button>
@@ -358,25 +364,24 @@ export function CertificatesPage() {
                           <button
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
-                            title="Für HTTPS + SMTP/IMAP/POP3 aktivieren"
+                            title="HTTPS-Proxy (Port 443) aktivieren"
                             className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-40">
                             <LockOpen size={14} />
                           </button>
                         ) : null}
-                        {/* ── Nur Protokoll-TLS (ohne HTTPS-Proxy) ── */}
-                        {!cert.isActiveHttps && !cert.isActiveProtocol &&
-                          (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
-                          <button
-                            onClick={() => activateProtocolMutation.mutate(cert.id)}
-                            disabled={activateProtocolMutation.isPending}
-                            title="Nur für SMTP/IMAP/POP3 aktivieren (kein HTTPS-Proxy)"
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40">
-                            <Server size={14} />
-                          </button>
-                        ) : cert.isActiveProtocol && !cert.isActiveHttps ? (
+                        {/* ── Protokoll-TLS (SMTP/IMAP/POP3) — unabhängig von HTTPS ── */}
+                        {cert.isActiveProtocol ? (
                           <span title="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-blue-500 cursor-default">
                             <Server size={14} />
                           </span>
+                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
+                          <button
+                            onClick={() => activateProtocolMutation.mutate(cert.id)}
+                            disabled={activateProtocolMutation.isPending}
+                            title="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
+                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40">
+                            <Server size={14} />
+                          </button>
                         ) : null}
                         {cert.type === 'LETSENCRYPT' && (
                           <button

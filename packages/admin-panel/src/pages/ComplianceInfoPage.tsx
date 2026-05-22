@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.34';
+const VERSION        = '3.17.35';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.35', date: '2026-05-22', title: 'Zertifikat-Logik: Vollständige Entkopplung HTTPS/Protokoll + Self-Signed-Default',
+    notes: 'HTTPS-Proxy (Schloss) und Protokoll-TLS für SMTP/IMAP/POP3 (Server-Symbol) vollständig entkoppelt — beide sind unabhängig voneinander. Self-Signed-Cert ist der Standardzustand (server_settings.tlsCert=NULL). Kein implizites Auto-Aktivieren mehr. Löschen eines aktiven Certs bereinigt automatisch server_settings.tlsCert/tlsKey und signalisiert SMTP/IMAP/POP3 per Redis. BCP: Server-Symbol immer für ACTIVE/EXPIRING-Certs sichtbar, Lösch-Warnung bei aktiven Certs, entkoppelte Toast-Meldungen.' },
   { version: '3.17.34', date: '2026-05-22', title: 'DNS-Check: Lokaler Resolver, kein Resolver-Banner/Badges/Details in BCP',
     notes: 'DNS-Eintragscheck (BCP → SMTP & Routing → DNS-Einträge) verwendet jetzt den lokalen DNS-Resolver des Servers (dns.promises) statt drei externen Resolvern (Google 8.8.8.8, Cloudflare 1.1.1.1, Quad9 9.9.9.9). API-Response vereinfacht: nur noch ok, found, warning? pro Eintrag. UI-Bereinigung: Externer-Resolver-Banner, Per-Resolver-Badges (Google/Cloudflare/Quad9 mit Latenz), aufklappbare Resolver-Detailansicht und Inkonsistenz-Warnung wurden entfernt. Zeigt weiterhin alle für den Mailbetrieb erforderlichen Einträge: MX, SPF (inkl. Mehrfach-Record-Erkennung RFC 7208), DKIM, DMARC, Autodiscover, PTR/FCrDNS.' },
   { version: '3.17.33', date: '2026-05-22', title: 'Fix: Redis-Kanal CHANNEL_SETTINGS_RELOAD in Startup-Migration (Protokoll-TLS geladen)',
