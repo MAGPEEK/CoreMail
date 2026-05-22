@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.41`
+**Aktuelle Version**: `3.17.42`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -540,7 +540,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.41 — Highlights
+## Aktuelle Version 3.17.42 — Highlights
+
+**v3.17.42** — Feature: Zertifikate bearbeiten. Stift-Symbol (✏️) in BCP SSL/TLS Aktionsspalte öffnet `EditCertModal`: Name, Services-Zuordnung (mit Exklusivitäts-Anzeige + `currentCertId`), Auto-Renew (nur Let's Encrypt) editierbar. Read-only: Typ, Status, Domains, HTTPS-Proxy-Status, Protokoll-TLS-Status. Fix: `PUT /:id` fehlte `isActiveProtocol` im Prisma-Select.
 
 **v3.17.41** — Fix: ACME-Prozess bricht nach 5 Min. ab (war endlos). `Promise.race()` in `runAcmeIssuance()` + Doppelstart-Guard (409 wenn PENDING/RENEWING) + Startup-Cleanup stale Certs + BCP Renew-Button deaktiviert bei PENDING.
 
@@ -668,4 +670,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-22 (v3.17.39 — publicHostname-Fix bei Zertifikat-Aktivierung; v3.17.38 — Auto-Self-Signed-Cert bei Setup, Spam-Filter-Toggle mit Hot-Reload; v3.17.37 — HTTPS_PROXY_ENABLED entfernt, Proxy immer aktiv; v3.17.35 — Zertifikat-Logik: HTTPS/Protokoll entkoppelt, Self-Signed-Default, clearProtocolCert, syncProtocolCertState)*
+*Letzte Aktualisierung: 2026-05-22 (v3.17.42 — EditCertModal + PUT isActiveProtocol fix; v3.17.41 — ACME-Timeout 5 min, Startup-Cleanup stale Certs, 409-Guard; v3.17.40 — exklusive Service-Zuordnung claimServices(); v3.17.39 — publicHostname-Fix bei Zertifikat-Aktivierung)*
