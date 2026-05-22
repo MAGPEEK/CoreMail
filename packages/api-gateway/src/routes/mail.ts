@@ -4,7 +4,7 @@ import { Readable } from 'stream';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
-import { prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey } from '@coremail/storage';
+import { prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey, outboundAttachKey } from '@coremail/storage';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -737,103 +737,119 @@ mailRouter.post(
     });
     if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-    // Hochgeladene Anhänge als Nodemailer-Attachment-Objekte
-    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-    const attachments: nodemailer.SendMailOptions['attachments'] = files.map((f) => ({
-      filename: f.originalname,
-      content:  f.buffer,
-      contentType: f.mimetype,
-    }));
-
-    // Rohe MIME-Nachricht aufbauen
-    // RFC 5322 §3.6.2: From-Header muss vorhanden und wohlgeformt sein.
-    // Nodemailer-Objekt-Format: leerer displayName → From: <email> (kein leerer Quoted-String)
-    // Template-Literal wie `"${null}" <email>` erzeugt `"null" <email>` (ungültig bei Gmail)
-    // RFC 5322 §3.4: Quoted-String darf nicht leer sein — { name: '', address } ist sauberer
-    // als '"" <email>' (leerer Quoted-String → Gmail meldet "From header missing").
+    const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const jobId       = crypto.randomUUID();
+    const msgId       = `<${crypto.randomUUID()}@${user.domain.name}>`;
+    const sendDate    = new Date();
     const displayName = (user.displayName ?? '').trim();
-    const fromAddress: nodemailer.SendMailOptions['from'] = {
-      name:    displayName,   // Leer-String → nodemailer lässt Quoted-String komplett weg
-      address: user.email,
-    };
 
-    const msgId = `<${crypto.randomUUID()}@${user.domain.name}>`;
-    const mailOptions: nodemailer.SendMailOptions = {
-      messageId: msgId,
-      from:      fromAddress,
-      to,
-      subject,
-      date: new Date(),   // RFC 5322 §3.6.1: Date-Header ist Pflicht
-      ...(cc.length  ? { cc }  : {}),
-      ...(bcc.length ? { bcc } : {}),
-      ...(bodyHtml   ? { html: bodyHtml } : {}),
-      ...(bodyText   ? { text: bodyText } : {}),
-      ...(inReplyTo  ? { inReplyTo, references: inReplyTo } : {}),
-      ...(attachments.length ? { attachments } : {}),
-    };
+    // ── Anhänge in MinIO hochladen (kein base64-Blob im Redis-Job) ───────────
+    // Dadurch bleibt der BullMQ-Job klein; der Worker lädt die Anhänge beim
+    // Aufbau der RFC-5322-Nachricht aus MinIO herunter.
+    const queueAttachments = await Promise.all(
+      files.map(async (f) => {
+        const minioPath = outboundAttachKey(jobId, f.originalname);
+        await uploadBuffer(minioPath, f.buffer, f.mimetype);
+        return {
+          filename:    f.originalname,
+          minioPath,
+          contentType: f.mimetype,
+          size:        f.size,
+        };
+      })
+    );
 
-    let rawBuffer: Buffer;
-    try {
-      rawBuffer = await buildRawMime(mailOptions);
-    } catch (err) {
-      log.error({ err }, 'MIME-Aufbau fehlgeschlagen');
-      res.status(500).json({ error: 'Nachricht konnte nicht aufgebaut werden' }); return;
-    }
-
-    // BullMQ-Job: alle Empfänger (To + CC + BCC) als SMTP-Envelope
+    // ── BullMQ-Job: strukturierte Nachricht (v3.17.30+) ──────────────────────
+    // Kein rawMessage (base64-Blob) mehr — der Worker baut den RFC-5322-Buffer
+    // selbst auf. DKIM-Signierung erfolgt über nodemailer-Transport-Option.
     const smtpRecipients = [...to, ...cc, ...bcc];
-    const jobId = crypto.randomUUID();
 
     try {
       await getOutboundQueue().add('send', {
-        messageId: jobId,
-        from: user.email,
-        to: smtpRecipients,
-        rawMessage: rawBuffer.toString('base64'),
+        messageId:    jobId,
+        from:         user.email,
+        to:           smtpRecipients,
         senderUserId: user.id,
         ...(user.domain.dkimPrivateKey ? {
-          dkimDomain:      user.domain.name,
-          dkimSelector:    user.domain.dkimSelector,
-          dkimPrivateKey:  user.domain.dkimPrivateKey,
+          dkimDomain:     user.domain.name,
+          dkimSelector:   user.domain.dkimSelector ?? 'mail',
+          dkimPrivateKey: user.domain.dkimPrivateKey,
         } : {}),
+        message: {
+          from:      user.email,
+          fromName:  displayName,          // leer → nodemailer lässt Quoted-String weg
+          to,
+          cc,
+          bcc,                             // nur im SMTP-Envelope, nicht im Header
+          subject,
+          html:      bodyHtml,
+          text:      bodyText,
+          messageId: msgId,
+          date:      sendDate.toISOString(),
+          ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
+          attachments: queueAttachments,
+        },
       }, { jobId: `api-${jobId}` });
     } catch (queueErr) {
-      log.error({ err: queueErr }, 'Outbound queue add failed');
+      log.error({ err: queueErr }, 'Outbound-Queue-Add fehlgeschlagen');
       res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
       return;
     }
 
-    // ── MAIL_FLOW — ACCEPTED-Log für Nachrichtenablaufverfolgung ────────────
+    // ── MAIL_FLOW — ACCEPTED-Log ──────────────────────────────────────────────
     void prisma.systemLog.create({
       data: {
-        level: 'INFO',
-        service: 'api-gateway',
+        level:    'INFO',
+        service:  'api-gateway',
         category: 'MAIL_FLOW',
-        message: `Sent: ${user.email} → ${smtpRecipients.join(', ')}`,
-        userId: user.id,
+        message:  `Sent: ${user.email} → ${smtpRecipients.join(', ')}`,
+        userId:   user.id,
         metadata: {
           sender:    user.email,
           recipient: smtpRecipients.join(', '),
           subject,
           status:    'ACCEPTED',
           messageId: jobId,
-          size:      String(rawBuffer.length),
           direction: 'OUTBOUND',
         },
       },
-    }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log failed'));
+    }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
 
     // ── Kopie in Gesendete Elemente speichern ────────────────────────────────
+    // RFC-5322-Buffer wird hier separat aufgebaut (mit In-Memory-Anhängen, nicht MinIO)
+    // damit die Sent-Kopie sofort verfügbar ist, ohne auf den Worker zu warten.
     void (async () => {
       try {
         const mailbox = await prisma.mailbox.findFirst({
           where: { userId: user.id },
           include: { folders: true },
         });
-        const sentFolder = mailbox?.folders.find(
-          (f: { name: string }) => f.name === 'Sent',
-        );
+        const sentFolder = mailbox?.folders.find((f: { name: string }) => f.name === 'Sent');
         if (!sentFolder || !mailbox) return;
+
+        // Raw-Buffer für Sent-Kopie mit In-Memory-Anhängen
+        const sentAttachments: nodemailer.SendMailOptions['attachments'] = files.map((f) => ({
+          filename:    f.originalname,
+          content:     f.buffer,
+          contentType: f.mimetype,
+        }));
+        const fromAddress: nodemailer.SendMailOptions['from'] = displayName
+          ? { name: displayName, address: user.email }
+          : user.email;
+
+        const rawBuffer = await buildRawMime({
+          messageId: msgId,
+          from:      fromAddress,
+          to,
+          subject,
+          date:      sendDate,
+          ...(cc.length             ? { cc }                                  : {}),
+          ...(bcc.length            ? { bcc }                                 : {}),
+          ...(bodyHtml              ? { html: bodyHtml }                      : {}),
+          ...(bodyText              ? { text: bodyText }                      : {}),
+          ...(inReplyTo             ? { inReplyTo, references: inReplyTo }    : {}),
+          ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
+        });
 
         const parsed = await parseRawMessage(rawBuffer);
         const updatedMbx = await prisma.mailbox.update({
@@ -846,8 +862,8 @@ mailRouter.post(
         const LARGE = 256 * 1024;
         let storagePath: string | null = null;
         if (rawBuffer.length > LARGE) {
-          const msgId = crypto.randomUUID();
-          storagePath = rawMessageKey(msgId);
+          const storageId = crypto.randomUUID();
+          storagePath = rawMessageKey(storageId);
           await uploadBuffer(storagePath, rawBuffer, 'message/rfc822');
         }
 
@@ -855,7 +871,7 @@ mailRouter.post(
           data: {
             folderId:  sentFolder.id,
             uid, modSeq,
-            flags:     ['\\Seen'], // Gesendete Mails als gelesen markieren
+            flags:     ['\\Seen'],
             subject:   parsed.subject,
             fromAddr:  parsed.fromAddr,
             fromName:  parsed.fromName,

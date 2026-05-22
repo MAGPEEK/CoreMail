@@ -13,6 +13,46 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.30] — 2026-05-22 — Outbound E-Mail-Pipeline komplett neu gebaut (Google-konform)
+
+### Changed
+
+- **🏗️ Strukturierter BullMQ-Job statt base64-Blob**: `POST /api/v1/mail/send` übergibt
+  ab sofort eine strukturierte Nachricht (`StructuredMessage`) an den Worker — kein
+  `rawMessage: base64`-Feld mehr. Das entlastet Redis erheblich (keine großen Blobs mehr).
+
+- **📎 Anhänge via MinIO**: Hochgeladene Anhänge werden sofort in MinIO gespeichert
+  (`outbound-queue/{jobId}/{filename}`). Der Worker lädt sie beim MIME-Aufbau herunter
+  und bereinigt sie nach erfolgreicher Zustellung automatisch.
+
+- **✍️ DKIM jetzt via nodemailer Transport-Option** (nicht mehr manuelles mailauth-Prepend):
+  ```typescript
+  nodemailer.createTransport({ host, ..., dkim: { domainName, keySelector, privateKey } })
+  ```
+  Das ist die robustere und von nodemailer empfohlene Methode. Die Signatur wird korrekt
+  über den gesamten Message-Stream gebildet — kein Fehler durch nachträgliches
+  Header-Einfügen mehr möglich.
+
+- **🗂️ Sent-Kopie sauber getrennt**: Der RFC-5322-Buffer für den „Gesendete Elemente"-
+  Ordner wird weiterhin in-memory aufgebaut (mit den bereits im RAM befindlichen Anhängen)
+  — unabhängig vom Queue-Worker.
+
+- **🧹 relay.ts bereinigt**: `ensureRfc5322Headers()` und `signMessage()` (mailauth) entfernt.
+  RFC-5322-Pflicht-Header (From, Message-ID, Date) werden von api-gateway und SMTP-
+  Submission-Handler garantiert; die Safety-Net-Funktion ist nicht mehr nötig.
+
+- **📦 SMTP-Submission-Pfad kompatibel**: `OutboundJob.rawMessage` (base64) bleibt für
+  den SMTP-Submission-Pfad (Ports 465/587) erhalten — E-Mail-Clients liefern vollständige
+  RFC-5322-Nachrichten, keine Strukturierung nötig.
+
+### Fixed
+
+- **Order-Bug**: DKIM-Signierung und Header-Sicherheits-Check waren in der falschen
+  Reihenfolge — Headers wurden nach der Signierung eingefügt, was die DKIM-Signatur
+  ungültig gemacht hätte. Mit Transport-DKIM entfällt dieses Problem komplett.
+
+---
+
 ## [3.17.29] — 2026-05-22 — Fix: RFC 5322 Compliance — From & Message-ID Header
 
 ### Fixed
