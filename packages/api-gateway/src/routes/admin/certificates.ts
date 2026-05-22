@@ -234,7 +234,52 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
 });
 
 // ── ACME HTTP-01 Issuance ─────────────────────────────────────────────────────
+
+/** Hard-Timeout für den gesamten ACME-Prozess (5 Minuten). */
+const ACME_TIMEOUT_MS = 5 * 60_000;
+
 export async function runAcmeIssuance(
+  certId: string,
+  domains: string[],
+  email: string,
+  autoRenew: boolean,
+  staging: boolean,
+) {
+  // ── Timeout-Schutz ────────────────────────────────────────────────────────
+  // acme-client.auto() hat keinen integrierten Hard-Timeout — hängt endlos wenn
+  // Port 80 nicht erreichbar ist oder Let's Encrypt nicht antwortet.
+  // Promise.race() bricht den Prozess nach ACME_TIMEOUT_MS ab.
+  let _timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const _timeout = new Promise<never>((_, reject) => {
+    _timeoutId = setTimeout(() => {
+      reject(new Error(
+        `ACME Timeout: Zertifikatsausstellung nach ${ACME_TIMEOUT_MS / 60_000} Minuten abgebrochen. ` +
+        'Port 80 muss öffentlich erreichbar sein (/.well-known/acme-challenge/).',
+      ));
+    }, ACME_TIMEOUT_MS);
+  });
+
+  const _issuance = _runAcmeIssuanceCore(certId, domains, email, autoRenew, staging);
+
+  try {
+    await Promise.race([_issuance, _timeout]);
+  } catch (err) {
+    // Timeout-Fall: innerer catch lief nicht → DB noch nicht auf ERROR gesetzt
+    if (err instanceof Error && err.message.startsWith('ACME Timeout')) {
+      log.warn({ certId, domains }, 'ACME issuance timed out — marking certificate as ERROR');
+      await prisma.certificate.update({
+        where: { id: certId },
+        data:  { status: 'ERROR', lastError: err.message.slice(0, 1000) },
+      }).catch(() => {});
+    }
+    throw err;
+  } finally {
+    clearTimeout(_timeoutId);
+  }
+}
+
+/** Interne Implementierung — wird von runAcmeIssuance mit Timeout gewrappt. */
+async function _runAcmeIssuanceCore(
   certId: string,
   domains: string[],
   email: string,
@@ -555,6 +600,13 @@ adminCertificatesRouter.post('/:id/renew', async (req: Request, res: Response) =
   }
   if (!cert.acmeEmail) {
     res.status(400).json({ error: 'No ACME email stored — cannot renew' });
+    return;
+  }
+  // Kein Doppelstart — Guard gegen parallele ACME-Prozesse
+  if (cert.status === 'PENDING' || cert.status === 'RENEWING') {
+    res.status(409).json({
+      error: `Certificate is already ${cert.status.toLowerCase()} — wait for the current process to complete or fail`,
+    });
     return;
   }
 

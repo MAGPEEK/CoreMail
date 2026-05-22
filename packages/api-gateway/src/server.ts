@@ -387,6 +387,31 @@ async function start() {
     log.warn({ err }, 'Protocol cert state sync failed — check certificates manually'),
   );
 
+  // ── Stale PENDING/RENEWING Zertifikate bereinigen ─────────────────────────
+  // Nach einem Container-Neustart können Certs in PENDING oder RENEWING stecken
+  // (der ACME-Hintergrundprozess wurde durch den Neustart gekillt).
+  // Alle Certs die seit >10 Minuten in diesem Zustand sind werden auf ERROR gesetzt.
+  void (async () => {
+    try {
+      const staleThreshold = new Date(Date.now() - 10 * 60_000);
+      const cleaned = await prisma.certificate.updateMany({
+        where: {
+          status: { in: ['PENDING', 'RENEWING'] },
+          updatedAt: { lt: staleThreshold },
+        },
+        data: {
+          status:    'ERROR',
+          lastError: 'Prozess durch Server-Neustart unterbrochen — bitte Zertifikat erneut anfordern.',
+        },
+      });
+      if (cleaned.count > 0) {
+        log.warn({ count: cleaned.count }, 'Stale PENDING/RENEWING certificates reset to ERROR on startup');
+      }
+    } catch (err) {
+      log.warn({ err }, 'Failed to cleanup stale pending certificates (non-fatal)');
+    }
+  })();
+
   // Kein Auto-LE — Admin fordert Let's Encrypt manuell via BCP → SSL/TLS an.
 }
 
