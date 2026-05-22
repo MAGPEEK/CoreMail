@@ -1059,22 +1059,38 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 interface DomainItem { id: string; name: string; primary: boolean; dkimSelector: string }
 interface DomainsResp { domains: DomainItem[] }
 
-interface DnsRecord {
-  type: string;
-  name: string;
-  expected: string;
-  ok: boolean;
-  found: string | null;
+interface ResolverResult {
+  resolver:  string;    // "Google", "Cloudflare", "Quad9"
+  ip:        string;    // "8.8.8.8"
+  ok:        boolean;
+  found:     string | null;
+  latencyMs: number;
+  error?:    string;
 }
+
+interface DnsRecord {
+  type:        string;
+  name:        string;
+  expected:    string;
+  ok:          boolean;
+  found:       string | null;
+  resolvers:   ResolverResult[];   // Ergebnis pro öffentlichem Resolver
+  consistent:  boolean;            // alle Resolver einig
+  warning?:    string;             // z.B. "Mehrere SPF-Records"
+}
+
 interface DnsCheckResult {
-  domain: string;
-  hostname: string;
+  domain:        string;
+  hostname:      string;
+  checkedAt:     string;
+  resolversUsed: { name: string; ip: string }[];
   records: {
     mx:           DnsRecord;
     spf:          DnsRecord;
     dkim:         DnsRecord;
     dmarc:        DnsRecord;
     autodiscover: DnsRecord;
+    ptr:          DnsRecord;
   };
 }
 
@@ -1112,6 +1128,71 @@ function StatusDot({ ok, checking }: { ok: boolean; checking: boolean }) {
   );
 }
 
+// ── ResolverBadges — kompakte Resolver-Statuszeile ────────────────────────────
+function ResolverBadges({ resolvers, checking }: { resolvers: ResolverResult[]; checking: boolean }) {
+  if (checking || !resolvers.length) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {resolvers.map((r) => (
+        <span
+          key={r.resolver}
+          title={r.error ? `${r.resolver} (${r.ip}): ${r.error}` : r.found ? `${r.resolver} (${r.ip}): ${r.found}` : `${r.resolver} (${r.ip}): kein Eintrag`}
+          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded border ${
+            r.ok
+              ? 'bg-green-50 border-green-200 text-green-700'
+              : r.error
+                ? 'bg-red-50 border-red-200 text-red-600'
+                : 'bg-gray-50 border-gray-200 text-gray-500'
+          }`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${r.ok ? 'bg-green-500' : r.error ? 'bg-red-400' : 'bg-gray-300'}`} />
+          {r.resolver}
+          {r.latencyMs > 0 && <span className="opacity-60 font-normal ml-0.5">{r.latencyMs}ms</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── ResolverDetails — aufklappbare Detailansicht ──────────────────────────────
+function ResolverDetails({ resolvers }: { resolvers: ResolverResult[] }) {
+  const [open, setOpen] = useState(false);
+  if (!resolvers.length) return null;
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="text-[10px] text-accent hover:underline flex items-center gap-1"
+      >
+        {open ? '▲' : '▼'} Resolver-Details {open ? 'ausblenden' : 'anzeigen'}
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded border border-gray-200 overflow-hidden">
+          {resolvers.map((r, i) => (
+            <div key={r.resolver} className={`px-3 py-2 text-[11px] ${i < resolvers.length - 1 ? 'border-b border-gray-100' : ''} ${r.ok ? 'bg-green-50' : 'bg-gray-50'}`}>
+              <div className="flex items-center gap-2 font-semibold">
+                <span className={`w-2 h-2 rounded-full ${r.ok ? 'bg-green-500' : r.error ? 'bg-red-400' : 'bg-gray-300'}`} />
+                <span className="text-gray-700">{r.resolver}</span>
+                <code className="text-gray-400 font-mono font-normal">{r.ip}</code>
+                <span className="ml-auto text-gray-400 font-normal">{r.latencyMs}ms</span>
+              </div>
+              {r.found && (
+                <code className="block mt-1 ml-4 text-gray-600 font-mono break-all leading-relaxed">{r.found}</code>
+              )}
+              {r.error && !r.found && (
+                <span className="block mt-1 ml-4 text-red-600">{r.error}</span>
+              )}
+              {!r.ok && !r.error && !r.found && (
+                <span className="block mt-1 ml-4 text-gray-400">Kein Eintrag</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── DnsRow — eine Zeile in der DNS-Tabelle ────────────────────────────────────
 interface DnsRowProps {
   label:       string;
@@ -1121,14 +1202,16 @@ interface DnsRowProps {
   isLast?:     boolean;
 }
 function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
+  const hasResolvers = record.resolvers?.length > 0;
+  const inconsistent = hasResolvers && !record.consistent && record.resolvers.some(r => r.ok) && record.resolvers.some(r => !r.ok);
+
   return (
     <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
-      {/* Status-Punkt (linke Spalte, zwei Zeilen hoch) */}
+      {/* Status-Punkt */}
       <div className="flex items-start pt-0.5">
         <StatusDot ok={record.ok} checking={checking} />
       </div>
 
-      {/* Rechte Spalte: alles */}
       <div className="space-y-2 min-w-0">
         {/* Labelzeile */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -1139,15 +1222,40 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
           {!checking && (
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
               record.ok
-                ? 'bg-green-100 text-green-700'
+                ? inconsistent ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
                 : 'bg-yellow-100 text-yellow-700'
             }`}>
-              {record.ok ? '● Gesetzt' : '○ Nicht gefunden'}
+              {record.ok
+                ? inconsistent ? '◑ Inkonsistent' : '● Gesetzt'
+                : '○ Nicht gefunden'}
             </span>
           )}
         </div>
 
         <p className="text-xs text-gray-400 leading-relaxed">{description}</p>
+
+        {/* Resolver-Badge-Zeile (kompakt, sofort sichtbar) */}
+        {hasResolvers && !checking && (
+          <ResolverBadges resolvers={record.resolvers} checking={checking} />
+        )}
+
+        {/* Inkonsistenz-Warnung */}
+        {inconsistent && (
+          <div className="flex items-start gap-1.5 bg-orange-50 border border-orange-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-orange-500 shrink-0 mt-0.5" />
+            <span className="text-[11px] text-orange-800">
+              Resolver-Inkonsistenz: Nicht alle DNS-Server liefern denselben Wert. Propagierung läuft möglicherweise noch (TTL).
+            </span>
+          </div>
+        )}
+
+        {/* Sonder-Warnung (z.B. Mehrere SPF-Records) */}
+        {!checking && record.warning && (
+          <div className="flex items-start gap-1.5 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
+            <span className="text-[11px] text-red-800 font-medium">{record.warning}</span>
+          </div>
+        )}
 
         {/* DNS-Name + Kopieren */}
         <div className="flex items-center gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
@@ -1170,12 +1278,18 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
             <code className="text-[11px] text-green-800 font-mono break-all leading-relaxed">{record.found}</code>
           </div>
         )}
-        {!checking && !record.ok && record.found && (
+        {!checking && !record.ok && record.found && !record.warning && (
           <div className="flex items-start gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
             <AlertCircle size={11} className="text-yellow-600 shrink-0 mt-0.5" />
             <span className="text-[11px] text-yellow-800">
               Gefunden, aber abweichend: <code className="font-mono">{record.found}</code>
             </span>
+          </div>
+        )}
+        {!checking && !record.ok && record.found && record.warning && (
+          <div className="flex items-start gap-1.5 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
+            <code className="text-[11px] text-red-800 font-mono break-all leading-relaxed">{record.found}</code>
           </div>
         )}
         {!checking && !record.ok && !record.found && (
@@ -1184,35 +1298,88 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
             <span className="text-[11px] text-yellow-700">Kein Eintrag gefunden — beim DNS-Anbieter eintragen</span>
           </div>
         )}
+
+        {/* Aufklappbare Resolver-Details */}
+        {hasResolvers && !checking && (
+          <ResolverDetails resolvers={record.resolvers} />
+        )}
       </div>
     </div>
   );
 }
 
-// ── PTR-Zeile (kein API-Check, immer manuell beim Hoster) ────────────────────
-function PtrRow({ hostname }: { hostname: string }) {
+// ── PTR-Zeile — jetzt mit echtem FCrDNS-Check ────────────────────────────────
+function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: string; checking: boolean }) {
+  const hasResolvers = (record?.resolvers?.length ?? 0) > 0;
   return (
     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4">
       <div className="flex items-start pt-0.5">
-        <span className="inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 bg-blue-400" />
+        {checking
+          ? <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />
+          : record
+            ? <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${record.ok ? 'bg-green-500' : 'bg-yellow-400'}`} />
+            : <span className="inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 bg-blue-400" />
+        }
       </div>
       <div className="space-y-2 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-semibold text-gray-900">Reverse DNS (PTR)</span>
+          <span className="text-sm font-semibold text-gray-900">Reverse DNS (PTR / FCrDNS)</span>
           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">PTR</span>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-            Beim Hosting-Anbieter setzen
-          </span>
+          {!checking && record && (
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              record.ok ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+            }`}>
+              {record.ok ? '● FCrDNS OK' : '○ PTR fehlt / falsch'}
+            </span>
+          )}
+          {!checking && !record && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+              Beim Hosting-Anbieter setzen
+            </span>
+          )}
         </div>
+
         <p className="text-xs text-gray-400 leading-relaxed">
-          Wird im Server-Panel des Hosters (Hetzner, Contabo, Netcup …) gesetzt — nicht beim DNS-Provider.
-          Ohne PTR lehnen GMail und viele andere Mailserver eingehende Verbindungen ab.
+          Forward-confirmed reverse DNS (FCrDNS): Der PTR-Record der Server-IP muss auf{' '}
+          <code className="font-mono">{hostname}</code> zeigen — und <code className="font-mono">{hostname}</code>{' '}
+          muss per A-Record auf dieselbe IP zurückzeigen. Wird im Server-Panel des Hosters gesetzt.
         </p>
+
+        {/* Resolver-Badges */}
+        {hasResolvers && !checking && record && (
+          <ResolverBadges resolvers={record.resolvers} checking={checking} />
+        )}
+
+        {/* Warnung / Ergebnis */}
+        {!checking && record?.ok && record.found && (
+          <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
+            <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
+            <code className="text-[11px] text-green-800 font-mono break-all">{record.found}</code>
+          </div>
+        )}
+        {!checking && record && !record.ok && (
+          <div className="flex items-start gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-yellow-500 shrink-0 mt-0.5" />
+            <span className="text-[11px] text-yellow-800">
+              {record.found
+                ? <>PTR vorhanden, stimmt aber nicht überein: <code className="font-mono">{record.found}</code></>
+                : 'Kein PTR-Record gefunden — im Server-Panel des Hosting-Anbieters (Contabo, Hetzner …) setzen.'
+              }
+            </span>
+          </div>
+        )}
+
+        {/* Erwarteter Wert */}
         <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
-          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Wert</span>
+          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Soll-Wert</span>
           <code className="flex-1 text-xs text-gray-800 font-mono break-all">{hostname}</code>
           <CopyBtn text={hostname} />
         </div>
+
+        {/* Resolver-Details */}
+        {hasResolvers && !checking && record && (
+          <ResolverDetails resolvers={record.resolvers} />
+        )}
       </div>
     </div>
   );
@@ -1223,18 +1390,16 @@ function DnsSection() {
   const [selectedDomainId, setSelectedDomainId] = useState<string>('');
   const [checkKey, setCheckKey] = useState(0);
 
-  // Alle Domains laden
   const { data: domainsData } = useQuery({
     queryKey: ['admin-domains-dns'],
     queryFn:  () => api.get<DomainsResp>('/admin/domains?limit=100'),
     select:   d => d.domains,
   });
 
-  const domains            = domainsData ?? [];
-  const effectiveDomainId  = selectedDomainId || (domains.find(d => d.primary)?.id ?? domains[0]?.id ?? '');
-  const selectedDomain     = domains.find(d => d.id === effectiveDomainId);
+  const domains           = domainsData ?? [];
+  const effectiveDomainId = selectedDomainId || (domains.find(d => d.primary)?.id ?? domains[0]?.id ?? '');
+  const selectedDomain    = domains.find(d => d.id === effectiveDomainId);
 
-  // DNS-Check für gewählte Domain
   const { data: dnsCheck, isFetching: checking } = useQuery({
     queryKey:  ['dns-check', effectiveDomainId, checkKey],
     queryFn:   () => api.get<DnsCheckResult>(`/admin/domains/${effectiveDomainId}/dns-check`),
@@ -1243,12 +1408,14 @@ function DnsSection() {
     gcTime:    0,
   });
 
-  const okCount = dnsCheck ? Object.values(dnsCheck.records).filter(r => r.ok).length : 0;
-  const allOk   = okCount === 5;
+  // 6 Einträge: MX, SPF, DKIM, DMARC, Autodiscover, PTR
+  const okCount  = dnsCheck ? Object.values(dnsCheck.records).filter(r => r.ok).length : 0;
+  const total    = 6;
+  const allOk    = okCount === total;
+  const hasWarn  = dnsCheck ? Object.values(dnsCheck.records).some(r => !!r.warning) : false;
 
-  // Skeleton-Records für Ladestand
   const emptyRecord = (type: string, name: string, expected: string): DnsRecord =>
-    ({ type, name, expected, ok: false, found: null });
+    ({ type, name, expected, ok: false, found: null, resolvers: [], consistent: true });
 
   const rows: { label: string; description: string; key: keyof DnsCheckResult['records']; fallback: DnsRecord }[] = [
     {
@@ -1260,14 +1427,14 @@ function DnsSection() {
     {
       key:         'spf',
       label:       'SPF — Sender Policy Framework',
-      description: 'Legt fest welche Server im Namen der Domain senden dürfen — verhindert E-Mail-Spoofing',
-      fallback:    emptyRecord('TXT',   selectedDomain?.name ?? '', 'v=spf1 a:… mx ~all'),
+      description: 'Legt fest welche IPs im Namen der Domain senden dürfen — nur EINEN SPF-Record setzen (RFC 7208)',
+      fallback:    emptyRecord('TXT',   selectedDomain?.name ?? '', 'v=spf1 ip4:<ServerIP> -all'),
     },
     {
       key:         'dkim',
-      label:       `DKIM — Signatur (Selektor: ${selectedDomain?.dkimSelector ?? 'coremail'})`,
+      label:       `DKIM — Signatur (Selektor: ${selectedDomain?.dkimSelector ?? 'mail'})`,
       description: 'Kryptografische Signatur — beweist Absenderauthentizität und verhindert Manipulation',
-      fallback:    emptyRecord('TXT',   `${selectedDomain?.dkimSelector ?? 'coremail'}._domainkey.${selectedDomain?.name ?? '…'}`, 'v=DKIM1; k=rsa; p=…'),
+      fallback:    emptyRecord('TXT',   `${selectedDomain?.dkimSelector ?? 'mail'}._domainkey.${selectedDomain?.name ?? '…'}`, 'v=DKIM1; k=rsa; p=…'),
     },
     {
       key:         'dmarc',
@@ -1283,6 +1450,11 @@ function DnsSection() {
     },
   ];
 
+  // Zeitstempel der letzten Prüfung lesbar formatieren
+  const checkedAtStr = dnsCheck?.checkedAt
+    ? new Date(dnsCheck.checkedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : null;
+
   return (
     <div className="space-y-5">
 
@@ -1291,20 +1463,37 @@ function DnsSection() {
         <div>
           <h2 className="text-base font-semibold text-gray-900">DNS-Einträge</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Notwendige Einträge beim DNS-Anbieter für zuverlässigen Mail-Betrieb
+            Live-Prüfung über Google (8.8.8.8), Cloudflare (1.1.1.1) und Quad9 (9.9.9.9) — unabhängig vom System-DNS
           </p>
         </div>
-        <button
-          onClick={() => setCheckKey(k => k + 1)}
-          disabled={!effectiveDomainId || checking}
-          className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
-        >
-          <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
-          Prüfen
-        </button>
+        <div className="flex items-center gap-3">
+          {checkedAtStr && !checking && (
+            <span className="text-[11px] text-gray-400">Geprüft um {checkedAtStr}</span>
+          )}
+          <button
+            onClick={() => setCheckKey(k => k + 1)}
+            disabled={!effectiveDomainId || checking}
+            className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+          >
+            <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
+            Prüfen
+          </button>
+        </div>
       </div>
 
-      {/* ── Domain-Tabs (nur bei mehreren Domains) ─────────────────────── */}
+      {/* ── Resolver-Info-Banner ────────────────────────────────────────── */}
+      {dnsCheck && !checking && dnsCheck.resolversUsed && (
+        <div className="rounded-lg px-3 py-2 bg-blue-50 border border-blue-100 flex items-center gap-2 flex-wrap">
+          <Globe size={12} className="text-blue-400 shrink-0" />
+          <span className="text-[11px] text-blue-700 font-medium">Externe Resolver:</span>
+          {dnsCheck.resolversUsed.map(r => (
+            <code key={r.ip} className="text-[11px] text-blue-600 font-mono">{r.name} ({r.ip})</code>
+          ))}
+          <span className="text-[11px] text-blue-500 ml-auto">Ergebnisse entsprechen dem, was externe Mailserver sehen</span>
+        </div>
+      )}
+
+      {/* ── Domain-Tabs ─────────────────────────────────────────────────── */}
       {domains.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {domains.map(d => (
@@ -1324,7 +1513,6 @@ function DnsSection() {
         </div>
       )}
 
-      {/* ── Keine Domains ──────────────────────────────────────────────── */}
       {domains.length === 0 && (
         <div className="card p-8 text-center text-sm text-gray-400">
           Keine Domains — bitte zuerst eine Domain unter <strong>Domains</strong> anlegen.
@@ -1333,17 +1521,17 @@ function DnsSection() {
 
       {/* ── Status-Banner ──────────────────────────────────────────────── */}
       {dnsCheck && !checking && (
-        <div className={`rounded-lg px-4 py-3 flex items-center gap-3 border ${
-          allOk ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
+        <div className={`rounded-lg px-4 py-3 flex items-start gap-3 border ${
+          allOk && !hasWarn ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
         }`}>
-          <span className={`w-3 h-3 rounded-full shrink-0 ${allOk ? 'bg-green-500' : 'bg-yellow-400'}`} />
-          <div>
-            <p className={`text-sm font-semibold ${allOk ? 'text-green-800' : 'text-yellow-800'}`}>
-              {allOk
-                ? `Alle 5 Einträge für ${dnsCheck.domain} sind gesetzt ✓`
-                : `${okCount} von 5 Einträgen gesetzt — ${5 - okCount} ${5 - okCount === 1 ? 'fehlt' : 'fehlen'} noch`}
+          <span className={`w-3 h-3 rounded-full shrink-0 mt-0.5 ${allOk && !hasWarn ? 'bg-green-500' : 'bg-yellow-400'}`} />
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-semibold ${allOk && !hasWarn ? 'text-green-800' : 'text-yellow-800'}`}>
+              {allOk && !hasWarn
+                ? `Alle ${total} Einträge für ${dnsCheck.domain} sind korrekt gesetzt ✓`
+                : `${okCount} von ${total} Einträgen gesetzt${hasWarn ? ' — ⚠ Kritische Warnungen vorhanden' : ` — ${total - okCount} ${total - okCount === 1 ? 'fehlt' : 'fehlen'} noch`}`}
             </p>
-            <p className={`text-xs mt-0.5 ${allOk ? 'text-green-700' : 'text-yellow-700'}`}>
+            <p className={`text-xs mt-0.5 ${allOk && !hasWarn ? 'text-green-700' : 'text-yellow-700'}`}>
               Mailserver: <strong className="font-mono">{dnsCheck.hostname}</strong>
             </p>
           </div>
@@ -1351,9 +1539,8 @@ function DnsSection() {
       )}
 
       {/* ── DNS-Tabelle ─────────────────────────────────────────────────── */}
-      {(domains.length > 0) && (
+      {domains.length > 0 && (
         <div className="card divide-y divide-gray-100 overflow-hidden">
-          {/* Tabellen-Header */}
           <div className="px-4 py-2 bg-gray-50 flex items-center gap-2">
             <Globe size={12} className="text-gray-400" />
             <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
@@ -1362,38 +1549,42 @@ function DnsSection() {
             {checking && <Loader2 size={11} className="animate-spin text-gray-400 ml-auto" />}
           </div>
 
-          {/* Zeilen */}
           <div className="px-4">
-            {rows.map((row, i) => (
+            {rows.map((row) => (
               <DnsRow
                 key={row.key}
                 label={row.label}
                 description={row.description}
                 record={dnsCheck?.records[row.key] ?? row.fallback}
                 checking={checking && !dnsCheck}
-                isLast={i === rows.length - 1}
+                isLast={false}
               />
             ))}
 
-            {/* PTR-Zeile (immer, sobald hostname bekannt) */}
+            {/* PTR — jetzt mit echtem Check-Ergebnis */}
             {(dnsCheck || selectedDomain) && (
-              <PtrRow hostname={dnsCheck?.hostname ?? selectedDomain?.name ?? '…'} />
+              <PtrRow
+                record={dnsCheck?.records.ptr}
+                hostname={dnsCheck?.hostname ?? selectedDomain?.name ?? '…'}
+                checking={checking && !dnsCheck}
+              />
             )}
           </div>
         </div>
       )}
 
       {/* ── Legende ────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-5 text-xs text-gray-500 px-1">
+      <div className="flex items-center gap-5 text-xs text-gray-500 px-1 flex-wrap">
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Eintrag gesetzt
+          <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gesetzt
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Nicht gefunden
+          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Nicht gefunden / Fehler
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-blue-400 inline-block" /> Manuell beim Hoster
+          <span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Resolver-Inkonsistenz
         </span>
+        <span className="text-gray-400">· Prüfung läuft über externe Resolver (kein Caching)</span>
       </div>
     </div>
   );

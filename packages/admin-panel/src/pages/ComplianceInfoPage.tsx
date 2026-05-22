@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.17.30';
+const VERSION        = '3.17.31';
 const BUILD_DATE     = '2026-05-22';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.17.31', date: '2026-05-22', title: 'DNS-Prüfung: Echte Multi-Resolver-Verifikation (Google/Cloudflare/Quad9), PTR/FCrDNS, SPF-Mehrfach-Record-Erkennung',
+    notes: 'Die DNS-Eintragsüberprüfung im BCP (SMTP & Routing → DNS-Einträge) befragt jetzt direkt die öffentlichen Resolver Google (8.8.8.8), Cloudflare (1.1.1.1) und Quad9 (9.9.9.9) statt des Docker-internen DNS (127.0.0.11). Der Docker-Resolver liefert gecachte/veraltete Ergebnisse und unterscheidet sich von dem, was externe MTAs (Gmail, Outlook) sehen — das führte dazu, dass MX-Einträge als gesetzt galten, obwohl sie noch nicht propagiert waren. Neu: (1) Multi-Resolver parallel prüfen via dns.promises.Resolver.setServers(). (2) Per-Resolver farbige Badges (grün/rot) mit Latenzanzeige. (3) Konsistenz-Warnung wenn Resolver unterschiedliche Werte melden. (4) PTR/FCrDNS-Check (A→PTR→Rück-A) auf echten Resolvern. (5) SPF-Mehrfach-Record-Erkennung: RFC 7208 §3.2 erlaubt genau einen SPF-TXT-Record — zwei Records → permerror bei allen Empfängern → explizite rote Warnung im BCP. (6) Prüfzeitpunkt-Anzeige und Info-Banner mit verwendeten Resolvern.' },
   { version: '3.17.30', date: '2026-05-22', title: 'Outbound E-Mail-Pipeline komplett neu (Google-konform): strukturierter Queue-Job, nodemailer Transport-DKIM, MinIO-Anhänge',
     notes: 'Vollständige Überarbeitung des ausgehenden E-Mail-Pfads nach Google RFC-5322-Richtlinien. (1) Strukturierter BullMQ-Job: api-gateway übergibt StructuredMessage (from, fromName, to, cc, bcc, subject, html, text, messageId, date, inReplyTo, attachments) statt base64-blob — Redis-Job bleibt klein. (2) MinIO für Anhänge: Uploads gehen direkt in outbound-queue/{jobId}/{filename}, Worker lädt und bereinigt nach Zustellung. (3) DKIM via nodemailer Transport-Option: dkim: { domainName, keySelector, privateKey } direkt in createTransport() — kein manuelles mailauth-Prepend mehr. nodemailer wendet DKIM korrekt auf den gesamten Message-Stream an. (4) Order-Bug behoben: DKIM-Signierung und Header-Einfügung waren in falscher Reihenfolge — mit Transport-DKIM ist das unmöglich. (5) Sent-Kopie sauber getrennt: RFC-5322-Buffer für Gesendete Elemente wird in-memory aufgebaut, unabhängig vom Queue-Worker. (6) SMTP-Submission-Pfad (Ports 465/587) nutzt weiterhin rawMessage (base64) — kompatibel.' },
   { version: '3.17.29', date: '2026-05-22', title: 'Fix: RFC 5322 Compliance — From & Message-ID Header fehlend (Gmail 550 5.7.1)',

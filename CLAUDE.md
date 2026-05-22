@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.30`
+**Aktuelle Version**: `3.17.31`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -73,7 +73,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 
 | Container | Docker Image | Inhalt |
 |-----------|-------------|--------|
-| `coremail` | `magpeek/coremail-app:3.17.30` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
+| `coremail` | `magpeek/coremail-app:3.17.31` | Alle Node.js-Services + MWA/BCP-Frontends (kein nginx!) |
 | `rspamd`   | `rspamd/rspamd:4.0.0`        | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
 | `clamav`   | `clamav/clamav:stable`       | Open-Source Antivirus Engine (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Standard-Image |
@@ -521,7 +521,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.17.30; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.17.31; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -540,7 +540,13 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.30 — Highlights
+## Aktuelle Version 3.17.31 — Highlights
+
+**v3.17.31** — DNS-Prüfung: Echte Multi-Resolver-Verifikation. `dns.promises.Resolver.
+setServers()` — befragt Google (8.8.8.8), Cloudflare (1.1.1.1), Quad9 (9.9.9.9) direkt
+statt Docker-internem DNS (127.0.0.11 ist gecacht/veraltet). PTR/FCrDNS-Check neu.
+SPF-Mehrfach-Record-Erkennung (RFC 7208 §3.2 — → permerror). Per-Resolver-Badges
+im BCP mit Latenz + Konsistenz-Warnung + aufklappbarer Detailansicht.
 
 **v3.17.30** — Outbound-Pipeline komplett neu: Strukturierter BullMQ-Job
 (`StructuredMessage` statt base64-blob), Anhänge via MinIO (`outbound-queue/{jobId}/`),
@@ -623,4 +629,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-22 (v3.17.30 — Outbound-Pipeline Rebuild: StructuredMessage Queue + MinIO Anhänge + nodemailer Transport-DKIM)*
+*Letzte Aktualisierung: 2026-05-22 (v3.17.31 — DNS-Prüfung Multi-Resolver: Google/Cloudflare/Quad9, PTR/FCrDNS, SPF-Mehrfach-Record-Erkennung)*
