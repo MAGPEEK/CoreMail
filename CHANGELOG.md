@@ -13,6 +13,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.43] — 2026-05-22 — Fix: Audit-Log schreibt keine Einträge
+
+### Fixed
+
+- **`auditMiddleware` Pfad-Bug** (`lib/audit.ts`): Das Middleware ist via
+  `app.use('/api/v1/admin', auditMiddleware)` gemountet. Express liefert
+  innerhalb des Middleware `req.path` **ohne** das Mount-Prefix — also
+  `/mailboxes/123` statt `/api/v1/admin/mailboxes/123`. Die Bedingung
+  `req.path.startsWith('/api/v1/admin/')` war daher **niemals wahr** →
+  kein einziger Audit-Eintrag wurde je in die DB geschrieben.
+
+  Fix: Prefix-Check entfernt (redundant wenn bereits auf `/api/v1/admin`
+  gemountet). `pathParts`-Extraktion auf relativen Pfad umgestellt
+  (`req.path.replace(/^\//, '').split('/')`).
+
+---
+
 ## [3.17.42] — 2026-05-22 — Feature: Zertifikate bearbeiten (Name, Services, Auto-Renew)
 
 ### Added
