@@ -1059,31 +1059,18 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 interface DomainItem { id: string; name: string; primary: boolean; dkimSelector: string }
 interface DomainsResp { domains: DomainItem[] }
 
-interface ResolverResult {
-  resolver:  string;    // "Google", "Cloudflare", "Quad9"
-  ip:        string;    // "8.8.8.8"
-  ok:        boolean;
-  found:     string | null;
-  latencyMs: number;
-  error?:    string;
-}
-
 interface DnsRecord {
-  type:        string;
-  name:        string;
-  expected:    string;
-  ok:          boolean;
-  found:       string | null;
-  resolvers:   ResolverResult[];   // Ergebnis pro öffentlichem Resolver
-  consistent:  boolean;            // alle Resolver einig
-  warning?:    string;             // z.B. "Mehrere SPF-Records"
+  type:     string;
+  name:     string;
+  expected: string;
+  ok:       boolean;
+  found:    string | null;
+  warning?: string;
 }
 
 interface DnsCheckResult {
-  domain:        string;
-  hostname:      string;
-  checkedAt:     string;
-  resolversUsed: { name: string; ip: string }[];
+  domain:   string;
+  hostname: string;
   records: {
     mx:           DnsRecord;
     spf:          DnsRecord;
@@ -1128,71 +1115,6 @@ function StatusDot({ ok, checking }: { ok: boolean; checking: boolean }) {
   );
 }
 
-// ── ResolverBadges — kompakte Resolver-Statuszeile ────────────────────────────
-function ResolverBadges({ resolvers, checking }: { resolvers: ResolverResult[]; checking: boolean }) {
-  if (checking || !resolvers.length) return null;
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      {resolvers.map((r) => (
-        <span
-          key={r.resolver}
-          title={r.error ? `${r.resolver} (${r.ip}): ${r.error}` : r.found ? `${r.resolver} (${r.ip}): ${r.found}` : `${r.resolver} (${r.ip}): kein Eintrag`}
-          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded border ${
-            r.ok
-              ? 'bg-green-50 border-green-200 text-green-700'
-              : r.error
-                ? 'bg-red-50 border-red-200 text-red-600'
-                : 'bg-gray-50 border-gray-200 text-gray-500'
-          }`}
-        >
-          <span className={`w-1.5 h-1.5 rounded-full ${r.ok ? 'bg-green-500' : r.error ? 'bg-red-400' : 'bg-gray-300'}`} />
-          {r.resolver}
-          {r.latencyMs > 0 && <span className="opacity-60 font-normal ml-0.5">{r.latencyMs}ms</span>}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-// ── ResolverDetails — aufklappbare Detailansicht ──────────────────────────────
-function ResolverDetails({ resolvers }: { resolvers: ResolverResult[] }) {
-  const [open, setOpen] = useState(false);
-  if (!resolvers.length) return null;
-  return (
-    <div>
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="text-[10px] text-accent hover:underline flex items-center gap-1"
-      >
-        {open ? '▲' : '▼'} Resolver-Details {open ? 'ausblenden' : 'anzeigen'}
-      </button>
-      {open && (
-        <div className="mt-1.5 rounded border border-gray-200 overflow-hidden">
-          {resolvers.map((r, i) => (
-            <div key={r.resolver} className={`px-3 py-2 text-[11px] ${i < resolvers.length - 1 ? 'border-b border-gray-100' : ''} ${r.ok ? 'bg-green-50' : 'bg-gray-50'}`}>
-              <div className="flex items-center gap-2 font-semibold">
-                <span className={`w-2 h-2 rounded-full ${r.ok ? 'bg-green-500' : r.error ? 'bg-red-400' : 'bg-gray-300'}`} />
-                <span className="text-gray-700">{r.resolver}</span>
-                <code className="text-gray-400 font-mono font-normal">{r.ip}</code>
-                <span className="ml-auto text-gray-400 font-normal">{r.latencyMs}ms</span>
-              </div>
-              {r.found && (
-                <code className="block mt-1 ml-4 text-gray-600 font-mono break-all leading-relaxed">{r.found}</code>
-              )}
-              {r.error && !r.found && (
-                <span className="block mt-1 ml-4 text-red-600">{r.error}</span>
-              )}
-              {!r.ok && !r.error && !r.found && (
-                <span className="block mt-1 ml-4 text-gray-400">Kein Eintrag</span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── DnsRow — eine Zeile in der DNS-Tabelle ────────────────────────────────────
 interface DnsRowProps {
   label:       string;
@@ -1202,9 +1124,6 @@ interface DnsRowProps {
   isLast?:     boolean;
 }
 function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
-  const hasResolvers = record.resolvers?.length > 0;
-  const inconsistent = hasResolvers && !record.consistent && record.resolvers.some(r => r.ok) && record.resolvers.some(r => !r.ok);
-
   return (
     <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
       {/* Status-Punkt */}
@@ -1221,33 +1140,14 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
           </span>
           {!checking && (
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-              record.ok
-                ? inconsistent ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
-                : 'bg-yellow-100 text-yellow-700'
+              record.ok ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
             }`}>
-              {record.ok
-                ? inconsistent ? '◑ Inkonsistent' : '● Gesetzt'
-                : '○ Nicht gefunden'}
+              {record.ok ? '● Gesetzt' : '○ Nicht gefunden'}
             </span>
           )}
         </div>
 
         <p className="text-xs text-gray-400 leading-relaxed">{description}</p>
-
-        {/* Resolver-Badge-Zeile (kompakt, sofort sichtbar) */}
-        {hasResolvers && !checking && (
-          <ResolverBadges resolvers={record.resolvers} checking={checking} />
-        )}
-
-        {/* Inkonsistenz-Warnung */}
-        {inconsistent && (
-          <div className="flex items-start gap-1.5 bg-orange-50 border border-orange-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-orange-500 shrink-0 mt-0.5" />
-            <span className="text-[11px] text-orange-800">
-              Resolver-Inkonsistenz: Nicht alle DNS-Server liefern denselben Wert. Propagierung läuft möglicherweise noch (TTL).
-            </span>
-          </div>
-        )}
 
         {/* Sonder-Warnung (z.B. Mehrere SPF-Records) */}
         {!checking && record.warning && (
@@ -1298,19 +1198,13 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
             <span className="text-[11px] text-yellow-700">Kein Eintrag gefunden — beim DNS-Anbieter eintragen</span>
           </div>
         )}
-
-        {/* Aufklappbare Resolver-Details */}
-        {hasResolvers && !checking && (
-          <ResolverDetails resolvers={record.resolvers} />
-        )}
       </div>
     </div>
   );
 }
 
-// ── PTR-Zeile — jetzt mit echtem FCrDNS-Check ────────────────────────────────
+// ── PTR-Zeile ─────────────────────────────────────────────────────────────────
 function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: string; checking: boolean }) {
-  const hasResolvers = (record?.resolvers?.length ?? 0) > 0;
   return (
     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4">
       <div className="flex items-start pt-0.5">
@@ -1345,12 +1239,6 @@ function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: 
           muss per A-Record auf dieselbe IP zurückzeigen. Wird im Server-Panel des Hosters gesetzt.
         </p>
 
-        {/* Resolver-Badges */}
-        {hasResolvers && !checking && record && (
-          <ResolverBadges resolvers={record.resolvers} checking={checking} />
-        )}
-
-        {/* Warnung / Ergebnis */}
         {!checking && record?.ok && record.found && (
           <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
             <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
@@ -1369,17 +1257,11 @@ function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: 
           </div>
         )}
 
-        {/* Erwarteter Wert */}
         <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
           <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Soll-Wert</span>
           <code className="flex-1 text-xs text-gray-800 font-mono break-all">{hostname}</code>
           <CopyBtn text={hostname} />
         </div>
-
-        {/* Resolver-Details */}
-        {hasResolvers && !checking && record && (
-          <ResolverDetails resolvers={record.resolvers} />
-        )}
       </div>
     </div>
   );
@@ -1415,7 +1297,7 @@ function DnsSection() {
   const hasWarn  = dnsCheck ? Object.values(dnsCheck.records).some(r => !!r.warning) : false;
 
   const emptyRecord = (type: string, name: string, expected: string): DnsRecord =>
-    ({ type, name, expected, ok: false, found: null, resolvers: [], consistent: true });
+    ({ type, name, expected, ok: false, found: null });
 
   const rows: { label: string; description: string; key: keyof DnsCheckResult['records']; fallback: DnsRecord }[] = [
     {
@@ -1450,11 +1332,6 @@ function DnsSection() {
     },
   ];
 
-  // Zeitstempel der letzten Prüfung lesbar formatieren
-  const checkedAtStr = dnsCheck?.checkedAt
-    ? new Date(dnsCheck.checkedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : null;
-
   return (
     <div className="space-y-5">
 
@@ -1463,35 +1340,18 @@ function DnsSection() {
         <div>
           <h2 className="text-base font-semibold text-gray-900">DNS-Einträge</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Live-Prüfung über Google (8.8.8.8), Cloudflare (1.1.1.1) und Quad9 (9.9.9.9) — unabhängig vom System-DNS
+            Prüft alle für den Mailserver erforderlichen DNS-Einträge
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {checkedAtStr && !checking && (
-            <span className="text-[11px] text-gray-400">Geprüft um {checkedAtStr}</span>
-          )}
-          <button
-            onClick={() => setCheckKey(k => k + 1)}
-            disabled={!effectiveDomainId || checking}
-            className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
-          >
-            <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
-            Prüfen
-          </button>
-        </div>
+        <button
+          onClick={() => setCheckKey(k => k + 1)}
+          disabled={!effectiveDomainId || checking}
+          className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+        >
+          <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
+          Prüfen
+        </button>
       </div>
-
-      {/* ── Resolver-Info-Banner ────────────────────────────────────────── */}
-      {dnsCheck && !checking && dnsCheck.resolversUsed && (
-        <div className="rounded-lg px-3 py-2 bg-blue-50 border border-blue-100 flex items-center gap-2 flex-wrap">
-          <Globe size={12} className="text-blue-400 shrink-0" />
-          <span className="text-[11px] text-blue-700 font-medium">Externe Resolver:</span>
-          {dnsCheck.resolversUsed.map(r => (
-            <code key={r.ip} className="text-[11px] text-blue-600 font-mono">{r.name} ({r.ip})</code>
-          ))}
-          <span className="text-[11px] text-blue-500 ml-auto">Ergebnisse entsprechen dem, was externe Mailserver sehen</span>
-        </div>
-      )}
 
       {/* ── Domain-Tabs ─────────────────────────────────────────────────── */}
       {domains.length > 1 && (
