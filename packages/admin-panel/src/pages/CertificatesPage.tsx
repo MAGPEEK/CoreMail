@@ -392,10 +392,14 @@ export function CertificatesPage() {
                         {cert.type === 'LETSENCRYPT' && (
                           <button
                             onClick={() => renewMutation.mutate(cert.id)}
-                            disabled={cert.status === 'RENEWING'}
-                            title="Jetzt erneuern"
+                            disabled={cert.status === 'RENEWING' || cert.status === 'PENDING'}
+                            title={
+                              cert.status === 'PENDING'   ? 'ACME-Prozess läuft noch — bitte warten' :
+                              cert.status === 'RENEWING'  ? 'Erneuerung läuft…' :
+                              'Jetzt erneuern'
+                            }
                             className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40">
-                            <RefreshCw size={14} className={cert.status === 'RENEWING' ? 'animate-spin' : ''} />
+                            <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
                           </button>
                         )}
                         <button

@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.41] — 2026-05-22 — Fix: ACME-Prozess bricht nach 5 Minuten ab
+
+### Fixed
+
+- **ACME-Timeout** (`routes/admin/certificates.ts`): `runAcmeIssuance()` läuft
+  nicht mehr endlos. `Promise.race()` bricht den ACME-Prozess nach 5 Minuten ab
+  und setzt das Zertifikat auf `ERROR` — auch wenn `client.auto()` hängt (Port 80
+  nicht erreichbar, Let's Encrypt antwortet nicht, etc.).
+
+- **Startup-Bereinigung** (`server.ts`): Beim Container-Start werden Zertifikate
+  die länger als 10 Minuten im Status `PENDING` oder `RENEWING` stecken automatisch
+  auf `ERROR` gesetzt. Verhindert dauerhaft hängende Certs nach einem Neustart.
+
+- **Doppelstart-Schutz** (Renew-Route): `POST /:id/renew` gibt jetzt `409 Conflict`
+  zurück wenn das Cert bereits `PENDING` oder `RENEWING` ist — kein paralleler
+  zweiter ACME-Prozess mehr möglich.
+
+- **BCP SSL/TLS UI**: Renew-Button (↻) ist für `PENDING`-Certs deaktiviert und
+  zeigt einen Spinner + Tooltip „ACME-Prozess läuft noch — bitte warten".
+
+---
+
 ## [3.17.40] — 2026-05-22 — Fix: Exklusive Service-Zuordnung bei Zertifikaten
 
 ### Fixed
