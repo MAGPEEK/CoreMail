@@ -42,6 +42,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   abonniert Redis-Channel `settings:reload` für Hot-Reload. Neue Funktion
   `loadSecuritySettings()`.
 
+### Fixed
+
+- **`routes/admin/security.ts`** — `PUT /admin/security/settings` publiziert jetzt
+  `settings:reload` via Redis nach dem Speichern, damit die security-filter sofort
+  `rspamdEnabled`/`clamavEnabled` übernimmt (ohne Container-Neustart).
+
 ---
 
 ## [3.17.37] — 2026-05-22 — BCP SSL/TLS: Banner entfernt, Services auf SMTP/IMAP/POP3 reduziert
