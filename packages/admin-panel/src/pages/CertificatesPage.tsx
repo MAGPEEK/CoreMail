@@ -13,7 +13,7 @@ import toast from 'react-hot-toast';
 import {
   ShieldCheck, Plus, RefreshCw, Trash2, Upload,
   ChevronDown, ChevronUp, X, Loader2, AlertCircle,
-  Lock, LockOpen, Server,
+  Lock, LockOpen, Server, Pencil,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
@@ -162,6 +162,7 @@ export function CertificatesPage() {
   const qc = useQueryClient();
   const [modal, setModal] = useState<ModalMode>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingCert, setEditingCert] = useState<Certificate | null>(null);
 
   const { data: certs = [], isLoading } = useQuery<Certificate[]>({
     queryKey: ['admin-certificates'],
@@ -403,6 +404,12 @@ export function CertificatesPage() {
                           </button>
                         )}
                         <button
+                          onClick={() => setEditingCert(cert)}
+                          title="Bearbeiten (Name, Services, Auto-Renew)"
+                          className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors">
+                          <Pencil size={14} />
+                        </button>
+                        <button
                           onClick={() => confirmDelete(cert)}
                           title="Löschen"
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
@@ -488,6 +495,13 @@ export function CertificatesPage() {
       {modal === 'letsencrypt' && <LetsEncryptModal onClose={() => setModal(null)} allCerts={certs} />}
       {modal === 'upload'      && <UploadModal      onClose={() => setModal(null)} allCerts={certs} />}
       {modal === 'selfsigned'  && <SelfSignedModal  onClose={() => setModal(null)} allCerts={certs} />}
+      {editingCert && (
+        <EditCertModal
+          cert={editingCert}
+          allCerts={certs}
+          onClose={() => setEditingCert(null)}
+        />
+      )}
     </div>
   );
 }
@@ -688,6 +702,113 @@ function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts:
             className="btn-primary flex items-center gap-1.5">
             {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
             Generieren
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Edit Cert Modal ───────────────────────────────────────────────────────────
+
+function EditCertModal({ cert, allCerts, onClose }: {
+  cert:     Certificate;
+  allCerts: Certificate[];
+  onClose:  () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName]         = useState(cert.name);
+  const [services, setServices] = useState<string[]>(cert.services);
+  const [autoRenew, setAutoRenew] = useState(cert.autoRenew);
+
+  const mutation = useMutation({
+    mutationFn: () => api.put(`/admin/certificates/${cert.id}`, {
+      name,
+      services,
+      ...(cert.type === 'LETSENCRYPT' ? { autoRenew } : {}),
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
+      toast.success('Zertifikat aktualisiert');
+      onClose();
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { message?: string })?.message ?? 'Aktualisierung fehlgeschlagen';
+      toast.error(msg);
+    },
+  });
+
+  return (
+    <Modal title="Zertifikat bearbeiten" onClose={onClose}>
+      <div className="space-y-4">
+        {/* Read-only info: Typ, Status, Domains */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <TypeBadge type={cert.type} />
+          <StatusBadge status={cert.status} expiresAt={cert.expiresAt} />
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 mb-1">Domains (nicht editierbar)</p>
+          <div className="flex flex-wrap gap-1">
+            {cert.domains.map(d => (
+              <span key={d} className="px-2 py-0.5 bg-gray-100 border border-gray-200 rounded text-xs font-mono">{d}</span>
+            ))}
+          </div>
+        </div>
+        {/* Read-only: Aktivierungsstatus */}
+        <div className="grid grid-cols-2 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm">
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">HTTPS-Proxy (Port 443)</p>
+            <p className="flex items-center gap-1">
+              {cert.isActiveHttps
+                ? <><Lock size={12} className="text-green-600" /><span className="text-green-700 font-medium">Aktiv</span></>
+                : <><LockOpen size={12} className="text-gray-400" /><span className="text-gray-400">Inaktiv</span></>}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">Protokoll-TLS (SMTP/IMAP/POP3)</p>
+            <p className="flex items-center gap-1">
+              {cert.isActiveProtocol
+                ? <><Server size={12} className="text-blue-600" /><span className="text-blue-700 font-medium">Aktiv</span></>
+                : <><Server size={12} className="text-gray-400" /><span className="text-gray-400">Inaktiv</span></>}
+            </p>
+          </div>
+        </div>
+        {/* Editierbare Felder */}
+        <Field label="Name">
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="input"
+            placeholder="Zertifikat-Name"
+          />
+        </Field>
+        <Field label="Services">
+          <ServiceSelector
+            selected={services}
+            onChange={setServices}
+            allCerts={allCerts}
+            currentCertId={cert.id}
+          />
+        </Field>
+        {cert.type === 'LETSENCRYPT' && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={autoRenew}
+              onChange={e => setAutoRenew(e.target.checked)}
+              className="rounded"
+            />
+            Auto-Renew (automatisch 30 Tage vor Ablauf erneuern)
+          </label>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="btn-secondary">Abbrechen</button>
+          <button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !name.trim()}
+            className="btn-primary flex items-center gap-1.5">
+            {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
+            Speichern
           </button>
         </div>
       </div>

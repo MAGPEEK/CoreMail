@@ -13,6 +13,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.42] — 2026-05-22 — Feature: Zertifikate bearbeiten (Name, Services, Auto-Renew)
+
+### Added
+
+- **BCP SSL/TLS — Zertifikat bearbeiten** (`CertificatesPage.tsx`): Stift-Symbol (✏️)
+  in der Aktionsspalte öffnet ein Bearbeitungs-Modal für jedes Zertifikat.
+  Editierbar: Name, Services-Zuordnung (SMTP/IMAP/POP3 mit Exklusivitäts-Anzeige),
+  Auto-Renew (nur für Let's Encrypt Zertifikate).
+  Read-only angezeigt: Typ, Status, Domains, HTTPS-Proxy-Status, Protokoll-TLS-Status.
+  Ruft `PUT /api/v1/admin/certificates/:id` auf.
+
+### Fixed
+
+- **`PUT /:id` Route** (`routes/admin/certificates.ts`): `isActiveProtocol` fehlte
+  im Prisma-`select` — wurde nicht im Response zurückgegeben. Behoben.
+
+---
+
 ## [3.17.41] — 2026-05-22 — Fix: ACME-Prozess bricht nach 5 Minuten ab
 
 ### Fixed

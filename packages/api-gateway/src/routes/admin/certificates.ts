@@ -573,8 +573,8 @@ adminCertificatesRouter.put('/:id', async (req: Request, res: Response) => {
       select: {
         id: true, name: true, domains: true, services: true, type: true,
         status: true, issuedAt: true, expiresAt: true, autoRenew: true,
-        isActiveHttps: true, acmeEmail: true, lastError: true, createdAt: true,
-        certPem: true, keyPem: true,
+        isActiveHttps: true, isActiveProtocol: true, acmeEmail: true,
+        lastError: true, createdAt: true, certPem: true, keyPem: true,
       },
     });
 
