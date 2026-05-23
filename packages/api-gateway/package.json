@@ -1,6 +1,6 @@
 {
   "name": "@coremail/api-gateway",
-  "version": "3.17.45",
+  "version": "3.17.46",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

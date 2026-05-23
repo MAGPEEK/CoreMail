@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.45`
+**Aktuelle Version**: `3.17.46`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -540,7 +540,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.45 — Highlights
+## Aktuelle Version 3.17.46 — Highlights
+
+**v3.17.46** — Fix: DKIM DNS-Eintrag syntaktisch korrekt. Public Key wurde bisher im SPKI-Format exportiert (enthält Algorithm-OID-Wrapper) — DKIM (RFC 6376) erwartet PKCS#1 (reiner RSAPublicKey). Fix: `type: 'spki'` → `type: 'pkcs1'` an allen drei Export-Stellen in `domains.ts` (dkim-record, regenerate-dkim, dns-check).
 
 **v3.17.45** — Feature: BCP Queue-Übersicht kompakt + Verwerfen-Funktion. Stats-Karten durch kompakten horizontalen Strip ersetzt. Übersicht zeigt jetzt alle ausstehenden Nachrichten direkt als Tabelle mit „Verwerfen"- und „Jetzt wiederholen"-Schaltflächen — kein Sub-Navigationswechsel nötig. Zweiter Refresh-Button entfernt (war in jedem Unterabschnitt).
 
@@ -676,4 +678,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-22 (v3.17.45 — Queue-Übersicht kompakt + Verwerfen; v3.17.44 — eDiscovery SearchField focus bug; v3.17.43 — Audit-Log Fix: req.path ohne Mount-Prefix; v3.17.42 — EditCertModal + PUT isActiveProtocol fix)*
+*Letzte Aktualisierung: 2026-05-23 (v3.17.46 — DKIM PKCS#1 Fix; v3.17.45 — Queue-Übersicht kompakt + Verwerfen; v3.17.44 — eDiscovery SearchField focus bug; v3.17.43 — Audit-Log Fix: req.path ohne Mount-Prefix)*
