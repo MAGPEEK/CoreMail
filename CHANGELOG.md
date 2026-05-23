@@ -13,6 +13,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.47] — 2026-05-23 — Feature: BCP DNS-Einrichtungs-Panel
+
+### Added
+
+- **DNS-Einrichtungs-Panel in BCP → Domains → Domain bearbeiten** (`DomainsPage.tsx`):
+  Neuer Button „DNS-Einrichtung prüfen" öffnet ein vollständiges Einrichtungs-Panel
+  mit allen 7 DNS-Einträgen, die für einen vollständig konfigurierten Mailserver
+  benötigt werden. Werte werden automatisch aus der aktuellen SSL/TLS-Konfiguration
+  (publicHostname) und dem DKIM-Schlüssel abgeleitet:
+  - **A-Record** — Mailserver-IP (aus live-aufgelöster Server-IP)
+  - **MX-Record** — Maileingang auf Mailserver-Hostname
+  - **SPF-Record** — mit echter Server-IP (`v=spf1 ip4:<IP> ~all`)
+  - **DKIM-Record** — vollständiger p=-Wert inkl. 255-Zeichen-Chunk-Option
+    (aufklappbar, für DNS-Provider mit 255-Zeichen-Limit)
+  - **DMARC-Record** — fertige Vorlage mit rua= für die Domain
+  - **Autodiscover** — CNAME auf Mailserver-Hostname
+  - **PTR/Reverse-DNS** — mit Hinweis auf Server-Hoster
+  Jeder Eintrag zeigt: Typ-Badge (farbig), Status (✅/❌), kopierbarer Host-/Name-Wert
+  und kopierbarer Inhalt-Wert. Modal wechselt auf max-w-2xl wenn Panel geöffnet ist.
+
+### Changed
+
+- **DNS-Check Backend verbessert** (`api-gateway/routes/admin/domains.ts`):
+  - Server-IP wird vom Hostnamen live aufgelöst und in der Antwort als `serverIp` zurückgegeben
+  - SPF `expected`-Wert enthält jetzt die echte Server-IP statt Platzhalter
+  - DKIM `ok`-Flag vergleicht jetzt den vollständigen Schlüssel (whitespace-normalisiert),
+    nicht nur ob irgendeín DKIM-Record existiert
+  - PTR-Check nutzt bereits aufgelöste Server-IP (kein zweites DNS-Lookup)
+  - Neue `a`-Record-Sektion in der API-Antwort
+
+---
+
 ## [3.17.46] — 2026-05-23 — Fix: DKIM Public Key Format (SPKI → PKCS#1)
 
 ### Fixed
