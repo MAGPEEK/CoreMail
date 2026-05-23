@@ -192,7 +192,7 @@ adminDomainsRouter.get('/:id/dkim-record', async (req: Request, res: Response) =
   try {
     const { createPublicKey } = await import('crypto');
     const pubKey    = createPublicKey(domain.dkimPrivateKey);
-    const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+    const pubKeyDer = pubKey.export({ type: 'pkcs1', format: 'der' });
     const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
 
     res.json({
@@ -222,7 +222,7 @@ adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Respon
   await prisma.domain.update({ where: { id }, data: { dkimPrivateKey: privateKey } });
 
   const pubKey    = createPublicKey(privateKey);
-  const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+  const pubKeyDer = pubKey.export({ type: 'pkcs1', format: 'der' });
   const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
 
   log.info({ id, name: domain.name }, 'DKIM key pair regenerated');
@@ -256,7 +256,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   let dkimExpected = '';
   try {
     const pubKey    = createPublicKey(domain.dkimPrivateKey);
-    const pubKeyDer = pubKey.export({ type: 'spki', format: 'der' });
+    const pubKeyDer = pubKey.export({ type: 'pkcs1', format: 'der' });
     const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
     dkimExpected = `v=DKIM1; k=rsa; p=${pubKeyB64}`;
   } catch { dkimExpected = ''; }

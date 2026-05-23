@@ -13,6 +13,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.46] — 2026-05-23 — Fix: DKIM Public Key Format (SPKI → PKCS#1)
+
+### Fixed
+
+- **DKIM DNS-Eintrag syntaktisch korrekt** (`api-gateway/routes/admin/domains.ts`):
+  Public Key wurde bisher im SPKI-Format (SubjectPublicKeyInfo, mit Algorithm-OID-Wrapper)
+  exportiert — DKIM erwartet jedoch PKCS#1 (reiner RSAPublicKey ohne OID). Fix:
+  `pubKey.export({ type: 'spki', format: 'der' })` → `type: 'pkcs1'` an allen drei
+  Stellen (dkim-record, regenerate-dkim, dns-check). Der generierte `p=`-Wert im BCP
+  ist nun RFC 6376-konform und besteht die DNS-Verifikation.
+
+---
+
 ## [3.17.45] — 2026-05-22 — Feature: Queue-Übersicht kompakt + Verwerfen-Funktion
 
 ### Changed
