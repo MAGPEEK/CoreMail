@@ -272,6 +272,13 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     }
   }
 
+  // ── Server-IP auflösen (für SPF-Record + PTR-Check) ──────────────────────────
+  let serverIp = '';
+  try {
+    const ips = await dns.resolve4(hostname);
+    serverIp = ips[0] ?? '';
+  } catch { /* A-Record noch nicht gesetzt — serverIp bleibt leer */ }
+
   // ── MX ──────────────────────────────────────────────────────────────────────
   const mx = await check(async () => {
     const recs = await dns.resolveMx(domainName);
@@ -322,33 +329,40 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   });
 
   // ── PTR / FCrDNS ─────────────────────────────────────────────────────────────
-  // Forward-confirmed reverse DNS: hostname → IP(A) → PTR → muss auf hostname zeigen.
+  // Nutzt die bereits aufgelöste serverIp — Forward-confirmed reverse DNS.
   const ptr = await check(async () => {
-    const ips  = await dns.resolve4(hostname);
-    const ip   = ips[0];
-    if (!ip) return null;
-    const ptrs    = await dns.reverse(ip);
+    if (!serverIp) return null;
+    const ptrs    = await dns.reverse(serverIp);
     const cleaned = ptrs.map(p => p.replace(/\.$/, ''));
     const matched = cleaned.find(p => p === hostname || hostname.endsWith(`.${p}`));
     if (!matched) throw new Error(`PTR ${cleaned.join(', ')} ≠ ${hostname}`);
-    return `${ip} → ${cleaned.join(', ')}`;
+    return `${serverIp} → ${cleaned.join(', ')}`;
   });
-  if (!ptr.ok) ptr.warning = 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers setzen.';
+  if (!ptr.ok) ptr.warning = 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers (Contabo, Hetzner, …) setzen.';
 
-  // ── Antwort ─────────────────────────────────────────────────────────────────
-  const spfExpected   = `v=spf1 ip4:<ServerIP> -all  (oder a:${hostname} mx ~all)`;
+  // ── Erwartungswerte ──────────────────────────────────────────────────────────
+  // SPF: echte Server-IP wenn bereits bekannt, sonst hostname-basiert
+  const spfExpected   = serverIp
+    ? `v=spf1 ip4:${serverIp} ~all`
+    : `v=spf1 a:${hostname} mx ~all`;
   const dmarcExpected = `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domainName}; adkim=r; aspf=r`;
+
+  // DKIM: exakter Schlüsselvergleich (Whitespace-normalisiert, ignoriert DNS-Chunking)
+  const dkimKeyOk = dkimExpected !== '' && dkim.found !== null &&
+    dkim.found.replace(/\s/g, '') === dkimExpected.replace(/\s/g, '');
 
   res.json({
     domain:   domainName,
     hostname,
+    serverIp,
     records: {
-      mx:           { type: 'MX',    name: domainName,                       expected: `10 ${hostname}`, ...mx },
-      spf:          { type: 'TXT',   name: domainName,                       expected: spfExpected,      ...spf },
-      dkim:         { type: 'TXT',   name: dkimName,                         expected: dkimExpected,     ...dkim },
-      dmarc:        { type: 'TXT',   name: `_dmarc.${domainName}`,           expected: dmarcExpected,    ...dmarc },
-      autodiscover: { type: 'CNAME', name: `autodiscover.${domainName}`,     expected: hostname,         ...autodiscover },
-      ptr:          { type: 'PTR',   name: hostname,                         expected: hostname,         ...ptr },
+      a:            { type: 'A',     name: hostname,                           expected: serverIp,           ok: !!serverIp,  found: serverIp || null },
+      mx:           { type: 'MX',    name: domainName,                         expected: `10 ${hostname}`,   ...mx },
+      spf:          { type: 'TXT',   name: domainName,                         expected: spfExpected,        ...spf },
+      dkim:         { type: 'TXT',   name: dkimName,                           expected: dkimExpected,       ...dkim, ok: dkimKeyOk },
+      dmarc:        { type: 'TXT',   name: `_dmarc.${domainName}`,             expected: dmarcExpected,      ...dmarc },
+      autodiscover: { type: 'CNAME', name: `autodiscover.${domainName}`,       expected: hostname,           ...autodiscover },
+      ptr:          { type: 'PTR',   name: hostname,                           expected: hostname,           ...ptr },
     },
   });
 });

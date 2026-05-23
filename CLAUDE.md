@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.17.46`
+**Aktuelle Version**: `3.17.47`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -540,7 +540,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.17.46 — Highlights
+## Aktuelle Version 3.17.47 — Highlights
+
+**v3.17.47** — Feature: BCP DNS-Einrichtungs-Panel. Neuer Button „DNS-Einrichtung prüfen" in Domains → Domain bearbeiten öffnet vollständiges Panel mit allen 7 Einträgen (A, MX, SPF, DKIM, DMARC, Autodiscover, PTR). Werte stammen live aus SSL/TLS-Konfiguration + DKIM-Key. Jeder Eintrag: Typ-Badge, Status (✅/❌), kopierbarer Host + Wert. DKIM: 255-Zeichen-Chunk-Option für netcup & Co. SPF-Expected jetzt mit echter Server-IP.
 
 **v3.17.46** — Fix: DKIM DNS-Eintrag syntaktisch korrekt. Public Key wurde bisher im SPKI-Format exportiert (enthält Algorithm-OID-Wrapper) — DKIM (RFC 6376) erwartet PKCS#1 (reiner RSAPublicKey). Fix: `type: 'spki'` → `type: 'pkcs1'` an allen drei Export-Stellen in `domains.ts` (dkim-record, regenerate-dkim, dns-check).
 
@@ -678,4 +680,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-23 (v3.17.46 — DKIM PKCS#1 Fix; v3.17.45 — Queue-Übersicht kompakt + Verwerfen; v3.17.44 — eDiscovery SearchField focus bug; v3.17.43 — Audit-Log Fix: req.path ohne Mount-Prefix)*
+*Letzte Aktualisierung: 2026-05-23 (v3.17.47 — DNS-Einrichtungs-Panel BCP; v3.17.46 — DKIM PKCS#1 Fix; v3.17.45 — Queue-Übersicht kompakt + Verwerfen; v3.17.44 — eDiscovery SearchField focus bug)*

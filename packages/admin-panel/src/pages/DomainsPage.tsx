@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Plus, X, Copy, CheckCircle, ChevronDown, RefreshCw } from 'lucide-react';
+import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, ChevronDown, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
@@ -19,6 +19,121 @@ interface Domain {
 }
 interface DomainsResponse { domains: Domain[]; total: number; page: number; limit: number }
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
+
+// ── DNS-Check-Typen ───────────────────────────────────────────────────────────
+interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string }
+interface DnsCheckResult {
+  domain: string; hostname: string; serverIp: string;
+  records: { a: DnsRec; mx: DnsRec; spf: DnsRec; dkim: DnsRec; dmarc: DnsRec; autodiscover: DnsRec; ptr: DnsRec };
+}
+
+// ── DNS-Hilfsfunktionen (Modul-Ebene) ─────────────────────────────────────────
+function getHostPart(name: string, domain: string): string {
+  if (name === domain) return '@';
+  if (name.endsWith('.' + domain)) return name.slice(0, -(domain.length + 1));
+  return name;
+}
+
+// ── CopyBtn (Modul-Ebene — keine Inline-Definition) ──────────────────────────
+function CopyBtn({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { void copyToClipboard(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+      className="shrink-0 p-1 text-gray-400 hover:text-blue-600 transition-colors"
+      title="Kopieren"
+    >
+      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+// ── DnsRow (Modul-Ebene) ──────────────────────────────────────────────────────
+interface DnsRowProps {
+  label: string; record: DnsRec; domain: string;
+  hostOverride?: string; valueOverride?: string; extra?: React.ReactNode;
+}
+function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: DnsRowProps) {
+  const host  = hostOverride ?? getHostPart(record.name, domain);
+  const value = valueOverride ?? record.expected;
+  return (
+    <div className="py-2.5 border-b border-gray-100 last:border-0">
+      <div className="flex items-start gap-2">
+        {record.ok
+          ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-green-500" />
+          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning ? 'text-amber-500' : 'text-red-500'}`} />}
+        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 leading-none ${
+          record.type === 'TXT'  ? 'bg-purple-100 text-purple-700' :
+          record.type === 'MX'   ? 'bg-blue-100   text-blue-700'   :
+          record.type === 'A'    ? 'bg-green-100  text-green-700'  :
+          record.type === 'CNAME'? 'bg-amber-100  text-amber-700'  :
+                                   'bg-gray-100   text-gray-500'
+        }`}>{record.type}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold text-gray-700 mb-1.5">{label}</div>
+          {/* Host */}
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="text-[10px] text-gray-400 w-9 shrink-0">Host</span>
+            <code className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono truncate min-w-0" title={record.name}>{host}</code>
+            <CopyBtn value={host} />
+          </div>
+          {/* Value */}
+          {value && (
+            <div className="flex items-start gap-1.5">
+              <span className="text-[10px] text-gray-400 w-9 shrink-0 pt-0.5">Wert</span>
+              <code className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono break-all min-w-0 leading-relaxed">{value}</code>
+              <CopyBtn value={value} />
+            </div>
+          )}
+          {extra}
+          {/* Aktuell im DNS — wenn abweichend */}
+          {record.found && record.found !== record.expected && (
+            <div className="mt-1.5 text-[10px] text-gray-400 bg-gray-50 rounded px-2 py-0.5 font-mono break-all">
+              Im DNS: {record.found.slice(0, 80)}{record.found.length > 80 ? '…' : ''}
+            </div>
+          )}
+          {record.warning && (
+            <div className="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-relaxed">⚠ {record.warning}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DkimDnsRow — mit 255-Zeichen-Chunk-Ansicht ────────────────────────────────
+function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string; label: string }) {
+  const [showChunked, setShowChunked] = useState(false);
+  const full   = record.expected;
+  const chunk1 = full.slice(0, 255);
+  const chunk2 = full.slice(255);
+  return (
+    <DnsRow label={label} record={record} domain={domain} extra={
+      full.length > 255 ? (
+        <div className="mt-1.5">
+          <button onClick={() => setShowChunked(s => !s)}
+            className="text-[10px] text-blue-500 hover:underline flex items-center gap-1">
+            {showChunked ? '▲' : '▼'} Für DNS-Provider mit 255-Zeichen-Limit
+          </button>
+          {showChunked && (
+            <div className="mt-1 space-y-1">
+              <div className="flex items-start gap-1.5">
+                <code className="flex-1 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk1}"</code>
+                <CopyBtn value={chunk1} />
+              </div>
+              {chunk2 && (
+                <div className="flex items-start gap-1.5">
+                  <code className="flex-1 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk2}"</code>
+                  <CopyBtn value={chunk2} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : null
+    } />
+  );
+}
 
 
 // ── Add-Domain-Modal ──────────────────────────────────────────────────────────
@@ -100,6 +215,8 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   const [selector, setSelector] = useState(domain.dkimSelector);
   const [dkimRecord, setDkimRecord] = useState<DkimRecord | null>(null);
   const [dkimLoading, setDkimLoading] = useState(false);
+  const [dnsCheck, setDnsCheck] = useState<DnsCheckResult | null>(null);
+  const [dnsLoading, setDnsLoading] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: () => api.put<Domain>(`/admin/domains/${domain.id}`, { name: name.trim(), dkimSelector: selector }),
@@ -139,6 +256,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     try {
       const r = await api.post<DkimRecord>(`/admin/domains/${domain.id}/regenerate-dkim`, {});
       setDkimRecord(r);
+      setDnsCheck(null); // DNS-Panel invalidieren — neuer Key
       toast.success(t('domain_dkim_regen_success'));
     } catch {
       toast.error(t('domain_dkim_regen_error'));
@@ -147,9 +265,21 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     }
   };
 
+  const runDnsCheck = async () => {
+    setDnsLoading(true);
+    try {
+      const r = await api.get<DnsCheckResult>(`/admin/domains/${domain.id}/dns-check`);
+      setDnsCheck(r);
+    } catch {
+      toast.error(t('domain_dns_check_error'));
+    } finally {
+      setDnsLoading(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-lg p-6">
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}>
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
@@ -181,7 +311,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             <span className="text-xs text-gray-400">{domain._count.users} {t('domain_edit_mailbox_count')}</span>
           </div>
 
-          {/* DKIM DNS Record */}
+          {/* ── DKIM Quick-Show ────────────────────────────────────────────── */}
           <div className="pt-1 flex items-center gap-3">
             <button
               onClick={() => void loadDkim()}
@@ -222,10 +352,67 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               </div>
             </div>
           )}
+
+          {/* ── DNS-Einrichtung ────────────────────────────────────────────── */}
+          <div className="pt-1 border-t border-gray-100">
+            <button
+              onClick={() => void runDnsCheck()}
+              disabled={dnsLoading}
+              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:underline disabled:opacity-50"
+            >
+              <Globe size={13} />
+              {dnsLoading ? t('domain_dns_checking') : t('domain_dns_check_btn')}
+              {dnsCheck && !dnsLoading && <RefreshCw size={11} className="ml-1 opacity-60" />}
+            </button>
+
+            {dnsCheck && (
+              <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
+                {/* Header */}
+                <div className="bg-gray-50 px-3 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-gray-700">
+                    {t('domain_dns_panel_title')} <span className="text-indigo-600">{dnsCheck.domain}</span>
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    {dnsCheck.hostname}
+                    {dnsCheck.serverIp ? <> · <span className="text-green-600">{dnsCheck.serverIp}</span></> : <span className="text-amber-600"> · {t('domain_dns_ip_unknown')}</span>}
+                  </span>
+                </div>
+
+                <div className="px-3">
+                  {/* A-Record */}
+                  <DnsRow
+                    label={t('domain_dns_record_a')}
+                    record={dnsCheck.records.a}
+                    domain={dnsCheck.domain}
+                    hostOverride={getHostPart(dnsCheck.records.a.name, dnsCheck.domain)}
+                  />
+                  {/* MX */}
+                  <DnsRow label={t('domain_dns_record_mx')} record={dnsCheck.records.mx} domain={dnsCheck.domain} />
+                  {/* SPF */}
+                  <DnsRow label={t('domain_dns_record_spf')} record={dnsCheck.records.spf} domain={dnsCheck.domain} />
+                  {/* DKIM — mit Chunked-Option */}
+                  <DkimDnsRow label={t('domain_dns_record_dkim')} record={dnsCheck.records.dkim} domain={dnsCheck.domain} />
+                  {/* DMARC */}
+                  <DnsRow label={t('domain_dns_record_dmarc')} record={dnsCheck.records.dmarc} domain={dnsCheck.domain} />
+                  {/* Autodiscover */}
+                  <DnsRow label={t('domain_dns_record_ac')} record={dnsCheck.records.autodiscover} domain={dnsCheck.domain} />
+                  {/* PTR — Host = Server-IP, Wert = Hostname */}
+                  <DnsRow
+                    label={t('domain_dns_record_ptr')}
+                    record={dnsCheck.records.ptr}
+                    domain={dnsCheck.domain}
+                    hostOverride={dnsCheck.serverIp || '(Server-IP)'}
+                    valueOverride={dnsCheck.hostname}
+                    extra={<p className="mt-1 text-[10px] text-gray-400">ℹ {t('domain_dns_ptr_note')}</p>}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center justify-between mt-5">
-          {/* Löschen nur wenn nicht primär und keine User */}
+          {/* Löschen nur wenn nicht primär */}
           <button
             onClick={() => {
               if (confirm(`${t('domain_delete_confirm')} "${domain.name}"`)) deleteMutation.mutate();
