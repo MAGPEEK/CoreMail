@@ -1105,14 +1105,11 @@ function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
   );
 }
 
-// ── StatusDot — gefüllter Kreis: grün = gesetzt, gelb = fehlt ────────────────
-function StatusDot({ ok, checking }: { ok: boolean; checking: boolean }) {
+// ── StatusDot — grün = ok, gelb = warning (existiert aber abweichend), rot = fehlt
+function StatusDot({ ok, checking, warning }: { ok: boolean; checking: boolean; warning?: boolean }) {
   if (checking) return <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />;
-  return (
-    <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${
-      ok ? 'bg-green-500' : 'bg-yellow-400'
-    }`} />
-  );
+  const color = ok ? 'bg-green-500' : warning ? 'bg-yellow-400' : 'bg-red-500';
+  return <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${color}`} />;
 }
 
 // ── DnsRow — eine Zeile in der DNS-Tabelle ────────────────────────────────────
@@ -1128,7 +1125,7 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
     <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
       {/* Status-Punkt */}
       <div className="flex items-start pt-0.5">
-        <StatusDot ok={record.ok} checking={checking} />
+        <StatusDot ok={record.ok} checking={checking} warning={!!record.warning} />
       </div>
 
       <div className="space-y-2 min-w-0">
@@ -1140,9 +1137,11 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
           </span>
           {!checking && (
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-              record.ok ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+              record.ok        ? 'bg-green-100  text-green-700'
+              : record.warning ? 'bg-yellow-100 text-yellow-700'
+              :                  'bg-red-100    text-red-700'
             }`}>
-              {record.ok ? '● Gesetzt' : '○ Nicht gefunden'}
+              {record.ok ? '● Gesetzt' : record.warning ? '⚠ Warnung' : '○ Nicht gefunden'}
             </span>
           )}
         </div>
@@ -1290,11 +1289,19 @@ function DnsSection() {
     gcTime:    0,
   });
 
-  // 6 Einträge: MX, SPF, DKIM, DMARC, Autodiscover, PTR
-  const okCount  = dnsCheck ? Object.values(dnsCheck.records).filter(r => r.ok).length : 0;
-  const total    = 6;
-  const allOk    = okCount === total;
-  const hasWarn  = dnsCheck ? Object.values(dnsCheck.records).some(r => !!r.warning) : false;
+  // 6 sichtbare Einträge: MX, SPF, DKIM, DMARC, Autodiscover, PTR
+  // (A-Record wird vom Backend zurückgegeben, aber NICHT im UI gerendert —
+  //  deshalb darf er auch nicht in den Counter einfließen, sonst Inkonsistenz)
+  const VISIBLE_DNS_KEYS = ['mx', 'spf', 'dkim', 'dmarc', 'autodiscover', 'ptr'] as const;
+  const visibleRecords = dnsCheck
+    ? VISIBLE_DNS_KEYS.map(k => dnsCheck.records[k])
+    : [];
+  const okCount      = visibleRecords.filter(r => r.ok).length;
+  const warnCount    = visibleRecords.filter(r => !r.ok && r.warning).length;
+  const missingCount = visibleRecords.filter(r => !r.ok && !r.warning).length;
+  const total        = VISIBLE_DNS_KEYS.length;
+  const allOk        = okCount === total;
+  const hasWarn      = warnCount > 0;
 
   const emptyRecord = (type: string, name: string, expected: string): DnsRecord =>
     ({ type, name, expected, ok: false, found: null });
@@ -1389,7 +1396,12 @@ function DnsSection() {
             <p className={`text-sm font-semibold ${allOk && !hasWarn ? 'text-green-800' : 'text-yellow-800'}`}>
               {allOk && !hasWarn
                 ? `Alle ${total} Einträge für ${dnsCheck.domain} sind korrekt gesetzt ✓`
-                : `${okCount} von ${total} Einträgen gesetzt${hasWarn ? ' — ⚠ Kritische Warnungen vorhanden' : ` — ${total - okCount} ${total - okCount === 1 ? 'fehlt' : 'fehlen'} noch`}`}
+                : (() => {
+                    const parts: string[] = [];
+                    if (warnCount > 0)    parts.push(`${warnCount} ${warnCount === 1 ? 'mit Warnung' : 'mit Warnungen'}`);
+                    if (missingCount > 0) parts.push(`${missingCount} ${missingCount === 1 ? 'fehlt' : 'fehlen'}`);
+                    return `${okCount} von ${total} Einträgen gesetzt${parts.length ? ' — ' + parts.join(', ') : ''}`;
+                  })()}
             </p>
             <p className={`text-xs mt-0.5 ${allOk && !hasWarn ? 'text-green-700' : 'text-yellow-700'}`}>
               Mailserver: <strong className="font-mono">{dnsCheck.hostname}</strong>
@@ -1439,12 +1451,12 @@ function DnsSection() {
           <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gesetzt
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Nicht gefunden / Fehler
+          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Warnung (Eintrag existiert, aber Wert weicht ab)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Resolver-Inkonsistenz
+          <span className="w-3 h-3 rounded-full bg-red-500 inline-block" /> Nicht gefunden
         </span>
-        <span className="text-gray-400">· Prüfung läuft über externe Resolver (kein Caching)</span>
+        <span className="text-gray-400">· Prüfung über lokalen Resolver (kein Caching)</span>
       </div>
     </div>
   );

@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.18.2';
+const VERSION        = '3.18.3';
 const BUILD_DATE     = '2026-05-24';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.18.3', date: '2026-05-24', title: 'Fix: BCP DNS-Check Counter und Status-Farben konsistent',
+    notes: 'BCP → SMTP & Routing → DNS-Einträge: Counter zeigte „5 von 6 Einträgen gesetzt" obwohl 2 gelbe sichtbar waren. Root Cause: Backend liefert 7 Records (a, mx, spf, dkim, dmarc, autodiscover, ptr), UI rendert aber nur 6 (A-Record unsichtbar). Counter zählte alle 7 gegen hardcoded total=6 → Inkonsistenz. Außerdem wurden Warnings (z.B. SPF-Multi-Record, PTR-Mismatch) im Status-Text gar nicht erwähnt. Fix: VISIBLE_DNS_KEYS=[mx,spf,dkim,dmarc,autodiscover,ptr] als Single Source of Truth, separater okCount/warnCount/missingCount, Status-Text differenziert „X mit Warnung" und „Y fehlt". StatusDot zeigt jetzt 3 Farben (grün=ok / gelb=warning / rot=missing) statt grün/gelb. Badge analog mit „⚠ Warnung" zusätzlich zu „Gesetzt"/„Nicht gefunden". Legende aktualisiert ohne veraltetes Orange (Multi-Resolver-Funktion gibts seit v3.17.34 nicht mehr).' },
   { version: '3.18.2', date: '2026-05-24', title: 'UI-Cleanup, Button-Fix + Compose-Window Rollback',
     notes: 'Drei Änderungen in einem Patch. (1) „Outlook"-Erwähnungen aus user-facing UI-Texten der MWA entfernt: Stop-Processing-Hinweis in der Regeln-Sektion ohne Outlook-Vergleich, Ansicht-Sektion zeigt „für CoreMail anpassen" statt „wie in Outlook oder Thunderbird", App-Passwörter-Hinweis sagt „Für externe E-Mail-Clients" statt der Marken-Aufzählung. Erhalten bleiben technische Outlook-Referenzen (Autodiscover-Setup-Anleitung im BCP, OAuth2-Client-Beispiele „Outlook Modern Auth", historische Changelog-Einträge) — diese zeigen auf den realen Microsoft-Outlook-Client als externen IMAP/EAS-Konsument. (2) Fix: „+ Neue Regel"-Button in Settings → Regeln schrumpfte bei knappen Viewport-Breiten und brach den Text um. Lösung: shrink-0 whitespace-nowrap px-4 — Button hält feste Breite, Text bleibt einzeilig. (3) Rollback: Das Gmail-Style-Compose-Window-Redesign aus v3.18.1 (3 Größen, Header-Drag, Schedule-Send-Dropdown, Emoji-Picker, Footer-Format-Toolbar) wurde zurückgenommen. Die alte Compose-Variante (Outlook-angelehnt, Formatierungs-Toolbar oben, Senden rechts unten) passt besser zur restlichen CoreMail-UI.' },
   { version: '3.18.1', date: '2026-05-24', title: 'Compose-Window Gmail-Style Redesign (in v3.18.2 zurückgerollt)',

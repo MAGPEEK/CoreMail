@@ -13,6 +13,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.3] — 2026-05-24 — Fix: BCP DNS-Check Counter + Status-Farben
+
+### Fixed
+
+- **BCP → SMTP & Routing → DNS-Einträge: Counter und gelbe Indikatoren waren inkonsistent**
+  (`packages/admin-panel/src/pages/SmtpConfigPage.tsx`):
+
+  **Root Cause**: Der Backend-Endpoint liefert **7 Records** (`a, mx, spf, dkim, dmarc,
+  autodiscover, ptr`), aber das UI rendert nur **6** davon (der A-Record wird nicht
+  angezeigt). Der Counter `okCount` zählte aber alle 7 Records gegen ein
+  hardcoded `total = 6`. Ergebnis: Bei z.B. 6 ok + 1 warning (A unsichtbar, 1
+  Warning sichtbar) → „6 von 6" obwohl ein gelber Eintrag sichtbar war. Bei
+  5 ok + 2 warning → „5 von 6 — 1 fehlt" obwohl 2 gelb sichtbar.
+
+  Außerdem: Warnings (z.B. SPF-Multi-Record, PTR-Mismatch) wurden im Status-Text
+  gar nicht erwähnt — sie waren weder „ok" noch „fehlend", fielen durchs Raster.
+
+  **Fix**:
+  - `VISIBLE_DNS_KEYS` = `['mx','spf','dkim','dmarc','autodiscover','ptr']` als
+    einzige Quelle der Wahrheit. `okCount`, `warnCount`, `missingCount` und `total`
+    werden konsistent aus dieser Liste berechnet.
+  - Status-Text differenziert jetzt klar: „5 von 6 Einträgen gesetzt — 1 mit
+    Warnung, 0 fehlen" / „4 von 6 — 1 mit Warnung, 1 fehlt" / etc.
+  - `StatusDot` zeigt jetzt **3 Farben** (grün = ok / gelb = warning / rot = missing)
+    statt nur grün/gelb. Badge analog mit ⚠ Warnung / ○ Nicht gefunden.
+  - Legende aktualisiert: korrekt grün/gelb/rot statt veraltetem orange für
+    „Resolver-Inkonsistenz" (gibts seit v3.17.34 nicht mehr — Multi-Resolver entfernt).
+
+---
+
 ## [3.18.2] — 2026-05-24 — UI-Cleanup, Button-Fix + Compose-Rollback
 
 ### Reverted
