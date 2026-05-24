@@ -13,6 +13,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.48] — 2026-05-24 — Fix: SMTP PIPELINING Race Condition (503 bei Server-to-Server)
+
+### Fixed
+
+- **SMTP: 503 5.5.1 Bad sequence of commands bei eingehenden Mails behoben**
+  (`smtp-server/src/core/session.ts`):
+
+  **Root Cause**: Der SMTP-Server bewarb `PIPELINING` (RFC 2920) und externe MTAs
+  (Gmail, Postfix, Exchange) nutzten es korrekt — sie sendeten `MAIL FROM`, `RCPT TO`
+  und `DATA` in einem Schwung. Da `handleMailFrom()` und `handleRcptTo()` asynchrone
+  Handler sind (`await onMailFrom()` → DB-Abfrage, Security-Filter), änderte sich der
+  State (`READY → MAIL → RCPT`) erst nach dem `await`. Bis dahin hatte der synchrone
+  Dispatch-Loop `RCPT TO` und `DATA` bereits verarbeitet — beide sahen State `'READY'`
+  statt `'MAIL'`/`'RCPT'` → beide wurden mit `503 5.5.1 Bad sequence of commands`
+  abgewiesen. Das `250 OK` für `MAIL FROM` kam danach zu spät und fehlplatziert.
+  Externe Absender (Gmail, Postfix, Exchange) bekamen ihre Mails als permanent
+  fehlgeschlagen zurück.
+
+  **Fix**: Command-Queue (`cmdQueue: Promise<void>`) — alle SMTP-Commands werden
+  über `enqueueCommand()` in eine verkettete Promise-Kette eingereiht und laufen
+  strikt sequenziell:
+  ```
+  EHLO → [250] → MAIL FROM → await onMailFrom() → [250] → RCPT TO → await onRcptTo() → [250] → DATA → [354]
+  ```
+  Responses kommen jetzt garantiert in der richtigen Reihenfolge, egal wie schnell
+  der sendende MTA piplined. AUTH-Multi-Step und `finishData()` ebenfalls in die Queue
+  eingereiht.
+
+---
+
 ## [3.17.47] — 2026-05-23 — Feature: BCP DNS-Einrichtungs-Panel
 
 ### Added

@@ -73,6 +73,16 @@ export class SmtpSession {
   // DATA mode: are we inside the message body accumulation?
   private inData: boolean = false;
 
+  /**
+   * Command queue — serializes async command processing to prevent PIPELINING
+   * race conditions (RFC 2920). Without this, pipelined MAIL FROM + RCPT TO
+   * arrive together: handleMailFrom() awaits onMailFrom() DB call, but RCPT TO
+   * is dispatched immediately while state is still 'READY' → 503.
+   *
+   * All commands are enqueued here and run strictly in order.
+   */
+  private cmdQueue: Promise<void> = Promise.resolve();
+
   constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig) {
     this.socket = socket;
     this.config = config;
@@ -120,6 +130,25 @@ export class SmtpSession {
     }
   }
 
+  // ─── Command Queue ───────────────────────────────────────────────────────────
+
+  /**
+   * Enqueues an SMTP command handler to run strictly after the previous one
+   * completes. This is the fix for PIPELINING race conditions: without a queue,
+   * async handlers (onMailFrom, onRcptTo) suspend mid-execution and the next
+   * pipelined command sees stale state.
+   */
+  private enqueueCommand(fn: () => Promise<void> | void): void {
+    this.cmdQueue = this.cmdQueue.then(async () => {
+      // Skip if session already terminated
+      if (this.state === 'QUIT') return;
+      await (fn() ?? Promise.resolve());
+    }).catch(() => {
+      // Errors are handled inside each handler — they send their own error
+      // responses and never propagate to the queue chain.
+    });
+  }
+
   // ─── Send ────────────────────────────────────────────────────────────────────
 
   private send(line: string): void {
@@ -154,7 +183,9 @@ export class SmtpSession {
     // Dot-stuffing terminator: single dot on its own line
     if (line === '.') {
       this.inData = false;
-      void this.finishData();
+      // Enqueue finishData so that any pipelined commands after the "."
+      // (e.g. QUIT or a new MAIL FROM) wait for delivery to complete first.
+      this.enqueueCommand(() => this.finishData());
       return;
     }
 
@@ -223,10 +254,11 @@ export class SmtpSession {
       return;
     }
 
-    // AUTH_WAIT: pass line directly to auth handler
+    // AUTH_WAIT: multi-step AUTH exchange — enqueue like all other commands
+    // so that concurrent pipelined commands don't race against auth state.
     if (this.state === 'AUTH_WAIT') {
       this.resetTimer(T_COMMAND);
-      void this.handleAuthStep(line);
+      this.enqueueCommand(() => this.handleAuthStep(line));
       return;
     }
 
@@ -237,21 +269,25 @@ export class SmtpSession {
 
     this.resetTimer(T_COMMAND);
 
+    // ALL commands go through the queue — this serializes async handlers
+    // (onMailFrom, onRcptTo) so that pipelined commands always see the correct
+    // state set by the previous command. Without this, RCPT TO arrives while
+    // MAIL FROM's onMailFrom() is still awaiting, sees state='READY' → 503.
     switch (cmd) {
-      case 'EHLO': this.handleEhlo(args); break;
-      case 'HELO': this.handleHelo(args); break;
-      case 'AUTH': void this.handleAuth(args); break;
-      case 'STARTTLS': void this.handleStarttls(); break;
-      case 'MAIL': void this.handleMailFrom(args); break;
-      case 'RCPT': void this.handleRcptTo(args); break;
-      case 'DATA': this.handleDataCommand(); break;
-      case 'RSET': this.handleRset(); break;
-      case 'NOOP': this.send('250 2.0.0 OK'); break;
-      case 'VRFY': this.send('502 5.5.1 VRFY not supported'); break;
-      case 'EXPN': this.send('502 5.5.1 EXPN not supported'); break;
-      case 'QUIT': this.handleQuit(); break;
+      case 'EHLO':    this.enqueueCommand(() => this.handleEhlo(args)); break;
+      case 'HELO':    this.enqueueCommand(() => this.handleHelo(args)); break;
+      case 'AUTH':    this.enqueueCommand(() => this.handleAuth(args)); break;
+      case 'STARTTLS':this.enqueueCommand(() => this.handleStarttls()); break;
+      case 'MAIL':    this.enqueueCommand(() => this.handleMailFrom(args)); break;
+      case 'RCPT':    this.enqueueCommand(() => this.handleRcptTo(args)); break;
+      case 'DATA':    this.enqueueCommand(() => this.handleDataCommand()); break;
+      case 'RSET':    this.enqueueCommand(() => this.handleRset()); break;
+      case 'NOOP':    this.enqueueCommand(() => { this.send('250 2.0.0 OK'); }); break;
+      case 'VRFY':    this.enqueueCommand(() => { this.send('502 5.5.1 VRFY not supported'); }); break;
+      case 'EXPN':    this.enqueueCommand(() => { this.send('502 5.5.1 EXPN not supported'); }); break;
+      case 'QUIT':    this.enqueueCommand(() => this.handleQuit()); break;
       default:
-        this.send(`500 5.5.1 Command not recognized: ${cmd}`);
+        this.enqueueCommand(() => { this.send(`500 5.5.1 Command not recognized: ${cmd}`); });
     }
   }
 
