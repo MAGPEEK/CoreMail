@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma, downloadBuffer, deleteObject } from '@coremail/storage';
 import { relayMessage } from './relay.js';
+import { extractSmtpCode, sendDsnBounce } from './dsn.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
@@ -135,10 +136,24 @@ export function getOutboundQueue(): Queue<OutboundJob> {
 
 export async function enqueueOutbound(job: OutboundJob): Promise<string> {
   const queue = getOutboundQueue();
+  // Dynamische Settings aus DB (Admin kann maxRetryAttempts + Backoff anpassen
+  // ohne Container-Neustart) — Fallback auf Defaults wenn nicht konfiguriert.
+  let attempts = 10;
+  let backoffDelay = 60_000;
+  try {
+    const settings = await prisma.queueSettings.findUnique({ where: { id: 'singleton' } });
+    if (settings) {
+      attempts = settings.maxRetryAttempts;
+      backoffDelay = settings.retryBackoffDelaySec * 1000;
+    }
+  } catch { /* DB ggf. nicht erreichbar — Defaults nehmen */ }
+
   const result = await queue.add('send', job, {
     jobId: `${job.messageId}-${Date.now()}`,
+    attempts,
+    backoff: { type: 'exponential', delay: backoffDelay },
   });
-  log.info({ jobId: result.id, to: job.to }, 'Nachricht in Ausgangs-Queue eingereiht');
+  log.info({ jobId: result.id, to: job.to, attempts, backoffDelay }, 'Nachricht in Ausgangs-Queue eingereiht');
   return result.id ?? '';
 }
 
@@ -307,39 +322,76 @@ export function startOutboundWorker(): Worker<OutboundJob> {
   });
 
   worker.on('failed', (job, err) => {
-    log.error({ jobId: job?.id, err }, 'Zustellung fehlgeschlagen');
-    if (job?.data) {
-      const attemptsMax = job.opts.attempts ?? 10;
-      const isPermanent = job.attemptsMade >= attemptsMax;
-
-      // MinIO-Anhänge erst bei permanentem Fehler bereinigen (Retries brauchen sie)
-      if (isPermanent && job.data.message?.attachments.length) {
-        void cleanupMinioAttachments(job.data.message).catch(
-          (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO-Bereinigung fehlgeschlagen')
-        );
-      }
-
-      void prisma.systemLog.create({
-        data: {
-          level:    isPermanent ? 'ERROR' : 'WARN',
-          service:  'smtp-server',
-          category: 'MAIL_FLOW',
-          message:  `${isPermanent ? 'Failed' : 'Deferred'}: ${job.data.from} → ${job.data.to.join(', ')}`,
-          messageId: job.data.messageId,
-          ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
-          metadata: {
-            sender:    job.data.from,
-            recipient: job.data.to.join(', '),
-            subject:   job.data.message?.subject ?? '',
-            status:    isPermanent ? 'REJECTED' : 'DEFERRED',
-            messageId: job.data.messageId,
-            reason:    (err as Error).message,
-            attempt:   String(job.attemptsMade),
-            direction: 'OUTBOUND',
-          },
-        },
-      }).catch(() => {});
+    if (!job?.data) {
+      log.error({ jobId: job?.id, err }, 'Zustellung fehlgeschlagen (kein Job-Data)');
+      return;
     }
+    const attemptsMax = job.opts.attempts ?? 10;
+    // v3.18.10: 5xx-Fehler sind PERMANENT — sofort als final markieren auch
+    // wenn noch Attempts übrig wären (sonst retried der Worker 10× ein
+    // 550 User unknown → IP-Reputation leidet, Empfänger-MX wird sauer).
+    const { code: smtpCode, isPermanent: isPermanent5xx } = extractSmtpCode(err);
+    const attemptsExhausted = job.attemptsMade >= attemptsMax;
+    const isPermanent = isPermanent5xx || attemptsExhausted;
+
+    log.error(
+      { jobId: job.id, err, smtpCode, isPermanent, isPermanent5xx, attemptsExhausted, attempt: job.attemptsMade },
+      isPermanent ? 'Zustellung permanent gescheitert' : 'Zustellung temporär gescheitert (wird retried)',
+    );
+
+    // Bei sofortigem 5xx-Stop: Job nicht weiter retryen (BullMQ.discard ist sync)
+    if (isPermanent5xx && !attemptsExhausted) {
+      try { job.discard(); } catch { /* ignore */ }
+    }
+
+    // MinIO-Anhänge erst bei permanentem Fehler bereinigen (Retries brauchen sie)
+    if (isPermanent && job.data.message?.attachments.length) {
+      void cleanupMinioAttachments(job.data.message).catch(
+        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO-Bereinigung fehlgeschlagen')
+      );
+    }
+
+    // DSN-Bounce an MAIL FROM bei permanentem Failure
+    if (isPermanent) {
+      void (async () => {
+        try {
+          const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
+          await sendDsnBounce({
+            originalFrom:     job.data.from,
+            originalTo:       job.data.to,
+            originalSubject:  job.data.message?.subject ?? '',
+            originalMessageId: job.data.message?.messageId ?? null,
+            failureReason:    (err as Error).message,
+            smtpCode,
+            serverHostname:   settings?.publicHostname ?? 'mail.local',
+          });
+        } catch (dsnErr) {
+          log.error({ err: dsnErr, jobId: job.id }, 'DSN-Generierung fehlgeschlagen');
+        }
+      })();
+    }
+
+    void prisma.systemLog.create({
+      data: {
+        level:    isPermanent ? 'ERROR' : 'WARN',
+        service:  'smtp-server',
+        category: 'MAIL_FLOW',
+        message:  `${isPermanent ? 'Failed' : 'Deferred'}: ${job.data.from} → ${job.data.to.join(', ')}${smtpCode ? ` [${smtpCode}]` : ''}`,
+        messageId: job.data.messageId,
+        ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
+        metadata: {
+          sender:    job.data.from,
+          recipient: job.data.to.join(', '),
+          subject:   job.data.message?.subject ?? '',
+          status:    isPermanent ? 'REJECTED' : 'DEFERRED',
+          messageId: job.data.messageId,
+          reason:    (err as Error).message,
+          smtpCode:  smtpCode !== null ? String(smtpCode) : '',
+          attempt:   String(job.attemptsMade),
+          direction: 'OUTBOUND',
+        },
+      },
+    }).catch(() => {});
   });
 
   return worker;

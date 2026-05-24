@@ -2,11 +2,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
   AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, Image as ImageIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { api } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
@@ -24,6 +24,64 @@ function sanitize(html: string): string {
   return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
 }
 
+/**
+ * Pre-processed HTML zur Privacy-Wahrung (Outlook/Gmail-Style):
+ * - cid:-References werden auf MinIO-Attachment-URLs ersetzt (inline-Bilder OK)
+ * - http(s):// Bilder bekommen ihr src durch ein Transparent-Pixel ersetzt,
+ *   das echte src wandert nach data-coremail-src für späteres Re-Aktivieren.
+ * - Tracking-Pixel (1×1) sind effektiv blockiert solange User nicht „Bilder
+ *   anzeigen" klickt.
+ *
+ * Returns: { html, externalImageCount }
+ */
+function processExternalImages(
+  html: string,
+  inlineAttachments: { id: string; contentId: string | null }[],
+  tokenParam: string,
+): { html: string; externalImageCount: number } {
+  if (!html) return { html: '', externalImageCount: 0 };
+
+  // Inline-CID-Mapping aufbauen: cid:foo@bar → /api/v1/mail/attachments/{id}
+  const cidMap = new Map<string, string>();
+  for (const att of inlineAttachments) {
+    if (att.contentId) {
+      // contentId kann mit "<...>" eingerahmt sein — beide Varianten mappen
+      const clean = att.contentId.replace(/^<|>$/g, '').toLowerCase();
+      cidMap.set(clean, `/api/v1/mail/attachments/${att.id}${tokenParam}`);
+    }
+  }
+
+  let externalCount = 0;
+  // 1x1 transparent PNG als Platzhalter für blockierte externe Bilder
+  const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  const processed = html.replace(/<img\b([^>]*?)src=(["'])([^"']+)\2([^>]*)>/gi, (_match, before: string, quote: string, src: string, after: string) => {
+    const trimmed = src.trim();
+    // cid:foo@bar → Attachment-URL
+    if (/^cid:/i.test(trimmed)) {
+      const cid = trimmed.slice(4).replace(/^<|>$/g, '').toLowerCase();
+      const mapped = cidMap.get(cid);
+      if (mapped) return `<img${before}src=${quote}${mapped}${quote}${after}>`;
+      // Unauflösbares cid → Platzhalter (kein Tracking-Risiko)
+      return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-unresolved-cid=${quote}${cid}${quote}${after}>`;
+    }
+    // data:-URLs sind inline (selbst eingebettet) → unverändert durchreichen
+    if (/^data:/i.test(trimmed)) {
+      return `<img${before}src=${quote}${trimmed}${quote}${after}>`;
+    }
+    // http(s):// → externes Bild, ersetzen mit Platzhalter + data-attribut
+    if (/^https?:/i.test(trimmed)) {
+      externalCount++;
+      return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote} style="opacity:0.5;border:1px dashed #ccc;min-width:16px;min-height:16px"${after}>`;
+    }
+    // Alles andere (relative URLs, protokollrelative //...) auch blocken
+    externalCount++;
+    return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote}${after}>`;
+  });
+
+  return { html: processed, externalImageCount: externalCount };
+}
+
 interface Props {
   messageId: string;
 }
@@ -35,6 +93,10 @@ export function MessageReader({ messageId }: Props) {
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
+  // Privacy: externe Bilder nur auf User-Anforderung laden (Tracking-Pixel-Schutz)
+  const [showExternalImages, setShowExternalImages] = useState(false);
+  // Reset des Toggle wenn auf eine andere Mail gewechselt wird
+  useEffect(() => { setShowExternalImages(false); }, [messageId]);
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -349,17 +411,67 @@ export function MessageReader({ messageId }: Props) {
         </div>
       )}
 
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        {msg.bodyHtml ? (
-          <div
-            className="prose prose-sm dark:prose-invert max-w-none"
-            dangerouslySetInnerHTML={{ __html: sanitize(msg.bodyHtml) }}
-          />
-        ) : (
-          <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-sans">{msg.bodyText}</pre>
-        )}
-      </div>
+      {/* Body — mit Privacy-Bilder-Banner (Outlook/Gmail-Style) */}
+      {(() => {
+        // Vorab: HTML pre-processen damit externe Bilder ggf. blockiert werden
+        if (!msg.bodyHtml) {
+          return (
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-sans">{msg.bodyText}</pre>
+            </div>
+          );
+        }
+        const inlineAtts = (msg.attachments ?? []).map((a) => ({
+          id: a.id,
+          contentId: a.contentId ?? null,
+        }));
+        const { html: processedHtml, externalImageCount } = processExternalImages(
+          msg.bodyHtml,
+          inlineAtts,
+          tokenParam,
+        );
+        // Wenn User auf „Bilder anzeigen" geklickt hat → originale URLs zurück-mappen
+        const finalHtml = showExternalImages
+          ? processedHtml.replace(
+              /<img\b([^>]*?)src=(["'])data:image\/png;base64,iVBORw0KGgo[^"']+\2([^>]*?)data-coremail-ext-src=(["'])([^"']+)\4/gi,
+              (_m, before: string, q1: string, after: string, _q2: string, original: string) =>
+                `<img${before}src=${q1}${original}${q1}${after}`,
+            )
+          : processedHtml;
+
+        return (
+          <>
+            {externalImageCount > 0 && !showExternalImages && (
+              <div className="px-4 py-2.5 border-b border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center gap-2.5 text-sm shrink-0">
+                <ImageIcon size={16} className="text-blue-600 dark:text-blue-300 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-blue-900 dark:text-blue-200 leading-tight">
+                    {externalImageCount === 1
+                      ? '1 externes Bild wurde blockiert.'
+                      : `${externalImageCount} externe Bilder wurden blockiert.`}
+                  </p>
+                  <p className="text-xs text-blue-800/80 dark:text-blue-300/80 leading-tight">
+                    Externe Bilder können verwendet werden, um Ihr Lese-Verhalten zu verfolgen (Tracking-Pixel).
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowExternalImages(true)}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+                  title="Externe Bilder einmalig nachladen"
+                >
+                  <ImageIcon size={13} /> Bilder anzeigen
+                </button>
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div
+                className="prose prose-sm dark:prose-invert max-w-none"
+                dangerouslySetInnerHTML={{ __html: sanitize(finalHtml) }}
+              />
+            </div>
+          </>
+        );
+      })()}
 
       {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} items={moreItems} onClose={() => setMoreMenu(null)} />}
 

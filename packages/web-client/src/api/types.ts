@@ -63,7 +63,7 @@ export interface MessageSummary {
   // SENT = bereits versendet, CANCELLED = Versand abgebrochen
   scheduledAt?: string | null;
   scheduledStatus?: 'PENDING' | 'SENT' | 'CANCELLED' | null;
-  attachments: { id: string; filename: string; mimeType: string; size: number }[];
+  attachments: { id: string; filename: string; mimeType: string; size: number; contentId?: string | null; inline?: boolean }[];
   categories?: Category[];
 }
 

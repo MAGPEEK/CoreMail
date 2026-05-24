@@ -650,7 +650,8 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
       select: {
         id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
         date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
-        attachments: { select: { id: true, filename: true, mimeType: true, size: true } },
+        spamScore: true, scheduledAt: true, scheduledStatus: true,
+        attachments: { select: { id: true, filename: true, mimeType: true, size: true, contentId: true, inline: true } },
         categories: { select: { category: { select: { id: true, name: true, color: true } } } },
       },
     }),

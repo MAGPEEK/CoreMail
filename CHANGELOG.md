@@ -13,6 +13,59 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.10] — 2026-05-24 — Bilder-Privacy-Banner + Queue-Hardening (DSN, 5xx, dynamische Settings)
+
+### Added — Bilder-Privacy-Banner (Outlook/Gmail-Style)
+
+- **Externe Bilder werden standardmäßig BLOCKIERT** zum Schutz vor Tracking-Pixeln
+  (`packages/web-client/src/components/MessageReader.tsx`):
+  - HTML wird vor `dangerouslySetInnerHTML` durch `processExternalImages()` geleitet
+  - `<img src="cid:foo">` → wird durch MinIO-Attachment-URL ersetzt (inline-Bilder
+    OK, da Teil der Mail selbst — kein Tracking-Risiko)
+  - `<img src="data:...">` → durchgereicht (selbst-eingebettet)
+  - `<img src="http(s)://...">` → `src` wird durch 1×1-Transparent-PNG ersetzt,
+    Original wandert nach `data-coremail-ext-src` (für späteres Re-Aktivieren)
+- **Banner** oben im Body bei blockierten externen Bildern:
+  *„X externe Bilder wurden blockiert. Externe Bilder können verwendet werden,
+  um Ihr Lese-Verhalten zu verfolgen."* + Button „Bilder anzeigen"
+- Per-Message Toggle (`useState` mit `useEffect`-Reset bei Message-Wechsel),
+  damit unterschiedliche Mails unterschiedlich behandelt werden können
+- Backend-API: `/folders/:folderId/messages` und `/messages/:id` liefern jetzt
+  `contentId` und `inline` Felder pro Attachment (vorher fehlten sie)
+
+### Added — Queue-Hardening Phase 1
+
+- **DSN (Delivery Status Notification, RFC 3464)** —
+  `packages/smtp-server/src/outbound/dsn.ts`:
+  - Bei permanentem Versand-Fehler wird automatisch eine Bounce-Mail an `MAIL FROM`
+    zugestellt (multipart/report mit human-readable Text + RFC-3464 report-Part).
+  - **Double-Bounce-Schutz**: keine DSN für leere MAIL FROM (`<>`-Sender = bereits
+    Bounce-Mail) per RFC 5321 §6.1.
+  - DSN wird nur an **lokale Absender** generiert — externe Sender bekommen
+    Bounce vom MX-Server zuverlässiger (verhindert Backscatter-Spam).
+  - `MAILER-DAEMON@<hostname>` als Absender, `Auto-Submitted: auto-replied`,
+    `In-Reply-To` der Original-Message-ID für Thread-Verknüpfung.
+
+- **4xx vs 5xx-Semantik** —
+  `packages/smtp-server/src/outbound/queue.ts`:
+  - Neuer `extractSmtpCode()`-Helper extrahiert SMTP-Reply-Codes aus
+    nodemailer-Error-Messages
+  - **5xx-Fehler** (permanent, z.B. 550 User unknown) werden **sofort** als final
+    markiert via `job.discard()` — kein 10×-Retry mehr (schont IP-Reputation,
+    Empfänger-MX wird nicht „gespammt")
+  - **4xx-Fehler** (transient, z.B. 421 Try again) durchlaufen normalen Retry mit
+    Exponential Backoff
+  - SMTP-Code wird im `MAIL_FLOW`-systemLog persistiert (vorher fehlte)
+  - Log-Message zeigt `[550]` etc. zur schnellen Erkennung im Admin-UI
+
+- **Dynamische Queue-Settings**:
+  - `enqueueOutbound()` liest jetzt `QueueSettings.maxRetryAttempts` und
+    `retryBackoffDelaySec` aus der DB — Admin kann Backoff anpassen ohne
+    Container-Neustart
+  - Fallback auf Defaults (10 attempts, 60s) wenn DB nicht erreichbar
+
+---
+
 ## [3.18.9] — 2026-05-24 — TransportRule-Engine + Public-Folders + SharedMailbox SEND_AS/ON_BEHALF
 
 ### Fixed — TransportRule funktionierte gar nicht
