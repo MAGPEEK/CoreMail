@@ -962,7 +962,7 @@ function SecuritySection() {
           <Key size={15} className="text-gray-400" />
           <span className="text-sm font-medium">App-Passwörter</span>
         </div>
-        <p className="text-xs text-gray-500 mb-3">Für E-Mail-Clients (Outlook, Thunderbird) ohne Hauptpasswort verbinden.</p>
+        <p className="text-xs text-gray-500 mb-3">Für externe E-Mail-Clients ohne Hauptpasswort verbinden.</p>
         <a href="/auth/app-passwords" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
           App-Passwörter verwalten
         </a>
@@ -1760,7 +1760,7 @@ function ViewSection() {
     <section className="space-y-8">
       <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-1">Ansicht</h2>
-        <p className="text-sm text-gray-600">Layout und Darstellungsoptionen anpassen — wie in Outlook oder Thunderbird.</p>
+        <p className="text-sm text-gray-600">Layout und Darstellungsoptionen für CoreMail anpassen.</p>
       </div>
 
       {/* ── Lesebereich ─────────────────────────────────────────────────────── */}

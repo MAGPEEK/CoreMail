@@ -195,7 +195,7 @@ export function RulesSection() {
         </div>
         <button
           onClick={() => setEditor({ open: true, rule: null })}
-          className="btn-primary text-sm"
+          className="btn-primary text-sm shrink-0 whitespace-nowrap px-4"
         >
           <Plus size={14} /> Neue Regel
         </button>
@@ -237,7 +237,7 @@ export function RulesSection() {
       <div className="mt-6 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg flex gap-2.5 text-sm">
         <AlertCircle size={16} className="text-blue-600 dark:text-blue-300 shrink-0 mt-0.5" />
         <p className="text-blue-900 dark:text-blue-200 leading-relaxed">
-          <strong>Stop-Processing:</strong> Aktiviere die Option <CheckCircle2 size={12} className="inline" /> „Verarbeitung weiterer Regeln beenden" um zu verhindern, dass nachfolgende Regeln dieselbe Nachricht erneut bearbeiten — wie in Outlook.
+          <strong>Stop-Processing:</strong> Aktiviere die Option <CheckCircle2 size={12} className="inline" /> „Verarbeitung weiterer Regeln beenden" um zu verhindern, dass nachfolgende Regeln dieselbe Nachricht erneut bearbeiten.
         </p>
       </div>
 

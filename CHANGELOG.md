@@ -13,6 +13,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.2] — 2026-05-24 — UI-Cleanup: „Outlook"-Wording entfernt + Button-Fix
+
+### Changed
+
+- **MWA: „Outlook"-Erwähnungen aus user-facing UI-Texten entfernt**:
+  - `RulesSection.tsx`: Stop-Processing-Hinweis ohne Outlook-Vergleich
+  - `SettingsPage.tsx → Ansicht`: „Layout und Darstellungsoptionen für CoreMail anpassen"
+    (statt „— wie in Outlook oder Thunderbird")
+  - `SettingsPage.tsx → App-Passwörter`: „Für externe E-Mail-Clients ohne Hauptpasswort
+    verbinden" (statt „Für E-Mail-Clients (Outlook, Thunderbird) …")
+
+  Erhalten bleiben technisch notwendige Outlook-Referenzen (Autodiscover-Setup-Anleitung
+  in BCP, „Outlook Modern Auth" als OAuth2-Client-Beispiel im Admin-Panel, historische
+  Changelog/Compliance-Einträge), weil diese auf den realen Microsoft-Outlook-Client
+  als externen IMAP/EAS-Konsument zeigen.
+
+### Fixed
+
+- **MWA: „+ Neue Regel"-Button schrumpfte bei knappen Viewport-Breiten** und brach
+  den Text um. Fix: `shrink-0 whitespace-nowrap px-4` — Button hält feste Breite,
+  Text bleibt einzeilig.
+
+---
+
 ## [3.18.1] — 2026-05-24 — Feature: Gmail-Style Compose-Window Redesign
 
 ### Changed
