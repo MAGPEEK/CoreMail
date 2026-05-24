@@ -217,6 +217,8 @@ export async function storeInboundMessage(
       changeKey: modSeq.toString(),
       ...(rulePinned ? { pinnedAt: new Date() } : {}),
       ...(smimeHeader ? { smimeMeta: smimeHeader } : {}),
+      // v3.18.6: rspamd-Score persistieren — für Frontend-Spam-Banner und Score-Badge
+      ...(typeof opts.spamScore === 'number' ? { spamScore: opts.spamScore } : {}),
     },
   });
 

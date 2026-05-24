@@ -484,9 +484,12 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
     case 'notSpam': {
       const inbox = await resolveSysFolder('INBOX');
       if (!inbox) { res.status(404).json({ error: 'Posteingang nicht gefunden' }); return; }
+      // Zurück in INBOX UND spamScore auf 0 setzen (sonst zeigt Reader-Banner
+      // weiterhin "Diese Nachricht wurde als Spam erkannt", obwohl sie als
+      // Ham markiert wurde)
       await prisma.message.updateMany({
         where: { id: { in: ownedIds } },
-        data: { folderId: inbox.id, modSeq: BigInt(Date.now()) },
+        data: { folderId: inbox.id, modSeq: BigInt(Date.now()), spamScore: 0 },
       });
       // Absender aus USER-JUNK-Sperrliste entfernen (False Positive)
       void (async () => {

@@ -55,6 +55,9 @@ export interface MessageSummary {
   rawSize: number;
   pinnedAt?: string | null;
   snoozeUntil?: string | null;
+  // v3.18.6: rspamd-Score zum Zeitpunkt der Zustellung. null = nicht gescannt.
+  // 0 = explizit als Ham markiert (vom User via „Kein Spam")
+  spamScore?: number | null;
   attachments: { id: string; filename: string; mimeType: string; size: number }[];
   categories?: Category[];
 }

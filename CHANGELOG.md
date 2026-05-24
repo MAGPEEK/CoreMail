@@ -13,6 +13,81 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.7] — 2026-05-24 — Spam-UX (Outlook-Style) + Audit-Log v2 (Compliance-grade)
+
+### Added — Spam-UX (Outlook-Style)
+
+- **Spam-Score-Persistenz**: Neues `Message.spamScore: Float?` Feld im Prisma-Schema.
+  `storeInboundMessage()` speichert den rspamd-Score zum Zeitpunkt der Zustellung
+  (vorher transient — nur fürs Folder-Routing genutzt, dann verworfen).
+- **Spam-Banner im MessageReader** (Outlook-Style):
+  - Sichtbar wenn `spamScore ≥ 3.0` ODER Mail im Junk-Ordner liegt
+  - **Rot** (hohes Risiko) bei `spamScore ≥ 6.0` (rspamd-Reject-Schwelle)
+  - **Amber** bei mittlerem Risiko oder im Junk-Ordner
+  - Zeigt den konkreten rspamd-Score als Mono-Font
+  - „Als Junk" / „Kein Spam"-Button direkt im Banner für 1-Klick-Aktion
+- **Spam-Badge in MessageList**: `ShieldAlert`-Icon in der Zeile (gelb/rot je nach
+  Score), Tooltip mit konkretem Score
+- **`notSpam`-Bulk-Aktion** verbessert: setzt `spamScore: 0` auf der Message,
+  damit der Banner nach „Kein Spam"-Klick nicht weiter angezeigt wird
+
+### Added — Audit-Log v2 (Compliance-grade Export & Anomalie-Erkennung)
+
+- **Kryptografische SHA-256-Signatur für alle Exports**
+  (`packages/api-gateway/src/routes/admin/audit-log.ts`):
+  - CSV-Export: SHA-256-Hash des Payloads (inkl. UTF-8 BOM) im
+    `X-CoreMail-Signature: sha256=…`-Response-Header
+  - PDF-Export: in-Memory-Buffer-Capture statt direkter `doc.pipe(res)`, danach
+    Hash über den vollständigen PDF-Buffer
+  - **NEU: JSON-Export** für SIEM-Integration (Splunk, Azure Sentinel, ELK) —
+    `/admin/audit-log/export.json` mit strukturiertem `metadata`+`entries`-Objekt,
+    `schemaVersion: '1.0'`, ebenfalls SHA-256-signiert
+  - Zusätzliche Header: `X-CoreMail-Export-Entries`, `X-CoreMail-Export-Generated-At`
+  - `Access-Control-Expose-Headers` damit Frontend die Signatur lesen kann
+  - Verifikation extern: `shasum -a 256 audit-log-YYYY-MM-DD.csv` → muss exakt mit
+    dem Header übereinstimmen → beweist Auditoren dass die Datei nicht manipuliert
+    wurde
+
+- **Anomalie-Erkennung** — neuer Endpoint `/admin/audit-log/anomalies`:
+  - **Burst-Detection**: ≥50 Aktionen vom selben Akteur in 5 Min (medium),
+    ≥200 Aktionen → high severity
+  - **Fehler-Burst**: ≥10 fehlgeschlagene Aktionen in 5 Min → high (mögl. Angriff)
+  - **Kritische Aktionen**: Regex-Pattern für `user.delete`, `mailbox.delete`,
+    `domain.delete`, `transport-rules.*`, `oauth.*`, `settings.*`, `certificate.*`,
+    `gateway.*`, `connector.*`, `smime.*`, `setup.*` → immer high
+  - **Off-Hours-Activity**: Admin-Aktivität zwischen 00:00 und 06:00 Server-Zeit
+    → low severity
+  - Dedup-Logik fasst identische Anomalien (Actor+Message) zusammen
+  - Frontend zeigt Top-50 als roter Banner mit Icons, Akteur, Zeitpunkt und
+    Severity-Badge — Auto-Refresh alle 60s
+
+- **Meta-Logging gegen Insider-Threats**
+  (`packages/api-gateway/src/lib/audit.ts`):
+  - **AUDIT_SENSITIVE_GET**: GET-Routen für Audit-Log-Exports (CSV/PDF/JSON) und
+    Anomalien werden jetzt ebenfalls auditiert. Wer Audit-Daten exportiert oder
+    Compliance-Auswertungen abruft, wird selbst protokolliert — kein silent
+    Daten-Abfluss durch Admins
+  - Erweiterter Code-Kommentar dokumentiert die Immutability-Garantie:
+    Audit-Log hat keinen DELETE-Endpoint, keinen UI-Toggle zum Ausschalten;
+    Versuche zur Manipulation erfordern Code-Deploy → über Git/CI/CD nachvollziehbar
+    (ISO 27001 / SOC 2 / TISAX / DSGVO konform)
+
+- **Frontend AuditLogPage** (`packages/admin-panel/src/pages/AuditLogPage.tsx`):
+  - **JSON-Export-Button** ergänzt (für SIEM)
+  - **Anomalien-Banner** oben auf der Seite — automatischer 60s-Refresh, scrollbar,
+    Severity-Farben (rot/amber/blau), Icons je nach Anomalie-Typ
+  - **Signatur-Hinweis** im Immutability-Banner: dokumentiert
+    `X-CoreMail-Signature: sha256=…`-Header und lokale Verifikation
+  - Bestehender Stats-Dashboard (KPI-Karten, Top-Akteure, Top-Aktionen) bleibt
+
+### Schema-Migration
+
+- `Message.spamScore Float?` — wird beim nächsten Container-Start via
+  `prisma db push` automatisch hinzugefügt (kein Datenverlust, bestehende
+  Messages haben `null`)
+
+---
+
 ## [3.18.5] — 2026-05-24 — Removed: eDiscovery & Legal Hold komplett entfernt
 
 ### Removed

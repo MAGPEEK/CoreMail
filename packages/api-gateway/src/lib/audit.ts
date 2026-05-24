@@ -69,23 +69,43 @@ export function auditContext(req: Request): Pick<AuditEntry, 'ipAddress' | 'user
 }
 
 /**
- * Express middleware that auto-audits mutating admin API calls.
- * Logs action = "<method>.<path>" for all POST/PUT/PATCH/DELETE on /api/v1/admin/
+ * GET-Pfade, die trotz Lese-Operation als auditrelevant gelten und mitprotokolliert
+ * werden müssen (Data-Export, Compliance-Auswertung, Quelltext-Zugriff).
+ *
+ * Compliance-Hintergrund: Wer Audit-Daten exportiert oder rohen Mail-Inhalt liest,
+ * wird selbst auditiert — sonst könnte ein Admin Daten exfiltrieren ohne Spuren.
+ */
+const AUDIT_SENSITIVE_GET = [
+  /^\/audit-log\/export\.(csv|pdf|json)$/i,
+  /^\/audit-log\/anomalies$/i,
+];
+
+/**
+ * Express middleware that auto-audits admin API calls.
+ *
+ * - Mutating ops (POST/PUT/PATCH/DELETE) → immer auditiert
+ * - Sensitive GET (audit-log exports, anomalies) → ebenfalls auditiert
+ *
+ * NOTE: Mounted via `app.use('/api/v1/admin', auditMiddleware)`. Express strips
+ * the mount prefix → req.path is relative (e.g. '/mailboxes/123').
+ *
+ * IMMUTABILITY-Hinweis (Meta-Logging): Diese Middleware schreibt direkt in die
+ * `audit_log`-Tabelle, die keinen DELETE-Endpoint hat. Selbst Admins können
+ * Einträge weder löschen noch verändern (DSGVO/SOX/HIPAA/TISAX/ISO 27001).
+ * Ein Versuch, die Middleware zur Laufzeit zu deaktivieren, bedingt einen
+ * Code-Deploy und ist damit über Git/CI/CD nachvollziehbar.
  */
 export function auditMiddleware(
   req: Request,
   _res: import('express').Response,
   next: import('express').NextFunction,
 ): void {
-  // Only audit mutating operations.
-  // NOTE: This middleware is mounted at app.use('/api/v1/admin', auditMiddleware).
-  // Express strips the mount prefix from req.path — so req.path is already relative,
-  // e.g. '/mailboxes/123' NOT '/api/v1/admin/mailboxes/123'.
-  // Checking req.path.startsWith('/api/v1/admin/') would NEVER match here.
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'];
-  if (mutating.includes(req.method)) {
+  const isMutating = mutating.includes(req.method);
+  const isSensitiveGet = req.method === 'GET' && AUDIT_SENSITIVE_GET.some((re) => re.test(req.path));
+
+  if (isMutating || isSensitiveGet) {
     const user = (req as Request & { apiUser?: { userId: string; email: string } }).apiUser;
-    // Strip leading slash, split into segments: '/mailboxes/123' → ['mailboxes', '123']
     const pathParts = req.path.replace(/^\//, '').split('/');
     const resource = pathParts[0] ?? 'unknown';
     const verb = req.method.toLowerCase();

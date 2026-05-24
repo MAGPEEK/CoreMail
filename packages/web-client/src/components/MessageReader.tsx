@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
   AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
+  ShieldAlert, ShieldCheck,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
@@ -202,6 +203,54 @@ export function MessageReader({ messageId }: Props) {
           <MoreHorizontal size={14} />
         </button>
       </div>
+
+      {/* Spam-Banner — Outlook-Style. Sichtbar wenn rspamd-Score ≥ 3.0 ODER Mail im Junk-Ordner liegt */}
+      {(() => {
+        const score = msg.spamScore ?? null;
+        const showSpamBanner = (score !== null && score >= 3.0) || isJunkFolder;
+        if (!showSpamBanner) return null;
+        const isHighRisk = (score !== null && score >= 6.0);
+        return (
+          <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
+            isHighRisk
+              ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-900 dark:text-red-200'
+              : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+          }`}>
+            <ShieldAlert size={16} className={isHighRisk ? 'text-red-600 dark:text-red-300 shrink-0' : 'text-amber-600 dark:text-amber-300 shrink-0'} />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold leading-tight">
+                {isHighRisk
+                  ? 'Diese Nachricht wurde als Spam erkannt — möglicherweise gefährlich.'
+                  : isJunkFolder
+                    ? 'Diese Nachricht liegt im Junk-Ordner.'
+                    : 'Diese Nachricht zeigt Spam-Signale.'}
+              </p>
+              <p className="text-xs opacity-80 leading-tight">
+                {score !== null
+                  ? <>rspamd-Score: <strong className="font-mono">{score.toFixed(2)}</strong> · Links nicht ohne Prüfung anklicken</>
+                  : <>Klicken Sie unten auf „Kein Spam", falls diese Nachricht fälschlicherweise als Junk erkannt wurde.</>}
+              </p>
+            </div>
+            {isJunkFolder ? (
+              <button
+                onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); }}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+                title="Diese Nachricht ist kein Spam (Bayes-Lernen)"
+              >
+                <ShieldCheck size={13} /> Kein Spam
+              </button>
+            ) : (
+              <button
+                onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); }}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+                title="In Junk verschieben (Bayes-Lernen)"
+              >
+                <AlertOctagon size={13} /> Als Junk
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0 animate-page-in">

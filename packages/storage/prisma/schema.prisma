@@ -304,6 +304,8 @@ model Message {
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
   snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
+  // Phase 10: Spam-Persistenz (rspamd-Score zum Zeitpunkt der Zustellung)
+  spamScore    Float?      // null = nicht gescannt, 0..15 = rspamd-Score
   // ── Retention (Phase 9 / Exchange-2019-konform) ────────────────────────────
   // Vom MFA berechneter oder vom User gesetzter effektiver Tag
   retentionTag     RetentionTag? @relation("MessageRetentionTag", fields: [retentionTagId], references: [id])

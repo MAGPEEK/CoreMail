@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.5`
+**Aktuelle Version**: `3.18.7`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.5; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.7; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.5 — Highlights
+## Aktuelle Version 3.18.7 — Highlights
+
+**v3.18.7** — Doppel-Feature: (1) **Spam-UX (Outlook-Style)** — `Message.spamScore` persistiert, Spam-Banner in MessageReader (rot ≥6.0 / amber ≥3.0 / im Junk-Ordner) mit Score-Anzeige und „Als Junk"/„Kein Spam"-Inline-Button, ShieldAlert-Badge in MessageList. (2) **Audit-Log v2** — SHA-256-Signatur für CSV/PDF/JSON-Exports (`X-CoreMail-Signature`-Header), neuer JSON-Export für SIEM (Splunk/Sentinel/ELK), Anomalie-Endpoint `/anomalies` mit Burst-Detection (≥50 Aktionen/5min), Fehler-Burst (≥10), kritische Aktionen (delete/settings/oauth/etc.) und Off-Hours-Activity. Meta-Logging gegen Insider-Threats: GET-Routen für Audit-Log-Exports werden auch auditiert, Immutability-Garantie dokumentiert. Frontend mit JSON-Button, Anomalien-Banner (60s auto-refresh), Signatur-Hinweis.
 
 **v3.18.5** — Removed: eDiscovery & Legal Hold komplett aus dem Code entfernt. Schema (EDiscoverySearch, LegalHold, EDiscoveryStatus enum, RetentionPolicy.respectLegalHold), Backend-Router `/admin/ediscovery`, Frontend-Page EDiscoveryPage.tsx, Sidebar-Eintrag, i18n-Keys (DE+EN), SearchCheck-Icon-Import, RbacPage-Beschreibung, RetentionPage-Checkbox. backup-worker.ts lädt keine legalHold-Records mehr. Bestehende Tabellen werden via `prisma db push --accept-data-loss` automatisch gedroppt.
 
