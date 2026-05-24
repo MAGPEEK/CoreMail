@@ -5,6 +5,7 @@ import {
   Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
   Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
   CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check,
+  Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -557,6 +558,9 @@ export function FolderTree({ onNewMail }: Props) {
             {systemFolders.map((f) => renderFolderTree(f, 0))}
           </div>
         )}
+
+        {/* Öffentliche Ordner (Exchange-Style) — Lese-/Schreibrechte vom Admin verwaltet */}
+        <PublicFoldersSection />
       </nav>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
@@ -609,5 +613,73 @@ export function FolderTree({ onNewMail }: Props) {
         />
       )}
     </aside>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PublicFoldersSection — Exchange-Style „Öffentliche Ordner" im FolderTree
+// Wird unter den persönlichen Ordnern angezeigt. Jeder Ordner mit ACL für den
+// aktuellen User taucht auf. Klick auf einen Ordner navigiert zum
+// PublicFolderViewer (Browse-Modus, Read-Only oder Write je nach Permission).
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PublicFolderItem {
+  id: string;
+  name: string;
+  displayName: string;
+  description?: string;
+  email?: string | null;
+  totalCount?: number;
+  permission?: 'READ' | 'WRITE' | 'FULL';
+}
+
+function PublicFoldersSection() {
+  const [collapsed, setCollapsed] = useState(false);
+  const { data: folders = [] } = useQuery<PublicFolderItem[]>({
+    queryKey: ['mwa-public-folders'],
+    queryFn: () => api.get<PublicFolderItem[]>('/public-folders'),
+    // Polling für Sync — Admin könnte gerade ACL ändern
+    refetchInterval: 60_000,
+  });
+
+  if (folders.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+      >
+        <span className="flex items-center gap-1.5">
+          <Users size={11} /> Öffentliche Ordner
+        </span>
+        {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+      </button>
+      {!collapsed && (
+        <div className="space-y-0.5 mt-1">
+          {folders.map((f) => (
+            <button
+              key={f.id}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+              title={f.description || (f.email ? `E-Mail: ${f.email}` : f.displayName)}
+              onClick={() => {
+                // Navigation in den Public-Folder-Reader — wird in v3.18.10 ausgebaut.
+                // Vorläufig: Toast mit Hinweis dass die Listen-Ansicht in Arbeit ist.
+                toast(`Öffentlicher Ordner „${f.displayName}" — Browse-Ansicht kommt im nächsten Patch`, { icon: '📁' });
+              }}
+            >
+              <Users size={13} className="text-purple-500 shrink-0" />
+              <span className="flex-1 truncate text-left">{f.displayName}</span>
+              {f.email && (
+                <span title="Mail-aktiviert" className="text-[9px] text-purple-500 font-mono">@</span>
+              )}
+              {f.totalCount !== undefined && f.totalCount > 0 && (
+                <span className="text-xs text-gray-400">{f.totalCount}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

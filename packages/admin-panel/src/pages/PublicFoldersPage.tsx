@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FolderOpen, FolderPlus, Pencil, Trash2, ChevronRight, ChevronDown, Lock, Plus, X } from 'lucide-react';
+import { FolderOpen, FolderPlus, Pencil, Trash2, ChevronRight, ChevronDown, Lock, Plus, X, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+
+interface ContactSuggest { id: string; displayName: string; email: string; company?: string; isGroup?: boolean }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -107,21 +109,83 @@ function AclPanel({ folder, onClose }: { folder: PublicFolder; onClose: () => vo
   const qc = useQueryClient();
   const [newEmail, setNewEmail] = useState('');
   const [newPerm, setNewPerm] = useState<'READ' | 'WRITE' | 'FULL'>('READ');
+  const [debouncedQ, setDebouncedQ] = useState('');
+  const [showSug, setShowSug] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: acl = [] } = useQuery<AclEntry[]>({
     queryKey: ['admin-public-folders-acl', folder.id],
     queryFn: () => api.get(`/admin/public-folders/${folder.id}/acl`),
   });
 
+  const { data: suggestions = [] } = useQuery<ContactSuggest[]>({
+    queryKey: ['contacts-suggest', debouncedQ],
+    queryFn: () => api.get(`/contacts?q=${encodeURIComponent(debouncedQ)}`),
+    enabled: debouncedQ.length >= 2,
+    staleTime: 30_000,
+  });
+
+  // Bereits berechtigte User ausblenden
+  const aclEmailSet = new Set(acl.map((e) => e.userEmail.toLowerCase()));
+  // Public Folders sind nur für interne User → externe + Gruppen rausfiltern
+  const filteredSug = suggestions.filter((s) =>
+    !aclEmailSet.has(s.email.toLowerCase()) &&
+    (s.id.startsWith('gal-') || (!s.id.startsWith('ext-') && !s.id.startsWith('grp-')))
+  );
+
   const grant = useMutation({
-    mutationFn: () => api.post(`/admin/public-folders/${folder.id}/acl`, { userEmail: newEmail, permission: newPerm }),
+    mutationFn: (email: string) => api.post(`/admin/public-folders/${folder.id}/acl`, { userEmail: email, permission: newPerm }),
     onSuccess: () => {
+      // Invalidieren: ACL-Liste + Folder-Liste (für ACL-Count) + Folder-Tree
       void qc.invalidateQueries({ queryKey: ['admin-public-folders-acl', folder.id] });
+      void qc.invalidateQueries({ queryKey: ['admin-public-folders'] });
       toast.success('Berechtigung hinzugefügt');
       setNewEmail('');
+      setDebouncedQ('');
+      setShowSug(false);
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const pickSuggestion = useCallback((c: ContactSuggest) => {
+    grant.mutate(c.email);
+  }, [grant]);
+
+  const handleChange = (val: string) => {
+    setNewEmail(val);
+    setActiveIdx(0);
+    if (val.length >= 2) {
+      setShowSug(true);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => setDebouncedQ(val), 220);
+    } else {
+      setShowSug(false);
+      setDebouncedQ('');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showSug && filteredSug.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filteredSug.length - 1)); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const s = filteredSug[activeIdx];
+        if (s) { e.preventDefault(); pickSuggestion(s); return; }
+      }
+      if (e.key === 'Escape') { setShowSug(false); return; }
+    }
+    if (e.key === 'Enter' && newEmail.trim()) { e.preventDefault(); grant.mutate(newEmail.trim()); }
+  };
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setShowSug(false);
+    }
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
 
   const revoke = useMutation({
     mutationFn: (userId: string) => api.delete(`/admin/public-folders/${folder.id}/acl/${userId}`),
@@ -161,18 +225,41 @@ function AclPanel({ folder, onClose }: { folder: PublicFolder; onClose: () => vo
           ))}
         </div>
 
-        {/* Add new */}
-        <div className="flex gap-2">
-          <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
-            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-            placeholder="user@example.com" />
+        {/* Add new — mit Autocomplete-Dropdown */}
+        <div ref={containerRef} className="relative flex gap-2">
+          <div className="flex-1 relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input value={newEmail}
+              onChange={(e) => handleChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => { if (newEmail.length >= 2) setShowSug(true); }}
+              className="w-full border border-gray-300 rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="User suchen — Name oder E-Mail…" />
+            {showSug && filteredSug.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-20 max-h-60 overflow-y-auto">
+                {filteredSug.map((c, i) => (
+                  <button key={c.id} type="button"
+                    onMouseDown={(ev) => { ev.preventDefault(); pickSuggestion(c); }}
+                    className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
+                      i === activeIdx ? 'bg-blue-50' : 'hover:bg-gray-50'
+                    }`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-900 truncate">{c.displayName}</div>
+                      <div className="text-xs text-gray-500 truncate">{c.email}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <select value={newPerm} onChange={e => setNewPerm(e.target.value as 'READ' | 'WRITE' | 'FULL')}
             className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
             <option value="READ">Lesen</option>
             <option value="WRITE">Lesen & Schreiben</option>
             <option value="FULL">Vollzugriff</option>
           </select>
-          <button onClick={() => grant.mutate()} disabled={!newEmail || grant.isPending}
+          <button onClick={() => { if (newEmail.trim()) grant.mutate(newEmail.trim()); }}
+            disabled={!newEmail || grant.isPending}
             className="flex items-center gap-1 px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 disabled:opacity-50">
             <Plus size={13} /> Hinzufügen
           </button>

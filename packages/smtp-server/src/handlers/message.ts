@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -19,8 +19,8 @@ export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
 ): Promise<void> {
-  // Find recipient — kann User (Postfach) oder SharedMailbox sein
-  const [user, sharedMailbox] = await Promise.all([
+  // Find recipient — kann User (Postfach), SharedMailbox oder PublicFolder sein
+  const [user, sharedMailbox, publicFolder] = await Promise.all([
     prisma.user.findFirst({
       where: { email: opts.rcptTo.toLowerCase(), active: true },
       include: { mailbox: { include: { folders: true } } },
@@ -29,7 +29,43 @@ export async function storeInboundMessage(
       where: { email: opts.rcptTo.toLowerCase(), active: true },
       include: { mailbox: { include: { folders: true } } },
     }),
+    // Mail-aktivierter Public Folder (v3.18.9) — Mail wird als PublicFolderMessage
+    // gespeichert, KEIN normales Mailbox-Routing
+    prisma.publicFolder.findFirst({
+      where: { email: opts.rcptTo.toLowerCase() },
+      select: { id: true, displayName: true },
+    }),
   ]);
+
+  // Public-Folder-Empfang ist ein separater Pfad — eigene Tabelle, keine Mailbox
+  if (publicFolder) {
+    const parsed = await parseRawMessage(rawBuffer);
+    await prisma.publicFolderMessage.create({
+      data: {
+        folderId:  publicFolder.id,
+        subject:   parsed.subject,
+        fromAddr:  parsed.fromAddr,
+        fromName:  parsed.fromName,
+        bodyText:  parsed.bodyText,
+        bodyHtml:  parsed.bodyHtml,
+        date:      parsed.date,
+        attachments: parsed.attachments.map((a) => ({
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size:     a.size,
+        })) as unknown as Record<string, string>,
+      },
+    });
+    await prisma.publicFolder.update({
+      where: { id: publicFolder.id },
+      data:  { totalCount: { increment: 1 } },
+    });
+    log.info(
+      { rcptTo: opts.rcptTo, folderId: publicFolder.id, folder: publicFolder.displayName },
+      'Mail in öffentlichem Ordner gespeichert',
+    );
+    return;
+  }
 
   // Common-Mode: User-Postfach. Fallback: SharedMailbox (für lokale Zustellung).
   // Wenn beides null → unbekannter Empfänger (Mail wird verworfen).
@@ -67,7 +103,8 @@ export async function storeInboundMessage(
   }
 
   // Use decrypted buffer (or original) for parsing and storage
-  const effectiveBuffer = smimeDecrypted ? processedBuffer : rawBuffer;
+  // `let` weil TransportRules den Buffer modifizieren können (addHeader, disclaimer)
+  let effectiveBuffer = smimeDecrypted ? processedBuffer : rawBuffer;
   // mailbox wurde oben aus user?.mailbox bzw. sharedMailbox?.mailbox aufgelöst
   // → muss als non-null behandelt werden (early-return-check oben)
   mailbox = mailbox!;
@@ -106,7 +143,45 @@ export async function storeInboundMessage(
     return;
   }
 
-  const parsed = await parseRawMessage(effectiveBuffer);
+  let parsed = await parseRawMessage(effectiveBuffer);
+
+  // ── Transport Rules (Server-weit, Admin-konfiguriert, v3.18.9) ──────────────
+  // Wird VOR User-Mail-Rules ausgewertet — modifiziert Header/Subject/Body und
+  // kann Mail komplett rejecten oder in Quarantäne schieben.
+  try {
+    const transportOutcome = await applyTransportRules(parsed, {
+      envelopeRcpt: opts.rcptTo,
+      ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
+    });
+    if (transportOutcome.rejected) {
+      log.warn(
+        { rcptTo: opts.rcptTo, from: opts.fromAddr, reason: transportOutcome.rejectReason },
+        'Mail durch TransportRule abgelehnt — keine Zustellung',
+      );
+      return;
+    }
+    if (transportOutcome.quarantined) {
+      log.info(
+        { rcptTo: opts.rcptTo, from: opts.fromAddr, ruleIds: transportOutcome.appliedRuleIds },
+        'Mail durch TransportRule in Quarantäne verschoben',
+      );
+      // TODO: in Quarantäne-Tabelle einreihen (v3.18.10+)
+      return;
+    }
+    // Wenn Buffer-Modifikationen nötig: Buffer anpassen + neu parsen
+    if (
+      transportOutcome.headerAdds.length > 0 ||
+      transportOutcome.headerRemoves.length > 0 ||
+      transportOutcome.subjectPrefix ||
+      transportOutcome.subjectSuffix ||
+      transportOutcome.disclaimerHtml
+    ) {
+      effectiveBuffer = applyOutcomeToBuffer(effectiveBuffer, transportOutcome);
+      parsed = await parseRawMessage(effectiveBuffer);
+    }
+  } catch (err) {
+    log.error({ err }, 'TransportRules-Auswertung fehlgeschlagen — Mail wird unverändert zugestellt');
+  }
 
   // ── User Inbox Rules (Outlook-Style, v3.18.0) ────────────────────────────────
   // Engine kann folderId überschreiben, Flags/Kategorien setzen, Forward triggern

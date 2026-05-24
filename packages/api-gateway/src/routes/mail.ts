@@ -797,6 +797,8 @@ mailRouter.post(
     let bodyText: string;
     let inReplyTo: string | undefined;
     let scheduledAt: Date | null = null;
+    let sendAsAddress: string | null = null;     // Shared-Mailbox-Adresse als Absender (SEND_AS)
+    let sendOnBehalfOf: string | null = null;    // Shared-Mailbox-Adresse als „im Auftrag" (SEND_ON_BEHALF)
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -809,6 +811,8 @@ mailRouter.post(
         bodyText: z.string().optional(),
         inReplyTo: z.string().optional(),
         scheduledAt: z.string().datetime().optional(),
+        sendAs:        z.string().email().optional(),
+        sendOnBehalfOf: z.string().email().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -819,7 +823,9 @@ mailRouter.post(
       bodyHtml = parsed.data.bodyHtml ?? '';
       bodyText = parsed.data.bodyText ?? '';
       inReplyTo = parsed.data.inReplyTo;
-      if (parsed.data.scheduledAt) scheduledAt = new Date(parsed.data.scheduledAt);
+      if (parsed.data.scheduledAt)    scheduledAt    = new Date(parsed.data.scheduledAt);
+      if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
+      if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
     } else {
       // multipart — Felder kommen als Strings (Arrays als Komma-getrennte Liste)
       to       = parseAddrs(req.body['to'] as unknown);
@@ -833,6 +839,8 @@ mailRouter.post(
         const d = new Date(String(req.body['scheduledAt']));
         if (!isNaN(d.getTime())) scheduledAt = d;
       }
+      if (req.body['sendAs'])         sendAsAddress  = String(req.body['sendAs']).toLowerCase();
+      if (req.body['sendOnBehalfOf']) sendOnBehalfOf = String(req.body['sendOnBehalfOf']).toLowerCase();
     }
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
@@ -859,11 +867,51 @@ mailRouter.post(
     });
     if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
+    // ── Shared-Mailbox Permission-Check (v3.18.9) ──────────────────────────
+    // Wenn sendAs oder sendOnBehalfOf gesetzt ist, muss der User die passende
+    // Permission auf die Shared Mailbox haben.
+    let effectiveFromEmail        = user.email;
+    let effectiveFromDisplayName  = (user.displayName ?? '').trim();
+    let onBehalfHeader: string | null = null;
+    if (sendAsAddress) {
+      const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
+        where: {
+          userId: user.id,
+          permission: { in: ['SEND_AS', 'FULL_ACCESS'] },
+          sharedMailbox: { email: sendAsAddress, active: true },
+        },
+        include: { sharedMailbox: { select: { email: true, displayName: true } } },
+      });
+      if (!sharedPerm) {
+        res.status(403).json({ error: `Keine SEND_AS-Berechtigung für ${sendAsAddress}` });
+        return;
+      }
+      effectiveFromEmail       = sharedPerm.sharedMailbox.email;
+      effectiveFromDisplayName = sharedPerm.sharedMailbox.displayName;
+    } else if (sendOnBehalfOf) {
+      const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
+        where: {
+          userId: user.id,
+          permission: 'SEND_ON_BEHALF',
+          sharedMailbox: { email: sendOnBehalfOf, active: true },
+        },
+        include: { sharedMailbox: { select: { email: true, displayName: true } } },
+      });
+      if (!sharedPerm) {
+        res.status(403).json({ error: `Keine SEND_ON_BEHALF-Berechtigung für ${sendOnBehalfOf}` });
+        return;
+      }
+      // Für „im Auftrag": From=Shared, Sender=User → RFC 5322 §3.6.2
+      effectiveFromEmail       = sharedPerm.sharedMailbox.email;
+      effectiveFromDisplayName = sharedPerm.sharedMailbox.displayName;
+      onBehalfHeader           = `${(user.displayName ?? '').trim() ? `"${(user.displayName ?? '').trim()}" ` : ''}<${user.email}>`;
+    }
+
     const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
     const jobId       = crypto.randomUUID();
     const msgId       = `<${crypto.randomUUID()}@${user.domain.name}>`;
     const sendDate    = new Date();
-    const displayName = (user.displayName ?? '').trim();
+    const displayName = effectiveFromDisplayName;
 
     // ── Anhänge in MinIO hochladen (kein base64-Blob im Redis-Job) ───────────
     // Dadurch bleibt der BullMQ-Job klein; der Worker lädt die Anhänge beim
@@ -896,7 +944,7 @@ mailRouter.post(
     try {
       await getOutboundQueue().add('send', {
         messageId:    jobId,
-        from:         user.email,
+        from:         effectiveFromEmail,
         to:           smtpRecipients,
         senderUserId: user.id,
         ...(user.domain.dkimPrivateKey ? {
@@ -905,8 +953,9 @@ mailRouter.post(
           dkimPrivateKey: user.domain.dkimPrivateKey,
         } : {}),
         message: {
-          from:      user.email,
+          from:      effectiveFromEmail,
           fromName:  displayName,          // leer → nodemailer lässt Quoted-String weg
+          ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" Header
           to,
           cc,
           bcc,                             // nur im SMTP-Envelope, nicht im Header
