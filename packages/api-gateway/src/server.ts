@@ -33,7 +33,7 @@ import { adminLogsRouter } from './routes/admin/logs.js';
 import { adminGroupsRouter } from './routes/admin/groups.js';
 import { adminResourcesRouter } from './routes/admin/resources.js';
 import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
-import { adminEDiscoveryRouter } from './routes/admin/ediscovery.js';
+// eDiscovery & Legal Hold komplett entfernt in v3.18.5
 import { adminEmsRouter } from './routes/admin/ems.js';
 // Journaling-Feature komplett entfernt in v3.13.6
 import { adminRetentionRouter } from './routes/admin/retention.js';
@@ -275,7 +275,7 @@ app.use('/api/v1/admin/logs',            adminLogsRouter);
 app.use('/api/v1/admin/groups',          adminGroupsRouter);
 app.use('/api/v1/admin/resources',       adminResourcesRouter);
 app.use('/api/v1/admin/public-folders',  adminPublicFoldersRouter);
-app.use('/api/v1/admin/ediscovery',      adminEDiscoveryRouter);
+// eDiscovery-Route entfernt in v3.18.5
 app.use('/api/v1/admin/ems',             adminEmsRouter);
 // Journaling-Route entfernt in v3.13.6
 app.use('/api/v1/admin/compliance/retention',  adminRetentionRouter);

@@ -36,7 +36,6 @@ interface RetentionPolicy {
   action: 'ARCHIVE' | 'DELETE' | 'MOVE_TO_FOLDER';
   targetFolder?: string;
   scope: 'ALL_ITEMS' | 'INBOX' | 'SENT_ITEMS' | 'DELETED_ITEMS' | 'JUNK';
-  respectLegalHold: boolean;
   enabled: boolean;
   createdAt: string;
   _count?: { assignments: number };
@@ -228,7 +227,6 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
       const policy = await api.post<{ id: string }>('/admin/compliance/retention', {
         name: tpl.policyName,
         description: tpl.description,
-        respectLegalHold: true,
         enabled: true,
         retentionDays: 0,
         action: 'ARCHIVE',
@@ -453,7 +451,6 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
   const [form, setForm] = useState({
     name:             policy?.name ?? '',
     description:      policy?.description ?? '',
-    respectLegalHold: policy?.respectLegalHold ?? true,
     enabled:          policy?.enabled ?? true,
   });
   const [selectedTags, setSelectedTags] = useState<Set<string>>(
@@ -475,7 +472,6 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
       const body = {
         name: form.name,
         description: form.description,
-        respectLegalHold: form.respectLegalHold,
         enabled: form.enabled,
         // Legacy-Defaults — neue Policies steuern alles über Tags
         retentionDays: 0,
@@ -532,16 +528,10 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
               rows={2} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent resize-none" />
           </div>
 
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.respectLegalHold} onChange={(e) => set('respectLegalHold', e.target.checked)} className="accent-accent" />
-              <span className="text-sm text-gray-700">Legal Hold respektieren</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} className="accent-accent" />
-              <span className="text-sm text-gray-700">Aktiviert</span>
-            </label>
-          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} className="accent-accent" />
+            <span className="text-sm text-gray-700">Aktiviert</span>
+          </label>
 
           <div className="border-t border-gray-100 pt-4">
             <div className="flex items-center justify-between mb-2">

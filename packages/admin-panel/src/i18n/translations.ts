@@ -49,7 +49,6 @@ const de = {
   nav_servers:            'Server & Health',
 
   // ── Navigation — Compliance ──────────────────────────────────────────────
-  nav_ediscovery:         'eDiscovery',
   nav_retention:          'Aufbewahrung',
 
   // ── TopBar ───────────────────────────────────────────────────────────────
@@ -800,7 +799,6 @@ const en: { [K in keyof DE]: string } = {
   nav_servers:            'Server & Health',
 
   // ── Navigation — Compliance ──────────────────────────────────────────────
-  nav_ediscovery:         'eDiscovery',
   nav_retention:          'Retention',
 
   // ── TopBar ───────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ import { ServicesPage } from './pages/ServicesPage.js';
 import { GroupsPage } from './pages/GroupsPage.js';
 import { ExternalContactsPage } from './pages/ExternalContactsPage.js';
 import { RbacPage } from './pages/RbacPage.js';
-import { EDiscoveryPage } from './pages/EDiscoveryPage.js';
+// eDiscovery & Legal Hold komplett entfernt in v3.18.5
 // Journaling-Feature komplett entfernt in v3.13.6
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
@@ -148,7 +148,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/groups"         element={<GroupsPage />} />
                   <Route path="/ext-contacts"   element={<ExternalContactsPage />} />
                   <Route path="/rbac"           element={<RbacPage />} />
-                  <Route path="/ediscovery"     element={<EDiscoveryPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
                   <Route path="/oauth-clients" element={<OAuthClientsPage />} />
