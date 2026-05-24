@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
   AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
@@ -66,6 +66,11 @@ export function MessageReader({ messageId }: Props) {
 
   const patchMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.patch(`/mail/messages/${messageId}`, body),
+    onSuccess: invalidate,
+  });
+
+  const cancelScheduledMutation = useMutation({
+    mutationFn: () => api.post(`/mail/messages/${messageId}/cancel-scheduled`, {}),
     onSuccess: invalidate,
   });
 
@@ -251,6 +256,40 @@ export function MessageReader({ messageId }: Props) {
           </div>
         );
       })()}
+
+      {/* Scheduled-Send-Banner (Outlook-Style) — sichtbar für PENDING/SENT/CANCELLED */}
+      {msg.scheduledAt && msg.scheduledStatus && (
+        <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
+          msg.scheduledStatus === 'PENDING'   ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200' :
+          msg.scheduledStatus === 'SENT'      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-900 dark:text-green-200' :
+                                                 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'
+        }`}>
+          {msg.scheduledStatus === 'PENDING' && <CalendarClock size={16} className="text-blue-600 dark:text-blue-300 shrink-0" />}
+          {msg.scheduledStatus === 'SENT'    && <CheckCircle  size={16} className="text-green-600 dark:text-green-300 shrink-0" />}
+          {msg.scheduledStatus === 'CANCELLED' && <X size={16} className="text-gray-500 shrink-0" />}
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold leading-tight">
+              {msg.scheduledStatus === 'PENDING'   ? 'Diese Nachricht wird geplant gesendet' :
+               msg.scheduledStatus === 'SENT'      ? 'Geplanter Versand abgeschlossen' :
+                                                     'Geplanter Versand abgebrochen'}
+            </p>
+            <p className="text-xs opacity-80 leading-tight">
+              {msg.scheduledStatus === 'PENDING' ? 'Versand am ' : 'War geplant für '}
+              <strong>{new Date(msg.scheduledAt).toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' })}</strong>
+            </p>
+          </div>
+          {msg.scheduledStatus === 'PENDING' && (
+            <button
+              onClick={() => cancelScheduledMutation.mutate()}
+              disabled={cancelScheduledMutation.isPending}
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors disabled:opacity-50"
+              title="Planung abbrechen — Mail wird nicht gesendet"
+            >
+              <X size={13} /> Planung abbrechen
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0 animate-page-in">

@@ -58,6 +58,11 @@ export interface MessageSummary {
   // v3.18.6: rspamd-Score zum Zeitpunkt der Zustellung. null = nicht gescannt.
   // 0 = explizit als Ham markiert (vom User via „Kein Spam")
   spamScore?: number | null;
+  // v3.18.7: Senden planen — wenn gesetzt, ist die Mail im Sent-Folder aber noch
+  // nicht versendet. scheduledStatus zeigt den Zustand: PENDING = wartet auf Versand,
+  // SENT = bereits versendet, CANCELLED = Versand abgebrochen
+  scheduledAt?: string | null;
+  scheduledStatus?: 'PENDING' | 'SENT' | 'CANCELLED' | null;
   attachments: { id: string; filename: string; mimeType: string; size: number }[];
   categories?: Category[];
 }

@@ -148,6 +148,22 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Zustellung gestartet');
 
+      // ── Schedule-Send: Cancellation-Check ────────────────────────────────
+      // Wenn der User die geplante Mail im MWA über „Planung abbrechen"
+      // storniert hat, wurde der Job zwar entfernt (BullMQ.remove()), aber
+      // wenn er bereits gestartet ist, muss der Worker selbst prüfen ob
+      // die Message inzwischen auf CANCELLED gesetzt wurde.
+      if (job.id) {
+        const scheduled = await prisma.message.findFirst({
+          where: { scheduledJobId: job.id },
+          select: { id: true, scheduledStatus: true },
+        });
+        if (scheduled && scheduled.scheduledStatus === 'CANCELLED') {
+          log.info({ jobId: job.id, msgId: scheduled.id }, 'Geplanter Versand abgebrochen — Worker stoppt');
+          return; // Job als erfolgreich markieren ohne zu senden
+        }
+      }
+
       // ── RFC-5322-Buffer aufbauen ──────────────────────────────────────────
       // Entweder aus strukturierter Nachricht (Web-Client-Pfad, v3.17.30+)
       // oder aus base64-Rohdaten (SMTP-Submission-Pfad, Clients).
@@ -243,6 +259,14 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
 
       log.info({ jobId: job.id, to }, 'Nachricht zugestellt');
+
+      // Schedule-Send: Status auf SENT setzen damit der Banner in MWA verschwindet
+      if (job.id) {
+        await prisma.message.updateMany({
+          where: { scheduledJobId: job.id, scheduledStatus: 'PENDING' },
+          data:  { scheduledStatus: 'SENT' },
+        }).catch((e: unknown) => log.warn({ err: e }, 'scheduledStatus=SENT Update fehlgeschlagen'));
+      }
     },
     {
       connection: createBullMqConnection(), // maxRetriesPerRequest: null (BullMQ-Pflicht)
