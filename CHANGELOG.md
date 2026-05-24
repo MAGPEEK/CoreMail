@@ -13,6 +13,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.50] — 2026-05-24 — Fix: MWA Quelltext-Kontextmenü öffnet Modal statt Tab
+
+### Fixed
+
+- **MWA: „Quelltext anzeigen" im Rechtsklick-Menü öffnet RFC-822-Modal statt Browser-Tab**
+  (`web-client/src/components/MessageList.tsx`):
+  Der Kontextmenü-Eintrag „Quelltext anzeigen" in der Nachrichtenliste öffnete den
+  Rohtext via `window.open()` in einem neuen Browser-Tab (Browser versuchte die Datei
+  herunterzuladen). Fix: Fetch-Request mit `?token=`-Auth, anschließend Anzeige im
+  gleichen RFC-822-Quelltext-Modal wie in `MessageReader` (Overlay, scrollbar,
+  Monospace-Font, EML-Download-Button, Schließen per ESC-Klick auf Backdrop).
+
+---
+
 ## [3.17.49] — 2026-05-24 — Fix: MWA Quelltext/EML Auth, Junk-Logik, Antwort-Indikator
 
 ### Fixed
