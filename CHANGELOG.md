@@ -13,6 +13,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.11] — 2026-05-24 — MWA Globales Adressbuch (GAL-Browser)
+
+### Added
+
+- **ContactsPage — Tabs „Mein Adressbuch" / „Globales Adressbuch"**
+  (`packages/web-client/src/pages/ContactsPage.tsx`):
+  - Tab-Navigation in der Sidebar zwischen privaten Kontakten (Bestand) und GAL
+  - GAL liefert vereint aus 3 Quellen (alle aktiven internen User, externe
+    Kontakte aus dem Admin-Verzeichnis, Verteilergruppen)
+  - Such-Bar funktioniert für beide Tabs; bei GAL ohne Suche werden alle
+    Einträge alphabetisch sortiert gelistet (Browse-Modus)
+  - Typ-Filter (Alle / Personen / Extern / Gruppen) als kompakte Toggle-Bar
+  - Counter-Badge zeigt Gesamtanzahl der GAL-Treffer
+  - Klick auf GAL-Eintrag → Read-Only-Detail-Panel mit Avatar, Typ-Badge
+    (Verteilergruppe / Externer Kontakt / Interner Benutzer), E-Mail (klickbar
+    mailto:), Telefon/Mobil (klickbar tel:), Unternehmen, Abteilung, Domain,
+    Mitgliederzahl
+  - **„Neue Nachricht"-Button** öffnet das Compose-Window mit der GAL-Adresse
+    vorausgefüllt
+  - Hinweis im Detail-Panel: zentrale Verwaltung — User kann GAL-Einträge nicht
+    direkt bearbeiten
+
+- **Backend `/api/v1/contacts/gal` erweitert** mit Browse-Modus + Typ-Filter:
+  - Ohne `q` → alle GAL-Einträge alphabetisch sortiert (Browse für GAL-Ansicht)
+  - Mit `q` (>=2 Zeichen) → Volltextsuche über alle 3 Quellen
+  - `type=all|users|external|groups` filtert die Quellen
+  - Paginiert: `limit` (max 500, default 300) + `offset`
+  - Response: `{ entries: GalEntry[], total, limit, offset }`
+  - Strukturiertes `GalEntry`-Format mit `kind`, `displayName`, `email`,
+    optionalen Feldern `company`/`department`/`phone`/`mobile`/`domain`/
+    `memberCount` und ID-Prefix (`user-`/`ext-`/`grp-`)
+
+---
+
 ## [3.18.10] — 2026-05-24 — Bilder-Privacy-Banner + Queue-Hardening (DSN, 5xx, dynamische Settings)
 
 ### Added — Bilder-Privacy-Banner (Outlook/Gmail-Style)
