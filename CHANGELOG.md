@@ -13,6 +13,68 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.9] — 2026-05-24 — TransportRule-Engine + Public-Folders + SharedMailbox SEND_AS/ON_BEHALF
+
+### Fixed — TransportRule funktionierte gar nicht
+
+- **Bug**: `TransportRule` wurde in der DB gespeichert, aber **niemals im Mail-Flow ausgewertet**.
+  Es gab keine Engine — nur CRUD-Endpoints.
+
+- **Fix**: Neue Engine `packages/storage/src/transport-rules.ts` mit
+  `applyTransportRules(parsed, ctx)` + `applyOutcomeToBuffer(buffer, outcome)`:
+  - 8 Conditions × 9 Operatoren mit AND-Verknüpfung (Exchange-Standard)
+  - 10 Aktionen: `addHeader`, `removeHeader`, `redirect`, `reject`, `addRecipient`,
+    `removeRecipient`, `setSubjectPrefix`, `setSubjectSuffix`, `quarantine`,
+    `addDisclaimer`
+  - Hook in `storeInboundMessage()` direkt nach Parsing — vor User-Mail-Rules,
+    vor Spam-Junk-Decision. `reject` und `quarantine` brechen die Zustellung ab.
+  - Header/Subject/Disclaimer-Modifikationen werden direkt am RFC-822-Buffer
+    angewendet (Re-Parsing nach Modifikation für konsistente DB-Felder).
+
+### Fixed — Verteilergruppen-Mitglieder erhielten keine Mails (Inbound-Pfad)
+
+- Bereits in v3.18.8 für Outbound gefixt; v3.18.9 für Inbound nachgezogen:
+  Externe Member von lokalen Gruppen werden via `enqueueOutbound()` weitergeleitet.
+
+### Fixed — Public Folders mehrere Bugs
+
+- **Schema**: `PublicFolder.email String? @unique` — Ordner ist jetzt mail-aktivierbar.
+- **SMTP Inbound**: `verifyRecipient()` und `storeInboundMessage()` erkennen jetzt
+  mail-aktivierte Public Folders. Mails landen als `PublicFolderMessage` direkt im
+  Ordner — kein Mailbox-Routing.
+- **BCP ACL-Editor**: Plain-Text-Input ersetzt durch Autocomplete-Dropdown
+  (Debouncing, Keyboard-Navigation, externe + Gruppen rausgefiltert da nur interne
+  User Public-Folder-Zugriff bekommen). Cache-Invalidierung nach Save erweitert
+  (`admin-public-folders` + ACL-Liste).
+- **MWA FolderTree**: Neue `PublicFoldersSection` zeigt Public Folders unter
+  persönlichen Ordnern. Lila Users-Icon + Tooltip mit E-Mail. Auto-Refresh 60s.
+  Klick zeigt vorerst Toast (Browse-Modus folgt in v3.18.10).
+
+### Added — Shared Mailbox SEND_AS / SEND_ON_BEHALF im REST `/mail/send`
+
+- **Bisher**: SEND_AS funktionierte nur über SMTP-Submission (Ports 465/587).
+  REST `/mail/send` ignorierte Shared-Mailbox-Permissions, `from` war immer
+  hartcodiert auf `user.email`.
+
+- **Neu**: `POST /api/v1/mail/send` akzeptiert optional:
+  - `sendAs: string` (E-Mail) — User muss `SEND_AS` oder `FULL_ACCESS` haben
+  - `sendOnBehalfOf: string` (E-Mail) — User muss `SEND_ON_BEHALF` haben
+
+- **Permission-Check**: explicit `prisma.sharedMailboxPerm.findFirst()` mit
+  Permission + Mailbox-Verknüpfung. Fehlt die Permission → `403`.
+
+- **From-Header-Override**: bei `sendAs` wird `From: <shared>` gesetzt;
+  bei `sendOnBehalfOf` wird `From: <shared>` UND zusätzlich `Sender: <user>` —
+  Outlook/Apple Mail zeigen dann „User im Auftrag von Shared".
+
+- **StructuredMessage.sender** als optionales Feld zur Queue ergänzt.
+
+### Added — Schema-Erweiterung
+
+- `PublicFolder.email String? @unique`
+
+---
+
 ## [3.18.8] — 2026-05-24 — Fix: Externe Kontakte, Verteilergruppen-Routing, Autocomplete
 
 ### Fixed

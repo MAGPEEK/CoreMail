@@ -875,6 +875,8 @@ model PublicFolder {
   // ACL: [{userId: string, permission: "READ"|"WRITE"|"FULL"}]
   acl         Json                  @default("[]")
   totalCount  Int                   @default(0)
+  // Mail-Enabled: wenn email gesetzt → SMTP-Empfang in den Ordner möglich
+  email       String?               @unique
   createdBy   String?
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt

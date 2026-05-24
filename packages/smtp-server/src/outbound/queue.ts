@@ -28,6 +28,8 @@ export interface StructuredAttachment {
 export interface StructuredMessage {
   from:       string;    // Absender-E-Mail-Adresse
   fromName:   string;    // Anzeigename (leer → kein Quoted-String)
+  /** Optionaler RFC-5322 §3.6.2 Sender-Header für „im Auftrag von" (SEND_ON_BEHALF). */
+  sender?:    string;
   to:         string[];
   cc:         string[];
   bcc:        string[];  // nur SMTP-Envelope, NICHT im Header
@@ -78,6 +80,8 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
   const info = await transport.sendMail({
     messageId: msg.messageId,
     from:      fromField,
+    // Sender: für SEND_ON_BEHALF — Outlook zeigt „Stefan im Auftrag von info@firma.de"
+    ...(msg.sender ? { sender: msg.sender } : {}),
     to:        msg.to,
     subject:   msg.subject,
     date:      new Date(msg.date),

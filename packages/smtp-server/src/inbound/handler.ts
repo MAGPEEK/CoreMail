@@ -227,7 +227,7 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 
   const email = rcptTo.toLowerCase();
 
-  const [user, sharedMailbox, distGroup, resourceMailbox, alias] = await Promise.all([
+  const [user, sharedMailbox, distGroup, resourceMailbox, alias, publicFolder] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.distributionGroup.findFirst({ where: { email, active: true }, select: { id: true } }),
@@ -244,9 +244,11 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
       },
       select: { id: true },
     }),
+    // Mail-aktivierter Public Folder (v3.18.9)
+    prisma.publicFolder.findFirst({ where: { email }, select: { id: true } }),
   ]);
 
-  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox ?? alias);
+  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox ?? alias ?? publicFolder);
 }
 
 // expandRecipients-Helper wurde nach handlers/expand.ts verschoben damit sie auch

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.8`
+**Aktuelle Version**: `3.18.9`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.8; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.9; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.8 — Highlights
+## Aktuelle Version 3.18.9 — Highlights
+
+**v3.18.9** — Drei kritische Backend-Features: (1) **TransportRule-Engine** — neue Engine `packages/storage/src/transport-rules.ts` mit 8 Conditions × 9 Operators und 10 Actions (addHeader, removeHeader, redirect, reject, addRecipient, removeRecipient, setSubjectPrefix/Suffix, quarantine, addDisclaimer). Hook in `storeInboundMessage` direkt nach Parsing. Regeln wurden vorher in DB gespeichert aber niemals evaluiert. (2) **Public Folders Mail-Enabled** — `PublicFolder.email String? @unique`, `verifyRecipient` + `storeInboundMessage` erkennen sie, Mails landen als `PublicFolderMessage` direkt im Ordner. MWA-FolderTree zeigt sie als „Öffentliche Ordner"-Sektion mit lila Users-Icon. BCP ACL-Editor mit Autocomplete-Dropdown. (3) **SharedMailbox SEND_AS/SEND_ON_BEHALF in REST `/mail/send`** — Permission-Check via `sharedMailboxPerm`, From-Override, `Sender:`-Header für „im Auftrag von".
 
 **v3.18.8** — Vier Fixes: (1) **ExternalContactsPage Cursor-Bug** — Field-Helper-Component inline → Recreation pro Render → Cursor-Verlust; alle Felder zu inline `<div>` umgebaut. (2) **GroupsPage Fragment-Key-Warning** — `<>` zu `<Fragment key>`. (3) **KRITISCH: Verteilergruppen externe Mitglieder erhielten keine Mails** — `expandRecipients` lieferte alle Member als „lokal", externe gingen silent verloren. Fix in `queue.ts` + `inbound/handler.ts`: nach Expansion erneut auf lokal/extern teilen, externe via `relayMessage`/`enqueueOutbound`. (4) **Compose-Autocomplete vereinte Adressquellen** — `/contacts?q=` liefert ab 2 Zeichen Private Kontakte + GAL-User + ExternalMailContacts + DistributionGroups mit ID-Prefix (gal-/ext-/grp-) zur Quellen-Markierung. GroupsPage MembersPanel mit Autocomplete-Dropdown statt Plain-Text-Input.
 
