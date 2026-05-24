@@ -218,9 +218,51 @@ userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// GET /api/v1/user/rules — mail rules
+// ─────────────────────────────────────────────────────────────────────────────
+// Mail Rules (Outlook-Style Inbox Rules, v3.18.0)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RuleConditionSchema = z.object({
+  field: z.enum([
+    'from', 'to', 'cc', 'bcc', 'subject', 'body', 'recipient',
+    'hasAttachment', 'size', 'importance', 'sentOnlyToMe',
+  ]),
+  operator: z.enum([
+    'contains', 'notContains', 'equals', 'notEquals',
+    'startsWith', 'endsWith', 'regex',
+    'greaterThan', 'lessThan', 'is',
+  ]),
+  value: z.union([z.string(), z.number(), z.boolean()]),
+});
+
+const RuleActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('moveTo'),        folderId: z.string().min(1) }),
+  z.object({ type: z.literal('copyTo'),        folderId: z.string().min(1) }),
+  z.object({ type: z.literal('delete') }),
+  z.object({ type: z.literal('hardDelete') }),
+  z.object({ type: z.literal('markRead') }),
+  z.object({ type: z.literal('markFlagged') }),
+  z.object({ type: z.literal('pin') }),
+  z.object({ type: z.literal('categorize'),    categoryId: z.string().min(1) }),
+  z.object({ type: z.literal('forward'),       address: z.string().email() }),
+  z.object({ type: z.literal('redirect'),      address: z.string().email() }),
+  z.object({ type: z.literal('markJunk') }),
+  z.object({ type: z.literal('setImportance'), value: z.enum(['high', 'normal', 'low']) }),
+]);
+
+const RuleSchema = z.object({
+  name: z.string().min(1).max(120),
+  enabled: z.boolean().default(true),
+  priority: z.number().int().default(0),
+  conditions: z.array(RuleConditionSchema).default([]),
+  exceptions: z.array(RuleConditionSchema).default([]),
+  actions:    z.array(RuleActionSchema).min(1, 'Mindestens eine Aktion erforderlich'),
+  stopProcessing: z.boolean().default(false),
+  matchAll: z.boolean().default(true),
+});
+
+// GET /api/v1/user/rules
 userRouter.get('/rules', async (req: Request, res: Response) => {
-  
   const rules = await prisma.mailRule.findMany({
     where: { userId: req.apiUser!.userId },
     orderBy: { priority: 'asc' },
@@ -228,35 +270,34 @@ userRouter.get('/rules', async (req: Request, res: Response) => {
   res.json(rules);
 });
 
-const RuleSchema = z.object({
-  name: z.string().min(1),
-  enabled: z.boolean().default(true),
-  priority: z.number().int().default(0),
-  conditions: z.array(z.object({
-    field: z.enum(['from', 'to', 'subject', 'body', 'hasAttachment', 'size']),
-    operator: z.enum(['contains', 'equals', 'startsWith', 'endsWith', 'greaterThan', 'lessThan', 'is']),
-    value: z.string(),
-  })),
-  actions: z.array(z.object({
-    type: z.enum(['move', 'copy', 'delete', 'markRead', 'markFlagged', 'forward', 'reject']),
-    value: z.string().optional(),
-  })),
-});
-
 // POST /api/v1/user/rules
 userRouter.post('/rules', async (req: Request, res: Response) => {
   const parsed = RuleSchema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
-
-  
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    return;
+  }
+  // Auto-Priority: an Ende einfügen wenn nicht explizit gesetzt
+  let priority = parsed.data.priority;
+  if (priority === 0) {
+    const maxRule = await prisma.mailRule.findFirst({
+      where: { userId: req.apiUser!.userId },
+      orderBy: { priority: 'desc' },
+      select: { priority: true },
+    });
+    priority = (maxRule?.priority ?? 0) + 1;
+  }
   const rule = await prisma.mailRule.create({
     data: {
       userId: req.apiUser!.userId,
       name: parsed.data.name,
       enabled: parsed.data.enabled,
-      priority: parsed.data.priority,
+      priority,
       conditions: parsed.data.conditions,
+      exceptions: parsed.data.exceptions,
       actions: parsed.data.actions,
+      stopProcessing: parsed.data.stopProcessing,
+      matchAll: parsed.data.matchAll,
     },
   });
   res.status(201).json(rule);
@@ -266,21 +307,90 @@ userRouter.post('/rules', async (req: Request, res: Response) => {
 userRouter.put('/rules/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const parsed = RuleSchema.partial().safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
-
-  
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    return;
+  }
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updated = await prisma.mailRule.update({ where: { id }, data: parsed.data as any });
+  const updated = await prisma.mailRule.update({
+    where: { id },
+    data: parsed.data as Parameters<typeof prisma.mailRule.update>[0]['data'],
+  });
   res.json(updated);
+});
+
+// PATCH /api/v1/user/rules/:id/toggle — schneller Enable/Disable
+userRouter.patch('/rules/:id/toggle', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
+  if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
+  const updated = await prisma.mailRule.update({
+    where: { id },
+    data: { enabled: !rule.enabled },
+  });
+  res.json(updated);
+});
+
+// POST /api/v1/user/rules/reorder — body { ids: string[] } — neue Reihenfolge
+userRouter.post('/rules/reorder', async (req: Request, res: Response) => {
+  const schema = z.object({ ids: z.array(z.string()).min(1) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  // Verifizieren dass alle IDs dem User gehören
+  const userRules = await prisma.mailRule.findMany({
+    where: { userId: req.apiUser!.userId },
+    select: { id: true },
+  });
+  const userRuleIds = new Set(userRules.map((r) => r.id));
+  for (const id of parsed.data.ids) {
+    if (!userRuleIds.has(id)) { res.status(403).json({ error: 'Rule not owned by user' }); return; }
+  }
+
+  await prisma.$transaction(
+    parsed.data.ids.map((id, idx) =>
+      prisma.mailRule.update({ where: { id }, data: { priority: idx + 1 } }),
+    ),
+  );
+  res.json({ ok: true });
+});
+
+// POST /api/v1/user/rules/:id/run-now — body { folderIds?: string[], limit?: number }
+userRouter.post('/rules/:id/run-now', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
+  if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
+
+  const user = await prisma.user.findUnique({
+    where: { id: req.apiUser!.userId },
+    select: { email: true },
+  });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  const optsSchema = z.object({
+    folderIds: z.array(z.string()).optional(),
+    limit:     z.number().int().min(1).max(5000).optional(),
+  });
+  const opts = optsSchema.safeParse(req.body ?? {});
+  if (!opts.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  try {
+    const { runRuleOnExisting } = await import('@coremail/storage');
+    const passOpts: { folderIds?: string[]; limit?: number } = {};
+    if (opts.data.folderIds) passOpts.folderIds = opts.data.folderIds;
+    if (opts.data.limit !== undefined) passOpts.limit = opts.data.limit;
+    const result = await runRuleOnExisting(id, req.apiUser!.userId, user.email, passOpts);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Run-now failed', detail: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // DELETE /api/v1/user/rules/:id
 userRouter.delete('/rules/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
   await prisma.mailRule.delete({ where: { id } });
