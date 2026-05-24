@@ -796,6 +796,7 @@ mailRouter.post(
     let bodyHtml: string;
     let bodyText: string;
     let inReplyTo: string | undefined;
+    let scheduledAt: Date | null = null;
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -807,6 +808,7 @@ mailRouter.post(
         bodyHtml: z.string().optional(),
         bodyText: z.string().optional(),
         inReplyTo: z.string().optional(),
+        scheduledAt: z.string().datetime().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -817,6 +819,7 @@ mailRouter.post(
       bodyHtml = parsed.data.bodyHtml ?? '';
       bodyText = parsed.data.bodyText ?? '';
       inReplyTo = parsed.data.inReplyTo;
+      if (parsed.data.scheduledAt) scheduledAt = new Date(parsed.data.scheduledAt);
     } else {
       // multipart — Felder kommen als Strings (Arrays als Komma-getrennte Liste)
       to       = parseAddrs(req.body['to'] as unknown);
@@ -826,9 +829,28 @@ mailRouter.post(
       bodyHtml = String(req.body['bodyHtml'] ?? '');
       bodyText = String(req.body['bodyText'] ?? '');
       inReplyTo = req.body['inReplyTo'] ? String(req.body['inReplyTo']) : undefined;
+      if (req.body['scheduledAt']) {
+        const d = new Date(String(req.body['scheduledAt']));
+        if (!isNaN(d.getTime())) scheduledAt = d;
+      }
     }
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
+
+    // Schedule-Send Validierung: Zeitpunkt muss in der Zukunft liegen (>30s),
+    // nicht weiter als 1 Jahr (sonst wahrscheinlich Fehler)
+    const now = Date.now();
+    if (scheduledAt) {
+      const delayMs = scheduledAt.getTime() - now;
+      if (delayMs < 30_000) {
+        res.status(400).json({ error: 'Geplanter Versand muss mindestens 30 Sekunden in der Zukunft liegen' });
+        return;
+      }
+      if (delayMs > 365 * 24 * 60 * 60 * 1000) {
+        res.status(400).json({ error: 'Geplanter Versand darf nicht mehr als 1 Jahr in der Zukunft liegen' });
+        return;
+      }
+    }
 
     // Absender laden (inkl. DKIM-Schlüssel der Domain)
     const user = await prisma.user.findUnique({
@@ -864,6 +886,13 @@ mailRouter.post(
     // selbst auf. DKIM-Signierung erfolgt über nodemailer-Transport-Option.
     const smtpRecipients = [...to, ...cc, ...bcc];
 
+    // BullMQ-Job: bei scheduledAt mit `delay` einreihen — der Worker startet
+    // den Versand erst zum geplanten Zeitpunkt. delay wird intern in ms gemessen.
+    const queueJobId = `api-${jobId}`;
+    const jobOptions: { jobId: string; delay?: number } = { jobId: queueJobId };
+    if (scheduledAt) {
+      jobOptions.delay = scheduledAt.getTime() - now;
+    }
     try {
       await getOutboundQueue().add('send', {
         messageId:    jobId,
@@ -885,11 +914,13 @@ mailRouter.post(
           html:      bodyHtml,
           text:      bodyText,
           messageId: msgId,
-          date:      sendDate.toISOString(),
+          // Bei Schedule-Send: Date-Header auf scheduledAt setzen damit der
+          // Empfänger den geplanten Versandzeitpunkt sieht (nicht den Erstell-Zeitpunkt)
+          date:      (scheduledAt ?? sendDate).toISOString(),
           ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
           attachments: queueAttachments,
         },
-      }, { jobId: `api-${jobId}` });
+      }, jobOptions);
     } catch (queueErr) {
       log.error({ err: queueErr }, 'Outbound-Queue-Add fehlgeschlagen');
       res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
@@ -987,6 +1018,12 @@ mailRouter.post(
             rawSize:   rawBuffer.length,
             storagePath,
             changeKey: modSeq.toString(),
+            // Schedule-Send-Metadaten: ermöglicht Banner + Cancel-Button im Reader
+            ...(scheduledAt ? {
+              scheduledAt,
+              scheduledStatus: 'PENDING',
+              scheduledJobId:  queueJobId,
+            } : {}),
           },
         });
         await prisma.folder.update({
@@ -998,10 +1035,56 @@ mailRouter.post(
       }
     })();
 
-    log.info({ userId: user.id, to, attachments: files.length }, 'Nachricht in Queue eingereiht');
-    res.json({ ok: true, jobId });
+    log.info(
+      { userId: user.id, to, attachments: files.length, scheduled: !!scheduledAt },
+      scheduledAt ? 'Geplante Nachricht in Queue eingereiht' : 'Nachricht in Queue eingereiht',
+    );
+    res.json({
+      ok: true,
+      jobId,
+      ...(scheduledAt ? { scheduledAt: scheduledAt.toISOString(), scheduled: true } : { scheduled: false }),
+    });
   },
 );
+
+// POST /api/v1/mail/messages/:id/cancel-scheduled — geplanten Versand abbrechen
+mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const msg = await prisma.message.findFirst({
+    where: { id, folder: { mailbox: { userId: req.apiUser!.userId } } },
+    select: { id: true, scheduledStatus: true, scheduledJobId: true, folderId: true },
+  });
+  if (!msg) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
+  if (msg.scheduledStatus !== 'PENDING') {
+    res.status(409).json({ error: `Nicht abbrechbar — Status: ${msg.scheduledStatus ?? '(nicht geplant)'}` });
+    return;
+  }
+
+  // BullMQ-Job entfernen (delay-Job kann via remove() gestoppt werden)
+  let jobRemoved = false;
+  if (msg.scheduledJobId) {
+    try {
+      const job = await getOutboundQueue().getJob(msg.scheduledJobId);
+      if (job) {
+        await job.remove();
+        jobRemoved = true;
+      }
+    } catch (err) {
+      log.warn({ err, jobId: msg.scheduledJobId }, 'BullMQ-Job-Remove fehlgeschlagen — Message wird trotzdem als CANCELLED markiert');
+    }
+  }
+
+  await prisma.message.update({
+    where: { id },
+    data: {
+      scheduledStatus: 'CANCELLED',
+      // scheduledAt/scheduledJobId für Audit-Trail behalten
+      modSeq: BigInt(Date.now()),
+    },
+  });
+
+  res.json({ ok: true, jobRemoved });
+});
 
 // GET /api/v1/mail/search?q=foo&categoryId=...
 mailRouter.get('/search', async (req: Request, res: Response) => {

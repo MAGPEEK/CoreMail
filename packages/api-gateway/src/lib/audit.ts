@@ -97,26 +97,42 @@ const AUDIT_SENSITIVE_GET = [
  */
 export function auditMiddleware(
   req: Request,
-  _res: import('express').Response,
+  res: import('express').Response,
   next: import('express').NextFunction,
 ): void {
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'];
   const isMutating = mutating.includes(req.method);
   const isSensitiveGet = req.method === 'GET' && AUDIT_SENSITIVE_GET.some((re) => re.test(req.path));
 
-  if (isMutating || isSensitiveGet) {
+  if (!isMutating && !isSensitiveGet) {
+    next();
+    return;
+  }
+
+  // KRITISCH: Loggen erst nach Response-Ende, damit `req.apiUser` durch
+  // `requireAuth` (in den einzelnen Router-Mountings) bereits gesetzt ist.
+  // Vor dem Fix wurde synchron geloggt → apiUser war undefined → Akteur immer leer.
+  // Außerdem kennen wir nach Response den HTTP-Status (Erfolg / Fehler).
+  res.on('finish', () => {
     const user = (req as Request & { apiUser?: { userId: string; email: string } }).apiUser;
     const pathParts = req.path.replace(/^\//, '').split('/');
     const resource = pathParts[0] ?? 'unknown';
     const verb = req.method.toLowerCase();
+    const success = res.statusCode >= 200 && res.statusCode < 400;
 
     audit({
       ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
       ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
       action: `${resource}.${verb}`,
-      ...(pathParts[1] !== undefined ? { targetId: pathParts[1] } : {}),
+      // targetType = Ressource (z.B. "mailboxes", "rules", "audit-log")
+      targetType: resource,
+      // targetId = path-Segment nach der Ressource, wenn vorhanden
+      ...(pathParts[1] !== undefined && pathParts[1] !== '' ? { targetId: pathParts[1] } : {}),
+      success,
+      ...(!success ? { errorMsg: `HTTP ${res.statusCode}` } : {}),
       ...auditContext(req),
     });
-  }
+  });
+
   next();
 }

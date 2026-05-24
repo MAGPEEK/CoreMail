@@ -13,7 +13,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.18.7] — 2026-05-24 — Spam-UX (Outlook-Style) + Audit-Log v2 (Compliance-grade)
+## [3.18.7] — 2026-05-24 — Spam-UX + Audit-Log v2 + Audit-Bug-Fix + Senden-Planen
+
+### Fixed
+
+- **Audit-Log: Akteur und Ziel waren leer** (`packages/api-gateway/src/lib/audit.ts`):
+  `auditMiddleware` lief synchron VOR `requireAuth` (Auth ist pro Router gemountet,
+  nicht global) → `req.apiUser` war beim Loggen `undefined` → `actorId` / `actorEmail`
+  blieben null. Außerdem wurde `targetType` gar nicht gesetzt (nur `targetId`).
+  Fix: Logging wandert in `res.on('finish')` damit Auth bereits gelaufen ist;
+  `targetType` aus `pathParts[0]` (Ressource), HTTP-Status wird als `success`/
+  `errorMsg` ausgewertet.
+
+### Added — Senden planen (Outlook-Style)
+
+- **Backend** (`packages/storage/prisma/schema.prisma` + `routes/mail.ts`):
+  - Neue Felder: `Message.scheduledAt: DateTime?`, `scheduledStatus: String?`
+    (`PENDING|SENT|CANCELLED`), `scheduledJobId: String?`
+  - `POST /mail/send` akzeptiert optional `scheduledAt` (ISO-Datum) — Validierung:
+    mind. 30s in der Zukunft, max. 1 Jahr
+  - BullMQ-Job mit `delay: scheduledAt - now` eingereiht — Worker startet erst
+    zum geplanten Zeitpunkt
+  - Sent-Kopie sofort im „Gesendete Elemente"-Ordner mit `scheduledStatus: PENDING`
+    + `scheduledJobId` (für späteren Cancel)
+  - Date-Header der Mail wird auf `scheduledAt` gesetzt (Empfänger sieht geplanten
+    Zeitpunkt, nicht Erstell-Zeitpunkt)
+  - Neuer Endpoint `POST /mail/messages/:id/cancel-scheduled` — entfernt den
+    BullMQ-Job via `queue.getJob(id).remove()`, setzt Status auf CANCELLED
+- **Worker** (`packages/smtp-server/src/outbound/queue.ts`):
+  - Cancellation-Check beim Job-Start: wenn Message inzwischen `CANCELLED` → return
+    ohne Versand (Race-Schutz)
+  - Nach erfolgreichem Versand: `scheduledStatus: 'SENT'` setzen (Banner verschwindet)
+- **Frontend ComposeWindow**:
+  - Send-Button-Group: „Senden"-Button + Pfeil-Dropdown
+  - Schedule-Picker mit 3 Presets (Morgen früh, Morgen nachmittags, Nächsten Montag
+    — alle 8:00 bzw. 13:00) + Custom datetime-local Picker
+  - Validierung: min. 30s Zukunft
+  - Toast „Versand geplant für [Datum/Zeit]" nach Submit
+- **Frontend MessageReader**:
+  - Schedule-Banner Outlook-Style: blau (PENDING „Wird gesendet am…"), grün
+    (SENT „Geplanter Versand abgeschlossen"), grau (CANCELLED „Geplanter Versand
+    abgebrochen")
+  - „Planung abbrechen"-Button bei PENDING (löscht BullMQ-Job, Banner wechselt)
+- **Frontend MessageList**: `CalendarClock`-Icon (blau) in der Zeile bei
+  geplanten Mails — Tooltip mit konkretem Zeitpunkt
+
+### Added — Spam-UX (Outlook-Style)
 
 ### Added — Spam-UX (Outlook-Style)
 

@@ -306,6 +306,11 @@ model Message {
   snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
   // Phase 10: Spam-Persistenz (rspamd-Score zum Zeitpunkt der Zustellung)
   spamScore    Float?      // null = nicht gescannt, 0..15 = rspamd-Score
+  // Phase 10: Senden planen — Mail wird sofort in „Gesendete Elemente" angelegt,
+  // aber erst zum geplanten Zeitpunkt via BullMQ-delay versendet.
+  scheduledAt     DateTime?   // Zeitpunkt für geplanten Versand
+  scheduledStatus String?     // 'PENDING' | 'SENT' | 'CANCELLED' | null
+  scheduledJobId  String?     // BullMQ-Job-ID zum Stornieren (delay-Job in smtp-outbound)
   // ── Retention (Phase 9 / Exchange-2019-konform) ────────────────────────────
   // Vom MFA berechneter oder vom User gesetzter effektiver Tag
   retentionTag     RetentionTag? @relation("MessageRetentionTag", fields: [retentionTagId], references: [id])

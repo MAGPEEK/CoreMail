@@ -5,7 +5,8 @@ import {
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   List, ListOrdered, Link2, Undo2, Redo2, Eraser,
-  ChevronDown, Quote, Code2, Highlighter, Type, FileIcon,
+  ChevronDown, ChevronUp, Quote, Code2, Highlighter, Type, FileIcon,
+  Clock, Calendar as CalendarIcon, Check,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -522,8 +523,15 @@ export function ComposeWindow() {
     }
   }, [editor]);
 
+  const [showScheduleMenu, setShowScheduleMenu] = useState(false);
+  const [showCustomSchedule, setShowCustomSchedule] = useState(false);
+  const [customScheduleValue, setCustomScheduleValue] = useState(() => {
+    const d = new Date(); d.setHours(d.getHours() + 1); d.setMinutes(0, 0, 0);
+    return d.toISOString().slice(0, 16);
+  });
+
   const sendMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (scheduledAt?: Date) => {
       const form = new FormData();
       form.append('to',       to.split(',').map((s) => s.trim()).filter(Boolean).join(','));
       form.append('cc',       cc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
@@ -532,16 +540,42 @@ export function ComposeWindow() {
       form.append('bodyHtml', editor?.getHTML() ?? '');
       form.append('bodyText', editor?.getText() ?? '');
       if (inReplyTo) form.append('inReplyTo', inReplyTo);
+      if (scheduledAt) form.append('scheduledAt', scheduledAt.toISOString());
       for (const file of attachments) form.append('attachments', file);
-      return api.postForm<{ ok: boolean }>('/mail/send', form);
+      return api.postForm<{ ok: boolean; scheduled?: boolean; scheduledAt?: string }>('/mail/send', form);
     },
-    onSuccess: () => {
-      toast.success('Nachricht gesendet');
+    onSuccess: (_data, scheduledAt) => {
+      if (scheduledAt) {
+        toast.success(`Versand geplant für ${scheduledAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`);
+      } else {
+        toast.success('Nachricht gesendet');
+      }
       qc.invalidateQueries({ queryKey: ['messages'] });
       closeCompose();
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  // Schedule-Presets (Outlook-Style): morgen früh, morgen nachmittags, nächster Montag
+  const schedulePresets = (() => {
+    const now = new Date();
+    const tomorrow8 = new Date(now); tomorrow8.setDate(now.getDate() + 1); tomorrow8.setHours(8, 0, 0, 0);
+    const tomorrow13 = new Date(now); tomorrow13.setDate(now.getDate() + 1); tomorrow13.setHours(13, 0, 0, 0);
+    const nextMon = new Date(now);
+    const diff = (1 - now.getDay() + 7) % 7 || 7;
+    nextMon.setDate(now.getDate() + diff); nextMon.setHours(8, 0, 0, 0);
+    return [
+      { label: 'Morgen früh',         sub: tomorrow8.toLocaleString('de-DE',  { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), date: tomorrow8 },
+      { label: 'Morgen nachmittags',  sub: tomorrow13.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), date: tomorrow13 },
+      { label: 'Nächsten Montag',     sub: nextMon.toLocaleString('de-DE',    { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }), date: nextMon },
+    ];
+  })();
+
+  const handleSchedule = (date: Date) => {
+    setShowScheduleMenu(false);
+    setShowCustomSchedule(false);
+    sendMutation.mutate(date);
+  };
 
   // ── Minimierter Zustand ────────────────────────────────────────────────────
   if (minimized) {
@@ -965,24 +999,88 @@ export function ComposeWindow() {
             Entwurf
           </button>
         </div>
-        <button
-          type="button"
-          onClick={() => sendMutation.mutate()}
-          disabled={sendMutation.isPending || !to.trim()}
-          className="btn-primary text-xs min-w-[100px] justify-center"
-        >
-          {sendMutation.isPending ? (
-            <>
-              <Loader2 size={14} className="animate-spin" />
-              Senden…
-            </>
-          ) : (
-            <>
-              <Send size={14} className="transition-transform duration-150 group-hover:translate-x-0.5" />
-              Senden
-            </>
+        {/* Send-Button-Group: Senden + Pfeil-Dropdown für „Senden planen" */}
+        <div className="relative flex">
+          <button
+            type="button"
+            onClick={() => sendMutation.mutate(undefined)}
+            disabled={sendMutation.isPending || !to.trim()}
+            className="btn-primary text-xs justify-center rounded-r-none px-4"
+            title="Senden (⌘+Enter)"
+          >
+            {sendMutation.isPending ? (
+              <><Loader2 size={14} className="animate-spin" /> Senden…</>
+            ) : (
+              <><Send size={14} /> Senden</>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setShowScheduleMenu((v) => !v); setShowCustomSchedule(false); }}
+            disabled={sendMutation.isPending || !to.trim()}
+            className="btn-primary text-xs rounded-l-none border-l border-blue-700/40 px-2"
+            title="Senden planen"
+          >
+            <ChevronUp size={12} />
+          </button>
+
+          {showScheduleMenu && (
+            <div
+              className="absolute bottom-full mb-1 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl py-2 z-50 w-[320px]"
+              onMouseLeave={() => setShowCustomSchedule(false)}
+            >
+              <div className="px-3 pb-2 text-xs font-semibold text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-gray-700 mb-1 flex items-center gap-1.5">
+                <Clock size={12} /> Senden planen
+              </div>
+              {schedulePresets.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => handleSchedule(p.date)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center justify-between transition-colors"
+                >
+                  <span className="text-sm text-gray-800 dark:text-gray-100 font-medium">{p.label}</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">{p.sub}</span>
+                </button>
+              ))}
+              <div className="border-t border-gray-100 dark:border-gray-700 mt-1 pt-1">
+                {!showCustomSchedule ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomSchedule(true)}
+                    className="w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-left text-blue-600 dark:text-blue-400 flex items-center gap-2"
+                  >
+                    <CalendarIcon size={13} /> Datum & Uhrzeit wählen…
+                  </button>
+                ) : (
+                  <div className="px-3 py-2 space-y-2">
+                    <input
+                      type="datetime-local"
+                      value={customScheduleValue}
+                      onChange={(e) => setCustomScheduleValue(e.target.value)}
+                      className="w-full text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1.5"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date(customScheduleValue);
+                        if (isNaN(d.getTime())) { toast.error('Ungültiges Datum'); return; }
+                        if (d.getTime() < Date.now() + 30_000) {
+                          toast.error('Zeitpunkt muss min. 30s in der Zukunft liegen');
+                          return;
+                        }
+                        handleSchedule(d);
+                      }}
+                      className="w-full btn-primary text-xs justify-center"
+                    >
+                      <Check size={13} /> Planen
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
-        </button>
+        </div>
       </div>
     </div>
   );

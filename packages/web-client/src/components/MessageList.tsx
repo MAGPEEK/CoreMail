@@ -4,7 +4,7 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
-  Search, X, ListFilter, Settings, ShieldAlert,
+  Search, X, ListFilter, Settings, ShieldAlert, CalendarClock,
 } from 'lucide-react';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
@@ -73,6 +73,8 @@ function MessageRow({
   const spamScore = (msg.spamScore ?? null);
   const isSpam = spamScore !== null && spamScore >= 3.0;
   const isHighRiskSpam = spamScore !== null && spamScore >= 6.0;
+  // v3.18.7: Geplanter Versand (Outlook-Style „Wird gesendet am…")
+  const isScheduledPending = msg.scheduledStatus === 'PENDING' && !!msg.scheduledAt;
 
   const py = density === 'compact' ? 'py-1.5' : density === 'comfortable' ? 'py-3.5' : 'py-2.5';
 
@@ -146,6 +148,11 @@ function MessageRow({
               {isSpam && (
                 <span title={`Als Spam erkannt (rspamd-Score: ${spamScore?.toFixed(2)})`}>
                   <ShieldAlert size={12} className={isHighRiskSpam ? 'text-red-600' : 'text-amber-500'} />
+                </span>
+              )}
+              {isScheduledPending && (
+                <span title={`Wird gesendet am ${msg.scheduledAt ? new Date(msg.scheduledAt).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : ''}`}>
+                  <CalendarClock size={12} className="text-blue-500" />
                 </span>
               )}
               {hasAttachments && <Paperclip size={12} className="text-gray-400" />}
