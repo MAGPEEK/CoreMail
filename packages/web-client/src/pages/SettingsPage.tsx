@@ -5,8 +5,9 @@ import {
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
-  Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock,
+  Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
 } from 'lucide-react';
+import { RulesSection } from '../components/RulesSection.js';
 import { format as fmtDate } from 'date-fns';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -20,7 +21,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules';
 
 interface RetentionTagDto {
   id: string;
@@ -1906,6 +1907,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
       { id: 'password',     label: 'Passwort',                icon: Lock       },
       { id: 'appPasswords', label: 'App-Passwörter',          icon: Smartphone },
       { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
+      { id: 'rules',        label: 'Regeln',                  icon: ListFilter },
       { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
       { id: 'categories',   label: 'Kategorien',              icon: Tag        },
       { id: 'retention',    label: 'Aufbewahrungsrichtlinien', icon: Clock      },
@@ -1940,6 +1942,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   appPasswords: AppPasswordsSection,
   inactivity:   InactivitySection,
   view:         ViewSection,
+  rules:        RulesSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

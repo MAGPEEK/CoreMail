@@ -13,6 +13,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.0] — 2026-05-24 — Feature: Outlook-Style Inbox Rules
+
+### Added
+
+- **Server-Side User Inbox Rules (analog Microsoft Exchange)**
+  Vollständige Outlook-Regeln-Funktion im Mail Web Access — Bedingungen, Aktionen,
+  Ausnahmen und Stop-Processing direkt im MWA verwaltbar. Regeln werden
+  serverseitig in der SMTP-Inbound-Pipeline angewendet, sobald eine Mail eintrifft —
+  unabhängig davon ob der Client offen ist. Funktioniert auch für IMAP/EWS/EAS-Zugriffe.
+
+  **Backend** (`packages/storage/src/mail-rules.ts`):
+  - Neues Schema: `MailRule.exceptions`, `MailRule.stopProcessing`, `MailRule.matchAll`
+    (`AND`/`OR`-Verknüpfung) — `@@index([userId, priority])` für sortierten Lookup.
+  - Rule-Engine: 11 Conditions (`from`, `to`, `cc`, `bcc`, `subject`, `body`,
+    `recipient`, `hasAttachment`, `size`, `importance`, `sentOnlyToMe`) × 10
+    Operatoren (`contains`, `notContains`, `equals`, `notEquals`, `startsWith`,
+    `endsWith`, `regex`, `greaterThan`, `lessThan`, `is`).
+  - 12 Aktionen: `moveTo`, `copyTo`, `delete` (→ Trash), `hardDelete` (verwerfen),
+    `markRead`, `markFlagged`, `pin`, `categorize`, `forward`, `redirect`,
+    `markJunk`, `setImportance`.
+  - Forward/Redirect über bestehende `smtp-outbound` BullMQ-Queue mit Loop-Schutz
+    (`X-CoreMail-RuleForwarded`-Header verhindert Endlos-Forwards).
+  - Hook in `storeInboundMessage()`: nach Junk-Decision, vor Folder-Assignment —
+    kann Ziel-Ordner überschreiben, Flags/Kategorien setzen, Mail verwerfen oder
+    in mehrere Ordner kopieren.
+
+  **API** (`packages/api-gateway/src/routes/user.ts`):
+  - `GET /user/rules`, `POST`, `PUT/:id`, `DELETE/:id` — CRUD mit Zod-Validation
+  - `PATCH /user/rules/:id/toggle` — schneller Enable/Disable
+  - `POST /user/rules/reorder` — Drag-Reorder-Persistenz via Transaktion
+  - `POST /user/rules/:id/run-now` — Regel retroaktiv auf bestehende Mails anwenden
+    (max. 5000, Forward/Redirect übersprungen für Sicherheit)
+
+  **Frontend** (MWA):
+  - **Settings → „Regeln"** (`packages/web-client/src/components/RulesSection.tsx`):
+    Liste aller Regeln mit Toggle, Drag-Reorder (dnd-kit), Bearbeiten, Löschen
+    und „Jetzt ausführen". Empty-State mit CTA.
+  - **RuleEditorModal** (`packages/web-client/src/components/RuleEditorModal.tsx`):
+    Outlook-Style 3-Schritt-Wizard — „Wenn die Nachricht eintrifft und …" /
+    „Folgendes tun:" / „Außer wenn …" mit Folder-Picker, Category-Picker,
+    E-Mail-Input für Forward/Redirect. `AND`/`OR`-Wahl, Stop-Processing-Checkbox.
+  - **Kontextmenü „Regeln" in MessageList**: Rechtsklick auf Mail →
+    „Regel erstellen …" öffnet Editor mit vorausgefüllter „Von"-Bedingung
+    oder „Regeln verwalten …" springt zur Settings-Seite.
+
+---
+
 ## [3.17.50] — 2026-05-24 — Fix: MWA Quelltext-Kontextmenü öffnet Modal statt Tab
 
 ### Fixed

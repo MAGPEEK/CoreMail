@@ -604,17 +604,20 @@ model UserSettings {
 }
 
 model MailRule {
-  id         String   @id @default(cuid())
-  userId     String
-  name       String
-  enabled    Boolean  @default(true)
-  priority   Int      @default(0)
-  conditions Json     @default("[]")
-  actions    Json     @default("[]")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
+  enabled        Boolean  @default(true)
+  priority       Int      @default(0)
+  conditions     Json     @default("[]")
+  exceptions     Json     @default("[]")
+  actions        Json     @default("[]")
+  stopProcessing Boolean  @default(false)
+  matchAll       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  @@index([userId])
+  @@index([userId, priority])
   @@map("mail_rules")
 }
 

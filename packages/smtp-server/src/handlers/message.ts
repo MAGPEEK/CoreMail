@@ -1,6 +1,7 @@
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
+import { enqueueRuleForward } from './rule-forward.js';
 // Journaling-Feature komplett entfernt in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -107,6 +108,66 @@ export async function storeInboundMessage(
 
   const parsed = await parseRawMessage(effectiveBuffer);
 
+  // ── User Inbox Rules (Outlook-Style, v3.18.0) ────────────────────────────────
+  // Engine kann folderId überschreiben, Flags/Kategorien setzen, Forward triggern
+  // oder die Mail komplett verwerfen (hardDelete). Nur für User-Postfächer.
+  let ruleFolderId   = folder.id;
+  let ruleFlags: string[] = [];
+  let ruleCategories: string[] = [];
+  let rulePinned     = false;
+  let ruleDiscard    = false;          // hardDelete → Mail wird gar nicht persistiert
+  const ruleCopyTargets: string[] = [];
+  if (ownerType === 'user' && user) {
+    try {
+      const outcome = await applyMailRules(parsed, user.id, user.email, folder.id);
+      if (outcome.targetFolderId) ruleFolderId = outcome.targetFolderId;
+      ruleFlags = [...outcome.flagsToAdd];
+      ruleCategories = [...outcome.categoriesToAdd];
+      rulePinned = outcome.pinned;
+      ruleCopyTargets.push(...outcome.copyTargets);
+
+      // forceJunk Override: Regel kann zwingend in Junk schicken
+      if (outcome.forceJunk) {
+        const junk = mailbox.folders.find((f: { name: string }) => f.name === 'Junk');
+        if (junk) ruleFolderId = junk.id;
+      }
+      // soft-delete = Trash
+      if (outcome.deleted === 'soft') {
+        const trash = mailbox.folders.find((f: { name: string }) => f.name === 'Trash');
+        if (trash) ruleFolderId = trash.id;
+      }
+      // hard-delete = verwerfen, kein Speichern
+      if (outcome.deleted === 'hard') {
+        ruleDiscard = true;
+      }
+
+      // Forwards/Redirects fire-and-forget (BullMQ-Queue)
+      for (const fwd of outcome.forwards) {
+        void enqueueRuleForward({
+          rawBuffer:      effectiveBuffer,
+          toAddress:      fwd.address,
+          forwardingUser: { id: user.id, email: user.email },
+          mode:           fwd.mode,
+          originalFrom:   parsed.fromAddr,
+        }).catch((err: unknown) => log.error({ err }, 'Rule-Forward enqueue failed'));
+      }
+
+      if (outcome.appliedRuleIds.length > 0) {
+        log.debug(
+          { rcptTo: opts.rcptTo, ruleIds: outcome.appliedRuleIds, targetFolder: ruleFolderId, discarded: ruleDiscard },
+          'Mail rules applied',
+        );
+      }
+    } catch (err) {
+      log.error({ err, userId: user.id }, 'Mail-Rules engine failed — using default delivery');
+    }
+  }
+
+  if (ruleDiscard) {
+    log.info({ rcptTo: opts.rcptTo, from: parsed.fromAddr }, 'Mail verworfen durch Rule (hardDelete)');
+    return;
+  }
+
   // Allocate UID and modseq atomically
   const updatedMailbox = await prisma.mailbox.update({
     where: { id: mailbox.id },
@@ -132,13 +193,13 @@ export async function storeInboundMessage(
     ? JSON.stringify({ ...smimeVerifyResult, decrypted: smimeDecrypted })
     : null;
 
-  // Create message record
+  // Create message record (folderId + flags ggf. von Mail-Rules überschrieben)
   const message = await prisma.message.create({
     data: {
-      folderId: folder.id,
+      folderId: ruleFolderId,
       uid,
       modSeq,
-      flags: opts.toJunk ? [] : [],
+      flags: ruleFlags,
       subject: parsed.subject,
       fromAddr: parsed.fromAddr,
       fromName: parsed.fromName,
@@ -154,9 +215,61 @@ export async function storeInboundMessage(
       rawSize: effectiveBuffer.length,
       storagePath,
       changeKey: modSeq.toString(),
+      ...(rulePinned ? { pinnedAt: new Date() } : {}),
       ...(smimeHeader ? { smimeMeta: smimeHeader } : {}),
     },
   });
+
+  // Rule-Categories zuordnen (best-effort, kein Hard-Fail)
+  if (ruleCategories.length > 0) {
+    await Promise.allSettled(
+      ruleCategories.map((categoryId) =>
+        prisma.messageCategory.create({
+          data: { messageId: message.id, categoryId },
+        }),
+      ),
+    );
+  }
+
+  // Rule-CopyTargets: zusätzliche Message-Records in weiteren Ordnern anlegen
+  for (const copyFolderId of ruleCopyTargets) {
+    if (copyFolderId === ruleFolderId) continue; // schon Hauptkopie
+    try {
+      const copyMailbox = await prisma.mailbox.update({
+        where: { id: mailbox.id },
+        data: { uidNext: { increment: 1 }, highestModSeq: { increment: 1 } },
+      });
+      await prisma.message.create({
+        data: {
+          folderId: copyFolderId,
+          uid:    copyMailbox.uidNext - 1,
+          modSeq: copyMailbox.highestModSeq,
+          flags: ruleFlags,
+          subject: parsed.subject,
+          fromAddr: parsed.fromAddr,
+          fromName: parsed.fromName,
+          toAddrs: parsed.toAddrs,
+          ccAddrs: parsed.ccAddrs,
+          bccAddrs: parsed.bccAddrs,
+          replyTo: parsed.replyTo,
+          messageId: parsed.messageId,
+          inReplyTo: parsed.inReplyTo,
+          date: parsed.date,
+          bodyText: storagePath ? '' : parsed.bodyText,
+          bodyHtml: storagePath ? '' : parsed.bodyHtml,
+          rawSize: effectiveBuffer.length,
+          storagePath,
+          changeKey: copyMailbox.highestModSeq.toString(),
+        },
+      });
+      await prisma.folder.update({
+        where: { id: copyFolderId },
+        data: { totalCount: { increment: 1 }, unreadCount: { increment: 1 } },
+      });
+    } catch (err) {
+      log.warn({ err, copyFolderId }, 'Rule copyTo failed for one target — skipped');
+    }
+  }
 
   // Store attachments (deduplicated by SHA256)
   for (const att of parsed.attachments) {
@@ -177,12 +290,15 @@ export async function storeInboundMessage(
     });
   }
 
-  // Update folder counters
+  // Update folder counters — Counter geht auf den TATSÄCHLICHEN Zielordner
+  // (kann durch Mail-Rule überschrieben sein). unreadCount nur erhöhen wenn
+  // die Mail nicht via Rule schon als gelesen markiert wurde.
+  const incrementUnread = ruleFlags.includes('\\Seen') ? 0 : 1;
   await prisma.folder.update({
-    where: { id: folder.id },
+    where: { id: ruleFolderId },
     data: {
       totalCount: { increment: 1 },
-      unreadCount: { increment: 1 },
+      unreadCount: { increment: incrementUnread },
       changeKey: modSeq.toString(),
     },
   });
@@ -222,7 +338,7 @@ export async function storeInboundMessage(
       CHANNEL_MAIL_NEW,
       JSON.stringify({
         userId: notifyUserId,
-        folderId: folder.id,
+        folderId: ruleFolderId,
         messageId: message.id,
         uid,
         subject: parsed.subject,

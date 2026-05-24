@@ -4,8 +4,10 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
-  Search, X,
+  Search, X, ListFilter, Settings,
 } from 'lucide-react';
+import { RuleEditorModal } from './RuleEditorModal.js';
+import type { RulePreset } from '../api/rule-types.js';
 import { format, isToday, isYesterday } from 'date-fns';
 import { api } from '../api/client.js';
 import type { MessagesResponse, MessageSummary, Folder, Category } from '../api/types.js';
@@ -205,6 +207,7 @@ export function MessageList({ folderId }: Props) {
   const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [rawModal, setRawModal] = useState<{ text: string; subject: string; msgId: string } | null>(null);
+  const [ruleEditor, setRuleEditor] = useState<{ open: boolean; preset?: RulePreset }>({ open: false });
 
   const { data, isLoading } = useQuery({
     queryKey: ['messages', folderId],
@@ -400,6 +403,13 @@ export function MessageList({ folderId }: Props) {
         : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />, onClick: () => bulkMutation.mutate({ ids: [msg.id], action: 'spam' }) },
       { label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') },
       { type: 'divider' },
+      { label: 'Regeln', icon: <ListFilter size={14} />, children: [
+        { label: 'Regel erstellen …', icon: <ListFilter size={14} />,
+          onClick: () => setRuleEditor({ open: true, preset: { fromAddr: msg.fromAddr, subject: msg.subject } }) },
+        { label: 'Regeln verwalten …', icon: <Settings size={14} />,
+          onClick: () => { window.location.hash = '#rules'; window.location.pathname = '/settings'; } },
+      ]},
+      { type: 'divider' },
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
         onClick: () => {
           void fetch(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, {
@@ -554,6 +564,16 @@ export function MessageList({ folderId }: Props) {
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+
+      {/* Rule-Editor (per Kontextmenü „Regel erstellen") */}
+      {ruleEditor.open && (
+        <RuleEditorModal
+          rule={null}
+          {...(ruleEditor.preset ? { preset: ruleEditor.preset } : {})}
+          onClose={() => setRuleEditor({ open: false })}
+          onSaved={() => { setRuleEditor({ open: false }); qc.invalidateQueries({ queryKey: ['rules'] }); }}
+        />
+      )}
 
       {/* RFC 822 Quelltext-Modal */}
       {rawModal && (
