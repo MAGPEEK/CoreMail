@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
-  AlertOctagon, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
+  AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import DOMPurify from 'dompurify';
@@ -9,6 +9,7 @@ import { useRef, useState } from 'react';
 import { api } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
+import { useAuthStore } from '../store/auth.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
@@ -29,12 +30,16 @@ interface Props {
 export function MessageReader({ messageId }: Props) {
   const qc = useQueryClient();
   const { openCompose, setSelectedMessage, selectedFolderId } = useUiStore();
+  const { accessToken } = useAuthStore();
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Token als URL-Query-Parameter für Browser-Navigationen (EML-Download, Quelltext),
+  // da <a href> und window.open() keine Custom-Headers unterstützen.
+  const tokenParam = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
 
   const { data: msg, isLoading } = useQuery({
     queryKey: ['message', messageId],
@@ -68,6 +73,17 @@ export function MessageReader({ messageId }: Props) {
 
   const isFlagged = msg.flags.includes('\\Flagged');
   const isPinned = !!msg.pinnedAt;
+
+  // Ermitteln ob aktueller Ordner der Junk-Ordner ist (für bedingtes Menü-Item)
+  const currentFolder = folders.find((f) => f.id === selectedFolderId);
+  const isJunkFolder = currentFolder?.name === 'Junk';
+
+  // \Answered-Flag setzen wenn Antworten/Allen antworten geklickt wird
+  const markAnswered = () => {
+    if (!msg.flags.includes('\\Answered')) {
+      patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
+    }
+  };
 
   const handleDelete = () => {
     bulkMutation.mutate({ ids: [msg.id], action: 'delete' });
@@ -118,22 +134,33 @@ export function MessageReader({ messageId }: Props) {
         },
       })),
     },
-    { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
-      onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); } },
+    isJunkFolder
+      ? { label: 'Kein Junk (False Positive)', icon: <ShieldOff size={14} />,
+          onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
+      : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
+          onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); } },
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
-        void fetch(`/api/v1/mail/messages/${msg.id}/raw`, {
+        // Bearer-Token als Query-Param übergeben — raw fetch() ohne API-Client
+        void fetch(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, {
           headers: { 'Accept': 'text/plain, message/rfc822, */*' },
-        }).then(r => r.text()).then(text => {
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.text();
+        }).then(text => {
           setRawSource(text);
+          setShowRawSource(true);
+        }).catch((err: unknown) => {
+          setRawSource(`Fehler beim Laden des Quelltexts: ${err instanceof Error ? err.message : String(err)}`);
           setShowRawSource(true);
         });
       } },
     { label: 'Als EML herunterladen', icon: <Download size={14} />,
       onClick: () => {
+        // Token als URL-Param — Browser-Download unterstützt keine Custom-Headers
         const a = document.createElement('a');
-        a.href = `/api/v1/mail/messages/${msg.id}/raw`;
+        a.href = `/api/v1/mail/messages/${msg.id}/raw${tokenParam}`;
         a.download = `${msg.subject || 'message'}.eml`;
         a.click();
       } },
@@ -145,12 +172,12 @@ export function MessageReader({ messageId }: Props) {
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 dark:border-gray-700 shrink-0">
         <button
-          onClick={() => openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` })}
+          onClick={() => { markAnswered(); openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
           className="btn-secondary text-xs">
           <Reply size={14} /> Antworten
         </button>
         <button
-          onClick={() => openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` })}
+          onClick={() => { markAnswered(); openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
           className="btn-secondary text-xs">
           <ReplyAll size={14} /> Allen antworten
         </button>

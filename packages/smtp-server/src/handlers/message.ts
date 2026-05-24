@@ -71,9 +71,29 @@ export async function storeInboundMessage(
   // → muss als non-null behandelt werden (early-return-check oben)
   mailbox = mailbox!;
 
+  // ── USER-JUNK-Sperrliste prüfen ──────────────────────────────────────────────
+  // Wenn ein User einen Absender manuell als Junk markiert hat (Aktion 'spam' in
+  // der MWA), wird ein Blacklist-Eintrag mit scope='USER-JUNK' für diese UserID
+  // gespeichert. Mails von diesem Absender landen dann immer im Junk-Ordner.
+  let forceJunk = opts.toJunk;
+  if (!forceJunk && user) {
+    const junkRule = await prisma.blacklist.findFirst({
+      where: {
+        scope: 'USER-JUNK',
+        scopeId: user.id,
+        pattern: opts.fromAddr.toLowerCase(),
+        active: true,
+      },
+    });
+    if (junkRule) {
+      forceJunk = true;
+      log.debug({ rcptTo: opts.rcptTo, fromAddr: opts.fromAddr }, 'USER-JUNK rule matched — delivering to Junk');
+    }
+  }
+
   // Find the target folder (INBOX or Junk)
   // WICHTIG: Ordner heißt 'Junk' (nicht 'Junk E-Mail') und 'INBOX' (nicht 'Inbox')
-  const targetFolderName = opts.toJunk ? 'Junk' : 'INBOX';
+  const targetFolderName = forceJunk ? 'Junk' : 'INBOX';
   const folder = mailbox.folders.find(
     (f: { name: string }) => f.name === targetFolderName,
   ) ?? mailbox.folders.find(
