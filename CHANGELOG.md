@@ -13,7 +13,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.18.2] — 2026-05-24 — UI-Cleanup: „Outlook"-Wording entfernt + Button-Fix
+## [3.18.2] — 2026-05-24 — UI-Cleanup, Button-Fix + Compose-Rollback
+
+### Reverted
+
+- **Compose-Window auf pre-v3.18.1-Variante zurückgerollt** —
+  das Gmail-Style-Redesign aus v3.18.1 (3 Größen, Header-Drag, Schedule-Send-Dropdown,
+  Emoji-Picker, Footer-Format-Toolbar) wird zurückgenommen. Die alte Compose-Variante
+  (Outlook-angelehnt, Formatierungs-Toolbar oben, Senden rechts unten, Anhang+Entwurf
+  links unten) passt besser zur restlichen CoreMail-UI. `ComposeWindow.tsx` ist exakt
+  identisch zur Version aus v3.18.0.
 
 ### Changed
 

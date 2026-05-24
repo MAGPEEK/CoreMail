@@ -542,7 +542,7 @@ SMTP Verbindung
 
 ## Aktuelle Version 3.18.2 — Highlights
 
-**v3.18.2** — UI-Cleanup: „Outlook"-Erwähnungen aus user-facing UI-Texten entfernt (Stop-Processing-Hinweis in RulesSection, Ansicht-Section, App-Passwords-Hinweis). Erhalten bleiben technische Outlook-Referenzen (Autodiscover-Setup, OAuth2-Client-Beispiele). Fix: „+ Neue Regel"-Button in Settings → Regeln bekommt `shrink-0 whitespace-nowrap px-4` damit der Text nicht umbricht.
+**v3.18.2** — UI-Cleanup + Compose-Rollback: (1) „Outlook"-Erwähnungen aus user-facing UI-Texten entfernt (Stop-Processing-Hinweis in RulesSection, Ansicht-Section, App-Passwords-Hinweis). Erhalten bleiben technische Outlook-Referenzen (Autodiscover-Setup, OAuth2-Client-Beispiele). (2) Fix: „+ Neue Regel"-Button bekommt `shrink-0 whitespace-nowrap px-4`. (3) **Revert**: v3.18.1-Gmail-Style-ComposeWindow zurückgerollt auf v3.18.0-Variante (Outlook-angelehnt) — passt besser zur restlichen CoreMail-UI.
 
 **v3.18.1** — Feature: Gmail-Style Compose-Window Redesign. 3 Modi (small/large/minimized) mit smooth Transitions, Header-Drag im Floating-Modus, Aa-Toggle für Format-Toolbar, Schedule-Send mit Presets (morgen 8/13, Montag, custom), Emoji-Picker, Bild-Insert, Drag&Drop Files mit Overlay, Tastatur-Shortcuts (⌘+Enter, ⌘+⇧+C/B, Esc), Draft-Save-Indikator, Dark-Mode überall, active:scale-Animations für taktiles Feedback.
 
