@@ -180,24 +180,122 @@ contactsRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// GET /api/v1/contacts/gal?q= — Global Address List
+// GET /api/v1/contacts/gal?q=&type=&limit=&offset= — Global Address List (Browse + Search)
+// Liefert die vereinten Einträge aus User-Tabelle, ExternalMailContact und
+// DistributionGroup. Browse-Modus (ohne `q`) für die GAL-Ansicht im Frontend,
+// Search-Modus (mit `q`) für den Compose-Autocomplete.
 contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
-  if (q.length < 2) { res.json([]); return; }
+  const type = String(req.query['type'] ?? 'all') as 'all' | 'users' | 'external' | 'groups';
+  const limit = Math.min(parseInt(String(req.query['limit'] ?? '100'), 10), 500);
+  const offset = parseInt(String(req.query['offset'] ?? '0'), 10);
 
-  
-  const users = await prisma.user.findMany({
-    where: {
-      active: true,
-      OR: [
-        { email: { contains: q, mode: 'insensitive' } },
-        { displayName: { contains: q, mode: 'insensitive' } },
-      ],
-    },
-    take: 20,
-    select: { email: true, displayName: true },
-  });
-  res.json(users);
+  const searchWhere = q.length >= 2 ? q.toLowerCase() : null;
+
+  // Drei Quellen parallel — jeweils sortiert nach displayName/email
+  const userPromise = (type === 'all' || type === 'users')
+    ? prisma.user.findMany({
+        where: {
+          active: true,
+          ...(searchWhere ? {
+            OR: [
+              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
+              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
+            ],
+          } : {}),
+        },
+        orderBy: [{ displayName: 'asc' }, { email: 'asc' }],
+        select: { id: true, email: true, displayName: true, domain: { select: { name: true } } },
+      })
+    : Promise.resolve([]);
+
+  const externalPromise = (type === 'all' || type === 'external')
+    ? prisma.externalMailContact.findMany({
+        where: {
+          hiddenFromGal: false,
+          ...(searchWhere ? {
+            OR: [
+              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
+              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
+              { firstName:   { contains: searchWhere, mode: 'insensitive' as const } },
+              { lastName:    { contains: searchWhere, mode: 'insensitive' as const } },
+              { company:     { contains: searchWhere, mode: 'insensitive' as const } },
+            ],
+          } : {}),
+        },
+        orderBy: [{ displayName: 'asc' }],
+        select: { id: true, email: true, displayName: true, firstName: true, lastName: true, company: true, department: true, phone: true, mobile: true },
+      })
+    : Promise.resolve([]);
+
+  const groupsPromise = (type === 'all' || type === 'groups')
+    ? prisma.distributionGroup.findMany({
+        where: {
+          active: true,
+          hiddenFromGal: false,
+          ...(searchWhere ? {
+            OR: [
+              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
+              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
+              { description: { contains: searchWhere, mode: 'insensitive' as const } },
+            ],
+          } : {}),
+        },
+        orderBy: [{ displayName: 'asc' }],
+        include: { _count: { select: { members: true } } },
+      })
+    : Promise.resolve([]);
+
+  const [users, external, groups] = await Promise.all([userPromise, externalPromise, groupsPromise]);
+
+  // Vereintes Format mit `kind` und `id`-Prefix als Stabilizer
+  type GalEntry = {
+    id: string;
+    kind: 'USER' | 'EXTERNAL' | 'GROUP';
+    email: string;
+    displayName: string;
+    subtitle?: string;
+    company?: string;
+    department?: string;
+    phone?: string;
+    mobile?: string;
+    domain?: string;
+    memberCount?: number;
+  };
+  const entries: GalEntry[] = [
+    ...users.map((u): GalEntry => ({
+      id:          `user-${u.id}`,
+      kind:        'USER',
+      email:       u.email,
+      displayName: u.displayName ?? u.email,
+      ...(u.domain?.name ? { domain: u.domain.name } : {}),
+    })),
+    ...external.map((c): GalEntry => ({
+      id:          `ext-${c.id}`,
+      kind:        'EXTERNAL',
+      email:       c.email,
+      displayName: c.displayName,
+      ...(c.company ? { company: c.company } : {}),
+      ...(c.department ? { department: c.department } : {}),
+      ...(c.phone ? { phone: c.phone } : {}),
+      ...(c.mobile ? { mobile: c.mobile } : {}),
+    })),
+    ...groups.map((g): GalEntry => ({
+      id:          `grp-${g.id}`,
+      kind:        'GROUP',
+      email:       g.email,
+      displayName: g.displayName,
+      memberCount: g._count.members,
+      ...(g.description ? { subtitle: g.description } : {}),
+    })),
+  ];
+
+  // Alphabetisch sortieren nach displayName (über alle Kinds), dann paginieren
+  entries.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
+  const total = entries.length;
+  const paged = entries.slice(offset, offset + limit);
+
+  res.json({ entries: paged, total, limit, offset });
 });
 
 function buildVcard(opts: {
