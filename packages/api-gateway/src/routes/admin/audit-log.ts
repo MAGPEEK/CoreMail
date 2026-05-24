@@ -18,8 +18,14 @@
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import PDFDocument from 'pdfkit';
+import { createHash } from 'crypto';
 import { prisma } from '@coremail/storage/prisma';
 import { requireAuth, requireAdmin } from '../../middleware/auth.js';
+
+// SHA-256 Helper: liefert Hex-Digest eines Strings oder Buffers
+function sha256(input: string | Buffer): string {
+  return createHash('sha256').update(input).digest('hex');
+}
 
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireAuth, requireAdmin);
@@ -206,11 +212,70 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 
   const csv = [csvHeader, ...csvRows].join('\n');
   const dateStr = new Date().toISOString().slice(0, 10);
+  // Integritäts-Signatur: SHA-256 über den exakten Payload (inkl. UTF-8 BOM).
+  // Auditoren können die Datei nach Download verifizieren mit
+  //   shasum -a 256 audit-log-YYYY-MM-DD.csv
+  // → muss mit dem im X-CoreMail-Signature-Header gelieferten Hash übereinstimmen.
+  const payload = '﻿' + csv;
+  const signature = sha256(payload);
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.csv"`);
-  // UTF-8 BOM so Excel detects encoding correctly
-  res.send('﻿' + csv);
+  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
+  res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
+  res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
+  res.send(payload);
+});
+
+// ─── GET /api/v1/admin/audit-log/export.json ────────────────────────────────
+// Für SIEM-Integration (Splunk, Azure Sentinel, ELK). Strukturiert + signiert.
+
+adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
+  const filters = parseFilters(req.query as Record<string, string | undefined>);
+  const where = buildWhere(filters);
+
+  const entries = await prisma.auditLog.findMany({
+    where,
+    orderBy: { timestamp: 'desc' },
+    take: 10_000,
+  });
+
+  const payloadObj = {
+    metadata: {
+      generator:     'CoreMail Audit-Log',
+      exportedAt:    new Date().toISOString(),
+      entries:       entries.length,
+      filters,
+      schemaVersion: '1.0',
+    },
+    entries: entries.map((e) => ({
+      id:         e.id,
+      timestamp:  e.timestamp.toISOString(),
+      actorId:    e.actorId,
+      actorEmail: e.actorEmail,
+      action:     e.action,
+      targetType: e.targetType,
+      targetId:   e.targetId,
+      targetName: e.targetName,
+      ipAddress:  e.ipAddress,
+      userAgent:  e.userAgent,
+      success:    e.success,
+      errorMsg:   e.errorMsg,
+      changes:    e.changes,
+    })),
+  };
+  const payload = JSON.stringify(payloadObj, null, 2);
+  const signature = sha256(payload);
+  const dateStr = new Date().toISOString().slice(0, 10);
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.json"`);
+  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
+  res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
+  res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
+  res.send(payload);
 });
 
 // ─── GET /api/v1/admin/audit-log/export.pdf ─────────────────────────────────
@@ -226,16 +291,20 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
   });
 
   const dateStr = new Date().toISOString().slice(0, 10);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.pdf"`);
 
+  // PDF in einen Buffer schreiben, dann signieren und senden — ermöglicht
+  // X-CoreMail-Signature-Header (geht nicht bei direktem doc.pipe(res)).
+  const chunks: Buffer[] = [];
   const doc = new PDFDocument({
     size: 'A4',
     layout: 'landscape',
     margins: { top: 40, bottom: 50, left: 40, right: 40 },
     bufferPages: true,
   });
-  doc.pipe(res);
+  doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+  const pdfDone: Promise<Buffer> = new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
 
   // ─── Header
   doc.fontSize(16).font('Helvetica-Bold').text('CoreMail Audit-Log Export');
@@ -350,6 +419,157 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
   }
 
   doc.end();
+  const pdfBuffer = await pdfDone;
+  const signature = sha256(pdfBuffer);
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.pdf"`);
+  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
+  res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
+  res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
+  res.send(pdfBuffer);
+});
+
+// ─── GET /api/v1/admin/audit-log/anomalies ───────────────────────────────────
+// Verdachtsmomente: Bursts, Fehler-Bursts, kritische Aktionen, Off-Hours.
+// Auswertung der letzten 24h (read-only — keine Persistenz, jede Anfrage rechnet neu).
+
+const CRITICAL_ACTIONS_PATTERN = /^(user\.delete|mailbox\.delete|domain\.delete|transport-rules\.|oauth\.|settings\.|certificate\.|gateway\.|connector\.|smime\.|setup\.)/i;
+
+interface Anomaly {
+  type:     'BURST_ACTIONS' | 'BURST_FAILURES' | 'CRITICAL_ACTION' | 'OFF_HOURS_LOGIN';
+  severity: 'high' | 'medium' | 'low';
+  actor:    string | null;
+  count:    number;
+  firstAt:  string;
+  lastAt:   string;
+  message:  string;
+}
+
+adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
+  const now = Date.now();
+  const since5min = new Date(now - 5 * 60 * 1000);
+  const since24h  = new Date(now - 24 * 60 * 60 * 1000);
+
+  const recent5min = await prisma.auditLog.findMany({
+    where: { timestamp: { gte: since5min } },
+    select: { actorEmail: true, action: true, success: true, timestamp: true, ipAddress: true },
+    take: 5000,
+  });
+
+  const last24h = await prisma.auditLog.findMany({
+    where: { timestamp: { gte: since24h } },
+    select: { actorEmail: true, action: true, success: true, timestamp: true, ipAddress: true },
+    take: 20_000,
+  });
+
+  const anomalies: Anomaly[] = [];
+
+  // 1) Burst (Aktionen): >50 Aktionen vom selben Akteur in den letzten 5 Min
+  const byActor = new Map<string, { count: number; first: Date; last: Date }>();
+  for (const e of recent5min) {
+    const k = e.actorEmail ?? '(anonym)';
+    const cur = byActor.get(k);
+    if (!cur) byActor.set(k, { count: 1, first: e.timestamp, last: e.timestamp });
+    else {
+      cur.count++;
+      if (e.timestamp < cur.first) cur.first = e.timestamp;
+      if (e.timestamp > cur.last)  cur.last = e.timestamp;
+    }
+  }
+  for (const [actor, info] of byActor.entries()) {
+    if (info.count >= 50) {
+      anomalies.push({
+        type: 'BURST_ACTIONS',
+        severity: info.count >= 200 ? 'high' : 'medium',
+        actor,
+        count: info.count,
+        firstAt: info.first.toISOString(),
+        lastAt:  info.last.toISOString(),
+        message: `Burst: ${info.count} Admin-Aktionen in 5 Minuten`,
+      });
+    }
+  }
+
+  // 2) Burst (Failures): >10 Failed Actions vom selben Akteur in 5 Min
+  const byActorFail = new Map<string, { count: number; first: Date; last: Date }>();
+  for (const e of recent5min) {
+    if (e.success) continue;
+    const k = e.actorEmail ?? '(anonym)';
+    const cur = byActorFail.get(k);
+    if (!cur) byActorFail.set(k, { count: 1, first: e.timestamp, last: e.timestamp });
+    else {
+      cur.count++;
+      if (e.timestamp < cur.first) cur.first = e.timestamp;
+      if (e.timestamp > cur.last)  cur.last = e.timestamp;
+    }
+  }
+  for (const [actor, info] of byActorFail.entries()) {
+    if (info.count >= 10) {
+      anomalies.push({
+        type: 'BURST_FAILURES',
+        severity: 'high',
+        actor,
+        count: info.count,
+        firstAt: info.first.toISOString(),
+        lastAt:  info.last.toISOString(),
+        message: `${info.count} fehlgeschlagene Aktionen in 5 Minuten — möglicher Angriff oder Skript-Fehler`,
+      });
+    }
+  }
+
+  // 3) Kritische Aktionen — IMMER eskalieren
+  for (const e of last24h) {
+    if (CRITICAL_ACTIONS_PATTERN.test(e.action)) {
+      anomalies.push({
+        type: 'CRITICAL_ACTION',
+        severity: 'high',
+        actor: e.actorEmail,
+        count: 1,
+        firstAt: e.timestamp.toISOString(),
+        lastAt:  e.timestamp.toISOString(),
+        message: `Kritische Aktion: ${e.action}`,
+      });
+    }
+  }
+
+  // 4) Off-Hours: Aktionen zwischen 00:00 und 06:00 Server-Zeit
+  for (const e of last24h) {
+    const h = e.timestamp.getHours();
+    if (h >= 0 && h < 6 && e.actorEmail) {
+      anomalies.push({
+        type: 'OFF_HOURS_LOGIN',
+        severity: 'low',
+        actor: e.actorEmail,
+        count: 1,
+        firstAt: e.timestamp.toISOString(),
+        lastAt:  e.timestamp.toISOString(),
+        message: `Admin-Aktivität außerhalb der Geschäftszeiten (${h}:00 Uhr)`,
+      });
+    }
+  }
+
+  // Doppelte CRITICAL_ACTION-Einträge (gleicher Actor + Action) zusammenfassen
+  const dedupKey = (a: Anomaly) => `${a.type}|${a.actor ?? ''}|${a.message}`;
+  const dedupMap = new Map<string, Anomaly>();
+  for (const a of anomalies) {
+    const k = dedupKey(a);
+    const cur = dedupMap.get(k);
+    if (!cur) dedupMap.set(k, { ...a });
+    else {
+      cur.count += a.count;
+      if (a.firstAt < cur.firstAt) cur.firstAt = a.firstAt;
+      if (a.lastAt  > cur.lastAt)  cur.lastAt = a.lastAt;
+    }
+  }
+  const deduped = [...dedupMap.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+
+  res.json({
+    generatedAt: new Date().toISOString(),
+    window: { burstSince: since5min.toISOString(), criticalSince: since24h.toISOString() },
+    anomalies: deduped,
+  });
 });
 
 // ─── DELETE /api/v1/admin/audit-log/purge ────────────────────────────────────

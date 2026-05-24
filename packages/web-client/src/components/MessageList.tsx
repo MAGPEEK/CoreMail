@@ -4,7 +4,7 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
-  Search, X, ListFilter, Settings,
+  Search, X, ListFilter, Settings, ShieldAlert,
 } from 'lucide-react';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
@@ -69,6 +69,10 @@ function MessageRow({
   const hasAttachments = msg.attachments.length > 0;
   const isPinned = !!msg.pinnedAt;
   const isSnoozed = msg.snoozeUntil && new Date(msg.snoozeUntil) > new Date();
+  // v3.18.6: Spam-Indikator — rspamd-Score ≥ 3.0 (Junk-Schwelle)
+  const spamScore = (msg.spamScore ?? null);
+  const isSpam = spamScore !== null && spamScore >= 3.0;
+  const isHighRiskSpam = spamScore !== null && spamScore >= 6.0;
 
   const py = density === 'compact' ? 'py-1.5' : density === 'comfortable' ? 'py-3.5' : 'py-2.5';
 
@@ -139,6 +143,11 @@ function MessageRow({
             </span>
             <div className="flex items-center gap-1 shrink-0">
               {isReplied && <span title="Beantwortet"><Reply size={12} className="text-blue-500" /></span>}
+              {isSpam && (
+                <span title={`Als Spam erkannt (rspamd-Score: ${spamScore?.toFixed(2)})`}>
+                  <ShieldAlert size={12} className={isHighRiskSpam ? 'text-red-600' : 'text-amber-500'} />
+                </span>
+              )}
               {hasAttachments && <Paperclip size={12} className="text-gray-400" />}
               {isSnoozed && <Clock size={12} className="text-amber-500" />}
               <span className="text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>

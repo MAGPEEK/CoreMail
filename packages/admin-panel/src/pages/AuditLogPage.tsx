@@ -3,10 +3,24 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Download, FileText, Search,
   CheckCircle2, XCircle, Info, X,
-  Activity, AlertTriangle, Users, BarChart3,
+  Activity, AlertTriangle, Users, BarChart3, Code2, ShieldAlert, Moon, Zap,
 } from 'lucide-react';
 import { api, exportUrl } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
+
+interface AnomaliesResponse {
+  generatedAt: string;
+  window: { burstSince: string; criticalSince: string };
+  anomalies: {
+    type:     'BURST_ACTIONS' | 'BURST_FAILURES' | 'CRITICAL_ACTION' | 'OFF_HOURS_LOGIN';
+    severity: 'high' | 'medium' | 'low';
+    actor:    string | null;
+    count:    number;
+    firstAt:  string;
+    lastAt:   string;
+    message:  string;
+  }[];
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -176,7 +190,13 @@ export function AuditLogPage() {
     refetchInterval: 30_000,
   });
 
-  const handleExport = (format: 'csv' | 'pdf') => {
+  const anomalies = useQuery<AnomaliesResponse>({
+    queryKey: ['admin-audit-log-anomalies'],
+    queryFn: () => api.get('/admin/audit-log/anomalies'),
+    refetchInterval: 60_000,
+  });
+
+  const handleExport = (format: 'csv' | 'pdf' | 'json') => {
     const params = buildParams();
     const url = exportUrl(`/admin/audit-log/export.${format}`, params);
     window.open(url, '_blank');
@@ -221,17 +241,69 @@ export function AuditLogPage() {
             <Download size={14} /> {t('audit_export_csv')}
           </button>
           <button onClick={() => handleExport('pdf')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50">
-            <FileText size={14} /> {t('audit_export_pdf')}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+            title="PDF — signiert mit SHA-256 (siehe X-CoreMail-Signature-Header)">
+            <FileText size={14} /> PDF
+          </button>
+          <button onClick={() => handleExport('json')}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+            title="JSON — signiert mit SHA-256, für SIEM-Integration (Splunk, Azure Sentinel, ELK)">
+            <Code2 size={14} /> JSON
           </button>
         </div>
       </div>
 
-      {/* Immutability notice */}
+      {/* Anomalien-Banner — wird automatisch alle 60s aktualisiert */}
+      {anomalies.data && anomalies.data.anomalies.length > 0 && (
+        <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-2.5 bg-red-100 border-b border-red-200 flex items-center gap-2">
+            <ShieldAlert size={16} className="text-red-600" />
+            <h3 className="text-sm font-semibold text-red-900">
+              {anomalies.data.anomalies.length} Anomalie{anomalies.data.anomalies.length !== 1 ? 'n' : ''} erkannt
+            </h3>
+            <span className="text-xs text-red-700 ml-auto">
+              Auswertung: letzte 5 Min (Bursts), 24h (kritische Aktionen, Off-Hours)
+            </span>
+          </div>
+          <div className="divide-y divide-red-100 max-h-64 overflow-y-auto">
+            {anomalies.data.anomalies.slice(0, 50).map((a, i) => {
+              const icon = a.type === 'BURST_ACTIONS' ? <Zap size={13} className="text-amber-600" />
+                       : a.type === 'BURST_FAILURES' ? <AlertTriangle size={13} className="text-red-600" />
+                       : a.type === 'CRITICAL_ACTION' ? <ShieldAlert size={13} className="text-red-600" />
+                       : <Moon size={13} className="text-indigo-500" />;
+              const sevColor = a.severity === 'high' ? 'bg-red-200 text-red-900'
+                           : a.severity === 'medium' ? 'bg-amber-200 text-amber-900'
+                           : 'bg-blue-100 text-blue-800';
+              return (
+                <div key={i} className="px-4 py-2 flex items-start gap-2 hover:bg-red-100/40">
+                  {icon}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900 leading-tight">{a.message}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Akteur: <strong>{a.actor ?? '(anonym)'}</strong> · {fmtDt(a.lastAt)}
+                    </p>
+                  </div>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${sevColor}`}>
+                    {a.severity}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Immutability notice + Signatur-Hinweis */}
       {!noticeDismissed && (
         <div className="mb-4 flex items-start gap-2 bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2 text-xs">
           <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
-          <span className="flex-1">{t('audit_immutable_notice')}</span>
+          <span className="flex-1">
+            {t('audit_immutable_notice')}
+            {' '}<strong>Exports sind kryptografisch signiert:</strong> Der HTTP-Response-Header
+            <code className="mx-1 font-mono bg-white px-1 rounded">X-CoreMail-Signature: sha256=…</code>
+            enthält den SHA-256-Hash über den Datei-Inhalt. Verifikation lokal mit
+            <code className="ml-1 font-mono bg-white px-1 rounded">shasum -a 256 audit-log-YYYY-MM-DD.csv</code>.
+          </span>
           <button onClick={dismissNotice} className="text-blue-500 hover:text-blue-700" aria-label="Dismiss">
             <X size={14} />
           </button>
