@@ -1,6 +1,6 @@
 {
   "name": "@coremail/web-client",
-  "version": "3.18.3",
+  "version": "3.18.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -23,6 +23,7 @@
     "@tiptap/extension-color": "^2.27.2",
     "@tiptap/extension-font-family": "^2.27.2",
     "@tiptap/extension-highlight": "^2.27.2",
+    "@tiptap/extension-image": "^2.27.2",
     "@tiptap/extension-link": "^2.5.8",
     "@tiptap/extension-text-align": "^2.5.8",
     "@tiptap/extension-text-style": "^2.27.2",

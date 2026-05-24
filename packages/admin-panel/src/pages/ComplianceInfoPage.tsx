@@ -1,12 +1,14 @@
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 
-const VERSION        = '3.18.3';
+const VERSION        = '3.18.4';
 const BUILD_DATE     = '2026-05-24';
 const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
 const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
 
 const HIGHLIGHTS = [
+  { version: '3.18.4', date: '2026-05-24', title: 'Feature: Signaturen-Editor mit Bildern, Links und Schriftarten',
+    notes: 'MWA Signaturen vollständig ausgebaut auf Gmail/Outlook-Level. Neue separate Komponente packages/web-client/src/components/SignatureSection.tsx ersetzt die alte 3-Button-Toolbar in SettingsPage. Formatierung: Schriftart-Dropdown (10 Optionen: Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Tahoma, Trebuchet MS, Comic Sans MS, Standard), Schriftgröße-Dropdown (Klein 12px / Normal 14px / Mittel 16px / Groß 20px / Sehr groß 28px) via Custom FontSizeExt TipTap-Extension, Bold/Italic/Unterstrichen/Durchgestrichen (mit korrektem U-Icon — war vorher fälschlich Strikethrough), Textfarbe (24 Farben) + Markierungsfarbe (12), Ausrichtung (links/zentriert/rechts/Blocksatz), Aufzählung + Nummerierte Listen + Zitat, Horizontale Trennlinie, Undo/Redo, Formatierung entfernen. Bilder einfügen: Hochladen-Button (max 500 KB als base64 inline embedded), URL-Eingabe, Drag&Drop mit Drop-Overlay. @tiptap/extension-image mit allowBase64. Links: Bei Selektion → Text wird zum Link, ohne Selektion → URL wird als Linktext eingefügt, Toggle zum Bearbeiten/Entfernen. Vorschau-Modus: zeigt Signatur exakt wie sie im Mail-Reader des Empfängers erscheint, „Editor"-Button schaltet zurück. Auto-Einfüge-Optionen unverändert (Bei neuen E-Mails / Bei Antworten und Weiterleitungen). Inline-Bilder als data:URL eingebettet → kein MinIO-Upload nötig, funktioniert in allen Mail-Clients.' },
   { version: '3.18.3', date: '2026-05-24', title: 'Fix: BCP DNS-Check Counter und Status-Farben konsistent',
     notes: 'BCP → SMTP & Routing → DNS-Einträge: Counter zeigte „5 von 6 Einträgen gesetzt" obwohl 2 gelbe sichtbar waren. Root Cause: Backend liefert 7 Records (a, mx, spf, dkim, dmarc, autodiscover, ptr), UI rendert aber nur 6 (A-Record unsichtbar). Counter zählte alle 7 gegen hardcoded total=6 → Inkonsistenz. Außerdem wurden Warnings (z.B. SPF-Multi-Record, PTR-Mismatch) im Status-Text gar nicht erwähnt. Fix: VISIBLE_DNS_KEYS=[mx,spf,dkim,dmarc,autodiscover,ptr] als Single Source of Truth, separater okCount/warnCount/missingCount, Status-Text differenziert „X mit Warnung" und „Y fehlt". StatusDot zeigt jetzt 3 Farben (grün=ok / gelb=warning / rot=missing) statt grün/gelb. Badge analog mit „⚠ Warnung" zusätzlich zu „Gesetzt"/„Nicht gefunden". Legende aktualisiert ohne veraltetes Orange (Multi-Resolver-Funktion gibts seit v3.17.34 nicht mehr).' },
   { version: '3.18.2', date: '2026-05-24', title: 'UI-Cleanup, Button-Fix + Compose-Window Rollback',

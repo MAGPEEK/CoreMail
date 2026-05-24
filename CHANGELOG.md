@@ -13,6 +13,58 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.4] — 2026-05-24 — Feature: Signaturen-Editor mit Bildern, Links, Schriftarten
+
+### Added
+
+- **MWA Signaturen vollständig ausgebaut** — Gmail/Outlook-Level
+  (`packages/web-client/src/components/SignatureSection.tsx` — neue separate Komponente):
+
+  **Formatierung:**
+  - Schriftart-Dropdown: 10 Optionen (Arial, Calibri, Georgia, Times New Roman,
+    Courier New, Verdana, Tahoma, Trebuchet MS, Comic Sans MS, Standard)
+  - Schriftgröße-Dropdown: 5 Stufen (Klein 12px / Normal 14px / Mittel 16px /
+    Groß 20px / Sehr groß 28px) — via Custom `FontSizeExt` TipTap-Extension
+    auf `textStyle`-Mark
+  - Bold / Italic / Unterstrichen / Durchgestrichen (mit korrektem U-Icon —
+    war vorher fälschlich „U" = Strikethrough!)
+  - Textfarbe (24 Farben) + Markierungsfarbe (12 Highlight-Farben)
+  - Ausrichtung (links, zentriert, rechts, Blocksatz)
+  - Aufzählungslisten + Nummerierte Listen + Zitat-Block
+  - Horizontale Trennlinie (`<hr>`)
+  - Undo / Redo / Formatierung entfernen
+
+  **Bilder einfügen** (für Logos, Profilbilder, Banner):
+  - Hochladen-Button → File-Picker (max 500 KB, base64-Embed)
+  - URL-Eingabe-Button
+  - Drag & Drop direkt in den Editor (mit Overlay „Bild hier ablegen")
+  - `@tiptap/extension-image` mit `allowBase64: true`
+
+  **Links** mit interaktivem Prompt:
+  - Bei Selektion → markierten Text wird zum Link
+  - Ohne Selektion → URL wird als Linktext eingefügt
+  - Link bearbeiten/entfernen über denselben Button (Toggle bei aktivem Link)
+
+  **Vorschau-Modus**:
+  - „Vorschau"-Button oben rechts → zeigt die Signatur exakt so wie sie im
+    Mail-Reader des Empfängers erscheinen würde (HTML-Rendering ohne Editor-Chrome)
+  - „Editor"-Button schaltet zurück
+
+  **Auto-Einfüge-Optionen** (wie vorher):
+  - Bei neuen E-Mails
+  - Bei Antworten und Weiterleitungen
+
+  **Technisch:**
+  - Custom `FontSizeExt` mit `addGlobalAttributes()` auf TextStyle-Mark
+    (TipTap hat keine eigene FontSize-Extension)
+  - `applyFontSize()` Helper umgeht ChainedCommands-Type-Konflikte
+  - Inline-Bilder als data:URL eingebettet — kein MinIO-Upload nötig,
+    funktioniert in allen Mail-Clients (Gmail, Outlook, Apple Mail)
+  - 500-KB-Limit pro Bild verhindert übergewichtige Outbound-Mails
+  - Dark-Mode-fähige Toolbar
+
+---
+
 ## [3.18.3] — 2026-05-24 — Fix: BCP DNS-Check Counter + Status-Farben
 
 ### Fixed

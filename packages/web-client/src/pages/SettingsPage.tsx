@@ -8,9 +8,8 @@ import {
   Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
+import { SignatureSection } from '../components/SignatureSection.js';
 import { format as fmtDate } from 'date-fns';
-import { useEditor, EditorContent } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
 import { api } from '../api/client.js';
 import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
@@ -66,7 +65,7 @@ interface OofData {
   endDate: string | null;
 }
 
-interface SigData { signature: string; autoNew: boolean; autoReply: boolean }
+// SigData ist jetzt in SignatureSection.tsx definiert
 
 interface StorageFolder { id: string; name: string; displayName: string; sizeBytes: number; messageCount: number }
 interface StorageData { quotaBytes: number; usedBytes: number; folders: StorageFolder[] }
@@ -405,84 +404,8 @@ function ThemeSection() {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SIGNATUREN
-// ═══════════════════════════════════════════════════════════════════════════════
-function SignatureSection() {
-  const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ['user-signature'],
-    queryFn: () => api.get<SigData>('/user/signature'),
-  });
-
-  const [autoNew,   setAutoNew]   = useState(true);
-  const [autoReply, setAutoReply] = useState(false);
-
-  useEffect(() => {
-    if (data) { setAutoNew(data.autoNew); setAutoReply(data.autoReply); }
-  }, [data]);
-
-  const editor = useEditor({
-    extensions: [StarterKit],
-    content: data?.signature ?? '',
-    editorProps: { attributes: { class: 'outline-none min-h-[140px] text-sm text-gray-800' } },
-  });
-
-  // Inhalt setzen wenn Daten geladen
-  useEffect(() => {
-    if (editor && data?.signature && editor.isEmpty) {
-      editor.commands.setContent(data.signature);
-    }
-  }, [editor, data?.signature]);
-
-  const mutation = useMutation({
-    mutationFn: () => api.put('/user/signature', { signature: editor?.getHTML() ?? '', autoNew, autoReply }),
-    onSuccess: () => { toast.success('Signatur gespeichert'); void qc.invalidateQueries({ queryKey: ['user-signature'] }); },
-    onError: () => toast.error('Fehler beim Speichern'),
-  });
-
-  if (isLoading) return <div className="flex justify-center py-12 text-gray-400"><Loader2 size={18} className="animate-spin" /></div>;
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold text-gray-900">Signaturen</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Wird automatisch an neue E-Mails angehängt</p>
-      </div>
-
-      {/* Rich-Text Editor */}
-      <div className="border border-gray-200 rounded-lg overflow-hidden">
-        {/* Toolbar */}
-        <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-200 bg-gray-50 flex-wrap">
-          {[
-            { label: 'B', cmd: () => editor?.chain().focus().toggleBold().run(),      active: editor?.isActive('bold')   },
-            { label: 'I', cmd: () => editor?.chain().focus().toggleItalic().run(),    active: editor?.isActive('italic') },
-            { label: 'U', cmd: () => editor?.chain().focus().toggleStrike().run(),    active: editor?.isActive('strike') },
-          ].map(({ label, cmd, active }) => (
-            <button key={label} onMouseDown={e => { e.preventDefault(); cmd(); }}
-              className={`w-7 h-7 text-xs font-semibold rounded transition-colors ${active ? 'bg-accent text-white' : 'hover:bg-gray-200 text-gray-700'}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="px-3 py-3">
-          <EditorContent editor={editor} />
-        </div>
-      </div>
-
-      {/* Auto-Insert Optionen */}
-      <div className="space-y-3 py-3 border-t border-gray-100">
-        <p className="text-sm font-medium text-gray-700">Signatur automatisch einfügen</p>
-        <Toggle checked={autoNew}   onChange={setAutoNew}   label="Bei neuen E-Mails" />
-        <Toggle checked={autoReply} onChange={setAutoReply} label="Bei Antworten und Weiterleitungen" />
-      </div>
-
-      <button onClick={() => mutation.mutate()} className="btn-primary" disabled={mutation.isPending}>
-        {mutation.isPending ? <><Loader2 size={14} className="animate-spin" /> Speichern…</> : 'Speichern'}
-      </button>
-    </div>
-  );
-}
+// SIGNATUREN — Komponente jetzt in components/SignatureSection.tsx
+// (ausgelagert für reichere Funktionen: Bilder, Links, Schriftarten, Schriftgrößen)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTOMATISCHE ANTWORTEN (OOF)
