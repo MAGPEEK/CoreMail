@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Users, Plus, Pencil, Trash2, UserPlus, UserMinus, ChevronDown, ChevronRight } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, UserPlus, UserMinus, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+
+interface ContactSuggest { id: string; displayName: string; email: string; company?: string; isGroup?: boolean }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -258,22 +260,89 @@ function MembersPanel({ group }: { group: Group }) {
   const qc = useQueryClient();
   const [newEmail, setNewEmail] = useState('');
   const [newType, setNewType] = useState<Member['memberType']>('USER');
+  const [debouncedQ, setDebouncedQ] = useState('');
+  const [showSug, setShowSug] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: members = [] } = useQuery<Member[]>({
     queryKey: ['admin-group-members', group.id],
     queryFn: () => api.get(`/admin/groups/${group.id}/members`),
   });
 
+  const { data: suggestions = [] } = useQuery<ContactSuggest[]>({
+    queryKey: ['contacts-suggest', debouncedQ],
+    queryFn: () => api.get(`/contacts?q=${encodeURIComponent(debouncedQ)}`),
+    enabled: debouncedQ.length >= 2,
+    staleTime: 30_000,
+  });
+
+  // Vorschläge filtern: bereits zugewiesene Mitglieder ausblenden
+  const memberEmailSet = new Set(members.map((m) => m.memberEmail.toLowerCase()));
+  const filteredSuggestions = suggestions.filter((s) => !memberEmailSet.has(s.email.toLowerCase()));
+
   const addMember = useMutation({
-    mutationFn: () => api.post(`/admin/groups/${group.id}/members`, { memberEmail: newEmail.trim(), memberType: newType }),
+    mutationFn: (params: { email: string; type: Member['memberType'] }) =>
+      api.post(`/admin/groups/${group.id}/members`, { memberEmail: params.email.trim(), memberType: params.type }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-group-members', group.id] });
       void qc.invalidateQueries({ queryKey: ['admin-groups'] });
       setNewEmail('');
+      setDebouncedQ('');
+      setShowSug(false);
       toast.success('Mitglied hinzugefügt');
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  // Auto-detect Member-Type aus Suggestion-ID-Prefix (gal-, ext-, grp-)
+  const pickSuggestion = useCallback((c: ContactSuggest) => {
+    let type: Member['memberType'] = 'EXTERNAL';
+    if (c.isGroup || c.id.startsWith('grp-'))     type = 'GROUP';
+    else if (c.id.startsWith('gal-'))             type = 'USER';
+    else if (c.id.startsWith('ext-'))             type = 'EXTERNAL';
+    addMember.mutate({ email: c.email, type });
+  }, [addMember]);
+
+  const handleChange = (val: string) => {
+    setNewEmail(val);
+    setActiveIdx(0);
+    if (val.length >= 2) {
+      setShowSug(true);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => setDebouncedQ(val), 220);
+    } else {
+      setShowSug(false);
+      setDebouncedQ('');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showSug && filteredSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filteredSuggestions.length - 1)); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const s = filteredSuggestions[activeIdx];
+        if (s) { e.preventDefault(); pickSuggestion(s); return; }
+      }
+      if (e.key === 'Escape') { setShowSug(false); return; }
+    }
+    // Enter ohne Suggestion → manuelle E-Mail hinzufügen
+    if (e.key === 'Enter' && newEmail.trim()) {
+      e.preventDefault();
+      addMember.mutate({ email: newEmail.trim(), type: newType });
+    }
+  };
+
+  // Outside-Click schließt Suggestions
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setShowSug(false);
+    }
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
 
   const removeMember = useMutation({
     mutationFn: (email: string) => api.delete(`/admin/groups/${group.id}/members/${encodeURIComponent(email)}`),
@@ -291,21 +360,53 @@ function MembersPanel({ group }: { group: Group }) {
         Mitglieder ({members.length})
       </h3>
 
-      {/* Add member */}
+      {/* Add member — mit Autocomplete-Dropdown */}
       {group.groupType === 'STATIC' && (
-        <div className="flex gap-2 mb-3">
-          <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && newEmail.trim()) addMember.mutate(); }}
-            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-            placeholder="E-Mail-Adresse eingeben" />
-          <select value={newType} onChange={e => setNewType(e.target.value as Member['memberType'])}
-            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+        <div ref={containerRef} className="relative flex gap-2 mb-3">
+          <div className="flex-1 relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input value={newEmail}
+              onChange={(e) => handleChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => { if (newEmail.length >= 2) setShowSug(true); }}
+              className="w-full border border-gray-300 rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="Suchen — Benutzer, externe Kontakte, Verteilergruppen…" />
+            {showSug && filteredSuggestions.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-20 max-h-72 overflow-y-auto">
+                {filteredSuggestions.map((c, i) => {
+                  const typeBadge = c.id.startsWith('grp-') ? { label: 'Gruppe', cls: 'bg-purple-100 text-purple-700' }
+                                  : c.id.startsWith('gal-') ? { label: 'User',   cls: 'bg-blue-100 text-blue-700' }
+                                  : c.id.startsWith('ext-') ? { label: 'Extern', cls: 'bg-gray-100 text-gray-700' }
+                                  :                            { label: 'Privat', cls: 'bg-amber-100 text-amber-700' };
+                  return (
+                    <button key={c.id} type="button"
+                      onMouseDown={(e) => { e.preventDefault(); pickSuggestion(c); }}
+                      className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
+                        i === activeIdx ? 'bg-blue-50' : 'hover:bg-gray-50'
+                      }`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-gray-900 truncate">{c.displayName}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${typeBadge.cls}`}>{typeBadge.label}</span>
+                        </div>
+                        <div className="text-xs text-gray-500 truncate">{c.email}</div>
+                        {c.company && <div className="text-[10px] text-gray-400 truncate">{c.company}</div>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <select value={newType} onChange={(e) => setNewType(e.target.value as Member['memberType'])}
+            className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+            title="Type wenn manuell E-Mail eingegeben — bei Auswahl aus Vorschlag automatisch">
             <option value="USER">User</option>
-            <option value="SHARED_MAILBOX">Shared Mailbox</option>
+            <option value="SHARED_MAILBOX">Shared</option>
             <option value="GROUP">Gruppe</option>
             <option value="EXTERNAL">Extern</option>
           </select>
-          <button onClick={() => { if (newEmail.trim()) addMember.mutate(); }}
+          <button onClick={() => { if (newEmail.trim()) addMember.mutate({ email: newEmail.trim(), type: newType }); }}
             disabled={!newEmail.trim() || addMember.isPending}
             className="flex items-center gap-1 px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 disabled:opacity-50">
             <UserPlus size={13} /> Hinzufügen
@@ -444,8 +545,8 @@ export function GroupsPage() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={7} className="text-center py-12 text-gray-400">Keine Gruppen gefunden</td></tr>
             ) : filtered.map(g => (
-              <>
-                <tr key={g.id} className="border-b border-gray-100 hover:bg-gray-50">
+              <Fragment key={g.id}>
+                <tr className="border-b border-gray-100 hover:bg-gray-50">
                   {/* Expand */}
                   <td className="px-3 py-3">
                     <button onClick={() => setExpanded(expanded === g.id ? null : g.id)}
@@ -491,13 +592,13 @@ export function GroupsPage() {
                 </tr>
                 {/* Members Panel */}
                 {expanded === g.id && (
-                  <tr key={`${g.id}-members`}>
+                  <tr>
                     <td colSpan={7} className="p-0">
                       <MembersPanel group={g} />
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>
