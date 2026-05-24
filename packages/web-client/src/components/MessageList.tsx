@@ -10,6 +10,7 @@ import { format, isToday, isYesterday } from 'date-fns';
 import { api } from '../api/client.js';
 import type { MessagesResponse, MessageSummary, Folder, Category } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
+import { useAuthStore } from '../store/auth.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
@@ -62,6 +63,7 @@ function MessageRow({
 
   const isUnread = !msg.flags.includes('\\Seen');
   const isFlagged = msg.flags.includes('\\Flagged');
+  const isReplied = msg.flags.includes('\\Answered');
   const hasAttachments = msg.attachments.length > 0;
   const isPinned = !!msg.pinnedAt;
   const isSnoozed = msg.snoozeUntil && new Date(msg.snoozeUntil) > new Date();
@@ -134,6 +136,7 @@ function MessageRow({
               <span className="truncate">{msg.fromAddr}</span>
             </span>
             <div className="flex items-center gap-1 shrink-0">
+              {isReplied && <span title="Beantwortet"><Reply size={12} className="text-blue-500" /></span>}
               {hasAttachments && <Paperclip size={12} className="text-gray-400" />}
               {isSnoozed && <Clock size={12} className="text-amber-500" />}
               <span className="text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>
@@ -195,6 +198,8 @@ export function MessageList({ folderId }: Props) {
   const qc = useQueryClient();
   const { selectedMessageId, setSelectedMessage, selectedIds, toggleSelection, selectAll, clearSelection, filter, setFilter, openCompose } = useUiStore();
   const { density } = useUiPrefs();
+  const { accessToken } = useAuthStore();
+  const tokenParam = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [searchText, setSearchText] = useState('');
   const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
@@ -395,11 +400,11 @@ export function MessageList({ folderId }: Props) {
       { label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') },
       { type: 'divider' },
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
-        onClick: () => window.open(`/api/v1/mail/messages/${msg.id}/raw`, '_blank') },
+        onClick: () => window.open(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, '_blank') },
       { label: 'Als EML herunterladen', icon: <Download size={14} />,
         onClick: () => {
           const a = document.createElement('a');
-          a.href = `/api/v1/mail/messages/${msg.id}/raw`;
+          a.href = `/api/v1/mail/messages/${msg.id}/raw${tokenParam}`;
           a.download = `${msg.subject || 'message'}.eml`;
           a.click();
         } },

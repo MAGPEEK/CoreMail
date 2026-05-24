@@ -13,6 +13,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.17.49] — 2026-05-24 — Fix: MWA Quelltext/EML Auth, Junk-Logik, Antwort-Indikator
+
+### Fixed
+
+- **MWA: Quelltext anzeigen → 401 Unauthorized behoben**
+  (`web-client/src/components/MessageReader.tsx`):
+  Der `fetch()`-Aufruf für den RFC-822-Quelltext wurde ohne Authentifizierung abgesetzt
+  (kein `Authorization`-Header in Browser-initiiertem Fetch). Fix: Bearer-Token als
+  `?token=…` Query-Parameter (wird vom auth-Middleware bereits für SSE unterstützt),
+  gelesen aus `useAuthStore().accessToken`. Fehler beim Laden werden jetzt im Modal
+  angezeigt statt still zu scheitern.
+
+- **MWA: EML-Download → 401 Unauthorized behoben**
+  (`web-client/src/components/MessageReader.tsx`, `MessageList.tsx`):
+  Browser-Navigation (`<a href>` und `window.open()`) unterstützt keine Custom-Headers.
+  Fix: Gleiches `?token=…`-Muster für alle EML-Download- und Quelltext-Links in
+  MessageReader und MessageList Kontext-Menü.
+
+- **MWA: „Kein Junk"-Button im Junk-Ordner fehlte**
+  (`web-client/src/components/MessageReader.tsx`):
+  Das Kontext-Menü zeigte immer „Als Junk markieren" unabhängig vom aktuellen Ordner.
+  Fix: `isJunkFolder`-Erkennung über `selectedFolderId` + Folders-Query; bedingte
+  Menüeinträge — Junk-Ordner zeigt „Kein Junk (False Positive)" mit ShieldOff-Icon,
+  alle anderen Ordner zeigen „Als Junk markieren".
+
+- **Zukünftige Mails von manuell als Junk markierten Absendern landen automatisch im Junk**
+  (`api-gateway/src/routes/mail.ts`, `smtp-server/src/handlers/message.ts`):
+  Aktion `spam` im Bulk-Endpunkt schreibt jetzt zusätzlich einen `Blacklist`-Eintrag
+  mit `scope: 'USER-JUNK'` für jeden einzigartigen Absender. `storeInboundMessage()`
+  prüft diese Einträge bei eingehenden Mails und leitet bei Match in den Junk-Ordner.
+  Aktion `notSpam` entfernt entsprechende Einträge. Beide Aktionen triggern rspamd
+  Bayes-Training (`learnspam`/`learnham`) für verbesserte Spam-Erkennung.
+
+- **MWA: Antwort-Indikator auf beantworteten Mails**
+  (`web-client/src/components/MessageReader.tsx`, `MessageList.tsx`):
+  Mails auf die geantwortet wurde erhielten kein visuelles Kennzeichen (wie Outlook's
+  Antwort-Pfeil). Fix:
+  - `MessageReader`: Antworten/Allen-antworten-Buttons setzen jetzt das IMAP-Flag
+    `\Answered` via `patchMutation` (`markAnswered()`-Funktion).
+  - `MessageList`: Blaues `Reply`-Icon in der Icons-Spalte wenn `flags` das Flag
+    `\Answered` enthält.
+
+---
+
 ## [3.17.48] — 2026-05-24 — Fix: SMTP PIPELINING Race Condition (503 bei Server-to-Server)
 
 ### Fixed

@@ -10,6 +10,55 @@ import { requireAuth } from '../middleware/auth.js';
 
 const log = createLogger('api:mail');
 export const mailRouter: RouterType = Router();
+
+// ── rspamd Bayes-Lernen ───────────────────────────────────────────────────────
+const RSPAMD_URL = process.env['RSPAMD_URL'] ?? 'http://rspamd:11334';
+
+/** Sendet eine Mail an rspamd /learnspam oder /learnham (fire and forget). */
+async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promise<void> {
+  await fetch(`${RSPAMD_URL}/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: raw,
+    signal: AbortSignal.timeout(10_000),
+  });
+}
+
+/**
+ * Für alle übergebenen Message-IDs: Rohinhalt aus MinIO laden (oder rekonstruieren)
+ * und an rspamd learnspam/learnham senden. Fehler werden geloggt, nicht propagiert.
+ */
+async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham', userId: string): Promise<void> {
+  for (const id of ids) {
+    try {
+      const msg = await prisma.message.findFirst({
+        where: { id, folder: { mailbox: { userId } } },
+        include: { attachments: true },
+      });
+      if (!msg) continue;
+
+      let raw: Buffer;
+      if (msg.storagePath) {
+        raw = await downloadBuffer(msg.storagePath);
+      } else {
+        // Minimalrekonstruktion für Bayes-Training
+        const from = msg.fromName
+          ? `"${msg.fromName.replace(/"/g, '\\"')}" <${msg.fromAddr}>`
+          : `<${msg.fromAddr}>`;
+        raw = Buffer.from(
+          `From: ${from}\r\nTo: ${msg.toAddrs.join(', ')}\r\n` +
+          `Subject: ${msg.subject ?? ''}\r\nDate: ${msg.date.toUTCString()}\r\n\r\n` +
+          (msg.bodyText || msg.bodyHtml || ''),
+        );
+      }
+
+      await rspamdLearn(action, raw);
+      log.debug({ id, action }, 'rspamd learning successful');
+    } catch (err) {
+      log.warn({ err, id, action }, 'rspamd learning failed — skipped');
+    }
+  }
+}
 mailRouter.use(requireAuth);
 
 // ── Multer (Anhänge, max 25 MB/Datei, max 20 Dateien) ────────────────────────
@@ -397,7 +446,39 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
         where: { id: { in: ownedIds } },
         data: { folderId: junk.id, modSeq: BigInt(Date.now()) },
       });
-      // TODO: rspamd Bayes-Lernen via /learnspam (Phase 2)
+      // Absender in USER-JUNK-Sperrliste aufnehmen → storeInboundMessage leitet
+      // künftige Mails dieses Absenders automatisch in den Junk-Ordner.
+      // Scope 'USER-JUNK' wird vom security-filter NICHT als SMTP-Reject behandelt,
+      // sondern ausschließlich beim Speichern geprüft (kein Bounce für den Absender).
+      void (async () => {
+        try {
+          const msgs = await prisma.message.findMany({
+            where: { id: { in: ownedIds } },
+            select: { fromAddr: true },
+          });
+          const senders = [...new Set(msgs.map((m) => m.fromAddr.toLowerCase()))];
+          for (const sender of senders) {
+            const exists = await prisma.blacklist.findFirst({
+              where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: sender },
+            });
+            if (!exists) {
+              await prisma.blacklist.create({
+                data: {
+                  scope: 'USER-JUNK',
+                  scopeId: req.apiUser!.userId,
+                  pattern: sender,
+                  patternType: 'EXACT',
+                  comment: `Manuell als Junk markiert am ${new Date().toISOString().slice(0, 10)}`,
+                },
+              });
+            }
+          }
+        } catch (err) {
+          log.warn({ err }, 'USER-JUNK Blacklist-Eintrag fehlgeschlagen — ignoriert');
+        }
+      })();
+      // rspamd Bayes-Lernen (fire and forget) — verbessert Spam-Erkennung über Zeit
+      void rspamdLearnBatch(ownedIds, 'learnspam', req.apiUser!.userId);
       break;
     }
     case 'notSpam': {
@@ -407,7 +488,23 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
         where: { id: { in: ownedIds } },
         data: { folderId: inbox.id, modSeq: BigInt(Date.now()) },
       });
-      // TODO: rspamd Bayes-Lernen via /learnham (Phase 2)
+      // Absender aus USER-JUNK-Sperrliste entfernen (False Positive)
+      void (async () => {
+        try {
+          const msgs = await prisma.message.findMany({
+            where: { id: { in: ownedIds } },
+            select: { fromAddr: true },
+          });
+          const senders = [...new Set(msgs.map((m) => m.fromAddr.toLowerCase()))];
+          await prisma.blacklist.deleteMany({
+            where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: { in: senders } },
+          });
+        } catch (err) {
+          log.warn({ err }, 'USER-JUNK Blacklist-Entfernung fehlgeschlagen — ignoriert');
+        }
+      })();
+      // rspamd Bayes-Lernen: Als Ham markieren
+      void rspamdLearnBatch(ownedIds, 'learnham', req.apiUser!.userId);
       break;
     }
   }
