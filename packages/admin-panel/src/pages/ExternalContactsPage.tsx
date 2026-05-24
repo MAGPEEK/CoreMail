@@ -55,14 +55,9 @@ function ContactModal({ contact, onClose }: { contact: ExternalContact | null; o
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const Field = ({ label, k, placeholder }: { label: string; k: keyof FormData; placeholder?: string }) => (
-    <div>
-      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
-      <input value={form[k] as string} onChange={e => set(k, e.target.value)}
-        className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-        placeholder={placeholder} />
-    </div>
-  );
+  // Inline-Helper-DIV statt eigener Field-Komponente — letztere würde bei jedem
+  // Render eine neue Component-Referenz erzeugen → React unmount+remount des Inputs
+  // → Cursor verloren (bekanntes Problem, siehe v3.17.44 Fix bei eDiscovery).
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -76,18 +71,58 @@ function ContactModal({ contact, onClose }: { contact: ExternalContact | null; o
 
         <div className="px-6 py-4 space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Vorname" k="firstName" placeholder="Max" />
-            <Field label="Nachname" k="lastName" placeholder="Mustermann" />
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Vorname</label>
+              <input value={form.firstName} onChange={e => set('firstName', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="Max" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Nachname</label>
+              <input value={form.lastName} onChange={e => set('lastName', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="Mustermann" />
+            </div>
           </div>
-          <Field label="Anzeigename *" k="displayName" placeholder="Max Mustermann" />
-          <Field label="E-Mail-Adresse *" k="email" placeholder="max@extern.com" />
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Unternehmen" k="company" placeholder="Acme GmbH" />
-            <Field label="Abteilung" k="department" placeholder="Vertrieb" />
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Anzeigename *</label>
+            <input value={form.displayName} onChange={e => set('displayName', e.target.value)}
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="Max Mustermann" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">E-Mail-Adresse *</label>
+            <input value={form.email} onChange={e => set('email', e.target.value)}
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              placeholder="max@extern.com" />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Telefon" k="phone" placeholder="+49 89 …" />
-            <Field label="Mobil" k="mobile" placeholder="+49 170 …" />
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Unternehmen</label>
+              <input value={form.company} onChange={e => set('company', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="Acme GmbH" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Abteilung</label>
+              <input value={form.department} onChange={e => set('department', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="Vertrieb" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Telefon</label>
+              <input value={form.phone} onChange={e => set('phone', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="+49 89 …" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Mobil</label>
+              <input value={form.mobile} onChange={e => set('mobile', e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="+49 170 …" />
+            </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">Notizen</label>

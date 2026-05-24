@@ -9,8 +9,10 @@
 
 import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma } from '@coremail/storage';
+import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
+import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
 
 const log = createLogger('smtp:inbound');
@@ -160,14 +162,48 @@ async function onMessage(
   // 2. Expand distribution groups → individual delivery addresses
   const deliveryAddresses = await expandRecipients(to);
 
-  // 3. Store for each final recipient
+  // 3. Split into local vs. external (Distribution groups may contain external
+  //    members like „partner@kunde.com" — these need outbound forwarding, not
+  //    local mailbox storage. Without this split, external members were silently
+  //    dropped (Bug-Fix v3.18.7).
+  const localDeliveries:    string[] = [];
+  const externalDeliveries: string[] = [];
   for (const rcpt of deliveryAddresses) {
+    const domain = rcpt.split('@')[1]?.toLowerCase();
+    if (!domain) { localDeliveries.push(rcpt); continue; }
+    const localDomain = await prisma.domain.findFirst({
+      where: { name: domain, active: true },
+    });
+    if (localDomain) localDeliveries.push(rcpt);
+    else             externalDeliveries.push(rcpt);
+  }
+
+  // 3a. Local mailbox storage
+  for (const rcpt of localDeliveries) {
     await storeInboundMessage(raw, {
       fromAddr: from,
       rcptTo: rcpt,
       toJunk: filterResult.junkFolder ?? false,
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     });
+  }
+
+  // 3b. External members of expanded groups → enqueue outbound (forward)
+  if (externalDeliveries.length > 0) {
+    try {
+      await enqueueOutbound({
+        messageId:  crypto.randomUUID(),
+        from,
+        to:         externalDeliveries,
+        rawMessage: raw.toString('base64'),
+      });
+      log.info(
+        { from, externalDeliveries, originalTo: to },
+        'Externe Verteilergruppen-Mitglieder werden via Outbound-Queue weitergeleitet',
+      );
+    } catch (err) {
+      log.error({ err, externalDeliveries }, 'Outbound-Forward für Verteilergruppen-Mitglieder fehlgeschlagen');
+    }
   }
 
   // 4. Handle resource mailbox auto-accept for calendar invitations

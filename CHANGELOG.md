@@ -13,6 +13,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.8] — 2026-05-24 — Fix: Externe Kontakte, Verteilergruppen-Routing, Autocomplete
+
+### Fixed
+
+- **ExternalContactsPage Cursor verlor sich beim Tippen**
+  (`packages/admin-panel/src/pages/ExternalContactsPage.tsx`):
+  Inline `Field`-Component-Helper innerhalb von `ContactModal` definiert →
+  bei jedem Render neue Component-Referenz → React unmount+remount des Inputs →
+  Cursor verloren. Fix: alle 8 Felder zu inline `<div><label><input>` umgebaut.
+  Selbes Pattern wie v3.17.44 eDiscovery-Fix und v3.17.43 RetentionPage.
+
+- **GroupsPage React Fragment-Key-Warning**:
+  `filtered.map(g => (<>...</>))` ohne Key → React-Warning. Fix:
+  `<Fragment key={g.id}>...</Fragment>`.
+
+- **KRITISCHER FIX: Externe Verteilergruppen-Member erhielten keine Mails**
+  (`packages/smtp-server/src/outbound/queue.ts` + `inbound/handler.ts`):
+  `expandRecipients()` löst Verteilergruppen in einzelne Member-Adressen auf,
+  aber die expandierten Adressen wurden komplett als „lokal" an
+  `storeInboundMessage()` übergeben. Wenn eine Gruppe externe Member hatte
+  (z.B. `partner@kunde.com`), gingen diese silent verloren — keine Mail kam an,
+  kein Bounce, kein Log.
+
+  **Fix**:
+  - Outbound (`queue.ts`): nach `expandRecipients` werden Adressen ERNEUT
+    auf lokal/extern geprüft. Externe Member werden zu `finalExternalRcpts`
+    hinzugefügt und via `relayMessage()` an MX/Smarthost zugestellt.
+  - Inbound (`handler.ts`): wenn ein externer Sender direkt an eine lokale
+    Verteilergruppe schickt und diese externe Member hat, werden die externen
+    Adressen via `enqueueOutbound()` weitergeleitet.
+
+### Added
+
+- **Compose-Autocomplete zeigt jetzt alle Adressquellen**
+  (`packages/api-gateway/src/routes/contacts.ts`):
+  `GET /api/v1/contacts?q=` liefert ab `q.length >= 2` eine vereinte Suche über:
+  1. Private Kontakte (`Contact`-Tabelle, eigener User)
+  2. Globale Adressliste — alle aktiven User
+  3. Externe Kontakte aus dem Admin-Verzeichnis (`ExternalMailContact`,
+     gefiltert `hiddenFromGal: false`)
+  4. Verteilergruppen (`DistributionGroup`, `active: true && hiddenFromGal: false`)
+
+  Dedup über E-Mail. ID-Prefix markiert Quelle (`gal-`, `ext-`, `grp-` oder
+  privat). Frontend `RecipientInput` und `MembersPanel` unterscheiden visuell.
+
+- **GroupsPage Mitglieder-Editor mit Autocomplete-Dropdown**
+  (`packages/admin-panel/src/pages/GroupsPage.tsx` `MembersPanel`):
+  Plain-Text-Input ersetzt durch Suggest-Field mit Debouncing (220ms),
+  Pfeil-Up/Down + Enter/Tab + Escape, Type-Badge pro Treffer (User/Extern/
+  Gruppe/Privat). `memberType` wird automatisch aus dem ID-Prefix abgeleitet.
+  Bereits zugewiesene Member werden aus den Vorschlägen ausgeblendet.
+
+---
+
 ## [3.18.7] — 2026-05-24 — Spam-UX + Audit-Log v2 + Audit-Bug-Fix + Senden-Planen
 
 ### Fixed

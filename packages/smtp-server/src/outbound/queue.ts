@@ -193,30 +193,47 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         }
       }
 
-      // ── Lokale vs. externe Empfänger trennen ──────────────────────────────
+      // Helper: prüft ob eine Adresse zu einer lokalen Domain gehört
+      async function isLocalAddress(addr: string): Promise<boolean> {
+        const domain = addr.split('@')[1]?.toLowerCase();
+        if (!domain) return false;
+        const localDomain = await prisma.domain.findFirst({
+          where: { name: domain, active: true },
+        });
+        return !!localDomain;
+      }
+
+      // ── Phase 1: Empfänger in lokal vs. extern trennen ──────────────────
       const localRcpts:    string[] = [];
       const externalRcpts: string[] = [];
 
       for (const rcpt of to) {
-        const domain = rcpt.split('@')[1]?.toLowerCase();
-        if (!domain) { externalRcpts.push(rcpt); continue; }
-        const localDomain = await prisma.domain.findFirst({
-          where: { name: domain, active: true },
-        });
-        if (localDomain) {
-          localRcpts.push(rcpt);
-        } else {
-          externalRcpts.push(rcpt);
-        }
+        if (await isLocalAddress(rcpt)) localRcpts.push(rcpt);
+        else                            externalRcpts.push(rcpt);
       }
 
-      // Lokale Empfänger auflösen (Aliase + Verteilergruppen + Shared-Mailbox-Aliase)
+      // ── Phase 2: Lokale Empfänger expandieren (Aliase + Verteilergruppen) ──
       const expandedLocalRcpts = localRcpts.length > 0
         ? await expandRecipients(localRcpts)
         : [];
 
-      // ── Lokale Zustellung (direkt ins Postfach schreiben) ─────────────────
+      // ── Phase 3: Nach Expansion ERNEUT lokal/extern trennen ─────────────
+      // KRITISCHER FIX (v3.18.7): Verteilergruppen können externe Mitglieder haben
+      // (z.B. „all@firma.de" mit Member „partner@kunde.com"). Vorher wurden ALLE
+      // expandierten Adressen als lokal an storeInboundMessage übergeben —
+      // externe Member gingen silent verloren (Mail kam nicht an).
+      const finalLocalRcpts:    string[] = [];
+      const finalExternalRcpts: string[] = [...externalRcpts];
+
       for (const rcpt of expandedLocalRcpts) {
+        if (await isLocalAddress(rcpt)) finalLocalRcpts.push(rcpt);
+        else                            finalExternalRcpts.push(rcpt);
+      }
+      // Dedup externals
+      const dedupedExternal = [...new Set(finalExternalRcpts)];
+
+      // ── Lokale Zustellung (direkt ins Postfach schreiben) ─────────────────
+      for (const rcpt of finalLocalRcpts) {
         await storeInboundMessage(buffer, {
           fromAddr: from,
           rcptTo:   rcpt,
@@ -226,16 +243,17 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       }
 
       // ── Externe Zustellung via MX / Smarthost ─────────────────────────────
-      if (externalRcpts.length > 0) {
-        await relayMessage(buffer, from, externalRcpts, {
+      if (dedupedExternal.length > 0) {
+        await relayMessage(buffer, from, dedupedExternal, {
           ...(dkimDomain    ? { dkimDomain }    : {}),
           ...(dkimSelector  ? { dkimSelector }  : {}),
           ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
         });
+        log.info({ to: dedupedExternal, jobId: job.id }, 'Externe Zustellung (Group/Alias-Expansion)');
       }
 
       // ── MAIL_FLOW-Log ─────────────────────────────────────────────────────
-      const allDelivered = [...localRcpts, ...externalRcpts];
+      const allDelivered = [...finalLocalRcpts, ...dedupedExternal];
       void prisma.systemLog.create({
         data: {
           level:     'INFO',
@@ -251,8 +269,8 @@ export function startOutboundWorker(): Worker<OutboundJob> {
             status:        'DELIVERED',
             messageId:     job.data.messageId,
             size:          String(buffer.length),
-            localRcpts:    localRcpts.join(', '),
-            externalRcpts: externalRcpts.join(', '),
+            localRcpts:    finalLocalRcpts.join(', '),
+            externalRcpts: dedupedExternal.join(', '),
             direction:     'OUTBOUND',
           },
         },

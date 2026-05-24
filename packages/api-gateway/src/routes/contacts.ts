@@ -6,29 +6,106 @@ import { requireAuth } from '../middleware/auth.js';
 export const contactsRouter: RouterType = Router();
 contactsRouter.use(requireAuth);
 
-// GET /api/v1/contacts?q=
+// GET /api/v1/contacts?q= — vereinte Suche über alle Adressquellen für den
+// Compose-Autocomplete (v3.18.7):
+//   1. Private Kontakte des Users (Contact-Tabelle)
+//   2. Globale Adressliste (alle aktiven User außer hiddenFromGal)
+//   3. Externe Kontakte aus dem Admin-Verzeichnis (ExternalContact)
+//   4. Verteilergruppen (DistributionGroup, sichtbar in GAL, aktiv)
+// Wenn `q` leer ist, werden nur private Kontakte zurückgegeben (Fallback wie zuvor).
 contactsRouter.get('/', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
-  
+  const userId = req.apiUser!.userId;
 
-  const where = q.length >= 2
+  // Private Kontakte (immer berücksichtigt)
+  const privateWhere = q.length >= 2
     ? {
-        userId: req.apiUser!.userId,
+        userId,
         OR: [
           { displayName: { contains: q, mode: 'insensitive' as const } },
-          { email: { contains: q, mode: 'insensitive' as const } },
-          { company: { contains: q, mode: 'insensitive' as const } },
+          { email:       { contains: q, mode: 'insensitive' as const } },
+          { company:     { contains: q, mode: 'insensitive' as const } },
         ],
       }
-    : { userId: req.apiUser!.userId };
-
-  const contacts = await prisma.contact.findMany({
-    where,
+    : { userId };
+  const privateContacts = await prisma.contact.findMany({
+    where: privateWhere,
     orderBy: { displayName: 'asc' },
     select: { id: true, displayName: true, email: true, company: true },
-    take: 200,
+    take: 100,
   });
-  res.json(contacts);
+
+  // Bei kurzem/leerem Query: nur private Kontakte (für Adressbuch-Ansicht)
+  if (q.length < 2) {
+    res.json(privateContacts);
+    return;
+  }
+
+  // GAL (Domain-User) + Externe Kontakte + Verteilergruppen parallel laden
+  const [galUsers, externalContacts, distGroups] = await Promise.all([
+    prisma.user.findMany({
+      where: {
+        active: true,
+        OR: [
+          { email:       { contains: q, mode: 'insensitive' } },
+          { displayName: { contains: q, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, email: true, displayName: true },
+      take: 30,
+    }),
+    prisma.externalMailContact.findMany({
+      where: {
+        hiddenFromGal: false,
+        OR: [
+          { email:       { contains: q, mode: 'insensitive' } },
+          { displayName: { contains: q, mode: 'insensitive' } },
+          { firstName:   { contains: q, mode: 'insensitive' } },
+          { lastName:    { contains: q, mode: 'insensitive' } },
+          { company:     { contains: q, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, email: true, displayName: true, company: true },
+      take: 30,
+    }),
+    prisma.distributionGroup.findMany({
+      where: {
+        active: true,
+        hiddenFromGal: false,
+        OR: [
+          { email:       { contains: q, mode: 'insensitive' } },
+          { displayName: { contains: q, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, email: true, displayName: true },
+      take: 20,
+    }),
+  ]);
+
+  // Vereintes Format (`isGroup` markiert Verteilergruppen). Dedup über E-Mail.
+  const seen = new Set<string>(privateContacts.map((c) => c.email.toLowerCase()));
+  const merged: Array<{ id: string; displayName: string; email: string; company?: string; isGroup?: boolean }> = [
+    ...privateContacts,
+  ];
+  for (const u of galUsers) {
+    const key = u.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ id: `gal-${u.id}`, displayName: u.displayName ?? u.email, email: u.email });
+  }
+  for (const c of externalContacts) {
+    const key = c.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ id: `ext-${c.id}`, displayName: c.displayName, email: c.email, company: c.company ?? '' });
+  }
+  for (const g of distGroups) {
+    const key = g.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ id: `grp-${g.id}`, displayName: g.displayName, email: g.email, isGroup: true });
+  }
+  res.json(merged.slice(0, 50));
 });
 
 // GET /api/v1/contacts/:id
