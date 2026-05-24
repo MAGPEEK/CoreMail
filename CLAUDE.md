@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.4`
+**Aktuelle Version**: `3.18.5`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -192,13 +192,13 @@ pnpm --filter @coremail/storage exec prisma generate
 - `PublicFolder` / `PublicFolderMessage` — Öffentliche Ordner mit ACL
 
 **Phase-8-Modelle**:
-- `EDiscoverySearch` — Cross-Mailbox-Suche (JSON-Query, Status, resultCount, exportPath)
-- `LegalHold` — Aufbewahrungssperre (mailboxIds[], active, appliedBy/releasedAt)
+- ~~`EDiscoverySearch`~~ — komplett entfernt in v3.18.5
+- ~~`LegalHold`~~ — komplett entfernt in v3.18.5
 
 **Phase-9-Modelle**:
 - `SmimeSettings` — Pro-User: autoSign, autoEncrypt, verifyIncoming, decryptIncoming
 - `JournalingRule` — Journaling-Regeln (scope, recipientType, journalAddress, wrapAsReport)
-- `RetentionPolicy` — Aufbewahrungsrichtlinien (retentionDays, action, scope, respectLegalHold)
+- `RetentionPolicy` — Aufbewahrungsrichtlinien (retentionDays, action, scope)
 - `RetentionPolicyAssignment` — Zuweisung von Policies zu GLOBAL / DOMAIN / USER
 - `Message.smimeMeta` — neues optionales String-Feld (JSON) für S/MIME-Signatur-/Verschlüsselungsmetadaten
 - `TransportRule` — Transportregeln (conditions/actions als JSON, priority, enabled)
@@ -313,7 +313,7 @@ Alle Endpunkte hinter nginx auf Port 443:
 /admin/groups/            adminGroupsRouter         Verteilergruppen
 /admin/resources/         adminResourcesRouter      Raum-/Ressourcenpostfächer
 /admin/public-folders/    adminPublicFoldersRouter  Öffentliche Ordner (Admin)
-/admin/ediscovery/        adminEDiscoveryRouter     eDiscovery & Legal Hold
+# /admin/ediscovery/ → komplett entfernt in v3.18.5
 /admin/ems/               adminEmsRouter            EMS REST-Bridge (20+ Cmdlets)
 /admin/compliance/journaling/ adminJournalingRouter Journaling-Regeln
 /admin/compliance/retention/  adminRetentionRouter  Aufbewahrungsrichtlinien
@@ -503,7 +503,6 @@ SMTP Verbindung
 - **Shared Mailboxes** haben dieselbe Standard-Ordnerstruktur wie User-Postfächer (auto-provisioniert, INBOX/Drafts/Sent/Trash/Junk/Archive/Notes/Tasks) — Folder-CRUD im MWA für User mit FULL_ACCESS
 - **E-Mail-Aliase** seit v3.13.5 pro User-Postfach + Shared-Mailbox; SMTP-Inbound löst Aliase zur Target-Primäradresse auf bevor sie ins Postfach geschrieben werden
 - **Templates für Compliance**: 8 Retention-Vorlagen (Papierkorb 30d, Junk 14d, …) + 9 Transport-Rule-Vorlagen ([EXTERN], CEO-Phishing, PCI-DSS Detection, …)
-- **eDiscovery** mit echtem MBOX-Export (streaming, mboxo-Format, Hard-Cap 50k Mails) + De-Duplizierung über Message-ID + Mailbox-Picker UI
 - **OAuth2-Server** komplett (Authorization Code, Refresh, Client Credentials, Password Grant, OIDC, PKCE)
 - **Dashboard** mit Server-Info (Uptime, RAM, CPU, V8-Heap-Limit) + konfigurierbaren Widgets (Drag-Reorder direkt auf Karten, persistiert in localStorage)
 - **BCP-Dashboard** alle Widgets mit DraggableCard umhüllt (v3.16.0) — queue-status, mails-chart, storage-ranking, domains-chart, recent-errors, recent-audit, recent-logins, system-strip per Drag verschiebbar
@@ -521,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.4; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.5; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -540,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.4 — Highlights
+## Aktuelle Version 3.18.5 — Highlights
+
+**v3.18.5** — Removed: eDiscovery & Legal Hold komplett aus dem Code entfernt. Schema (EDiscoverySearch, LegalHold, EDiscoveryStatus enum, RetentionPolicy.respectLegalHold), Backend-Router `/admin/ediscovery`, Frontend-Page EDiscoveryPage.tsx, Sidebar-Eintrag, i18n-Keys (DE+EN), SearchCheck-Icon-Import, RbacPage-Beschreibung, RetentionPage-Checkbox. backup-worker.ts lädt keine legalHold-Records mehr. Bestehende Tabellen werden via `prisma db push --accept-data-loss` automatisch gedroppt.
 
 **v3.18.4** — Feature: Signaturen-Editor mit Bildern, Links und Schriftarten (Gmail/Outlook-Level). 10 Schriftarten, 5 Schriftgrößen, Textfarbe (24)/Markierungsfarbe (12), B/I/U/S, Ausrichtung, Listen, Trennlinie, Link (markiert → wird zum Link / nichts markiert → URL als Text), Bild-Upload (max 500 KB als base64) + URL + Drag&Drop mit Overlay, Vorschau/Editor-Toggle. Custom FontSizeExt via TipTap `addGlobalAttributes`. SignatureSection in eigene Komponente ausgelagert.
 

@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Users,
-  BookUser, ShieldHalf, SearchCheck, Archive,
+  BookUser, ShieldHalf, Archive,
   FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog,
 } from 'lucide-react';
@@ -64,7 +64,6 @@ export function Sidebar() {
     {
       groupKey: 'nav_group_compliance',
       items: [
-        { path: '/ediscovery',       labelKey: 'nav_ediscovery',       icon: SearchCheck },
         { path: '/retention',        labelKey: 'nav_retention',        icon: Archive },
       ],
     },

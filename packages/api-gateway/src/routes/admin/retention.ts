@@ -205,7 +205,6 @@ adminRetentionRouter.post('/', async (req: Request, res: Response) => {
     action,
     targetFolder,
     scope,
-    respectLegalHold,
     enabled,
   } = req.body as {
     name?: string;
@@ -214,7 +213,6 @@ adminRetentionRouter.post('/', async (req: Request, res: Response) => {
     action?: string;
     targetFolder?: string;
     scope?: string;
-    respectLegalHold?: boolean;
     enabled?: boolean;
   };
 
@@ -254,7 +252,6 @@ adminRetentionRouter.post('/', async (req: Request, res: Response) => {
       action: (action as 'ARCHIVE' | 'DELETE' | 'MOVE_TO_FOLDER') ?? 'ARCHIVE',
       ...(targetFolder ? { targetFolder } : {}),
       scope: (scope as 'ALL_ITEMS' | 'INBOX' | 'SENT_ITEMS' | 'DELETED_ITEMS' | 'JUNK') ?? 'ALL_ITEMS',
-      respectLegalHold: respectLegalHold ?? true,
       enabled: enabled ?? true,
       createdBy: req.apiUser!.userId,
     },
@@ -291,7 +288,7 @@ adminRetentionRouter.get('/:id', async (req: Request, res: Response) => {
 adminRetentionRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const {
-    name, description, retentionDays, action, targetFolder, scope, respectLegalHold, enabled,
+    name, description, retentionDays, action, targetFolder, scope, enabled,
   } = req.body as {
     name?: string;
     description?: string;
@@ -299,7 +296,6 @@ adminRetentionRouter.put('/:id', async (req: Request, res: Response) => {
     action?: string;
     targetFolder?: string;
     scope?: string;
-    respectLegalHold?: boolean;
     enabled?: boolean;
   };
 
@@ -323,7 +319,6 @@ adminRetentionRouter.put('/:id', async (req: Request, res: Response) => {
       ...(action !== undefined ? { action: action as 'ARCHIVE' | 'DELETE' | 'MOVE_TO_FOLDER' } : {}),
       ...(targetFolder !== undefined ? { targetFolder } : {}),
       ...(scope !== undefined ? { scope: scope as 'ALL_ITEMS' | 'INBOX' | 'SENT_ITEMS' | 'DELETED_ITEMS' | 'JUNK' } : {}),
-      ...(respectLegalHold !== undefined ? { respectLegalHold } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
     },
     include: { _count: { select: { assignments: true } } },

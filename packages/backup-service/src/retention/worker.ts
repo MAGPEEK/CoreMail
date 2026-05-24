@@ -74,8 +74,9 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       include: { assignments: true, policyTags: { include: { tag: true } } },
     });
 
-    const legalHolds = await prisma.legalHold.findMany({ where: { active: true } });
-    const heldUserIds = new Set(legalHolds.flatMap((h) => h.mailboxIds));
+    // Legal Hold komplett entfernt in v3.18.5 — leeres Set für Kompatibilität
+    // mit den bestehenden Funktionssignaturen
+    const heldUserIds = new Set<string>();
 
     // ── Schritt 2: Mailbox → Policies-Mapping aus den Assignments ────────────
     // Hier reduzieren wir Policies-pro-User auf das, was wirklich angewendet wird.

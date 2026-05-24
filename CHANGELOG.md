@@ -13,6 +13,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.5] — 2026-05-24 — Removed: eDiscovery & Legal Hold komplett entfernt
+
+### Removed
+
+- **Phase-8-Features eDiscovery & Legal Hold vollständig aus dem Code entfernt**
+  (Backend, Frontend, Schema, Routes, i18n):
+  - **Schema** (`packages/storage/prisma/schema.prisma`): Models `EDiscoverySearch`,
+    `LegalHold` und Enum `EDiscoveryStatus` gelöscht.
+    `RetentionPolicy.respectLegalHold`-Feld entfernt (Default war `true`, hatte aber
+    keinen Effekt mehr da `LegalHold`-Records keine UI hatten zum Anlegen).
+  - **Backend**: `packages/api-gateway/src/routes/admin/ediscovery.ts` Datei gelöscht.
+    Import + Mount in `server.ts` entfernt (`/api/v1/admin/ediscovery` Route gibt
+    jetzt 404).
+  - **Retention-Route** (`routes/admin/retention.ts`): `respectLegalHold` aus
+    POST/PUT-Body, Validierung und Prisma-Update entfernt.
+  - **Backup-Worker** (`packages/backup-service/src/retention/worker.ts`):
+    `prisma.legalHold.findMany()`-Aufruf entfernt; `heldUserIds` ist jetzt ein
+    leeres Set (Signatur-Kompatibilität für nachgelagerte Funktionen).
+  - **Frontend**: `packages/admin-panel/src/pages/EDiscoveryPage.tsx` Datei gelöscht.
+    Sidebar-Eintrag „eDiscovery" entfernt, Route aus `main.tsx` ausgebaut,
+    `nav_ediscovery`-i18n-Key in DE+EN gelöscht, ungenutzter `SearchCheck`-Icon-Import
+    raus, RbacPage `COMPLIANCE_MANAGEMENT`-Beschreibung von „eDiscovery, Aufbewahrung"
+    → „Aufbewahrungsrichtlinien".
+  - **RetentionPage**: `respectLegalHold`-Feld aus `RetentionPolicy`-Type, Form-State,
+    Template-Creator und UI-Checkbox entfernt.
+
+  **Bestandsdaten**: Bestehende `ediscovery_searches` + `legal_holds` Tabellen
+  werden beim nächsten `prisma db push --accept-data-loss` (im Container-Entrypoint)
+  automatisch gedroppt. `retention_policies.respect_legal_hold`-Spalte ebenfalls.
+
+  **Migration**: Wer eine bestehende Installation upgradet und das Feature
+  tatsächlich nutzt: Bitte vor dem Upgrade eDiscovery-Exporte sichern.
+  Empfohlen wird dazu der `mbox`-Streaming-Export der vorhandenen Suchen
+  unter v3.18.4 oder älter — danach upgraden.
+
+---
+
 ## [3.18.4] — 2026-05-24 — Feature: Signaturen-Editor mit Bildern, Links, Schriftarten
 
 ### Added

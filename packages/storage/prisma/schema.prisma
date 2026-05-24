@@ -892,51 +892,7 @@ model PublicFolderMessage {
   @@map("public_folder_messages")
 }
 
-// ─────────────────────────────────────────────
-// Phase 8 — eDiscovery & Legal Hold
-// ─────────────────────────────────────────────
-
-enum EDiscoveryStatus {
-  DRAFT
-  RUNNING
-  COMPLETED
-  FAILED
-}
-
-model EDiscoverySearch {
-  id          String            @id @default(cuid())
-  name        String
-  description String            @default("")
-  status      EDiscoveryStatus  @default(DRAFT)
-  // query: { keywords?, senderAddresses?, recipientAddresses?, dateFrom?, dateTo?, hasAttachment? }
-  query       Json              @default("{}")
-  // empty = all mailboxes
-  mailboxIds  String[]
-  resultCount Int               @default(0)
-  exportPath  String?           // MinIO path to exported archive
-  createdBy   String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-
-  @@index([createdBy])
-  @@index([status])
-  @@map("ediscovery_searches")
-}
-
-model LegalHold {
-  id          String    @id @default(cuid())
-  name        String
-  description String    @default("")
-  // userIds under hold — messages cannot be permanently deleted
-  mailboxIds  String[]
-  active      Boolean   @default(true)
-  appliedBy   String    // userId of admin
-  appliedAt   DateTime  @default(now())
-  releasedAt  DateTime?
-
-  @@index([active])
-  @@map("legal_holds")
-}
+// (Phase 8 eDiscovery & Legal Hold — komplett entfernt in v3.18.5)
 
 // ─────────────────────────────────────────────
 // Phase 8 — Transport Rules
@@ -989,7 +945,7 @@ model SmimeSettings {
 
 enum RetentionAction {
   ARCHIVE        // Move to Archive folder
-  DELETE         // Permanently delete (unless under Legal Hold)
+  DELETE         // Permanently delete
   MOVE_TO_FOLDER // Move to a specified folder
 }
 
@@ -1011,8 +967,6 @@ model RetentionPolicy {
   action      RetentionAction       @default(ARCHIVE)
   targetFolder String?
   scope       RetentionScope        @default(ALL_ITEMS)
-  // If true, items under Legal Hold are skipped even if they match
-  respectLegalHold Boolean         @default(true)
   // ── Neu (Exchange-2019-konformes Tag-Modell) ──
   policyTags  RetentionPolicyTag[]
   assignments RetentionPolicyAssignment[]
