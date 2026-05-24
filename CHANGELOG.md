@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.1] — 2026-05-24 — Feature: Gmail-Style Compose-Window Redesign
+
+### Changed
+
+- **MWA Compose-Window komplett redesigned nach Gmail-Vorbild**
+  (`packages/web-client/src/components/ComposeWindow.tsx`):
+
+  **Window-Modi:**
+  - **Small** (Default, Floating 600×640 unten rechts) — Header per Drag mit Maus verschiebbar
+  - **Large** (Vollbild, zentriert, max 1100px, 90vh) — Toggle per Maximize-Button im Header
+  - **Minimized** (Streifen 288px unten rechts mit Subject)
+  - Smooth Transition `transition-[width,height,inset] duration-300 ease-out` zwischen Größen
+
+  **Footer-Toolbar (Gmail-Layout):**
+  - **Senden-Button mit Schedule-Dropdown** (▲): „Morgen früh", „Morgen nachmittags",
+    „Nächsten Montag" Presets + Custom datetime-local Picker — geplante Mails via
+    `scheduledAt`-FormData-Feld an `/mail/send`
+  - **Aa** Format-Toolbar-Toggle (ein/aus)
+  - **Paperclip** Anhang mit Badge (Anzahl Anhänge)
+  - **Link** (Insert/Edit Link)
+  - **Smile** Emoji-Picker (80 handpicked emojis, 10×8 Grid)
+  - **Image** Bild via URL einfügen
+  - **Lock** Confidential-Mode-Placeholder (Toast „kommt bald")
+  - **MoreVertical** Submenu: Vollbild-Toggle, Formatierung entfernen, Cc/Bcc toggle
+  - **Trash** Discard mit Confirmation
+  - **Draft-Status-Anzeige** rechts: „Speichern…" / „Entwurf gespeichert"
+
+  **UX-Features:**
+  - **Drag & Drop Files**: Drop-Overlay über gesamtem Compose-Fenster (Paperclip-Icon
+    + „Dateien hier ablegen zum Anhängen")
+  - **Tastatur-Shortcuts**: ⌘+Enter senden, ⌘+⇧+C Cc einblenden, ⌘+⇧+B Bcc, Esc schließen
+  - **Cc/Bcc** mit X-Button zum Ausblenden + Reset, fade-in-Animation beim Einblenden
+  - **Active-Scale-Animations** (active:scale-90) auf allen Buttons für taktiles Feedback
+  - **Dark-Mode** in allen Komponenten unterstützt (dark:bg/dark:border)
+  - **Header-Drag** im Small-Mode verschiebt Fenster auf dem Viewport (`transform: translate`)
+  - **Discard-Confirmation** nur bei nicht-leerem Inhalt (To/Cc/Bcc/Subject/Body/Attachments)
+
+  Bestehende Hilfskomponenten (RecipientInput, ColorPicker, BlockTypeDropdown,
+  FontFamilyDropdown, ToolBtn, Sep) bleiben unverändert — sie sind gut, nur das
+  Main-Layout wurde neu gebaut.
+
+---
+
 ## [3.18.0] — 2026-05-24 — Feature: Outlook-Style Inbox Rules
 
 ### Added
