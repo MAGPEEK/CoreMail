@@ -165,3 +165,29 @@
     animation: coremail-drop-pulse 1.2s ease-out infinite;
   }
 }
+
+/* ─── v3.18.21: Print-Layout für „Drucken"-Button im Kalender ──────────────
+   class wird in CalendarPage.handlePrint() temporär auf <html> gesetzt,
+   damit nur der FullCalendar-Bereich gedruckt wird (App-Chrome / Sidebar /
+   Toolbar / NavBar werden ausgeblendet). */
+@media print {
+  .coremail-printing {
+    background: white !important;
+    color: black !important;
+  }
+  .coremail-printing aside,
+  .coremail-printing nav,
+  .coremail-printing header,
+  .coremail-printing .coremail-no-print,
+  .coremail-printing [data-coremail-toolbar] {
+    display: none !important;
+  }
+  .coremail-printing .fc {
+    page-break-inside: avoid;
+    color: black !important;
+  }
+  .coremail-printing .fc-event {
+    border: 1px solid #888 !important;
+  }
+}
+

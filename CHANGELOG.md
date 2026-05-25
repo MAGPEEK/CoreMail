@@ -13,6 +13,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.21] — 2026-05-25 — Calendar-Toolbar Filter + Drucken funktionsfähig
+
+### Fixed
+
+- **Filter-Button hatte keine Funktion**
+  (`packages/web-client/src/components/CalendarToolbar.tsx`,
+  `packages/web-client/src/pages/CalendarPage.tsx`):
+  Dropdown öffnete sich zwar mit Toggle-Checkboxen, aber der State war
+  rein lokal in der Toolbar — wurde nie an CalendarPage weitergegeben.
+  Außerdem waren die alten Outlook-Begriffe („Besprechungen",
+  „Kategorien", „Anzeigen als") bedeutungslos für CoreMail.
+  **Fix**: Filter-Set auf 5 realistische, tatsächlich-mapbare Optionen
+  reduziert: Wiederholende Termine (rrule), Aufgaben, Private Termine
+  (classification=PRIVATE), Vertrauliche Termine (CONFIDENTIAL für Owner),
+  Geteilte Kalender (shared=true). State zu CalendarPage gelifted
+  (controlled component). `fcEvents` werden jetzt tatsächlich gefiltert.
+
+- **„Drucken" druckte die komplette Seite mit Sidebar + Toolbar**
+  (`packages/web-client/src/pages/CalendarPage.tsx`,
+  `packages/web-client/src/index.css`):
+  Vorher: simples `window.print()` ohne Print-CSS — Sidebar, Toolbar,
+  App-Chrome alles auf dem Druck. **Fix**: vor `window.print()` wird
+  `coremail-printing`-Class auf `<html>` gesetzt; neuer `@media print`-
+  Block in `index.css` blendet `aside`, `nav`, `header` und alle
+  `[data-coremail-toolbar]`-Elemente aus. Nach Print-Dialog wird die
+  Class via Timeout (500ms) wieder entfernt. Events bekommen Print-
+  geeignete Border (1px solid #888) damit sie auf Papier sichtbar bleiben.
+
+---
+
 ## [3.18.20] — 2026-05-25 — Dark-Mode-Patches (LoginPage + SettingsPage)
 
 ### Changed
