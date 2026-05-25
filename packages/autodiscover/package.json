@@ -1,6 +1,6 @@
 {
   "name": "@coremail/autodiscover",
-  "version": "3.18.25",
+  "version": "3.18.26",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

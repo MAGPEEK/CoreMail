@@ -2,10 +2,10 @@ import express from 'express';
 import { z } from 'zod';
 import { connectDatabase } from '@coremail/storage';
 import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core';
-import { runUserBackup, runFullBackup, startBackupScheduler } from './scheduler/index.js';
+import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler } from './scheduler/index.js';
 import { runRetentionPolicies } from './retention/worker.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
-import { listBackups } from './upload/s3.js';
+import { listBackups, ensureBackupBucket } from './upload/s3.js';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
@@ -87,9 +87,149 @@ app.post('/backup/user/restore/:messageId', requireAuth, async (req, res) => {
 // ─── Admin backup ────────────────────────────────────────────────────────────
 
 // POST /backup/admin/full — trigger immediate full backup
+// v3.18.26: liefert Job-ID damit Frontend sofort den RUNNING-Job sehen kann
 app.post('/backup/admin/full', requireAdmin, async (_req, res) => {
-  res.status(202).json({ message: 'Full backup started' });
-  runFullBackup().catch((err) => log.error({ err }, 'Manual full backup failed'));
+  try {
+    const { jobId } = await runFullBackup({ triggeredBy: 'MANUAL' });
+    res.status(202).json({ message: 'Full backup started', jobId });
+  } catch (err) {
+    log.error({ err }, 'Manual full backup failed to start');
+    res.status(500).json({ error: 'Failed to start backup', detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.26 — POST /backup/admin/mailbox/:userId — single-mailbox backup
+app.post('/backup/admin/mailbox/:userId', requireAdmin, async (req, res) => {
+  const { userId } = req.params as { userId: string };
+  const format = ((req.body as { format?: string })?.format ?? 'zip') as 'mbox' | 'zip';
+  if (format !== 'mbox' && format !== 'zip') {
+    res.status(400).json({ error: 'format must be mbox or zip' });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  try {
+    const { jobId } = await runSingleMailboxBackup({ userId, format, triggeredBy: 'MANUAL' });
+    res.status(202).json({ message: 'Mailbox backup started', jobId, userEmail: user.email });
+  } catch (err) {
+    log.error({ err, userId }, 'Manual mailbox backup failed to start');
+    res.status(500).json({ error: 'Failed to start backup', detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.26 — Backup-Schedules CRUD (DB-getrieben statt Env-Variable)
+
+// GET /backup/admin/schedules — Alle Schedules listen
+app.get('/backup/admin/schedules', requireAdmin, async (_req, res) => {
+  const schedules = await prisma.backupSchedule.findMany({
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(schedules);
+});
+
+// POST /backup/admin/schedules — Neue Schedule anlegen
+app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
+  const body = req.body as {
+    name?: string; cron?: string; scope?: string; format?: string;
+    targetUserId?: string; retentionDays?: number; enabled?: boolean;
+  };
+  if (!body.name || !body.cron) {
+    res.status(400).json({ error: 'name and cron required' });
+    return;
+  }
+  // Cron-Validierung: einfacher Smoke-Test via CronJob-Konstruktor
+  try {
+    const { CronJob } = await import('cron');
+    new CronJob(body.cron, () => undefined, null, false, 'UTC');
+  } catch {
+    res.status(400).json({ error: 'Invalid cron expression' });
+    return;
+  }
+  const actorId = (req as express.Request & { userId: string }).userId;
+  const created = await prisma.backupSchedule.create({
+    data: {
+      name: body.name,
+      cron: body.cron,
+      scope: body.scope ?? 'full',
+      format: body.format ?? 'zip',
+      ...(body.targetUserId ? { targetUserId: body.targetUserId } : {}),
+      retentionDays: body.retentionDays ?? 30,
+      enabled: body.enabled !== false,
+      createdBy: actorId,
+    },
+  });
+  res.status(201).json(created);
+});
+
+// PUT /backup/admin/schedules/:id — Schedule bearbeiten
+app.put('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as {
+    name?: string; cron?: string; scope?: string; format?: string;
+    targetUserId?: string | null; retentionDays?: number; enabled?: boolean;
+  };
+  if (body.cron) {
+    try {
+      const { CronJob } = await import('cron');
+      new CronJob(body.cron, () => undefined, null, false, 'UTC');
+    } catch {
+      res.status(400).json({ error: 'Invalid cron expression' });
+      return;
+    }
+  }
+  const updates: Record<string, unknown> = {};
+  if (body.name !== undefined)         updates['name'] = body.name;
+  if (body.cron !== undefined)         updates['cron'] = body.cron;
+  if (body.scope !== undefined)        updates['scope'] = body.scope;
+  if (body.format !== undefined)       updates['format'] = body.format;
+  if (body.targetUserId !== undefined) updates['targetUserId'] = body.targetUserId;
+  if (body.retentionDays !== undefined) updates['retentionDays'] = body.retentionDays;
+  if (body.enabled !== undefined)      updates['enabled'] = body.enabled;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updated = await prisma.backupSchedule.update({ where: { id }, data: updates as any });
+  res.json(updated);
+});
+
+// DELETE /backup/admin/schedules/:id
+app.delete('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params as { id: string };
+  await prisma.backupSchedule.delete({ where: { id } }).catch(() => undefined);
+  res.json({ ok: true });
+});
+
+// POST /backup/admin/schedules/:id/run-now — Schedule manuell triggern
+app.post('/backup/admin/schedules/:id/run-now', requireAdmin, async (req, res) => {
+  const { id } = req.params as { id: string };
+  const schedule = await prisma.backupSchedule.findUnique({ where: { id } });
+  if (!schedule) { res.status(404).json({ error: 'Schedule not found' }); return; }
+  try {
+    if (schedule.scope === 'full') {
+      const { jobId } = await runFullBackup({ triggeredBy: 'MANUAL', scheduleId: id });
+      res.json({ message: 'Triggered', jobId });
+    } else if (schedule.scope === 'user' && schedule.targetUserId) {
+      const { jobId } = await runSingleMailboxBackup({
+        userId: schedule.targetUserId,
+        format: schedule.format === 'mbox' ? 'mbox' : 'zip',
+        triggeredBy: 'MANUAL',
+        scheduleId: id,
+      });
+      res.json({ message: 'Triggered', jobId });
+    } else {
+      res.status(400).json({ error: 'Schedule has invalid scope/targetUserId combination' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to trigger' });
+  }
+});
+
+// GET /backup/admin/users — Liste aller User für Mailbox-Backup-Picker
+app.get('/backup/admin/users', requireAdmin, async (_req, res) => {
+  const users = await prisma.user.findMany({
+    where: { active: true },
+    select: { id: true, email: true, displayName: true },
+    orderBy: { email: 'asc' },
+  });
+  res.json(users);
 });
 
 // GET /backup/admin/list — list all backups in S3
@@ -153,6 +293,10 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
 async function start() {
   await connectDatabase();
   getRedisClient();
+
+  // v3.18.26 Bugfix: Backup-Bucket idempotent erstellen — sonst crasht
+  // listBackups() bei jedem ersten Start mit NoSuchBucket.
+  await ensureBackupBucket();
 
   startBackupScheduler();
 

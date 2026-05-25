@@ -13,6 +13,85 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.26] — 2026-05-25 — Backup-Bugfixes + Per-Mailbox + Scheduling + Status-Log
+
+### Fixed
+
+- **Vollbackup-Button und Refresh-Button funktionierten nicht**
+  (`packages/backup-service/src/upload/s3.ts`,
+  `packages/backup-service/src/server.ts`):
+  Root Cause: backup-service crashte beim ersten Aufruf von
+  `listBackups()` weil der MinIO-Bucket `coremail-backups` nicht
+  existierte (`NoSuchBucket` Error). supervisord startete den Container
+  alle paar Minuten neu — vom User aus gesehen reagierten Buttons nicht.
+  **Fix**: `ensureBackupBucket()` läuft beim Service-Start und legt den
+  Bucket idempotent an (HeadBucket → CreateBucket bei 404). `listBackups()`
+  zusätzlich fail-safe: bei NoSuchBucket Bucket erstellen + leere Liste
+  liefern statt zu crashen.
+
+### Added
+
+- **Per-Mailbox-Backup**
+  (`packages/backup-service/src/scheduler/index.ts`,
+  `packages/backup-service/src/server.ts`,
+  `packages/admin-panel/src/pages/BackupsPage.tsx`):
+  Neuer Endpoint `POST /admin/backups/mailbox/:userId` mit Body
+  `{ format: "zip" | "mbox" }`. Frontend: User-Picker (Dropdown aller
+  aktiven User) + Format-Auswahl + „Mailbox sichern"-Button. Snapshot
+  landet in MinIO unter `mailbox/{userId}/{timestamp}.{format}`.
+
+- **Backup-Zeitpläne (Cron) in DB statt Env-Variable**
+  (`packages/storage/prisma/schema.prisma` — neues Modell `BackupSchedule`,
+  `packages/backup-service/src/scheduler/index.ts`):
+  Admin kann Cron-Expressions im BCP verwalten — kein Container-Restart
+  nötig. Scheduler liest alle 60s aus DB und synchronisiert aktive
+  CronJobs. Felder: `name`, `cron`, `enabled`, `scope` (full/user),
+  `format`, `targetUserId`, `retentionDays`, `lastRunAt`, `lastStatus`.
+  Frontend mit Cron-Presets (täglich/wöchentlich/stündlich/alle 6h/
+  monatlich), Run-Now-Button pro Schedule, Edit/Delete-Buttons.
+
+- **Erweiterte Status-Log-Felder im BackupJob-Modell** (Research: siehe
+  `coremail/research/imip-itip.md` und RTO/RPO-Recherche):
+  - `startedAt`, `durationMs` — für RTO-Messung
+  - `sizeBytes`, `messageCount` — Backup-Volumetrie
+  - `errorClass` (NETWORK/STORAGE/PERMISSION/CORRUPT/UNKNOWN) +
+    `errorMessage` — strukturiertes Error-Reporting
+  - `retryCount`, `triggeredBy` (CRON/MANUAL/EVENT/RESTORE/API)
+  - `progressMeta` (JSONB) für Live-Phase „Reading mailbox X (3/12)"
+  - `scheduleId` — Verweis auf BackupSchedule wenn aus Cron getriggert
+
+- **Erweiterte `JobStatus`-Enum-Werte** für vollständigen Backup-
+  Lifecycle: `SCHEDULED`, `RUNNING`, `RETRYING`, `ABORTED`, `EXPIRED`
+  zusätzlich zu den bisherigen `PENDING|PROCESSING|COMPLETED|FAILED`.
+
+### Changed
+
+- **`POST /backup/admin/full`** liefert jetzt sofort die Master-Job-ID
+  zurück (`202 { jobId }`) statt Fire-and-Forget. Frontend kann sofort
+  den RUNNING-Job in der Tabelle anzeigen.
+- **`runFullBackup()`** erstellt jetzt einen Master-Job mit `progress`-
+  Tracking statt nur per-User-Jobs ohne Übersicht. UI zeigt Progress-Bar
+  „X/Y User exportiert" während des Laufs.
+- **Refresh-Button** mit Toast-Feedback („Aktualisiert") damit User
+  visuell Bestätigung bekommt.
+
+### Removed / Explicitly Not Supported
+
+- **PST-Format** wird bewusst nicht unterstützt. Begründung im Frontend-
+  Banner: PST ist proprietäres Microsoft-Binärformat, alle verfügbaren
+  Open-Source-Libs (libpff, node-pst-extractor) sind read-only. Stattdessen
+  ZIP mit .eml-Dateien — Outlook akzeptiert das per Drag&Drop nativ.
+
+### Schema
+
+- Neues Modell `BackupSchedule` (Cron-Verwaltung in DB).
+- `BackupJob` erweitert um 10 neue Spalten (`startedAt`, `durationMs`,
+  `sizeBytes`, `messageCount`, `errorClass`, `retryCount`, `triggeredBy`,
+  `progressMeta`, `scheduleId`).
+- `JobStatus`-Enum erweitert um 5 Werte.
+
+---
+
 ## [3.18.25] — 2026-05-25 — Calendar-Invitations (iMIP/iTIP, A5)
 
 ### Added
