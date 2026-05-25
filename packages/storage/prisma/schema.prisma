@@ -939,48 +939,7 @@ model ResourceBooking {
   @@map("resource_bookings")
 }
 
-// ─────────────────────────────────────────────
-// Phase 7 — Public Folders
-// ─────────────────────────────────────────────
-
-model PublicFolder {
-  id          String                @id @default(cuid())
-  name        String
-  displayName String
-  description String                @default("")
-  parent      PublicFolder?         @relation("PublicFolderTree", fields: [parentId], references: [id])
-  parentId    String?
-  children    PublicFolder[]        @relation("PublicFolderTree")
-  messages    PublicFolderMessage[]
-  // ACL: [{userId: string, permission: "READ"|"WRITE"|"FULL"}]
-  acl         Json                  @default("[]")
-  totalCount  Int                   @default(0)
-  // Mail-Enabled: wenn email gesetzt → SMTP-Empfang in den Ordner möglich
-  email       String?               @unique
-  createdBy   String?
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
-
-  @@map("public_folders")
-}
-
-model PublicFolderMessage {
-  id          String       @id @default(cuid())
-  folder      PublicFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
-  folderId    String
-  subject     String       @default("")
-  fromAddr    String
-  fromName    String       @default("")
-  bodyText    String       @default("")
-  bodyHtml    String       @default("")
-  date        DateTime
-  attachments Json         @default("[]")
-  createdAt   DateTime     @default(now())
-
-  @@index([folderId, date])
-  @@map("public_folder_messages")
-}
-
+// (Phase 7 Public Folders — komplett entfernt in v3.18.31)
 // (Phase 8 eDiscovery & Legal Hold — komplett entfernt in v3.18.5)
 
 // ─────────────────────────────────────────────

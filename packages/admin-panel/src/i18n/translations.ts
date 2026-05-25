@@ -26,7 +26,6 @@ const de = {
   nav_groups:             'Verteilergruppen',
   nav_resources:          'Ressourcen',
   nav_ext_contacts:       'Ext. Kontakte',
-  nav_public_folders:     'Öffentl. Ordner',
   nav_domains:            'Domains',
 
   // ── Navigation — Nachrichtenfluss ────────────────────────────────────────
@@ -777,7 +776,6 @@ const en: { [K in keyof DE]: string } = {
   nav_groups:             'Distribution Groups',
   nav_resources:          'Resources',
   nav_ext_contacts:       'Ext. Contacts',
-  nav_public_folders:     'Public Folders',
   nav_domains:            'Domains',
 
   // ── Navigation — Nachrichtenfluss ────────────────────────────────────────

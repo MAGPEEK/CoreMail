@@ -4,7 +4,7 @@ import {
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Users,
   BookUser, ShieldHalf, Archive,
-  FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal,
+  KeyRound, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
@@ -25,7 +25,6 @@ export function Sidebar() {
         { path: '/shared-mailboxes', labelKey: 'nav_shared_mailboxes', icon: Inbox },
         { path: '/groups',           labelKey: 'nav_groups',           icon: Users },
         { path: '/ext-contacts',     labelKey: 'nav_ext_contacts',     icon: BookUser },
-        { path: '/public-folders',   labelKey: 'nav_public_folders',   icon: FolderOpen },
         { path: '/domains',          labelKey: 'nav_domains',          icon: Globe },
       ],
     },
