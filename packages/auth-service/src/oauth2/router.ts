@@ -297,17 +297,25 @@ oauth2Router.get('/authorize', async (req: Request, res: Response) => {
  *
  * Intern: Wird von OWA nach erfolgreicher Benutzerauthentifizierung aufgerufen.
  * Stellt den Authorization Code aus und gibt die Redirect-URL zurück.
- * Für nicht-trusted Clients wird Consent geprüft / gespeichert.
+ * Für nicht-trusted Clients wird Consent geprüft.
+ *
+ * v3.18.22 D1: KEIN Auto-Grant mehr! Wenn Consent fehlt oder neue Scopes
+ * benötigt werden, liefert die Antwort `{ requiresConsent: true, client,
+ * requestedScopes, alreadyGrantedScopes }`. Frontend muss dann den User
+ * über die ConsentPage führen und nach Grant erneut diesen Endpoint mit
+ * `consentConfirmed: true` aufrufen.
  */
 oauth2Router.post('/authorize/complete', async (req: Request, res: Response) => {
   const {
     userId, clientId, redirectUri, scope, state,
     codeChallenge, codeChallengeMethod, nonce,
+    consentConfirmed,
   } = req.body as {
     userId?: string; clientId?: string; redirectUri?: string;
     scope?: string; state?: string;
     codeChallenge?: string; codeChallengeMethod?: string;
     nonce?: string;
+    consentConfirmed?: boolean;
   };
 
   if (!userId || !clientId || !redirectUri) {
@@ -318,19 +326,37 @@ oauth2Router.post('/authorize/complete', async (req: Request, res: Response) => 
   const client = await prisma.oAuthClient.findUnique({ where: { clientId } });
   if (!client?.active) { res.status(401).json({ error: 'invalid_client' }); return; }
 
+  const requestedScopes = (scope ?? '').split(' ').filter(Boolean);
+
   // Consent-Prüfung für nicht-trusted Clients
   if (!client.trusted) {
-    const requestedScopes = (scope ?? '').split(' ').filter(Boolean);
     const existing = await prisma.oAuthConsent.findUnique({
       where: { userId_clientId: { userId, clientId: client.id } },
     });
 
     const grantedScopes = existing?.scopes ?? [];
     const newScopes     = requestedScopes.filter((s) => !grantedScopes.includes(s));
+    const consentMissing = !existing || newScopes.length > 0;
 
-    if (!existing || newScopes.length > 0) {
-      // Consent noch nicht erteilt oder neue Scopes benötigt
-      // → Consent speichern (auto-grant beim ersten Mal; für echte UI-Consent: pending status einbauen)
+    if (consentMissing) {
+      // v3.18.22: Statt Auto-Grant → Frontend muss User durch Consent-Page führen.
+      // Nach Bestätigung kommt der zweite Call mit `consentConfirmed: true`.
+      if (!consentConfirmed) {
+        res.status(200).json({
+          requiresConsent: true,
+          client: {
+            clientId:    client.clientId,
+            name:        client.name,
+            description: client.description,
+            trusted:     false,
+          },
+          requestedScopes,
+          alreadyGrantedScopes: grantedScopes,
+          newScopes,
+        });
+        return;
+      }
+      // consentConfirmed=true → Consent in DB persistieren
       await prisma.oAuthConsent.upsert({
         where: { userId_clientId: { userId, clientId: client.id } },
         create: { userId, clientId: client.id, scopes: requestedScopes },

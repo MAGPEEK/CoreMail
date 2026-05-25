@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.21`
+**Aktuelle Version**: `3.18.22`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.21; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.22; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.21 — Highlights
+## Aktuelle Version 3.18.22 — Highlights
+
+**v3.18.22** — Security: OAuth2-Consent-UI (D1). Backend `/oauth2/authorize/complete` granted vorher Consent blind beim ersten Aufruf eines nicht-trusted Clients — User hatten keine Chance, eine Drittanbieter-App vor dem Zugriff zu sehen/ablehnen. Jetzt: Backend liefert `requiresConsent: true` mit Client-Info + Scope-Liste statt direkt Code auszustellen. Neue `OAuthConsentPage` zeigt Client-Name, Scopes mit deutschen Labels (z.B. mail.send → „E-Mails senden in deinem Namen"), Allow/Deny-Buttons. „Erlauben" → zweiter Call mit `consentConfirmed: true` → Code + Redirect. „Ablehnen" → RFC-6749-konformer `error=access_denied` zurück an Client. LoginPage parst `?oauth2=1` aus URL und navigiert nach Login zur ConsentPage statt zu `/mail`. Neue Route `/oauth-consent` mit AuthGuard ohne Layout-Wrapper.
 
 **v3.18.21** — Calendar-Toolbar Filter + Drucken funktionsfähig. (1) Filter-Button öffnete vorher nur ein Dropdown ohne tatsächliche Wirkung — State war lokal in Toolbar. Außerdem Outlook-Begriffe (Besprechungen, Kategorien) bedeutungslos. Reduziert auf 5 realistische Optionen die auf CalendarEvent-Felder mappen: Wiederholende Termine, Aufgaben, Private/Vertrauliche Termine, Geteilte Kalender. State zu CalendarPage lifted, `fcEvents.filter()` wendet sie an. (2) „Drucken" druckte komplette Seite mit Sidebar/Toolbar. Fix: `coremail-printing`-Class auf `<html>` + `@media print`-Block in `index.css` blendet `aside/nav/header` aus, Events bekommen Print-Border.
 
@@ -727,4 +729,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.21 — Calendar-Filter+Drucken; v3.18.20 — Dark-Mode-Patches; v3.18.19 — Forced 2FA für Admins)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.22 — OAuth2-Consent-UI; v3.18.21 — Calendar-Filter+Drucken; v3.18.20 — Dark-Mode-Patches)*

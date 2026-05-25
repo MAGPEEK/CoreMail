@@ -106,6 +106,16 @@ export function LoginPage() {
     setTokens(accessToken, refreshToken);
     const profile = await api.get<UserProfile>('/user/profile');
     setProfile(profile.id, profile.email, profile.displayName, profile.role);
+
+    // v3.18.22 D1: OAuth2-Flow erkennen — wenn LoginPage mit ?oauth2=1&client_id=... aufgerufen
+    // wurde, leiten wir nach erfolgreichem Login auf die ConsentPage (nicht auf /mail).
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('oauth2') === '1' && params.get('client_id')) {
+      // Alle OAuth-Parameter werden via Query-String an /oauth-consent weitergegeben.
+      navigate(`/oauth-consent?${params.toString()}`);
+      return;
+    }
+
     navigate('/mail');
   };
 
