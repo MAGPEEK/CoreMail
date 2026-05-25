@@ -97,6 +97,23 @@ export interface Calendar {
   icon?: string | null;
   sortOrder?: number;
   isDefault?: boolean;
+  // v3.18.14 Calendar Sharing
+  shared?: boolean;
+  ownerId?: string;
+  ownerDisplayName?: string | null;
+  ownerEmail?: string | null;
+  permission?: 'OWNER' | 'READ' | 'WRITE';
+}
+
+export interface CalendarShare {
+  id: string;
+  calendarId: string;
+  granteeId: string;
+  granteeEmail: string;
+  granteeDisplayName: string;
+  permission: 'READ' | 'WRITE';
+  comment?: string;
+  createdAt: string;
 }
 
 export interface CalendarEvent {

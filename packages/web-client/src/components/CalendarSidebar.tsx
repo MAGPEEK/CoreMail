@@ -22,6 +22,7 @@ import { useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
 import { MiniCalendar } from './MiniCalendar.js';
+import { ShareCalendarDialog } from './ShareCalendarDialog.js';
 
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
 export const ICON_MAP: Record<string, React.ElementType> = {
@@ -61,6 +62,7 @@ interface MenuState {
 type DialogState =
   | { kind: 'create' }
   | { kind: 'rename'; cal: Calendar }
+  | { kind: 'share'; cal: Calendar }
   | null;
 
 export function CalendarSidebar({
@@ -76,7 +78,8 @@ export function CalendarSidebar({
   const { hiddenCalendarIds, toggleCalendar, showOnlyCalendar } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [expanded, setExpanded] = useState(true);
+  const [expandedOwned, setExpandedOwned] = useState(true);
+  const [expandedShared, setExpandedShared] = useState(true);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['calendars'] });
@@ -108,36 +111,64 @@ export function CalendarSidebar({
     onSuccess: () => invalidate(),
   });
 
-  const sorted = useMemo(
-    () => [...calendars].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+  // Geteilt-mit-mir-Share entfernen (Grantee-Selfremoval)
+  const removeSharedAccess = useMutation({
+    mutationFn: async (cal: Calendar) => {
+      if (!cal.shared || !cal.id) return;
+      // Owner-Wissen reicht nicht — wir haben keine shareId. Stattdessen die
+      // GET /:id/shares Route umgehen wir und löschen über den dedizierten Endpoint
+      // nicht möglich für Grantees ohne shareId. Daher: simpler Pfad — wir nutzen
+      // den DELETE-Endpoint mit shareId-Lookup via Backend-Convenience.
+      // FIX: Backend muss DELETE auf granteeId akzeptieren — wir ergänzen einen
+      // Convenience-Endpoint, oder Grantee fragt zuerst seine Share-ID ab.
+      // Pragmatisch für v3.18.14: über `/calendar-shares/mine?calendarId=` listen.
+      const list = await api.get<{ id: string; calendarId: string }[]>(
+        `/calendar/mine-shares?calendarId=${encodeURIComponent(cal.id)}`,
+      ).catch(() => [] as { id: string; calendarId: string }[]);
+      const mine = list.find((s) => s.calendarId === cal.id);
+      if (!mine) throw new Error('Freigabe nicht gefunden');
+      await api.delete(`/calendar/${cal.id}/shares/${mine.id}`);
+    },
+    onSuccess: () => { invalidate(); toast.success('Aus Liste entfernt'); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Eigene vs. geteilte Kalender aufsplitten
+  const ownedCalendars = useMemo(
+    () => calendars.filter((c) => !c.shared).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+    [calendars],
+  );
+  const sharedCalendars = useMemo(
+    () => calendars.filter((c) => c.shared).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '')),
     [calendars],
   );
 
   const moveCalendar = (id: string, dir: -1 | 1) => {
-    const idx = sorted.findIndex((c) => c.id === id);
+    const idx = ownedCalendars.findIndex((c) => c.id === id);
     const swap = idx + dir;
-    if (idx < 0 || swap < 0 || swap >= sorted.length) return;
-    const next = [...sorted];
+    if (idx < 0 || swap < 0 || swap >= ownedCalendars.length) return;
+    const next = [...ownedCalendars];
     [next[idx]!, next[swap]!] = [next[swap]!, next[idx]!];
     reorderCal.mutate(next.map((c) => c.id));
   };
 
-  const buildMenu = (cal: Calendar): ContextMenuItem[] => {
-    const allIds = sorted.map((c) => c.id);
-    const idx = sorted.findIndex((c) => c.id === cal.id);
+  // Kontextmenü für eigene Kalender
+  const buildOwnedMenu = (cal: Calendar): ContextMenuItem[] => {
+    const allIds = calendars.map((c) => c.id);
+    const idx = ownedCalendars.findIndex((c) => c.id === cal.id);
     const isHidden = hiddenCalendarIds.includes(cal.id);
     return [
       {
         label: 'Nur dies anzeigen',
         icon: <Eye size={14} />,
-        disabled: !isHidden && hiddenCalendarIds.length === sorted.length - 1,
+        disabled: !isHidden && hiddenCalendarIds.length === calendars.length - 1,
         onClick: () => showOnlyCalendar(cal.id, allIds),
       },
       { type: 'divider' },
       {
         label: 'Teilen und Berechtigungen',
         icon: <Share2 size={14} />,
-        onClick: () => toast('Bald verfügbar', { icon: 'ℹ️' }),
+        onClick: () => setDialog({ kind: 'share', cal }),
       },
       {
         label: 'Farbe',
@@ -187,7 +218,7 @@ export function CalendarSidebar({
       {
         label: 'Nach unten',
         icon: <ArrowDown size={14} />,
-        disabled: idx === sorted.length - 1,
+        disabled: idx === ownedCalendars.length - 1,
         onClick: () => moveCalendar(cal.id, 1),
       },
       { type: 'divider' },
@@ -210,6 +241,85 @@ export function CalendarSidebar({
     ];
   };
 
+  // Kontextmenü für geteilte Kalender (Grantee-Sicht)
+  const buildSharedMenu = (cal: Calendar): ContextMenuItem[] => {
+    const allIds = calendars.map((c) => c.id);
+    const isHidden = hiddenCalendarIds.includes(cal.id);
+    return [
+      {
+        label: 'Nur dies anzeigen',
+        icon: <Eye size={14} />,
+        disabled: !isHidden && hiddenCalendarIds.length === calendars.length - 1,
+        onClick: () => showOnlyCalendar(cal.id, allIds),
+      },
+      { type: 'divider' },
+      {
+        label: 'Aus meiner Liste entfernen',
+        icon: <Trash2 size={14} />,
+        danger: true,
+        onClick: () => {
+          if (window.confirm(`„${cal.name}" wirklich aus deiner Liste entfernen? Der Owner kann dich erneut einladen.`)) {
+            removeSharedAccess.mutate(cal);
+          }
+        },
+      },
+    ];
+  };
+
+  const renderCalendarRow = (cal: Calendar, isShared: boolean) => {
+    const isHidden = hiddenCalendarIds.includes(cal.id);
+    const Icon = cal.icon ? ICON_MAP[cal.icon] : null;
+    return (
+      <div
+        key={cal.id}
+        className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+      >
+        {/* Checkbox / Farbkreis */}
+        <button
+          onClick={() => toggleCalendar(cal.id)}
+          className="shrink-0 w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all duration-150 active:scale-90"
+          style={{
+            borderColor: cal.color,
+            backgroundColor: isHidden ? 'transparent' : cal.color,
+          }}
+          aria-label={isHidden ? 'Kalender anzeigen' : 'Kalender ausblenden'}
+        >
+          {!isHidden && <span className="text-[10px] text-white leading-none">✓</span>}
+        </button>
+
+        {isShared
+          ? <Share2 size={12} style={{ color: cal.color }} className="shrink-0 opacity-70" />
+          : Icon && <Icon size={14} style={{ color: cal.color }} className="shrink-0" />
+        }
+
+        <div className="flex-1 min-w-0">
+          <span className="block text-sm text-gray-700 dark:text-gray-200 truncate">{cal.name}</span>
+          {isShared && (
+            <span className="block text-[10px] text-gray-500 dark:text-gray-400 truncate">
+              {cal.permission === 'WRITE' ? 'R/W' : 'R'} · {cal.ownerDisplayName ?? cal.ownerEmail ?? '?'}
+            </span>
+          )}
+        </div>
+
+        {/* 3-Punkte-Menü */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenu({
+              x: r.left, y: r.bottom,
+              items: isShared ? buildSharedMenu(cal) : buildOwnedMenu(cal),
+            });
+          }}
+          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition-all duration-150 active:scale-90"
+          aria-label="Optionen"
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <aside className="w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col">
       {/* Mini-Kalender oben */}
@@ -228,54 +338,30 @@ export function CalendarSidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto px-1 pb-3">
+        {/* Eigene Kalender */}
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => setExpandedOwned(!expandedOwned)}
           className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
         >
-          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {expandedOwned ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           Meine Kalender
         </button>
 
-        {expanded && sorted.map((cal) => {
-          const isHidden = hiddenCalendarIds.includes(cal.id);
-          const Icon = cal.icon ? ICON_MAP[cal.icon] : null;
-          return (
-            <div
-              key={cal.id}
-              className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        {expandedOwned && ownedCalendars.map((cal) => renderCalendarRow(cal, false))}
+
+        {/* Geteilt mit mir */}
+        {sharedCalendars.length > 0 && (
+          <>
+            <button
+              onClick={() => setExpandedShared(!expandedShared)}
+              className="w-full flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
             >
-              {/* Checkbox / Farbkreis */}
-              <button
-                onClick={() => toggleCalendar(cal.id)}
-                className="shrink-0 w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all duration-150 active:scale-90"
-                style={{
-                  borderColor: cal.color,
-                  backgroundColor: isHidden ? 'transparent' : cal.color,
-                }}
-                aria-label={isHidden ? 'Kalender anzeigen' : 'Kalender ausblenden'}
-              >
-                {!isHidden && <span className="text-[10px] text-white leading-none">✓</span>}
-              </button>
-
-              {Icon && <Icon size={14} style={{ color: cal.color }} className="shrink-0" />}
-
-              <span className="flex-1 text-sm text-gray-700 dark:text-gray-200 truncate">{cal.name}</span>
-
-              {/* 3-Punkte-Menü */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  setMenu({ x: r.left, y: r.bottom, items: buildMenu(cal) });
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition-all duration-150 active:scale-90"
-                aria-label="Optionen"
-              >
-                <MoreHorizontal size={14} />
-              </button>
-            </div>
-          );
-        })}
+              {expandedShared ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              Geteilt mit mir
+            </button>
+            {expandedShared && sharedCalendars.map((cal) => renderCalendarRow(cal, true))}
+          </>
+        )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
@@ -306,6 +392,13 @@ export function CalendarSidebar({
             await patchCal.mutateAsync({ id: dialog.cal.id, body: { name } });
             setDialog(null);
           }}
+        />
+      )}
+
+      {dialog?.kind === 'share' && (
+        <ShareCalendarDialog
+          calendar={dialog.cal}
+          onClose={() => setDialog(null)}
         />
       )}
     </aside>

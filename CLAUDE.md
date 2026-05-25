@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.13`
+**Aktuelle Version**: `3.18.14`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.13; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.14; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.13 — Highlights
+## Aktuelle Version 3.18.14 — Highlights
+
+**v3.18.14** — Neues Feature: Kalender teilen und berechtigen. User können eigene Kalender intern an andere User mit READ oder READ+WRITE-Permission freigeben. Geteilte Kalender erscheinen beim Empfänger in neuer Sidebar-Sektion „Geteilt mit mir" mit Share-Icon + Permission-Badge + Owner-Name. **Schema**: neues Model `CalendarShare` + Enum `CalendarPermType` (READ/WRITE), `Calendar.acl` als `@deprecated` markiert. **Backend**: zentraler Helper `canAccessCalendar()` + `listAccessibleCalendars()` in `packages/api-gateway/src/lib/calendar-access.ts`, REST-Endpoints `GET/POST/PUT/DELETE /calendar/:id/shares` + `GET /calendar/mine-shares`, Event-Routen prüfen jetzt durchgängig READ/WRITE-Permission. Owner sind immer OWNER. Self-Share verboten. **CalDAV**: Grantees sehen geteilte Kalender in `calendar-home-set` (Prefix `[Geteilt]`), PROPFIND/REPORT/GET erlaubt, PUT/DELETE bleiben in v3.18.14 OWNER-only. `<DAV:current-user-privilege-set>` korrekt gesetzt. **Frontend**: `ShareCalendarDialog` mit Benutzer-Autocomplete (reuse `/contacts?q=`, gefiltert auf User-Treffer, Keyboard-Nav), Permission-Select, Liste bestehender Freigaben mit Toggle + Delete. CalendarPage rendert READ-only Events als nicht editierbar, Neuer-Termin-Dropdown listet nur Schreib-Kalender. TanStack Query mit `staleTime: 30s` + `refetchInterval: 60s` für Live-Sync von Widerrufen. **v3.18.15 (folgt)**: volle CalDAV-WRITE via RFC-3744-DAV-ACL.
 
 **v3.18.13** — Zwei Fixes. (1) BCP ExternalContactsPage: Vorname/Nachname-Eingaben aus dem Modal entfernt — nur noch das Pflichtfeld „Anzeigename". Backend-Felder firstName/lastName bleiben mit Default-`""` in der DB erhalten (kein Schema-Bruch). (2) MWA GAL-Cache Live-Sync: neu in BCP angelegte ExternalContacts/DistributionGroups waren bisher erst nach Reload sichtbar (30s Cache). Fix: `staleTime:0` + `refetchOnMount:true` + `refetchOnWindowFocus:true` + `refetchInterval:60_000` für `/contacts/gal`-Query, plus expliziter Refresh-Button (RefreshCw-Icon mit Spin) in der Filter-Bar.
 
@@ -711,4 +713,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.13 — Externe Kontakte UI + GAL-Cache Live-Sync; v3.18.12 — Public Folders Browse-Modal + Auto-Hide; v3.18.11 — GAL-Browser)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.14 — Kalender teilen und berechtigen; v3.18.13 — Externe Kontakte UI + GAL-Cache Live-Sync; v3.18.12 — Public Folders Browse-Modal + Auto-Hide)*
