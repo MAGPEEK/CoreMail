@@ -13,6 +13,45 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.18] — 2026-05-25 — Toolbar-Share-Button + CalDAV-URL-Anzeige
+
+### Fixed
+
+- **Toolbar „Kalender teilen" funktioniert jetzt**
+  (`packages/web-client/src/pages/CalendarPage.tsx`):
+  Der Button oben in der CalendarToolbar zeigte vorher nur einen Toast
+  („Wähle einen Kalender und klicke Teilen über das ⋯-Menü"). Jetzt
+  öffnet er den `ShareCalendarDialog` direkt — wenn der User mehrere
+  eigene Kalender hat, erscheint im Dialog-Header ein Auswahl-Dropdown
+  zum Wechseln. Bei nur einem eigenen Kalender wird dieser direkt
+  geöffnet. Wenn gar keiner vorhanden ist → Toast-Fehler.
+
+### Added
+
+- **CalDAV-URL-Anzeige für externen Kalender-Zugriff**
+  (`packages/api-gateway/src/routes/calendar.ts`,
+  `packages/web-client/src/components/ShareCalendarDialog.tsx`,
+  `packages/web-client/src/components/CalendarSidebar.tsx`):
+  Neuer Endpoint `GET /api/v1/calendar/caldav-info` liefert
+  - `accountUrl` für Auto-Discovery (`https://host/dav/calendars/{userId}/`)
+  - Pro-Kalender-URL für direkten Mount (`.../{calendarId}/`)
+  - Username + Auth-Hinweis (App-Passwort statt Login-Passwort wegen MFA)
+  Im Share-Dialog erscheint eine neue Sektion „Externer Zugriff (CalDAV)"
+  mit beiden URLs und Copy-to-Clipboard-Buttons. Im Sidebar-Kontextmenü
+  auf eigenen Kalendern gibt es zusätzlich „CalDAV-URL kopieren" für
+  Quick-Access. CalDAV wird konsequent über HTTPS empfohlen (Auth-Leak-
+  Schutz); nur wenn Admin explizit `useHttps=false` gesetzt hat (z. B.
+  hinter Reverse-Proxy), wird `http://` ausgegeben.
+
+### Changed
+
+- **ShareCalendarDialog** akzeptiert jetzt optional `ownedCalendars`-Prop
+  für Picker-Modus. Bei Aufruf aus Sidebar-Kontextmenü bleibt der
+  Kalender fix; beim Aufruf aus Toolbar wird gewechselt werden können.
+  Header zeigt Picker-Dropdown nur wenn `ownedCalendars.length > 1`.
+
+---
+
 ## [3.18.17] — 2026-05-25 — Calendar SSE-Push + Free/Busy-Query
 
 ### Added

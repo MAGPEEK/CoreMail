@@ -142,6 +142,60 @@ calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   res.json({ ok: true, count: sequence.length });
 });
 
+// ─── CalDAV-Info (v3.18.18) ─────────────────────────────────────────────────
+
+// GET /api/v1/calendar/caldav-info
+// Liefert die CalDAV-URLs für den aktuellen User — eine "Account-URL" für
+// Auto-Discovery in Apple Kalender / Thunderbird plus eine direkte URL pro
+// eigenem Kalender. Inklusive Hinweis zum Auth (Bearer-Token funktioniert
+// nicht in CalDAV-Clients — App-Passwort nötig).
+calendarRouter.get('/caldav-info', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+
+  const [settings, user, calendars] = await Promise.all([
+    prisma.serverSettings.findUnique({
+      where: { id: 'singleton' },
+      select: { publicHostname: true, useHttps: true, httpPort: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    }),
+    prisma.calendar.findMany({
+      where: { userId },
+      select: { id: true, name: true, isDefault: true },
+      orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    }),
+  ]);
+
+  const hostname = settings?.publicHostname ?? req.get('host') ?? 'mail.local';
+  // CalDAV immer über HTTPS empfehlen (Auth-Leak sonst). Wenn Admin den Server
+  // explizit auf HTTP konfiguriert hat (z. B. hinter Reverse-Proxy), respektieren
+  // wir das aber, sonst geht Auto-Discovery vom Apple Kalender nicht.
+  const proto = settings?.useHttps === false ? 'http' : 'https';
+  const port = settings?.httpPort ?? 443;
+  const isStandardPort = (proto === 'https' && port === 443) || (proto === 'http' && port === 80);
+  const portSuffix = isStandardPort ? '' : `:${port}`;
+  const baseUrl = `${proto}://${hostname}${portSuffix}`;
+
+  res.json({
+    // Auto-Discovery (Apple Kalender, Thunderbird): User gibt nur baseUrl ein
+    // und der Client entdeckt alle Kalender via PROPFIND.
+    accountUrl: `${baseUrl}/dav/calendars/${userId}/`,
+    // Pro-Kalender-URL für direkten Mount (z. B. nur einen Kalender abonnieren)
+    calendars: calendars.map((c) => ({
+      id: c.id,
+      name: c.name,
+      isDefault: c.isDefault,
+      url: `${baseUrl}/dav/calendars/${userId}/${c.id}/`,
+    })),
+    // Auth-Hinweis: CalDAV-Clients brauchen ein App-Passwort, nicht das normale
+    // Login-Passwort (das wäre durch MFA blockiert).
+    username: user?.email ?? '',
+    authHint: 'app-password',
+  });
+});
+
 // ─── Grantee-lokale Settings (v3.18.16 A3 + A8) ─────────────────────────────
 
 // PATCH /api/v1/calendar/mine-shares/:shareId

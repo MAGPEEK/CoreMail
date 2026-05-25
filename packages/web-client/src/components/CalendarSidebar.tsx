@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, MoreHorizontal, ChevronDown, ChevronRight, Eye,
   // Icons für Kalender-Auswahl
@@ -14,6 +14,7 @@ import {
   ClipboardCheck, Target, CheckSquare, Flag, AlertCircle, Bell,
   CreditCard, DollarSign, Wallet,
   Share2, Pencil as Edit3, Trash2, ArrowUp, ArrowDown,
+  Link as LinkIcon,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -137,6 +138,28 @@ export function CalendarSidebar({
     onSuccess: () => invalidate(),
   });
 
+  // v3.18.18: CalDAV-Info für Copy-URL-Action
+  interface CalDavInfoLite {
+    accountUrl: string;
+    calendars: Array<{ id: string; url: string }>;
+  }
+  const { data: caldavInfo } = useQuery<CalDavInfoLite>({
+    queryKey: ['caldav-info'],
+    queryFn: () => api.get<CalDavInfoLite>('/calendar/caldav-info'),
+    staleTime: 5 * 60_000,
+  });
+
+  const copyCalDavUrl = async (calId: string) => {
+    const url = caldavInfo?.calendars.find((c) => c.id === calId)?.url;
+    if (!url) { toast.error('CalDAV-URL nicht verfügbar'); return; }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('CalDAV-URL kopiert');
+    } catch {
+      toast.error('Kopieren fehlgeschlagen');
+    }
+  };
+
   // Eigene vs. geteilte Kalender aufsplitten
   const ownedCalendars = useMemo(
     () => calendars.filter((c) => !c.shared).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
@@ -189,6 +212,11 @@ export function CalendarSidebar({
         label: t('cal_share_title'),
         icon: <Share2 size={14} />,
         onClick: () => setDialog({ kind: 'share', cal }),
+      },
+      {
+        label: 'CalDAV-URL kopieren',
+        icon: <LinkIcon size={14} />,
+        onClick: () => { void copyCalDavUrl(cal.id); },
       },
       {
         label: 'Farbe',
