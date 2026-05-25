@@ -10,7 +10,14 @@ import {
 } from '../lib/calendar-access.js';
 import { audit, auditContext } from '../lib/audit.js';
 import { notifyUserInbox } from '../lib/internal-notify.js';
-import { getRedisClient, CHANNEL_CALENDAR_SHARES } from '@coremail/core';
+import { getRedisClient, CHANNEL_CALENDAR_SHARES, createBullMqConnection } from '@coremail/core';
+import { Queue } from 'bullmq';
+import {
+  enqueueInvitation,
+  buildEventUid,
+  type EventData,
+  type AttendeeData,
+} from '../lib/imip.js';
 
 /**
  * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE-Handler
@@ -38,6 +45,88 @@ calendarRouter.use(requireAuth);
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ─── BullMQ Outbound Queue (für iMIP, v3.18.25) ─────────────────────────────
+// Singleton-Pattern wie in routes/mail.ts. Eigene Redis-Connection für BullMQ
+// — getRedisClient() ist shared mit maxRetriesPerRequest:3, BullMQ braucht
+// dedizierte Connection für Blocking-Commands.
+let _outboundQueue: Queue | null = null;
+function getOutboundQueue(): Queue {
+  if (!_outboundQueue) {
+    _outboundQueue = new Queue('smtp-outbound', {
+      connection: createBullMqConnection(),
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 60_000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 500 },
+      },
+    });
+  }
+  return _outboundQueue;
+}
+
+/**
+ * v3.18.25 A5: Sendet iMIP-Einladungen an alle Attendees (REQUEST oder CANCEL).
+ * Fire-and-forget — Fehler werden geloggt, blockieren aber nicht den Hauptpfad
+ * (Event ist ja schon in der DB).
+ */
+async function sendInvitations(opts: {
+  ev: { id: string; uid: string; summary: string; description: string;
+        location: string; dtStart: Date; dtEnd: Date; sequence: number;
+        attendees: unknown };
+  organizerEmail: string;
+  organizerName: string;
+  method: 'REQUEST' | 'CANCEL';
+}): Promise<void> {
+  const rawAttendees = Array.isArray(opts.ev.attendees) ? opts.ev.attendees : [];
+  const attendees: AttendeeData[] = rawAttendees
+    .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
+    .filter((a) => typeof a['email'] === 'string' && a['email'].includes('@'))
+    .map((a): AttendeeData => ({
+      email: a['email'] as string,
+      ...(typeof a['cn'] === 'string' ? { cn: a['cn'] } : {}),
+      partstat: (a['partstat'] as AttendeeData['partstat']) ?? 'NEEDS-ACTION',
+      role: 'REQ-PARTICIPANT',
+      rsvp: true,
+    }));
+  if (attendees.length === 0) return;
+
+  // PublicHostname aus ServerSettings (für UID-Domain)
+  const settings = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { publicHostname: true },
+  });
+  const publicHostname = settings?.publicHostname ?? 'coremail.local';
+
+  const eventData: EventData = {
+    uid: opts.ev.uid.includes('@') ? opts.ev.uid : buildEventUid(opts.ev.id, publicHostname),
+    sequence: opts.ev.sequence,
+    summary: opts.ev.summary,
+    description: opts.ev.description,
+    location: opts.ev.location,
+    dtStart: opts.ev.dtStart,
+    dtEnd: opts.ev.dtEnd,
+    organizer: { email: opts.organizerEmail, cn: opts.organizerName },
+    attendees,
+    publicHostname,
+  };
+
+  try {
+    await enqueueInvitation({
+      ev: eventData,
+      method: opts.method,
+      queue: getOutboundQueue(),
+      trackingId: `imip-${opts.method}-${opts.ev.id}`,
+    });
+  } catch (err) {
+    // Fail-safe: Event existiert bereits in DB, Einladung scheitert nur an Queue/SMTP
+    // — wir loggen und gehen weiter. User kann später via „Einladung neu senden"-Button
+    // retry triggern (zukünftig).
+    // eslint-disable-next-line no-console
+    console.error('[iMIP] failed to enqueue invitation', { eventId: opts.ev.id, err });
+  }
 }
 
 // GET /api/v1/calendar — eigene + geteilte Kalender
@@ -693,6 +782,11 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/calendar/events  (WRITE-Permission auf Ziel-Kalender)
+const AttendeeSchema = z.object({
+  email: z.string().email(),
+  cn: z.string().optional(),
+  partstat: z.enum(['NEEDS-ACTION', 'ACCEPTED', 'DECLINED', 'TENTATIVE']).optional(),
+});
 const EventSchema = z.object({
   calendarId: z.string(),
   summary: z.string().min(1),
@@ -705,6 +799,8 @@ const EventSchema = z.object({
   rrule: z.string().optional(),
   // v3.18.15: Privacy-Level (PUBLIC=Default, PRIVATE=nur Beschäftigt, CONFIDENTIAL=unsichtbar)
   classification: z.enum(['PUBLIC', 'PRIVATE', 'CONFIDENTIAL']).optional(),
+  // v3.18.25 A5: Attendees (Mail-Adressen Gäste) — wenn nicht-leer wird iMIP-REQUEST versendet
+  attendees: z.array(AttendeeSchema).max(100).optional(),
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
@@ -712,29 +808,69 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const parsed = EventSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule, classification = 'PUBLIC' } = parsed.data;
+  const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule, classification = 'PUBLIC', attendees = [] } = parsed.data;
 
   const access = await canAccessCalendar(userId, calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
+
+  // Organizer = aktueller User (Self-Lookup für displayName)
+  const organizer = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, displayName: true },
+  });
+  if (!organizer) { res.status(500).json({ error: 'Organizer-User nicht gefunden' }); return; }
 
   const icalData = buildIcal({
     summary, dtStart, dtEnd, description, location, allDay, classification,
     ...(rrule !== undefined ? { rrule } : {}),
   });
 
+  // v3.18.25: UID mit Hostname-Suffix für globale Eindeutigkeit (RFC 5545 §3.8.4.7)
+  const settings = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { publicHostname: true },
+  });
   const { randomUUID } = await import('node:crypto');
+  const rawEventId = randomUUID();
+  const uid = buildEventUid(rawEventId, settings?.publicHostname ?? 'coremail.local');
+
+  // Attendees als JSON-Array speichern
+  const attendeesJson = attendees.map((a) => ({
+    email: a.email,
+    cn: a.cn ?? a.email,
+    partstat: a.partstat ?? 'NEEDS-ACTION',
+    role: 'REQ-PARTICIPANT',
+    rsvp: true,
+  }));
+
   const event = await prisma.calendarEvent.create({
     data: {
       calendarId,
-      uid: randomUUID(),
+      uid,
       summary,
+      description,
+      location,
       dtStart: new Date(dtStart),
       dtEnd: new Date(dtEnd),
       recurring,
       icalData,
       classification,
+      organizer: organizer.email,
+      attendees: attendeesJson,
+      sequence: 0,
     },
   });
+
+  // v3.18.25 A5: iMIP-REQUEST an alle Attendees senden (fire-and-forget)
+  if (attendees.length > 0) {
+    void sendInvitations({
+      ev: event,
+      organizerEmail: organizer.email,
+      organizerName: organizer.displayName ?? organizer.email,
+      method: 'REQUEST',
+    });
+  }
+
   res.status(201).json(event);
 });
 
@@ -747,14 +883,16 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
 
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
-    select: { id: true, calendarId: true, summary: true, dtStart: true, dtEnd: true, recurring: true, classification: true },
+    select: { id: true, calendarId: true, summary: true, description: true, location: true,
+              uid: true, dtStart: true, dtEnd: true, recurring: true, classification: true,
+              sequence: true, organizer: true, attendees: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
-  const { summary, dtStart, dtEnd, description, location, allDay, rrule, classification } = parsed.data;
+  const { summary, dtStart, dtEnd, description, location, allDay, rrule, classification, attendees } = parsed.data;
   const effectiveClass = classification ?? event.classification ?? 'PUBLIC';
   const icalData = buildIcal({
     summary: summary ?? event.summary,
@@ -767,17 +905,57 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ...(rrule !== undefined ? { rrule } : {}),
   });
 
+  // v3.18.25 A5: Wenn relevante Felder geändert wurden → sequence++ +
+  // neue REQUEST-Mails an alle Attendees senden. „Relevante" Felder sind alle
+  // die in der iMIP-Mail erscheinen (summary, dtStart, dtEnd, location, attendees).
+  const willSendUpdate =
+    (summary !== undefined && summary !== event.summary) ||
+    (dtStart !== undefined && new Date(dtStart).getTime() !== event.dtStart.getTime()) ||
+    (dtEnd !== undefined && new Date(dtEnd).getTime() !== event.dtEnd.getTime()) ||
+    (location !== undefined && location !== event.location) ||
+    attendees !== undefined;
+
+  const newAttendeesJson = attendees
+    ? attendees.map((a) => ({
+        email: a.email,
+        cn: a.cn ?? a.email,
+        partstat: a.partstat ?? 'NEEDS-ACTION',
+        role: 'REQ-PARTICIPANT',
+        rsvp: true,
+      }))
+    : event.attendees;
+
   const updated = await prisma.calendarEvent.update({
     where: { id },
     data: {
       summary: summary ?? event.summary,
+      description: description ?? event.description,
+      location: location ?? event.location,
       dtStart: dtStart ? new Date(dtStart) : event.dtStart,
       dtEnd: dtEnd ? new Date(dtEnd) : event.dtEnd,
       recurring: !!rrule || event.recurring,
       icalData,
       classification: effectiveClass,
+      ...(attendees !== undefined ? { attendees: newAttendeesJson as object } : {}),
+      ...(willSendUpdate ? { sequence: { increment: 1 } } : {}),
     },
   });
+
+  // v3.18.25 A5: REQUEST-Update an Attendees senden (mit erhöhter SEQUENCE)
+  const finalAttendees = Array.isArray(updated.attendees) ? updated.attendees : [];
+  if (willSendUpdate && finalAttendees.length > 0 && event.organizer) {
+    const organizerUser = await prisma.user.findFirst({
+      where: { email: event.organizer },
+      select: { displayName: true },
+    });
+    void sendInvitations({
+      ev: updated,
+      organizerEmail: event.organizer,
+      organizerName: organizerUser?.displayName ?? event.organizer,
+      method: 'REQUEST',
+    });
+  }
+
   res.json(updated);
 });
 
@@ -786,9 +964,12 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
 
+  // v3.18.25 A5: Volle Event-Daten für CANCEL-Mail laden BEVOR Delete
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
-    select: { id: true, calendarId: true },
+    select: { id: true, calendarId: true, uid: true, summary: true, description: true,
+              location: true, dtStart: true, dtEnd: true, sequence: true,
+              organizer: true, attendees: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
@@ -796,6 +977,22 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
   await prisma.calendarEvent.delete({ where: { id } });
+
+  // v3.18.25 A5: CANCEL-Mails an alle Attendees (mit sequence+1)
+  const attList = Array.isArray(event.attendees) ? event.attendees : [];
+  if (attList.length > 0 && event.organizer) {
+    const organizerUser = await prisma.user.findFirst({
+      where: { email: event.organizer },
+      select: { displayName: true },
+    });
+    void sendInvitations({
+      ev: { ...event, sequence: event.sequence + 1 },
+      organizerEmail: event.organizer,
+      organizerName: organizerUser?.displayName ?? event.organizer,
+      method: 'CANCEL',
+    });
+  }
+
   res.json({ ok: true });
 });
 

@@ -13,6 +13,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.25] — 2026-05-25 — Calendar-Invitations (iMIP/iTIP, A5)
+
+### Added
+
+- **iMIP-REQUEST-Mails an Gäste beim Termin-Erstellen** (RFC 6047 / 5546)
+  (`packages/api-gateway/src/lib/imip.ts`,
+  `packages/api-gateway/src/routes/calendar.ts`):
+  Wenn ein Event mit Attendees angelegt wird, generiert das System eine
+  iMIP-konforme Einladungs-Mail per `ical-generator` mit:
+  - `multipart/alternative` → text/plain + text/html + `text/calendar; method=REQUEST` (für Gmail)
+  - `application/ics`-Attachment (für Outlook-Win32 RSVP-Buttons)
+  - Outlook-Quirks (`X-MICROSOFT-CDO-BUSYSTATUS`, `X-MS-OLK-FORCEINSPECTOROPEN`)
+  - Pflicht-Properties: UID (mit `@hostname`-Suffix), DTSTAMP, ORGANIZER,
+    ATTENDEE mit `RSVP=TRUE PARTSTAT=NEEDS-ACTION`, SEQUENCE, STATUS:CONFIRMED
+  Versand über bestehende BullMQ-Outbound-Queue (`smtp-outbound`) via
+  `rawMessage`-base64-Pfad — Retry + DKIM-Signing greifen automatisch.
+
+- **iMIP-Update bei Event-Änderung** — Bei `PUT /calendar/events/:id` werden
+  geänderte Felder erkannt (summary/dtStart/dtEnd/location/attendees). Wenn
+  sich relevante Felder ändern, wird `sequence++` und eine neue REQUEST-Mail
+  an alle Attendees gesendet (Mail-Clients erkennen am höheren SEQUENCE den
+  Update und ersetzen den bestehenden Eintrag).
+
+- **iMIP-CANCEL bei Event-Löschen** — Bei `DELETE /calendar/events/:id` wird
+  vor dem Delete eine CANCEL-Mail (`METHOD:CANCEL`, `STATUS:CANCELLED`,
+  `sequence++`) an alle Attendees gesendet. Gmail/Outlook zeigen Banner
+  „Termin abgesagt" und entfernen den Eintrag.
+
+- **iTIP-REPLY-Inbound-Handler** (Gast antwortet)
+  (`packages/storage/src/itip-inbound.ts`,
+  `packages/smtp-server/src/handlers/message.ts`):
+  Eingehende Mails werden auf `BEGIN:VCALENDAR ... METHOD:REPLY` gescannt
+  (Regex-basiert, kein schwerer ical-Parser im Hot-Path). Bei Match:
+  UID-Lookup auf `CalendarEvent`, SEQUENCE-Check (alte REPLYs werden
+  ignoriert, RFC 5546 §3.4.3), Attendee-Eintrag im JSON-Array updaten
+  (`partstat=ACCEPTED|DECLINED|TENTATIVE`). Mail wird TROTZDEM in die
+  Inbox zugestellt (User-Awareness wie bei Outlook).
+
+- **Frontend: Gäste-Input im Neuer-Termin-Dialog**
+  (`packages/web-client/src/pages/CalendarPage.tsx`):
+  Neues Eingabefeld „Gäste einladen (kommagetrennt)" akzeptiert E-Mail-
+  Adressen wie `anna@example.com, bob@x.de`. Counter zeigt „X Gäste —
+  Einladungs-Mails werden beim Speichern versendet".
+
+### Schema
+
+- `CalendarEvent.attendees` (Json-Array) wird beim Create mit
+  `{ email, cn, partstat, role, rsvp }`-Objekten gefüllt.
+- `CalendarEvent.sequence` (Int, default 0) wird bei jedem relevanten
+  Update inkrementiert (war in v3.18.24 vorbereitet).
+- `CalendarEvent.uid` jetzt mit Hostname-Suffix `<id>@<publicHostname>`
+  (RFC 5545 §3.8.4.7 — globale Eindeutigkeit).
+
+### Dependencies
+
+- `ical-generator@10.2.0` in api-gateway (war in v3.18.24 installiert)
+
+---
+
 ## [3.18.24] — 2026-05-25 — Performance E: MinIO Lifecycle-Policies
 
 ### Added

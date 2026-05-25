@@ -27,6 +27,11 @@ import toast from 'react-hot-toast';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
+interface AttendeeInput {
+  email: string;
+  cn?: string;
+}
+
 interface NewEventForm {
   summary: string;
   dtStart: string;
@@ -34,6 +39,8 @@ interface NewEventForm {
   calendarId: string;
   allDay: boolean;
   classification: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
+  // v3.18.25 A5: Liste der Gäste-E-Mails (kommasepariert eingegeben, dann gesplittet)
+  attendees: AttendeeInput[];
 }
 
 export function CalendarPage() {
@@ -120,6 +127,7 @@ export function CalendarPage() {
       calendarId: defaultWritableCalId,
       allDay: info.allDay,
       classification: 'PUBLIC',
+      attendees: [],
     });
   };
 
@@ -207,6 +215,7 @@ export function CalendarPage() {
             calendarId: defaultWritableCalId,
             allDay: false,
             classification: 'PUBLIC',
+            attendees: [],
           })}
           onShare={() => {
             const owned = (calendars ?? []).filter((c) => !c.shared);
@@ -300,6 +309,34 @@ export function CalendarPage() {
                   <option value="CONFIDENTIAL">{t('cal_event_class_confidential')}</option>
                 </select>
               </div>
+            </div>
+            {/* v3.18.25 A5: Gäste einladen */}
+            <div className="mt-3">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Gäste einladen (kommagetrennt)
+              </label>
+              <input
+                type="text"
+                className="input"
+                value={newEvent.attendees.map((a) => a.email).join(', ')}
+                onChange={(e) => {
+                  const emails = e.target.value
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0);
+                  setNewEvent({
+                    ...newEvent,
+                    attendees: emails.map((email) => ({ email })),
+                  });
+                }}
+                placeholder="z. B. anna@example.com, bob@x.de"
+              />
+              {newEvent.attendees.length > 0 && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {newEvent.attendees.length} Gast{newEvent.attendees.length === 1 ? '' : 'e'} —
+                  Einladungs-Mails werden beim Speichern versendet
+                </p>
+              )}
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setNewEvent(null)} className="btn-secondary">Abbrechen</button>
