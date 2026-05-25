@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.17`
+**Aktuelle Version**: `3.18.18`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.17; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.18; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.17 — Highlights
+## Aktuelle Version 3.18.18 — Highlights
+
+**v3.18.18** — Toolbar-Share-Button funktioniert + CalDAV-URL-Anzeige. (1) **Fix Toolbar „Kalender teilen"**: Button zeigte vorher nur Toast, jetzt öffnet er ShareCalendarDialog mit Picker-Dropdown im Header wenn User mehrere eigene Kalender hat. Bei einem direkt geöffnet, bei keinem Toast-Error. ShareCalendarDialog akzeptiert optionalen `ownedCalendars`-Prop für Picker-Modus. (2) **CalDAV-URL-Anzeige**: Neuer Endpoint `GET /api/v1/calendar/caldav-info` liefert `accountUrl` (Auto-Discovery) + Pro-Kalender-URL + Username + Auth-Hinweis (App-Passwort wegen MFA). ShareDialog zeigt neue Sektion „Externer Zugriff (CalDAV)" mit Copy-Buttons. Sidebar-Kontextmenü hat zusätzlich „CalDAV-URL kopieren" auf eigenen Kalendern. HTTPS empfohlen außer bei explizit `useHttps=false` (Reverse-Proxy-Setup).
 
 **v3.18.17** — Calendar SSE-Push + Free/Busy. (A2) **SSE-Push für Share-Lifecycle** — neuer Redis-Channel `coremail:calendar:shares` (`CHANNEL_CALENDAR_SHARES` in @coremail/core). Backend published JSON-Event mit `affectedUserIds[]` bei create/update/delete/self_remove. SSE-Handler filtert pro Verbindung und forwardet als `event: calendar:shares` an betroffene User. Frontend `useMailEvents()` invalidiert `['calendars']`+`['calendar-shares']`-Caches → instant Live-Sync. Toast bei `action=create`. CalendarPage-Polling von 60s auf 5min reduziert (nur Fallback). (A4) **Free/Busy-Query** — `POST /api/v1/calendar/freebusy` mit Body `{ userEmails[], start, end }`. Liefert Busy-Slots aus Kalendern mit Zugriff. CONFIDENTIAL für Foreign-Caller ausgeblendet, PRIVATE ohne Subject. Hard-Limits 90 Tage / 50 User (DoS). Response-Shape `{ start, end, users: [{ email, found, busy: [{ start, end, type, subject? }] }] }`.
 
@@ -719,4 +721,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.17 — Calendar SSE-Push + Free/Busy; v3.18.16 — Calendar Quick-Wins; v3.18.15 — CalDAV-WRITE + Private Events + Audit + i18n)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.18 — Toolbar-Share-Button + CalDAV-URL-Anzeige; v3.18.17 — Calendar SSE-Push + Free/Busy; v3.18.16 — Calendar Quick-Wins)*

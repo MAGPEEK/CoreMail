@@ -17,6 +17,7 @@ import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
 import { CalendarToolbar, type CalendarView } from '../components/CalendarToolbar.js';
+import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
 import toast from 'react-hot-toast';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
@@ -36,6 +37,7 @@ export function CalendarPage() {
   const lang = useLanguageStore((s) => s.lang);
   const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
   const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const calendarRef = useRef<FullCalendar | null>(null);
@@ -189,7 +191,14 @@ export function CalendarPage() {
             allDay: false,
             classification: 'PUBLIC',
           })}
-          onShare={() => toast('Wähle einen Kalender und klicke Teilen über das ⋯-Menü', { icon: 'ℹ️' })}
+          onShare={() => {
+            const owned = (calendars ?? []).filter((c) => !c.shared);
+            if (owned.length === 0) {
+              toast.error('Du hast noch keinen eigenen Kalender zum Teilen');
+              return;
+            }
+            setShareDialogOpen(true);
+          }}
           onPrint={() => window.print()}
         />
 
@@ -276,6 +285,20 @@ export function CalendarPage() {
           </div>
         </div>
       )}
+
+      {/* v3.18.18: Share-Dialog via Toolbar-Button („Kalender teilen") */}
+      {shareDialogOpen && (() => {
+        const owned = (calendars ?? []).filter((c) => !c.shared);
+        const initial = owned.find((c) => c.isDefault) ?? owned[0];
+        if (!initial) return null;
+        return (
+          <ShareCalendarDialog
+            calendar={initial}
+            ownedCalendars={owned}
+            onClose={() => setShareDialogOpen(false)}
+          />
+        );
+      })()}
     </div>
   );
 }

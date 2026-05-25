@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { X, Trash2, Share2, Eye, Pencil, UserPlus } from 'lucide-react';
+import { Trash2, Share2, Eye, UserPlus, Copy, Link as LinkIcon, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarShare } from '../api/types.js';
@@ -8,12 +8,17 @@ import { useT } from '../i18n/useT.js';
 
 /**
  * v3.18.14 Calendar Sharing — Dialog zum Verwalten der Freigaben eines eigenen
- * Kalenders. Wird über Sidebar-Kontextmenü „Teilen und Berechtigungen" geöffnet.
+ * Kalenders. Wird über Sidebar-Kontextmenü „Teilen und Berechtigungen" geöffnet,
+ * oder über den Toolbar-Button „Kalender teilen" (dann mit `allowCalendarPicker`).
+ *
+ * v3.18.18: erweitert um (1) Kalender-Picker im Header wenn aus Toolbar
+ * aufgerufen, (2) CalDAV-URL-Sektion am Ende für externen Zugriff.
  *
  * Funktionen:
  *  - Benutzer-Autocomplete (reuse `/contacts?q=`)
  *  - Permission-Select: Read / Read+Write
  *  - Liste bestehender Freigaben mit Permission-Toggle und Löschen
+ *  - CalDAV-URLs zum Kopieren (Account-URL + Pro-Kalender-URL)
  */
 
 interface ContactSuggest {
@@ -24,17 +29,40 @@ interface ContactSuggest {
   isGroup?: boolean;
 }
 
+interface CalDavInfo {
+  accountUrl: string;
+  username: string;
+  authHint: string;
+  calendars: Array<{
+    id: string;
+    name: string;
+    isDefault: boolean;
+    url: string;
+  }>;
+}
+
 type Perm = 'READ' | 'WRITE';
 
 export function ShareCalendarDialog({
-  calendar,
+  calendar: initialCalendar,
   onClose,
+  /** Liste eigener Kalender für Picker-Modus (Toolbar-Aufruf) */
+  ownedCalendars,
 }: {
   calendar: Calendar;
   onClose: () => void;
+  ownedCalendars?: Calendar[];
 }) {
   const qc = useQueryClient();
   const t = useT();
+
+  // v3.18.18: Wenn ownedCalendars übergeben → Picker-Modus
+  const [selectedCalId, setSelectedCalId] = useState<string>(initialCalendar.id);
+  const calendar = useMemo(() => {
+    if (!ownedCalendars) return initialCalendar;
+    return ownedCalendars.find((c) => c.id === selectedCalId) ?? initialCalendar;
+  }, [ownedCalendars, selectedCalId, initialCalendar]);
+
   const [search, setSearch] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [permission, setPermission] = useState<Perm>('READ');
@@ -43,7 +71,7 @@ export function ShareCalendarDialog({
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Liste bestehender Freigaben
+  // Liste bestehender Freigaben für aktuell selektierten Kalender
   const { data: shares = [], isLoading: sharesLoading } = useQuery<CalendarShare[]>({
     queryKey: ['calendar-shares', calendar.id],
     queryFn: () => api.get<CalendarShare[]>(`/calendar/${calendar.id}/shares`),
@@ -51,10 +79,20 @@ export function ShareCalendarDialog({
     refetchOnWindowFocus: true,
   });
 
+  // v3.18.18: CalDAV-URLs einmal laden (für alle eigenen Kalender)
+  const { data: caldavInfo } = useQuery<CalDavInfo>({
+    queryKey: ['caldav-info'],
+    queryFn: () => api.get<CalDavInfo>('/calendar/caldav-info'),
+    staleTime: 5 * 60_000,
+  });
+
+  // Aktuelle CalDAV-URL für den selektierten Kalender finden
+  const currentCalDavUrl = caldavInfo?.calendars.find((c) => c.id === calendar.id)?.url ?? '';
+
   // Auto-Filter: bereits zugewiesene User aus Vorschlägen ausblenden
   const assignedIds = new Set(shares.map((s) => s.granteeId));
 
-  // Suggest-Query (nur User-Treffer, keine externen Kontakte/Gruppen)
+  // Suggest-Query (nur User-Treffer)
   const { data: contacts = [] } = useQuery<ContactSuggest[]>({
     queryKey: ['contact-suggest-share', debouncedQ],
     queryFn: () => api.get<ContactSuggest[]>(`/contacts?q=${encodeURIComponent(debouncedQ)}`),
@@ -67,7 +105,6 @@ export function ShareCalendarDialog({
     .map((c) => ({ ...c, id: c.id.replace(/^gal-/, '') }))
     .filter((c) => !assignedIds.has(c.id));
 
-  // Debounce
   const onSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setSearch(v);
@@ -82,7 +119,6 @@ export function ShareCalendarDialog({
     }
   };
 
-  // Mutations
   const addShare = useMutation({
     mutationFn: (vars: { granteeId: string; permission: Perm }) =>
       api.post<CalendarShare>(`/calendar/${calendar.id}/shares`, vars),
@@ -123,7 +159,6 @@ export function ShareCalendarDialog({
     addShare.mutate({ granteeId: c.id, permission });
   }, [addShare, permission]);
 
-  // Keyboard-Nav im Suggest-Dropdown
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!showSug || suggestions.length === 0) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => (i + 1) % suggestions.length); }
@@ -136,7 +171,15 @@ export function ShareCalendarDialog({
     }
   };
 
-  // Cleanup
+  const copyToClipboard = async (text: string, label = 'URL') => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} kopiert`);
+    } catch {
+      toast.error('Kopieren fehlgeschlagen');
+    }
+  };
+
   useEffect(() => () => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
   }, []);
@@ -146,20 +189,38 @@ export function ShareCalendarDialog({
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Share2 size={18} className="text-accent" />
-            <div>
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <Share2 size={18} className="text-accent shrink-0" />
+            <div className="min-w-0 flex-1">
               <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
                 {t('cal_share_title')}
               </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ backgroundColor: calendar.color }} />
-                {calendar.name}
-              </p>
+              {ownedCalendars && ownedCalendars.length > 1 ? (
+                /* v3.18.18: Calendar-Picker im Header bei Toolbar-Aufruf */
+                <div className="relative mt-0.5">
+                  <select
+                    value={selectedCalId}
+                    onChange={(e) => setSelectedCalId(e.target.value)}
+                    className="text-xs bg-transparent border-0 pl-0 pr-5 py-0 text-gray-500 dark:text-gray-400 focus:outline-none focus:ring-0 appearance-none cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    {ownedCalendars.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{c.isDefault ? ' (Standard)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={11} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                  <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ backgroundColor: calendar.color }} />
+                  {calendar.name}
+                </p>
+              )}
             </div>
           </div>
           <button onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none ml-2"
             aria-label="×">
             ×
           </button>
@@ -268,7 +329,7 @@ export function ShareCalendarDialog({
             )}
           </div>
 
-          {/* Hinweis CalDAV */}
+          {/* Hinweis Permissions */}
           <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded p-3 text-xs text-blue-700 dark:text-blue-300">
             <div className="flex items-start gap-2">
               <Eye size={14} className="mt-0.5 shrink-0" />
@@ -281,6 +342,71 @@ export function ShareCalendarDialog({
               </div>
             </div>
           </div>
+
+          {/* v3.18.18: CalDAV-URL für externen Zugriff */}
+          {caldavInfo && (
+            <div className="border border-gray-200 dark:border-gray-700 rounded p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+                <LinkIcon size={14} className="text-accent" />
+                Externer Zugriff (CalDAV)
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                Für Apple Kalender, Thunderbird Lightning, DAVx⁵ usw.
+              </div>
+
+              {/* Account-URL (Auto-Discovery) */}
+              <div>
+                <label className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-2 mb-1">
+                  Account-URL (Auto-Discovery, empfohlen)
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <code className="flex-1 px-2 py-1.5 text-[11px] bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded font-mono text-gray-700 dark:text-gray-200 truncate">
+                    {caldavInfo.accountUrl}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(caldavInfo.accountUrl, 'Account-URL')}
+                    className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded shrink-0"
+                    aria-label="Kopieren"
+                    title="Account-URL kopieren"
+                  >
+                    <Copy size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Pro-Kalender-URL (nur aktuell selektierten zeigen) */}
+              {currentCalDavUrl && (
+                <div>
+                  <label className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-2 mb-1">
+                    Direkte URL für „{calendar.name}"
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <code className="flex-1 px-2 py-1.5 text-[11px] bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded font-mono text-gray-700 dark:text-gray-200 truncate">
+                      {currentCalDavUrl}
+                    </code>
+                    <button
+                      onClick={() => copyToClipboard(currentCalDavUrl, 'Kalender-URL')}
+                      className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded shrink-0"
+                      aria-label="Kopieren"
+                      title="Kalender-URL kopieren"
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                <div className="flex flex-col gap-0.5 text-[11px] text-gray-600 dark:text-gray-400">
+                  <div><strong>Benutzer:</strong> <span className="font-mono">{caldavInfo.username}</span></div>
+                  <div className="text-amber-600 dark:text-amber-400">
+                    <strong>Passwort:</strong> App-Passwort erforderlich
+                    (Einstellungen → Sicherheit → App-Passwörter)
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -294,6 +420,3 @@ export function ShareCalendarDialog({
     </div>
   );
 }
-
-// Eye/Pencil/X mark unused imports — leave for future use
-void Pencil; void X;
