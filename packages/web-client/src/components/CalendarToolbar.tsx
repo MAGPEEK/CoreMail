@@ -7,27 +7,22 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 
 export type CalendarView = 'timeGridDay' | 'timeGridWeek' | 'workWeek' | 'dayGridMonth' | 'split';
 
-const FILTER_OPTIONS = [
-  'Termine',
-  'Besprechungen',
-  'Kalendereinträge für Abstimmungen',
-  'Reservierungen',
-  'Kategorien',
-  'Anzeigen als',
-  'Wiederholung',
-  'Persönlich',
+/** v3.18.21: Realistische Filter, die tatsächlich auf CalendarEvent-Felder mappen. */
+export const FILTER_OPTIONS = [
+  'Wiederholende Termine',  // rrule != null
+  'Aufgaben',                // tasks mit dueDate (separate Datenquelle)
+  'Private Termine',         // classification = PRIVATE
+  'Vertrauliche Termine',    // classification = CONFIDENTIAL (Owner sieht sie)
+  'Geteilte Kalender',       // shared = true
 ] as const;
-type FilterKey = typeof FILTER_OPTIONS[number];
+export type FilterKey = typeof FILTER_OPTIONS[number];
 
-const FILTER_DEFAULT: Record<FilterKey, boolean> = {
-  'Termine': true,
-  'Besprechungen': true,
-  'Kalendereinträge für Abstimmungen': true,
-  'Reservierungen': false,
-  'Kategorien': true,
-  'Anzeigen als': true,
-  'Wiederholung': true,
-  'Persönlich': true,
+export const FILTER_DEFAULT: Record<FilterKey, boolean> = {
+  'Wiederholende Termine': true,
+  'Aufgaben':              true,
+  'Private Termine':       true,
+  'Vertrauliche Termine':  true,
+  'Geteilte Kalender':     true,
 };
 
 interface Props {
@@ -36,16 +31,19 @@ interface Props {
   onNewEvent: () => void;
   onPrint?: () => void;
   onShare?: () => void;
+  // v3.18.21: kontrollierter Filter-State — wird in CalendarPage gehalten
+  // und auf fcEvents angewendet
+  filters: Record<FilterKey, boolean>;
+  onFiltersChange: (next: Record<FilterKey, boolean>) => void;
 }
 
 interface MenuState { x: number; y: number; items: ContextMenuItem[] }
 
 export function CalendarToolbar({
-  view, onChangeView, onNewEvent, onPrint, onShare,
+  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange,
 }: Props) {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [filterOpen, setFilterOpen] = useState<{ x: number; y: number } | null>(null);
-  const [filters, setFilters] = useState<Record<FilterKey, boolean>>(FILTER_DEFAULT);
 
   const filterCount = (Object.keys(FILTER_DEFAULT) as FilterKey[])
     .filter((k) => filters[k] !== FILTER_DEFAULT[k]).length;
@@ -108,9 +106,9 @@ export function CalendarToolbar({
   };
 
   const toggleFilter = (k: FilterKey) =>
-    setFilters((s) => ({ ...s, [k]: !s[k] }));
+    onFiltersChange({ ...filters, [k]: !filters[k] });
 
-  const resetFilters = () => setFilters({ ...FILTER_DEFAULT });
+  const resetFilters = () => onFiltersChange({ ...FILTER_DEFAULT });
 
   return (
     <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 shrink-0">
@@ -171,28 +169,26 @@ export function CalendarToolbar({
               <span>Filter löschen</span>
             </button>
             <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
-            {FILTER_OPTIONS.map((opt) => {
-              const isReservation = opt === 'Reservierungen';
-              const hasSubmenu = !['Termine', 'Persönlich', 'Reservierungen'].includes(opt);
-              return (
-                <button
-                  key={opt}
-                  onClick={() => toggleFilter(opt)}
-                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
-                    filters[opt]
-                      ? 'bg-accent border-accent text-white'
-                      : 'border-gray-300 dark:border-gray-600'
-                  }`}>
-                    {filters[opt] && <span className="text-[10px] leading-none">✓</span>}
-                  </span>
-                  <span className="flex-1 text-left">{opt}</span>
-                  {hasSubmenu && <ChevronDown size={12} className="-rotate-90 text-gray-400" />}
-                  {isReservation && null}
-                </button>
-              );
-            })}
+            {FILTER_OPTIONS.map((opt) => (
+              <button
+                key={opt}
+                onClick={() => toggleFilter(opt)}
+                className="w-full flex items-center gap-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              >
+                <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
+                  filters[opt]
+                    ? 'bg-accent border-accent text-white'
+                    : 'border-gray-300 dark:border-gray-600'
+                }`}>
+                  {filters[opt] && <span className="text-[10px] leading-none">✓</span>}
+                </span>
+                <span className="flex-1 text-left">{opt}</span>
+              </button>
+            ))}
+            <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
+            <div className="px-3 py-1.5 text-[10px] text-gray-400 dark:text-gray-500">
+              {filterCount === 0 ? 'Keine Filter aktiv' : `${filterCount} Filter aktiv`}
+            </div>
           </div>
         </>
       )}

@@ -16,7 +16,12 @@ import { useUiPrefs } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
-import { CalendarToolbar, type CalendarView } from '../components/CalendarToolbar.js';
+import {
+  CalendarToolbar,
+  FILTER_DEFAULT,
+  type CalendarView,
+  type FilterKey,
+} from '../components/CalendarToolbar.js';
 import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
 import toast from 'react-hot-toast';
 
@@ -40,6 +45,8 @@ export function CalendarPage() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  // v3.18.21: Filter-State auf der Page lifted, damit fcEvents tatsächlich gefiltert werden
+  const [filters, setFilters] = useState<Record<FilterKey, boolean>>(() => ({ ...FILTER_DEFAULT }));
   const calendarRef = useRef<FullCalendar | null>(null);
 
   const changeView = (v: CalendarView) => {
@@ -133,7 +140,8 @@ export function CalendarPage() {
     }
   };
 
-  const taskEvents = (tasks ?? [])
+  // v3.18.21: Aufgaben nur wenn Filter „Aufgaben" aktiv
+  const taskEvents = !filters['Aufgaben'] ? [] : (tasks ?? [])
     .filter((t) => !!t.dueDate)
     .map((t) => ({
       id: `task-${t.id}`,
@@ -149,6 +157,15 @@ export function CalendarPage() {
   const fcEvents = [
     ...(events ?? [])
       .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
+      .filter((ev) => {
+        // v3.18.21: Filter anwenden
+        const cal = calendars?.find((c) => c.id === ev.calendarId);
+        if (!filters['Geteilte Kalender'] && cal?.shared) return false;
+        if (!filters['Wiederholende Termine'] && ev.recurring) return false;
+        if (!filters['Private Termine'] && ev.classification === 'PRIVATE') return false;
+        if (!filters['Vertrauliche Termine'] && ev.classification === 'CONFIDENTIAL') return false;
+        return true;
+      })
       .map((ev) => {
         const cal = calendars?.find((c) => c.id === ev.calendarId);
         const isReadOnly = cal?.permission === 'READ';
@@ -199,7 +216,19 @@ export function CalendarPage() {
             }
             setShareDialogOpen(true);
           }}
-          onPrint={() => window.print()}
+          onPrint={() => {
+            // v3.18.21: Nur Kalender drucken (Sidebar, Toolbar, App-Chrome via
+            // print:hidden in print.css ausgeblendet). class auf <html> setzen
+            // damit FullCalendar full-width für den Print-Job rendert.
+            document.documentElement.classList.add('coremail-printing');
+            window.print();
+            // Cleanup nach Print-Dialog (sowohl bei Abbruch als auch nach Druck)
+            setTimeout(() => {
+              document.documentElement.classList.remove('coremail-printing');
+            }, 500);
+          }}
+          filters={filters}
+          onFiltersChange={setFilters}
         />
 
         <div className="flex-1 overflow-auto p-4">
