@@ -1,6 +1,6 @@
 {
   "name": "@coremail/auth-service",
-  "version": "3.18.28",
+  "version": "3.18.29",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

@@ -166,6 +166,41 @@ export function BackupsPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  // v3.18.29: Archive-Object löschen (DELETE per S3-Key)
+  const deleteArchive = useMutation({
+    mutationFn: (key: string) => api.delete(`/admin/backups/archive?key=${encodeURIComponent(key)}`),
+    onSuccess: () => {
+      toast.success('Archive-Objekt gelöscht');
+      void qc.invalidateQueries({ queryKey: ['admin-backups-s3'] });
+      void qc.invalidateQueries({ queryKey: ['admin-backups-jobs'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // v3.18.29: Archive-Object download (Stream-Proxy per S3-Key)
+  const downloadArchive = async (key: string) => {
+    const token = localStorage.getItem('bcp-token') ?? '';
+    try {
+      const res = await fetch(`/api/v1/admin/backups/archive/download?key=${encodeURIComponent(key)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = key.split('/').pop() ?? 'backup.bin';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
+    }
+  };
+
   const createSchedule = useMutation({
     mutationFn: (s: Partial<BackupSchedule>) => api.post('/admin/backups/schedules', s),
     onSuccess: () => { toast.success('Zeitplan erstellt'); setScheduleEditor(null); void qc.invalidateQueries({ queryKey: ['admin-backups-schedules'] }); },
@@ -438,14 +473,38 @@ export function BackupsPage() {
                     <th className="px-4 py-2 text-left font-medium">Speicherort</th>
                     <th className="px-4 py-2 text-right font-medium">Größe</th>
                     <th className="px-4 py-2 text-left font-medium">Geändert</th>
+                    <th className="px-4 py-2 text-right font-medium">Aktionen</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {s3Data.map((b) => (
                     <tr key={b.key} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-4 py-2 font-mono text-xs text-gray-700 dark:text-gray-200 truncate max-w-md">{b.key}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-700 dark:text-gray-200 truncate max-w-md" title={b.key}>{b.key}</td>
                       <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-300">{fmtBytes(b.size)}</td>
                       <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{fmtDate(b.lastModified)}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => void downloadArchive(b.key)}
+                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                            title="Backup herunterladen"
+                          >
+                            <HardDriveDownload size={13} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Backup „${b.key}" wirklich endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
+                                deleteArchive.mutate(b.key);
+                              }
+                            }}
+                            disabled={deleteArchive.isPending}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+                            title="Backup löschen"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
