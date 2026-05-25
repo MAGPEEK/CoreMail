@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -144,6 +144,19 @@ export async function storeInboundMessage(
   }
 
   let parsed = await parseRawMessage(effectiveBuffer);
+
+  // ── iTIP-REPLY-Handler (v3.18.25 A5) ────────────────────────────────────────
+  // Wenn die eingehende Mail eine REPLY auf eine Termin-Einladung ist, updaten
+  // wir den Attendee-Status im entsprechenden CalendarEvent. Die Mail wird
+  // TROTZDEM normal in die Inbox zugestellt (User-Awareness wie bei Outlook).
+  try {
+    const handled = await processITipInbound(effectiveBuffer);
+    if (handled) {
+      log.info({ rcptTo: opts.rcptTo, from: opts.fromAddr }, 'iTIP REPLY processed — CalendarEvent attendee updated');
+    }
+  } catch (err) {
+    log.warn({ err, rcptTo: opts.rcptTo }, 'iTIP processing failed — continuing normal delivery');
+  }
 
   // ── Transport Rules (Server-weit, Admin-konfiguriert, v3.18.9) ──────────────
   // Wird VOR User-Mail-Rules ausgewertet — modifiziert Header/Subject/Body und
