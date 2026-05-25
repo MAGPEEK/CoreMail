@@ -116,7 +116,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText })) as { error: string };
+    const body = await res.json().catch(() => ({ error: res.statusText })) as { error: string; code?: string };
+    // v3.18.19 D5: Forced 2FA — Backend liefert 403 mit code=MFA_REQUIRED wenn
+    // requireMfaForAdmins=true und User keine MFA aktiviert hat. Frontend leitet
+    // auf MFA-Setup-Seite. (Verhindert dass User in Endlos-Fehler-Loop landen.)
+    if (res.status === 403 && body.code === 'MFA_REQUIRED') {
+      // Vermeide doppelte Redirects wenn schon auf der MFA-Seite
+      if (!window.location.pathname.startsWith('/bcp/mfa-required')) {
+        window.location.href = '/bcp/mfa-required';
+      }
+      throw new Error('MFA_REQUIRED');
+    }
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
 

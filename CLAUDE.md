@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.18`
+**Aktuelle Version**: `3.18.19`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.18; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.19; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.18 — Highlights
+## Aktuelle Version 3.18.19 — Highlights
+
+**v3.18.19** — Security: Forced 2FA für Admin-Login. ServerSettings.requireMfaForAdmins-Toggle bestand seit längerem, wurde aber nirgendwo enforced. Jetzt prüft `requireAdmin`-Middleware in `packages/api-gateway/src/middleware/auth.ts` bei aktivem Toggle die UserMfa-Tabelle (totpEnabled OR webAuthnCredentials nicht leer). Ohne MFA → 403 `{ code: "MFA_REQUIRED" }`. BCP-Frontend-API-Client leitet auf neue `MfaRequiredPage` (Pfad `/bcp/mfa-required`) mit Anleitung zur Aktivierung im MWA. Kein Chicken-and-Egg: MFA-Setup-Routes (`/auth/mfa/*`) sind außerhalb der Admin-Sperre. Fail-safe bei DB-Fehler (durchlassen + ERROR-Log) damit Admins nicht bei Postgres-Ausfall ausgesperrt werden.
 
 **v3.18.18** — Toolbar-Share-Button funktioniert + CalDAV-URL-Anzeige. (1) **Fix Toolbar „Kalender teilen"**: Button zeigte vorher nur Toast, jetzt öffnet er ShareCalendarDialog mit Picker-Dropdown im Header wenn User mehrere eigene Kalender hat. Bei einem direkt geöffnet, bei keinem Toast-Error. ShareCalendarDialog akzeptiert optionalen `ownedCalendars`-Prop für Picker-Modus. (2) **CalDAV-URL-Anzeige**: Neuer Endpoint `GET /api/v1/calendar/caldav-info` liefert `accountUrl` (Auto-Discovery) + Pro-Kalender-URL + Username + Auth-Hinweis (App-Passwort wegen MFA). ShareDialog zeigt neue Sektion „Externer Zugriff (CalDAV)" mit Copy-Buttons. Sidebar-Kontextmenü hat zusätzlich „CalDAV-URL kopieren" auf eigenen Kalendern. HTTPS empfohlen außer bei explizit `useHttps=false` (Reverse-Proxy-Setup).
 
@@ -721,4 +723,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.18 — Toolbar-Share-Button + CalDAV-URL-Anzeige; v3.18.17 — Calendar SSE-Push + Free/Busy; v3.18.16 — Calendar Quick-Wins)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.19 — Forced 2FA für Admins; v3.18.18 — Toolbar-Share-Button + CalDAV-URL; v3.18.17 — Calendar SSE-Push + Free/Busy)*

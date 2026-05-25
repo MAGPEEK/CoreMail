@@ -56,6 +56,38 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
       res.status(403).json({ error: 'Admin role required' });
       return;
     }
-    next();
+    // v3.18.19 D5: Forced 2FA für Admins. Wenn Server-Setting
+    // requireMfaForAdmins=true und User hat KEINE MFA aktiviert → 403 mit
+    // code=MFA_REQUIRED. Frontend zeigt Force-Setup-Banner. MFA-Setup-Route
+    // läuft über /auth/mfa (nicht /admin/*) — keine Chicken-and-Egg-Sperre.
+    void (async () => {
+      try {
+        const [settings, mfa] = await Promise.all([
+          prisma.serverSettings.findUnique({
+            where: { id: 'singleton' },
+            select: { requireMfaForAdmins: true },
+          }),
+          prisma.userMfa.findFirst({
+            where: { userId: req.apiUser!.userId },
+            select: { totpEnabled: true, webAuthnCredentials: true },
+          }),
+        ]);
+        if (!settings?.requireMfaForAdmins) { next(); return; }
+        const hasWebauthn = Array.isArray(mfa?.webAuthnCredentials)
+          && (mfa.webAuthnCredentials as unknown[]).length > 0;
+        const hasMfa = !!(mfa?.totpEnabled || hasWebauthn);
+        if (!hasMfa) {
+          res.status(403).json({
+            error: 'MFA is required for admin access',
+            code: 'MFA_REQUIRED',
+          });
+          return;
+        }
+        next();
+      } catch (err) {
+        log.error({ err }, 'MFA enforcement check failed — falling through');
+        next();
+      }
+    })();
   });
 }
