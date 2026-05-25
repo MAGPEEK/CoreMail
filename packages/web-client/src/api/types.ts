@@ -124,6 +124,8 @@ export interface CalendarEvent {
   dtEnd: string;
   recurring: boolean;
   icalData?: string;
+  // v3.18.15 Event Visibility (RFC 5545 CLASS)
+  classification?: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
 }
 
 export interface Contact {

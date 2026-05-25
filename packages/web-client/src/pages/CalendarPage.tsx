@@ -27,6 +27,7 @@ interface NewEventForm {
   dtEnd: string;
   calendarId: string;
   allDay: boolean;
+  classification: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
 }
 
 export function CalendarPage() {
@@ -108,6 +109,7 @@ export function CalendarPage() {
       dtEnd: info.endStr,
       calendarId: defaultWritableCalId,
       allDay: info.allDay,
+      classification: 'PUBLIC',
     });
   };
 
@@ -120,7 +122,7 @@ export function CalendarPage() {
     const eventCalId = (info.event.extendedProps as { calendarId?: string })?.calendarId;
     const cal = (calendars ?? []).find((c) => c.id === eventCalId);
     if (cal && cal.permission === 'READ') {
-      toast.error('Nur Lese-Berechtigung für diesen Kalender');
+      toast.error(t('cal_share_no_write_perm'));
       return;
     }
     if (confirm(`Termin "${info.event.title}" löschen?`)) {
@@ -184,6 +186,7 @@ export function CalendarPage() {
             dtEnd: '',
             calendarId: defaultWritableCalId,
             allDay: false,
+            classification: 'PUBLIC',
           })}
           onShare={() => toast('Wähle einen Kalender und klicke Teilen über das ⋯-Menü', { icon: 'ℹ️' })}
           onPrint={() => window.print()}
@@ -244,9 +247,18 @@ export function CalendarPage() {
                     .filter((c) => c.permission !== 'READ')
                     .map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name}{c.shared ? ` (geteilt von ${c.ownerDisplayName ?? c.ownerEmail ?? '?'})` : ''}
+                        {c.name}{c.shared ? ` (${t('cal_share_shared_by').replace('{name}', c.ownerDisplayName ?? c.ownerEmail ?? '?')})` : ''}
                       </option>
                     ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t('cal_event_classification')}</label>
+                <select className="input" value={newEvent.classification}
+                  onChange={(e) => setNewEvent({ ...newEvent, classification: e.target.value as 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL' })}>
+                  <option value="PUBLIC">{t('cal_event_class_public')}</option>
+                  <option value="PRIVATE">{t('cal_event_class_private')}</option>
+                  <option value="CONFIDENTIAL">{t('cal_event_class_confidential')}</option>
                 </select>
               </div>
             </div>

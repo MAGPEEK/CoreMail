@@ -23,6 +23,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
 import { MiniCalendar } from './MiniCalendar.js';
 import { ShareCalendarDialog } from './ShareCalendarDialog.js';
+import { useT } from '../i18n/useT.js';
 
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
 export const ICON_MAP: Record<string, React.ElementType> = {
@@ -75,6 +76,7 @@ export function CalendarSidebar({
   onSelectDate: (d: Date) => void;
 }) {
   const qc = useQueryClient();
+  const t = useT();
   const { hiddenCalendarIds, toggleCalendar, showOnlyCalendar } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -166,7 +168,7 @@ export function CalendarSidebar({
       },
       { type: 'divider' },
       {
-        label: 'Teilen und Berechtigungen',
+        label: t('cal_share_title'),
         icon: <Share2 size={14} />,
         onClick: () => setDialog({ kind: 'share', cal }),
       },
@@ -254,11 +256,11 @@ export function CalendarSidebar({
       },
       { type: 'divider' },
       {
-        label: 'Aus meiner Liste entfernen',
+        label: t('cal_share_remove_self'),
         icon: <Trash2 size={14} />,
         danger: true,
         onClick: () => {
-          if (window.confirm(`„${cal.name}" wirklich aus deiner Liste entfernen? Der Owner kann dich erneut einladen.`)) {
+          if (window.confirm(t('cal_share_remove_self_confirm'))) {
             removeSharedAccess.mutate(cal);
           }
         },
@@ -344,7 +346,7 @@ export function CalendarSidebar({
           className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
         >
           {expandedOwned ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          Meine Kalender
+          {t('cal_share_my_calendars')}
         </button>
 
         {expandedOwned && ownedCalendars.map((cal) => renderCalendarRow(cal, false))}
@@ -357,7 +359,7 @@ export function CalendarSidebar({
               className="w-full flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
             >
               {expandedShared ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              Geteilt mit mir
+              {t('cal_share_shared_with_me')}
             </button>
             {expandedShared && sharedCalendars.map((cal) => renderCalendarRow(cal, true))}
           </>

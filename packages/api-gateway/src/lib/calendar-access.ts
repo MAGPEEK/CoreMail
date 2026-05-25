@@ -142,3 +142,52 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
 export function stripGalPrefix(id: string): string {
   return id.replace(/^(gal|ext|grp|user)-/, '');
 }
+
+/**
+ * v3.18.15 Private/Confidential Events.
+ *
+ * Maskiert ein Event basierend auf Permission + Classification:
+ *   - Owner: unverändert
+ *   - PUBLIC: unverändert
+ *   - PRIVATE: Subject="Beschäftigt", Description="", Location="", attendees gehen weg
+ *   - CONFIDENTIAL: Event soll vom Aufrufer komplett ausgeblendet werden → Helper
+ *     gibt `null` zurück. Der Aufrufer filtert das raus.
+ *
+ * Owner sieht IMMER alle Details. Nur Grantees (READ/WRITE) sehen Maskierung.
+ */
+export interface MaskableEvent {
+  id: string;
+  uid: string;
+  calendarId: string;
+  summary: string;
+  description: string;
+  location: string;
+  dtStart: Date;
+  dtEnd: Date;
+  allDay: boolean;
+  recurring: boolean;
+  classification: string;
+  // Restliche Felder bleiben durchgereicht
+  [key: string]: unknown;
+}
+
+export function maskEventForViewer<T extends MaskableEvent>(
+  event: T,
+  isOwner: boolean,
+): T | null {
+  if (isOwner) return event;
+  const cls = (event.classification ?? 'PUBLIC').toUpperCase();
+  if (cls === 'CONFIDENTIAL') return null;
+  if (cls === 'PRIVATE') {
+    return {
+      ...event,
+      summary: 'Beschäftigt',
+      description: '',
+      location: '',
+      // attendees/organizer-Felder auch leeren falls vorhanden
+      organizer: null,
+      attendees: [],
+    };
+  }
+  return event;
+}
