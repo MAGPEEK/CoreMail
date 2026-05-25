@@ -13,6 +13,7 @@ import { MailboxesPage } from './pages/MailboxesPage.js';
 import { DomainsPage } from './pages/DomainsPage.js';
 import { QueuesPage } from './pages/QueuesPage.js';
 import { LogsPage } from './pages/LogsPage.js';
+import { BackupsPage } from './pages/BackupsPage.js';
 import { ProtectionPage } from './pages/ProtectionPage.js';
 import { ServersPage } from './pages/ServersPage.js';
 import { ReportsPage } from './pages/ReportsPage.js';
@@ -138,6 +139,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/domains" element={<DomainsPage />} />
                   <Route path="/queues" element={<QueuesPage />} />
                   <Route path="/logs" element={<LogsPage />} />
+                  <Route path="/backups" element={<BackupsPage />} />
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />

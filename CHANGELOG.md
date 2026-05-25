@@ -13,6 +13,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.23] — 2026-05-25 — Backup-Restore-UI im BCP (D3)
+
+### Added
+
+- **Neue BCP-Seite „Backup & Restore"**
+  (`packages/admin-panel/src/pages/BackupsPage.tsx`,
+  `packages/admin-panel/src/components/Sidebar.tsx`,
+  `packages/admin-panel/src/i18n/translations.ts`,
+  `packages/api-gateway/src/routes/admin/backups.ts`,
+  `packages/api-gateway/src/server.ts`):
+
+  Bisher war Backup-Verwaltung nur über CLI / direkten backup-service-Aufruf
+  möglich. Neue Admin-UI mit:
+  - **Backup-Jobs-Tabelle** — Datum, Scope (user/domain/full), Format
+    (mbox/eml/full), Status mit Icons (PENDING/RUNNING/COMPLETED/FAILED/
+    CANCELLED), Progress-Bar, Download-Link bei abgeschlossenen Jobs.
+    Auto-Polling alle 5s wenn ein Job RUNNING oder PENDING ist, sonst 60s
+    (Performance + Live-Updates).
+  - **S3-Snapshots-Tabelle** — Listet alle Backup-Objekte im MinIO/S3-Bucket
+    mit Key, Größe (formatiert KB/MB/GB), Last-Modified.
+  - **„Vollbackup starten"-Button** — Triggert `POST /admin/backups/full`,
+    Audit-Log-Entry `backup.full.trigger`.
+  - **MBOX-Import (Restore)** — File-Picker (Limit 500 MB) + Ziel-User-ID,
+    `POST /admin/backups/import/:userId` mit `Content-Type: application/mbox`,
+    Audit-Log-Entry `backup.mbox.import`.
+
+  Backend: Wrapper-Router `adminBackupsRouter` leitet `/api/v1/admin/backups/*`
+  an `BACKUP_SERVICE_URL` (default `http://localhost:3004`) weiter. Auth via
+  `requireAdmin`-Middleware + Authorization-Header-Forward. Audit-Log für
+  Trigger/Import. Side-effect-Import für Express-Augmentation `req.apiUser`.
+
+  Sidebar: neuer Nav-Eintrag „Backup & Restore" mit `HardDriveDownload`-
+  Icon. i18n-Key `nav_backups` in DE + EN.
+
+---
+
 ## [3.18.22] — 2026-05-25 — OAuth2-Consent-UI (Security)
 
 ### Security

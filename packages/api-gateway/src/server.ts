@@ -30,6 +30,7 @@ import { adminAliasesRouter } from './routes/admin/aliases.js';
 import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
 import { adminLogsRouter } from './routes/admin/logs.js';
+import { adminBackupsRouter } from './routes/admin/backups.js';
 import { adminGroupsRouter } from './routes/admin/groups.js';
 import { adminResourcesRouter } from './routes/admin/resources.js';
 import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
@@ -122,6 +123,7 @@ app.get('/.well-known/acme-challenge/:token', async (req, res) => {
 const EWS_URL = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
+const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
 
 function internalProxy(targetBase: string): express.RequestHandler {
   const proxy = createProxyMiddleware({
@@ -271,6 +273,7 @@ app.use('/api/v1/admin/mailboxes',       adminMailboxesRouter);
 app.use('/api/v1/admin',                 adminAliasesRouter);
 app.use('/api/v1/admin/domains',         adminDomainsRouter);
 app.use('/api/v1/admin/queues',          adminQueuesRouter);
+app.use('/api/v1/admin/backups',         adminBackupsRouter);
 app.use('/api/v1/admin/logs',            adminLogsRouter);
 app.use('/api/v1/admin/groups',          adminGroupsRouter);
 app.use('/api/v1/admin/resources',       adminResourcesRouter);

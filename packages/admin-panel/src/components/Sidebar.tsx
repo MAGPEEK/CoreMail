@@ -5,7 +5,7 @@ import {
   ShieldAlert, Search, Users,
   BookUser, ShieldHalf, Archive,
   FolderOpen, KeyRound, ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog,
+  Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 
@@ -70,6 +70,7 @@ export function Sidebar() {
     { path: '/rbac',             labelKey: 'nav_rbac',             icon: ShieldHalf },
     { path: '/audit-log',        labelKey: 'nav_audit_log',        icon: ClipboardList },
     { path: '/logs',             labelKey: 'nav_logs',             icon: ScrollText },
+    { path: '/backups',          labelKey: 'nav_backups',          icon: HardDriveDownload },
     { path: '/compliance-info',  labelKey: 'nav_info',             icon: Info },
   ];
 
