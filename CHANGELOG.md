@@ -13,6 +13,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.12] — 2026-05-24 — Public Folders: Browse-Modal, Folder-Icons, Auto-Hide ohne ACL
+
+### Fixed
+
+- **Public Folders waren nicht zugreifbar trotz Vollzugriff**
+  (`packages/web-client/src/components/FolderTree.tsx`):
+  Klick auf einen Public Folder zeigte nur einen Toast „Browse-Ansicht kommt
+  im nächsten Patch" — kein tatsächlicher Zugriff auf die Nachrichten möglich.
+  **Fix**: Neue `PublicFolderViewerModal`-Komponente — Klick öffnet 2-Spalten-
+  Modal (Liste links, Detail rechts) mit allen Nachrichten des Ordners.
+  Auto-Refresh 30s, sanitized HTML-Rendering, klickbare Empfänger-Avatare,
+  „X Nachrichten"-Counter im Footer.
+
+- **Falsche Symbole** — Public Folders hatten ein Users-Icon (Verteilergruppen-
+  Style), wirkten wie Kontakte statt Ordner.
+  **Fix**: `Folder`-Icon (amber, gefüllt) sowohl in der Sidebar als auch im
+  Modal-Header. `FolderTree`-Icon für die Sektion-Überschrift. Klare visuelle
+  Trennung zwischen Mail-Ordnern (Stack-Icon) und Public Folders (Folder-Icon).
+
+- **Section erschien bei leerem Cache / während Loading**
+  Vorher: `if (folders.length === 0) return null` — vor erstem Fetch zeigte die
+  Section nichts, das ist korrekt, ABER wenn der Cache stale war (älterer User
+  hatte noch ACLs), wurde die Section initial gezeigt obwohl neu eingeloggter
+  User keine Berechtigung mehr hat.
+  **Fix**: Hide-Logik prüft jetzt `!isSuccess || !folders || folders.length === 0`
+  — Section ist garantiert unsichtbar bis Backend tatsächlich Daten geliefert
+  hat. Zusätzlich `refetchOnWindowFocus: true` + Polling-Intervall von 60s auf
+  30s reduziert: wenn Admin Zugriff entzieht, verschwindet die Section beim
+  nächsten Tab-Fokus oder spätestens nach 30s automatisch.
+
+---
+
 ## [3.18.11] — 2026-05-24 — MWA Globales Adressbuch (GAL-Browser)
 
 ### Added

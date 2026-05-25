@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.11`
+**Aktuelle Version**: `3.18.12`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.11; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.12; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.11 — Highlights
+## Aktuelle Version 3.18.12 — Highlights
+
+**v3.18.12** — Public Folders: drei Fixes. (1) Browse-Modal: Klick auf Public Folder zeigte vorher nur Toast, jetzt neue `PublicFolderViewerModal`-Komponente mit 2-Spalten-Layout (Liste + Detail), Auto-Refresh 30s, sanitized HTML-Rendering. (2) Folder-Icon (amber, gefüllt) statt Users-Icon — Public Folders sehen jetzt wie Ordner aus, nicht wie Kontakte. (3) Section komplett unsichtbar wenn keine ACL: Hide-Logik via `!isSuccess || !folders || folders.length === 0`. `refetchOnWindowFocus: true` + Polling-Intervall 30s — wenn Admin Zugriff entzieht, verschwindet Section beim Tab-Fokus oder spätestens nach 30s.
 
 **v3.18.11** — MWA Globales Adressbuch (GAL-Browser): ContactsPage hat jetzt Tabs „Mein Adressbuch" / „Globales Adressbuch". GAL liefert vereint aus 3 Quellen (alle aktiven User + ExternalMailContacts + DistributionGroups), alphabetisch sortiert (Browse-Modus ohne Query), Typ-Filter (Alle/Personen/Extern/Gruppen), Counter-Badge. Klick auf GAL-Eintrag → Read-Only-Detail-Panel mit Typ-Badge, klickbarem E-Mail/Telefon/Mobil, Unternehmen/Abteilung/Domain/Mitgliederzahl + „Neue Nachricht"-Button mit vorausgefüllter Adresse. Backend: `/contacts/gal` erweitert mit Browse-Modus + `type=`-Filter + Paginierung. ID-Prefix (`user-`/`ext-`/`grp-`) markiert Quelle.
 
