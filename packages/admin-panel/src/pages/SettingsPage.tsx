@@ -33,6 +33,7 @@ interface GlobalSettings {
   requireMfaForAdmins:         boolean;
   allowSelfRegistration:       boolean;
   selfServicePasswordReset:    boolean;
+  auditLogEnabled:             boolean;
   // Wartung
   maintenanceMode:    boolean;
   maintenanceMessage: string;
@@ -204,6 +205,7 @@ export function SettingsPage() {
     inactivityTimeoutMinutes: 30,
     requireMfaForAdmins: false, allowSelfRegistration: false,
     selfServicePasswordReset: true,
+    auditLogEnabled: true,
   });
   const [maint, setMaint] = useState({
     maintenanceMode: false,
@@ -224,7 +226,8 @@ export function SettingsPage() {
              sessionTimeoutMinutes: cfg.sessionTimeoutMinutes,
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
              requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration,
-             selfServicePasswordReset: cfg.selfServicePasswordReset ?? true });
+             selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
+             auditLogEnabled: cfg.auditLogEnabled ?? true });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
     setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
   }, [cfg]);
@@ -450,6 +453,28 @@ export function SettingsPage() {
             <div className="flex items-center gap-2 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
               <AlertTriangle size={12} />
               Der „Passwort vergessen?"-Link wird im Login-Formular ausgeblendet.
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup
+          label="Audit-Log"
+          hint="Protokolliert alle administrativen Aktionen (Benutzerverwaltung, Domain-Änderungen, Logins). Kritische Aktionen (Einstellungen-Änderung, Audit-Toggle selbst, Rolle/OAuth/Mailbox-/Domain-Löschungen) werden auch bei ausgeschaltetem Audit-Log IMMER protokolliert — Compliance-Anforderung gegen Insider-Threats."
+        >
+          <Toggle
+            value={sec.auditLogEnabled}
+            onChange={(v) => updSec('auditLogEnabled', v)}
+            label={sec.auditLogEnabled
+              ? 'Aktiviert — alle Admin-Aktionen werden protokolliert'
+              : 'Deaktiviert — nur kritische Aktionen werden noch protokolliert'}
+          />
+          {!sec.auditLogEnabled && (
+            <div className="flex items-start gap-2 mt-2 text-xs text-red-700 bg-red-50 border border-red-100 rounded px-3 py-2">
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <div>
+                <strong>Achtung:</strong> Compliance-Anforderungen (DSGVO Art. 32, SOX, HIPAA, TISAX, ISO 27001) verlangen lückenlose Protokollierung administrativer Aktionen.
+                Ein Ausschalten kann zu Audit-Findings führen. Diese Aktion selbst wird ungeachtet des Toggle-Werts protokolliert.
+              </div>
             </div>
           )}
         </FieldGroup>

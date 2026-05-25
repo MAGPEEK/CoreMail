@@ -34,28 +34,73 @@ export interface AuditEntry {
 }
 
 /**
+ * v3.18.30: In-Memory-Cache (60s TTL) für auditLogEnabled-Flag. Vermeidet
+ * Datenbank-Hit auf jedem Audit-Write. Invalidiert wird via Redis-Channel
+ * `settings:reload` (siehe global-settings.ts Save-Handler).
+ */
+let _auditEnabledCache: { value: boolean; expiresAt: number } | null = null;
+
+export function invalidateAuditCache(): void { _auditEnabledCache = null; }
+
+async function isAuditEnabled(): Promise<boolean> {
+  if (_auditEnabledCache && _auditEnabledCache.expiresAt > Date.now()) {
+    return _auditEnabledCache.value;
+  }
+  try {
+    const s = await prisma.serverSettings.findUnique({
+      where: { id: 'singleton' },
+      select: { auditLogEnabled: true },
+    });
+    const enabled = s?.auditLogEnabled ?? true;
+    _auditEnabledCache = { value: enabled, expiresAt: Date.now() + 60_000 };
+    return enabled;
+  } catch {
+    return true; // fail-safe: bei DB-Fehler weiterhin loggen
+  }
+}
+
+/**
+ * v3.18.30: Audit-Actions die IMMER protokolliert werden müssen — auch wenn
+ * der globale Toggle aus ist. Zentral: alle Settings-Änderungen und der
+ * Audit-Toggle selbst (Compliance-Anforderung — sonst könnte man unentdeckt
+ * loggen ausschalten, Daten exfiltrieren, wieder anschalten).
+ */
+const ALWAYS_AUDIT = /^(settings\.|audit\.|user\.role|oauth\.client|mailbox\.delete|domain\.delete)/i;
+
+/**
  * Write an audit log entry asynchronously (fire-and-forget).
  * Never throws — audit failures must not break the main flow.
+ *
+ * v3.18.30: Respektiert ServerSettings.auditLogEnabled — wenn aus, werden
+ * normale Events nicht geloggt. Kritische Aktionen (ALWAYS_AUDIT) werden
+ * ungeachtet des Toggles immer geloggt.
  */
 export function audit(entry: AuditEntry): void {
-  prisma.auditLog
-    .create({
-      data: {
-        ...(entry.actorId !== undefined ? { actorId: entry.actorId } : {}),
-        ...(entry.actorEmail !== undefined ? { actorEmail: entry.actorEmail } : {}),
-        action: entry.action,
-        ...(entry.targetType !== undefined ? { targetType: entry.targetType } : {}),
-        ...(entry.targetId !== undefined ? { targetId: entry.targetId } : {}),
-        ...(entry.targetName !== undefined ? { targetName: entry.targetName } : {}),
-        ...(entry.ipAddress !== undefined ? { ipAddress: entry.ipAddress } : {}),
-        ...(entry.userAgent !== undefined ? { userAgent: entry.userAgent } : {}),
-        // Cast via unknown: Prisma InputJsonValue doesn't accept Record<string, unknown> directly
-        ...(entry.changes !== undefined ? { changes: entry.changes as unknown as Record<string, string> } : {}),
-        success: entry.success ?? true,
-        ...(entry.errorMsg !== undefined ? { errorMsg: entry.errorMsg } : {}),
-      },
-    })
-    .catch((err) => log.error({ err, action: entry.action }, 'Audit log write failed'));
+  void (async () => {
+    const isCritical = ALWAYS_AUDIT.test(entry.action);
+    if (!isCritical) {
+      const enabled = await isAuditEnabled();
+      if (!enabled) return;
+    }
+
+    prisma.auditLog
+      .create({
+        data: {
+          ...(entry.actorId !== undefined ? { actorId: entry.actorId } : {}),
+          ...(entry.actorEmail !== undefined ? { actorEmail: entry.actorEmail } : {}),
+          action: entry.action,
+          ...(entry.targetType !== undefined ? { targetType: entry.targetType } : {}),
+          ...(entry.targetId !== undefined ? { targetId: entry.targetId } : {}),
+          ...(entry.targetName !== undefined ? { targetName: entry.targetName } : {}),
+          ...(entry.ipAddress !== undefined ? { ipAddress: entry.ipAddress } : {}),
+          ...(entry.userAgent !== undefined ? { userAgent: entry.userAgent } : {}),
+          ...(entry.changes !== undefined ? { changes: entry.changes as unknown as Record<string, string> } : {}),
+          success: entry.success ?? true,
+          ...(entry.errorMsg !== undefined ? { errorMsg: entry.errorMsg } : {}),
+        },
+      })
+      .catch((err) => log.error({ err, action: entry.action }, 'Audit log write failed'));
+  })();
 }
 
 /**

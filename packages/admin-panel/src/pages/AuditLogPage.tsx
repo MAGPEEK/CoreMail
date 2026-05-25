@@ -76,15 +76,94 @@ function dateToIso(d: string): string {
   return new Date(d + 'T23:59:59.999Z').toISOString();
 }
 
+// v3.18.30: Human-readable Action-Labels. Audit-Middleware schreibt das Pattern
+// `<resource>.<verb>` (z.B. `settings.put`, `mailboxes.delete`) — für Admins ist
+// das aber wenig aussagekräftig. Diese Map übersetzt häufige Aktionen in
+// menschenlesbare Beschreibungen + ordnet sie Farben zu.
+type ActionMeta = { label: string; tone: 'create' | 'update' | 'delete' | 'auth' | 'critical' | 'read' };
+
+const ACTION_MAP: Record<string, ActionMeta> = {
+  // Settings
+  'settings.put':                 { label: 'Einstellungen geändert',         tone: 'update' },
+  'settings.post':                { label: 'Einstellungen geändert',         tone: 'update' },
+  'audit.enabled':                { label: 'Audit-Log AKTIVIERT',            tone: 'critical' },
+  'audit.disabled':               { label: 'Audit-Log DEAKTIVIERT',          tone: 'critical' },
+  // Mailboxes
+  'mailboxes.post':               { label: 'Postfach angelegt',              tone: 'create' },
+  'mailboxes.put':                { label: 'Postfach geändert',              tone: 'update' },
+  'mailboxes.patch':              { label: 'Postfach geändert',              tone: 'update' },
+  'mailboxes.delete':             { label: 'Postfach gelöscht',              tone: 'delete' },
+  'mailbox.create':               { label: 'Postfach angelegt',              tone: 'create' },
+  'mailbox.update':               { label: 'Postfach geändert',              tone: 'update' },
+  'mailbox.delete':               { label: 'Postfach gelöscht',              tone: 'delete' },
+  // Domains
+  'domains.post':                 { label: 'Domain angelegt',                tone: 'create' },
+  'domains.put':                  { label: 'Domain geändert',                tone: 'update' },
+  'domains.delete':               { label: 'Domain gelöscht',                tone: 'delete' },
+  'domain.create':                { label: 'Domain angelegt',                tone: 'create' },
+  'domain.delete':                { label: 'Domain gelöscht',                tone: 'delete' },
+  // Auth
+  'auth.login':                   { label: 'Anmeldung erfolgreich',          tone: 'auth' },
+  'auth.login_failed':            { label: 'Anmeldung fehlgeschlagen',       tone: 'delete' },
+  'auth.logout':                  { label: 'Abgemeldet',                     tone: 'auth' },
+  'auth.mfa_enabled':             { label: 'MFA aktiviert',                  tone: 'create' },
+  'auth.mfa_disabled':            { label: 'MFA deaktiviert',                tone: 'critical' },
+  'session.revoke':               { label: 'Session widerrufen',             tone: 'delete' },
+  // OAuth
+  'oauth.token_issued':           { label: 'OAuth-Token ausgestellt',        tone: 'auth' },
+  'oauth.token_revoked':          { label: 'OAuth-Token widerrufen',         tone: 'delete' },
+  'oauth.client.post':            { label: 'OAuth-Client angelegt',          tone: 'create' },
+  'oauth.client.put':             { label: 'OAuth-Client geändert',          tone: 'update' },
+  'oauth.client.delete':          { label: 'OAuth-Client gelöscht',          tone: 'delete' },
+  // Backups
+  'backups.post':                 { label: 'Backup gestartet',               tone: 'create' },
+  'backups.delete':               { label: 'Backup gelöscht',                tone: 'delete' },
+  'backup.full.trigger':          { label: 'Vollbackup gestartet',           tone: 'create' },
+  'backup.mailbox.trigger':       { label: 'Mailbox-Backup gestartet',       tone: 'create' },
+  'backup.mbox.import':           { label: 'MBOX-Import (Restore)',          tone: 'update' },
+  // Calendar Sharing
+  'calendar.share.create':        { label: 'Kalender freigegeben',           tone: 'create' },
+  'calendar.share.update':        { label: 'Freigabe geändert',              tone: 'update' },
+  'calendar.share.delete':        { label: 'Freigabe entzogen',              tone: 'delete' },
+  'calendar.share.self_remove':   { label: 'Freigabe selbst verlassen',      tone: 'delete' },
+  // Rules / Compliance
+  'rule.create':                  { label: 'Regel angelegt',                 tone: 'create' },
+  'rule.update':                  { label: 'Regel geändert',                 tone: 'update' },
+  'rule.delete':                  { label: 'Regel gelöscht',                 tone: 'delete' },
+  'journaling.rule_created':      { label: 'Journaling-Regel angelegt',      tone: 'create' },
+  'retention.run':                { label: 'Aufbewahrung ausgeführt',        tone: 'update' },
+  // Roles
+  'user.role':                    { label: 'Rolle geändert',                 tone: 'critical' },
+  'roles.put':                    { label: 'Rolle geändert',                 tone: 'critical' },
+  // Gateway
+  'gateway.settings_updated':     { label: 'SMTP-Gateway konfiguriert',      tone: 'update' },
+};
+
+function actionMeta(action: string): ActionMeta {
+  if (ACTION_MAP[action]) return ACTION_MAP[action];
+  // Heuristik: Fallback nach Verb
+  const verb = action.split('.').pop()?.toLowerCase() ?? '';
+  if (verb === 'post' || verb === 'create')      return { label: action, tone: 'create' };
+  if (verb === 'delete')                          return { label: action, tone: 'delete' };
+  if (verb === 'put' || verb === 'patch' || verb === 'update') return { label: action, tone: 'update' };
+  if (verb === 'get')                             return { label: action, tone: 'read' };
+  return { label: action, tone: 'read' };
+}
+
 function ActionBadge({ action }: { action: string }) {
-  const color = action.startsWith('CREATE') ? 'bg-green-100 text-green-700'
-    : action.startsWith('DELETE') ? 'bg-red-100 text-red-700'
-    : action.startsWith('UPDATE') || action.startsWith('PUT') ? 'bg-blue-100 text-blue-700'
-    : action.startsWith('LOGIN') ? 'bg-purple-100 text-purple-700'
-    : 'bg-gray-100 text-gray-600';
+  const meta = actionMeta(action);
+  const color = meta.tone === 'create'   ? 'bg-green-100 text-green-700'
+              : meta.tone === 'delete'   ? 'bg-red-100 text-red-700'
+              : meta.tone === 'update'   ? 'bg-blue-100 text-blue-700'
+              : meta.tone === 'auth'     ? 'bg-purple-100 text-purple-700'
+              : meta.tone === 'critical' ? 'bg-amber-100 text-amber-800 border border-amber-200'
+              : 'bg-gray-100 text-gray-600';
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium ${color}`}>
-      {action}
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${color}`}
+      title={action}
+    >
+      {meta.label}
     </span>
   );
 }

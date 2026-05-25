@@ -13,6 +13,57 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.30] — 2026-05-25 — BigInt-Crashfix + Audit-Log-Toggle + Audit-Translations
+
+### Fixed
+
+- **KRITISCH: backup-service Crashloop wegen `BigInt`-Serialisierung**
+  (`packages/backup-service/src/server.ts`): Seit v3.18.26 hat `BackupJob.sizeBytes`
+  den Prisma-Typ `BigInt` (für korrekte Repräsentation von Backup-Größen > 4 GB).
+  Beim ersten Aufruf von `/jobs` oder `/users` warf Node mit
+  `TypeError: Do not know how to serialize a BigInt` → supervisord restartete den
+  Container endlos → **ALLE Backup-Endpoints lieferten 500**, was wiederum die
+  vom User gemeldeten Symptome erklärt:
+  - „Einzelne Mailbox sichern zeigt keine Benutzer an" → `/users` crashte
+  - „Jobs zeigt keinen Status" → `/jobs` crashte
+  Fix: Globaler Monkey-Patch von `express.response.json` am Modul-Top mit
+  rekursivem `BigInt → string`-Replacer in `JSON.stringify`. Wirkt damit für
+  alle bestehenden und zukünftigen Endpoints, ohne dass einzelne Handler
+  angepasst werden müssen.
+
+### Added
+
+- **Audit-Log-Toggle in Sicherheitseinstellungen**
+  (`packages/storage/prisma/schema.prisma`,
+  `packages/api-gateway/src/lib/audit.ts`,
+  `packages/api-gateway/src/routes/admin/global-settings.ts`,
+  `packages/admin-panel/src/pages/SettingsPage.tsx`):
+  Neues Feld `ServerSettings.auditLogEnabled` (Default `true`) erlaubt
+  Admins, das globale Audit-Logging ein-/auszuschalten. Toggle in
+  BCP → Einstellungen → Sicherheit. **Critical-Action-Override**: Regex
+  `ALWAYS_AUDIT` (`/^(settings\.|audit\.|user\.role|oauth\.client|mailbox\.delete|domain\.delete)/i`)
+  loggt sicherheits- und compliance-relevante Aktionen IMMER — auch bei
+  ausgeschaltetem Toggle. Compliance-Hintergrund (DSGVO Art. 32, SOX, HIPAA,
+  TISAX, ISO 27001): Sonst könnte ein Admin Audit ausschalten, Daten
+  exfiltrieren und wieder einschalten — unentdeckt. Der Toggle-Wechsel
+  selbst wird als `audit.enabled` / `audit.disabled` mit Diff im
+  `changes`-Feld protokolliert. **In-Memory-Cache** (60s TTL) verhindert
+  DB-Hit auf jedem Audit-Write; Invalidierung via `invalidateAuditCache()`
+  nach jedem Save.
+
+- **Human-Readable Action-Labels im Audit-Log**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`):
+  Aktionen wie `settings.put` oder `mailboxes.delete` werden jetzt mit
+  einer `ACTION_MAP` in lesbare Beschreibungen übersetzt — z.B.
+  „Einstellungen geändert", „Postfach gelöscht", „Vollbackup gestartet",
+  „Kalender freigegeben", „Audit-Log DEAKTIVIERT" (mit roter Critical-Tone).
+  Über 40 Mappings für Settings, Mailboxes, Domains, Auth, OAuth, Backups,
+  Calendar-Sharing, Rules, Roles, Gateway. Hover-Tooltip zeigt den
+  Original-Action-String für SIEM-Querverweise. Heuristik-Fallback nach
+  Verb (`post`/`create`/`delete`/...) für unbekannte Aktionen.
+
+---
+
 ## [3.18.29] — 2026-05-25 — Backup-Archiv: Download + Delete für S3-Objekte
 
 ### Added

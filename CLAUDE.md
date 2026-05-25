@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.29`
+**Aktuelle Version**: `3.18.30`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.29 — Highlights
+## Aktuelle Version 3.18.30 — Highlights
+
+**v3.18.30** — BigInt-Crashfix + Audit-Toggle + Audit-Translations. **KRITISCH**: backup-service crashloopte seit v3.18.26 weil `BackupJob.sizeBytes` als Prisma-BigInt nicht von `JSON.stringify` serialisiert wird — `/jobs` und `/users` warfen 500, was die User-Symptome „Einzelne Mailbox sichern zeigt keine Benutzer" und „Jobs zeigt keinen Status" erklärt. Fix: globaler Monkey-Patch von `express.response.json` am Modul-Top mit rekursivem BigInt→String-Replacer. Wirkt für alle Endpoints. **Audit-Log-Toggle** in BCP→Sicherheit (`ServerSettings.auditLogEnabled`). Critical-Action-Override via Regex `ALWAYS_AUDIT` (`settings.*`, `audit.*`, `user.role`, `oauth.client`, `mailbox.delete`, `domain.delete`) — diese werden IMMER protokolliert auch bei abgeschaltetem Toggle. Toggle-Wechsel selbst als `audit.enabled`/`audit.disabled` mit Diff geloggt (Compliance: DSGVO Art. 32 / SOX / HIPAA / TISAX / ISO 27001). 60s In-Memory-Cache vermeidet DB-Hit pro Audit-Write; `invalidateAuditCache()` nach Save. **Human-Readable Audit-Labels**: `ACTION_MAP` mit 40+ Mappings übersetzt `settings.put`→„Einstellungen geändert", `mailboxes.delete`→„Postfach gelöscht", `audit.disabled`→„Audit-Log DEAKTIVIERT" (rote Critical-Tone) etc. Original-String im title-Tooltip für SIEM-Querverweise.
 
 **v3.18.29** — Backup-Archiv Download + Delete. Vorher war die Archive-Tabelle read-only. Jetzt: zwei neue Backend-Endpoints (`GET /backup/admin/archive/download?key=` als Stream-Proxy, `DELETE /backup/admin/archive?key=` löscht S3-Object und nullt referenzierende BackupJob.downloadUrl mit Status=EXPIRED). Frontend: neue Aktionsspalte im Archive-Tab mit Download-Button (HardDriveDownload-Icon) und Trash-Button (mit „endgültig löschen"-Confirm). Audit-Log-Entry `backup.archive.delete`.
 
@@ -743,4 +745,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.29 — Backup-Archiv Download+Delete; v3.18.28 — Calendar+Backup UX-Fixes; v3.18.27 — Outlook-Style Event-Dialog)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations; v3.18.29 — Backup-Archiv Download+Delete; v3.18.28 — Calendar+Backup UX-Fixes)*
