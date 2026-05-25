@@ -113,26 +113,28 @@ export function CalendarSidebar({
     onSuccess: () => invalidate(),
   });
 
-  // Geteilt-mit-mir-Share entfernen (Grantee-Selfremoval)
+  // v3.18.16: Grantee-Operationen via shareId direkt
   const removeSharedAccess = useMutation({
     mutationFn: async (cal: Calendar) => {
-      if (!cal.shared || !cal.id) return;
-      // Owner-Wissen reicht nicht — wir haben keine shareId. Stattdessen die
-      // GET /:id/shares Route umgehen wir und löschen über den dedizierten Endpoint
-      // nicht möglich für Grantees ohne shareId. Daher: simpler Pfad — wir nutzen
-      // den DELETE-Endpoint mit shareId-Lookup via Backend-Convenience.
-      // FIX: Backend muss DELETE auf granteeId akzeptieren — wir ergänzen einen
-      // Convenience-Endpoint, oder Grantee fragt zuerst seine Share-ID ab.
-      // Pragmatisch für v3.18.14: über `/calendar-shares/mine?calendarId=` listen.
-      const list = await api.get<{ id: string; calendarId: string }[]>(
-        `/calendar/mine-shares?calendarId=${encodeURIComponent(cal.id)}`,
-      ).catch(() => [] as { id: string; calendarId: string }[]);
-      const mine = list.find((s) => s.calendarId === cal.id);
-      if (!mine) throw new Error('Freigabe nicht gefunden');
-      await api.delete(`/calendar/${cal.id}/shares/${mine.id}`);
+      if (!cal.shared || !cal.shareId) throw new Error('Keine Freigabe-ID');
+      await api.delete(`/calendar/${cal.id}/shares/${cal.shareId}`);
     },
     onSuccess: () => { invalidate(); toast.success('Aus Liste entfernt'); },
     onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Per-Grantee Farbe ändern (PATCH /mine-shares/:shareId)
+  const patchMineShare = useMutation({
+    mutationFn: (vars: { shareId: string; body: Record<string, unknown> }) =>
+      api.patch(`/calendar/mine-shares/${vars.shareId}`, vars.body),
+    onSuccess: () => invalidate(),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Reorder geteilter Kalender
+  const reorderShared = useMutation({
+    mutationFn: (ids: string[]) => api.post('/calendar/mine-shares/reorder', { ids }),
+    onSuccess: () => invalidate(),
   });
 
   // Eigene vs. geteilte Kalender aufsplitten
@@ -141,7 +143,12 @@ export function CalendarSidebar({
     [calendars],
   );
   const sharedCalendars = useMemo(
-    () => calendars.filter((c) => c.shared).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '')),
+    () => calendars
+      .filter((c) => c.shared)
+      .sort((a, b) =>
+        (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+        || (a.name ?? '').localeCompare(b.name ?? '')
+      ),
     [calendars],
   );
 
@@ -152,6 +159,17 @@ export function CalendarSidebar({
     const next = [...ownedCalendars];
     [next[idx]!, next[swap]!] = [next[swap]!, next[idx]!];
     reorderCal.mutate(next.map((c) => c.id));
+  };
+
+  const moveSharedCalendar = (calId: string, dir: -1 | 1) => {
+    const idx = sharedCalendars.findIndex((c) => c.id === calId);
+    const swap = idx + dir;
+    if (idx < 0 || swap < 0 || swap >= sharedCalendars.length) return;
+    const next = [...sharedCalendars];
+    [next[idx]!, next[swap]!] = [next[swap]!, next[idx]!];
+    // shareId statt calendarId für Backend-Reorder (Backend filtert auf granteeId)
+    const ids = next.map((c) => c.shareId).filter((id): id is string => !!id);
+    reorderShared.mutate(ids);
   };
 
   // Kontextmenü für eigene Kalender
@@ -244,15 +262,50 @@ export function CalendarSidebar({
   };
 
   // Kontextmenü für geteilte Kalender (Grantee-Sicht)
+  // v3.18.16: erweitert um Farbe + Reorder via shareId
   const buildSharedMenu = (cal: Calendar): ContextMenuItem[] => {
     const allIds = calendars.map((c) => c.id);
     const isHidden = hiddenCalendarIds.includes(cal.id);
+    const idx = sharedCalendars.findIndex((c) => c.id === cal.id);
+    const shareId = cal.shareId ?? '';
     return [
       {
         label: 'Nur dies anzeigen',
         icon: <Eye size={14} />,
         disabled: !isHidden && hiddenCalendarIds.length === calendars.length - 1,
         onClick: () => showOnlyCalendar(cal.id, allIds),
+      },
+      { type: 'divider' },
+      {
+        label: 'Farbe',
+        icon: <PaletteIcon size={14} />,
+        children: [
+          {
+            label: 'Original-Farbe (vom Owner)',
+            icon: <span className="w-3.5 h-3.5 rounded-full bg-gray-300 ring-1 ring-inset ring-black/10" />,
+            onClick: () => patchMineShare.mutate({ shareId, body: { localColor: null } }),
+          },
+          { type: 'divider' },
+          {
+            type: 'color-grid',
+            colors: COLOR_PALETTE,
+            current: cal.color,
+            onPick: (c) => patchMineShare.mutate({ shareId, body: { localColor: c } }),
+          },
+        ],
+      },
+      { type: 'divider' },
+      {
+        label: 'Nach oben',
+        icon: <ArrowUp size={14} />,
+        disabled: idx === 0,
+        onClick: () => moveSharedCalendar(cal.id, -1),
+      },
+      {
+        label: 'Nach unten',
+        icon: <ArrowDown size={14} />,
+        disabled: idx === sharedCalendars.length - 1,
+        onClick: () => moveSharedCalendar(cal.id, 1),
       },
       { type: 'divider' },
       {

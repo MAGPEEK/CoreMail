@@ -488,7 +488,6 @@ model Calendar {
   icon        String?         // lucide-Icon-Name (z. B. "Home", "Plane")
   sortOrder   Int             @default(0)
   isDefault   Boolean         @default(false)
-  acl         Json            @default("{}")  // @deprecated v3.18.14 — durch CalendarShare ersetzt, Entfernung in v3.19
   syncToken   String          @default("")
   events      CalendarEvent[]
   shares      CalendarShare[]
@@ -513,6 +512,10 @@ model CalendarShare {
   granteeId  String
   permission CalendarPermType
   comment    String?
+  // v3.18.16 A3: Grantee-lokale Farbe (überschreibt Owner-Farbe nur für diesen User)
+  localColor String?
+  // v3.18.16 A8: Grantee-lokale Sortierung in „Geteilt mit mir"-Sektion
+  sortOrder  Int              @default(0)
   createdAt  DateTime         @default(now())
 
   @@unique([calendarId, granteeId])

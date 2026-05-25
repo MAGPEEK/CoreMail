@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.15`
+**Aktuelle Version**: `3.18.16`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.15; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.16; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.15 — Highlights
+## Aktuelle Version 3.18.16 — Highlights
+
+**v3.18.16** — Calendar Sharing Quick-Wins. (A1) **Notification-Mail an Grantee** — neuer Helper `packages/api-gateway/src/lib/internal-notify.ts` mit `notifyUserInbox()` schreibt direkt in `Message`-Tabelle (kein SMTP-Roundtrip, kein DKIM/Spam-Check). Wird im `POST /calendar/:id/shares`-Handler getriggert. Heuristik (5s-Schwelle) verhindert Spam bei Permission-Update via Upsert. (A3) **Per-Grantee-Farbe** — `CalendarShare.localColor String?` + `PATCH /calendar/mine-shares/:shareId`. Grantee kann lokal umfärben, Owner-Farbe bleibt unverändert. `listAccessibleCalendars` liefert `localColor ?? color`. (A8) **Reorder shared section** — `CalendarShare.sortOrder Int @default(0)` + `POST /calendar/mine-shares/reorder`. Kontextmenü mit ArrowUp/Down. CalendarSidebar sortiert geteilte Kalender nach `sortOrder` statt alphabetisch. (C1) **`Calendar.acl Json` gedroppt** (v3.18.14 als @deprecated markiert, kein Code-Reference). `PublicFolder.acl` bleibt. Frontend bekommt jetzt `shareId` direkt im `GET /calendar`-Response — vereinfacht Self-Removal/Color-Change/Reorder.
 
 **v3.18.15** — Folge-Release zu v3.18.14: (1) **CalDAV-WRITE für Grantees** — Apple Kalender / Thunderbird Lightning können jetzt Termine in geteilten Kalendern erstellen, ändern, löschen (wenn WRITE-Permission). Volle RFC-3744-DAV-ACL: `<DAV:owner>`, `<DAV:current-user-privilege-set>` mit `read`/`write`/`bind`/`unbind`/`write-content`, `<DAV:acl>`-Block für Owner. OPTIONS mit `Allow: …, ACL` + `DAV: access-control`. (2) **Private/vertrauliche Termine** (RFC 5545 `CLASS:`) — neues Feld `CalendarEvent.classification` mit Werten `PUBLIC`/`PRIVATE`/`CONFIDENTIAL`. PRIVATE-Events erscheinen bei Grantees nur als „Beschäftigt" (Subject/Description/Location maskiert), CONFIDENTIAL-Events sind komplett ausgeblendet. Owner sieht alles. Masking greift in REST `GET /events`, CalDAV `GET`/`PROPFIND`/`REPORT`. Dropdown im MWA-Neuer-Termin-Dialog. (3) **Audit-Log für Sharing** — neue Aktionen `calendar.share.create|update|delete|self_remove` mit Diff im `changes`-Feld (Compliance-Lücke aus v3.18.14 geschlossen, DSGVO Art. 32). (4) **i18n EN/ES/IT** für die kompletten Sharing-UI-Texte (25 neue Keys `cal_share_*` + `cal_event_class_*`).
 
@@ -715,4 +717,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.15 — CalDAV-WRITE + Private Events + Audit + i18n; v3.18.14 — Kalender teilen und berechtigen; v3.18.13 — Externe Kontakte UI + GAL-Cache Live-Sync)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.16 — Calendar Quick-Wins: Notification-Mail + Per-Grantee-Farbe + Reorder + acl-Cleanup; v3.18.15 — CalDAV-WRITE + Private Events + Audit + i18n; v3.18.14 — Kalender teilen und berechtigen)*

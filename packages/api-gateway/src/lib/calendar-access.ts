@@ -32,6 +32,9 @@ export interface AccessibleCalendar {
   ownerDisplayName: string | null;
   ownerEmail: string | null;
   permission: EffectivePerm;
+  // v3.18.16: Share-ID nur bei `shared: true` — Frontend nutzt sie für
+  // PATCH/POST /calendar/mine-shares* (Farbe ändern, Reorder, Self-Remove)
+  shareId?: string;
 }
 
 /**
@@ -92,7 +95,10 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
     prisma.calendarShare.findMany({
       where: { granteeId: userId },
       select: {
+        id: true,
         permission: true,
+        localColor: true,
+        sortOrder: true,
         calendar: {
           select: {
             id: true, name: true, color: true, icon: true,
@@ -101,6 +107,7 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
           },
         },
       },
+      orderBy: { sortOrder: 'asc' },
     }),
   ]);
 
@@ -121,15 +128,18 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
   const sharedList: AccessibleCalendar[] = shares.map((s) => ({
     id: s.calendar.id,
     name: s.calendar.name,
-    color: s.calendar.color,
+    // v3.18.16 A3: Grantee-lokale Farbe überschreibt Owner-Farbe (falls gesetzt)
+    color: s.localColor ?? s.calendar.color,
     icon: s.calendar.icon,
-    sortOrder: 9999, // shared calendars werden ans Ende einsortiert
+    // v3.18.16 A8: Grantee-lokale Sortierung (sortOrder im CalendarShare-Record)
+    sortOrder: s.sortOrder,
     isDefault: false,
     shared: true,
     ownerId: s.calendar.user.id,
     ownerDisplayName: s.calendar.user.displayName ?? null,
     ownerEmail: s.calendar.user.email ?? null,
     permission: s.permission === 'WRITE' ? 'WRITE' : 'READ',
+    shareId: s.id,
   }));
 
   return [...ownedList, ...sharedList];

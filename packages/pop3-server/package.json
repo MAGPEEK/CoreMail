@@ -1,6 +1,6 @@
 {
   "name": "@coremail/pop3-server",
-  "version": "3.18.15",
+  "version": "3.18.16",
   "private": true,
   "type": "module",
   "scripts": {

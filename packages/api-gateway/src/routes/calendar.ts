@@ -9,9 +9,14 @@ import {
   maskEventForViewer,
 } from '../lib/calendar-access.js';
 import { audit, auditContext } from '../lib/audit.js';
+import { notifyUserInbox } from '../lib/internal-notify.js';
 
 export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 // GET /api/v1/calendar — eigene + geteilte Kalender
 calendarRouter.get('/', async (req: Request, res: Response) => {
@@ -110,6 +115,59 @@ calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   await prisma.$transaction(
     sequence.map((id, idx) =>
       prisma.calendar.update({ where: { id }, data: { sortOrder: (idx + 1) * 10 } }),
+    ),
+  );
+  res.json({ ok: true, count: sequence.length });
+});
+
+// ─── Grantee-lokale Settings (v3.18.16 A3 + A8) ─────────────────────────────
+
+// PATCH /api/v1/calendar/mine-shares/:shareId
+// Body: { localColor?: string|null, sortOrder?: number }
+// Nur Grantee selbst — Owner-Farbe wird NICHT geändert.
+const PatchMineShareSchema = z.object({
+  localColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
+  sortOrder: z.number().int().optional(),
+});
+calendarRouter.patch('/mine-shares/:shareId', async (req: Request, res: Response) => {
+  const { shareId } = req.params as { shareId: string };
+  const userId = req.apiUser!.userId;
+
+  const parsed = PatchMineShareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const share = await prisma.calendarShare.findFirst({
+    where: { id: shareId, granteeId: userId },
+    select: { id: true },
+  });
+  if (!share) { res.status(404).json({ error: 'Freigabe nicht gefunden' }); return; }
+
+  const updates: Record<string, unknown> = {};
+  if (parsed.data.localColor !== undefined) updates['localColor'] = parsed.data.localColor;
+  if (parsed.data.sortOrder !== undefined)  updates['sortOrder']  = parsed.data.sortOrder;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await prisma.calendarShare.update({ where: { id: shareId }, data: updates as any });
+  res.json({ ok: true });
+});
+
+// POST /api/v1/calendar/mine-shares/reorder  Body: { ids: string[] }
+// Setzt sortOrder analog /calendar/reorder für eigene Freigaben.
+calendarRouter.post('/mine-shares/reorder', async (req: Request, res: Response) => {
+  const parsed = ReorderSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const userId = req.apiUser!.userId;
+  const mine = await prisma.calendarShare.findMany({
+    where: { id: { in: parsed.data.ids }, granteeId: userId },
+    select: { id: true },
+  });
+  const mineSet = new Set(mine.map((s) => s.id));
+  const sequence = parsed.data.ids.filter((id) => mineSet.has(id));
+
+  await prisma.$transaction(
+    sequence.map((id, idx) =>
+      prisma.calendarShare.update({ where: { id }, data: { sortOrder: (idx + 1) * 10 } }),
     ),
   );
   res.json({ ok: true, count: sequence.length });
@@ -240,6 +298,34 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     changes: { granteeId, granteeEmail: grantee.email, permission: parsed.data.permission },
     ...auditContext(req),
   });
+
+  // v3.18.16 A1: Notification-Mail in Grantee-Inbox — nur bei *neuer* Share,
+  // nicht bei Permission-Update via Upsert (sonst Spam).
+  const wasUpdate = share.createdAt.getTime() < Date.now() - 5000; // grobe Heuristik
+  if (!wasUpdate) {
+    const ownerName = req.apiUser!.email; // displayName ggf. via lookup, hier KISS
+    const permLabel = parsed.data.permission === 'WRITE' ? 'Lesen und Schreiben' : 'Nur lesen';
+    void notifyUserInbox({
+      recipientUserId: grantee.id,
+      fromName: ownerName,
+      fromAddr: req.apiUser!.email,
+      subject: `${ownerName} hat den Kalender „${cal.name}" mit dir geteilt`,
+      bodyText:
+        `Hallo,\n\n` +
+        `${ownerName} hat den Kalender „${cal.name}" mit dir geteilt.\n\n` +
+        `Berechtigung: ${permLabel}\n\n` +
+        `Du findest den Kalender ab sofort in deinem CoreMail-Kalender unter „Geteilt mit mir".\n\n` +
+        `— CoreMail`,
+      bodyHtml:
+        `<p>Hallo,</p>` +
+        `<p><strong>${escapeHtml(ownerName)}</strong> hat den Kalender ` +
+        `<strong>„${escapeHtml(cal.name)}"</strong> mit dir geteilt.</p>` +
+        `<p>Berechtigung: <strong>${permLabel}</strong></p>` +
+        `<p>Du findest den Kalender ab sofort in deinem CoreMail-Kalender unter ` +
+        `<em>Geteilt mit mir</em>.</p>` +
+        `<p style="color:#888;font-size:12px">— CoreMail</p>`,
+    });
+  }
 
   res.status(201).json({
     id: share.id,

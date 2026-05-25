@@ -103,6 +103,8 @@ export interface Calendar {
   ownerDisplayName?: string | null;
   ownerEmail?: string | null;
   permission?: 'OWNER' | 'READ' | 'WRITE';
+  // v3.18.16: shareId nur bei shared=true — Frontend für PATCH/Reorder/Self-Remove
+  shareId?: string;
 }
 
 export interface CalendarShare {
