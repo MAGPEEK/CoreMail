@@ -13,6 +13,66 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.28] — 2026-05-25 — Calendar+Backup UX-Fixes (Hook-Bug, Tabs, Delete, Time-Input)
+
+### Fixed
+
+- **KRITISCH: Erneutes Öffnen eines erstellten Termins → weiße Seite**
+  (`packages/web-client/src/components/EventEditDialog.tsx`):
+  React-Rules-of-Hooks-Verletzung — `useMemo(currentCal)` wurde NACH einem
+  `if (existingLoading) return` aufgerufen. Beim ersten Render: 0 Memo,
+  beim zweiten: 1 Memo → React-Crash mit „Rendered more hooks than during
+  the previous render". Resultat: komplett weiße Modal-Seite, kein Reaction.
+  **Fix**: alle Hooks VOR jedem early-return platziert.
+
+- **Backup-Jobs konnten weder gelöscht noch heruntergeladen werden**:
+  Download-URL zeigte auf `http://minio:9000` (Docker-intern, vom Browser
+  nicht erreichbar). Delete-Endpoint fehlte komplett.
+  **Fix Download**: neuer Stream-Proxy-Endpoint `GET /admin/backups/download/:jobId`
+  im backup-service streamt das S3-Object durch die api-gateway zum Browser.
+  Frontend nutzt Fetch + Blob + `URL.createObjectURL` für sauberen Datei-
+  Download.
+  **Fix Delete**: neuer Endpoint `DELETE /admin/backups/jobs/:id` löscht DB-
+  Record + S3-Object (best-effort, kein Throw bei fehlendem S3-Object).
+  Löschen-Button in jeder Job-Zeile mit Bestätigungs-Dialog.
+
+### Changed
+
+- **Speichern-Button im Event-Dialog jetzt unten rechts** (vorher Header-
+  Toolbar oben links). Standard-Outlook-/Office-Pattern. Footer mit grauem
+  Hintergrund: Löschen-Button links, Abbrechen + Speichern rechts.
+
+- **Time-Input statt Dropdown-only**
+  (`packages/web-client/src/components/EventEditDialog.tsx`):
+  Vorher `<select>` mit 96 Optionen (15-min) — User konnte keine custom-Zeit
+  wie „13:42" eingeben. Jetzt `<input type="time" list="...">` mit
+  `<datalist>` — Browser zeigt 15-min-Vorschläge als Dropdown beim Fokus,
+  User kann aber jede beliebige Zeit frei tippen.
+
+- **BackupsPage komplett refactored als Tab-Layout**:
+  5 Tabs („Jobs", „Schnellaktionen", „Zeitpläne", „Backup-Archiv",
+  „Restore (Import)") mit Badge-Counters. Vorher waren alle Sektionen
+  untereinander gestapelt — übersichtlicher und mobil-freundlicher.
+
+- **„S3-Snapshots" umbenannt zu „Backup-Archiv"** — AWS-Begriff vermieden,
+  klarere Sprache. Tab heißt „Backup-Archiv".
+
+- **Zeitplan-Editor mit vollständigen Dropdowns**: Frequenz-Dropdown
+  (Stündlich/Täglich/Wöchentlich/Monatlich/Custom), Wochentag-Dropdown
+  (Mo–So), Stunde-Dropdown (0–23), Minute-Dropdown (5er-Schritte), Tag-des-
+  Monats-Dropdown (1–28), Retention-Dropdown (vorausgewählte Werte
+  7/14/30/60/90/180/365/730/1825/3650). Cron-Expression wird im Hintergrund
+  generiert und als read-only-Hinweis angezeigt. Nur bei „Custom" sieht User
+  das Cron-Textfeld direkt.
+
+### Added
+
+- `streamObject()` + `deleteObject()` Helper in
+  `packages/backup-service/src/upload/s3.ts`
+- Audit-Log-Entry `backup.job.delete` für gelöschte Backup-Jobs
+
+---
+
 ## [3.18.27] — 2026-05-25 — Outlook-Style Event-Dialog (Edit/Delete/Reschedule/Notes/Time-Picker)
 
 ### Fixed

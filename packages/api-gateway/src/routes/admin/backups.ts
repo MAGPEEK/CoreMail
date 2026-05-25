@@ -143,6 +143,54 @@ adminBackupsRouter.delete('/schedules/:id', async (req: Request, res: Response) 
   await forward(req, res, 'DELETE', `/backup/admin/schedules/${encodeURIComponent(id)}`);
 });
 
+// v3.18.28: Download (Stream-Proxy zum backup-service)
+adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) => {
+  const { jobId } = req.params as { jobId: string };
+  try {
+    const upstream = await fetch(`${BACKUP_URL}/backup/admin/download/${encodeURIComponent(jobId)}`, {
+      method: 'GET',
+      headers: { ...(req.get('Authorization') ? { Authorization: req.get('Authorization')! } : {}) },
+    });
+    if (!upstream.ok) {
+      const txt = await upstream.text();
+      res.status(upstream.status).send(txt);
+      return;
+    }
+    const ct = upstream.headers.get('content-type');
+    const cd = upstream.headers.get('content-disposition');
+    const cl = upstream.headers.get('content-length');
+    if (ct) res.setHeader('Content-Type', ct);
+    if (cd) res.setHeader('Content-Disposition', cd);
+    if (cl) res.setHeader('Content-Length', cl);
+    if (!upstream.body) { res.status(502).end(); return; }
+    // Web-Stream → Node-Stream
+    const reader = upstream.body.getReader();
+    const pump = async (): Promise<void> => {
+      const { done, value } = await reader.read();
+      if (done) { res.end(); return; }
+      res.write(value);
+      await pump();
+    };
+    await pump();
+  } catch (err) {
+    res.status(502).json({ error: 'backup-service unavailable', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.28: Backup-Job löschen
+adminBackupsRouter.delete('/jobs/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.job.delete',
+    targetType: 'backup_job',
+    targetId: id,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'DELETE', `/backup/admin/jobs/${encodeURIComponent(id)}`);
+});
+
 adminBackupsRouter.post('/schedules/:id/run-now', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   audit({

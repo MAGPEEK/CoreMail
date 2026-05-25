@@ -5,7 +5,7 @@ import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core'
 import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler } from './scheduler/index.js';
 import { runRetentionPolicies } from './retention/worker.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
-import { listBackups, ensureBackupBucket } from './upload/s3.js';
+import { listBackups, ensureBackupBucket, streamObject, deleteObject } from './upload/s3.js';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
@@ -220,6 +220,43 @@ app.post('/backup/admin/schedules/:id/run-now', requireAdmin, async (req, res) =
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to trigger' });
   }
+});
+
+// v3.18.28 — Download eines Backup-Jobs als Stream (verwendet S3-internes GetObject)
+app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
+  const { jobId } = req.params as { jobId: string };
+  const job = await prisma.backupJob.findUnique({ where: { id: jobId } });
+  if (!job?.downloadUrl) { res.status(404).json({ error: 'Backup nicht gefunden' }); return; }
+  try {
+    const { stream, contentLength, contentType } = await streamObject(job.downloadUrl);
+    const filename = job.downloadUrl.split('/').pop() ?? `backup-${jobId}.bin`;
+    res.setHeader('Content-Type', contentType ?? (job.format === 'mbox' ? 'application/mbox' : 'application/zip'));
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (contentLength) res.setHeader('Content-Length', String(contentLength));
+    stream.pipe(res);
+    stream.on('error', (err) => {
+      log.error({ err, jobId }, 'Stream error during download');
+      if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
+    });
+  } catch (err) {
+    log.error({ err, jobId }, 'Download failed');
+    res.status(500).json({ error: 'Download failed', detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.28 — Backup-Job löschen (DB + S3-Object)
+app.delete('/backup/admin/jobs/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params as { id: string };
+  const job = await prisma.backupJob.findUnique({ where: { id } });
+  if (!job) { res.status(404).json({ error: 'Job nicht gefunden' }); return; }
+  // S3-Object löschen wenn vorhanden (best-effort, kein Throw bei Fehlern)
+  if (job.downloadUrl) {
+    try { await deleteObject(job.downloadUrl); }
+    catch (err) { log.warn({ err, jobId: id, s3Key: job.downloadUrl }, 'S3 delete failed — continuing with DB delete'); }
+  }
+  await prisma.backupJob.delete({ where: { id } });
+  log.info({ jobId: id }, 'Backup job deleted');
+  res.json({ ok: true });
 });
 
 // GET /backup/admin/users — Liste aller User für Mailbox-Backup-Picker
