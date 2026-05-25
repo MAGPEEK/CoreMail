@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadBucketCommand, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -19,6 +19,35 @@ function getClient(): S3Client {
 }
 
 const BUCKET = process.env['BACKUP_BUCKET'] ?? 'coremail-backups';
+
+/**
+ * v3.18.26 Bugfix: Wird beim Service-Start aufgerufen. Verhindert dass
+ * listBackups() crasht weil der Bucket nicht existiert (NoSuchBucket-Error
+ * killte den ganzen backup-service-Container).
+ *
+ * Idempotent — wenn Bucket schon existiert (200 OK von HeadBucket): nichts tun.
+ */
+export async function ensureBackupBucket(): Promise<void> {
+  const client = getClient();
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: BUCKET }));
+    log.info({ bucket: BUCKET }, 'Backup bucket exists');
+  } catch (err) {
+    // 404 NoSuchBucket → erstellen. Andere Errors → throwen.
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 404 || status === 301) {
+      log.warn({ bucket: BUCKET }, 'Backup bucket missing — creating');
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: BUCKET }));
+        log.info({ bucket: BUCKET }, 'Backup bucket created');
+      } catch (createErr) {
+        log.error({ err: createErr, bucket: BUCKET }, 'Failed to create backup bucket');
+      }
+    } else {
+      log.error({ err, bucket: BUCKET }, 'HeadBucket failed with unexpected error');
+    }
+  }
+}
 
 export async function uploadToS3(
   localPath: string,
@@ -59,13 +88,25 @@ export async function uploadToS3(
 
 export async function listBackups(prefix: string): Promise<{ key: string; size: number; lastModified: Date }[]> {
   const client = getClient();
-  const result = await client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix }));
-
-  return (result.Contents ?? []).map((obj) => ({
-    key: obj.Key ?? '',
-    size: obj.Size ?? 0,
-    lastModified: obj.LastModified ?? new Date(),
-  }));
+  try {
+    const result = await client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix }));
+    return (result.Contents ?? []).map((obj) => ({
+      key: obj.Key ?? '',
+      size: obj.Size ?? 0,
+      lastModified: obj.LastModified ?? new Date(),
+    }));
+  } catch (err) {
+    // v3.18.26 Bugfix: NoSuchBucket darf den Service nicht crashen.
+    // Wir versuchen den Bucket zu erstellen und liefern dann leere Liste zurück.
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 404) {
+      log.warn({ bucket: BUCKET }, 'listBackups: bucket missing — triggering ensureBackupBucket');
+      await ensureBackupBucket();
+      return [];
+    }
+    log.error({ err, bucket: BUCKET, prefix }, 'listBackups failed');
+    return [];
+  }
 }
 
 export async function getSignedDownloadUrl(s3Key: string): Promise<string> {

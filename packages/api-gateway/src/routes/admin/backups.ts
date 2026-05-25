@@ -26,7 +26,7 @@ adminBackupsRouter.use(requireAdmin);
 async function forward(
   req: Request,
   res: Response,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   upstreamPath: string,
   bodyText?: string,
   contentType?: string,
@@ -77,6 +77,83 @@ adminBackupsRouter.post('/full', async (req: Request, res: Response) => {
     ...auditContext(req),
   });
   await forward(req, res, 'POST', '/backup/admin/full');
+});
+
+// v3.18.26 — Per-Mailbox-Backup
+adminBackupsRouter.post('/mailbox/:userId', async (req: Request, res: Response) => {
+  const { userId } = req.params as { userId: string };
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.mailbox.trigger',
+    targetType: 'user',
+    targetId: userId,
+    ...auditContext(req),
+  });
+  const body = JSON.stringify(req.body ?? {});
+  await forward(req, res, 'POST', `/backup/admin/mailbox/${encodeURIComponent(userId)}`, body);
+});
+
+// v3.18.26 — User-Liste für Mailbox-Picker
+adminBackupsRouter.get('/users', async (req: Request, res: Response) => {
+  await forward(req, res, 'GET', '/backup/admin/users');
+});
+
+// v3.18.26 — Backup-Schedules CRUD
+adminBackupsRouter.get('/schedules', async (req: Request, res: Response) => {
+  await forward(req, res, 'GET', '/backup/admin/schedules');
+});
+
+adminBackupsRouter.post('/schedules', async (req: Request, res: Response) => {
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.schedule.create',
+    targetType: 'backup_schedule',
+    changes: req.body as Record<string, unknown>,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'POST', '/backup/admin/schedules', JSON.stringify(req.body ?? {}));
+});
+
+adminBackupsRouter.put('/schedules/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.schedule.update',
+    targetType: 'backup_schedule',
+    targetId: id,
+    changes: req.body as Record<string, unknown>,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'PUT', `/backup/admin/schedules/${encodeURIComponent(id)}`, JSON.stringify(req.body ?? {}));
+});
+
+adminBackupsRouter.delete('/schedules/:id', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.schedule.delete',
+    targetType: 'backup_schedule',
+    targetId: id,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'DELETE', `/backup/admin/schedules/${encodeURIComponent(id)}`);
+});
+
+adminBackupsRouter.post('/schedules/:id/run-now', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.schedule.run_now',
+    targetType: 'backup_schedule',
+    targetId: id,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'POST', `/backup/admin/schedules/${encodeURIComponent(id)}/run-now`);
 });
 
 // POST /api/v1/admin/backups/import/:userId — MBOX für User importieren

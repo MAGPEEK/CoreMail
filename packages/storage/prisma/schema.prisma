@@ -42,8 +42,14 @@ enum LogLevel {
 enum JobStatus {
   PENDING
   PROCESSING
+  // v3.18.26 — erweitert für Backup-Job-Lifecycle (RTO/RPO-Tracking)
+  SCHEDULED        // wartet auf nächsten Cron-Tick
+  RUNNING          // gerade in Bearbeitung (synonym zu PROCESSING, klarer benannt)
+  RETRYING         // nach Fehler retry läuft
   COMPLETED
   FAILED
+  ABORTED          // User hat manuell abgebrochen
+  EXPIRED          // Snapshot wurde durch Retention gelöscht
 }
 
 enum AuthSource {
@@ -676,7 +682,7 @@ model BackupJob {
   id          String    @id @default(cuid())
   userId      String?
   scope       String    // "user" | "domain" | "full"
-  format      String    // "mbox" | "eml" | "full"
+  format      String    // "mbox" | "eml" | "full" | "zip"
   status      JobStatus @default(PENDING)
   progress    Int       @default(0)
   downloadUrl String?
@@ -684,10 +690,44 @@ model BackupJob {
   errorMsg    String?
   createdAt   DateTime  @default(now())
   completedAt DateTime?
+  // v3.18.26 — erweiterte Status-Logging-Felder (Research siehe v3.18.26)
+  startedAt   DateTime?
+  durationMs  Int?              // (finishedAt - startedAt) — für RTO-Messung
+  sizeBytes   BigInt?           // Backup-Größe im S3-Bucket
+  messageCount Int?             // Wie viele Nachrichten waren im Backup
+  errorClass  String?           // NETWORK | STORAGE | PERMISSION | CORRUPT | UNKNOWN
+  retryCount  Int       @default(0)
+  triggeredBy String    @default("MANUAL")  // CRON | MANUAL | EVENT | RESTORE | API
+  progressMeta Json?    @default("{}")      // { phase, current, total, currentFolder }
+  scheduleId  String?              // Verweis auf BackupSchedule wenn aus Schedule getriggert
 
   @@index([userId])
   @@index([status])
+  @@index([scheduleId])
   @@map("backup_jobs")
+}
+
+/// v3.18.26 — Backup-Zeitplanung in der DB statt Env-Variable.
+/// Admin kann Cron-Expressions definieren, Format wählen, Ziel-User filtern.
+model BackupSchedule {
+  id           String    @id @default(cuid())
+  name         String                              // Sprechender Name z. B. „Daily Full Backup"
+  cron         String                              // Cron-Expression z. B. „0 2 * * *"
+  enabled      Boolean   @default(true)
+  scope        String    @default("full")          // user | full | domain
+  format       String    @default("zip")           // mbox | zip | eml
+  targetUserId String?                              // null = alle User
+  retentionDays Int      @default(30)              // Nach so vielen Tagen wird der Snapshot gelöscht
+  lastRunAt    DateTime?
+  lastStatus   String?                              // letzter JobStatus
+  lastJobId    String?                              // Verweis auf letzten BackupJob
+  nextRunAt    DateTime?                            // berechnet vom Scheduler
+  createdBy    String?                              // userId des Admins der Schedule erstellt hat
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([enabled])
+  @@map("backup_schedules")
 }
 
 // ─────────────────────────────────────────────
