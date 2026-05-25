@@ -13,6 +13,59 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.16] — 2026-05-25 — Calendar Sharing Quick-Wins (Notification, Per-Grantee-Farbe, Reorder, Cleanup)
+
+### Added
+
+- **A1 — Notification-Mail an Grantee beim Teilen**
+  (`packages/api-gateway/src/lib/internal-notify.ts`, `routes/calendar.ts`):
+  Wenn Owner einen Kalender freigibt, erhält der Empfänger automatisch eine
+  System-Mail in seine INBOX („X hat den Kalender ‚Y' mit dir geteilt" mit
+  Permission-Level). Neuer Helper `notifyUserInbox()` mit direkter Inbox-
+  Insertion via `prisma.message.create` — kein SMTP-Roundtrip, kein DKIM/
+  Spam-Check nötig, sofortige Sichtbarkeit. Nur bei *neuer* Share, nicht bei
+  Permission-Update via Upsert (verhindert Spam). HTML-Escaping gegen XSS.
+
+- **A3 — Per-Grantee-Farbe für geteilte Kalender**
+  (`schema.prisma`, `routes/calendar.ts`, `components/CalendarSidebar.tsx`):
+  Grantees können freigegebene Kalender lokal umfärben, ohne dass die Owner-
+  Farbe geändert wird. Neues Feld `CalendarShare.localColor String?` und
+  Endpoint `PATCH /calendar/mine-shares/:shareId` mit Body `{ localColor }`.
+  Farb-Picker im Kontextmenü auf geteilten Kalendern; „Original-Farbe (vom
+  Owner)" setzt `localColor=null` zurück. `listAccessibleCalendars` liefert
+  `localColor ?? calendar.color` für Grantees.
+
+- **A8 — Reorder für geteilte Kalender**
+  (`schema.prisma`, `routes/calendar.ts`, `components/CalendarSidebar.tsx`):
+  Grantees können die Reihenfolge der „Geteilt mit mir"-Sektion lokal
+  anpassen. Neues Feld `CalendarShare.sortOrder Int @default(0)` und Endpoint
+  `POST /calendar/mine-shares/reorder` (Body `{ ids[] }`, filtert auf
+  `granteeId === userId`). Kontextmenü „Nach oben" / „Nach unten" auf
+  geteilten Kalendern.
+
+- **`shareId`-Feld** im `GET /calendar`-Response (nur bei `shared: true`)
+  — Frontend benutzt es für Self-Removal, Color-Change, Reorder. Vorher
+  brauchte Self-Removal einen Roundtrip via `/mine-shares?calendarId=`,
+  jetzt direkt verfügbar.
+
+### Changed
+
+- **CalendarSidebar — geteilte Kalender sortiert nach `sortOrder`** statt
+  alphabetisch nach Name. Tie-Break bleibt `localeCompare`.
+- **Self-Removal-Mutation** vereinfacht — nutzt jetzt `cal.shareId` direkt
+  statt Lookup über `mine-shares?calendarId=`.
+
+### Removed
+
+- **C1 — `Calendar.acl Json`-Feld komplett entfernt**
+  (`packages/storage/prisma/schema.prisma`):
+  In v3.18.14 als `@deprecated` markiert (durch `CalendarShare` ersetzt).
+  Spalte wird beim Container-Start via `prisma db push --accept-data-loss`
+  automatisch gedroppt. Kein Code in `packages/` referenzierte das Feld —
+  `PublicFolder.acl` bleibt unverändert (anderes Modell).
+
+---
+
 ## [3.18.15] — 2026-05-25 — CalDAV-WRITE-Sharing + Private Events + Audit-Log + i18n
 
 ### Added
