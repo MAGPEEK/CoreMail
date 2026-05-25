@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.22`
+**Aktuelle Version**: `3.18.23`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.22; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.23; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.22 — Highlights
+## Aktuelle Version 3.18.23 — Highlights
+
+**v3.18.23** — Backup-Restore-UI im BCP (D3). Neue Page „Backup & Restore" in der Sidebar mit drei Sektionen: (1) Backup-Jobs-Tabelle mit Datum/Scope/Format/Status (Icons für PENDING/RUNNING/COMPLETED/FAILED/CANCELLED) + Progress-Bar + Download-Link bei completed. Auto-Polling alle 5s wenn Job läuft, sonst 60s. (2) S3-Snapshots-Tabelle mit Key/Size/Last-Modified aus MinIO-Bucket. (3) MBOX-Import (Wiederherstellung) mit File-Picker (max 500MB) + Ziel-User-ID. Vollbackup-Button im Header triggert sofort einen neuen Job. Backend: Wrapper-Router `adminBackupsRouter` in `packages/api-gateway/src/routes/admin/backups.ts` leitet `/api/v1/admin/backups/*` an `BACKUP_SERVICE_URL` (Default `http://localhost:3004`). Authorization-Header wird durchgereicht (backup-service hat eigenen requireAdmin). Audit-Log für `backup.full.trigger` und `backup.mbox.import`. i18n DE+EN. Neuer Sidebar-Eintrag mit HardDriveDownload-Icon.
 
 **v3.18.22** — Security: OAuth2-Consent-UI (D1). Backend `/oauth2/authorize/complete` granted vorher Consent blind beim ersten Aufruf eines nicht-trusted Clients — User hatten keine Chance, eine Drittanbieter-App vor dem Zugriff zu sehen/ablehnen. Jetzt: Backend liefert `requiresConsent: true` mit Client-Info + Scope-Liste statt direkt Code auszustellen. Neue `OAuthConsentPage` zeigt Client-Name, Scopes mit deutschen Labels (z.B. mail.send → „E-Mails senden in deinem Namen"), Allow/Deny-Buttons. „Erlauben" → zweiter Call mit `consentConfirmed: true` → Code + Redirect. „Ablehnen" → RFC-6749-konformer `error=access_denied` zurück an Client. LoginPage parst `?oauth2=1` aus URL und navigiert nach Login zur ConsentPage statt zu `/mail`. Neue Route `/oauth-consent` mit AuthGuard ohne Layout-Wrapper.
 
@@ -729,4 +731,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.22 — OAuth2-Consent-UI; v3.18.21 — Calendar-Filter+Drucken; v3.18.20 — Dark-Mode-Patches)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.23 — Backup-Restore-UI im BCP; v3.18.22 — OAuth2-Consent-UI; v3.18.21 — Calendar-Filter+Drucken)*

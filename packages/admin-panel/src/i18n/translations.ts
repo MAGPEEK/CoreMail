@@ -9,6 +9,7 @@ const de = {
   nav_rbac:               'Berechtigungen',
   nav_audit_log:          'Audit-Log',
   nav_logs:               'Protokolle',
+  nav_backups:            'Backup & Restore',
   nav_info:               'Info',
 
   // ── Navigation — Gruppen ─────────────────────────────────────────────────
@@ -759,6 +760,7 @@ const en: { [K in keyof DE]: string } = {
   nav_rbac:               'Permissions',
   nav_audit_log:          'Audit Log',
   nav_logs:               'Logs',
+  nav_backups:            'Backup & Restore',
   nav_info:               'Info',
 
   // ── Navigation — Gruppen ─────────────────────────────────────────────────
