@@ -19,8 +19,9 @@ export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
 ): Promise<void> {
-  // Find recipient — kann User (Postfach), SharedMailbox oder PublicFolder sein
-  const [user, sharedMailbox, publicFolder] = await Promise.all([
+  // Find recipient — kann User (Postfach) oder SharedMailbox sein.
+  // (Public-Folder-Pfad entfernt in v3.18.31 — Feature komplett entfernt)
+  const [user, sharedMailbox] = await Promise.all([
     prisma.user.findFirst({
       where: { email: opts.rcptTo.toLowerCase(), active: true },
       include: { mailbox: { include: { folders: true } } },
@@ -29,43 +30,7 @@ export async function storeInboundMessage(
       where: { email: opts.rcptTo.toLowerCase(), active: true },
       include: { mailbox: { include: { folders: true } } },
     }),
-    // Mail-aktivierter Public Folder (v3.18.9) — Mail wird als PublicFolderMessage
-    // gespeichert, KEIN normales Mailbox-Routing
-    prisma.publicFolder.findFirst({
-      where: { email: opts.rcptTo.toLowerCase() },
-      select: { id: true, displayName: true },
-    }),
   ]);
-
-  // Public-Folder-Empfang ist ein separater Pfad — eigene Tabelle, keine Mailbox
-  if (publicFolder) {
-    const parsed = await parseRawMessage(rawBuffer);
-    await prisma.publicFolderMessage.create({
-      data: {
-        folderId:  publicFolder.id,
-        subject:   parsed.subject,
-        fromAddr:  parsed.fromAddr,
-        fromName:  parsed.fromName,
-        bodyText:  parsed.bodyText,
-        bodyHtml:  parsed.bodyHtml,
-        date:      parsed.date,
-        attachments: parsed.attachments.map((a) => ({
-          filename: a.filename,
-          mimeType: a.mimeType,
-          size:     a.size,
-        })) as unknown as Record<string, string>,
-      },
-    });
-    await prisma.publicFolder.update({
-      where: { id: publicFolder.id },
-      data:  { totalCount: { increment: 1 } },
-    });
-    log.info(
-      { rcptTo: opts.rcptTo, folderId: publicFolder.id, folder: publicFolder.displayName },
-      'Mail in öffentlichem Ordner gespeichert',
-    );
-    return;
-  }
 
   // Common-Mode: User-Postfach. Fallback: SharedMailbox (für lokale Zustellung).
   // Wenn beides null → unbekannter Empfänger (Mail wird verworfen).

@@ -32,7 +32,7 @@ import { RbacPage } from './pages/RbacPage.js';
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
 import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
-import { PublicFoldersPage } from './pages/PublicFoldersPage.js';
+// PublicFoldersPage komplett entfernt in v3.18.31
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
@@ -155,7 +155,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
                   <Route path="/oauth-clients" element={<OAuthClientsPage />} />
-                  <Route path="/public-folders" element={<PublicFoldersPage />} />
+                  {/* /public-folders Route entfernt in v3.18.31 */}
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/compliance-info" element={<ComplianceInfoPage />} />

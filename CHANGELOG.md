@@ -13,6 +13,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.31] — 2026-05-25 — Öffentliche Ordner komplett entfernt
+
+### Removed
+
+- **Feature „Öffentliche Ordner" (Public Folders) komplett aus dem Code entfernt.**
+  Exchange-Style-Konzept (mit ACL `READ`/`WRITE`/`FULL` + Mail-Enabled-Variante
+  seit v3.18.9) wird vom Markt heute kaum noch genutzt. Moderne Teams bevorzugen
+  **Shared Mailboxes** (`/admin/shared-mailboxes/`) und **Distribution Groups**
+  (`/admin/groups/`) für die typischen Use-Cases (Team-Postfach, Verteiler,
+  kollaborative Inbox). Reduziert Code-Komplexität und Wartungsaufwand —
+  analog zu v3.18.5 (eDiscovery/LegalHold-Removal).
+
+  **Backend** (`packages/api-gateway/src/`):
+  - `routes/public-folders.ts` — gelöscht (User-Endpoints `GET/POST/PUT/DELETE`)
+  - `routes/admin/public-folders.ts` — gelöscht (Admin-CRUD + ACL-Management)
+  - `server.ts` — Mount-Punkte `/api/v1/public-folders` + `/api/v1/admin/public-folders` entfernt
+
+  **SMTP-Server** (`packages/smtp-server/src/`):
+  - `inbound/handler.ts` `verifyRecipient()` — `publicFolder.findFirst()`-Lookup entfernt
+  - `handlers/message.ts` `storeInboundMessage()` — Public-Folder-Branch entfernt;
+    Mails an ehemalige Public-Folder-Adressen werden jetzt als unbekannter
+    Empfänger verworfen (Standard-Behandlung)
+
+  **BCP** (`packages/admin-panel/src/`):
+  - `pages/PublicFoldersPage.tsx` — gelöscht
+  - `components/Sidebar.tsx` — Eintrag „Öffentl. Ordner" + `FolderOpen`-Icon-Import entfernt
+  - `main.tsx` — Route `/public-folders` + Import entfernt
+  - `i18n/translations.ts` — i18n-Keys `nav_public_folders` (DE+EN) entfernt
+
+  **MWA** (`packages/web-client/src/`):
+  - `components/FolderTree.tsx` — Sektion `PublicFoldersSection` + `PublicFolderViewerModal`-
+    Komponenten + ungenutzte Icon-Imports (`FolderTree`, `X`, `Mail`) entfernt
+
+  **Datenbank** (`packages/storage/prisma/schema.prisma`):
+  - Models `PublicFolder` + `PublicFolderMessage` entfernt
+  - Tabellen `public_folders` + `public_folder_messages` werden beim Container-Start
+    via `prisma db push --accept-data-loss` gedroppt
+  - **Migration ist destruktiv**: alle bestehenden Public Folders + deren
+    Mails gehen verloren (vergleichbar mit eDiscovery-Removal in v3.18.5)
+
+---
+
 ## [3.18.30] — 2026-05-25 — BigInt-Crashfix + Audit-Log-Toggle + Audit-Translations
 
 ### Fixed

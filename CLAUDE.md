@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.30`
+**Aktuelle Version**: `3.18.31`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -189,7 +189,7 @@ pnpm --filter @coremail/storage exec prisma generate
 **Phase-7-Modelle**:
 - `DistributionGroup` / `DistributionGroupMember` — Verteilergruppen (statisch + dynamisch)
 - `ResourceMailbox` / `ResourceCalendar` / `ResourceBooking` — Raum-/Ressourcenpostfächer
-- `PublicFolder` / `PublicFolderMessage` — Öffentliche Ordner mit ACL
+- ~~`PublicFolder` / `PublicFolderMessage`~~ — komplett entfernt in v3.18.31
 
 **Phase-8-Modelle**:
 - ~~`EDiscoverySearch`~~ — komplett entfernt in v3.18.5
@@ -305,14 +305,14 @@ Alle Endpunkte hinter nginx auf Port 443:
 /notes/                   notesRouter
 /user/                    userRouter
 /smime/                   smimeRouter              S/MIME + Geräteverwaltung
-/public-folders/          publicFoldersRouter      Öffentliche Ordner (User)
+# /public-folders/ → komplett entfernt in v3.18.31
 /admin/mailboxes/         adminMailboxesRouter
 /admin/domains/           adminDomainsRouter
 /admin/queues/            adminQueuesRouter
 /admin/logs/              adminLogsRouter
 /admin/groups/            adminGroupsRouter         Verteilergruppen
 /admin/resources/         adminResourcesRouter      Raum-/Ressourcenpostfächer
-/admin/public-folders/    adminPublicFoldersRouter  Öffentliche Ordner (Admin)
+# /admin/public-folders/ → komplett entfernt in v3.18.31
 # /admin/ediscovery/ → komplett entfernt in v3.18.5
 /admin/ems/               adminEmsRouter            EMS REST-Bridge (20+ Cmdlets)
 /admin/compliance/journaling/ adminJournalingRouter Journaling-Regeln
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.30 — Highlights
+## Aktuelle Version 3.18.31 — Highlights
+
+**v3.18.31** — Öffentliche Ordner komplett entfernt. Das Feature war Exchange-Public-Folder-Style (mit ACL READ/WRITE/FULL + Mail-Enabled-Variante seit v3.18.9) und wird vom Markt heute kaum noch genutzt — moderne Teams bevorzugen Shared Mailboxes (`/admin/shared-mailboxes/`) und Distribution Groups (`/admin/groups/`) für die typischen Use-Cases (Team-Postfach, Verteiler, kollaborative Inbox). **Entfernt**: Prisma-Modelle `PublicFolder` + `PublicFolderMessage` (Tabellen `public_folders` + `public_folder_messages` via `prisma db push --accept-data-loss` gedroppt), Backend-Router `packages/api-gateway/src/routes/public-folders.ts` + `packages/api-gateway/src/routes/admin/public-folders.ts`, Route-Mounts `/api/v1/public-folders` + `/api/v1/admin/public-folders`, BCP-Page `PublicFoldersPage.tsx` + Sidebar-Eintrag + Route + i18n-Keys (`nav_public_folders` DE+EN), MWA-Sektion `PublicFoldersSection` + `PublicFolderViewerModal` in `FolderTree.tsx`. **Geändert**: `smtp-server/src/inbound/handler.ts` `verifyRecipient()` ohne publicFolder-Lookup, `smtp-server/src/handlers/message.ts` `storeInboundMessage()` ohne Public-Folder-Branch — Mails an ehemalige Public-Folder-Adressen werden jetzt als unbekannter Empfänger verworfen. Migration ist destruktiv, alle bestehenden Public Folders + deren Mails gehen verloren (vergleichbar mit eDiscovery-Removal in v3.18.5).
 
 **v3.18.30** — BigInt-Crashfix + Audit-Toggle + Audit-Translations. **KRITISCH**: backup-service crashloopte seit v3.18.26 weil `BackupJob.sizeBytes` als Prisma-BigInt nicht von `JSON.stringify` serialisiert wird — `/jobs` und `/users` warfen 500, was die User-Symptome „Einzelne Mailbox sichern zeigt keine Benutzer" und „Jobs zeigt keinen Status" erklärt. Fix: globaler Monkey-Patch von `express.response.json` am Modul-Top mit rekursivem BigInt→String-Replacer. Wirkt für alle Endpoints. **Audit-Log-Toggle** in BCP→Sicherheit (`ServerSettings.auditLogEnabled`). Critical-Action-Override via Regex `ALWAYS_AUDIT` (`settings.*`, `audit.*`, `user.role`, `oauth.client`, `mailbox.delete`, `domain.delete`) — diese werden IMMER protokolliert auch bei abgeschaltetem Toggle. Toggle-Wechsel selbst als `audit.enabled`/`audit.disabled` mit Diff geloggt (Compliance: DSGVO Art. 32 / SOX / HIPAA / TISAX / ISO 27001). 60s In-Memory-Cache vermeidet DB-Hit pro Audit-Write; `invalidateAuditCache()` nach Save. **Human-Readable Audit-Labels**: `ACTION_MAP` mit 40+ Mappings übersetzt `settings.put`→„Einstellungen geändert", `mailboxes.delete`→„Postfach gelöscht", `audit.disabled`→„Audit-Log DEAKTIVIERT" (rote Critical-Tone) etc. Original-String im title-Tooltip für SIEM-Querverweise.
 
@@ -745,4 +747,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations; v3.18.29 — Backup-Archiv Download+Delete; v3.18.28 — Calendar+Backup UX-Fixes)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.31 — Öffentliche Ordner komplett entfernt; v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations; v3.18.29 — Backup-Archiv Download+Delete)*

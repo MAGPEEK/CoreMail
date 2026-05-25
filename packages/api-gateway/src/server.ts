@@ -33,7 +33,7 @@ import { adminLogsRouter } from './routes/admin/logs.js';
 import { adminBackupsRouter } from './routes/admin/backups.js';
 import { adminGroupsRouter } from './routes/admin/groups.js';
 import { adminResourcesRouter } from './routes/admin/resources.js';
-import { adminPublicFoldersRouter } from './routes/admin/public-folders.js';
+// Public Folders komplett entfernt in v3.18.31
 // eDiscovery & Legal Hold komplett entfernt in v3.18.5
 import { adminEmsRouter } from './routes/admin/ems.js';
 // Journaling-Feature komplett entfernt in v3.13.6
@@ -62,7 +62,6 @@ import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
 import { authRouter } from './routes/auth.js';
-import { publicFoldersRouter } from './routes/public-folders.js';
 import { retentionTagsRouter } from './routes/retention-tags.js';
 import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
@@ -250,7 +249,6 @@ app.use('/api/v1/notes',          notesRouter);
 app.use('/api/v1/user',           userRouter);
 app.use('/api/v1/categories',     categoriesRouter);
 app.use('/api/v1/smime',          smimeRouter);
-app.use('/api/v1/public-folders', publicFoldersRouter);
 app.use('/api/v1/retention-tags', retentionTagsRouter);
 app.use('/api/v1/push',           pushRouter);
 
@@ -277,7 +275,7 @@ app.use('/api/v1/admin/backups',         adminBackupsRouter);
 app.use('/api/v1/admin/logs',            adminLogsRouter);
 app.use('/api/v1/admin/groups',          adminGroupsRouter);
 app.use('/api/v1/admin/resources',       adminResourcesRouter);
-app.use('/api/v1/admin/public-folders',  adminPublicFoldersRouter);
+// Public-Folders-Route entfernt in v3.18.31
 // eDiscovery-Route entfernt in v3.18.5
 app.use('/api/v1/admin/ems',             adminEmsRouter);
 // Journaling-Route entfernt in v3.13.6

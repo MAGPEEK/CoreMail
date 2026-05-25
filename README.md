@@ -59,7 +59,6 @@ Outlook-Clients (Desktop und Mobil), iOS Mail, Android Mail und alle anderen IMA
 | Shared Mailbox-Reader im MWA — „Weiteres Postfach öffnen" über Konto-Dropdown | ✅ |
 | Folder-CRUD in Shared Mailboxes (Neuer Ordner, Umbenennen, Löschen, Standard-Folder geschützt) | ✅ |
 | E-Mail-Aliase pro User-Postfach und Shared-Mailbox | ✅ |
-| Öffentliche Ordner mit ACL (READ / WRITE / FULL) | ✅ |
 | Verteilergruppen (statisch & dynamisch via LDAP-Filter) | ✅ |
 | Raum- und Gerätepostfächer mit Auto-Accept | ✅ |
 | Abwesenheitsassistent | ✅ |
