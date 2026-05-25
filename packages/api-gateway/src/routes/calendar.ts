@@ -6,7 +6,9 @@ import {
   canAccessCalendar,
   listAccessibleCalendars,
   stripGalPrefix,
+  maskEventForViewer,
 } from '../lib/calendar-access.js';
+import { audit, auditContext } from '../lib/audit.js';
 
 export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
@@ -227,6 +229,18 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     },
   });
 
+  // v3.18.15 Audit-Log: Share-Erstellung/-Update (Compliance)
+  audit({
+    actorId: userId,
+    actorEmail: req.apiUser!.email,
+    action: 'calendar.share.create',
+    targetType: 'calendar',
+    targetId: id,
+    targetName: cal.name,
+    changes: { granteeId, granteeEmail: grantee.email, permission: parsed.data.permission },
+    ...auditContext(req),
+  });
+
   res.status(201).json({
     id: share.id,
     calendarId: id,
@@ -269,6 +283,20 @@ calendarRouter.put('/:id/shares/:shareId', async (req: Request, res: Response) =
     },
   });
 
+  audit({
+    actorId: userId,
+    actorEmail: req.apiUser!.email,
+    action: 'calendar.share.update',
+    targetType: 'calendar',
+    targetId: id,
+    targetName: cal.name,
+    changes: {
+      shareId, granteeEmail: updated.grantee.email,
+      oldPermission: share.permission, newPermission: parsed.data.permission,
+    },
+    ...auditContext(req),
+  });
+
   res.json({
     id: updated.id,
     calendarId: id,
@@ -288,23 +316,46 @@ calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response
 
   const share = await prisma.calendarShare.findUnique({
     where: { id: shareId },
-    select: { id: true, calendarId: true, ownerId: true, granteeId: true },
+    select: {
+      id: true, calendarId: true, ownerId: true, granteeId: true, permission: true,
+      grantee: { select: { email: true } },
+      calendar: { select: { name: true } },
+    },
   });
   if (!share || share.calendarId !== id) { res.status(404).json({ error: 'Freigabe nicht gefunden' }); return; }
 
   // Owner darf alles entfernen; Grantee darf eigene Share entfernen ("Aus meiner Liste")
-  if (share.ownerId !== userId && share.granteeId !== userId) {
+  const isOwnerAction = share.ownerId === userId;
+  const isGranteeSelfRemoval = share.granteeId === userId;
+  if (!isOwnerAction && !isGranteeSelfRemoval) {
     res.status(403).json({ error: 'Keine Berechtigung' });
     return;
   }
 
   await prisma.calendarShare.delete({ where: { id: shareId } });
+
+  audit({
+    actorId: userId,
+    actorEmail: req.apiUser!.email,
+    action: isOwnerAction ? 'calendar.share.delete' : 'calendar.share.self_remove',
+    targetType: 'calendar',
+    targetId: id,
+    targetName: share.calendar.name,
+    changes: {
+      shareId, granteeEmail: share.grantee.email,
+      permission: share.permission,
+    },
+    ...auditContext(req),
+  });
+
   res.json({ ok: true });
 });
 
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 // GET /api/v1/calendar/events?start=&end=&calendarId=
+// v3.18.15: Privacy-Masking aktiv — Grantees sehen private Events nur als „Beschäftigt",
+// confidential Events werden komplett ausgeblendet. Owner sieht alles unverändert.
 calendarRouter.get('/events', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const start = req.query['start'] ? new Date(String(req.query['start'])) : new Date();
@@ -313,14 +364,18 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const calendarIdParam = req.query['calendarId'] as string | undefined;
 
+  // Pro Kalender merken ob viewer Owner ist (für Masking-Entscheidung)
+  const ownerByCalendar = new Map<string, boolean>();
   let calIds: string[];
   if (calendarIdParam) {
     const access = await canAccessCalendar(userId, calendarIdParam, 'READ');
     if (!access) { res.status(403).json({ error: 'Keine Leserechte für diesen Kalender' }); return; }
     calIds = [calendarIdParam];
+    ownerByCalendar.set(calendarIdParam, access.isOwner);
   } else {
     const accessible = await listAccessibleCalendars(userId);
     calIds = accessible.map((c) => c.id);
+    for (const c of accessible) ownerByCalendar.set(c.id, c.permission === 'OWNER');
   }
 
   if (calIds.length === 0) { res.json([]); return; }
@@ -329,7 +384,13 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     where: { calendarId: { in: calIds }, dtStart: { gte: start }, dtEnd: { lte: end } },
     orderBy: { dtStart: 'asc' },
   });
-  res.json(events);
+
+  // Masking: PRIVATE → details ersetzt durch "Beschäftigt"; CONFIDENTIAL → ausgeblendet
+  const masked = events
+    .map((ev) => maskEventForViewer(ev, ownerByCalendar.get(ev.calendarId) === true))
+    .filter((ev): ev is NonNullable<typeof ev> => ev !== null);
+
+  res.json(masked);
 });
 
 // POST /api/v1/calendar/events  (WRITE-Permission auf Ziel-Kalender)
@@ -343,6 +404,8 @@ const EventSchema = z.object({
   allDay: z.boolean().default(false),
   recurring: z.boolean().default(false),
   rrule: z.string().optional(),
+  // v3.18.15: Privacy-Level (PUBLIC=Default, PRIVATE=nur Beschäftigt, CONFIDENTIAL=unsichtbar)
+  classification: z.enum(['PUBLIC', 'PRIVATE', 'CONFIDENTIAL']).optional(),
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
@@ -350,12 +413,15 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const parsed = EventSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule } = parsed.data;
+  const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule, classification = 'PUBLIC' } = parsed.data;
 
   const access = await canAccessCalendar(userId, calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
-  const icalData = buildIcal({ summary, dtStart, dtEnd, description, location, allDay, ...(rrule !== undefined ? { rrule } : {}) });
+  const icalData = buildIcal({
+    summary, dtStart, dtEnd, description, location, allDay, classification,
+    ...(rrule !== undefined ? { rrule } : {}),
+  });
 
   const { randomUUID } = await import('node:crypto');
   const event = await prisma.calendarEvent.create({
@@ -367,6 +433,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
       dtEnd: new Date(dtEnd),
       recurring,
       icalData,
+      classification,
     },
   });
   res.status(201).json(event);
@@ -381,14 +448,15 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
 
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
-    select: { id: true, calendarId: true, summary: true, dtStart: true, dtEnd: true, recurring: true },
+    select: { id: true, calendarId: true, summary: true, dtStart: true, dtEnd: true, recurring: true, classification: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
-  const { summary, dtStart, dtEnd, description, location, allDay, rrule } = parsed.data;
+  const { summary, dtStart, dtEnd, description, location, allDay, rrule, classification } = parsed.data;
+  const effectiveClass = classification ?? event.classification ?? 'PUBLIC';
   const icalData = buildIcal({
     summary: summary ?? event.summary,
     dtStart: dtStart ?? event.dtStart.toISOString(),
@@ -396,6 +464,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     description: description ?? '',
     location: location ?? '',
     allDay: allDay ?? false,
+    classification: effectiveClass,
     ...(rrule !== undefined ? { rrule } : {}),
   });
 
@@ -407,6 +476,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
       dtEnd: dtEnd ? new Date(dtEnd) : event.dtEnd,
       recurring: !!rrule || event.recurring,
       icalData,
+      classification: effectiveClass,
     },
   });
   res.json(updated);
@@ -432,7 +502,9 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
 
 function buildIcal(opts: {
   summary: string; dtStart: string; dtEnd: string;
-  description: string; location: string; allDay: boolean; rrule?: string;
+  description: string; location: string; allDay: boolean;
+  rrule?: string;
+  classification?: string;
 }): string {
   const formatDt = (iso: string, allDay: boolean): string => {
     if (allDay) return iso.slice(0, 10).replace(/-/g, '');
@@ -455,6 +527,10 @@ function buildIcal(opts: {
   if (opts.description) lines.push(`DESCRIPTION:${opts.description}`);
   if (opts.location) lines.push(`LOCATION:${opts.location}`);
   if (opts.rrule) lines.push(`RRULE:${opts.rrule}`);
+  // RFC 5545 §3.8.1.3 — CLASS:PUBLIC|PRIVATE|CONFIDENTIAL
+  if (opts.classification && opts.classification !== 'PUBLIC') {
+    lines.push(`CLASS:${opts.classification}`);
+  }
   lines.push('END:VEVENT', 'END:VCALENDAR');
   return lines.join('\r\n');
 }

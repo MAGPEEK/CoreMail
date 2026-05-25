@@ -13,6 +13,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.15] — 2026-05-25 — CalDAV-WRITE-Sharing + Private Events + Audit-Log + i18n
+
+### Added
+
+- **CalDAV-WRITE für Grantees mit voller RFC-3744-DAV-ACL**
+  (`packages/caldav-server/src/caldav/index.ts`):
+  In v3.18.14 konnten Apple Kalender / Thunderbird Lightning nur lesen.
+  Jetzt dürfen WRITE-Grantees auch PUT (Create/Update) und DELETE.
+  Schreib-Sperre für READ-Grantees bleibt. Volle RFC-3744-DAV-ACL:
+  - `<DAV:owner>` mit `<d:href>/dav/principals/{ownerId}/</d:href>`
+  - `<DAV:current-user-privilege-set>` mit feingranularen Privileges
+    (`<d:read/>`, `<d:write/>`, `<d:write-content/>`, `<d:bind/>`, `<d:unbind/>`)
+  - `<DAV:acl>` Block (nur für OWNER sichtbar) mit ACE pro Grantee
+  - `Allow`-Header in OPTIONS jetzt mit `ACL`, `DAV`-Header mit `access-control`
+  Cross-Calendar-Manipulation-Protection: Grantee kann ein Event aus seiner
+  Sicht nicht in einen anderen Kalender verschieben.
+
+- **Private und vertrauliche Termine (RFC 5545 `CLASS:`)**
+  (`packages/storage/prisma/schema.prisma`, `packages/api-gateway/src/lib/calendar-access.ts`):
+  Neues Feld `CalendarEvent.classification` mit drei Werten:
+  - `PUBLIC` (Default): Grantees sehen alle Details
+  - `PRIVATE`: Grantees sehen nur „Beschäftigt" — Subject/Description/Location/
+    Attendees werden maskiert. Owner sieht alles unverändert.
+  - `CONFIDENTIAL`: Termin wird für Grantees komplett ausgeblendet
+  Mapping zu iCal `CLASS:`-Property (RFC 5545 §3.8.1.3) in beide Richtungen
+  (Backend → iCal beim Build, CalDAV-PUT → DB beim Parse). Maskierung greift
+  in REST `GET /calendar/events`, CalDAV `GET`, `PROPFIND` und `REPORT`.
+  WRITE-Grantees können CONFIDENTIAL-Events nicht ändern (sie wären sonst
+  trotz Maskierung manipulierbar).
+
+- **Audit-Log für Sharing-Aktionen** (Compliance, DSGVO Art. 32)
+  (`packages/api-gateway/src/routes/calendar.ts`):
+  Neue Audit-Aktionen — alle mit Actor, Ziel-Kalender, IP, User-Agent und
+  Diff im `changes`-Feld:
+  - `calendar.share.create` — beim Erstellen einer Freigabe
+  - `calendar.share.update` — bei Permission-Änderung (mit oldPermission/newPermission)
+  - `calendar.share.delete` — wenn Owner eine Freigabe entfernt
+  - `calendar.share.self_remove` — wenn Grantee sich selbst aus der Liste entfernt
+  Bisher waren Sharing-Aktionen NICHT auditiert — Lücke geschlossen.
+
+- **i18n: EN, ES, IT-Übersetzungen für Sharing-UI**
+  (`packages/web-client/src/i18n/translations.ts`):
+  25 neue Keys (`cal_share_*` und `cal_event_class_*`) in allen vier
+  Sprachen Deutsch/Englisch/Spanisch/Italienisch.
+
+### Changed
+
+- **Event-Erstellungs-Dialog** im MWA hat jetzt einen Sichtbarkeits-Dropdown
+  („Öffentlich" / „Privat" / „Vertraulich"). Default bleibt PUBLIC für
+  Rückwärts-Kompatibilität.
+
+- **CalDAV OPTIONS-Antwort** enthält jetzt `ACL` im Allow-Header und
+  `access-control` im DAV-Header — Apple Kalender erkennt damit volle
+  RFC-3744-Unterstützung.
+
+### Schema
+
+- Neues Feld `CalendarEvent.classification String @default("PUBLIC")`.
+  Migration läuft automatisch via `prisma db push --accept-data-loss`.
+  Bestehende Events bekommen `PUBLIC` als Default — keine Verhaltensänderung
+  für nicht-geteilte Kalender.
+
+---
+
 ## [3.18.14] — 2026-05-25 — Kalender teilen und berechtigen (Read/Write)
 
 ### Added

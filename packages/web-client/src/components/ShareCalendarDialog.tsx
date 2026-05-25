@@ -4,6 +4,7 @@ import { X, Trash2, Share2, Eye, Pencil, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarShare } from '../api/types.js';
+import { useT } from '../i18n/useT.js';
 
 /**
  * v3.18.14 Calendar Sharing — Dialog zum Verwalten der Freigaben eines eigenen
@@ -33,6 +34,7 @@ export function ShareCalendarDialog({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const t = useT();
   const [search, setSearch] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [permission, setPermission] = useState<Perm>('READ');
@@ -88,7 +90,7 @@ export function ShareCalendarDialog({
       void qc.invalidateQueries({ queryKey: ['calendar-shares', calendar.id] });
       void qc.invalidateQueries({ queryKey: ['calendars'] });
       setSearch(''); setDebouncedQ(''); setShowSug(false);
-      toast.success('Freigegeben');
+      toast.success('✓');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -101,7 +103,7 @@ export function ShareCalendarDialog({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['calendar-shares', calendar.id] });
       void qc.invalidateQueries({ queryKey: ['calendars'] });
-      toast.success('Berechtigung aktualisiert');
+      toast.success('✓');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -112,7 +114,7 @@ export function ShareCalendarDialog({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['calendar-shares', calendar.id] });
       void qc.invalidateQueries({ queryKey: ['calendars'] });
-      toast.success('Freigabe entfernt');
+      toast.success(t('cal_share_remove'));
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -148,7 +150,7 @@ export function ShareCalendarDialog({
             <Share2 size={18} className="text-accent" />
             <div>
               <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-                Kalender teilen
+                {t('cal_share_title')}
               </h2>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ backgroundColor: calendar.color }} />
@@ -158,7 +160,7 @@ export function ShareCalendarDialog({
           </div>
           <button onClick={onClose}
             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none"
-            aria-label="Schließen">
+            aria-label="×">
             ×
           </button>
         </div>
@@ -168,7 +170,7 @@ export function ShareCalendarDialog({
           {/* Permission-Auswahl + Input */}
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Benutzer hinzufügen
+              {t('cal_share_add_user')}
             </label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
@@ -180,7 +182,7 @@ export function ShareCalendarDialog({
                   onChange={onSearchChange}
                   onKeyDown={onKeyDown}
                   onFocus={() => { if (suggestions.length > 0) setShowSug(true); }}
-                  placeholder="Name oder E-Mail-Adresse"
+                  placeholder={t('cal_share_add_user')}
                   className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
                 />
                 {showSug && suggestions.length > 0 && (
@@ -205,26 +207,26 @@ export function ShareCalendarDialog({
                 onChange={(e) => setPermission(e.target.value as Perm)}
                 className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
               >
-                <option value="READ">Nur lesen</option>
-                <option value="WRITE">Lesen und Schreiben</option>
+                <option value="READ">{t('cal_share_perm_read')}</option>
+                <option value="WRITE">{t('cal_share_perm_write')}</option>
               </select>
             </div>
             {debouncedQ.length >= 1 && suggestions.length === 0 && (
-              <p className="text-xs text-gray-400 mt-1.5">Keine Benutzer gefunden</p>
+              <p className="text-xs text-gray-400 mt-1.5">{t('cal_share_no_users_found')}</p>
             )}
           </div>
 
           {/* Bestehende Freigaben */}
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Aktuell freigegeben für
+              {t('cal_share_current')}
             </label>
             {sharesLoading ? (
-              <p className="text-sm text-gray-400 py-2">Lade…</p>
+              <p className="text-sm text-gray-400 py-2">…</p>
             ) : shares.length === 0 ? (
               <div className="border border-dashed border-gray-200 dark:border-gray-700 rounded p-4 text-center">
                 <Share2 size={20} className="mx-auto text-gray-300 mb-1.5" />
-                <p className="text-sm text-gray-400">Noch nicht freigegeben</p>
+                <p className="text-sm text-gray-400">{t('cal_share_empty')}</p>
               </div>
             ) : (
               <ul className="border border-gray-200 dark:border-gray-700 rounded divide-y divide-gray-100 dark:divide-gray-700">
@@ -245,18 +247,18 @@ export function ShareCalendarDialog({
                       disabled={updateShare.isPending}
                       className="text-xs border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
                     >
-                      <option value="READ">Nur lesen</option>
-                      <option value="WRITE">Lesen + Schreiben</option>
+                      <option value="READ">{t('cal_share_perm_read')}</option>
+                      <option value="WRITE">{t('cal_share_perm_write')}</option>
                     </select>
                     <button
                       onClick={() => {
-                        if (window.confirm(`Freigabe für „${s.granteeDisplayName}" wirklich entfernen?`)) {
+                        if (window.confirm(t('cal_share_remove_confirm'))) {
                           removeShare.mutate(s.id);
                         }
                       }}
                       disabled={removeShare.isPending}
                       className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
-                      aria-label="Entfernen"
+                      aria-label={t('cal_share_remove')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -271,11 +273,10 @@ export function ShareCalendarDialog({
             <div className="flex items-start gap-2">
               <Eye size={14} className="mt-0.5 shrink-0" />
               <div>
-                <strong>Lesen:</strong> Termine ansehen, aber nicht ändern.<br />
-                <strong>Lesen + Schreiben:</strong> Termine erstellen, ändern und löschen.<br />
+                {t('cal_share_help_read')}<br />
+                {t('cal_share_help_write')}<br />
                 <span className="block mt-1 text-blue-600/70 dark:text-blue-400/70">
-                  Externe Kalender-Clients (Apple Kalender, Thunderbird) erhalten in dieser Version nur Lesezugriff.
-                  Schreibrechte über CalDAV folgen im nächsten Update.
+                  {t('cal_share_help_caldav')}
                 </span>
               </div>
             </div>
@@ -286,7 +287,7 @@ export function ShareCalendarDialog({
         <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end">
           <button onClick={onClose}
             className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800">
-            Fertig
+            {t('cal_share_done')}
           </button>
         </div>
       </div>
