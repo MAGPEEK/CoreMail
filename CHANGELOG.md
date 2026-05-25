@@ -13,6 +13,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.17] — 2026-05-25 — Calendar SSE-Push + Free/Busy-Query
+
+### Added
+
+- **A2 — SSE-Push für Calendar-Share-Lifecycle**
+  (`packages/core/src/redis/index.ts`, `packages/api-gateway/src/sse.ts`,
+  `packages/api-gateway/src/routes/calendar.ts`,
+  `packages/web-client/src/hooks/useMailEvents.ts`):
+  Neuer Redis-Channel `coremail:calendar:shares` (Konstante
+  `CHANNEL_CALENDAR_SHARES`). Backend published bei jeder Share-Lifecycle-
+  Aktion (create/update/delete/self_remove) ein JSON-Event mit
+  `affectedUserIds[]` (Owner + Grantee). SSE-Handler im api-gateway
+  abonniert den Channel und forwardet das Event als `event: calendar:shares`
+  nur an die SSE-Verbindungen der betroffenen User. Frontend-Hook
+  `useMailEvents()` invalidiert auf das Event hin die `['calendars']`- und
+  `['calendar-shares']`-Caches → instant Live-Sync ohne Polling. Toast
+  „🗓️ Ein Kalender wurde mit dir geteilt" bei `action=create`. Polling-
+  Intervall der Calendar-Query in CalendarPage von 60s auf 5min reduziert
+  (nur noch Sicherheits-Fallback falls SSE tot).
+
+- **A4 — Free/Busy-Query über geteilte Kalender**
+  (`packages/api-gateway/src/routes/calendar.ts`):
+  Neuer Endpoint `POST /api/v1/calendar/freebusy`, Body
+  `{ userEmails[], start, end }`. Liefert pro angefragtem User alle
+  Busy-Slots aus Kalendern, auf die der Caller Zugriff hat (eigene + per
+  Share). CONFIDENTIAL-Events bleiben für Foreign-Caller ausgeblendet,
+  PRIVATE-Events werden als generic „Busy"-Slot OHNE Subject geliefert.
+  Self-Query (Caller fragt sich selbst) sieht alle Details. Range hart
+  begrenzt auf 90 Tage (DoS-Schutz), Liste auf 50 User. Response-Shape:
+  `{ start, end, users: [{ email, displayName, found, busy: [{ start, end, type, subject? }] }] }`.
+
+---
+
 ## [3.18.16] — 2026-05-25 — Calendar Sharing Quick-Wins (Notification, Per-Grantee-Farbe, Reorder, Cleanup)
 
 ### Added

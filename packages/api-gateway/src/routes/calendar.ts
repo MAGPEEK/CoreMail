@@ -10,6 +10,28 @@ import {
 } from '../lib/calendar-access.js';
 import { audit, auditContext } from '../lib/audit.js';
 import { notifyUserInbox } from '../lib/internal-notify.js';
+import { getRedisClient, CHANNEL_CALENDAR_SHARES } from '@coremail/core';
+
+/**
+ * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE-Handler
+ * forwards it to all affectedUserIds (Owner + Grantee). Frontend invalidates
+ * TanStack Query Cache → instant UI update statt 60s-Polling.
+ */
+function publishShareEvent(
+  action: 'create' | 'update' | 'delete' | 'self_remove',
+  calendarId: string,
+  affectedUserIds: string[],
+  extra?: Record<string, unknown>,
+): void {
+  try {
+    void getRedisClient().publish(
+      CHANNEL_CALENDAR_SHARES,
+      JSON.stringify({ action, calendarId, affectedUserIds, ...extra }),
+    );
+  } catch {
+    // best-effort — Redis-Ausfall darf nicht den Hauptpfad blocken
+  }
+}
 
 export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
@@ -299,6 +321,14 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     ...auditContext(req),
   });
 
+  // v3.18.17 A2: SSE-Push für Live-Sync
+  publishShareEvent(
+    share.createdAt.getTime() < Date.now() - 5000 ? 'update' : 'create',
+    id,
+    [userId, granteeId],
+    { permission: parsed.data.permission },
+  );
+
   // v3.18.16 A1: Notification-Mail in Grantee-Inbox — nur bei *neuer* Share,
   // nicht bei Permission-Update via Upsert (sonst Spam).
   const wasUpdate = share.createdAt.getTime() < Date.now() - 5000; // grobe Heuristik
@@ -383,6 +413,10 @@ calendarRouter.put('/:id/shares/:shareId', async (req: Request, res: Response) =
     ...auditContext(req),
   });
 
+  publishShareEvent('update', id, [userId, updated.granteeId], {
+    permission: parsed.data.permission,
+  });
+
   res.json({
     id: updated.id,
     calendarId: id,
@@ -434,7 +468,132 @@ calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response
     ...auditContext(req),
   });
 
+  publishShareEvent(
+    isOwnerAction ? 'delete' : 'self_remove',
+    id,
+    [share.ownerId, share.granteeId],
+  );
+
   res.json({ ok: true });
+});
+
+// ─── Free/Busy (v3.18.17 A4) ────────────────────────────────────────────────
+
+// POST /api/v1/calendar/freebusy
+// Body: { userEmails: string[], start: ISO, end: ISO }
+// Liefert pro angefragtem User alle Busy-Slots aus Kalendern, auf die der
+// aufrufende User Zugriff hat (eigen + per Share). Für andere User werden nur
+// Slots aus Kalendern berücksichtigt, die der andere User dem aufrufenden User
+// freigegeben hat. CONFIDENTIAL bleibt ausgeblendet, PRIVATE wird als generic
+// „Busy" geliefert ohne Subject.
+const FreeBusySchema = z.object({
+  userEmails: z.array(z.string().email()).min(1).max(50),
+  start: z.string(),
+  end: z.string(),
+});
+calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
+  const callerId = req.apiUser!.userId;
+  const parsed = FreeBusySchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+
+  const start = new Date(parsed.data.start);
+  const end = new Date(parsed.data.end);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+    res.status(400).json({ error: 'Invalid date range' });
+    return;
+  }
+  // Begrenzen auf max. 90 Tage (gegen DoS)
+  if (end.getTime() - start.getTime() > 90 * 24 * 60 * 60 * 1000) {
+    res.status(400).json({ error: 'Range too large (max 90 days)' });
+    return;
+  }
+
+  // Email → User-Mapping
+  const users = await prisma.user.findMany({
+    where: { email: { in: parsed.data.userEmails.map((e) => e.toLowerCase()) }, active: true },
+    select: { id: true, email: true, displayName: true },
+  });
+  const usersByEmail = new Map(users.map((u) => [u.email.toLowerCase(), u]));
+
+  const result: Array<{
+    email: string;
+    displayName: string | null;
+    found: boolean;
+    busy: Array<{ start: string; end: string; type: 'busy' | 'tentative'; subject?: string }>;
+  }> = [];
+
+  for (const requestedEmail of parsed.data.userEmails) {
+    const targetUser = usersByEmail.get(requestedEmail.toLowerCase());
+    if (!targetUser) {
+      result.push({ email: requestedEmail, displayName: null, found: false, busy: [] });
+      continue;
+    }
+
+    // Welche Kalender vom Ziel-User darf der Caller einsehen?
+    // - Eigene Kalender vom Caller (wenn er sich selbst anfragt)
+    // - Vom Ziel-User an Caller geteilte Kalender
+    const targetCalendars = await prisma.calendar.findMany({
+      where: {
+        userId: targetUser.id,
+        OR: [
+          // Caller fragt sich selbst → alle eigenen
+          ...(targetUser.id === callerId ? [{ userId: callerId }] : []),
+          // Caller hat Share vom Ziel-User
+          { shares: { some: { granteeId: callerId } } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (targetCalendars.length === 0) {
+      // Caller hat keinen Zugriff auf Ziel-Kalender → leere Busy-Liste
+      result.push({
+        email: requestedEmail,
+        displayName: targetUser.displayName ?? null,
+        found: true,
+        busy: [],
+      });
+      continue;
+    }
+
+    const events = await prisma.calendarEvent.findMany({
+      where: {
+        calendarId: { in: targetCalendars.map((c) => c.id) },
+        // Overlap: event.dtStart < end AND event.dtEnd > start
+        dtStart: { lt: end },
+        dtEnd:   { gt: start },
+      },
+      select: { dtStart: true, dtEnd: true, summary: true, classification: true },
+    });
+
+    const busy = events
+      .filter((e) => {
+        const cls = (e.classification ?? 'PUBLIC').toUpperCase();
+        // CONFIDENTIAL → ausblenden für Caller (außer Caller ist Owner = Self-Query)
+        if (cls === 'CONFIDENTIAL' && targetUser.id !== callerId) return false;
+        return true;
+      })
+      .map((e) => {
+        const cls = (e.classification ?? 'PUBLIC').toUpperCase();
+        const isPrivateForCaller = cls === 'PRIVATE' && targetUser.id !== callerId;
+        return {
+          start: e.dtStart.toISOString(),
+          end: e.dtEnd.toISOString(),
+          type: 'busy' as const,
+          // PRIVATE für Foreign-Caller → kein Subject
+          ...(isPrivateForCaller ? {} : { subject: e.summary }),
+        };
+      });
+
+    result.push({
+      email: requestedEmail,
+      displayName: targetUser.displayName ?? null,
+      found: true,
+      busy,
+    });
+  }
+
+  res.json({ start: start.toISOString(), end: end.toISOString(), users: result });
 });
 
 // ─── Events ─────────────────────────────────────────────────────────────────

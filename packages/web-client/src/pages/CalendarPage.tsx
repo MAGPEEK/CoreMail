@@ -61,10 +61,11 @@ export function CalendarPage() {
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn: () => api.get<Calendar[]>('/calendar'),
-    // v3.18.14: Shared-Kalender können vom Owner widerrufen werden — periodisch syncen.
+    // v3.18.17: SSE-Push via useMailEvents() invalidiert den Cache live —
+    // 60s-Polling als Sicherheits-Fallback (falls SSE-Verbindung tot ist)
     staleTime: 30_000,
     refetchOnWindowFocus: true,
-    refetchInterval: 60_000,
+    refetchInterval: 5 * 60_000,
   });
 
   const { data: events } = useQuery({
