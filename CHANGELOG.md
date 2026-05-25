@@ -13,6 +13,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.13] — 2026-05-25 — Externe Kontakte UI vereinfacht + GAL-Cache Live-Sync
+
+### Changed
+
+- **BCP ExternalContactsPage — Vorname/Nachname-Felder entfernt**
+  (`packages/admin-panel/src/pages/ExternalContactsPage.tsx`):
+  Die getrennten Eingaben für Vorname und Nachname waren redundant — der
+  Anzeigename ist der einzig relevante Wert, der überall in MWA/GAL/Outlook
+  sichtbar ist. UI hat jetzt nur noch ein Pflichtfeld „Anzeigename". Backend
+  `firstName`/`lastName` bleiben in DB mit Default `""`-Fallback erhalten
+  (kein Schema-Bruch).
+
+### Fixed
+
+- **GAL im MWA zeigte neu angelegte externe Kontakte erst nach Reload**
+  (`packages/web-client/src/pages/ContactsPage.tsx`):
+  Wenn Admin in BCP einen neuen externen Kontakt oder eine Verteilergruppe
+  anlegte, war dieser im MWA Globalen Adressbuch nicht sichtbar — der
+  TanStack-Query-Cache hielt das alte Ergebnis 30 Sekunden lang stale-free.
+  **Fix**: `staleTime: 0` + `refetchOnMount: true` + `refetchOnWindowFocus: true`
+  + `refetchInterval: 60_000` für die `/contacts/gal`-Query. Zusätzlich neuer
+  Refresh-Button (RefreshCw-Icon) in der Filter-Bar neben dem Counter — User
+  kann jederzeit manuell synchronisieren. Spinning-Animation während des
+  Fetches als visuelles Feedback.
+
+---
+
 ## [3.18.12] — 2026-05-24 — Public Folders: Browse-Modal, Folder-Icons, Auto-Hide ohne ACL
 
 ### Fixed

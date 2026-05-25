@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, Plus, Mail, Phone, Building2, X, Pencil, Trash2,
   Briefcase, MessageSquare, Smartphone, AtSign, User,
-  BookOpen, Users as UsersIcon, Globe,
+  BookOpen, Users as UsersIcon, Globe, RefreshCw,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import type { Contact } from '../api/types.js';
@@ -71,7 +71,9 @@ export function ContactsPage() {
   });
 
   // Globales Adressbuch (GAL) — Browse-Modus ohne q, Suche mit q
-  const { data: galData } = useQuery<GalResponse>({
+  // Cache so wenig wie möglich: Admin kann jederzeit neue ExternalContacts oder
+  // DistributionGroups anlegen — der MWA-User soll sie ohne Reload sehen.
+  const { data: galData, refetch: refetchGal, isFetching: galLoading } = useQuery<GalResponse>({
     queryKey: ['gal', search, galFilter],
     queryFn: () => {
       const params = new URLSearchParams({ limit: '300' });
@@ -79,7 +81,10 @@ export function ContactsPage() {
       if (galFilter !== 'all') params.set('type', galFilter);
       return api.get<GalResponse>(`/contacts/gal?${params.toString()}`);
     },
-    staleTime: 30_000,
+    staleTime: 0,                  // immer als stale markieren
+    refetchOnMount: true,          // bei Tab-Wechsel zur ContactsPage neu laden
+    refetchOnWindowFocus: true,    // bei Tab/Fenster-Fokus neu laden
+    refetchInterval: 60_000,       // im Hintergrund alle 60s sync
     enabled: view === 'gal',
   });
   const galEntries = galData?.entries ?? [];
@@ -222,6 +227,14 @@ export function ContactsPage() {
               </button>
             ))}
             {galData && <span className="ml-auto text-gray-400 text-[10px]">{galData.total}</span>}
+            <button
+              onClick={() => refetchGal()}
+              disabled={galLoading}
+              className="text-gray-400 hover:text-accent transition-colors disabled:opacity-30"
+              title="GAL neu laden"
+            >
+              <RefreshCw size={11} className={galLoading ? 'animate-spin' : ''} />
+            </button>
           </div>
         )}
 
