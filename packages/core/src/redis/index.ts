@@ -73,3 +73,5 @@ export const CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload';
 export const CHANNEL_SETTINGS_RELOAD = 'settings:reload';
 /** Fired whenever a security attack event is detected (brute-force, relay, DNSBL, etc.). */
 export const CHANNEL_ADMIN_ATTACK = 'admin:attack';
+/** Fired on calendar-share lifecycle changes (create/update/delete/self_remove). v3.18.17 */
+export const CHANNEL_CALENDAR_SHARES = 'calendar:shares';

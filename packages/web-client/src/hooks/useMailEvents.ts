@@ -57,6 +57,22 @@ export function useMailEvents() {
       void qc.invalidateQueries({ queryKey: ['folders'] });
     });
 
+    // v3.18.17 A2: Calendar-Share-Lifecycle → Live-Sync ohne Polling
+    es.addEventListener('calendar:shares', (ev) => {
+      void qc.invalidateQueries({ queryKey: ['calendars'] });
+      void qc.invalidateQueries({ queryKey: ['calendar-shares'] });
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as {
+          action?: 'create' | 'update' | 'delete' | 'self_remove';
+        };
+        if (data.action === 'create') {
+          toast('🗓️ Ein Kalender wurde mit dir geteilt', { duration: 3500 });
+        } else if (data.action === 'delete') {
+          toast('🗓️ Eine Kalender-Freigabe wurde entfernt', { duration: 3500 });
+        }
+      } catch { /* silent */ }
+    });
+
     es.onerror = () => {
       // EventSource versucht automatisch alle 3s neu zu verbinden
       // — kein manuelles Reconnect nötig
