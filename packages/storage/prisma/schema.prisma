@@ -106,6 +106,8 @@ model User {
   appPasswords    AppPassword[]
   sharedPerms     SharedMailboxPerm[]
   delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
+  calendarSharesGranted  CalendarShare[] @relation("CalendarShareOwner")
+  calendarSharesReceived CalendarShare[] @relation("CalendarShareGrantee")
   activeSyncDevices ActiveSyncDevice[]
   certificates    UserCertificate[]
   smimeSettings   SmimeSettings?
@@ -486,13 +488,37 @@ model Calendar {
   icon        String?         // lucide-Icon-Name (z. B. "Home", "Plane")
   sortOrder   Int             @default(0)
   isDefault   Boolean         @default(false)
-  acl         Json            @default("{}")
+  acl         Json            @default("{}")  // @deprecated v3.18.14 — durch CalendarShare ersetzt, Entfernung in v3.19
   syncToken   String          @default("")
   events      CalendarEvent[]
+  shares      CalendarShare[]
   createdAt   DateTime        @default(now())
 
   @@index([userId])
   @@map("calendars")
+}
+
+enum CalendarPermType {
+  READ
+  WRITE
+}
+
+model CalendarShare {
+  id         String           @id @default(cuid())
+  calendar   Calendar         @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  calendarId String
+  owner      User             @relation("CalendarShareOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId    String
+  grantee    User             @relation("CalendarShareGrantee", fields: [granteeId], references: [id], onDelete: Cascade)
+  granteeId  String
+  permission CalendarPermType
+  comment    String?
+  createdAt  DateTime         @default(now())
+
+  @@unique([calendarId, granteeId])
+  @@index([granteeId])
+  @@index([calendarId])
+  @@map("calendar_shares")
 }
 
 model CalendarEvent {

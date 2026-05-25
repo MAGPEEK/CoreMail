@@ -1,7 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { v4 as uuidv4 } from 'uuid';
 import { create } from 'xmlbuilder2';
 
 const log = createLogger('caldav');
@@ -20,6 +19,36 @@ function caldavBase(userId: string): string {
   return `/dav/calendars/${userId}`;
 }
 
+/**
+ * v3.18.14 Calendar Sharing — CalDAV-Helper.
+ * Liefert die Permission des `viewerUserId` auf `calendarId`:
+ *  - 'OWNER' wenn `viewerUserId === calendar.userId`
+ *  - 'WRITE' / 'READ' wenn CalendarShare existiert
+ *  - null wenn kein Zugriff besteht
+ *
+ * TODO v3.18.15: Volle DAV-ACL nach RFC 3744 (`<DAV:acl>`, `<DAV:principal-URL>`,
+ * `<DAV:owner>`) + WRITE-Sharing über CalDAV (PUT/DELETE für WRITE-Grantees).
+ * Aktuell: Grantees können nur lesen (PROPFIND/REPORT/GET).
+ */
+async function getDavPermission(
+  viewerUserId: string,
+  calendarId: string,
+): Promise<'OWNER' | 'WRITE' | 'READ' | null> {
+  const cal = await prisma.calendar.findUnique({
+    where: { id: calendarId },
+    select: { userId: true },
+  });
+  if (!cal) return null;
+  if (cal.userId === viewerUserId) return 'OWNER';
+
+  const share = await prisma.calendarShare.findUnique({
+    where: { calendarId_granteeId: { calendarId, granteeId: viewerUserId } },
+    select: { permission: true },
+  });
+  if (!share) return null;
+  return share.permission === 'WRITE' ? 'WRITE' : 'READ';
+}
+
 // OPTIONS — advertise CalDAV capabilities
 caldavRouter.options('*', (req: Request, res: Response) => {
   res.set({
@@ -31,6 +60,7 @@ caldavRouter.options('*', (req: Request, res: Response) => {
 });
 
 // PROPFIND /:userId — list calendars (calendar-home-set)
+// User sieht eigene Kalender + alle Kalender, die andere User mit ihm geteilt haben.
 caldavRouter.all('/calendars/:userId', async (req: Request, res: Response) => {
   if (req.method !== 'PROPFIND') { res.status(405).send('Method Not Allowed'); return; }
 
@@ -38,13 +68,22 @@ caldavRouter.all('/calendars/:userId', async (req: Request, res: Response) => {
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  
-  const calendars = await prisma.calendar.findMany({ where: { userId } });
+  // Eigene + geteilte Kalender (READ-Shares reichen für Listing).
+  const [owned, shares] = await Promise.all([
+    prisma.calendar.findMany({ where: { userId } }),
+    prisma.calendarShare.findMany({
+      where: { granteeId: userId },
+      select: {
+        permission: true,
+        calendar: { select: { id: true, name: true } },
+      },
+    }),
+  ]);
 
   const doc = create({ version: '1.0', encoding: 'utf-8' })
     .ele('d:multistatus', { 'xmlns:d': NS_DAV, 'xmlns:c': NS_CALDAV });
 
-  for (const cal of calendars) {
+  for (const cal of owned) {
     const href = `${caldavBase(userId)}/${cal.id}/`;
     const response = doc.ele('d:response');
     response.ele('d:href').txt(href);
@@ -56,6 +95,27 @@ caldavRouter.all('/calendars/:userId', async (req: Request, res: Response) => {
     prop.ele('c:supported-calendar-component-set')
       .ele('c:comp', { name: 'VEVENT' }).up()
       .ele('c:comp', { name: 'VTODO' });
+    // Owner sieht alle Privilegien
+    const cups = prop.ele('d:current-user-privilege-set');
+    cups.ele('d:privilege').ele('d:all');
+    propstat.ele('d:status').txt('HTTP/1.1 200 OK');
+  }
+
+  for (const s of shares) {
+    const href = `${caldavBase(userId)}/${s.calendar.id}/`;
+    const response = doc.ele('d:response');
+    response.ele('d:href').txt(href);
+    const propstat = response.ele('d:propstat');
+    const prop = propstat.ele('d:prop');
+    prop.ele('d:resourcetype').ele('d:collection').up().ele('c:calendar');
+    prop.ele('d:displayname').txt(`[Geteilt] ${s.calendar.name}`);
+    prop.ele('d:getctag', { 'xmlns:cs': NS_CS }).txt(String(Date.now()));
+    prop.ele('c:supported-calendar-component-set')
+      .ele('c:comp', { name: 'VEVENT' }).up()
+      .ele('c:comp', { name: 'VTODO' });
+    // v3.18.14: read-only über CalDAV (WRITE-Shares folgen in v3.18.15)
+    const cups = prop.ele('d:current-user-privilege-set');
+    cups.ele('d:privilege').ele('d:read');
     propstat.ele('d:status').txt('HTTP/1.1 200 OK');
   }
 
@@ -70,8 +130,10 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  
-  const calendar = await prisma.calendar.findFirst({ where: { id: calendarId, userId } });
+  const perm = await getDavPermission(userId, calendarId);
+  if (!perm) { res.status(404).send('Not Found'); return; }
+
+  const calendar = await prisma.calendar.findUnique({ where: { id: calendarId } });
   if (!calendar) { res.status(404).send('Not Found'); return; }
 
   const events = await prisma.calendarEvent.findMany({
@@ -88,8 +150,16 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   const calPropstat = calResponse.ele('d:propstat');
   const calProp = calPropstat.ele('d:prop');
   calProp.ele('d:resourcetype').ele('d:collection').up().ele('c:calendar');
-  calProp.ele('d:displayname').txt(calendar.name);
+  calProp.ele('d:displayname').txt(perm === 'OWNER' ? calendar.name : `[Geteilt] ${calendar.name}`);
   calProp.ele('d:getctag', { 'xmlns:cs': NS_CS }).txt(String(Date.now()));
+  // current-user-privilege-set
+  const cups = calProp.ele('d:current-user-privilege-set');
+  if (perm === 'OWNER') {
+    cups.ele('d:privilege').ele('d:all');
+  } else {
+    // v3.18.14: alle Grantees read-only über CalDAV. WRITE-CalDAV in v3.18.15.
+    cups.ele('d:privilege').ele('d:read');
+  }
   calPropstat.ele('d:status').txt('HTTP/1.1 200 OK');
 
   // Each event as a response entry
@@ -114,8 +184,10 @@ caldavRouter.get('/calendars/:userId/:calendarId/:eventId', async (req: Request,
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
+  const perm = await getDavPermission(userId, calendarId);
+  if (!perm) { res.status(404).send('Not Found'); return; }
+
   const id = eventId.replace(/\.ics$/, '');
-  
   const event = await prisma.calendarEvent.findFirst({
     where: { id, calendarId },
   });
@@ -129,12 +201,16 @@ caldavRouter.get('/calendars/:userId/:calendarId/:eventId', async (req: Request,
 });
 
 // PUT /:userId/:calendarId/:eventId.ics — create or update event
+// v3.18.14: Nur OWNER. WRITE-Grantees in v3.18.15.
 caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request, res: Response) => {
   const { userId, calendarId, eventId } = req.params as {
     userId: string; calendarId: string; eventId: string;
   };
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
+
+  const perm = await getDavPermission(userId, calendarId);
+  if (perm !== 'OWNER') { res.status(403).send('Forbidden — only owner can write via CalDAV in v3.18.14'); return; }
 
   const id = eventId.replace(/\.ics$/, '');
   const icalData = typeof req.body === 'string' ? req.body : '';
@@ -150,7 +226,6 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request,
   const dtEnd = dtEndMatch ? parseIcalDate(dtEndMatch[1] ?? '') : new Date(Date.now() + 3600000);
   const summary = summaryMatch?.[1]?.trim() ?? '';
 
-  
   const calendar = await prisma.calendar.findFirst({ where: { id: calendarId, userId } });
   if (!calendar) { res.status(404).send('Calendar Not Found'); return; }
 
@@ -172,7 +247,7 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request,
   }
 });
 
-// DELETE /:userId/:calendarId/:eventId.ics — delete event
+// DELETE /:userId/:calendarId/:eventId.ics — delete event (OWNER only in v3.18.14)
 caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', async (req: Request, res: Response) => {
   const { userId, calendarId, eventId } = req.params as {
     userId: string; calendarId: string; eventId: string;
@@ -180,8 +255,10 @@ caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', async (req: Reque
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
+  const perm = await getDavPermission(userId, calendarId);
+  if (perm !== 'OWNER') { res.status(403).send('Forbidden — only owner can delete via CalDAV in v3.18.14'); return; }
+
   const id = eventId.replace(/\.ics$/, '');
-  
   const event = await prisma.calendarEvent.findFirst({ where: { id, calendarId } });
   if (!event) { res.status(404).send('Not Found'); return; }
 
@@ -190,7 +267,7 @@ caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', async (req: Reque
   res.status(204).send();
 });
 
-// MKCALENDAR — create new calendar
+// MKCALENDAR — create new calendar (only OWNER under their own URL)
 caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Response, next) => {
   if (req.method !== 'MKCALENDAR') { next(); return; }
 
@@ -198,7 +275,6 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  
   await prisma.calendar.create({
     data: { id: calendarId, userId, name: calendarId, color: '#0078D4' },
   });
@@ -206,7 +282,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   res.status(201).send();
 });
 
-// REPORT — calendar-query for sync
+// REPORT — calendar-query for sync (OWNER + READ/WRITE-Grantees)
 caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Response, next) => {
   if (req.method !== 'REPORT') { next(); return; }
 
@@ -214,7 +290,9 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   const davUser = req.davUser;
   if (!davUser || davUser.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
-  
+  const perm = await getDavPermission(userId, calendarId);
+  if (!perm) { res.status(404).send('Not Found'); return; }
+
   const events = await prisma.calendarEvent.findMany({
     where: { calendarId },
     select: { id: true, icalData: true },

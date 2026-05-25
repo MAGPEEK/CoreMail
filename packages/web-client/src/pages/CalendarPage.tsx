@@ -60,6 +60,10 @@ export function CalendarPage() {
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn: () => api.get<Calendar[]>('/calendar'),
+    // v3.18.14: Shared-Kalender können vom Owner widerrufen werden — periodisch syncen.
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
   });
 
   const { data: events } = useQuery({
@@ -90,13 +94,19 @@ export function CalendarPage() {
     },
   });
 
+  // Default-Kalender für neue Events: bevorzugt eigener Default, dann erster eigener.
+  // Geteilte READ-only Kalender niemals als Default verwenden.
+  const defaultWritableCalId = useMemo(() => {
+    const writable = (calendars ?? []).filter((c) => c.permission !== 'READ' && !c.shared);
+    return writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? '';
+  }, [calendars]);
+
   const handleDateSelect = (info: DateSelectArg) => {
-    const calId = calendars?.[0]?.id ?? '';
     setNewEvent({
       summary: '',
       dtStart: info.startStr,
       dtEnd: info.endStr,
-      calendarId: calId,
+      calendarId: defaultWritableCalId,
       allDay: info.allDay,
     });
   };
@@ -104,6 +114,13 @@ export function CalendarPage() {
   const handleEventClick = (info: EventClickArg) => {
     if (info.event.id.startsWith('task-')) {
       toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
+      return;
+    }
+    // Permission-Check: Event darf nur in WRITE/OWNER-Kalendern gelöscht werden
+    const eventCalId = (info.event.extendedProps as { calendarId?: string })?.calendarId;
+    const cal = (calendars ?? []).find((c) => c.id === eventCalId);
+    if (cal && cal.permission === 'READ') {
+      toast.error('Nur Lese-Berechtigung für diesen Kalender');
       return;
     }
     if (confirm(`Termin "${info.event.title}" löschen?`)) {
@@ -127,15 +144,24 @@ export function CalendarPage() {
   const fcEvents = [
     ...(events ?? [])
       .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
-      .map((ev) => ({
-        id: ev.id,
-        title: ev.summary,
-        start: ev.dtStart,
-        end: ev.dtEnd,
-        allDay: false,
-        backgroundColor: calendars?.find((c) => c.id === ev.calendarId)?.color ?? '#0078D4',
-        borderColor: 'transparent',
-      })),
+      .map((ev) => {
+        const cal = calendars?.find((c) => c.id === ev.calendarId);
+        const isReadOnly = cal?.permission === 'READ';
+        return {
+          id: ev.id,
+          title: ev.summary,
+          start: ev.dtStart,
+          end: ev.dtEnd,
+          allDay: false,
+          backgroundColor: cal?.color ?? '#0078D4',
+          borderColor: 'transparent',
+          // READ-Shares: per-event editable=false (verhindert Drag/Resize)
+          editable: !isReadOnly,
+          startEditable: !isReadOnly,
+          durationEditable: !isReadOnly,
+          extendedProps: { calendarId: ev.calendarId, isReadOnly },
+        };
+      }),
     ...taskEvents,
   ];
 
@@ -156,10 +182,10 @@ export function CalendarPage() {
             summary: '',
             dtStart: '',
             dtEnd: '',
-            calendarId: calendars?.[0]?.id ?? '',
+            calendarId: defaultWritableCalId,
             allDay: false,
           })}
-          onShare={() => toast('Kalender teilen kommt bald', { icon: 'ℹ️' })}
+          onShare={() => toast('Wähle einen Kalender und klicke Teilen über das ⋯-Menü', { icon: 'ℹ️' })}
           onPrint={() => window.print()}
         />
 
@@ -214,7 +240,13 @@ export function CalendarPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Kalender</label>
                 <select className="input" value={newEvent.calendarId}
                   onChange={(e) => setNewEvent({ ...newEvent, calendarId: e.target.value })}>
-                  {(calendars ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {(calendars ?? [])
+                    .filter((c) => c.permission !== 'READ')
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{c.shared ? ` (geteilt von ${c.ownerDisplayName ?? c.ownerEmail ?? '?'})` : ''}
+                      </option>
+                    ))}
                 </select>
               </div>
             </div>

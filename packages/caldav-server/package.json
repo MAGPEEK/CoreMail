@@ -1,6 +1,6 @@
 {
   "name": "@coremail/caldav-server",
-  "version": "3.18.13",
+  "version": "3.18.14",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

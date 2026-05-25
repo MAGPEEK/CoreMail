@@ -2,29 +2,27 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
+import {
+  canAccessCalendar,
+  listAccessibleCalendars,
+  stripGalPrefix,
+} from '../lib/calendar-access.js';
 
 export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
 
-// GET /api/v1/calendar
+// GET /api/v1/calendar — eigene + geteilte Kalender
 calendarRouter.get('/', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
-  const sel    = { id: true, name: true, color: true, icon: true, sortOrder: true, isDefault: true } as const;
 
-  let calendars = await prisma.calendar.findMany({
-    where:   { userId },
-    select:  sel,
-    orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
-  });
+  let calendars = await listAccessibleCalendars(userId);
 
-  // Lazy provisioning: falls noch kein Kalender existiert → Default-Kalender anlegen.
-  // Gilt für bestehende Accounts die vor der Provisioning-Logik erstellt wurden.
-  if (calendars.length === 0) {
-    const defaultCal = await prisma.calendar.create({
-      data:   { userId, name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 },
-      select: sel,
+  // Lazy provisioning: nur wenn User noch GAR keinen eigenen Kalender hat.
+  if (!calendars.some((c) => !c.shared)) {
+    await prisma.calendar.create({
+      data: { userId, name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 },
     });
-    calendars = [defaultCal];
+    calendars = await listAccessibleCalendars(userId);
   }
 
   res.json(calendars);
@@ -41,7 +39,6 @@ calendarRouter.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   const userId = req.apiUser!.userId;
-  // sortOrder = letzte Position
   const maxOrder = await prisma.calendar.aggregate({
     where: { userId },
     _max: { sortOrder: true },
@@ -58,7 +55,7 @@ calendarRouter.post('/', async (req: Request, res: Response) => {
   res.status(201).json(calendar);
 });
 
-// PATCH /api/v1/calendar/:id
+// PATCH /api/v1/calendar/:id  (nur Owner)
 const PatchCalSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
@@ -84,7 +81,7 @@ calendarRouter.patch('/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// DELETE /api/v1/calendar/:id  (Default-Kalender kann nicht gelöscht werden)
+// DELETE /api/v1/calendar/:id  (nur Owner; Default-Kalender geschützt)
 calendarRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const cal = await prisma.calendar.findFirst({ where: { id, userId: req.apiUser!.userId } });
@@ -94,7 +91,7 @@ calendarRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// POST /api/v1/calendar/reorder  Body: { ids: string[] }
+// POST /api/v1/calendar/reorder  Body: { ids: string[] }  (nur eigene)
 const ReorderSchema = z.object({ ids: z.array(z.string()).min(1).max(50) });
 calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   const parsed = ReorderSchema.safeParse(req.body);
@@ -116,19 +113,217 @@ calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   res.json({ ok: true, count: sequence.length });
 });
 
+// ─── Sharing-Endpoints ──────────────────────────────────────────────────────
+
+// GET /api/v1/calendar/mine-shares — Shares die mir gewährt wurden
+// (Grantee-Sicht). Optional Filter ?calendarId=...
+calendarRouter.get('/mine-shares', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const calendarIdFilter = typeof req.query['calendarId'] === 'string'
+    ? req.query['calendarId']
+    : null;
+
+  const shares = await prisma.calendarShare.findMany({
+    where: {
+      granteeId: userId,
+      ...(calendarIdFilter ? { calendarId: calendarIdFilter } : {}),
+    },
+    select: {
+      id: true,
+      calendarId: true,
+      permission: true,
+      createdAt: true,
+      calendar: { select: { name: true, color: true, userId: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  res.json(shares.map((s) => ({
+    id: s.id,
+    calendarId: s.calendarId,
+    permission: s.permission,
+    calendarName: s.calendar.name,
+    calendarColor: s.calendar.color,
+    ownerId: s.calendar.userId,
+    createdAt: s.createdAt.toISOString(),
+  })));
+});
+
+// GET /api/v1/calendar/:id/shares — Liste aller Freigaben (nur Owner)
+calendarRouter.get('/:id/shares', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const userId = req.apiUser!.userId;
+
+  const cal = await prisma.calendar.findFirst({ where: { id, userId } });
+  if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
+
+  const shares = await prisma.calendarShare.findMany({
+    where: { calendarId: id },
+    select: {
+      id: true,
+      granteeId: true,
+      permission: true,
+      comment: true,
+      createdAt: true,
+      grantee: { select: { email: true, displayName: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  res.json(shares.map((s) => ({
+    id: s.id,
+    calendarId: id,
+    granteeId: s.granteeId,
+    granteeEmail: s.grantee.email,
+    granteeDisplayName: s.grantee.displayName ?? s.grantee.email,
+    permission: s.permission,
+    comment: s.comment ?? '',
+    createdAt: s.createdAt.toISOString(),
+  })));
+});
+
+// POST /api/v1/calendar/:id/shares — Body: { granteeId, permission, comment? }
+const CreateShareSchema = z.object({
+  granteeId: z.string().min(1),
+  permission: z.enum(['READ', 'WRITE']),
+  comment: z.string().max(200).optional(),
+});
+calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const userId = req.apiUser!.userId;
+
+  const parsed = CreateShareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+
+  const cal = await prisma.calendar.findFirst({ where: { id, userId } });
+  if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
+
+  const granteeId = stripGalPrefix(parsed.data.granteeId);
+
+  if (granteeId === userId) {
+    res.status(400).json({ error: 'Du kannst den Kalender nicht an dich selbst freigeben' });
+    return;
+  }
+
+  const grantee = await prisma.user.findFirst({
+    where: { id: granteeId, active: true },
+    select: { id: true, email: true, displayName: true },
+  });
+  if (!grantee) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
+
+  // Upsert: erneuter POST mit gleicher granteeId → Update
+  const share = await prisma.calendarShare.upsert({
+    where: { calendarId_granteeId: { calendarId: id, granteeId } },
+    update: {
+      permission: parsed.data.permission,
+      ...(parsed.data.comment !== undefined ? { comment: parsed.data.comment } : {}),
+    },
+    create: {
+      calendarId: id,
+      ownerId: userId,
+      granteeId,
+      permission: parsed.data.permission,
+      ...(parsed.data.comment !== undefined ? { comment: parsed.data.comment } : {}),
+    },
+  });
+
+  res.status(201).json({
+    id: share.id,
+    calendarId: id,
+    granteeId: grantee.id,
+    granteeEmail: grantee.email,
+    granteeDisplayName: grantee.displayName ?? grantee.email,
+    permission: share.permission,
+    comment: share.comment ?? '',
+    createdAt: share.createdAt.toISOString(),
+  });
+});
+
+// PUT /api/v1/calendar/:id/shares/:shareId — Body: { permission, comment? }
+const UpdateShareSchema = z.object({
+  permission: z.enum(['READ', 'WRITE']),
+  comment: z.string().max(200).optional(),
+});
+calendarRouter.put('/:id/shares/:shareId', async (req: Request, res: Response) => {
+  const { id, shareId } = req.params as { id: string; shareId: string };
+  const userId = req.apiUser!.userId;
+
+  const parsed = UpdateShareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+
+  const cal = await prisma.calendar.findFirst({ where: { id, userId } });
+  if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
+
+  const share = await prisma.calendarShare.findFirst({ where: { id: shareId, calendarId: id } });
+  if (!share) { res.status(404).json({ error: 'Freigabe nicht gefunden' }); return; }
+
+  const updated = await prisma.calendarShare.update({
+    where: { id: shareId },
+    data: {
+      permission: parsed.data.permission,
+      ...(parsed.data.comment !== undefined ? { comment: parsed.data.comment } : {}),
+    },
+    select: {
+      id: true, granteeId: true, permission: true, comment: true, createdAt: true,
+      grantee: { select: { email: true, displayName: true } },
+    },
+  });
+
+  res.json({
+    id: updated.id,
+    calendarId: id,
+    granteeId: updated.granteeId,
+    granteeEmail: updated.grantee.email,
+    granteeDisplayName: updated.grantee.displayName ?? updated.grantee.email,
+    permission: updated.permission,
+    comment: updated.comment ?? '',
+    createdAt: updated.createdAt.toISOString(),
+  });
+});
+
+// DELETE /api/v1/calendar/:id/shares/:shareId — Owner ODER Grantee selbst
+calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response) => {
+  const { id, shareId } = req.params as { id: string; shareId: string };
+  const userId = req.apiUser!.userId;
+
+  const share = await prisma.calendarShare.findUnique({
+    where: { id: shareId },
+    select: { id: true, calendarId: true, ownerId: true, granteeId: true },
+  });
+  if (!share || share.calendarId !== id) { res.status(404).json({ error: 'Freigabe nicht gefunden' }); return; }
+
+  // Owner darf alles entfernen; Grantee darf eigene Share entfernen ("Aus meiner Liste")
+  if (share.ownerId !== userId && share.granteeId !== userId) {
+    res.status(403).json({ error: 'Keine Berechtigung' });
+    return;
+  }
+
+  await prisma.calendarShare.delete({ where: { id: shareId } });
+  res.json({ ok: true });
+});
+
+// ─── Events ─────────────────────────────────────────────────────────────────
+
 // GET /api/v1/calendar/events?start=&end=&calendarId=
 calendarRouter.get('/events', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
   const start = req.query['start'] ? new Date(String(req.query['start'])) : new Date();
   const end = req.query['end']
     ? new Date(String(req.query['end']))
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  const calendarId = req.query['calendarId'] as string | undefined;
+  const calendarIdParam = req.query['calendarId'] as string | undefined;
 
-  
-  const calendars = await prisma.calendar.findMany({ where: { userId: req.apiUser!.userId } });
-  const calIds = calendarId
-    ? calendars.filter((c: { id: string }) => c.id === calendarId).map((c: { id: string }) => c.id)
-    : calendars.map((c: { id: string }) => c.id);
+  let calIds: string[];
+  if (calendarIdParam) {
+    const access = await canAccessCalendar(userId, calendarIdParam, 'READ');
+    if (!access) { res.status(403).json({ error: 'Keine Leserechte für diesen Kalender' }); return; }
+    calIds = [calendarIdParam];
+  } else {
+    const accessible = await listAccessibleCalendars(userId);
+    calIds = accessible.map((c) => c.id);
+  }
+
+  if (calIds.length === 0) { res.json([]); return; }
 
   const events = await prisma.calendarEvent.findMany({
     where: { calendarId: { in: calIds }, dtStart: { gte: start }, dtEnd: { lte: end } },
@@ -137,7 +332,7 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
   res.json(events);
 });
 
-// POST /api/v1/calendar/events
+// POST /api/v1/calendar/events  (WRITE-Permission auf Ziel-Kalender)
 const EventSchema = z.object({
   calendarId: z.string(),
   summary: z.string().min(1),
@@ -151,16 +346,14 @@ const EventSchema = z.object({
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
   const parsed = EventSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule } = parsed.data;
 
-  
-  const calendar = await prisma.calendar.findFirst({
-    where: { id: calendarId, userId: req.apiUser!.userId },
-  });
-  if (!calendar) { res.status(404).json({ error: 'Calendar not found' }); return; }
+  const access = await canAccessCalendar(userId, calendarId, 'WRITE');
+  if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
   const icalData = buildIcal({ summary, dtStart, dtEnd, description, location, allDay, ...(rrule !== undefined ? { rrule } : {}) });
 
@@ -179,17 +372,21 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   res.status(201).json(event);
 });
 
-// PUT /api/v1/calendar/events/:id
+// PUT /api/v1/calendar/events/:id  (WRITE-Permission auf Kalender des Events)
 calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
   const parsed = EventSchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  
-  const event = await prisma.calendarEvent.findFirst({
-    where: { id, calendar: { userId: req.apiUser!.userId } },
+  const event = await prisma.calendarEvent.findUnique({
+    where: { id },
+    select: { id: true, calendarId: true, summary: true, dtStart: true, dtEnd: true, recurring: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
+
+  const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
+  if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
   const { summary, dtStart, dtEnd, description, location, allDay, rrule } = parsed.data;
   const icalData = buildIcal({
@@ -215,14 +412,20 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// DELETE /api/v1/calendar/events/:id
+// DELETE /api/v1/calendar/events/:id  (WRITE-Permission auf Kalender des Events)
 calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
-  
-  const event = await prisma.calendarEvent.findFirst({
-    where: { id, calendar: { userId: req.apiUser!.userId } },
+
+  const event = await prisma.calendarEvent.findUnique({
+    where: { id },
+    select: { id: true, calendarId: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
+
+  const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
+  if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
+
   await prisma.calendarEvent.delete({ where: { id } });
   res.json({ ok: true });
 });

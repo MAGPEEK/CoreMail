@@ -13,6 +13,82 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.14] — 2026-05-25 — Kalender teilen und berechtigen (Read/Write)
+
+### Added
+
+- **Kalender-Sharing — internes Sharing zwischen Usern**
+  (`packages/storage/prisma/schema.prisma`, `packages/api-gateway/src/routes/calendar.ts`,
+  `packages/web-client/src/components/ShareCalendarDialog.tsx`):
+  User können ihre eigenen Kalender an andere User im selben System freigeben
+  mit READ- oder READ+WRITE-Permission. Geteilte Kalender erscheinen beim
+  Empfänger in einer neuen Sidebar-Sektion „Geteilt mit mir" mit Share-Icon
+  und Permission-Badge (R / R/W) sowie Owner-Name als Untertitel.
+
+- **Sharing-Dialog mit Benutzer-Autocomplete**
+  (`packages/web-client/src/components/ShareCalendarDialog.tsx`):
+  Klick auf „Teilen und Berechtigungen" im Kalender-Kontextmenü öffnet einen
+  vollwertigen Dialog statt der bisherigen „Bald verfügbar"-Notification.
+  - Benutzer-Autocomplete via `/contacts?q=` (220ms Debouncing, Keyboard-Nav
+    ↑↓/Enter/Tab/Escape, automatische Filterung nur auf interne User-Treffer,
+    bereits zugewiesene User werden ausgeblendet)
+  - Permission-Select (Nur lesen / Lesen und Schreiben)
+  - Liste der aktuellen Freigaben mit Permission-Toggle + Trash-Button
+  - Self-Share verhindert (Backend 400-Response)
+  - Info-Banner mit Erklärung READ vs WRITE und CalDAV-Hinweis
+
+- **CalDAV Discovery für geteilte Kalender (Read-Only)**
+  (`packages/caldav-server/src/caldav/index.ts`):
+  Externe Clients (Apple Kalender, Thunderbird Lightning) sehen jetzt in der
+  Calendar-Home-Set auch geteilte Kalender (mit `[Geteilt]`-Prefix im Displayname).
+  PROPFIND/REPORT/GET sind erlaubt. PUT/DELETE bleiben in v3.18.14 OWNER-only
+  (volle WRITE-CalDAV folgt in v3.18.15 mit RFC-3744-konformer DAV ACL).
+  `<DAV:current-user-privilege-set>` korrekt gesetzt: OWNER → `<d:all/>`,
+  Grantee → `<d:read/>`.
+
+### Changed
+
+- **GET /api/v1/calendar** liefert jetzt eigene + geteilte Kalender mit Feldern
+  `shared`, `ownerId`, `ownerDisplayName`, `ownerEmail`, `permission`
+  (`OWNER`/`READ`/`WRITE`). Lazy-Provisioning nur noch bei komplett leerem Bestand.
+
+- **Event-Permission-Checks** in `POST/PUT/DELETE /calendar/events*` über neuen
+  zentralen Helper `canAccessCalendar(userId, calendarId, required)` in
+  `packages/api-gateway/src/lib/calendar-access.ts`. WRITE-Permission erforderlich
+  für Schreib-Operationen, READ reicht für `GET /events`. Owner haben immer
+  alle Rechte.
+
+- **FullCalendar im MWA** rendert geteilte READ-only-Kalender als nicht editierbar
+  (`editable: false`, `startEditable: false`, `durationEditable: false`).
+  Klick auf einen READ-only-Event zeigt Toast „Nur Lese-Berechtigung für diesen
+  Kalender" statt Delete-Confirm. Neuer-Termin-Dialog listet nur Kalender mit
+  Schreibrecht im Dropdown.
+
+- **TanStack Query Calendar-Cache** mit `staleTime: 30s` + `refetchInterval: 60s`
+  + `refetchOnWindowFocus: true` — geänderte Freigaben (z. B. Owner widerruft
+  Permission) verschwinden binnen 60s aus der UI.
+
+### Schema
+
+- **Neue Tabelle `calendar_shares`** mit Feldern `id`, `calendarId`, `ownerId`,
+  `granteeId`, `permission` (Enum `READ`/`WRITE`), `comment`, `createdAt`.
+  Unique-Constraint `(calendarId, granteeId)` verhindert Duplikate, POST ist
+  idempotent (Upsert). Cascade-Delete bei Calendar/Owner/Grantee-Löschung.
+- **Neuer Enum `CalendarPermType`** mit Werten `READ`, `WRITE`.
+- **`Calendar.acl Json`** als `@deprecated` markiert — Entfernung in v3.19.
+
+### API
+
+- `GET /api/v1/calendar/:id/shares` — Liste aller Freigaben für eigenen Kalender
+- `POST /api/v1/calendar/:id/shares` — Body `{ granteeId, permission, comment? }`,
+  Upsert-Verhalten, akzeptiert `gal-`-Prefix
+- `PUT /api/v1/calendar/:id/shares/:shareId` — Permission updaten
+- `DELETE /api/v1/calendar/:id/shares/:shareId` — Owner ODER Grantee (Self-Removal)
+- `GET /api/v1/calendar/mine-shares?calendarId=...` — Shares die mir gewährt
+  wurden (Grantee-Sicht, für Self-Removal-Flow nötig)
+
+---
+
 ## [3.18.13] — 2026-05-25 — Externe Kontakte UI vereinfacht + GAL-Cache Live-Sync
 
 ### Changed
