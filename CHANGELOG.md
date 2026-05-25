@@ -13,6 +13,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.19] — 2026-05-25 — Forced 2FA für Admin-Login (Security)
+
+### Security
+
+- **D5 — Pflicht-2FA für Admins** (`packages/api-gateway/src/middleware/auth.ts`,
+  `packages/admin-panel/src/api/client.ts`,
+  `packages/admin-panel/src/pages/MfaRequiredPage.tsx`):
+  Wenn `ServerSettings.requireMfaForAdmins=true` (Toggle bestand bereits in
+  Sicherheits-Einstellungen, wurde aber nirgendwo enforced) und der Admin
+  hat KEINE MFA aktiviert → alle `/api/v1/admin/*`-Routen liefern jetzt
+  `403 { code: "MFA_REQUIRED" }`. Frontend-API-Client erkennt den Code und
+  leitet auf neue Pflicht-Setup-Seite `/bcp/mfa-required` mit Anleitung
+  („MWA öffnen → Einstellungen → Sicherheit → 2FA aktivieren → zurückkommen").
+  TOTP- oder WebAuthn-Credentials zählen beide als „MFA aktiviert".
+  Kein Chicken-and-Egg-Problem: MFA-Setup-Routes (`/auth/mfa/*`) sind
+  außerhalb der `/admin/*`-Sperre. Fail-safe: bei DB-Fehler im Check wird
+  durchgelassen (Logged als ERROR), damit Admins nicht ausgesperrt werden
+  bei Postgres-Ausfall.
+
+---
+
 ## [3.18.18] — 2026-05-25 — Toolbar-Share-Button + CalDAV-URL-Anzeige
 
 ### Fixed
