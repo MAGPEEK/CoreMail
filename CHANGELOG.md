@@ -13,6 +13,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.24] — 2026-05-25 — Performance E: MinIO Lifecycle-Policies
+
+### Added
+
+- **E4 — MinIO Lifecycle-Policies für automatisches Cleanup**
+  (`packages/storage/src/minio/index.ts`):
+  Bisher konnten temporäre Backup-, Quarantäne- und Outbound-Queue-Objekte
+  unbegrenzt im MinIO-Bucket wachsen — speziell „outbound-queue/"-Anhänge
+  von toten BullMQ-Jobs (z. B. nach Crash zwischen Job-Enqueue und Worker-
+  Pickup) blieben für immer liegen. Neuer Helper `ensureLifecyclePolicies()`
+  wird in `ensureBuckets()` aufgerufen und setzt drei prefix-basierte
+  Expiration-Regeln im Bucket:
+  - `outbound-queue/` → 7 Tage (Sicherheitsnetz für tote Jobs)
+  - `quarantine/`     → 90 Tage (rspamd-Quarantäne)
+  - `backups/`        → 365 Tage (Backup-Retention)
+  E-Mail-Anhänge (`attachments/`) und Raw-Messages (`raw/`) sind explizit
+  AUSGENOMMEN — die werden beim Message-Delete einzeln entfernt. Idempotent:
+  setBucketLifecycle() überschreibt die Policy jedes Mal, bei jedem
+  Container-Start wird der aktuelle State garantiert. Fail-safe: wenn MinIO
+  die Policy nicht akzeptiert (alte Version, Permission-Issue), nur WARN-
+  Log, kein Throw.
+
+### Added (Dependency)
+
+- `ical-generator@^10.2.0` als Vorbereitung für v3.18.25 iMIP-Calendar-
+  Invitations.
+
+### Schema
+
+- **`CalendarEvent.sequence Int @default(0)`** — Sequence-Counter für
+  iMIP-konforme Event-Updates (RFC 5546 §3.2). Mail-Clients (Outlook,
+  Gmail) ignorieren REPLY-Mails mit niedrigerer Sequence als der aktuell
+  gespeicherte Event-Stand. Vorbereitung für v3.18.25.
+
+---
+
 ## [3.18.23] — 2026-05-25 — Backup-Restore-UI im BCP (D3)
 
 ### Added

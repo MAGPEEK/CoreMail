@@ -1,6 +1,6 @@
 {
   "name": "@coremail/smtp-server",
-  "version": "3.18.23",
+  "version": "3.18.24",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
