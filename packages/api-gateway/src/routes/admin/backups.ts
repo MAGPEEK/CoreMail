@@ -177,6 +177,55 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
   }
 });
 
+// v3.18.29: Backup-Archiv Download (per S3-Key) — Stream-Proxy
+adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) => {
+  const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
+  if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  try {
+    const upstream = await fetch(`${BACKUP_URL}/backup/admin/archive/download?key=${encodeURIComponent(key)}`, {
+      method: 'GET',
+      headers: { ...(req.get('Authorization') ? { Authorization: req.get('Authorization')! } : {}) },
+    });
+    if (!upstream.ok) {
+      const txt = await upstream.text();
+      res.status(upstream.status).send(txt);
+      return;
+    }
+    const ct = upstream.headers.get('content-type');
+    const cd = upstream.headers.get('content-disposition');
+    const cl = upstream.headers.get('content-length');
+    if (ct) res.setHeader('Content-Type', ct);
+    if (cd) res.setHeader('Content-Disposition', cd);
+    if (cl) res.setHeader('Content-Length', cl);
+    if (!upstream.body) { res.status(502).end(); return; }
+    const reader = upstream.body.getReader();
+    const pump = async (): Promise<void> => {
+      const { done, value } = await reader.read();
+      if (done) { res.end(); return; }
+      res.write(value);
+      await pump();
+    };
+    await pump();
+  } catch (err) {
+    res.status(502).json({ error: 'backup-service unavailable', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.29: Backup-Archiv Object löschen
+adminBackupsRouter.delete('/archive', async (req: Request, res: Response) => {
+  const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
+  if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.archive.delete',
+    targetType: 'backup_archive',
+    targetId: key,
+    ...auditContext(req),
+  });
+  await forward(req, res, 'DELETE', `/backup/admin/archive?key=${encodeURIComponent(key)}`);
+});
+
 // v3.18.28: Backup-Job löschen
 adminBackupsRouter.delete('/jobs/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };

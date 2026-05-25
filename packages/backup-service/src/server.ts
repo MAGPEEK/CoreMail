@@ -244,6 +244,50 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
   }
 });
 
+// v3.18.29 — Backup-Archive Download (per S3-Key, nicht JobID — für Archive-Tab
+// wo Objekte ohne DB-Reference angezeigt werden, z.B. alte Backups vor
+// BackupJob-Tracking oder externe Imports in den Bucket).
+app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
+  const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
+  if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  try {
+    const { stream, contentLength, contentType } = await streamObject(key);
+    const filename = key.split('/').pop() ?? 'backup.bin';
+    res.setHeader('Content-Type', contentType ?? 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (contentLength) res.setHeader('Content-Length', String(contentLength));
+    stream.pipe(res);
+    stream.on('error', (err) => {
+      log.error({ err, key }, 'Archive stream error');
+      if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
+    });
+  } catch (err) {
+    log.error({ err, key }, 'Archive download failed');
+    res.status(500).json({ error: 'Download failed', detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// v3.18.29 — Backup-Archive löschen (S3-Object). Sucht zusätzlich nach
+// passenden BackupJob-Records und nullt ihre downloadUrl (damit der Job in
+// der UI nicht mit broken-Link erscheint).
+app.delete('/backup/admin/archive', requireAdmin, async (req, res) => {
+  const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
+  if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  try {
+    await deleteObject(key);
+    // BackupJob-Records mit dieser downloadUrl ausnullen (Cosmetic, optional)
+    await prisma.backupJob.updateMany({
+      where: { downloadUrl: key },
+      data: { downloadUrl: null, status: 'EXPIRED' },
+    }).catch(() => undefined);
+    log.info({ key }, 'Archive object deleted');
+    res.json({ ok: true });
+  } catch (err) {
+    log.error({ err, key }, 'Archive delete failed');
+    res.status(500).json({ error: 'Delete failed', detail: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // v3.18.28 — Backup-Job löschen (DB + S3-Object)
 app.delete('/backup/admin/jobs/:id', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };

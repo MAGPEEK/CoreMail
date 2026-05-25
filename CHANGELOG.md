@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.29] — 2026-05-25 — Backup-Archiv: Download + Delete für S3-Objekte
+
+### Added
+
+- **Download- und Delete-Buttons im „Backup-Archiv"-Tab**
+  (`packages/backup-service/src/server.ts`,
+  `packages/api-gateway/src/routes/admin/backups.ts`,
+  `packages/admin-panel/src/pages/BackupsPage.tsx`):
+  Vorher war die Archive-Tabelle read-only — User konnten Objekte nicht
+  einzeln herunterladen oder löschen. Jetzt zwei neue Backend-Endpoints:
+  - `GET /backup/admin/archive/download?key=<s3-key>` — Stream-Proxy für
+    direkten Download (analog zum `download/:jobId`-Endpoint, aber für
+    Objekte ohne BackupJob-Referenz z.B. alte/externe Imports)
+  - `DELETE /backup/admin/archive?key=<s3-key>` — Löscht das S3-Objekt
+    und nullt zusätzlich passende `BackupJob.downloadUrl`-Felder
+    (Status → EXPIRED) damit die UI keinen broken Link mehr zeigt
+  Frontend: neue Aktionsspalte mit Download- (HardDriveDownload) und
+  Trash-Button. Confirm-Dialog vor Delete („endgültig löschen, kann nicht
+  rückgängig gemacht werden"). Audit-Log-Entry `backup.archive.delete`.
+
+---
+
 ## [3.18.28] — 2026-05-25 — Calendar+Backup UX-Fixes (Hook-Bug, Tabs, Delete, Time-Input)
 
 ### Fixed
