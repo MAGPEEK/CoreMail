@@ -128,6 +128,26 @@ export interface CalendarEvent {
   icalData?: string;
   // v3.18.15 Event Visibility (RFC 5545 CLASS)
   classification?: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
+  // v3.18.25 / v3.18.27
+  description?: string;
+  location?: string;
+  organizer?: string | null;
+  allDay?: boolean;
+  rrule?: string | null;
+  uid?: string;
+  sequence?: number;
+  attendees?: EventAttendee[];
+  // Permission-Info (von GET /events/:id)
+  canWrite?: boolean;
+  readOnly?: boolean;
+}
+
+export interface EventAttendee {
+  email: string;
+  cn?: string;
+  partstat?: 'NEEDS-ACTION' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE';
+  role?: 'REQ-PARTICIPANT' | 'OPT-PARTICIPANT' | 'CHAIR';
+  rsvp?: boolean;
 }
 
 export interface Contact {
