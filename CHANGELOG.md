@@ -13,6 +13,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.22] — 2026-05-25 — OAuth2-Consent-UI (Security)
+
+### Security
+
+- **D1 — OAuth2 Auto-Grant entfernt, echte Consent-UI**
+  (`packages/auth-service/src/oauth2/router.ts`,
+  `packages/web-client/src/pages/LoginPage.tsx`,
+  `packages/web-client/src/pages/OAuthConsentPage.tsx`,
+  `packages/web-client/src/App.tsx`):
+
+  **Vorher (Security-Issue)**: `/oauth2/authorize/complete` granted Consent
+  blind beim ersten Aufruf eines nicht-trusted Clients — User hatten keine
+  Möglichkeit, eine Drittanbieter-App vor dem ersten Zugriff zu sehen oder
+  abzulehnen. Trotz „nicht-trusted" Markierung wurden alle angeforderten
+  Scopes automatisch genehmigt.
+
+  **Jetzt**: Backend liefert bei fehlender oder unvollständiger Einwilligung
+  `200 { requiresConsent: true, client, requestedScopes, alreadyGrantedScopes,
+  newScopes }` statt direkt Code auszustellen. Frontend zeigt neue
+  ConsentPage mit:
+  - Client-Name + Beschreibung
+  - Liste der angeforderten Scopes mit deutschen Labels (z. B. „mail.send" →
+    „E-Mails senden in deinem Namen", „calendar.write" → „Termine erstellen,
+    ändern oder löschen")
+  - Bei bestehender Genehmigung mit zusätzlichen Scopes: nur die NEUEN Scopes
+    werden hervorgehoben, bereits erteilte als kleiner Hinweis unten
+  - Amber-Warnung „Du kannst diesen Zugriff jederzeit widerrufen"
+  - „Erlauben" und „Ablehnen"-Buttons
+
+  Flow:
+  1. Drittanbieter-App → `GET /oauth2/authorize?client_id=...&...`
+  2. Auth-Service redirected zu `/owa/login?oauth2=1&client_id=...`
+  3. LoginPage erkennt `oauth2=1`, nach Login → `navigate('/oauth-consent?...')`
+  4. ConsentPage fragt Backend ob Consent nötig → bei `redirect` direkt zurück
+     zum Client (bereits genehmigt), bei `requiresConsent` UI zeigen
+  5. „Erlauben" → zweiter Call mit `consentConfirmed: true` → Backend
+     persistiert Consent + erstellt Code + liefert `redirect`-URL
+  6. „Ablehnen" → Client wird mit `error=access_denied` (RFC 6749 §4.1.2.1)
+     aufgerufen, kein Code ausgestellt
+
+  Neue Route `/oauth-consent` im MWA, mit AuthGuard aber ohne Layout-Wrapper
+  (standalone Vollbild-Dialog).
+
+---
+
 ## [3.18.21] — 2026-05-25 — Calendar-Toolbar Filter + Drucken funktionsfähig
 
 ### Fixed
