@@ -70,20 +70,6 @@ function ContactModal({ contact, onClose }: { contact: ExternalContact | null; o
         </div>
 
         <div className="px-6 py-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Vorname</label>
-              <input value={form.firstName} onChange={e => set('firstName', e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-                placeholder="Max" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Nachname</label>
-              <input value={form.lastName} onChange={e => set('lastName', e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-                placeholder="Mustermann" />
-            </div>
-          </div>
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">Anzeigename *</label>
             <input value={form.displayName} onChange={e => set('displayName', e.target.value)}
