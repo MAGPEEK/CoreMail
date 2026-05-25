@@ -13,6 +13,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.20] — 2026-05-25 — Dark-Mode-Patches (LoginPage + SettingsPage)
+
+### Changed
+
+- **MWA LoginPage Dark-Mode** (`packages/web-client/src/pages/LoginPage.tsx`):
+  Login-Card war komplett ohne `dark:`-Modifier — als erste Seite die ein
+  neuer User sieht, ein offensichtlicher Bug. Jetzt mit
+  `dark:bg-gray-900`, `dark:text-white`, `dark:text-gray-400` für Logo +
+  Subtitle. Card-Border `dark:border-gray-700` als subtile Abgrenzung.
+
+- **MWA SettingsPage Dark-Mode (Sektion-Headers + Form-Labels)**
+  (`packages/web-client/src/pages/SettingsPage.tsx`):
+  Sektion-Überschriften (`text-lg font-semibold text-gray-900` → +
+  `dark:text-gray-100`), Sub-Texts (`text-sm text-gray-500 mt-0.5` → +
+  `dark:text-gray-400`), Form-Labels (`block text-sm font-medium
+  text-gray-700 mb-1` → + `dark:text-gray-300`) und disabled E-Mail-Input
+  (`bg-gray-50` → + `dark:bg-gray-800`) sind jetzt im Dark-Mode korrekt
+  lesbar.
+
+### Known
+
+- ComposeWindow (~22 Stellen) und SignatureSection (~9 Stellen) haben
+  noch einzelne nicht-dark-aware-Klassen. Wird in einer dedizierten
+  Dark-Mode-Sweep-Session in v3.19 aufgeräumt.
+
+---
+
 ## [3.18.19] — 2026-05-25 — Forced 2FA für Admin-Login (Security)
 
 ### Security

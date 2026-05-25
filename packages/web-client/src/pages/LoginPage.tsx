@@ -150,7 +150,7 @@ export function LoginPage() {
         </div>
       )}
 
-      <div className={`bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm${maintenanceMode ? ' mt-14' : ''}`}>
+      <div className={`bg-white dark:bg-gray-900 rounded-lg shadow-2xl p-8 w-full max-w-sm border border-transparent dark:border-gray-700${maintenanceMode ? ' mt-14' : ''}`}>
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
@@ -160,8 +160,8 @@ export function LoginPage() {
             }
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">CoreMail</h1>
-            <p className="text-xs text-gray-500">
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">CoreMail</h1>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
               {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
             </p>
           </div>
