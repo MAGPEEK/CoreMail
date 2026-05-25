@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadBucketCommand, CreateBucketCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadBucketCommand, CreateBucketCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import type { Readable } from 'node:stream';
 import { Upload } from '@aws-sdk/lib-storage';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -110,7 +111,31 @@ export async function listBackups(prefix: string): Promise<{ key: string; size: 
 }
 
 export async function getSignedDownloadUrl(s3Key: string): Promise<string> {
-  // Build a direct MinIO URL — presigned URL support requires @aws-sdk/s3-request-presigner
-  const endpoint = process.env['S3_ENDPOINT'] ?? 'http://minio:9000';
-  return `${endpoint}/${BUCKET}/${encodeURIComponent(s3Key)}`;
+  // v3.18.28: Bekanntes Problem — http://minio:9000 ist nur intern erreichbar.
+  // Frontend nutzt stattdessen den Download-Stream-Endpoint /backup/admin/download/:jobId.
+  // Wir liefern hier den S3-Key zurück damit das Frontend ihn auf den richtigen
+  // Stream-Endpoint mappen kann.
+  return s3Key;
+}
+
+/**
+ * v3.18.28: Object aus S3 als Stream zurück — wird im Express-Handler an den
+ * Client gepiped. Funktioniert ohne presigned URL.
+ */
+export async function streamObject(s3Key: string): Promise<{ stream: Readable; contentLength?: number; contentType?: string }> {
+  const client = getClient();
+  const result = await client.send(new GetObjectCommand({ Bucket: BUCKET, Key: s3Key }));
+  return {
+    stream: result.Body as Readable,
+    ...(typeof result.ContentLength === 'number' ? { contentLength: result.ContentLength } : {}),
+    ...(typeof result.ContentType === 'string' ? { contentType: result.ContentType } : {}),
+  };
+}
+
+/**
+ * v3.18.28: Object aus S3 löschen.
+ */
+export async function deleteObject(s3Key: string): Promise<void> {
+  const client = getClient();
+  await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: s3Key }));
 }

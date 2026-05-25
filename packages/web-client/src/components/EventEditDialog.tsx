@@ -267,6 +267,12 @@ export function EventEditDialog({
     else createMut.mutate(body);
   };
 
+  // v3.18.28 FIX: useMemo MUSS vor jedem `return` aufgerufen werden — sonst
+  // ändert sich die Hook-Reihenfolge zwischen Renders → React-Crash → weiße
+  // Seite. Daher alle Hooks NACH oben und das Loading-`return` NACH den Hooks.
+  const readOnly = isEdit && existing?.canWrite === false;
+  const currentCal = useMemo(() => calendars.find((c) => c.id === calendarId), [calendars, calendarId]);
+
   // Lade-Spinner für Edit-Mode während GET
   if (isEdit && existingLoading) {
     return (
@@ -279,37 +285,20 @@ export function EventEditDialog({
     );
   }
 
-  const readOnly = isEdit && existing?.canWrite === false;
-  const currentCal = useMemo(() => calendars.find((c) => c.id === calendarId), [calendars, calendarId]);
-
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col">
 
-        {/* Header — Outlook-Style Toolbar */}
-        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between flex-wrap gap-2">
+        {/* Header — Titel + Refresh + Close */}
+        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+            {isEdit ? 'Termin bearbeiten' : 'Neuer Termin'}
+          </h2>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleSave}
-              disabled={!canSave || createMut.isPending || updateMut.isPending || readOnly}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-accent hover:bg-accent/90 text-white rounded font-medium disabled:opacity-50"
-            >
-              <Save size={14} />
-              {createMut.isPending || updateMut.isPending ? 'Speichern…' : 'Speichern'}
-            </button>
-            {isEdit && !readOnly && (
-              <button
-                onClick={() => {
-                  if (window.confirm(`Termin „${summary}" wirklich löschen? Alle Gäste erhalten eine Absage-Mail.`)) {
-                    deleteMut.mutate();
-                  }
-                }}
-                disabled={deleteMut.isPending}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
-              >
-                <Trash2 size={14} />
-                Löschen
-              </button>
+            {readOnly && (
+              <span className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-500/10 px-2 py-1 rounded">
+                Nur Lesezugriff
+              </span>
             )}
             {isEdit && (
               <button
@@ -319,13 +308,6 @@ export function EventEditDialog({
               >
                 <RefreshCw size={14} />
               </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {readOnly && (
-              <span className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-500/10 px-2 py-1 rounded">
-                Nur Lesezugriff
-              </span>
             )}
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none px-2" aria-label="Schließen">×</button>
           </div>
@@ -431,7 +413,8 @@ export function EventEditDialog({
             </div>
           </div>
 
-          {/* Datum + Zeit (Date-Inputs + Time-Dropdowns) */}
+          {/* v3.18.28: Datum + Zeit — type=time mit datalist erlaubt Dropdown
+              UND manuelles Tippen ("HH:MM"). Bessere UX als pures <select>. */}
           <div className="flex items-start gap-3">
             <Clock size={18} className="text-gray-400 mt-2 shrink-0" />
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
@@ -446,14 +429,15 @@ export function EventEditDialog({
                 className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
               />
               {!allDay && (
-                <select
+                <input
+                  type="time"
+                  list="cal-time-options"
+                  step={900}
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   disabled={readOnly}
-                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
-                >
-                  {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
+                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60 w-[110px]"
+                />
               )}
               {allDay && <span className="text-xs text-gray-400 px-2">ganztägig</span>}
               <input
@@ -464,15 +448,21 @@ export function EventEditDialog({
                 className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
               />
               {!allDay && (
-                <select
+                <input
+                  type="time"
+                  list="cal-time-options"
+                  step={900}
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
                   disabled={readOnly}
-                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
-                >
-                  {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
+                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60 w-[110px]"
+                />
               )}
+              {/* Datalist mit 15-min-Vorschlägen — Browser zeigt sie als Dropdown
+                  beim Fokus, User kann aber auch frei „13:42" eintippen */}
+              <datalist id="cal-time-options">
+                {TIME_OPTIONS.map((t) => <option key={t} value={t} />)}
+              </datalist>
               <label className="col-span-full inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-1">
                 <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} disabled={readOnly} className="rounded" />
                 Ganztägig
@@ -532,6 +522,42 @@ export function EventEditDialog({
               {attendees.length > 0 && <span>· Status-Updates kommen automatisch alle 30s</span>}
             </div>
           )}
+        </div>
+
+        {/* v3.18.28: Footer mit Speichern bottom-right + Löschen links + Abbrechen */}
+        <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            {isEdit && !readOnly && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`Termin „${summary}" wirklich löschen? Alle Gäste erhalten eine Absage-Mail.`)) {
+                    deleteMut.mutate();
+                  }
+                }}
+                disabled={deleteMut.isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+              >
+                <Trash2 size={14} />
+                Löschen
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              Abbrechen
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!canSave || createMut.isPending || updateMut.isPending || readOnly}
+              className="flex items-center gap-1.5 px-5 py-1.5 text-sm bg-accent hover:bg-accent/90 text-white rounded font-medium disabled:opacity-50"
+            >
+              <Save size={14} />
+              {createMut.isPending || updateMut.isPending ? 'Speichern…' : 'Speichern'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

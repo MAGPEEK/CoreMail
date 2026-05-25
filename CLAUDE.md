@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.27`
+**Aktuelle Version**: `3.18.28`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.27; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.28; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.27 — Highlights
+## Aktuelle Version 3.18.28 — Highlights
+
+**v3.18.28** — Calendar+Backup UX-Fixes. **KRITISCH**: Erneutes Öffnen eines erstellten Termins → weiße Seite. Root: React-Rules-of-Hooks-Verletzung in EventEditDialog — `useMemo` wurde nach `if (existingLoading) return` aufgerufen → Hook-Count ändert sich zwischen Renders → Crash. Fix: alle Hooks vor jedem early-return. **Backup-Jobs**: Download (Stream-Proxy statt Docker-interne MinIO-URL die Browser nicht erreicht) + Delete (Endpoint DELETE /admin/backups/jobs/:id mit S3-Object-Cleanup). **Speichern-Button** im Event-Dialog jetzt unten rechts (Outlook-Standard) + Footer mit Löschen links / Abbrechen+Speichern rechts. **Time-Input** statt nur Dropdown — `<input type="time" list="...">` mit datalist: Browser zeigt 15-min-Vorschläge, User kann aber jede beliebige Zeit eintippen. **BackupsPage refactor** als 5-Tab-Layout (Jobs / Schnellaktionen / Zeitpläne / Backup-Archiv / Restore) mit Badge-Counters. **„S3-Snapshots" → „Backup-Archiv"** (AWS-Begriff vermieden). **Zeitplan-Editor** vollständig mit Dropdowns: Frequenz (Stündlich/Täglich/Wöchentlich/Monatlich/Custom), Wochentag, Stunde, Minute, Tag-des-Monats, Retention. Cron-Expression wird automatisch generiert und als read-only-Hinweis angezeigt.
 
 **v3.18.27** — Outlook-Style Event-Dialog für Kalender. (1) FIX: Klick auf bestehenden Termin öffnete vorher nur „Löschen?"-Confirm — User konnte Termin nicht bearbeiten. Jetzt vollwertiger Edit-Dialog. (2) FIX: datetime-local-Input ersetzt durch separates Date + Time-Dropdown (15-min Steps, 96 Optionen). „Ganztägig"-Checkbox blendet Zeit aus. (3) Neue `EventEditDialog`-Komponente mit Outlook-Layout: Header-Toolbar (Speichern/Löschen/Refresh), Kalender-Picker mit Farbpunkt, Titel-Input, **Attendee-Liste mit Live-PARTSTAT-Badges** (grün ACCEPTED / rot DECLINED / amber TENTATIVE / grau NEEDS-ACTION + Counter „X zugesagt · Y abgesagt · …"), Date+Time-Pickers, Ort, Klassifizierung (Public/Private/Confidential), Notizen-Textarea, Footer mit Organisator+SEQUENCE. Attendee-Status refresht automatisch alle 30s + manueller Refresh-Button. (4) Neuer GET-Endpoint `/calendar/events/:id` mit `canWrite`/`readOnly`-Flags + Privacy-Masking für PRIVATE/CONFIDENTIAL bei Grantees. CalendarPage-State vereinfacht: `eventDialog: { mode: 'create' | 'edit', ... } | null`.
 
@@ -739,4 +741,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.27 — Outlook-Style Event-Dialog; v3.18.26 — Backup-Bugfixes + Per-Mailbox + Scheduling; v3.18.25 — Calendar-Invitations iMIP/iTIP)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.28 — Calendar+Backup UX-Fixes: Hook-Bug, Tabs, Delete, Time-Input; v3.18.27 — Outlook-Style Event-Dialog; v3.18.26 — Backup-Bugfixes)*
