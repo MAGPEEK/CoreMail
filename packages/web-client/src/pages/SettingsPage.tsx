@@ -140,16 +140,16 @@ function ProfileSection() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">E-Mail-Konto</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Kontoinformationen und Anzeigename</p>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">E-Mail-Konto</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Kontoinformationen und Anzeigename</p>
       </div>
       <div className="space-y-4 max-w-md">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">E-Mail-Adresse</label>
-          <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" value={data?.email ?? ''} disabled />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">E-Mail-Adresse</label>
+          <input className="input bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 cursor-not-allowed" value={data?.email ?? ''} disabled />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Anzeigename</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Anzeigename</label>
           <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Ihr Name" />
         </div>
         <button onClick={() => mutation.mutate()} className="btn-primary" disabled={mutation.isPending}>
@@ -189,14 +189,14 @@ function PasswordSection() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">Passwort ändern</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Legen Sie ein neues Passwort für Ihr Konto fest</p>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Passwort ändern</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Legen Sie ein neues Passwort für Ihr Konto fest</p>
       </div>
 
       <div className="space-y-4 max-w-md">
         {/* Aktuelles Passwort */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Aktuelles Passwort</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Aktuelles Passwort</label>
           <div className="relative">
             <input
               type={showCurrent ? 'text' : 'password'}
@@ -218,7 +218,7 @@ function PasswordSection() {
 
         {/* Neues Passwort */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Neues Passwort</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Neues Passwort</label>
           <div className="relative">
             <input
               type={showNew ? 'text' : 'password'}
@@ -266,7 +266,7 @@ function PasswordSection() {
 
         {/* Passwort bestätigen */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Passwort bestätigen</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Passwort bestätigen</label>
           <input
             type="password"
             className={`input ${mismatch ? 'border-red-400 focus:border-red-400 focus:ring-red-200' : ''}`}
@@ -326,8 +326,8 @@ function ThemeSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">Design</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Erscheinungsbild und Akzentfarbe des Webclients</p>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Design</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Erscheinungsbild und Akzentfarbe des Webclients</p>
       </div>
 
       {/* Farbschema */}
@@ -472,7 +472,7 @@ function OofSection() {
   return (
     <div className="space-y-5 max-w-xl">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">Automatische Antworten</h2>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Automatische Antworten</h2>
         <p className="text-sm text-gray-500 mt-0.5 leading-relaxed">
           Verwenden Sie automatische Antworten, um anderen mitzuteilen, dass Sie im Urlaub sind oder Ihre E-Mails zurzeit nicht beantworten können.
           Sie können festlegen, dass Ihre Antworten an einem bestimmten Zeitpunkt beginnen und enden. Andernfalls bleiben sie aktiviert, bis Sie sie deaktivieren.
@@ -631,8 +631,8 @@ function StorageSection() {
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">Speicher</h2>
-        <p className="text-sm text-gray-500 mt-0.5">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Speicher</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
           Sie haben {fmtBytes(quota)} E-Mail-Speicher mit diesem Konto, das Anlagen und Nachrichten in allen Ordnern umfasst.
         </p>
       </div>
@@ -875,8 +875,8 @@ function SecuritySection() {
   return (
     <div className="space-y-5 max-w-lg">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900">Sicherheit</h2>
-        <p className="text-sm text-gray-500 mt-0.5">App-Passwörter und Zwei-Faktor-Authentifizierung</p>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Sicherheit</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">App-Passwörter und Zwei-Faktor-Authentifizierung</p>
       </div>
 
       {/* App-Passwörter (Link bleibt) */}
@@ -1162,7 +1162,7 @@ function AppPasswordsSection() {
       {/* Inline-Editor für neue Passwörter */}
       {creating && !createdPw && (
         <div className="mb-4 border border-gray-200 rounded-md p-4 bg-blue-50/40 animate-fly-in">
-          <label className="block text-sm font-medium text-gray-700 mb-1">{t('app_password_name')}</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('app_password_name')}</label>
           <input
             type="text"
             value={newName}
@@ -1569,7 +1569,7 @@ function InactivitySection() {
     <section className="space-y-6">
       <div>
         <h2 className="text-base font-semibold text-gray-900">Automatischer Logout bei Inaktivität</h2>
-        <p className="text-sm text-gray-500 mt-0.5">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
           Legt fest, nach wie vielen Minuten ohne Interaktion Sie automatisch abgemeldet werden.
         </p>
       </div>
