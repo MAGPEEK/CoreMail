@@ -12,6 +12,21 @@ const log = createLogger('backup-service');
 const app = express();
 const PORT = parseInt(process.env['BACKUP_PORT'] ?? '3004', 10);
 
+// v3.18.30 KRITISCHER FIX: BigInt-Felder (BackupJob.sizeBytes) crashen
+// JSON.stringify(). Globaler Replacer wandelt BigInt → String. Verhindert
+// dass der gesamte backup-service bei jedem /jobs-Call crasht und supervisord
+// ihn neu startet — was die Symptom „keine User in Dropdown" + „kein Status
+// bei laufenden Jobs" verursacht hat.
+//
+// Monkey-Patch des res.json — alternativ könnte man pro Endpoint manuell
+// serialisieren, aber das ist fehleranfällig. Global ist sauberer.
+const _origJson = express.response.json;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(express.response as any).json = function (this: express.Response, body: unknown): express.Response {
+  const safe = JSON.parse(JSON.stringify(body, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+  return _origJson.call(this, safe);
+};
+
 app.use(express.json());
 
 // Auth middleware

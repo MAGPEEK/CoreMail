@@ -1566,6 +1566,8 @@ model ServerSettings {
   // 0 = deaktiviert; > 0 = Minuten bis automatischer Logout bei Inaktivität im Browser
   inactivityTimeoutMinutes   Int     @default(30)
   requireMfaForAdmins        Boolean @default(false)
+  // v3.18.30: Audit-Log global ein/aus. Default an. Toggle wird selbst auditiert.
+  auditLogEnabled            Boolean @default(true)
   allowSelfRegistration      Boolean @default(false)
   // Erlaubt Benutzern, ihr Passwort selbst per E-Mail-Link zurückzusetzen
   selfServicePasswordReset   Boolean @default(true)
