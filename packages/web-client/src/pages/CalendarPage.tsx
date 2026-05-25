@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -9,7 +9,6 @@ import enLocale from '@fullcalendar/core/locales/en-gb';
 import esLocale from '@fullcalendar/core/locales/es';
 import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, EventClickArg } from '@fullcalendar/core';
-import { X } from 'lucide-react';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, Task } from '../api/types.js';
 import { useUiPrefs } from '../store/ui.js';
@@ -23,32 +22,25 @@ import {
   type FilterKey,
 } from '../components/CalendarToolbar.js';
 import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
+import { EventEditDialog } from '../components/EventEditDialog.js';
 import toast from 'react-hot-toast';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
-interface AttendeeInput {
-  email: string;
-  cn?: string;
-}
-
-interface NewEventForm {
-  summary: string;
-  dtStart: string;
-  dtEnd: string;
-  calendarId: string;
-  allDay: boolean;
-  classification: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
-  // v3.18.25 A5: Liste der Gäste-E-Mails (kommasepariert eingegeben, dann gesplittet)
-  attendees: AttendeeInput[];
-}
+/**
+ * v3.18.27: EventEditDialog ersetzt das alte inline new-event Modal.
+ * Doppelklick auf Event → Edit-Mode mit existingId; Datum-Select → Create-Mode.
+ */
+type EventDialogState =
+  | null
+  | { mode: 'create'; defaults: { calendarId?: string; dtStart?: string; dtEnd?: string; allDay?: boolean } }
+  | { mode: 'edit'; eventId: string };
 
 export function CalendarPage() {
-  const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
   const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
-  const [newEvent, setNewEvent] = useState<NewEventForm | null>(null);
+  const [eventDialog, setEventDialog] = useState<EventDialogState>(null);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -94,24 +86,6 @@ export function CalendarPage() {
     queryFn: () => api.get<Task[]>('/tasks'),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: NewEventForm) => api.post('/calendar/events', data),
-    onSuccess: () => {
-      toast.success('Termin erstellt');
-      qc.invalidateQueries({ queryKey: ['calendar-events'] });
-      setNewEvent(null);
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/calendar/events/${id}`),
-    onSuccess: () => {
-      toast.success('Termin gelöscht');
-      qc.invalidateQueries({ queryKey: ['calendar-events'] });
-    },
-  });
-
   // Default-Kalender für neue Events: bevorzugt eigener Default, dann erster eigener.
   // Geteilte READ-only Kalender niemals als Default verwenden.
   const defaultWritableCalId = useMemo(() => {
@@ -119,33 +93,27 @@ export function CalendarPage() {
     return writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? '';
   }, [calendars]);
 
+  // v3.18.27: Datum-Auswahl im FullCalendar → Create-Dialog
   const handleDateSelect = (info: DateSelectArg) => {
-    setNewEvent({
-      summary: '',
-      dtStart: info.startStr,
-      dtEnd: info.endStr,
-      calendarId: defaultWritableCalId,
-      allDay: info.allDay,
-      classification: 'PUBLIC',
-      attendees: [],
+    setEventDialog({
+      mode: 'create',
+      defaults: {
+        calendarId: defaultWritableCalId,
+        dtStart: info.startStr,
+        dtEnd: info.endStr,
+        allDay: info.allDay,
+      },
     });
   };
 
+  // v3.18.27: Klick auf existierendes Event → Edit-Dialog (NICHT mehr Delete-Confirm).
+  // Permission-Check macht der EventEditDialog selbst via canWrite-Flag im GET-Response.
   const handleEventClick = (info: EventClickArg) => {
     if (info.event.id.startsWith('task-')) {
       toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
       return;
     }
-    // Permission-Check: Event darf nur in WRITE/OWNER-Kalendern gelöscht werden
-    const eventCalId = (info.event.extendedProps as { calendarId?: string })?.calendarId;
-    const cal = (calendars ?? []).find((c) => c.id === eventCalId);
-    if (cal && cal.permission === 'READ') {
-      toast.error(t('cal_share_no_write_perm'));
-      return;
-    }
-    if (confirm(`Termin "${info.event.title}" löschen?`)) {
-      deleteMutation.mutate(info.event.id);
-    }
+    setEventDialog({ mode: 'edit', eventId: info.event.id });
   };
 
   // v3.18.21: Aufgaben nur wenn Filter „Aufgaben" aktiv
@@ -208,14 +176,9 @@ export function CalendarPage() {
         <CalendarToolbar
           view={view}
           onChangeView={changeView}
-          onNewEvent={() => setNewEvent({
-            summary: '',
-            dtStart: '',
-            dtEnd: '',
-            calendarId: defaultWritableCalId,
-            allDay: false,
-            classification: 'PUBLIC',
-            attendees: [],
+          onNewEvent={() => setEventDialog({
+            mode: 'create',
+            defaults: { calendarId: defaultWritableCalId },
           })}
           onShare={() => {
             const owned = (calendars ?? []).filter((c) => !c.shared);
@@ -262,94 +225,15 @@ export function CalendarPage() {
       </div>
 
       {/* New event dialog */}
-      {newEvent && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Neuer Termin</h2>
-              <button onClick={() => setNewEvent(null)} className="btn-ghost p-1"><X size={16} /></button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Titel</label>
-                <input className="input" value={newEvent.summary}
-                  onChange={(e) => setNewEvent({ ...newEvent, summary: e.target.value })} placeholder="Terminbezeichnung" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Von</label>
-                  <input type="datetime-local" className="input" value={newEvent.dtStart.slice(0, 16)}
-                    onChange={(e) => setNewEvent({ ...newEvent, dtStart: e.target.value })} />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Bis</label>
-                  <input type="datetime-local" className="input" value={newEvent.dtEnd.slice(0, 16)}
-                    onChange={(e) => setNewEvent({ ...newEvent, dtEnd: e.target.value })} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Kalender</label>
-                <select className="input" value={newEvent.calendarId}
-                  onChange={(e) => setNewEvent({ ...newEvent, calendarId: e.target.value })}>
-                  {(calendars ?? [])
-                    .filter((c) => c.permission !== 'READ')
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}{c.shared ? ` (${t('cal_share_shared_by').replace('{name}', c.ownerDisplayName ?? c.ownerEmail ?? '?')})` : ''}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('cal_event_classification')}</label>
-                <select className="input" value={newEvent.classification}
-                  onChange={(e) => setNewEvent({ ...newEvent, classification: e.target.value as 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL' })}>
-                  <option value="PUBLIC">{t('cal_event_class_public')}</option>
-                  <option value="PRIVATE">{t('cal_event_class_private')}</option>
-                  <option value="CONFIDENTIAL">{t('cal_event_class_confidential')}</option>
-                </select>
-              </div>
-            </div>
-            {/* v3.18.25 A5: Gäste einladen */}
-            <div className="mt-3">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Gäste einladen (kommagetrennt)
-              </label>
-              <input
-                type="text"
-                className="input"
-                value={newEvent.attendees.map((a) => a.email).join(', ')}
-                onChange={(e) => {
-                  const emails = e.target.value
-                    .split(',')
-                    .map((s) => s.trim())
-                    .filter((s) => s.length > 0);
-                  setNewEvent({
-                    ...newEvent,
-                    attendees: emails.map((email) => ({ email })),
-                  });
-                }}
-                placeholder="z. B. anna@example.com, bob@x.de"
-              />
-              {newEvent.attendees.length > 0 && (
-                <p className="text-xs text-gray-500 mt-1">
-                  {newEvent.attendees.length} Gast{newEvent.attendees.length === 1 ? '' : 'e'} —
-                  Einladungs-Mails werden beim Speichern versendet
-                </p>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setNewEvent(null)} className="btn-secondary">Abbrechen</button>
-              <button
-                onClick={() => createMutation.mutate(newEvent)}
-                disabled={!newEvent.summary || !newEvent.dtStart || createMutation.isPending}
-                className="btn-primary disabled:opacity-50"
-              >
-                {createMutation.isPending ? 'Speichern...' : 'Speichern'}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* v3.18.27: Outlook-Style Event-Dialog für Create & Edit */}
+      {eventDialog && (
+        <EventEditDialog
+          eventId={eventDialog.mode === 'edit' ? eventDialog.eventId : null}
+          defaults={eventDialog.mode === 'create' ? eventDialog.defaults : undefined}
+          calendars={calendars ?? []}
+          defaultWritableCalendarId={defaultWritableCalId}
+          onClose={() => setEventDialog(null)}
+        />
       )}
 
       {/* v3.18.18: Share-Dialog via Toolbar-Button („Kalender teilen") */}

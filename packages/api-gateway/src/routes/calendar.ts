@@ -781,6 +781,50 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
   res.json(masked);
 });
 
+// v3.18.27 — GET /api/v1/calendar/events/:id (Detail-Load für Edit-Dialog)
+calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const { id } = req.params as { id: string };
+
+  const event = await prisma.calendarEvent.findUnique({
+    where: { id },
+    select: {
+      id: true, uid: true, calendarId: true, summary: true, description: true,
+      location: true, dtStart: true, dtEnd: true, allDay: true,
+      recurring: true, rrule: true, classification: true, sequence: true,
+      organizer: true, attendees: true, status: true,
+    },
+  });
+  if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
+
+  const access = await canAccessCalendar(userId, event.calendarId, 'READ');
+  if (!access) { res.status(403).json({ error: 'Keine Leserechte' }); return; }
+
+  // Masking für PRIVATE/CONFIDENTIAL bei Grantees
+  if (!access.isOwner) {
+    const cls = (event.classification ?? 'PUBLIC').toUpperCase();
+    if (cls === 'CONFIDENTIAL') {
+      res.status(404).json({ error: 'Event not found' });
+      return;
+    }
+    if (cls === 'PRIVATE') {
+      res.json({
+        ...event,
+        summary: 'Beschäftigt', description: '', location: '',
+        attendees: [], organizer: null,
+        readOnly: true, canWrite: false,
+      });
+      return;
+    }
+  }
+
+  res.json({
+    ...event,
+    canWrite: access.permission === 'OWNER' || access.permission === 'WRITE',
+    readOnly: access.permission === 'READ',
+  });
+});
+
 // POST /api/v1/calendar/events  (WRITE-Permission auf Ziel-Kalender)
 const AttendeeSchema = z.object({
   email: z.string().email(),

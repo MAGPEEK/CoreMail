@@ -13,6 +13,64 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.27] — 2026-05-25 — Outlook-Style Event-Dialog (Edit/Delete/Reschedule/Notes/Time-Picker)
+
+### Fixed
+
+- **Klick auf bestehenden Termin öffnete nur „Löschen?"-Dialog**
+  (`packages/web-client/src/pages/CalendarPage.tsx`):
+  Vorher: `confirm('Termin XYZ löschen?')` — User konnte den Termin nicht
+  bearbeiten. **Fix**: Klick öffnet jetzt vollwertigen Edit-Dialog mit allen
+  Details (Titel, Datum, Zeit, Gäste mit Status, Ort, Notizen, Klassifizierung).
+  Permission-Check via `canWrite`-Flag im GET-Response: bei READ-Share wird
+  Dialog read-only gerendert mit „Nur Lesezugriff"-Badge.
+
+- **Datum/Zeit-Eingabe war frickelig (datetime-local)**:
+  Manuelles Tippen der Uhrzeit, kein Dropdown — gerade auf Mobile umständlich.
+  **Fix**: Separate Date-Inputs + Time-Dropdowns mit 15-Minuten-Schritten
+  (00:00 bis 23:45 = 96 Optionen). „Ganztägig"-Checkbox blendet Zeit-Felder aus.
+
+### Added
+
+- **`EventEditDialog`-Komponente (Outlook-Style)**
+  (`packages/web-client/src/components/EventEditDialog.tsx`):
+  Vollwertiger Modal-Dialog für Create + Edit mit:
+  - **Header-Toolbar**: Speichern, Löschen (nur Edit), Status-Refresh, Schließen
+  - **Kalender-Picker**: Farbpunkt + Dropdown (im Edit-Mode disabled)
+  - **Titel-Input**: Outlook-Style große Überschrift
+  - **Attendee-Liste mit Live-PARTSTAT-Badges**:
+    - Grün CheckCircle für ACCEPTED, Rot XCircle für DECLINED,
+      Amber HelpCircle für TENTATIVE, Grau Clock für NEEDS-ACTION
+    - Autocomplete-Input mit Keyboard-Nav (↑↓/Enter/Tab/Esc) reuse `/contacts?q=`
+    - Counter unten: „X zugesagt · Y abgesagt · Z vielleicht · N ausstehend"
+    - Status refresht automatisch alle 30 Sekunden (live!)
+  - **Date+Time-Pickers**: HTML-Date-Input + Time-Dropdown (15-min Steps),
+    automatisches End-Date-Folgen wenn Start verschoben wird
+  - **Ort-Input** mit MapPin-Icon
+  - **Klassifizierungs-Dropdown** (Öffentlich / Privat / Vertraulich)
+  - **Notizen-Textarea** (6 Zeilen, vertical-resize)
+  - **Info-Footer**: Organisator-Name, SEQUENCE-Counter, Auto-Update-Hinweis
+
+- **`GET /api/v1/calendar/events/:id`** — Detail-Load für Edit-Dialog mit
+  `canWrite`/`readOnly`-Flags. Permission-Check via `canAccessCalendar`,
+  Privacy-Masking für PRIVATE-Events bei Grantees (Summary → „Beschäftigt",
+  Attendees ausgeblendet), CONFIDENTIAL liefert 404 für Foreign-Viewer.
+
+### Changed
+
+- **CalendarPage** — alter inline-Dialog entfernt (war ~80 Zeilen JSX).
+  Ersetzt durch einheitlichen `EventEditDialog` für Create und Edit.
+  State vereinfacht: `eventDialog: { mode: 'create' | 'edit', ... } | null`.
+- **Toolbar „Neues Ereignis"** öffnet jetzt den Outlook-Style-Dialog
+  statt des alten Mini-Dialogs.
+- **Doppelklick / einfacher Klick auf Event**: öffnet Edit-Dialog (Doppel-
+  click wird von FullCalendar als zwei eventClicks gefeuert — beide öffnen
+  den gleichen Dialog, kein Konflikt).
+- **Attendee-Status-Refresh**: Edit-Dialog hat eigenen `refetchInterval: 30s`
+  + Manual-Refresh-Button im Header.
+
+---
+
 ## [3.18.26] — 2026-05-25 — Backup-Bugfixes + Per-Mailbox + Scheduling + Status-Log
 
 ### Fixed
