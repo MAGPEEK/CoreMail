@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.23`
+**Aktuelle Version**: `3.18.24`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -520,7 +520,7 @@ SMTP Verbindung
 - **MWA E-Mail-Suche**: Scope-Umschalter (Ordner / Gesamtes Postfach) + Typeahead-Vorschläge beim Tippen (v3.16.0)
 - **Tiptap-Schriftarten**: Schriftart-Auswahl (Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS) im E-Mail-Verfassen-Fenster — `@tiptap/extension-font-family@^2.27.2` (v3.16.0)
 - **DNS-Hardening** (v3.15.0): trusted Resolver (8.8.8.8 / 1.1.1.1 / 9.9.9.9), Cross-Validation, Startup-Integrity-Check — `initDnsHardening()` in security-filter
-- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.23; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
+- **Live-Server**: `84.247.191.198` (Contabo VPS, Ubuntu 24.04, 4 Cores, 7.8 GB RAM) — läuft v3.18.24; Deploy: `cd /opt/coremail && docker compose pull coremail && docker compose up -d coremail`
 - **Integrierter HTTPS-Proxy** (v3.17.0): `packages/api-gateway/src/tls-proxy.ts` — Node.js-HTTPS-Server auf Port 443, Hot-Reload via Redis-Kanal `coremail:tls:reload`; Aktivierung in BCP → SSL/TLS → Schloss-Icon; `Certificate.isActiveHttps` Prisma-Feld; Port `443:443` in docker-compose
 - **SSH**: `ssh root@84.247.191.198` (PW: `dihgos-nadzyn-muZmu6`)
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.23 — Highlights
+## Aktuelle Version 3.18.24 — Highlights
+
+**v3.18.24** — Performance E4: MinIO Lifecycle-Policies + Vorbereitung iMIP. Neuer Helper `ensureLifecyclePolicies()` in `packages/storage/src/minio/index.ts` wird in `ensureBuckets()` aufgerufen — setzt prefix-basierte Expiration-Regeln: `outbound-queue/` 7 Tage (Sicherheitsnetz für tote BullMQ-Jobs), `quarantine/` 90 Tage (rspamd), `backups/` 365 Tage. Anhänge und Raw-Messages sind ausgenommen. Idempotent + fail-safe (WARN bei alter MinIO-Version). Zusätzlich `CalendarEvent.sequence Int @default(0)` als Vorbereitung für v3.18.25 iMIP-Updates (RFC 5546 §3.2). Dep `ical-generator@10` installiert.
 
 **v3.18.23** — Backup-Restore-UI im BCP (D3). Neue Page „Backup & Restore" in der Sidebar mit drei Sektionen: (1) Backup-Jobs-Tabelle mit Datum/Scope/Format/Status (Icons für PENDING/RUNNING/COMPLETED/FAILED/CANCELLED) + Progress-Bar + Download-Link bei completed. Auto-Polling alle 5s wenn Job läuft, sonst 60s. (2) S3-Snapshots-Tabelle mit Key/Size/Last-Modified aus MinIO-Bucket. (3) MBOX-Import (Wiederherstellung) mit File-Picker (max 500MB) + Ziel-User-ID. Vollbackup-Button im Header triggert sofort einen neuen Job. Backend: Wrapper-Router `adminBackupsRouter` in `packages/api-gateway/src/routes/admin/backups.ts` leitet `/api/v1/admin/backups/*` an `BACKUP_SERVICE_URL` (Default `http://localhost:3004`). Authorization-Header wird durchgereicht (backup-service hat eigenen requireAdmin). Audit-Log für `backup.full.trigger` und `backup.mbox.import`. i18n DE+EN. Neuer Sidebar-Eintrag mit HardDriveDownload-Icon.
 
@@ -731,4 +733,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.23 — Backup-Restore-UI im BCP; v3.18.22 — OAuth2-Consent-UI; v3.18.21 — Calendar-Filter+Drucken)*
+*Letzte Aktualisierung: 2026-05-25 (v3.18.24 — MinIO Lifecycle; v3.18.23 — Backup-Restore-UI im BCP; v3.18.22 — OAuth2-Consent-UI)*

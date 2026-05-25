@@ -26,6 +26,67 @@ export async function ensureBuckets(): Promise<void> {
     await client.makeBucket(bucket, 'eu-central-1');
     log.info({ bucket }, 'Bucket created');
   }
+  // v3.18.24 E4: Lifecycle-Policies setzen damit temporäre Objekte automatisch
+  // gelöscht werden — verhindert dass der MinIO-Bucket über Jahre vollläuft.
+  await ensureLifecyclePolicies();
+}
+
+/**
+ * v3.18.24 E4: MinIO-Lifecycle-Policies — automatisches Cleanup für temporäre
+ * Objekte nach festen Aufbewahrungsfristen.
+ *
+ * Prefix-basierte Regeln (per Konvention in den Object-Keys, siehe Helper unten):
+ *  - `outbound-queue/`  → expire 7 Tage (BullMQ-Outbound-Anhänge,
+ *                         werden nach Send-Erfolg ohnehin gelöscht,
+ *                         Lifecycle ist Sicherheitsnetz für tote Jobs)
+ *  - `quarantine/`       → expire 90 Tage (rspamd-quarantäne)
+ *  - `backups/`          → expire 365 Tage (Backup-Retention)
+ *
+ * NICHT in Lifecycle: `attachments/` und `raw/` (E-Mail-Anhänge + Raw-Messages),
+ * weil die direkt zu Messages gehören und beim Message-Delete einzeln entfernt
+ * werden.
+ *
+ * Idempotent: setBucketLifecycle() überschreibt die Policy jedes Mal — bei jedem
+ * Container-Start wird der aktuelle State garantiert.
+ */
+async function ensureLifecyclePolicies(): Promise<void> {
+  const client = getMinioClient();
+  const bucket = config.MINIO_BUCKET_ATTACHMENTS;
+  try {
+    // MinIO SDK akzeptiert Object oder XML-String — wir nutzen Object-Form.
+    // Format laut MinIO Node-SDK: { Rule: [{ ID, Status, Filter, Expiration }] }
+    const policy = {
+      Rule: [
+        {
+          ID: 'coremail-outbound-queue-7d',
+          Status: 'Enabled',
+          Filter: { Prefix: 'outbound-queue/' },
+          Expiration: { Days: 7 },
+        },
+        {
+          ID: 'coremail-quarantine-90d',
+          Status: 'Enabled',
+          Filter: { Prefix: 'quarantine/' },
+          Expiration: { Days: 90 },
+        },
+        {
+          ID: 'coremail-backups-365d',
+          Status: 'Enabled',
+          Filter: { Prefix: 'backups/' },
+          Expiration: { Days: 365 },
+        },
+      ],
+    };
+    // setBucketLifecycle ist erst seit MinIO Node SDK v7.1 stabil — eslint-disable
+    // für any cast falls Typdefinition nicht vorhanden ist.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (client as any).setBucketLifecycle(bucket, policy);
+    log.info({ bucket, rules: policy.Rule.length }, 'Lifecycle policy applied');
+  } catch (err) {
+    // Bei älteren MinIO-Versionen oder Permission-Problemen → nur WARN, kein Throw
+    // (Bucket-Existenz und normale Operationen sollen nicht blockieren).
+    log.warn({ err, bucket }, 'Failed to set bucket lifecycle policy — continuing without');
+  }
 }
 
 export async function uploadBuffer(
