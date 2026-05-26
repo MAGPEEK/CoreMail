@@ -847,7 +847,10 @@ function ScheduleEditorModal(props: {
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Minute</label>
                 <select value={minute} onChange={(e) => setMinute(parseInt(e.target.value, 10))}
                   className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
-                  {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+                  {/* v3.18.34: minutengenau (0..59) statt 5-min-Raster */}
+                  {Array.from({ length: 60 }, (_, m) => (
+                    <option key={m} value={m}>{String(m).padStart(2, '0')}</option>
+                  ))}
                 </select>
               </div>
             </div>

@@ -13,6 +13,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.34] — 2026-05-26 — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup
+
+### Fixed
+
+- **KRITISCH: Audit-Log zeigte unleserliche CUID-Aktionen** wie
+  `cmplad51y000v13k3j0nbipt5.post` statt `certificates.activate-https.post`
+  (`packages/api-gateway/src/lib/audit.ts`). Root Cause: `auditMiddleware` las
+  `req.path` INNERHALB des `res.on('finish')`-Callbacks. Zu dem Zeitpunkt hatte
+  Express den Path bereits beim Descend in Sub-Router mutiert — für
+  `POST /api/v1/admin/certificates/<cuid>/activate-https` zeigte `req.path`
+  dann nur noch `/<cuid>/activate-https` (relativ zum Certificates-Sub-Router-
+  Mount) statt `/certificates/<cuid>/activate-https`. Daraus baute der
+  Action-Builder fälschlich `<cuid>.post`. **Fix**: `req.path` wird jetzt am
+  Middleware-Eintritt in `capturedPath` gespeichert und im Finish-Callback
+  verwendet. **Zusätzlich**: neuer **CUID-bewusster Action-Builder**
+  (`buildAction()`) — CUIDs werden aus dem Action-String herausgefiltert und
+  separat als `targetId` gespeichert. Aus `DELETE /backups/jobs/<cuid>` wird
+  jetzt `action='backups.jobs.delete'` + `targetId=<cuid>`.
+
+### Added
+
+- **40+ neue Action-Übersetzungen im Audit-Log**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx` `ACTION_MAP`): Neue
+  Mappings für `backups.jobs.delete` → „Backup-Job gelöscht",
+  `audit-log.anomalies.get` → „Anomalien-Report abgerufen",
+  `certificates.activate-https.post` → „Zertifikat für HTTPS aktiviert",
+  `settings.security.put` → „Sicherheitseinstellungen geändert",
+  `groups.members.delete` → „Gruppenmitglied entfernt" und viele weitere für
+  Zertifikate, Aliase, Shared Mailboxes, Transport Rules, Quarantine, Queues,
+  OAuth-Clients, Backup-Schedules.
+
+- **Backup-Service: Startup-Orphan-Cleanup + Watchdog**
+  (`packages/backup-service/src/server.ts`):
+  - **Orphan-Cleanup** beim Start: Backup-Jobs mit Status `RUNNING`/`PENDING`/
+    `RETRYING`/`PROCESSING`/`SCHEDULED` älter als 60s werden automatisch als
+    `FAILED` markiert mit `errorMsg='Container wurde während Backup
+    neugestartet — Job abgebrochen.'` Verhindert „Backup läuft endlos"-UI-
+    Anzeige nach Container-Restart.
+  - **Watchdog-Timer** (alle 5 Min.): Jobs mit Status `RUNNING`/`PROCESSING`/
+    `RETRYING` älter als 30 Min. werden als `FAILED` markiert mit
+    `errorMsg='Watchdog: Job > 30 Min. ohne Fortschritt — abgebrochen.'`
+
+### Changed
+
+- **Backup-Zeitplan-Editor: minutengenau (0..59) statt 5-Minuten-Raster**
+  (`packages/admin-panel/src/pages/BackupsPage.tsx`): Vorher konnte der Admin
+  die Minute nur in 5er-Schritten wählen (12 Optionen). Jetzt alle 60 Minuten
+  (0..59) verfügbar — User-Wunsch.
+
+### Removed
+
+- **Rotes „Anomalien erkannt"-Banner aus Audit-Log entfernt**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Das Banner über der
+  Audit-Tabelle (mit „2 Anomalien erkannt — Auswertung: letzte 5 Min Bursts,
+  24h kritische Aktionen, Off-Hours") war in der Praxis verwirrend — es
+  zeigte u.a. eigene Settings-Änderungen als „kritische Aktion" an. Audit-Log
+  selbst zeigt alle relevanten Aktionen mit klaren Farbcodierungen (rot =
+  Löschungen, amber = kritisch, blau = Updates). `anomalies`-Query +
+  `AnomaliesResponse`-Interface komplett entfernt. Backend-Endpoint
+  `/admin/audit-log/anomalies` bleibt erhalten (kann via PDF/JSON-Export
+  weiterhin abgerufen werden).
+
+---
+
 ## [3.18.33] — 2026-05-26 — Externe Kontakte komplett entfernt
 
 ### Removed

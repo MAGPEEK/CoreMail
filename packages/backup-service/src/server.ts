@@ -394,6 +394,60 @@ async function start() {
   // listBackups() bei jedem ersten Start mit NoSuchBucket.
   await ensureBackupBucket();
 
+  // v3.18.34: Orphan-Cleanup. Wenn der Container während eines Backups neu-
+  // gestartet wird, bleibt der master-job im Status RUNNING/PENDING/RETRYING/
+  // PROCESSING in der DB hängen und das Frontend zeigt „läuft endlos". Beim
+  // Start prüfen wir, ob solche Jobs älter als 60s sind (sicher: kein neu
+  // gerade gestarteter Job wird versehentlich markiert) und markieren sie als
+  // FAILED mit klarem Fehlertext.
+  try {
+    const cutoff = new Date(Date.now() - 60 * 1000);
+    const orphans = await prisma.backupJob.updateMany({
+      where: {
+        status: { in: ['RUNNING', 'PENDING', 'RETRYING', 'PROCESSING', 'SCHEDULED'] },
+        startedAt: { lt: cutoff },
+      },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        errorClass: 'STORAGE',
+        errorMsg: 'Container wurde während Backup neugestartet — Job abgebrochen.',
+      },
+    });
+    if (orphans.count > 0) {
+      log.warn({ count: orphans.count }, 'Orphan backup jobs marked as FAILED (container restart cleanup)');
+    }
+  } catch (err) {
+    log.error({ err }, 'Orphan-cleanup failed (non-fatal)');
+  }
+
+  // v3.18.34: Watchdog. Wenn ein laufender Job > 30 Min. nicht fertig wird,
+  // ist mit hoher Wahrscheinlichkeit ein Deadlock — auto-FAIL.
+  const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;   // alle 5 Minuten prüfen
+  const STUCK_AFTER_MS       = 30 * 60 * 1000;  // 30 Minuten = stuck
+  setInterval(async () => {
+    try {
+      const cutoff = new Date(Date.now() - STUCK_AFTER_MS);
+      const stuck = await prisma.backupJob.updateMany({
+        where: {
+          status: { in: ['RUNNING', 'PROCESSING', 'RETRYING'] },
+          startedAt: { lt: cutoff },
+        },
+        data: {
+          status: 'FAILED',
+          completedAt: new Date(),
+          errorClass: 'UNKNOWN',
+          errorMsg: 'Watchdog: Job > 30 Min. ohne Fortschritt — abgebrochen.',
+        },
+      });
+      if (stuck.count > 0) {
+        log.warn({ count: stuck.count }, 'Stuck backup jobs auto-FAILED by watchdog');
+      }
+    } catch (err) {
+      log.error({ err }, 'Watchdog tick failed');
+    }
+  }, WATCHDOG_INTERVAL_MS);
+
   startBackupScheduler();
 
   app.listen(PORT, () => log.info({ port: PORT }, 'Backup service listening'));
