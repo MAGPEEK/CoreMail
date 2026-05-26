@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.35] — 2026-05-26 — Outlook LTSC Verbindungs-Fix (Autodiscover-Routing + URL-Auto-Sync)
+
+### Fixed
+
+- **KRITISCH: Outlook LTSC „Da hat etwas nicht geklappt" — Autodiscover-Endpunkt
+  lieferte Express-404**
+  (`packages/api-gateway/src/server.ts`): Der API-Gateway routete
+  `/Autodiscover/Autodiscover.xml` und `/autodiscover/autodiscover.json/v1.0/...`
+  an den **EWS-Server** (Port 8080), obwohl dort gar keine Autodiscover-Routen
+  implementiert sind. Der **autodiscover-Server** auf Port 8081 hat die echten
+  Handler (`handleAutodiscoverV1` + `handleAutodiscoverV2`), wurde aber nie
+  aufgerufen. Outlook bekam vom EWS-Server `Cannot POST /Autodiscover/
+  Autodiscover.xml` (Express-Default-404) und konnte deshalb nicht konfigurieren.
+  **Fix**: Neue Env-Variable `AUTODISCOVER_SERVICE_URL` (Default
+  `http://localhost:8081`). Routes `/Autodiscover` und `/autodiscover` werden
+  jetzt korrekt zum autodiscover-Server proxied.
+
+- **EWS-/Owa-/EAS-URLs zeigten auf internen Port :8080** statt auf den
+  externen HTTPS-Port (`packages/api-gateway/src/server.ts`,
+  `packages/api-gateway/src/routes/admin/servers.ts`): Beim Setup wurden die
+  `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase`-Felder in `ServerSettings`
+  initial mit `http://mail.local:8080/...` befüllt (Schema-Defaults). Wenn
+  der Admin später `publicHostname` änderte (z.B. via BCP → Server-
+  Einstellungen), wurden die abgeleiteten URLs aber NICHT mit-migriert →
+  Autodiscover lieferte für Outlook unerreichbare interne URLs.
+  - **Startup-Migration** (`syncAutodiscoverUrls()`): Beim api-gateway-Start
+    werden URLs auto-korrigiert, wenn `publicHostname != mail.local` aber URLs
+    noch `mail.local` oder `:8080` enthalten. Berechnet `ewsUrl`/`owaUrl`/
+    `easUrl` aus `publicHostname` + `useHttps` + `httpPort` und
+    `autodiscoverBase` aus der Root-Domain (Microsoft-Spec:
+    `autodiscover.<root-domain>`).
+  - **PUT /admin/servers/settings** repariert ebenfalls stale URLs beim Save
+    automatisch, wenn der Admin den Hostname ohne URL-Anpassung speichert.
+
+- **Autodiscover-Settings-Cache TTL 60s** verzögerte Sichtbarkeit von
+  URL-Änderungen (`packages/autodiscover/src/server.ts`): Der autodiscover-
+  Service hatte einen 60-Sekunden-In-Memory-Cache für `ServerSettings`, ohne
+  Redis-Subscription. **Fix**: Subscription auf Channel
+  `coremail:settings:reload` — `invalidateSettingsCache()` wird sofort bei
+  Settings-Update aufgerufen, damit neue URLs ohne 60s-Wartezeit aktiv sind.
+
+---
+
 ## [3.18.34] — 2026-05-26 — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup
 
 ### Fixed

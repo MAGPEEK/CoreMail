@@ -1,6 +1,6 @@
 {
   "name": "@coremail/auth-sso",
-  "version": "3.18.34",
+  "version": "3.18.35",
   "private": true,
   "type": "module",
   "exports": {
