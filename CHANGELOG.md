@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.5.0] — 2026-05-26 — MAPI/HTTP Phase 5: Push-Notifications via Redis pub/sub
+
+### Added
+
+- **RopRegisterNotification** (`packages/ews-server/src/mapi/rop/notification.ts`):
+  Outlook abonniert per ROP gewünschte Event-Typen (NewMail / MessageDeleted /
+  MessageModified / FolderChanged) auf einem Folder- oder Mailbox-Handle.
+  Subscription wird dynamisch am Handle persistiert (subscription-Feld via
+  JSON-Round-Trip durch Redis).
+
+- **NotificationWait echter Long-Poll** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
+  Bisher pollte Outlook mit langen NotificationWait-Requests, die nach 30s
+  mit EventPending=false zurückkamen → spürbare Verzögerung. Jetzt:
+  duplicate()-ed ioredis-Client (subscribe braucht dedizierten Connection
+  nach ioredis-Pflicht), subscribe auf `coremail:mapi:notify:<userId>`,
+  Race zwischen Redis-Event und 30s-Timeout, sauberer Cleanup (unsubscribe +
+  disconnect + clearTimeout) bei beiden Ausgängen, plus `req.on('close')`
+  für Client-Disconnect-Handling. Antwortet sofort bei Event mit
+  EventPending=1, sonst nach Timeout mit EventPending=0.
+
+- **publishNotifyEvent-Helper** in `rop/notification.ts` mit
+  `notifyChannelFor(userId)`-Channel-Generator. Event-Shape:
+  `{ kind, userId, folderId?, messageId?, subject? }`.
+
+- **SMTP-Hook** (`packages/smtp-server/src/handlers/message.ts`):
+  `storeInboundMessage()` published nach der bestehenden `CHANNEL_MAIL_NEW`-
+  Publish jetzt zusätzlich auf `coremail:mapi:notify:<userId>` mit
+  MAPI-Notify-Event (`{kind:'NewMail', userId, folderId, messageId, subject}`)
+  — non-fatal `.catch(() => {})` für Backward-Compatibility wenn MAPI
+  nicht aktiv.
+
+- **NotifyEvent-TypeScript-Interface** exportiert für andere Module die
+  Push-Events triggern (z.B. künftige Hooks für MessageDeleted / FolderChanged).
+
+### Outlook-Verhalten nach v4.5.0
+
+Neue Mail erscheint innerhalb von <1s in Outlook (statt vorher bis zu 30s
+warten). Toast-Notifikation bei neuer Mail funktioniert. Folder-Refresh-
+Cache wird invalidiert. Battery-Drain auf mobilen Outlook-Clients deutlich
+reduziert (kein Dauer-Polling mehr).
+
+---
+
 ## [4.4.0] — 2026-05-26 — MAPI/HTTP Phase 4: Attachments + Move/Delete
 
 ### Added

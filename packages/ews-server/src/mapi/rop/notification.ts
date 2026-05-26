@@ -1,38 +1,104 @@
 /**
- * Notification-ROP-Handler — Phase v4.5.0
+ * Notification-ROP-Handler (v4.5.0)
  *
- * STUB — Implementation kommt in v4.5.0.
+ * Implementiert:
+ *   - RopRegisterNotification (MS-OXCNOTIF §2.2.1.2)
  *
- * Geplante Handlers:
- *   - RopRegisterNotification (MS-OXCNOTIF §2.2.1.2.1)
- *   - RopNotify               (MS-OXCNOTIF §2.2.1.4.1) — Server → Client Push
- *   - RopPending              (MS-OXCNOTIF §2.2.1.4.2)
- *
- * Plus NotificationWait-Endpoint in emsmdb-handler.ts auf echten Long-Poll
- * upgrade:
- *
- *   1. Outlook ruft NotificationWait → Server hält Connection offen
- *   2. Server subscriben Redis-Channel `coremail:mail:new:<userId>` UND
- *      `coremail:folder:change:<userId>`
- *   3. Bei Event: Response mit EventPending=true + Events-Liste
- *   4. Bei Timeout (X-PendingPeriod ms): Response mit EventPending=false
- *
- * Event-Types (NotificationFlags, MS-OXCNOTIF §2.2.1.2.3):
- *   fnevNewMail    (0x0002) — neue Mail
- *   fnevObjectCreated (0x0004) — neuer Folder
- *   fnevObjectDeleted (0x0008)
- *   fnevObjectModified (0x0010)
- *   fnevObjectMoved (0x0020)
- *   fnevObjectCopied (0x0040)
- *   fnevSearchComplete (0x0080)
- *   fnevTableModified (0x0100)
- *   fnevStatusObjectModified (0x0200)
- *
- * Subscription-State:
- *   In Session-HandleTable: { kind: 'notification', eventMask, folderId }
- *
- * Wiederverwendung: bestehender CHANNEL_MAIL_NEW Redis-Channel aus
- * smtp-server/handlers/message.ts. Bridge ist 1-line: bei publish() den
- * neuen Mail-Event in MAPI-Notify-Format konvertieren.
+ * Workflow:
+ *   1) Outlook ruft RopRegisterNotification auf einem Folder-Handle auf.
+ *   2) Subscription wird am Handle persistiert (subscription-Feld via
+ *      dynamic JSON-Attribut).
+ *   3) Outlook polled via NotificationWait long-poll.
+ *   4) Server subscribed Redis-Channel `coremail:mapi:notify:<userId>`.
+ *   5) Bei neuer Mail published storeInboundMessage() ein Event auf den
+ *      Channel.
+ *   6) Long-poll-Handler antwortet sofort mit EventPending=true.
  */
-export {};
+
+import { createLogger, getRedisClient } from '@coremail/core';
+import { MapiReader, MapiWriter, MapiStatusCode } from '../codec.js';
+import { RopId } from '../rop-types.js';
+import { resolveHandleIndex, updateRopObject, type RopObject } from '../rop-handle-table.js';
+import type { RopRequest } from '../rop-codec.js';
+
+const log = createLogger('mapi:rop:notification');
+
+/** Redis-Channel-Name pro User. */
+export function notifyChannelFor(userId: string): string {
+  return `coremail:mapi:notify:${userId}`;
+}
+
+export interface NotifyEvent {
+  kind: 'NewMail' | 'MessageDeleted' | 'MessageModified' | 'FolderChanged';
+  userId: string;
+  folderId?: string;
+  messageId?: string;
+  subject?: string;
+}
+
+/**
+ * v4.5.0: RopRegisterNotification
+ *
+ * Payload: NotificationTypes(uint16) | Reserved(uint8) | WantWholeStore(uint8)
+ *        | [FolderId(uint64) | MessageId(uint64)]?
+ *
+ * Antwort: ReturnValue
+ */
+export async function handleRopRegisterNotification(
+  rop: RopRequest,
+  sessionToken: string,
+  serverObjectHandles: number[],
+): Promise<Buffer> {
+  const input = await resolveHandleIndex(sessionToken, serverObjectHandles, rop.inputHandleIndex);
+  if (!input) {
+    return writeNotifyError(RopId.RegisterNotification, rop, MapiStatusCode.EC_INVALID_SESSION);
+  }
+
+  let notificationTypes = 0;
+  try {
+    const r = new MapiReader(rop.payload);
+    notificationTypes = r.readUint16();
+    r.readUint8();    // Reserved
+    r.readUint8();    // WantWholeStore
+  } catch (err) {
+    log.warn({ err }, 'RegisterNotification: Payload-Parse-Fehler');
+  }
+
+  // Subscription dynamisch am Handle anhängen — JSON-Round-Trip durch Redis
+  // erhält das Feld trotz fehlendem Type.
+  const patched = {
+    ...input.object,
+    subscription: { notificationTypes, registeredAt: Date.now() },
+  } as unknown as Partial<RopObject>;
+  await updateRopObject(sessionToken, input.handle, patched);
+
+  log.debug({ notificationTypes, handle: input.handle, kind: input.object.kind }, 'RegisterNotification OK');
+  const w = new MapiWriter();
+  w.writeUint8(RopId.RegisterNotification);
+  w.writeUint8(rop.inputHandleIndex ?? 0);
+  w.writeUint32(MapiStatusCode.SUCCESS);
+  return w.toBuffer();
+}
+
+/**
+ * Published ein Event auf den User-Notify-Channel. Wird (in einem nächsten
+ * Step) von SMTP-Inbound `storeInboundMessage()` aufgerufen wenn eine neue
+ * Mail in der Inbox landet.
+ */
+export async function publishNotifyEvent(event: NotifyEvent): Promise<void> {
+  try {
+    const redis = getRedisClient();
+    await redis.publish(notifyChannelFor(event.userId), JSON.stringify(event));
+    log.debug({ event }, 'publishNotifyEvent OK');
+  } catch (err) {
+    log.warn({ err }, 'publishNotifyEvent fehlgeschlagen');
+  }
+}
+
+function writeNotifyError(ropId: number, rop: RopRequest, errorCode: number): Buffer {
+  const w = new MapiWriter();
+  w.writeUint8(ropId);
+  w.writeUint8(rop.outputHandleIndex ?? rop.inputHandleIndex ?? 0);
+  w.writeUint32(errorCode);
+  return w.toBuffer();
+}

@@ -43,6 +43,7 @@ import {
 import {
   handleRopDeleteMessages, handleRopMoveCopyMessages,
 } from './rop/folder-ops.js';
+import { handleRopRegisterNotification } from './rop/notification.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -187,8 +188,11 @@ async function dispatchOne(
     case RopId.MoveCopyMessages:
       return handleRopMoveCopyMessages(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.5.0+ Phasen: TODO ────────────────────────────────────────────────
+    // ── v4.5.0 — Push-Notifications ────────────────────────────────────────
     case RopId.RegisterNotification:
+      return handleRopRegisterNotification(rop, sessionToken, serverObjectHandles);
+
+    // ── v4.6.0+ Phasen: TODO ────────────────────────────────────────────────
     default: {
       const b = new RopResponseBuilder();
       writeNotSupportedRop(b, rop.ropId, rop.outputHandleIndex ?? 0);
