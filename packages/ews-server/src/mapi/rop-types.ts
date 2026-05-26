@@ -18,10 +18,12 @@ export const RopId = {
   OpenFolder:                       0x02,
   CreateFolder:                     0x1C,
   DeleteFolder:                     0x1D,
+  DeleteMessages:                   0x1E,
   GetHierarchyTable:                0x04,
   GetContentsTable:                 0x05,
   GetSearchCriteria:                0x2B,
   SetSearchCriteria:                0x30,
+  MoveCopyMessages:                 0x33,
   MoveFolder:                       0x35,
   CopyFolder:                       0x36,
 

@@ -225,6 +225,211 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
+      // v4.2.0 — Mail-Lesen
+      case RopId.OpenMessage: {
+        // RopOpenMessage: LogonId(1), InputHandleIndex(1), OutputHandleIndex(1),
+        //   CodePageId(uint16), FolderId(uint64), OpenModeFlags(uint8), MessageId(uint64)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint16();         // CodePageId
+        reader.readUint64();         // FolderId
+        reader.readUint8();          // OpenModeFlags
+        reader.readUint64();         // MessageId
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.GetPropertiesAll: {
+        // RopGetPropertiesAll: LogonId(1), InputHandleIndex(1),
+        //   PropertySizeLimit(uint16), WantUnicode(uint16)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint16(); reader.readUint16();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.GetPropertiesSpecific: {
+        // RopGetPropertiesSpecific: LogonId(1), InputHandleIndex(1),
+        //   PropertySizeLimit(uint16), WantUnicode(uint16),
+        //   PropertyTagCount(uint16), PropertyTags(uint32[])
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint16(); reader.readUint16();
+        const cnt = reader.readUint16();
+        reader.readBuffer(cnt * 4);
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.OpenStream: {
+        // RopOpenStream: LogonId(1), InputHandleIndex(1), OutputHandleIndex(1),
+        //   PropertyTag(uint32), OpenModeFlags(uint8)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint32(); reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.ReadStream: {
+        // RopReadStream: LogonId(1), InputHandleIndex(1), ByteCount(uint16),
+        //   MaximumByteCount(uint32 — wenn ByteCount==0xBABE)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        const byteCount = reader.readUint16();
+        if (byteCount === 0xBABE) {
+          reader.readUint32();
+        }
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.GetStreamSize: {
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        rops.push({ ropId, logonId, inputHandleIndex, payload: Buffer.alloc(0) });
+        continue;
+      }
+
+      // v4.3.0 — Mail-Schreiben + Senden
+      case RopId.CreateMessage: {
+        // RopCreateMessage: LogonId(1), InputHandleIndex(1), OutputHandleIndex(1),
+        //   CodePageId(uint16), FolderId(uint64), AssociatedFlag(uint8)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint16(); reader.readUint64(); reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.SaveChangesMessage: {
+        // RopSaveChangesMessage: LogonId(1), InputHandleIndex(1),
+        //   ResponseHandleIndex(1), SaveFlags(uint8)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8(); reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.SetProperties: {
+        // RopSetProperties: LogonId(1), InputHandleIndex(1),
+        //   PropertyValueSize(uint16), PropertyValueCount(uint16), PropertyValues(variable)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        const valSize = reader.readUint16();
+        reader.readBuffer(valSize);
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.SubmitMessage: {
+        // RopSubmitMessage: LogonId(1), InputHandleIndex(1), SubmitFlags(uint8)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.WriteStream: {
+        // RopWriteStream: LogonId(1), InputHandleIndex(1), DataSize(uint16), Data(variable)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        const sz = reader.readUint16();
+        reader.readBuffer(sz);
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.CommitStream:
+      case RopId.SetMessageReadFlag:
+      case RopId.SetReadFlags: {
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        rops.push({ ropId, logonId, inputHandleIndex, payload: Buffer.alloc(0) });
+        continue;
+      }
+
+      // v4.4.0 — Attachments + Move/Delete
+      case RopId.GetAttachmentTable:
+      case RopId.OpenAttachment:
+      case RopId.CreateAttachment:
+      case RopId.DeleteAttachment:
+      case RopId.SaveChangesAttachment:
+      case RopId.MoveCopyMessages:
+      case RopId.DeleteMessages:
+      case RopId.MoveFolder:
+      case RopId.CopyFolder:
+      // v4.5.0 — Notifications
+      case RopId.RegisterNotification:
+      // v4.6/4.7 — Calendar / Contacts (Properties + Submit reuse v4.2/v4.3 handlers)
+      case RopId.GetPropertyIdsFromNames:
+      case RopId.GetNamesFromPropertyIds:
+      case RopId.ModifyRecipients:
+      case RopId.ReadRecipients:
+      case RopId.RemoveAllRecipients: {
+        // Konsumiere minimal LogonId + InputHandleIndex, restliche Payload bis
+        // Buffer-Ende oder bis nächster bekannter ROP. v4.4-v4.8 Handler stubs
+        // beantworten mit ecNotSupported.
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const remStart = reader.position;
+        // Take rest of buffer as payload (Dispatcher returns ecNotSupported anyway)
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(remStart, Math.min(remStart + 64, body.length))),
+        });
+        // Diese ROPs haben variable Länge — wir können nicht sicher zum nächsten
+        // ROP springen. Daher: Stream-Parsing nach diesem ROP abbrechen.
+        reader.seek(body.length);
+        continue;
+      }
+
       default: {
         // Unbekannter ROP — wir konsumieren minimal (LogonId+InputHandleIndex)
         // und stoppen. Dispatcher wird ecNotSupported zurückgeben.
