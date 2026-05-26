@@ -34,34 +34,28 @@ function buildAutodiscoverResponse(
       <AccountType>email</AccountType>
       <Action>settings</Action>
       <MicrosoftOnline>False</MicrosoftOnline>
-      <Protocol>
-        <Type>EXCH</Type>
-        <Server>${escapeXml(ewsHost)}</Server>
-        <ServerVersion>73C0834F</ServerVersion>
-        <ServerDN>/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}</ServerDN>
-        <MdbDN>/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}/cn=Microsoft Private MDB</MdbDN>
-        <AuthPackage>Basic</AuthPackage>
-        <ServerExclusiveConnect>off</ServerExclusiveConnect>
-        <CertPrincipalName>None</CertPrincipalName>
-        <ASUrl>${escapeXml(cfg.ewsUrl)}</ASUrl>
-        <EwsUrl>${escapeXml(cfg.ewsUrl)}</EwsUrl>
-        <EmwsUrl>${escapeXml(cfg.ewsUrl)}</EmwsUrl>
-        <EwsPartnerUrl>${escapeXml(cfg.ewsUrl)}</EwsPartnerUrl>
-        <OOFUrl>${escapeXml(cfg.ewsUrl)}</OOFUrl>
-        <OABUrl>${escapeXml(oabUrl)}</OABUrl>
-        <OWAUrl AuthenticationMethod="Basic, Fba">${escapeXml(cfg.owaUrl)}</OWAUrl>
-        <EcpUrl>${escapeXml(cfg.owaUrl)}</EcpUrl>
-      </Protocol>
-      <Protocol>
-        <Type>EXPR</Type>
-        <Server>${escapeXml(ewsHost)}</Server>
-        <SSL>On</SSL>
-        <CertPrincipalName>None</CertPrincipalName>
-        <AuthPackage>Basic</AuthPackage>
-        <ServerExclusiveConnect>on</ServerExclusiveConnect>
-        <AuthRequired>on</AuthRequired>
-        <GroupingInformation>default</GroupingInformation>
-      </Protocol>
+      <!--
+        v3.18.39: EXCH + EXPR Blöcke ENTFERNT.
+
+        Hintergrund: Outlook 2016+/LTSC benötigt für „Exchange-Profile"
+        entweder MAPI-over-HTTP (Type=mapiHttp) oder RPC-over-HTTPS (EXPR)
+        oder intra-Exchange RPC/TCP (EXCH). Alle drei Pfade nutzen das
+        binäre MAPI/ROP-Protokoll, das wir aktuell NICHT vollständig
+        implementiert haben (nur Stubs auf /mapi/emsmdb/ + /mapi/nspi/).
+
+        Wenn wir die Blöcke trotzdem ausliefern, versucht Outlook eine
+        RPC-Verbindung an den Server-Hostname (Port 135/RPC-Endpoint-Mapper
+        oder Port 443/rpcproxy.dll) — und hängt minutenlang im Connect-Loop.
+        User-Symptom: „Outlook reagiert nicht", VIDs mit Status „wird
+        hergestellt" und Protokoll RPC/TCP. Plus Fehler „Diese Ordnergruppe
+        kann nicht geöffnet werden — Fehler bei der Anmeldung bei Exchange".
+
+        Lösung bis MAPI/HTTP voll implementiert ist: nur IMAP/SMTP/ActiveSync
+        in der Autodiscover-Response. Outlook konfiguriert sich dann als
+        „IMAP-Konto" — Mail funktioniert sofort. Kalender + Kontakte gehen
+        per CalDAV/CardDAV (z.B. Apple Kalender, Thunderbird Lightning,
+        eM Client) oder direkt über OWA im Browser.
+      -->
       <Protocol>
         <Type>IMAP</Type>
         <Server>${escapeXml(cfg.imapHost)}</Server>
