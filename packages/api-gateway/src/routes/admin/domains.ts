@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
+import { syncFromPrimaryDomain } from '../../lib/server-urls.js';
 
 const log = createLogger('admin:domains');
 export const adminDomainsRouter: RouterType = Router();
@@ -83,6 +84,18 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
     select: SELECT,
   });
   log.info({ name: parsed.data.name, primary: isPrimary }, 'Domain created');
+
+  // v3.18.36: Wenn dies die ERSTE Domain ist (= automatisch primary), den
+  // publicHostname + alle abgeleiteten URLs (EWS/OWA/EAS/Autodiscover-Base)
+  // automatisch ableiten. Schützt vor dem alten Bug: Schema-Default war
+  // `mail.local:8080`, was Outlook-Autodiscover für 1000+ User unbrauchbar
+  // machte, weil die URLs nirgends sichtbar lagen.
+  if (isPrimary) {
+    await syncFromPrimaryDomain(parsed.data.name).catch((err: unknown) =>
+      log.warn({ err, domain: parsed.data.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+    );
+  }
+
   res.status(201).json(domain);
 });
 
@@ -139,6 +152,14 @@ adminDomainsRouter.post('/:id/make-primary', async (req: Request, res: Response)
     prisma.domain.update({ where: { id }, data: { primary: true } }),
   ]);
   log.info({ id, name: domain.name }, 'Domain set as primary');
+
+  // v3.18.36: Wenn publicHostname noch Default ist, an die neue primary
+  // Domain anpassen. Falls Admin bereits einen eigenen Hostname gesetzt hat,
+  // bleibt der erhalten — wir syncen aber die URLs (für den Fall dass nur
+  // publicHostname geändert wurde ohne URLs zu derive'n).
+  await syncFromPrimaryDomain(domain.name).catch((err: unknown) =>
+    log.warn({ err, domain: domain.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+  );
 
   const domains = await prisma.domain.findMany({
     select: SELECT,

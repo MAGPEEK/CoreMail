@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { deriveServerUrls } from '../lib/server-urls.js';
 
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
@@ -67,6 +68,30 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
           dkimPrivateKey: '',
           dkimSelector:   'default',
           active:          true,
+          primary:         true, // v3.18.36: Setup-Domain ist immer primary
+        },
+      });
+
+      // v3.18.36: publicHostname + alle abgeleiteten Server-URLs sofort
+      // aus der Setup-Domain ableiten — sonst bleibt das System auf den
+      // unbrauchbaren Schema-Defaults `mail.local:8080` hängen und
+      // Outlook-Autodiscover liefert Outlook-Clients Falsche URLs.
+      const newHostname = `mail.${domain}`;
+      const derivedUrls = deriveServerUrls(newHostname, true, 443);
+      await tx.serverSettings.upsert({
+        where: { id: 'singleton' },
+        create: {
+          id: 'singleton',
+          publicHostname: newHostname,
+          useHttps: true,
+          httpPort: 443,
+          ...derivedUrls,
+        },
+        update: {
+          publicHostname: newHostname,
+          useHttps: true,
+          httpPort: 443,
+          ...derivedUrls,
         },
       });
 

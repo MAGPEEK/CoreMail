@@ -13,9 +13,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [3.18.36] — 2026-05-26 — Bilder-Privacy-Banner gehärtet (Tracking-Pixel-Schutz)
+## [3.18.36] — 2026-05-26 — Hostname-Auto-Derive + Bilder-Privacy-Banner gehärtet
 
 ### Fixed
+
+- **Server-URLs werden jetzt dynamisch aus dem `publicHostname` abgeleitet —
+  nicht mehr fest auf `mail.local:8080`** (`packages/api-gateway/src/lib/server-urls.ts`,
+  `packages/api-gateway/src/routes/setup.ts`, `packages/api-gateway/src/routes/admin/domains.ts`):
+  Bisheriges Verhalten: Schema-Defaults schreiben `ewsUrl`/`owaUrl`/`easUrl`/
+  `autodiscoverBase` als `http://mail.local:8080/...` beim ersten Container-
+  Start. Wer eine echte Domain konfiguriert (z. B. `mail.firma.de`) musste
+  die URLs manuell in BCP → Server-Einstellungen ändern, sonst lieferte
+  Autodiscover Outlook unbrauchbare URLs. Das funktioniert für 1 Test-User
+  manuell, aber NICHT für die 1000+ User mit individuellen Domains.
+
+  **Fix**: Neuer zentraler Helper `lib/server-urls.ts` mit:
+  - `deriveServerUrls(publicHostname, useHttps, httpPort)` — berechnet alle
+    URLs aus dem Hostname (Autodiscover-Host nach Microsoft-Spec
+    `autodiscover.<root-domain>`).
+  - `syncFromPrimaryDomain(domainName)` — setzt `publicHostname` auf
+    `mail.<domain>` wenn er noch Default ist, leitet alle URLs ab.
+  - `syncServerUrlsFromHostname()` — idempotenter Re-Sync, läuft beim
+    api-gateway-Start UND ist von außen aufrufbar.
+
+  Eingehängt in:
+  - `POST /api/v1/setup/complete` — Setup-Wizard speichert in einer
+    Transaktion Domain + Admin-User + `publicHostname=mail.<setup-domain>` +
+    alle abgeleiteten URLs. Vorher blieb `publicHostname=mail.local`.
+  - `POST /api/v1/admin/domains` — wenn die erste Domain angelegt wird
+    (= automatisch `primary=true`), werden Hostname + URLs daraus
+    abgeleitet.
+  - `POST /api/v1/admin/domains/:id/make-primary` — wenn eine andere
+    Domain primary wird, werden URLs nur dann auf den neuen Hostname
+    umgestellt wenn `publicHostname` noch Default ist. Eine bereits
+    explizit gesetzte Konfiguration bleibt respektiert.
+  - `PUT  /api/v1/admin/servers/settings` — beim Save mit stale URLs
+    (`mail.local` oder `:8080`) wird automatisch nachgezogen.
+  - api-gateway Startup — als Sicherheitsnetz für bestehende Installationen.
+
+  Redis-Publish auf `coremail:settings:reload` informiert den autodiscover-
+  Service sofort, sodass Outlook keine veralteten URLs sieht.
+
+### Fixed (zusätzlich)
+
+- **Bilder-Privacy-Banner aus v3.18.10 funktionierte in der Praxis nicht** —
 
 - **Bilder-Privacy-Banner aus v3.18.10 funktionierte in der Praxis nicht** —
   externe Bilder wurden direkt geladen, das blaue „X externe Bilder wurden
