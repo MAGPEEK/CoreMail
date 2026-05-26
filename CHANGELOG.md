@@ -13,6 +13,89 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.1.0] — 2026-05-26 — MAPI/HTTP Phase 1: ROP-Infrastruktur + Logon + Folder-Browse
+
+### Added
+
+- **ROP-Stream-Codec** (`packages/ews-server/src/mapi/rop-codec.ts`): Parser
+  für den binären ROP-Buffer aus EcDoRpcExt2 — RopSize-Header, ROP-Header
+  (RopId + LogonId + Input/Output-Handle-Indexes), Server-Object-Handle-Table.
+  `RopResponseBuilder` für Spiegelung in die Response.
+
+- **ROP-Types-Konstanten** (`packages/ews-server/src/mapi/rop-types.ts`):
+  RopId-Enum mit allen relevanten ROPs aus MS-OXCROPS (Logon, OpenFolder,
+  GetHierarchyTable, GetContentsTable, SetColumns, QueryRows, OpenMessage,
+  CreateMessage, SubmitMessage, RegisterNotification, ...). PropType-Enum
+  (PT_LONG, PT_UNICODE, PT_BINARY, PT_SYSTIME, etc.). Property-Tag-Dictionary
+  mit den wichtigsten PR_* aus MS-OXPROPS (Folder, Mailbox, Message).
+
+- **Property-Codec** (`packages/ews-server/src/mapi/property-codec.ts`):
+  `writePropertyValue` + `readPropertyValue` für die 8 wichtigsten
+  PropertyTypes. FILETIME ↔ JavaScript-Date-Konvertierung. `writeTaggedProperty`
+  + `writePropertyRow` für Table-Row-Serialisierung.
+
+- **EntryID-Helpers** (`packages/ews-server/src/mapi/entry-id.ts`):
+  EntryID-Encoder/Decoder mit CoreMail-eigenem ProviderUID. CUID → uint64
+  FNV-1a-Hash für PR_FOLDER_ID.
+
+- **ROP-Handle-Table** (`packages/ews-server/src/mapi/rop-handle-table.ts`):
+  Typed Object-Descriptors (mailbox, folder, message, table, stream,
+  attachment) in der Session-State persistiert. `putRopObject`,
+  `getRopObject`, `releaseRopObject`, `resolveHandleIndex`.
+
+- **ROP-Dispatcher** (`packages/ews-server/src/mapi/rop-dispatcher.ts`):
+  Hauptdispatch-Funktion die binären Execute-Request parsed, jeden ROP an
+  seinen Handler dispatched, Response-Buffers sammelt, und finalen
+  ROP-Stream-Response baut.
+
+- **Handler v4.1.0**:
+  - `rop/logon.ts`: **RopLogon** — Outlook-Mailbox-Login, lädt User aus
+    Prisma, baut Folder-IDs-Array (Inbox, Drafts, Sent, Trash, Subtree),
+    erstellt Mailbox-Handle in der Session. Response mit MailboxGuid,
+    ReplGuid, LogonTime, GwartTime, StoreState.
+  - `rop/folder.ts`: **RopOpenFolder**, **RopGetHierarchyTable**,
+    **RopGetContentsTable** (Stub-Count).
+  - `rop/table.ts`: **RopSetColumns**, **RopQueryRows**, **RopGetRowCount**,
+    **RopRelease**. Property-Row-Serialisierung mit dynamischer Spaltenwahl.
+
+- **Execute-Handler-Refactor** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
+  `handleExecute` nutzt jetzt `dispatchRopBuffer` statt `ecNotSupported` zu
+  liefern. Outlook sieht real funktionierende ROPs.
+
+### Skeleton-Files für nachfolgende Phasen
+
+- `rop/message.ts` — v4.2.0 (Mail-Lesen) + v4.3.0 (Mail-Schreiben)
+- `rop/stream.ts` — v4.2.0 (Read) + v4.3.0 (Write)
+- `rop/submit.ts` — v4.3.0 (Mail-Senden via BullMQ-Bridge)
+- `rop/attachment.ts` — v4.4.0
+- `rop/notification.ts` — v4.5.0 (Push via Redis-pub/sub)
+- `rop/calendar.ts` — v4.6.0 (IPM.Appointment Property-Mapping)
+- `rop/contacts.ts` — v4.7.0 (NSPI + IPM.Contact)
+
+Jedes Skeleton-File enthält detaillierten Implementations-Plan + Property-
+Mapping + Microsoft-Spec-Referenzen.
+
+### Tests
+
+- 16 Codec-Round-Trip-Tests alle grün
+  (uint8/16/32/64, ASCII/UTF-16-LE Strings, GUIDs, Complex Connect-Request-
+  Sequence, Range-Errors)
+
+### Outlook-Funktionalität
+
+Mit v4.1.0 kann Outlook nach Connect:
+- ✅ RopLogon erfolgreich durchführen
+- ✅ Folder-Hierarchie-Tabelle anfordern
+- ✅ Standard-Ordner (Inbox, Drafts, Sent, Trash) sehen
+- ❌ Mails lesen (kommt in v4.2.0 — `OpenMessage`/`GetProperties`/`ReadStream`)
+- ❌ Mails schreiben (kommt in v4.3.0)
+- ❌ Push-Notifications (kommt in v4.5.0)
+
+Outlook-Profil-Build geht nach Connect deutlich weiter als in v4.0.0, aber
+beim ersten Mail-Klick wird ecNotSupported zurückkommen.
+
+---
+
 ## [4.0.0] — 2026-05-26 — MAPI-over-HTTP Foundation + Externe Clients Setup-Page
 
 **Major-Version-Bump**: Beginn der MAPI-over-HTTP-Implementation für native

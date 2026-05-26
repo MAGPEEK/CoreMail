@@ -160,15 +160,27 @@ async function handleExecute(req: Request, res: Response, requestId: string): Pr
     return;
   }
 
-  log.debug({ userId: session.userId, bodyLen: (req.body as Buffer)?.length }, 'Execute (Stub → ecNotSupported)');
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  log.debug({ userId: session.userId, bodyLen: body.length }, 'Execute → ROP-Dispatcher');
 
-  // Binäres Error-Response: StatusCode + ErrorCode + leere Body-Felder
+  // v4.1.0: ROP-Dispatcher übernimmt
+  const { dispatchRopBuffer } = await import('./rop-dispatcher.js');
+  const result = await dispatchRopBuffer(body, sessionToken, session);
+
+  // Execute-Response-Hülle (MS-OXCRPC §2.2.4.2):
+  //   StatusCode (uint32)
+  //   ErrorCode (uint32)
+  //   Flags (uint32)
+  //   RopBufferSize (uint32)
+  //   RopBuffer (variable — = ROP-Stream + Handle-Table)
+  //   AuxBufferSize (uint32) = 0
   const w = new MapiWriter();
-  w.writeUint32(MapiStatusCode.EC_NOT_SUPPORTED); // StatusCode
-  w.writeUint32(MapiStatusCode.EC_NOT_SUPPORTED); // ErrorCode
-  w.writeUint32(0);                                // Flags
-  w.writeUint32(0);                                // RopBufferSize (0 = leerer ROP-Stream)
-  // Kein RopBuffer Body — Outlook wird verstehen "ecNotSupported, retry via EWS"
+  w.writeUint32(MapiStatusCode.SUCCESS); // StatusCode
+  w.writeUint32(MapiStatusCode.SUCCESS); // ErrorCode
+  w.writeUint32(0);                       // Flags
+  w.writeUint32(result.responseBuffer.length); // RopBufferSize
+  w.writeBuffer(result.responseBuffer);   // RopBuffer
+  w.writeUint32(0);                       // AuxBufferSize (no aux)
 
   setMapiResponseHeaders(res, { requestId });
   res.status(200).send(w.toBuffer());
