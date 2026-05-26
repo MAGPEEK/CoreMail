@@ -24,10 +24,16 @@ async function main() {
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'ews-server' }));
 
-  // EWS SOAP endpoint — all operations via POST
+  // v3.18.38: Outlook LTSC probt mit GET /EWS/Exchange.asmx BEVOR es überhaupt
+  // einen Authorization-Header sendet. Bisher haben wir 200 OK + WSDL-Stub
+  // zurückgegeben → Outlook nahm an, dass keine Auth nötig ist, schickte nie
+  // Credentials, und das Setup endete mit "Private Ordner" statt der Mailbox.
+  // KRITISCH: jeder EWS-Request (GET wie POST) MUSS bei fehlendem Auth-Header
+  // 401 + WWW-Authenticate: Basic realm="..." zurückgeben, damit Outlook den
+  // Credential-Prompt zeigt.
   app.post('/EWS/Exchange.asmx', ewsAuthMiddleware, handleEwsRequest);
-  app.get('/EWS/Exchange.asmx', (_req, res) => {
-    // WSDL stub for Outlook service discovery
+  app.get('/EWS/Exchange.asmx', ewsAuthMiddleware, (_req, res) => {
+    // WSDL stub for Outlook service discovery (nur für authentifizierte Clients)
     res.set('Content-Type', 'text/xml; charset=utf-8');
     res.send(`<?xml version="1.0" encoding="utf-8"?>
 <wsdl:definitions
@@ -38,14 +44,19 @@ async function main() {
 </wsdl:definitions>`);
   });
 
-  // OAB (Offline Address Book) stub
-  app.get('/OAB/', (_req, res) => {
-    res.status(404).json({ error: 'OAB not implemented' });
+  // OAB (Offline Address Book) — v3.18.38: 401 statt 404, damit Outlook das
+  // Profil nicht als incomplete markiert.
+  app.use('/OAB', ewsAuthMiddleware, (_req, res) => {
+    res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
 
-  // MAPI over HTTP — Phase 8
-  // Provides Connect/Execute/Disconnect for Outlook 2013 SP1+ and Outlook 365
-  app.use('/mapi', mapiRouter);
+  // MAPI over HTTP — Phase 8 — v3.18.38: ewsAuthMiddleware vor MAPI-Router,
+  // damit Outlook beim Connect Credentials sendet. Ausnahme: /healthcheck.htm
+  // muss anonym sein (Outlook connectivity-probe vor Login).
+  app.use('/mapi', (req, res, next) => {
+    if (req.path === '/healthcheck.htm') return next();
+    return ewsAuthMiddleware(req, res, next);
+  }, mapiRouter);
 
   app.listen(PORT, () => {
     log.info({ port: PORT }, 'EWS server started');

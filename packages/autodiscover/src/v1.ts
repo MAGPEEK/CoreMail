@@ -5,13 +5,19 @@ import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
 
-function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awaited<ReturnType<typeof getServerConfig>>): string {
-  // v3.18.37: Erweiterte Outlook-LTSC-/Exchange-2019-Felder.
-  // Outlook 2016+ erwartet AuthPackage, OABUrl, ASUrl im EXCH-Block sowie
-  // einen EXPR-Block (Outlook Anywhere / MAPI-over-HTTP-Fallback). Ohne
-  // diese Felder bricht Outlook LTSC den Setup-Wizard mit „Da hat etwas
-  // nicht geklappt" ab.
-  // EXTRACT publicHostname aus EWS-URL (https://mail.<domain>/EWS/...)
+function buildAutodiscoverResponse(
+  email: string,
+  displayName: string,
+  legacyDn: string,
+  cfg: Awaited<ReturnType<typeof getServerConfig>>,
+): string {
+  // v3.18.38: Outlook-LTSC-2019/2021/2024-kompatible Autodiscover-Response.
+  // KRITISCH (laut Recherche an Microsoft Docs + Grommunio-Implementierung):
+  //   - AuthPackage MUSS "Basic" (capital B) sein, manche Outlook-Builds sind case-sensitive
+  //   - <User><LegacyDN> ist Pflicht (Outlook verwendet es als interne User-Identity)
+  //   - <GroupingInformation> im EXPR-Block ab Exchange 2013 SP1
+  //   - <PublicFolderInformation> Dummy auch wenn keine Public Folders existieren
+  //   - MAPI/HTTP-Block (Type=mapiHttp) NICHT ausliefern bis wirklich implementiert
   const ewsHost = (() => {
     try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
   })();
@@ -21,6 +27,8 @@ function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awai
   <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
     <User>
       <DisplayName>${escapeXml(displayName)}</DisplayName>
+      <LegacyDN>${escapeXml(legacyDn)}</LegacyDN>
+      <AutoDiscoverSMTPAddress>${escapeXml(email)}</AutoDiscoverSMTPAddress>
     </User>
     <Account>
       <AccountType>email</AccountType>
@@ -30,9 +38,9 @@ function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awai
         <Type>EXCH</Type>
         <Server>${escapeXml(ewsHost)}</Server>
         <ServerVersion>73C0834F</ServerVersion>
-        <ServerDN>/o=CoreMail/ou=Exchange/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}</ServerDN>
-        <MdbDN>/o=CoreMail/ou=Exchange/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}/cn=Microsoft Private MDB</MdbDN>
-        <AuthPackage>basic</AuthPackage>
+        <ServerDN>/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}</ServerDN>
+        <MdbDN>/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}/cn=Microsoft Private MDB</MdbDN>
+        <AuthPackage>Basic</AuthPackage>
         <ServerExclusiveConnect>off</ServerExclusiveConnect>
         <CertPrincipalName>None</CertPrincipalName>
         <ASUrl>${escapeXml(cfg.ewsUrl)}</ASUrl>
@@ -42,15 +50,17 @@ function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awai
         <OOFUrl>${escapeXml(cfg.ewsUrl)}</OOFUrl>
         <OABUrl>${escapeXml(oabUrl)}</OABUrl>
         <OWAUrl AuthenticationMethod="Basic, Fba">${escapeXml(cfg.owaUrl)}</OWAUrl>
+        <EcpUrl>${escapeXml(cfg.owaUrl)}</EcpUrl>
       </Protocol>
       <Protocol>
         <Type>EXPR</Type>
         <Server>${escapeXml(ewsHost)}</Server>
         <SSL>On</SSL>
         <CertPrincipalName>None</CertPrincipalName>
-        <AuthPackage>basic</AuthPackage>
+        <AuthPackage>Basic</AuthPackage>
         <ServerExclusiveConnect>on</ServerExclusiveConnect>
         <AuthRequired>on</AuthRequired>
+        <GroupingInformation>default</GroupingInformation>
       </Protocol>
       <Protocol>
         <Type>IMAP</Type>
@@ -74,6 +84,9 @@ function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awai
         <UsePOPAuth>off</UsePOPAuth>
         <SMTPLast>off</SMTPLast>
       </Protocol>
+      <PublicFolderInformation>
+        <SmtpAddress>publicfolder@${escapeXml(ewsHost.replace(/^mail\./, ''))}</SmtpAddress>
+      </PublicFolderInformation>
     </Account>
     <Account>
       <AccountType>email</AccountType>
@@ -125,13 +138,17 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   const [user, cfg] = await Promise.all([
     prisma.user.findUnique({
       where: { email: email.toLowerCase() },
-      select: { displayName: true, email: true },
+      select: { id: true, displayName: true, email: true },
     }),
     getServerConfig(),
   ]);
 
   const displayName = user?.displayName ?? email;
+  // v3.18.38: LegacyDN ist Pflicht für MAPI-Profile (Outlook benutzt es als
+  // interne User-Identity). Format nach Microsoft-Spec.
+  const userId = user?.id ?? email.split('@')[0] ?? 'unknown';
+  const legacyDn = `/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=${userId}`;
 
   res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(buildAutodiscoverResponse(email, displayName, cfg));
+  res.send(buildAutodiscoverResponse(email, displayName, legacyDn, cfg));
 }

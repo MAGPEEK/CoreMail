@@ -67,8 +67,9 @@ export async function ewsAuthMiddleware(
       const password = decoded.slice(colonIdx + 1);
 
       try {
-        // Validate via auth-service REST call (internal)
-        const authUrl = `http://auth-service:3001/auth/login`;
+        // v3.18.38: auth-service läuft auf Port 3003 (nicht 3001 — das war storage-api).
+        // Im monolithischen App-Container ist alles unter localhost erreichbar.
+        const authUrl = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003/auth/login';
         const resp = await fetch(authUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

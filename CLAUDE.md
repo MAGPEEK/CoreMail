@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.37`
+**Aktuelle Version**: `3.18.38`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.37 — Highlights
+## Aktuelle Version 3.18.38 — Highlights
+
+**v3.18.38** — Outlook-LTSC „kein Passwort-Prompt"-Root-Cause + Autodiscover-Vervollständigung. **KRITISCH**: User-Symptom war „Outlook verbindet sich, aber ohne Password-Abfrage, dann Private Ordner (PST) statt Exchange-Mailbox, plus Fehler 'Informationsdienst incomplete'". Root Cause: Outlook LTSC probt zuerst `GET /EWS/Exchange.asmx` BEVOR es einen Authorization-Header sendet. Der bisherige GET-Handler lieferte 200+WSDL-Stub ohne Auth-Check → Outlook nahm an, keine Auth nötig, schickte nie Credentials → Setup landete bei lokaler PST. Fix: `ewsAuthMiddleware` jetzt VOR GET-Handler + vor `/mapi/*`-Router (außer `/healthcheck.htm`) + OAB-Endpoint. Sendet jetzt 401 + `WWW-Authenticate: Basic realm="CoreMail EWS"` → Outlook fragt nach Credentials. PLUS `auth-service`-URL gefixt: war `http://auth-service:3001/auth/login` (Port 3001 = storage-api!) → jetzt env `AUTH_SERVICE_URL` mit Default `http://localhost:3003/auth/login`. PLUS Autodiscover-XML vervollständigt (Recherche an MS Docs + Grommunio): `AuthPackage` von `basic` auf `Basic` (case-sensitive bei Outlook-LTSC-Builds), `<User><LegacyDN>` Pflicht ergänzt (`/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>` — Outlook nutzt es als interne User-Identity), `<AutoDiscoverSMTPAddress>` ergänzt, `<GroupingInformation>default</GroupingInformation>` im EXPR-Block, `<PublicFolderInformation>` Dummy, korrekte Exchange-2019-Topologie in ServerDN/MdbDN, `<EcpUrl>` ergänzt.
 
 **v3.18.37** — Outlook-LTSC Autodiscover-XML erweitert (Exchange-2019-kompatibel) + Audit-Übersetzungen vervollständigt. (1) **AUTODISCOVER**: Die v1-XML-Response hatte nur einen minimalen `<Protocol Type=EXCH>`-Block. Outlook 2016+ braucht aber `AuthPackage`, `OABUrl`, `ASUrl`, `OOFUrl`, `EmwsUrl`, `MdbDN`, `ServerVersion` PLUS einen separaten `<Protocol Type=EXPR>`-Block (Outlook Anywhere / MAPI-over-HTTP-Fallback). Ohne diese bricht der Setup-Wizard mit „Da hat etwas nicht geklappt" ab. Fix: alle Pflichtfelder ergänzt, AuthPackage=basic, MicrosoftOnline=False (On-Premises-Signal), CertPrincipalName=None. (2) **AUDIT-ÜBERSETZUNGEN**: alte Pre-v3.18.34-Entries (`anomalies.get`, `full.post`, `jobs.delete`, `tags.post`, `members.delete`) wurden nicht erkannt weil das ACTION_MAP nur die neuen Long-Forms hatte. Plus neue v3.18.37-Formats: `servers.settings.put`, `servers.settings.derive.post`, `retention.tags.*`, `dashboard.get`, `services.put`, `make-primary.post`. Insgesamt 25+ neue Mappings. (3) **AKTEUR-FALLBACK**: bei leerem `actorEmail` (z.B. System-/Cron-Aktionen) wurde gar nichts angezeigt — jetzt Fallback `System (cmpla8p1…)`.
 
@@ -759,4 +761,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.37 — Outlook-LTSC Autodiscover-XML erweitert + Audit-Übersetzungen; v3.18.36 — Hostname-Auto-Derive + Bilder-Privacy-Banner; v3.18.35 — Outlook LTSC Verbindungs-Fix)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.38 — Outlook-LTSC Passwort-Prompt-Root-Cause; v3.18.37 — Autodiscover-XML erweitert + Audit-Übersetzungen; v3.18.36 — Hostname-Auto-Derive)*
