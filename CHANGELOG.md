@@ -13,6 +13,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.36] — 2026-05-26 — Bilder-Privacy-Banner gehärtet (Tracking-Pixel-Schutz)
+
+### Fixed
+
+- **Bilder-Privacy-Banner aus v3.18.10 funktionierte in der Praxis nicht** —
+  externe Bilder wurden direkt geladen, das blaue „X externe Bilder wurden
+  blockiert"-Banner erschien nie (`packages/web-client/src/components/MessageReader.tsx`):
+  Root Cause: `DOMPurify.sanitize(html)` lief OHNE Konfiguration und entfernte
+  unsere Privacy-Markierungen (`data-coremail-ext-src` Attribut, transparenter
+  `data:image/png;base64,...`-Placeholder als src) standardmäßig. Damit wurde
+  der Block-Mechanismus durch den Sanitize-Schritt direkt wieder ausgehebelt.
+
+  **Fix**: `sanitize()` mit explizier Konfiguration neu gebaut:
+  - `ADD_ATTR: ['data-coremail-ext-src', 'data-coremail-unresolved-cid',
+    'data-coremail-ext-bg']` — unsere Markierungen erlaubt
+  - `ALLOWED_URI_REGEXP` erlaubt `data:image/...;base64,...` (Placeholder)
+  - `FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'object', 'embed',
+    'meta', 'base']` — Tracking-Vektoren raus
+  - `FORBID_ATTR: ['onload', 'onerror', 'onclick', …, 'srcset']` —
+    Event-Handler + Responsive-Image-Tracker raus
+
+### Added
+
+- **CSS `background-image: url(...)` wird ebenfalls geblockt**
+  (`packages/web-client/src/components/MessageReader.tsx`): Häufiger Tracker-
+  Vektor in HTML-Mails (z.B. `<div style="background-image:url(http://tracker
+  .com/pixel.png)">`). `processExternalImages()` extrahiert `background-image`
+  aus inline-`style`-Attributen, neutralisiert externe URLs und speichert das
+  Original in `data-coremail-ext-bg`. Beim „Bilder anzeigen"-Klick wird die
+  CSS-Property wieder eingesetzt.
+
+### Changed
+
+- **„Bilder anzeigen"-Toggle räumt zusätzlich Placeholder-Styles auf**
+  (`packages/web-client/src/components/MessageReader.tsx`): Der dünne
+  gestrichelte Rahmen + `opacity:0.5`, der blockierte Bilder kennzeichnet,
+  wird nach dem Klick automatisch entfernt — Bilder erscheinen normal statt
+  weiterhin „gedimmt" mit Rahmen.
+
+---
+
 ## [3.18.35] — 2026-05-26 — Outlook LTSC Verbindungs-Fix (Autodiscover-Routing + URL-Auto-Sync)
 
 ### Fixed

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.35`
+**Aktuelle Version**: `3.18.36`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.35 — Highlights
+## Aktuelle Version 3.18.36 — Highlights
+
+**v3.18.36** — Bilder-Privacy-Banner gehärtet. User-Report: trotz v3.18.10-Feature werden externe Bilder in Mails immer noch direkt geladen, das blaue „Bilder anzeigen"-Banner erscheint nie. Root Cause: `sanitize()` in MessageReader.tsx ruft `DOMPurify.sanitize(html)` OHNE Konfiguration → DOMPurify entfernt standardmäßig unsere Privacy-Markierungen (`data-coremail-ext-src`-Attribut, transparenter `data:image/png;base64`-Placeholder als src) → Block-Mechanismus wird direkt nach Aufbau wieder ausgehebelt. Fix: `sanitize()` mit explizit konfiguriertem DOMPurify — `ADD_ATTR` whitelistet unsere drei `data-coremail-*`-Markierungen, `ALLOWED_URI_REGEXP` erlaubt `data:image/...;base64,...`, `FORBID_TAGS` entfernt Tracking-Vektoren `script`/`style`/`link`/`iframe`/`object`/`embed`/`meta`/`base`, `FORBID_ATTR` blockt Event-Handler + `srcset` (Responsive-Image-Tracker). ZUSÄTZLICH: CSS `background-image: url(...)` in inline `style`-Attributen wird ebenfalls geblockt — häufiger Tracker-Vektor (z.B. `<div style="background-image:url(http://tracker/pixel.png)">`); Original wird in `data-coremail-ext-bg` gespeichert. „Bilder anzeigen"-Toggle räumt Placeholder-Styles (gestrichelter Rahmen, opacity:0.5) auf — Bilder erscheinen nach Klick normal statt weiterhin gedimmt. CID-Inline-Bilder (echte Attachments) bleiben unverändert sichtbar (kein Tracking-Risiko, Teil der Mail).
 
 **v3.18.35** — Outlook LTSC Verbindungs-Fix. User-Report: „Outlook LTSC konnte keine Verbindung aufbauen — Da hat etwas nicht geklappt". Drei zusammenhängende Probleme: (1) API-Gateway routete `/Autodiscover/Autodiscover.xml` zum **EWS-Server** (Port 8080), aber der autodiscover-Server läuft auf Port 8081 — Outlook bekam Express-Default-404. Fix: neue env `AUTODISCOVER_SERVICE_URL`, Routes `/Autodiscover` + `/autodiscover` zum richtigen Service. (2) `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase` in `ServerSettings` zeigten noch auf `mail.local:8080` (Schema-Default), obwohl `publicHostname` längst auf die echte Domain umgestellt war — Autodiscover lieferte Outlook unerreichbare interne URLs. Fix: Startup-Migration `syncAutodiscoverUrls()` korrigiert stale URLs automatisch beim api-gateway-Start; PUT /admin/servers/settings ebenfalls. Berechnet aus `publicHostname` + `useHttps` + `httpPort`; Autodiscover-Host aus Root-Domain (Microsoft-Spec). (3) Autodiscover-Service hatte 60s-Cache ohne Redis-Subscription — Settings-Änderungen wurden bis zu 60s nicht sichtbar. Fix: Subscription auf `coremail:settings:reload` für sofortige Cache-Invalidation.
 
@@ -755,4 +757,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.35 — Outlook LTSC Verbindungs-Fix; v3.18.34 — Audit-Log-Path-Fix + Backup-Watchdog; v3.18.33 — Externe Kontakte komplett entfernt)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.36 — Bilder-Privacy-Banner gehärtet; v3.18.35 — Outlook LTSC Verbindungs-Fix; v3.18.34 — Audit-Log-Path-Fix + Backup-Watchdog)*

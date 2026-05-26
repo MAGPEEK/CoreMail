@@ -17,11 +17,30 @@ import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 
+/**
+ * v3.18.36: Gehärtetes Sanitize. DOMPurify ohne Konfiguration entfernt unsere
+ * Privacy-Markierungen (`data-coremail-ext-src`, transparenter PNG-Placeholder)
+ * → Bilder wurden trotz Block-Logik geladen oder Banner blieb aus.
+ * Plus: Tracking-Vektoren `<style>`, `<link>`, JS-Event-Handler explizit blocken.
+ */
 function sanitize(html: string): string {
-  if (typeof window !== 'undefined' && 'DOMPurify' in window) {
-    return (window as unknown as { DOMPurify: typeof DOMPurify }).DOMPurify.sanitize(html);
+  if (typeof window === 'undefined') {
+    return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
   }
-  return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  return DOMPurify.sanitize(html, {
+    // Whitelist unserer Privacy-Markierungen + data: URI für Placeholder
+    ADD_ATTR: ['data-coremail-ext-src', 'data-coremail-unresolved-cid', 'data-coremail-ext-bg'],
+    ALLOW_DATA_ATTR: true,
+    // Tracking-relevante Tags + Event-Handler komplett blocken
+    FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'object', 'embed', 'meta', 'base'],
+    FORBID_ATTR: [
+      'onload', 'onerror', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
+      'onfocus', 'onblur', 'onkeydown', 'onkeyup', 'onsubmit', 'onchange',
+      'ping', 'srcset', // srcset könnte Tracking-URL enthalten
+    ],
+    // data:image für unseren Placeholder explizit erlauben, http(s) für CID-aufgelöste URLs
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|data:image\/[a-z]+;base64,):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+  });
 }
 
 /**
@@ -55,7 +74,8 @@ function processExternalImages(
   // 1x1 transparent PNG als Platzhalter für blockierte externe Bilder
   const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
-  const processed = html.replace(/<img\b([^>]*?)src=(["'])([^"']+)\2([^>]*)>/gi, (_match, before: string, quote: string, src: string, after: string) => {
+  // (1) <img src="..."> behandeln
+  let processed = html.replace(/<img\b([^>]*?)src=(["'])([^"']+)\2([^>]*)>/gi, (_match, before: string, quote: string, src: string, after: string) => {
     const trimmed = src.trim();
     // cid:foo@bar → Attachment-URL
     if (/^cid:/i.test(trimmed)) {
@@ -78,6 +98,23 @@ function processExternalImages(
     externalCount++;
     return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote}${after}>`;
   });
+
+  // v3.18.36: (2) CSS `background-image: url(...)` in inline-`style`-Attributen
+  // ist ein häufiger Tracker-Vektor — wir neutralisieren externe URLs und
+  // sichern Original in `data-coremail-ext-bg` für späteres Re-Aktivieren.
+  processed = processed.replace(
+    /(style=)(["'])([^"']*?)background-image\s*:\s*url\(\s*(['"]?)([^"')]+)\4\s*\)([^"']*?)\2/gi,
+    (_m, attrName: string, attrQuote: string, stylePrefix: string, _urlQuote: string, url: string, styleSuffix: string) => {
+      const trimmed = url.trim();
+      if (/^data:/i.test(trimmed) || /^cid:/i.test(trimmed)) {
+        // Inline / CID — passieren lassen
+        return _m;
+      }
+      // Extern → Background entfernen, Original speichern
+      externalCount++;
+      return `${attrName}${attrQuote}${stylePrefix}${styleSuffix}${attrQuote} data-coremail-ext-bg=${attrQuote}${trimmed}${attrQuote}`;
+    },
+  );
 
   return { html: processed, externalImageCount: externalCount };
 }
@@ -430,14 +467,31 @@ export function MessageReader({ messageId }: Props) {
           inlineAtts,
           tokenParam,
         );
-        // Wenn User auf „Bilder anzeigen" geklickt hat → originale URLs zurück-mappen
-        const finalHtml = showExternalImages
-          ? processedHtml.replace(
-              /<img\b([^>]*?)src=(["'])data:image\/png;base64,iVBORw0KGgo[^"']+\2([^>]*?)data-coremail-ext-src=(["'])([^"']+)\4/gi,
-              (_m, before: string, q1: string, after: string, _q2: string, original: string) =>
-                `<img${before}src=${q1}${original}${q1}${after}`,
-            )
-          : processedHtml;
+        // v3.18.36: Wenn User auf „Bilder anzeigen" geklickt hat → originale URLs
+        // wiederherstellen. Behandelt BEIDE Markierungen: data-coremail-ext-src
+        // (für <img>) UND data-coremail-ext-bg (für CSS background-image).
+        // Zusätzlich wird der Placeholder-Style (opacity, border) entfernt.
+        let finalHtml = processedHtml;
+        if (showExternalImages) {
+          // (a) <img>-Tags: Placeholder-src + style zurücksetzen
+          finalHtml = finalHtml.replace(
+            /<img\b([^>]*?)src=(["'])data:image\/png;base64,iVBORw0KGgo[^"']+\2([^>]*?)data-coremail-ext-src=(["'])([^"']+)\4([^>]*?)>/gi,
+            (_m, before: string, q: string, middle: string, _q2: string, original: string, after: string) => {
+              // Placeholder-Style entfernen (style="opacity:0.5;border:1px dashed #ccc;...")
+              const cleanMiddle = middle.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
+              const cleanAfter  = after.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
+              return `<img${before}src=${q}${original}${q}${cleanMiddle}${cleanAfter}>`;
+            },
+          );
+          // (b) data-coremail-ext-bg → background-image: url(...) wieder einsetzen
+          finalHtml = finalHtml.replace(
+            /(style=(["']))([^"']*?)\2([^>]*?)data-coremail-ext-bg=(["'])([^"']+)\5/gi,
+            (_m, _styleAttr: string, q: string, stylePart: string, middle: string, _q2: string, url: string) => {
+              const sep = stylePart.trim().length > 0 && !stylePart.trim().endsWith(';') ? ';' : '';
+              return `style=${q}${stylePart}${sep}background-image:url("${url}")${q}${middle}`;
+            },
+          );
+        }
 
         return (
           <>
