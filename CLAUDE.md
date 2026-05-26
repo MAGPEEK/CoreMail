@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.32`
+**Aktuelle Version**: `3.18.33`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.32 — Highlights
+## Aktuelle Version 3.18.33 — Highlights
+
+**v3.18.33** — Externe Kontakte (ExternalMailContact) komplett entfernt. Feature wurde in der Praxis selten genutzt — externe Adressen sind typischerweise individuell pro User relevant (private Kontakte) oder pro Gruppe (z. B. „Lieferanten-Verteiler"). Reduziert Code-Komplexität, vereinfacht die GAL-Ansicht (User + Verteilergruppen) und entfernt einen Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery) und v3.18.31 (Public Folders). **Entfernt**: Prisma-Model `ExternalMailContact` (Tabelle `external_mail_contacts` wird via `prisma db push --accept-data-loss` gedroppt), Backend-Router `routes/admin/external-contacts.ts` + Mount `/api/v1/admin/contacts`, BCP-Page `ExternalContactsPage.tsx` + Sidebar-Eintrag + Route `/ext-contacts` + i18n-Keys (`nav_ext_contacts` DE+EN), MWA-GAL-Filter „Extern" + Detail-Panel-Rendering für `EXTERNAL`-Kind, `ext-`-Branches in GroupsPage Member-Autocomplete (toter Code). **Geändert**: `routes/contacts.ts` GAL-Endpoint liefert nur noch User+DistributionGroup, `/contacts?q=` Compose-Autocomplete ebenso. Externe Empfänger werden ab sofort direkt im Compose-Fenster eingetippt oder als `EXTERNAL`-Mitglieder in Verteilergruppen gepflegt (DistributionGroupMember.memberType=`EXTERNAL` bleibt unverändert).
 
 **v3.18.32** — TLS-Proxy SNI-Multi-Cert-Support (Outlook-Autodiscover-Fix). User-Report: „Outlook-Autodiscover liefert Zertifikatsfehler, obwohl `autodiscover.<domain>`-Cert via ACME ausgestellt wurde". Root Cause: Der integrierte HTTPS-Proxy auf Port 443 lud nur das **eine** Cert mit `isActiveHttps=true` und bediente damit alle eingehenden TLS-Verbindungen — Outlook sah beim Verbinden mit `autodiscover.<domain>` immer das `mail.<domain>`-Cert → Hostname-Mismatch. Fix: TLS-Proxy auf **SNI-Multi-Cert-Support** refactort. Beim Reload werden ALLE Certs mit `status='ACTIVE'` geladen, pro Hostname (CN + alle SANs + `domains[]`) ein eigener `tls.SecureContext`. `SNICallback` matcht exact → wildcard (`*.example.com`, RFC 6125) → Default-Cert. Default-Cert ist weiterhin das mit `isActiveHttps=true`, Fallback das neueste ACTIVE-Cert. Zusätzlich triggern jetzt auch ACME-Issuance + Self-Signed-Generate + Cert-Upload den `coremail:tls:reload`-Channel — vorher musste man nach Cert-Erstellung manuell „HTTPS aktivieren" klicken, mit Multi-SNI ist jeder ACTIVE-Cert sofort verfügbar.
 
@@ -749,4 +751,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support; v3.18.31 — Öffentliche Ordner komplett entfernt; v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.33 — Externe Kontakte komplett entfernt; v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support; v3.18.31 — Öffentliche Ordner komplett entfernt)*

@@ -13,6 +13,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.33] — 2026-05-26 — Externe Kontakte komplett entfernt
+
+### Removed
+
+- **Feature „Externe Kontakte" (ExternalMailContact) komplett aus dem Code entfernt.**
+  Externe Empfänger werden ab sofort:
+  - Im Compose-Fenster direkt als E-Mail-Adresse eingegeben (Outlook-Standard),
+  - als `EXTERNAL`-Mitglieder von Verteilergruppen gepflegt — der Member-Type
+    `EXTERNAL` in `DistributionGroupMember` bleibt unverändert erhalten.
+
+  Begründung: Die Pflege eines separaten externen Adressbuchs wurde in der
+  Praxis selten genutzt — externe Adressen sind typischerweise individuell pro
+  User relevant (private Kontakte) oder pro Gruppe (z. B. „Lieferanten-Verteiler").
+  Reduziert Code-Komplexität, vereinfacht die GAL-Ansicht (User + Verteilergruppen)
+  und entfernt einen Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery) und
+  v3.18.31 (Public Folders).
+
+  **Schema** (`packages/storage/prisma/schema.prisma`):
+  - Model `ExternalMailContact` entfernt
+  - Tabelle `external_mail_contacts` wird beim Container-Start via
+    `prisma db push --accept-data-loss` gedroppt
+  - **Migration ist destruktiv**: alle bestehenden externen Kontakte gehen
+    verloren
+
+  **Backend** (`packages/api-gateway/src/`):
+  - `routes/admin/external-contacts.ts` — gelöscht (Admin-CRUD)
+  - Route-Mount `/api/v1/admin/contacts` entfernt
+  - `routes/contacts.ts`:
+    - `/contacts?q=…` (Compose-Autocomplete) liefert nur noch User + Verteilergruppen
+    - `/contacts/gal` (Browse-GAL): `type=external`-Filter liefert leere Liste,
+      damit alte Frontend-Aufrufe nicht brechen
+
+  **BCP** (`packages/admin-panel/src/`):
+  - `pages/ExternalContactsPage.tsx` — gelöscht
+  - `components/Sidebar.tsx` — Eintrag „Ext. Kontakte" + `BookUser`-Icon-Import entfernt
+  - `main.tsx` — Route `/ext-contacts` + Import entfernt
+  - `i18n/translations.ts` — i18n-Keys `nav_ext_contacts` (DE+EN) entfernt
+  - `pages/GroupsPage.tsx` — `ext-`-Prefix-Branches in `pickSuggestion()` und
+    `typeBadge`-Map entfernt (toter Code seit GAL keine `ext-`-IDs mehr liefert)
+
+  **MWA** (`packages/web-client/src/`):
+  - `pages/ContactsPage.tsx` — GAL-Filter-Toggle „Extern" entfernt; Detail-Panel
+    rendert nur noch `USER`/`GROUP`-Kinds; `EXTERNAL`-Conditional-Renders entfernt
+
+---
+
 ## [3.18.32] — 2026-05-26 — TLS-Proxy: SNI-Multi-Cert-Support (Outlook-Autodiscover-Fix)
 
 ### Fixed

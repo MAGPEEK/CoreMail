@@ -296,12 +296,13 @@ function MembersPanel({ group }: { group: Group }) {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // Auto-detect Member-Type aus Suggestion-ID-Prefix (gal-, ext-, grp-)
+  // Auto-detect Member-Type aus Suggestion-ID-Prefix (gal-, grp-)
+  // ext- (ExternalMailContact) komplett entfernt in v3.18.33 — manuelle
+  // E-Mail-Eingabe ohne Suggestion erzeugt einen EXTERNAL-Eintrag.
   const pickSuggestion = useCallback((c: ContactSuggest) => {
     let type: Member['memberType'] = 'EXTERNAL';
     if (c.isGroup || c.id.startsWith('grp-'))     type = 'GROUP';
     else if (c.id.startsWith('gal-'))             type = 'USER';
-    else if (c.id.startsWith('ext-'))             type = 'EXTERNAL';
     addMember.mutate({ email: c.email, type });
   }, [addMember]);
 
@@ -376,7 +377,6 @@ function MembersPanel({ group }: { group: Group }) {
                 {filteredSuggestions.map((c, i) => {
                   const typeBadge = c.id.startsWith('grp-') ? { label: 'Gruppe', cls: 'bg-purple-100 text-purple-700' }
                                   : c.id.startsWith('gal-') ? { label: 'User',   cls: 'bg-blue-100 text-blue-700' }
-                                  : c.id.startsWith('ext-') ? { label: 'Extern', cls: 'bg-gray-100 text-gray-700' }
                                   :                            { label: 'Privat', cls: 'bg-amber-100 text-amber-700' };
                   return (
                     <button key={c.id} type="button"

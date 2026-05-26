@@ -41,8 +41,11 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     return;
   }
 
-  // GAL (Domain-User) + Externe Kontakte + Verteilergruppen parallel laden
-  const [galUsers, externalContacts, distGroups] = await Promise.all([
+  // GAL (Domain-User) + Verteilergruppen parallel laden.
+  // (ExternalMailContact entfernt in v3.18.33 — externe Empfänger werden
+  // direkt im Compose-Fenster eingetippt oder als EXTERNAL-Mitglieder in
+  // Verteilergruppen gepflegt.)
+  const [galUsers, distGroups] = await Promise.all([
     prisma.user.findMany({
       where: {
         active: true,
@@ -52,20 +55,6 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
         ],
       },
       select: { id: true, email: true, displayName: true },
-      take: 30,
-    }),
-    prisma.externalMailContact.findMany({
-      where: {
-        hiddenFromGal: false,
-        OR: [
-          { email:       { contains: q, mode: 'insensitive' } },
-          { displayName: { contains: q, mode: 'insensitive' } },
-          { firstName:   { contains: q, mode: 'insensitive' } },
-          { lastName:    { contains: q, mode: 'insensitive' } },
-          { company:     { contains: q, mode: 'insensitive' } },
-        ],
-      },
-      select: { id: true, email: true, displayName: true, company: true },
       take: 30,
     }),
     prisma.distributionGroup.findMany({
@@ -92,12 +81,6 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push({ id: `gal-${u.id}`, displayName: u.displayName ?? u.email, email: u.email });
-  }
-  for (const c of externalContacts) {
-    const key = c.email.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push({ id: `ext-${c.id}`, displayName: c.displayName, email: c.email, company: c.company ?? '' });
   }
   for (const g of distGroups) {
     const key = g.email.toLowerCase();
@@ -181,9 +164,9 @@ contactsRouter.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/contacts/gal?q=&type=&limit=&offset= — Global Address List (Browse + Search)
-// Liefert die vereinten Einträge aus User-Tabelle, ExternalMailContact und
-// DistributionGroup. Browse-Modus (ohne `q`) für die GAL-Ansicht im Frontend,
-// Search-Modus (mit `q`) für den Compose-Autocomplete.
+// Liefert die vereinten Einträge aus User-Tabelle und DistributionGroup.
+// (ExternalMailContact entfernt in v3.18.33 — Type-Filter `external` liefert
+// jetzt immer eine leere Liste, damit alte Frontend-Aufrufe nicht brechen.)
 contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const type = String(req.query['type'] ?? 'all') as 'all' | 'users' | 'external' | 'groups';
@@ -192,7 +175,7 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
 
   const searchWhere = q.length >= 2 ? q.toLowerCase() : null;
 
-  // Drei Quellen parallel — jeweils sortiert nach displayName/email
+  // Zwei Quellen parallel — jeweils sortiert nach displayName/email
   const userPromise = (type === 'all' || type === 'users')
     ? prisma.user.findMany({
         where: {
@@ -206,25 +189,6 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
         },
         orderBy: [{ displayName: 'asc' }, { email: 'asc' }],
         select: { id: true, email: true, displayName: true, domain: { select: { name: true } } },
-      })
-    : Promise.resolve([]);
-
-  const externalPromise = (type === 'all' || type === 'external')
-    ? prisma.externalMailContact.findMany({
-        where: {
-          hiddenFromGal: false,
-          ...(searchWhere ? {
-            OR: [
-              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
-              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
-              { firstName:   { contains: searchWhere, mode: 'insensitive' as const } },
-              { lastName:    { contains: searchWhere, mode: 'insensitive' as const } },
-              { company:     { contains: searchWhere, mode: 'insensitive' as const } },
-            ],
-          } : {}),
-        },
-        orderBy: [{ displayName: 'asc' }],
-        select: { id: true, email: true, displayName: true, firstName: true, lastName: true, company: true, department: true, phone: true, mobile: true },
       })
     : Promise.resolve([]);
 
@@ -246,19 +210,15 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
       })
     : Promise.resolve([]);
 
-  const [users, external, groups] = await Promise.all([userPromise, externalPromise, groupsPromise]);
+  const [users, groups] = await Promise.all([userPromise, groupsPromise]);
 
   // Vereintes Format mit `kind` und `id`-Prefix als Stabilizer
   type GalEntry = {
     id: string;
-    kind: 'USER' | 'EXTERNAL' | 'GROUP';
+    kind: 'USER' | 'GROUP';
     email: string;
     displayName: string;
     subtitle?: string;
-    company?: string;
-    department?: string;
-    phone?: string;
-    mobile?: string;
     domain?: string;
     memberCount?: number;
   };
@@ -269,16 +229,6 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
       email:       u.email,
       displayName: u.displayName ?? u.email,
       ...(u.domain?.name ? { domain: u.domain.name } : {}),
-    })),
-    ...external.map((c): GalEntry => ({
-      id:          `ext-${c.id}`,
-      kind:        'EXTERNAL',
-      email:       c.email,
-      displayName: c.displayName,
-      ...(c.company ? { company: c.company } : {}),
-      ...(c.department ? { department: c.department } : {}),
-      ...(c.phone ? { phone: c.phone } : {}),
-      ...(c.mobile ? { mobile: c.mobile } : {}),
     })),
     ...groups.map((g): GalEntry => ({
       id:          `grp-${g.id}`,

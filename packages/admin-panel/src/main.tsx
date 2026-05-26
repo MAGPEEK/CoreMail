@@ -25,7 +25,7 @@ import { TransportRulesPage } from './pages/TransportRulesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ServicesPage } from './pages/ServicesPage.js';
 import { GroupsPage } from './pages/GroupsPage.js';
-import { ExternalContactsPage } from './pages/ExternalContactsPage.js';
+// ExternalContactsPage komplett entfernt in v3.18.33
 import { RbacPage } from './pages/RbacPage.js';
 // eDiscovery & Legal Hold komplett entfernt in v3.18.5
 // Journaling-Feature komplett entfernt in v3.13.6
@@ -150,7 +150,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/message-trace"  element={<MessageTracePage />} />
                   <Route path="/connectors"     element={<Navigate to="/services" replace />} />
                   <Route path="/groups"         element={<GroupsPage />} />
-                  <Route path="/ext-contacts"   element={<ExternalContactsPage />} />
+                  {/* /ext-contacts Route entfernt in v3.18.33 */}
                   <Route path="/rbac"           element={<RbacPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />

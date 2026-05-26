@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Users,
-  BookUser, ShieldHalf, Archive,
+  ShieldHalf, Archive,
   KeyRound, ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
@@ -24,7 +24,6 @@ export function Sidebar() {
         { path: '/mailboxes',        labelKey: 'nav_mailboxes',        icon: Mail },
         { path: '/shared-mailboxes', labelKey: 'nav_shared_mailboxes', icon: Inbox },
         { path: '/groups',           labelKey: 'nav_groups',           icon: Users },
-        { path: '/ext-contacts',     labelKey: 'nav_ext_contacts',     icon: BookUser },
         { path: '/domains',          labelKey: 'nav_domains',          icon: Globe },
       ],
     },
