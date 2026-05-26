@@ -13,6 +13,46 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.37] — 2026-05-26 — Outlook-LTSC Autodiscover-XML erweitert + Audit-Übersetzungen
+
+### Fixed
+
+- **Outlook LTSC (Exchange 2019) konnte sich nicht verbinden trotz korrekt
+  geliefertem Autodiscover** (`packages/autodiscover/src/v1.ts`): Die
+  XML-Response hatte nur einen minimalen `<Protocol><Type>EXCH</Type>...`-
+  Block ohne `AuthPackage`, `OABUrl`, `ASUrl`, `OOFUrl`, `MdbDN`,
+  `ServerVersion` und ohne den **EXPR-Block** (Outlook Anywhere / MAPI-
+  over-HTTP-Fallback). Outlook 2016+ erwartet diese Felder zwingend —
+  ohne sie bricht der Setup-Wizard mit „Da hat etwas nicht geklappt" ab.
+
+  **Fix**: Autodiscover-v1-XML erweitert um:
+  - `<AuthPackage>basic</AuthPackage>` (Outlook braucht expliziten Auth-Typ)
+  - `<ServerVersion>73C0834F</ServerVersion>` (Exchange-2019-kompatibler Server-Version-Token)
+  - `<MdbDN>` + `<ServerDN>` (Exchange-Topologie-Identifikatoren)
+  - `<ASUrl>`, `<OOFUrl>`, `<OABUrl>` (Availability-Service, Out-of-Office, Offline-Adressbuch)
+  - `<EmwsUrl>` (Exchange Management Web Service)
+  - `<OWAUrl AuthenticationMethod="Basic, Fba">`
+  - **Komplett neuer `<Protocol><Type>EXPR</Type>`-Block** für Outlook Anywhere
+    /MAPI-over-HTTP (SSL=on, AuthPackage=basic, ServerExclusiveConnect=on)
+  - `<MicrosoftOnline>False</MicrosoftOnline>` (signalisiert On-Premises-Setup)
+
+- **Audit-Log: Legacy-Action-Strings (vor v3.18.34 Path-Fix) nicht übersetzt**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Alte Audit-Einträge
+  vor dem Path-Mutation-Fix wurden mit Short-Action-Strings (`anomalies.get`,
+  `full.post`, `jobs.delete`, `tags.post`, `members.delete`) gespeichert.
+  Das v3.18.34 `ACTION_MAP` hatte nur die NEUEN Long-Forms (z.B.
+  `audit-log.anomalies.get`). **Fix**: 25+ zusätzliche Einträge für
+  Legacy-Short-Forms + neue v3.18.37-Formats (`servers.settings.put`,
+  `servers.settings.derive.post`, `retention.tags.*`, `dashboard.get`,
+  `services.put`, etc.).
+
+- **Audit-Log Akteur-Spalte: leerer `actorEmail` zeigte gar nichts**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Bei System-Aktionen
+  (z. B. Cron-getriggert) ist `actorEmail` leer. Fix: Fallback-Anzeige
+  `System (cmpla8p1…)` statt leere Zelle.
+
+---
+
 ## [3.18.36] — 2026-05-26 — Hostname-Auto-Derive + Bilder-Privacy-Banner gehärtet
 
 ### Fixed

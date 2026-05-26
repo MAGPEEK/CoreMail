@@ -145,6 +145,48 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   // v3.18.34: Audit-Log (sensitive GETs)
   'audit-log.export.get':         { label: 'Audit-Log exportiert',           tone: 'read' },
   'audit-log.anomalies.get':      { label: 'Anomalien-Report abgerufen',     tone: 'read' },
+  // v3.18.37: Legacy-Action-Strings (vor v3.18.34 Path-Fix — Sub-Router-Mutation)
+  'anomalies.get':                { label: 'Anomalien-Report abgerufen',     tone: 'read' },
+  'full.post':                    { label: 'Vollbackup gestartet',           tone: 'create' },
+  'jobs.delete':                  { label: 'Backup-Job gelöscht',            tone: 'delete' },
+  'jobs.post':                    { label: 'Backup-Job gestartet',           tone: 'create' },
+  'tags.post':                    { label: 'Tag angelegt',                   tone: 'create' },
+  'tags.put':                     { label: 'Tag geändert',                   tone: 'update' },
+  'tags.delete':                  { label: 'Tag gelöscht',                   tone: 'delete' },
+  'archive.delete':               { label: 'Backup-Archiv-Objekt gelöscht',  tone: 'delete' },
+  'mailbox.post':                 { label: 'Mailbox-Backup gestartet',       tone: 'create' },
+  'schedules.post':               { label: 'Backup-Zeitplan angelegt',       tone: 'create' },
+  'schedules.put':                { label: 'Backup-Zeitplan geändert',       tone: 'update' },
+  'schedules.delete':             { label: 'Backup-Zeitplan gelöscht',       tone: 'delete' },
+  'run.post':                     { label: 'Zeitplan manuell ausgeführt',    tone: 'create' },
+  'activate-https.post':          { label: 'Zertifikat für HTTPS aktiviert', tone: 'update' },
+  'activate-protocol.post':       { label: 'Zertifikat für Mail-Protokolle aktiviert', tone: 'update' },
+  'activate-https.delete':        { label: 'HTTPS-Aktivierung entfernt',     tone: 'update' },
+  'renew.post':                   { label: 'Zertifikat erneuert',            tone: 'update' },
+  'upload.post':                  { label: 'Zertifikat hochgeladen',         tone: 'create' },
+  'self-signed.post':             { label: 'Selbst-signiertes Zertifikat erzeugt', tone: 'create' },
+  'regenerate-dkim.post':         { label: 'DKIM-Schlüssel neu erzeugt',     tone: 'update' },
+  'members.post':                 { label: 'Gruppenmitglied hinzugefügt',    tone: 'create' },
+  'members.delete':               { label: 'Gruppenmitglied entfernt',       tone: 'delete' },
+  'make-primary.post':            { label: 'Primäre Domain gesetzt',         tone: 'update' },
+  'dkim-record.get':              { label: 'DKIM DNS-Eintrag abgerufen',     tone: 'read' },
+  'dns-check.get':                { label: 'DNS-Einrichtung geprüft',        tone: 'read' },
+  // v3.18.37: Server-Settings (admin/servers/*)
+  'servers.settings.put':         { label: 'Server-Einstellungen geändert',  tone: 'update' },
+  'servers.settings.get':         { label: 'Server-Einstellungen abgerufen', tone: 'read' },
+  'servers.settings.derive.post': { label: 'Server-URLs neu abgeleitet',     tone: 'update' },
+  // v3.18.37: Retention-Tags (admin/compliance/retention/*)
+  'retention.tags.post':          { label: 'Aufbewahrungs-Tag angelegt',     tone: 'create' },
+  'retention.tags.put':           { label: 'Aufbewahrungs-Tag geändert',     tone: 'update' },
+  'retention.tags.delete':        { label: 'Aufbewahrungs-Tag gelöscht',     tone: 'delete' },
+  'retention.policy.post':        { label: 'Aufbewahrungsrichtlinie angelegt', tone: 'create' },
+  'retention.policy.put':         { label: 'Aufbewahrungsrichtlinie geändert', tone: 'update' },
+  'retention.policy.delete':      { label: 'Aufbewahrungsrichtlinie gelöscht', tone: 'delete' },
+  // v3.18.37: Dashboard, Logs, Services
+  'dashboard.get':                { label: 'Dashboard abgerufen',            tone: 'read' },
+  'logs.get':                     { label: 'System-Logs abgerufen',          tone: 'read' },
+  'services.put':                 { label: 'Service-Einstellung geändert',   tone: 'update' },
+  'services.restart.post':        { label: 'Service neugestartet',           tone: 'update' },
   // v3.18.34: Zertifikate
   'certificates.post':            { label: 'Zertifikat angelegt',            tone: 'create' },
   'certificates.put':             { label: 'Zertifikat geändert',            tone: 'update' },
@@ -490,7 +532,10 @@ export function AuditLogPage() {
                   onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}>
                   <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{fmtDt(e.timestamp)}</td>
                   <td className="px-4 py-2.5">
-                    <p className="text-gray-900 text-xs font-medium">{e.actorEmail}</p>
+                    {/* v3.18.37: Fallback wenn actorEmail leer ist (z.B. Cron-Jobs, System-Aktionen) */}
+                    <p className="text-gray-900 text-xs font-medium">
+                      {e.actorEmail || (e.actorId ? <span className="text-gray-400 italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-gray-400 italic">System</span>)}
+                    </p>
                   </td>
                   <td className="px-4 py-2.5"><ActionBadge action={e.action} /></td>
                   <td className="px-4 py-2.5 text-xs text-gray-600">
