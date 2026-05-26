@@ -5,6 +5,12 @@ import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
 
+// v4.0.0 Feature-Flag: experimentelles MAPI/HTTP-Protokoll. Default off, weil
+// ROP-Execution (RopLogon, Folder-Browse, etc.) noch nicht implementiert ist —
+// Outlook würde nach Connect das Profile-Building abbrechen. Sobald RopLogon
+// + Folder-Browse in v4.1.0 funktional sind, wird das default-on.
+const MAPI_HTTP_ENABLED = process.env['ENABLE_MAPI_HTTP'] === 'true';
+
 function buildAutodiscoverResponse(
   email: string,
   displayName: string,
@@ -34,6 +40,23 @@ function buildAutodiscoverResponse(
       <AccountType>email</AccountType>
       <Action>settings</Action>
       <MicrosoftOnline>False</MicrosoftOnline>
+      ${MAPI_HTTP_ENABLED ? `
+      <!--
+        v4.0.0 EXPERIMENTAL: MAPI-over-HTTP-Block. Outlook 2013 SP1+ erkennt
+        diesen <Protocol Type="mapiHttp"> als modernen Transport und versucht
+        die /mapi/emsmdb/-URL statt RPC. Nur aktivieren wenn ENABLE_MAPI_HTTP
+        gesetzt ist UND die ROP-Implementation funktional ist (ab v4.1.0).
+      -->
+      <Protocol Type="mapiHttp" Version="1">
+        <MailStore>
+          <InternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/emsmdb/</InternalUrl>
+          <ExternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/emsmdb/</ExternalUrl>
+        </MailStore>
+        <AddressBook>
+          <InternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/nspi/</InternalUrl>
+          <ExternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/nspi/</ExternalUrl>
+        </AddressBook>
+      </Protocol>` : ''}
       <!--
         v3.18.39: EXCH + EXPR Blöcke ENTFERNT.
 
