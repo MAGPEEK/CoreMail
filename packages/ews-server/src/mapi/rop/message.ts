@@ -17,6 +17,7 @@ import {
 } from '../rop-handle-table.js';
 import { cuidToFolderId64 } from '../entry-id.js';
 import { writeTaggedProperty, writePropertyValue, readPropertyValue } from '../property-codec.js';
+import { VIRTUAL_FOLDERS } from './folder.js';
 import type { RopRequest } from '../rop-codec.js';
 
 /**
@@ -68,7 +69,13 @@ export async function handleRopOpenMessage(
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_INVALID_PARAMETER);
   }
 
-  // Folder via 64-bit-Hash auflösen
+  // v4.6.0: Virtuelle PIM-Folder zuerst prüfen
+  const vf = VIRTUAL_FOLDERS.find((v) => cuidToFolderId64(v.id) === folderId64);
+  if (vf) {
+    return openVirtualPimMessage(rop, sessionToken, userId, vf.id, messageId64);
+  }
+
+  // Folder via 64-bit-Hash auflösen (Standard-Mail-Folder)
   const folders = await prisma.folder.findMany({
     where: { mailbox: { userId } },
     select: { id: true },
@@ -293,6 +300,80 @@ function writeMsgError(ropId: number, rop: RopRequest, errorCode: number): Buffe
   w.writeUint8(ropId);
   w.writeUint8(rop.outputHandleIndex ?? rop.inputHandleIndex ?? 0);
   w.writeUint32(errorCode);
+  return w.toBuffer();
+}
+
+// ── v4.6.0 — Virtual PIM Message Open (Calendar/Contact/Task/Note) ────────────
+
+async function openVirtualPimMessage(
+  rop: RopRequest,
+  sessionToken: string,
+  userId: string,
+  virtualFolderId: string,
+  messageId64: bigint,
+): Promise<Buffer> {
+  let foundId: string | null = null;
+  switch (virtualFolderId) {
+    case 'virtual-calendar': {
+      const events = await prisma.calendarEvent.findMany({
+        where: { calendar: { userId } },
+        select: { id: true },
+      }).catch(() => []);
+      const e = events.find((x) => cuidToFolderId64(x.id) === messageId64);
+      if (e) foundId = e.id;
+      break;
+    }
+    case 'virtual-contacts': {
+      const contacts = await prisma.contact.findMany({
+        where: { userId }, select: { id: true },
+      }).catch(() => []);
+      const c = contacts.find((x) => cuidToFolderId64(x.id) === messageId64);
+      if (c) foundId = c.id;
+      break;
+    }
+    case 'virtual-tasks': {
+      const tasks = await prisma.task.findMany({
+        where: { userId }, select: { id: true },
+      }).catch(() => []);
+      const t = tasks.find((x) => cuidToFolderId64(x.id) === messageId64);
+      if (t) foundId = t.id;
+      break;
+    }
+    case 'virtual-notes': {
+      const notes = await prisma.note.findMany({
+        where: { userId }, select: { id: true },
+      }).catch(() => []);
+      const n = notes.find((x) => cuidToFolderId64(x.id) === messageId64);
+      if (n) foundId = n.id;
+      break;
+    }
+  }
+  if (!foundId) {
+    return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_NOT_FOUND);
+  }
+
+  // Message-Handle anlegen — wir speichern die foundId im messageId-Feld
+  // (Prisma findUnique würde fehlschlagen — GetPropertiesAll-Pfad muss
+  // entsprechend dispatchen, v4.6.0 minimal: leerer Property-Set
+  // zurückgeben, Outlook zeigt dann zumindest die Liste).
+  const handle = await putRopObject(sessionToken, {
+    kind: 'message', userId, folderId: virtualFolderId, messageId: foundId,
+  });
+  if (handle === null) {
+    return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_INVALID_SESSION);
+  }
+
+  const w = new MapiWriter();
+  w.writeUint8(RopId.OpenMessage);
+  w.writeUint8(rop.outputHandleIndex ?? 0);
+  w.writeUint32(MapiStatusCode.SUCCESS);
+  w.writeUint8(0);                     // HasNamedProperties
+  w.writeUtf16String('');              // SubjectPrefix
+  w.writeUtf16String('');              // NormalizedSubject
+  w.writeUint16(0);                    // RecipientCount
+  w.writeUint16(0);                    // ColumnCount
+  w.writeUint8(0);                     // RowCount
+  log.info({ virtualFolderId, itemId: foundId }, 'openVirtualPimMessage OK');
   return w.toBuffer();
 }
 
