@@ -15,7 +15,7 @@
  */
 
 import type { Request, Response } from 'express';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
   MapiReader, MapiWriter,
@@ -27,6 +27,7 @@ import {
 import {
   createMapiSession, getMapiSession, deleteMapiSession,
 } from './session-store.js';
+import { notifyChannelFor } from './rop/notification.js';
 
 const log = createLogger('mapi:emsmdb');
 
@@ -37,7 +38,7 @@ const log = createLogger('mapi:emsmdb');
 const SERVER_DN_PREFIX =
   '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)';
 
-/** Long-Poll-Dauer für NotificationWait (ms). */
+/** Long-Poll-Dauer für NotificationWait (ms). Outlook akzeptiert bis 59 Min. */
 const NOTIFICATION_POLL_TIMEOUT_MS = 30_000;
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
@@ -207,13 +208,21 @@ async function handleDisconnect(req: Request, res: Response, requestId: string):
   res.status(200).send(w.toBuffer());
 }
 
-// ─── NotificationWait (Long-Poll) ────────────────────────────────────────────
+// ─── NotificationWait (Long-Poll, v4.5.0 Redis-Push) ─────────────────────────
 
 /**
  * Outlook hält diese Verbindung offen und wartet auf Server-Push-Events
- * (z.B. neue Mail). Wir respondieren nach `NOTIFICATION_POLL_TIMEOUT_MS` mit
- * `EventPending=false`. In v4.5.0 wird hier Redis-pub/sub für echtes Push
- * angebunden.
+ * (z.B. neue Mail). v4.5.0: echter Long-Poll mit Redis-pub/sub.
+ *
+ * Workflow:
+ *   1) Wenn keine Session: 401-equivalent.
+ *   2) Subscribe Redis-Channel `coremail:mapi:notify:<userId>`.
+ *   3) Race: (a) Event auf Channel → Response EventPending=true,
+ *           (b) Timeout NOTIFICATION_POLL_TIMEOUT_MS → EventPending=false.
+ *   4) Cleanup: unsubscribe + dispose dedicated Redis-Connection.
+ *
+ * Wir nutzen einen `duplicate()` des ioredis-Clients weil subscribe einen
+ * dedizierten Connection braucht (ioredis-Pflicht).
  */
 async function handleNotificationWait(req: Request, res: Response, requestId: string): Promise<void> {
   const headers = parseMapiHeaders(req);
@@ -224,19 +233,55 @@ async function handleNotificationWait(req: Request, res: Response, requestId: st
     return;
   }
 
-  // v4.0.0: Sofort-Response (kein echter Long-Poll), damit Outlook nicht
-  // hängt und wir keine Connection-Pool-Probleme bekommen.
-  // v4.5.0 wird hier Redis-pub/sub-Subscribe einbauen.
+  const userId = session.userId;
+  const channel = notifyChannelFor(userId);
+  const sub = getRedisClient().duplicate();
+
+  // Race zwischen Event und Timeout
+  const eventPending: boolean = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      void cleanup();
+      resolve(false);
+    }, NOTIFICATION_POLL_TIMEOUT_MS);
+
+    let settled = false;
+    const cleanup = async () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        await sub.unsubscribe(channel);
+      } catch { /* ignore */ }
+      try {
+        sub.disconnect();
+      } catch { /* ignore */ }
+    };
+
+    sub.on('message', (_ch, _msg) => {
+      void cleanup();
+      resolve(true);
+    });
+
+    sub.subscribe(channel).catch((err: unknown) => {
+      log.warn({ err, userId }, 'NotificationWait: Redis-subscribe fehlgeschlagen — sofort-Response');
+      void cleanup();
+      resolve(false);
+    });
+
+    // Wenn Outlook die Connection schließt, sauberer Abbruch
+    req.on('close', () => { void cleanup(); resolve(false); });
+  });
+
   const w = new MapiWriter();
   w.writeUint32(MapiStatusCode.SUCCESS);  // StatusCode
-  w.writeUint32(0);                       // EventPending = false (uint32 flag)
-  // Keine Events
+  w.writeUint32(eventPending ? 1 : 0);     // EventPending
 
   setMapiResponseHeaders(res, {
     requestId,
     pendingMs: NOTIFICATION_POLL_TIMEOUT_MS,
   });
   res.status(200).send(w.toBuffer());
+  log.debug({ userId, eventPending }, 'NotificationWait completed');
 }
 
 // ─── Router-Hook ─────────────────────────────────────────────────────────────

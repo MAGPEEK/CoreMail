@@ -403,6 +403,17 @@ export async function storeInboundMessage(
         isJunk: opts.toJunk,
       }),
     );
+    // v4.5.0: parallel publish auf MAPI-Notify-Channel für native Outlook-Push
+    await redis.publish(
+      `coremail:mapi:notify:${notifyUserId}`,
+      JSON.stringify({
+        kind: 'NewMail',
+        userId: notifyUserId,
+        folderId: ruleFolderId,
+        messageId: message.id,
+        subject: parsed.subject,
+      }),
+    ).catch(() => { /* MAPI optional, non-fatal */ });
   }
 
   // MAIL_FLOW — Nachrichtenablaufverfolgung
