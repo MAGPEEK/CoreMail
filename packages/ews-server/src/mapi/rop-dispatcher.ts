@@ -36,6 +36,13 @@ import {
   handleRopOpenStream, handleRopReadStream, handleRopGetStreamSize,
   handleRopWriteStream, handleRopCommitStream,
 } from './rop/stream.js';
+import {
+  handleRopGetAttachmentTable, handleRopOpenAttachment, handleRopCreateAttachment,
+  handleRopDeleteAttachment, handleRopSaveChangesAttachment,
+} from './rop/attachment.js';
+import {
+  handleRopDeleteMessages, handleRopMoveCopyMessages,
+} from './rop/folder-ops.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -164,10 +171,23 @@ async function dispatchOne(
     case RopId.ModifyRecipients:
       return handleRopModifyRecipients(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.4.0+ Phasen: TODO ────────────────────────────────────────────────
+    // ── v4.4.0 — Attachments + Move/Delete ──────────────────────────────────
     case RopId.GetAttachmentTable:
+      return handleRopGetAttachmentTable(rop, sessionToken, serverObjectHandles);
     case RopId.OpenAttachment:
+      return handleRopOpenAttachment(rop, sessionToken, serverObjectHandles);
     case RopId.CreateAttachment:
+      return handleRopCreateAttachment(rop, sessionToken, serverObjectHandles);
+    case RopId.DeleteAttachment:
+      return handleRopDeleteAttachment(rop, sessionToken, serverObjectHandles);
+    case RopId.SaveChangesAttachment:
+      return handleRopSaveChangesAttachment(rop, sessionToken, serverObjectHandles);
+    case RopId.DeleteMessages:
+      return handleRopDeleteMessages(rop, sessionToken, serverObjectHandles);
+    case RopId.MoveCopyMessages:
+      return handleRopMoveCopyMessages(rop, sessionToken, serverObjectHandles);
+
+    // ── v4.5.0+ Phasen: TODO ────────────────────────────────────────────────
     case RopId.RegisterNotification:
     default: {
       const b = new RopResponseBuilder();

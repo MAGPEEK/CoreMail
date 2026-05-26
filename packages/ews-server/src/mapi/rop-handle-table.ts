@@ -35,7 +35,8 @@ export type RopObject =
         address: string;
       }>;
     }
-  | { kind: 'table';   userId: string; tableType: 'hierarchy' | 'contents';
+  | { kind: 'table';   userId: string; tableType: 'hierarchy' | 'contents' | 'attachments';
+                       /** Bei 'attachments': MessageId statt FolderId. */
                        parentFolderId: string; columns?: number[] /* property-tags */ }
   | { kind: 'stream';  userId: string; messageId: string | null;
                        /** Optional: für Stream auf einer Draft-Message (v4.3.0 OpenStream → WriteStream → CommitStream) */
@@ -43,7 +44,15 @@ export type RopObject =
                        propertyTag: number;
                        buffer: Buffer; offset: number;
                        writable?: boolean }
-  | { kind: 'attachment'; userId: string; messageId: string; attachmentId: string };
+  | { kind: 'attachment'; userId: string; messageId: string;
+      /** Bei bestehender Attachment: ID des DB-Records. Null für neue Attachment (v4.4.0 RopCreateAttachment). */
+      attachmentId: string | null;
+      /** Attachment-Index innerhalb der Message (Outlook-AttachmentNum). */
+      attachNum: number;
+      /** Pending-Properties + Buffer für Compose-Workflow (v4.4.0). */
+      pendingProperties?: Record<string, unknown>;
+      pendingBuffer?: Buffer;
+    };
 
 /**
  * Liest das Object aus der Session-State HandleTable.

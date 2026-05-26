@@ -24,25 +24,85 @@ const log = createLogger('mapi:rop:stream');
 
 const MAX_STREAM_CHUNK_BYTES = 30_000;     // Outlook erwartet Chunks ≤ 32KB
 
-/** v4.2.0: RopOpenStream */
+/** v4.2.0+v4.4.0: RopOpenStream auf Message oder Attachment */
 export async function handleRopOpenStream(
   rop: RopRequest,
   sessionToken: string,
   serverObjectHandles: number[],
 ): Promise<Buffer> {
   const input = await resolveHandleIndex(sessionToken, serverObjectHandles, rop.inputHandleIndex);
-  if (!input || input.object.kind !== 'message') {
+  if (!input) {
     return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
-  if (input.object.messageId === null) {
-    // Draft noch nicht persistiert — v4.3.0 erlaubt OpenStream auf Draft
-    return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_NOT_FOUND);
-  }
-  const messageId: string = input.object.messageId;
 
   const r = new MapiReader(rop.payload);
   const propertyTag = r.readUint32();
-  r.readUint8();                        // OpenModeFlags
+  const openMode = r.readUint8();        // 0=ReadOnly, 1=ReadWrite, 2=Create
+  const writable = openMode !== 0;
+
+  // ── v4.4.0: Attachment-Stream (PR_ATTACH_DATA_BIN) ─────────────────────
+  if (input.object.kind === 'attachment') {
+    const att = input.object;
+    let buffer: Buffer = Buffer.alloc(0);
+    if (att.attachmentId !== null && propertyTag === PR.PR_ATTACH_DATA_BIN) {
+      const { loadAttachmentBytes } = await import('./attachment.js');
+      buffer = (await loadAttachmentBytes(att.attachmentId)) ?? Buffer.alloc(0);
+    } else if (writable) {
+      // RopCreateAttachment-Workflow: leerer Buffer für Outlook-Write
+      buffer = Buffer.isBuffer(att.pendingBuffer)
+        ? att.pendingBuffer
+        : Buffer.from((att.pendingBuffer as unknown as { data: number[] })?.data ?? []);
+    }
+
+    const handle = await putRopObject(sessionToken, {
+      kind: 'stream',
+      userId: att.userId,
+      messageId: att.messageId || null,
+      propertyTag,
+      buffer,
+      offset: 0,
+      writable,
+      parentMessageHandle: input.handle,    // wir nutzen das gleiche Feld auch für Attachment-Parent
+    });
+    if (handle === null) {
+      return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
+    }
+    const w = new MapiWriter();
+    w.writeUint8(RopId.OpenStream);
+    w.writeUint8(rop.outputHandleIndex ?? 0);
+    w.writeUint32(MapiStatusCode.SUCCESS);
+    w.writeUint32(buffer.length);
+    log.debug({ kind: 'attachment', writable, size: buffer.length, handle }, 'RopOpenStream(att) OK');
+    return w.toBuffer();
+  }
+
+  // ── Message-Stream (v4.2.0+v4.3.0) ─────────────────────────────────────
+  if (input.object.kind !== 'message') {
+    return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
+  }
+  // v4.3.0: Stream auf Draft (messageId === null) für Write-Compose erlauben
+  if (input.object.messageId === null) {
+    const handle = await putRopObject(sessionToken, {
+      kind: 'stream',
+      userId: input.object.userId,
+      messageId: null,
+      propertyTag,
+      buffer: Buffer.alloc(0),
+      offset: 0,
+      writable,
+      parentMessageHandle: input.handle,
+    });
+    if (handle === null) {
+      return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
+    }
+    const w = new MapiWriter();
+    w.writeUint8(RopId.OpenStream);
+    w.writeUint8(rop.outputHandleIndex ?? 0);
+    w.writeUint32(MapiStatusCode.SUCCESS);
+    w.writeUint32(0);
+    return w.toBuffer();
+  }
+  const messageId: string = input.object.messageId;
 
   // Lade den Property-Value aus DB
   const msg = await prisma.message.findUnique({
@@ -286,6 +346,7 @@ export async function handleRopCommitStream(
     }
   } else if (streamObj.parentMessageHandle !== undefined) {
     // Draft-Stream → in parent message-Handle's pendingProperties schreiben
+    // (oder Attachment-Stream → pendingBuffer)
     const parent = await getRopObject(sessionToken, streamObj.parentMessageHandle);
     if (parent && parent.kind === 'message') {
       const pending = { ...(parent.pendingProperties ?? {}) };
@@ -293,6 +354,20 @@ export async function handleRopCommitStream(
       await updateRopObject(sessionToken, streamObj.parentMessageHandle, {
         pendingProperties: pending,
       } as Partial<RopObject>);
+    } else if (parent && parent.kind === 'attachment') {
+      // v4.4.0: Attachment-Data-Stream → in pendingBuffer
+      if (streamObj.propertyTag === PR.PR_ATTACH_DATA_BIN) {
+        await updateRopObject(sessionToken, streamObj.parentMessageHandle, {
+          pendingBuffer: buf,
+        } as Partial<RopObject>);
+      } else {
+        // andere Properties (Filename, Mime) → pendingProperties
+        const pending = { ...(parent.pendingProperties ?? {}) };
+        pending[String(streamObj.propertyTag)] = stringValue ?? binaryValue?.toString('utf-8') ?? '';
+        await updateRopObject(sessionToken, streamObj.parentMessageHandle, {
+          pendingProperties: pending,
+        } as Partial<RopObject>);
+      }
     }
   }
 

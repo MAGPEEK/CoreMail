@@ -13,6 +13,84 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.4.0] — 2026-05-26 — MAPI/HTTP Phase 4: Attachments + Move/Delete
+
+### Added
+
+- **RopGetAttachmentTable** (`packages/ews-server/src/mapi/rop/attachment.ts`):
+  Erstellt ein Table-Object-Handle für die Attachments einer Message. Neuer
+  Tabellen-Typ `attachments` (in `RopObject.table.tableType`), bei dem
+  `parentFolderId` die MessageId enthält.
+
+- **RopOpenAttachment**: Lädt Attachment via Index (PR_ATTACH_NUM aus QueryRows),
+  erzeugt Attachment-Handle.
+
+- **RopCreateAttachment**: Legt Draft-Attachment-Handle an (`attachmentId=null`,
+  `pendingBuffer`, `pendingProperties`). Bei SaveChangesAttachment wird in
+  DB+MinIO persistiert. AttachmentId = nächster freier Index in der
+  Message-Attachment-Liste.
+
+- **RopDeleteAttachment**: Entfernt Attachment-DB-Record.
+
+- **RopSaveChangesAttachment**: SHA256-Hash, MinIO-Upload zu
+  `attachments/{messageId}/{sha256}`, DB-Insert (oder Update bei bestehender
+  Attachment) mit `filename/mimeType/size/sha256/storagePath/contentId`.
+
+- **RopDeleteMessages** (`packages/ews-server/src/mapi/rop/folder-ops.ts`):
+  Parst MessageId-Array (uint64-FNV-Hashes), löscht via `prisma.message.delete`,
+  dekrementiert Folder-Counter. Response liefert PartialCompletion-Flag.
+
+- **RopMoveCopyMessages**: Source-Handle (input) + Destination-Handle (output),
+  parst WantCopy-Flag + MessageId-Array. Move = Folder-Update, Copy = duplicate
+  Message via `prisma.message.create` mit allen Original-Feldern. Updates
+  Folder-Counter (Source -= moved, Dest += moved).
+
+- **OpenStream auf Attachment**: Erweiterung von `handleRopOpenStream` —
+  bei `kind === 'attachment'` wird PR_ATTACH_DATA_BIN aus MinIO via
+  `loadAttachmentBytes()` geladen (oder leer für Draft-Attachment).
+  WriteStream akkumuliert in `pendingBuffer`, CommitStream persistiert
+  via SaveChangesAttachment.
+
+- **ROP-Codec**: Korrekte Payload-Parsing für GetAttachmentTable (TableFlags),
+  OpenAttachment (AttachmentId uint32), CreateAttachment, DeleteAttachment,
+  SaveChangesAttachment, DeleteMessages (WantAsync + NotifyNonRead +
+  MessageIdCount + MessageIds[uint64]), MoveCopyMessages (DestHandleIndex +
+  WantAsync + WantCopy + MessageIds[uint64]).
+
+- **RopObject erweitert**:
+  - `attachment`-Variante mit `attachmentId:string|null`, `attachNum`,
+    `pendingProperties`, `pendingBuffer`
+  - `table`-Variante mit neuem `tableType:'attachments'`
+
+- **table.ts erweitert**: `attachmentToPropRow()` mappt Attachment →
+  PR_ATTACH_NUM/LONG_FILENAME_W/MIME_TAG_W/SIZE/METHOD/CONTENT_ID_W.
+  GetRowCount unterstützt 'attachments'-Tabellen.
+
+- **buildMessagePropertyList erweitert**: Lädt `_count.attachments` aus Prisma
+  und setzt `PR_HAS_ATTACH=true` + `PR_MESSAGE_FLAGS` HasAttach-Bit (0x10).
+
+- **SubmitMessage erweitert**: Lädt `msg.attachments` (filename/mimeType/
+  storagePath/size) aus DB und füllt `OutboundJob.message.attachments` mit
+  `{filename, minioPath, contentType, size}` — der existierende Worker baut
+  RFC-5322 mit echten Anhängen via `buildRawFromMessage`.
+
+- **Neue Property-Tags**: PR_ATTACH_NUM, PR_ATTACH_METHOD,
+  PR_ATTACH_LONG_FILENAME_W, PR_ATTACH_FILENAME_W, PR_ATTACH_MIME_TAG_W,
+  PR_ATTACH_SIZE, PR_ATTACH_CONTENT_ID_W, PR_ATTACH_DATA_BIN,
+  PR_ATTACHMENT_LINKID.
+
+### Outlook-Verhalten nach v4.4.0
+
+Anhang an neue Mail anhängen (Drag&Drop oder „Datei einfügen") funktioniert
+end-to-end — gespeichert in MinIO, beim Senden in Outbound-Queue mit
+`minioPath` weitergereicht, Worker lädt + signiert + sendet. Empfangene Mails
+mit Attachments: Outlook zeigt Paperclip-Icon, Anhang-Liste, Doppelklick
+öffnet Datei. Mails verschieben (Drag-and-Drop in andere Ordner) +
+Mehrfach-Lösch über Delete-Taste funktioniert. Push-Notifications bei neuer
+Mail: noch nicht (v4.5.0).
+
+---
+
 ## [4.3.0] — 2026-05-26 — MAPI/HTTP Phase 3: Mail-Schreiben + Senden
 
 ### Added
