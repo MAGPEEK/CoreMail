@@ -123,6 +123,10 @@ const EWS_URL = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
+// v3.18.35: Autodiscover hat einen EIGENEN Service auf Port 8081 — nicht
+// zu EWS routen, sonst antwortet Express mit "Cannot POST /Autodiscover/
+// Autodiscover.xml" und Outlook LTSC verbindet nicht.
+const AUTODISCOVER_URL = process.env['AUTODISCOVER_SERVICE_URL'] ?? 'http://localhost:8081';
 
 function internalProxy(targetBase: string): express.RequestHandler {
   const proxy = createProxyMiddleware({
@@ -147,8 +151,9 @@ function internalProxy(targetBase: string): express.RequestHandler {
 app.use('/EWS',          internalProxy(EWS_URL));
 app.use('/mapi',         internalProxy(EWS_URL));
 app.use('/OAB',          internalProxy(EWS_URL));
-app.use('/Autodiscover', internalProxy(EWS_URL));
-app.use('/autodiscover', internalProxy(EWS_URL));
+// v3.18.35: Autodiscover hat einen eigenen Service (Port 8081), nicht EWS.
+app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
+app.use('/autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
 app.use('/dav',          internalProxy(DAV_URL));
 
@@ -388,6 +393,16 @@ async function start() {
     log.warn({ err }, 'Protocol cert state sync failed — check certificates manually'),
   );
 
+  // v3.18.35: URL-Synchronisation. Wenn der Admin publicHostname geändert hat
+  // (z.B. von mail.local zu mail.<echte-domain>), wurden die abgeleiteten
+  // URLs (ewsUrl, owaUrl, easUrl, autodiscoverBase) nicht mit-migriert.
+  // Outlook-Autodiscover liefert dann veraltete Adressen → Outlook kann sich
+  // nicht verbinden. Diese Migration korrigiert URLs die noch `mail.local`
+  // enthalten oder den Default-Port `:8080` (intern!) führen.
+  void syncAutodiscoverUrls().catch(err =>
+    log.warn({ err }, 'Autodiscover URL sync failed — Outlook-Autodiscover prüfen'),
+  );
+
   // ── Stale PENDING/RENEWING Zertifikate bereinigen ─────────────────────────
   // Nach einem Container-Neustart können Certs in PENDING oder RENEWING stecken
   // (der ACME-Hintergrundprozess wurde durch den Neustart gekillt).
@@ -447,6 +462,90 @@ async function syncProtocolCertState(): Promise<void> {
     log.info('Startup sync: orphaned server_settings.tlsCert cleared — SMTP/IMAP/POP3 using self-signed');
   } catch (err) {
     log.error({ err }, 'syncProtocolCertState failed');
+  }
+}
+
+/**
+ * v3.18.35: Auto-Korrektur veralteter Autodiscover-/EWS-URLs.
+ *
+ * Hintergrund: Initiale ServerSettings-Defaults im Schema sind `mail.local:8080`.
+ * Wenn der Admin `publicHostname` auf z.B. `mail.example.com` umstellt, werden
+ * `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase` aber NICHT mit-migriert →
+ * Outlook-Autodiscover liefert `mail.local:8080`-URLs zurück, die von außen
+ * unerreichbar sind → Outlook „Da hat etwas nicht geklappt".
+ *
+ * Diese Funktion läuft beim Startup und korrigiert die URL-Felder, wenn:
+ *   - publicHostname != 'mail.local' (also tatsächlich konfiguriert)
+ *   - mindestens ein URL-Feld noch `mail.local` enthält ODER auf `:8080` zeigt
+ *
+ * Annahmen: HTTPS aktiv (Standard für Outlook), Standard-Port 443.
+ */
+async function syncAutodiscoverUrls(): Promise<void> {
+  try {
+    const s = await prisma.serverSettings.findUnique({
+      where: { id: 'singleton' },
+      select: {
+        publicHostname: true,
+        useHttps: true,
+        httpPort: true,
+        ewsUrl: true,
+        owaUrl: true,
+        easUrl: true,
+        autodiscoverBase: true,
+      },
+    });
+    if (!s) return;
+    if (s.publicHostname === 'mail.local' || s.publicHostname === '') {
+      log.debug('publicHostname noch default — kein URL-Sync');
+      return;
+    }
+
+    const needsSync =
+      /mail\.local/i.test(s.ewsUrl) ||
+      /mail\.local/i.test(s.owaUrl) ||
+      /mail\.local/i.test(s.easUrl) ||
+      /mail\.local/i.test(s.autodiscoverBase) ||
+      /:8080/.test(s.ewsUrl) ||
+      /:8080/.test(s.owaUrl) ||
+      /:8080/.test(s.easUrl) ||
+      /:8080/.test(s.autodiscoverBase);
+
+    if (!needsSync) return;
+
+    const proto = s.useHttps ? 'https' : 'http';
+    const port = s.httpPort;
+    const portSuffix = (s.useHttps && port === 443) || (!s.useHttps && port === 80)
+      ? ''
+      : `:${port}`;
+    const base = `${proto}://${s.publicHostname}${portSuffix}`;
+
+    // Autodiscover-Hostname leitet sich von Root-Domain ab (Microsoft-Spec):
+    //   mail.example.com → autodiscover.example.com
+    //   example.com      → autodiscover.example.com
+    const labels = s.publicHostname.split('.');
+    const adHost = s.publicHostname.startsWith('autodiscover.')
+      ? s.publicHostname
+      : `autodiscover.${labels.length >= 3 ? labels.slice(1).join('.') : s.publicHostname}`;
+    const adBase = `${proto}://${adHost}${portSuffix}`;
+
+    await prisma.serverSettings.update({
+      where: { id: 'singleton' },
+      data: {
+        ewsUrl:           `${base}/EWS/Exchange.asmx`,
+        owaUrl:           `${base}/owa/`,
+        easUrl:           `${base}/Microsoft-Server-ActiveSync`,
+        autodiscoverBase: adBase,
+      },
+    });
+    log.warn(
+      { publicHostname: s.publicHostname, base, adBase },
+      'Autodiscover-URLs auto-korrigiert (alter Default mail.local:8080 → publicHostname-basiert)',
+    );
+
+    // Settings-Cache des autodiscover-Service invalidieren (Redis-Channel)
+    await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'autodiscover-urls' })).catch(() => undefined);
+  } catch (err) {
+    log.error({ err }, 'syncAutodiscoverUrls failed');
   }
 }
 

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.34`
+**Aktuelle Version**: `3.18.35`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.34 — Highlights
+## Aktuelle Version 3.18.35 — Highlights
+
+**v3.18.35** — Outlook LTSC Verbindungs-Fix. User-Report: „Outlook LTSC konnte keine Verbindung aufbauen — Da hat etwas nicht geklappt". Drei zusammenhängende Probleme: (1) API-Gateway routete `/Autodiscover/Autodiscover.xml` zum **EWS-Server** (Port 8080), aber der autodiscover-Server läuft auf Port 8081 — Outlook bekam Express-Default-404. Fix: neue env `AUTODISCOVER_SERVICE_URL`, Routes `/Autodiscover` + `/autodiscover` zum richtigen Service. (2) `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase` in `ServerSettings` zeigten noch auf `mail.local:8080` (Schema-Default), obwohl `publicHostname` längst auf die echte Domain umgestellt war — Autodiscover lieferte Outlook unerreichbare interne URLs. Fix: Startup-Migration `syncAutodiscoverUrls()` korrigiert stale URLs automatisch beim api-gateway-Start; PUT /admin/servers/settings ebenfalls. Berechnet aus `publicHostname` + `useHttps` + `httpPort`; Autodiscover-Host aus Root-Domain (Microsoft-Spec). (3) Autodiscover-Service hatte 60s-Cache ohne Redis-Subscription — Settings-Änderungen wurden bis zu 60s nicht sichtbar. Fix: Subscription auf `coremail:settings:reload` für sofortige Cache-Invalidation.
 
 **v3.18.34** — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup. (1) KRITISCHER Audit-Bug: `req.path` wurde im `res.on('finish')`-Callback gelesen, aber Express hatte den Pfad da bereits beim Sub-Router-Descend mutiert → Audit zeigte CUIDs als Aktionen (`cmplad51y0…post`). Fix: Path am Middleware-Eintritt in `capturedPath` speichern. Plus neuer CUID-bewusster `buildAction()` — CUIDs werden aus Action-String herausgefiltert + separat als `targetId` gespeichert. Aus `DELETE /backups/jobs/<cuid>` wird jetzt `action='backups.jobs.delete'` mit `targetId=<cuid>`. 40+ neue Übersetzungen im ACTION_MAP für Backups-Subroutes, Zertifikate-Subroutes (activate-https/activate-protocol), Settings-Subsections (security/org/mail/maintenance), Gruppen-Members, Aliase, Shared Mailboxes, Transport Rules, Quarantine, Queues, OAuth-Clients. (2) Backup-Service: Startup-Orphan-Cleanup markiert RUNNING/PENDING/RETRYING/PROCESSING/SCHEDULED-Jobs älter als 60s als FAILED nach Container-Restart („läuft endlos"-UI verhindert). Plus Watchdog-Timer (5min-Interval): Jobs > 30min werden als FAILED markiert. (3) Backup-Zeitplan-Editor: minutengenau (0..59) statt 5er-Schritt-Raster. (4) Rotes „Anomalien erkannt"-Banner aus Audit-Log entfernt — war verwirrend (zeigte eigene Settings-Änderungen als „kritische Aktion"); Backend-Endpoint `/admin/audit-log/anomalies` bleibt für Export-Zwecke.
 
@@ -753,4 +755,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.34 — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup; v3.18.33 — Externe Kontakte komplett entfernt; v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.35 — Outlook LTSC Verbindungs-Fix; v3.18.34 — Audit-Log-Path-Fix + Backup-Watchdog; v3.18.33 — Externe Kontakte komplett entfernt)*

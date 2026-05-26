@@ -59,6 +59,32 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
   }
 
   try {
+    // v3.18.35: Wenn der Admin nur publicHostname/useHttps/httpPort ändert ohne
+    // die abgeleiteten URLs (ewsUrl/owaUrl/easUrl/autodiscoverBase) anzupassen,
+    // wären diese veraltet und Outlook-Autodiscover lieferte falsche Adressen.
+    // Wir prüfen: enthält der Request alte mail.local-URLs ODER zeigen URLs noch
+    // auf Port 8080 obwohl httpPort != 8080? Dann auto-derive aus publicHostname.
+    const requestUrls = [parsed.data.ewsUrl, parsed.data.owaUrl, parsed.data.easUrl, parsed.data.autodiscoverBase];
+    const hasStaleUrls = requestUrls.some((u) => /mail\.local/i.test(u)) ||
+                         (parsed.data.httpPort !== 8080 && requestUrls.some((u) => /:8080/.test(u)));
+    if (hasStaleUrls) {
+      const proto = parsed.data.useHttps ? 'https' : 'http';
+      const portSuffix = (parsed.data.useHttps && parsed.data.httpPort === 443) ||
+                          (!parsed.data.useHttps && parsed.data.httpPort === 80)
+        ? ''
+        : `:${parsed.data.httpPort}`;
+      const base = `${proto}://${parsed.data.publicHostname}${portSuffix}`;
+      const labels = parsed.data.publicHostname.split('.');
+      const adHost = parsed.data.publicHostname.startsWith('autodiscover.')
+        ? parsed.data.publicHostname
+        : `autodiscover.${labels.length >= 3 ? labels.slice(1).join('.') : parsed.data.publicHostname}`;
+      parsed.data.ewsUrl = `${base}/EWS/Exchange.asmx`;
+      parsed.data.owaUrl = `${base}/owa/`;
+      parsed.data.easUrl = `${base}/Microsoft-Server-ActiveSync`;
+      parsed.data.autodiscoverBase = `${proto}://${adHost}${portSuffix}`;
+      log.info({ publicHostname: parsed.data.publicHostname }, 'Auto-derived URLs from publicHostname (stale mail.local detected)');
+    }
+
     const settings = await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
       create: { id: 'singleton', ...parsed.data },
@@ -66,7 +92,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
     });
     log.info({ hostname: parsed.data.publicHostname }, 'Server settings updated');
 
-    // Notify SMTP / IMAP / POP3 servers to pick up new hostname
+    // Notify SMTP / IMAP / POP3 + autodiscover services to pick up new hostname
     try {
       await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'hostname' }));
     } catch (pubErr) {
