@@ -27,6 +27,15 @@ import {
 import {
   handleRopSetColumns, handleRopQueryRows, handleRopGetRowCount, handleRopRelease,
 } from './rop/table.js';
+import {
+  handleRopOpenMessage, handleRopGetPropertiesAll, handleRopGetPropertiesSpecific,
+  handleRopCreateMessage, handleRopSetProperties, handleRopSaveChangesMessage,
+  handleRopSubmitMessage,
+} from './rop/message.js';
+import {
+  handleRopOpenStream, handleRopReadStream, handleRopGetStreamSize,
+  handleRopWriteStream, handleRopCommitStream,
+} from './rop/stream.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -125,17 +134,36 @@ async function dispatchOne(
     case RopId.Release:
       return handleRopRelease(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.2.0+ Phasen: TODO ────────────────────────────────────────────────
+    // ── v4.2.0 — Mail-Lesen ─────────────────────────────────────────────────
     case RopId.OpenMessage:
+      return handleRopOpenMessage(rop, sessionToken, serverObjectHandles);
     case RopId.GetPropertiesAll:
+      return handleRopGetPropertiesAll(rop, sessionToken, serverObjectHandles);
     case RopId.GetPropertiesSpecific:
+      return handleRopGetPropertiesSpecific(rop, sessionToken, serverObjectHandles);
     case RopId.OpenStream:
+      return handleRopOpenStream(rop, sessionToken, serverObjectHandles);
     case RopId.ReadStream:
-    case RopId.GetAttachmentTable:
+      return handleRopReadStream(rop, sessionToken, serverObjectHandles);
+    case RopId.GetStreamSize:
+      return handleRopGetStreamSize(rop, sessionToken, serverObjectHandles);
+
+    // ── v4.3.0 — Mail-Schreiben + Senden (Stubs returning ecNotSupported) ──
     case RopId.CreateMessage:
+      return handleRopCreateMessage(rop, sessionToken, serverObjectHandles);
     case RopId.SetProperties:
+      return handleRopSetProperties(rop, sessionToken, serverObjectHandles);
     case RopId.SaveChangesMessage:
+      return handleRopSaveChangesMessage(rop, sessionToken, serverObjectHandles);
     case RopId.SubmitMessage:
+      return handleRopSubmitMessage(rop, sessionToken, serverObjectHandles);
+    case RopId.WriteStream:
+      return handleRopWriteStream(rop, sessionToken, serverObjectHandles);
+    case RopId.CommitStream:
+      return handleRopCommitStream(rop, sessionToken, serverObjectHandles);
+
+    // ── v4.4.0+ Phasen: TODO ────────────────────────────────────────────────
+    case RopId.GetAttachmentTable:
     case RopId.ModifyRecipients:
     case RopId.OpenAttachment:
     case RopId.CreateAttachment:

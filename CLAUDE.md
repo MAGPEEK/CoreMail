@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `4.1.0` (MAPI/HTTP Phase 1: ROP-Infrastruktur + Logon + Folder-Browse)
+**Aktuelle Version**: `4.2.0` (MAPI/HTTP Phase 2: Mail-Lesen — OpenMessage + Stream-Read)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 4.1.0 — Highlights (MAPI/HTTP Phase 1)
+## Aktuelle Version 4.2.0 — Highlights (MAPI/HTTP Phase 2)
+
+**v4.2.0** — MAPI/HTTP Phase 2: Mail-Lesen (OpenMessage + Stream-Read). Bauen auf v4.1.0-ROP-Infrastruktur: jetzt kann Outlook nach Logon nicht nur die Folder-Hierarchie sehen, sondern auch einzelne Mails öffnen und anzeigen. (1) **RopOpenMessage** (`rop/message.ts`): Folder-Lookup über CUID→uint64-FNV-1a-Hash (entry-id.ts), Message via Prisma, Message-Handle in Session-Handle-Table. (2) **RopGetPropertiesAll** + **RopGetPropertiesSpecific**: vollständiges Property-Set für Outlook-Mail-Anzeige — PR_SUBJECT_W, PR_SENDER_*, PR_SENT_REPRESENTING_*, PR_DISPLAY_TO/CC/BCC_W, PR_MESSAGE_DELIVERY_TIME/CLIENT_SUBMIT_TIME, PR_MESSAGE_FLAGS (Read/Unsent/HasAttach), PR_MESSAGE_SIZE, PR_BODY_W (UTF-16-LE), PR_HTML (UTF-8 bytes), PR_MESSAGE_CLASS_W (IPM.Note), PR_HAS_ATTACH, PR_INTERNET_MESSAGE_ID_W. `buildMessagePropertyList` mappt Prisma-Message → MAPI-Tagged-Properties. (3) **RopOpenStream** (`rop/stream.ts`): öffnet Stream auf Message-Property, lädt kompletten Wert in Buffer, Response liefert StreamSize. (4) **RopReadStream**: chunked Read mit Offset-Tracking (Redis-persistiert), max 30 KB pro Chunk (MAX_STREAM_CHUNK_BYTES — Outlook erwartet <32 KB), Request-Format `Uint16 ByteCount | 0xBABE+Uint32 ExtendedByteCount`. (5) **RopGetStreamSize**: liefert Buffer-Größe. (6) **ROP-Codec**: Parsing für alle v4.2.0+v4.3.0+v4.4.0+ ROPs ergänzt; v4.3.0-Stubs (CreateMessage, SetProperties, SaveChangesMessage, SubmitMessage, WriteStream, CommitStream) parsen Payload korrekt und liefern aktuell ecNotSupported, kommen in v4.3.0 als echte Handler. (7) **RopId** ergänzt: MoveCopyMessages (0x33) + DeleteMessages (0x1E) für v4.4.0-Vorbereitung. **Outlook-Verhalten**: Mail-Liste sichtbar + einzelne Mail mit Subject/Sender/Body lesbar; Schreiben/Senden/Attachments/Push folgt in v4.3.0-v4.5.0.
 
 **v4.1.0** — MAPI/HTTP Phase 1: ROP-Infrastruktur + Logon + Folder-Browse. Bauen auf v4.0.0-Foundation: voller ROP-Stream-Codec mit RopId/Property-Tags/EntryID-Helpers, ROP-Dispatcher der binäre Execute-Bodies parsed, RopLogon-Handler (lädt User aus Prisma, baut Folder-IDs-Array für IPM-Subtree/Inbox/Drafts/Sent/Trash, erstellt MailboxGuid+ReplGuid), RopOpenFolder/GetHierarchyTable/GetContentsTable, RopSetColumns/QueryRows/GetRowCount/Release. Property-Codec mit FILETIME-Konvertierung. 16 Codec-Tests grün. Skeleton-Files für v4.2-v4.7 mit detaillierten Plänen + Property-Mappings. Mit v4.1.0 kann Outlook nach Connect Logon machen, Folder-Hierarchie sehen — Mail-Lesen kommt in v4.2.0.
 
@@ -769,4 +771,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v4.1.0 — MAPI/HTTP Phase 1 ROP-Infrastruktur + Logon + Folder-Browse; v4.0.0 — Foundation; v3.18.39 — Outlook EXCH+EXPR raus)*
+*Letzte Aktualisierung: 2026-05-26 (v4.2.0 — MAPI/HTTP Phase 2: Mail-Lesen OpenMessage+Stream-Read; v4.1.0 — Phase 1 ROP-Infra+Logon+Folder; v4.0.0 — Foundation)*

@@ -13,6 +13,66 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.2.0] — 2026-05-26 — MAPI/HTTP Phase 2: Mail-Lesen (OpenMessage + Stream-Read)
+
+### Added
+
+- **RopOpenMessage** (`packages/ews-server/src/mapi/rop/message.ts`):
+  Öffnet eine Message anhand `FolderId` + `MessageId` aus der Contents-Table,
+  legt einen Message-Handle in der Session-Handle-Table ab. Response liefert
+  ReturnValue + HasNamedProperties + SubjectPrefix/NormalizedSubject + Recipients/Columns/Rows.
+  Folder-ID-Lookup über CUID→uint64-FNV-1a-Hash (siehe `entry-id.ts`).
+
+- **RopGetPropertiesAll** + **RopGetPropertiesSpecific**: Beide Handler liefern
+  die vollständige Liste aller Message-Properties (oder eine vom Client
+  spezifizierte Auswahl). `buildMessagePropertyList` mappt Prisma-`Message` →
+  MAPI-Properties: PR_SUBJECT_W, PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W,
+  PR_SENT_REPRESENTING_*, PR_DISPLAY_TO_W/CC_W/BCC_W, PR_MESSAGE_DELIVERY_TIME,
+  PR_CLIENT_SUBMIT_TIME, PR_MESSAGE_FLAGS, PR_MESSAGE_SIZE, PR_BODY_W, PR_HTML,
+  PR_MESSAGE_CLASS_W (IPM.Note), PR_HAS_ATTACH, PR_INTERNET_MESSAGE_ID_W,
+  PR_PRIORITY, PR_IMPORTANCE.
+
+- **RopOpenStream** (`packages/ews-server/src/mapi/rop/stream.ts`):
+  Öffnet einen Stream auf eine Message-Property. PR_BODY_W (UTF-16-LE),
+  PR_HTML (UTF-8), PR_SUBJECT_W (UTF-16-LE). Property-Wert wird komplett
+  in den Stream-Object-Buffer geladen, Response liefert StreamSize.
+
+- **RopReadStream**: Chunked Read mit Offset-Tracking in der Session.
+  Max 30 KB pro Chunk (MAX_STREAM_CHUNK_BYTES) — Outlook erwartet
+  Antworten unter 32 KB. ReadStream-Request-Format: Uint16 ByteCount,
+  oder 0xBABE-Marker + Uint32 ExtendedByteCount für große Reads.
+
+- **RopGetStreamSize**: Liefert Buffer-Größe in Bytes.
+
+- **ROP-Codec-Erweiterung** (`packages/ews-server/src/mapi/rop-codec.ts`):
+  Parsing für OpenMessage, GetPropertiesAll, GetPropertiesSpecific,
+  OpenStream, ReadStream, GetStreamSize, CreateMessage, SaveChangesMessage,
+  SetProperties, SubmitMessage, WriteStream, CommitStream, SetMessageReadFlag,
+  SetReadFlags. Plus Stub-Parsing für v4.4+ ROPs (MoveCopyMessages,
+  DeleteMessages, OpenAttachment, CreateAttachment, RegisterNotification,
+  ModifyRecipients, ReadRecipients, RemoveAllRecipients,
+  GetPropertyIdsFromNames, GetNamesFromPropertyIds) — alle konsumieren
+  ihren Payload und werden vom Dispatcher mit ecNotSupported beantwortet,
+  so dass der ROP-Stream nicht abreißt.
+
+- **ROP-Dispatcher-Erweiterung**: Switch-Cases für alle v4.2.0-Handler
+  (echte Implementierung) + v4.3.0-Stubs (CreateMessage, SetProperties,
+  SaveChangesMessage, SubmitMessage, WriteStream, CommitStream — alle
+  return ecNotSupported, werden in v4.3.0 implementiert).
+
+- **RopId**: `MoveCopyMessages` (0x33) + `DeleteMessages` (0x1E) ergänzt
+  in `rop-types.ts` (Vorbereitung v4.4.0).
+
+### Outlook-Verhalten nach v4.2.0
+
+Profile-Build (Logon + Folder-Browse aus v4.1.0) ist unverändert. Neu:
+Outlook kann jetzt die Liste von Mails in der Inbox öffnen UND eine
+einzelne Mail mit Subject, Sender, Body anzeigen. Schreiben (Reply/Forward/
+Compose), Senden, Attachments, Notifications: noch ecNotSupported, kommen
+in v4.3.0 (Mail-Schreiben) + v4.4.0 (Attachments) + v4.5.0 (Push).
+
+---
+
 ## [4.1.0] — 2026-05-26 — MAPI/HTTP Phase 1: ROP-Infrastruktur + Logon + Folder-Browse
 
 ### Added
