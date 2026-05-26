@@ -248,6 +248,19 @@ export const PR = {
   PR_CONVERSATION_INDEX:    makePropTag(0x0071, PropType.Binary),
   PR_READ_RECEIPT_REQUESTED: makePropTag(0x0029, PropType.Boolean),
 
+  // ── Attachment Properties (MS-OXCMSG §2.2.2) ──────────────────────────
+  PR_ATTACH_NUM:                makePropTag(0x0E21, PropType.Int32),
+  PR_ATTACH_METHOD:             makePropTag(0x3705, PropType.Int32),
+  PR_ATTACH_LONG_FILENAME_W:    makePropTag(0x3707, PropType.Unicode),
+  PR_ATTACH_FILENAME_W:         makePropTag(0x3704, PropType.Unicode),
+  PR_ATTACH_MIME_TAG_W:         makePropTag(0x370E, PropType.Unicode),
+  PR_ATTACH_SIZE:               makePropTag(0x0E20, PropType.Int32),
+  PR_ATTACH_CONTENT_ID_W:       makePropTag(0x3712, PropType.Unicode),
+  PR_ATTACH_DATA_BIN:           makePropTag(0x3701, PropType.Binary),
+  PR_ATTACH_DATA_OBJ:           makePropTag(0x3701, PropType.Object),
+  PR_ATTACHMENT_LINKID:         makePropTag(0x7FFA, PropType.Int32),
+  // PR_DISPLAY_NAME_W (0x3001) wird auch für Attachment-DisplayName verwendet.
+
   // ── Recipient Properties (MS-OXOABK / MS-OXOMSG) ───────────────────────
   PR_EMAIL_ADDRESS_W:           makePropTag(0x3003, PropType.Unicode),
   PR_ADDRTYPE_W:                makePropTag(0x3002, PropType.Unicode),

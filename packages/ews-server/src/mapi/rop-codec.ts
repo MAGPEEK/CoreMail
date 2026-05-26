@@ -395,14 +395,108 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
-      // v4.4.0 — Attachments + Move/Delete
-      case RopId.GetAttachmentTable:
-      case RopId.OpenAttachment:
-      case RopId.CreateAttachment:
-      case RopId.DeleteAttachment:
-      case RopId.SaveChangesAttachment:
-      case RopId.MoveCopyMessages:
-      case RopId.DeleteMessages:
+      // v4.4.0 — Attachments
+      case RopId.GetAttachmentTable: {
+        // LogonId(1) | InputHandleIndex(1) | OutputHandleIndex(1) | TableFlags(1)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.OpenAttachment: {
+        // LogonId(1) | InputHandleIndex(1) | OutputHandleIndex(1) | OpenAttachmentFlags(1) | AttachmentId(uint32)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8(); reader.readUint32();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.CreateAttachment: {
+        // LogonId(1) | InputHandleIndex(1) | OutputHandleIndex(1)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.alloc(0),
+        });
+        continue;
+      }
+
+      case RopId.DeleteAttachment: {
+        // LogonId(1) | InputHandleIndex(1) | AttachmentId(uint32)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint32();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.SaveChangesAttachment: {
+        // LogonId(1) | InputHandleIndex(1) | ResponseHandleIndex(1) | SaveFlags(1)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8(); reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      // v4.4.0 — Move + Delete
+      case RopId.DeleteMessages: {
+        // LogonId(1) | InputHandleIndex(1) | WantAsynchronous(1) | NotifyNonRead(1)
+        //   | MessageIdCount(uint16) | MessageIds(uint64[])
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8(); reader.readUint8();
+        const idCount = reader.readUint16();
+        for (let i = 0; i < idCount; i++) reader.readUint64();
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.MoveCopyMessages: {
+        // LogonId(1) | InputHandleIndex(1) | DestinationHandleIndex(1)
+        //   | WantAsynchronous(1) | WantCopy(1)
+        //   | MessageIdCount(uint16) | MessageIds(uint64[])
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const destHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8(); reader.readUint8();
+        const idCount = reader.readUint16();
+        for (let i = 0; i < idCount; i++) reader.readUint64();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex: destHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
       case RopId.MoveFolder:
       case RopId.CopyFolder:
       // v4.5.0 — Notifications
@@ -414,10 +508,8 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
       case RopId.ReadRecipients:
       case RopId.RemoveAllRecipients: {
         // Variable-length ROPs ohne explizites Längen-Präfix:
-        // - ModifyRecipients (v4.3.0): wird vom Handler vollständig geparst,
-        //   wir geben ihm den vollständigen Rest des Buffers.
-        // - Andere ROPs in dieser Liste sind v4.4+ Stubs (ecNotSupported), die
-        //   ihren Payload ignorieren.
+        // - ModifyRecipients (v4.3.0): wird vom Handler vollständig geparst.
+        // - Andere v4.5+ Stubs (ecNotSupported), die ihren Payload ignorieren.
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
         const remStart = reader.position;

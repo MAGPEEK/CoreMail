@@ -107,6 +107,16 @@ export async function handleRopQueryRows(
       orderBy: [{ date: 'desc' }],
     }).catch(() => []);
     rows = messages.map((m) => messageToPropRow(m));
+  } else if (tableObj.tableType === 'attachments') {
+    // v4.4.0: parentFolderId enthält tatsächlich die MessageId
+    const attachments = await prisma.attachment.findMany({
+      where: { messageId: tableObj.parentFolderId },
+      select: { id: true, filename: true, mimeType: true, size: true, contentId: true,
+                inline: true, createdAt: true },
+      take: rowCount,
+      orderBy: [{ createdAt: 'asc' }],
+    }).catch(() => []);
+    rows = attachments.map((a, idx) => attachmentToPropRow(a, idx));
   }
 
   // Response zusammenbauen
@@ -142,6 +152,10 @@ export async function handleRopGetRowCount(
         mailbox: { userId: tableObj.userId },
         parentId: tableObj.parentFolderId === '' ? null : tableObj.parentFolderId,
       },
+    }).catch(() => 0);
+  } else if (tableObj.tableType === 'attachments') {
+    count = await prisma.attachment.count({
+      where: { messageId: tableObj.parentFolderId },
     }).catch(() => 0);
   } else {
     count = await prisma.message.count({
@@ -226,6 +240,29 @@ function messageToPropRow(msg: MessageRecord): Map<number, unknown> {
   m.set(PR.PR_MESSAGE_DELIVERY_TIME, msg.date);
   m.set(PR.PR_MESSAGE_SIZE, typeof msg.rawSize === 'bigint' ? Number(msg.rawSize) : msg.rawSize);
   m.set(PR.PR_MESSAGE_FLAGS, msg.flags.includes('\\Seen') ? 0x01 : 0x00);
+  return m;
+}
+
+interface AttachmentRecord {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  contentId: string | null;
+  inline: boolean;
+  createdAt: Date;
+}
+
+function attachmentToPropRow(a: AttachmentRecord, idx: number): Map<number, unknown> {
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_ATTACH_NUM, idx);
+  m.set(PR.PR_ATTACH_LONG_FILENAME_W, a.filename);
+  m.set(PR.PR_ATTACH_FILENAME_W, a.filename);
+  m.set(PR.PR_DISPLAY_NAME_W, a.filename);
+  m.set(PR.PR_ATTACH_MIME_TAG_W, a.mimeType);
+  m.set(PR.PR_ATTACH_SIZE, a.size);
+  m.set(PR.PR_ATTACH_METHOD, 1);  // afByValue (Inline-Daten via OpenStream)
+  if (a.contentId) m.set(PR.PR_ATTACH_CONTENT_ID_W, a.contentId);
   return m;
 }
 

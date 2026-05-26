@@ -135,13 +135,14 @@ export async function handleRopGetPropertiesAll(
     select: { id: true, subject: true, fromAddr: true, fromName: true,
               toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true,
               date: true, bodyText: true, bodyHtml: true, rawSize: true,
-              flags: true, messageId: true, inReplyTo: true },
+              flags: true, messageId: true, inReplyTo: true,
+              _count: { select: { attachments: true } } },
   });
   if (!msg) {
     return writeMsgError(RopId.GetPropertiesAll, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  const props = buildMessagePropertyList(msg);
+  const props = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
 
   // Response: RopId, InputHandleIndex, ReturnValue, PropertyValueCount (uint16),
   //   TaggedPropertyValues (variable)
@@ -185,13 +186,14 @@ export async function handleRopGetPropertiesSpecific(
     where: { id: messageId },
     select: { id: true, subject: true, fromAddr: true, fromName: true,
               toAddrs: true, ccAddrs: true, date: true, bodyText: true,
-              bodyHtml: true, rawSize: true, flags: true, messageId: true },
+              bodyHtml: true, rawSize: true, flags: true, messageId: true,
+              _count: { select: { attachments: true } } },
   });
   if (!msg) {
     return writeMsgError(RopId.GetPropertiesSpecific, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  const allProps = buildMessagePropertyList(msg);
+  const allProps = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
   // Response: nur die requested tags, gleiche Reihenfolge wie tags[]
   const w = new MapiWriter();
   w.writeUint8(RopId.GetPropertiesSpecific);
@@ -228,6 +230,7 @@ interface MessageData {
   flags: string[];
   messageId?: string | null;
   inReplyTo?: string | null;
+  hasAttach?: boolean;
 }
 
 function buildMessagePropertyList(msg: MessageData): Map<number, unknown> {
@@ -257,7 +260,12 @@ function buildMessagePropertyList(msg: MessageData): Map<number, unknown> {
   if (msg.flags.includes('\\Seen')) flagBits |= 0x01;
   m.set(PR.PR_MESSAGE_FLAGS, flagBits);
   m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.Note');
-  m.set(PR.PR_HAS_ATTACH, false);  // v4.4.0 erweitert
+  m.set(PR.PR_HAS_ATTACH, msg.hasAttach ?? false);
+  if (msg.hasAttach) {
+    // PR_MESSAGE_FLAGS HasAttach-Bit (0x10) hinzufügen
+    const cur = m.get(PR.PR_MESSAGE_FLAGS) as number | undefined;
+    m.set(PR.PR_MESSAGE_FLAGS, (cur ?? 0) | 0x10);
+  }
   m.set(PR.PR_PRIORITY, 0);
   m.set(PR.PR_IMPORTANCE, 1);
   if (msg.messageId) m.set(PR.PR_INTERNET_MESSAGE_ID_W, msg.messageId);
@@ -593,6 +601,9 @@ export async function handleRopSubmitMessage(
       id: true, subject: true, fromAddr: true, fromName: true,
       toAddrs: true, ccAddrs: true, bccAddrs: true,
       bodyText: true, bodyHtml: true, messageId: true, date: true,
+      attachments: {
+        select: { filename: true, mimeType: true, storagePath: true, size: true },
+      },
     },
   });
   if (!msg) {
@@ -637,7 +648,12 @@ export async function handleRopSubmitMessage(
         text:        msg.bodyText ?? '',
         messageId:   internetMessageId,
         date:        (msg.date ?? new Date()).toISOString(),
-        attachments: [],   // v4.4.0 — Attachments
+        attachments: (msg.attachments ?? []).map((a) => ({
+          filename:    a.filename,
+          minioPath:   a.storagePath,
+          contentType: a.mimeType,
+          size:        a.size,
+        })),
       },
     }, { jobId: trackingId });
   } catch (err) {
