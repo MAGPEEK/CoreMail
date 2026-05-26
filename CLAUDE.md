@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.40`
+**Aktuelle Version**: `4.0.0` (Major-Bump — MAPI/HTTP Foundation)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.40 — Highlights
+## Aktuelle Version 4.0.0 — Highlights (Major-Bump)
+
+**v4.0.0** — MAPI-over-HTTP Foundation + Externe Clients Setup-Page. Beginn der nativen Outlook-Exchange-Anbindung. Diese Foundation legt: (1) `packages/ews-server/src/mapi/ARCHITECTURE.md` — vollständiger Implementations-Plan mit Roadmap v4.0.0 → v5.0.0, geschätzt 6-9 Monate für ein 2-Personen-Team. (2) `codec.ts` — Binary-Buffer-Reader/Writer für MS-OXCRPC Wire-Format (LE-uint8/16/32/64, ASCII/UTF-16-LE null-terminated Strings, GUIDs, AUX-Header-Blocks). (3) `codec.test.ts` — 16 Round-Trip-Tests alle grün. (4) `http-headers.ts` — X-RequestType/X-RequestId/X-ResponseCode/X-ExpirationInfo/Set-Cookie Header-Handling. (5) `session-store.ts` — Redis-backed Session-Store mit 10-Min-TTL und Auto-Renew. (6) `emsmdb-handler.ts` — Binary Connect/Disconnect/NotificationWait funktional; Execute liefert ecNotSupported (ROPs kommen iterativ). (7) NSPI-Handler-Stub: Bind/Unbind funktional, QueryRows etc. ecNotSupported. (8) Express raw() body-parser für /mapi/emsmdb/ + /mapi/nspi/ (binary statt JSON). (9) Autodiscover Feature-Flag `ENABLE_MAPI_HTTP=true` → fügt `<Protocol Type="mapiHttp" Version="1">` Block hinzu (default off bis ROP-Execution funktional). (10) OWA Settings-Page „Externe Clients & Outlook" mit IMAP/SMTP/CalDAV/CardDAV-Daten + Outlook-CalDav-Synchronizer-Setup. Volle Outlook-Funktionalität (Login, Folder-Browse, Mail-Lesen, Senden, Kalender, Kontakte) kommt in v4.1.0-v4.7.0.
 
 **v3.18.40** — Externe Clients & Outlook Setup-Page in OWA. User-Wunsch: „Kalender und Kontakte über Outlook einsehen + bearbeiten". Microsoft Outlook Desktop hat keinen nativen CalDAV/CardDAV-Support — volle MAPI-over-HTTP-Implementierung wäre Wochen-Arbeit. Pragmatische Lösung: neue OWA-Settings-Section „Externe Clients & Outlook" mit allen nötigen Daten + Schritt-für-Schritt-Anleitung für das (kostenlose, OSS) „Outlook CalDav Synchronizer"-Plugin. Backend: neuer Endpoint `GET /api/v1/user/client-config` liefert konsolidiert IMAP/SMTP/POP3-Daten aus ServerSettings, CalDAV-Account + per-Kalender-URLs, CardDAV-Account + Default-Adressbuch-URL, plus `requiresAppPassword`-Flag basierend auf MFA-Status. Frontend: neue ExternalClientsSection mit Copy-Buttons für alle Werte, App-Passwort-Hinweis bei MFA, ausführliche Plugin-Setup-Anleitung mit pre-filled URLs (User muss nur kopieren+einfügen), und Hinweise zu Alternativen (OWA-Browser, Apple Kalender, Thunderbird+TbSync, eM Client, DAVx⁵ für Android).
 
@@ -765,4 +767,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.40 — Externe Clients Setup-Page in OWA; v3.18.39 — Outlook EXCH+EXPR raus; v3.18.38 — Passwort-Prompt-Root-Cause)*
+*Letzte Aktualisierung: 2026-05-26 (v4.0.0 — MAPI/HTTP Foundation + Externe Clients Setup-Page; v3.18.39 — Outlook EXCH+EXPR raus; v3.18.38 — Passwort-Prompt-Root-Cause)*

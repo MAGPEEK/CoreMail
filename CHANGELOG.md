@@ -13,6 +13,68 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.0.0] — 2026-05-26 — MAPI-over-HTTP Foundation + Externe Clients Setup-Page
+
+**Major-Version-Bump**: Beginn der MAPI-over-HTTP-Implementation für native
+Outlook-Exchange-Anbindung. Diese Foundation legt Protokoll-Layer, Codec,
+Session-Store, Architektur-Plan. Volle Outlook-Funktionalität kommt iterativ
+in v4.0.x / v4.1.0+ (siehe `packages/ews-server/src/mapi/ARCHITECTURE.md`).
+
+### Added
+
+- **MAPI/HTTP Foundation** (`packages/ews-server/src/mapi/`):
+  - `ARCHITECTURE.md`: Vollständiger Implementations-Plan inkl. Protokoll-
+    Layer, ROP-Mapping, Versions-Roadmap v4.0.0 → v5.0.0
+  - `codec.ts`: Binary-Buffer-Reader/Writer für MS-OXCRPC Wire-Format
+    (Little-Endian uint8/16/32/64, ASCII/UTF-16-LE null-terminated Strings,
+    GUIDs in MS-DTYP-Format, AUX-Header-Blocks)
+  - `codec.test.ts`: 16 Round-Trip-Tests für alle Read/Write-Pairs (alle grün)
+  - `http-headers.ts`: Header-Parsing + Response-Header-Setting (X-RequestType,
+    X-RequestId, X-ResponseCode, X-ExpirationInfo, X-PendingPeriod,
+    Set-Cookie-Management)
+  - `session-store.ts`: Redis-backed Session-Store für emsmdb + nspi mit
+    10-Min-TTL und Auto-Renew bei jedem Call
+  - `emsmdb-handler.ts`: Binary Connect/Disconnect/NotificationWait funktional;
+    Execute liefert `ecNotSupported` (ROPs kommen in v4.1.0+)
+  - `handler.ts` Refactor: Express `raw()` body-parser für `/mapi/emsmdb/` +
+    `/mapi/nspi/` (binäre Bodies statt JSON)
+
+- **Autodiscover MAPI/HTTP Protocol-Block** (feature-flagged):
+  Env `ENABLE_MAPI_HTTP=true` aktiviert `<Protocol Type="mapiHttp" Version="1">`
+  in der Autodiscover-Response. Default off, weil ROP-Execution noch nicht
+  funktional ist. Sobald RopLogon+Folder-Browse in v4.1.0 fertig: default on.
+
+- **Setup-Page „Externe Clients & Outlook" im OWA** (aus v3.18.40 vorgezogen):
+  `packages/web-client/src/pages/SettingsPage.tsx` neue Section + Backend-
+  Endpoint `GET /api/v1/user/client-config`. Zeigt IMAP/SMTP-Daten, CalDAV-
+  + CardDAV-URLs, App-Passwort-Hinweis bei MFA, Step-by-Step für „Outlook
+  CalDav Synchronizer"-Plugin (kostenlos, OSS) — bis MAPI/HTTP voll
+  funktioniert die ausgereifte Lösung für Kalender + Kontakte in Outlook.
+
+### Roadmap (v4.x — siehe `ARCHITECTURE.md`)
+
+| Version | Inhalt | Aufwand |
+|---------|--------|---------|
+| v4.0.0  | Foundation (Codec, Session, Connect-Handshake)         | ✅ aktuell |
+| v4.1.0  | RopLogon + Folder-Browse (Outlook kann Login + Folders) | ~2 Wo. |
+| v4.2.0  | Mail-Lesen (RopGetContentsTable, OpenMessage, Stream)   | ~2 Wo. |
+| v4.3.0  | Mail-Schreiben + Senden (CreateMessage, SubmitMessage)  | ~1 Wo. |
+| v4.4.0  | Attachments + Move/Delete                                | ~1 Wo. |
+| v4.5.0  | Push-Notifications (NotificationWait + Redis-pub/sub)   | ~2 Wo. |
+| v4.6.0  | Calendar (IPM.Appointment)                              | ~3 Wo. |
+| v4.7.0  | Contacts (NSPI QueryRows + IPM.Contact)                 | ~2 Wo. |
+| v4.8.0  | Search (RopFindRow, Restrict)                            | ~2 Wo. |
+| v5.0.0  | Production Hardening + Outlook-Compat-Tests             | ~4 Wo. |
+
+**Geschätzter Gesamtaufwand**: 6–9 Monate für 2-Personen-Team.
+
+### Migration / Breaking
+
+Keine Breaking Changes — alle bestehenden Funktionen unverändert. Outlook
+nutzt bis v4.1.0 weiterhin den IMAP-Fallback aus v3.18.39.
+
+---
+
 ## [3.18.40] — 2026-05-26 — Externe Clients & Outlook Setup-Page in OWA
 
 ### Added
