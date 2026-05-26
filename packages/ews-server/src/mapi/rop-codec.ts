@@ -217,6 +217,44 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
+      case RopId.Restrict: {
+        // RopRestrict (MS-OXCTABL §2.2.2.4):
+        //   LogonId(1), InputHandleIndex(1), RestrictFlags(1),
+        //   RestrictionSize(uint16), Restriction(variable, MS-OXCDATA §2.12)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8();
+        const rSize = reader.readUint16();
+        reader.readBuffer(rSize);
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      case RopId.FindRow: {
+        // RopFindRow (MS-OXCTABL §2.2.2.13):
+        //   LogonId(1), InputHandleIndex(1), FindRowFlags(1),
+        //   RestrictionSize(uint16), Restriction(variable),
+        //   Origin(1), BookmarkSize(uint16), Bookmark(variable)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint8();
+        const rSize = reader.readUint16();
+        reader.readBuffer(rSize);
+        reader.readUint8();
+        const bSize = reader.readUint16();
+        reader.readBuffer(bSize);
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
       case RopId.GetRowCount: {
         // RopGetRowCount: LogonId(1), InputHandleIndex(1)
         logonId = reader.readUint8();

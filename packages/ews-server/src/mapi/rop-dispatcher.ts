@@ -44,6 +44,7 @@ import {
   handleRopDeleteMessages, handleRopMoveCopyMessages,
 } from './rop/folder-ops.js';
 import { handleRopRegisterNotification } from './rop/notification.js';
+import { handleRopRestrict, handleRopFindRow } from './rop/search.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -191,6 +192,12 @@ async function dispatchOne(
     // ── v4.5.0 — Push-Notifications ────────────────────────────────────────
     case RopId.RegisterNotification:
       return handleRopRegisterNotification(rop, sessionToken, serverObjectHandles);
+
+    // ── v4.8.0 — Search (Restrict + FindRow) ───────────────────────────────
+    case RopId.Restrict:
+      return handleRopRestrict(rop, sessionToken, serverObjectHandles);
+    case RopId.FindRow:
+      return handleRopFindRow(rop, sessionToken, serverObjectHandles);
 
     // ── v4.6.0+ Phasen: TODO ────────────────────────────────────────────────
     default: {
