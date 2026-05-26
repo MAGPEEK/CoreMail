@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.33`
+**Aktuelle Version**: `3.18.34`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.33 — Highlights
+## Aktuelle Version 3.18.34 — Highlights
+
+**v3.18.34** — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup. (1) KRITISCHER Audit-Bug: `req.path` wurde im `res.on('finish')`-Callback gelesen, aber Express hatte den Pfad da bereits beim Sub-Router-Descend mutiert → Audit zeigte CUIDs als Aktionen (`cmplad51y0…post`). Fix: Path am Middleware-Eintritt in `capturedPath` speichern. Plus neuer CUID-bewusster `buildAction()` — CUIDs werden aus Action-String herausgefiltert + separat als `targetId` gespeichert. Aus `DELETE /backups/jobs/<cuid>` wird jetzt `action='backups.jobs.delete'` mit `targetId=<cuid>`. 40+ neue Übersetzungen im ACTION_MAP für Backups-Subroutes, Zertifikate-Subroutes (activate-https/activate-protocol), Settings-Subsections (security/org/mail/maintenance), Gruppen-Members, Aliase, Shared Mailboxes, Transport Rules, Quarantine, Queues, OAuth-Clients. (2) Backup-Service: Startup-Orphan-Cleanup markiert RUNNING/PENDING/RETRYING/PROCESSING/SCHEDULED-Jobs älter als 60s als FAILED nach Container-Restart („läuft endlos"-UI verhindert). Plus Watchdog-Timer (5min-Interval): Jobs > 30min werden als FAILED markiert. (3) Backup-Zeitplan-Editor: minutengenau (0..59) statt 5er-Schritt-Raster. (4) Rotes „Anomalien erkannt"-Banner aus Audit-Log entfernt — war verwirrend (zeigte eigene Settings-Änderungen als „kritische Aktion"); Backend-Endpoint `/admin/audit-log/anomalies` bleibt für Export-Zwecke.
 
 **v3.18.33** — Externe Kontakte (ExternalMailContact) komplett entfernt. Feature wurde in der Praxis selten genutzt — externe Adressen sind typischerweise individuell pro User relevant (private Kontakte) oder pro Gruppe (z. B. „Lieferanten-Verteiler"). Reduziert Code-Komplexität, vereinfacht die GAL-Ansicht (User + Verteilergruppen) und entfernt einen Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery) und v3.18.31 (Public Folders). **Entfernt**: Prisma-Model `ExternalMailContact` (Tabelle `external_mail_contacts` wird via `prisma db push --accept-data-loss` gedroppt), Backend-Router `routes/admin/external-contacts.ts` + Mount `/api/v1/admin/contacts`, BCP-Page `ExternalContactsPage.tsx` + Sidebar-Eintrag + Route `/ext-contacts` + i18n-Keys (`nav_ext_contacts` DE+EN), MWA-GAL-Filter „Extern" + Detail-Panel-Rendering für `EXTERNAL`-Kind, `ext-`-Branches in GroupsPage Member-Autocomplete (toter Code). **Geändert**: `routes/contacts.ts` GAL-Endpoint liefert nur noch User+DistributionGroup, `/contacts?q=` Compose-Autocomplete ebenso. Externe Empfänger werden ab sofort direkt im Compose-Fenster eingetippt oder als `EXTERNAL`-Mitglieder in Verteilergruppen gepflegt (DistributionGroupMember.memberType=`EXTERNAL` bleibt unverändert).
 
@@ -751,4 +753,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.33 — Externe Kontakte komplett entfernt; v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support; v3.18.31 — Öffentliche Ordner komplett entfernt)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.34 — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup; v3.18.33 — Externe Kontakte komplett entfernt; v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support)*

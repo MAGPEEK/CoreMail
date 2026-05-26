@@ -2,25 +2,15 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Download, FileText, Search,
-  CheckCircle2, XCircle, Info, X,
-  Activity, AlertTriangle, Users, BarChart3, Code2, ShieldAlert, Moon, Zap,
+  CheckCircle2, XCircle, Info, X, AlertTriangle,
+  Activity, Users, BarChart3, Code2,
 } from 'lucide-react';
 import { api, exportUrl } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
-interface AnomaliesResponse {
-  generatedAt: string;
-  window: { burstSince: string; criticalSince: string };
-  anomalies: {
-    type:     'BURST_ACTIONS' | 'BURST_FAILURES' | 'CRITICAL_ACTION' | 'OFF_HOURS_LOGIN';
-    severity: 'high' | 'medium' | 'low';
-    actor:    string | null;
-    count:    number;
-    firstAt:  string;
-    lastAt:   string;
-    message:  string;
-  }[];
-}
+// v3.18.34: AnomaliesResponse-Interface + Banner entfernt — rote Banner waren
+// in der Praxis verwirrend (zeigten u.a. eigene Settings-Änderungen als
+// „kritische Aktion"). Audit-Log selbst zeigt alle relevanten Aktionen.
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,9 +73,13 @@ function dateToIso(d: string): string {
 type ActionMeta = { label: string; tone: 'create' | 'update' | 'delete' | 'auth' | 'critical' | 'read' };
 
 const ACTION_MAP: Record<string, ActionMeta> = {
-  // Settings
+  // Settings (v3.18.34: jetzt mit Sub-Resource im Action-String)
   'settings.put':                 { label: 'Einstellungen geändert',         tone: 'update' },
   'settings.post':                { label: 'Einstellungen geändert',         tone: 'update' },
+  'settings.org.put':             { label: 'Organisations-Einstellungen geändert', tone: 'update' },
+  'settings.mail.put':            { label: 'Mail-Einstellungen geändert',    tone: 'update' },
+  'settings.security.put':        { label: 'Sicherheitseinstellungen geändert', tone: 'update' },
+  'settings.maintenance.put':     { label: 'Wartungsmodus geändert',         tone: 'update' },
   'audit.enabled':                { label: 'Audit-Log AKTIVIERT',            tone: 'critical' },
   'audit.disabled':               { label: 'Audit-Log DEAKTIVIERT',          tone: 'critical' },
   // Mailboxes
@@ -115,12 +109,23 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'oauth.client.post':            { label: 'OAuth-Client angelegt',          tone: 'create' },
   'oauth.client.put':             { label: 'OAuth-Client geändert',          tone: 'update' },
   'oauth.client.delete':          { label: 'OAuth-Client gelöscht',          tone: 'delete' },
-  // Backups
+  // Backups (v3.18.34: erweiterte Action-Pfade)
   'backups.post':                 { label: 'Backup gestartet',               tone: 'create' },
   'backups.delete':               { label: 'Backup gelöscht',                tone: 'delete' },
+  'backups.full.post':            { label: 'Vollbackup gestartet',           tone: 'create' },
+  'backups.mailbox.post':         { label: 'Mailbox-Backup gestartet',       tone: 'create' },
+  'backups.restore.post':         { label: 'MBOX-Import (Restore)',          tone: 'update' },
+  'backups.jobs.delete':          { label: 'Backup-Job gelöscht',            tone: 'delete' },
+  'backups.archive.delete':       { label: 'Backup-Archiv-Objekt gelöscht',  tone: 'delete' },
+  'backups.schedules.post':       { label: 'Backup-Zeitplan angelegt',       tone: 'create' },
+  'backups.schedules.put':        { label: 'Backup-Zeitplan geändert',       tone: 'update' },
+  'backups.schedules.delete':     { label: 'Backup-Zeitplan gelöscht',       tone: 'delete' },
+  'backups.schedules.run.post':   { label: 'Zeitplan manuell ausgeführt',    tone: 'create' },
   'backup.full.trigger':          { label: 'Vollbackup gestartet',           tone: 'create' },
   'backup.mailbox.trigger':       { label: 'Mailbox-Backup gestartet',       tone: 'create' },
   'backup.mbox.import':           { label: 'MBOX-Import (Restore)',          tone: 'update' },
+  'backup.job.delete':            { label: 'Backup-Job gelöscht',            tone: 'delete' },
+  'backup.archive.delete':        { label: 'Backup-Archiv-Objekt gelöscht',  tone: 'delete' },
   // Calendar Sharing
   'calendar.share.create':        { label: 'Kalender freigegeben',           tone: 'create' },
   'calendar.share.update':        { label: 'Freigabe geändert',              tone: 'update' },
@@ -137,6 +142,43 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'roles.put':                    { label: 'Rolle geändert',                 tone: 'critical' },
   // Gateway
   'gateway.settings_updated':     { label: 'SMTP-Gateway konfiguriert',      tone: 'update' },
+  // v3.18.34: Audit-Log (sensitive GETs)
+  'audit-log.export.get':         { label: 'Audit-Log exportiert',           tone: 'read' },
+  'audit-log.anomalies.get':      { label: 'Anomalien-Report abgerufen',     tone: 'read' },
+  // v3.18.34: Zertifikate
+  'certificates.post':            { label: 'Zertifikat angelegt',            tone: 'create' },
+  'certificates.put':             { label: 'Zertifikat geändert',            tone: 'update' },
+  'certificates.delete':          { label: 'Zertifikat gelöscht',            tone: 'delete' },
+  'certificates.activate-https.post':    { label: 'Zertifikat für HTTPS aktiviert',         tone: 'update' },
+  'certificates.activate-protocol.post': { label: 'Zertifikat für Mail-Protokolle aktiviert', tone: 'update' },
+  'certificates.activate-https.delete':  { label: 'HTTPS-Aktivierung entfernt',             tone: 'update' },
+  'certificates.renew.post':             { label: 'Zertifikat erneuert',                    tone: 'update' },
+  'certificates.upload.post':            { label: 'Zertifikat hochgeladen',                 tone: 'create' },
+  'certificates.self-signed.post':       { label: 'Selbst-signiertes Zertifikat erzeugt',   tone: 'create' },
+  'certificates.regenerate-dkim.post':   { label: 'DKIM-Schlüssel neu erzeugt',             tone: 'update' },
+  // v3.18.34: Gruppen, Aliase, Postfächer (Untermenüs)
+  'groups.post':                  { label: 'Verteilergruppe angelegt',       tone: 'create' },
+  'groups.put':                   { label: 'Verteilergruppe geändert',       tone: 'update' },
+  'groups.delete':                { label: 'Verteilergruppe gelöscht',       tone: 'delete' },
+  'groups.members.post':          { label: 'Gruppenmitglied hinzugefügt',    tone: 'create' },
+  'groups.members.delete':        { label: 'Gruppenmitglied entfernt',       tone: 'delete' },
+  'aliases.post':                 { label: 'E-Mail-Alias angelegt',          tone: 'create' },
+  'aliases.delete':               { label: 'E-Mail-Alias gelöscht',          tone: 'delete' },
+  'shared-mailboxes.post':        { label: 'Shared Mailbox angelegt',        tone: 'create' },
+  'shared-mailboxes.put':         { label: 'Shared Mailbox geändert',        tone: 'update' },
+  'shared-mailboxes.delete':      { label: 'Shared Mailbox gelöscht',        tone: 'delete' },
+  // v3.18.34: Transport Rules, Quarantine, Queues
+  'transport-rules.post':         { label: 'Transportregel angelegt',        tone: 'create' },
+  'transport-rules.put':          { label: 'Transportregel geändert',        tone: 'update' },
+  'transport-rules.delete':       { label: 'Transportregel gelöscht',        tone: 'delete' },
+  'quarantine.release.post':      { label: 'Quarantäne-Mail freigegeben',    tone: 'update' },
+  'quarantine.delete':            { label: 'Quarantäne-Mail gelöscht',       tone: 'delete' },
+  'queues.flush.post':            { label: 'Warteschlange geleert',          tone: 'update' },
+  'queues.retry.post':            { label: 'Warteschlange erneut versucht',  tone: 'update' },
+  // v3.18.34: OAuth Clients (Sub-Routes)
+  'oauth.clients.post':           { label: 'OAuth-Client angelegt',          tone: 'create' },
+  'oauth.clients.put':            { label: 'OAuth-Client geändert',          tone: 'update' },
+  'oauth.clients.delete':         { label: 'OAuth-Client gelöscht',          tone: 'delete' },
 };
 
 function actionMeta(action: string): ActionMeta {
@@ -269,11 +311,7 @@ export function AuditLogPage() {
     refetchInterval: 30_000,
   });
 
-  const anomalies = useQuery<AnomaliesResponse>({
-    queryKey: ['admin-audit-log-anomalies'],
-    queryFn: () => api.get('/admin/audit-log/anomalies'),
-    refetchInterval: 60_000,
-  });
+  // v3.18.34: Anomalies-Query entfernt — Banner war zu noisy
 
   const handleExport = (format: 'csv' | 'pdf' | 'json') => {
     const params = buildParams();
@@ -332,45 +370,9 @@ export function AuditLogPage() {
         </div>
       </div>
 
-      {/* Anomalien-Banner — wird automatisch alle 60s aktualisiert */}
-      {anomalies.data && anomalies.data.anomalies.length > 0 && (
-        <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-lg overflow-hidden">
-          <div className="px-4 py-2.5 bg-red-100 border-b border-red-200 flex items-center gap-2">
-            <ShieldAlert size={16} className="text-red-600" />
-            <h3 className="text-sm font-semibold text-red-900">
-              {anomalies.data.anomalies.length} Anomalie{anomalies.data.anomalies.length !== 1 ? 'n' : ''} erkannt
-            </h3>
-            <span className="text-xs text-red-700 ml-auto">
-              Auswertung: letzte 5 Min (Bursts), 24h (kritische Aktionen, Off-Hours)
-            </span>
-          </div>
-          <div className="divide-y divide-red-100 max-h-64 overflow-y-auto">
-            {anomalies.data.anomalies.slice(0, 50).map((a, i) => {
-              const icon = a.type === 'BURST_ACTIONS' ? <Zap size={13} className="text-amber-600" />
-                       : a.type === 'BURST_FAILURES' ? <AlertTriangle size={13} className="text-red-600" />
-                       : a.type === 'CRITICAL_ACTION' ? <ShieldAlert size={13} className="text-red-600" />
-                       : <Moon size={13} className="text-indigo-500" />;
-              const sevColor = a.severity === 'high' ? 'bg-red-200 text-red-900'
-                           : a.severity === 'medium' ? 'bg-amber-200 text-amber-900'
-                           : 'bg-blue-100 text-blue-800';
-              return (
-                <div key={i} className="px-4 py-2 flex items-start gap-2 hover:bg-red-100/40">
-                  {icon}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-gray-900 leading-tight">{a.message}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Akteur: <strong>{a.actor ?? '(anonym)'}</strong> · {fmtDt(a.lastAt)}
-                    </p>
-                  </div>
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${sevColor}`}>
-                    {a.severity}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* v3.18.34: Anomalies-Banner komplett entfernt — Audit-Log selbst zeigt
+          alle relevanten Aktionen, der Banner war in der Praxis verwirrend
+          (eigene Settings-Änderungen wurden als „kritische Aktion" angezeigt). */}
 
       {/* Immutability notice + Signatur-Hinweis */}
       {!noticeDismissed && (

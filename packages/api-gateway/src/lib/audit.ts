@@ -154,25 +154,30 @@ export function auditMiddleware(
     return;
   }
 
+  // v3.18.34 KRITISCHER BUG-FIX: req.path NOW erfassen.
+  // Express mutiert req.url/req.path beim Descend in Sub-Router (z.B.
+  // `app.use('/api/v1/admin/certificates', certRouter)` setzt im Sub-Router
+  // req.path auf '/cmplad51y0…/activate-https' statt '/certificates/cmplad…').
+  // Im `res.on('finish')`-Callback ist das mutierte Path — daher landeten
+  // im Audit-Log Aktionen wie `cmplad51y0.post` statt `certificates.post`.
+  const capturedPath = req.path;
+  const capturedMethod = req.method;
+
   // KRITISCH: Loggen erst nach Response-Ende, damit `req.apiUser` durch
   // `requireAuth` (in den einzelnen Router-Mountings) bereits gesetzt ist.
   // Vor dem Fix wurde synchron geloggt → apiUser war undefined → Akteur immer leer.
   // Außerdem kennen wir nach Response den HTTP-Status (Erfolg / Fehler).
   res.on('finish', () => {
     const user = (req as Request & { apiUser?: { userId: string; email: string } }).apiUser;
-    const pathParts = req.path.replace(/^\//, '').split('/');
-    const resource = pathParts[0] ?? 'unknown';
-    const verb = req.method.toLowerCase();
     const success = res.statusCode >= 200 && res.statusCode < 400;
+    const { action, targetType, targetId } = buildAction(capturedMethod, capturedPath);
 
     audit({
       ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
       ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
-      action: `${resource}.${verb}`,
-      // targetType = Ressource (z.B. "mailboxes", "rules", "audit-log")
-      targetType: resource,
-      // targetId = path-Segment nach der Ressource, wenn vorhanden
-      ...(pathParts[1] !== undefined && pathParts[1] !== '' ? { targetId: pathParts[1] } : {}),
+      action,
+      targetType,
+      ...(targetId ? { targetId } : {}),
       success,
       ...(!success ? { errorMsg: `HTTP ${res.statusCode}` } : {}),
       ...auditContext(req),
@@ -180,4 +185,49 @@ export function auditMiddleware(
   });
 
   next();
+}
+
+/**
+ * v3.18.34: CUID-bewusster Action-Builder. Aus dem path-relativ zur audit-
+ * middleware-Mountpoint (z.B. `/certificates/<cuid>/activate-https`) wird:
+ *   action     = 'certificates.activate-https.post'  (CUIDs werden NICHT zum Action-String)
+ *   targetType = 'certificates'                        (immer das erste Segment)
+ *   targetId   = '<cuid>'                              (letztes CUID-Segment im Path)
+ *
+ * Beispiele:
+ *   DELETE /backups/jobs/<cuid>       → backups.jobs.delete           targetId=<cuid>
+ *   GET    /audit-log/anomalies        → audit-log.anomalies.get
+ *   POST   /certificates/<cuid>/activate-https
+ *                                       → certificates.activate-https.post  targetId=<cuid>
+ *   PUT    /settings/security          → settings.security.put
+ *   DELETE /mailboxes/<cuid>           → mailboxes.delete              targetId=<cuid>
+ */
+function buildAction(
+  method: string,
+  path: string,
+): { action: string; targetType: string; targetId?: string } {
+  const verb = method.toLowerCase();
+  const parts = path.replace(/^\//, '').replace(/\/$/, '').split('/').filter(Boolean);
+  const resource = parts[0] ?? 'unknown';
+
+  // CUID: 25 chars, starts with 'c' followed by 24 [a-z0-9] chars
+  const isCuid = (s: string): boolean => /^c[a-z0-9]{24}$/.test(s);
+
+  // Letztes CUID-Segment ist targetId; alle Nicht-CUID-Segmente formen Action.
+  let targetId: string | undefined;
+  const actionParts: string[] = [resource];
+  for (let i = 1; i < parts.length; i++) {
+    const seg = parts[i]!;
+    if (isCuid(seg)) {
+      targetId = seg;
+    } else {
+      actionParts.push(seg);
+    }
+  }
+
+  return {
+    action: `${actionParts.join('.')}.${verb}`,
+    targetType: resource,
+    ...(targetId ? { targetId } : {}),
+  };
 }
