@@ -10,10 +10,10 @@ import type { Contact } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
 
-// GAL-Entry-Typ (vereint User, ExternalMailContact, DistributionGroup)
+// GAL-Entry-Typ (vereint interne User und DistributionGroup)
 interface GalEntry {
   id:           string;
-  kind:         'USER' | 'EXTERNAL' | 'GROUP';
+  kind:         'USER' | 'GROUP';
   email:        string;
   displayName:  string;
   subtitle?:    string;
@@ -54,7 +54,7 @@ export function ContactsPage() {
   const qc = useQueryClient();
   const { openCompose } = useUiStore();
   const [view, setView] = useState<'personal' | 'gal'>('personal');
-  const [galFilter, setGalFilter] = useState<'all' | 'users' | 'external' | 'groups'>('all');
+  const [galFilter, setGalFilter] = useState<'all' | 'users' | 'groups'>('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Contact | null>(null);
   const [selectedGal, setSelectedGal] = useState<GalEntry | null>(null);
@@ -71,7 +71,7 @@ export function ContactsPage() {
   });
 
   // Globales Adressbuch (GAL) — Browse-Modus ohne q, Suche mit q
-  // Cache so wenig wie möglich: Admin kann jederzeit neue ExternalContacts oder
+  // Cache so wenig wie möglich: Admin kann jederzeit neue User oder
   // DistributionGroups anlegen — der MWA-User soll sie ohne Reload sehen.
   const { data: galData, refetch: refetchGal, isFetching: galLoading } = useQuery<GalResponse>({
     queryKey: ['gal', search, galFilter],
@@ -213,7 +213,6 @@ export function ContactsPage() {
             {([
               { v: 'all',      l: 'Alle' },
               { v: 'users',    l: 'Personen' },
-              { v: 'external', l: 'Extern' },
               { v: 'groups',   l: 'Gruppen' },
             ] as const).map(({ v, l }) => (
               <button
@@ -265,9 +264,9 @@ export function ContactsPage() {
             <>
               {galEntries.map((g) => {
                 const isSelected = selectedGal?.id === g.id;
-                const avatarColor = g.kind === 'GROUP' ? 'bg-purple-500' : g.kind === 'EXTERNAL' ? 'bg-amber-500' : 'bg-accent';
-                const kindBadge = g.kind === 'GROUP' ? 'Gruppe' : g.kind === 'EXTERNAL' ? 'Extern' : 'Intern';
-                const kindCls   = g.kind === 'GROUP' ? 'bg-purple-100 text-purple-700' : g.kind === 'EXTERNAL' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700';
+                const avatarColor = g.kind === 'GROUP' ? 'bg-purple-500' : 'bg-accent';
+                const kindBadge = g.kind === 'GROUP' ? 'Gruppe' : 'Intern';
+                const kindCls   = g.kind === 'GROUP' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
                 return (
                   <button
                     key={g.id}
@@ -312,18 +311,16 @@ export function ContactsPage() {
               <button onClick={() => setSelectedGal(null)} className="btn-ghost p-1"><X size={16} /></button>
             </div>
             <div className="flex items-start gap-4 mb-6">
-              <div className={`w-16 h-16 rounded-full ${selectedGal.kind === 'GROUP' ? 'bg-purple-500' : selectedGal.kind === 'EXTERNAL' ? 'bg-amber-500' : 'bg-accent'} flex items-center justify-center text-white text-xl font-bold shrink-0`}>
+              <div className={`w-16 h-16 rounded-full ${selectedGal.kind === 'GROUP' ? 'bg-purple-500' : 'bg-accent'} flex items-center justify-center text-white text-xl font-bold shrink-0`}>
                 {selectedGal.kind === 'GROUP' ? <UsersIcon size={24} /> : initials(selectedGal.displayName)}
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <h3 className="text-lg font-semibold text-gray-900">{selectedGal.displayName}</h3>
                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                    selectedGal.kind === 'GROUP'    ? 'bg-purple-100 text-purple-700' :
-                    selectedGal.kind === 'EXTERNAL' ? 'bg-amber-100 text-amber-700'   :
-                                                      'bg-blue-100 text-blue-700'
+                    selectedGal.kind === 'GROUP' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
                   }`}>
-                    {selectedGal.kind === 'GROUP' ? 'Verteilergruppe' : selectedGal.kind === 'EXTERNAL' ? 'Externer Kontakt' : 'Interner Benutzer'}
+                    {selectedGal.kind === 'GROUP' ? 'Verteilergruppe' : 'Interner Benutzer'}
                   </span>
                 </div>
                 <p className="text-sm text-gray-500 mt-0.5">{selectedGal.email}</p>

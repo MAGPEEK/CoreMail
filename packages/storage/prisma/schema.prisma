@@ -1687,21 +1687,6 @@ model Certificate {
   @@map("certificates")
 }
 
-// ─── External Mail Contacts (Admin-managed, appear in GAL) ───────────────────
-model ExternalMailContact {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  displayName   String
-  firstName     String   @default("")
-  lastName      String   @default("")
-  company       String   @default("")
-  department    String   @default("")
-  phone         String   @default("")
-  mobile        String   @default("")
-  hiddenFromGal Boolean  @default(false)
-  notes         String   @default("")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@map("external_mail_contacts")
-}
+// (ExternalMailContact — komplett entfernt in v3.18.33. Externe Empfänger
+// werden bei Bedarf direkt als E-Mail-Adresse in DistributionGroup-Membern
+// (Type=EXTERNAL) oder als Empfänger im Compose-Fenster eingetragen.)

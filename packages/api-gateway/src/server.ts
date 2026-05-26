@@ -52,7 +52,7 @@ import { adminMobileRouter } from './routes/admin/mobile.js';
 import { adminMessageTraceRouter } from './routes/admin/message-trace.js';
 import { adminConnectorsRouter } from './routes/admin/connectors.js';
 import { adminOrganisationRouter } from './routes/admin/organisation.js';
-import { adminExternalContactsRouter } from './routes/admin/external-contacts.js';
+// adminExternalContactsRouter komplett entfernt in v3.18.33
 import { adminSecurityRouter } from './routes/admin/security.js';
 import { adminSecurityAttacksRouter } from './routes/admin/security-attacks.js';
 import { adminSmtpConfigRouter } from './routes/admin/smtp-config.js';
@@ -292,7 +292,7 @@ app.use('/api/v1/admin/mobile',           adminMobileRouter);
 app.use('/api/v1/admin/message-trace',    adminMessageTraceRouter);
 app.use('/api/v1/admin/connectors',       adminConnectorsRouter);
 app.use('/api/v1/admin/organisation',     adminOrganisationRouter);
-app.use('/api/v1/admin/contacts',         adminExternalContactsRouter);
+// /api/v1/admin/contacts (externe Kontakte) komplett entfernt in v3.18.33
 app.use('/api/v1/admin/security',         adminSecurityRouter);
 app.use('/api/v1/admin/security/attacks', adminSecurityAttacksRouter);
 app.use('/api/v1/admin/smtp-config',      adminSmtpConfigRouter);
