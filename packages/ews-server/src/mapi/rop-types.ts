@@ -247,6 +247,19 @@ export const PR = {
   PR_CONVERSATION_TOPIC_W:  makePropTag(0x0070, PropType.Unicode),
   PR_CONVERSATION_INDEX:    makePropTag(0x0071, PropType.Binary),
   PR_READ_RECEIPT_REQUESTED: makePropTag(0x0029, PropType.Boolean),
+
+  // ── Recipient Properties (MS-OXOABK / MS-OXOMSG) ───────────────────────
+  PR_EMAIL_ADDRESS_W:           makePropTag(0x3003, PropType.Unicode),
+  PR_ADDRTYPE_W:                makePropTag(0x3002, PropType.Unicode),
+  PR_SMTP_ADDRESS_W:            makePropTag(0x39FE, PropType.Unicode),
+  PR_7BIT_DISPLAY_NAME_W:       makePropTag(0x39FF, PropType.Unicode),
+  PR_RECIPIENT_TYPE:            makePropTag(0x0C15, PropType.Int32),
+  PR_RECIPIENT_FLAGS:           makePropTag(0x5FFD, PropType.Int32),
+  PR_RECIPIENT_DISPLAY_NAME_W:  makePropTag(0x5FF6, PropType.Unicode),
+  PR_RECIPIENT_TRACKSTATUS:     makePropTag(0x5FFF, PropType.Int32),
+  PR_SEND_INTERNET_ENCODING:    makePropTag(0x3A71, PropType.Int32),
+  PR_OBJECT_TYPE:               makePropTag(0x0FFE, PropType.Int32),
+  PR_DISPLAY_TYPE:              makePropTag(0x3900, PropType.Int32),
 } as const;
 
 /**

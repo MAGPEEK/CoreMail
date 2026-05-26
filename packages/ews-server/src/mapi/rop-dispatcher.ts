@@ -30,7 +30,7 @@ import {
 import {
   handleRopOpenMessage, handleRopGetPropertiesAll, handleRopGetPropertiesSpecific,
   handleRopCreateMessage, handleRopSetProperties, handleRopSaveChangesMessage,
-  handleRopSubmitMessage,
+  handleRopSubmitMessage, handleRopModifyRecipients,
 } from './rop/message.js';
 import {
   handleRopOpenStream, handleRopReadStream, handleRopGetStreamSize,
@@ -161,10 +161,11 @@ async function dispatchOne(
       return handleRopWriteStream(rop, sessionToken, serverObjectHandles);
     case RopId.CommitStream:
       return handleRopCommitStream(rop, sessionToken, serverObjectHandles);
+    case RopId.ModifyRecipients:
+      return handleRopModifyRecipients(rop, sessionToken, serverObjectHandles);
 
     // ── v4.4.0+ Phasen: TODO ────────────────────────────────────────────────
     case RopId.GetAttachmentTable:
-    case RopId.ModifyRecipients:
     case RopId.OpenAttachment:
     case RopId.CreateAttachment:
     case RopId.RegisterNotification:

@@ -19,11 +19,30 @@ import {
 export type RopObject =
   | { kind: 'mailbox'; userId: string }
   | { kind: 'folder';  userId: string; folderId: string; folderName: string }
-  | { kind: 'message'; userId: string; folderId: string; messageId: string }
+  | { kind: 'message'; userId: string; folderId: string;
+      /**
+       * `messageId === null` markiert eine NEUE Draft, die noch nicht in der DB persistiert
+       * ist (v4.3.0 — RopCreateMessage erzeugt das Handle ohne sofortigen DB-Schreibvorgang;
+       * `pendingProperties` + `pendingRecipients` werden bei RopSaveChangesMessage in die DB
+       * geflusht).
+       */
+      messageId: string | null;
+      isDraft?: boolean;
+      pendingProperties?: Record<string, unknown>;   // PropertyTag (dec) → value
+      pendingRecipients?: Array<{
+        type: 'TO' | 'CC' | 'BCC';
+        name: string;
+        address: string;
+      }>;
+    }
   | { kind: 'table';   userId: string; tableType: 'hierarchy' | 'contents';
                        parentFolderId: string; columns?: number[] /* property-tags */ }
-  | { kind: 'stream';  userId: string; messageId: string; propertyTag: number;
-                       buffer: Buffer; offset: number }
+  | { kind: 'stream';  userId: string; messageId: string | null;
+                       /** Optional: für Stream auf einer Draft-Message (v4.3.0 OpenStream → WriteStream → CommitStream) */
+                       parentMessageHandle?: number;
+                       propertyTag: number;
+                       buffer: Buffer; offset: number;
+                       writable?: boolean }
   | { kind: 'attachment'; userId: string; messageId: string; attachmentId: string };
 
 /**
@@ -81,6 +100,22 @@ async function persistSessionState(
   state.lastSeen = Date.now();
   await getRedisClient().set(KEY, JSON.stringify(state), 'EX', 600);
   return true;
+}
+
+/**
+ * Aktualisiert ein bestehendes Handle-Object (für Draft-Akkumulation in v4.3.0).
+ */
+export async function updateRopObject(
+  sessionToken: string,
+  handle: number,
+  patch: Partial<RopObject>,
+): Promise<boolean> {
+  const session = await getMapiSession(sessionToken);
+  if (!session) return false;
+  const existing = session.handleTable[handle];
+  if (!existing) return false;
+  session.handleTable[handle] = { ...existing, ...(patch as object) } as RopObject;
+  return persistSessionState(sessionToken, session);
 }
 
 /**

@@ -13,6 +13,86 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.3.0] — 2026-05-26 — MAPI/HTTP Phase 3: Mail-Schreiben + Senden
+
+### Added
+
+- **RopCreateMessage** (`packages/ews-server/src/mapi/rop/message.ts`):
+  Legt eine neue Draft-Message-Handle an (`messageId=null`, `isDraft=true`,
+  `pendingProperties={}`, `pendingRecipients=[]`). Folder-Lookup über
+  CUID→uint64 FNV-1a-Hash. Response: ReturnValue + HasMessageId(0).
+
+- **RopSetProperties**: Parst PropertyValueArray (PropertyValueSize +
+  PropertyValueCount + TaggedPropertyValues) und akkumuliert die Tagged-
+  Property-Values in `pendingProperties` am Message-Handle. JSON-safe
+  Encoding für Session-Persistierung in Redis (Buffer → {_t:'Buffer',data},
+  BigInt → {_t:'BigInt',v}, Date → {_t:'Date',iso}).
+
+- **RopModifyRecipients**: Parst die ColumnCount/Columns + RowCount/Rows-
+  Struktur aus MS-OXCMSG §2.2.3.1.2. Extrahiert RecipientType (1=TO/2=CC/3=BCC)
+  + DisplayName + EmailAddress aus den RecipientRow-Header-Bytes. Speichert
+  die Liste in `pendingRecipients` am Message-Handle.
+
+- **RopSaveChangesMessage**: Persistiert Draft-Properties+Recipients in die
+  Prisma-DB. Bei `messageId === null` (neue Draft) wird ein neuer Message-
+  Record im aktuellen Folder (typischerweise Drafts) angelegt mit
+  `flags: ['\\Draft']`, UID-Increment auf Mailbox, ModSeq-Update. Bei
+  bestehender Message: Update. Response: FolderId(uint64) + MessageId(uint64).
+
+- **RopWriteStream** (`packages/ews-server/src/mapi/rop/stream.ts`):
+  Hängt Data an den Stream-Buffer an (am aktuellen Offset). Outlook ruft
+  WriteStream wiederholt für lange Bodies — der Buffer wird im Stream-Handle
+  akkumuliert bis CommitStream. Unterstützt Overwrite-in-place und
+  Sparse-Write (Padding mit Null-Bytes wenn Offset > Buffer-Länge).
+
+- **RopCommitStream**: Schreibt den akkumulierten Stream-Buffer in die
+  parent Message. Bei gespeicherter Message: direktes Prisma-Update auf
+  bodyText/bodyHtml/subject (UTF-16-LE-Decode für PR_BODY_W/PR_SUBJECT_W,
+  UTF-8 für PR_HTML). Bei Draft-Stream: Update der `pendingProperties`
+  am parent Message-Handle.
+
+- **RopSubmitMessage**: Reicht die persistierte Message via BullMQ
+  smtp-outbound-Queue zum Versand ein. Baut StructuredMessage aus
+  Prisma-Message + lädt DKIM-Key der Sender-Domain + From/To/CC/BCC.
+  Verschiebt die Message nach Submit in den Sent-Folder (oder loggt
+  Warning bei Fehler — non-fatal). Lokale BullMQ-Queue-Instanz auf
+  Queue-Name `'smtp-outbound'` (gemeinsame Vereinbarung mit dem
+  Consumer im smtp-server, kein Cross-Package-Import nötig).
+
+- **RopObject-Type erweitert**: Die `message`-Variante hat jetzt
+  `messageId: string | null`, `isDraft`, `pendingProperties` (Record),
+  `pendingRecipients` (Array). Die `stream`-Variante hat
+  `writable`, `parentMessageHandle` für Draft-Streams.
+
+- **Helper `updateRopObject`** (`rop-handle-table.ts`): Patch-Update
+  eines bestehenden Handle-Objects in Redis (für Pending-Property-
+  Akkumulation während eines Compose-Workflows).
+
+- **PR_*-Konstanten ergänzt**: PR_EMAIL_ADDRESS_W, PR_ADDRTYPE_W,
+  PR_SMTP_ADDRESS_W, PR_7BIT_DISPLAY_NAME_W, PR_RECIPIENT_TYPE,
+  PR_RECIPIENT_FLAGS, PR_RECIPIENT_DISPLAY_NAME_W, PR_OBJECT_TYPE,
+  PR_DISPLAY_TYPE.
+
+- **ROP-Codec ModifyRecipients-Payload**: Bisher wurde nur 64 Bytes geslicet
+  und der Rest verworfen — jetzt bekommt der Handler den vollständigen
+  Rest des Buffers, weil ModifyRecipients keine fest definierte Größe hat.
+
+### Dependencies
+
+- **`bullmq` zu `@coremail/ews-server`-Dependencies hinzugefügt** —
+  für die direkte Queue-Anbindung an `'smtp-outbound'`.
+
+### Outlook-Verhalten nach v4.3.0
+
+Compose-Window in Outlook: neue Mail anlegen, Subject + Body + Recipients
+eintippen, „Senden" klicken → Mail kommt beim Empfänger an. Sent-Folder
+zeigt die Kopie. Reply/Forward via Outlook-Buttons funktioniert genauso
+(Outlook lädt Original via v4.2.0 → schreibt Draft via v4.3.0 → submitted).
+Attachments: noch leer (kommen in v4.4.0). Push-Notification bei neuer
+Mail: noch nicht (kommt in v4.5.0).
+
+---
+
 ## [4.2.0] — 2026-05-26 — MAPI/HTTP Phase 2: Mail-Lesen (OpenMessage + Stream-Read)
 
 ### Added
