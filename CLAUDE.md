@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.38`
+**Aktuelle Version**: `3.18.39`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.38 — Highlights
+## Aktuelle Version 3.18.39 — Highlights
+
+**v3.18.39** — Outlook: EXCH+EXPR aus Autodiscover entfernt → IMAP-Fallback. User-Symptom (nach v3.18.38-Deploy): Password-Prompt kam jetzt korrekt, aber Outlook hing minutenlang im RPC/TCP-Connect, dann Fehler „Diese Ordnergruppe kann nicht geöffnet werden — Fehler bei der Anmeldung bei Microsoft Exchange". Outlook-Verbindungsstatus zeigte VIDs mit Protokoll RPC/TCP auf `mail.<domain>` mit Status „wird hergestellt" — und Typ „Öffentlich..." (Public Folder). Root Cause: Autodiscover-Response lieferte `<Protocol Type="EXCH">` (intra-Exchange RPC) und `<Protocol Type="EXPR">` (Outlook Anywhere / RPC-over-HTTPS). Beide nutzen das binäre MAPI/ROP-Protokoll. Wir haben nur EWS + Stubs auf /mapi/emsmdb/. Outlook versuchte deshalb minutenlang RPC-Connects an `rpcproxy.dll` (existiert nicht) oder den RPC-Endpoint-Mapper auf Port 135. **Pragmatischer Fix**: EXCH- und EXPR-Blöcke aus Autodiscover-XML ENTFERNT. Outlook fällt jetzt auto auf IMAP-Konfiguration zurück — Mail funktioniert sofort. Kalender + Kontakte gehen via CalDAV/CardDAV (Apple Kalender, Thunderbird, eM Client) oder direkt über OWA im Browser. Volle MAPI-over-HTTP-Implementation (EcDoConnectEx, ROP-Verbose-Binary, NSPI Bind/QueryRows) wäre für native Outlook-Exchange-Anbindung nötig — mehrere Wochen Arbeit, kommt später als eigenes Feature.
 
 **v3.18.38** — Outlook-LTSC „kein Passwort-Prompt"-Root-Cause + Autodiscover-Vervollständigung. **KRITISCH**: User-Symptom war „Outlook verbindet sich, aber ohne Password-Abfrage, dann Private Ordner (PST) statt Exchange-Mailbox, plus Fehler 'Informationsdienst incomplete'". Root Cause: Outlook LTSC probt zuerst `GET /EWS/Exchange.asmx` BEVOR es einen Authorization-Header sendet. Der bisherige GET-Handler lieferte 200+WSDL-Stub ohne Auth-Check → Outlook nahm an, keine Auth nötig, schickte nie Credentials → Setup landete bei lokaler PST. Fix: `ewsAuthMiddleware` jetzt VOR GET-Handler + vor `/mapi/*`-Router (außer `/healthcheck.htm`) + OAB-Endpoint. Sendet jetzt 401 + `WWW-Authenticate: Basic realm="CoreMail EWS"` → Outlook fragt nach Credentials. PLUS `auth-service`-URL gefixt: war `http://auth-service:3001/auth/login` (Port 3001 = storage-api!) → jetzt env `AUTH_SERVICE_URL` mit Default `http://localhost:3003/auth/login`. PLUS Autodiscover-XML vervollständigt (Recherche an MS Docs + Grommunio): `AuthPackage` von `basic` auf `Basic` (case-sensitive bei Outlook-LTSC-Builds), `<User><LegacyDN>` Pflicht ergänzt (`/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>` — Outlook nutzt es als interne User-Identity), `<AutoDiscoverSMTPAddress>` ergänzt, `<GroupingInformation>default</GroupingInformation>` im EXPR-Block, `<PublicFolderInformation>` Dummy, korrekte Exchange-2019-Topologie in ServerDN/MdbDN, `<EcpUrl>` ergänzt.
 
@@ -761,4 +763,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.38 — Outlook-LTSC Passwort-Prompt-Root-Cause; v3.18.37 — Autodiscover-XML erweitert + Audit-Übersetzungen; v3.18.36 — Hostname-Auto-Derive)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.39 — Outlook EXCH+EXPR raus → IMAP-Fallback; v3.18.38 — Passwort-Prompt-Root-Cause; v3.18.37 — Autodiscover-XML erweitert)*

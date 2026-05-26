@@ -13,6 +13,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.39] — 2026-05-26 — Outlook: EXCH+EXPR aus Autodiscover entfernt → IMAP-Fallback
+
+### Fixed
+
+- **Outlook-LTSC hing minutenlang im RPC/TCP-Connect-Loop, dann Fehler
+  „Diese Ordnergruppe kann nicht geöffnet werden — Fehler bei der Anmeldung
+  bei Exchange"** (`packages/autodiscover/src/v1.ts`): User-Verbindungsstatus
+  zeigte mehrere VIDs mit Status „wird hergestellt" und Protokoll **RPC/TCP**
+  auf `mail.<domain>`. Root Cause: Unsere Autodiscover-Response lieferte
+  `<Protocol Type="EXCH">` und `<Protocol Type="EXPR">` Blöcke — beide
+  signalisieren Outlook, dass der Server **MAPI/RPC** kann (intra-Exchange-RPC
+  bzw. RPC-over-HTTPS via `rpcproxy.dll`). Wir haben aber nur **EWS** + Stubs
+  von MAPI-over-HTTP implementiert. Outlook versuchte minutenlang RPC-Connects,
+  die hängen blieben.
+
+  **Pragmatischer Fix** bis volle MAPI/HTTP-Implementation:
+  **EXCH- und EXPR-Blöcke ENTFERNT** aus Autodiscover-XML. Outlook erkennt:
+  - Server ist kein Exchange-Server für direkte MAPI-Profile
+  - Fällt automatisch auf **IMAP-Account-Konfiguration** zurück
+  - Mail funktioniert sofort via `<Protocol Type="IMAP">` + `<Protocol Type="SMTP">`
+  - Kalender + Kontakte gehen via CalDAV/CardDAV (Apple Kalender,
+    Thunderbird, eM Client) oder direkt über OWA im Browser
+
+  Outlook konfiguriert das Konto dann automatisch als „IMAP" (User sieht
+  weiterhin den Email-Adress-only-Setup-Flow, aber die Verbindung wird
+  IMAP statt Exchange).
+
+### Roadmap
+
+Volle MAPI-over-HTTP-Implementierung (`EcDoConnectEx`, ROP-Verbose-Binary-
+Protocol, NSPI Bind/QueryRows) für native Outlook-Exchange-Anbindung ist
+mehrere Wochen Arbeit. Bis dahin ist IMAP der pragmatische Pfad für
+Outlook-Desktop-User.
+
+---
+
 ## [3.18.38] — 2026-05-26 — Outlook-LTSC „kein Passwort-Prompt" + Autodiscover-Vervollständigung
 
 ### Fixed

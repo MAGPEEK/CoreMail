@@ -1,6 +1,6 @@
 {
   "name": "@coremail/activesync",
-  "version": "3.18.38",
+  "version": "3.18.39",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",
