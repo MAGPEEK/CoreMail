@@ -14,7 +14,8 @@ import { createLogger } from '@coremail/core';
 import { MapiReader, MapiWriter, MapiStatusCode } from '../codec.js';
 import { RopId, PR, getPropType, PropType } from '../rop-types.js';
 import {
-  putRopObject, resolveHandleIndex, getRopObject,
+  putRopObject, resolveHandleIndex, getRopObject, updateRopObject,
+  type RopObject,
 } from '../rop-handle-table.js';
 import type { RopRequest } from '../rop-codec.js';
 import { getRedisClient } from '@coremail/core';
@@ -33,6 +34,11 @@ export async function handleRopOpenStream(
   if (!input || input.object.kind !== 'message') {
     return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
+  if (input.object.messageId === null) {
+    // Draft noch nicht persistiert — v4.3.0 erlaubt OpenStream auf Draft
+    return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_NOT_FOUND);
+  }
+  const messageId: string = input.object.messageId;
 
   const r = new MapiReader(rop.payload);
   const propertyTag = r.readUint32();
@@ -40,7 +46,7 @@ export async function handleRopOpenStream(
 
   // Lade den Property-Value aus DB
   const msg = await prisma.message.findUnique({
-    where: { id: input.object.messageId },
+    where: { id: messageId },
     select: { bodyText: true, bodyHtml: true, subject: true },
   });
   if (!msg) {
@@ -67,7 +73,7 @@ export async function handleRopOpenStream(
   const handle = await putRopObject(sessionToken, {
     kind: 'stream',
     userId: input.object.userId,
-    messageId: input.object.messageId,
+    messageId,
     propertyTag,
     buffer,
     offset: 0,
@@ -155,22 +161,155 @@ export async function handleRopGetStreamSize(
   return w.toBuffer();
 }
 
-// ── v4.3.0 STUBS ─────────────────────────────────────────────────────────────
+// ── v4.3.0 — Stream-Write für Compose ────────────────────────────────────────
 
+/**
+ * v4.3.0: RopWriteStream
+ *
+ * Payload: DataSize(uint16) | Data(variable)
+ *
+ * Antwort: ReturnValue + WrittenBytes(uint16)
+ *
+ * Hängt Data an den Stream-Buffer an (am aktuellen Offset). Outlook ruft
+ * WriteStream wiederholt für lange Bodies — wir akkumulieren bis CommitStream.
+ */
 export async function handleRopWriteStream(
   rop: RopRequest,
-  _sessionToken: string,
-  _serverObjectHandles: number[],
+  sessionToken: string,
+  serverObjectHandles: number[],
 ): Promise<Buffer> {
-  return writeStreamError(RopId.WriteStream, rop, MapiStatusCode.EC_NOT_SUPPORTED);
+  const input = await resolveHandleIndex(sessionToken, serverObjectHandles, rop.inputHandleIndex);
+  if (!input || input.object.kind !== 'stream') {
+    return writeStreamError(RopId.WriteStream, rop, MapiStatusCode.EC_INVALID_SESSION);
+  }
+  const streamObj = input.object;
+
+  const r = new MapiReader(rop.payload);
+  const dataSize = r.readUint16();
+  const data = r.readBuffer(dataSize);
+
+  // Bestehender Buffer (kann JSON-decoded sein)
+  const existing = Buffer.isBuffer(streamObj.buffer)
+    ? streamObj.buffer
+    : Buffer.from((streamObj.buffer as unknown as { data: number[] }).data ?? []);
+
+  // Daten am Offset einsetzen (typischerweise = Buffer-Ende)
+  let merged: Buffer;
+  if (streamObj.offset === existing.length) {
+    merged = Buffer.concat([existing, data]);
+  } else if (streamObj.offset < existing.length) {
+    // Overwrite-in-place + Extension
+    const before = existing.subarray(0, streamObj.offset);
+    const tailEnd = streamObj.offset + data.length;
+    const after = tailEnd < existing.length ? existing.subarray(tailEnd) : Buffer.alloc(0);
+    merged = Buffer.concat([before, data, after]);
+  } else {
+    // Offset hinter dem Buffer — mit Nullbytes auffüllen
+    const pad = Buffer.alloc(streamObj.offset - existing.length);
+    merged = Buffer.concat([existing, pad, data]);
+  }
+
+  await updateRopObject(sessionToken, input.handle, {
+    buffer: merged,
+    offset: streamObj.offset + data.length,
+  } as Partial<RopObject>);
+
+  const w = new MapiWriter();
+  w.writeUint8(RopId.WriteStream);
+  w.writeUint8(rop.inputHandleIndex ?? 0);
+  w.writeUint32(MapiStatusCode.SUCCESS);
+  w.writeUint16(data.length);
+  log.debug({ written: data.length, totalSize: merged.length, handle: input.handle }, 'RopWriteStream OK');
+  return w.toBuffer();
 }
 
+/**
+ * v4.3.0: RopCommitStream
+ *
+ * Antwort: ReturnValue
+ *
+ * Schreibt den akkumulierten Stream-Buffer in die parent Message — entweder in
+ * die persistierte Prisma-Message (bei bestehendem Stream auf gespeicherte
+ * Message) oder in die `pendingProperties` der Draft (bei Stream auf
+ * Draft-Message). Mapping PropertyTag → DB-Feld:
+ *   PR_BODY_W      → bodyText (UTF-16-LE-Decode)
+ *   PR_HTML        → bodyHtml (UTF-8)
+ *   PR_SUBJECT_W   → subject  (UTF-16-LE-Decode)
+ */
 export async function handleRopCommitStream(
   rop: RopRequest,
-  _sessionToken: string,
-  _serverObjectHandles: number[],
+  sessionToken: string,
+  serverObjectHandles: number[],
 ): Promise<Buffer> {
-  return writeStreamError(RopId.CommitStream, rop, MapiStatusCode.EC_NOT_SUPPORTED);
+  const input = await resolveHandleIndex(sessionToken, serverObjectHandles, rop.inputHandleIndex);
+  if (!input || input.object.kind !== 'stream') {
+    return writeStreamError(RopId.CommitStream, rop, MapiStatusCode.EC_INVALID_SESSION);
+  }
+  const streamObj = input.object;
+
+  const buf = Buffer.isBuffer(streamObj.buffer)
+    ? streamObj.buffer
+    : Buffer.from((streamObj.buffer as unknown as { data: number[] }).data ?? []);
+
+  // Decode je nach Property-Tag
+  let stringValue: string | null = null;
+  let binaryValue: Buffer | null = null;
+  switch (streamObj.propertyTag) {
+    case PR.PR_BODY_W:
+    case PR.PR_SUBJECT_W:
+      stringValue = decodeUtf16Le(buf);
+      break;
+    case PR.PR_HTML:
+      binaryValue = buf;
+      break;
+    default:
+      log.warn({ tag: streamObj.propertyTag.toString(16) }, 'CommitStream: unbekannter Property-Tag — überspringe Persist');
+      // Trotzdem SUCCESS damit Outlook nicht hängt
+      break;
+  }
+
+  // Wenn parent eine gespeicherte Message ist: direkt DB-Update
+  if (streamObj.messageId !== null) {
+    const dataPatch: Record<string, unknown> = {};
+    if (streamObj.propertyTag === PR.PR_BODY_W) dataPatch['bodyText'] = stringValue;
+    if (streamObj.propertyTag === PR.PR_SUBJECT_W) dataPatch['subject'] = stringValue;
+    if (streamObj.propertyTag === PR.PR_HTML) dataPatch['bodyHtml'] = binaryValue?.toString('utf-8') ?? '';
+    if (Object.keys(dataPatch).length > 0) {
+      try {
+        await prisma.message.update({
+          where: { id: streamObj.messageId },
+          data: dataPatch as never,
+        });
+      } catch (e) {
+        log.warn({ err: e, msgId: streamObj.messageId }, 'CommitStream DB-Update fehlgeschlagen');
+      }
+    }
+  } else if (streamObj.parentMessageHandle !== undefined) {
+    // Draft-Stream → in parent message-Handle's pendingProperties schreiben
+    const parent = await getRopObject(sessionToken, streamObj.parentMessageHandle);
+    if (parent && parent.kind === 'message') {
+      const pending = { ...(parent.pendingProperties ?? {}) };
+      pending[String(streamObj.propertyTag)] = stringValue ?? binaryValue?.toString('utf-8') ?? '';
+      await updateRopObject(sessionToken, streamObj.parentMessageHandle, {
+        pendingProperties: pending,
+      } as Partial<RopObject>);
+    }
+  }
+
+  const w = new MapiWriter();
+  w.writeUint8(RopId.CommitStream);
+  w.writeUint8(rop.inputHandleIndex ?? 0);
+  w.writeUint32(MapiStatusCode.SUCCESS);
+  log.debug({ tag: streamObj.propertyTag.toString(16), size: buf.length }, 'RopCommitStream OK');
+  return w.toBuffer();
+}
+
+function decodeUtf16Le(buf: Buffer): string {
+  if (buf.length === 0) return '';
+  // Trim trailing UTF-16-LE null terminator
+  let end = buf.length;
+  if (end >= 2 && buf[end - 1] === 0 && buf[end - 2] === 0) end -= 2;
+  return buf.subarray(0, end).toString('utf16le');
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

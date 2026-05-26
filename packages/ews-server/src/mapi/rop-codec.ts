@@ -413,19 +413,20 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
       case RopId.ModifyRecipients:
       case RopId.ReadRecipients:
       case RopId.RemoveAllRecipients: {
-        // Konsumiere minimal LogonId + InputHandleIndex, restliche Payload bis
-        // Buffer-Ende oder bis nächster bekannter ROP. v4.4-v4.8 Handler stubs
-        // beantworten mit ecNotSupported.
+        // Variable-length ROPs ohne explizites Längen-Präfix:
+        // - ModifyRecipients (v4.3.0): wird vom Handler vollständig geparst,
+        //   wir geben ihm den vollständigen Rest des Buffers.
+        // - Andere ROPs in dieser Liste sind v4.4+ Stubs (ecNotSupported), die
+        //   ihren Payload ignorieren.
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
         const remStart = reader.position;
-        // Take rest of buffer as payload (Dispatcher returns ecNotSupported anyway)
         rops.push({
           ropId, logonId, inputHandleIndex,
-          payload: Buffer.from(body.subarray(remStart, Math.min(remStart + 64, body.length))),
+          payload: Buffer.from(body.subarray(remStart, body.length)),
         });
-        // Diese ROPs haben variable Länge — wir können nicht sicher zum nächsten
-        // ROP springen. Daher: Stream-Parsing nach diesem ROP abbrechen.
+        // Stream-Parsing abbrechen — diese ROPs sind variabel-lang ohne
+        // Längen-Präfix, wir können nicht sicher zum nächsten ROP springen.
         reader.seek(body.length);
         continue;
       }
