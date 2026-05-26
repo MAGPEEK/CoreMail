@@ -6,6 +6,7 @@ import {
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
   Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
+  Cable, Mail as MailIcon, BookUser, Info, ExternalLink,
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
@@ -20,7 +21,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Typen ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
 
 interface RetentionTagDto {
   id: string;
@@ -1822,6 +1823,252 @@ function RetentionSection() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ExternalClientsSection (v3.18.40)
+//
+// Zeigt alle Setup-Daten für externe Clients (Outlook + CalDAV-Plugin,
+// Apple Kalender, Thunderbird, eM Client, iPhone, Android).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ClientConfig {
+  user: { email: string; displayName: string };
+  requiresAppPassword: boolean;
+  mail: {
+    imap: { host: string; port: number; ssl: boolean };
+    pop3: { host: string; port: number; ssl: boolean };
+    smtp: { host: string; port: number; tls: boolean };
+  };
+  caldav: {
+    accountUrl: string;
+    calendars: { id: string; name: string; isDefault: boolean; url: string }[];
+  };
+  carddav: {
+    accountUrl: string;
+    defaultUrl: string;
+  };
+}
+
+function CopyRow({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center gap-3 py-2 border-b border-gray-100 dark:border-gray-700 last:border-0">
+      <span className="text-xs text-gray-500 dark:text-gray-400 w-32 shrink-0">{label}</span>
+      <code className={`flex-1 text-xs ${mono ? 'font-mono' : ''} text-gray-800 dark:text-gray-200 break-all`}>
+        {value}
+      </code>
+      <button
+        onClick={() => { void copyToClipboard(value); toast.success(`${label} kopiert`); }}
+        className="shrink-0 p-1.5 text-gray-400 hover:text-accent rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+        title={`${label} kopieren`}
+      >
+        <Copy size={13} />
+      </button>
+    </div>
+  );
+}
+
+function ExternalClientsSection() {
+  const { data: cfg, isLoading } = useQuery<ClientConfig>({
+    queryKey: ['client-config'],
+    queryFn: () => api.get<ClientConfig>('/user/client-config'),
+  });
+
+  if (isLoading) {
+    return <div className="p-8 text-center"><Loader2 className="animate-spin mx-auto text-gray-400" /></div>;
+  }
+  if (!cfg) return null;
+
+  return (
+    <section>
+      <header className="mb-6">
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+          <Cable size={20} className="text-accent" />
+          Externe Clients & Outlook
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Setup-Daten für E-Mail-Programme (Outlook, Apple Mail, Thunderbird), Kalender-Apps und mobile Geräte.
+        </p>
+      </header>
+
+      {/* Outlook Hinweis-Banner */}
+      <div className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+        <div className="flex items-start gap-3">
+          <Info size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">
+              Outlook Desktop &amp; Kalender / Kontakte
+            </h3>
+            <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+              Outlook Desktop konfiguriert E-Mail über <strong>IMAP/SMTP</strong> (siehe unten) — funktioniert
+              automatisch via Autodiscover. Für <strong>Kalender und Kontakte</strong> hat Microsoft keinen
+              nativen CalDAV/CardDAV-Support eingebaut. Drei Wege:
+            </p>
+            <ol className="list-decimal ml-5 mt-2 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+              <li>
+                <strong>Outlook CalDav Synchronizer</strong> (kostenloses Open-Source-Plugin):{' '}
+                <a href="https://caldavsynchronizer.org/" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-600">
+                  caldavsynchronizer.org <ExternalLink size={10} className="inline" />
+                </a>{' '}— Schritt-für-Schritt-Anleitung unten.
+              </li>
+              <li>
+                <strong>OWA im Browser</strong> nutzen — Kalender + Kontakte funktionieren vollständig im
+                CoreMail-Webclient (oben rechts „Kalender"/„Kontakte"-Tab).
+              </li>
+              <li>
+                <strong>Alternative Clients</strong> mit nativem CalDAV/CardDAV: Apple Kalender + Kontakte (macOS),
+                Thunderbird mit TbSync-Add-on, eM Client (kostenlos für Privatnutzung).
+              </li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      {/* App-Password-Hinweis */}
+      {cfg.requiresAppPassword && (
+        <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3">
+          <Key size={18} className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+              Du hast MFA aktiv — App-Passwort erforderlich
+            </p>
+            <p className="text-xs text-blue-800 dark:text-blue-300 mt-1">
+              Externe Clients können MFA nicht durchführen. Generiere ein App-Passwort unter
+              „Einstellungen → App-Passwörter" und nutze das bei IMAP/SMTP/CalDAV/CardDAV-Logins
+              statt deines normalen Passworts.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* E-Mail (IMAP / SMTP / POP3) */}
+      <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-1">
+          <MailIcon size={16} className="text-accent" /> E-Mail (IMAP / SMTP)
+        </h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Für Outlook, Apple Mail, Thunderbird, K-9 Mail (Android) — wird via Autodiscover automatisch erkannt.
+        </p>
+        <div className="grid md:grid-cols-2 gap-6">
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
+              Eingehend (IMAP)
+            </h4>
+            <CopyRow label="Server" value={cfg.mail.imap.host} />
+            <CopyRow label="Port" value={String(cfg.mail.imap.port)} mono={false} />
+            <CopyRow label="Verschlüsselung" value={cfg.mail.imap.ssl ? 'SSL/TLS' : 'STARTTLS'} mono={false} />
+            <CopyRow label="Benutzername" value={cfg.user.email} />
+          </div>
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
+              Ausgehend (SMTP)
+            </h4>
+            <CopyRow label="Server" value={cfg.mail.smtp.host} />
+            <CopyRow label="Port" value={String(cfg.mail.smtp.port)} mono={false} />
+            <CopyRow label="Verschlüsselung" value={cfg.mail.smtp.tls ? 'STARTTLS' : 'Keine'} mono={false} />
+            <CopyRow label="Benutzername" value={cfg.user.email} />
+          </div>
+        </div>
+        <details className="mt-4 text-xs text-gray-500 dark:text-gray-400">
+          <summary className="cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+            POP3 (für ältere Clients, nicht empfohlen — synchronisiert nicht zwischen Geräten)
+          </summary>
+          <div className="mt-2 ml-3">
+            <CopyRow label="Server" value={cfg.mail.pop3.host} />
+            <CopyRow label="Port" value={String(cfg.mail.pop3.port)} mono={false} />
+            <CopyRow label="Verschlüsselung" value={cfg.mail.pop3.ssl ? 'SSL/TLS' : 'STARTTLS'} mono={false} />
+          </div>
+        </details>
+      </div>
+
+      {/* CalDAV */}
+      <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-1">
+          <CalendarDays size={16} className="text-accent" /> Kalender (CalDAV)
+        </h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Für Apple Kalender, Thunderbird Lightning, eM Client, DAVx⁵ (Android), Outlook + CalDav-Synchronizer-Plugin.
+        </p>
+        <CopyRow label="Account-URL" value={cfg.caldav.accountUrl} />
+        <CopyRow label="Benutzername" value={cfg.user.email} />
+        <CopyRow label="Passwort" value={cfg.requiresAppPassword ? '(App-Passwort)' : '(dein Login-Passwort)'} mono={false} />
+        {cfg.caldav.calendars.length > 0 && (
+          <details className="mt-3 text-xs">
+            <summary className="cursor-pointer text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
+              Direkte Kalender-URLs ({cfg.caldav.calendars.length}) — für Clients ohne Auto-Discovery
+            </summary>
+            <div className="mt-2 ml-3 space-y-1">
+              {cfg.caldav.calendars.map((c) => (
+                <CopyRow key={c.id} label={c.name + (c.isDefault ? ' ★' : '')} value={c.url} />
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+
+      {/* CardDAV */}
+      <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-1">
+          <BookUser size={16} className="text-accent" /> Kontakte (CardDAV)
+        </h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Für Apple Kontakte, Thunderbird CardBook, eM Client, DAVx⁵, Outlook + CalDav-Synchronizer-Plugin.
+        </p>
+        <CopyRow label="Account-URL" value={cfg.carddav.accountUrl} />
+        <CopyRow label="Adressbuch-URL" value={cfg.carddav.defaultUrl} />
+        <CopyRow label="Benutzername" value={cfg.user.email} />
+        <CopyRow label="Passwort" value={cfg.requiresAppPassword ? '(App-Passwort)' : '(dein Login-Passwort)'} mono={false} />
+      </div>
+
+      {/* Outlook CalDav Synchronizer Anleitung */}
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-3">
+          <ExternalLink size={16} className="text-accent" /> Outlook CalDav Synchronizer einrichten
+        </h3>
+        <ol className="list-decimal ml-5 text-sm text-gray-700 dark:text-gray-300 space-y-3">
+          <li>
+            <strong>Plugin herunterladen + installieren</strong>:
+            <a href="https://github.com/aluxnimm/outlookcaldavsynchronizer/releases/latest"
+               target="_blank" rel="noopener noreferrer"
+               className="text-accent hover:underline ml-1 inline-flex items-center gap-1">
+              GitHub Releases <ExternalLink size={11} />
+            </a>
+            <span className="text-xs text-gray-500 dark:text-gray-400 block mt-1">
+              Lade die neueste <code>OutlookCalDavSynchronizer-x.x.x.zip</code>, entpacke und führe <code>setup.exe</code> aus.
+              Outlook neu starten.
+            </span>
+          </li>
+          <li>
+            <strong>In Outlook</strong>: Tab „CalDav Synchronizer" → „Synchronization Profiles" → „+ Add" → „Generic CalDAV/CardDAV".
+          </li>
+          <li>
+            <strong>Kalender-Profil erstellen</strong>:
+            <div className="text-xs text-gray-600 dark:text-gray-400 ml-2 mt-1 space-y-0.5">
+              <div>• <strong>Outlook Folder</strong>: „Kalender" (lokaler Outlook-Kalender)</div>
+              <div>• <strong>DAV URL</strong>: <code className="bg-gray-100 dark:bg-gray-700 px-1">{cfg.caldav.accountUrl}</code></div>
+              <div>• <strong>Username</strong>: <code className="bg-gray-100 dark:bg-gray-700 px-1">{cfg.user.email}</code></div>
+              <div>• <strong>Password</strong>: {cfg.requiresAppPassword ? 'App-Passwort (Einstellungen → App-Passwörter)' : 'dein Login-Passwort'}</div>
+              <div>• <strong>Test Connection</strong> klicken → wählt automatisch verfügbare Kalender</div>
+              <div>• <strong>Synchronization Settings</strong>: „Outlook ↔ Server (Two-Way)", Intervall z.B. 5 Min.</div>
+            </div>
+          </li>
+          <li>
+            <strong>Kontakte-Profil erstellen</strong> (gleich wiederholen):
+            <div className="text-xs text-gray-600 dark:text-gray-400 ml-2 mt-1 space-y-0.5">
+              <div>• <strong>Outlook Folder</strong>: „Kontakte" (lokaler Outlook-Ordner)</div>
+              <div>• <strong>DAV URL</strong>: <code className="bg-gray-100 dark:bg-gray-700 px-1">{cfg.carddav.defaultUrl}</code></div>
+              <div>• Rest wie oben</div>
+            </div>
+          </li>
+          <li>
+            <strong>Erste Synchronisierung</strong> manuell anstoßen („Synchronize now"). Danach läuft alles
+            automatisch im Hintergrund. Termine und Kontakte erscheinen in Outlook und bleiben bidirektional
+            mit CoreMail synchron.
+          </li>
+        </ol>
+      </div>
+    </section>
+  );
+}
+
 const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
   {
     group: 'Konto',
@@ -1829,6 +2076,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
       { id: 'profile',      label: 'E-Mail-Konto',           icon: User       },
       { id: 'password',     label: 'Passwort',                icon: Lock       },
       { id: 'appPasswords', label: 'App-Passwörter',          icon: Smartphone },
+      { id: 'externalClients', label: 'Externe Clients & Outlook', icon: Cable },
       { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
       { id: 'rules',        label: 'Regeln',                  icon: ListFilter },
       { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
@@ -1862,8 +2110,9 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   calendar:     CalendarSection,
   categories:   CategoriesSection,
   retention:    RetentionSection,
-  appPasswords: AppPasswordsSection,
-  inactivity:   InactivitySection,
+  appPasswords:    AppPasswordsSection,
+  externalClients: ExternalClientsSection,
+  inactivity:      InactivitySection,
   view:         ViewSection,
   rules:        RulesSection,
 };

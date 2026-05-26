@@ -7,6 +7,94 @@ import { requireAuth } from '../middleware/auth.js';
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
 
+// GET /api/v1/user/client-config
+// v3.18.40: Liefert ALLE Setup-Daten für externe E-Mail-/Kalender-/Kontakte-
+// Clients (Outlook + CalDAV-Plugin, Apple Kalender, Thunderbird, eM Client).
+// Outlook-Desktop unterstützt nativ kein CalDAV/CardDAV → Kalender + Kontakte
+// erfordern das (kostenlose, OSS) „Outlook CalDav Synchronizer"-Plugin.
+userRouter.get('/client-config', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const [settings, user, calendars, mfa] = await Promise.all([
+    prisma.serverSettings.findUnique({
+      where: { id: 'singleton' },
+      select: {
+        publicHostname: true, useHttps: true, httpPort: true,
+        imapHost: true, imapPort: true, imapSsl: true,
+        pop3Host: true, pop3Port: true, pop3Ssl: true,
+        smtpHost: true, smtpPort: true, smtpTls: true,
+      },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, displayName: true },
+    }),
+    prisma.calendar.findMany({
+      where: { userId },
+      select: { id: true, name: true, isDefault: true },
+      orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    }),
+    prisma.userMfa.findUnique({
+      where: { userId },
+      select: { totpEnabled: true, webAuthnCredentials: true },
+    }).catch(() => null),
+  ]);
+
+  const hostname = settings?.publicHostname ?? req.get('host') ?? 'mail.local';
+  const proto = settings?.useHttps === false ? 'http' : 'https';
+  const port = settings?.httpPort ?? 443;
+  const isStandardPort = (proto === 'https' && port === 443) || (proto === 'http' && port === 80);
+  const portSuffix = isStandardPort ? '' : `:${port}`;
+  const baseUrl = `${proto}://${hostname}${portSuffix}`;
+
+  // MFA-aktiv → CalDAV/CardDAV/IMAP/SMTP-Clients brauchen App-Passwort
+  // (Bearer-Token funktioniert in den Clients nicht, normales Passwort wird
+  // durch MFA blockiert).
+  const mfaEnabled = !!(mfa?.totpEnabled || (mfa?.webAuthnCredentials &&
+    typeof mfa.webAuthnCredentials === 'string' &&
+    mfa.webAuthnCredentials.length > 2));
+
+  res.json({
+    user: {
+      email: user?.email ?? '',
+      displayName: user?.displayName ?? '',
+    },
+    requiresAppPassword: mfaEnabled,
+    mail: {
+      imap: {
+        host: settings?.imapHost ?? hostname,
+        port: settings?.imapPort ?? 993,
+        ssl:  settings?.imapSsl ?? true,
+      },
+      pop3: {
+        host: settings?.pop3Host ?? hostname,
+        port: settings?.pop3Port ?? 995,
+        ssl:  settings?.pop3Ssl ?? true,
+      },
+      smtp: {
+        host: settings?.smtpHost ?? hostname,
+        port: settings?.smtpPort ?? 587,
+        tls:  settings?.smtpTls ?? true,
+      },
+    },
+    caldav: {
+      accountUrl: `${baseUrl}/dav/calendars/${userId}/`,
+      calendars: calendars.map((c) => ({
+        id: c.id,
+        name: c.name,
+        isDefault: c.isDefault,
+        url: `${baseUrl}/dav/calendars/${userId}/${c.id}/`,
+      })),
+    },
+    carddav: {
+      // Account-URL für Client-Auto-Discovery (Apple Kontakte, Thunderbird,
+      // Outlook CalDav Synchronizer). CoreMail hat aktuell EIN Default-
+      // Adressbuch pro User unter dem Pfad „/default/".
+      accountUrl: `${baseUrl}/dav/addressbooks/${userId}/`,
+      defaultUrl: `${baseUrl}/dav/addressbooks/${userId}/default/`,
+    },
+  });
+});
+
 // GET /api/v1/user/profile
 userRouter.get('/profile', async (req: Request, res: Response) => {
   

@@ -13,6 +13,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.40] — 2026-05-26 — Externe Clients & Outlook Setup-Page in OWA
+
+### Added
+
+- **Neue OWA-Settings-Section „Externe Clients & Outlook"**
+  (`packages/web-client/src/pages/SettingsPage.tsx`, `packages/api-gateway/src/routes/user.ts`):
+  Zentrale Setup-Hilfe-Seite für alle externen Clients. Zeigt prominent:
+  - **IMAP/SMTP/POP3-Daten** mit Copy-Buttons (Host, Port, Verschlüsselung)
+  - **CalDAV Account-URL** + direkte URLs pro Kalender
+  - **CardDAV Account-URL** + Default-Adressbuch-URL
+  - **App-Passwort-Hinweis** wenn MFA aktiv ist
+  - **Schritt-für-Schritt-Anleitung für „Outlook CalDav Synchronizer"**
+    (kostenloses OSS-Plugin) — Kalender + Kontakte über Outlook nutzen
+  - **Hinweise zu Alternativen**: OWA im Browser, Apple Kalender/Kontakte,
+    Thunderbird + TbSync, eM Client, DAVx⁵ (Android)
+
+- **Neuer Backend-Endpoint** `GET /api/v1/user/client-config`
+  (`packages/api-gateway/src/routes/user.ts`): Liefert konsolidiert alle
+  Setup-Daten — Email/DisplayName, IMAP/SMTP/POP3-Hosts aus `ServerSettings`,
+  CalDAV-Account-URL + pro Kalender, CardDAV-Account- + Default-URL,
+  `requiresAppPassword`-Flag basierend auf User-MFA-Status.
+
+### Hintergrund
+
+Microsoft Outlook Desktop hat keinen nativen CalDAV/CardDAV-Support eingebaut.
+Volle MAPI-over-HTTP-Implementierung (für native Outlook-Exchange-Anbindung
+mit Kalender + Kontakte) ist mehrere Wochen Arbeit und kommt als eigenes
+zukünftiges Feature. Bis dahin ist der „Outlook CalDav Synchronizer"
+(GitHub: `aluxnimm/outlookcaldavsynchronizer`) der ausgereifte OSS-Plugin-
+Weg für Outlook-User. Die neue Settings-Page bündelt alle nötigen Daten
++ liefert die Installations-Anleitung direkt im UI.
+
+---
+
 ## [3.18.39] — 2026-05-26 — Outlook: EXCH+EXPR aus Autodiscover entfernt → IMAP-Fallback
 
 ### Fixed

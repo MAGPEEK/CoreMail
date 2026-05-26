@@ -1,6 +1,6 @@
 {
   "name": "@coremail/web-client",
-  "version": "3.18.39",
+  "version": "3.18.40",
   "private": true,
   "type": "module",
   "scripts": {

@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.39`
+**Aktuelle Version**: `3.18.40`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.39 — Highlights
+## Aktuelle Version 3.18.40 — Highlights
+
+**v3.18.40** — Externe Clients & Outlook Setup-Page in OWA. User-Wunsch: „Kalender und Kontakte über Outlook einsehen + bearbeiten". Microsoft Outlook Desktop hat keinen nativen CalDAV/CardDAV-Support — volle MAPI-over-HTTP-Implementierung wäre Wochen-Arbeit. Pragmatische Lösung: neue OWA-Settings-Section „Externe Clients & Outlook" mit allen nötigen Daten + Schritt-für-Schritt-Anleitung für das (kostenlose, OSS) „Outlook CalDav Synchronizer"-Plugin. Backend: neuer Endpoint `GET /api/v1/user/client-config` liefert konsolidiert IMAP/SMTP/POP3-Daten aus ServerSettings, CalDAV-Account + per-Kalender-URLs, CardDAV-Account + Default-Adressbuch-URL, plus `requiresAppPassword`-Flag basierend auf MFA-Status. Frontend: neue ExternalClientsSection mit Copy-Buttons für alle Werte, App-Passwort-Hinweis bei MFA, ausführliche Plugin-Setup-Anleitung mit pre-filled URLs (User muss nur kopieren+einfügen), und Hinweise zu Alternativen (OWA-Browser, Apple Kalender, Thunderbird+TbSync, eM Client, DAVx⁵ für Android).
 
 **v3.18.39** — Outlook: EXCH+EXPR aus Autodiscover entfernt → IMAP-Fallback. User-Symptom (nach v3.18.38-Deploy): Password-Prompt kam jetzt korrekt, aber Outlook hing minutenlang im RPC/TCP-Connect, dann Fehler „Diese Ordnergruppe kann nicht geöffnet werden — Fehler bei der Anmeldung bei Microsoft Exchange". Outlook-Verbindungsstatus zeigte VIDs mit Protokoll RPC/TCP auf `mail.<domain>` mit Status „wird hergestellt" — und Typ „Öffentlich..." (Public Folder). Root Cause: Autodiscover-Response lieferte `<Protocol Type="EXCH">` (intra-Exchange RPC) und `<Protocol Type="EXPR">` (Outlook Anywhere / RPC-over-HTTPS). Beide nutzen das binäre MAPI/ROP-Protokoll. Wir haben nur EWS + Stubs auf /mapi/emsmdb/. Outlook versuchte deshalb minutenlang RPC-Connects an `rpcproxy.dll` (existiert nicht) oder den RPC-Endpoint-Mapper auf Port 135. **Pragmatischer Fix**: EXCH- und EXPR-Blöcke aus Autodiscover-XML ENTFERNT. Outlook fällt jetzt auto auf IMAP-Konfiguration zurück — Mail funktioniert sofort. Kalender + Kontakte gehen via CalDAV/CardDAV (Apple Kalender, Thunderbird, eM Client) oder direkt über OWA im Browser. Volle MAPI-over-HTTP-Implementation (EcDoConnectEx, ROP-Verbose-Binary, NSPI Bind/QueryRows) wäre für native Outlook-Exchange-Anbindung nötig — mehrere Wochen Arbeit, kommt später als eigenes Feature.
 
@@ -763,4 +765,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-26 (v3.18.39 — Outlook EXCH+EXPR raus → IMAP-Fallback; v3.18.38 — Passwort-Prompt-Root-Cause; v3.18.37 — Autodiscover-XML erweitert)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.40 — Externe Clients Setup-Page in OWA; v3.18.39 — Outlook EXCH+EXPR raus; v3.18.38 — Passwort-Prompt-Root-Cause)*
