@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { deriveServerUrls } from '../../lib/server-urls.js';
 
 const log = createLogger('admin:servers');
 export const adminServersRouter: RouterType = Router();
@@ -59,29 +60,20 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
   }
 
   try {
-    // v3.18.35: Wenn der Admin nur publicHostname/useHttps/httpPort ändert ohne
-    // die abgeleiteten URLs (ewsUrl/owaUrl/easUrl/autodiscoverBase) anzupassen,
-    // wären diese veraltet und Outlook-Autodiscover lieferte falsche Adressen.
-    // Wir prüfen: enthält der Request alte mail.local-URLs ODER zeigen URLs noch
-    // auf Port 8080 obwohl httpPort != 8080? Dann auto-derive aus publicHostname.
+    // v3.18.35+36: Wenn der Admin nur publicHostname/useHttps/httpPort ändert
+    // ohne die abgeleiteten URLs anzupassen, wären diese veraltet und
+    // Outlook-Autodiscover lieferte falsche Adressen. Wir prüfen: enthält der
+    // Request alte mail.local-URLs ODER zeigen URLs noch auf Port 8080 obwohl
+    // httpPort != 8080? Dann auto-derive aus publicHostname.
     const requestUrls = [parsed.data.ewsUrl, parsed.data.owaUrl, parsed.data.easUrl, parsed.data.autodiscoverBase];
     const hasStaleUrls = requestUrls.some((u) => /mail\.local/i.test(u)) ||
                          (parsed.data.httpPort !== 8080 && requestUrls.some((u) => /:8080/.test(u)));
     if (hasStaleUrls) {
-      const proto = parsed.data.useHttps ? 'https' : 'http';
-      const portSuffix = (parsed.data.useHttps && parsed.data.httpPort === 443) ||
-                          (!parsed.data.useHttps && parsed.data.httpPort === 80)
-        ? ''
-        : `:${parsed.data.httpPort}`;
-      const base = `${proto}://${parsed.data.publicHostname}${portSuffix}`;
-      const labels = parsed.data.publicHostname.split('.');
-      const adHost = parsed.data.publicHostname.startsWith('autodiscover.')
-        ? parsed.data.publicHostname
-        : `autodiscover.${labels.length >= 3 ? labels.slice(1).join('.') : parsed.data.publicHostname}`;
-      parsed.data.ewsUrl = `${base}/EWS/Exchange.asmx`;
-      parsed.data.owaUrl = `${base}/owa/`;
-      parsed.data.easUrl = `${base}/Microsoft-Server-ActiveSync`;
-      parsed.data.autodiscoverBase = `${proto}://${adHost}${portSuffix}`;
+      const derived = deriveServerUrls(parsed.data.publicHostname, parsed.data.useHttps, parsed.data.httpPort);
+      parsed.data.ewsUrl           = derived.ewsUrl;
+      parsed.data.owaUrl           = derived.owaUrl;
+      parsed.data.easUrl           = derived.easUrl;
+      parsed.data.autodiscoverBase = derived.autodiscoverBase;
       log.info({ publicHostname: parsed.data.publicHostname }, 'Auto-derived URLs from publicHostname (stale mail.local detected)');
     }
 
