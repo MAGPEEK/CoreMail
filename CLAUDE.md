@@ -13,7 +13,7 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `3.18.31`
+**Aktuelle Version**: `3.18.32`
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
@@ -539,7 +539,9 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 3.18.31 — Highlights
+## Aktuelle Version 3.18.32 — Highlights
+
+**v3.18.32** — TLS-Proxy SNI-Multi-Cert-Support (Outlook-Autodiscover-Fix). User-Report: „Outlook-Autodiscover liefert Zertifikatsfehler, obwohl `autodiscover.<domain>`-Cert via ACME ausgestellt wurde". Root Cause: Der integrierte HTTPS-Proxy auf Port 443 lud nur das **eine** Cert mit `isActiveHttps=true` und bediente damit alle eingehenden TLS-Verbindungen — Outlook sah beim Verbinden mit `autodiscover.<domain>` immer das `mail.<domain>`-Cert → Hostname-Mismatch. Fix: TLS-Proxy auf **SNI-Multi-Cert-Support** refactort. Beim Reload werden ALLE Certs mit `status='ACTIVE'` geladen, pro Hostname (CN + alle SANs + `domains[]`) ein eigener `tls.SecureContext`. `SNICallback` matcht exact → wildcard (`*.example.com`, RFC 6125) → Default-Cert. Default-Cert ist weiterhin das mit `isActiveHttps=true`, Fallback das neueste ACTIVE-Cert. Zusätzlich triggern jetzt auch ACME-Issuance + Self-Signed-Generate + Cert-Upload den `coremail:tls:reload`-Channel — vorher musste man nach Cert-Erstellung manuell „HTTPS aktivieren" klicken, mit Multi-SNI ist jeder ACTIVE-Cert sofort verfügbar.
 
 **v3.18.31** — Öffentliche Ordner komplett entfernt. Das Feature war Exchange-Public-Folder-Style (mit ACL READ/WRITE/FULL + Mail-Enabled-Variante seit v3.18.9) und wird vom Markt heute kaum noch genutzt — moderne Teams bevorzugen Shared Mailboxes (`/admin/shared-mailboxes/`) und Distribution Groups (`/admin/groups/`) für die typischen Use-Cases (Team-Postfach, Verteiler, kollaborative Inbox). **Entfernt**: Prisma-Modelle `PublicFolder` + `PublicFolderMessage` (Tabellen `public_folders` + `public_folder_messages` via `prisma db push --accept-data-loss` gedroppt), Backend-Router `packages/api-gateway/src/routes/public-folders.ts` + `packages/api-gateway/src/routes/admin/public-folders.ts`, Route-Mounts `/api/v1/public-folders` + `/api/v1/admin/public-folders`, BCP-Page `PublicFoldersPage.tsx` + Sidebar-Eintrag + Route + i18n-Keys (`nav_public_folders` DE+EN), MWA-Sektion `PublicFoldersSection` + `PublicFolderViewerModal` in `FolderTree.tsx`. **Geändert**: `smtp-server/src/inbound/handler.ts` `verifyRecipient()` ohne publicFolder-Lookup, `smtp-server/src/handlers/message.ts` `storeInboundMessage()` ohne Public-Folder-Branch — Mails an ehemalige Public-Folder-Adressen werden jetzt als unbekannter Empfänger verworfen. Migration ist destruktiv, alle bestehenden Public Folders + deren Mails gehen verloren (vergleichbar mit eDiscovery-Removal in v3.18.5).
 
@@ -747,4 +749,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-25 (v3.18.31 — Öffentliche Ordner komplett entfernt; v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations; v3.18.29 — Backup-Archiv Download+Delete)*
+*Letzte Aktualisierung: 2026-05-26 (v3.18.32 — TLS-Proxy SNI-Multi-Cert-Support; v3.18.31 — Öffentliche Ordner komplett entfernt; v3.18.30 — BigInt-Crashfix + Audit-Toggle + Audit-Translations)*
