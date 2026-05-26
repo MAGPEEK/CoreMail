@@ -13,6 +13,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.38] — 2026-05-26 — Outlook-LTSC „kein Passwort-Prompt" + Autodiscover-Vervollständigung
+
+### Fixed
+
+- **KRITISCHER ROOT CAUSE: EWS antwortete auf ersten Request mit 200 OK
+  statt 401 — Outlook fragt nie nach Passwort** (`packages/ews-server/src/server.ts`):
+  User-Symptom: Outlook „verband" sich nach Autodiscover ohne Credential-
+  Prompt, zeigte aber dann nur „Private Ordner" (lokales PST) statt der
+  Exchange-Mailbox, plus Fehlermeldung „Microsoft Exchange-Informationsdienst
+  Ihres Profils enthält nicht alle erforderlichen Informationen". Root Cause:
+  Outlook LTSC probt zuerst `GET /EWS/Exchange.asmx` BEVOR es überhaupt
+  einen `Authorization`-Header sendet. Der bisherige GET-Handler lieferte
+  unauthentifiziert 200 + WSDL-Stub zurück → Outlook nahm an, dass keine
+  Auth nötig ist, schickte nie Credentials, und das Setup landete bei der
+  lokalen Standard-PST („Private Ordner"). **Fix**: `ewsAuthMiddleware` jetzt
+  auch vor dem GET-Handler und vor dem `/mapi/*`-Router (außer
+  `/mapi/healthcheck.htm` — bleibt anonym für Outlook-Probe). MAPI- und
+  OAB-Endpoints senden jetzt auch korrekt `WWW-Authenticate: Basic
+  realm="CoreMail EWS"` bei fehlendem Auth-Header.
+
+- **`auth-service` URL war falsch** (`packages/ews-server/src/auth/middleware.ts`):
+  Basic-Auth-Fallback im EWS rief `http://auth-service:3001/auth/login` —
+  Port 3001 ist aber die `storage-api`, nicht der `auth-service` (der auf
+  3003 läuft). Plus im monolithischen App-Container ist alles unter
+  `localhost` erreichbar, nicht unter Service-Hostnames. Fix: env-Variable
+  `AUTH_SERVICE_URL` mit Default `http://localhost:3003/auth/login`.
+
+- **Autodiscover v1 XML hatte Outlook-Pflichtfelder fehlend bzw. falsch**
+  (`packages/autodiscover/src/v1.ts`): Recherche an Microsoft Docs +
+  Grommunio-Implementierung ergab:
+  - `AuthPackage` MUSS `Basic` (capital B) sein — manche Outlook-LTSC-Builds
+    sind case-sensitive. War `basic` (kleines b).
+  - `<User><LegacyDN>` Pflicht: Outlook nutzt es als interne User-Identity
+    (Format `/o=CoreMail/ou=Exchange Administrative Group
+    (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>`). Fehlte komplett.
+  - `<User><AutoDiscoverSMTPAddress>` ergänzt (Pflicht für Profile-Binding).
+  - `<GroupingInformation>default</GroupingInformation>` im EXPR-Block —
+    required ab Exchange 2013 SP1 für Sharing-Discovery.
+  - `<PublicFolderInformation><SmtpAddress>publicfolder@<root-domain>` als
+    Dummy — Outlook loggt sonst „PublicFolder discovery failed" und
+    klassifiziert das Profil als incomplete.
+  - `ServerDN`/`MdbDN` mit korrekter Exchange-2019-Topologie
+    (`Exchange Administrative Group (FYDIBOHF23SPDLT)` statt nur
+    `Exchange`).
+  - `<EcpUrl>` ergänzt (zeigt auf OWA — Outlook nutzt es für Web-Open-Link).
+
+### Hintergrund-Recherche
+
+Quellen: Microsoft Learn (MS-OXDSCLI, MS-OXCMAPIHTTP, POX Autodiscover),
+msxfaq.de (HTTP-401-Negotiate-Flow), Grommunio Docs (KB Outlook bugs),
+Mailcow Docs (kein EWS, daher kein Outlook-Exchange-Support). Vergleiche
+zu Stalwart + Mailcow (Open-Source-Mailserver) bestätigen: ohne EWS +
+korrektes 401-Verhalten kann Outlook keine Exchange-Profile bauen.
+
+---
+
 ## [3.18.37] — 2026-05-26 — Outlook-LTSC Autodiscover-XML erweitert + Audit-Übersetzungen
 
 ### Fixed
