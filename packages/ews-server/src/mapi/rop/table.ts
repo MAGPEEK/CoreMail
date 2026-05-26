@@ -17,6 +17,7 @@ import {
   releaseRopObject, resolveHandleIndex,
 } from '../rop-handle-table.js';
 import { cuidToFolderId64 } from '../entry-id.js';
+import { containerClassFor, VIRTUAL_FOLDERS } from './folder.js';
 import type { RopRequest } from '../rop-codec.js';
 import type { RopObject } from '../rop-handle-table.js';
 
@@ -98,15 +99,28 @@ export async function handleRopQueryRows(
       take: rowCount,
     }).catch(() => []);
     rows = folders.map((f) => folderToPropRow({ ...f, updatedAt: f.createdAt }, tableObj.parentFolderId));
+
+    // v4.6.0: Virtuelle PIM-Folder auf Root-Ebene injizieren
+    if (tableObj.parentFolderId === '' && rows.length < rowCount) {
+      for (const vf of VIRTUAL_FOLDERS) {
+        rows.push(virtualFolderToPropRow(vf, tableObj.userId));
+        if (rows.length >= rowCount) break;
+      }
+    }
   } else if (tableObj.tableType === 'contents') {
-    const messages = await prisma.message.findMany({
-      where: { folderId: tableObj.parentFolderId },
-      select: { id: true, subject: true, fromAddr: true, fromName: true, date: true,
-                rawSize: true, flags: true },
-      take: rowCount,
-      orderBy: [{ date: 'desc' }],
-    }).catch(() => []);
-    rows = messages.map((m) => messageToPropRow(m));
+    // v4.6.0: Virtuelle PIM-Folder
+    if (tableObj.parentFolderId.startsWith('virtual-')) {
+      rows = await loadVirtualContents(tableObj.parentFolderId, tableObj.userId, rowCount);
+    } else {
+      const messages = await prisma.message.findMany({
+        where: { folderId: tableObj.parentFolderId },
+        select: { id: true, subject: true, fromAddr: true, fromName: true, date: true,
+                  rawSize: true, flags: true },
+        take: rowCount,
+        orderBy: [{ date: 'desc' }],
+      }).catch(() => []);
+      rows = messages.map((m) => messageToPropRow(m));
+    }
   } else if (tableObj.tableType === 'attachments') {
     // v4.4.0: parentFolderId enthält tatsächlich die MessageId
     const attachments = await prisma.attachment.findMany({
@@ -157,6 +171,22 @@ export async function handleRopGetRowCount(
     count = await prisma.attachment.count({
       where: { messageId: tableObj.parentFolderId },
     }).catch(() => 0);
+  } else if (tableObj.parentFolderId.startsWith('virtual-')) {
+    // v4.6.0: Virtuelle PIM-Contents-Counts
+    switch (tableObj.parentFolderId) {
+      case 'virtual-calendar':
+        count = await prisma.calendarEvent.count({ where: { calendar: { userId: tableObj.userId } } }).catch(() => 0);
+        break;
+      case 'virtual-contacts':
+        count = await prisma.contact.count({ where: { userId: tableObj.userId } }).catch(() => 0);
+        break;
+      case 'virtual-tasks':
+        count = await prisma.task.count({ where: { userId: tableObj.userId } }).catch(() => 0);
+        break;
+      case 'virtual-notes':
+        count = await prisma.note.count({ where: { userId: tableObj.userId } }).catch(() => 0);
+        break;
+    }
   } else {
     count = await prisma.message.count({
       where: { folderId: tableObj.parentFolderId },
@@ -216,9 +246,29 @@ function folderToPropRow(f: FolderRecord, _parentFolderId: string): Map<number, 
   m.set(PR.PR_CONTENT_COUNT, f.totalCount);
   m.set(PR.PR_CONTENT_UNREAD, f.unreadCount);
   m.set(PR.PR_SUBFOLDERS, false);
-  m.set(PR.PR_CONTAINER_CLASS_W, 'IPF.Note');
+  m.set(PR.PR_CONTAINER_CLASS_W, containerClassFor(f.name));
   m.set(PR.PR_LAST_MODIFICATION_TIME, f.updatedAt);
   m.set(PR.PR_CREATION_TIME, f.createdAt);
+  return m;
+}
+
+/**
+ * v4.6.0: Property-Row für virtuelle PIM-Folder (Calendar/Contacts/Tasks/Notes).
+ */
+function virtualFolderToPropRow(
+  vf: { id: string; name: string; displayName: string; containerClass: string },
+  _userId: string,
+): Map<number, unknown> {
+  const now = new Date();
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_DISPLAY_NAME_W, vf.displayName);
+  m.set(PR.PR_FOLDER_ID, cuidToFolderId64(vf.id));
+  m.set(PR.PR_CONTENT_COUNT, 0);     // wird per QueryRows on-demand bestimmt
+  m.set(PR.PR_CONTENT_UNREAD, 0);
+  m.set(PR.PR_SUBFOLDERS, false);
+  m.set(PR.PR_CONTAINER_CLASS_W, vf.containerClass);
+  m.set(PR.PR_LAST_MODIFICATION_TIME, now);
+  m.set(PR.PR_CREATION_TIME, now);
   return m;
 }
 
@@ -263,6 +313,121 @@ function attachmentToPropRow(a: AttachmentRecord, idx: number): Map<number, unkn
   m.set(PR.PR_ATTACH_SIZE, a.size);
   m.set(PR.PR_ATTACH_METHOD, 1);  // afByValue (Inline-Daten via OpenStream)
   if (a.contentId) m.set(PR.PR_ATTACH_CONTENT_ID_W, a.contentId);
+  return m;
+}
+
+// ── v4.6.0 — Virtuelle PIM-Folder Contents-Loader ───────────────────────────
+
+async function loadVirtualContents(
+  virtualId: string,
+  userId: string,
+  rowCount: number,
+): Promise<Map<number, unknown>[]> {
+  switch (virtualId) {
+    case 'virtual-calendar': {
+      const events = await prisma.calendarEvent.findMany({
+        where: { calendar: { userId } },
+        select: { id: true, summary: true, description: true, location: true,
+                  dtStart: true, dtEnd: true, organizer: true, allDay: true },
+        take: rowCount,
+        orderBy: [{ dtStart: 'desc' }],
+      }).catch(() => []);
+      return events.map((e) => calendarEventToPropRow(e));
+    }
+    case 'virtual-contacts': {
+      const contacts = await prisma.contact.findMany({
+        where: { userId },
+        select: { id: true, displayName: true, email: true, phone: true,
+                  company: true, jobTitle: true },
+        take: rowCount,
+        orderBy: [{ displayName: 'asc' }],
+      }).catch(() => []);
+      return contacts.map((c) => contactToPropRow(c));
+    }
+    case 'virtual-tasks': {
+      const tasks = await prisma.task.findMany({
+        where: { userId },
+        select: { id: true, subject: true, body: true, dueDate: true,
+                  completedAt: true, priority: true, createdAt: true, status: true },
+        take: rowCount,
+        orderBy: [{ createdAt: 'desc' }],
+      }).catch(() => []);
+      return tasks.map((t) => taskToPropRow({
+        id: t.id, subject: t.subject, body: t.body,
+        dueDate: t.dueDate,
+        completed: t.completedAt !== null || t.status === 'COMPLETED',
+        priority: parseInt(t.priority, 10) || 0,
+        createdAt: t.createdAt,
+      }));
+    }
+    case 'virtual-notes': {
+      const notes = await prisma.note.findMany({
+        where: { userId },
+        select: { id: true, subject: true, body: true, createdAt: true,
+                  updatedAt: true },
+        take: rowCount,
+        orderBy: [{ updatedAt: 'desc' }],
+      }).catch(() => []);
+      return notes.map((n) => noteToPropRow(n));
+    }
+  }
+  return [];
+}
+
+function calendarEventToPropRow(e: {
+  id: string; summary: string; description: string; location: string;
+  dtStart: Date; dtEnd: Date; organizer: string | null; allDay: boolean;
+}): Map<number, unknown> {
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_SUBJECT_W, e.summary);
+  m.set(PR.PR_BODY_W, e.description);
+  m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.Appointment');
+  m.set(PR.PR_MESSAGE_DELIVERY_TIME, e.dtStart);
+  m.set(PR.PR_CLIENT_SUBMIT_TIME, e.dtStart);
+  m.set(PR.PR_CREATION_TIME, e.dtStart);
+  m.set(PR.PR_LAST_MODIFICATION_TIME, e.dtEnd);
+  m.set(PR.PR_MESSAGE_SIZE, (e.summary.length + e.description.length) * 2);
+  m.set(PR.PR_MESSAGE_FLAGS, 0x01);  // Read
+  return m;
+}
+
+function contactToPropRow(c: {
+  id: string; displayName: string; email: string; phone: string;
+  company: string; jobTitle: string;
+}): Map<number, unknown> {
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_SUBJECT_W, c.displayName);
+  m.set(PR.PR_DISPLAY_NAME_W, c.displayName);
+  m.set(PR.PR_SENDER_NAME_W, c.displayName);
+  m.set(PR.PR_SENDER_EMAIL_ADDRESS_W, c.email);
+  m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.Contact');
+  return m;
+}
+
+function taskToPropRow(t: {
+  id: string; subject: string; body: string; dueDate: Date | null;
+  completed: boolean; priority: number | null; createdAt: Date;
+}): Map<number, unknown> {
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_SUBJECT_W, t.subject);
+  m.set(PR.PR_BODY_W, t.body);
+  m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.Task');
+  m.set(PR.PR_PRIORITY, t.priority ?? 0);
+  m.set(PR.PR_MESSAGE_FLAGS, t.completed ? 0x01 : 0x00);
+  m.set(PR.PR_MESSAGE_DELIVERY_TIME, t.dueDate ?? t.createdAt);
+  m.set(PR.PR_CREATION_TIME, t.createdAt);
+  return m;
+}
+
+function noteToPropRow(n: {
+  id: string; subject: string; body: string; createdAt: Date; updatedAt: Date;
+}): Map<number, unknown> {
+  const m = new Map<number, unknown>();
+  m.set(PR.PR_SUBJECT_W, n.subject);
+  m.set(PR.PR_BODY_W, n.body);
+  m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.StickyNote');
+  m.set(PR.PR_CREATION_TIME, n.createdAt);
+  m.set(PR.PR_LAST_MODIFICATION_TIME, n.updatedAt);
   return m;
 }
 

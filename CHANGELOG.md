@@ -13,6 +13,71 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.6.0] — 2026-05-27 — MAPI/HTTP Phase 6: Calendar/Contacts/Tasks/Notes virtual folders
+
+### Added
+
+- **containerClassFor(folderName)** (`packages/ews-server/src/mapi/rop/folder.ts`):
+  Mappt einen Folder-Namen auf Outlook MAPI Container-Class (PR_CONTAINER_CLASS_W).
+  Werte nach MS-OXOSFLD §2.2.3: IPF.Note (Mail, Default), IPF.Appointment,
+  IPF.Contact, IPF.Task, IPF.StickyNote, IPF.Journal. Case-insensitive Match
+  für englische + deutsche Standard-Namen (Calendar/Kalender, Contacts/Kontakte,
+  Tasks/Aufgaben, Notes/Notizen).
+
+- **VIRTUAL_FOLDERS-Konstante**: 4 synthesische PIM-Folder mit fixen IDs
+  (`virtual-calendar`, `virtual-contacts`, `virtual-tasks`, `virtual-notes`).
+  CoreMail speichert diese Daten in separaten Prisma-Modellen (CalendarEvent,
+  Contact, Task, Note) — Outlook MAPI sieht sie aber als Mailbox-Folder.
+
+- **GetHierarchyTable erweitert**: Auf Root-Ebene (`parentFolderId === ''`)
+  wird die rowCount um VIRTUAL_FOLDERS.length erhöht.
+
+- **QueryRows auf hierarchy**: Injiziert `virtualFolderToPropRow()` für die
+  4 PIM-Folder mit PR_DISPLAY_NAME_W + PR_FOLDER_ID + PR_CONTAINER_CLASS_W.
+
+- **OpenFolder erweitert**: Matched auch virtuelle IDs via
+  `cuidToFolderId64(VIRTUAL_FOLDERS[*].id)`.
+
+- **GetContentsTable erweitert**: Virtuelle Folder liefern Counts aus
+  `prisma.calendarEvent / contact / task / note` statt `prisma.message`.
+
+- **QueryRows auf contents**: `parentFolderId.startsWith('virtual-')` →
+  `loadVirtualContents()` lädt Events/Contacts/Tasks/Notes aus Prisma und
+  mappt sie zu PropRows mit:
+  - PR_MESSAGE_CLASS_W = 'IPM.Appointment' / 'IPM.Contact' / 'IPM.Task' /
+    'IPM.StickyNote'
+  - PR_SUBJECT_W = summary / displayName / subject
+  - PR_BODY_W = description / body
+  - PR_MESSAGE_DELIVERY_TIME = dtStart / dueDate / createdAt
+  - PR_DISPLAY_NAME_W, PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W
+    (für Contact-Rows)
+
+- **GetRowCount erweitert** für virtuelle Folder.
+
+- **OpenMessage erweitert**: Erkennt virtuelle Folder-IDs und delegiert an
+  `openVirtualPimMessage()` der das Item via Hash-Match in der jeweiligen
+  PIM-Table findet (`calendarEvent / contact / task / note`).
+
+- **folderToPropRow** nutzt jetzt `containerClassFor(name)` statt hardcoded
+  'IPF.Note' — bestehende Folder mit Name 'Calendar'/'Kontakte' etc.
+  werden ebenfalls korrekt klassifiziert.
+
+### Outlook-Verhalten nach v4.6.0
+
+4 zusätzliche Folder erscheinen in Outlook unter dem Postfach: „Kalender",
+„Kontakte", „Aufgaben", „Notizen" — mit korrektem Icon je nach Outlook-
+Folder-Type-Detection. Listen-View zeigt jeweils Items (Termine/Kontakte/
+Tasks/Notes) mit Subject und Date.
+
+Read-only Browsing der PIM-Daten ist funktional. Volle Property-Round-Trip
+auf einzelne Items (Detail-Anzeige der Termine, Kontakte etc.) braucht
+noch volles Named-Property-Mapping (PSETID_Appointment etc.) — kommt in
+v5.0.0 oder optional als v4.6.1 Patch. Für volle bidirektionale Kalender/
+Kontakte-Sync empfehlen wir weiterhin den „Outlook CalDav Synchronizer"
+aus dem Setup-Page (Settings → Externe Clients).
+
+---
+
 ## [4.5.0] — 2026-05-26 — MAPI/HTTP Phase 5: Push-Notifications via Redis pub/sub
 
 ### Added

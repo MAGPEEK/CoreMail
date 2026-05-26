@@ -55,13 +55,21 @@ export async function handleRopOpenFolder(
     select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true,
               parentId: true },
   });
-  const folder = folders.find((f) => cuidToFolderId64(f.id) === folderId64);
+  let folder = folders.find((f) => cuidToFolderId64(f.id) === folderId64) as
+    | { id: string; name: string } | undefined;
+
+  // v4.6.0: Virtuelle PIM-Folder auch matchen
+  if (!folder) {
+    const vf = VIRTUAL_FOLDERS.find((v) => cuidToFolderId64(v.id) === folderId64);
+    if (vf) folder = { id: vf.id, name: vf.name };
+  }
+
   if (!folder) {
     log.warn({ folderId64: folderId64.toString(16), userId }, 'RopOpenFolder: Folder nicht gefunden');
     return writeOpenFolderError(rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Folder-Handle in der Tabelle eintragen
+  // Folder-Handle in der Tabelle eintragen (v4.6.0: containerClass dynamisch ergänzt)
   const handle = await putRopObject(sessionToken, {
     kind: 'folder',
     userId,
@@ -81,6 +89,53 @@ export async function handleRopOpenFolder(
   w.writeUint8(0); // HasRules
   w.writeUint8(0); // IsGhosted
   return w.toBuffer();
+}
+
+/**
+ * v4.6.0: Virtuelle PIM-Folder. CoreMail speichert Calendar/Contacts/Tasks
+ * NICHT als Mailbox-Folder (separate Prisma-Modelle), aber Outlook MAPI braucht
+ * sie als Folder-Einträge in der Hierarchy-Tabelle damit der User sie sieht.
+ *
+ * Wir synthesizen sie mit fixen "virtual-*" IDs und auto-generieren ihre
+ * Property-Rows. OpenFolder auf eine virtuelle ID erkennt das und legt ein
+ * Folder-Handle mit einem speziellen folderName an, das von QueryRows
+ * ausgewertet wird.
+ */
+export const VIRTUAL_FOLDERS = [
+  { id: 'virtual-calendar',   name: 'Kalender',  displayName: 'Kalender',  containerClass: 'IPF.Appointment' },
+  { id: 'virtual-contacts',   name: 'Kontakte',  displayName: 'Kontakte',  containerClass: 'IPF.Contact' },
+  { id: 'virtual-tasks',      name: 'Aufgaben',  displayName: 'Aufgaben',  containerClass: 'IPF.Task' },
+  { id: 'virtual-notes',      name: 'Notizen',   displayName: 'Notizen',   containerClass: 'IPF.StickyNote' },
+] as const;
+
+export function isVirtualFolderId(id: string): boolean {
+  return id.startsWith('virtual-');
+}
+
+/**
+ * v4.6.0: Mappt einen Folder-Namen auf eine Outlook MAPI Container-Class.
+ *
+ * Outlook nutzt PR_CONTAINER_CLASS_W (0x3613001F) um den Folder-Typ zu
+ * erkennen — daraus folgt das Icon, das Default-View (Mail/Kalender/Kontakte),
+ * und das Editor-Verhalten. Werte (MS-OXOSFLD §2.2.3):
+ *   "IPF.Note"        — Mail (Default)
+ *   "IPF.Appointment" — Kalender
+ *   "IPF.Contact"     — Kontakte
+ *   "IPF.Task"        — Aufgaben
+ *   "IPF.StickyNote"  — Notizen
+ *   "IPF.Journal"     — Journal
+ *
+ * Wir matchen case-insensitive sowohl die englischen als auch die deutschen
+ * Standard-Namen (Outlook prüft den Klassen-String, nicht den Folder-Namen).
+ */
+export function containerClassFor(folderName: string): string {
+  const n = folderName.toLowerCase();
+  if (n === 'calendar' || n === 'kalender')               return 'IPF.Appointment';
+  if (n === 'contacts' || n === 'kontakte')               return 'IPF.Contact';
+  if (n === 'tasks'    || n === 'aufgaben')               return 'IPF.Task';
+  if (n === 'notes'    || n === 'notizen')                return 'IPF.StickyNote';
+  if (n === 'journal'  || n === 'journal')                return 'IPF.Journal';
+  return 'IPF.Note';                                       // Default: Mail
 }
 
 function writeOpenFolderError(rop: RopRequest, errorCode: number): Buffer {
@@ -106,13 +161,17 @@ export async function handleRopGetHierarchyTable(
   const userId = input.object.userId;
   const parentFolderId = input.object.kind === 'folder' ? input.object.folderId : '';
 
-  // Zähle direkte Sub-Folder
-  const rowCount = await prisma.folder.count({
+  // Zähle direkte Sub-Folder (+ virtuelle PIM-Folder auf Root-Ebene)
+  let rowCount = await prisma.folder.count({
     where: {
       mailbox: { userId },
       parentId: parentFolderId === '' ? null : parentFolderId,
     },
   }).catch(() => 0);
+  // v4.6.0: Virtuelle Folder nur auf Root-Ebene (Mailbox-Handle) zählen
+  if (parentFolderId === '') {
+    rowCount += VIRTUAL_FOLDERS.length;
+  }
 
   const tableHandle = await putRopObject(sessionToken, {
     kind: 'table', userId, tableType: 'hierarchy', parentFolderId,
@@ -144,12 +203,36 @@ export async function handleRopGetContentsTable(
     return writeTableError(RopId.GetContentsTable, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
 
-  // Zähle Messages — aber sie werden in v4.1.0 noch nicht via QueryRows
-  // ausgeliefert. Outlook sieht eine "Tabelle mit N Zeilen", QueryRows
-  // returnt aber leere Rows. v4.2.0 füllt es auf.
-  const rowCount = await prisma.message.count({
-    where: { folderId: input.object.folderId },
-  }).catch(() => 0);
+  // v4.6.0: Virtuelle Folder → eigene Counts
+  let rowCount = 0;
+  if (isVirtualFolderId(input.object.folderId)) {
+    switch (input.object.folderId) {
+      case 'virtual-calendar':
+        rowCount = await prisma.calendarEvent.count({
+          where: { calendar: { userId: input.object.userId } },
+        }).catch(() => 0);
+        break;
+      case 'virtual-contacts':
+        rowCount = await prisma.contact.count({
+          where: { userId: input.object.userId },
+        }).catch(() => 0);
+        break;
+      case 'virtual-tasks':
+        rowCount = await prisma.task.count({
+          where: { userId: input.object.userId },
+        }).catch(() => 0);
+        break;
+      case 'virtual-notes':
+        rowCount = await prisma.note.count({
+          where: { userId: input.object.userId },
+        }).catch(() => 0);
+        break;
+    }
+  } else {
+    rowCount = await prisma.message.count({
+      where: { folderId: input.object.folderId },
+    }).catch(() => 0);
+  }
 
   const tableHandle = await putRopObject(sessionToken, {
     kind: 'table', userId: input.object.userId,
