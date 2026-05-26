@@ -13,6 +13,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.18.32] — 2026-05-26 — TLS-Proxy: SNI-Multi-Cert-Support (Outlook-Autodiscover-Fix)
+
+### Fixed
+
+- **Outlook-Autodiscover lieferte „Zertifikatsfehler" trotz korrekt ausgestelltem
+  `autodiscover.<domain>`-Zertifikat** (`packages/api-gateway/src/tls-proxy.ts`):
+  Der integrierte HTTPS-Proxy (Port 443) lud nur das eine Zertifikat mit
+  `isActiveHttps=true` und bediente damit ALLE eingehenden TLS-Verbindungen.
+  Wenn Outlook auf `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml`
+  zugriff, sah der Client das `mail.<domain>`-Zertifikat → Hostname-Mismatch →
+  `ERR_CERT_COMMON_NAME_INVALID` / Outlook zeigte Zertifikatswarnung.
+
+  **Fix**: TLS-Proxy auf **SNI-Multi-Cert-Support** refactort.
+  - Beim Reload werden ALLE Certs mit `status='ACTIVE'` geladen, nicht nur das
+    mit `isActiveHttps=true`.
+  - Pro Cert wird ein `tls.SecureContext` erstellt und allen Hostnames zugeordnet
+    (CN + alle SANs aus dem PEM + `domains[]`-Array aus der DB).
+  - Wildcard-Certs (`*.example.com`) werden separat gehalten und per Suffix-Match
+    aufgelöst (RFC 6125 — genau eine Sub-Label-Ebene).
+  - `SNICallback` wählt pro Verbindung anhand des vom Client gesendeten
+    Servernames: exact-match → wildcard-match → Default-Cert.
+  - Default-Cert (für unbekannte SNI oder Verbindungen ohne SNI) ist das Cert
+    mit `isActiveHttps=true`; Fallback: das neueste ACTIVE-Cert.
+
+- **Neu ausgestellte ACME- + Self-Signed- + Upload-Certs triggern jetzt sofort
+  `coremail:tls:reload`** (`packages/api-gateway/src/routes/admin/certificates.ts`):
+  Vorher wurde der Reload nur beim manuellen „HTTPS aktivieren"-Klick (Toggle
+  `isActiveHttps`) ausgelöst — mit Multi-Cert-SNI sollen aber alle ACTIVE-Certs
+  sofort verfügbar sein, ohne dass jemand HTTPS umschaltet. Trigger ergänzt in
+  drei Code-Pfaden: ACME-Issuance (Let's-Encrypt-Ausstellung), Self-Signed-
+  Generierung, Cert-Upload.
+
+### Migration
+
+Bestehende Setups: Beim ersten Reload nach Deploy wird die SNI-Map automatisch
+aus allen ACTIVE-Certs aufgebaut. Bestehende Verbindungen werden nicht unterbrochen.
+Wer das `autodiscover.<domain>`-Cert noch nicht ausgestellt hat: BCP → SSL/TLS →
+ACME-Zertifikat anfordern mit Domain `autodiscover.<domain>` — danach funktioniert
+Outlook-Autodiscover sofort, ohne dass „HTTPS aktivieren" geklickt werden muss.
+
+---
+
 ## [3.18.31] — 2026-05-25 — Öffentliche Ordner komplett entfernt
 
 ### Removed

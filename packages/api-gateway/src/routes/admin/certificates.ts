@@ -378,6 +378,11 @@ async function _runAcmeIssuanceCore(
 
     log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
 
+    // v3.18.32: TLS-Proxy informieren — SNI-Map muss neue Domain einbeziehen.
+    // Vorher wurde der Reload nur beim manuellen „HTTPS aktivieren"-Klick getriggert;
+    // mit Multi-Cert-SNI sollen aber alle ACTIVE-Certs sofort verfügbar sein.
+    await getRedisClient().publish('coremail:tls:reload', certId).catch(() => {});
+
     // Auto-activate for SMTP/IMAP/POP3 if services list includes mail protocols
     const mailProtocols = ['SMTP', 'IMAP', 'POP3'];
     const hasMailProtocol = (issued.services as string[]).some(s => mailProtocols.includes(s));
@@ -446,6 +451,9 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
 
   // Services exklusiv zuordnen
   if (parsed.data.services.length > 0) await claimServices(cert.id, parsed.data.services);
+
+  // v3.18.32: SNI-Map im TLS-Proxy aktualisieren — neuer Hostname verfügbar.
+  await getRedisClient().publish('coremail:tls:reload', cert.id).catch(() => {});
 
   log.info({ id: cert.id, name: cert.name, expiresAt }, 'Custom certificate uploaded');
   res.status(201).json(safe(cert as unknown as Record<string, unknown>));
@@ -539,6 +547,9 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
 
     // Services exklusiv zuordnen
     if (services.length > 0) await claimServices(cert.id, services);
+
+    // v3.18.32: SNI-Map im TLS-Proxy aktualisieren — neuer Hostname verfügbar.
+    await getRedisClient().publish('coremail:tls:reload', cert.id).catch(() => {});
 
     log.info({ id: cert.id, domains, days }, 'Self-signed certificate generated');
     res.status(201).json(safe(cert as unknown as Record<string, unknown>));
