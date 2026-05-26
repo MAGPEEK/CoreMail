@@ -18,6 +18,7 @@ import {
 } from '../rop-handle-table.js';
 import { cuidToFolderId64 } from '../entry-id.js';
 import { containerClassFor, VIRTUAL_FOLDERS } from './folder.js';
+import { restrictionToPrismaWhere, type ParsedRestriction } from './search.js';
 import type { RopRequest } from '../rop-codec.js';
 import type { RopObject } from '../rop-handle-table.js';
 
@@ -112,8 +113,11 @@ export async function handleRopQueryRows(
     if (tableObj.parentFolderId.startsWith('virtual-')) {
       rows = await loadVirtualContents(tableObj.parentFolderId, tableObj.userId, rowCount);
     } else {
+      // v4.8.0: Restriction anwenden (falls vorhanden)
+      const restriction = (tableObj as { restriction?: ParsedRestriction | null }).restriction ?? null;
+      const restrictionWhere = restrictionToPrismaWhere(restriction);
       const messages = await prisma.message.findMany({
-        where: { folderId: tableObj.parentFolderId },
+        where: { folderId: tableObj.parentFolderId, ...restrictionWhere },
         select: { id: true, subject: true, fromAddr: true, fromName: true, date: true,
                   rawSize: true, flags: true },
         take: rowCount,

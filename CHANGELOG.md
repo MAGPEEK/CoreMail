@@ -13,6 +13,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [4.7.0] — 2026-05-27 — MAPI/HTTP Phase 7: NSPI Address-Book Fallback + Server-Side Search
+
+### Changed (NSPI)
+
+- **NSPI-Endpoint** (`packages/ews-server/src/mapi/handler.ts`):
+  Alle NSPI-Operationen (`QueryRows / ResolveNames / GetMatches /
+  GetSpecialTable / GetProps / DnToMinId / GetPropList`) liefern jetzt
+  `SUCCESS-empty` (StatusCode=OK, ErrorCode=OK, RowCount=0, HasValue=0)
+  statt binäres `ecNotSupported` (0x80040102). Outlook interpretiert
+  SUCCESS-empty als „keine Treffer" und fällt automatisch auf den
+  EWS-basierten ResolveNames/FindPeople-Pfad zurück (in CoreMail seit
+  v3.x funktional). Volle MS-OXNSPI-Implementation bleibt für v5.x als
+  optionales Hardening.
+
+### Added (Search — gebündelt aus geplanter v4.8.0)
+
+- **RopRestrict** (`packages/ews-server/src/mapi/rop/search.ts`):
+  Parst MS-OXCDATA §2.12 Restriction-Format (ResAnd / ResOr / ResNot /
+  ResContent / ResProperty / ResExist) und persistiert die geparste
+  Restriction am Table-Handle (dynamisches Feld `restriction`).
+
+- **RopFindRow**: Akzeptiert FindRowFlags + Restriction + Origin +
+  Bookmark; v4.7.0 minimal liefert „kein Match" (HasRowData=0) —
+  Outlook nutzt typischerweise RopRestrict + nachfolgendes
+  RopQueryRows als Such-Workflow, der voll funktioniert.
+
+- **restrictionToPrismaWhere()**: Konvertiert ParsedRestriction in
+  Prisma `where`-Clause. Property-Tag → DB-Feld-Mapping unterstützt
+  PR_SUBJECT_W → `subject`, PR_BODY_W → `bodyText`, PR_HTML →
+  `bodyHtml`, PR_SENDER_NAME_W → `fromName`, PR_SENDER_EMAIL_ADDRESS_W
+  → `fromAddr`, PR_DISPLAY_TO_W → `toAddrs`, PR_MESSAGE_DELIVERY_TIME
+  → `date`, PR_MESSAGE_SIZE → `rawSize`, PR_MESSAGE_FLAGS → `flags`.
+  Content-Fuzzy-Levels: FullString/Substring/Prefix + Ignore-Case.
+  Property-RelOps: LT/LE/GT/GE/EQ/NE.
+
+- **QueryRows-Integration**: Bei Standard-Mail-Contents-Tabelle wird
+  die Restriction als zusätzlicher Filter neben `folderId` angewendet
+  (`{ folderId, ...restrictionWhere }`).
+
+- **ROP-Codec-Erweiterung**: Korrektes Payload-Parsing für RopRestrict
+  (RestrictFlags + RestrictionSize + Restriction) und RopFindRow
+  (FindRowFlags + RestrictionSize + Restriction + Origin + BookmarkSize +
+  Bookmark).
+
+### Outlook-Verhalten nach v4.7.0
+
+- Kein „NSPI-Fehler" mehr im Outlook-Verbindungsstatus
+- Empfänger-Autocomplete im To/CC/BCC-Feld funktioniert nahtlos (EWS FindPeople)
+- „Namen überprüfen" (Ctrl+K) funktioniert (EWS ResolveNames)
+- GAL-Browse zeigt User + Verteilergruppen (EWS FindFolder + FindItem)
+- **Server-Side-Search** (Strg+E im Outlook) filtert Inbox/Folder direkt
+  via MAPI Restriction → Prisma WHERE — kein Client-Side-Scan mehr für
+  große Postfächer mit >1000 Mails.
+
+---
+
 ## [4.6.0] — 2026-05-27 — MAPI/HTTP Phase 6: Calendar/Contacts/Tasks/Notes virtual folders
 
 ### Added

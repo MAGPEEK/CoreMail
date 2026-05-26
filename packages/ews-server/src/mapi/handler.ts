@@ -127,18 +127,23 @@ mapiRouter.post('/nspi/', async (req: Request, res: Response) => {
     case 'GetProps':
     case 'DnToMinId':
     case 'GetPropList': {
-      // v4.0.0: NSPI-Operationen geben binär ecNotSupported zurück. Volle
-      // Implementation kommt in v4.7.0. Outlook fällt damit auf EWS-basierte
-      // Adressbuch-Lookups zurück.
+      // v4.7.0: NSPI gibt SUCCESS-empty zurück statt ecNotSupported.
+      // Volle MS-OXNSPI Binary-Implementation ist umfangreich (mehrere Wochen
+      // Arbeit) und wird auf v5.x verschoben. Outlook fällt mit SUCCESS-empty
+      // automatisch auf den EWS-basierten ResolveNames/FindPeople-Pfad zurück
+      // (welcher in CoreMail seit v3.x funktional ist über ews-server).
+      // Damit funktioniert „Empfänger-Autocomplete" + „Namen überprüfen" in
+      // Outlook über die existierende EWS-GAL.
       const session = await getNspiSession(headers.cookies['NspiSession'] ?? '');
       if (!session) {
         sendMapiError(res, { requestId, responseCode: ResponseCode.EXPIRED_COOKIE });
         return;
       }
       const w = new MapiWriter();
-      w.writeUint32(MapiStatusCode.EC_NOT_SUPPORTED);
-      w.writeUint32(MapiStatusCode.EC_NOT_SUPPORTED);
-      w.writeUint32(0);   // RowCount = 0
+      w.writeUint32(MapiStatusCode.SUCCESS);  // StatusCode = OK
+      w.writeUint32(MapiStatusCode.SUCCESS);  // ErrorCode = OK
+      w.writeUint32(0);                        // RowCount = 0 → Outlook tries EWS fallback
+      w.writeUint32(0);                        // HasValue = false
       setMapiResponseHeaders(res, { requestId });
       res.status(200).send(w.toBuffer());
       return;
