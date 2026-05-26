@@ -6,6 +6,16 @@ import { getServerConfig } from './settings.js';
 const log = createLogger('autodiscover:v1');
 
 function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awaited<ReturnType<typeof getServerConfig>>): string {
+  // v3.18.37: Erweiterte Outlook-LTSC-/Exchange-2019-Felder.
+  // Outlook 2016+ erwartet AuthPackage, OABUrl, ASUrl im EXCH-Block sowie
+  // einen EXPR-Block (Outlook Anywhere / MAPI-over-HTTP-Fallback). Ohne
+  // diese Felder bricht Outlook LTSC den Setup-Wizard mit „Da hat etwas
+  // nicht geklappt" ab.
+  // EXTRACT publicHostname aus EWS-URL (https://mail.<domain>/EWS/...)
+  const ewsHost = (() => {
+    try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
+  })();
+  const oabUrl = `${cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, '')}/OAB/`;
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
   <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
@@ -15,11 +25,32 @@ function buildAutodiscoverResponse(email: string, displayName: string, cfg: Awai
     <Account>
       <AccountType>email</AccountType>
       <Action>settings</Action>
+      <MicrosoftOnline>False</MicrosoftOnline>
       <Protocol>
         <Type>EXCH</Type>
+        <Server>${escapeXml(ewsHost)}</Server>
+        <ServerVersion>73C0834F</ServerVersion>
+        <ServerDN>/o=CoreMail/ou=Exchange/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}</ServerDN>
+        <MdbDN>/o=CoreMail/ou=Exchange/cn=Configuration/cn=Servers/cn=${escapeXml(ewsHost)}/cn=Microsoft Private MDB</MdbDN>
+        <AuthPackage>basic</AuthPackage>
+        <ServerExclusiveConnect>off</ServerExclusiveConnect>
+        <CertPrincipalName>None</CertPrincipalName>
+        <ASUrl>${escapeXml(cfg.ewsUrl)}</ASUrl>
         <EwsUrl>${escapeXml(cfg.ewsUrl)}</EwsUrl>
+        <EmwsUrl>${escapeXml(cfg.ewsUrl)}</EmwsUrl>
         <EwsPartnerUrl>${escapeXml(cfg.ewsUrl)}</EwsPartnerUrl>
-        <OWAUrl>${escapeXml(cfg.owaUrl)}</OWAUrl>
+        <OOFUrl>${escapeXml(cfg.ewsUrl)}</OOFUrl>
+        <OABUrl>${escapeXml(oabUrl)}</OABUrl>
+        <OWAUrl AuthenticationMethod="Basic, Fba">${escapeXml(cfg.owaUrl)}</OWAUrl>
+      </Protocol>
+      <Protocol>
+        <Type>EXPR</Type>
+        <Server>${escapeXml(ewsHost)}</Server>
+        <SSL>On</SSL>
+        <CertPrincipalName>None</CertPrincipalName>
+        <AuthPackage>basic</AuthPackage>
+        <ServerExclusiveConnect>on</ServerExclusiveConnect>
+        <AuthRequired>on</AuthRequired>
       </Protocol>
       <Protocol>
         <Type>IMAP</Type>
