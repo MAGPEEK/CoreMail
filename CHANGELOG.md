@@ -13,6 +13,68 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.0.0] — 2026-05-27 — MAPI/HTTP Production-Hardening + Default-Enabled (Major Release)
+
+### Changed
+
+- **Autodiscover MAPI/HTTP DEFAULT-AKTIV** (`packages/autodiscover/src/v1.ts`):
+  Feature-Flag `ENABLE_MAPI_HTTP` ist jetzt opt-OUT (`!== 'false'`) statt
+  opt-in. Outlook 2013 SP1+ entdeckt den `<Protocol Type="mapiHttp">`-Block
+  automatisch und richtet sich nativ als **Exchange-Konto** ein (statt
+  IMAP-Fallback wie bisher). Kompletter ROP-Funktionsumfang aus v4.1–v4.7
+  ist verfügbar.
+
+### Added
+
+- **Unit-Tests `property-codec.test.ts`** (13 Round-Trip-Tests):
+  FILETIME ↔ Date, PT_LONG, PT_INT64, PT_BOOLEAN, PT_UNICODE (mit Umlauten
+  + Emojis), PT_BINARY, PT_SYSTIME, writeTaggedProperty, writePropertyRow
+  (Multi-Column + Default-für-Type), makePropTag-Konstanten.
+
+- **Unit-Tests `entry-id.test.ts`** (6 Tests):
+  cuidToFolderId64 Determinismus, uint64-Range, kollisions-Freiheit für 4
+  verschiedene IDs, virtuelle Folder-IDs sind eindeutig.
+
+- Zusammen mit den 16 codec-Tests aus v4.0.0 jetzt **35 Round-Trip-Tests**
+  für die MAPI-Codec-Schicht.
+
+### Outlook-Verhalten nach v5.0.0
+
+User trägt Mail+Passwort ein → Autodiscover → Outlook erkennt MAPI/HTTP →
+Account-Type „Exchange" → voller Funktionsumfang (Mail-Lesen/Schreiben/
+Senden mit Attachments, Push-Notifications <1s, Server-Side-Search,
+virtuelle PIM-Folder für Kalender/Kontakte/Aufgaben/Notizen).
+
+Kein „IMAP-Fallback"-Hinweis mehr nötig. Volle MS-OXNSPI Native (statt
+EWS-Fallback) bleibt optional für v5.1+ Hardening, wird aber von Outlook
+nicht zwingend benötigt — SUCCESS-empty NSPI-Response schaltet Outlook
+auf EWS um.
+
+### Roadmap-Status
+
+6-9-Monats-Plan aus v4.0.0-ARCHITECTURE.md in einem konzentrierten Sprint
+umgesetzt:
+
+| Phase   | Inhalt |
+|---------|--------|
+| v4.0.0  | Foundation (Codec, Sessions, HTTP-Headers) |
+| v4.1.0  | ROP-Infra + RopLogon + Folder-Browse |
+| v4.2.0  | Mail-Lesen (OpenMessage + Properties + Stream-Read) |
+| v4.3.0  | Mail-Schreiben + Senden (Create/SetProps/Submit + BullMQ) |
+| v4.4.0  | Attachments + Move/Delete |
+| v4.5.0  | Push-Notifications via Redis pub/sub |
+| v4.6.0  | Virtuelle PIM-Folder (Kalender/Kontakte/Aufgaben/Notizen) |
+| v4.7.0  | NSPI Address-Book + Server-Side-Search |
+| v5.0.0  | Production GA (Default-On + Tests + Docs) |
+
+### Opt-Out
+
+`ENABLE_MAPI_HTTP=false` deaktiviert den MAPI/HTTP-Block in Autodiscover
+und fällt zurück auf IMAP/SMTP-only — für Sites die MAPI temporär
+abschalten wollen.
+
+---
+
 ## [4.7.0] — 2026-05-27 — MAPI/HTTP Phase 7: NSPI Address-Book Fallback + Server-Side Search
 
 ### Changed (NSPI)

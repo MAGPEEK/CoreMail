@@ -5,11 +5,12 @@ import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
 
-// v4.0.0 Feature-Flag: experimentelles MAPI/HTTP-Protokoll. Default off, weil
-// ROP-Execution (RopLogon, Folder-Browse, etc.) noch nicht implementiert ist —
-// Outlook würde nach Connect das Profile-Building abbrechen. Sobald RopLogon
-// + Folder-Browse in v4.1.0 funktional sind, wird das default-on.
-const MAPI_HTTP_ENABLED = process.env['ENABLE_MAPI_HTTP'] === 'true';
+// v5.0.0: MAPI/HTTP ist jetzt DEFAULT AKTIV. Mit den v4.1-v4.7 Releases sind
+// alle wichtigen ROPs implementiert (Logon, Folder-Browse, Mail-Read/Write,
+// Send, Attachments, Move/Delete, Push-Notifications, virtuelle PIM-Folder,
+// Server-Side-Search). Outlook kann sich jetzt nativ als Exchange-Konto
+// einrichten statt IMAP-Fallback. Opt-out via `ENABLE_MAPI_HTTP=false`.
+const MAPI_HTTP_ENABLED = process.env['ENABLE_MAPI_HTTP'] !== 'false';
 
 function buildAutodiscoverResponse(
   email: string,
@@ -42,10 +43,12 @@ function buildAutodiscoverResponse(
       <MicrosoftOnline>False</MicrosoftOnline>
       ${MAPI_HTTP_ENABLED ? `
       <!--
-        v4.0.0 EXPERIMENTAL: MAPI-over-HTTP-Block. Outlook 2013 SP1+ erkennt
-        diesen <Protocol Type="mapiHttp"> als modernen Transport und versucht
-        die /mapi/emsmdb/-URL statt RPC. Nur aktivieren wenn ENABLE_MAPI_HTTP
-        gesetzt ist UND die ROP-Implementation funktional ist (ab v4.1.0).
+        v5.0.0: MAPI-over-HTTP DEFAULT AKTIV. Outlook 2013 SP1+ erkennt diesen
+        <Protocol Type="mapiHttp"> als modernen Transport und nutzt /mapi/emsmdb/
+        + /mapi/nspi/ — Account-Type "Exchange" statt "IMAP". Volle Funktionen:
+        Logon, Folder-Browse, Mail-Lesen, Mail-Schreiben+Senden, Attachments,
+        Move/Delete, Push-Notifications (Redis-pub/sub), virtuelle PIM-Folder
+        (Kalender/Kontakte/Aufgaben/Notizen), Server-Side-Search.
       -->
       <Protocol Type="mapiHttp" Version="1">
         <MailStore>
