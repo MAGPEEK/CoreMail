@@ -14,6 +14,8 @@ import {
   // v5.3.1: Folder-Management + APPEND + COPY/MOVE + SEARCH (RFC-Pflicht)
   handleCreate, handleDeleteFolder, handleRename, handleAppend,
   handleCopy, handleMove, handleSearch, handleClose, handleCheck,
+  // v5.5.0: RFC 9051 IMAP4rev2 + RFC 2971 + RFC 3501 §6.2.2 SASL
+  handleUnselect, handleId, handleAuthenticate, handleSaslContinuation,
 } from '../commands/index.js';
 
 const log = createLogger('imap:server');
@@ -34,8 +36,11 @@ export interface ImapTlsConfig {
 }
 
 export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Server {
+  // v5.5.0: isTls flag — auf Port 993 (implicit TLS) ist die Verbindung sofort
+  // sicher; auf Port 143 muss der Client STARTTLS senden um upzugraden.
+  const isImplicitTls = !!tlsConfig;
   const onSocket = (socket: net.Socket): void => {
-    const session = createSession(socket);
+    const session = createSession(socket, isImplicitTls);
     sessions.set(session.id, session);
 
     log.debug({ id: session.id, ip: socket.remoteAddress }, 'IMAP connect');
@@ -56,6 +61,21 @@ export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Se
         // Handle IDLE DONE
         if (session.idleActive && line.trim().toUpperCase() === 'DONE') {
           handleIdleDone(session);
+          continue;
+        }
+
+        // v5.5.0: SASL-Continuation (AUTHENTICATE PLAIN/LOGIN multi-step).
+        // Wenn saslMech gesetzt ist, wartet der Server auf eine Continuation-
+        // Response des Clients — diese ist KEIN normales tagged-Command,
+        // sondern eine reine base64-encoded Datenzeile (oder "*" für Abbruch).
+        if (session.saslMech) {
+          // Wir kennen das letzte tag — am einfachsten merken wir uns das
+          // separat. Da wir das aktuell nicht tracken, parsen wir den
+          // letzten tag aus der pending state. Für jetzt verwenden wir
+          // ein hardcoded "*" als pseudo-tag, da AUTHENTICATE-Response
+          // immer auf den originalen tag bezogen ist — dieser steht im
+          // saslPendingTag (wir tracken den unten).
+          void handleSaslContinuation(session, session.saslPendingTag ?? '*', line);
           continue;
         }
 
@@ -122,6 +142,44 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
     switch (cmd) {
       case 'CAPABILITY':
         await handleCapability(session, tag);
+        break;
+
+      // v5.5.0: STARTTLS — RFC 3501 §6.2.1
+      // Auf Port 143 (plaintext) upgraded der Client die Verbindung auf TLS.
+      // Auf Port 993 (implicit-TLS) liefert wir BAD weil bereits TLS aktiv.
+      case 'STARTTLS':
+        if (session.isTls) {
+          session.socket.write(`${tag} BAD STARTTLS not available on TLS connection\r\n`);
+        } else {
+          // Hier wäre eigentlich tls.TLSSocket-Upgrade nötig. Wir können das
+          // ohne signifikanten Refactor des Socket-Lifecycles nicht trivial.
+          // Workaround: weisen den Client auf Port 993 hin.
+          session.socket.write(`${tag} NO [UNAVAILABLE] STARTTLS not yet supported on port 143 — use implicit TLS on port 993\r\n`);
+        }
+        break;
+
+      // v5.5.0: AUTHENTICATE — RFC 3501 §6.2.2 mit PLAIN/LOGIN SASL
+      case 'AUTHENTICATE':
+        if (session.state !== 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Already authenticated\r\n`);
+        } else {
+          session.saslPendingTag = tag;
+          await handleAuthenticate(session, tag, args);
+        }
+        break;
+
+      // v5.5.0: ID — RFC 2971
+      case 'ID':
+        handleId(session, tag, args);
+        break;
+
+      // v5.5.0: UNSELECT — RFC 3691 / RFC 9051 IMAP4rev2 Pflicht
+      case 'UNSELECT':
+        if (session.state !== 'SELECTED') {
+          session.socket.write(`${tag} NO No mailbox selected\r\n`);
+        } else {
+          handleUnselect(session, tag);
+        }
         break;
 
       case 'NOOP':
