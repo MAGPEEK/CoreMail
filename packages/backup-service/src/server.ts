@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { connectDatabase } from '@coremail/storage';
-import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core';
+import { getRedisClient, createLogger, verifyAccessToken, initJwtKeys } from '@coremail/core';
 import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler } from './scheduler/index.js';
 import { runRetentionPolicies } from './retention/worker.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
@@ -388,6 +388,8 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
 
 async function start() {
   await connectDatabase();
+  // v5.3.0: RS256 JWT-Keys initialisieren (verifyAccessToken in Auth-Middleware)
+  await initJwtKeys(prisma);
   getRedisClient();
 
   // v3.18.26 Bugfix: Backup-Bucket idempotent erstellen — sonst crasht
