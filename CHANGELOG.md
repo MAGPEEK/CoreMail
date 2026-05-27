@@ -13,6 +13,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.1] — 2026-05-27 — Hotfix: Outlook Endlos-Passwort-Prompt
+
+### Fixed
+
+- **EWS/MAPI Basic-Auth-Middleware** (`packages/ews-server/src/auth/middleware.ts`):
+  Bypassed bisher den `/auth/login`-Endpoint des auth-service, der bei
+  aktivem MFA `{ mfaRequired: true, challengeToken: ... }` zurückgibt
+  **ohne** `accessToken`. Outlook kann mit Basic-Auth keine MFA-Challenge
+  beantworten → Middleware fiel auf 401 zurück → Outlook prompted
+  endlos nach dem Passwort.
+
+  **User-Symptom**: Im BCP funktioniert die Anmeldung (MFA wird interaktiv
+  gelöst), aber in Outlook erscheint die Passwort-Abfrage immer wieder,
+  obwohl das Passwort korrekt ist.
+
+  **Fix**: Middleware verifiziert jetzt direkt gegen `User.passwordHash`
+  UND `AppPassword.hash` via `verifyPassword()` aus `@coremail/core` —
+  gleiche Logik wie IMAP/SMTP/POP3-Server seit v3.x. Bei aktivem MFA muss
+  der User ein **App-Passwort** in MWA → Einstellungen → Sicherheit
+  anlegen und dieses in Outlook eintragen (statt seines regulären
+  Passworts). Ohne MFA funktioniert das reguläre Passwort weiterhin direkt.
+
+- **Username-Normalisierung**: Outlook LTSC sendet im NTLM-Stil manchmal
+  `DOMAIN\user` statt `user@domain` — wir normalisieren jetzt auf den
+  letzten Backslash-Teil.
+
+- **Detailliertes Logging** für Auth-Failures: User-Lookup-Status,
+  Passwort-Hash-Match, App-Password-Match, Auth-Header-Typ — damit
+  künftige Probleme schneller diagnostizierbar sind.
+
+### Outlook-Setup mit MFA
+
+1. User loggt sich in MWA ein und löst MFA
+2. MWA → Einstellungen → Sicherheit → App-Passwort generieren → Name "Outlook"
+3. In Outlook: Passwort-Dialog → **App-Passwort** statt regulärem Passwort eingeben
+4. Outlook-Konto verbindet sich nativ als Exchange via MAPI/HTTP
+
+---
+
+---
+
 ## [5.2.0] — 2026-05-27 — MAPI/HTTP FINAL (Cached Mode + Recurrence + Embedded + Multi-Value + gzip + RTF)
 
 **Abschluss-Release** der MAPI/HTTP-Implementation. Bündelt alle Features
