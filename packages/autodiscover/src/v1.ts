@@ -212,6 +212,68 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     res.status(401).send('Unauthorized');
     return;
   }
+  // v5.3.2: Bearer-Token forensisch loggen — Outlook 2024 LTSC sendet nur
+  // noch Bearer. Wir entschlüsseln den JWT-Payload (NICHT verify, nur base64
+  // decoden) um zu sehen: iss (welcher Identity Provider?), aud (an wen
+  // gerichtet?), sub (welcher User?), scp (welche Scopes?). Damit wissen
+  // wir präzise, woher Outlook das Token hat und können entscheiden ob WS-
+  // Trust-Emulation oder ADFS-Login-UI nötig ist.
+  if (authSchemeLower === 'bearer') {
+    const tokenStart = authHeader.indexOf(' ');
+    const tok = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
+    let claims: Record<string, unknown> = {};
+    try {
+      const parts = tok.split('.');
+      if (parts.length >= 2 && parts[1]) {
+        const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = payloadB64 + '='.repeat((4 - payloadB64.length % 4) % 4);
+        const json = Buffer.from(padded, 'base64').toString('utf8');
+        claims = JSON.parse(json) as Record<string, unknown>;
+      }
+    } catch { /* unverified decode failed — empty token */ }
+    log.warn({
+      ip: req.ip,
+      tokenLen: tok.length,
+      iss: claims['iss'],
+      aud: claims['aud'],
+      sub: claims['sub'],
+      scp: claims['scp'],
+      tid: claims['tid'],
+      appid: claims['appid'],
+      exp: claims['exp'],
+      userAgent: req.get('User-Agent') ?? '',
+    }, 'Autodiscover v1: Bearer-Token empfangen (forensisch decoded, nicht verified)');
+    // SystemLog für BCP-Sichtbarkeit
+    void prisma.systemLog.create({
+      data: {
+        level:    'INFO',
+        service:  'autodiscover',
+        category: 'MAPI_AUTH',
+        message:  `Autodiscover Bearer-Token (iss=${claims['iss'] ?? 'n/a'}, aud=${claims['aud'] ?? 'n/a'}, sub=${claims['sub'] ?? 'n/a'})`,
+        metadata: {
+          protocol:  'AUTODISCOVER',
+          reason:    'BEARER_TOKEN_INSPECTION',
+          claims:    JSON.parse(JSON.stringify(claims)),  // Prisma JSON-safe
+          ip:        req.ip ?? 'unknown',
+          userAgent: req.get('User-Agent') ?? '',
+        },
+      },
+    }).catch(() => { /* non-fatal */ });
+    // Bearer von uns nicht akzeptiert (wir signieren nicht für Outlook-aud)
+    // — sende 401 mit ADFS-Challenge zurück
+    const settings = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { publicHostname: true, useHttps: true, httpPort: true },
+    }).catch(() => null);
+    const hostname = settings?.publicHostname ?? 'mail.localhost';
+    const scheme = settings?.useHttps !== false ? 'https' : 'http';
+    const port = settings?.httpPort ?? 443;
+    const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
+    const base = `${scheme}://${hostname}${portSuffix}`;
+    res.set('WWW-Authenticate', `Bearer realm="${base}", authorization_uri="${base}/adfs/oauth2/authorize", error="invalid_token", Basic realm="CoreMail Autodiscover"`);
+    res.status(401).send('Unauthorized');
+    return;
+  }
 
   // v5.2.14: KRITISCH — Basic-Auth muss VALIDIERT werden!
   // Vorher akzeptierte V1 jedes Passwort. Outlook bekam dann gültiges XML
