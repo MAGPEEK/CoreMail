@@ -13,6 +13,63 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.18] — 2026-05-27 — IMAP SPECIAL-USE + LSUB + NAMESPACE + STATUS (Mac Mail fix)
+
+### Fixed
+
+User-Beobachtung: Mac Mail kann sich via IMAP anmelden, zeigt aber nur INBOX
+an. Die anderen System-Ordner (Drafts/Sent/Trash/Junk/Archive) sind in der
+Sidebar ausgeblendet, und Mails aus diesen Ordnern erscheinen nicht — selbst
+wenn sie im MWA sichtbar sind.
+
+### Root Cause
+
+Unser IMAP-Server lieferte:
+- LIST-Antworten OHNE SPECIAL-USE-Flags (`\Drafts`, `\Sent`, `\Trash`, `\Junk`,
+  `\Archive`). Mac Mail erkennt System-Ordner ausschließlich über diese Flags
+  — ohne sie sieht es nur INBOX als „Standard-Ordner" und blendet alles
+  andere aus.
+- LSUB nicht implementiert → Mac Mail bekam `BAD Command not recognized`,
+  fiel auf nur-INBOX zurück.
+- SUBSCRIBE / UNSUBSCRIBE nicht implementiert.
+- NAMESPACE nicht implementiert (CAPABILITY annoncierte es zwar, aber kein
+  Handler).
+- STATUS nicht implementiert (Mac Mail nutzt das für Folder-Refresh ohne
+  SELECT — wenn die Antwort ein `BAD` ist, wird der Ordner als „unsync"
+  markiert).
+
+### Added
+
+- **`specialUseFlag(name)`** in `packages/imap-server/src/commands/index.ts`
+  mappt Folder-Namen (case-insensitive, EN + DE) auf SPECIAL-USE-Flags:
+  - `INBOX` / `Posteingang` → kein Flag (INBOX ist immer `*`)
+  - `Drafts` / `Entwürfe` → `\Drafts`
+  - `Sent` / `Gesendet` → `\Sent`
+  - `Trash` / `Gelöscht` → `\Trash`
+  - `Junk` / `Spam` → `\Junk`
+  - `Archive` / `Archiv` → `\Archive`
+- **handleList** emittiert jetzt SPECIAL-USE-Flags neben `\HasNoChildren`
+- **handleLsub** — gleicher Output wie LIST (alle Standard-Ordner gelten
+  als auto-subscribed)
+- **handleSubscribe** / **handleUnsubscribe** — RFC 3501 §6.3.6/6.3.7,
+  akzeptieren Subscriptions (no-op)
+- **handleNamespace** — RFC 2342, liefert Personal-Namespace `(""  ".")`
+- **handleStatus** — RFC 3501 §6.3.10, MESSAGES/UIDNEXT/UIDVALIDITY/UNSEEN/
+  RECENT/HIGHESTMODSEQ
+
+### CAPABILITY
+
+Annonciert jetzt zusätzlich: `SPECIAL-USE`, `LIST-EXTENDED`, `LIST-STATUS`,
+`CHILDREN`. Mac Mail prüft diese explizit.
+
+### Wirkung
+
+Apple Mail / Mac Mail / iOS Mail / Thunderbird sehen jetzt alle Standard-
+Ordner mit korrektem Icon (Briefcase für Drafts, Papierflieger für Sent,
+Mülltonne für Trash, …) UND alle darin enthaltenen Nachrichten.
+
+---
+
 ## [5.2.17] — 2026-05-27 — Modern Auth Foundation (RS256 JWT + OIDC Discovery)
 
 ### Why

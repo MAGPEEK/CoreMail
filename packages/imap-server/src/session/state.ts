@@ -53,6 +53,13 @@ export function createSession(socket: Socket | TLSSocket): ImapSession {
       'UTF8=ACCEPT',
       'QUOTA',
       'NAMESPACE',
+      // v5.2.18: SPECIAL-USE (RFC 6154) + LIST-EXTENDED (RFC 5258) — Mac Mail
+      // braucht SPECIAL-USE-Flags um Drafts/Sent/Trash/Junk/Archive zu erkennen,
+      // sonst zeigt es nur INBOX an.
+      'SPECIAL-USE',
+      'LIST-EXTENDED',
+      'LIST-STATUS',
+      'CHILDREN',
       'AUTH=PLAIN',
       'AUTH=LOGIN',
     ],
