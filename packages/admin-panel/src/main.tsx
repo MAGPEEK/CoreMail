@@ -1,4 +1,4 @@
-import { StrictMode, Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
+import { StrictMode, Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -105,6 +105,37 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// ── Setup-Guard ───────────────────────────────────────────────────────────────
+// Solange noch kein Admin in der DB existiert, MUSS der User zuerst die
+// Ersteinrichtung im MWA (/setup) durchlaufen.  BCP hat keine eigene Setup-Page —
+// wir leiten daher auf den MWA-Pfad um (verlässt den /bcp-Basename komplett).
+function SetupGuard({ children }: { children: React.ReactNode }) {
+  const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch('/api/v1/setup/status')
+      .then((r) => r.json() as Promise<{ setupRequired: boolean }>)
+      .then((data) => setSetupRequired(!!data.setupRequired))
+      .catch(() => setSetupRequired(false)); // Bei Netzwerkfehler durchlassen
+  }, []);
+
+  useEffect(() => {
+    if (setupRequired === true) {
+      // Komplettes Hard-Redirect — verlässt /bcp-Basename und landet im MWA-Setup-Wizard
+      window.location.href = '/setup';
+    }
+  }, [setupRequired]);
+
+  if (setupRequired === null || setupRequired === true) {
+    return (
+      <div className="min-h-screen bg-blue-700 flex items-center justify-center">
+        <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 function AdminLayout({ children }: { children: React.ReactNode }) {
   // Automatischer Logout bei Inaktivität — konfigurierbar in Global Settings
   useInactivityLogout();
@@ -127,6 +158,7 @@ createRoot(document.getElementById('root')!).render(
     <ThemeApplier />
     <QueryClientProvider client={queryClient}>
       <BrowserRouter basename="/bcp">
+        <SetupGuard>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/mfa-required" element={<MfaRequiredPage />} />
@@ -168,6 +200,7 @@ createRoot(document.getElementById('root')!).render(
             </AuthGuard>
           } />
         </Routes>
+        </SetupGuard>
         <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       </BrowserRouter>
     </QueryClientProvider>

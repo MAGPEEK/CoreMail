@@ -83,28 +83,41 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Prüft beim Start ob Setup erforderlich ist
+// Prüft beim Start ob Setup erforderlich ist.
+// Wirkt als TOP-LEVEL-Guard und blockt ALLE Routen (auch /login, /forgot-password),
+// solange Setup nicht abgeschlossen ist.  Nach Setup-Abschluss leitet ein direkter
+// Aufruf von /setup zurück auf /login.
 function SetupGuard({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
-  const [checked, setChecked] = useState(false);
+  const location = useLocation();
+  const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch('/api/v1/setup/status')
       .then((r) => r.json() as Promise<{ setupRequired: boolean }>)
-      .then((data) => {
-        if (data.setupRequired) navigate('/setup', { replace: true });
-      })
-      .catch(() => { /* Setup-Check fehlgeschlagen — normal weiterfahren */ })
-      .finally(() => setChecked(true));
-  }, [navigate]);
+      .then((data) => setSetupRequired(!!data.setupRequired))
+      .catch(() => setSetupRequired(false)); // Bei Netzwerkfehler durchlassen
+  }, []);
 
-  if (!checked) {
+  useEffect(() => {
+    if (setupRequired === null) return;
+    if (setupRequired && location.pathname !== '/setup') {
+      navigate('/setup', { replace: true });
+    } else if (!setupRequired && location.pathname === '/setup') {
+      navigate('/login', { replace: true });
+    }
+  }, [setupRequired, location.pathname, navigate]);
+
+  if (setupRequired === null) {
     return (
       <div className="min-h-screen bg-[#0078D4] flex items-center justify-center">
         <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
       </div>
     );
   }
+  // Während Navigate-Redirect noch läuft, falsche Routes nicht rendern
+  if (setupRequired && location.pathname !== '/setup') return null;
+  if (!setupRequired && location.pathname === '/setup') return null;
   return <>{children}</>;
 }
 
@@ -112,19 +125,19 @@ export function App() {
   return (
     <>
       <ThemeApplier />
-    <Routes>
-      <Route path="/setup" element={<SetupPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
-      {/* v3.18.22 D1: OAuth2-Consent — braucht Auth, aber kein Layout */}
-      <Route path="/oauth-consent" element={
-        <AuthGuard>
-          <OAuthConsentPage />
-        </AuthGuard>
-      } />
-      <Route path="/*" element={
-        <SetupGuard>
+    <SetupGuard>
+      <Routes>
+        <Route path="/setup" element={<SetupPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        {/* v3.18.22 D1: OAuth2-Consent — braucht Auth, aber kein Layout */}
+        <Route path="/oauth-consent" element={
+          <AuthGuard>
+            <OAuthConsentPage />
+          </AuthGuard>
+        } />
+        <Route path="/*" element={
           <AuthGuard>
             <Layout>
               <Routes>
@@ -139,9 +152,9 @@ export function App() {
               </Routes>
             </Layout>
           </AuthGuard>
-        </SetupGuard>
-      } />
-    </Routes>
+        } />
+      </Routes>
+    </SetupGuard>
     </>
   );
 }
