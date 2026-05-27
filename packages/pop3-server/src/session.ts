@@ -102,10 +102,53 @@ export class POP3Session {
       if (!this.user) return this.send('-ERR send USER first');
       if (!args[0]) return this.send('-ERR missing password');
 
-      
-      const user = await prisma.user.findUnique({ where: { email: this.user } });
-      if (!user || !user.passwordHash || !(await verifyPassword(args[0], user.passwordHash))) {
-        log.warn({ user: this.user }, 'auth failure');
+      const password = args[0];
+      // v5.3.1: Normalisierung wie bei IMAP — DOMAIN\user oder bare username
+      // → email-form. Plus App-Password-Fallback für MFA-User.
+      let email = this.user;
+      const bsIdx = email.lastIndexOf('\\');
+      if (bsIdx !== -1) email = email.slice(bsIdx + 1);
+      email = email.trim().toLowerCase();
+      if (!email.includes('@')) {
+        // bare username → mit primärer Domain ergänzen
+        const primaryDomain = await prisma.domain.findFirst({
+          where:  { primary: true, active: true },
+          select: { name: true },
+        }).catch(() => null);
+        if (primaryDomain) email = `${email}@${primaryDomain.name}`;
+      }
+
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user || !user.active) {
+        log.warn({ user: this.user }, 'POP3 auth failure: user not found/inactive');
+        return this.send('-ERR invalid credentials');
+      }
+
+      // 1) Regulärer Passwort-Hash
+      let authenticated = false;
+      if (user.passwordHash) {
+        authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
+      }
+      // 2) Fallback: App-Password (Pflicht für MFA-Accounts)
+      if (!authenticated) {
+        const appPasswords = await prisma.appPassword.findMany({
+          where: { userId: user.id },
+          select: { id: true, hash: true },
+        }).catch(() => []);
+        for (const ap of appPasswords) {
+          if (await verifyPassword(password, ap.hash).catch(() => false)) {
+            authenticated = true;
+            void prisma.appPassword.update({
+              where: { id: ap.id },
+              data:  { lastUsedAt: new Date() },
+            }).catch(() => { /* ignore */ });
+            break;
+          }
+        }
+      }
+
+      if (!authenticated) {
+        log.warn({ user: this.user }, 'POP3 auth failure: bad password');
         return this.send('-ERR invalid credentials');
       }
 
@@ -201,21 +244,28 @@ export class POP3Session {
   }
 
   private async sendMessage(id: string, topLines: number | null) {
-    
     const msg = await prisma.message.findUnique({ where: { id } });
     if (!msg) return this.send('-ERR message not found');
 
     const eml = buildEml(msg as Record<string, unknown>);
     this.send(`+OK ${eml.length} octets`);
 
+    // v5.3.1 FIX: Byte-Stuffing nach RFC 1939 §3 — JEDE Zeile, die mit "."
+    // beginnt, muss durch ".." eskapiert werden. Sonst wird die Mail bei
+    // Clients abgeschnitten, weil "." am Zeilenanfang das End-of-Message
+    // signalisiert. Vorher: nur erstes Zeichen via `replace(/^\./, '..')`
+    // → mehrzeilige Mails mit "." am Zeilenanfang wurden korrupt empfangen.
+    const stuffLines = (text: string): string =>
+      text.split(/\r?\n/).map((line) => line.startsWith('.') ? '.' + line : line).join('\r\n');
+
     if (topLines !== null) {
       const parts = eml.split('\r\n\r\n');
       const headers = parts[0] ?? '';
       const body = (parts.slice(1).join('\r\n\r\n')).split('\r\n').slice(0, topLines).join('\r\n');
       const output = body ? `${headers}\r\n\r\n${body}` : headers;
-      this.send(output.replace(/^\./, '..'));
+      this.send(stuffLines(output));
     } else {
-      this.send(eml.replace(/^\./, '..'));
+      this.send(stuffLines(eml));
     }
     this.send('.');
   }
