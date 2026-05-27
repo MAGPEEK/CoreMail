@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken, createLogger } from '@coremail/core';
+import { verifyAccessToken, verifyPassword, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('ews:auth');
@@ -58,52 +58,95 @@ export async function ewsAuthMiddleware(
     }
   }
 
-  // Basic Auth (Outlook legacy)
+  // Basic Auth (Outlook MAPI/HTTP + EWS legacy)
+  //
+  // v5.2.1 BUGFIX: Wir umgehen den /auth/login-Endpoint des auth-service
+  // (der mfaRequired statt accessToken liefert wenn MFA aktiv ist — Outlook
+  // kann mit Basic-Auth keine MFA-Challenge beantworten → Endlos-Prompt).
+  // Stattdessen verifizieren wir direkt gegen User.passwordHash UND
+  // AppPassword.hash — gleiche Logik wie IMAP/SMTP/POP3.
+  //
+  // App-Passwörter sind der empfohlene Weg für Outlook bei aktivem MFA.
   if (authHeader.startsWith('Basic ')) {
     const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
     const colonIdx = decoded.indexOf(':');
-    if (colonIdx !== -1) {
-      const email = decoded.slice(0, colonIdx);
+    if (colonIdx === -1) {
+      log.warn({ ip: req.ip }, 'EWS: Basic-Auth ohne Doppelpunkt');
+    } else {
+      const rawUser = decoded.slice(0, colonIdx);
       const password = decoded.slice(colonIdx + 1);
+      // Outlook LTSC sendet manchmal `DOMAIN\user` oder `user@domain` —
+      // wir normalisieren auf E-Mail-Form.
+      const email = normalizeUserName(rawUser);
+
+      log.debug({ email, hasPassword: !!password, ip: req.ip }, 'EWS Basic-Auth attempt');
 
       try {
-        // v3.18.38: auth-service läuft auf Port 3003 (nicht 3001 — das war storage-api).
-        // Im monolithischen App-Container ist alles unter localhost erreichbar.
-        const authUrl = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003/auth/login';
-        const resp = await fetch(authUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
-          signal: AbortSignal.timeout(5000),
+        const user = await prisma.user.findUnique({
+          where: { email: email.toLowerCase() },
+          select: { id: true, email: true, role: true, active: true, passwordHash: true },
         });
 
-        if (resp.ok) {
-          const data = await resp.json() as { accessToken?: string; mfaRequired?: boolean };
-          if (data.accessToken) {
-            const payload = verifyAccessToken(data.accessToken);
-            if (payload) {
-              
-              const user = await prisma.user.findUnique({
-                where: { id: payload.sub },
-                select: { id: true, email: true, role: true },
-              });
-              if (user) {
-                req.ewsUser = { userId: user.id, email: user.email, role: user.role };
-                const anchor = req.get('X-AnchorMailbox');
-                if (anchor) req.targetMailbox = anchor.toLowerCase();
-                next();
-                return;
+        if (!user || !user.active) {
+          log.warn({ email, found: !!user, active: user?.active }, 'EWS Basic-Auth: User nicht gefunden/aktiv');
+        } else {
+          // 1) Versuche regulärer Passwort-Hash
+          let authenticated = false;
+          if (user.passwordHash) {
+            authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
+            if (authenticated) {
+              log.debug({ userId: user.id }, 'EWS Basic-Auth: User-Passwort OK');
+            }
+          }
+
+          // 2) Fallback: App-Passwort (für MFA-Accounts der einzige Weg)
+          if (!authenticated) {
+            const appPasswords = await prisma.appPassword.findMany({
+              where: { userId: user.id },
+              select: { id: true, hash: true },
+            }).catch(() => []);
+            for (const ap of appPasswords) {
+              if (await verifyPassword(password, ap.hash).catch(() => false)) {
+                authenticated = true;
+                // lastUsedAt aktualisieren (non-blocking)
+                void prisma.appPassword.update({
+                  where: { id: ap.id },
+                  data: { lastUsedAt: new Date() },
+                }).catch(() => { /* ignore */ });
+                log.debug({ userId: user.id, appPasswordId: ap.id }, 'EWS Basic-Auth: App-Passwort OK');
+                break;
               }
             }
           }
+
+          if (authenticated) {
+            req.ewsUser = { userId: user.id, email: user.email, role: user.role };
+            const anchor = req.get('X-AnchorMailbox') ?? req.get('X-OpenTypeMailbox');
+            if (anchor) req.targetMailbox = anchor.toLowerCase();
+            next();
+            return;
+          }
+
+          log.warn({ email, ip: req.ip }, 'EWS Basic-Auth: Passwort + App-Passwort fehlgeschlagen');
         }
       } catch (err) {
-        log.error({ err }, 'Auth service call failed');
+        log.error({ err, email }, 'EWS Basic-Auth: DB-Fehler');
       }
     }
   }
 
-  log.warn({ ip: req.ip }, 'EWS: unauthorized request');
+  log.warn({ ip: req.ip, hasAuth: !!authHeader, authType: authHeader.split(' ')[0] }, 'EWS: unauthorized request');
   res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
   res.status(401).send('Unauthorized');
+}
+
+/**
+ * Normalisiert Outlook-Username-Formate (DOMAIN\user, user@domain) auf
+ * E-Mail-Form. CoreMail-User identifizieren sich per E-Mail-Adresse.
+ */
+function normalizeUserName(raw: string): string {
+  // DOMAIN\user → user (Outlook NTLM-Stil, wir kennen die Domain nicht)
+  const bsIdx = raw.lastIndexOf('\\');
+  if (bsIdx !== -1) return raw.slice(bsIdx + 1).trim();
+  return raw.trim();
 }
