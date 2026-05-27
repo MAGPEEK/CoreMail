@@ -13,6 +13,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.11] — 2026-05-27 — Setup-Guard für BCP + MWA-Hardening
+
+### Changed
+
+- **MWA SetupGuard greift jetzt TOP-LEVEL** (`packages/web-client/src/App.tsx`):
+  blockt nicht nur die geschützten Routes, sondern auch `/login`,
+  `/forgot-password`, `/reset-password`.  Solange Setup nicht abgeschlossen ist,
+  landet jede URL auf `/setup`.  Sobald Setup erfolgt ist, wird ein direkter
+  Aufruf von `/setup` zurück auf `/login` umgeleitet (verhindert versehentlich
+  zweites Setup).
+- **BCP bekommt einen SetupGuard** (`packages/admin-panel/src/main.tsx`):
+  Beim Start des Admin-Panels wird `/api/v1/setup/status` geprüft.  Wenn
+  Setup-Required, redirect via `window.location.href = '/setup'` zum
+  MWA-Setup-Wizard (verlässt den `/bcp`-Basename komplett).  Vorher konnte
+  ein Admin direkt zur BCP-Login-Seite navigieren ohne dass Setup je gemacht
+  worden wäre — Login schlug zwar fehl (kein User), aber die Begrüßungs-UI
+  war sichtbar und verwirrend.
+
+### Why
+
+User-Beobachtung: „Beim Aufrufen von /bcp landet man im Login-Screen statt im
+Setup-Wizard, obwohl noch nie ein Admin angelegt wurde."  Jetzt ist garantiert,
+dass die Ersteinrichtung der erste sichtbare Bildschirm ist — kein versehentliches
+Eintragen falscher Credentials im halbfertigen System mehr möglich.
+
+---
+
 ## [5.2.10] — 2026-05-27 — Self-Signed-Cert immer mail.localhost (Fresh-Install-Baseline)
 
 ### Fixed
