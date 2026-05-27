@@ -13,6 +13,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.3.1] — 2026-05-27 — IMAP Vollständigkeit + POP3 App-Password + Byte-Stuffing
+
+### Fixed — IMAP (Mac Mail folder management broken)
+
+User-Beobachtung: Mac Mail kann sich verbinden und sieht die Standard-
+Ordner, aber **neue Ordner werden nicht angelegt** und **Mails in den
+Ordnern werden nicht angezeigt**. Root Cause: Major IMAP Commands fehlten.
+
+Implementiert in `packages/imap-server/src/commands/index.ts`:
+
+| Command | RFC | Wirkung |
+|---------|-----|---------|
+| `CREATE` | 3501 §6.3.3 | „Neuen Ordner anlegen" in Mac Mail |
+| `DELETE` | 3501 §6.3.4 | Ordner löschen (Messages soft-deleted) |
+| `RENAME` | 3501 §6.3.5 | Ordner umbenennen |
+| `APPEND` | 3501 §6.3.11 | Mac Mail lädt lokale Drafts/Sent zum Server |
+| `COPY` / `UID COPY` | 3501 §6.4.7 | Drag-Drop „in Ordner kopieren" |
+| `MOVE` / `UID MOVE` | 6851 | Atomic Move ohne EXPUNGE-Roundtrip |
+| `SEARCH` / `UID SEARCH` | 3501 §6.4.4 | **KRITISCH** — Mac Mail nutzt das auf jedem Folder-Open |
+| `CLOSE` | 3501 §6.4.2 | Folder abwählen + implizit EXPUNGE |
+| `CHECK` | 3501 §6.4.1 | Server-Sync (NOOP für uns) |
+
+**SEARCH war der wichtigste Fix**: Mac Mail macht beim Öffnen eines
+Ordners zuerst `UID SEARCH ALL` um die UID-Liste zu holen, DANN
+`UID FETCH 1:* (UID FLAGS …)`. Ohne SEARCH bekam Mac Mail `BAD Command
+not recognized` → Folder erschien leer obwohl Messages vorhanden waren.
+
+### Fixed — IMAP UID Command Variants
+
+Dispatcher erkennt jetzt `UID <SUB>` als Compound-Command (vorher: nur
+erstes Token uppercased, daher `UID FETCH` als `cmd='UID'` mit `args[0]
+='FETCH'` falsch behandelt). Jetzt: alle 6 Varianten — `UID FETCH`,
+`UID STORE`, `UID COPY`, `UID MOVE`, `UID SEARCH`, `UID EXPUNGE`.
+
+### Fixed — IMAP Sequence-Set Parser
+
+`parseSequenceSet()` unterstützt jetzt zusätzlich zum UID-Modus auch
+den Seq-Num-Modus (1-basierte Positionen) für nicht-UID-Varianten
+von COPY/MOVE/SEARCH/STORE/FETCH. Backward-compat: Default `byUid=true`.
+
+### Fixed — POP3 App-Password + Bare-Username
+
+User-Beobachtung: POP3 mit MFA-User → Login-Fehler. Vorher checkte
+nur `User.passwordHash`. Jetzt analog zu IMAP/EWS:
+1. `verifyPassword(pw, User.passwordHash)`
+2. Fallback: `verifyPassword(pw, AppPassword.hash)` für alle App-Passwords
+3. Bare-Username (`admin` ohne `@domain`) wird mit primärer Domain
+   ergänzt (vorher: User-Lookup mit `email='admin'` → 401)
+
+### Fixed — POP3 Byte-Stuffing (RFC 1939 §3)
+
+**Kritisch**: Mehrzeilige Mails mit `.` am Zeilenanfang wurden bei
+POP3-Clients abgeschnitten. Vorher: `eml.replace(/^\./, '..')` —
+ersetzte nur das ERSTE Zeichen. Jetzt: jede Zeile, die mit `.`
+beginnt, wird zu `..` eskapiert (line-by-line). Standard-Pflicht
+für POP3-Server.
+
+---
+
 ## [5.3.0] — 2026-05-27 — ADFS-Emulation Foundation (Phase C + E + ADFS-Aliases)
 
 ### Major Feature

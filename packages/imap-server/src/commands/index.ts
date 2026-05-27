@@ -301,6 +301,402 @@ export async function handleStatus(
 }
 
 // ─────────────────────────────────────────────
+// CREATE — RFC 3501 §6.3.3 (Mac Mail braucht das für „Neuen Ordner" + Drafts/Sent-Upload)
+// ─────────────────────────────────────────────
+export async function handleCreate(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+): Promise<void> {
+  if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
+  let name = unquote(args[0] ?? '');
+  if (!name) { sendBad(session, tag, 'Folder name required'); return; }
+  // Trailing-Slash entfernen (Mac Mail sendet "Parent.Child." manchmal)
+  name = name.replace(/[.\/]+$/, '');
+  if (name.toUpperCase() === 'INBOX') {
+    sendNo(session, tag, 'INBOX cannot be created');
+    return;
+  }
+  // Doppelte Ordner verhindern
+  const existing = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name },
+    select: { id: true },
+  });
+  if (existing) {
+    sendNo(session, tag, '[ALREADYEXISTS] Mailbox already exists');
+    return;
+  }
+  await prisma.folder.create({
+    data: { mailboxId: session.mailboxId, name, displayName: name },
+  });
+  log.info({ mailboxId: session.mailboxId, name }, 'IMAP folder created');
+  sendOk(session, tag, 'CREATE completed');
+}
+
+// ─────────────────────────────────────────────
+// DELETE — RFC 3501 §6.3.4
+// ─────────────────────────────────────────────
+export async function handleDeleteFolder(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+): Promise<void> {
+  if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
+  const name = unquote(args[0] ?? '');
+  if (!name) { sendBad(session, tag, 'Folder name required'); return; }
+  if (name.toUpperCase() === 'INBOX') {
+    sendNo(session, tag, 'INBOX cannot be deleted');
+    return;
+  }
+  const folder = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name },
+    select: { id: true },
+  });
+  if (!folder) {
+    sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
+    return;
+  }
+  // Soft-Delete der Messages, dann Folder löschen
+  await prisma.message.updateMany({
+    where: { folderId: folder.id, deletedAt: null },
+    data:  { deletedAt: new Date() },
+  });
+  await prisma.folder.delete({ where: { id: folder.id } });
+  sendOk(session, tag, 'DELETE completed');
+}
+
+// ─────────────────────────────────────────────
+// RENAME — RFC 3501 §6.3.5
+// ─────────────────────────────────────────────
+export async function handleRename(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+): Promise<void> {
+  if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
+  const oldName = unquote(args[0] ?? '');
+  const newName = unquote(args[1] ?? '');
+  if (!oldName || !newName) { sendBad(session, tag, 'Old + new folder name required'); return; }
+  if (oldName.toUpperCase() === 'INBOX') {
+    sendNo(session, tag, 'INBOX cannot be renamed');
+    return;
+  }
+  const folder = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name: oldName },
+    select: { id: true },
+  });
+  if (!folder) {
+    sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
+    return;
+  }
+  // Konflikt mit existierendem Ordner?
+  const conflict = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name: newName },
+    select: { id: true },
+  });
+  if (conflict) {
+    sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
+    return;
+  }
+  await prisma.folder.update({
+    where: { id: folder.id },
+    data:  { name: newName, displayName: newName },
+  });
+  sendOk(session, tag, 'RENAME completed');
+}
+
+// ─────────────────────────────────────────────
+// APPEND — RFC 3501 §6.3.11 (Mac Mail lädt Drafts/Sent zum Server)
+// ─────────────────────────────────────────────
+// Achtung: APPEND nutzt IMAP-Literals ({size}+) für den RFC-822-Body.
+// Der vollständige Body wird beim ersten Aufruf vom Server-Loop bereits
+// gepuffert (parseLine sammelt ihn). Args[0] = folder, args[1] = (flags),
+// args[2] = datetime?, letzter Token = literal body.
+export async function handleAppend(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+): Promise<void> {
+  if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
+  if (args.length < 2) { sendBad(session, tag, 'APPEND requires folder + body'); return; }
+  const folderName = unquote(args[0] ?? '');
+  // Body ist immer der letzte Arg (Literal-Inhalt)
+  const body = args[args.length - 1] ?? '';
+  // Flags-Parse: zwischen ( und )
+  let flags: string[] = [];
+  for (const a of args.slice(1, -1)) {
+    const m = /^\((.*)\)$/.exec(a);
+    if (m && m[1]) flags = m[1].split(/\s+/).filter(Boolean);
+  }
+  const folder = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name: folderName },
+    include: { mailbox: true },
+  });
+  if (!folder) {
+    sendNo(session, tag, '[TRYCREATE] Mailbox does not exist');
+    return;
+  }
+
+  // Minimal RFC-822-Parsing — Subject + From + To extrahieren
+  const headerBlock = body.split(/\r?\n\r?\n/)[0] ?? '';
+  const getHeader = (name: string): string | undefined => {
+    const re = new RegExp(`^${name}:\\s*(.+)$`, 'mi');
+    const m = re.exec(headerBlock);
+    return m?.[1]?.trim();
+  };
+  const subject  = getHeader('subject')   ?? '';
+  const fromAddr = getHeader('from')      ?? '';
+  const toRaw    = getHeader('to')        ?? '';
+  const toAddrs  = toRaw ? toRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const msgId    = getHeader('message-id') ?? '';
+
+  // Body extrahieren (alles nach Header-Block)
+  const bodyStart = body.indexOf('\r\n\r\n') >= 0 ? body.indexOf('\r\n\r\n') + 4 : body.indexOf('\n\n') + 2;
+  const bodyText = bodyStart > 0 ? body.slice(bodyStart) : '';
+
+  // Mailbox UID hochzählen (atomar via increment)
+  const updated = await prisma.mailbox.update({
+    where: { id: folder.mailboxId },
+    data:  { uidNext: { increment: 1 } },
+    select: { uidNext: true, highestModSeq: true },
+  });
+  const newUid = updated.uidNext - 1;
+
+  await prisma.message.create({
+    data: {
+      uid:       newUid,
+      modSeq:    updated.highestModSeq + 1n,
+      folderId:  folder.id,
+      subject,
+      fromAddr,
+      fromName:  '',
+      toAddrs,
+      ccAddrs:   [],
+      bccAddrs:  [],
+      date:      new Date(),
+      rawSize:   Buffer.byteLength(body, 'utf8'),
+      bodyText,
+      bodyHtml:  '',
+      flags,
+      messageId: msgId,
+    },
+  });
+  // Modseq des Mailbox erhöhen
+  await prisma.mailbox.update({
+    where: { id: folder.mailboxId },
+    data:  { highestModSeq: { increment: 1n } },
+  });
+
+  log.info({ folderId: folder.id, uid: newUid, subject }, 'IMAP APPEND stored message');
+  sendOk(session, tag, `[APPENDUID ${folder.mailbox.uidValidity} ${newUid}] APPEND completed`);
+}
+
+// ─────────────────────────────────────────────
+// COPY — RFC 3501 §6.4.7 (Mac Mail "in Ordner verschieben" = COPY + STORE \Deleted + EXPUNGE)
+// ─────────────────────────────────────────────
+export async function handleCopy(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+  byUid = false,
+): Promise<void> {
+  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  const seqSet = args[0] ?? '';
+  const targetName = unquote(args[1] ?? '');
+  if (!seqSet || !targetName) { sendBad(session, tag, 'COPY: seq + target required'); return; }
+
+  const target = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId!, name: targetName },
+    include: { mailbox: true },
+  });
+  if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
+
+  // Messages der aktuellen Folder laden
+  const messages = await prisma.message.findMany({
+    where: { folderId: session.selected.folderId, deletedAt: null },
+    orderBy: { uid: 'asc' },
+  });
+  // Sequence-Set parsen (UID oder Seq-Nr)
+  const uids = messages.map((m) => m.uid);
+  const matchedUids = parseSequenceSet(seqSet, uids, byUid);
+
+  if (matchedUids.length === 0) {
+    sendOk(session, tag, 'COPY completed (no messages matched)');
+    return;
+  }
+
+  const sourceMsgs = messages.filter((m) => matchedUids.includes(m.uid));
+  // UIDs reservieren
+  await prisma.mailbox.update({
+    where: { id: target.mailboxId },
+    data:  { uidNext: { increment: sourceMsgs.length } },
+  });
+  const targetStartUid = target.mailbox.uidNext;
+  const newUids: number[] = [];
+  for (let i = 0; i < sourceMsgs.length; i++) {
+    const src = sourceMsgs[i];
+    if (!src) continue;
+    const newUid = targetStartUid + i;
+    newUids.push(newUid);
+    await prisma.message.create({
+      data: {
+        uid:        newUid,
+        modSeq:     target.mailbox.highestModSeq + 1n,
+        folderId:   target.id,
+        subject:    src.subject,
+        fromAddr:   src.fromAddr,
+        fromName:   src.fromName,
+        toAddrs:    src.toAddrs,
+        ccAddrs:    src.ccAddrs,
+        bccAddrs:   src.bccAddrs,
+        date:       src.date,
+        rawSize:    src.rawSize,
+        bodyText:   src.bodyText,
+        bodyHtml:   src.bodyHtml,
+        flags:      src.flags,
+        messageId:  src.messageId,
+      },
+    });
+  }
+  await prisma.mailbox.update({
+    where: { id: target.mailboxId },
+    data:  { highestModSeq: { increment: 1n } },
+  });
+
+  const copyUid = `[COPYUID ${target.mailbox.uidValidity} ${matchedUids.join(',')} ${newUids.join(',')}]`;
+  sendOk(session, tag, `${copyUid} COPY completed`);
+}
+
+// ─────────────────────────────────────────────
+// MOVE — RFC 6851 (atomic COPY + EXPUNGE)
+// ─────────────────────────────────────────────
+export async function handleMove(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+  byUid = false,
+): Promise<void> {
+  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  const seqSet = args[0] ?? '';
+  const targetName = unquote(args[1] ?? '');
+  if (!seqSet || !targetName) { sendBad(session, tag, 'MOVE: seq + target required'); return; }
+
+  const target = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId!, name: targetName },
+    select: { id: true },
+  });
+  if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
+
+  const messages = await prisma.message.findMany({
+    where: { folderId: session.selected.folderId, deletedAt: null },
+    select: { id: true, uid: true },
+    orderBy: { uid: 'asc' },
+  });
+  const uids = messages.map((m) => m.uid);
+  const matchedUids = parseSequenceSet(seqSet, uids, byUid);
+  if (matchedUids.length === 0) {
+    sendOk(session, tag, 'MOVE completed (no messages matched)');
+    return;
+  }
+  const matched = messages.filter((m) => matchedUids.includes(m.uid));
+  // Atomic move: nur folderId updaten
+  await prisma.message.updateMany({
+    where: { id: { in: matched.map((m) => m.id) } },
+    data:  { folderId: target.id },
+  });
+  sendOk(session, tag, 'MOVE completed');
+}
+
+// ─────────────────────────────────────────────
+// SEARCH — RFC 3501 §6.4.4 — Mac Mail nutzt das auf jedem Folder-Open!
+// ─────────────────────────────────────────────
+// Minimal-Implementierung: SEARCH ALL, SEARCH UNSEEN, SEARCH SEEN,
+// SEARCH FLAGGED, SEARCH UNFLAGGED, SEARCH DELETED, SEARCH UNDELETED,
+// SEARCH NEW (UNSEEN+RECENT), SEARCH OLD (NOT RECENT), SEARCH RECENT.
+// Ohne SEARCH zeigt Mac Mail Folders als leer an, weil es zuerst SEARCH ALL
+// macht um die UID-Liste zu holen.
+export async function handleSearch(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+  byUid = false,
+): Promise<void> {
+  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+
+  // Sehr einfacher Filter-Parser
+  const criteria = args.map((a) => a.toUpperCase());
+  const where: Record<string, unknown> = {
+    folderId:  session.selected.folderId,
+    deletedAt: null,
+  };
+  if (criteria.includes('UNSEEN'))    Object.assign(where, { NOT: { flags: { has: '\\Seen' } } });
+  if (criteria.includes('SEEN'))      Object.assign(where, { flags: { has: '\\Seen' } });
+  if (criteria.includes('FLAGGED'))   Object.assign(where, { flags: { has: '\\Flagged' } });
+  if (criteria.includes('UNFLAGGED')) Object.assign(where, { NOT: { flags: { has: '\\Flagged' } } });
+  if (criteria.includes('DELETED'))   Object.assign(where, { flags: { has: '\\Deleted' } });
+  if (criteria.includes('UNDELETED')) Object.assign(where, { NOT: { flags: { has: '\\Deleted' } } });
+  // NEW/RECENT: wir tracken RECENT nicht — interpretieren als UNSEEN (gleicher Effekt für Mac Mail)
+  if (criteria.includes('NEW') || criteria.includes('RECENT')) {
+    Object.assign(where, { NOT: { flags: { has: '\\Seen' } } });
+  }
+
+  const messages = await prisma.message.findMany({
+    where,
+    select: { uid: true },
+    orderBy: { uid: 'asc' },
+  });
+
+  if (byUid) {
+    const uids = messages.map((m) => m.uid);
+    sendUntagged(session, `SEARCH${uids.length ? ' ' + uids.join(' ') : ''}`);
+    sendOk(session, tag, 'UID SEARCH completed');
+  } else {
+    // SEARCH ohne UID liefert Sequenz-Nummern (1-basiert in sortierter Folder-Reihenfolge)
+    const allMessages = await prisma.message.findMany({
+      where: { folderId: session.selected.folderId, deletedAt: null },
+      select: { uid: true },
+      orderBy: { uid: 'asc' },
+    });
+    const matchedUids = new Set(messages.map((m) => m.uid));
+    const seqNums: number[] = [];
+    allMessages.forEach((m, idx) => {
+      if (matchedUids.has(m.uid)) seqNums.push(idx + 1);
+    });
+    sendUntagged(session, `SEARCH${seqNums.length ? ' ' + seqNums.join(' ') : ''}`);
+    sendOk(session, tag, 'SEARCH completed');
+  }
+}
+
+// ─────────────────────────────────────────────
+// CLOSE — RFC 3501 §6.4.2 (Mailbox abwählen + implizit EXPUNGE)
+// ─────────────────────────────────────────────
+export async function handleClose(
+  session: ImapSession,
+  tag: string,
+): Promise<void> {
+  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  // Implizit Messages mit \Deleted-Flag entfernen
+  await prisma.message.updateMany({
+    where: {
+      folderId:  session.selected.folderId,
+      deletedAt: null,
+      flags:     { has: '\\Deleted' },
+    },
+    data: { deletedAt: new Date() },
+  });
+  session.selected = null;
+  session.state = 'AUTHENTICATED';
+  sendOk(session, tag, 'CLOSE completed');
+}
+
+// ─────────────────────────────────────────────
+// CHECK — RFC 3501 §6.4.1 (Server-Sync, im Wesentlichen NOOP für uns)
+// ─────────────────────────────────────────────
+export function handleCheck(session: ImapSession, tag: string): void {
+  sendOk(session, tag, 'CHECK completed');
+}
+
+// ─────────────────────────────────────────────
 // SELECT / EXAMINE
 // ─────────────────────────────────────────────
 export async function handleSelect(
@@ -539,27 +935,65 @@ function unquote(s: string): string {
   return s.replace(/^["']|["']$/g, '');
 }
 
-function parseSequenceSet(set: string, uids: number[]): number[] {
+/**
+ * Parst eine IMAP-Sequenz-Set-Notation (RFC 3501 §9):
+ *   "1,3,5:9"     — Elemente 1, 3, 5-9
+ *   "1:*"         — alles
+ *   "*"           — letztes Element
+ *
+ * Liefert die matching UIDs zurück.
+ *
+ * @param set     Sequence-Set-String
+ * @param uids    Array aller UIDs in der aktuellen Folder-View (sortiert)
+ * @param byUid   true: input ist UID-Set (UID FETCH/STORE/COPY/MOVE),
+ *                false: input ist Seq-Num-Set (1-basierte Positions in uids[])
+ */
+function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
   if (!uids.length) return [];
-  const maxUid = Math.max(...uids);
-  const result = new Set<number>();
 
+  if (byUid) {
+    const maxUid = Math.max(...uids);
+    const result = new Set<number>();
+    for (const part of set.split(',')) {
+      if (part.includes(':')) {
+        const [startStr, endStr] = part.split(':') as [string, string];
+        const start = startStr === '*' ? maxUid : parseInt(startStr, 10);
+        const end   = endStr   === '*' ? maxUid : parseInt(endStr, 10);
+        for (const uid of uids) {
+          if (uid >= Math.min(start, end) && uid <= Math.max(start, end)) {
+            result.add(uid);
+          }
+        }
+      } else {
+        const n = part === '*' ? maxUid : parseInt(part, 10);
+        if (uids.includes(n)) result.add(n);
+      }
+    }
+    return [...result];
+  }
+
+  // Seq-Num-Modus: input sind 1-basierte Positionen in uids[]
+  const max = uids.length;
+  const result = new Set<number>();
   for (const part of set.split(',')) {
     if (part.includes(':')) {
       const [startStr, endStr] = part.split(':') as [string, string];
-      const start = startStr === '*' ? maxUid : parseInt(startStr, 10);
-      const end   = endStr   === '*' ? maxUid : parseInt(endStr, 10);
-      for (const uid of uids) {
-        if (uid >= Math.min(start, end) && uid <= Math.max(start, end)) {
-          result.add(uid);
+      const start = startStr === '*' ? max : parseInt(startStr, 10);
+      const end   = endStr   === '*' ? max : parseInt(endStr, 10);
+      for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+        if (i >= 1 && i <= max) {
+          const uid = uids[i - 1];
+          if (uid !== undefined) result.add(uid);
         }
       }
     } else {
-      const n = part === '*' ? maxUid : parseInt(part, 10);
-      if (uids.includes(n)) result.add(n);
+      const n = part === '*' ? max : parseInt(part, 10);
+      if (n >= 1 && n <= max) {
+        const uid = uids[n - 1];
+        if (uid !== undefined) result.add(uid);
+      }
     }
   }
-
   return [...result];
 }
 
