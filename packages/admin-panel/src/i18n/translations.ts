@@ -39,7 +39,6 @@ const de = {
   nav_services:           'Services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Zertifikate',
-  nav_oauth_clients:      'OAuth2-Clients',
   nav_sso:                'SSO',
   nav_ldap:               'LDAP / Active Dir.',
 
@@ -788,7 +787,6 @@ const en: { [K in keyof DE]: string } = {
   nav_services:           'Services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Certificates',
-  nav_oauth_clients:      'OAuth2 Clients',
   nav_sso:                'SSO',
   nav_ldap:               'LDAP / Active Dir.',
 

@@ -13,7 +13,6 @@ import { TasksPage } from './pages/TasksPage.js';
 import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
-import { OAuthConsentPage } from './pages/OAuthConsentPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
@@ -131,12 +130,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        {/* v3.18.22 D1: OAuth2-Consent — braucht Auth, aber kein Layout */}
-        <Route path="/oauth-consent" element={
-          <AuthGuard>
-            <OAuthConsentPage />
-          </AuthGuard>
-        } />
+        {/* OAuth2-Consent-Route entfernt in v5.6.0 (OAuth2 komplett raus) */}
         <Route path="/*" element={
           <AuthGuard>
             <Layout>
