@@ -239,22 +239,29 @@ function parseLine(line: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let inQuote = false;
+  // v5.2.19: track whether quotes were opened in this token. Empty quoted
+  // strings ("") müssen als leerer Token gepusht werden — Mac Mail sendet
+  // LIST "" "*" wo args[0] = '' und args[1] = '*'. Vorher: '""' wurde
+  // verworfen weil current leer war → reference wurde '*' → Regex ungültig.
+  let quotedToken = false;
 
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '"') {
       inQuote = !inQuote;
+      quotedToken = true;
     } else if (ch === ' ' && !inQuote) {
-      if (current) {
+      if (current || quotedToken) {
         tokens.push(current);
         current = '';
+        quotedToken = false;
       }
     } else {
       current += ch;
     }
   }
 
-  if (current) tokens.push(current);
+  if (current || quotedToken) tokens.push(current);
   return tokens;
 }
 
