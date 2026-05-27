@@ -29,6 +29,17 @@ adminDashboardRouter.use(requireAdmin);
 
 const log = createLogger('api:admin:dashboard');
 
+// ── GET /api/v1/admin/dashboard/version — lightweight Version-Endpoint ─────
+// Wird von der „System-Informationen"-Page genutzt damit die angezeigte
+// Version immer mit dem deployten Container übereinstimmt (ohne dass das
+// Frontend bei jedem Patch-Release neu gebaut werden muss).
+adminDashboardRouter.get('/version', async (_req: Request, res: Response) => {
+  res.json({
+    version: await getAppVersion(),
+    bootedAt: PROCESS_STARTED_AT.toISOString(),
+  });
+});
+
 // ── BullMQ Outbound-Queue-Referenz ────────────────────────────────────────────
 let _queue: Queue | null = null;
 function getOutboundQueue(): Queue {
