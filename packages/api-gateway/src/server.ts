@@ -289,19 +289,19 @@ app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
 // v5.3.0: OAuth2/OIDC-Endpoints für Modern Auth (Outlook 2024 LTSC etc.)
 // /oauth2/authorize, /oauth2/token, /oauth2/userinfo, /oauth2/jwks, /oauth2/.well-known/*
 app.use('/oauth2',             internalProxy(AUTH_SERVICE_URL));
-// v5.3.0: ADFS-Emulation — Outlook 2024 LTSC sucht OAuth2-Endpoints fest unter
+// v5.3.0/3.3: ADFS-Emulation — Outlook 2024 LTSC sucht OAuth2-Endpoints fest unter
 // /adfs/oauth2/* (Active Directory Federation Services). Wir routen die an
 // denselben auth-service-Backend, der intern /oauth2/* serviert.
-function adfsProxy(): express.RequestHandler {
+// v5.3.3: /adfs/ls/ → /oauth2/ls (server-rendered HTML Login für Outlook
+//         WebView). Anders als /adfs/oauth2/* mappt /adfs/ls/ direkt auf
+//         eine SUB-Path innerhalb des oauth2-Routers.
+function adfsProxy(rewrite: (url: string) => string): express.RequestHandler {
   const proxy = createProxyMiddleware({
     target: AUTH_SERVICE_URL,
     changeOrigin: true,
     on: {
       proxyReq: (proxyReq, req) => {
-        // /adfs/oauth2/authorize → /oauth2/authorize
-        const rewritten = (req as express.Request).originalUrl
-          .replace(/^\/adfs\/oauth2/, '/oauth2');
-        proxyReq.path = rewritten;
+        proxyReq.path = rewrite((req as express.Request).originalUrl);
       },
       error: (err, _req, res) => {
         log.warn({ err }, 'ADFS proxy error');
@@ -313,7 +313,8 @@ function adfsProxy(): express.RequestHandler {
   });
   return proxy as express.RequestHandler;
 }
-app.use('/adfs/oauth2', adfsProxy());
+app.use('/adfs/oauth2', adfsProxy((url) => url.replace(/^\/adfs\/oauth2/, '/oauth2')));
+app.use('/adfs/ls',     adfsProxy((url) => url.replace(/^\/adfs\/ls/, '/oauth2/ls')));
 
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
