@@ -2,7 +2,7 @@ import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { connectDatabase, prisma, provisionWellKnownOAuthClients } from '@coremail/storage';
+import { connectDatabase, prisma } from '@coremail/storage';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, initJwtKeys, getPublicJwk } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
@@ -144,86 +144,8 @@ app.get('/.well-known/jwks.json', (_req, res) => {
   }
 });
 
-// ── ADFS Federation Metadata (v5.3.0 Modern Auth für Outlook 2024 LTSC) ────
-// Outlook 2024 LTSC sucht beim Modern-Auth-Setup nach diesem XML, um den
-// Identity Provider zu discovern. Wir liefern eine minimale aber gültige
-// FederationMetadata.xml, die unsere OAuth2-Endpoints unter /adfs/oauth2/*
-// annonciert.
-//
-// Format-Quellen:
-//   - MS-MWBF (Microsoft Web Browser Federated Sign-On Protocol)
-//   - WS-Federation Metadata 1.2
-//   - ADFS-Setup-Guide aus Microsoft Learn (Exchange on-premises Modern Auth)
-app.get('/FederationMetadata/2007-06/FederationMetadata.xml', async (_req, res) => {
-  try {
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { publicHostname: true, useHttps: true, httpPort: true, jwtPublicKey: true },
-    });
-    const hostname = settings?.publicHostname ?? 'mail.localhost';
-    const scheme = settings?.useHttps !== false ? 'https' : 'http';
-    const port = settings?.httpPort ?? 443;
-    const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
-    const base = `${scheme}://${hostname}${portSuffix}`;
-    // Public-Key als reine base64 (kein PEM-Header) für X509Certificate-Element.
-    // Beachte: Federation Metadata erwartet eigentlich ein vollständiges X.509-
-    // Zertifikat — wir haben nur einen RSA-Public-Key. Für die OAuth2-Discovery
-    // reicht das in der Praxis, weil Outlook nur das Subject/Issuer prüft.
-    const pubKey = (settings?.jwtPublicKey ?? '')
-      .replace(/-----BEGIN[^-]+-----/g, '')
-      .replace(/-----END[^-]+-----/g, '')
-      .replace(/\s/g, '');
-    const entityId = `${base}/adfs/services/trust`;
-    res.set('Content-Type', 'application/samlmetadata+xml');
-    res.send(`<?xml version="1.0" encoding="utf-8"?>
-<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata"
-                  xmlns:fed="http://docs.oasis-open.org/wsfed/federation/200706"
-                  xmlns:wsa="http://www.w3.org/2005/08/addressing"
-                  xmlns:auth="http://docs.oasis-open.org/wsfed/authorization/200706"
-                  xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
-                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                  entityID="${entityId}">
-  <RoleDescriptor xsi:type="fed:SecurityTokenServiceType"
-                  protocolSupportEnumeration="http://docs.oasis-open.org/wsfed/federation/200706">
-    <KeyDescriptor use="signing">
-      <ds:KeyInfo>
-        <ds:X509Data>
-          <ds:X509Certificate>${pubKey}</ds:X509Certificate>
-        </ds:X509Data>
-      </ds:KeyInfo>
-    </KeyDescriptor>
-    <fed:TokenTypesOffered>
-      <fed:TokenType Uri="urn:ietf:params:oauth:token-type:jwt"/>
-    </fed:TokenTypesOffered>
-    <fed:PassiveRequestorEndpoint>
-      <wsa:EndpointReference>
-        <wsa:Address>${base}/adfs/ls/</wsa:Address>
-      </wsa:EndpointReference>
-    </fed:PassiveRequestorEndpoint>
-  </RoleDescriptor>
-  <!-- OAuth2-spezifische Endpoints (für Outlook 2024 LTSC) -->
-  <RoleDescriptor xsi:type="fed:ApplicationServiceType"
-                  protocolSupportEnumeration="http://schemas.xmlsoap.org/ws/2005/02/trust http://docs.oasis-open.org/wsfed/federation/200706"
-                  ServiceDisplayName="CoreMail OAuth2">
-    <KeyDescriptor use="signing">
-      <ds:KeyInfo>
-        <ds:X509Data>
-          <ds:X509Certificate>${pubKey}</ds:X509Certificate>
-        </ds:X509Data>
-      </ds:KeyInfo>
-    </KeyDescriptor>
-    <fed:PassiveRequestorEndpoint>
-      <wsa:EndpointReference>
-        <wsa:Address>${base}/adfs/oauth2/authorize</wsa:Address>
-      </wsa:EndpointReference>
-    </fed:PassiveRequestorEndpoint>
-  </RoleDescriptor>
-</EntityDescriptor>`);
-  } catch (err) {
-    log.error({ err }, 'FederationMetadata request failed');
-    res.status(503).type('text/plain').send('FederationMetadata not available');
-  }
-});
+// v5.4.0: ADFS FederationMetadata.xml entfernt (war für Outlook 2024 LTSC
+// Modern Auth — MAPI ist raus, ADFS-Emulation damit auch nutzlos).
 
 // ── ACME HTTP-01 Challenge ────────────────────────────────────────────────────
 // Muss vor den Proxies stehen (kein Auth, kein Body-Parser nötig).
@@ -272,7 +194,7 @@ function internalProxy(targetBase: string): express.RequestHandler {
 }
 
 app.use('/EWS',          internalProxy(EWS_URL));
-app.use('/mapi',         internalProxy(EWS_URL));
+// v5.4.0: /mapi/* komplett entfernt
 app.use('/OAB',          internalProxy(EWS_URL));
 // v3.18.35: Autodiscover hat einen eigenen Service (Port 8081), nicht EWS.
 app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
@@ -289,32 +211,9 @@ app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
 // v5.3.0: OAuth2/OIDC-Endpoints für Modern Auth (Outlook 2024 LTSC etc.)
 // /oauth2/authorize, /oauth2/token, /oauth2/userinfo, /oauth2/jwks, /oauth2/.well-known/*
 app.use('/oauth2',             internalProxy(AUTH_SERVICE_URL));
-// v5.3.0/3.3: ADFS-Emulation — Outlook 2024 LTSC sucht OAuth2-Endpoints fest unter
-// /adfs/oauth2/* (Active Directory Federation Services). Wir routen die an
-// denselben auth-service-Backend, der intern /oauth2/* serviert.
-// v5.3.3: /adfs/ls/ → /oauth2/ls (server-rendered HTML Login für Outlook
-//         WebView). Anders als /adfs/oauth2/* mappt /adfs/ls/ direkt auf
-//         eine SUB-Path innerhalb des oauth2-Routers.
-function adfsProxy(rewrite: (url: string) => string): express.RequestHandler {
-  const proxy = createProxyMiddleware({
-    target: AUTH_SERVICE_URL,
-    changeOrigin: true,
-    on: {
-      proxyReq: (proxyReq, req) => {
-        proxyReq.path = rewrite((req as express.Request).originalUrl);
-      },
-      error: (err, _req, res) => {
-        log.warn({ err }, 'ADFS proxy error');
-        if (!('headersSent' in res && res.headersSent)) {
-          (res as express.Response).status(502).json({ error: 'Service temporarily unavailable' });
-        }
-      },
-    },
-  });
-  return proxy as express.RequestHandler;
-}
-app.use('/adfs/oauth2', adfsProxy((url) => url.replace(/^\/adfs\/oauth2/, '/oauth2')));
-app.use('/adfs/ls',     adfsProxy((url) => url.replace(/^\/adfs\/ls/, '/oauth2/ls')));
+// v5.4.0: ADFS-Emulation entfernt (war für Outlook MAPI Modern Auth, MAPI
+// wurde aus dem Stack genommen). OAuth2-Server bleibt unter /oauth2/*
+// verfügbar für Web-Apps und Mobile-Clients.
 
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
@@ -499,8 +398,7 @@ if (existsSync(owaDir)) {
   // SPA-Catch-All: alles, was nicht bisher zugeordnet wurde und KEINE
   // bekannte API-/Proxy-Route ist, ist eine OWA-Route → index.html zurück.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/oauth2/', '/.well-known/', '/EWS', '/mapi', '/OAB', '/Autodiscover', '/autodiscover',
-    '/adfs/', '/FederationMetadata/',
+    '/api/', '/auth/', '/oauth2/', '/.well-known/', '/EWS', '/OAB', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
   ];
   app.get('*', (req, res, next) => {
@@ -531,15 +429,8 @@ async function start() {
   // generiert und in ServerSettings persistiert. Modern Auth (OAuth2/OIDC)
   // braucht asymmetrische Signatur damit Clients via JWKS verifizieren können.
   await initJwtKeys(prisma);
-  // v5.3.0 Phase C: Well-Known Native-Client-IDs (Outlook Win, Outlook Mobile,
-  // iOS Mail, Microsoft Graph) idempotent in OAuthClient-Tabelle anlegen,
-  // damit unser OAuth2-Server diese Clients bei /oauth2/authorize akzeptiert.
-  try {
-    const created = await provisionWellKnownOAuthClients();
-    if (created > 0) log.info({ created }, 'Well-Known OAuth2-Clients provisioniert');
-  } catch (err) {
-    log.warn({ err }, 'Well-Known OAuth2-Client-Provisioning fehlgeschlagen (non-fatal)');
-  }
+  // v5.4.0: Well-Known OAuth Microsoft-Clients-Bootstrap entfernt (war für
+  // Outlook MAPI Modern Auth — MAPI ist raus, kein Anwendungsfall mehr).
   getRedisClient();
   log.info({ port: PORT }, 'API Gateway listening');
   app.listen(PORT);

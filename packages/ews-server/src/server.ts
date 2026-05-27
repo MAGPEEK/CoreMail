@@ -3,7 +3,10 @@ import { createLogger, initJwtKeys } from '@coremail/core';
 import { connectDatabase, prisma } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
-import { mapiRouter } from './mapi/handler.js';
+// v5.4.0: MAPI/HTTP komplett entfernt (12k+ Zeilen). User-Entscheidung:
+// MAPI war fundamental inkompatibel mit Outlook 2024 LTSC's Modern-Auth-
+// Hardening (siehe Research: ADFS-Emulation wäre 3-4 Wochen + nicht garantiert
+// funktionsfähig). IMAP/SMTP + CalDAV/CardDAV decken die User-Bedürfnisse ab.
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
@@ -52,13 +55,7 @@ async function main() {
     res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
 
-  // MAPI over HTTP — Phase 8 — v3.18.38: ewsAuthMiddleware vor MAPI-Router,
-  // damit Outlook beim Connect Credentials sendet. Ausnahme: /healthcheck.htm
-  // muss anonym sein (Outlook connectivity-probe vor Login).
-  app.use('/mapi', (req, res, next) => {
-    if (req.path === '/healthcheck.htm') return next();
-    return ewsAuthMiddleware(req, res, next);
-  }, mapiRouter);
+  // v5.4.0: /mapi/* endpoints entfernt (siehe Header-Kommentar)
 
   app.listen(PORT, () => {
     log.info({ port: PORT }, 'EWS server started');

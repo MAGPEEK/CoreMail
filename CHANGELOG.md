@@ -13,6 +13,61 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.4.0] — 2026-05-27 — MAPI komplett aus dem Stack entfernt
+
+### Removed (Major)
+
+**MAPI-over-HTTP-Implementation komplett gelöscht.** User-Entscheidung:
+„verwerfe das Konzept MAPI und entferne es". Hintergrund: Outlook 2024
+LTSC erzwingt Modern Auth auf Exchange-Endpoints und akzeptiert keine
+non-Microsoft-OAuth-Provider. Custom-ADFS-Emulation hätte 3-4 Wochen
+Aufwand erfordert ohne Erfolgs-Garantie (siehe Recherche aus v5.3.0).
+
+Konsequente Cleanups:
+
+| Komponente | Status | Größe |
+|------------|--------|-------|
+| `packages/ews-server/src/mapi/` | **gelöscht** | ~12.000 LOC |
+| `<Protocol Type="mapiHttp">` in Autodiscover XML | **entfernt** | Autodiscover annonciert jetzt nur IMAP+SMTP+ActiveSync |
+| `/mapi/*` Proxy in api-gateway | **entfernt** | — |
+| `/adfs/oauth2/*`, `/adfs/ls/`, `/FederationMetadata/*` Routen | **entfernt** | War für MAPI Modern Auth |
+| `provisionWellKnownOAuthClients()` (Outlook native client_ids) | **entfernt** | — |
+| `packages/storage/src/oauth-clients-bootstrap.ts` | **gelöscht** | — |
+| `ENABLE_MAPI_HTTP`-Environment-Flag | **entfernt** | War nur noch Dead-Code |
+
+### Behalten
+
+- **IMAP/IMAPS** Port 143/993 — voll funktional (siehe v5.3.1 + v5.3.5 fixes)
+- **SMTP/Submission** Port 25/465/587 — STARTTLS + Basic Auth
+- **POP3/POP3S** Port 110/995 — mit App-Password-Fallback (v5.3.1)
+- **EWS** Port 8080 — bleibt für Outlook-Web-App-Compatibility
+- **CalDAV** Port 8082 — Kalender via Apple Kalender, Thunderbird Lightning, etc.
+- **CardDAV** Port 8082 — Kontakte synchron
+- **ActiveSync** Port 3005 — EAS 14.1 für mobile Clients
+- **OAuth2-Server** unter `/oauth2/*` — für Web-Apps + API-Clients
+- **MWA + BCP** — voll funktionale Web-UIs
+
+### Empfohlene Client-Setups
+
+| Client | Konto-Typ | Protokolle |
+|--------|-----------|------------|
+| **Outlook 2024 LTSC** | „Andere E-Mail-Konten" → **IMAP** | IMAP+SMTP |
+| **Outlook 2021 LTSC** | IMAP oder Exchange (Exchange via EWS) | IMAP+SMTP |
+| **Apple Mail (Mac + iOS)** | IMAP-Konto | IMAP+SMTP+CalDAV+CardDAV |
+| **Thunderbird** | IMAP-Konto | IMAP+SMTP+CalDAV (Lightning)+CardDAV (TbSync) |
+| **eM Client** | IMAP-Konto | IMAP+SMTP+CalDAV+CardDAV |
+| **Android K-9 Mail** | IMAP-Konto | IMAP+SMTP |
+| **iOS Mail.app** | „Andere" → IMAP | IMAP+SMTP+CalDAV+CardDAV (Apple Kalender/Kontakte separat) |
+
+### Geänderte/erhaltene Versionsnummern in Roadmap
+
+MAPI-Roadmap v4.0→v5.2 (Phase 1-7 + FINAL) bleibt als git-Historie und
+README-Dokumentation erhalten, ist aber kein aktiver Code mehr. Wenn
+Microsoft jemals Modern Auth lockert oder ein realistischer Pfad
+auftaucht, kann der Code aus dem git-Archiv reaktiviert werden.
+
+---
+
 ## [5.3.1] — 2026-05-27 — IMAP Vollständigkeit + POP3 App-Password + Byte-Stuffing
 
 ### Fixed — IMAP (Mac Mail folder management broken)
