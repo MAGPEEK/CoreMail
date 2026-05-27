@@ -133,7 +133,17 @@ export async function handleList(
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/%/g, '[^.]*');
-  const regex = new RegExp(`^${reference}${regexPattern}$`, 'i');
+  // v5.2.19: Defensive — reference auch eskapieren falls Client sie mit
+  // Sonderzeichen sendet. Plus try/catch um RegExp damit ungültige Patterns
+  // nicht zum 500 führen sondern alle Ordner zurückgeben.
+  const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
+  let regex: RegExp;
+  try {
+    regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
+  } catch {
+    // Fallback: alle Folder matchen
+    regex = /.*/;
+  }
 
   const folders = await prisma.folder.findMany({
     where: { mailboxId: session.mailboxId },
@@ -174,7 +184,17 @@ export async function handleLsub(
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/%/g, '[^.]*');
-  const regex = new RegExp(`^${reference}${regexPattern}$`, 'i');
+  // v5.2.19: Defensive — reference auch eskapieren falls Client sie mit
+  // Sonderzeichen sendet. Plus try/catch um RegExp damit ungültige Patterns
+  // nicht zum 500 führen sondern alle Ordner zurückgeben.
+  const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
+  let regex: RegExp;
+  try {
+    regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
+  } catch {
+    // Fallback: alle Folder matchen
+    regex = /.*/;
+  }
 
   const folders = await prisma.folder.findMany({
     where: { mailboxId: session.mailboxId },

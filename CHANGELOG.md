@@ -13,6 +13,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.19] — 2026-05-27 — IMAP parseLine-Bug: leere quoted Strings (LIST "" "*")
+
+### Fixed
+
+Nach v5.2.18-Deploy Live-Logs zeigten:
+`SyntaxError: Invalid regular expression: /^*.*$/i: Nothing to repeat`
+bei jedem LIST + LSUB Mac-Mail-Aufruf → IMAP-Verbindung warf 500.
+
+Root Cause: `parseLine()` in `packages/imap-server/src/server/index.ts`
+behandelt leere quoted Strings (`""`) als „nicht vorhanden" und überspringt
+sie. Mac Mail sendet `LIST "" "*"` (RFC 3501 Standard) → unser Parser
+machte daraus `args=['*']` statt `args=['', '*']` → `reference` wurde
+fälschlicherweise auf `*` gesetzt → Regex `^*.*$` ungültig (Stern am
+Anfang ohne Vorgänger-Zeichen).
+
+### Changes
+
+- `parseLine()`: Track `quotedToken`-Flag — leere quoted Tokens werden jetzt
+  korrekt als leerer String gepusht
+- `handleList` + `handleLsub`: Defensive — `reference` wird vor RegExp-Bau
+  eskapiert, plus try/catch der RegExp-Konstruktion (Fallback: alle Ordner
+  matchen)
+
+Wirkung: Mac Mail / iOS Mail / Thunderbird / alle IMAP-Clients sehen jetzt
+ihre Ordner-Liste korrekt. Vor diesem Fix war effectively jedes
+`LIST "" "*"` broken — der Bug war seit langem latent, aber maskiert
+weil unsere Test-Clients (openssl ohne `""`) ihn nicht triggerten.
+
+---
+
 ## [5.2.18] — 2026-05-27 — IMAP SPECIAL-USE + LSUB + NAMESPACE + STATUS (Mac Mail fix)
 
 ### Fixed
