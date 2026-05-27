@@ -228,7 +228,7 @@ async function handleGetSpecialTable(res: Response, requestId: string): Promise<
 }
 
 /**
- * QueryRows — paginiert durch GAL-Einträge.
+ * QueryRows — paginiert durch GAL-Einträge (v5.2.0 mit Cursor-Pagination).
  *
  * Request-Body (MS-OXNSPI §2.2.x simplified):
  *   Flags(uint32) | Reserved(uint32) | StartMid(uint32) | RowCount(uint32)
@@ -236,12 +236,35 @@ async function handleGetSpecialTable(res: Response, requestId: string): Promise<
  *
  * Response:
  *   StatusCode + ErrorCode + CodePage + RowCount + Rows
+ *
+ * v5.2.0: Cursor-Pagination via StartMid. Wenn StartMid > 0, suchen wir
+ * den Index dieser MinEntryID und liefern ab da. Sort: alphabetisch nach
+ * displayName.
  */
 async function handleQueryRows(req: Request, res: Response, requestId: string): Promise<void> {
-  const rows = await loadGalRows();
-  const limit = Math.min(rows.length, 500);
-  const selected = rows.slice(0, limit);
-  void req; // request-payload-parsing simplified — wir liefern erste 500 Einträge
+  let rows = await loadGalRows();
+  // v5.2.0: Default-Sort alphabetisch
+  rows.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
+
+  // Parse request: skip header (16 bytes), get StartMid + RowCount
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  let startMid = 0;
+  let rowCount = 500;
+  try {
+    if (body.length >= 16) {
+      startMid = body.readUint32LE(8);
+      rowCount = body.readUint32LE(12);
+    }
+  } catch { /* defaults */ }
+
+  // Cursor-Pagination
+  let startIdx = 0;
+  if (startMid > 0) {
+    const idx = rows.findIndex((r) => r.minId === startMid);
+    if (idx >= 0) startIdx = idx + 1;
+  }
+  const safeRowCount = Math.min(Math.max(rowCount, 1), 1000);  // 1..1000
+  const selected = rows.slice(startIdx, startIdx + safeRowCount);
 
   const w = new MapiWriter();
   w.writeUint32(MapiStatusCode.SUCCESS);
@@ -253,7 +276,7 @@ async function handleQueryRows(req: Request, res: Response, requestId: string): 
   }
   setMapiResponseHeaders(res, { requestId });
   res.status(200).send(w.toBuffer());
-  log.debug({ rowCount: selected.length }, 'NSPI QueryRows OK');
+  log.debug({ startMid, startIdx, rowCount: selected.length, total: rows.length }, 'NSPI QueryRows OK');
 }
 
 /**

@@ -549,6 +549,89 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
+      // v5.2.0 — OpenEmbeddedMessage
+      case RopId.OpenEmbeddedMessage: {
+        // LogonId(1) | InputHandleIndex(1) | OutputHandleIndex(1) | CodePageId(uint16) | OpenModeFlags(uint8)
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        outputHandleIndex = reader.readUint8();
+        const payloadStart = reader.position;
+        reader.readUint16(); reader.readUint8();
+        rops.push({
+          ropId, logonId, inputHandleIndex, outputHandleIndex,
+          payload: Buffer.from(body.subarray(payloadStart, reader.position)),
+        });
+        continue;
+      }
+
+      // v5.2.0 — Search Folders / Rules / Permissions / Misc (variable-length)
+      case RopId.GetSearchCriteria:
+      case RopId.SetSearchCriteria:
+      case RopId.GetRulesTable:
+      case RopId.UpdateRules:
+      case RopId.GetPermissionsTable:
+      case RopId.ModifyPermissions:
+      case RopId.ReloadCachedInformation:
+      case RopId.GetMessageStatus:
+      case RopId.SetMessageStatus:
+      case RopId.AbortSubmit: {
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        // OutputHandle für *Table-ROPs
+        if (ropId === RopId.GetRulesTable || ropId === RopId.GetPermissionsTable) {
+          outputHandleIndex = reader.readUint8();
+        }
+        const remStart = reader.position;
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          ...(outputHandleIndex !== undefined ? { outputHandleIndex } : {}),
+          payload: Buffer.from(body.subarray(remStart, body.length)),
+        });
+        reader.seek(body.length);
+        continue;
+      }
+
+      // v5.2.0 — MS-OXCFXICS Sync ROPs (variable-length, eigener Handler-Parse)
+      case RopId.FastTransferSourceGetBuffer:
+      case RopId.FastTransferSourceCopyFolder:
+      case RopId.FastTransferSourceCopyMessages:
+      case RopId.FastTransferSourceCopyProperties:
+      case RopId.FastTransferDestinationConfigure:
+      case RopId.FastTransferDestinationPutBuffer:
+      case RopId.SyncConfigure:
+      case RopId.SyncImportMessageChange:
+      case RopId.SyncImportHierarchyChange:
+      case RopId.SyncImportDeletes:
+      case RopId.SyncImportMessageMove:
+      case RopId.SyncUploadStateStreamBegin:
+      case RopId.SyncUploadStateStreamContinue:
+      case RopId.SyncUploadStateStreamEnd:
+      case RopId.SyncOpenCollector:
+      case RopId.GetLocalReplicaIds:
+      case RopId.SyncGetTransferState: {
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        // OutputHandle für ROPs die einen neuen Handle ausstellen
+        if (ropId === RopId.SyncConfigure ||
+            ropId === RopId.FastTransferSourceCopyFolder ||
+            ropId === RopId.FastTransferSourceCopyMessages ||
+            ropId === RopId.FastTransferSourceCopyProperties ||
+            ropId === RopId.FastTransferDestinationConfigure ||
+            ropId === RopId.SyncImportMessageChange ||
+            ropId === RopId.SyncOpenCollector ||
+            ropId === RopId.SyncGetTransferState) {
+          outputHandleIndex = reader.readUint8();
+        }
+        const remStart = reader.position;
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          ...(outputHandleIndex !== undefined ? { outputHandleIndex } : {}),
+          payload: Buffer.from(body.subarray(remStart, body.length)),
+        });
+        reader.seek(body.length);
+        continue;
+      }
+
       case RopId.MoveFolder:
       case RopId.CopyFolder:
       // v4.5.0 — Notifications

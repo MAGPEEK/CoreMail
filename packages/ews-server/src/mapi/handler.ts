@@ -42,6 +42,25 @@ mapiRouter.use((req, res, next) => {
   return next();
 });
 
+// ─── v5.2.0: gzip/deflate-Decompression für X-CompressedRequest ──────────────
+// Outlook 2016+ kann Request-Bodies mit gzip komprimieren (MS-OXCMAPIHTTP §2.2.3.2.6).
+// Wir dekomprimieren transparent vor dem Handler. Spart bei großen ROP-Streams
+// (Search, Sync) Bandwidth, besonders über mobile Netze.
+mapiRouter.use(async (req, res, next) => {
+  if (req.path !== '/emsmdb/' && req.path !== '/nspi/') return next();
+  const compressed = req.headers['x-compressedrequest'];
+  if (compressed !== '1' && compressed !== 'true') return next();
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return next();
+  try {
+    const { gunzipSync } = await import('node:zlib');
+    req.body = gunzipSync(req.body);
+    log.debug({ origLen: req.headers['content-length'], unpacked: req.body.length }, 'X-CompressedRequest decompressed');
+  } catch (err) {
+    log.warn({ err }, 'X-CompressedRequest gunzip failed — passing body unchanged');
+  }
+  next();
+});
+
 // ─── Healthcheck (anonym) ────────────────────────────────────────────────────
 
 mapiRouter.get('/healthcheck.htm', (_req: Request, res: Response) => {

@@ -15,7 +15,7 @@ import {
   PSETID_Appointment, PSETID_Address, PSETID_Task, PSETID_Note,
   LID_LOCATION, LID_APPOINTMENT_START_WHOLE, LID_APPOINTMENT_END_WHOLE,
   LID_APPOINTMENT_DURATION, LID_APPOINTMENT_SUB_TYPE, LID_BUSY_STATUS,
-  LID_APPOINTMENT_SEQUENCE, LID_RECURRING,
+  LID_APPOINTMENT_SEQUENCE, LID_RECURRING, LID_APPOINTMENT_RECUR,
   LID_EMAIL1_DISPLAY_NAME, LID_EMAIL1_ADDRESS_TYPE, LID_EMAIL1_EMAIL_ADDRESS,
   LID_EMAIL2_DISPLAY_NAME, LID_EMAIL2_EMAIL_ADDRESS, LID_FILE_AS,
   LID_TASK_STATUS, LID_PERCENT_COMPLETE, LID_TASK_START_DATE,
@@ -23,6 +23,7 @@ import {
   LID_NOTE_COLOR, LID_NOTE_WIDTH, LID_NOTE_HEIGHT,
   getNamedPropMap, resolveNamedProperties, saveNamedPropMap, lidProp,
 } from '../named-properties.js';
+import { encodeRecurrencePattern } from '../recurrence-pattern.js';
 
 const log = createLogger('mapi:rop:pim-properties');
 
@@ -60,7 +61,7 @@ async function buildAppointmentProps(
     select: {
       id: true, summary: true, description: true, location: true,
       dtStart: true, dtEnd: true, allDay: true, recurring: true,
-      organizer: true, sequence: true, classification: true,
+      rrule: true, organizer: true, sequence: true, classification: true,
     },
   }).catch(() => null);
 
@@ -94,11 +95,12 @@ async function buildAppointmentProps(
     lidProp(PSETID_Appointment, LID_BUSY_STATUS),
     lidProp(PSETID_Appointment, LID_APPOINTMENT_SEQUENCE),
     lidProp(PSETID_Appointment, LID_RECURRING),
+    lidProp(PSETID_Appointment, LID_APPOINTMENT_RECUR),
   ];
   const { ids, map: newMap } = resolveNamedProperties(baseMap, reqs);
   await saveNamedPropMap(sessionToken, newMap);
 
-  const [idLocation, idStart, idEnd, idDuration, idSubType, idBusy, idSeq, idRecur] = ids;
+  const [idLocation, idStart, idEnd, idDuration, idSubType, idBusy, idSeq, idRecur, idRecurPat] = ids;
 
   // PT_UNICODE = 0x001F, PT_SYSTIME = 0x0040, PT_LONG = 0x0003, PT_BOOLEAN = 0x000B
   // Property-Tag = (id << 16) | type
@@ -114,7 +116,17 @@ async function buildAppointmentProps(
   m.set(tag(idSeq,      0x0003),  ev.sequence);
   m.set(tag(idRecur,    0x000B),  ev.recurring);
 
-  log.debug({ itemId, namedCount: ids.length }, 'buildAppointmentProps OK');
+  // v5.2.0: Recurrence Pattern Binary für PidLidAppointmentRecur (PT_BINARY)
+  if (ev.recurring && ev.rrule) {
+    try {
+      const recurBin = encodeRecurrencePattern(ev.rrule, ev.dtStart, ev.dtEnd);
+      m.set(tag(idRecurPat, 0x0102), recurBin);
+    } catch (err) {
+      log.warn({ err, rrule: ev.rrule }, 'encodeRecurrencePattern failed — skip');
+    }
+  }
+
+  log.debug({ itemId, namedCount: ids.length, recurring: ev.recurring }, 'buildAppointmentProps OK');
   return m;
 }
 

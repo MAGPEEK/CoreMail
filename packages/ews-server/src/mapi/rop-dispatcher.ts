@@ -48,6 +48,24 @@ import { handleRopRestrict, handleRopFindRow } from './rop/search.js';
 import {
   handleRopGetPropertyIdsFromNames, handleRopGetNamesFromPropertyIds,
 } from './rop/named-props-handler.js';
+import {
+  handleRopOpenEmbeddedMessage, handleRopGetSearchCriteria, handleRopSetSearchCriteria,
+  handleRopGetRulesTable, handleRopUpdateRules,
+  handleRopGetPermissionsTable, handleRopModifyPermissions,
+  handleRopAbortSubmit, handleRopReloadCachedInformation,
+  handleRopGetMessageStatus, handleRopSetMessageStatus,
+} from './rop/v52-handlers.js';
+import {
+  handleRopSyncConfigure, handleRopFastTransferSourceGetBuffer,
+  handleRopFastTransferSourceCopyFolder, handleRopFastTransferSourceCopyMessages,
+  handleRopFastTransferSourceCopyProperties,
+  handleRopFastTransferDestinationConfigure, handleRopFastTransferDestinationPutBuffer,
+  handleRopSyncImportMessageChange, handleRopSyncImportHierarchyChange,
+  handleRopSyncImportDeletes, handleRopSyncImportMessageMove,
+  handleRopSyncUploadStateStreamBegin, handleRopSyncUploadStateStreamContinue,
+  handleRopSyncUploadStateStreamEnd, handleRopSyncOpenCollector,
+  handleRopGetLocalReplicaIds, handleRopSyncGetTransferState,
+} from './rop/sync.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -207,6 +225,66 @@ async function dispatchOne(
       return handleRopGetPropertyIdsFromNames(rop, sessionToken, serverObjectHandles);
     case RopId.GetNamesFromPropertyIds:
       return handleRopGetNamesFromPropertyIds(rop, sessionToken, serverObjectHandles);
+
+    // ── v5.2.0 — Embedded Messages / Search Folders / Rules / Perms / Misc ──
+    case RopId.OpenEmbeddedMessage:
+      return handleRopOpenEmbeddedMessage(rop, sessionToken, serverObjectHandles);
+    case RopId.GetSearchCriteria:
+      return handleRopGetSearchCriteria(rop, sessionToken, serverObjectHandles);
+    case RopId.SetSearchCriteria:
+      return handleRopSetSearchCriteria(rop, sessionToken, serverObjectHandles);
+    case RopId.GetRulesTable:
+      return handleRopGetRulesTable(rop, sessionToken, serverObjectHandles);
+    case RopId.UpdateRules:
+      return handleRopUpdateRules(rop, sessionToken, serverObjectHandles);
+    case RopId.GetPermissionsTable:
+      return handleRopGetPermissionsTable(rop, sessionToken, serverObjectHandles);
+    case RopId.ModifyPermissions:
+      return handleRopModifyPermissions(rop, sessionToken, serverObjectHandles);
+    case RopId.AbortSubmit:
+      return handleRopAbortSubmit(rop, sessionToken, serverObjectHandles);
+    case RopId.ReloadCachedInformation:
+      return handleRopReloadCachedInformation(rop, sessionToken, serverObjectHandles);
+    case RopId.GetMessageStatus:
+      return handleRopGetMessageStatus(rop, sessionToken, serverObjectHandles);
+    case RopId.SetMessageStatus:
+      return handleRopSetMessageStatus(rop, sessionToken, serverObjectHandles);
+
+    // ── v5.2.0 — MS-OXCFXICS Sync (Cached Mode) ─────────────────────────────
+    case RopId.SyncConfigure:
+      return handleRopSyncConfigure(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferSourceGetBuffer:
+      return handleRopFastTransferSourceGetBuffer(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferSourceCopyFolder:
+      return handleRopFastTransferSourceCopyFolder(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferSourceCopyMessages:
+      return handleRopFastTransferSourceCopyMessages(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferSourceCopyProperties:
+      return handleRopFastTransferSourceCopyProperties(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferDestinationConfigure:
+      return handleRopFastTransferDestinationConfigure(rop, sessionToken, serverObjectHandles);
+    case RopId.FastTransferDestinationPutBuffer:
+      return handleRopFastTransferDestinationPutBuffer(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncImportMessageChange:
+      return handleRopSyncImportMessageChange(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncImportHierarchyChange:
+      return handleRopSyncImportHierarchyChange(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncImportDeletes:
+      return handleRopSyncImportDeletes(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncImportMessageMove:
+      return handleRopSyncImportMessageMove(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncUploadStateStreamBegin:
+      return handleRopSyncUploadStateStreamBegin(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncUploadStateStreamContinue:
+      return handleRopSyncUploadStateStreamContinue(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncUploadStateStreamEnd:
+      return handleRopSyncUploadStateStreamEnd(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncOpenCollector:
+      return handleRopSyncOpenCollector(rop, sessionToken, serverObjectHandles);
+    case RopId.GetLocalReplicaIds:
+      return handleRopGetLocalReplicaIds(rop, sessionToken, serverObjectHandles);
+    case RopId.SyncGetTransferState:
+      return handleRopSyncGetTransferState(rop, sessionToken, serverObjectHandles);
 
     // ── v4.6.0+ Phasen: TODO ────────────────────────────────────────────────
     default: {

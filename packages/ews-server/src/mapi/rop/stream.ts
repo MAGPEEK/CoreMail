@@ -125,6 +125,15 @@ export async function handleRopOpenStream(
     case PR.PR_SUBJECT_W:
       buffer = encodeUtf16Le(msg.subject ?? '');
       break;
+    case PR.PR_RTF_COMPRESSED: {
+      // v5.2.0: RTF-Body über PR_RTF_COMPRESSED (MS-OXRTFCP) liefern.
+      // Outlook bevorzugt RTF wenn HTML+RTF beide gesetzt sind. Wir bauen
+      // ein minimales RTF aus HTML/Text und wrappen es ins MELA-uncompressed
+      // Format — Outlook akzeptiert das ohne CRC-Validation.
+      const { htmlOrTextToRtfCompressed } = await import('../rtf-compress.js');
+      buffer = htmlOrTextToRtfCompressed(msg.bodyHtml ?? '', msg.bodyText ?? '');
+      break;
+    }
     default:
       log.warn({ propertyTag: propertyTag.toString(16) }, 'OpenStream: unbekannter PropertyTag');
       return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_NOT_SUPPORTED);
