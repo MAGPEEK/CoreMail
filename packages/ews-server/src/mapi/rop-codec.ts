@@ -535,13 +535,24 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
+      // v5.1.0 — Named Properties (variable-length, eigener Handler-Parse)
+      case RopId.GetPropertyIdsFromNames:
+      case RopId.GetNamesFromPropertyIds: {
+        logonId = reader.readUint8();
+        inputHandleIndex = reader.readUint8();
+        const remStart = reader.position;
+        rops.push({
+          ropId, logonId, inputHandleIndex,
+          payload: Buffer.from(body.subarray(remStart, body.length)),
+        });
+        reader.seek(body.length);
+        continue;
+      }
+
       case RopId.MoveFolder:
       case RopId.CopyFolder:
       // v4.5.0 — Notifications
       case RopId.RegisterNotification:
-      // v4.6/4.7 — Calendar / Contacts (Properties + Submit reuse v4.2/v4.3 handlers)
-      case RopId.GetPropertyIdsFromNames:
-      case RopId.GetNamesFromPropertyIds:
       case RopId.ModifyRecipients:
       case RopId.ReadRecipients:
       case RopId.RemoveAllRecipients: {

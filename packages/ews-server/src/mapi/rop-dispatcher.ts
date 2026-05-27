@@ -45,6 +45,9 @@ import {
 } from './rop/folder-ops.js';
 import { handleRopRegisterNotification } from './rop/notification.js';
 import { handleRopRestrict, handleRopFindRow } from './rop/search.js';
+import {
+  handleRopGetPropertyIdsFromNames, handleRopGetNamesFromPropertyIds,
+} from './rop/named-props-handler.js';
 
 const log = createLogger('mapi:dispatcher');
 
@@ -198,6 +201,12 @@ async function dispatchOne(
       return handleRopRestrict(rop, sessionToken, serverObjectHandles);
     case RopId.FindRow:
       return handleRopFindRow(rop, sessionToken, serverObjectHandles);
+
+    // ── v5.1.0 — Named Properties ──────────────────────────────────────────
+    case RopId.GetPropertyIdsFromNames:
+      return handleRopGetPropertyIdsFromNames(rop, sessionToken, serverObjectHandles);
+    case RopId.GetNamesFromPropertyIds:
+      return handleRopGetNamesFromPropertyIds(rop, sessionToken, serverObjectHandles);
 
     // ── v4.6.0+ Phasen: TODO ────────────────────────────────────────────────
     default: {
