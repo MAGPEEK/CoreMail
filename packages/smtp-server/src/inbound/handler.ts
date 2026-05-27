@@ -227,10 +227,10 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 
   const email = rcptTo.toLowerCase();
 
-  const [user, sharedMailbox, distGroup, resourceMailbox, alias] = await Promise.all([
+  const [user, sharedMailbox, resourceMailbox, alias] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
-    prisma.distributionGroup.findFirst({ where: { email, active: true }, select: { id: true } }),
+    // v5.6.1: distributionGroup-Lookup entfernt (Feature komplett raus)
     prisma.resourceMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
     // Alias muss aktiv sein und Target ebenfalls aktiv
     prisma.emailAlias.findFirst({
@@ -244,10 +244,9 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
       },
       select: { id: true },
     }),
-    // Public-Folder-Lookup entfernt in v3.18.31 (Feature komplett entfernt)
   ]);
 
-  return !!(user ?? sharedMailbox ?? distGroup ?? resourceMailbox ?? alias);
+  return !!(user ?? sharedMailbox ?? resourceMailbox ?? alias);
 }
 
 // expandRecipients-Helper wurde nach handlers/expand.ts verschoben damit sie auch

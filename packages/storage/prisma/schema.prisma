@@ -58,10 +58,7 @@ enum AuthSource {
   OIDC
 }
 
-enum GroupType {
-  STATIC
-  DYNAMIC
-}
+// v5.6.1: enum GroupType entfernt (DistributionGroup-Feature gelöscht)
 
 enum ResourceType {
   ROOM
@@ -83,7 +80,7 @@ model Domain {
   sharedMailboxes    SharedMailbox[]
   ldapConfig         LdapConfig?
   oidcProviders      OidcProvider[]
-  distributionGroups DistributionGroup[]
+  // v5.6.1: distributionGroups-Relation entfernt
   resourceMailboxes  ResourceMailbox[]
   aliases            EmailAlias[]
   createdAt          DateTime             @default(now())
@@ -834,47 +831,10 @@ model UserCertificate {
   @@map("user_certificates")
 }
 
-// ─────────────────────────────────────────────
-// Phase 7 — Distribution Groups
-// ─────────────────────────────────────────────
-
-model DistributionGroup {
-  id                String                    @id @default(cuid())
-  email             String                    @unique
-  displayName       String
-  description       String                    @default("")
-  domain            Domain                    @relation(fields: [domainId], references: [id])
-  domainId          String
-  groupType         GroupType                 @default(STATIC)
-  ldapFilter        String?                   // for DYNAMIC groups
-  requireSenderAuth Boolean                   @default(false)
-  allowExternal     Boolean                   @default(true)
-  moderationEnabled Boolean                   @default(false)
-  moderatorIds      String[]
-  hiddenFromGal     Boolean                   @default(false)
-  active            Boolean                   @default(true)
-  members           DistributionGroupMember[]
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
-
-  @@index([domainId])
-  @@index([email])
-  @@map("distribution_groups")
-}
-
-model DistributionGroupMember {
-  id          String            @id @default(cuid())
-  group       DistributionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  groupId     String
-  memberEmail String            // resolved email address
-  memberType  String            @default("USER") // USER | SHARED_MAILBOX | GROUP | EXTERNAL
-  addedAt     DateTime          @default(now())
-  addedBy     String?           // userId of admin who added
-
-  @@unique([groupId, memberEmail])
-  @@index([groupId])
-  @@map("distribution_group_members")
-}
+// v5.6.1: DistributionGroup + DistributionGroupMember Models gelöscht.
+// Tabellen werden via `prisma db push --accept-data-loss` beim Container-
+// Start gedroppt. Empfehlung für Verteiler-Mails: externe Tools wie
+// Sympa, GNU mailman, oder einfache Email-Aliases im Mail-Client.
 
 // ─────────────────────────────────────────────
 // Phase 7 — Resource Mailboxes (Rooms & Equipment)

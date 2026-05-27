@@ -24,7 +24,6 @@ import { QuarantinePage } from './pages/QuarantinePage.js';
 import { TransportRulesPage } from './pages/TransportRulesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ServicesPage } from './pages/ServicesPage.js';
-import { GroupsPage } from './pages/GroupsPage.js';
 // ExternalContactsPage komplett entfernt in v3.18.33
 import { RbacPage } from './pages/RbacPage.js';
 // eDiscovery & Legal Hold komplett entfernt in v3.18.5
@@ -180,7 +179,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/transport-rules" element={<TransportRulesPage />} />
                   <Route path="/message-trace"  element={<MessageTracePage />} />
                   <Route path="/connectors"     element={<Navigate to="/services" replace />} />
-                  <Route path="/groups"         element={<GroupsPage />} />
+                  {/* /groups Route entfernt in v5.6.1 (DistributionGroups raus) */}
                   {/* /ext-contacts Route entfernt in v3.18.33 */}
                   <Route path="/rbac"           element={<RbacPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />

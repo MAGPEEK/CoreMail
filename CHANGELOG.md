@@ -13,6 +13,79 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.6.1] — 2026-05-27 — Verteilergruppen (DistributionGroups) komplett entfernt
+
+### Removed (Major)
+
+**Distribution Groups (Verteilergruppen) komplett aus dem Stack entfernt.**
+User-Entscheidung: „Entferne auch Verteilergruppen". In der Praxis wurden
+Verteilergruppen selten genutzt — moderne Teams bevorzugen Shared Mailboxes
+(`/admin/shared-mailboxes/`) für Team-Postfächer mit Aliasen oder externe
+Listserv-Tools für reine Verteiler. Reduziert Code-Komplexität und einen
+Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery), v3.18.31 (Public
+Folders), v3.18.33 (ExternalMailContacts), v5.4.0 (MAPI), v5.6.0 (OAuth2).
+
+### Prisma Schema (DESTRUCTIVE Migration)
+
+**2 Models + 1 Enum gelöscht** — Tabellen werden via `prisma db push
+--accept-data-loss` beim Container-Start gedroppt:
+- `DistributionGroup` → table `distribution_groups`
+- `DistributionGroupMember` → table `distribution_group_members`
+- enum `GroupType { STATIC, DYNAMIC }`
+- `Domain.distributionGroups` Relation entfernt
+
+### Frontend (BCP / admin-panel)
+
+- **BCP `/groups/` Page**: gelöscht (`packages/admin-panel/src/pages/GroupsPage.tsx`)
+- Sidebar-Eintrag „Verteilergruppen" + Users-Icon-Import entfernt
+- Route `/groups` aus `main.tsx` entfernt
+- i18n-Keys `nav_groups` (DE+EN) entfernt
+- OrganisationPage GAL-Section: „Verteilergruppen"-Spalte entfernt
+- SmtpConfigPage Lokale-Zustellung-Hinweis: „Verteilergruppen werden aufgelöst" entfernt
+
+### Backend (api-gateway)
+
+- **`packages/api-gateway/src/routes/admin/groups.ts`**: gelöscht
+- Mount `/api/v1/admin/groups` aus server.ts entfernt
+- **EMS REST-Bridge** (`routes/admin/ems.ts`): alle DistributionGroup-CRUD-
+  Endpoints entfernt (~150 LOC) inkl. `formatGroup()` Helper:
+  - `GET/POST /distribution-groups`
+  - `GET/PUT/DELETE /distribution-groups/:id`
+  - `GET/POST/DELETE /distribution-groups/:id/members`
+  - Cmdlet-Routes für Get-/New-/Set-/Remove-DistributionGroup +
+    Get-/Add-/Remove-DistributionGroupMember entfernt
+- **PowerShell Remoting** (`routes/powershell.ts`): 6 DistributionGroup-
+  Cmdlets aus `SUPPORTED_CMDLETS` Set entfernt
+- **GAL-Endpoint** (`routes/contacts.ts`):
+  - `/contacts?q=` Autocomplete: DistributionGroup-Suche entfernt
+  - `/contacts/gal` (sowohl Suche als auch Detail): DistributionGroup-
+    Quelle entfernt, `GROUP`-Kind aus `GalEntry`-Type entfernt
+- **Dashboard** (`routes/admin/dashboard.ts`): `distributionGroup.count()`
+  → konstant 0
+- **Organisation** (`routes/admin/organisation.ts`): GAL-Section
+  `groups`-Array bleibt leer
+
+### Backend (smtp-server)
+
+- **`packages/smtp-server/src/handlers/expand.ts`**: komplett rewritten —
+  `expandRecipients()` löst nur noch EmailAliase auf (Cycle-Protection via
+  visited Set bleibt erhalten); kein DistributionGroup-Lookup mehr.
+- **`packages/smtp-server/src/inbound/handler.ts`**: `verifyRecipient()`
+  Promise.all entfernt DistributionGroup-Lookup; eingehende Mails an
+  ehemalige Gruppen-Adressen werden als unbekannter Empfänger
+  abgewiesen (550 5.1.1).
+
+### Migrations-Hinweis
+
+Bestehende DistributionGroups + Mitgliedschaften gehen mit dem Upgrade
+unwiderruflich verloren. Use-Case-Empfehlung:
+- **Team-Postfach mit gemeinsamer Inbox** → Shared Mailbox + Mitglieder
+  via Permissions
+- **Reiner Verteiler (Outbound)** → externer Listserv (Mailman, listmonk)
+  oder pflegen der Empfängerliste direkt in den User-Clients
+
+---
+
 ## [5.6.0] — 2026-05-27 — OAuth2 / Modern Auth komplett aus dem Stack entfernt
 
 ### Removed (Major)

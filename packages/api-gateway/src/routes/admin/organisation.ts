@@ -143,11 +143,8 @@ adminOrganisationRouter.get('/gal', async (req: Request, res: Response) => {
       take: parseInt(limit), orderBy: { displayName: 'asc' },
       select: { id: true, email: true, displayName: true },
     }),
-    prisma.distributionGroup.findMany({
-      where: { active: true, hiddenFromGal: false, ...where },
-      take: parseInt(limit), orderBy: { displayName: 'asc' },
-      select: { id: true, email: true, displayName: true },
-    }),
+    // v5.6.1: distributionGroup-Suche entfernt
+    Promise.resolve([] as Array<{ id: string; email: string; displayName: string }>),
     prisma.resourceMailbox.findMany({
       where: { active: true, ...where },
       take: parseInt(limit), orderBy: { displayName: 'asc' },

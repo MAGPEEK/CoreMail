@@ -204,7 +204,7 @@ export function OrganisationPage() {
               {([
                 { title: 'Benutzer', items: gal.users },
                 { title: 'Freigegebene Postfächer', items: gal.shared },
-                { title: 'Verteilergruppen', items: gal.groups },
+                // v5.6.1: Verteilergruppen entfernt
                 { title: 'Ressourcen', items: gal.resources },
               ]).map(section => (
                 <div key={section.title} className="bg-white rounded-xl border border-gray-200 overflow-hidden">

@@ -31,7 +31,6 @@ import { adminDomainsRouter } from './routes/admin/domains.js';
 import { adminQueuesRouter } from './routes/admin/queues.js';
 import { adminLogsRouter } from './routes/admin/logs.js';
 import { adminBackupsRouter } from './routes/admin/backups.js';
-import { adminGroupsRouter } from './routes/admin/groups.js';
 import { adminResourcesRouter } from './routes/admin/resources.js';
 // Public Folders komplett entfernt in v3.18.31
 // eDiscovery & Legal Hold komplett entfernt in v3.18.5
@@ -284,7 +283,7 @@ app.use('/api/v1/admin/domains',         adminDomainsRouter);
 app.use('/api/v1/admin/queues',          adminQueuesRouter);
 app.use('/api/v1/admin/backups',         adminBackupsRouter);
 app.use('/api/v1/admin/logs',            adminLogsRouter);
-app.use('/api/v1/admin/groups',          adminGroupsRouter);
+// v5.6.1: /api/v1/admin/groups entfernt (DistributionGroups raus)
 app.use('/api/v1/admin/resources',       adminResourcesRouter);
 // Public-Folders-Route entfernt in v3.18.31
 // eDiscovery-Route entfernt in v3.18.5

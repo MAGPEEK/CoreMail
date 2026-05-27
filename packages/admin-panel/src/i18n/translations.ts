@@ -23,7 +23,6 @@ const de = {
   // ── Navigation — Empfänger ───────────────────────────────────────────────
   nav_mailboxes:          'Postfächer',
   nav_shared_mailboxes:   'Freigegeben',
-  nav_groups:             'Verteilergruppen',
   nav_resources:          'Ressourcen',
   nav_domains:            'Domains',
 
@@ -771,7 +770,6 @@ const en: { [K in keyof DE]: string } = {
   // ── Navigation — Empfänger ───────────────────────────────────────────────
   nav_mailboxes:          'Mailboxes',
   nav_shared_mailboxes:   'Shared',
-  nav_groups:             'Distribution Groups',
   nav_resources:          'Resources',
   nav_domains:            'Domains',
 
