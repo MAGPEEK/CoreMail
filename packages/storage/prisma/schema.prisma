@@ -118,9 +118,7 @@ model User {
   certificates    UserCertificate[]
   smimeSettings   SmimeSettings?
   pushSubscriptions PushSubscription[]
-  oauthCodes      OAuthAuthorizationCode[]
-  oauthTokens     OAuthToken[]
-  oauthConsents   OAuthConsent[]
+  // v5.6.0: OAuth-Relationen (oauthCodes/Tokens/Consents) entfernt
   categories          Category[]
   aliases             EmailAlias[]        @relation("UserAliases")
   passwordResetTokens PasswordResetToken[]
@@ -1207,90 +1205,13 @@ model PushSubscription {
   @@map("push_subscriptions")
 }
 
-// ─────────────────────────────────────────────
-// Phase 10 — OAuth2 / Modern Auth (EWS)
-// ─────────────────────────────────────────────
-
-model OAuthClient {
-  id           String   @id @default(cuid())
-  clientId     String   @unique
-  clientSecret String   // bcrypt hash for confidential clients; empty string for public clients
-  name         String
-  description  String   @default("")
-  redirectUris String[]
-  // Available scopes: "openid" | "profile" | "email" | "mail" | "calendar" | "contacts" | "ews" | "admin"
-  allowedScopes String[]
-  // Trusted clients skip user consent screen
-  trusted      Boolean  @default(false)
-  // Public clients (no clientSecret) must use PKCE
-  pkceRequired Boolean  @default(false)
-  active       Boolean  @default(true)
-  createdBy    String
-  createdAt    DateTime @default(now())
-  tokens       OAuthToken[]
-  codes        OAuthAuthorizationCode[]
-  consents     OAuthConsent[]
-
-  @@map("oauth_clients")
-}
-
-// Tracks which scopes a user has granted to an OAuth2 client (consent).
-// Non-trusted clients must obtain user consent before receiving tokens.
-model OAuthConsent {
-  id        String      @id @default(cuid())
-  userId    String
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clientId  String
-  client    OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  scopes    String[]    // granted scopes
-  grantedAt DateTime    @default(now())
-  revokedAt DateTime?
-
-  @@unique([userId, clientId])
-  @@index([userId])
-  @@map("oauth_consents")
-}
-
-model OAuthAuthorizationCode {
-  id          String      @id @default(cuid())
-  code        String      @unique
-  client      OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  clientId    String
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  scope       String      // space-separated list
-  redirectUri String
-  codeChallenge     String?  // PKCE S256
-  codeChallengeMethod String? @default("S256")
-  expiresAt   DateTime
-  used        Boolean     @default(false)
-  createdAt   DateTime    @default(now())
-
-  @@index([code])
-  @@index([userId])
-  @@map("oauth_authorization_codes")
-}
-
-model OAuthToken {
-  id               String      @id @default(cuid())
-  accessToken      String      @unique
-  tokenType        String      @default("Bearer")
-  scope            String
-  expiresAt        DateTime
-  refreshToken     String?     @unique
-  refreshExpiresAt DateTime?
-  client           OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  clientId         String
-  userId           String
-  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  revoked          Boolean     @default(false)
-  createdAt        DateTime    @default(now())
-
-  @@index([accessToken])
-  @@index([refreshToken])
-  @@index([userId, clientId])
-  @@map("oauth_tokens")
-}
+// v5.6.0: OAuth2 / Modern Auth komplett entfernt.
+// Models OAuthClient, OAuthConsent, OAuthAuthorizationCode, OAuthToken
+// wurden in v5.6.0 gelöscht. Tabellen werden via `prisma db push
+// --accept-data-loss` beim Container-Start gedroppt.
+//
+// MFA-Bypass für Mail-Clients: App-Passwörter (AppPassword-Model)
+// — funktioniert mit IMAP, SMTP, POP3, EWS.
 
 // ── SMTP-Server-Einstellungen (Singleton) ────────────────────────────────────
 model SmtpSettings {
@@ -1541,14 +1462,9 @@ model ServerSettings {
   tlsCert  String?  // PEM-kodiertes Zertifikat (Certificate)
   tlsKey   String?  // PEM-kodierter privater Schlüssel (Private Key)
 
-  // ── JWT Signing Keys (v5.3.0 — RS256 für OAuth2/OIDC Modern Auth) ────────────
-  // Outlook 2024 LTSC erzwingt Modern Auth (OAuth2) und verifiziert JWT-Signaturen
-  // selbständig via JWKS. Daher RSA-2048 asymmetrisch statt HMAC HS256.
-  // Werden beim ersten Bedarf auto-generiert via initJwtKeys() in @coremail/core.
-  jwtPrivateKey  String?  // PEM-kodierter RSA Private Key
-  jwtPublicKey   String?  // PEM-kodierter RSA Public Key (PKCS#1/SPKI)
-  jwtKeyId       String?  // Stable Key-ID für JWK 'kid' (UUIDv4)
-  jwtKeyCreated  DateTime? // Wann generiert — für Rotation-Planung
+  // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated entfernt
+  // (RS256-Keys waren für OAuth2/OIDC — komplett aus Stack raus).
+  // JWT wieder mit HS256 + JWT_SECRET env-Variable.
 
   updatedAt       DateTime @updatedAt
 

@@ -31,7 +31,6 @@ import { RbacPage } from './pages/RbacPage.js';
 // Journaling-Feature komplett entfernt in v3.13.6
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
-import { OAuthClientsPage } from './pages/OAuthClientsPage.js';
 // PublicFoldersPage komplett entfernt in v3.18.31
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
@@ -186,7 +185,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/rbac"           element={<RbacPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
-                  <Route path="/oauth-clients" element={<OAuthClientsPage />} />
+                  {/* /oauth-clients Route entfernt in v5.6.0 (OAuth2 komplett raus) */}
                   {/* /public-folders Route entfernt in v3.18.31 */}
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />

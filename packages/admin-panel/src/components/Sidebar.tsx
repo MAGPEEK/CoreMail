@@ -4,7 +4,7 @@ import {
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search, Users,
   ShieldHalf, Archive,
-  KeyRound, ClipboardList, Activity, Info, Terminal,
+  ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
@@ -47,7 +47,6 @@ export function Sidebar() {
         { path: '/services',         labelKey: 'nav_services',         icon: Server },
         { path: '/smtp-config',      labelKey: 'nav_smtp_config',      icon: Terminal },
         { path: '/certificates',     labelKey: 'nav_certificates',     icon: ShieldCheck },
-        { path: '/oauth-clients',    labelKey: 'nav_oauth_clients',    icon: KeyRound },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
         { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
       ],

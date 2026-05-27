@@ -13,6 +13,86 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.6.0] — 2026-05-27 — OAuth2 / Modern Auth komplett aus dem Stack entfernt
+
+### Removed (Major)
+
+**OAuth2 / Modern Auth / JWT-RS256-Infrastruktur komplett gelöscht.** User-
+Entscheidung: „Entfernen und aus Code entfernen bcp OAuth2 / Modern Auth".
+
+Hintergrund: Nach MAPI-Removal in v5.4.0 + IMAP-OAuth-Decision in v5.5.0 hat
+OAuth2 keinen praktischen Use-Case mehr im Stack. Mail-Clients nutzen IMAP/
+SMTP/POP3 mit App-Passwörtern (MFA-tauglich). MWA + BCP nutzen Session-JWTs
+über `/auth/login`. Komplette OAuth2-Codebase ist toter Ballast.
+
+### Frontend
+
+- **BCP `/oauth-clients/` Page**: gelöscht (`packages/admin-panel/src/pages/OAuthClientsPage.tsx`)
+- BCP Sidebar-Eintrag „OAuth2 Clients" + i18n-Keys entfernt
+- BCP Route `/oauth-clients` entfernt
+- **MWA `/oauth-consent/` Page**: gelöscht (`packages/web-client/src/pages/OAuthConsentPage.tsx`)
+- MWA Route `/oauth-consent` entfernt
+- MWA LoginPage: OAuth2-Flow-Detection entfernt (Login geht direkt zu `/mail`)
+
+### Backend
+
+- **`packages/auth-service/src/oauth2/`**: komplettes Verzeichnis gelöscht (Router + 970 LOC)
+- **`packages/api-gateway/src/routes/admin/oauth-clients.ts`**: gelöscht
+- api-gateway: `/oauth2/*` Proxy entfernt
+- api-gateway: `/api/v1/admin/oauth/*` Mount entfernt
+- api-gateway: `/.well-known/openid-configuration` + `/.well-known/jwks.json` Handler entfernt
+- auth-service: `/oauth2` Mount entfernt
+- ews-server middleware: Bearer-Branch komplett entfernt (Audience-Validation, OAuth-Token-Revocation-Check) — nur noch Basic-Auth
+
+### JWT zurück auf HS256
+
+- **`packages/core/src/auth/jwt-keys.ts`**: gelöscht (RS256-Key-Management war nur für JWKS)
+- `packages/core/src/auth/jwt.ts`: komplett rewritten zurück auf HS256 mit `JWT_SECRET` env-Var (wie pre-v5.2.17)
+- `initJwtKeys()` aus api-gateway, auth-service, ews-server, backup-service, caldav-server startup entfernt
+
+### Prisma Schema (DESTRUCTIVE Migration)
+
+**4 Models gelöscht** — Tabellen werden via `prisma db push --accept-data-loss` beim Container-Start gedroppt:
+- `OAuthClient` → table `oauth_clients`
+- `OAuthAuthorizationCode` → table `oauth_authorization_codes`
+- `OAuthToken` → table `oauth_tokens`
+- `OAuthConsent` → table `oauth_consents`
+
+**`User` Relationen** entfernt: `oauthCodes`, `oauthTokens`, `oauthConsents`.
+
+**`ServerSettings` Felder entfernt:** `jwtPrivateKey`, `jwtPublicKey`,
+`jwtKeyId`, `jwtKeyCreated`.
+
+### Was bleibt
+
+- **App-Passwörter** (`AppPassword`-Model + `/auth/app-passwords` Router) — der pragmatische MFA-Bypass für IMAP/SMTP/POP3/EWS
+- **Session-JWTs** (HS256-signiert mit `JWT_SECRET`) für REST-API + MWA/BCP-Login
+- **MFA/TOTP/WebAuthn** (`UserMfa`-Model + `/auth/mfa` Router) — für interaktive Logins
+- **SSO/OIDC-Provider-Integration** (`SsoConfig`-Model + `/sso` Routes) — für External-IdP-Login (NICHT für unsere eigenen Tokens)
+
+### Migration-Impact
+
+- Bestehende OAuth-Clients-Daten gehen verloren (sind aber nie genutzt worden in dieser Installation)
+- RS256-JWTs werden invalid → User loggen einmal neu ein (HS256-JWTs werden ausgestellt)
+- API-Konsumenten die unsere `/oauth2/token` nutzten müssten auf `/auth/login` umsteigen (keine bekannt)
+
+### Stack-Vereinfachung
+
+| Vorher (v5.5.0) | Nachher (v5.6.0) |
+|-----------------|------------------|
+| 2 Frontend-Pages (OAuthClientsPage + OAuthConsentPage) | — |
+| 1 Backend-Router (oauth2/router.ts, 970 LOC) | — |
+| 1 Backend-Modul (jwt-keys.ts, 130 LOC) | — |
+| 1 Admin-API-Router (oauth-clients.ts, 220 LOC) | — |
+| 4 Prisma-Models + Relationen | — |
+| JWT-Keys in DB persistiert | JWT_SECRET env-Var |
+| 9 Endpunkte unter /oauth2/* | — |
+| 2 Well-Known-Endpoints | — |
+
+**Total entfernt: ~1.500 LOC** zusätzlich zu MAPI's 12.000 LOC aus v5.4.0.
+
+---
+
 ## [5.5.0] — 2026-05-27 — IMAP4rev2 RFC-Compliance + Doku-Update
 
 ### Added

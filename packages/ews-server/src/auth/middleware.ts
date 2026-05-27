@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken, verifyPassword, createLogger } from '@coremail/core';
+import { verifyPassword, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('ews:auth');
@@ -30,89 +30,12 @@ export async function ewsAuthMiddleware(
   // false-negativ zurückgeben → 401-Schleife.
   const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
 
+  // v5.6.0: Bearer-Branch komplett entfernt (OAuth2 raus). Nur noch Basic-Auth.
   if (authSchemeLower === 'bearer') {
-    const tokenStart = authHeader.indexOf(' ');
-    const token = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
-    type TokenPayload = { sub: string; aud?: string | string[]; iss?: string; exp?: number };
-    let payload: TokenPayload | null = null;
-    try {
-      payload = verifyAccessToken(token) as unknown as TokenPayload;
-    } catch (err) {
-      log.debug({ err: (err as Error)?.message }, 'EWS Bearer: JWT verify failed');
-      payload = null;
-    }
-    if (payload) {
-      // v5.3.0 Phase E: Audience-Validation. Outlook 2024 LTSC + andere
-      // Microsoft-Clients setzen `aud` auf den Resource-URI (server FQDN
-      // oder eine Microsoft-Konstante). Wir akzeptieren:
-      //   1. Tokens ohne `aud` (Legacy CoreMail-Tokens — Refresh würde aud setzen)
-      //   2. Tokens mit `aud` = unserem publicHostname-FQDN
-      //   3. Tokens mit `aud` in unserer Whitelist (Outlook-Resource-URIs)
-      // Sonst → 401 (verhindert Token-Substitution / cross-tenant).
-      const audClaim: string[] = Array.isArray(payload.aud)
-        ? payload.aud
-        : payload.aud
-          ? [payload.aud]
-          : [];
-      if (audClaim.length > 0) {
-        const settings = await prisma.serverSettings.findUnique({
-          where:  { id: 'singleton' },
-          select: { publicHostname: true, useHttps: true, httpPort: true },
-        }).catch(() => null);
-        const hostname = settings?.publicHostname ?? '';
-        const scheme = settings?.useHttps !== false ? 'https' : 'http';
-        const port = settings?.httpPort ?? 443;
-        const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
-        const ourFqdn = hostname ? `${scheme}://${hostname}${portSuffix}` : '';
-        const allowedAud = [
-          ourFqdn,
-          ourFqdn + '/',
-          hostname,
-          'https://outlook.office365.com',
-          'https://outlook.office365.com/',
-          // Outlook EWS resource ID — Outlook 2024 LTSC sendet manchmal exakt das
-          '00000002-0000-0ff1-ce00-000000000000',
-        ];
-        const audOk = audClaim.some((a) => allowedAud.includes(a));
-        if (!audOk) {
-          log.warn({
-            userId: payload.sub,
-            audClaim,
-            allowedAud: allowedAud.filter(Boolean),
-          }, 'EWS Bearer: ungültige Audience → 401');
-          res.set('WWW-Authenticate', 'Bearer realm="CoreMail EWS", error="invalid_token", error_description="Audience claim does not match"');
-          res.status(401).send('Unauthorized');
-          return;
-        }
-      }
-
-      // Phase 10: Check OAuth2 token revocation status in DB
-      const oauthToken = await prisma.oAuthToken.findUnique({
-        where: { accessToken: token },
-        select: { revoked: true, expiresAt: true },
-      }).catch(() => null);
-
-      // If found in oauth_tokens table, must not be revoked/expired
-      if (oauthToken && (oauthToken.revoked || oauthToken.expiresAt < new Date())) {
-        log.warn({ userId: payload.sub }, 'EWS: OAuth2 token revoked or expired');
-        res.set('WWW-Authenticate', 'Bearer realm="CoreMail EWS", error="invalid_token"');
-        res.status(401).send('Unauthorized');
-        return;
-      }
-
-      const user = await prisma.user.findUnique({
-        where: { id: payload.sub },
-        select: { id: true, email: true, role: true, active: true },
-      });
-      if (user?.active) {
-        req.ewsUser = { userId: user.id, email: user.email, role: user.role };
-        // EWS Shared Mailbox delegation header
-        const anchor = req.get('X-AnchorMailbox') ?? req.get('X-OpenTypeMailbox');
-        if (anchor) req.targetMailbox = anchor.toLowerCase();
-        next();
-        return;
-      }
-    }
+    log.debug({ ip: req.ip }, 'EWS: Bearer-Token nicht unterstützt — verwende Basic-Auth');
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
+    res.status(401).send('Unauthorized');
+    return;
   }
 
   // v5.2.2: Outlook 2019+/365 sendet bei "Negotiate, NTLM, Basic" zuerst

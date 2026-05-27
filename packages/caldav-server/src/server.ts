@@ -1,6 +1,6 @@
 import express from 'express';
-import { createLogger, initJwtKeys } from '@coremail/core';
-import { connectDatabase, prisma } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { connectDatabase } from '@coremail/storage';
 import { davAuthMiddleware } from './auth.js';
 import { caldavRouter } from './caldav/index.js';
 import { carddavRouter } from './carddav/index.js';
@@ -10,8 +10,7 @@ const PORT = parseInt(process.env['CALDAV_PORT'] ?? '8082', 10);
 
 async function main() {
   await connectDatabase();
-  // v5.3.0: RS256 JWT-Keys initialisieren (Bearer-Auth über davAuthMiddleware)
-  await initJwtKeys(prisma);
+  // v5.6.0: initJwtKeys() entfernt (HS256 zurück)
 
   const app = express();
 

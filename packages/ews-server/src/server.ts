@@ -1,20 +1,17 @@
 import express from 'express';
-import { createLogger, initJwtKeys } from '@coremail/core';
-import { connectDatabase, prisma } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { connectDatabase } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
-// v5.4.0: MAPI/HTTP komplett entfernt (12k+ Zeilen). User-Entscheidung:
-// MAPI war fundamental inkompatibel mit Outlook 2024 LTSC's Modern-Auth-
-// Hardening (siehe Research: ADFS-Emulation wäre 3-4 Wochen + nicht garantiert
-// funktionsfähig). IMAP/SMTP + CalDAV/CardDAV decken die User-Bedürfnisse ab.
+// v5.4.0: MAPI/HTTP entfernt. v5.6.0: OAuth2/JWT-Bearer entfernt
+// (siehe core/auth/jwt.ts und ews-server/auth/middleware.ts).
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
 
 async function main() {
   await connectDatabase();
-  // v5.3.0: RS256 JWT-Keys initialisieren (Modern Auth Bearer-Validierung)
-  await initJwtKeys(prisma);
+  // v5.6.0: initJwtKeys() entfernt
 
   const app = express();
 
