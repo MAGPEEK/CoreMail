@@ -138,6 +138,31 @@ function extractEmailFromXml(body: string): string | null {
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
+  // v5.2.3-Fix: Outlook macht zuerst einen GET-Probe ohne Auth-Header auf
+  // den V1-Endpoint. Erwartet wird 401 + WWW-Authenticate (so weiß Outlook
+  // dass der Endpoint Auth unterstützt). Wenn wir stattdessen 400 zurückgeben
+  // bricht Outlook die Discovery ab und prompted endlos nach Passwort.
+  //
+  // Lösung: Bei fehlender Authorization → 401 mit Multi-Scheme-Header,
+  // damit Outlook die Credentials sendet. Im zweiten Request (mit Auth)
+  // parsen wir dann den Body und liefern das XML.
+  //
+  // Hinweis: Wir validieren die Credentials hier NICHT (Autodiscover liefert
+  // nur Setup-Daten, keine User-Daten). Das ist Exchange-üblich.
+  const authHeader = req.get('Authorization') ?? '';
+  if (!authHeader) {
+    log.debug({ method: req.method, url: req.originalUrl }, 'Autodiscover v1: no auth, sending 401 challenge');
+    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.status(401).send('Unauthorized');
+    return;
+  }
+  // Negotiate/NTLM-Token → wir lehnen ab und drängen auf Basic
+  if (authHeader.startsWith('Negotiate ') || authHeader.startsWith('NTLM ')) {
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
+    res.status(401).send('Unauthorized');
+    return;
+  }
+
   let email: string | null = null;
 
   if (req.method === 'POST') {
@@ -147,13 +172,28 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     email = (req.query['emailaddress'] as string | undefined) ?? null;
   }
 
+  // Fallback: Email aus Basic-Auth-Header extrahieren wenn Body sie nicht hat
+  if (!email && authHeader.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      const colonIdx = decoded.indexOf(':');
+      if (colonIdx !== -1) {
+        const user = decoded.slice(0, colonIdx);
+        // user@domain oder DOMAIN\user
+        const bsIdx = user.lastIndexOf('\\');
+        const cleanUser = bsIdx !== -1 ? user.slice(bsIdx + 1) : user;
+        if (cleanUser.includes('@')) email = cleanUser;
+      }
+    } catch { /* ignore */ }
+  }
+
   if (!email) {
-    log.warn({ method: req.method }, 'Autodiscover v1: no email found in request');
+    log.warn({ method: req.method }, 'Autodiscover v1: no email found in request (auth present but no email in body or header)');
     res.status(400).send('<?xml version="1.0"?><Autodiscover><Response><Error/></Response></Autodiscover>');
     return;
   }
 
-  log.info({ email }, 'Autodiscover v1 request');
+  log.info({ email, method: req.method }, 'Autodiscover v1 request');
 
   const [user, cfg] = await Promise.all([
     prisma.user.findUnique({

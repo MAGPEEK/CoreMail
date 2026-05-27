@@ -1,6 +1,6 @@
 {
   "name": "coremail",
-  "version": "5.2.3",
+  "version": "5.2.4",
   "private": true,
   "description": "CoreMail — Open-Source Exchange 2019 Alternative",
   "engines": {
