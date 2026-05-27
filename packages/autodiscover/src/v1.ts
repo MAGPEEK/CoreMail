@@ -201,7 +201,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
   if (!authHeader) {
     log.debug({ method: req.method, url: req.originalUrl }, 'Autodiscover v1: no auth, sending 401 challenge');
-    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }
@@ -270,7 +270,9 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     const port = settings?.httpPort ?? 443;
     const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
     const base = `${scheme}://${hostname}${portSuffix}`;
-    res.set('WWW-Authenticate', `Bearer realm="${base}", authorization_uri="${base}/adfs/oauth2/authorize", error="invalid_token", Basic realm="CoreMail Autodiscover"`);
+    // v5.3.4: Bearer rausgenommen — Outlook 2024 LTSC würde sonst Modern Auth
+    // bei login.microsoftonline.com starten statt Basic-Auth zu uns zu schicken.
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }
@@ -303,7 +305,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       hasUser: !!basicAuthUser,
       hasPassword: !!basicAuthPassword,
     }, 'Autodiscover v1: Basic-Auth-Header malformed → 401');
-    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }
@@ -357,7 +359,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
         },
       },
     }).catch(() => { /* non-fatal */ });
-    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }

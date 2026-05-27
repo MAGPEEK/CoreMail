@@ -225,37 +225,30 @@ export async function ewsAuthMiddleware(
   if (!authHeader) {
     rateLimitedNoAuthLog(req);
   }
-  // v5.3.0: Bearer-Challenge mit `authorization_uri` Parameter (RFC 6750 §3 +
-  // Microsoft Exchange Modern Auth Pattern). Outlook 2024 LTSC liest den
-  // authorization_uri, um den OAuth2-Endpoint zu finden. Wir verweisen auf
-  // unseren ADFS-emulierten OAuth-Authorize-Endpoint.
-  try {
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { publicHostname: true, useHttps: true, httpPort: true },
-    });
-    const hostname = settings?.publicHostname;
-    if (hostname) {
-      const scheme = settings?.useHttps !== false ? 'https' : 'http';
-      const port = settings?.httpPort ?? 443;
-      const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
-      const base = `${scheme}://${hostname}${portSuffix}`;
-      // Doppel-Challenge: erst Bearer für Modern Auth, dann Basic für Legacy-Clients.
-      res.set('WWW-Authenticate', [
-        `Bearer realm="${base}", authorization_uri="${base}/adfs/oauth2/authorize", scope="EWS.AccessAsUser.All"`,
-        `Basic realm="CoreMail EWS"`,
-      ].join(', '));
-      res.status(401).send('Unauthorized');
-      return;
-    }
-  } catch { /* fall through to legacy challenge */ }
-  // v5.2.2: Mehrere Auth-Schemes anbieten — moderne Outlook-Builds (2019+/365)
-  // blockieren Basic wenn es das einzige Scheme ist. Mit Negotiate/NTLM in der
-  // Liste fällt Outlook gracefully auf Basic zurück, wenn die anderen Schemes
-  // fehlschlagen. Wir implementieren weder Negotiate noch NTLM — durch das
-  // Listen wird Outlook lediglich davon überzeugt, dass das Senden von
-  // Credentials erlaubt ist.
-  res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail EWS"');
+  // v5.3.4 KORREKTUR: Bearer aus der WWW-Authenticate-Challenge entfernt!
+  //
+  // Hintergrund: v5.3.0 hatte als erste Option `Bearer realm=...
+  // authorization_uri=...` annonciert. Outlook 2024 LTSC sieht Bearer als
+  // erstes Schema in der Challenge und triggert Modern Auth — geht direkt
+  // zu login.microsoftonline.com (Microsoft's hardcodierter Default für
+  // Modern-Auth-Discovery), bekommt von dort nichts (unsere Domain ist nicht
+  // in Entra ID registriert) und gibt den Auth-Flow auf, OHNE jemals
+  // Credentials an uns zu senden.
+  //
+  // User-Symptom: „eine Webseite von Microsoft zur Anmeldung erscheint" —
+  // genau das ist login.microsoftonline.com, NICHT unsere ADFS-Login-Page.
+  //
+  // Fix: Nur noch Basic als WWW-Authenticate. Outlook 2024 LTSC unterstützt
+  // weiterhin Basic-Auth-MAPI als „reguläre Anmeldung" — das ist der
+  // funktionierende Standard-Pfad für non-Entra-Server.
+  //
+  // Wer Modern Auth EXPLIZIT will: client-side via /adfs/oauth2/authorize
+  // (Browser-OAuth-Flow, z.B. für Web-Apps oder mobile Clients) — der
+  // Endpoint funktioniert weiterhin, wird nur nicht mehr automatisch
+  // annonciert.
+  // v5.3.4: Nur noch Basic — kein Negotiate/NTLM mehr (würde Outlook 2024
+  // LTSC verleiten Kerberos/SSO-Flows zu probieren statt direkt Basic-Auth).
+  res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
   res.status(401).send('Unauthorized');
 }
 
