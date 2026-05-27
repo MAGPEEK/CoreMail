@@ -284,7 +284,18 @@ oauth2Router.get('/authorize', async (req: Request, res: Response) => {
     return;
   }
 
-  // Redirect zu OWA-Login mit OAuth2-Kontext im Query-String
+  // v5.3.3: Outlook 2024 LTSC's WebView ist mit dem MWA-React-SPA unzuverlässig.
+  // ADFS-Style Native-Clients (Outlook, iOS Mail, Outlook Mobile) bekommen die
+  // dedizierte server-rendered HTML-Login-Page. Andere Clients (Web-Apps)
+  // werden weiterhin zur React-Login geführt.
+  const wellKnownNativeClients = new Set([
+    'd3590ed6-52b3-4102-aeff-aad2292ab01c',  // Outlook Desktop
+    '27922004-5251-4030-b22d-91ecd9a37ea4',  // Outlook Mobile
+    'f8d98a96-0999-43f5-8af3-69971c7bb423',  // iOS Mail.app
+    '00000003-0000-0000-c000-000000000000',  // Microsoft Graph
+  ]);
+  const useAdfsLogin = wellKnownNativeClients.has(client_id);
+
   const loginParams = new URLSearchParams({
     oauth2:        '1',
     client_id:     client_id,
@@ -296,7 +307,177 @@ oauth2Router.get('/authorize', async (req: Request, res: Response) => {
     ...(code_challenge_method ? { code_challenge_method } : {}),
   });
 
-  res.redirect(`/owa/login?${loginParams.toString()}`);
+  if (useAdfsLogin) {
+    res.redirect(`/adfs/ls/?${loginParams.toString()}`);
+  } else {
+    res.redirect(`/owa/login?${loginParams.toString()}`);
+  }
+});
+
+// ── /adfs/ls/ — Server-rendered ADFS-style Login Page (v5.3.3) ──────────────
+// Outlook 2024 LTSC's WebView (eingebettet via WebView2/Edge-WebView) hat
+// Probleme mit Single-Page-Applications. Diese Seite rendert pures HTML +
+// minimales CSS — keine externen Scripts, kein React, keine externen Fonts.
+// Damit funktioniert sie auch in restriktiven WebView-Kontexten.
+
+oauth2Router.get('/ls', (req: Request, res: Response) => {
+  const {
+    client_id    = '',
+    redirect_uri = '',
+    scope        = '',
+    state        = '',
+    nonce        = '',
+    code_challenge        = '',
+    code_challenge_method = 'S256',
+    error,
+  } = req.query as Record<string, string | undefined>;
+
+  const errMsg = typeof error === 'string' ? error : '';
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c] ?? c));
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  // X-Frame-Options: erlauben (Outlook embedded WebView)
+  res.set('X-Frame-Options', 'ALLOWALL');
+  res.send(`<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoreMail — Anmelden</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0; background: #0078D4; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .card { background: #fff; padding: 40px 32px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+          width: 100%; max-width: 380px; }
+  h1 { margin: 0 0 8px; font-size: 22px; color: #1f2937; font-weight: 600; }
+  p.sub { margin: 0 0 24px; color: #6b7280; font-size: 14px; }
+  .field { margin-bottom: 16px; }
+  label { display: block; margin-bottom: 6px; color: #374151; font-size: 13px; font-weight: 500; }
+  input[type=email], input[type=password] {
+    width: 100%; padding: 10px 12px; font-size: 15px;
+    border: 1px solid #d1d5db; border-radius: 4px; outline: none;
+  }
+  input:focus { border-color: #0078D4; box-shadow: 0 0 0 3px rgba(0,120,212,0.15); }
+  button { width: 100%; padding: 10px; background: #0078D4; color: #fff; border: 0;
+           border-radius: 4px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button:hover { background: #106EBE; }
+  .err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+         padding: 10px; border-radius: 4px; font-size: 13px; margin-bottom: 16px; }
+  .footer { margin-top: 16px; font-size: 12px; color: #9ca3af; text-align: center; }
+</style>
+</head>
+<body>
+  <form class="card" method="post" action="/adfs/ls/">
+    <h1>Anmelden</h1>
+    <p class="sub">CoreMail Modern Auth</p>
+    ${errMsg ? `<div class="err">${esc(errMsg)}</div>` : ''}
+    <div class="field">
+      <label for="username">E-Mail-Adresse</label>
+      <input id="username" name="username" type="email" autofocus required autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="password">Passwort</label>
+      <input id="password" name="password" type="password" required autocomplete="current-password">
+    </div>
+    <button type="submit">Anmelden</button>
+    <input type="hidden" name="client_id"             value="${esc(client_id)}">
+    <input type="hidden" name="redirect_uri"          value="${esc(redirect_uri)}">
+    <input type="hidden" name="scope"                 value="${esc(scope)}">
+    <input type="hidden" name="state"                 value="${esc(state)}">
+    <input type="hidden" name="nonce"                 value="${esc(nonce)}">
+    <input type="hidden" name="code_challenge"        value="${esc(code_challenge)}">
+    <input type="hidden" name="code_challenge_method" value="${esc(code_challenge_method)}">
+    <div class="footer">Hinweis: Bei aktivem MFA bitte ein App-Passwort verwenden.</div>
+  </form>
+</body>
+</html>`);
+});
+
+oauth2Router.post('/ls', async (req: Request, res: Response) => {
+  // urlencoded form data
+  const body = req.body as Record<string, string | undefined>;
+  const username      = (body['username']     ?? '').trim().toLowerCase();
+  const password      = body['password']       ?? '';
+  const client_id     = body['client_id']      ?? '';
+  const redirect_uri  = body['redirect_uri']   ?? '';
+  const scope         = body['scope']          ?? '';
+  const state         = body['state']          ?? '';
+  const nonce         = body['nonce']          ?? '';
+  const code_challenge        = body['code_challenge']        ?? '';
+  const code_challenge_method = body['code_challenge_method'] ?? 'S256';
+
+  // Bare-Username → @primary-domain (analog zu IMAP/EWS/POP3)
+  let email = username;
+  if (!email.includes('@')) {
+    const primaryDomain = await prisma.domain.findFirst({
+      where: { primary: true, active: true }, select: { name: true },
+    }).catch(() => null);
+    if (primaryDomain) email = `${email}@${primaryDomain.name}`;
+  }
+
+  const renderError = (err: string): void => {
+    const params = new URLSearchParams({
+      client_id, redirect_uri, scope, state, nonce,
+      code_challenge, code_challenge_method, error: err,
+    });
+    res.redirect(`/adfs/ls/?${params.toString()}`);
+  };
+
+  if (!email || !password) {
+    renderError('E-Mail und Passwort erforderlich');
+    return;
+  }
+
+  // User + Passwort (regulär + AppPassword-Fallback)
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, active: true, passwordHash: true },
+  }).catch(() => null);
+  if (!user || !user.active) {
+    renderError('Anmeldung fehlgeschlagen — Benutzer unbekannt oder inaktiv');
+    return;
+  }
+  let authenticated = false;
+  if (user.passwordHash) {
+    authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
+  }
+  if (!authenticated) {
+    const apps = await prisma.appPassword.findMany({ where: { userId: user.id } }).catch(() => []);
+    for (const ap of apps) {
+      if (await verifyPassword(password, ap.hash).catch(() => false)) {
+        authenticated = true;
+        void prisma.appPassword.update({
+          where: { id: ap.id }, data: { lastUsedAt: new Date() },
+        }).catch(() => { /* ignore */ });
+        break;
+      }
+    }
+  }
+  if (!authenticated) {
+    renderError('Anmeldung fehlgeschlagen — falsches Passwort');
+    return;
+  }
+
+  // Client validieren + Code ausstellen
+  const client = await prisma.oAuthClient.findUnique({ where: { clientId: client_id } }).catch(() => null);
+  if (!client?.active) { renderError('Unbekannter Client'); return; }
+  if (!client.redirectUris.includes(redirect_uri)) { renderError('Ungültige redirect_uri'); return; }
+
+  const code = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + AUTH_CODE_TTL_SEC * 1000);
+  await prisma.oAuthAuthorizationCode.create({
+    data: {
+      code, clientId: client.id, userId: user.id, scope: scope || 'openid email',
+      redirectUri: redirect_uri, expiresAt,
+      ...(code_challenge ? { codeChallenge: code_challenge, codeChallengeMethod: code_challenge_method } : {}),
+    },
+  });
+
+  const params = new URLSearchParams({
+    code, ...(state ? { state } : {}), ...(nonce ? { nonce } : {}),
+  });
+  res.redirect(`${redirect_uri}?${params.toString()}`);
 });
 
 /**

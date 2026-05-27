@@ -8,6 +8,8 @@ import { oauth2Router } from './oauth2/router.js';
 export function createApp(): Express {
   const app = express();
   app.use(express.json());
+  // v5.3.3: urlencoded für /oauth2/ls Form-Post (ADFS-Login-Page)
+  app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'auth-service' }));
 
