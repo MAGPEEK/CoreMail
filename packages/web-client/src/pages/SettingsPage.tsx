@@ -1882,7 +1882,7 @@ function ExternalClientsSection() {
       <header className="mb-6">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
           <Cable size={20} className="text-accent" />
-          Externe Clients & Outlook
+          Externe Clients
         </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Setup-Daten für E-Mail-Programme (Outlook, Apple Mail, Thunderbird), Kalender-Apps und mobile Geräte.
@@ -2076,7 +2076,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
       { id: 'profile',      label: 'E-Mail-Konto',           icon: User       },
       { id: 'password',     label: 'Passwort',                icon: Lock       },
       { id: 'appPasswords', label: 'App-Passwörter',          icon: Smartphone },
-      { id: 'externalClients', label: 'Externe Clients & Outlook', icon: Cable },
+      { id: 'externalClients', label: 'Externe Clients', icon: Cable },
       { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
       { id: 'rules',        label: 'Regeln',                  icon: ListFilter },
       { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
@@ -2146,9 +2146,9 @@ export function SettingsPage() {
         ))}
       </aside>
 
-      {/* Rechter Inhaltsbereich */}
+      {/* Rechter Inhaltsbereich — Externe Clients braucht mehr Breite für URLs */}
       <div className="flex-1 overflow-y-auto p-8 bg-white">
-        <div className="max-w-xl">
+        <div className={section === 'externalClients' ? 'max-w-5xl' : 'max-w-xl'}>
           <SectionComp />
         </div>
       </div>
