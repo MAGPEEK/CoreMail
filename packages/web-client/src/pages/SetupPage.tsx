@@ -1,8 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
 
 export function SetupPage() {
-  const navigate = useNavigate();
   const [step, setStep] = useState<'form' | 'done'>('form');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -56,7 +54,13 @@ export function SetupPage() {
             Dein Administrator-Konto wurde erstellt. Du kannst dich jetzt anmelden.
           </p>
           <button
-            onClick={() => navigate('/login')}
+            onClick={() => {
+              // Hard-Reload (kein react-router navigate!) damit SetupGuard
+              // frisch den Setup-Status fetcht und nicht mehr auf /setup
+              // zurück-redirected.  Ohne Reload steht setupRequired in
+              // SetupGuard noch auf true (vom ersten Mount) → Loop.
+              window.location.href = '/login';
+            }}
             className="w-full bg-[#0078D4] hover:bg-[#106EBE] text-white font-medium py-2 px-4 rounded transition-colors"
           >
             Zur Anmeldung
