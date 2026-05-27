@@ -9,6 +9,8 @@ import {
   handleCapability, handleLogin, handleLogout,
   handleList, handleSelect, handleFetch,
   handleStore, handleExpunge, handleIdle, handleIdleDone, handleNoop,
+  // v5.2.18: SPECIAL-USE + LSUB + SUBSCRIBE + NAMESPACE + STATUS für Mac Mail
+  handleLsub, handleSubscribe, handleUnsubscribe, handleNamespace, handleStatus,
 } from '../commands/index.js';
 
 const log = createLogger('imap:server');
@@ -123,6 +125,47 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
           session.socket.write(`${tag} NO [AUTHENTICATIONFAILED] Not authenticated\r\n`);
         } else {
           await handleList(session, tag, args);
+        }
+        break;
+
+      // v5.2.18: Mac Mail braucht LSUB + SUBSCRIBE + NAMESPACE + STATUS
+      case 'LSUB':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO [AUTHENTICATIONFAILED] Not authenticated\r\n`);
+        } else {
+          await handleLsub(session, tag, args);
+        }
+        break;
+
+      case 'SUBSCRIBE':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else {
+          await handleSubscribe(session, tag, args);
+        }
+        break;
+
+      case 'UNSUBSCRIBE':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else {
+          await handleUnsubscribe(session, tag, args);
+        }
+        break;
+
+      case 'NAMESPACE':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else {
+          handleNamespace(session, tag);
+        }
+        break;
+
+      case 'STATUS':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else {
+          await handleStatus(session, tag, args);
         }
         break;
 
