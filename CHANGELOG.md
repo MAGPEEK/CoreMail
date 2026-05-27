@@ -13,6 +13,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.12] — 2026-05-27 — Setup-Loop nach erfolgreichem Abschluss behoben
+
+### Fixed
+
+- **Setup-Wizard sprang nach erfolgreichem Abschluss sofort von vorne** —
+  Bug eingeführt mit v5.2.11-SetupGuard.  Ursache: SetupPage navigierte per
+  `react-router navigate('/login')` (Soft-Routing).  SetupGuard hatte aber
+  noch den initialen State `setupRequired=true` (vom ersten Mount) und
+  führte den Effect aus: `setupRequired===true && pathname!=='/setup'` →
+  `navigate('/setup', { replace: true })` → SetupPage remountet mit
+  `step='form'` → Loop.
+
+  **Fix** (`packages/web-client/src/pages/SetupPage.tsx`): Der „Zur
+  Anmeldung"-Button macht jetzt einen **Hard-Reload** via
+  `window.location.href = '/login'` statt React-Router-navigate.  Beim
+  Reload remountet SetupGuard von Grund auf und fetcht `/api/v1/setup/status`
+  frisch — `setupRequired=false` → durchlässig zur Login-Seite.
+
+  Außerdem wird damit auch der Auth-State / Query-Cache zuverlässig
+  geleert; Setup ist ein einmaliges Ereignis, ein Full-Reload ist hier
+  semantisch korrekt.
+
+---
+
 ## [5.2.11] — 2026-05-27 — Setup-Guard für BCP + MWA-Hardening
 
 ### Changed
