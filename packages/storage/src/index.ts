@@ -5,3 +5,4 @@ export * from './mail-rules.js';
 export * from './transport-rules.js';
 export * from './itip-inbound.js';
 export * from './protocol-cert.js';
+export * from './oauth-clients-bootstrap.js';

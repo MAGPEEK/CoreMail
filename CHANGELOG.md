@@ -13,6 +13,88 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.3.0] — 2026-05-27 — ADFS-Emulation Foundation (Phase C + E + ADFS-Aliases)
+
+### Major Feature
+
+Beginn der **ADFS-Emulation für Outlook 2024 LTSC Modern Auth**.
+Hintergrund: Recherche (Grommunio Source, Microsoft Q&A, MS Docs) zeigte
+dass Outlook Win32 (inkl. 2024 LTSC) **keinen** non-Microsoft-OAuth2-
+Provider akzeptiert. Modern Auth ist im ADAL/MSAL-Stack effektiv hardcoded
+auf `login.microsoftonline.com` ODER **ADFS** (Active Directory Federation
+Services). Daher emuliert CoreMail v5.3+ schrittweise das ADFS-Protokoll.
+
+Diese v5.3.0 ist die **Foundation** — vollständige End-to-End-Anbindung
+folgt in v5.4.0 (WS-Trust 1.3) + v5.5.0 (Login-UI) + v5.6.0 (E2E-Test).
+
+### Added — Phase C: Well-Known OAuth2-Clients
+
+`packages/storage/src/oauth-clients-bootstrap.ts` provisioniert beim
+api-gateway-Boot idempotent die fest-verdrahteten Microsoft/Apple
+Client-IDs:
+
+- `d3590ed6-52b3-4102-aeff-aad2292ab01c` — Outlook Desktop (Win + Mac)
+- `27922004-5251-4030-b22d-91ecd9a37ea4` — Outlook Mobile (iOS + Android)
+- `f8d98a96-0999-43f5-8af3-69971c7bb423` — iOS Mail.app
+- `00000003-0000-0000-c000-000000000000` — Microsoft Graph (catch-all)
+
+Alle als Public Clients (kein Secret), PKCE-Pflicht, trusted (kein
+Consent-Prompt). Mit `redirect_uris` für `msauth://`, `urn:ietf:wg:oauth:
+2.0:oob`, `ms-appx-web://Microsoft.AAD.BrokerPlugin/*`.
+
+### Added — Phase E: Bearer-Token Audience-Validation
+
+`packages/ews-server/src/auth/middleware.ts` validiert jetzt den `aud`-
+Claim eingehender Bearer-Tokens. Akzeptiert:
+- Tokens ohne `aud` (Legacy CoreMail-Tokens — Refresh setzt `aud`)
+- `aud` = Server-FQDN (`https://mail.example.de`)
+- `aud` = `https://outlook.office365.com` (Outlook Standard)
+- `aud` = `00000002-0000-0ff1-ce00-000000000000` (Office 365 Exchange ID)
+
+Schutz vor Token-Substitution / cross-tenant.
+
+### Added — ADFS Endpoint Aliases
+
+API-Gateway routet jetzt `/adfs/oauth2/*` an denselben auth-service-
+Backend wie `/oauth2/*`:
+- `/adfs/oauth2/authorize` ← Outlook 2024 LTSC sucht dort fest verdrahtet
+- `/adfs/oauth2/token`
+- `/adfs/oauth2/jwks`
+- `/adfs/oauth2/.well-known/openid-configuration`
+
+### Added — Federation Metadata XML
+
+Neuer Endpoint `GET /FederationMetadata/2007-06/FederationMetadata.xml`
+liefert minimale aber gültige WS-Federation 1.2 Metadaten mit:
+- `<EntityDescriptor>` mit Server-FQDN als entityID
+- `<RoleDescriptor xsi:type="fed:SecurityTokenServiceType">`
+- `<KeyDescriptor use="signing">` mit unserem RS256-Public-Key
+- `<fed:TokenTypesOffered>` JWT
+- `<fed:PassiveRequestorEndpoint>` zeigt auf `/adfs/oauth2/authorize`
+
+### Added — EWS/MAPI Bearer-Challenge mit authorization_uri (RFC 6750)
+
+Wenn ein unauthentifizierter Request an `/EWS/Exchange.asmx` oder
+`/mapi/emsmdb/` ankommt, antwortet der Server jetzt mit:
+```
+WWW-Authenticate: Bearer realm="https://mail.example.de",
+                  authorization_uri="https://mail.example.de/adfs/oauth2/authorize",
+                  scope="EWS.AccessAsUser.All", Basic realm="CoreMail EWS"
+```
+Outlook 2024 LTSC liest `authorization_uri` und startet seinen
+OAuth2-Flow gegen den dort angegebenen Endpoint.
+
+### Roadmap zur kompletten Outlook-2024-LTSC-Anbindung
+
+| Version | Inhalt | Aufwand |
+|---------|--------|---------|
+| **v5.3.0** (heute) | Foundation: Phase C+E, ADFS-Aliases, FederationMetadata, Bearer-Challenge | ✅ |
+| **v5.4.0** | WS-Trust 1.3 endpoint (`/adfs/services/trust/13/usernamemixed`) — SOAP-basierte UsernameToken-Auth | ~6-8h |
+| **v5.5.0** | ADFS-Login-Page (`/adfs/ls/`) mit Browser-Flow + Token-Audience-Adjustment | ~4-6h |
+| **v5.6.0** | Autodiscover OAuth2-Hint + Real-Outlook-2024-Test + Bug-Fixes | ~2-4h |
+
+---
+
 ## [5.2.19] — 2026-05-27 — IMAP parseLine-Bug: leere quoted Strings (LIST "" "*")
 
 ### Fixed

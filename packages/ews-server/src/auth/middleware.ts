@@ -33,8 +33,59 @@ export async function ewsAuthMiddleware(
   if (authSchemeLower === 'bearer') {
     const tokenStart = authHeader.indexOf(' ');
     const token = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
-    const payload = verifyAccessToken(token);
+    type TokenPayload = { sub: string; aud?: string | string[]; iss?: string; exp?: number };
+    let payload: TokenPayload | null = null;
+    try {
+      payload = verifyAccessToken(token) as unknown as TokenPayload;
+    } catch (err) {
+      log.debug({ err: (err as Error)?.message }, 'EWS Bearer: JWT verify failed');
+      payload = null;
+    }
     if (payload) {
+      // v5.3.0 Phase E: Audience-Validation. Outlook 2024 LTSC + andere
+      // Microsoft-Clients setzen `aud` auf den Resource-URI (server FQDN
+      // oder eine Microsoft-Konstante). Wir akzeptieren:
+      //   1. Tokens ohne `aud` (Legacy CoreMail-Tokens — Refresh würde aud setzen)
+      //   2. Tokens mit `aud` = unserem publicHostname-FQDN
+      //   3. Tokens mit `aud` in unserer Whitelist (Outlook-Resource-URIs)
+      // Sonst → 401 (verhindert Token-Substitution / cross-tenant).
+      const audClaim: string[] = Array.isArray(payload.aud)
+        ? payload.aud
+        : payload.aud
+          ? [payload.aud]
+          : [];
+      if (audClaim.length > 0) {
+        const settings = await prisma.serverSettings.findUnique({
+          where:  { id: 'singleton' },
+          select: { publicHostname: true, useHttps: true, httpPort: true },
+        }).catch(() => null);
+        const hostname = settings?.publicHostname ?? '';
+        const scheme = settings?.useHttps !== false ? 'https' : 'http';
+        const port = settings?.httpPort ?? 443;
+        const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
+        const ourFqdn = hostname ? `${scheme}://${hostname}${portSuffix}` : '';
+        const allowedAud = [
+          ourFqdn,
+          ourFqdn + '/',
+          hostname,
+          'https://outlook.office365.com',
+          'https://outlook.office365.com/',
+          // Outlook EWS resource ID — Outlook 2024 LTSC sendet manchmal exakt das
+          '00000002-0000-0ff1-ce00-000000000000',
+        ];
+        const audOk = audClaim.some((a) => allowedAud.includes(a));
+        if (!audOk) {
+          log.warn({
+            userId: payload.sub,
+            audClaim,
+            allowedAud: allowedAud.filter(Boolean),
+          }, 'EWS Bearer: ungültige Audience → 401');
+          res.set('WWW-Authenticate', 'Bearer realm="CoreMail EWS", error="invalid_token", error_description="Audience claim does not match"');
+          res.status(401).send('Unauthorized');
+          return;
+        }
+      }
+
       // Phase 10: Check OAuth2 token revocation status in DB
       const oauthToken = await prisma.oAuthToken.findUnique({
         where: { accessToken: token },
@@ -174,6 +225,30 @@ export async function ewsAuthMiddleware(
   if (!authHeader) {
     rateLimitedNoAuthLog(req);
   }
+  // v5.3.0: Bearer-Challenge mit `authorization_uri` Parameter (RFC 6750 §3 +
+  // Microsoft Exchange Modern Auth Pattern). Outlook 2024 LTSC liest den
+  // authorization_uri, um den OAuth2-Endpoint zu finden. Wir verweisen auf
+  // unseren ADFS-emulierten OAuth-Authorize-Endpoint.
+  try {
+    const settings = await prisma.serverSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { publicHostname: true, useHttps: true, httpPort: true },
+    });
+    const hostname = settings?.publicHostname;
+    if (hostname) {
+      const scheme = settings?.useHttps !== false ? 'https' : 'http';
+      const port = settings?.httpPort ?? 443;
+      const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
+      const base = `${scheme}://${hostname}${portSuffix}`;
+      // Doppel-Challenge: erst Bearer für Modern Auth, dann Basic für Legacy-Clients.
+      res.set('WWW-Authenticate', [
+        `Bearer realm="${base}", authorization_uri="${base}/adfs/oauth2/authorize", scope="EWS.AccessAsUser.All"`,
+        `Basic realm="CoreMail EWS"`,
+      ].join(', '));
+      res.status(401).send('Unauthorized');
+      return;
+    }
+  } catch { /* fall through to legacy challenge */ }
   // v5.2.2: Mehrere Auth-Schemes anbieten — moderne Outlook-Builds (2019+/365)
   // blockieren Basic wenn es das einzige Scheme ist. Mit Negotiate/NTLM in der
   // Liste fällt Outlook gracefully auf Basic zurück, wenn die anderen Schemes
