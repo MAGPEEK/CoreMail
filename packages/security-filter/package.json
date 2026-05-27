@@ -1,6 +1,6 @@
 {
   "name": "@coremail/security-filter",
-  "version": "5.2.13",
+  "version": "5.2.14",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
