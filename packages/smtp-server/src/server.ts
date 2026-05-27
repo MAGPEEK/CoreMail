@@ -177,9 +177,13 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // Kein Zertifikat in der DB → selbstsigniertes generieren
-    log.info({ hostname: _hostname }, 'No TLS cert in DB — generating self-signed certificate');
-    const { certPem, keyPem } = generateSelfSignedCert(_hostname);
+    // Kein Zertifikat in der DB → selbstsigniertes Default-Cert mit fixem
+    // CN=mail.localhost generieren.  Der Admin tauscht es später im BCP
+    // gegen ein echtes Cert; ein fixer CN verhindert dass das Self-Signed-
+    // Cert beim Umbenennen des publicHostname neu ausgestellt wird.
+    const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+    log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No TLS cert in DB — generating self-signed certificate');
+    const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
     _tlsCertSelfSigned = true;
 
