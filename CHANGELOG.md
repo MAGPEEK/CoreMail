@@ -13,6 +13,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.14] — 2026-05-27 — Outlook Auth-Loop FIX (Autodiscover validiert jetzt Passwörter)
+
+### Security
+
+- **Autodiscover V1 akzeptierte JEDES beliebige Passwort als gültig.**
+  Bisheriger Kommentar im Code: „Wir validieren die Credentials hier NICHT —
+  das ist Exchange-üblich." Das ist FALSCH — Exchange Autodiscover
+  validiert Credentials sehr wohl und antwortet bei falschem Passwort mit
+  401.  Der bisherige Code lieferte das volle XML mit allen User-Details
+  (DisplayName, LegacyDN, SMTPAddress) für jede gültige E-Mail-Adresse —
+  ein Information-Disclosure-Bug.
+
+### Fixed
+
+- **Outlook Classic Auth-Endlos-Prompt** (auch in v5.2.1-v5.2.5 verfolgt,
+  jetzt wirklich behoben).  Root-Cause-Kette:
+
+  1. Outlook ruft Autodiscover V2 (`?Protocol=AutodiscoverV1`) → bekommt
+     V1-URL zurück
+  2. Outlook ruft Autodiscover V1 mit Basic-Auth → V1 lieferte **immer 200**
+     (auch bei falschem Passwort!) → Outlook nahm die Config
+  3. Outlook versuchte EWS/MAPI mit demselben Passwort → 401 (EWS prüft
+     korrekt)
+  4. Outlook fragt User erneut nach Passwort
+  5. → zurück zu Schritt 1 → **Endlos-Loop**, der User glaubt sein
+     Passwort wird nicht übertragen
+
+  **Fix** (`packages/autodiscover/src/v1.ts`): V1 validiert Basic-Auth jetzt
+  gegen `User.passwordHash` UND `AppPassword.hash` (gleiche
+  Multi-Verifikation wie EWS-Middleware aus v5.2.1).  Bei falschem Passwort
+  → 401 + Multi-Scheme `WWW-Authenticate`-Header.  Bei korrektem Passwort
+  → 200 + XML-Config.
+
+  Outlook bricht den Autodiscover-Loop nun bei wirklich falschem Passwort
+  ab und prompted nur EINMAL pro Versuch, statt das Token endlos durch
+  Autodiscover/EWS zu jagen.
+
+  **Auch im SystemLog (BCP) sichtbar**: Fehlgeschlagene
+  Autodiscover-Auth-Versuche werden mit `category='MAPI_AUTH'`,
+  `reason='WRONG_PASSWORD_OR_USER'` geloggt.
+
+  **Hinweis für MFA-Accounts**: Wie bei EWS/IMAP — bei aktivem MFA ist der
+  einzige Weg ein **App-Passwort** aus dem MWA → Einstellungen → Sicherheit.
+
+---
+
 ## [5.2.13] — 2026-05-27 — Audit-Log: 5 neue Übersetzungen
 
 ### Fixed

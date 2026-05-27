@@ -1,9 +1,53 @@
 import type { Request, Response } from 'express';
-import { createLogger } from '@coremail/core';
+import { createLogger, verifyPassword } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
+
+/**
+ * v5.2.14: Verifiziert Basic-Auth-Credentials gegen User.passwordHash UND
+ * AppPassword.hash (gleiche Logik wie EWS-Middleware).  Liefert true/false.
+ *
+ * KRITISCH: Vorher akzeptierte V1 jedes beliebige Passwort als gültig — Outlook
+ * bekam dann von Autodiscover ein OK, scheiterte aber an EWS/MAPI (401),
+ * pollte Autodiscover wieder, bekam wieder OK → Endlos-Loop ohne Aussicht
+ * dass der User je das richtige Passwort treffen würde.
+ */
+async function validateBasicAuth(email: string, password: string): Promise<boolean> {
+  if (!email || !password) return false;
+  const user = await prisma.user.findUnique({
+    where:  { email: email.toLowerCase() },
+    select: { id: true, active: true, passwordHash: true },
+  }).catch(() => null);
+
+  if (!user || !user.active) return false;
+
+  // 1) Regulärer Passwort-Hash
+  if (user.passwordHash) {
+    if (await verifyPassword(password, user.passwordHash).catch(() => false)) return true;
+  }
+  // 2) Fallback: App-Passwort (Pflicht für MFA-Accounts)
+  const appPasswords = await prisma.appPassword.findMany({
+    where: { userId: user.id },
+    select: { id: true, hash: true },
+  }).catch(() => []);
+  for (const ap of appPasswords) {
+    if (await verifyPassword(password, ap.hash).catch(() => false)) {
+      void prisma.appPassword.update({
+        where: { id: ap.id }, data: { lastUsedAt: new Date() },
+      }).catch(() => { /* ignore */ });
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Normalisiert Outlook-Username (DOMAIN\user oder user@domain) auf E-Mail-Form. */
+function normalizeBasicAuthUser(rawUser: string): string {
+  const bsIdx = rawUser.lastIndexOf('\\');
+  return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
+}
 
 // v5.0.0: MAPI/HTTP ist jetzt DEFAULT AKTIV. Mit den v4.1-v4.7 Releases sind
 // alle wichtigen ROPs implementiert (Logon, Folder-Browse, Mail-Read/Write,
@@ -163,37 +207,73 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  let email: string | null = null;
+  // v5.2.14: KRITISCH — Basic-Auth muss VALIDIERT werden!
+  // Vorher akzeptierte V1 jedes Passwort. Outlook bekam dann gültiges XML
+  // mit FALSCHEM Passwort, scheiterte aber an EWS/MAPI (die korrekt prüfen),
+  // promptet User erneut, schickt erneut zu Autodiscover (das wieder OK
+  // sagt), → ENDLOS-LOOP.
+  let basicAuthEmail: string | null = null;
+  let basicAuthPassword: string | null = null;
+  if (authHeader.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      const colonIdx = decoded.indexOf(':');
+      if (colonIdx !== -1) {
+        basicAuthEmail    = normalizeBasicAuthUser(decoded.slice(0, colonIdx));
+        basicAuthPassword = decoded.slice(colonIdx + 1);
+      }
+    } catch { /* malformed header — wird unten als 401 behandelt */ }
+  }
 
+  if (!basicAuthEmail || !basicAuthPassword) {
+    log.warn({ ip: req.ip }, 'Autodiscover v1: Basic-Auth-Header malformed → 401');
+    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.status(401).send('Unauthorized');
+    return;
+  }
+
+  const authOk = await validateBasicAuth(basicAuthEmail, basicAuthPassword);
+  if (!authOk) {
+    log.warn({ email: basicAuthEmail, ip: req.ip }, 'Autodiscover v1: Passwort + App-Passwort fehlgeschlagen');
+    // SystemLog für Audit (analog zu EWS-Middleware in writeAuthFailureLog)
+    void prisma.systemLog.create({
+      data: {
+        level:    'WARN',
+        service:  'autodiscover',
+        category: 'MAPI_AUTH',
+        message:  `Autodiscover Basic-Auth fehlgeschlagen: ${basicAuthEmail}`,
+        metadata: {
+          protocol:  'AUTODISCOVER',
+          email:     basicAuthEmail,
+          reason:    'WRONG_PASSWORD_OR_USER',
+          ip:        req.ip ?? 'unknown',
+          userAgent: req.get('User-Agent') ?? '',
+          path:      req.originalUrl,
+        },
+      },
+    }).catch(() => { /* non-fatal */ });
+    res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
+    res.status(401).send('Unauthorized');
+    return;
+  }
+
+  // Auth OK — Email aus Body extrahieren (oder Fallback auf Basic-Auth-Email)
+  let email: string | null = null;
   if (req.method === 'POST') {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     email = extractEmailFromXml(body);
   } else {
     email = (req.query['emailaddress'] as string | undefined) ?? null;
   }
-
-  // Fallback: Email aus Basic-Auth-Header extrahieren wenn Body sie nicht hat
-  if (!email && authHeader.startsWith('Basic ')) {
-    try {
-      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-      const colonIdx = decoded.indexOf(':');
-      if (colonIdx !== -1) {
-        const user = decoded.slice(0, colonIdx);
-        // user@domain oder DOMAIN\user
-        const bsIdx = user.lastIndexOf('\\');
-        const cleanUser = bsIdx !== -1 ? user.slice(bsIdx + 1) : user;
-        if (cleanUser.includes('@')) email = cleanUser;
-      }
-    } catch { /* ignore */ }
-  }
+  if (!email && basicAuthEmail.includes('@')) email = basicAuthEmail;
 
   if (!email) {
-    log.warn({ method: req.method }, 'Autodiscover v1: no email found in request (auth present but no email in body or header)');
+    log.warn({ method: req.method }, 'Autodiscover v1: no email found in request body or header');
     res.status(400).send('<?xml version="1.0"?><Autodiscover><Response><Error/></Response></Autodiscover>');
     return;
   }
 
-  log.info({ email, method: req.method }, 'Autodiscover v1 request');
+  log.info({ email, method: req.method }, 'Autodiscover v1 request (authenticated)');
 
   const [user, cfg] = await Promise.all([
     prisma.user.findUnique({
