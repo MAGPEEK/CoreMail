@@ -75,7 +75,7 @@ export async function handleLogin(
   session.userId = user.id;
   session.mailboxId = user.mailbox?.id ?? null;
   log.info({ email: username }, 'IMAP login success');
-  sendOk(session, tag, '[CAPABILITY IMAP4rev1 IDLE CONDSTORE] LOGIN completed');
+  sendOk(session, tag, '[CAPABILITY IMAP4rev1 IMAP4rev2 IDLE CONDSTORE MOVE UNSELECT UIDPLUS] LOGIN completed');
 }
 
 // ─────────────────────────────────────────────
@@ -694,6 +694,186 @@ export async function handleClose(
 // ─────────────────────────────────────────────
 export function handleCheck(session: ImapSession, tag: string): void {
   sendOk(session, tag, 'CHECK completed');
+}
+
+// ─────────────────────────────────────────────
+// UNSELECT — RFC 3691 / RFC 9051 IMAP4rev2 Pflicht
+// ─────────────────────────────────────────────
+// Schließt aktuell selektierten Folder, OHNE EXPUNGE auszuführen.
+// Im Gegensatz zu CLOSE bleiben \Deleted-Messages erhalten.
+export function handleUnselect(session: ImapSession, tag: string): void {
+  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  session.selected = null;
+  session.state = 'AUTHENTICATED';
+  sendOk(session, tag, 'UNSELECT completed');
+}
+
+// ─────────────────────────────────────────────
+// ID — RFC 2971 (Client/Server Identification)
+// ─────────────────────────────────────────────
+// Client identifiziert sich mit ("name" "Thunderbird" "version" "115.0")
+// — wir antworten mit unserer Server-ID. Manche Clients senden ID
+// proaktiv, Server-Antwort darf NIL sein.
+export function handleId(session: ImapSession, tag: string, _args: string[]): void {
+  sendUntagged(session, 'ID ("name" "CoreMail" "version" "5.5.0" "vendor" "MAGPEEK" "support-url" "https://github.com/MAGPEEK/CoreMail")');
+  sendOk(session, tag, 'ID completed');
+}
+
+// ─────────────────────────────────────────────
+// AUTHENTICATE — RFC 3501 §6.2.2 + RFC 4959 SASL-IR
+// ─────────────────────────────────────────────
+// Unterstützt: PLAIN (RFC 4616), LOGIN (deprecated aber weit verbreitet).
+// Mit SASL-IR-Capability darf der Client das initial-response direkt
+// mitsenden (`A1 AUTHENTICATE PLAIN <base64>`). Sonst Server fragt mit
+// `+ ` (challenge) → Client sendet base64-Response.
+//
+// XOAUTH2 wäre RFC 7628 — bewusst NICHT implementiert weil Mainstream-
+// Clients (Apple Mail, Outlook LTSC) keine UI für custom OAuth-Server
+// bieten. App-Passwörter sind der praktische MFA-Bypass.
+export async function handleAuthenticate(
+  session: ImapSession,
+  tag: string,
+  args: string[],
+): Promise<void> {
+  const mech = (args[0] ?? '').toUpperCase();
+  const initialResponse = args[1] ?? '';
+
+  if (mech === 'PLAIN') {
+    // RFC 4616 PLAIN: base64("\x00user\x00password")
+    if (initialResponse) {
+      await processPlainAuth(session, tag, initialResponse);
+      return;
+    }
+    // Kein SASL-IR → Server sendet leeres Continuation und wartet auf Response
+    session.saslMech = 'PLAIN';
+    session.saslStep = 0;
+    send(session, '+ ');
+    return;
+  }
+
+  if (mech === 'LOGIN') {
+    // SASL LOGIN: 2-step (Username challenge → Password challenge)
+    if (initialResponse) {
+      // Some clients send username as initial response
+      session.saslMech = 'LOGIN';
+      session.saslStep = 1;
+      try { session.saslUser = Buffer.from(initialResponse, 'base64').toString('utf8'); } catch { /* ignore */ }
+      send(session, '+ ' + Buffer.from('Password:').toString('base64'));
+      return;
+    }
+    session.saslMech = 'LOGIN';
+    session.saslStep = 0;
+    send(session, '+ ' + Buffer.from('Username:').toString('base64'));
+    return;
+  }
+
+  // v5.5.0: XOAUTH2 explizit NICHT implementiert — siehe Kommentar oben
+  sendNo(session, tag, `[CANNOT] Unsupported SASL mechanism. Use PLAIN, LOGIN, or LOGIN command`);
+}
+
+/**
+ * Wird vom dispatcher aufgerufen wenn session.saslMech gesetzt ist,
+ * d.h. wir warten auf die nächste Continuation-Response.
+ */
+export async function handleSaslContinuation(
+  session: ImapSession,
+  tag: string,
+  line: string,
+): Promise<void> {
+  const data = line.trim();
+  // Client kann mit "*" abbrechen
+  if (data === '*') {
+    session.saslMech = null;
+    session.saslStep = 0;
+    sendBad(session, tag, 'Authentication cancelled');
+    return;
+  }
+
+  if (session.saslMech === 'PLAIN') {
+    session.saslMech = null;
+    await processPlainAuth(session, tag, data);
+    return;
+  }
+
+  if (session.saslMech === 'LOGIN') {
+    if (session.saslStep === 0) {
+      // Username
+      try { session.saslUser = Buffer.from(data, 'base64').toString('utf8'); } catch { /* ignore */ }
+      session.saslStep = 1;
+      send(session, '+ ' + Buffer.from('Password:').toString('base64'));
+      return;
+    }
+    // Password
+    let password = '';
+    try { password = Buffer.from(data, 'base64').toString('utf8'); } catch { /* ignore */ }
+    session.saslMech = null;
+    session.saslStep = 0;
+    await loginUser(session, tag, session.saslUser, password);
+    session.saslUser = '';
+    return;
+  }
+
+  // Fallback — kein aktiver Mech
+  sendBad(session, tag, 'Unexpected continuation');
+}
+
+async function processPlainAuth(session: ImapSession, tag: string, b64Data: string): Promise<void> {
+  let decoded: string;
+  try { decoded = Buffer.from(b64Data, 'base64').toString('utf8'); }
+  catch { sendBad(session, tag, '[ALERT] Invalid base64 in PLAIN'); return; }
+  // RFC 4616: [authzid] \0 authcid \0 password
+  const parts = decoded.split(' ');
+  if (parts.length < 3) { sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid PLAIN format'); return; }
+  const user     = parts[1] ?? '';
+  const password = parts[2] ?? '';
+  await loginUser(session, tag, user, password);
+}
+
+/**
+ * Interne Login-Verifikation für AUTHENTICATE PLAIN/LOGIN.
+ * Reuses handleLogin-style verification but doesn't go through args parsing.
+ */
+async function loginUser(session: ImapSession, tag: string, username: string, password: string): Promise<void> {
+  let email = username.trim().toLowerCase();
+  // Bare-Username → @primary-domain
+  if (!email.includes('@')) {
+    const primaryDomain = await prisma.domain.findFirst({
+      where: { primary: true, active: true }, select: { name: true },
+    }).catch(() => null);
+    if (primaryDomain) email = `${email}@${primaryDomain.name}`;
+  }
+  const user = await prisma.user.findFirst({
+    where: { email, active: true },
+    include: { mailbox: true },
+  });
+  if (!user) { sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials'); return; }
+
+  let authenticated = false;
+  if (user.passwordHash) {
+    authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
+  }
+  if (!authenticated) {
+    const apps = await prisma.appPassword.findMany({ where: { userId: user.id } });
+    for (const ap of apps) {
+      if (await verifyPassword(password, ap.hash).catch(() => false)) {
+        authenticated = true;
+        void prisma.appPassword.update({
+          where: { id: ap.id }, data: { lastUsedAt: new Date() },
+        }).catch(() => { /* ignore */ });
+        break;
+      }
+    }
+  }
+  if (!authenticated) {
+    log.warn({ email }, 'IMAP AUTHENTICATE failed');
+    sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials');
+    return;
+  }
+  session.state = 'AUTHENTICATED';
+  session.userId = user.id;
+  session.mailboxId = user.mailbox?.id ?? null;
+  log.info({ email }, 'IMAP AUTHENTICATE success');
+  sendOk(session, tag, '[CAPABILITY IMAP4rev1 IMAP4rev2 IDLE CONDSTORE MOVE UNSELECT] AUTHENTICATE completed');
 }
 
 // ─────────────────────────────────────────────

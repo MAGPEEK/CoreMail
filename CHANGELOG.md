@@ -13,6 +13,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.5.0] — 2026-05-27 — IMAP4rev2 RFC-Compliance + Doku-Update
+
+### Added
+
+**IMAP RFC 3501 + RFC 9051 (IMAP4rev2) Compliance:**
+
+| Feature | RFC | Wirkung |
+|---------|-----|---------|
+| **AUTHENTICATE PLAIN** | 3501 §6.2.2 + 4616 | SASL-Standard, statt nur LOGIN-Command |
+| **AUTHENTICATE LOGIN** | obsolet aber häufig | Multi-Step `Username:` → `Password:` |
+| **SASL-IR** | 4959 | Initial-Response in selber Zeile |
+| **UNSELECT** | 3691 / IMAP4rev2 Pflicht | Folder abwählen ohne EXPUNGE (vs CLOSE) |
+| **ID** | 2971 | Client/Server-Identifikation |
+| **STARTTLS** | 3501 §6.2.1 | Stub auf Port 143 (zeigt auf 993 hin — voller Upgrade braucht Socket-Refactor) |
+
+**CAPABILITY-Liste erweitert um:** `IMAP4rev2`, `MOVE`, `UNSELECT`, `UIDPLUS`, `STATUS=SIZE`. Plus dynamische `STARTTLS`/`LOGINDISABLED`-Toggle (nur auf Plain-Connection).
+
+### Architektur-Entscheidung: KEIN XOAUTH2 für Mail-Protokolle
+
+Recherche-Ergebnis (Grommunio + Mozilla + Microsoft Docs):
+- **Apple Mail**: hardcoded Provider-Liste (iCloud/Gmail/Microsoft/Yahoo) — keine UI für custom OAuth-Server
+- **Outlook 2024 LTSC**: Microsoft hat explizit erklärt: kein OAuth für POP/IMAP
+- **Thunderbird**: theoretisch ja, praktisch `prefs.js`-Hack pro Account → Endnutzer-untauglich
+- **eM Client / K-9 Mail**: nur große Provider
+
+**Verdict**: XOAUTH2 für non-Microsoft-Server hat ~1% reale Userbase (mutt/isync-Power-User). Diese können stattdessen **App-Passwörter** verwenden, die bereits implementiert sind. OAuth2-Server bleibt unter `/oauth2/*` für REST-API + Web-App-Integration.
+
+### Changed — Doku komplett aktualisiert
+
+**README.md:**
+- MAPI-Sektion entfernt
+- "Outlook nativ verbinden"-Sektion → **"Clients verbinden"** mit IMAP-Setup-Tabelle für alle gängigen Clients (Outlook 2024 LTSC, Apple Mail, Thunderbird, eM Client, K-9, iOS Mail)
+- App-Passwörter-Sektion mit Step-by-Step-Anleitung
+- IMAP4rev2-Badge statt MAPI/HTTP-Badge
+- Versionsverlauf aktualisiert: v5.x = "IMAP4rev2 + RFC-Compliance + MAPI-Cleanup"
+
+**CLAUDE.md:**
+- "Aktuelle Version" → 5.5.0
+- Neue Sektion "Architektur-Entscheidungen (v5.4.0+)" — MAPI-Removal-Begründung, OAuth2-Scope, IMAP4rev2-Status
+- `/mapi/*` aus Routing-Tabelle entfernt
+- "MAPI over HTTP"-Sektion → Hinweis auf v5.4.0-Removal
+
+---
+
 ## [5.4.0] — 2026-05-27 — MAPI komplett aus dem Stack entfernt
 
 ### Removed (Major)

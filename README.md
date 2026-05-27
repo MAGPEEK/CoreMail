@@ -7,8 +7,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.2.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
-[![MAPI/HTTP](https://img.shields.io/badge/MAPI%2FHTTP-native-blue.svg)](https://github.com/MAGPEEK/CoreMail/releases/tag/v5.2.0)
+[![Version](https://img.shields.io/badge/Version-5.5.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
+[![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
 📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
@@ -16,16 +17,18 @@
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
-**🎯 Outlook nativ als Exchange-Konto.** Mit der vollständigen MAPI/HTTP-Implementation seit v5.2.0 verbindet sich Outlook 2013+ direkt als „Exchange"-Konto — inklusive Cached Mode (.ost), Push-Notifications (<1s), Server-Side-Search, native GAL via NSPI, und vollständige Kalender/Kontakte/Aufgaben/Notizen-Synchronisation. Daneben funktionieren auch alle IMAP/POP3/SMTP/CalDAV/CardDAV/ActiveSync-Clients. Kein VPN, kein Connector, keine Drittanbieter-Software.
+**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **SMTP-Submission** + **POP3** + **EWS** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v5.2.0** — MAPI/HTTP **FINAL** mit Cached Mode + Recurrence + RTF + Multi-Value + gzip · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v5.5.0** — IMAP4rev2 (RFC 9051) + STARTTLS + AUTHENTICATE SASL + Mac-Mail-Vollkompatibilität · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+>
+> **Wichtiger Hinweis (seit v5.4.0)**: MAPI/HTTP wurde aus dem Stack entfernt — Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Verwende **Outlook → „Andere E-Mail-Konten" → IMAP**. Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning).
 
 ---
 
 ## Inhalt
 
 1. [Features](#features)
-2. [Outlook nativ verbinden](#outlook-nativ-verbinden)
+2. [Clients verbinden](#clients-verbinden)
 3. [Schnellstart](#schnellstart)
 4. [Docker Compose](#docker-compose)
 5. [Zugriff](#zugriff)
@@ -41,41 +44,17 @@
 
 ## Features
 
-### Outlook MAPI/HTTP (v5.2.0 FINAL — feature-complete) ⭐
+### E-Mail-Protokolle
 
-| Feature | Status |
-|---------|--------|
-| Native Exchange-Account in Outlook 2013+ (kein IMAP-Fallback) | ✅ |
-| Logon + Folder-Browse + Mail-Lesen + Schreiben + Senden | ✅ |
-| Attachments end-to-end (MinIO-backed) | ✅ |
-| Move/Copy/Delete-Operationen | ✅ |
-| **Cached Mode (.ost)** — MS-OXCFXICS Sync-Protocol | ✅ |
-| **Push-Notifications <1s** via Redis pub/sub (statt 30s-Polling) | ✅ |
-| **Server-Side-Search** (Strg+E) — MAPI Restriction → Prisma WHERE | ✅ |
-| **Native NSPI Address-Book** (GAL + DistributionGroups, kein EWS-Fallback) | ✅ |
-| **Named Properties** (PSETID_Appointment/Address/Task/Note) | ✅ |
-| **Calendar/Contact/Task/Note Detail-Views** mit vollem Property-Set | ✅ |
-| **Recurrence Pattern Binary** (iCal RRULE → MAPI binary) | ✅ |
-| **PR_RTF_COMPRESSED** Stream (LZ77-Decoder + MELA-Encoder) | ✅ |
-| **Embedded Messages** (Mail-als-Anhang weiterleiten) | ✅ |
-| **gzip Transport-Compression** (`X-CompressedRequest`) | ✅ |
-| **Multi-Value Properties** (PT_MV_INT16/INT32/STRING/UNICODE/SYSTIME/BINARY) | ✅ |
-| Autodiscover MAPI/HTTP default-aktiv (opt-out via `ENABLE_MAPI_HTTP=false`) | ✅ |
-| 35 Round-Trip-Tests für die Codec-Schicht | ✅ |
-
-> **MAPI/HTTP-Roadmap-Abschluss in einem Sprint**: Foundation (v4.0) → Cached Mode (v5.2) in ~12.000 LOC TypeScript. Originaler MS-Spec-Aufwand: 6-9 Monate für 2-Personen-Team.
-
-### E-Mail
-
-| Feature | Status |
-|---------|--------|
-| SMTP Inbound (Port 25, 465, 587) | ✅ |
-| SMTP Outbound mit MX-Lookup & DKIM-Signierung | ✅ |
-| IMAP4rev1 mit IDLE, CONDSTORE, ESEARCH | ✅ |
-| POP3 (Port 110, 995) | ✅ |
-| EWS — Outlook Desktop 2010–2024 (SOAP/XML) | ✅ |
-| MAPI over HTTP — Outlook 2013+ native Transport (v5.2.0 FINAL) | ✅ |
-| Autodiscover v1 + v2 (MAPI/HTTP default-aktiv seit v5.0.0) | ✅ |
+| Feature | Status | RFC |
+|---------|--------|-----|
+| **SMTP** Inbound (Port 25) + Submission (465 implicit-TLS, 587 STARTTLS) | ✅ | 5321 + 6409 |
+| SMTP Outbound mit MX-Lookup & DKIM-Signierung | ✅ | 6376 |
+| **IMAP4rev2** (Port 143 STARTTLS, 993 implicit-TLS) | ✅ | **9051** |
+| IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ✅ | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
+| **POP3** (Port 110 STLS, 995 implicit-TLS) + SASL PLAIN/LOGIN + App-Password-Support | ✅ | 1939 + 5034 |
+| EWS (Exchange Web Services) — Outlook Desktop 2010–2021 (SOAP/XML) | ✅ | MS-OXWSCORE |
+| Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
 | MWA — Mail Web Access (React, Exchange-ähnliches Layout) | ✅ |
 | RFC 822 Quelltext-Ansicht (Modal im MWA) | ✅ |
@@ -189,44 +168,47 @@
 
 ---
 
-## Outlook nativ verbinden
+## Clients verbinden
 
-Mit v5.2.0 verbindet sich Outlook 2013+ **nativ als Exchange-Konto** — kein IMAP-Fallback, kein zusätzliches Plugin.
+CoreMail funktioniert mit allen Standard-Mail-Clients. Die empfohlene Konfiguration variiert je nach Client:
 
-### Setup in Outlook (Windows)
+### Setup-Übersicht
 
-1. **Outlook starten** → `Datei` → `Konto hinzufügen`
-2. **E-Mail-Adresse eintippen** (z.B. `max@firma.de`)
-3. **„Erweiterte Optionen" → „Ich möchte mein Konto manuell einrichten"** ist **nicht** nötig
-4. Outlook ruft im Hintergrund Autodiscover auf → erkennt MAPI/HTTP-Block → richtet Konto als „Exchange" ein
-5. **Passwort eingeben** (oder App-Passwort wenn MFA aktiv)
-6. Fertig — alle Folder, Push-Notifikationen, Cached Mode, GAL, Search funktionieren sofort
+| Client | Konto-Typ | Mail | Kalender + Kontakte |
+|--------|-----------|------|---------------------|
+| **Outlook 2024 LTSC** | „Andere E-Mail-Konten" → **IMAP** | IMAP+SMTP | Outlook-CalDav-Synchronizer-Plugin (gratis OSS) |
+| **Outlook 2021 LTSC** | IMAP oder Exchange (via EWS) | IMAP+SMTP oder EWS | Outlook-CalDav-Synchronizer |
+| **Apple Mail** (Mac + iOS) | „Anderes Mail-Konto" → IMAP | IMAP+SMTP | Apple Kalender/Kontakte separat (CalDAV/CardDAV) |
+| **Thunderbird** | IMAP-Konto | IMAP+SMTP | Lightning (CalDAV) + TbSync (CardDAV) |
+| **eM Client** | IMAP-Konto | IMAP+SMTP | CalDAV+CardDAV nativ |
+| **K-9 Mail** (Android) | IMAP-Konto | IMAP+SMTP | DAVx⁵ für CalDAV/CardDAV |
+| **Browser** | — | **MWA** unter `https://<dein-host>/` | inkl. Kalender/Kontakte im Web |
 
-### Was Outlook nativ kann
+### IMAP-Einstellungen
 
-| Funktion | Implementierung |
-|----------|----------------|
-| Mail lesen / schreiben / senden | MAPI ROPs |
-| Anhänge (Send + Receive) | MinIO-backed |
-| Cached Mode (`.ost`-Datei, offline) | MS-OXCFXICS Sync |
-| Push-Notifications (<1s neue Mail) | Redis pub/sub |
-| Server-Side-Search (Strg+E) | MAPI Restriction → Prisma WHERE |
-| Empfänger-Autocomplete | NSPI binary (kein EWS-Round-Trip) |
-| GAL „Namen überprüfen" (Ctrl+K) | NSPI ResolveNames |
-| Kalender / Kontakte / Aufgaben / Notizen | Virtuelle PIM-Folder + Named Properties |
-| Recurring Termine | PidLidAppointmentRecur Binary |
-| RTF-formatierte Mails | PR_RTF_COMPRESSED + LZ77 |
-| Mail als Anhang weiterleiten | RopOpenEmbeddedMessage |
+| Setting | Wert |
+|---------|------|
+| IMAP-Server | `mail.<deine-domain>` |
+| IMAP-Port | **993** (implicit-TLS, empfohlen) oder **143** (STARTTLS) |
+| SMTP-Server | `mail.<deine-domain>` |
+| SMTP-Port | **465** (implicit-TLS) oder **587** (STARTTLS, empfohlen) |
+| Authentifizierung | **PLAIN** oder **LOGIN** (SASL) |
+| Username | `max@firma.de` (vollständige E-Mail-Adresse) |
+| Passwort | Account-Passwort ODER **App-Passwort** (Pflicht bei aktivem MFA) |
 
-### Andere Clients
+### App-Passwörter (für MFA-Accounts)
 
-- **iOS Mail / Android Mail / Outlook Mobile** → ActiveSync EAS 14.1
-- **Apple Kalender / Thunderbird Lightning** → CalDAV
-- **Apple Kontakte / Thunderbird TbSync** → CardDAV
-- **Thunderbird / Apple Mail (Desktop)** → IMAP + SMTP
-- **Browser** → MWA Web Access unter `https://<dein-host>/`
+Bei aktiviertem 2FA können Mail-Clients das normale Passwort nicht mehr verwenden — der MFA-Code lässt sich nicht via IMAP/SMTP übertragen. Lösung: **App-Passwort** pro Client erstellen.
 
-> **Opt-Out**: `ENABLE_MAPI_HTTP=false` in `.env` → IMAP/SMTP-only Fallback. Default ist `MAPI/HTTP aktiv` seit v5.0.0.
+1. Im MWA anmelden → Einstellungen → **Sicherheit** → „App-Passwörter"
+2. „Neues App-Passwort" → Name eintippen (z.B. „Apple Mail Mac")
+3. Generiertes 32-stelliges Passwort kopieren
+4. Im Client als Passwort eintragen
+5. Bei Verlust/Diebstahl: einzelnes App-Passwort widerrufen — andere bleiben gültig
+
+### Hinweis zu Outlook 2024 LTSC
+
+Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist die einzige praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"). MAPI/HTTP wurde aus diesem Grund in v5.4.0 aus CoreMail entfernt.
 
 ---
 
@@ -607,21 +589,17 @@ docker pull magpeek/coremail-app:3.17.8
 
 ## Versionsverlauf
 
-### v5.x — MAPI/HTTP Implementation (Outlook nativ als Exchange)
+### v5.x — IMAP4rev2 + RFC-Compliance + MAPI-Cleanup
 
 | Version | Highlights |
 |---------|-----------|
-| **v5.2.0** | **MAPI/HTTP FINAL** — Cached Mode (MS-OXCFXICS Sync, .ost-Sync) + Recurrence Pattern Binary (iCal RRULE → MAPI) + PR_RTF_COMPRESSED (LZ77) + gzip Transport-Compression + Multi-Value Properties + Embedded Messages + Search Folders + Server-Rules-Bridge + Folder-Permissions-Stubs + Misc Message ROPs + NSPI Cursor-Pagination |
-| **v5.1.0** | Named Properties (PSETID_Appointment/Address/Task/Note) + PIM Detail-Views (Calendar/Contact/Task/Note mit vollem Property-Set inkl. Location/Start/End/BusyStatus/Recurring) + Native NSPI Binary (kein EWS-Fallback) |
-| **v5.0.0** | MAPI/HTTP Production GA + Default-Enabled in Autodiscover + 35 Round-Trip-Tests (codec + property-codec + entry-id) |
-| **v4.7.0** | NSPI Address-Book Fallback + Server-Side-Search (RopRestrict + RopFindRow → Prisma WHERE) |
-| **v4.6.0** | Virtuelle PIM-Folder (Kalender/Kontakte/Aufgaben/Notizen) in Outlook-Hierarchy mit IPF.Appointment/Contact/Task/StickyNote |
-| **v4.5.0** | Push-Notifications via Redis pub/sub — neue Mail erscheint <1s in Outlook (statt 30s Long-Poll) |
-| **v4.4.0** | Attachments end-to-end (MinIO) + RopMoveCopyMessages + RopDeleteMessages |
-| **v4.3.0** | Mail-Schreiben + Senden (RopCreateMessage + SetProperties + ModifyRecipients + SaveChangesMessage + WriteStream + CommitStream + SubmitMessage via BullMQ-Bridge) |
-| **v4.2.0** | Mail-Lesen (RopOpenMessage + GetProperties + OpenStream + ReadStream — UTF-16-LE + HTML chunked) |
-| **v4.1.0** | ROP-Infrastruktur + RopLogon + Folder-Browse + Property-Codec mit FILETIME + EntryID-Helpers |
-| **v4.0.0** | MAPI/HTTP Foundation (Binary Codec, Sessions, HTTP-Headers, Connect/Disconnect/NotificationWait) |
+| **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Doku-Update für MAPI-Removal. OAuth2-Server bleibt für REST-API; XOAUTH2 für Mail-Protokolle **nicht** implementiert (keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server). |
+| **v5.4.0** | **MAPI/HTTP komplett entfernt** (~12.000 LOC). Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Empfehlung: Outlook → „Andere E-Mail-Konten" → IMAP. Kalender/Kontakte via CalDAV/CardDAV. |
+| **v5.3.5** | IMAP FETCH komplett rewritten: ENVELOPE-Bug fixed (NIL-Listen RFC 3501 §7.4.2), echte BODYSTRUCTURE statt BODY[TEXT], INTERNALDATE, BODY[]/BODY[HEADER]/BODY.PEEK[*]/RFC822-Varianten |
+| **v5.3.1** | IMAP vollständige Command-Suite: CREATE, DELETE, RENAME, APPEND, COPY, UID COPY, MOVE, UID MOVE, SEARCH, UID SEARCH, CLOSE, CHECK. UID-Compound-Dispatcher-Bug fixed. POP3 App-Password + Byte-Stuffing fix. |
+| **v5.2.19** | parseLine empty-quoted-string fix (`LIST "" "*"`) — Mac Mail/iOS Mail/Thunderbird konnten ihre Ordnerliste nie über LIST holen |
+| **v5.2.18** | IMAP SPECIAL-USE + LSUB + NAMESPACE + STATUS für Mac Mail / iOS Mail |
+| **v5.2.0** | (archiviert) MAPI/HTTP FINAL — siehe v5.4.0 für Removal-Begründung |
 
 ### v3.18.x — Feature-Polish & Production-Hardening
 
@@ -680,6 +658,6 @@ MIT License — siehe [LICENSE](LICENSE)
 
 <div align="center">
   <b>CoreMail v5.2.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
-  <sub>MAPI/HTTP feature-complete · Outlook nativ als Exchange-Konto</sub><br>
+  <sub>IMAP4rev2 + SMTP + POP3 + EWS + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

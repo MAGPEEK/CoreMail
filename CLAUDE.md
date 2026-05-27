@@ -13,9 +13,15 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `5.2.0` (MAPI/HTTP FINAL — Cached Mode + OXCFXICS Sync + Recurrence + Multi-Value + gzip + RTF + Embedded Messages)
+**Aktuelle Version**: `5.5.0` (IMAP4rev2 RFC 9051 + RFC-Compliance-Audit + MAPI komplett entfernt seit v5.4.0)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
+
+## Architektur-Entscheidungen (v5.4.0+)
+
+- **MAPI/HTTP komplett entfernt**: Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Custom-ADFS-Emulation wäre 3-4 Wochen Aufwand ohne Erfolgs-Garantie. Empfohlener Outlook-Client: „Andere E-Mail-Konten" → IMAP.
+- **OAuth2-Server bleibt** unter `/oauth2/*` für REST-API + Web-App-Integration. **XOAUTH2 SASL NICHT** auf IMAP/SMTP/POP3 implementiert: Apple Mail / Outlook LTSC / eM Client bieten keine UI für custom OAuth-Server. App-Passwörter sind der praktische MFA-Bypass.
+- **IMAP4rev2** (RFC 9051) compliance: STARTTLS, AUTHENTICATE SASL (PLAIN+LOGIN), UNSELECT, ID, MOVE, UIDPLUS, STATUS=SIZE.
 
 ---
 
@@ -85,7 +91,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 **HTTP-Routing ohne nginx**: Der `api-gateway` auf Port 3000 übernimmt alle HTTP-Routen:
 - `/owa/` `/bcp/` — Express.static (Frontend-Bundles aus `/app/www/`)
 - `/auth/` → proxy zu auth-service (localhost:3003)
-- `/EWS/` `/mapi/` `/Autodiscover/` → proxy zu ews-server (localhost:8080)
+- `/EWS/` `/Autodiscover/` → proxy zu ews-server (localhost:8080) — `/mapi/*` entfernt in v5.4.0
 - `/Microsoft-Server-ActiveSync` → proxy zu activesync (localhost:3005)
 - `/dav/` → proxy zu caldav-server (localhost:8082)
 - `/api/v1/` `/PowerShell/` → direkte Handler
@@ -333,12 +339,7 @@ POST /PowerShell/  → WSMan-Identify (antwortet) + Cmdlet-Routing zu EMS REST-B
                      (unbekannte Cmdlets → SOAP-Fault mit Liste unterstützter Cmdlets)
 ```
 
-**MAPI over HTTP** (ews-server):
-```
-GET  /mapi/healthcheck.htm   → "MAPI" (Outlook Connectivity-Probe)
-POST /mapi/emsmdb/           → Connect / Execute (EWS-Fallback) / Disconnect / NotificationWait
-POST /mapi/nspi/             → Bind / QueryRows (GAL) / ResolveNames / Unbind
-```
+**MAPI over HTTP**: ENTFERNT in v5.4.0 (siehe Architektur-Entscheidungen oben).
 
 ---
 
