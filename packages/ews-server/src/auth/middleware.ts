@@ -100,6 +100,7 @@ export async function ewsAuthMiddleware(
 
         if (!user || !user.active) {
           log.warn({ email, found: !!user, active: user?.active }, 'EWS Basic-Auth: User nicht gefunden/aktiv');
+          await writeAuthFailureLog(req, email, !user ? 'USER_NOT_FOUND' : 'USER_INACTIVE');
         } else {
           // 1) Versuche regulärer Passwort-Hash
           let authenticated = false;
@@ -139,14 +140,22 @@ export async function ewsAuthMiddleware(
           }
 
           log.warn({ email, ip: req.ip }, 'EWS Basic-Auth: Passwort + App-Passwort fehlgeschlagen');
+          await writeAuthFailureLog(req, email, 'WRONG_PASSWORD', user.id);
         }
       } catch (err) {
         log.error({ err, email }, 'EWS Basic-Auth: DB-Fehler');
+        await writeAuthFailureLog(req, email, 'DB_ERROR');
       }
     }
   }
 
   log.warn({ ip: req.ip, hasAuth: !!authHeader, authType: authHeader.split(' ')[0] }, 'EWS: unauthorized request');
+  // SystemLog für „no auth"-Probe nur 1x pro Minute pro IP loggen — sonst
+  // flutet Outlook das Log mit jeder Discovery-Probe. Wir nutzen einen
+  // simplen In-Memory-Cache.
+  if (!authHeader) {
+    rateLimitedNoAuthLog(req);
+  }
   // v5.2.2: Mehrere Auth-Schemes anbieten — moderne Outlook-Builds (2019+/365)
   // blockieren Basic wenn es das einzige Scheme ist. Mit Negotiate/NTLM in der
   // Liste fällt Outlook gracefully auf Basic zurück, wenn die anderen Schemes
@@ -166,4 +175,80 @@ function normalizeUserName(raw: string): string {
   const bsIdx = raw.lastIndexOf('\\');
   if (bsIdx !== -1) return raw.slice(bsIdx + 1).trim();
   return raw.trim();
+}
+
+/**
+ * Schreibt einen MAPI/EWS-Auth-Failure-Eintrag in SystemLog (sichtbar im BCP).
+ * Non-blocking via .catch() — falls DB nicht erreichbar wird nur pino-Log
+ * geschrieben.
+ *
+ * Reasons: USER_NOT_FOUND | USER_INACTIVE | WRONG_PASSWORD | DB_ERROR
+ */
+async function writeAuthFailureLog(
+  req: Request,
+  email: string,
+  reason: string,
+  userId?: string,
+): Promise<void> {
+  const url = req.originalUrl || req.url || '';
+  const path = url.startsWith('/mapi') ? 'MAPI' : 'EWS';
+  const ip = req.ip ?? 'unknown';
+  const userAgent = req.get('User-Agent') ?? '';
+
+  void prisma.systemLog.create({
+    data: {
+      level: 'WARN',
+      service: 'ews-server',
+      category: 'MAPI_AUTH',
+      message: `${path} Basic-Auth fehlgeschlagen: ${email} (${reason})`,
+      ...(userId ? { userId } : {}),
+      metadata: {
+        protocol: path,
+        email,
+        reason,
+        ip,
+        userAgent,
+        path: url,
+      },
+    },
+  }).catch((err: unknown) => log.error({ err }, 'SystemLog-Write für MAPI-Auth-Failure fehlgeschlagen'));
+}
+
+/**
+ * Rate-Limited Log für „kein Auth-Header"-Probes (Outlook-Discovery).
+ * Schreibt max 1 SystemLog-Eintrag pro IP+Path-Kombi pro 60s.
+ */
+const noAuthLogCache = new Map<string, number>();
+function rateLimitedNoAuthLog(req: Request): void {
+  const ip = req.ip ?? 'unknown';
+  const url = req.originalUrl || req.url || '';
+  const path = url.startsWith('/mapi') ? 'MAPI' : 'EWS';
+  const cacheKey = `${ip}::${path}`;
+  const now = Date.now();
+  const last = noAuthLogCache.get(cacheKey) ?? 0;
+  if (now - last < 60_000) return;  // unter 60s seit letztem Log → skip
+  noAuthLogCache.set(cacheKey, now);
+
+  // Cleanup: alte Einträge entfernen (älter als 5min)
+  if (noAuthLogCache.size > 100) {
+    for (const [k, t] of noAuthLogCache.entries()) {
+      if (now - t > 300_000) noAuthLogCache.delete(k);
+    }
+  }
+
+  void prisma.systemLog.create({
+    data: {
+      level: 'INFO',
+      service: 'ews-server',
+      category: 'MAPI_AUTH',
+      message: `${path}: Client-Probe ohne Auth-Header (Discovery)`,
+      metadata: {
+        protocol: path,
+        ip,
+        userAgent: req.get('User-Agent') ?? '',
+        path: url,
+        info: 'Outlook sendet zunächst Request ohne Auth, erwartet 401-Challenge',
+      },
+    },
+  }).catch(() => { /* non-fatal */ });
 }
