@@ -198,6 +198,12 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'certificates.upload.post':            { label: 'Zertifikat hochgeladen',                 tone: 'create' },
   'certificates.self-signed.post':       { label: 'Selbst-signiertes Zertifikat erzeugt',   tone: 'create' },
   'certificates.regenerate-dkim.post':   { label: 'DKIM-Schlüssel neu erzeugt',             tone: 'update' },
+  // v5.2.13: Let's Encrypt + SMTP-Outbound-Config (smarthost relay)
+  'certificates.letsencrypt.post':       { label: "Let's Encrypt Zertifikat angefordert",   tone: 'create' },
+  'letsencrypt.post':                    { label: "Let's Encrypt Zertifikat angefordert",   tone: 'create' },
+  'smtp-config.settings.get':            { label: 'SMTP-Outbound-Konfiguration abgerufen',  tone: 'read' },
+  'smtp-config.settings.put':            { label: 'SMTP-Outbound-Konfiguration geändert',   tone: 'update' },
+  'smtp-config.test-smarthost.post':     { label: 'Smarthost-Verbindung getestet',          tone: 'read' },
   // v3.18.34: Gruppen, Aliase, Postfächer (Untermenüs)
   'groups.post':                  { label: 'Verteilergruppe angelegt',       tone: 'create' },
   'groups.put':                   { label: 'Verteilergruppe geändert',       tone: 'update' },
