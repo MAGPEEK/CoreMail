@@ -24,9 +24,15 @@ export async function ewsAuthMiddleware(
 ): Promise<void> {
   // Bearer token (Modern Auth)
   const authHeader = req.get('Authorization') ?? '';
+  // v5.2.15: Auth-Scheme case-insensitive matchen (RFC 7235 §2.1).
+  // Outlook-LTSC unter aktuellen Win11-Patches sendet manchmal `basic`
+  // (lowercase) statt `Basic` — startsWith() ist case-sensitiv und würde
+  // false-negativ zurückgeben → 401-Schleife.
+  const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
 
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
+  if (authSchemeLower === 'bearer') {
+    const tokenStart = authHeader.indexOf(' ');
+    const token = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
     const payload = verifyAccessToken(token);
     if (payload) {
       // Phase 10: Check OAuth2 token revocation status in DB
@@ -62,8 +68,8 @@ export async function ewsAuthMiddleware(
   // Negotiate (Kerberos/SPNEGO). Wir implementieren das nicht — explizit
   // 401 zurück mit nur Basic-Schema im Header, damit Outlook sofort auf
   // Basic-Auth wechselt statt auf Endlos-Negotiate-Loop.
-  if (authHeader.startsWith('Negotiate ') || authHeader.startsWith('NTLM ')) {
-    log.debug({ scheme: authHeader.split(' ')[0] }, 'EWS: rejecting Negotiate/NTLM → Basic only');
+  if (authSchemeLower === 'negotiate' || authSchemeLower === 'ntlm') {
+    log.debug({ scheme: authSchemeLower }, 'EWS: rejecting Negotiate/NTLM → Basic only');
     res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
     res.status(401).send('Unauthorized');
     return;
@@ -78,8 +84,10 @@ export async function ewsAuthMiddleware(
   // AppPassword.hash — gleiche Logik wie IMAP/SMTP/POP3.
   //
   // App-Passwörter sind der empfohlene Weg für Outlook bei aktivem MFA.
-  if (authHeader.startsWith('Basic ')) {
-    const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+  if (authSchemeLower === 'basic') {
+    const tokenStart = authHeader.indexOf(' ');
+    const b64 = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
+    const decoded = Buffer.from(b64, 'base64').toString('utf8');
     const colonIdx = decoded.indexOf(':');
     if (colonIdx === -1) {
       log.warn({ ip: req.ip }, 'EWS: Basic-Auth ohne Doppelpunkt');
@@ -88,7 +96,17 @@ export async function ewsAuthMiddleware(
       const password = decoded.slice(colonIdx + 1);
       // Outlook LTSC sendet manchmal `DOMAIN\user` oder `user@domain` —
       // wir normalisieren auf E-Mail-Form.
-      const email = normalizeUserName(rawUser);
+      let email = normalizeUserName(rawUser);
+      // v5.2.15: Bare-Username Fallback. Outlook sendet bei NTLM-Stil oft
+      // nur `admin` ohne @domain. Wenn kein @ enthalten, mit primärer
+      // Domain ergänzen.
+      if (!email.includes('@')) {
+        const primaryDomain = await prisma.domain.findFirst({
+          where:  { primary: true, active: true },
+          select: { name: true },
+        }).catch(() => null);
+        if (primaryDomain) email = `${email}@${primaryDomain.name}`;
+      }
 
       log.debug({ email, hasPassword: !!password, ip: req.ip }, 'EWS Basic-Auth attempt');
 

@@ -13,6 +13,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.15] — 2026-05-27 — Outlook Auth: case-insensitive Schemes + Bare-Username-Fallback
+
+### Fixed
+
+User-Beobachtung nach v5.2.14: „Password korrekt eingetippt am Outlook Client
+und Password-Fenster geht immer wieder auf." Live-Log zeigte
+`Autodiscover v1: Basic-Auth-Header malformed → 401` — Auth-Header kam an,
+wurde aber von unserer Parsing-Logik abgewiesen.
+
+Zwei Root Causes:
+
+1. **Case-Sensitivität des Auth-Schemes.** Outlook-LTSC unter aktuellen
+   Win11-Patches sendet `basic` (lowercase) statt `Basic` — RFC 7235 §2.1
+   sagt explizit „case-insensitive", aber unser Code nutzte
+   `authHeader.startsWith('Basic ')` was strikt case-sensitiv ist. Fix:
+   `authHeader.split(' ')[0]?.toLowerCase()` → matcht jetzt
+   `Basic`/`basic`/`BASIC`. Gilt für Autodiscover V1 + EWS-Middleware
+   (auch Bearer/Negotiate/NTLM analog).
+
+2. **Bare-Username ohne @domain.** Outlook sendet bei NTLM-Stil teilweise
+   nur `admin` (ohne @stefanwuestner.de). Vorher: DB-Lookup mit `email='admin'`
+   → kein Treffer → 401. Fix: wenn der User-Teil kein `@` enthält, mit der
+   primären Domain ergänzen (`admin` → `admin@stefanwuestner.de`).
+
+3. **Whitespace-Toleranz**: `authHeader.slice(6)` setzt vor­aus dass
+   genau ein Space zwischen Schema und Token steht. Outlook fügt manchmal
+   mehrere ein. Fix: `indexOf(' ')` + `.trim()` auf den Token-Teil.
+
+### Files
+
+- `packages/autodiscover/src/v1.ts`
+- `packages/ews-server/src/auth/middleware.ts`
+
+---
+
 ## [5.2.14] — 2026-05-27 — Outlook Auth-Loop FIX (Autodiscover validiert jetzt Passwörter)
 
 ### Security

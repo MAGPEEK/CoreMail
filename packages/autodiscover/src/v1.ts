@@ -194,6 +194,11 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   // Hinweis: Wir validieren die Credentials hier NICHT (Autodiscover liefert
   // nur Setup-Daten, keine User-Daten). Das ist Exchange-üblich.
   const authHeader = req.get('Authorization') ?? '';
+  // v5.2.15: Auth-Scheme case-insensitive matchen (RFC 7235 §2.1). Manche
+  // Outlook-Builds (insbesondere Outlook-LTSC unter aktuellen Win11-Patches)
+  // senden `basic` (lowercase). Express liefert den raw Value zurück, so
+  // dass startsWith('Basic ') case-sensitiv ist.
+  const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
   if (!authHeader) {
     log.debug({ method: req.method, url: req.originalUrl }, 'Autodiscover v1: no auth, sending 401 challenge');
     res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
@@ -201,7 +206,8 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
   // Negotiate/NTLM-Token → wir lehnen ab und drängen auf Basic
-  if (authHeader.startsWith('Negotiate ') || authHeader.startsWith('NTLM ')) {
+  if (authSchemeLower === 'negotiate' || authSchemeLower === 'ntlm') {
+    log.debug({ scheme: authSchemeLower }, 'Autodiscover v1: Negotiate/NTLM → fordere Basic');
     res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
@@ -212,24 +218,47 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   // mit FALSCHEM Passwort, scheiterte aber an EWS/MAPI (die korrekt prüfen),
   // promptet User erneut, schickt erneut zu Autodiscover (das wieder OK
   // sagt), → ENDLOS-LOOP.
-  let basicAuthEmail: string | null = null;
+  let basicAuthUser: string | null = null;  // raw username (kann admin oder admin@domain sein)
   let basicAuthPassword: string | null = null;
-  if (authHeader.startsWith('Basic ')) {
+  if (authSchemeLower === 'basic') {
+    // Whitespace-tolerant slicen (Outlook fügt manchmal mehrere Leerzeichen ein)
+    const tokenStart = authHeader.indexOf(' ');
+    const b64 = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
     try {
-      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      const decoded = Buffer.from(b64, 'base64').toString('utf8');
       const colonIdx = decoded.indexOf(':');
       if (colonIdx !== -1) {
-        basicAuthEmail    = normalizeBasicAuthUser(decoded.slice(0, colonIdx));
+        basicAuthUser     = normalizeBasicAuthUser(decoded.slice(0, colonIdx));
         basicAuthPassword = decoded.slice(colonIdx + 1);
       }
     } catch { /* malformed header — wird unten als 401 behandelt */ }
   }
 
-  if (!basicAuthEmail || !basicAuthPassword) {
-    log.warn({ ip: req.ip }, 'Autodiscover v1: Basic-Auth-Header malformed → 401');
+  if (!basicAuthUser || !basicAuthPassword) {
+    log.warn({
+      ip: req.ip,
+      scheme: authSchemeLower,
+      hasUser: !!basicAuthUser,
+      hasPassword: !!basicAuthPassword,
+    }, 'Autodiscover v1: Basic-Auth-Header malformed → 401');
     res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
+  }
+
+  // v5.2.15: Bare-Username Fallback. Outlook sendet bei NTLM-Style `DOMAIN\user`
+  // teilweise auch nur `user` (ohne @domain). Wenn kein @ enthalten ist, suchen
+  // wir den User in der primären Domain.
+  let basicAuthEmail = basicAuthUser;
+  if (!basicAuthUser.includes('@')) {
+    const primaryDomain = await prisma.domain.findFirst({
+      where:  { primary: true, active: true },
+      select: { name: true },
+    }).catch(() => null);
+    if (primaryDomain) {
+      basicAuthEmail = `${basicAuthUser}@${primaryDomain.name}`;
+      log.debug({ raw: basicAuthUser, email: basicAuthEmail }, 'Autodiscover v1: bare username → expanded mit primary domain');
+    }
   }
 
   const authOk = await validateBasicAuth(basicAuthEmail, basicAuthPassword);
