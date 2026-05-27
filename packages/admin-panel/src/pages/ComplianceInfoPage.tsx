@@ -1,10 +1,16 @@
+import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
+import { api } from '../api/client';
 
-const VERSION        = '5.2.0';
-const BUILD_DATE     = '2026-05-27';
-const GITHUB_URL     = 'https://github.com/MAGPEEK/CoreMail';
-const CHANGELOG_URL  = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
-const DOCKERHUB_URL  = 'https://hub.docker.com/r/magpeek/coremail-app';
+// v5.2.6: VERSION wird live vom Server gezogen (statt hardcoded) — so
+// stimmt die angezeigte Version immer mit dem deployten Container überein,
+// auch wenn nach Frontend-Build noch Backend-Hotfixes deployed werden.
+const VERSION_FALLBACK = '5.2.6';
+const GITHUB_URL       = 'https://github.com/MAGPEEK/CoreMail';
+const CHANGELOG_URL    = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
+const DOCKERHUB_URL    = 'https://hub.docker.com/r/magpeek/coremail-app';
+
+interface VersionInfo { version: string; bootedAt: string }
 
 const HIGHLIGHTS = [
   { version: '5.2.0', date: '2026-05-27', title: 'MAPI/HTTP FINAL (Cached Mode + Recurrence + Embedded + Multi-Value + gzip + RTF)',
@@ -450,6 +456,18 @@ function StatBadge({ label, value }: { label: string; value: string }) {
 
 
 export function ComplianceInfoPage() {
+  // Live-Version vom Backend ziehen (statt hardcoded). Fallback auf
+  // VERSION_FALLBACK falls Endpoint nicht erreichbar (Offline-View).
+  const { data: versionInfo } = useQuery<VersionInfo>({
+    queryKey: ['admin', 'version'],
+    queryFn:  () => api.get<VersionInfo>('/admin/dashboard/version'),
+    staleTime: 30_000,
+  });
+  const liveVersion = versionInfo?.version ?? VERSION_FALLBACK;
+  const bootedAt    = versionInfo?.bootedAt
+    ? new Date(versionInfo.bootedAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
+    : '—';
+
   return (
     <div className="p-6 max-w-3xl space-y-6">
       {/* Header */}
@@ -465,11 +483,11 @@ export function ComplianceInfoPage() {
         </div>
         <div className="flex-1">
           <p className="text-xs text-gray-500 uppercase tracking-wide font-medium mb-0.5">Aktuelle Version</p>
-          <p className="text-3xl font-bold text-gray-900">v{VERSION}</p>
+          <p className="text-3xl font-bold text-gray-900">v{liveVersion}</p>
           <p className="text-sm text-gray-500 mt-0.5">CoreMail — Open-Source Mailserver</p>
         </div>
         <div className="flex gap-3">
-          <StatBadge label="Build" value={BUILD_DATE} />
+          <StatBadge label="Container gestartet" value={bootedAt} />
           <StatBadge label="Lizenz" value="MIT" />
         </div>
       </div>
