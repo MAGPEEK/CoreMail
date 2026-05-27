@@ -49,12 +49,13 @@ function normalizeBasicAuthUser(rawUser: string): string {
   return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
 }
 
-// v5.0.0: MAPI/HTTP ist jetzt DEFAULT AKTIV. Mit den v4.1-v4.7 Releases sind
-// alle wichtigen ROPs implementiert (Logon, Folder-Browse, Mail-Read/Write,
-// Send, Attachments, Move/Delete, Push-Notifications, virtuelle PIM-Folder,
-// Server-Side-Search). Outlook kann sich jetzt nativ als Exchange-Konto
-// einrichten statt IMAP-Fallback. Opt-out via `ENABLE_MAPI_HTTP=false`.
-const MAPI_HTTP_ENABLED = process.env['ENABLE_MAPI_HTTP'] !== 'false';
+// v5.4.0: MAPI/HTTP komplett aus dem Stack entfernt (User-Entscheidung).
+// Outlook 2024 LTSC erzwingt Modern Auth auf Exchange-Endpoints und
+// akzeptiert keine non-Microsoft-OAuth-Provider — Custom-Implementation
+// hätte ADFS-Protokoll-Emulation gebraucht (3-4 Wochen Aufwand + nicht
+// garantiert). Autodiscover annonciert jetzt nur IMAP+SMTP+ActiveSync.
+// Mail-Clients konfigurieren CoreMail als IMAP-Konto, Kalender + Kontakte
+// via CalDAV/CardDAV.
 
 function buildAutodiscoverResponse(
   email: string,
@@ -85,25 +86,6 @@ function buildAutodiscoverResponse(
       <AccountType>email</AccountType>
       <Action>settings</Action>
       <MicrosoftOnline>False</MicrosoftOnline>
-      ${MAPI_HTTP_ENABLED ? `
-      <!--
-        v5.0.0: MAPI-over-HTTP DEFAULT AKTIV. Outlook 2013 SP1+ erkennt diesen
-        <Protocol Type="mapiHttp"> als modernen Transport und nutzt /mapi/emsmdb/
-        + /mapi/nspi/ — Account-Type "Exchange" statt "IMAP". Volle Funktionen:
-        Logon, Folder-Browse, Mail-Lesen, Mail-Schreiben+Senden, Attachments,
-        Move/Delete, Push-Notifications (Redis-pub/sub), virtuelle PIM-Folder
-        (Kalender/Kontakte/Aufgaben/Notizen), Server-Side-Search.
-      -->
-      <Protocol Type="mapiHttp" Version="1">
-        <MailStore>
-          <InternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/emsmdb/</InternalUrl>
-          <ExternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/emsmdb/</ExternalUrl>
-        </MailStore>
-        <AddressBook>
-          <InternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/nspi/</InternalUrl>
-          <ExternalUrl>${escapeXml(cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, ''))}/mapi/nspi/</ExternalUrl>
-        </AddressBook>
-      </Protocol>` : ''}
       <!--
         v3.18.39: EXCH + EXPR Blöcke ENTFERNT.
 
