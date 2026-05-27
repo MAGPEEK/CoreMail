@@ -372,17 +372,31 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   const dkimKeyOk = dkimExpected !== '' && dkim.found !== null &&
     dkim.found.replace(/\s/g, '') === dkimExpected.replace(/\s/g, '');
 
+  // v5.2.5: Relative DNS-Namen wie sie der Provider erwartet
+  // (`_dmarc` statt `_dmarc.stefanwuestner.de`, `@` für Root, `mail` statt
+  // `mail.stefanwuestner.de`). Verhindert Doppel-Suffix wenn der User
+  // versehentlich den FQDN aus dem UI in das Provider-Feld kopiert.
+  const relativeName = (fqdn: string): string => {
+    if (fqdn === domainName) return '@';
+    const suffix = `.${domainName}`;
+    return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
+  };
+
+  // Hostname auch relativ (z.B. "mail.stefanwuestner.de" → "mail")
+  const aName = relativeName(hostname);
+  const dkimNameRel = relativeName(dkimName);
+
   res.json({
     domain:   domainName,
     hostname,
     serverIp,
     records: {
-      a:            { type: 'A',     name: hostname,                           expected: serverIp,           ok: !!serverIp,  found: serverIp || null },
-      mx:           { type: 'MX',    name: domainName,                         expected: `10 ${hostname}`,   ...mx },
-      spf:          { type: 'TXT',   name: domainName,                         expected: spfExpected,        ...spf },
-      dkim:         { type: 'TXT',   name: dkimName,                           expected: dkimExpected,       ...dkim, ok: dkimKeyOk },
-      dmarc:        { type: 'TXT',   name: `_dmarc.${domainName}`,             expected: dmarcExpected,      ...dmarc },
-      autodiscover: { type: 'CNAME', name: `autodiscover.${domainName}`,       expected: hostname,           ...autodiscover },
+      a:            { type: 'A',     name: aName,                              expected: serverIp,           ok: !!serverIp,  found: serverIp || null },
+      mx:           { type: 'MX',    name: '@',                                expected: `10 ${hostname}`,   ...mx },
+      spf:          { type: 'TXT',   name: '@',                                expected: spfExpected,        ...spf },
+      dkim:         { type: 'TXT',   name: dkimNameRel,                        expected: dkimExpected,       ...dkim, ok: dkimKeyOk },
+      dmarc:        { type: 'TXT',   name: '_dmarc',                           expected: dmarcExpected,      ...dmarc },
+      autodiscover: { type: 'CNAME', name: 'autodiscover',                     expected: hostname,           ...autodiscover },
       ptr:          { type: 'PTR',   name: hostname,                           expected: hostname,           ...ptr },
     },
   });
