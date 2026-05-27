@@ -165,28 +165,22 @@ async function refreshTlsConfig(): Promise<void> {
 
     if (settings?.tlsCert && settings?.tlsKey) {
       const isSelfSigned = isCertSelfSigned(settings.tlsCert);
-      // Self-signed Cert: Hostname MUSS zum aktuellen publicHostname passen.
-      // Häufiger Bug: Cert wurde beim ersten Container-Start mit Default-Hostname
-      // 'mail.localhost' generiert bevor publicHostname in DB gesetzt war —
-      // bleibt dann auf ewig falsch. Outlook 365 etc. lehnen wegen CN-Mismatch ab.
-      // Fix: bei Mismatch das self-signed Cert NEU generieren mit korrektem Hostname.
-      // CA-signierte Certs (LE/Custom) NIE neu generieren — könnten gültig für mehrere Hostnames sein.
-      if (isSelfSigned && !certMatchesHostname(settings.tlsCert, _hostname)) {
-        log.warn({ hostname: _hostname }, 'Self-signed cert hostname mismatch — regenerating');
-        const { certPem, keyPem } = generateSelfSignedCert(_hostname);
-        _tlsConfig = tlsPemToBuffers(certPem, keyPem);
-        _tlsCertSelfSigned = true;
-        await prisma.serverSettings.upsert({
-          where:  { id: 'singleton' },
-          create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: keyPem },
-          update: { tlsCert: certPem, tlsKey: keyPem },
-        });
-        log.info({ hostname: _hostname }, 'Self-signed cert regenerated with correct hostname');
-        return;
-      }
+      // v5.2.8-Fix: Bisher wurde ein bestehendes self-signed Cert mit
+      // hostname-mismatch automatisch regeneriert. Problem: certMatchesHostname()
+      // war fragil (Regex erwartete Komma-Separator, Node 20+ X509Certificate.subject
+      // nutzt aber Newlines) → false-positive Mismatch → smtp-server überschrieb
+      // bei JEDEM Restart das gerade per BCP aktivierte LE-Cert. Konsequenz:
+      // Outlook + IMAP-Clients sahen permanent self-signed Cert.
+      //
+      // Neue Logik: Cert NIEMALS automatisch beim Refresh überschreiben — der
+      // BCP-Workflow `activate-protocol` ist der einzige autorisierte Schreibpfad.
+      // Hostname-Mismatch wird nur noch geloggt (admin-action erforderlich).
       _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
       _tlsCertSelfSigned = isSelfSigned;
-      log.debug({ selfSigned: _tlsCertSelfSigned, hostname: _hostname }, 'SMTP TLS cert loaded from DB');
+      if (isSelfSigned && !certMatchesHostname(settings.tlsCert, _hostname)) {
+        log.warn({ hostname: _hostname }, 'Self-signed cert subject != publicHostname — admin sollte im BCP ein passendes Cert aktivieren');
+      }
+      log.debug({ selfSigned: _tlsCertSelfSigned, hostname: _hostname, certLen: settings.tlsCert.length }, 'SMTP TLS cert loaded from DB');
       return;
     }
 
