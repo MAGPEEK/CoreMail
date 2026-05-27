@@ -263,18 +263,32 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   const authOk = await validateBasicAuth(basicAuthEmail, basicAuthPassword);
   if (!authOk) {
-    log.warn({ email: basicAuthEmail, ip: req.ip }, 'Autodiscover v1: Passwort + App-Passwort fehlgeschlagen');
+    // v5.2.16: Forensisches Logging um zu sehen WAS Outlook sendet ohne
+    // das Passwort selbst zu leaken: Länge + Code-Points der ersten/letzten
+    // 2 Zeichen (Trailing-Whitespace / Newline / Encoding-Issue erkennbar).
+    const pwLen   = basicAuthPassword.length;
+    const pwCodes = pwLen >= 4
+      ? [basicAuthPassword.charCodeAt(0), basicAuthPassword.charCodeAt(1),
+         basicAuthPassword.charCodeAt(pwLen - 2), basicAuthPassword.charCodeAt(pwLen - 1)]
+      : Array.from(basicAuthPassword).map((c) => c.charCodeAt(0));
+    log.warn({
+      email: basicAuthEmail, ip: req.ip,
+      pwLen, pwCodes,
+      userAgent: req.get('User-Agent') ?? '',
+    }, 'Autodiscover v1: Passwort + App-Passwort fehlgeschlagen');
     // SystemLog für Audit (analog zu EWS-Middleware in writeAuthFailureLog)
     void prisma.systemLog.create({
       data: {
         level:    'WARN',
         service:  'autodiscover',
         category: 'MAPI_AUTH',
-        message:  `Autodiscover Basic-Auth fehlgeschlagen: ${basicAuthEmail}`,
+        message:  `Autodiscover Basic-Auth fehlgeschlagen: ${basicAuthEmail} (pwLen=${pwLen}, codes=[${pwCodes.join(',')}])`,
         metadata: {
           protocol:  'AUTODISCOVER',
           email:     basicAuthEmail,
           reason:    'WRONG_PASSWORD_OR_USER',
+          pwLen,
+          pwCodes,
           ip:        req.ip ?? 'unknown',
           userAgent: req.get('User-Agent') ?? '',
           path:      req.originalUrl,
