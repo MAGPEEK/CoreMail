@@ -28,6 +28,16 @@ export type RopObject =
        */
       messageId: string | null;
       isDraft?: boolean;
+      /**
+       * v5.1.0: PIM-Typ für virtuelle Folder. Steuert welcher Property-Mapper
+       * in handleRopGetPropertiesAll verwendet wird.
+       *   - 'mail' (default) → Message-Tabelle
+       *   - 'appointment'     → CalendarEvent-Tabelle (IPM.Appointment)
+       *   - 'contact'         → Contact-Tabelle (IPM.Contact)
+       *   - 'task'            → Task-Tabelle (IPM.Task)
+       *   - 'note'            → Note-Tabelle (IPM.StickyNote)
+       */
+      pimKind?: 'mail' | 'appointment' | 'contact' | 'task' | 'note';
       pendingProperties?: Record<string, unknown>;   // PropertyTag (dec) → value
       pendingRecipients?: Array<{
         type: 'TO' | 'CC' | 'BCC';

@@ -18,6 +18,7 @@ import {
 import { cuidToFolderId64 } from '../entry-id.js';
 import { writeTaggedProperty, writePropertyValue, readPropertyValue } from '../property-codec.js';
 import { VIRTUAL_FOLDERS } from './folder.js';
+import { buildPimPropertyList } from './pim-properties.js';
 import type { RopRequest } from '../rop-codec.js';
 
 /**
@@ -137,19 +138,24 @@ export async function handleRopGetPropertiesAll(
   }
   const messageId: string = input.object.messageId;
 
-  const msg = await prisma.message.findUnique({
-    where: { id: messageId },
-    select: { id: true, subject: true, fromAddr: true, fromName: true,
-              toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true,
-              date: true, bodyText: true, bodyHtml: true, rawSize: true,
-              flags: true, messageId: true, inReplyTo: true,
-              _count: { select: { attachments: true } } },
-  });
-  if (!msg) {
-    return writeMsgError(RopId.GetPropertiesAll, rop, MapiStatusCode.EC_NOT_FOUND);
+  // v5.1.0: PIM-Item-Dispatch
+  let props: Map<number, unknown>;
+  if (input.object.pimKind && input.object.pimKind !== 'mail') {
+    props = await buildPimPropertyList(sessionToken, input.object.pimKind, messageId);
+  } else {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { id: true, subject: true, fromAddr: true, fromName: true,
+                toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true,
+                date: true, bodyText: true, bodyHtml: true, rawSize: true,
+                flags: true, messageId: true, inReplyTo: true,
+                _count: { select: { attachments: true } } },
+    });
+    if (!msg) {
+      return writeMsgError(RopId.GetPropertiesAll, rop, MapiStatusCode.EC_NOT_FOUND);
+    }
+    props = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
   }
-
-  const props = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
 
   // Response: RopId, InputHandleIndex, ReturnValue, PropertyValueCount (uint16),
   //   TaggedPropertyValues (variable)
@@ -189,18 +195,23 @@ export async function handleRopGetPropertiesSpecific(
     tags.push(r.readUint32());
   }
 
-  const msg = await prisma.message.findUnique({
-    where: { id: messageId },
-    select: { id: true, subject: true, fromAddr: true, fromName: true,
-              toAddrs: true, ccAddrs: true, date: true, bodyText: true,
-              bodyHtml: true, rawSize: true, flags: true, messageId: true,
-              _count: { select: { attachments: true } } },
-  });
-  if (!msg) {
-    return writeMsgError(RopId.GetPropertiesSpecific, rop, MapiStatusCode.EC_NOT_FOUND);
+  // v5.1.0: PIM-Item-Dispatch
+  let allProps: Map<number, unknown>;
+  if (input.object.pimKind && input.object.pimKind !== 'mail') {
+    allProps = await buildPimPropertyList(sessionToken, input.object.pimKind, messageId);
+  } else {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { id: true, subject: true, fromAddr: true, fromName: true,
+                toAddrs: true, ccAddrs: true, date: true, bodyText: true,
+                bodyHtml: true, rawSize: true, flags: true, messageId: true,
+                _count: { select: { attachments: true } } },
+    });
+    if (!msg) {
+      return writeMsgError(RopId.GetPropertiesSpecific, rop, MapiStatusCode.EC_NOT_FOUND);
+    }
+    allProps = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
   }
-
-  const allProps = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
   // Response: nur die requested tags, gleiche Reihenfolge wie tags[]
   const w = new MapiWriter();
   w.writeUint8(RopId.GetPropertiesSpecific);
@@ -313,6 +324,7 @@ async function openVirtualPimMessage(
   messageId64: bigint,
 ): Promise<Buffer> {
   let foundId: string | null = null;
+  let pimKind: 'appointment' | 'contact' | 'task' | 'note' | null = null;
   switch (virtualFolderId) {
     case 'virtual-calendar': {
       const events = await prisma.calendarEvent.findMany({
@@ -320,7 +332,7 @@ async function openVirtualPimMessage(
         select: { id: true },
       }).catch(() => []);
       const e = events.find((x) => cuidToFolderId64(x.id) === messageId64);
-      if (e) foundId = e.id;
+      if (e) { foundId = e.id; pimKind = 'appointment'; }
       break;
     }
     case 'virtual-contacts': {
@@ -328,7 +340,7 @@ async function openVirtualPimMessage(
         where: { userId }, select: { id: true },
       }).catch(() => []);
       const c = contacts.find((x) => cuidToFolderId64(x.id) === messageId64);
-      if (c) foundId = c.id;
+      if (c) { foundId = c.id; pimKind = 'contact'; }
       break;
     }
     case 'virtual-tasks': {
@@ -336,7 +348,7 @@ async function openVirtualPimMessage(
         where: { userId }, select: { id: true },
       }).catch(() => []);
       const t = tasks.find((x) => cuidToFolderId64(x.id) === messageId64);
-      if (t) foundId = t.id;
+      if (t) { foundId = t.id; pimKind = 'task'; }
       break;
     }
     case 'virtual-notes': {
@@ -344,20 +356,18 @@ async function openVirtualPimMessage(
         where: { userId }, select: { id: true },
       }).catch(() => []);
       const n = notes.find((x) => cuidToFolderId64(x.id) === messageId64);
-      if (n) foundId = n.id;
+      if (n) { foundId = n.id; pimKind = 'note'; }
       break;
     }
   }
-  if (!foundId) {
+  if (!foundId || !pimKind) {
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Message-Handle anlegen — wir speichern die foundId im messageId-Feld
-  // (Prisma findUnique würde fehlschlagen — GetPropertiesAll-Pfad muss
-  // entsprechend dispatchen, v4.6.0 minimal: leerer Property-Set
-  // zurückgeben, Outlook zeigt dann zumindest die Liste).
+  // v5.1.0: pimKind im Handle setzen → GetPropertiesAll/Specific
+  // dispatcht auf buildPimPropertyList für volle Detail-View.
   const handle = await putRopObject(sessionToken, {
-    kind: 'message', userId, folderId: virtualFolderId, messageId: foundId,
+    kind: 'message', userId, folderId: virtualFolderId, messageId: foundId, pimKind,
   });
   if (handle === null) {
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_INVALID_SESSION);

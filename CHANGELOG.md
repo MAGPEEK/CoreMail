@@ -13,6 +13,102 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.1.0] — 2026-05-27 — MAPI/HTTP: Named Properties + PIM Detail-Views + Native NSPI
+
+Schließt die letzten v5.x-Punkte aus dem v5.0.0-Release: vollständige
+Calendar/Contact/Task/Note Detail-View und native MS-OXNSPI Binary-
+Implementation statt EWS-Fallback.
+
+### Added — Named Properties
+
+- **`packages/ews-server/src/mapi/named-properties.ts`**: PSETID-GUIDs
+  (PSETID_Appointment / PSETID_Address / PSETID_Task / PSETID_Note /
+  PSETID_Common / PSETID_Meeting / PS_INTERNET_HEADERS / PS_PUBLIC_STRINGS)
+  + Standard-LIDs aus MS-OXOCAL / MS-OXOCNTC / MS-OXOTASK / MS-OXONOTE
+  (LID_APPOINTMENT_START_WHOLE 0x820D, LID_LOCATION 0x8208,
+  LID_BUSY_STATUS 0x8205, LID_TASK_COMPLETE 0x811C,
+  LID_PERCENT_COMPLETE 0x8102, LID_NOTE_COLOR 0x8B00 etc.).
+
+- **`resolveNamedProperties()`** vergibt lokale uint16-IDs ab 0x8000 in
+  der Session-State (`mapi:session:<token>.namedPropMap`). Idempotent:
+  bereits-allokierte IDs werden wiederverwendet.
+
+- **`reverseNamedProperties()`** für GetNamesFromPropertyIds-Round-Trip.
+
+- **`RopGetPropertyIdsFromNames`** + **`RopGetNamesFromPropertyIds`**
+  (`rop/named-props-handler.ts`) — vollständige binäre Implementierung
+  inkl. GUID-Encoding (4-2-2-8-Format) und LID/Name-Kind-Differenzierung.
+
+- **ROP-Codec**: Beide Named-Prop-ROPs bekommen jetzt den vollständigen
+  Payload (statt Pass-Through-Stub).
+
+### Added — PIM Detail-Views
+
+- **`packages/ews-server/src/mapi/rop/pim-properties.ts`** mit
+  `buildPimPropertyList(sessionToken, kind, itemId)`: lädt
+  CalendarEvent/Contact/Task/Note aus Prisma und mapt jedes Item auf
+  vollständigen Property-Set:
+
+  | Kind | Standard MAPI | Named Properties |
+  |------|---------------|------------------|
+  | IPM.Appointment | Subject, Body, Times, MessageClass | Location, AppointmentStartWhole, EndWhole, Duration, AllDay (SubType), BusyStatus, Sequence, Recurring |
+  | IPM.Contact | DisplayName, Body, SenderName/Email | Email1/2 DisplayName/Type/Address, FileAs + PR_COMPANY_NAME_W, PR_TITLE_W, PR_DEPARTMENT_NAME_W, PR_BUSINESS_TEL_W, PR_MOBILE_TEL_W |
+  | IPM.Task | Subject, Body, Times, Priority | TaskStatus (NotStarted/InProgress/Completed/Waiting/Deferred), PercentComplete, StartDate, DueDate, DateCompleted, Complete-Flag, Owner |
+  | IPM.StickyNote | Subject, Body, Times | NoteColor (yellow=3 default), NoteWidth, NoteHeight |
+
+- **`handleRopGetPropertiesAll`** + **`handleRopGetPropertiesSpecific`**
+  in `rop/message.ts` dispatchen auf `buildPimPropertyList()` wenn das
+  Message-Handle `pimKind !== 'mail'` hat (statt der Standard-Message-
+  Property-Mapping).
+
+- **`openVirtualPimMessage`** setzt jetzt `pimKind`
+  (appointment/contact/task/note) auf das Message-Handle.
+
+- **`RopObject.message`-Type** erweitert um `pimKind`-Feld.
+
+### Added — Native NSPI Binary
+
+- **`packages/ews-server/src/mapi/nspi-handler.ts`** ersetzt den v4.7.0
+  SUCCESS-empty Fallback durch vollständige MS-OXNSPI Binary-
+  Implementation:
+
+  - **GetSpecialTable** — liefert „Globale Adressliste" als root entry
+  - **QueryRows** — paginiert User + DistributionGroup (max 500)
+  - **ResolveNames** + **GetMatches** — Substring-Match auf
+    displayName + email
+  - **GetProps** — Properties einer einzelnen Entry per MinId
+  - **DnToMinId** — Legacy-DN-String (`/o=…/cn=Recipients/cn=<email>`)
+    → MinEntryID
+  - **GetPropList** — Standard-Property-Set für GAL-Einträge
+
+- **MinEntryID** = FNV-1a-32bit-Hash der `userId`/`groupId` im Range
+  [0x10000000, 0xFFFFFFFF] (MS-OXNSPI-konform).
+
+- **Standard-Property-Set per Row**: PR_DISPLAY_NAME_W,
+  PR_EMAIL_ADDRESS_W, PR_SMTP_ADDRESS_W, PR_ADDRTYPE_W='SMTP',
+  PR_OBJECT_TYPE (6=MAILUSER/8=DISTLIST),
+  PR_DISPLAY_TYPE (0/1).
+
+- **`handler.ts`** dispatcht NSPI-Operationen jetzt an
+  `handleNspiOperation()` aus `nspi-handler.ts` statt SUCCESS-empty
+  zurückzugeben.
+
+### Outlook-Verhalten nach v5.1.0
+
+- **Calendar-Detail-View**: Doppelklick auf einen Termin in Outlook
+  öffnet das volle Termin-Fenster mit Subject, Ort, Start/Ende,
+  Ganztägig-Flag, BusyStatus-Anzeige (Frei/Beschäftigt/Außer Haus/Vorläufig).
+- **Contact-Detail-View**: Kontakt zeigt alle Felder (Firma, Position,
+  Abteilung, Telefone, Email1/Email2).
+- **Task-Detail-View**: Aufgabe zeigt Fälligkeit, Prozent-Fortschritt,
+  Status (NotStarted/InProgress/Completed).
+- **Note-Detail-View**: Notiz mit Farbcode.
+- **Outlook-Adressbuch nativ gefüllt**: GAL via direkter NSPI-Connection
+  (keine EWS-Round-Trips) — schneller, weniger Latenz, weniger
+  Server-Last bei großen Postfächern.
+
+---
+
 ## [5.0.0] — 2026-05-27 — MAPI/HTTP Production-Hardening + Default-Enabled (Major Release)
 
 ### Changed
