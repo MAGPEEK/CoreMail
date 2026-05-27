@@ -775,7 +775,14 @@ export async function handleFetch(
   }
 
   const sequenceSet = args[0] ?? '1:*';
-  const dataItems   = args.slice(1).join(' ');
+  const dataItemsRaw = args.slice(1).join(' ');
+  // Tokenize data items: split on whitespace, strip parens, uppercase
+  const dataItems = new Set(
+    dataItemsRaw.replace(/[()]/g, ' ').split(/\s+/).filter(Boolean).map((s) => s.toUpperCase())
+  );
+  // Auch zusammengesetzte Items wie BODY[HEADER] etc. erkennen
+  const requestedBodyParts = [...dataItemsRaw.matchAll(/BODY(?:\.PEEK)?(\[[^\]]*\])/gi)]
+    .map((m) => ({ raw: m[0], part: (m[1] ?? '').toUpperCase(), peek: /\.PEEK/i.test(m[0]) }));
 
   const messages = await prisma.message.findMany({
     where: { folderId: session.selected.folderId, deletedAt: null },
@@ -783,33 +790,200 @@ export async function handleFetch(
     include: { attachments: { select: { filename: true, mimeType: true, size: true } } },
   });
 
-  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid));
+  // v5.3.5: parseSequenceSet jetzt mit byUid-Parameter
+  const isUidFetch = /UID FETCH/i.test(args.join(' ')) || false;
+  const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid), isUidFetch);
 
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
     const num = seqNum + 1;
+    const items: string[] = [];
 
-    const envelope = buildEnvelope(msg);
-    const flags = `(${msg.flags.join(' ')})`;
-    const size = msg.rawSize;
+    // UID — Mac Mail braucht das immer für UID FETCH
+    items.push(`UID ${msg.uid}`);
 
-    let response = `${num} FETCH (UID ${msg.uid} FLAGS ${flags} RFC822.SIZE ${size}`;
-
-    if (dataItems.includes('ENVELOPE')) {
-      response += ` ENVELOPE ${envelope}`;
-    }
-    if (dataItems.includes('BODYSTRUCTURE') || dataItems.includes('BODY')) {
-      response += ` BODY[TEXT] {${msg.bodyText.length}}\r\n${msg.bodyText}`;
-    }
-    if (dataItems.includes('MODSEQ') || session.condstoreEnabled) {
-      response += ` MODSEQ (${msg.modSeq})`;
+    // FLAGS
+    if (dataItems.has('FLAGS') || dataItems.has('FAST') || dataItems.has('ALL') || dataItems.has('FULL')) {
+      items.push(`FLAGS (${msg.flags.join(' ')})`);
     }
 
-    response += ')';
-    sendUntagged(session, response);
+    // INTERNALDATE — RFC 3501 §6.4.5 "DD-Mon-YYYY HH:MM:SS +ZZZZ"
+    if (dataItems.has('INTERNALDATE') || dataItems.has('ALL') || dataItems.has('FAST') || dataItems.has('FULL')) {
+      items.push(`INTERNALDATE "${formatInternalDate(msg.createdAt ?? msg.date)}"`);
+    }
+
+    // RFC822.SIZE
+    if (dataItems.has('RFC822.SIZE') || dataItems.has('ALL') || dataItems.has('FAST') || dataItems.has('FULL')) {
+      items.push(`RFC822.SIZE ${msg.rawSize}`);
+    }
+
+    // ENVELOPE
+    if (dataItems.has('ENVELOPE') || dataItems.has('ALL') || dataItems.has('FULL')) {
+      items.push(`ENVELOPE ${buildEnvelope(msg)}`);
+    }
+
+    // BODYSTRUCTURE / BODY (ohne Argument) — RFC 3501 §7.4.2 MIME structure
+    if (dataItems.has('BODYSTRUCTURE') || dataItems.has('FULL')) {
+      items.push(`BODYSTRUCTURE ${buildBodyStructure(msg)}`);
+    } else if (dataItems.has('BODY')) {
+      // BODY ohne Argument = nicht-extensible BODYSTRUCTURE
+      items.push(`BODY ${buildBodyStructure(msg, false)}`);
+    }
+
+    // BODY[*] / BODY.PEEK[*] / RFC822 / RFC822.HEADER / RFC822.TEXT
+    for (const bp of requestedBodyParts) {
+      const partName = bp.part.replace(/\[|\]/g, '').toUpperCase();
+      let content = '';
+      if (partName === '' || partName === '0') {
+        content = buildRfc5322(msg);
+      } else if (partName === 'HEADER') {
+        content = buildRfc5322Headers(msg);
+      } else if (partName === 'TEXT') {
+        content = msg.bodyText || '';
+      } else if (partName.startsWith('HEADER.FIELDS')) {
+        // BODY[HEADER.FIELDS (FROM TO SUBJECT)] etc. — wir liefern alle Header
+        content = buildRfc5322Headers(msg);
+      } else {
+        content = buildRfc5322(msg);
+      }
+      const bodyKey = bp.peek ? `BODY${bp.part}` : `BODY${bp.part}`;
+      // Beim non-PEEK setzen wir \Seen
+      if (!bp.peek && !msg.flags.includes('\\Seen')) {
+        void prisma.message.update({
+          where: { id: msg.id },
+          data:  { flags: [...msg.flags, '\\Seen'] },
+        }).catch(() => { /* ignore */ });
+      }
+      items.push(`${bodyKey} {${Buffer.byteLength(content, 'utf8')}}\r\n${content}`);
+    }
+    // RFC822 / RFC822.HEADER / RFC822.TEXT (legacy aliases)
+    if (dataItems.has('RFC822')) {
+      const full = buildRfc5322(msg);
+      items.push(`RFC822 {${Buffer.byteLength(full, 'utf8')}}\r\n${full}`);
+    }
+    if (dataItems.has('RFC822.HEADER')) {
+      const hdr = buildRfc5322Headers(msg);
+      items.push(`RFC822.HEADER {${Buffer.byteLength(hdr, 'utf8')}}\r\n${hdr}`);
+    }
+    if (dataItems.has('RFC822.TEXT')) {
+      const txt = msg.bodyText || '';
+      items.push(`RFC822.TEXT {${Buffer.byteLength(txt, 'utf8')}}\r\n${txt}`);
+    }
+
+    // MODSEQ (CONDSTORE)
+    if (dataItems.has('MODSEQ') || session.condstoreEnabled) {
+      items.push(`MODSEQ (${msg.modSeq})`);
+    }
+
+    sendUntagged(session, `${num} FETCH (${items.join(' ')})`);
   }
 
   sendOk(session, tag, 'FETCH completed');
+}
+
+// ─────────────────────────────────────────────
+// FETCH-Helpers (v5.3.5)
+// ─────────────────────────────────────────────
+
+/** RFC 3501 §6.4.5 INTERNALDATE-Format: "01-Jan-2026 12:34:56 +0000" */
+function formatInternalDate(d: Date): string {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mon = months[d.getUTCMonth()] ?? 'Jan';
+  const yyyy = d.getUTCFullYear();
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${dd}-${mon}-${yyyy} ${hh}:${mm}:${ss} +0000`;
+}
+
+/**
+ * Baut einen RFC-5322 / RFC-2822 konformen Mail-Body inkl. Headern.
+ * Wenn HTML vorhanden ist, multipart/alternative; sonst text/plain.
+ */
+function buildRfc5322(msg: {
+  date: Date; subject: string; fromAddr: string; fromName: string;
+  toAddrs: string[]; ccAddrs: string[]; bccAddrs: string[];
+  bodyText: string; bodyHtml: string;
+  messageId: string | null; inReplyTo: string | null; replyTo: string | null;
+}): string {
+  const headers = buildRfc5322Headers(msg);
+  const hasHtml = !!msg.bodyHtml && msg.bodyHtml.length > 0;
+  const hasText = !!msg.bodyText && msg.bodyText.length > 0;
+
+  if (hasHtml && hasText) {
+    // multipart/alternative
+    const boundary = `----=_CoreMail_${Date.now().toString(36)}`;
+    const parts = [
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      msg.bodyText,
+      `--${boundary}`,
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      msg.bodyHtml,
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
+    return `${headers}MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n${parts}`;
+  }
+  if (hasHtml) {
+    return `${headers}MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${msg.bodyHtml}`;
+  }
+  return `${headers}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${msg.bodyText || ''}`;
+}
+
+/** RFC-5322 Header-Block (endet mit \r\n\r\n — Header-Body-Separator NICHT enthalten). */
+function buildRfc5322Headers(msg: {
+  date: Date; subject: string; fromAddr: string; fromName: string;
+  toAddrs: string[]; ccAddrs: string[]; bccAddrs: string[];
+  messageId: string | null; inReplyTo: string | null; replyTo: string | null;
+}): string {
+  const fromHeader = msg.fromName ? `"${msg.fromName}" <${msg.fromAddr}>` : msg.fromAddr;
+  const lines: string[] = [
+    `Date: ${msg.date.toUTCString().replace('GMT', '+0000')}`,
+    `From: ${fromHeader}`,
+    `Subject: ${msg.subject}`,
+  ];
+  if (msg.toAddrs.length > 0)  lines.push(`To: ${msg.toAddrs.join(', ')}`);
+  if (msg.ccAddrs.length > 0)  lines.push(`Cc: ${msg.ccAddrs.join(', ')}`);
+  if (msg.replyTo)             lines.push(`Reply-To: ${msg.replyTo}`);
+  if (msg.messageId)           lines.push(`Message-ID: ${msg.messageId}`);
+  if (msg.inReplyTo)           lines.push(`In-Reply-To: ${msg.inReplyTo}`);
+  return lines.join('\r\n') + '\r\n';
+}
+
+/**
+ * RFC 3501 §7.4.2 BODYSTRUCTURE.
+ * Format für text/plain: ("text" "plain" ("charset" "utf-8") NIL NIL "8bit" SIZE LINES)
+ * Wir liefern ein vereinfachtes single-part text/plain — Mac Mail akzeptiert das,
+ * auch wenn der Body eigentlich HTML enthält (Body[TEXT] liefert dann den Plain-Text-
+ * Anteil).
+ */
+function buildBodyStructure(msg: { bodyText: string; bodyHtml: string; rawSize: number },
+                            _extensible = true): string {
+  const hasHtml = !!msg.bodyHtml && msg.bodyHtml.length > 0;
+  const hasText = !!msg.bodyText && msg.bodyText.length > 0;
+
+  if (hasHtml && hasText) {
+    const textSize  = Buffer.byteLength(msg.bodyText, 'utf8');
+    const textLines = msg.bodyText.split('\n').length;
+    const htmlSize  = Buffer.byteLength(msg.bodyHtml, 'utf8');
+    const htmlLines = msg.bodyHtml.split('\n').length;
+    return `(("text" "plain" ("charset" "utf-8") NIL NIL "8bit" ${textSize} ${textLines})("text" "html" ("charset" "utf-8") NIL NIL "8bit" ${htmlSize} ${htmlLines}) "alternative")`;
+  }
+  if (hasHtml) {
+    const size  = Buffer.byteLength(msg.bodyHtml, 'utf8');
+    const lines = msg.bodyHtml.split('\n').length;
+    return `("text" "html" ("charset" "utf-8") NIL NIL "8bit" ${size} ${lines})`;
+  }
+  const text  = msg.bodyText || '';
+  const size  = Buffer.byteLength(text, 'utf8');
+  const lines = text.split('\n').length;
+  return `("text" "plain" ("charset" "utf-8") NIL NIL "8bit" ${size} ${lines})`;
 }
 
 // ─────────────────────────────────────────────
@@ -997,6 +1171,21 @@ function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
   return [...result];
 }
 
+/**
+ * RFC 3501 §7.4.2 — Envelope-Structure.
+ *
+ * Fields (in order): date, subject, from, sender, reply-to, to, cc, bcc,
+ * in-reply-to, message-id.
+ *
+ * KRITISCH: Address-Listen (from/sender/reply-to/to/cc/bcc) sind ENTWEDER
+ *   - NIL (ohne Klammern!) wenn leer/null
+ *   - (addr1 addr2 …) wenn nicht-leer — Klammern UMGEBEN die Liste
+ *
+ * Vorher v5.3.5 (Bug): `(${replyTo})` lieferte `(NIL)` für leere reply-to.
+ * Mac Mail's ENVELOPE-Parser bricht bei `(NIL)` ab und verwirft den
+ * ganzen FETCH-Response → User sieht 0 Mails im Posteingang obwohl
+ * Server `* 1 EXISTS` annonciert.
+ */
 function buildEnvelope(msg: {
   date: Date;
   subject: string;
@@ -1007,18 +1196,39 @@ function buildEnvelope(msg: {
   messageId: string | null;
   inReplyTo: string | null;
 }): string {
-  const date    = `"${msg.date.toUTCString()}"`;
-  const subject = `"${msg.subject.replace(/"/g, '\\"')}"`;
-  const from    = formatAddr(msg.fromName, msg.fromAddr);
-  const replyTo = msg.replyTo ? formatAddr('', msg.replyTo) : 'NIL';
-  const to      = msg.toAddrs.map((a) => formatAddr('', a)).join(' ');
-  const msgId   = msg.messageId ? `"${msg.messageId}"` : 'NIL';
-  const inReply = msg.inReplyTo ? `"${msg.inReplyTo}"` : 'NIL';
+  // String mit IMAP-Escaping (RFC 3501 §4.3 "quoted")
+  const q = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const date    = q(msg.date.toUTCString());
+  const subject = q(msg.subject);
+  const from    = formatAddrList([{ name: msg.fromName, email: msg.fromAddr }]);
+  const sender  = from;  // wenn nicht explizit gesetzt, sender = from (RFC 5322 §3.6.2)
+  const replyTo = msg.replyTo ? formatAddrList([{ name: '', email: msg.replyTo }]) : 'NIL';
+  const to      = msg.toAddrs.length > 0 ? formatAddrList(msg.toAddrs.map((e) => ({ name: '', email: e }))) : 'NIL';
+  const cc      = 'NIL';
+  const bcc     = 'NIL';
+  const msgId   = msg.messageId ? q(msg.messageId) : 'NIL';
+  const inReply = msg.inReplyTo ? q(msg.inReplyTo) : 'NIL';
 
-  return `(${date} ${subject} (${from}) (${from}) (${replyTo}) (${to}) NIL NIL ${inReply} ${msgId})`;
+  return `(${date} ${subject} ${from} ${sender} ${replyTo} ${to} ${cc} ${bcc} ${inReply} ${msgId})`;
+}
+
+/**
+ * Formatiert eine Liste von Mail-Adressen als IMAP-Address-Struct-List.
+ * Leere Liste → `NIL`. Nicht-leer → `(addr1 addr2 …)` mit umschließenden Klammern.
+ */
+function formatAddrList(addresses: { name: string; email: string }[]): string {
+  if (addresses.length === 0) return 'NIL';
+  const formatted = addresses.map(({ name, email }) => formatAddr(name, email)).join(' ');
+  return `(${formatted})`;
 }
 
 function formatAddr(name: string, email: string): string {
-  const [local, domain] = email.split('@');
-  return `("${name}" NIL "${local}" "${domain}")`;
+  // RFC 3501 §7.4.2 — address structure: (personal source-route mailbox host)
+  // Werte sind nstring (NIL oder "quoted") — niemals leere String-Literals "".
+  const [local = '', domain = ''] = email.split('@');
+  const q = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const personal = name ? q(name) : 'NIL';
+  const mailbox  = local  ? q(local)  : 'NIL';
+  const host     = domain ? q(domain) : 'NIL';
+  return `(${personal} NIL ${mailbox} ${host})`;
 }
