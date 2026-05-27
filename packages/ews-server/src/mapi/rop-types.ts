@@ -105,6 +105,14 @@ export const RopId = {
   RegisterNotification:             0x29,
   Notify:                           0x2A,
 
+  // v5.2.0 — Rules (MS-OXCRULES)
+  GetRulesTable:                    0x3F,
+  UpdateRules:                      0x41,
+
+  // v5.2.0 — Permissions (MS-OXCPERM)
+  GetPermissionsTable:              0x3E,
+  ModifyPermissions:                0x40,
+
   // Sync (MS-OXCFXICS)
   FastTransferSourceGetBuffer:      0x4E,
   FastTransferSourceCopyFolder:     0x4C,

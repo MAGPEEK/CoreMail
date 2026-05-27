@@ -97,6 +97,54 @@ export function writePropertyValue(
       w.writeBuffer(guid);
       return;
     }
+    // v5.2.0: Multi-Value Property Types (MS-OXCDATA §2.11.1.6)
+    case PropType.MultipleInt16: {
+      const arr = Array.isArray(value) ? (value as number[]) : [];
+      w.writeUint16(arr.length);
+      for (const n of arr) w.writeUint16(n & 0xFFFF);
+      return;
+    }
+    case PropType.MultipleInt32: {
+      const arr = Array.isArray(value) ? (value as number[]) : [];
+      w.writeUint16(arr.length);
+      for (const n of arr) w.writeUint32(n >>> 0);
+      return;
+    }
+    case PropType.MultipleString: {
+      const arr = Array.isArray(value) ? (value as string[]) : [];
+      w.writeUint16(arr.length);
+      for (const s of arr) {
+        const bytes = Buffer.from(s, 'utf-8');
+        w.writeBuffer(bytes);
+        w.writeUint8(0);
+      }
+      return;
+    }
+    case PropType.MultipleUnicode: {
+      const arr = Array.isArray(value) ? (value as string[]) : [];
+      w.writeUint16(arr.length);
+      for (const s of arr) w.writeUtf16String(s);
+      return;
+    }
+    case PropType.MultipleSysTime: {
+      const arr = Array.isArray(value) ? (value as Array<Date | bigint>) : [];
+      w.writeUint16(arr.length);
+      for (const v of arr) {
+        const ft = v instanceof Date ? dateToFiletime(v) : (typeof v === 'bigint' ? v : 0n);
+        w.writeUint64(ft);
+      }
+      return;
+    }
+    case PropType.MultipleBinary: {
+      const arr = Array.isArray(value) ? (value as Buffer[]) : [];
+      w.writeUint16(arr.length);
+      for (const b of arr) {
+        const buf = Buffer.isBuffer(b) ? b : Buffer.alloc(0);
+        w.writeUint16(buf.length);
+        w.writeBuffer(buf);
+      }
+      return;
+    }
     default:
       throw new RangeError(`writePropertyValue: PropertyType 0x${propType.toString(16)} not supported`);
   }
@@ -123,6 +171,45 @@ export function readPropertyValue(r: MapiReader, propType: number): unknown {
       return r.readBuffer(len);
     }
     case PropType.ClassId:  return r.readGuid();
+    case PropType.MultipleInt16: {
+      const cnt = r.readUint16();
+      const out: number[] = [];
+      for (let i = 0; i < cnt; i++) out.push(r.readUint16());
+      return out;
+    }
+    case PropType.MultipleInt32: {
+      const cnt = r.readUint16();
+      const out: number[] = [];
+      for (let i = 0; i < cnt; i++) out.push(r.readUint32());
+      return out;
+    }
+    case PropType.MultipleUnicode: {
+      const cnt = r.readUint16();
+      const out: string[] = [];
+      for (let i = 0; i < cnt; i++) out.push(r.readUtf16String());
+      return out;
+    }
+    case PropType.MultipleString: {
+      const cnt = r.readUint16();
+      const out: string[] = [];
+      for (let i = 0; i < cnt; i++) out.push(r.readAsciiString());
+      return out;
+    }
+    case PropType.MultipleSysTime: {
+      const cnt = r.readUint16();
+      const out: Date[] = [];
+      for (let i = 0; i < cnt; i++) out.push(filetimeToDate(r.readUint64()));
+      return out;
+    }
+    case PropType.MultipleBinary: {
+      const cnt = r.readUint16();
+      const out: Buffer[] = [];
+      for (let i = 0; i < cnt; i++) {
+        const len = r.readUint16();
+        out.push(r.readBuffer(len));
+      }
+      return out;
+    }
     default:
       throw new RangeError(`readPropertyValue: PropertyType 0x${propType.toString(16)} not supported`);
   }
