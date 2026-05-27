@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.5.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-5.6.1-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -19,9 +19,13 @@
 
 **🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **SMTP-Submission** + **POP3** + **EWS** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v5.5.0** — IMAP4rev2 (RFC 9051) + STARTTLS + AUTHENTICATE SASL + Mac-Mail-Vollkompatibilität · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v5.6.1** — Verteilergruppen entfernt · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · MAPI-Cleanup (v5.4.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Wichtiger Hinweis (seit v5.4.0)**: MAPI/HTTP wurde aus dem Stack entfernt — Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Verwende **Outlook → „Andere E-Mail-Konten" → IMAP**. Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning).
+>
+> **Hinweis (seit v5.6.0)**: Der OAuth2-Authorization-Server unter `/oauth2/*` wurde komplett entfernt — XOAUTH2 hat in der Praxis keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server. JWT läuft jetzt wieder mit HS256 (`JWT_SECRET`). REST-API + MWA/BCP nutzen Session-JWTs über `/auth/login`, Mail-Clients App-Passwörter.
+>
+> **Hinweis (seit v5.6.1)**: Verteilergruppen wurden entfernt — moderne Teams nutzen Shared Mailboxes (mit Aliasen) für Team-Postfächer oder externe Listserv-Tools (Mailman, listmonk) für reine Outbound-Verteiler.
 
 ---
 
@@ -64,7 +68,6 @@
 | Shared Mailbox-Reader im MWA — „Weiteres Postfach öffnen" über Konto-Dropdown | ✅ |
 | Folder-CRUD in Shared Mailboxes (Neuer Ordner, Umbenennen, Löschen, Standard-Folder geschützt) | ✅ |
 | E-Mail-Aliase pro User-Postfach und Shared-Mailbox | ✅ |
-| Verteilergruppen (statisch & dynamisch via LDAP-Filter) | ✅ |
 | Raum- und Gerätepostfächer mit Auto-Accept | ✅ |
 | Abwesenheitsassistent | ✅ |
 | Posteingangsregeln & Transportregeln + 9 Exchange-Vorlagen (Disclaimer, CEO-Phishing, PCI-DSS, …) | ✅ |
@@ -73,8 +76,7 @@
 | SMTP-Gateway-Modus (Relay zu Upstream-MTA) | ✅ |
 | Aufbewahrungsrichtlinien Exchange-2019-konform (DPT/RPT/Personal Tags · 8 Vorlagen · Recoverable Items) | ✅ |
 | Managed Folder Assistant (Tag-Hierarchie, Soft/Hard Delete, Legal-Hold-aware) | ✅ |
-| Outlook Modern Auth (OAuth2 / PKCE) | ✅ |
-| PowerShell-Remoting (EMS mit 20+ Cmdlets) | ✅ |
+| PowerShell-Remoting (EMS mit 14+ Cmdlets — Mailbox/Domain/TransportRule/ResourceMailbox) | ✅ |
 
 ### Kalender & Zusammenarbeit
 
@@ -122,8 +124,7 @@
 | MFA: TOTP (Authenticator-App) | ✅ |
 | MFA: WebAuthn / FIDO2 (YubiKey, Touch ID) | ✅ |
 | MFA: Backup-Codes | ✅ |
-| App-Passwörter für Mail-Clients | ✅ |
-| OAuth2 Authorization Server (Modern Auth) | ✅ |
+| App-Passwörter für Mail-Clients (IMAP/SMTP/POP3/EAS — MFA-tauglich) | ✅ |
 | Passwort-Änderung im Webclient (MWA) | ✅ |
 
 ### Administration (BCP Admin-Panel)
@@ -589,11 +590,13 @@ docker pull magpeek/coremail-app:3.17.8
 
 ## Versionsverlauf
 
-### v5.x — IMAP4rev2 + RFC-Compliance + MAPI-Cleanup
+### v5.x — IMAP4rev2 + RFC-Compliance + Stack-Slim-down
 
 | Version | Highlights |
 |---------|-----------|
-| **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Doku-Update für MAPI-Removal. OAuth2-Server bleibt für REST-API; XOAUTH2 für Mail-Protokolle **nicht** implementiert (keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server). |
+| **v5.6.1** | **Verteilergruppen (DistributionGroups) komplett entfernt** — selten genutzt, Use-Case besser mit Shared Mailboxes (Team-Postfächer) oder externem Listserv-Tool gelöst. Schema-Drop von 2 Tabellen + Enum, BCP-Page entfernt, EMS-Cmdlets entfernt. |
+| **v5.6.0** | **OAuth2 / Modern Auth komplett aus dem Stack entfernt** (~970 LOC + 4 Prisma-Tabellen). XOAUTH2 hat keine Mainstream-Client-UI für non-Microsoft-Server. JWT zurück auf HS256 (`JWT_SECRET`). Mail-Clients nutzen App-Passwörter, MWA/BCP Session-JWTs. |
+| **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Doku-Update für MAPI-Removal. Entscheidung gegen XOAUTH2 dokumentiert. |
 | **v5.4.0** | **MAPI/HTTP komplett entfernt** (~12.000 LOC). Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Empfehlung: Outlook → „Andere E-Mail-Konten" → IMAP. Kalender/Kontakte via CalDAV/CardDAV. |
 | **v5.3.5** | IMAP FETCH komplett rewritten: ENVELOPE-Bug fixed (NIL-Listen RFC 3501 §7.4.2), echte BODYSTRUCTURE statt BODY[TEXT], INTERNALDATE, BODY[]/BODY[HEADER]/BODY.PEEK[*]/RFC822-Varianten |
 | **v5.3.1** | IMAP vollständige Command-Suite: CREATE, DELETE, RENAME, APPEND, COPY, UID COPY, MOVE, UID MOVE, SEARCH, UID SEARCH, CLOSE, CHECK. UID-Compound-Dispatcher-Bug fixed. POP3 App-Password + Byte-Stuffing fix. |

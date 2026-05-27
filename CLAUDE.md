@@ -13,15 +13,17 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `5.5.0` (IMAP4rev2 RFC 9051 + RFC-Compliance-Audit + MAPI komplett entfernt seit v5.4.0)
+**Aktuelle Version**: `5.6.1` (Verteilergruppen entfernt + OAuth2-Server entfernt v5.6.0 + IMAP4rev2 v5.5.0 + MAPI raus v5.4.0)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
 ## Architektur-Entscheidungen (v5.4.0+)
 
-- **MAPI/HTTP komplett entfernt**: Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Custom-ADFS-Emulation wäre 3-4 Wochen Aufwand ohne Erfolgs-Garantie. Empfohlener Outlook-Client: „Andere E-Mail-Konten" → IMAP.
-- **OAuth2-Server bleibt** unter `/oauth2/*` für REST-API + Web-App-Integration. **XOAUTH2 SASL NICHT** auf IMAP/SMTP/POP3 implementiert: Apple Mail / Outlook LTSC / eM Client bieten keine UI für custom OAuth-Server. App-Passwörter sind der praktische MFA-Bypass.
+- **MAPI/HTTP komplett entfernt (v5.4.0)**: Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Custom-ADFS-Emulation wäre 3-4 Wochen Aufwand ohne Erfolgs-Garantie. Empfohlener Outlook-Client: „Andere E-Mail-Konten" → IMAP.
+- **OAuth2-Server komplett entfernt (v5.6.0)**: war unter `/oauth2/*` (Authorization-Server für externe Apps). Da XOAUTH2 SASL keine Mainstream-Client-UI-Unterstützung hat (Apple Mail / Outlook LTSC / eM Client bieten keine UI für custom OAuth-Server), war der Server in der Praxis ohne realen Use-Case. JWT zurück auf **HS256** (`JWT_SECRET`). MWA + BCP nutzen Session-JWTs über `/auth/login`, Mail-Clients App-Passwörter.
+- **Verteilergruppen komplett entfernt (v5.6.1)**: DistributionGroups + DistributionGroupMember Models gelöscht. Use-Case besser via Shared Mailboxes (Team-Postfach) oder externem Listserv (Mailman, listmonk). Reduziert Code-Komplexität + 1 BCP-Page weniger zu pflegen.
 - **IMAP4rev2** (RFC 9051) compliance: STARTTLS, AUTHENTICATE SASL (PLAIN+LOGIN), UNSELECT, ID, MOVE, UIDPLUS, STATUS=SIZE.
+- **SSO via externe IdPs** (auth-sso package, Azure AD/Keycloak/Authentik) **bleibt erhalten** — das ist OIDC-Client-Funktionalität (CoreMail loggt User über externen IdP ein), NICHT zu verwechseln mit dem entfernten OAuth2-Authorization-Server.
 
 ---
 
@@ -193,7 +195,7 @@ pnpm --filter @coremail/storage exec prisma generate
 - `UserCertificate` — S/MIME Zertifikate (Fingerprint, MinIO-Pfad)
 
 **Phase-7-Modelle**:
-- `DistributionGroup` / `DistributionGroupMember` — Verteilergruppen (statisch + dynamisch)
+- ~~`DistributionGroup` / `DistributionGroupMember`~~ — komplett entfernt in v5.6.1
 - `ResourceMailbox` / `ResourceCalendar` / `ResourceBooking` — Raum-/Ressourcenpostfächer
 - ~~`PublicFolder` / `PublicFolderMessage`~~ — komplett entfernt in v3.18.31
 
@@ -212,9 +214,7 @@ pnpm --filter @coremail/storage exec prisma generate
 **Phase-10-Modelle**:
 - `AuditLog` — Admin-Aktionen (actorId, actorEmail, action, targetType, targetId, targetName, ipAddress, userAgent, changes, success, errorMsg)
 - `PushSubscription` — VAPID Web Push Subscriptions (userId, endpoint, p256dhKey, authKey, topics[], userAgent)
-- `OAuthClient` — OAuth2-Clients (clientId, clientSecret bcrypt, redirectUris, allowedScopes, trusted)
-- `OAuthAuthorizationCode` — Authorization Codes (PKCE S256, expiresAt, used)
-- `OAuthToken` — Access + Refresh Tokens (accessToken, refreshToken, revoked, expiresAt, refreshExpiresAt)
+- ~~`OAuthClient` / `OAuthAuthorizationCode` / `OAuthToken` / `OAuthConsent`~~ — komplett entfernt in v5.6.0 (OAuth2-Server raus)
 - `GatewaySettings` — SMTP-Gateway-Konfiguration (Singleton id="singleton": enabled, upstreamHost/Port/Tls, relayDomains[], filterBeforeRelay)
 
 ---
@@ -316,16 +316,16 @@ Alle Endpunkte hinter nginx auf Port 443:
 /admin/domains/           adminDomainsRouter
 /admin/queues/            adminQueuesRouter
 /admin/logs/              adminLogsRouter
-/admin/groups/            adminGroupsRouter         Verteilergruppen
+# /admin/groups/ → komplett entfernt in v5.6.1 (Verteilergruppen raus)
 /admin/resources/         adminResourcesRouter      Raum-/Ressourcenpostfächer
 # /admin/public-folders/ → komplett entfernt in v3.18.31
 # /admin/ediscovery/ → komplett entfernt in v3.18.5
-/admin/ems/               adminEmsRouter            EMS REST-Bridge (20+ Cmdlets)
+/admin/ems/               adminEmsRouter            EMS REST-Bridge (14+ Cmdlets)
 /admin/compliance/journaling/ adminJournalingRouter Journaling-Regeln
 /admin/compliance/retention/  adminRetentionRouter  Aufbewahrungsrichtlinien
 /push/                    pushRouter                VAPID Web Push
 /admin/audit-log/         adminAuditLogRouter       Audit-Log
-/admin/oauth/             adminOAuthClientsRouter   OAuth2-Clients
+# /admin/oauth/ → komplett entfernt in v5.6.0 (OAuth2-Server raus)
 /admin/gateway/           adminGatewayRouter        SMTP-Gateway-Modus
 /changelog                inline (server.ts)        Changelog-API
 /events                   SSE Live-Events
@@ -540,7 +540,19 @@ SMTP Verbindung
 
 - **BullMQ Queue-Namen**: Kein `:` erlaubt (BullMQ v5) — Queue heißt `'smtp-outbound'` (mit Bindestrich), NICHT `'smtp:outbound'`. Producer (api-gateway/routes/mail.ts) und Consumer (smtp-server/outbound/queue.ts) müssen identische Namen haben.
 
-## Aktuelle Version 5.2.0 — Highlights (MAPI/HTTP FINAL)
+## Aktuelle Version 5.6.1 — Highlights (Stack-Slim-down)
+
+**v5.6.1** — Verteilergruppen (DistributionGroups) komplett entfernt. User-Entscheidung: „Entferne auch Verteilergruppen". In der Praxis selten genutzt — moderne Teams nutzen Shared Mailboxes (`/admin/shared-mailboxes/`) mit Aliasen für Team-Postfächer oder externe Listserv-Tools (Mailman, listmonk) für reine Outbound-Verteiler. Reduziert Code-Komplexität und einen Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery), v3.18.31 (Public Folders), v3.18.33 (ExternalMailContacts), v5.4.0 (MAPI), v5.6.0 (OAuth2). **Schema (DESTRUCTIVE — Tabellen werden via `prisma db push --accept-data-loss` beim Container-Start gedroppt)**: `DistributionGroup` + `DistributionGroupMember` Models gelöscht, enum `GroupType { STATIC, DYNAMIC }` entfernt, `Domain.distributionGroups` Relation entfernt. **Frontend (BCP)**: `/groups/` Page (`GroupsPage.tsx`) gelöscht, Sidebar-Eintrag + Users-Icon-Import entfernt, Route + i18n-Keys (`nav_groups` DE+EN) entfernt, `OrganisationPage` GAL-Section ohne „Verteilergruppen"-Spalte, `SmtpConfigPage` Lokale-Zustellung-Hinweis ohne „Verteilergruppen werden aufgelöst". **Backend (api-gateway)**: `routes/admin/groups.ts` gelöscht, Mount `/api/v1/admin/groups` entfernt, EMS REST-Bridge (`routes/admin/ems.ts`) — alle 7 DistributionGroup-Endpoints + `formatGroup()` Helper entfernt (~150 LOC), 7 Cmdlet-Routes (Get-/New-/Set-/Remove-DistributionGroup + *DistributionGroupMember) entfernt, PowerShell Remoting (`routes/powershell.ts`) — 6 Cmdlets aus SUPPORTED_CMDLETS entfernt, GAL-Endpoint (`routes/contacts.ts`) ohne DistributionGroup-Quelle (GROUP-Kind aus GalEntry-Type entfernt), Dashboard (`routes/admin/dashboard.ts`) `distributionGroup.count()` → 0, Organisation (`routes/admin/organisation.ts`) `groups`-Array bleibt leer. **Backend (smtp-server)**: `handlers/expand.ts` komplett rewritten — `expandRecipients()` löst nur noch EmailAliase auf, Cycle-Protection bleibt; `inbound/handler.ts` `verifyRecipient()` Promise.all ohne DistributionGroup-Lookup, eingehende Mails an ehemalige Gruppen-Adressen werden mit 550 5.1.1 abgewiesen. **Migrations-Hinweis**: bestehende DistributionGroups + Mitgliedschaften gehen mit dem Upgrade unwiderruflich verloren — Use-Cases: Team-Inbox → Shared Mailbox + Permissions, reiner Verteiler → externer Listserv (Mailman/listmonk) oder Empfängerliste direkt im Client.
+
+**v5.6.0** — OAuth2 / Modern Auth komplett aus dem Stack entfernt (Major Release). User-Entscheidung: „Entfernen und aus Code entfernen bcp OAuth2 / Modern Auth". Nach MAPI-Removal in v5.4.0 + IMAP-OAuth-Decision in v5.5.0 hat OAuth2 keinen praktischen Use-Case mehr im Stack: Mail-Clients nutzen IMAP/SMTP/POP3 mit App-Passwörtern (MFA-tauglich), MWA + BCP nutzen Session-JWTs über `/auth/login`. Komplette OAuth2-Codebase war toter Ballast. **Frontend**: BCP `/oauth-clients/` Page (`OAuthClientsPage.tsx`) + Sidebar-Eintrag + i18n-Keys + Route entfernt, MWA `/oauth-consent/` Page (`OAuthConsentPage.tsx`) + Route + LoginPage OAuth2-Flow-Detection entfernt. **Backend**: `packages/auth-service/src/oauth2/` komplettes Verzeichnis gelöscht (Router + ~970 LOC), `packages/api-gateway/src/routes/admin/oauth-clients.ts` gelöscht, api-gateway `/oauth2/*` Proxy + `/api/v1/admin/oauth/*` Mount + `/.well-known/openid-configuration` + `/.well-known/jwks.json` Handler entfernt, auth-service `/oauth2` Mount entfernt, ews-server middleware Bearer-Branch komplett entfernt (nur noch Basic-Auth — Audience-Validation, OAuth-Token-Revocation-Check raus). **JWT zurück auf HS256**: `packages/core/src/auth/jwt-keys.ts` gelöscht (RS256-Key-Management war nur für JWKS), `packages/core/src/auth/jwt.ts` rewritten zurück auf HS256 mit `JWT_SECRET` env-Var (wie pre-v5.2.17), `initJwtKeys()` aus api-gateway/auth-service/ews-server/backup-service/caldav-server Startup entfernt. **Prisma Schema (DESTRUCTIVE)**: 4 Models gelöscht — `OAuthClient`, `OAuthAuthorizationCode`, `OAuthToken`, `OAuthConsent` (Tabellen werden via `prisma db push --accept-data-loss` beim Container-Start gedroppt). **WICHTIG**: SSO via externe IdPs (auth-sso package, Azure AD/Keycloak/Authentik) **bleibt erhalten** — das ist OIDC-Client-Funktionalität (CoreMail loggt User über externen IdP ein), NICHT zu verwechseln mit dem entfernten OAuth2-Authorization-Server.
+
+## Archivierte Highlights (v5.5.0–v5.2.0)
+
+**v5.5.0** — IMAP4rev2 (RFC 9051) Compliance + Doku-Update + XOAUTH2-Decision. STARTTLS, AUTHENTICATE SASL (PLAIN+LOGIN), UNSELECT, ID-Command. Doku-Update für MAPI-Removal. Entscheidung gegen XOAUTH2 dokumentiert (keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server).
+
+**v5.4.0** — MAPI/HTTP komplett aus dem Stack entfernt (~12.000 LOC). Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert (Custom-ADFS-Emulation = 3-4 Wochen Aufwand ohne Erfolgs-Garantie). Empfohlener Outlook-Client: „Andere E-Mail-Konten" → IMAP. Kalender + Kontakte via CalDAV/CardDAV.
+
+## Aktuelle Version 5.2.0 — Highlights (MAPI/HTTP FINAL — archiviert, raus seit v5.4.0)
 
 **v5.2.0** — Abschluss der MAPI/HTTP-Implementation. Bündelt alle ursprünglich geplanten v5.2/v5.3/v5.4/v5.5-Features in eine finale Release: Cached Mode (MS-OXCFXICS Sync), Recurrence Pattern Binary, Search Folders, Server-Side-Rules-Bridge, Folder-Permissions-Stubs, Embedded Messages, Multi-Value Properties, RTF-Compression, gzip-Transport-Compression. Markiert MAPI/HTTP als feature-complete für typische Outlook-Workflows. (1) **MS-OXCFXICS Sync (rop/sync.ts)** — Cached Mode für Outlook (Default ab 2007). RopSyncConfigure liefert FastTransfer-Source-Handle. RopFastTransferSourceGetBuffer streamt ICS-Records (StartMessage 0x40000003 + TaggedProperties + EndMessage 0x40000004) chunk-weise (max 28KB pro Chunk, TransferStatus 1=Partial/3=Done). Implementiert: SyncConfigure, FastTransferSourceCopyFolder/Messages/Properties/GetBuffer, FastTransferDestinationConfigure/PutBuffer, SyncImportMessageChange/HierarchyChange/Deletes/MessageMove, SyncUploadStateStreamBegin/Continue/End, SyncOpenCollector, GetLocalReplicaIds, SyncGetTransferState. Initial-Sync schlägt durch, Delta-Sync degraded-aber-stable. (2) **Recurrence Pattern Binary (recurrence-pattern.ts)** — encodeRecurrencePattern(rrule, dtStart, dtEnd) parst iCal RRULE und konvertiert in PidLidAppointmentRecur Binary (MS-OXOCAL §2.2.1.44). Unterstützt FREQ=DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL, BYDAY (Mo-So Bitmask), BYMONTHDAY, BYMONTH, COUNT, UNTIL. Outlook zeigt jetzt korrekte Recurrence-Pattern im Termin-Editor. (3) **PR_RTF_COMPRESSED Stream (rtf-compress.ts)** — htmlOrTextToRtfCompressed() wrappt HTML/Text in MELA-uncompressed RTF-Format (MS-OXRTFCP), Outlook akzeptiert ohne CRC. Plus LZ77-Decoder für künftige Outlook→Server-RTF-Bodies. OpenStream auf PR_RTF_COMPRESSED (0x10090102) jetzt funktional. (4) **gzip Transport-Compression** — X-CompressedRequest:1 Header triggert transparente gunzip-Decompression vor dem Handler. Spart Bandwidth bei großen ROP-Streams (typisch 60-70% Reduktion). Middleware in handler.ts. (5) **Multi-Value Properties** — property-codec erweitert um PT_MV_INT16/INT32/STRING/UNICODE/SYSTIME/BINARY (MS-OXCDATA §2.11.1.6). Read+Write. Outlook nutzt Multi-Value für PR_RECEIVED_BY_ADDRTYPE_LIST und PT_MV_BINARY-Encoded-RowSets. (6) **RopOpenEmbeddedMessage (v52-handlers.ts)** — Mail-als-Attachment-weiterleiten. Erzeugt sub-message-Handle auf einem Attachment, Outlook kann dann das eingebettete IPM.Note via OpenStream lesen. (7) **Search Folders** — RopGetSearchCriteria + RopSetSearchCriteria mit minimaler Persistierung (kein Crash bei Outlook „gespeicherte Suche"-Workflow). (8) **Server-Side-Rules-Bridge** — RopGetRulesTable liefert leere Table, RopUpdateRules akzeptiert mit SUCCESS. Outlook-Rules bleiben client-local (CoreMail MailRules werden über MWA verwaltet, server-seitig in storeInboundMessage angewendet). (9) **Folder-Permissions** — RopGetPermissionsTable + RopModifyPermissions Stubs (Outlook-Berechtigungs-Dialog crasht nicht mehr — ACL-Verwaltung bleibt im BCP). (10) **Misc Message ROPs** — RopAbortSubmit, RopReloadCachedInformation (Outlook-Cached-Refresh), RopGetMessageStatus/SetMessageStatus für Read-Tracking. (11) **NSPI Pagination + SortTable (nspi-handler.ts)** — QueryRows mit Cursor-Pagination via StartMid + RowCount aus Request-Body, alphabetische Sortierung nach displayName (Locale 'de'), Hard-Limit auf 1000 statt 500. (12) **Codec + Dispatcher** — alle neuen ROPs (28 zusätzlich) verdrahtet, korrekte Payload-Parsing-Branches inkl. variable-Length-Handling. **Outlook-Verhalten nach v5.2.0**: Cached Mode funktioniert (.ost-Datei wird initial gefüllt, Outlook ist offline-fähig), Recurring-Termine zeigen Wiederholungs-Muster, Embedded-Mails öffnen sich, „Suchordner"-Klick crasht nicht mehr, Rules-Dialog kann geöffnet werden (lokal gespeichert), Permissions-Dialog read-only ohne Fehler, RTF-Mails werden korrekt formatiert angezeigt, große GAL (>500 Einträge) wird vollständig paginiert. **MAPI/HTTP-Roadmap-Abschluss**: v4.0 (Foundation) → v4.7 (Phase 7) → v5.0 (GA + default-on) → v5.1 (Named Props + PIM-Details + Native NSPI) → v5.2 (FINAL — Cached Mode + Recurrence + Misc). Aufwand: ~12.000 Zeilen MAPI-Code in einem zusammenhängenden Sprint statt 6-9 Monaten geschätzter Wochenarbeit. Optional offen für v5.3+: volle ICS-OPCODE-Records (Delta-Sync), DAV-ACL-Mapping auf MAPI-Permissions, RTF→HTML-Conversion via LZ77-Decoder.
 
@@ -788,4 +800,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-27 (v5.2.0 — MAPI/HTTP FINAL: Cached Mode + Recurrence + Multi-Value + gzip + RTF + Embedded; v5.1.0 — Named Props + PIM Details; v5.0.0 — Production GA; v4.0→v4.7 — Phasen 1-7 + Foundation)*
+*Letzte Aktualisierung: 2026-05-27 (v5.6.1 — Verteilergruppen entfernt; v5.6.0 — OAuth2 / Modern Auth entfernt; v5.5.0 — IMAP4rev2 Compliance; v5.4.0 — MAPI komplett raus)*
