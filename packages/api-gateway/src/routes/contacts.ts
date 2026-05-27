@@ -57,23 +57,13 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
       select: { id: true, email: true, displayName: true },
       take: 30,
     }),
-    prisma.distributionGroup.findMany({
-      where: {
-        active: true,
-        hiddenFromGal: false,
-        OR: [
-          { email:       { contains: q, mode: 'insensitive' } },
-          { displayName: { contains: q, mode: 'insensitive' } },
-        ],
-      },
-      select: { id: true, email: true, displayName: true },
-      take: 20,
-    }),
+    // v5.6.1: DistributionGroup-Suche entfernt
+    Promise.resolve([] as Array<{ id: string; email: string; displayName: string }>),
   ]);
 
-  // Vereintes Format (`isGroup` markiert Verteilergruppen). Dedup über E-Mail.
+  // Vereintes Format. Dedup über E-Mail.
   const seen = new Set<string>(privateContacts.map((c) => c.email.toLowerCase()));
-  const merged: Array<{ id: string; displayName: string; email: string; company?: string; isGroup?: boolean }> = [
+  const merged: Array<{ id: string; displayName: string; email: string; company?: string }> = [
     ...privateContacts,
   ];
   for (const u of galUsers) {
@@ -82,12 +72,8 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     seen.add(key);
     merged.push({ id: `gal-${u.id}`, displayName: u.displayName ?? u.email, email: u.email });
   }
-  for (const g of distGroups) {
-    const key = g.email.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push({ id: `grp-${g.id}`, displayName: g.displayName, email: g.email, isGroup: true });
-  }
+  // distGroups-Loop entfernt
+  void distGroups;
   res.json(merged.slice(0, 50));
 });
 
@@ -192,35 +178,20 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
       })
     : Promise.resolve([]);
 
-  const groupsPromise = (type === 'all' || type === 'groups')
-    ? prisma.distributionGroup.findMany({
-        where: {
-          active: true,
-          hiddenFromGal: false,
-          ...(searchWhere ? {
-            OR: [
-              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
-              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
-              { description: { contains: searchWhere, mode: 'insensitive' as const } },
-            ],
-          } : {}),
-        },
-        orderBy: [{ displayName: 'asc' }],
-        include: { _count: { select: { members: true } } },
-      })
-    : Promise.resolve([]);
+  // v5.6.1: DistributionGroup-GAL-Suche entfernt
+  const groupsPromise: Promise<Array<never>> = Promise.resolve([]);
 
   const [users, groups] = await Promise.all([userPromise, groupsPromise]);
+  void groups;
 
   // Vereintes Format mit `kind` und `id`-Prefix als Stabilizer
   type GalEntry = {
     id: string;
-    kind: 'USER' | 'GROUP';
+    kind: 'USER';
     email: string;
     displayName: string;
     subtitle?: string;
     domain?: string;
-    memberCount?: number;
   };
   const entries: GalEntry[] = [
     ...users.map((u): GalEntry => ({
@@ -229,14 +200,6 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
       email:       u.email,
       displayName: u.displayName ?? u.email,
       ...(u.domain?.name ? { domain: u.domain.name } : {}),
-    })),
-    ...groups.map((g): GalEntry => ({
-      id:          `grp-${g.id}`,
-      kind:        'GROUP',
-      email:       g.email,
-      displayName: g.displayName,
-      memberCount: g._count.members,
-      ...(g.description ? { subtitle: g.description } : {}),
     })),
   ];
 

@@ -113,8 +113,8 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       prisma.message.count({ where: { deletedAt: null, date: { gte: sevenDaysAgo } } }),
       prisma.message.count({ where: { deletedAt: null, date: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } } }),
 
-      // Gruppen + Shared Mailboxes
-      prisma.distributionGroup.count().catch(() => 0),
+      // v5.6.1: distributionGroup.count entfernt → liefert immer 0
+      Promise.resolve(0),
       prisma.sharedMailbox.count().catch(() => 0),
 
       // Letzte 10 Fehler- und Warn-Logs
