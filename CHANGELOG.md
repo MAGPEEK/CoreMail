@@ -13,6 +13,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.13] — 2026-05-27 — Audit-Log: 5 neue Übersetzungen
+
+### Fixed
+
+- **Audit-Log-Einträge `certificates.letsencrypt.post` und
+  `smtp-config.settings.put` blieben technisch und unverständlich.**
+
+  Neue Mappings in `packages/admin-panel/src/pages/AuditLogPage.tsx`:
+
+  | Action-String                          | Anzeige                                |
+  |----------------------------------------|----------------------------------------|
+  | `certificates.letsencrypt.post`        | Let's Encrypt Zertifikat angefordert   |
+  | `letsencrypt.post` (Legacy, pre-v3.18.34) | Let's Encrypt Zertifikat angefordert |
+  | `smtp-config.settings.get`             | SMTP-Outbound-Konfiguration abgerufen  |
+  | `smtp-config.settings.put`             | SMTP-Outbound-Konfiguration geändert   |
+  | `smtp-config.test-smarthost.post`      | Smarthost-Verbindung getestet          |
+
+---
+
 ## [5.2.12] — 2026-05-27 — Setup-Loop nach erfolgreichem Abschluss behoben
 
 ### Fixed
