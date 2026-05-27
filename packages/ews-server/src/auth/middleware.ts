@@ -58,6 +58,17 @@ export async function ewsAuthMiddleware(
     }
   }
 
+  // v5.2.2: Outlook 2019+/365 sendet bei "Negotiate, NTLM, Basic" zuerst
+  // Negotiate (Kerberos/SPNEGO). Wir implementieren das nicht — explizit
+  // 401 zurück mit nur Basic-Schema im Header, damit Outlook sofort auf
+  // Basic-Auth wechselt statt auf Endlos-Negotiate-Loop.
+  if (authHeader.startsWith('Negotiate ') || authHeader.startsWith('NTLM ')) {
+    log.debug({ scheme: authHeader.split(' ')[0] }, 'EWS: rejecting Negotiate/NTLM → Basic only');
+    res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
+    res.status(401).send('Unauthorized');
+    return;
+  }
+
   // Basic Auth (Outlook MAPI/HTTP + EWS legacy)
   //
   // v5.2.1 BUGFIX: Wir umgehen den /auth/login-Endpoint des auth-service
@@ -136,7 +147,13 @@ export async function ewsAuthMiddleware(
   }
 
   log.warn({ ip: req.ip, hasAuth: !!authHeader, authType: authHeader.split(' ')[0] }, 'EWS: unauthorized request');
-  res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
+  // v5.2.2: Mehrere Auth-Schemes anbieten — moderne Outlook-Builds (2019+/365)
+  // blockieren Basic wenn es das einzige Scheme ist. Mit Negotiate/NTLM in der
+  // Liste fällt Outlook gracefully auf Basic zurück, wenn die anderen Schemes
+  // fehlschlagen. Wir implementieren weder Negotiate noch NTLM — durch das
+  // Listen wird Outlook lediglich davon überzeugt, dass das Senden von
+  // Credentials erlaubt ist.
+  res.set('WWW-Authenticate', 'Negotiate, NTLM, Basic realm="CoreMail EWS"');
   res.status(401).send('Unauthorized');
 }
 
