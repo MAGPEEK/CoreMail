@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
+import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
@@ -158,29 +158,22 @@ function certMatchesHostname(certPem: string, expectedHostname: string): boolean
 
 async function refreshTlsConfig(): Promise<void> {
   try {
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { tlsCert: true, tlsKey: true },
-    });
+    // v5.2.8: Cert direkt aus der certificates-Tabelle via services[]-Array
+    // anhand des Service-Namens (hier: 'SMTP'). Fallback auf legacy
+    // ServerSettings.tlsCert für Pre-v5.2.8-Setups.
+    const found = await loadProtocolCert('SMTP');
 
-    if (settings?.tlsCert && settings?.tlsKey) {
-      const isSelfSigned = isCertSelfSigned(settings.tlsCert);
-      // v5.2.8-Fix: Bisher wurde ein bestehendes self-signed Cert mit
-      // hostname-mismatch automatisch regeneriert. Problem: certMatchesHostname()
-      // war fragil (Regex erwartete Komma-Separator, Node 20+ X509Certificate.subject
-      // nutzt aber Newlines) → false-positive Mismatch → smtp-server überschrieb
-      // bei JEDEM Restart das gerade per BCP aktivierte LE-Cert. Konsequenz:
-      // Outlook + IMAP-Clients sahen permanent self-signed Cert.
-      //
-      // Neue Logik: Cert NIEMALS automatisch beim Refresh überschreiben — der
-      // BCP-Workflow `activate-protocol` ist der einzige autorisierte Schreibpfad.
-      // Hostname-Mismatch wird nur noch geloggt (admin-action erforderlich).
-      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
+    if (found) {
+      const isSelfSigned = isCertSelfSigned(found.certPem);
+      _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
       _tlsCertSelfSigned = isSelfSigned;
-      if (isSelfSigned && !certMatchesHostname(settings.tlsCert, _hostname)) {
-        log.warn({ hostname: _hostname }, 'Self-signed cert subject != publicHostname — admin sollte im BCP ein passendes Cert aktivieren');
+      if (isSelfSigned && !certMatchesHostname(found.certPem, _hostname)) {
+        log.warn({ hostname: _hostname }, 'SMTP self-signed cert subject != publicHostname — admin sollte im BCP ein passendes Cert aktivieren');
       }
-      log.debug({ selfSigned: _tlsCertSelfSigned, hostname: _hostname, certLen: settings.tlsCert.length }, 'SMTP TLS cert loaded from DB');
+      log.info({
+        selfSigned: _tlsCertSelfSigned, hostname: _hostname,
+        source: found.source, certName: found.certName, certId: found.certId,
+      }, 'SMTP TLS cert loaded');
       return;
     }
 

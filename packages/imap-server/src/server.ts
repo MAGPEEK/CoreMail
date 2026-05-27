@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma } from '@coremail/storage';
+import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, type ImapTlsConfig } from './server/index.js';
 
 const log = createLogger('imap:main');
@@ -32,26 +32,32 @@ async function refreshHostname(): Promise<void> {
 
 async function refreshTlsConfig(): Promise<void> {
   try {
+    // v5.2.8: Cert direkt aus certificates-Tabelle via services[]='IMAP'
+    const found = await loadProtocolCert('IMAP');
+
+    if (found) {
+      _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
+      log.info({ source: found.source, certName: found.certName, certId: found.certId }, 'IMAP TLS cert loaded');
+      return;
+    }
+
+    // Kein passendes Cert in DB → self-signed Fallback (nur beim allerersten Start sinnvoll)
     const settings = await prisma.serverSettings.findUnique({
       where:  { id: 'singleton' },
-      select: { tlsCert: true, tlsKey: true, publicHostname: true },
+      select: { publicHostname: true },
     });
-    if (settings?.tlsCert && settings?.tlsKey) {
-      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
-      log.debug('IMAP TLS cert loaded from DB');
-    } else {
-      // Generiert SMTP-Server normalerweise zuerst — aber als Fallback hier auch
-      const hostname = settings?.publicHostname ?? 'mail.localhost';
-      log.info({ hostname }, 'No TLS cert in DB — generating self-signed certificate for IMAP');
-      const { certPem, keyPem } = generateSelfSignedCert(hostname);
-      _tlsConfig = tlsPemToBuffers(certPem, keyPem);
-      await prisma.serverSettings.upsert({
-        where:  { id: 'singleton' },
-        create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
-        update: { tlsCert: certPem, tlsKey: keyPem },
-      });
-      log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
-    }
+    const hostname = settings?.publicHostname ?? 'mail.localhost';
+    log.info({ hostname }, 'No protocol cert in DB — generating self-signed certificate for IMAP');
+    const { certPem, keyPem } = generateSelfSignedCert(hostname);
+    _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+    // Self-signed in ServerSettings.tlsCert speichern als Fallback für andere Services
+    // beim erstmaligen Setup. activate-protocol überschreibt das später.
+    await prisma.serverSettings.upsert({
+      where:  { id: 'singleton' },
+      create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
+      update: { tlsCert: certPem, tlsKey: keyPem },
+    });
+    log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
   } catch (err) {
     log.error({ err }, 'Failed to load/generate IMAP TLS config — port 993 will use plaintext');
   }

@@ -2,7 +2,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
-import { prisma } from '@coremail/storage';
+import { prisma, loadProtocolCert } from '@coremail/storage';
 import { POP3Session, setPop3Hostname } from './session.js';
 
 const log = createLogger('pop3-server');
@@ -34,25 +34,29 @@ async function refreshHostname(): Promise<void> {
 
 async function refreshTlsConfig(): Promise<void> {
   try {
+    // v5.2.8: Cert direkt aus certificates-Tabelle via services[]='POP3'
+    const found = await loadProtocolCert('POP3');
+
+    if (found) {
+      _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
+      log.info({ source: found.source, certName: found.certName, certId: found.certId }, 'POP3 TLS cert loaded');
+      return;
+    }
+
     const settings = await prisma.serverSettings.findUnique({
       where:  { id: 'singleton' },
-      select: { tlsCert: true, tlsKey: true, publicHostname: true },
+      select: { publicHostname: true },
     });
-    if (settings?.tlsCert && settings?.tlsKey) {
-      _tlsConfig = tlsPemToBuffers(settings.tlsCert, settings.tlsKey);
-      log.debug('POP3 TLS cert loaded from DB');
-    } else {
-      const hostname = settings?.publicHostname ?? 'mail.localhost';
-      log.info({ hostname }, 'No TLS cert in DB — generating self-signed certificate for POP3');
-      const { certPem, keyPem } = generateSelfSignedCert(hostname);
-      _tlsConfig = tlsPemToBuffers(certPem, keyPem);
-      await prisma.serverSettings.upsert({
-        where:  { id: 'singleton' },
-        create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
-        update: { tlsCert: certPem, tlsKey: keyPem },
-      });
-      log.info('Self-signed TLS certificate generated and stored in DB (POP3)');
-    }
+    const hostname = settings?.publicHostname ?? 'mail.localhost';
+    log.info({ hostname }, 'No protocol cert in DB — generating self-signed certificate for POP3');
+    const { certPem, keyPem } = generateSelfSignedCert(hostname);
+    _tlsConfig = tlsPemToBuffers(certPem, keyPem);
+    await prisma.serverSettings.upsert({
+      where:  { id: 'singleton' },
+      create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
+      update: { tlsCert: certPem, tlsKey: keyPem },
+    });
+    log.info('Self-signed TLS certificate generated and stored in DB (POP3)');
   } catch (err) {
     log.error({ err }, 'Failed to load/generate POP3 TLS config — port 995 will use plaintext');
   }
