@@ -3,7 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { connectDatabase, prisma } from '@coremail/storage';
-import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, initJwtKeys, getPublicJwk } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
 import {
@@ -103,6 +103,47 @@ app.use(suspiciousInputGuard);
 // 4. Globales Rate-Limiting — pro IP, Loopback ausgenommen
 app.use(generalRateLimit);
 
+// ── Well-Known: OIDC Discovery + JWKS (v5.3.0 Modern Auth) ───────────────────
+// Outlook 2024 LTSC und andere OIDC-Clients erwarten den Discovery-Endpoint
+// am Root: /.well-known/openid-configuration und /.well-known/jwks.json.
+app.get('/.well-known/openid-configuration', async (_req, res) => {
+  const settings = await prisma.serverSettings.findUnique({
+    where:  { id: 'singleton' },
+    select: { publicHostname: true, useHttps: true, httpPort: true },
+  });
+  const hostname = settings?.publicHostname ?? 'mail.localhost';
+  const scheme = settings?.useHttps !== false ? 'https' : 'http';
+  const port = settings?.httpPort ?? 443;
+  const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
+  const base = `${scheme}://${hostname}${portSuffix}`;
+  res.json({
+    issuer:                              base,
+    authorization_endpoint:              `${base}/oauth2/authorize`,
+    token_endpoint:                      `${base}/oauth2/token`,
+    userinfo_endpoint:                   `${base}/oauth2/userinfo`,
+    jwks_uri:                            `${base}/.well-known/jwks.json`,
+    revocation_endpoint:                 `${base}/oauth2/token/revoke`,
+    introspection_endpoint:              `${base}/oauth2/token/introspect`,
+    response_types_supported:            ['code'],
+    grant_types_supported:               ['authorization_code', 'refresh_token', 'password', 'client_credentials'],
+    subject_types_supported:             ['public'],
+    id_token_signing_alg_values_supported: ['RS256'],
+    scopes_supported:                    ['openid', 'profile', 'email', 'mail', 'calendar', 'contacts', 'ews', 'EWS.AccessAsUser.All', 'Mail.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'Contacts.ReadWrite', 'offline_access'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
+    code_challenge_methods_supported:    ['S256'],
+    claims_supported:                    ['sub', 'iss', 'aud', 'iat', 'exp', 'email', 'name', 'preferred_username'],
+  });
+});
+
+app.get('/.well-known/jwks.json', (_req, res) => {
+  try {
+    res.json({ keys: [getPublicJwk()] });
+  } catch (err) {
+    log.error({ err }, 'JWKS request failed — keys not initialized?');
+    res.status(503).json({ error: 'JWKS not available' });
+  }
+});
+
 // ── ACME HTTP-01 Challenge ────────────────────────────────────────────────────
 // Muss vor den Proxies stehen (kein Auth, kein Body-Parser nötig).
 app.get('/.well-known/acme-challenge/:token', async (req, res) => {
@@ -164,6 +205,9 @@ const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:30
 app.use('/auth/mfa',           internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/app-passwords', internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
+// v5.3.0: OAuth2/OIDC-Endpoints für Modern Auth (Outlook 2024 LTSC etc.)
+// /oauth2/authorize, /oauth2/token, /oauth2/userinfo, /oauth2/jwks, /oauth2/.well-known/*
+app.use('/oauth2',             internalProxy(AUTH_SERVICE_URL));
 
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
@@ -348,7 +392,7 @@ if (existsSync(owaDir)) {
   // SPA-Catch-All: alles, was nicht bisher zugeordnet wurde und KEINE
   // bekannte API-/Proxy-Route ist, ist eine OWA-Route → index.html zurück.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/EWS', '/mapi', '/OAB', '/Autodiscover', '/autodiscover',
+    '/api/', '/auth/', '/oauth2/', '/.well-known/', '/EWS', '/mapi', '/OAB', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
   ];
   app.get('*', (req, res, next) => {
@@ -375,6 +419,10 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   await connectDatabase();
+  // v5.3.0: JWT-Signing-Keys (RS256) initialisieren — wird beim ersten Boot
+  // generiert und in ServerSettings persistiert. Modern Auth (OAuth2/OIDC)
+  // braucht asymmetrische Signatur damit Clients via JWKS verifizieren können.
+  await initJwtKeys(prisma);
   getRedisClient();
   log.info({ port: PORT }, 'API Gateway listening');
   app.listen(PORT);

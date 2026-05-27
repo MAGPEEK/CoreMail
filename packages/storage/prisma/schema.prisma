@@ -1541,6 +1541,15 @@ model ServerSettings {
   tlsCert  String?  // PEM-kodiertes Zertifikat (Certificate)
   tlsKey   String?  // PEM-kodierter privater Schlüssel (Private Key)
 
+  // ── JWT Signing Keys (v5.3.0 — RS256 für OAuth2/OIDC Modern Auth) ────────────
+  // Outlook 2024 LTSC erzwingt Modern Auth (OAuth2) und verifiziert JWT-Signaturen
+  // selbständig via JWKS. Daher RSA-2048 asymmetrisch statt HMAC HS256.
+  // Werden beim ersten Bedarf auto-generiert via initJwtKeys() in @coremail/core.
+  jwtPrivateKey  String?  // PEM-kodierter RSA Private Key
+  jwtPublicKey   String?  // PEM-kodierter RSA Public Key (PKCS#1/SPKI)
+  jwtKeyId       String?  // Stable Key-ID für JWK 'kid' (UUIDv4)
+  jwtKeyCreated  DateTime? // Wann generiert — für Rotation-Planung
+
   updatedAt       DateTime @updatedAt
 
   @@map("server_settings")

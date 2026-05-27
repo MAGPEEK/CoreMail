@@ -29,7 +29,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import crypto from 'node:crypto';
 import bcrypt from 'bcrypt';
 import { prisma } from '@coremail/storage/prisma';
-import { createLogger, signAccessToken, signIdToken } from '@coremail/core';
+import { createLogger, signAccessToken, signIdToken, getPublicJwk } from '@coremail/core';
 import { verifyPassword } from '@coremail/core/auth';
 import type { Router as RouterType } from 'express';
 
@@ -189,23 +189,30 @@ oauth2Router.get('/.well-known/openid-configuration', async (_req: Request, res:
     authorization_endpoint:              `${base}/oauth2/authorize`,
     token_endpoint:                      `${base}/oauth2/token`,
     userinfo_endpoint:                   `${base}/oauth2/userinfo`,
-    jwks_uri:                            `${base}/oauth2/jwks`,
+    // JWKS auch unter dem Standard-Pfad /.well-known/jwks.json verfügbar
+    // (Outlook + andere Clients suchen häufig dort).
+    jwks_uri:                            `${base}/.well-known/jwks.json`,
     revocation_endpoint:                 `${base}/oauth2/token/revoke`,
     introspection_endpoint:              `${base}/oauth2/token/introspect`,
     response_types_supported:            ['code'],
     grant_types_supported:               ['authorization_code', 'client_credentials', 'password', 'refresh_token'],
     subject_types_supported:             ['public'],
-    id_token_signing_alg_values_supported: ['HS256'],
-    scopes_supported:                    ['openid', 'profile', 'email', 'mail', 'calendar', 'contacts', 'ews'],
+    // v5.3.0: RS256 (RSA-2048 asymmetrisch) — Outlook + Clients verifizieren via JWKS
+    id_token_signing_alg_values_supported: ['RS256'],
+    scopes_supported:                    ['openid', 'profile', 'email', 'mail', 'calendar', 'contacts', 'ews', 'EWS.AccessAsUser.All', 'Mail.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'Contacts.ReadWrite'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
     code_challenge_methods_supported:    ['S256'],
     claims_supported:                    ['sub', 'iss', 'aud', 'iat', 'exp', 'email', 'name', 'preferred_username'],
   });
 });
 
+/**
+ * JWKS-Endpoint (RFC 7517) — liefert den öffentlichen RSA-Schlüssel als JWK
+ * damit Outlook & andere Clients die JWT-Signatur selbständig verifizieren
+ * können. Vor v5.3.0 war das leer (HS256 hat keinen Public Key).
+ */
 oauth2Router.get('/jwks', (_req: Request, res: Response) => {
-  // CoreMail verwendet HS256 (symmetrisch) — kein öffentlicher Schlüssel verfügbar.
-  res.json({ keys: [] });
+  res.json({ keys: [getPublicJwk()] });
 });
 
 // ── §4.1 Authorization Code Endpoint ──────────────────────────────────────────

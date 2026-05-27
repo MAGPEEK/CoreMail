@@ -13,6 +13,71 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.17] — 2026-05-27 — Modern Auth Foundation (RS256 JWT + OIDC Discovery)
+
+### Why
+
+Outlook 2024 LTSC erzwingt Modern Auth (OAuth2/OIDC) und akzeptiert keinen
+Basic-Auth-Fallback mehr (auch nicht mit `EnableADAL=0`-Registry). Live-Logs
+auf dem Server zeigten `scheme:"bearer"` bei jedem Connect-Versuch — Outlook
+sendet ausschließlich OAuth2-Tokens, niemals Basic-Auth-Credentials.
+
+Bisher hatte CoreMail OAuth2-Server-Endpunkte unter `/oauth2/*`, aber JWT war
+mit HS256 (HMAC, symmetrisch) signiert — daher konnte der JWKS-Endpoint
+keinen Public Key liefern → OIDC-Clients (Outlook, mobile Apps mit Modern
+Auth) lehnten Tokens ab.
+
+### Changed
+
+- **JWT-Signing von HS256 auf RS256 umgestellt.** RSA-2048 asymmetrisch, Keys
+  werden beim ersten Service-Start automatisch generiert und in
+  `ServerSettings.jwtPrivateKey/jwtPublicKey/jwtKeyId` persistiert.
+  Geschieht idempotent via neue `initJwtKeys(prisma)`-Funktion in
+  `@coremail/core`, aufgerufen beim Boot von api-gateway, auth-service,
+  ews-server, backup-service, caldav-server.
+
+- **JWKS-Endpoint** (`/oauth2/jwks` + neu `/.well-known/jwks.json`) liefert
+  jetzt den Public Key als JWK (RFC 7517). Outlook + andere Clients können
+  damit JWT-Signaturen selbst verifizieren.
+
+- **OIDC Discovery** (`/oauth2/.well-known/openid-configuration` + neu
+  `/.well-known/openid-configuration` am Root) annonciert RS256 als
+  `id_token_signing_alg_values_supported` und ergänzt Microsoft-Graph-Scopes
+  (`EWS.AccessAsUser.All`, `Mail.Read/ReadWrite/Send`,
+  `Calendars.Read/ReadWrite`, `Contacts.Read/ReadWrite`, `offline_access`).
+
+- **OAuth2-Proxy in api-gateway**: `/oauth2/*` wird jetzt zum auth-service
+  durchgereicht, damit Clients direkt auf `https://mail.../oauth2/authorize`
+  und `.../oauth2/token` zugreifen können.
+
+### Schema
+
+`ServerSettings` bekommt 4 neue Felder:
+- `jwtPrivateKey String?` — PEM RSA Private Key
+- `jwtPublicKey  String?` — PEM RSA Public Key (PKCS#1/SPKI)
+- `jwtKeyId      String?` — Stable Key-ID für JWK `kid`
+- `jwtKeyCreated DateTime?` — Generierungszeitpunkt (für künftige Rotation)
+
+### Migration impact
+
+- **Bestehende Sessions/Tokens werden invalidiert** (HS256-signiert, jetzt
+  RS256-Verify). User muss sich einmal neu anmelden. Access-Tokens haben
+  ohnehin nur 15min TTL.
+- **Schema-Migration**: `prisma db push --accept-data-loss` beim ersten
+  Container-Start fügt die neuen Felder hinzu. Keine Datenverluste.
+
+### Was noch fehlt für Outlook 2024 LTSC End-to-End
+
+Phase A+B (diese Version) ist die Infrastruktur. Für funktionierende Outlook-
+2024-LTSC-Verbindung fehlen noch Phasen C–F (in Arbeit, kommen in v5.3.0+):
+
+- Microsoft Outlook Native-Client-ID auto-provisionieren
+- Autodiscover-XML mit OAuth2-Endpoint-Hint erweitern
+- Bearer-Token-Audience-Validierung in EWS/MAPI-Middleware
+- Browser-Login-Flow speziell für Outlook
+
+---
+
 ## [5.2.15] — 2026-05-27 — Outlook Auth: case-insensitive Schemes + Bare-Username-Fallback
 
 ### Fixed

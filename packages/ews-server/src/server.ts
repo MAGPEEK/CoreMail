@@ -1,6 +1,6 @@
 import express from 'express';
-import { createLogger } from '@coremail/core';
-import { connectDatabase } from '@coremail/storage';
+import { createLogger, initJwtKeys } from '@coremail/core';
+import { connectDatabase, prisma } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
 import { mapiRouter } from './mapi/handler.js';
@@ -10,6 +10,8 @@ const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
 
 async function main() {
   await connectDatabase();
+  // v5.3.0: RS256 JWT-Keys initialisieren (Modern Auth Bearer-Validierung)
+  await initJwtKeys(prisma);
 
   const app = express();
 
