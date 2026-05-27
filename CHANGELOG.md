@@ -13,6 +13,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.2.10] — 2026-05-27 — Self-Signed-Cert immer mail.localhost (Fresh-Install-Baseline)
+
+### Fixed
+
+- **Self-Signed-Cert beim Erstaufsetzen nutzte den eingegebenen Hostname
+  (`mail.stefanwuestner.de`) statt des erwarteten Defaults `mail.localhost`.**
+  Beim Aufrufen des Setup-Wizards wurde aus dem konfigurierten
+  `publicHostname` das Self-Signed-Cert generiert — beim Umbenennen oder bei
+  einer frischen Installation mit echter Domain entstand so ein „echt
+  aussehendes" aber tatsächlich vertraulichkeits-unsicheres Cert.
+
+  **Fix**: Self-Signed-Cert verwendet ab v5.2.10 in allen vier Code-Pfaden
+  einen **fix-codierten CN=`mail.localhost`**:
+
+  1. `packages/api-gateway/src/routes/setup.ts:147` — Initial-Setup-Wizard
+  2. `packages/smtp-server/src/server.ts:182` — SMTP-Fallback wenn kein
+     Protocol-Cert in DB
+  3. `packages/imap-server/src/server.ts:49` — IMAP-Fallback
+  4. `packages/pop3-server/src/server.ts:50` — POP3-Fallback
+
+  Der Admin tauscht das Self-Signed-Cert anschließend über BCP → SSL/TLS
+  gegen ein echtes Let's-Encrypt- oder Custom-Cert aus. Die v5.2.9-eingebaute
+  `loadProtocolCert()`-Logik priorisiert ein echtes Cert mit
+  `isActiveProtocol=true` über das Self-Signed-Fallback.
+
+  **Vorteil eines fixen CN**: Self-Signed-Cert wird beim Umbenennen des
+  `publicHostname` nicht versehentlich neu generiert; der Admin sieht
+  konsistent „mail.localhost" als Baseline und weiß, dass es sich nicht um
+  ein produktives Cert handelt.
+
+---
+
 ## [5.2.1] — 2026-05-27 — Hotfix: Outlook Endlos-Passwort-Prompt
 
 ### Fixed

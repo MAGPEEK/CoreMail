@@ -134,17 +134,14 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
     });
 
     // ── Auto self-signed cert ────────────────────────────────────────────────
-    // Read current publicHostname from ServerSettings (set during initial setup
-    // or defaulting to 'mail.local').  A self-signed cert is generated and
-    // written to the certificates table so it immediately appears in BCP → SSL/TLS.
+    // Generates a baseline self-signed cert with CN=mail.localhost.  Admin
+    // activates a real (LE/uploaded) cert later in BCP → SSL/TLS.  Using a
+    // predictable 'mail.localhost' CN avoids accidental re-issuance whenever
+    // the admin renames their public hostname.
     try {
-      const serverSettings = await prisma.serverSettings.findUnique({
-        where: { id: 'singleton' },
-        select: { publicHostname: true },
-      });
-      const hostname = serverSettings?.publicHostname ?? domain;
+      const SELF_SIGNED_HOSTNAME = 'mail.localhost';
 
-      const { certPem, keyPem } = generateSelfSignedCert(hostname);
+      const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
       const tenYears = new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000);
 
       // Remove any existing self-signed cert that may be left over
@@ -153,8 +150,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       // Create visible cert entry in the certificates table
       await prisma.certificate.create({
         data: {
-          name:             hostname,
-          domains:          [hostname],
+          name:             SELF_SIGNED_HOSTNAME,
+          domains:          [SELF_SIGNED_HOSTNAME],
           services:         ['SMTP', 'IMAP', 'POP3'],
           type:             'SELF_SIGNED',
           status:           'ACTIVE',
@@ -178,7 +175,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       // Notify protocol servers to reload TLS
       void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '').catch(() => {});
 
-      log.info({ hostname }, 'Self-signed certificate created and activated for SMTP/IMAP/POP3');
+      log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'Self-signed certificate created and activated for SMTP/IMAP/POP3');
     } catch (certErr) {
       // Non-fatal — user can still log in and configure certs manually in BCP
       log.warn({ err: certErr }, 'Auto self-signed cert creation failed (non-fatal)');

@@ -41,20 +41,19 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // Kein passendes Cert in DB → self-signed Fallback (nur beim allerersten Start sinnvoll)
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { publicHostname: true },
-    });
-    const hostname = settings?.publicHostname ?? 'mail.localhost';
-    log.info({ hostname }, 'No protocol cert in DB — generating self-signed certificate for IMAP');
-    const { certPem, keyPem } = generateSelfSignedCert(hostname);
+    // Kein passendes Cert in DB → self-signed Fallback mit fixem CN=mail.localhost
+    // (nur beim allerersten Start sinnvoll).  Der Admin tauscht es später im BCP
+    // gegen ein echtes Cert; ein fixer CN verhindert Neuausstellung beim Umbenennen
+    // des publicHostname.
+    const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+    log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No protocol cert in DB — generating self-signed certificate for IMAP');
+    const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
     // Self-signed in ServerSettings.tlsCert speichern als Fallback für andere Services
     // beim erstmaligen Setup. activate-protocol überschreibt das später.
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
-      create: { id: 'singleton', publicHostname: hostname, tlsCert: certPem, tlsKey: keyPem },
+      create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: keyPem },
       update: { tlsCert: certPem, tlsKey: keyPem },
     });
     log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
