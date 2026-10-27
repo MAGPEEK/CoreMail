@@ -13,13 +13,14 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `5.6.1` (Verteilergruppen entfernt + OAuth2-Server entfernt v5.6.0 + IMAP4rev2 v5.5.0 + MAPI raus v5.4.0)
+**Aktuelle Version**: `5.7.0` (MAPI over HTTP optional zurück, Default aus + Build-Härtung; Verteilergruppen raus v5.6.1 + OAuth2-Server raus v5.6.0 + IMAP4rev2 v5.5.0)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
 ## Architektur-Entscheidungen (v5.4.0+)
 
-- **MAPI/HTTP komplett entfernt (v5.4.0)**: Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Custom-ADFS-Emulation wäre 3-4 Wochen Aufwand ohne Erfolgs-Garantie. Empfohlener Outlook-Client: „Andere E-Mail-Konten" → IMAP.
+- **MAPI/HTTP optional (v5.7.0, war in v5.4.0 entfernt)**: Code aus v5.2 wiederhergestellt in `packages/ews-server/src/mapi/`, hinter `ServerSettings.mapiHttpEnabled` (Default **false**). Schalter: BCP → Server → „MAPI over HTTP“. Gate `requireMapiEnabled` (`mapi/feature-flag.ts`, 60s-Cache + Redis `CHANNEL_SETTINGS_RELOAD`) → `/mapi/*` 404 wenn aus; Autodiscover liefert `mapiHttp`-Block nur wenn an. **Einschränkung**: Outlook 2024 LTSC / M365 Classic erzwingen Modern Auth gegen Entra/ADFS → dort IMAP („Andere E-Mail-Konten"); MAPI funktioniert für Outlook 2013–2021 (Basic-Auth). ADFS-Emulation (v5.3.0) bleibt entfernt. Neues Outlook + Outlook für Mac: kein MAPI.
+- **Build-Härtung (v5.7.0)**: pnpm gepinnt (`packageManager: pnpm@11.28.9`, Dockerfile `pnpm@11`) — corepack `pnpm@latest` zog pnpm 12 und brach. Frontend-tsconfigs `noEmit: true`; keine `.js` neben `.tsx` mehr einchecken.
 - **OAuth2-Server komplett entfernt (v5.6.0)**: war unter `/oauth2/*` (Authorization-Server für externe Apps). Da XOAUTH2 SASL keine Mainstream-Client-UI-Unterstützung hat (Apple Mail / Outlook LTSC / eM Client bieten keine UI für custom OAuth-Server), war der Server in der Praxis ohne realen Use-Case. JWT zurück auf **HS256** (`JWT_SECRET`). MWA + BCP nutzen Session-JWTs über `/auth/login`, Mail-Clients App-Passwörter.
 - **Verteilergruppen komplett entfernt (v5.6.1)**: DistributionGroups + DistributionGroupMember Models gelöscht. Use-Case besser via Shared Mailboxes (Team-Postfach) oder externem Listserv (Mailman, listmonk). Reduziert Code-Komplexität + 1 BCP-Page weniger zu pflegen.
 - **IMAP4rev2** (RFC 9051) compliance: STARTTLS, AUTHENTICATE SASL (PLAIN+LOGIN), UNSELECT, ID, MOVE, UIDPLUS, STATUS=SIZE.
@@ -93,7 +94,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 **HTTP-Routing ohne nginx**: Der `api-gateway` auf Port 3000 übernimmt alle HTTP-Routen:
 - `/owa/` `/bcp/` — Express.static (Frontend-Bundles aus `/app/www/`)
 - `/auth/` → proxy zu auth-service (localhost:3003)
-- `/EWS/` `/Autodiscover/` → proxy zu ews-server (localhost:8080) — `/mapi/*` entfernt in v5.4.0
+- `/EWS/` `/mapi/` `/Autodiscover/` → proxy zu ews-server (localhost:8080) — `/mapi/*` optional seit v5.7.0 (404 wenn aus)
 - `/Microsoft-Server-ActiveSync` → proxy zu activesync (localhost:3005)
 - `/dav/` → proxy zu caldav-server (localhost:8082)
 - `/api/v1/` `/PowerShell/` → direkte Handler
@@ -339,7 +340,7 @@ POST /PowerShell/  → WSMan-Identify (antwortet) + Cmdlet-Routing zu EMS REST-B
                      (unbekannte Cmdlets → SOAP-Fault mit Liste unterstützter Cmdlets)
 ```
 
-**MAPI over HTTP**: ENTFERNT in v5.4.0 (siehe Architektur-Entscheidungen oben).
+**MAPI over HTTP**: optional seit v5.7.0, Default aus (siehe Architektur-Entscheidungen oben).
 
 ---
 
@@ -800,4 +801,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-05-27 (v5.6.1 — Verteilergruppen entfernt; v5.6.0 — OAuth2 / Modern Auth entfernt; v5.5.0 — IMAP4rev2 Compliance; v5.4.0 — MAPI komplett raus)*
+*Letzte Aktualisierung: 2026-10-27 (v5.7.0 — MAPI over HTTP optional zurück + Build-Härtung; v5.6.1 — Verteilergruppen entfernt; v5.6.0 — OAuth2 / Modern Auth entfernt; v5.5.0 — IMAP4rev2 Compliance; v5.4.0 — MAPI komplett raus)*

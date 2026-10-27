@@ -23,6 +23,8 @@ export interface ServerConfig {
   smtpPort: number;
   smtpTls: boolean;
   orgName: string;
+  // v5.7.0: MAPI over HTTP annoncieren (ServerSettings.mapiHttpEnabled)
+  mapiHttpEnabled: boolean;
 }
 
 // In-Memory-Cache (60 Sekunden TTL) — vermeidet DB-Abfrage pro Autodiscover-Request
@@ -50,6 +52,7 @@ function envDefaults(): ServerConfig {
     smtpPort:        587,
     smtpTls:         true,
     orgName:         'CoreMail',
+    mapiHttpEnabled: process.env['ENABLE_MAPI_HTTP'] === 'true',
   };
 }
 
@@ -75,6 +78,7 @@ export async function getServerConfig(): Promise<ServerConfig> {
         smtpPort:         settings.smtpPort,
         smtpTls:          settings.smtpTls,
         orgName:          settings.orgName,
+        mapiHttpEnabled:  settings.mapiHttpEnabled,
       };
       cacheExpiry = now + CACHE_TTL_MS;
       return cache;

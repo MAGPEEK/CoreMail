@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, RefreshCw } from 'lucide-react';
+import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 
@@ -24,6 +24,8 @@ interface ServerSettings {
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
+  // v5.7.0: MAPI over HTTP optional zuschaltbar
+  mapiHttpEnabled:  boolean;
 }
 
 type Tab = 'health' | 'settings';
@@ -202,6 +204,40 @@ export function ServersPage() {
                     />
                   </div>
                 ))}
+              </div>
+
+              {/* MAPI over HTTP — v5.7.0 optional */}
+              <div className="card space-y-3">
+                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">MAPI over HTTP (Outlook „Exchange-Konto")</h2>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-gray-300"
+                    checked={current.mapiHttpEnabled ?? false}
+                    onChange={(e) => set('mapiHttpEnabled', e.target.checked)}
+                  />
+                  <span className="text-sm text-gray-700">MAPI over HTTP aktivieren</span>
+                  <span className="text-xs text-gray-400">(Standard: aus)</span>
+                </label>
+                <p className="text-xs text-gray-500">
+                  Aktiv: Autodiscover annonciert <code className="bg-gray-100 px-1 rounded">mapiHttp</code>, Outlook richtet
+                  ein natives Exchange-Konto ein (Mail, Kalender, Kontakte, Aufgaben, Notizen, GAL) über{' '}
+                  <code className="bg-gray-100 px-1 rounded">/mapi/emsmdb/</code> und{' '}
+                  <code className="bg-gray-100 px-1 rounded">/mapi/nspi/</code> mit Basic-Auth (Passwort oder App-Passwort).
+                  Aus: <code className="bg-gray-100 px-1 rounded">/mapi/*</code> liefert 404 und Outlook richtet sich als IMAP-Konto ein.
+                  Die Umschaltung greift ohne Neustart.
+                </p>
+                {current.mapiHttpEnabled && (
+                  <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                    <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Einschränkung:</strong> Outlook 2024 LTSC und Microsoft 365 (Classic) erzwingen bei Exchange-Konten
+                      Modern Auth gegen Microsoft Entra/ADFS und senden keine Basic-Credentials — dort scheitert die Einrichtung
+                      und IMAP bleibt der Weg. Getestet funktioniert MAPI/HTTP mit Outlook 2013–2021. Das neue Outlook und
+                      Outlook für Mac unterstützen kein MAPI.
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Speichern */}

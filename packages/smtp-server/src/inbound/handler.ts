@@ -251,7 +251,7 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 
 // expandRecipients-Helper wurde nach handlers/expand.ts verschoben damit sie auch
 // vom Outbound-Queue-Worker und vom Submission-Handler genutzt werden kann
-// (lokale Zustellung braucht Alias-/Gruppen-Auflösung VOR storeInboundMessage).
+// (lokale Zustellung braucht Alias-Auflösung VOR storeInboundMessage).
 
 // ── Helper: processResourceMailboxes ─────────────────────────────────────────
 

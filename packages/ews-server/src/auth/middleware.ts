@@ -165,10 +165,8 @@ export async function ewsAuthMiddleware(
   // weiterhin Basic-Auth-MAPI als „reguläre Anmeldung" — das ist der
   // funktionierende Standard-Pfad für non-Entra-Server.
   //
-  // Wer Modern Auth EXPLIZIT will: client-side via /adfs/oauth2/authorize
-  // (Browser-OAuth-Flow, z.B. für Web-Apps oder mobile Clients) — der
-  // Endpoint funktioniert weiterhin, wird nur nicht mehr automatisch
-  // annonciert.
+  // v5.4.0/v5.6.0: ADFS-Emulation und OAuth2-Server wurden entfernt — es
+  // gibt nur noch Basic-Auth (Passwort oder App-Passwort).
   // v5.3.4: Nur noch Basic — kein Negotiate/NTLM mehr (würde Outlook 2024
   // LTSC verleiten Kerberos/SSO-Flows zu probieren statt direkt Basic-Auth).
   res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');

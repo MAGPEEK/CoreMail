@@ -1412,6 +1412,13 @@ model ServerSettings {
   // Erlaubt Benutzern, ihr Passwort selbst per E-Mail-Link zurückzusetzen
   selfServicePasswordReset   Boolean @default(true)
 
+  // ── Protokolle ────────────────────────────────────────────────────────────
+  // v5.7.0: MAPI over HTTP (Outlook „Exchange-Konto") optional zuschaltbar.
+  // Default AUS: /mapi/* liefert 404 und Autodiscover annonciert kein
+  // <Protocol Type="mapiHttp"> → Outlook richtet sich als IMAP-Konto ein.
+  // Hot-Reload via Redis CHANNEL_SETTINGS_RELOAD (kein Container-Neustart).
+  mapiHttpEnabled    Boolean @default(false)
+
   // ── Wartung ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)
   maintenanceMessage String  @default("Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.")
@@ -1573,5 +1580,4 @@ model Certificate {
 }
 
 // (ExternalMailContact — komplett entfernt in v3.18.33. Externe Empfänger
-// werden bei Bedarf direkt als E-Mail-Adresse in DistributionGroup-Membern
-// (Type=EXTERNAL) oder als Empfänger im Compose-Fenster eingetragen.)
+// werden direkt als Adresse im Compose-Fenster eingetragen.)

@@ -1,10 +1,12 @@
 import express from 'express';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
-// v5.4.0: MAPI/HTTP entfernt. v5.6.0: OAuth2/JWT-Bearer entfernt
-// (siehe core/auth/jwt.ts und ews-server/auth/middleware.ts).
+import { mapiRouter } from './mapi/handler.js';
+import { requireMapiEnabled, invalidateMapiFlagCache } from './mapi/feature-flag.js';
+// v5.6.0: OAuth2/JWT-Bearer entfernt (siehe core/auth/jwt.ts und
+// ews-server/auth/middleware.ts). v5.7.0: MAPI/HTTP optional zurück.
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
@@ -52,7 +54,27 @@ async function main() {
     res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
 
-  // v5.4.0: /mapi/* endpoints entfernt (siehe Header-Kommentar)
+  // MAPI over HTTP — v5.7.0 optional (BCP → Server → „MAPI over HTTP").
+  // Gate zuerst: 404 wenn deaktiviert (auch /healthcheck.htm, damit Outlook
+  // den Endpoint gar nicht erst als Exchange erkennt). Dann v3.18.38-Regel:
+  // ewsAuthMiddleware vor dem Router, damit Outlook beim Connect Credentials
+  // sendet — Ausnahme /healthcheck.htm (anonyme Connectivity-Probe).
+  app.use('/mapi', requireMapiEnabled, (req, res, next) => {
+    if (req.path === '/healthcheck.htm') return next();
+    return ewsAuthMiddleware(req, res, next);
+  }, mapiRouter);
+
+  // Settings-Änderungen aus dem BCP sofort übernehmen (sonst bis 60s Cache).
+  try {
+    const sub = getRedisClient().duplicate();
+    void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
+    sub.on('message', () => {
+      invalidateMapiFlagCache();
+      log.info('MAPI-Flag-Cache invalidiert (Redis-Signal)');
+    });
+  } catch (err) {
+    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — MAPI-Flag läuft nach 60s ab');
+  }
 
   app.listen(PORT, () => {
     log.info({ port: PORT }, 'EWS server started');
