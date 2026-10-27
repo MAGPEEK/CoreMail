@@ -41,6 +41,8 @@ jobs:
             dockerfile: packages/autodiscover/Dockerfile
           - service: caldav-server
             dockerfile: packages/caldav-server/Dockerfile
+          - service: jmap-server
+            dockerfile: packages/jmap-server/Dockerfile
           - service: api-gateway
             dockerfile: packages/api-gateway/Dockerfile
           - service: backup-service
