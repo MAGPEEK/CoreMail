@@ -70,6 +70,14 @@ async function ensureLifecyclePolicies(): Promise<void> {
           Expiration: { Days: 90 },
         },
         {
+          // v5.7.1: JMAP Blob-Uploads (RFC 8620 §6.1) — Clients müssen den
+          // Blob zeitnah referenzieren; nach 7 Tagen räumt MinIO auf.
+          ID: 'coremail-jmap-upload-7d',
+          Status: 'Enabled',
+          Filter: { Prefix: 'jmap-upload/' },
+          Expiration: { Days: 7 },
+        },
+        {
           ID: 'coremail-backups-365d',
           Status: 'Enabled',
           Filter: { Prefix: 'backups/' },
@@ -118,6 +126,11 @@ export async function deleteObject(objectKey: string): Promise<void> {
 
 export function attachmentKey(messageId: string, filename: string): string {
   return `attachments/${messageId}/${filename}`;
+}
+
+/** v5.7.1: JMAP Upload-Blobs (RFC 8620 §6.1), Lifecycle 7 Tage. */
+export function jmapUploadKey(accountId: string, blobId: string): string {
+  return `jmap-upload/${accountId}/${blobId}`;
 }
 
 export function rawMessageKey(messageId: string): string {

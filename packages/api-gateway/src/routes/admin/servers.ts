@@ -37,6 +37,8 @@ const SettingsSchema = z.object({
   // v5.7.0: MAPI over HTTP optional (Default aus). Optional im Request, damit
   // ältere BCP-Builds ohne das Feld weiterhin speichern können.
   mapiHttpEnabled:  z.boolean().optional(),
+  // v5.7.1: JMAP (RFC 8620/8621) an/aus — Default an
+  jmapEnabled:      z.boolean().optional(),
 });
 
 // GET /api/v1/admin/servers/settings
@@ -81,14 +83,18 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
     }
 
     // exactOptionalPropertyTypes: undefined darf nicht an Prisma durchgereicht werden
-    const { mapiHttpEnabled, ...rest } = parsed.data;
-    const data = { ...rest, ...(mapiHttpEnabled !== undefined ? { mapiHttpEnabled } : {}) };
+    const { mapiHttpEnabled, jmapEnabled, ...rest } = parsed.data;
+    const data = {
+      ...rest,
+      ...(mapiHttpEnabled !== undefined ? { mapiHttpEnabled } : {}),
+      ...(jmapEnabled !== undefined ? { jmapEnabled } : {}),
+    };
     const settings = await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
       create: { id: 'singleton', ...data },
       update: data,
     });
-    log.info({ hostname: parsed.data.publicHostname, mapiHttpEnabled: settings.mapiHttpEnabled }, 'Server settings updated');
+    log.info({ hostname: parsed.data.publicHostname, mapiHttpEnabled: settings.mapiHttpEnabled, jmapEnabled: settings.jmapEnabled }, 'Server settings updated');
 
     // Notify SMTP / IMAP / POP3 + autodiscover services to pick up new hostname
     try {
