@@ -150,7 +150,9 @@ function internalProxy(targetBase: string): express.RequestHandler {
 }
 
 app.use('/EWS',          internalProxy(EWS_URL));
-// v5.4.0: /mapi/* komplett entfernt
+// v5.7.0: MAPI over HTTP wieder im Stack — optional, Schalter in BCP → Server
+// (ServerSettings.mapiHttpEnabled). Der ews-server liefert 404 wenn aus.
+app.use('/mapi',         internalProxy(EWS_URL));
 app.use('/OAB',          internalProxy(EWS_URL));
 // v3.18.35: Autodiscover hat einen eigenen Service (Port 8081), nicht EWS.
 app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
@@ -164,10 +166,8 @@ const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:30
 app.use('/auth/mfa',           internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/app-passwords', internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
-// v5.6.0: /oauth2/* Proxy entfernt (OAuth2-Server raus)
-// v5.4.0: ADFS-Emulation entfernt (war für Outlook MAPI Modern Auth, MAPI
-// wurde aus dem Stack genommen). OAuth2-Server bleibt unter /oauth2/*
-// verfügbar für Web-Apps und Mobile-Clients.
+// v5.6.0: /oauth2/* Proxy entfernt (OAuth2-Server raus).
+// v5.4.0: ADFS-Emulation entfernt (war für Outlook-2024-LTSC Modern Auth).
 
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
@@ -352,7 +352,7 @@ if (existsSync(owaDir)) {
   // SPA-Catch-All: alles, was nicht bisher zugeordnet wurde und KEINE
   // bekannte API-/Proxy-Route ist, ist eine OWA-Route → index.html zurück.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/.well-known/', '/EWS', '/OAB', '/Autodiscover', '/autodiscover',
+    '/api/', '/auth/', '/.well-known/', '/EWS', '/mapi', '/OAB', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
   ];
   app.get('*', (req, res, next) => {

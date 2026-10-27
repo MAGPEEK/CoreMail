@@ -10,8 +10,7 @@ contactsRouter.use(requireAuth);
 // Compose-Autocomplete (v3.18.7):
 //   1. Private Kontakte des Users (Contact-Tabelle)
 //   2. Globale Adressliste (alle aktiven User außer hiddenFromGal)
-//   3. Externe Kontakte aus dem Admin-Verzeichnis (ExternalContact)
-//   4. Verteilergruppen (DistributionGroup, sichtbar in GAL, aktiv)
+//   (ExternalMailContact entfernt in v3.18.33, DistributionGroup in v5.6.1)
 // Wenn `q` leer ist, werden nur private Kontakte zurückgegeben (Fallback wie zuvor).
 contactsRouter.get('/', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
@@ -150,9 +149,9 @@ contactsRouter.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/contacts/gal?q=&type=&limit=&offset= — Global Address List (Browse + Search)
-// Liefert die vereinten Einträge aus User-Tabelle und DistributionGroup.
-// (ExternalMailContact entfernt in v3.18.33 — Type-Filter `external` liefert
-// jetzt immer eine leere Liste, damit alte Frontend-Aufrufe nicht brechen.)
+// Liefert die Einträge aus der User-Tabelle. (ExternalMailContact entfernt in
+// v3.18.33, DistributionGroup in v5.6.1 — die Type-Filter `external`/`group`
+// liefern leere Listen, damit alte Frontend-Aufrufe nicht brechen.)
 contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const type = String(req.query['type'] ?? 'all') as 'all' | 'users' | 'external' | 'groups';

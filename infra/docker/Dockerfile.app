@@ -27,7 +27,7 @@ WORKDIR /app
 # Prisma Engine-Binary-Download im Builder überspringen (schlägt unter QEMU fehl).
 # Nur den JS-Client generieren (für TypeScript-Typen). Die echte Engine wird im Runner-Stage geladen.
 ENV PRISMA_CLI_QUERY_ENGINE_TYPE=library
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 RUN apk add --no-cache python3 make g++
 
 # Workspace-Konfiguration zuerst (Layer-Caching)
@@ -90,7 +90,7 @@ RUN pnpm --filter @coremail/smtp-server    build \
 # ── Stage 2: Frontend-Build ───────────────────────────────────────────────────
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY packages/web-client/package.json  ./packages/web-client/
@@ -132,7 +132,7 @@ RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap
 # privilegierte Ports binden, wenn no-new-privileges NICHT gesetzt ist.
 RUN setcap 'cap_net_bind_service=+eip' /usr/local/bin/node
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
 # Workspace-Konfiguration
 COPY --from=builder /app/pnpm-workspace.yaml ./

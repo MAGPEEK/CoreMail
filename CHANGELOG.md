@@ -13,6 +13,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.7.0] — 2026-10-27 — MAPI over HTTP optional zurück + Build-Härtung
+
+### Added
+
+**MAPI over HTTP als optionales Feature (Default AUS).** Der in v5.4.0
+entfernte MAPI/HTTP-Stack (v4.0–v5.2, MS-OXCMAPIHTTP/ROPS/NSPI, ~9.000 LOC)
+ist aus der Git-Historie wiederhergestellt und hinter einen Schalter gelegt:
+
+- Neues Feld `ServerSettings.mapiHttpEnabled Boolean @default(false)`.
+- BCP → Server → Karte „MAPI over HTTP“ mit Checkbox + Einschränkungs-Hinweis.
+- `PUT /api/v1/admin/servers/settings` akzeptiert `mapiHttpEnabled` (optional,
+  damit ältere BCP-Builds weiter speichern können).
+- ews-server: `src/mapi/feature-flag.ts` — `isMapiHttpEnabled()` mit 60s-Cache,
+  Invalidation über Redis `CHANNEL_SETTINGS_RELOAD` (Hot-Reload, kein Neustart).
+  Gate `requireMapiEnabled` liefert **404** auf `/mapi/*` (inkl.
+  `/healthcheck.htm`) solange der Schalter aus ist. Fail-closed bei DB-Fehler.
+- api-gateway: Proxy `/mapi` → ews-server wieder aktiv, `/mapi` in `API_PREFIXES`.
+- autodiscover: `<Protocol Type="mapiHttp">` nur wenn `cfg.mapiHttpEnabled`;
+  `ServerConfig.mapiHttpEnabled` (Env-Fallback `ENABLE_MAPI_HTTP=true` ohne DB).
+- NSPI-GAL ohne DistributionGroup (v5.6.1-Anpassung), nur aktive User.
+- 35 MAPI-Codec-Tests (`node --test`) laufen wieder.
+
+**Nicht enthalten**: ADFS-Emulation (v5.3.0) — bleibt entfernt. Damit gilt:
+Outlook 2013–2021 verbinden per Basic-Auth als Exchange-Konto; Outlook 2024
+LTSC / M365 Classic erzwingen Modern Auth gegen Entra/ADFS und bleiben beim
+IMAP-Weg; neues Outlook + Outlook für Mac unterstützen kein MAPI.
+
+### Changed
+
+- **pnpm festgepinnt**: `packageManager: pnpm@11.28.9` in der Root-
+  `package.json`, `Dockerfile.app` nutzt `corepack prepare pnpm@11` statt
+  `pnpm@latest` (pnpm 12 via corepack brach den Install).
+- **Frontend-Builds emittieren kein JS mehr neben den Quellen**: `noEmit: true`
+  in `admin-panel`/`web-client` tsconfig. 70 veraltete, eingecheckte
+  `src/**/*.js`-Artefakte (Stand v3.18.34, inkl. `OAuthClientsPage.js`) entfernt.
+- Veraltete Kommentare zu OAuth2/ADFS/MAPI/Verteilergruppen bereinigt
+  (api-gateway `server.ts`, `contacts.ts`, ews-server `auth/middleware.ts`,
+  smtp-server `inbound/handler.ts`, `schema.prisma`).
+
+### Migration
+
+- `prisma db push` legt `server_settings.mapiHttpEnabled` (false) an — nicht
+  destruktiv. Verhalten nach dem Upgrade identisch zu v5.6.1, bis der Schalter
+  im BCP gesetzt wird.
+
+---
+
 ## [5.6.1] — 2026-05-27 — Verteilergruppen (DistributionGroups) komplett entfernt
 
 ### Removed (Major)
