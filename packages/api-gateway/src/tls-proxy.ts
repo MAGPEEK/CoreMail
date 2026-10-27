@@ -43,6 +43,11 @@ let defaultContext: tls.SecureContext | null = null;
 
 // ── Öffentlicher Einstiegspunkt ──────────────────────────────────────────────
 
+/** v5.7.1: Upgrade-Handler (JMAP over WebSocket) — wird vom api-gateway gesetzt. */
+type UpgradeHandler = (req: import('node:http').IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => void;
+let upgradeHandler: UpgradeHandler | null = null;
+export function setTlsUpgradeHandler(h: UpgradeHandler): void { upgradeHandler = h; }
+
 export async function startTlsProxy(app: Application): Promise<void> {
   // Initial laden
   await reloadServer(app);
@@ -261,6 +266,12 @@ async function reloadServer(app: Application): Promise<void> {
     },
     app,
   );
+
+  // v5.7.1: WebSocket-Upgrades (JMAP /jmap/ws) an den Gateway-Handler weiterreichen
+  server.on('upgrade', (req, socket, head) => {
+    if (upgradeHandler) upgradeHandler(req, socket, head);
+    else socket.destroy();
+  });
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EACCES') {

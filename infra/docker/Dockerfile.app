@@ -18,7 +18,7 @@
 #   3002  security-filter 3003  auth-service
 #   3004  backup-service  3005  activesync
 #   8080  ews-server      8081  autodiscover
-#   8082  caldav-server
+#   8082  caldav-server   3006  jmap-server
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build aller Node.js-Pakete ──────────────────────────────────────
@@ -49,6 +49,7 @@ COPY packages/auth-sso/package.json       ./packages/auth-sso/
 COPY packages/backup-service/package.json ./packages/backup-service/
 COPY packages/security-filter/package.json ./packages/security-filter/
 COPY packages/activesync/package.json     ./packages/activesync/
+COPY packages/jmap-server/package.json    ./packages/jmap-server/
 
 RUN pnpm install --frozen-lockfile
 
@@ -68,6 +69,7 @@ COPY packages/auth-sso      ./packages/auth-sso
 COPY packages/backup-service    ./packages/backup-service
 COPY packages/security-filter   ./packages/security-filter
 COPY packages/activesync        ./packages/activesync
+COPY packages/jmap-server       ./packages/jmap-server
 
 # Prisma-Client generieren und alle Pakete bauen
 RUN pnpm --filter @coremail/storage exec prisma generate
@@ -85,7 +87,8 @@ RUN pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/auth-sso       build \
  && pnpm --filter @coremail/backup-service build \
  && pnpm --filter @coremail/security-filter build \
- && pnpm --filter @coremail/activesync     build
+ && pnpm --filter @coremail/activesync     build \
+ && pnpm --filter @coremail/jmap-server    build
 
 # ── Stage 2: Frontend-Build ───────────────────────────────────────────────────
 FROM node:22-alpine AS frontend-builder
@@ -176,6 +179,8 @@ COPY --from=builder /app/packages/security-filter/package.json ./packages/securi
 COPY --from=builder /app/packages/security-filter/dist         ./packages/security-filter/dist
 COPY --from=builder /app/packages/activesync/package.json     ./packages/activesync/
 COPY --from=builder /app/packages/activesync/dist             ./packages/activesync/dist
+COPY --from=builder /app/packages/jmap-server/package.json    ./packages/jmap-server/
+COPY --from=builder /app/packages/jmap-server/dist            ./packages/jmap-server/dist
 
 # Nur Produktions-Abhängigkeiten installieren.
 # python3 + make + g++ werden für native Module (bcrypt) benötigt die keine

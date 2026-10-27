@@ -13,6 +13,67 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [5.7.1] — 2026-10-27 — JMAP-Server (RFC 8620/8621 + 8887/9404/9425/9670/9749)
+
+### Added
+
+**Neues Paket `packages/jmap-server/` (Port 3006)** — JSON Meta Application
+Protocol als moderner IMAP/SMTP-Ersatz, hinter dem api-gateway erreichbar:
+
+| Pfad | Zweck |
+|------|-------|
+| `GET /.well-known/jmap` | Discovery → 301 auf `/jmap/session` (RFC 8620 §2.2) |
+| `GET /jmap/session` | Session-Resource mit Capabilities, Accounts, URLs |
+| `POST /jmap/api` | Method-Calls (Result-References, Creation-Ids, Limits) |
+| `POST /jmap/upload/{accountId}/` · `GET /jmap/download/{accountId}/{blobId}/{name}` | Blobs |
+| `GET /jmap/eventsource` | Push via Server-Sent Events (`types`, `closeafter`, `ping`) |
+| `WS /jmap/ws` | JMAP over WebSocket, Subprotokoll `jmap` (RFC 8887) |
+
+- **RFC 8620 Core**: Session, `Core/echo`, Standard-Fehler (`urn:ietf:params:jmap:error:*`,
+  Method-/SetErrors), `PushSubscription/get|set` mit PushVerification-Flow
+  (neue Tabelle `jmap_push_subscriptions`), State-Strings pro Datentyp.
+- **RFC 8621 Mail**: `Mailbox/get|changes|query|set`, `Email/get|changes|query|set|copy|import|parse`,
+  `Thread/get|changes`, `Identity/get|changes|set`, `EmailSubmission/get|changes|query|set`
+  (inkl. `onSuccessUpdateEmail`/`onSuccessDestroyEmail`, verzögertes Senden +
+  Abbruch über die BullMQ-Queue `smtp-outbound`), `SearchSnippet/get`,
+  `VacationResponse/get|set` (auf `UserSettings.oof*`).
+- **RFC 8887 WebSocket**: `Request`/`Response`/`RequestError`/`StateChange`,
+  `WebSocketPushEnable|Disable`; Upgrade wird vom api-gateway (HTTP + integrierter
+  TLS-Proxy) an den jmap-server weitergereicht.
+- **RFC 9404 Blob**: `Blob/upload` (asText/asBase64/blobId-Slices), `Blob/get`
+  (`data:*`, `digest:sha`, `digest:sha-256`, `size`, offset/length), `Blob/lookup`.
+- **RFC 9425 Quota**: `Quota/get|changes|query|queryChanges` aus `quotaBytes`/`usedBytes`.
+- **RFC 9670 Sharing**: `Principal/*` (User = individual, Shared Mailbox = group),
+  `ShareNotification/*` (derzeit leer), `urn:ietf:params:jmap:principals:owner` pro Account.
+- **RFC 9749 VAPID**: Session-Capability `urn:ietf:params:jmap:webpush-vapid`
+  mit `applicationServerKey` aus `VAPID_PUBLIC_KEY`.
+- **Accounts**: eigenes Postfach (`accountId = userId`), Shared Mailboxes
+  (`shared-<id>`, FULL_ACCESS/READ_ONLY), delegierte Postfächer (MailboxDelegate).
+- **Auth**: Bearer (Session-JWT, auch `?access_token=` für EventSource/WS) und
+  Basic (Passwort; bei MFA nur App-Passwort; LDAP/OIDC über auth-service), 60s-Cache.
+- **Threads**: neue Spalte `Message.threadId` (lazy aus `inReplyTo` abgeleitet).
+- **Schalter**: `ServerSettings.jmapEnabled @default(true)`, BCP → Server →
+  Karte „JMAP", Hot-Reload über Redis `settings:reload`; aus → 404.
+- **MinIO**: Lifecycle `jmap-upload/` 7 Tage, Helper `jmapUploadKey()`.
+- Unit-Tests (`node --test`): Dispatcher/Result-References, Keywords, State-Codecs.
+- Doku: `docs/jmap.md` (Einrichtung, Clients, Methodenübersicht, Grenzen).
+
+### Bekannte Grenzen
+
+- `Email/queryChanges`, `Mailbox/queryChanges`: `cannotCalculateChanges` (Client lädt neu).
+- Gelöschte Nachrichten haben keine Tombstones → `Email/changes` liefert nach einem
+  Hard-Delete `cannotCalculateChanges`.
+- Eine E-Mail liegt in genau einem Ordner (`maxMailboxesPerEmail: 1`).
+- Filter `header`, `*InThreadHaveKeyword` → `unsupportedFilter`; Sort `to` → `unsupportedSort`.
+- `bodyStructure` wird aus den DB-Feldern synthetisiert (text/plain, text/html, Anhänge).
+
+### Infra
+
+- `Dockerfile.app`, `supervisord-app.conf`, `docker-compose*.yml` (`JMAP_SERVICE_URL`, `JMAP_PORT`),
+  Root-`tsconfig.json`: Paket `jmap-server` registriert.
+
+---
+
 ## [5.7.0] — 2026-10-27 — MAPI over HTTP optional zurück + Build-Härtung
 
 ### Added

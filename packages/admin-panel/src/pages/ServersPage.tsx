@@ -26,6 +26,8 @@ interface ServerSettings {
   autodiscoverBase: string;
   // v5.7.0: MAPI over HTTP optional zuschaltbar
   mapiHttpEnabled:  boolean;
+  // v5.7.1: JMAP (RFC 8620/8621) — Default an
+  jmapEnabled:      boolean;
 }
 
 type Tab = 'health' | 'settings';
@@ -238,6 +240,32 @@ export function ServersPage() {
                     </span>
                   </div>
                 )}
+              </div>
+
+              {/* JMAP — v5.7.1 */}
+              <div className="card space-y-3">
+                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">JMAP (RFC 8620 / 8621)</h2>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-gray-300"
+                    checked={current.jmapEnabled ?? true}
+                    onChange={(e) => set('jmapEnabled', e.target.checked)}
+                  />
+                  <span className="text-sm text-gray-700">JMAP aktivieren</span>
+                  <span className="text-xs text-gray-400">(Standard: an)</span>
+                </label>
+                <p className="text-xs text-gray-500">
+                  JSON-Mail-Protokoll als moderner IMAP/SMTP-Ersatz. Discovery über{' '}
+                  <code className="bg-gray-100 px-1 rounded">{current.autodiscoverBase.replace(/^https?:\/\/autodiscover\./, (m) => m.replace('autodiscover.', ''))}/.well-known/jmap</code>,
+                  Session unter <code className="bg-gray-100 px-1 rounded">/jmap/session</code>. Login per App-Passwort (Basic) oder Session-Token (Bearer).
+                  Enthalten: Mail (Mailbox/Email/Thread/Identity/EmailSubmission), Push über EventSource und WebSocket (RFC 8887),
+                  Blob-Methoden (RFC 9404), Quota (RFC 9425), Principals/Sharing (RFC 9670), VAPID (RFC 9749).
+                  Aus: <code className="bg-gray-100 px-1 rounded">/jmap/*</code> liefert 404. Die Umschaltung greift ohne Neustart.
+                </p>
+                <p className="text-xs text-gray-500">
+                  DNS-Empfehlung (RFC 8620 §2.2): <code className="bg-gray-100 px-1 rounded">_jmap._tcp.{current.publicHostname.split('.').slice(-2).join('.')} SRV 0 1 443 {current.publicHostname}</code>
+                </p>
               </div>
 
               {/* Speichern */}
