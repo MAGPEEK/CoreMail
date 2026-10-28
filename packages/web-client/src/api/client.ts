@@ -120,7 +120,7 @@ export async function login(email: string, password: string): Promise<LoginResul
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string; message?: string };
-    // Wartungsmodus: message als Prefix übergeben damit LoginPage ihn erkennt
+    // Maintenance mode: pass message as prefix so LoginPage can detect it
     if (body.error === 'maintenance') {
       throw new Error(`maintenance:${body.message ?? 'Wartungsmodus aktiv'}`);
     }

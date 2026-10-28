@@ -27,12 +27,12 @@ interface SigData {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Custom Font-Size Extension (TipTap hat keine Standard-Extension dafür)
+// Custom font-size extension (TipTap has no standard extension for this)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Custom Extension für inline `style="font-size: …"` Attribut.
-// Wir definieren KEIN globales Modul-Augment für Commands<> (vermeidet ChainedCommands-
-// Konflikte); stattdessen rufen wir das Mark direkt via setMark/unsetMark auf.
+// Custom extension for the inline `style="font-size: …"` attribute.
+// We define NO global module augmentation for Commands<> (avoids ChainedCommands
+// conflicts); instead we call the mark directly via setMark/unsetMark.
 const FontSizeExt = Extension.create({
   name: 'fontSize',
   addOptions() {
@@ -54,7 +54,7 @@ const FontSizeExt = Extension.create({
   },
 });
 
-/** Helper: setzt oder entfernt font-size am aktuellen TextStyle-Mark. */
+/** Helper: sets or removes font-size on the current TextStyle mark. */
 function applyFontSize(editor: ReturnType<typeof useEditor>, size: string): void {
   if (!editor) return;
   if (!size) {
@@ -65,7 +65,7 @@ function applyFontSize(editor: ReturnType<typeof useEditor>, size: string): void
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Konstanten
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TEXT_COLORS = [
@@ -101,7 +101,7 @@ const FONT_SIZES = [
   { label: 'Sehr groß', value: '28px' },
 ];
 
-const MAX_IMAGE_BYTES = 500 * 1024; // 500 KB als data:URL — sonst werden Mails zu groß
+const MAX_IMAGE_BYTES = 500 * 1024; // 500 KB as data:URL — otherwise mails get too large
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UI-Helpers
@@ -237,7 +237,7 @@ function FontDropdown({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hauptkomponente
+// Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function SignatureSection() {
@@ -286,7 +286,7 @@ export function SignatureSection() {
     },
   });
 
-  // Initial content nur einmal setzen (verhindert Cursor-Reset)
+  // Set initial content only once (prevents cursor reset)
   useEffect(() => {
     if (editor && data?.signature && !contentInitialized.current) {
       editor.commands.setContent(data.signature);
@@ -294,7 +294,7 @@ export function SignatureSection() {
     }
   }, [editor, data?.signature]);
 
-  // ── Aktionen ──────────────────────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────
   const insertLink = useCallback(() => {
     if (!editor) return;
     const prev = editor.getAttributes('link').href as string | undefined;
@@ -303,8 +303,8 @@ export function SignatureSection() {
     if (!url.trim()) {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
     } else {
-      // Wenn Text markiert ist → Link auf markierten Text
-      // Wenn nichts markiert ist → Link mit URL als Text einfügen
+      // If text is selected → link on the selected text
+      // If nothing is selected → insert link with URL as text
       const { from, to } = editor.state.selection;
       if (from === to) {
         editor.chain().focus().insertContent(`<a href="${url.trim()}">${url.trim()}</a>`).run();
@@ -417,7 +417,7 @@ export function SignatureSection() {
         )}
 
         {showPreview ? (
-          /* Vorschau-Modus: Wie es im Mail-Reader aussieht */
+          /* Preview mode: how it looks in the mail reader */
           <div className="p-4 bg-gray-50">
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Vorschau</p>
             <div
@@ -438,7 +438,7 @@ export function SignatureSection() {
               </ToolBtn>
               <Sep />
 
-              {/* Schriftart */}
+              {/* Font family */}
               <FontDropdown
                 label="Schriftart"
                 options={FONT_FAMILIES}
@@ -450,7 +450,7 @@ export function SignatureSection() {
                 width={120}
               />
 
-              {/* Schriftgröße */}
+              {/* Font size */}
               <FontDropdown
                 label="Größe"
                 options={FONT_SIZES}
@@ -460,7 +460,7 @@ export function SignatureSection() {
               />
               <Sep />
 
-              {/* Fett/Kursiv/U/Strike */}
+              {/* Bold/Italic/U/Strike */}
               <ToolBtn title="Fett" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}>
                 <Bold size={13} />
               </ToolBtn>
@@ -475,7 +475,7 @@ export function SignatureSection() {
               </ToolBtn>
               <Sep />
 
-              {/* Textfarbe */}
+              {/* Text color */}
               <div className="relative">
                 <button
                   type="button"
@@ -500,7 +500,7 @@ export function SignatureSection() {
                 )}
               </div>
 
-              {/* Markierungsfarbe */}
+              {/* Highlight color */}
               <div className="relative">
                 <button
                   type="button"
@@ -526,7 +526,7 @@ export function SignatureSection() {
               </div>
               <Sep />
 
-              {/* Ausrichtung */}
+              {/* Alignment */}
               <ToolBtn title="Linksbündig" active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()}>
                 <AlignLeft size={13} />
               </ToolBtn>
@@ -541,7 +541,7 @@ export function SignatureSection() {
               </ToolBtn>
               <Sep />
 
-              {/* Listen */}
+              {/* Lists */}
               <ToolBtn title="Aufzählung" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}>
                 <List size={13} />
               </ToolBtn>
@@ -553,12 +553,12 @@ export function SignatureSection() {
               </ToolBtn>
               <Sep />
 
-              {/* Link einfügen */}
+              {/* Insert link */}
               <ToolBtn title="Link einfügen / bearbeiten" active={editor.isActive('link')} onClick={insertLink}>
                 <Link2 size={13} />
               </ToolBtn>
 
-              {/* Bild einfügen (Upload + URL) */}
+              {/* Insert image (upload + URL) */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -583,20 +583,20 @@ export function SignatureSection() {
               </button>
               <Sep />
 
-              {/* Trennlinie */}
+              {/* Divider */}
               <ToolBtn title="Horizontale Trennlinie" onClick={() => editor.chain().focus().setHorizontalRule().run()}>
                 <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
                   <rect x="1" y="7" width="14" height="2" rx="1" />
                 </svg>
               </ToolBtn>
 
-              {/* Formatierung entfernen */}
+              {/* Clear formatting */}
               <ToolBtn title="Formatierung entfernen" onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}>
                 <Eraser size={13} />
               </ToolBtn>
             </div>
 
-            {/* Editor-Bereich */}
+            {/* Editor area */}
             <div className="px-4 py-3">
               <EditorContent
                 editor={editor}
@@ -619,7 +619,7 @@ export function SignatureSection() {
         )}
       </div>
 
-      {/* Auto-Insert Optionen */}
+      {/* Auto-insert options */}
       <div className="space-y-3 py-3 border-t border-gray-100">
         <p className="text-sm font-medium text-gray-700">Signatur automatisch einfügen</p>
         <label className="flex items-center gap-3 cursor-pointer">
@@ -642,7 +642,7 @@ export function SignatureSection() {
         </label>
       </div>
 
-      {/* Speichern */}
+      {/* Save */}
       <button
         type="button"
         onClick={() => mutation.mutate()}

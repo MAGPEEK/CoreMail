@@ -16,7 +16,7 @@ import { api, getToken } from '../api/client.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
   users:   { total: number; active: number; inactive: number; newWeek: number };
   domains: { total: number; list: { id: string; name: string; active: boolean; userCount: number }[] };
@@ -55,7 +55,7 @@ interface AttackSummary {
   isUnderAttack: boolean;
 }
 
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   if (bytes < 1024)             return `${bytes} B`;
@@ -91,7 +91,7 @@ function barColor(pct: number): string {
   return 'bg-green-500';
 }
 
-// ── KPI-Karte ─────────────────────────────────────────────────────────────────
+// ── KPI card ──────────────────────────────────────────────────────────────────
 function KpiCard({
   label, value, sub, icon: Icon, color, trend,
 }: {
@@ -123,7 +123,7 @@ function KpiCard({
   );
 }
 
-// ── Abschnitt-Titel ───────────────────────────────────────────────────────────
+// ── Section title ─────────────────────────────────────────────────────────────
 function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: string }) {
   return (
     <div className="flex items-center gap-2 mb-3">
@@ -160,7 +160,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   );
 }
 
-// ── Mini-Bar (für RAM/CPU-Anzeige) ────────────────────────────────────────────
+// ── Mini bar (for RAM/CPU display) ────────────────────────────────────────────
 function MiniBar({ pct, color }: { pct: number; color: string }) {
   return (
     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -169,10 +169,10 @@ function MiniBar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
-// ── Settings-Popover mit Drag-Reorder ────────────────────────────────────────
-// Native HTML5 Drag-and-Drop — kein @dnd-kit nötig, weil die Interaktion auf
-// eine simple vertikale Liste begrenzt ist. Die Position innerhalb der globalen
-// `order`-Liste bestimmt die Reihenfolge im Dashboard (per Gruppe sortiert).
+// ── Settings popover with drag reorder ───────────────────────────────────────
+// Native HTML5 drag-and-drop — no @dnd-kit needed because the interaction is
+// limited to a simple vertical list. The position within the global
+// `order` list determines the order in the dashboard (sorted per group).
 function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
   const t = useT();
   const visible    = useDashboardStore((s) => s.visible);
@@ -227,7 +227,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
             onDragStart={(e) => {
               dragIndex.current = i;
               setDraggingIndex(i);
-              // Firefox: ohne setData wird drag sofort abgebrochen
+              // Firefox: without setData the drag is aborted immediately
               e.dataTransfer.setData('text/plain', w.id);
               e.dataTransfer.effectAllowed = 'move';
             }}
@@ -238,7 +238,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
               e.dataTransfer.dropEffect = 'move';
             }}
             onDragLeave={(e) => {
-              // Nur leeren, wenn cursor wirklich die ganze Zeile verlässt
+              // Only clear when the cursor really leaves the entire row
               if (e.currentTarget.contains(e.relatedTarget as Node)) return;
               setHoverIndex((h) => (h === i ? null : h));
             }}
@@ -268,7 +268,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
             <span className="text-[10px] text-gray-400 uppercase tracking-wide shrink-0">{GROUP_LABELS[w.group]}</span>
           </div>
         ))}
-        {/* End-of-list Drop-Zone — erlaubt "ans Ende ziehen" */}
+        {/* End-of-list drop zone — allows "drag to the end" */}
         <div
           onDragEnter={(e) => { e.preventDefault(); if (dragIndex.current !== null) setHoverIndex(orderedItems.length); }}
           onDragOver={(e) => {
@@ -295,21 +295,21 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Reorder-Helper für die Dashboard-Sections ────────────────────────────────
-// Sortiert eine Liste von Widget-IDs nach ihrer Position im User-`order`.
-// Unbekannte IDs (nicht in der order-Liste) landen am Ende in Ursprungsreihenfolge.
+// ── Reorder helper for the dashboard sections ────────────────────────────────
+// Sorts a list of widget IDs by their position in the user's `order`.
+// Unknown IDs (not in the order list) end up at the end in their original order.
 function sortByOrder(ids: WidgetId[], order: WidgetId[]): WidgetId[] {
   const idx = new Map(order.map((id, i) => [id, i] as const));
   return [...ids].sort((a, b) => (idx.get(a) ?? 9999) - (idx.get(b) ?? 9999));
 }
 
 // ── DraggableCard ───────────────────────────────────────────────────────────
-// WICHTIG: muss auf Modul-Ebene definiert sein. Inline in DashboardPage führt
-// dazu, dass jeder Re-Render eine neue Funktion-Referenz erzeugt → React mountet
-// die Karten beim ersten setState-Aufruf neu → laufender Drag bricht ab.
+// IMPORTANT: must be defined at module level. Inline in DashboardPage causes
+// every re-render to create a new function reference → React remounts
+// the cards on the first setState call → the running drag is aborted.
 //
-// `select-none` verhindert Text-Selektion beim Mousedown auf Text in der Karte
-// (sonst startet Chrome/Firefox Text-Selektion statt Drag).
+// `select-none` prevents text selection on mousedown on text inside the card
+// (otherwise Chrome/Firefox starts text selection instead of a drag).
 interface DraggableCardProps {
   id:            WidgetId;
   children:      React.ReactNode;
@@ -375,9 +375,9 @@ function DraggableCard({
   );
 }
 
-// ── Angriffs-Erkennungs-Widget ────────────────────────────────────────────────
-// Pollt /admin/security/attacks/summary alle 30s und lauscht auf SSE-Events
-// vom Typ `security:attack` für Echtzeit-Updates.
+// ── Attack detection widget ───────────────────────────────────────────────────
+// Polls /admin/security/attacks/summary every 30s and listens for SSE events
+// of type `security:attack` for real-time updates.
 function AttackEventsWidget() {
   const t = useT();
   const queryClient = useQueryClient();
@@ -387,7 +387,7 @@ function AttackEventsWidget() {
     refetchInterval: 30_000,
   });
 
-  // SSE-Subscription für Live-Updates
+  // SSE subscription for live updates
   useEffect(() => {
     const token = getToken();
     if (!token) return;
@@ -395,7 +395,7 @@ function AttackEventsWidget() {
     const es = new EventSource(url);
 
     es.addEventListener('security:attack', () => {
-      // Invalidieren reicht — Query holt sich die neuen Daten
+      // Invalidating is enough — the query fetches the new data
       void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
     });
 
@@ -432,7 +432,7 @@ function AttackEventsWidget() {
         )}
       </div>
 
-      {/* Zähler */}
+      {/* Counters */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className={`rounded-lg p-3 text-center ${data.total1h > 0 ? 'bg-red-50 border border-red-100' : 'bg-gray-50'}`}>
           <p className={`text-2xl font-bold tabular-nums ${data.total1h > 0 ? 'text-red-700' : 'text-gray-700'}`}>{data.total1h}</p>
@@ -444,7 +444,7 @@ function AttackEventsWidget() {
         </div>
       </div>
 
-      {/* Top-Angriffstypen */}
+      {/* Top attack types */}
       {data.byType.length > 0 && (
         <div className="mb-4">
           <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_types')}</p>
@@ -474,7 +474,7 @@ function AttackEventsWidget() {
         </div>
       )}
 
-      {/* Jüngste Ereignisse */}
+      {/* Recent events */}
       {data.latestEvents.length === 0 ? (
         <div className="flex items-center gap-2 justify-center text-green-600 py-2">
           <CheckCircle size={14} />
@@ -502,7 +502,7 @@ function AttackEventsWidget() {
   );
 }
 
-// ── Hauptkomponente ───────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 export function DashboardPage() {
   const t = useT();
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
@@ -516,7 +516,7 @@ export function DashboardPage() {
   const moveWidget = useDashboardStore((s) => s.moveWidget);
   const isVisible  = (id: WidgetId) => visible[id] ?? true;
 
-  // ── Drag-State für direktes Reordern auf den Dashboard-Karten ──────────────
+  // ── Drag state for direct reordering on the dashboard cards ────────────────
   const [cardDrag, setCardDrag]   = useState<WidgetId | null>(null);
   const [cardHover, setCardHover] = useState<WidgetId | null>(null);
 
@@ -539,8 +539,8 @@ export function DashboardPage() {
   const totalQueueItems = queues.waiting + queues.active + queues.delayed;
   const hasQueueProblem = queues.failed > 0;
   const uptime = fmtUptime(server.uptimeSeconds);
-  // Heap-Budget = V8 heap_size_limit (--max-old-space-size). Fallback auf heapTotal
-  // für ältere Backends, die heapLimit noch nicht liefern.
+  // Heap budget = V8 heap_size_limit (--max-old-space-size). Fallback to heapTotal
+  // for older backends that do not yet provide heapLimit.
   const heapBudget = server.memory.heapLimit ?? server.memory.heapTotal;
   const heapPct    = heapBudget > 0 ? Math.round((server.memory.heapUsed / heapBudget) * 100) : 0;
   const sysMemUsed = server.memory.systemTotal - server.memory.systemFree;
@@ -556,7 +556,7 @@ export function DashboardPage() {
   return (
     <div className="p-6 space-y-6 max-w-[1400px]">
 
-      {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{t('dash_title')}</h1>
@@ -583,7 +583,7 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── KPI-Karten (Zeile 1) — Reihenfolge gemäß User-`order` ──────────── */}
+      {/* ── KPI cards (row 1) — order according to user `order` ────────────── */}
       {anyKpi && (() => {
         const kpiSlots: Partial<Record<WidgetId, ReactElement>> = {
           'kpi-users': (
@@ -634,7 +634,7 @@ export function DashboardPage() {
         );
       })()}
 
-      {/* ── Server-Sektion ────────────────────────────────────────────────── */}
+      {/* ── Server section ────────────────────────────────────────────────── */}
       {anyServer && (() => {
         const serverSlots: Partial<Record<WidgetId, ReactElement>> = {
           'server-info': (
@@ -728,7 +728,7 @@ export function DashboardPage() {
         );
       })()}
 
-      {/* ── Queue-Status + Nachrichten-Chart ─────────────────────────────── */}
+      {/* ── Queue status + messages chart ────────────────────────────────── */}
       {anyQueueOrChart && (() => {
         const queueSlots: Partial<Record<WidgetId, ReactElement>> = {
           'queue-status': (
@@ -798,7 +798,7 @@ export function DashboardPage() {
         );
       })()}
 
-      {/* ── Speicher-Ranking + Domain-Übersicht ──────────────────────────── */}
+      {/* ── Storage ranking + domain overview ────────────────────────────── */}
       {anyRankOrDomain && (() => {
         const rankSlots: Partial<Record<WidgetId, ReactElement>> = {
           'storage-ranking': (
@@ -886,7 +886,7 @@ export function DashboardPage() {
         );
       })()}
 
-      {/* ── Fehler-Log + Audit-Trail + Angriffs-Erkennung ───────────────── */}
+      {/* ── Error log + audit trail + attack detection ──────────────────── */}
       {anyErrorOrAudit && (() => {
         const errorSlots: Partial<Record<WidgetId, ReactElement>> = {
           'attack-events': (
@@ -968,7 +968,7 @@ export function DashboardPage() {
         );
       })()}
 
-      {/* ── Letzte Anmeldungen ───────────────────────────────────────────── */}
+      {/* ── Recent logins ────────────────────────────────────────────────── */}
       {isVisible('recent-logins') && (
         <DraggableCard id="recent-logins" cardDrag={cardDrag} cardHover={cardHover}
           setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>
@@ -995,7 +995,7 @@ export function DashboardPage() {
         </DraggableCard>
       )}
 
-      {/* ── System-Info-Leiste ────────────────────────────────────────────── */}
+      {/* ── System info strip ─────────────────────────────────────────────── */}
       {isVisible('system-strip') && (
         <DraggableCard id="system-strip" cardDrag={cardDrag} cardHover={cardHover}
           setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>

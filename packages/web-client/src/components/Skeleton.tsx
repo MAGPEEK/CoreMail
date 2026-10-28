@@ -1,7 +1,7 @@
 import { Inbox, Mail, Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-/** Generischer Shimmer-Bar */
+/** Generic shimmer bar */
 export function SkeletonBar({ width = '100%', height = 12, className = '' }: { width?: string | number; height?: number; className?: string }) {
   return (
     <span
@@ -11,7 +11,7 @@ export function SkeletonBar({ width = '100%', height = 12, className = '' }: { w
   );
 }
 
-/** Skeleton-Liste für MessageList beim Laden */
+/** Skeleton list for MessageList while loading */
 export function MessageListSkeleton({ rows = 8 }: { rows?: number }) {
   return (
     <div className="flex-1 overflow-hidden">
@@ -35,7 +35,7 @@ export function MessageListSkeleton({ rows = 8 }: { rows?: number }) {
   );
 }
 
-/** Skeleton für MessageReader */
+/** Skeleton for MessageReader */
 export function MessageReaderSkeleton() {
   return (
     <div className="flex-1 flex flex-col bg-white dark:bg-gray-900 p-6 space-y-6">
@@ -63,7 +63,7 @@ export function MessageReaderSkeleton() {
   );
 }
 
-/** Empty-State mit Icon + Titel + Untertitel */
+/** Empty state with icon + title + subtitle */
 export function EmptyState({
   icon,
   title,

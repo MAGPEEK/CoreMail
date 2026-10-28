@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-// ── Widget-Katalog ──────────────────────────────────────────────────────────
-// Jeder Wert muss eindeutig sein — wird als Key im localStorage gespeichert.
-// Neue Widgets einfach hier ergänzen; default-on über `DEFAULT_VISIBILITY`.
+// ── Widget catalog ──────────────────────────────────────────────────────────
+// Each value must be unique — it is stored as a key in localStorage.
+// Simply add new widgets here; default-on via `DEFAULT_VISIBILITY`.
 export type WidgetId =
   | 'kpi-users'
   | 'kpi-domains'
@@ -64,7 +64,7 @@ const DEFAULT_ORDER: WidgetId[] = WIDGET_CATALOG.map((w) => w.id);
 
 interface DashboardStore {
   visible:       Record<WidgetId, boolean>;
-  order:         WidgetId[]; // flache Reihenfolge — Dashboard sortiert pro Gruppe nach diesem Index
+  order:         WidgetId[]; // flat order — dashboard sorts per group by this index
   toggle:        (id: WidgetId) => void;
   setAll:        (value: boolean) => void;
   resetDefaults: () => void;
@@ -81,15 +81,15 @@ export const useDashboardStore = create<DashboardStore>()(
         visible: Object.fromEntries(WIDGET_CATALOG.map((w) => [w.id, value])) as Record<WidgetId, boolean>,
       }),
       resetDefaults: () => set({ visible: { ...DEFAULT_VISIBILITY }, order: [...DEFAULT_ORDER] }),
-      // Semantik: `to` ist die "Insert-vor-diesem-Index"-Position.
-      // Wert `to === length` = ans Ende anhängen.
-      // Wichtig: wenn `from < to`, schiebt das `splice(from,1)` alle nachfolgenden
-      // Indices um 1 runter, daher Korrektur per `to - 1`.
+      // Semantics: `to` is the "insert before this index" position.
+      // Value `to === length` = append to the end.
+      // Important: if `from < to`, `splice(from,1)` shifts all subsequent
+      // indices down by 1, hence the correction via `to - 1`.
       moveWidget: (from, to) => {
         const current = get().order;
         if (from < 0 || from >= current.length) return;
         if (to < 0 || to > current.length) return;
-        if (from === to || from + 1 === to) return; // kein No-Op-Move
+        if (from === to || from + 1 === to) return; // no no-op move
         const next = [...current];
         const [moved] = next.splice(from, 1);
         const insertAt = from < to ? to - 1 : to;
@@ -99,11 +99,11 @@ export const useDashboardStore = create<DashboardStore>()(
     }),
     {
       name: 'coremail-dashboard-v1',
-      // Fehlende Keys (z. B. nach Update mit neuen Widgets) auf Default setzen
+      // Set missing keys (e.g. after an update with new widgets) to default
       merge: (persisted, current) => {
         const p = persisted as Partial<DashboardStore> | undefined;
-        // Order-Migration: alle bekannten IDs erhalten, in persistierter Reihenfolge zuerst,
-        // dann neue Widgets aus DEFAULT_ORDER hinten anhängen.
+        // Order migration: keep all known IDs, persisted order first,
+        // then append new widgets from DEFAULT_ORDER at the end.
         const validIds = new Set<WidgetId>(DEFAULT_ORDER);
         const persistedOrder = (p?.order ?? []).filter((id): id is WidgetId => validIds.has(id as WidgetId));
         const missingFromPersisted = DEFAULT_ORDER.filter((id) => !persistedOrder.includes(id));

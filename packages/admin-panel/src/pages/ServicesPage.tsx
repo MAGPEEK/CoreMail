@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
 type NavView    = 'overview' | ServiceKey;
 
@@ -92,7 +92,7 @@ function ListenerModal({ initial, onSave, onClose }: {
   );
 }
 
-// ── Listener-Tabelle ──────────────────────────────────────────────────────────
+// ── Listener table ────────────────────────────────────────────────────────────
 function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
   const qc   = useQueryClient();
   const slug = SVC_SLUG[svcKey];
@@ -223,7 +223,7 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
   );
 }
 
-// ── Übersicht ─────────────────────────────────────────────────────────────────
+// ── Overview ──────────────────────────────────────────────────────────────────
 function Overview({ onSelect }: { onSelect: (k: ServiceKey) => void }) {
   const { data: overview, isLoading } = useQuery<Overview>({
     queryKey: ['services-overview'],
@@ -284,7 +284,7 @@ function Overview({ onSelect }: { onSelect: (k: ServiceKey) => void }) {
   );
 }
 
-// ── Haupt-Komponente ──────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 export function ServicesPage() {
   const [view, setView] = useState<NavView>('overview');
 
@@ -313,7 +313,7 @@ export function ServicesPage() {
         </nav>
       </aside>
 
-      {/* Inhalt */}
+      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {view === 'overview'
           ? <Overview onSelect={k => setView(k)} />

@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 import { api } from '../api/client';
 
-// v5.2.6: VERSION wird live vom Server gezogen (statt hardcoded) — so
-// stimmt die angezeigte Version immer mit dem deployten Container überein,
-// auch wenn nach Frontend-Build noch Backend-Hotfixes deployed werden.
+// v5.2.6: VERSION is fetched live from the server (instead of hardcoded) — so
+// the displayed version always matches the deployed container,
+// even when backend hotfixes are deployed after the frontend build.
 const VERSION_FALLBACK = '5.2.6';
 const GITHUB_URL       = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL    = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
@@ -456,8 +456,8 @@ function StatBadge({ label, value }: { label: string; value: string }) {
 
 
 export function ComplianceInfoPage() {
-  // Live-Version vom Backend ziehen (statt hardcoded). Fallback auf
-  // VERSION_FALLBACK falls Endpoint nicht erreichbar (Offline-View).
+  // Fetch live version from the backend (instead of hardcoded). Fallback to
+  // VERSION_FALLBACK if the endpoint is unreachable (offline view).
   const { data: versionInfo } = useQuery<VersionInfo>({
     queryKey: ['admin', 'version'],
     queryFn:  () => api.get<VersionInfo>('/admin/dashboard/version'),

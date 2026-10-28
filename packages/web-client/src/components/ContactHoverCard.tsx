@@ -5,13 +5,13 @@ import { Avatar } from './Avatar.js';
 import { copyToClipboard } from '../api/clipboard.js';
 
 interface ContactHoverCardProps {
-  /** E-Mail-Adresse */
+  /** Email address */
   email: string;
-  /** Anzeigename (falls bekannt) */
+  /** Display name (if known) */
   name?: string;
-  /** Anker-Element relativ zu dem die Karte erscheint */
+  /** Anchor element relative to which the card appears */
   anchorRef: React.RefObject<HTMLElement | null>;
-  /** Callback wenn die Karte geschlossen werden soll */
+  /** Callback when the card should be closed */
   onClose: () => void;
 }
 
@@ -28,7 +28,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
     setPos({ x: rect.left, y: rect.bottom + 4 });
   }, [anchorRef]);
 
-  // Auto-Reposition wenn aus Viewport ragt
+  // Auto-reposition when overflowing the viewport
   useEffect(() => {
     if (!cardRef.current) return;
     const r = cardRef.current.getBoundingClientRect();
@@ -39,7 +39,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
     if (nx !== pos.x || ny !== pos.y) setPos({ x: Math.max(8, nx), y: Math.max(8, ny) });
   }, [pos.x, pos.y]);
 
-  // Schließen wenn Maus weg
+  // Close when the mouse leaves
   const handleEnter = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
   };

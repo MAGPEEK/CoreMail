@@ -36,9 +36,9 @@ const ACTION_TYPES = [
   { value: 'addDisclaimer', label: 'Haftungsausschluss anhängen' },
 ];
 
-// ── Vorlagen (Exchange-2019-typische „Aus Vorlage"-Optionen) ────────────────
-// Jede Vorlage prefilled die Conditions + Actions. Platzhalter wie
-// @firma.com muss der Admin nach Auswahl anpassen.
+// ── Templates (typical Exchange 2019 "From template" options) ───────────────
+// Each template prefills the conditions + actions. Placeholders like
+// @firma.com must be adjusted by the admin after selection.
 interface RuleTemplate {
   id:          string;
   category:    'tagging' | 'compliance' | 'security' | 'governance';
@@ -279,7 +279,7 @@ export function TransportRulesPage() {
   const [editItem, setEditItem] = useState<TransportRule | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Initial-State, wenn die Regel aus einer Vorlage gestartet wird:
+  // Initial state when the rule is started from a template:
   const [createInitial, setCreateInitial] = useState<RuleTemplate['rule'] | null>(null);
 
   const { data: rules = [], isLoading } = useQuery<TransportRule[]>({
@@ -424,7 +424,7 @@ export function TransportRulesPage() {
 // ── Rule Modal ────────────────────────────────────────────────────────────────
 function RuleModal({ rule, initial, onClose }: {
   rule?: TransportRule;
-  /** Vorbefüllt aus einer Template-Auswahl. Wird ignoriert wenn `rule` (Edit-Modus) gesetzt ist. */
+  /** Prefilled from a template selection. Ignored when `rule` (edit mode) is set. */
   initial?: RuleTemplate['rule'] | null;
   onClose: () => void;
 }) {
@@ -466,7 +466,7 @@ function RuleModal({ rule, initial, onClose }: {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-5">
-          {/* Grunddaten */}
+          {/* Basic data */}
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className="field-label">Name</label>
@@ -488,7 +488,7 @@ function RuleModal({ rule, initial, onClose }: {
             </div>
           </div>
 
-          {/* Bedingungen */}
+          {/* Conditions */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-gray-500 uppercase">Bedingungen (alle müssen zutreffen)</p>
@@ -511,7 +511,7 @@ function RuleModal({ rule, initial, onClose }: {
             ))}
           </div>
 
-          {/* Aktionen */}
+          {/* Actions */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-gray-500 uppercase">Aktionen</p>

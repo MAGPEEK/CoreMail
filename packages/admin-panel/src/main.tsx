@@ -24,13 +24,13 @@ import { QuarantinePage } from './pages/QuarantinePage.js';
 import { TransportRulesPage } from './pages/TransportRulesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ServicesPage } from './pages/ServicesPage.js';
-// ExternalContactsPage komplett entfernt in v3.18.33
+// ExternalContactsPage completely removed in v3.18.33
 import { RbacPage } from './pages/RbacPage.js';
-// eDiscovery & Legal Hold komplett entfernt in v3.18.5
-// Journaling-Feature komplett entfernt in v3.13.6
+// eDiscovery & Legal Hold completely removed in v3.18.5
+// Journaling feature completely removed in v3.13.6
 import { RetentionPage } from './pages/RetentionPage.js';
 import { AuditLogPage } from './pages/AuditLogPage.js';
-// PublicFoldersPage komplett entfernt in v3.18.31
+// PublicFoldersPage completely removed in v3.18.31
 import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
@@ -41,18 +41,18 @@ import './index.css';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 
-// ── ThemeApplier — reagiert auf Store-Änderungen (kein OWA-Sync!) ───────────
+// ── ThemeApplier — reacts to store changes (no OWA sync!) ───────────────────
 function ThemeApplier() {
   const { theme } = useThemeStore();
 
-  // Dark Mode auf document anwenden wenn sich Store ändert
+  // Apply dark mode to document when the store changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolveIsDark(theme));
-    // Akzentfarbe ist im BCP immer Microsoft-Blau — unabhängig vom OWA-Theme
+    // Accent color in BCP is always Microsoft blue — independent of the OWA theme
     document.documentElement.style.setProperty('--color-accent', ECP_ACCENT_RGB);
   }, [theme]);
 
-  // System-Präferenz bei theme==='system' live übernehmen
+  // Follow the system preference live when theme==='system'
   useEffect(() => {
     if (theme !== 'system') return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -104,9 +104,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 // ── Setup-Guard ───────────────────────────────────────────────────────────────
-// Solange noch kein Admin in der DB existiert, MUSS der User zuerst die
-// Ersteinrichtung im MWA (/setup) durchlaufen.  BCP hat keine eigene Setup-Page —
-// wir leiten daher auf den MWA-Pfad um (verlässt den /bcp-Basename komplett).
+// As long as no admin exists in the DB yet, the user MUST first complete the
+// initial setup in the MWA (/setup).  BCP has no setup page of its own —
+// so we redirect to the MWA path (leaves the /bcp basename entirely).
 function SetupGuard({ children }: { children: React.ReactNode }) {
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
 
@@ -114,12 +114,12 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
     fetch('/api/v1/setup/status')
       .then((r) => r.json() as Promise<{ setupRequired: boolean }>)
       .then((data) => setSetupRequired(!!data.setupRequired))
-      .catch(() => setSetupRequired(false)); // Bei Netzwerkfehler durchlassen
+      .catch(() => setSetupRequired(false)); // Let through on network errors
   }, []);
 
   useEffect(() => {
     if (setupRequired === true) {
-      // Komplettes Hard-Redirect — verlässt /bcp-Basename und landet im MWA-Setup-Wizard
+      // Full hard redirect — leaves the /bcp basename and lands in the MWA setup wizard
       window.location.href = '/setup';
     }
   }, [setupRequired]);
@@ -135,7 +135,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 }
 
 function AdminLayout({ children }: { children: React.ReactNode }) {
-  // Automatischer Logout bei Inaktivität — konfigurierbar in Global Settings
+  // Automatic logout on inactivity — configurable in Global Settings
   useInactivityLogout();
 
   return (
@@ -179,13 +179,13 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/transport-rules" element={<TransportRulesPage />} />
                   <Route path="/message-trace"  element={<MessageTracePage />} />
                   <Route path="/connectors"     element={<Navigate to="/services" replace />} />
-                  {/* /groups Route entfernt in v5.6.1 (DistributionGroups raus) */}
-                  {/* /ext-contacts Route entfernt in v3.18.33 */}
+                  {/* /groups route removed in v5.6.1 (DistributionGroups dropped) */}
+                  {/* /ext-contacts route removed in v3.18.33 */}
                   <Route path="/rbac"           element={<RbacPage />} />
                   <Route path="/retention"      element={<RetentionPage />} />
                   <Route path="/audit-log"     element={<AuditLogPage />} />
-                  {/* /oauth-clients Route entfernt in v5.6.0 (OAuth2 komplett raus) */}
-                  {/* /public-folders Route entfernt in v3.18.31 */}
+                  {/* /oauth-clients route removed in v5.6.0 (OAuth2 dropped entirely) */}
+                  {/* /public-folders route removed in v3.18.31 */}
                   <Route path="/reports" element={<ReportsPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/compliance-info" element={<ComplianceInfoPage />} />

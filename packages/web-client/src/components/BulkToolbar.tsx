@@ -59,9 +59,9 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       onClick: () => run('move', { folderId: f.id }),
     }));
 
-  // BulkToolbar liegt absolut über der MessageList (FolderTree-Breite 208 px = left-52)
-  // und endet bei der MessageList-Breite (320 px + 208 = 528 px = w-[20rem] + left-52).
-  // Damit überdeckt die Bar nur die Filter-Tab-Zeile der MessageList, nicht den Reader.
+  // BulkToolbar is positioned absolutely over the MessageList (FolderTree width 208 px = left-52)
+  // and ends at the MessageList width (320 px + 208 = 528 px = w-[20rem] + left-52).
+  // This way the bar only covers the filter tab row of the MessageList, not the reader.
 
   const IconBtn = ({
     icon, onClick, title,
@@ -108,7 +108,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
         icon={<FolderInput size={15} />}
         title="Verschieben"
         onClick={() => {
-          /* Sub-Menü öffnen via DOM-Anker — Trick: dummy-Button-Ref */
+          /* Open submenu via DOM anchor — trick: dummy button ref */
           setMoveMenu({ x: 0, y: 0 });
         }}
       />
@@ -118,7 +118,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       <IconBtn icon={<Pin size={15} />}      title="Anheften"                onClick={() => run('pin')} />
       <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  onClick={() => run('spam')} />
 
-      {/* unsichtbarer Anchor für das Verschieben-Menü (Position direkt unter der Bar) */}
+      {/* invisible anchor for the move menu (positioned directly below the bar) */}
       {moveMenu && (
         <MoveMenu
           items={moveItems}
@@ -130,11 +130,11 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   );
 }
 
-// Kleiner Wrapper, der das ContextMenu positionsrelativ zum Toolbar-Container öffnet
+// Small wrapper that opens the ContextMenu relative to the toolbar container
 function MoveMenu({ items, onClose }: { items: ContextMenuItem[]; onClose: () => void }) {
-  // Ankerpunkt: rechts unten unterhalb der Toolbar (in der Nähe des Verschieben-Buttons)
-  // Wir berechnen das einfach relativ zum Viewport, da BulkToolbar fix sitzt.
-  // Die Toolbar ist links-52 (208 px), w-80 (320 px), Höhe ~36 px.
+  // Anchor point: bottom right below the toolbar (near the move button)
+  // We simply compute this relative to the viewport since BulkToolbar is fixed.
+  // The toolbar is left-52 (208 px), w-80 (320 px), height ~36 px.
   return (
     <ContextMenu
       x={208 + 320 - 220}

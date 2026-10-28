@@ -32,7 +32,7 @@ export function ResetPasswordPage() {
   const navigate = useNavigate();
   const token = searchParams.get('token') ?? '';
 
-  const [tokenValid, setTokenValid]   = useState<boolean | null>(null); // null = lädt
+  const [tokenValid, setTokenValid]   = useState<boolean | null>(null); // null = loading
   const [password, setPassword]       = useState('');
   const [confirm, setConfirm]         = useState('');
   const [showPw, setShowPw]           = useState(false);
@@ -43,19 +43,19 @@ export function ResetPasswordPage() {
   const [orgName, setOrgName]         = useState('CoreMail');
 
   useEffect(() => {
-    // Einstellungen laden
+    // Load settings
     fetch('/api/v1/admin/settings/public')
       .then((r) => r.json())
       .then((d: { orgName?: string }) => { if (d.orgName) setOrgName(d.orgName); })
       .catch(() => undefined);
 
-    // Passwort-Mindestlänge aus Admin-Settings
+    // Minimum password length from admin settings
     fetch('/api/v1/admin/settings')
       .then((r) => r.json())
       .then((d: { minPasswordLength?: number }) => { if (d.minPasswordLength) setMinLen(d.minPasswordLength); })
       .catch(() => undefined);
 
-    // Token-Gültigkeit prüfen
+    // Check token validity
     if (!token) { setTokenValid(false); return; }
     fetch(`/api/v1/auth/reset-password/verify?token=${encodeURIComponent(token)}`)
       .then((r) => r.json())
@@ -100,7 +100,7 @@ export function ResetPasswordPage() {
           </div>
         </div>
 
-        {/* Lädt Token-Prüfung */}
+        {/* Token check loading */}
         {tokenValid === null && (
           <div className="text-center py-8">
             <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
@@ -108,7 +108,7 @@ export function ResetPasswordPage() {
           </div>
         )}
 
-        {/* Token ungültig */}
+        {/* Token invalid */}
         {tokenValid === false && (
           <div className="text-center space-y-4">
             <XCircle size={48} className="mx-auto text-red-500" />
@@ -125,7 +125,7 @@ export function ResetPasswordPage() {
           </div>
         )}
 
-        {/* Erfolg */}
+        {/* Success */}
         {success && (
           <div className="text-center space-y-4">
             <CheckCircle size={48} className="mx-auto text-green-500" />
@@ -136,7 +136,7 @@ export function ResetPasswordPage() {
           </div>
         )}
 
-        {/* Formular */}
+        {/* Form */}
         {tokenValid === true && !success && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <p className="text-sm text-gray-600">

@@ -1,7 +1,7 @@
-// ── CoreMail OWA — Übersetzungen DE / EN / ES / IT ───────────────────────────
+// ── CoreMail OWA — Translations DE / EN / ES / IT ────────────────────────────
 
 const de = {
-  // Allgemein
+  // General
   language:                'Sprache',
   language_de:             'Deutsch',
   language_en:             'Englisch',
@@ -14,7 +14,7 @@ const de = {
   rename:                  'Umbenennen',
   ok:                      'OK',
 
-  // Settings: Sektionen
+  // Settings: sections
   section_account:         'Konto',
   section_general:         'Allgemein',
   section_profile:         'E-Mail-Konto',
@@ -40,7 +40,7 @@ const de = {
   refresh_folders:         'Ordner aktualisieren',
   refresh_done:            'Aktualisiert',
 
-  // Aktionen
+  // Actions
   reply:                   'Antworten',
   reply_all:               'Allen antworten',
   forward:                 'Weiterleiten',
@@ -59,7 +59,7 @@ const de = {
   view_source:             'Quelltext anzeigen',
   download_eml:            'Als EML herunterladen',
 
-  // Listen
+  // Lists
   no_messages:             'Keine Nachrichten',
   filter_all:              'Alle',
   filter_unread:           'Ungelesen',
@@ -68,7 +68,7 @@ const de = {
   select_all:              'Alle auswählen',
   selected_count:          'ausgewählt',
 
-  // Ordner-Menü
+  // Folder menu
   mark_all_read:           'Alle als gelesen markieren',
   add_favorite:            'Zu Favoriten hinzufügen',
   remove_favorite:         'Aus Favoriten entfernen',
@@ -86,18 +86,18 @@ const de = {
   folder_deleted:          'Ordner gelöscht',
   folder_emptied:          'Ordner geleert',
 
-  // Sprach-Einstellungen
+  // Language settings
   lang_help:               'Wählen Sie die Anzeigesprache der Web-Oberfläche.',
   lang_change_save:        'Speichern',
   lang_changed:            'Sprache geändert',
 
-  // Kalender
+  // Calendar
   calendar:                'Kalender',
   show_week_numbers:       'Kalenderwochen (KW) anzeigen',
   cw_short:                'KW',
   view_settings:           'Ansicht',
 
-  // App-Passwörter
+  // App passwords
   app_passwords:           'App-Passwörter',
   app_passwords_help:      'Für IMAP, POP3, SMTP, ActiveSync und andere Drittanwendungen, die kein 2FA unterstützen.',
   app_password_create:     'Neues App-Passwort',
@@ -113,7 +113,7 @@ const de = {
   app_password_never_used: 'Noch nie benutzt',
   app_password_created:    'Erstellt',
 
-  // Kategorien
+  // Categories
   categories:              'Kategorien',
   categories_help:         'Mit Kategorien können Sie E-Mails markieren, organisieren und durchsuchen.',
   category_name:           'Kategoriename',
@@ -124,7 +124,7 @@ const de = {
   remove_category:         'Kategorie entfernen',
   filter_category:         'Kategorie',
 
-  // Aufbewahrungsrichtlinien (Retention Policies)
+  // Retention policies
   retention_section_title:           'Aufbewahrungsrichtlinien',
   retention_section_desc:            'Diese Richtlinien können Sie per Rechtsklick auf einen Ordner zuweisen.',
   retention_no_tags:                 'Der Administrator hat noch keine persönlichen Aufbewahrungsrichtlinien konfiguriert.',
@@ -138,7 +138,7 @@ const de = {
   retention_action_mark:             'Nur kennzeichnen',
   retention_action_archive:          'In Archiv verschieben',
 
-  // v3.18.14/15 Kalender-Sharing
+  // v3.18.14/15 Calendar sharing
   cal_share_title:                   'Kalender teilen',
   cal_share_my_calendars:            'Meine Kalender',
   cal_share_shared_with_me:          'Geteilt mit mir',

@@ -14,9 +14,9 @@ export interface ComposeContext {
   bodyText?: string;
 }
 
-// ── UI-Zustand (nicht persistent) ─────────────────────────────────────────────
-/** Wo wurde der aktuelle Ordner ausgewählt — bestimmt, welcher Render-Pfad
- * die selected-Markierung zeigt (Favoriten-Mirror vs. Hauptbaum). */
+// ── UI state (not persistent) ─────────────────────────────────────────────────
+/** Where the current folder was selected — determines which render path
+ * shows the selected marker (favorites mirror vs. main tree). */
 export type FolderSelectionSource = 'fav' | 'tree';
 
 interface UiState {
@@ -27,7 +27,7 @@ interface UiState {
   composeCtx: ComposeContext | null;
   sidebarCollapsed: boolean;
 
-  // Mehrfachauswahl in der Nachrichtenliste
+  // Multi-selection in the message list
   selectedIds: Set<string>;
   lastSelectedId: string | null;
   filter: MessageFilter;
@@ -95,7 +95,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setFilter: (f) => set({ filter: f }),
 }));
 
-// ── Persistente UI-Präferenzen ────────────────────────────────────────────────
+// ── Persistent UI preferences ─────────────────────────────────────────────────
 export type Density = 'compact' | 'normal' | 'comfortable';
 export type ReadingPane = 'right' | 'bottom' | 'off';
 
@@ -145,7 +145,7 @@ export const useUiPrefs = create<UiPrefs>()(
   ),
 );
 
-// ── Theme-Zustand (persistent via localStorage) ───────────────────────────────
+// ── Theme state (persistent via localStorage) ─────────────────────────────────
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export const ACCENT_COLORS = [
@@ -176,7 +176,7 @@ export const useThemeStore = create<ThemeState>()(
   ),
 );
 
-/** Berechnet ob Dark-Mode aktiv sein soll */
+/** Computes whether dark mode should be active */
 export function resolveIsDark(theme: ThemeMode): boolean {
   if (theme === 'dark') return true;
   if (theme === 'light') return false;

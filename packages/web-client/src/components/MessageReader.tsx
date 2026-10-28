@@ -18,38 +18,38 @@ import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 
 /**
- * v3.18.36: Gehärtetes Sanitize. DOMPurify ohne Konfiguration entfernt unsere
- * Privacy-Markierungen (`data-coremail-ext-src`, transparenter PNG-Placeholder)
- * → Bilder wurden trotz Block-Logik geladen oder Banner blieb aus.
- * Plus: Tracking-Vektoren `<style>`, `<link>`, JS-Event-Handler explizit blocken.
+ * v3.18.36: Hardened sanitize. DOMPurify without configuration removes our
+ * privacy markers (`data-coremail-ext-src`, transparent PNG placeholder)
+ * → images were loaded despite the blocking logic or the banner did not appear.
+ * Plus: explicitly block tracking vectors `<style>`, `<link>`, JS event handlers.
  */
 function sanitize(html: string): string {
   if (typeof window === 'undefined') {
     return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
   }
   return DOMPurify.sanitize(html, {
-    // Whitelist unserer Privacy-Markierungen + data: URI für Placeholder
+    // Whitelist our privacy markers + data: URI for the placeholder
     ADD_ATTR: ['data-coremail-ext-src', 'data-coremail-unresolved-cid', 'data-coremail-ext-bg'],
     ALLOW_DATA_ATTR: true,
-    // Tracking-relevante Tags + Event-Handler komplett blocken
+    // Completely block tracking-relevant tags + event handlers
     FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'object', 'embed', 'meta', 'base'],
     FORBID_ATTR: [
       'onload', 'onerror', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
       'onfocus', 'onblur', 'onkeydown', 'onkeyup', 'onsubmit', 'onchange',
-      'ping', 'srcset', // srcset könnte Tracking-URL enthalten
+      'ping', 'srcset', // srcset could contain a tracking URL
     ],
-    // data:image für unseren Placeholder explizit erlauben, http(s) für CID-aufgelöste URLs
+    // Explicitly allow data:image for our placeholder, http(s) for CID-resolved URLs
     ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|data:image\/[a-z]+;base64,):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
   });
 }
 
 /**
- * Pre-processed HTML zur Privacy-Wahrung (Outlook/Gmail-Style):
- * - cid:-References werden auf MinIO-Attachment-URLs ersetzt (inline-Bilder OK)
- * - http(s):// Bilder bekommen ihr src durch ein Transparent-Pixel ersetzt,
- *   das echte src wandert nach data-coremail-src für späteres Re-Aktivieren.
- * - Tracking-Pixel (1×1) sind effektiv blockiert solange User nicht „Bilder
- *   anzeigen" klickt.
+ * Pre-process HTML for privacy protection (Outlook/Gmail style):
+ * - cid: references are replaced with MinIO attachment URLs (inline images OK)
+ * - http(s):// images get their src replaced by a transparent pixel,
+ *   the real src moves to data-coremail-src for later re-activation.
+ * - Tracking pixels (1×1) are effectively blocked as long as the user does not
+ *   click "Show images".
  *
  * Returns: { html, externalImageCount }
  */
@@ -60,57 +60,57 @@ function processExternalImages(
 ): { html: string; externalImageCount: number } {
   if (!html) return { html: '', externalImageCount: 0 };
 
-  // Inline-CID-Mapping aufbauen: cid:foo@bar → /api/v1/mail/attachments/{id}
+  // Build inline CID mapping: cid:foo@bar → /api/v1/mail/attachments/{id}
   const cidMap = new Map<string, string>();
   for (const att of inlineAttachments) {
     if (att.contentId) {
-      // contentId kann mit "<...>" eingerahmt sein — beide Varianten mappen
+      // contentId may be wrapped in "<...>" — map both variants
       const clean = att.contentId.replace(/^<|>$/g, '').toLowerCase();
       cidMap.set(clean, `/api/v1/mail/attachments/${att.id}${tokenParam}`);
     }
   }
 
   let externalCount = 0;
-  // 1x1 transparent PNG als Platzhalter für blockierte externe Bilder
+  // 1x1 transparent PNG as placeholder for blocked external images
   const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
-  // (1) <img src="..."> behandeln
+  // (1) Handle <img src="...">
   let processed = html.replace(/<img\b([^>]*?)src=(["'])([^"']+)\2([^>]*)>/gi, (_match, before: string, quote: string, src: string, after: string) => {
     const trimmed = src.trim();
-    // cid:foo@bar → Attachment-URL
+    // cid:foo@bar → attachment URL
     if (/^cid:/i.test(trimmed)) {
       const cid = trimmed.slice(4).replace(/^<|>$/g, '').toLowerCase();
       const mapped = cidMap.get(cid);
       if (mapped) return `<img${before}src=${quote}${mapped}${quote}${after}>`;
-      // Unauflösbares cid → Platzhalter (kein Tracking-Risiko)
+      // Unresolvable cid → placeholder (no tracking risk)
       return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-unresolved-cid=${quote}${cid}${quote}${after}>`;
     }
-    // data:-URLs sind inline (selbst eingebettet) → unverändert durchreichen
+    // data: URLs are inline (self-embedded) → pass through unchanged
     if (/^data:/i.test(trimmed)) {
       return `<img${before}src=${quote}${trimmed}${quote}${after}>`;
     }
-    // http(s):// → externes Bild, ersetzen mit Platzhalter + data-attribut
+    // http(s):// → external image, replace with placeholder + data attribute
     if (/^https?:/i.test(trimmed)) {
       externalCount++;
       return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote} style="opacity:0.5;border:1px dashed #ccc;min-width:16px;min-height:16px"${after}>`;
     }
-    // Alles andere (relative URLs, protokollrelative //...) auch blocken
+    // Block everything else too (relative URLs, protocol-relative //...)
     externalCount++;
     return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote}${after}>`;
   });
 
-  // v3.18.36: (2) CSS `background-image: url(...)` in inline-`style`-Attributen
-  // ist ein häufiger Tracker-Vektor — wir neutralisieren externe URLs und
-  // sichern Original in `data-coremail-ext-bg` für späteres Re-Aktivieren.
+  // v3.18.36: (2) CSS `background-image: url(...)` in inline `style` attributes
+  // is a common tracker vector — we neutralize external URLs and
+  // save the original in `data-coremail-ext-bg` for later re-activation.
   processed = processed.replace(
     /(style=)(["'])([^"']*?)background-image\s*:\s*url\(\s*(['"]?)([^"')]+)\4\s*\)([^"']*?)\2/gi,
     (_m, attrName: string, attrQuote: string, stylePrefix: string, _urlQuote: string, url: string, styleSuffix: string) => {
       const trimmed = url.trim();
       if (/^data:/i.test(trimmed) || /^cid:/i.test(trimmed)) {
-        // Inline / CID — passieren lassen
+        // Inline / CID — let through
         return _m;
       }
-      // Extern → Background entfernen, Original speichern
+      // External → remove background, store original
       externalCount++;
       return `${attrName}${attrQuote}${stylePrefix}${styleSuffix}${attrQuote} data-coremail-ext-bg=${attrQuote}${trimmed}${attrQuote}`;
     },
@@ -130,15 +130,15 @@ export function MessageReader({ messageId }: Props) {
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
-  // Privacy: externe Bilder nur auf User-Anforderung laden (Tracking-Pixel-Schutz)
+  // Privacy: load external images only on user request (tracking pixel protection)
   const [showExternalImages, setShowExternalImages] = useState(false);
-  // Reset des Toggle wenn auf eine andere Mail gewechselt wird
+  // Reset the toggle when switching to another mail
   useEffect(() => { setShowExternalImages(false); }, [messageId]);
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Token als URL-Query-Parameter für Browser-Navigationen (EML-Download, Quelltext),
-  // da <a href> und window.open() keine Custom-Headers unterstützen.
+  // Token as URL query parameter for browser navigations (EML download, source),
+  // since <a href> and window.open() do not support custom headers.
   const tokenParam = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
 
   const { data: msg, isLoading } = useQuery({
@@ -179,11 +179,11 @@ export function MessageReader({ messageId }: Props) {
   const isFlagged = msg.flags.includes('\\Flagged');
   const isPinned = !!msg.pinnedAt;
 
-  // Ermitteln ob aktueller Ordner der Junk-Ordner ist (für bedingtes Menü-Item)
+  // Determine whether the current folder is the junk folder (for conditional menu item)
   const currentFolder = folders.find((f) => f.id === selectedFolderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
 
-  // \Answered-Flag setzen wenn Antworten/Allen antworten geklickt wird
+  // Set \Answered flag when Reply/Reply all is clicked
   const markAnswered = () => {
     if (!msg.flags.includes('\\Answered')) {
       patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
@@ -247,7 +247,7 @@ export function MessageReader({ messageId }: Props) {
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
-        // Bearer-Token als Query-Param übergeben — raw fetch() ohne API-Client
+        // Pass bearer token as query param — raw fetch() without API client
         void fetch(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, {
           headers: { 'Accept': 'text/plain, message/rfc822, */*' },
         }).then(async (r) => {
@@ -263,7 +263,7 @@ export function MessageReader({ messageId }: Props) {
       } },
     { label: 'Als EML herunterladen', icon: <Download size={14} />,
       onClick: () => {
-        // Token als URL-Param — Browser-Download unterstützt keine Custom-Headers
+        // Token as URL param — browser download does not support custom headers
         const a = document.createElement('a');
         a.href = `/api/v1/mail/messages/${msg.id}/raw${tokenParam}`;
         a.download = `${msg.subject || 'message'}.eml`;
@@ -308,7 +308,7 @@ export function MessageReader({ messageId }: Props) {
         </button>
       </div>
 
-      {/* Spam-Banner — Outlook-Style. Sichtbar wenn rspamd-Score ≥ 3.0 ODER Mail im Junk-Ordner liegt */}
+      {/* Spam banner — Outlook style. Visible when rspamd score ≥ 3.0 OR the mail is in the junk folder */}
       {(() => {
         const score = msg.spamScore ?? null;
         const showSpamBanner = (score !== null && score >= 3.0) || isJunkFolder;
@@ -356,7 +356,7 @@ export function MessageReader({ messageId }: Props) {
         );
       })()}
 
-      {/* Scheduled-Send-Banner (Outlook-Style) — sichtbar für PENDING/SENT/CANCELLED */}
+      {/* Scheduled send banner (Outlook style) — visible for PENDING/SENT/CANCELLED */}
       {msg.scheduledAt && msg.scheduledStatus && (
         <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
           msg.scheduledStatus === 'PENDING'   ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200' :
@@ -448,9 +448,9 @@ export function MessageReader({ messageId }: Props) {
         </div>
       )}
 
-      {/* Body — mit Privacy-Bilder-Banner (Outlook/Gmail-Style) */}
+      {/* Body — with privacy images banner (Outlook/Gmail style) */}
       {(() => {
-        // Vorab: HTML pre-processen damit externe Bilder ggf. blockiert werden
+        // First: pre-process HTML so external images get blocked if needed
         if (!msg.bodyHtml) {
           return (
             <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -467,23 +467,23 @@ export function MessageReader({ messageId }: Props) {
           inlineAtts,
           tokenParam,
         );
-        // v3.18.36: Wenn User auf „Bilder anzeigen" geklickt hat → originale URLs
-        // wiederherstellen. Behandelt BEIDE Markierungen: data-coremail-ext-src
-        // (für <img>) UND data-coremail-ext-bg (für CSS background-image).
-        // Zusätzlich wird der Placeholder-Style (opacity, border) entfernt.
+        // v3.18.36: If the user clicked "Show images" → restore original URLs.
+        // Handles BOTH markers: data-coremail-ext-src
+        // (for <img>) AND data-coremail-ext-bg (for CSS background-image).
+        // Additionally the placeholder style (opacity, border) is removed.
         let finalHtml = processedHtml;
         if (showExternalImages) {
-          // (a) <img>-Tags: Placeholder-src + style zurücksetzen
+          // (a) <img> tags: reset placeholder src + style
           finalHtml = finalHtml.replace(
             /<img\b([^>]*?)src=(["'])data:image\/png;base64,iVBORw0KGgo[^"']+\2([^>]*?)data-coremail-ext-src=(["'])([^"']+)\4([^>]*?)>/gi,
             (_m, before: string, q: string, middle: string, _q2: string, original: string, after: string) => {
-              // Placeholder-Style entfernen (style="opacity:0.5;border:1px dashed #ccc;...")
+              // Remove placeholder style (style="opacity:0.5;border:1px dashed #ccc;...")
               const cleanMiddle = middle.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
               const cleanAfter  = after.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
               return `<img${before}src=${q}${original}${q}${cleanMiddle}${cleanAfter}>`;
             },
           );
-          // (b) data-coremail-ext-bg → background-image: url(...) wieder einsetzen
+          // (b) data-coremail-ext-bg → re-insert background-image: url(...)
           finalHtml = finalHtml.replace(
             /(style=(["']))([^"']*?)\2([^>]*?)data-coremail-ext-bg=(["'])([^"']+)\5/gi,
             (_m, _styleAttr: string, q: string, stylePart: string, middle: string, _q2: string, url: string) => {
@@ -529,7 +529,7 @@ export function MessageReader({ messageId }: Props) {
 
       {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} items={moreItems} onClose={() => setMoreMenu(null)} />}
 
-      {/* RFC 822 Quelltext-Modal */}
+      {/* RFC 822 source modal */}
       {showRawSource && rawSource !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowRawSource(false)}>
           <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>

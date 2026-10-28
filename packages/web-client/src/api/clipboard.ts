@@ -1,10 +1,10 @@
 /**
- * Kopiert Text in die Zwischenablage. Funktioniert in HTTPS-/Localhost-
- * Kontexten via Clipboard-API, fällt im HTTP-Kontext auf `execCommand('copy')`
- * zurück. Wirft, wenn beides scheitert.
+ * Copies text to the clipboard. Works in HTTPS/localhost
+ * contexts via the Clipboard API, falls back to `execCommand('copy')` in HTTP
+ * contexts. Throws if both fail.
  */
 export async function copyToClipboard(text: string): Promise<void> {
-  // 1) Moderne Clipboard-API (nur in Secure Context verfügbar)
+  // 1) Modern Clipboard API (only available in secure context)
   if (typeof navigator !== 'undefined'
       && navigator.clipboard
       && typeof navigator.clipboard.writeText === 'function'
@@ -13,14 +13,14 @@ export async function copyToClipboard(text: string): Promise<void> {
       await navigator.clipboard.writeText(text);
       return;
     } catch {
-      // weiter zum Fallback
+      // continue to fallback
     }
   }
 
-  // 2) Fallback: verstecktes textarea + execCommand('copy')
+  // 2) Fallback: hidden textarea + execCommand('copy')
   const ta = document.createElement('textarea');
   ta.value = text;
-  // außerhalb des sichtbaren Bereichs platzieren, damit kein Scroll-Sprung
+  // place outside the visible area to avoid a scroll jump
   ta.style.position = 'fixed';
   ta.style.top = '-1000px';
   ta.style.left = '0';

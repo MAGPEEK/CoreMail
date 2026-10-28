@@ -24,9 +24,9 @@ interface ServerSettings {
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
-  // v5.7.0: MAPI over HTTP optional zuschaltbar
+  // v5.7.0: MAPI over HTTP can be enabled optionally
   mapiHttpEnabled:  boolean;
-  // v5.7.1: JMAP (RFC 8620/8621) — Default an
+  // v5.7.1: JMAP (RFC 8620/8621) — default on
   jmapEnabled:      boolean;
 }
 
@@ -44,7 +44,7 @@ export function ServersPage() {
     retry: 1,
   });
 
-  // Formular initialisieren sobald Daten geladen
+  // Initialize form once data is loaded
   useEffect(() => {
     if (settings && !form) setForm(settings);
   }, [settings, form]);
@@ -109,7 +109,7 @@ export function ServersPage() {
         ))}
       </div>
 
-      {/* ── Tab: Virtuelle Verzeichnisse ─────────────────────────────────────── */}
+      {/* ── Tab: Virtual directories ─────────────────────────────────────────── */}
       {tab === 'settings' && (
         <div className="space-y-6 max-w-3xl">
           {isLoading ? (
@@ -133,7 +133,7 @@ export function ServersPage() {
             </div>
           ) : (
             <>
-              {/* Basis */}
+              {/* Base */}
               <div className="card space-y-4">
                 <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
                   <Settings size={16} className="text-gray-400" />
@@ -208,7 +208,7 @@ export function ServersPage() {
                 ))}
               </div>
 
-              {/* MAPI over HTTP + EWS — v5.7.0 optional, v5.8.0 inkl. EWS */}
+              {/* MAPI over HTTP + EWS — v5.7.0 optional, v5.8.0 incl. EWS */}
               <div className="card space-y-3">
                 <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">MAPI over HTTP + EWS (Outlook „Exchange-Konto")</h2>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -270,7 +270,7 @@ export function ServersPage() {
                 </p>
               </div>
 
-              {/* Speichern */}
+              {/* Save */}
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleSave}
@@ -293,7 +293,7 @@ export function ServersPage() {
                 )}
               </div>
 
-              {/* Outlook-Anleitung */}
+              {/* Outlook guide */}
               <div className="card bg-blue-50 border border-blue-200 space-y-3">
                 <h3 className="font-medium text-blue-800 flex items-center gap-2">
                   <Settings size={16} />
@@ -310,7 +310,7 @@ export function ServersPage() {
                   <code className="bg-blue-100 px-1 rounded">{current.autodiscoverBase}/Autodiscover/Autodiscover.xml</code>{' '}
                   muss von Outlook erreichbar sein.
                   {current.publicHostname && (() => {
-                    // Microsoft Exchange Spec: Outlook sucht IMMER autodiscover.{primary-domain}
+                    // Microsoft Exchange spec: Outlook ALWAYS looks for autodiscover.{primary-domain}
                     // mail.stefanwuestner.de → autodiscover.stefanwuestner.de CNAME mail.stefanwuestner.de
                     const labels = current.publicHostname.split('.');
                     const rootDomain = labels.length >= 3 ? labels.slice(1).join('.') : current.publicHostname;

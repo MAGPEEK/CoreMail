@@ -24,7 +24,7 @@ export function LoginPage() {
     if (step === 'mfa') setTimeout(() => digitRefs.current[0]?.focus(), 50);
   }, [step]);
 
-  // ── Step 1: E-Mail + Passwort ────────────────────────────────────────────────
+  // ── Step 1: Email + password ─────────────────────────────────────────────────
   const handleSubmitCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -46,7 +46,7 @@ export function LoginPage() {
     }
   };
 
-  // ── Step 2: MFA-Code ─────────────────────────────────────────────────────────
+  // ── Step 2: MFA code ─────────────────────────────────────────────────────────
   const handleSubmitMfa = async (e: React.FormEvent) => {
     e.preventDefault();
     const code = otpDigits.join('');
@@ -66,7 +66,7 @@ export function LoginPage() {
     }
   };
 
-  // ── OTP-Digit-Helpers ────────────────────────────────────────────────────────
+  // ── OTP digit helpers ────────────────────────────────────────────────────────
   const handleDigitChange = (i: number, val: string) => {
     const digit = val.replace(/\D/g, '').slice(-1);
     const next = [...otpDigits];
@@ -105,7 +105,7 @@ export function LoginPage() {
           </div>
         </div>
 
-        {/* ── SCHRITT 1: Anmeldedaten ── */}
+        {/* ── STEP 1: Credentials ── */}
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
@@ -134,7 +134,7 @@ export function LoginPage() {
           </form>
         )}
 
-        {/* ── SCHRITT 2: MFA-Code ── */}
+        {/* ── STEP 2: MFA code ── */}
         {step === 'mfa' && (
           <form onSubmit={handleSubmitMfa} className="space-y-5">
             <div className="text-center">

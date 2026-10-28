@@ -7,12 +7,12 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 
 export type CalendarView = 'timeGridDay' | 'timeGridWeek' | 'workWeek' | 'dayGridMonth' | 'split';
 
-/** v3.18.21: Realistische Filter, die tatsächlich auf CalendarEvent-Felder mappen. */
+/** v3.18.21: Realistic filters that actually map to CalendarEvent fields. */
 export const FILTER_OPTIONS = [
   'Wiederholende Termine',  // rrule != null
-  'Aufgaben',                // tasks mit dueDate (separate Datenquelle)
+  'Aufgaben',                // tasks with dueDate (separate data source)
   'Private Termine',         // classification = PRIVATE
-  'Vertrauliche Termine',    // classification = CONFIDENTIAL (Owner sieht sie)
+  'Vertrauliche Termine',    // classification = CONFIDENTIAL (owner sees them)
   'Geteilte Kalender',       // shared = true
 ] as const;
 export type FilterKey = typeof FILTER_OPTIONS[number];
@@ -31,8 +31,8 @@ interface Props {
   onNewEvent: () => void;
   onPrint?: () => void;
   onShare?: () => void;
-  // v3.18.21: kontrollierter Filter-State — wird in CalendarPage gehalten
-  // und auf fcEvents angewendet
+  // v3.18.21: controlled filter state — held in CalendarPage
+  // and applied to fcEvents
   filters: Record<FilterKey, boolean>;
   onFiltersChange: (next: Record<FilterKey, boolean>) => void;
 }
@@ -55,8 +55,8 @@ export function CalendarToolbar({
     </div>
   );
 
-  /** Großer Toolbar-Button (Icon oben, Label unten) — Office-Ribbon-Stil
-   *  Feste Größe damit alle Buttons gleich aussehen. */
+  /** Large toolbar button (icon on top, label below) — Office ribbon style
+   *  Fixed size so all buttons look the same. */
   const RibbonBtn = ({
     icon, label, active, onClick, disabled, hasArrow,
   }: {
@@ -114,7 +114,7 @@ export function CalendarToolbar({
     <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 shrink-0">
       <div className="flex items-stretch gap-2 divide-x divide-gray-200 dark:divide-gray-700">
 
-        {/* Section: Neu */}
+        {/* Section: New */}
         <Section title="Neu">
           <RibbonBtn
             icon={<Plus size={20} className="text-accent" />}
@@ -124,7 +124,7 @@ export function CalendarToolbar({
           />
         </Section>
 
-        {/* Section: Anordnen */}
+        {/* Section: Arrange */}
         <Section title="Anordnen">
           <RibbonBtn icon={<CalDay size={20} />}        label="Tag"          active={view === 'timeGridDay'}  hasArrow onClick={() => onChangeView('timeGridDay')} />
           <RibbonBtn icon={<Briefcase size={20} />}     label="Arbeitswoche" active={view === 'workWeek'}     onClick={() => onChangeView('workWeek')} />
@@ -144,7 +144,7 @@ export function CalendarToolbar({
           />
         </Section>
 
-        {/* Section: Teilen */}
+        {/* Section: Share */}
         <Section title="Teilen">
           <RibbonBtn icon={<Share2 size={20} />}  label="Kalender teilen" onClick={onShare} />
           <RibbonBtn icon={<Printer size={20} />} label="Drucken"         onClick={onPrint} />

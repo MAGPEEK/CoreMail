@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { useT } from '../i18n/useT.js';
 
-// ── Typen ────────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────
 interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
 interface User {
   id: string; email: string; displayName: string; role: string;
@@ -25,7 +25,7 @@ interface Delegate { id: string; granteeId: string; permission: string; grantedA
 
 type PermType = 'FULL_ACCESS' | 'READ_ONLY' | 'SEND_AS' | 'SEND_ON_BEHALF';
 
-// ── Hilfsfunktionen ──────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function formatBytes(b: number): string {
   if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
   if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
@@ -54,7 +54,7 @@ const QUOTA_OPTIONS = [
   { label: 'Unbegrenzt', value: 107_374_182_400 },
 ];
 
-// ── Quota-Balken ─────────────────────────────────────────────────────────────
+// ── Quota bar ────────────────────────────────────────────────────────────────
 function QuotaBar({ used, total, showLabel = false }: { used: number; total: number; showLabel?: boolean }) {
   const t = useT();
   const pct = Math.min(100, total > 0 ? (used / total) * 100 : 0);
@@ -85,7 +85,7 @@ const EMPTY_FORM = {
   role: 'USER', quotaBytes: 5_368_709_120,
 };
 
-// ── Hauptkomponente ──────────────────────────────────────────────────────────
+// ── Main component ───────────────────────────────────────────────────────────
 export function MailboxesPage() {
   const t = useT();
   const qc = useQueryClient();
@@ -109,7 +109,7 @@ export function MailboxesPage() {
     queryFn:  () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
   });
 
-  // Detail-Abfrage für aufgeklappten User (Ordner + Speicher)
+  // Detail query for expanded user (folders + storage)
   const { data: detail, isFetching: detailLoading } = useQuery<UserDetail>({
     queryKey: ['admin-mailbox-detail', expandedId],
     queryFn:  () => api.get<UserDetail>(`/admin/mailboxes/${expandedId}`),
@@ -118,7 +118,7 @@ export function MailboxesPage() {
 
   const domainName = (id: string) => domains.find((d) => d.id === id)?.name ?? id;
 
-  // Erstellen
+  // Create
   const createMutation = useMutation({
     mutationFn: () => api.post('/admin/mailboxes', form),
     onSuccess: () => {
@@ -129,7 +129,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Bearbeiten
+  // Edit
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.put(`/admin/mailboxes/${id}`, data),
@@ -141,7 +141,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Status umschalten
+  // Toggle status
   const toggleMutation = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) =>
       api.put(`/admin/mailboxes/${id}`, { active }),
@@ -149,7 +149,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Löschen
+  // Delete
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/mailboxes/${id}`),
     onSuccess: () => {
@@ -160,7 +160,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Passwort-Reset
+  // Password reset
   const resetPwMutation = useMutation({
     mutationFn: ({ id, password }: { id: string; password: string }) =>
       api.put(`/admin/mailboxes/${id}`, { password }),
@@ -168,7 +168,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Quota neu berechnen (alle)
+  // Recalculate quota (all)
   const recalcAllMutation = useMutation({
     mutationFn: () => api.post('/admin/mailboxes/recalculate-all-quotas', {}),
     onSuccess: () => {
@@ -179,7 +179,7 @@ export function MailboxesPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Delegate-Queries: pro expandiertem User
+  // Delegate queries: per expanded user
   const { data: delegates = [], refetch: refetchDelegates } = useQuery<Delegate[]>({
     queryKey: ['admin-mailbox-delegates', expandedId],
     queryFn:  () => api.get<Delegate[]>(`/admin/mailboxes/${expandedId}/delegates`),
@@ -235,7 +235,7 @@ export function MailboxesPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 space-y-4">
-      {/* Kopfzeile */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{t('mbox_page_title')}</h1>
@@ -287,7 +287,7 @@ export function MailboxesPage() {
         )}
       </div>
 
-      {/* Tabelle */}
+      {/* Table */}
       <div className="card p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
@@ -310,11 +310,11 @@ export function MailboxesPage() {
               const pct = u.quotaBytes > 0 ? Math.min(100, (u.usedBytes / u.quotaBytes) * 100) : 0;
 
               return [
-                // Hauptzeile
+                // Main row
                 <tr key={u.id}
                   className={`transition-colors ${!u.active ? 'opacity-60' : ''} ${isExpanded ? 'bg-blue-50/50' : 'hover:bg-gray-50'}`}
                 >
-                  {/* Aufklapp-Pfeil */}
+                  {/* Expand arrow */}
                   <td className="px-2 py-3 text-center">
                     <button onClick={() => toggleExpand(u.id)}
                       className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -324,7 +324,7 @@ export function MailboxesPage() {
                     </button>
                   </td>
 
-                  {/* Benutzer */}
+                  {/* User */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
@@ -348,7 +348,7 @@ export function MailboxesPage() {
                     </span>
                   </td>
 
-                  {/* Rolle */}
+                  {/* Role */}
                   <td className="px-4 py-3">
                     <span className={`badge text-xs ${role.color} flex items-center gap-1 w-fit`}>
                       {u.role === 'ORGANIZATION_MANAGEMENT' && <Shield size={10} />}
@@ -356,7 +356,7 @@ export function MailboxesPage() {
                     </span>
                   </td>
 
-                  {/* Speicher */}
+                  {/* Storage */}
                   <td className="px-4 py-3 w-48">
                     <div className="space-y-1">
                       <div className="flex justify-between text-xs">
@@ -389,7 +389,7 @@ export function MailboxesPage() {
                     </button>
                   </td>
 
-                  {/* Aktionen */}
+                  {/* Actions */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')}>
@@ -408,7 +408,7 @@ export function MailboxesPage() {
                   </td>
                 </tr>,
 
-                // ── Aufgeklappte Detail-Zeile ────────────────────────────────
+                // ── Expanded detail row ──────────────────────────────────────
                 isExpanded && (
                   <tr key={`${u.id}-detail`} className="bg-blue-50/30">
                     <td colSpan={7} className="px-6 py-4">
@@ -418,7 +418,7 @@ export function MailboxesPage() {
                         </div>
                       ) : detail && detail.id === u.id ? (
                         <div className="space-y-3">
-                          {/* Gesamtbalken */}
+                          {/* Total bar */}
                           <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
@@ -432,7 +432,7 @@ export function MailboxesPage() {
                             <QuotaBar used={detail.usedBytes} total={detail.quotaBytes} showLabel />
                           </div>
 
-                          {/* Ordner-Aufschlüsselung */}
+                          {/* Folder breakdown */}
                           {detail.mailbox?.folders && detail.mailbox.folders.length > 0 && (
                             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
                               <p className="text-xs font-medium text-gray-500 px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
@@ -492,7 +492,7 @@ export function MailboxesPage() {
                             isPending={grantDelegateMutation.isPending || revokeDelegateMutation.isPending}
                           />
 
-                          {/* Metadaten */}
+                          {/* Metadata */}
                           <div className="flex gap-4 text-xs text-gray-400">
                             <span>{t('mbox_detail_id')}: <code className="bg-gray-100 px-1 rounded">{detail.id}</code></span>
                             <span>{t('mbox_detail_created')}: {new Date(detail.createdAt).toLocaleDateString('de-DE')}</span>
@@ -513,7 +513,7 @@ export function MailboxesPage() {
         </table>
       </div>
 
-      {/* ── Dialog: Neuer Benutzer ──────────────────────────────────────────── */}
+      {/* ── Dialog: New user ────────────────────────────────────────────────── */}
       {showCreate && (
         <Modal title={t('mbox_create_title')} onClose={() => setShowCreate(false)}>
           <div className="space-y-4">
@@ -585,7 +585,7 @@ export function MailboxesPage() {
         </Modal>
       )}
 
-      {/* ── Dialog: Bearbeiten ─────────────────────────────────────────────── */}
+      {/* ── Dialog: Edit ───────────────────────────────────────────────────── */}
       {editUser && (
         <Modal title={`${editUser.displayName} ${t('mbox_edit_title')}`} onClose={() => setEditUser(null)}>
           <EditForm user={editUser} domains={domains}
@@ -594,7 +594,7 @@ export function MailboxesPage() {
         </Modal>
       )}
 
-      {/* ── Dialog: Passwort-Reset ─────────────────────────────────────────── */}
+      {/* ── Dialog: Password reset ─────────────────────────────────────────── */}
       {showResetPw && (
         <Modal title={`${t('mbox_reset_pw_title')} — ${showResetPw.email}`} onClose={() => setShowResetPw(null)}>
           <div className="space-y-3">
@@ -637,7 +637,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   );
 }
 
-// ── Edit-Formular ────────────────────────────────────────────────────────────
+// ── Edit form ────────────────────────────────────────────────────────────────
 function EditForm({ user, domains, onSave, isPending }:
   { user: User; domains: Domain[]; onSave: (d: Record<string, unknown>) => void; isPending: boolean }
 ) {
