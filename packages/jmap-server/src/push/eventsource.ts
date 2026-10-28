@@ -53,5 +53,5 @@ export async function eventSourceHandler(req: Request, res: Response): Promise<v
     if (!res.writableEnded) res.end();
   };
   req.on('close', cleanup);
-  log.debug({ userId: user.userId, types: typesParam }, 'EventSource verbunden');
+  log.debug({ userId: user.userId, types: typesParam }, 'EventSource connected');
 }

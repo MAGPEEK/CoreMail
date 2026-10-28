@@ -272,7 +272,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       generatedAt: now.toISOString(),
     });
   } catch (err) {
-    log.error({ err }, 'Dashboard-Fehler');
+    log.error({ err }, 'Dashboard error');
     res.status(500).json({ error: 'Dashboard nicht verfügbar' });
   }
 });

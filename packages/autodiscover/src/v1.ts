@@ -201,7 +201,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   }
   // Negotiate/NTLM token → we reject and push for Basic
   if (authSchemeLower === 'negotiate' || authSchemeLower === 'ntlm') {
-    log.debug({ scheme: authSchemeLower }, 'Autodiscover v1: Negotiate/NTLM → fordere Basic');
+    log.debug({ scheme: authSchemeLower }, 'Autodiscover v1: Negotiate/NTLM → requesting Basic');
     res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
@@ -236,7 +236,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       appid: claims['appid'],
       exp: claims['exp'],
       userAgent: req.get('User-Agent') ?? '',
-    }, 'Autodiscover v1: Bearer-Token empfangen (forensisch decoded, nicht verified)');
+    }, 'Autodiscover v1: Bearer token received (forensically decoded, not verified)');
     // SystemLog for BCP visibility
     void prisma.systemLog.create({
       data: {
@@ -315,7 +315,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     }).catch(() => null);
     if (primaryDomain) {
       basicAuthEmail = `${basicAuthUser}@${primaryDomain.name}`;
-      log.debug({ raw: basicAuthUser, email: basicAuthEmail }, 'Autodiscover v1: bare username → expanded mit primary domain');
+      log.debug({ raw: basicAuthUser, email: basicAuthEmail }, 'Autodiscover v1: bare username → expanded with primary domain');
     }
   }
 
@@ -333,7 +333,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       email: basicAuthEmail, ip: req.ip,
       pwLen, pwCodes,
       userAgent: req.get('User-Agent') ?? '',
-    }, 'Autodiscover v1: Passwort + App-Passwort fehlgeschlagen');
+    }, 'Autodiscover v1: password + app password failed');
     // SystemLog for audit (analogous to the EWS middleware in writeAuthFailureLog)
     void prisma.systemLog.create({
       data: {

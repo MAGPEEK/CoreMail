@@ -28,7 +28,7 @@ export async function sendPushMessage(target: PushTarget, payload: Record<string
   try {
     if (target.keysP256dh && target.keysAuth) {
       const opts: webPush.RequestOptions = { TTL: ttlSec, contentEncoding: 'aes128gcm' };
-      if (!ensureVapid()) log.debug('VAPID nicht konfiguriert — Web Push ohne VAPID-Signatur');
+      if (!ensureVapid()) log.debug('VAPID not configured — Web Push without VAPID signature');
       await webPush.sendNotification({ endpoint: target.url, keys: { p256dh: target.keysP256dh, auth: target.keysAuth } }, body, opts);
     } else {
       const resp = await fetch(target.url, {
@@ -44,7 +44,7 @@ export async function sendPushMessage(target: PushTarget, payload: Record<string
     const status = typeof err === 'object' && err && 'statusCode' in err ? (err as { statusCode: number }).statusCode : 0;
     if (status === 404 || status === 410) {
       await prisma.jmapPushSubscription.delete({ where: { id: target.id } }).catch(() => undefined);
-      log.info({ id: target.id }, 'PushSubscription abgelaufen (410/404) — entfernt');
+      log.info({ id: target.id }, 'PushSubscription expired (410/404) — removed');
       return;
     }
     throw err;

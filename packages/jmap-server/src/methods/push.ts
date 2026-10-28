@@ -86,7 +86,7 @@ registerMethod('PushSubscription/set', CAP_CORE, async (args, ctx) => {
     created[cid] = { id: row.id, expires: utc(expires) };
     // Deliver PushVerification asynchronously (RFC 8620 §7.2.2)
     void sendPushMessage(row, { '@type': 'PushVerification', pushSubscriptionId: row.id, verificationCode })
-      .catch((err: unknown) => log.warn({ err, id: row.id }, 'PushVerification konnte nicht zugestellt werden'));
+      .catch((err: unknown) => log.warn({ err, id: row.id }, 'PushVerification could not be delivered'));
   }
 
   for (const [id, patch] of Object.entries(update)) {

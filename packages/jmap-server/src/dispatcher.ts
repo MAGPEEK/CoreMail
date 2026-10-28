@@ -151,7 +151,7 @@ export async function processRequest(
       if (err instanceof MethodError) {
         responses.push(['error', err.toJson(), callId]);
       } else {
-        log.error({ err, method: name }, 'Unerwarteter Fehler in JMAP-Methode');
+        log.error({ err, method: name }, 'Unexpected error in JMAP method');
         responses.push(['error', { type: 'serverFail', description: err instanceof Error ? err.message : String(err) }, callId]);
       }
     }

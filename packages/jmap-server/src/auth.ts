@@ -89,7 +89,7 @@ export async function authenticateBasic(email: string, password: string): Promis
       });
       ok = resp.ok;
     } catch (err) {
-      log.warn({ err }, 'auth-service nicht erreichbar');
+      log.warn({ err }, 'auth-service unreachable');
     }
   }
   if (!ok) return null;
@@ -133,7 +133,7 @@ export async function jmapAuthMiddleware(req: Request, res: Response, next: Next
       return;
     }
   } catch (err) {
-    log.error({ err }, 'Auth-Fehler');
+    log.error({ err }, 'Auth error');
   }
   res.set('WWW-Authenticate', 'Basic realm="CoreMail JMAP", Bearer realm="CoreMail JMAP"');
   res.status(401).type('application/problem+json').send(JSON.stringify({

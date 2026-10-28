@@ -65,7 +65,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
   };
 
   const deadlineMs = startMs + WORK_CYCLE_SEC * 1000;
-  log.info({ dryRun: DRY_RUN, workCycleSec: WORK_CYCLE_SEC, deletionsTtlDays: DELETIONS_TTL_D }, 'MFA Run gestartet');
+  log.info({ dryRun: DRY_RUN, workCycleSec: WORK_CYCLE_SEC, deletionsTtlDays: DELETIONS_TTL_D }, 'MFA run started');
 
   try {
     // ── Step 1: policies with tag binding ───────────────────────────────────
@@ -90,7 +90,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
         result.mailboxesScanned += 1;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log.error({ userId, err }, 'Mailbox-Run fehlgeschlagen');
+        log.error({ userId, err }, 'Mailbox run failed');
         result.errors.push(`User ${userId}: ${msg}`);
       }
     }
@@ -104,7 +104,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       result.throttled = true;
     }
   } catch (err) {
-    log.error({ err }, 'MFA-Run abgebrochen mit Fehler');
+    log.error({ err }, 'MFA run aborted with error');
     result.errors.push(err instanceof Error ? err.message : String(err));
   }
 
@@ -123,7 +123,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
     },
   });
 
-  log.info(result, 'MFA Run beendet');
+  log.info(result, 'MFA run finished');
   return result;
 }
 

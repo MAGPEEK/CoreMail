@@ -437,7 +437,7 @@ async function start() {
   // start (in addition to the synchronous updates on domain-create /
   // make-primary / settings-PUT).
   void syncServerUrlsFromHostname().catch(err =>
-    log.warn({ err }, 'Server-URL sync failed — Outlook-Autodiscover prüfen'),
+    log.warn({ err }, 'Server-URL sync failed — check Outlook Autodiscover'),
   );
 
   // ── Clean up stale PENDING/RENEWING certificates ──────────────────────────

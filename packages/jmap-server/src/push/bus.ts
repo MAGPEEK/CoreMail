@@ -47,7 +47,7 @@ async function pushToSubscribers(accountId: string, mailboxId: string | null): P
       filtered.changed[acc] = Object.fromEntries(Object.entries(states).filter(([t]) => !s.types.length || s.types.includes(t)));
     }
     try { await sendPushMessage(s, filtered as unknown as Record<string, unknown>); }
-    catch (err) { log.warn({ err, id: s.id }, 'Web-Push fehlgeschlagen'); }
+    catch (err) { log.warn({ err, id: s.id }, 'Web Push failed'); }
   }));
 }
 
@@ -96,9 +96,9 @@ export function startChangeBus(): void {
           }, 1000));
         }
       } catch (err) {
-        log.warn({ err }, 'Ungültiges Redis-Event');
+        log.warn({ err }, 'Invalid Redis event');
       }
     })();
   });
-  log.info('Change-Bus gestartet (mail:new, mail:update)');
+  log.info('Change bus started (mail:new, mail:update)');
 }

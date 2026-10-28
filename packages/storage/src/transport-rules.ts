@@ -135,7 +135,7 @@ export async function applyTransportRules(
       orderBy: { priority: 'asc' },
     });
   } catch (err) {
-    log.error({ err }, 'TransportRules-Load fehlgeschlagen — Mail-Flow läuft ohne Regel-Auswertung weiter');
+    log.error({ err }, 'TransportRules load failed — mail flow continues without rule evaluation');
     return outcome;
   }
 
@@ -195,13 +195,13 @@ export async function applyTransportRules(
 
     // Reject is terminal — do not evaluate further rules
     if (outcome.rejected) {
-      log.info({ ruleId: raw.id, ruleName: raw.name, reason: outcome.rejectReason }, 'Mail wegen TransportRule abgelehnt');
+      log.info({ ruleId: raw.id, ruleName: raw.name, reason: outcome.rejectReason }, 'Mail rejected by TransportRule');
       break;
     }
   }
 
   if (outcome.appliedRuleIds.length > 0) {
-    log.debug({ ruleIds: outcome.appliedRuleIds }, 'TransportRules angewendet');
+    log.debug({ ruleIds: outcome.appliedRuleIds }, 'TransportRules applied');
   }
 
   return outcome;

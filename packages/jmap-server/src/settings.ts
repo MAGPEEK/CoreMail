@@ -31,7 +31,7 @@ async function loadSettings(): Promise<PublicSettings> {
     });
     cache = s ?? { publicHostname: 'mail.local', useHttps: false, httpPort: 8080, maxMessageSizeMb: 25 };
   } catch (err) {
-    log.warn({ err }, 'ServerSettings nicht lesbar — Host-Header wird verwendet');
+    log.warn({ err }, 'ServerSettings not readable — using Host header');
     cache = { publicHostname: 'mail.local', useHttps: false, httpPort: 8080, maxMessageSizeMb: 25 };
   }
   cacheExpiry = now + 60_000;

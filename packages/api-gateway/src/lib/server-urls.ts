@@ -90,7 +90,7 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
   });
   if (!s) return false;
   if (!s.publicHostname || s.publicHostname === 'mail.local') {
-    log.debug('publicHostname noch leer/default — kein URL-Sync');
+    log.debug('publicHostname still empty/default — skipping URL sync');
     return false;
   }
 
@@ -111,7 +111,7 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
     where: { id: 'singleton' },
     data: derived,
   });
-  log.info({ publicHostname: s.publicHostname, ...derived }, 'Server-URLs aus publicHostname neu abgeleitet');
+  log.info({ publicHostname: s.publicHostname, ...derived }, 'Server URLs re-derived from publicHostname');
 
   // Cache invalidation for autodiscover + other services
   await getRedisClient()
@@ -140,7 +140,7 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
 
   const isDefault = !s.publicHostname || s.publicHostname === 'mail.local' || s.publicHostname === '';
   if (!isDefault && !force) {
-    log.debug({ publicHostname: s.publicHostname, primaryDomain }, 'publicHostname bereits gesetzt — kein Auto-Update');
+    log.debug({ publicHostname: s.publicHostname, primaryDomain }, 'publicHostname already set — no auto-update');
     // Still sync URLs in case someone changed publicHostname without deriving the URLs
     await syncServerUrlsFromHostname();
     return;
@@ -157,7 +157,7 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
       ...derived,
     },
   });
-  log.info({ newHostname, primaryDomain, derived }, 'publicHostname + URLs aus erster/neuer primary Domain abgeleitet');
+  log.info({ newHostname, primaryDomain, derived }, 'publicHostname + URLs derived from first/new primary domain');
 
   await getRedisClient()
     .publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'hostname' }))

@@ -474,7 +474,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
             }
           }
         } catch (err) {
-          log.warn({ err }, 'USER-JUNK Blacklist-Eintrag fehlgeschlagen — ignoriert');
+          log.warn({ err }, 'USER-JUNK blacklist entry failed — ignored');
         }
       })();
       // rspamd Bayes learning (fire and forget) — improves spam detection over time
@@ -503,7 +503,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
             where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: { in: senders } },
           });
         } catch (err) {
-          log.warn({ err }, 'USER-JUNK Blacklist-Entfernung fehlgeschlagen — ignoriert');
+          log.warn({ err }, 'USER-JUNK blacklist removal failed — ignored');
         }
       })();
       // rspamd Bayes learning: mark as ham
@@ -972,7 +972,7 @@ mailRouter.post(
         },
       }, jobOptions);
     } catch (queueErr) {
-      log.error({ err: queueErr }, 'Outbound-Queue-Add fehlgeschlagen');
+      log.error({ err: queueErr }, 'Outbound queue add failed');
       res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
       return;
     }
@@ -994,7 +994,7 @@ mailRouter.post(
           direction: 'OUTBOUND',
         },
       },
-    }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
+    }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log write failed'));
 
     // ── Save copy to Sent Items ──────────────────────────────────────────────
     // The RFC 5322 buffer is built separately here (with in-memory attachments, not MinIO)
@@ -1081,13 +1081,13 @@ mailRouter.post(
           data: { totalCount: { increment: 1 }, changeKey: modSeq.toString() },
         });
       } catch (e) {
-        log.warn({ err: e }, 'Sent-Kopie konnte nicht gespeichert werden');
+        log.warn({ err: e }, 'Could not store Sent copy');
       }
     })();
 
     log.info(
       { userId: user.id, to, attachments: files.length, scheduled: !!scheduledAt },
-      scheduledAt ? 'Geplante Nachricht in Queue eingereiht' : 'Nachricht in Queue eingereiht',
+      scheduledAt ? 'Scheduled message enqueued' : 'Message enqueued',
     );
     res.json({
       ok: true,
@@ -1120,7 +1120,7 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
         jobRemoved = true;
       }
     } catch (err) {
-      log.warn({ err, jobId: msg.scheduledJobId }, 'BullMQ-Job-Remove fehlgeschlagen — Message wird trotzdem als CANCELLED markiert');
+      log.warn({ err, jobId: msg.scheduledJobId }, 'BullMQ job remove failed — message is marked CANCELLED anyway');
     }
   }
 

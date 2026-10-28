@@ -38,7 +38,7 @@ export function attachWebSocket(server: Server, path = '/jmap/ws'): void {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, user));
-    })().catch((err) => { log.error({ err }, 'WS-Upgrade fehlgeschlagen'); socket.destroy(); });
+    })().catch((err) => { log.error({ err }, 'WS upgrade failed'); socket.destroy(); });
   });
 }
 
@@ -89,7 +89,7 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
             send({ '@type': 'Response', requestId, ...resp });
           } catch (err) {
             if (err instanceof RequestError) send({ '@type': 'RequestError', requestId, ...err.toJson() });
-            else { log.error({ err }, 'WS-Request fehlgeschlagen'); send({ '@type': 'RequestError', requestId, type: 'urn:ietf:params:jmap:error:serverFail', status: 500 }); }
+            else { log.error({ err }, 'WS request failed'); send({ '@type': 'RequestError', requestId, type: 'urn:ietf:params:jmap:error:serverFail', status: 500 }); }
           }
           return;
         }
@@ -110,7 +110,7 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
         default:
           send({ '@type': 'RequestError', requestId, type: 'urn:ietf:params:jmap:error:notRequest', status: 400, detail: 'Unknown @type' });
       }
-    })().catch((err) => log.error({ err }, 'WS-Message-Handler'));
+    })().catch((err) => log.error({ err }, 'WS message handler error'));
   });
 
   ws.on('close', () => {
@@ -118,5 +118,5 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
     clearInterval(alive);
     if (timer) clearTimeout(timer);
   });
-  ws.on('error', (err) => log.debug({ err }, 'WS-Fehler'));
+  ws.on('error', (err) => log.debug({ err }, 'WS error'));
 }
