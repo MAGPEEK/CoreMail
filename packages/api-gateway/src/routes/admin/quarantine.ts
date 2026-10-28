@@ -1,11 +1,11 @@
 /**
- * Admin-API: Quarantäne-Verwaltung
+ * Admin API: quarantine management
  *
- * GET    /api/v1/admin/quarantine                 — Liste (paginiert + Filter)
- * GET    /api/v1/admin/quarantine/stats           — Statistiken
- * POST   /api/v1/admin/quarantine/:id/release     — Freigeben (an Empfänger zustellen)
- * DELETE /api/v1/admin/quarantine/:id             — Endgültig löschen
- * DELETE /api/v1/admin/quarantine                 — Alle gelöschten / älter als X Tage löschen
+ * GET    /api/v1/admin/quarantine                 — list (paginated + filters)
+ * GET    /api/v1/admin/quarantine/stats           — statistics
+ * POST   /api/v1/admin/quarantine/:id/release     — release (deliver to recipient)
+ * DELETE /api/v1/admin/quarantine/:id             — delete permanently
+ * DELETE /api/v1/admin/quarantine                 — delete all deleted / older than X days
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -114,8 +114,8 @@ adminQuarantineRouter.post('/:id/release', async (req: Request, res: Response) =
     data: { released: true, releasedAt: new Date(), releasedBy: actorId },
   });
 
-  // TODO: Tatsächliche SMTP-Zustellung der rohen Nachricht aus MinIO
-  // (erfordert smtp-server Integration — hier nur DB-Update als Placeholder)
+  // TODO: actual SMTP delivery of the raw message from MinIO
+  // (requires smtp-server integration — DB update only as placeholder here)
   log.info({ id, toAddr: item.toAddr, releasedBy: actorId }, 'Quarantine item released');
   res.json({ message: 'Nachricht freigegeben' });
 });
@@ -130,7 +130,7 @@ adminQuarantineRouter.delete('/:id', async (req: Request, res: Response) => {
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
 
-// ── DELETE / (Bulk-Bereinigung) ───────────────────────────────────────────────
+// ── DELETE / (bulk cleanup) ───────────────────────────────────────────────────
 adminQuarantineRouter.delete('/', async (req: Request, res: Response) => {
   const schema = z.object({
     olderThanDays: z.number().int().min(1).max(365).optional(),

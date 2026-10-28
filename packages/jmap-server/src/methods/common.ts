@@ -1,6 +1,6 @@
 /**
- * Hilfen für die Standard-Methoden (RFC 8620 §5): Argument-Parsing für
- * /get, /set, /query; PatchObject-Anwendung; Pagination mit anchor.
+ * Helpers for the standard methods (RFC 8620 §5): argument parsing for
+ * /get, /set, /query; PatchObject application; pagination with anchor.
  */
 import { MethodError, anchorNotFound, requestTooLarge, stateMismatch } from '../errors.js';
 import { LIMITS } from '../settings.js';
@@ -74,8 +74,8 @@ export function assertState(ifInState: string | null, current: string): void {
 }
 
 /**
- * PatchObject (RFC 8620 §5.3): Schlüssel sind JSON-Pointer ohne führendes '/'.
- * Liefert ein neues Objekt; wirft invalidPatch bei ungültigem Pfad.
+ * PatchObject (RFC 8620 §5.3): keys are JSON pointers without a leading '/'.
+ * Returns a new object; throws invalidPatch on an invalid path.
  */
 export function applyPatch(base: JsonObject, patch: JsonObject): JsonObject {
   const out: JsonObject = structuredClone(base);

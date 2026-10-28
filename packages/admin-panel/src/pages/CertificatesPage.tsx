@@ -1,11 +1,11 @@
 /**
- * SSL/TLS Zertifikat-Verwaltung
+ * SSL/TLS certificate management
  *
- * Listet alle Zertifikate, ermöglicht:
- * - Let's Encrypt (ACME HTTP-01) anfordern
- * - Eigenes Zertifikat hochladen (PEM)
- * - Selbstsigniertes Zertifikat generieren
- * - Zertifikat erneuern / löschen
+ * Lists all certificates, allows:
+ * - Requesting Let's Encrypt (ACME HTTP-01)
+ * - Uploading your own certificate (PEM)
+ * - Generating a self-signed certificate
+ * - Renewing / deleting certificates
  */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.js';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type CertType   = 'LETSENCRYPT' | 'CUSTOM' | 'SELF_SIGNED';
 type CertStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'ERROR' | 'RENEWING';
@@ -39,7 +39,7 @@ interface Certificate {
   createdAt:        string;
 }
 
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function daysUntil(dateStr: string | null): number | null {
   if (!dateStr) return null;
@@ -65,7 +65,7 @@ function TypeBadge({ type }: { type: CertType }) {
   return <span className={`${base} bg-gray-100 text-gray-600`}>Self-Signed</span>;
 }
 
-// Nur Mail-Protokolle — HTTPS wird per Schloss-Symbol aktiviert, nicht über Services
+// Mail protocols only — HTTPS is activated via the lock icon, not via services
 const ALL_SERVICES = ['SMTP', 'IMAP', 'POP3'];
 
 const SERVICE_COLORS: Record<string, string> = {
@@ -75,9 +75,9 @@ const SERVICE_COLORS: Record<string, string> = {
 };
 
 /**
- * Service-Auswahl mit Exklusivitäts-Anzeige.
- * Jeder Service kann nur einem Zertifikat gleichzeitig zugeordnet sein.
- * Services die bereits von einem anderen Cert beansprucht sind, werden orange markiert.
+ * Service selection with exclusivity display.
+ * Each service can only be assigned to one certificate at a time.
+ * Services already claimed by another cert are marked orange.
  */
 function ServiceSelector({
   selected, onChange, allCerts, currentCertId,
@@ -85,9 +85,9 @@ function ServiceSelector({
   selected:       string[];
   onChange:       (s: string[]) => void;
   allCerts?:      Certificate[];
-  currentCertId?: string; // undefined = neues Cert
+  currentCertId?: string; // undefined = new cert
 }) {
-  // Ermitteln welche Services schon von anderen Certs beansprucht werden
+  // Determine which services are already claimed by other certs
   const takenBy: Record<string, string> = {};
   if (allCerts) {
     for (const cert of allCerts) {
@@ -98,7 +98,7 @@ function ServiceSelector({
     }
   }
 
-  // Services die gerade ausgewählt sind UND von einem anderen Cert übernommen werden
+  // Services that are currently selected AND will be taken over from another cert
   const beingTransferred = ALL_SERVICES.filter(s => selected.includes(s) && takenBy[s]);
 
   function toggle(svc: string) {
@@ -132,7 +132,7 @@ function ServiceSelector({
           );
         })}
       </div>
-      {/* Hinweis wenn Services von anderen Certs übernommen werden */}
+      {/* Notice when services are taken over from other certs */}
       {beingTransferred.length > 0 && (
         <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           ⚠️ {beingTransferred.map(s => `${s} (von „${takenBy[s]}")`).join(', ')} {beingTransferred.length === 1 ? 'wird' : 'werden'} diesem Zertifikat übertragen und beim anderen entfernt.
@@ -145,18 +145,18 @@ function ServiceSelector({
   );
 }
 
-// ── Modal-Typen ───────────────────────────────────────────────────────────────
+// ── Modal types ───────────────────────────────────────────────────────────────
 
 type ModalMode = 'letsencrypt' | 'upload' | 'selfsigned' | null;
 
-// ── TLS-Proxy-Status-Typen ────────────────────────────────────────────────────
+// ── TLS proxy status types ────────────────────────────────────────────────────
 
 interface TlsProxyInfo {
   port:       number;
   activeCert: { id: string; name: string; domains: string[]; status: string } | null;
 }
 
-// ── Haupt-Komponente ──────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 export function CertificatesPage() {
   const qc = useQueryClient();
@@ -263,7 +263,7 @@ export function CertificatesPage() {
         </div>
       </div>
 
-      {/* HTTPS-Status-Banner — nur wenn aktiv */}
+      {/* HTTPS status banner — only when active */}
       {tlsInfo?.activeCert && (
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
           <Lock size={16} className="text-green-600 shrink-0" />
@@ -278,7 +278,7 @@ export function CertificatesPage() {
         </div>
       )}
 
-      {/* Tabelle */}
+      {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
@@ -336,7 +336,7 @@ export function CertificatesPage() {
                         </div>
                       </div>
                     </td>
-                    {/* Typ */}
+                    {/* Type */}
                     <td className="px-4 py-3">
                       <TypeBadge type={cert.type} />
                     </td>
@@ -355,10 +355,10 @@ export function CertificatesPage() {
                         }
                       </div>
                     </td>
-                    {/* Aktionen */}
+                    {/* Actions */}
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {/* ── HTTPS-Proxy Schloss ── */}
+                        {/* ── HTTPS proxy lock ── */}
                         {cert.isActiveHttps ? (
                           <button
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
@@ -376,7 +376,7 @@ export function CertificatesPage() {
                             <LockOpen size={14} />
                           </button>
                         ) : null}
-                        {/* ── Protokoll-TLS (SMTP/IMAP/POP3) — unabhängig von HTTPS ── */}
+                        {/* ── Protocol TLS (SMTP/IMAP/POP3) — independent of HTTPS ── */}
                         {cert.isActiveProtocol ? (
                           <span title="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-blue-500 cursor-default">
                             <Server size={14} />
@@ -418,7 +418,7 @@ export function CertificatesPage() {
                       </div>
                     </td>
                   </tr>
-                  {/* Aufgeklappte Detailzeile */}
+                  {/* Expanded detail row */}
                   {expandedId === cert.id && (
                     <tr key={`${cert.id}-detail`} className="bg-blue-50/40">
                       <td colSpan={5} className="px-4 py-3">
@@ -454,7 +454,7 @@ export function CertificatesPage() {
                                 }
                               </p>
                             </div>
-                            {/* Protokoll-TLS Status — unabhängig von HTTPS-Proxy */}
+                            {/* Protocol TLS status — independent of HTTPS proxy */}
                             <div>
                               <p className="text-xs text-gray-500">Protokoll-TLS (SMTP/IMAP/POP3)</p>
                               <p className="flex items-center gap-1 text-gray-700">
@@ -491,7 +491,7 @@ export function CertificatesPage() {
         )}
       </div>
 
-      {/* Modals — certs weitergeben für Exklusivitäts-Anzeige */}
+      {/* Modals — pass certs for exclusivity display */}
       {modal === 'letsencrypt' && <LetsEncryptModal onClose={() => setModal(null)} allCerts={certs} />}
       {modal === 'upload'      && <UploadModal      onClose={() => setModal(null)} allCerts={certs} />}
       {modal === 'selfsigned'  && <SelfSignedModal  onClose={() => setModal(null)} allCerts={certs} />}
@@ -741,7 +741,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
   return (
     <Modal title="Zertifikat bearbeiten" onClose={onClose}>
       <div className="space-y-4">
-        {/* Read-only info: Typ, Status, Domains */}
+        {/* Read-only info: type, status, domains */}
         <div className="flex items-center gap-2 flex-wrap">
           <TypeBadge type={cert.type} />
           <StatusBadge status={cert.status} expiresAt={cert.expiresAt} />
@@ -754,7 +754,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
             ))}
           </div>
         </div>
-        {/* Read-only: Aktivierungsstatus */}
+        {/* Read-only: activation status */}
         <div className="grid grid-cols-2 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm">
           <div>
             <p className="text-xs text-gray-500 mb-0.5">HTTPS-Proxy (Port 443)</p>
@@ -773,7 +773,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
             </p>
           </div>
         </div>
-        {/* Editierbare Felder */}
+        {/* Editable fields */}
         <Field label="Name">
           <input
             value={name}

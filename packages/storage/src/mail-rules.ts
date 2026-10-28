@@ -9,17 +9,17 @@ const log = createLogger('storage:mail-rules');
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type RuleField =
-  | 'from'        // From-Adresse
-  | 'to'          // To-Empfänger (irgendein)
-  | 'cc'          // CC-Empfänger (irgendein)
-  | 'bcc'         // BCC-Empfänger
-  | 'subject'     // Betreff
+  | 'from'        // From address
+  | 'to'          // To recipient (any)
+  | 'cc'          // CC recipient (any)
+  | 'bcc'         // BCC recipient
+  | 'subject'     // Subject
   | 'body'        // Body (Text + HTML)
-  | 'recipient'   // To/CC/BCC kombiniert
+  | 'recipient'   // To/CC/BCC combined
   | 'hasAttachment'   // Boolean
   | 'size'        // Bytes
-  | 'importance'  // 'high' | 'normal' | 'low' aus X-Priority
-  | 'sentOnlyToMe';   // Empfänger == nur user.email
+  | 'importance'  // 'high' | 'normal' | 'low' from X-Priority
+  | 'sentOnlyToMe';   // recipients == only user.email
 
 export type RuleOperator =
   | 'contains'
@@ -94,7 +94,7 @@ function getFieldValue(field: RuleField, parsed: ParsedMessage, userEmail: strin
     case 'body':      return ((parsed.bodyText ?? '') + ' ' + (parsed.bodyHtml ?? '')).toLowerCase();
     case 'hasAttachment': return parsed.attachments.length > 0;
     case 'size':      return parsed.size;
-    case 'importance': return 'normal'; // TODO: aus X-Priority parsen, vorerst neutral
+    case 'importance': return 'normal'; // TODO: parse from X-Priority, neutral for now
     case 'sentOnlyToMe': {
       const me = userEmail.toLowerCase();
       const recips = [...parsed.toAddrs, ...parsed.ccAddrs, ...parsed.bccAddrs].map((r) => r.toLowerCase());
@@ -108,13 +108,13 @@ function evaluateOperator(
   operator: RuleOperator,
   expected: string | number | boolean,
 ): boolean {
-  // Bool-Felder: nur is/equals sinnvoll
+  // Boolean fields: only is/equals make sense
   if (typeof fieldValue === 'boolean') {
     if (operator === 'is' || operator === 'equals') return fieldValue === Boolean(expected);
     if (operator === 'notEquals') return fieldValue !== Boolean(expected);
     return false;
   }
-  // Numerische Felder
+  // Numeric fields
   if (typeof fieldValue === 'number') {
     const exp = Number(expected);
     if (Number.isNaN(exp)) return false;
@@ -126,7 +126,7 @@ function evaluateOperator(
       default: return false;
     }
   }
-  // String-Felder
+  // String fields
   const fv = String(fieldValue);
   const ev = String(expected).toLowerCase();
   switch (operator) {
@@ -155,7 +155,7 @@ function matchCondition(cond: RuleCondition, parsed: ParsedMessage, userEmail: s
 }
 
 function matchRule(rule: MailRuleData, parsed: ParsedMessage, userEmail: string): boolean {
-  // Exceptions IMMER OR: trifft eine Exception zu → Regel überspringen
+  // Exceptions are ALWAYS OR: if any exception matches → skip the rule
   for (const exc of rule.exceptions) {
     if (matchCondition(exc, parsed, userEmail)) return false;
   }
@@ -301,7 +301,7 @@ export async function applyMailRules(
 export const __internals = { matchCondition, matchRule, evaluateOperator, getFieldValue };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Run-Now (retroaktive Anwendung einer Regel auf bestehende DB-Messages)
+// Run-Now (retroactive application of a rule to existing DB messages)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface RunNowResult {
@@ -313,9 +313,9 @@ export interface RunNowResult {
 }
 
 /**
- * Wendet eine einzelne Rule retroaktiv auf vorhandene Messages an.
- * Forward/Redirect-Aktionen werden NICHT ausgeführt (das wäre Spam) —
- * nur Move/Copy/Flag/Categorize/Pin/MarkRead.
+ * Applies a single rule retroactively to existing messages.
+ * Forward/redirect actions are NOT executed (that would be spam) —
+ * only Move/Copy/Flag/Categorize/Pin/MarkRead.
  */
 export async function runRuleOnExisting(
   ruleId: string,
@@ -357,7 +357,7 @@ export async function runRuleOnExisting(
 
   for (const m of messages) {
     result.scanned++;
-    // synthetische ParsedMessage aus DB-Feldern bauen
+    // build a synthetic ParsedMessage from DB fields
     const synth: ParsedMessage = {
       subject:   m.subject ?? '',
       fromAddr:  m.fromAddr,
@@ -371,7 +371,7 @@ export async function runRuleOnExisting(
       date:      m.date,
       bodyText:  m.bodyText,
       bodyHtml:  m.bodyHtml,
-      attachments: [], // hasAttachment-Condition kann hier nicht geprüft werden
+      attachments: [], // hasAttachment condition cannot be checked here
       size:      m.rawSize,
     };
 

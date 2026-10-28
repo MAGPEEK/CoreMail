@@ -1,8 +1,8 @@
 /**
- * Tests für mapi/codec.ts — Round-Trip-Validation für alle Read/Write-Pairs.
+ * Tests for mapi/codec.ts — round-trip validation for all read/write pairs.
  *
- * Ausführung: pnpm --filter @coremail/ews-server exec node --test src/mapi/codec.test.ts
- * (TypeScript wird durch tsx oder ähnlich vorab kompiliert).
+ * Run: pnpm --filter @coremail/ews-server exec node --test src/mapi/codec.test.ts
+ * (TypeScript is compiled beforehand by tsx or similar).
  */
 
 import { test } from 'node:test';
@@ -77,7 +77,7 @@ test('ASCII string round-trip with null-terminator', () => {
     const w = new MapiWriter();
     w.writeAsciiString(s);
     const buf = w.toBuffer();
-    // Erwartete Länge: s.length + 1 (null-Byte)
+    // Expected length: s.length + 1 (null byte)
     assert.equal(buf.length, s.length + 1);
     assert.equal(buf[buf.length - 1], 0, 'last byte must be null terminator');
     const r = new MapiReader(buf);
@@ -92,7 +92,7 @@ test('UTF-16-LE string round-trip with null-terminator', () => {
     const w = new MapiWriter();
     w.writeUtf16String(s);
     const buf = w.toBuffer();
-    // Erwartete Länge: s.length * 2 + 2 (UTF-16 + 2-Byte-Null)
+    // Expected length: s.length * 2 + 2 (UTF-16 + 2-byte null)
     assert.equal(buf.length, s.length * 2 + 2);
     const r = new MapiReader(buf);
     assert.equal(r.readUtf16String(), s);

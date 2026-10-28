@@ -1,4 +1,4 @@
-/** Server-Limits für die Session (RFC 8620 §2) — ohne DB-Abhängigkeit, damit Tests sie laden können. */
+/** Server limits for the session (RFC 8620 §2) — no DB dependency so tests can load them. */
 export interface JmapLimits {
   maxSizeUpload: number;
   maxConcurrentUpload: number;

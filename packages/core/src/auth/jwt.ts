@@ -3,11 +3,11 @@ import { config } from '../config/index.js';
 import type { JwtPayload } from '../types/index.js';
 
 /**
- * v5.6.0: JWT zurück auf HS256 (HMAC) — RS256 + JWKS waren nur für OAuth2
- * Modern Auth nötig, und OAuth2/Modern Auth ist komplett aus dem Stack
- * entfernt. HS256 mit `JWT_SECRET` ist einfacher (keine Key-Generation,
- * keine DB-Persistenz, keine Public-Key-Verteilung) und ausreichend für
- * Session-Tokens innerhalb unseres Trust-Boundary.
+ * v5.6.0: JWT back to HS256 (HMAC) — RS256 + JWKS were only needed for OAuth2
+ * Modern Auth, and OAuth2/Modern Auth has been completely removed from the
+ * stack. HS256 with `JWT_SECRET` is simpler (no key generation,
+ * no DB persistence, no public key distribution) and sufficient for
+ * session tokens within our trust boundary.
  */
 
 export function signAccessToken(payload: Omit<JwtPayload, 'iat' | 'exp'>): string {

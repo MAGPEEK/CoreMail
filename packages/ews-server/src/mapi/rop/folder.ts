@@ -1,10 +1,10 @@
 /**
- * Folder-ROP-Handler (v4.1.0)
+ * Folder ROP handler (v4.1.0)
  *
- * Implementiert:
+ * Implements:
  *   - RopOpenFolder          (MS-OXCFOLD §2.2.1.1)
  *   - RopGetHierarchyTable   (MS-OXCFOLD §2.2.1.13)
- *   - RopGetContentsTable    (MS-OXCFOLD §2.2.1.14) — Stub (returnt leere Tabelle)
+ *   - RopGetContentsTable    (MS-OXCFOLD §2.2.1.14) — stub (returns an empty table)
  */
 
 import { prisma } from '@coremail/storage';
@@ -27,18 +27,18 @@ export async function handleRopOpenFolder(
   sessionToken: string,
   serverObjectHandles: number[],
 ): Promise<Buffer> {
-  // Input: Mailbox- oder Folder-Handle
+  // Input: mailbox or folder handle
   const input = await resolveHandleIndex(sessionToken, serverObjectHandles, rop.inputHandleIndex);
   if (!input) {
     return writeOpenFolderError(rop, MapiStatusCode.EC_INVALID_SESSION);
   }
 
-  // Payload parsen: FolderId (uint64) + OpenModeFlags (uint8)
+  // Parse payload: FolderId (uint64) + OpenModeFlags (uint8)
   const r = new MapiReader(rop.payload);
   const folderId64 = r.readUint64();
-  // const openModeFlags = r.readUint8(); // aktuell ignoriert
+  // const openModeFlags = r.readUint8(); // currently ignored
 
-  // Folder im DB suchen — wir matchen über den 64-Bit-Hash
+  // Look up the folder in the DB — we match via the 64-bit hash
   const userId = input.object.kind === 'mailbox'
     ? input.object.userId
     : input.object.kind === 'folder'
@@ -58,18 +58,18 @@ export async function handleRopOpenFolder(
   let folder = folders.find((f) => cuidToFolderId64(f.id) === folderId64) as
     | { id: string; name: string } | undefined;
 
-  // v4.6.0: Virtuelle PIM-Folder auch matchen
+  // v4.6.0: Also match virtual PIM folders
   if (!folder) {
     const vf = VIRTUAL_FOLDERS.find((v) => cuidToFolderId64(v.id) === folderId64);
     if (vf) folder = { id: vf.id, name: vf.name };
   }
 
   if (!folder) {
-    log.warn({ folderId64: folderId64.toString(16), userId }, 'RopOpenFolder: Folder nicht gefunden');
+    log.warn({ folderId64: folderId64.toString(16), userId }, 'RopOpenFolder: folder not found');
     return writeOpenFolderError(rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Folder-Handle in der Tabelle eintragen (v4.6.0: containerClass dynamisch ergänzt)
+  // Register the folder handle in the table (v4.6.0: containerClass added dynamically)
   const handle = await putRopObject(sessionToken, {
     kind: 'folder',
     userId,
@@ -92,14 +92,14 @@ export async function handleRopOpenFolder(
 }
 
 /**
- * v4.6.0: Virtuelle PIM-Folder. CoreMail speichert Calendar/Contacts/Tasks
- * NICHT als Mailbox-Folder (separate Prisma-Modelle), aber Outlook MAPI braucht
- * sie als Folder-Einträge in der Hierarchy-Tabelle damit der User sie sieht.
+ * v4.6.0: Virtual PIM folders. CoreMail does NOT store Calendar/Contacts/Tasks
+ * as mailbox folders (separate Prisma models), but Outlook MAPI needs
+ * them as folder entries in the hierarchy table so the user sees them.
  *
- * Wir synthesizen sie mit fixen "virtual-*" IDs und auto-generieren ihre
- * Property-Rows. OpenFolder auf eine virtuelle ID erkennt das und legt ein
- * Folder-Handle mit einem speziellen folderName an, das von QueryRows
- * ausgewertet wird.
+ * We synthesize them with fixed "virtual-*" IDs and auto-generate their
+ * property rows. OpenFolder on a virtual ID detects this and creates a
+ * folder handle with a special folderName that is evaluated by
+ * QueryRows.
  */
 export const VIRTUAL_FOLDERS = [
   { id: 'virtual-calendar',   name: 'Kalender',  displayName: 'Kalender',  containerClass: 'IPF.Appointment' },
@@ -113,20 +113,20 @@ export function isVirtualFolderId(id: string): boolean {
 }
 
 /**
- * v4.6.0: Mappt einen Folder-Namen auf eine Outlook MAPI Container-Class.
+ * v4.6.0: Maps a folder name to an Outlook MAPI container class.
  *
- * Outlook nutzt PR_CONTAINER_CLASS_W (0x3613001F) um den Folder-Typ zu
- * erkennen — daraus folgt das Icon, das Default-View (Mail/Kalender/Kontakte),
- * und das Editor-Verhalten. Werte (MS-OXOSFLD §2.2.3):
- *   "IPF.Note"        — Mail (Default)
- *   "IPF.Appointment" — Kalender
- *   "IPF.Contact"     — Kontakte
- *   "IPF.Task"        — Aufgaben
- *   "IPF.StickyNote"  — Notizen
- *   "IPF.Journal"     — Journal
+ * Outlook uses PR_CONTAINER_CLASS_W (0x3613001F) to detect the folder type —
+ * from it follow the icon, the default view (mail/calendar/contacts),
+ * and the editor behavior. Values (MS-OXOSFLD §2.2.3):
+ *   "IPF.Note"        — mail (default)
+ *   "IPF.Appointment" — calendar
+ *   "IPF.Contact"     — contacts
+ *   "IPF.Task"        — tasks
+ *   "IPF.StickyNote"  — notes
+ *   "IPF.Journal"     — journal
  *
- * Wir matchen case-insensitive sowohl die englischen als auch die deutschen
- * Standard-Namen (Outlook prüft den Klassen-String, nicht den Folder-Namen).
+ * We match both the English and the German standard names case-insensitively
+ * (Outlook checks the class string, not the folder name).
  */
 export function containerClassFor(folderName: string): string {
   const n = folderName.toLowerCase();
@@ -147,7 +147,7 @@ function writeOpenFolderError(rop: RopRequest, errorCode: number): Buffer {
 }
 
 /**
- * RopGetHierarchyTable: erstellt ein Table-Object über die Sub-Folder.
+ * RopGetHierarchyTable: creates a table object over the subfolders.
  */
 export async function handleRopGetHierarchyTable(
   rop: RopRequest,
@@ -161,14 +161,14 @@ export async function handleRopGetHierarchyTable(
   const userId = input.object.userId;
   const parentFolderId = input.object.kind === 'folder' ? input.object.folderId : '';
 
-  // Zähle direkte Sub-Folder (+ virtuelle PIM-Folder auf Root-Ebene)
+  // Count direct subfolders (+ virtual PIM folders at root level)
   let rowCount = await prisma.folder.count({
     where: {
       mailbox: { userId },
       parentId: parentFolderId === '' ? null : parentFolderId,
     },
   }).catch(() => 0);
-  // v4.6.0: Virtuelle Folder nur auf Root-Ebene (Mailbox-Handle) zählen
+  // v4.6.0: Count virtual folders only at root level (mailbox handle)
   if (parentFolderId === '') {
     rowCount += VIRTUAL_FOLDERS.length;
   }
@@ -190,8 +190,8 @@ export async function handleRopGetHierarchyTable(
 }
 
 /**
- * RopGetContentsTable: Mail-Liste im Folder. v4.1.0 Stub (rowCount = 0).
- * Volle Implementation in v4.2.0.
+ * RopGetContentsTable: mail list in the folder. v4.1.0 stub (rowCount = 0).
+ * Full implementation in v4.2.0.
  */
 export async function handleRopGetContentsTable(
   rop: RopRequest,
@@ -203,7 +203,7 @@ export async function handleRopGetContentsTable(
     return writeTableError(RopId.GetContentsTable, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
 
-  // v4.6.0: Virtuelle Folder → eigene Counts
+  // v4.6.0: Virtual folders → their own counts
   let rowCount = 0;
   if (isVirtualFolderId(input.object.folderId)) {
     switch (input.object.folderId) {

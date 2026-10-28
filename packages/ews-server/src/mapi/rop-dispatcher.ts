@@ -1,10 +1,10 @@
 /**
- * ROP-Dispatcher (v4.1.0)
+ * ROP dispatcher (v4.1.0)
  *
- * Parst den binären Execute-Request, dispatched jeden ROP an seinen
- * Handler, sammelt die Response-Buffers und baut die ROP-Stream-Response.
+ * Parses the binary Execute request, dispatches each ROP to its
+ * handler, collects the response buffers and builds the ROP stream response.
  *
- * Phasen-Mapping (welcher ROP in welcher Version implementiert):
+ * Phase mapping (which ROP is implemented in which version):
  *   v4.1.0: Logon, OpenFolder, GetHierarchyTable, GetContentsTable (stub),
  *           SetColumns, QueryRows, GetRowCount, Release
  *   v4.2.0: OpenMessage, GetPropertiesAll, GetPropertiesSpecific, OpenStream,
@@ -72,18 +72,18 @@ const log = createLogger('mapi:dispatcher');
 export interface DispatchResult {
   responseBuffer: Buffer;
   /**
-   * Nach dem Dispatch geänderte Server-Object-Handle-Table (mit ggf. neuen
-   * Handles für OutputHandleIndexes der ROPs).
+   * Server object handle table as modified after the dispatch (with any new
+   * handles for the ROPs' OutputHandleIndexes).
    */
   serverObjectHandles: number[];
 }
 
 /**
- * Hauptdispatch-Funktion.
+ * Main dispatch function.
  *
- * `executeBody` ist der raw binary Body von Execute-Request, der typischerweise
- * mit RopBuffer beginnt. Wir liefern einen ROP-Stream-Response zurück, der
- * von emsmdb-handler in eine Execute-Response-Hülle verpackt wird.
+ * `executeBody` is the raw binary body of the Execute request, which typically
+ * begins with RopBuffer. We return a ROP stream response, which the
+ * emsmdb-handler wraps in an Execute response envelope.
  */
 export async function dispatchRopBuffer(
   executeBody: Buffer,
@@ -97,7 +97,7 @@ export async function dispatchRopBuffer(
   try {
     parsed = parseRopBuffer(executeBody);
   } catch (err) {
-    log.warn({ err, bodyLen: executeBody.length }, 'ROP-Buffer-Parsing fehlgeschlagen');
+    log.warn({ err, bodyLen: executeBody.length }, 'ROP buffer parsing failed');
     return { responseBuffer: Buffer.alloc(0), serverObjectHandles: [] };
   }
 
@@ -105,7 +105,7 @@ export async function dispatchRopBuffer(
     ropCount: parsed.rops.length,
     handleCount: parsed.serverObjectHandles.length,
     rops: parsed.rops.map((r) => `0x${r.ropId.toString(16)}`),
-  }, 'Dispatching ROP-Stream');
+  }, 'Dispatching ROP stream');
 
   for (const rop of parsed.rops) {
     try {
@@ -114,15 +114,15 @@ export async function dispatchRopBuffer(
         builder.appendRop(responseBuf);
       }
     } catch (err) {
-      log.error({ err, ropId: `0x${rop.ropId.toString(16)}` }, 'ROP-Handler-Fehler');
+      log.error({ err, ropId: `0x${rop.ropId.toString(16)}` }, 'ROP handler error');
       writeNotSupportedRop(builder, rop.ropId, rop.outputHandleIndex ?? 0);
     }
   }
 
-  // Server-Object-Handle-Table für die Response: alle Eingabe-Handles
-  // bleiben gleich + ggf. neue Handles vom Allocate. Wir laden den
-  // aktuellen Session-State und nehmen alle Handles die nach den ROPs
-  // bekannt sind. v4.1.0 minimal: nur die Eingabe-Handles spiegeln.
+  // Server object handle table for the response: all input handles
+  // stay the same + any new handles from Allocate. We load the
+  // current session state and take all handles known after the ROPs.
+  // v4.1.0 minimal: only mirror the input handles.
   for (const h of parsed.serverObjectHandles) {
     responseHandles.push(h);
   }
@@ -164,7 +164,7 @@ async function dispatchOne(
     case RopId.Release:
       return handleRopRelease(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.2.0 — Mail-Lesen ─────────────────────────────────────────────────
+    // ── v4.2.0 — Reading mail ─────────────────────────────────────────────────
     case RopId.OpenMessage:
       return handleRopOpenMessage(rop, sessionToken, serverObjectHandles);
     case RopId.GetPropertiesAll:
@@ -178,7 +178,7 @@ async function dispatchOne(
     case RopId.GetStreamSize:
       return handleRopGetStreamSize(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.3.0 — Mail-Schreiben + Senden (Stubs returning ecNotSupported) ──
+    // ── v4.3.0 — Composing + sending mail (Stubs returning ecNotSupported) ──
     case RopId.CreateMessage:
       return handleRopCreateMessage(rop, sessionToken, serverObjectHandles);
     case RopId.SetProperties:
@@ -210,7 +210,7 @@ async function dispatchOne(
     case RopId.MoveCopyMessages:
       return handleRopMoveCopyMessages(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.5.0 — Push-Notifications ────────────────────────────────────────
+    // ── v4.5.0 — Push notifications ────────────────────────────────────────
     case RopId.RegisterNotification:
       return handleRopRegisterNotification(rop, sessionToken, serverObjectHandles);
 
@@ -286,13 +286,13 @@ async function dispatchOne(
     case RopId.SyncGetTransferState:
       return handleRopSyncGetTransferState(rop, sessionToken, serverObjectHandles);
 
-    // ── v4.6.0+ Phasen: TODO ────────────────────────────────────────────────
+    // ── v4.6.0+ phases: TODO ────────────────────────────────────────────────
     default: {
       const b = new RopResponseBuilder();
       writeNotSupportedRop(b, rop.ropId, rop.outputHandleIndex ?? 0);
-      // appendRop wurde aufgerufen, .rops enthält den Eintrag
-      // toBuffer() inkludiert aber den RopSize-Header — wir wollen nur den
-      // ROP-Inhalt zurück. → einzelnen Slice ohne Header bauen
+      // appendRop was called, .rops contains the entry
+      // but toBuffer() includes the RopSize header — we only want the
+      // ROP content back. → build a single slice without header
       return extractFirstRopFromBuilder(b);
     }
   }

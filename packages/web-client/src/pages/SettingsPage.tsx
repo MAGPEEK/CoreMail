@@ -20,7 +20,7 @@ import { useT } from '../i18n/useT.js';
 import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
 
 interface RetentionTagDto {
@@ -47,7 +47,7 @@ interface Category {
   sortOrder?: number;
 }
 
-// 14 vorgegebene Pastell-Farben (Outlook-Stil)
+// 14 predefined pastel colors (Outlook style)
 const CATEGORY_PALETTE = [
   '#EF4444', '#F97316', '#F59E0B', '#EAB308',
   '#84CC16', '#22C55E', '#10B981', '#14B8A6',
@@ -66,12 +66,12 @@ interface OofData {
   endDate: string | null;
 }
 
-// SigData ist jetzt in SignatureSection.tsx definiert
+// SigData is now defined in SignatureSection.tsx
 
 interface StorageFolder { id: string; name: string; displayName: string; sizeBytes: number; messageCount: number }
 interface StorageData { quotaBytes: number; usedBytes: number; folders: StorageFolder[] }
 
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBytes(b: number): string {
   if (b === 0) return '0 B';
   if (b < 1024) return `${b} B`;
@@ -83,7 +83,7 @@ function fmtBytes(b: number): string {
 function today()    { return new Date().toISOString().split('T')[0]!; }
 function tomorrow() { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]!; }
 
-// Passwort-Stärke ─────────────────────────────────────────────────────────────
+// Password strength ───────────────────────────────────────────────────────────
 function getPasswordStrength(pw: string): { score: 0 | 1 | 2 | 3 | 4; label: string; colorClass: string } {
   if (!pw) return { score: 0, label: '', colorClass: '' };
   let score = 0;
@@ -121,7 +121,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PROFIL
+// PROFILE
 // ═══════════════════════════════════════════════════════════════════════════════
 function ProfileSection() {
   const qc = useQueryClient();
@@ -162,7 +162,7 @@ function ProfileSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PASSWORT ÄNDERN
+// CHANGE PASSWORD
 // ═══════════════════════════════════════════════════════════════════════════════
 function PasswordSection() {
   const [currentPw,  setCurrentPw]  = useState('');
@@ -195,7 +195,7 @@ function PasswordSection() {
       </div>
 
       <div className="space-y-4 max-w-md">
-        {/* Aktuelles Passwort */}
+        {/* Current password */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Aktuelles Passwort</label>
           <div className="relative">
@@ -217,7 +217,7 @@ function PasswordSection() {
           </div>
         </div>
 
-        {/* Neues Passwort */}
+        {/* New password */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Neues Passwort</label>
           <div className="relative">
@@ -238,7 +238,7 @@ function PasswordSection() {
             </button>
           </div>
 
-          {/* Stärkemeter */}
+          {/* Strength meter */}
           {newPw.length > 0 && (
             <div className="mt-2 space-y-1">
               <div className="flex gap-1">
@@ -265,7 +265,7 @@ function PasswordSection() {
           )}
         </div>
 
-        {/* Passwort bestätigen */}
+        {/* Confirm password */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Passwort bestätigen</label>
           <input
@@ -293,7 +293,7 @@ function PasswordSection() {
   );
 }
 
-// Minimale SVG-Icons für Passwort-Sichtbarkeit ───────────────────────────────
+// Minimal SVG icons for password visibility ──────────────────────────────────
 function EyeIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -331,7 +331,7 @@ function ThemeSection() {
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Erscheinungsbild und Akzentfarbe des Webclients</p>
       </div>
 
-      {/* Farbschema */}
+      {/* Color scheme */}
       <div className="space-y-3">
         <p className="text-sm font-medium text-gray-700">Farbschema</p>
         <div className="grid grid-cols-3 gap-3 max-w-lg">
@@ -352,7 +352,7 @@ function ThemeSection() {
                     <Check size={11} className="text-white" strokeWidth={3} />
                   </span>
                 )}
-                {/* Vorschau-Box */}
+                {/* Preview box */}
                 <div className={`w-full h-14 rounded-lg overflow-hidden border ${
                   id === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
                 }`}>
@@ -376,7 +376,7 @@ function ThemeSection() {
         </div>
       </div>
 
-      {/* Akzentfarbe */}
+      {/* Accent color */}
       <div className="space-y-3">
         <p className="text-sm font-medium text-gray-700">Akzentfarbe</p>
         <div className="flex flex-wrap gap-3">
@@ -405,11 +405,11 @@ function ThemeSection() {
   );
 }
 
-// SIGNATUREN — Komponente jetzt in components/SignatureSection.tsx
-// (ausgelagert für reichere Funktionen: Bilder, Links, Schriftarten, Schriftgrößen)
+// SIGNATURES — component now in components/SignatureSection.tsx
+// (extracted for richer features: images, links, fonts, font sizes)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AUTOMATISCHE ANTWORTEN (OOF)
+// AUTOMATIC REPLIES (OOF)
 // ═══════════════════════════════════════════════════════════════════════════════
 function OofSection() {
   const qc = useQueryClient();
@@ -480,14 +480,14 @@ function OofSection() {
         </p>
       </div>
 
-      {/* Haupt-Toggle */}
+      {/* Main toggle */}
       <Toggle checked={enabled} onChange={setEnabled} label="Automatische Antworten aktivieren" />
 
-      {/* Optionen wenn aktiviert */}
+      {/* Options when enabled */}
       {enabled && (
         <div className="space-y-5 pl-1">
 
-          {/* Zeitraum */}
+          {/* Time range */}
           <div className="space-y-3">
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input type="checkbox" checked={useTimeRange} onChange={e => setUseTimeRange(e.target.checked)}
@@ -496,7 +496,7 @@ function OofSection() {
             </label>
 
             <div className={`space-y-2 pl-6 ${!useTimeRange ? 'opacity-40 pointer-events-none' : ''}`}>
-              {/* Startzeit */}
+              {/* Start time */}
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-600 w-16">Startzeit</span>
                 <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
@@ -509,7 +509,7 @@ function OofSection() {
                   <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
               </div>
-              {/* Endzeit */}
+              {/* End time */}
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-600 w-16">Endzeit</span>
                 <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
@@ -530,7 +530,7 @@ function OofSection() {
             </div>
           </div>
 
-          {/* Interne Antwort */}
+          {/* Internal reply */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">Antwort an Personen innerhalb Ihrer Organisation</label>
             <textarea
@@ -539,7 +539,7 @@ function OofSection() {
               placeholder="Ich bin momentan nicht erreichbar und antworte Ihrer Nachricht so schnell wie möglich." />
           </div>
 
-          {/* Externe Antwort */}
+          {/* External reply */}
           <div className="space-y-3 pt-1">
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input type="checkbox" checked={externalEnabled} onChange={e => setExternalEnabled(e.target.checked)}
@@ -570,7 +570,7 @@ function OofSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SPEICHER
+// STORAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const FOLDER_COLORS: Record<string, string> = {
@@ -616,7 +616,7 @@ function StorageSection() {
   const pct   = quota > 0 ? Math.min((used / quota) * 100, 100) : 0;
   const folders = data?.folders ?? [];
 
-  // Farbe pro Ordner
+  // Color per folder
   const colorFor = (name: string, idx: number) =>
     FOLDER_COLORS[name] ?? FALLBACK_COLORS[idx % FALLBACK_COLORS.length]!;
 
@@ -638,14 +638,14 @@ function StorageSection() {
         </p>
       </div>
 
-      {/* Verwendungsanzeige */}
+      {/* Usage display */}
       <div className="space-y-2">
         <p className="text-sm text-gray-700">
           <span className="font-medium">{fmtBytes(used)}</span> von <span className="font-medium">{fmtBytes(quota)}</span>{' '}
           (<span className="font-medium">{pct.toFixed(1)}%</span>) verwendet
         </p>
 
-        {/* Gestapelter Balken */}
+        {/* Stacked bar */}
         <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden flex">
           {folders.map((f, i) => {
             const w = quota > 0 ? (f.sizeBytes / quota) * 100 : 0;
@@ -658,7 +658,7 @@ function StorageSection() {
           })}
         </div>
 
-        {/* Legende */}
+        {/* Legend */}
         <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
           {folders.filter(f => f.sizeBytes > 0).map((f, i) => (
             <div key={f.id} className="flex items-center gap-1.5 text-xs text-gray-600">
@@ -669,7 +669,7 @@ function StorageSection() {
         </div>
       </div>
 
-      {/* Tabelle */}
+      {/* Table */}
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-1">Speicher verwalten</h3>
         <p className="text-xs text-gray-500 mb-3">
@@ -741,9 +741,9 @@ function StorageSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SICHERHEIT
+// SECURITY
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── TOTP-Setup-Wizard (integriert) ────────────────────────────────────────────
+// ── TOTP setup wizard (integrated) ────────────────────────────────────────────
 type TotpStep = 'idle' | 'setup' | 'confirm' | 'done';
 
 interface MfaStatus {
@@ -758,7 +758,7 @@ interface TotpSetupData {
   qrCodeDataUrl: string;
 }
 
-// Auth-Fetch-Helper für /auth/* Routen (außerhalb von /api/v1/)
+// Auth fetch helper for /auth/* routes (outside /api/v1/)
 async function authFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = useAuthStore.getState().accessToken ?? '';
   const isGet = !init.method || init.method === 'GET';
@@ -880,7 +880,7 @@ function SecuritySection() {
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">App-Passwörter und Zwei-Faktor-Authentifizierung</p>
       </div>
 
-      {/* App-Passwörter (Link bleibt) */}
+      {/* App passwords (link stays) */}
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
         <div className="flex items-center gap-2 mb-2">
           <Key size={15} className="text-gray-400" />
@@ -892,7 +892,7 @@ function SecuritySection() {
         </a>
       </div>
 
-      {/* ── 2FA Karte ── */}
+      {/* ── 2FA card ── */}
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -912,7 +912,7 @@ function SecuritySection() {
           )}
         </div>
 
-        {/* ── Status: inaktiv → Setup starten ── */}
+        {/* ── Status: inactive → start setup ── */}
         {!mfaStatus?.totpEnabled && totpStep === 'idle' && (
           <>
             <p className="text-xs text-gray-500">
@@ -929,7 +929,7 @@ function SecuritySection() {
           </>
         )}
 
-        {/* ── Schritt 1: QR-Code anzeigen ── */}
+        {/* ── Step 1: Show QR code ── */}
         {totpStep === 'setup' && setupData && (
           <div className="space-y-3">
             <p className="text-xs text-gray-600 font-medium">
@@ -956,7 +956,7 @@ function SecuritySection() {
           </div>
         )}
 
-        {/* ── Schritt 2: Code bestätigen ── */}
+        {/* ── Step 2: Confirm code ── */}
         {totpStep === 'confirm' && (
           <div className="space-y-3">
             <p className="text-xs text-gray-600 font-medium">
@@ -1000,7 +1000,7 @@ function SecuritySection() {
           </div>
         )}
 
-        {/* ── Schritt 3: Erfolg + Backup-Codes ── */}
+        {/* ── Step 3: Success + backup codes ── */}
         {totpStep === 'done' && backupCodes && (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
@@ -1020,7 +1020,7 @@ function SecuritySection() {
           </div>
         )}
 
-        {/* ── Aktiv: Verwaltung ── */}
+        {/* ── Active: management ── */}
         {mfaStatus?.totpEnabled && totpStep === 'idle' && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
@@ -1069,7 +1069,7 @@ function SecuritySection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// APP-PASSWORDS-SEKTION (nutzt authFetch aus SecuritySection)
+// APP PASSWORDS SECTION (uses authFetch from SecuritySection)
 // ═══════════════════════════════════════════════════════════════════════════════
 function AppPasswordsSection() {
   const t = useT();
@@ -1131,7 +1131,7 @@ function AppPasswordsSection() {
       </div>
       <p className="text-sm text-gray-600 mb-6 max-w-lg">{t('app_passwords_help')}</p>
 
-      {/* „Hier ist dein neues Passwort" — wird einmal angezeigt */}
+      {/* "Here is your new password" — shown once */}
       {createdPw && (
         <div className="mb-6 border-2 border-accent rounded-md p-4 bg-accent/5 animate-fly-in">
           <div className="flex items-start gap-2 mb-3">
@@ -1160,7 +1160,7 @@ function AppPasswordsSection() {
         </div>
       )}
 
-      {/* Inline-Editor für neue Passwörter */}
+      {/* Inline editor for new passwords */}
       {creating && !createdPw && (
         <div className="mb-4 border border-gray-200 rounded-md p-4 bg-blue-50/40 animate-fly-in">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('app_password_name')}</label>
@@ -1192,7 +1192,7 @@ function AppPasswordsSection() {
         </div>
       )}
 
-      {/* Liste */}
+      {/* List */}
       <div className="border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
         <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md">
           Name · {t('app_password_created')} · {t('app_password_last_used')}
@@ -1233,7 +1233,7 @@ function AppPasswordsSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// KATEGORIEN-SEKTION (Outlook-Style)
+// CATEGORIES SECTION (Outlook style)
 // ═══════════════════════════════════════════════════════════════════════════════
 function CategoriesSection() {
   const t = useT();
@@ -1290,7 +1290,7 @@ function CategoriesSection() {
       </div>
       <p className="text-sm text-gray-600 mb-6 max-w-lg">{t('categories_help')}</p>
 
-      {/* Liste */}
+      {/* List */}
       <div className="border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
         <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide bg-gray-50 rounded-t-md">
           {t('category_name')}
@@ -1423,7 +1423,7 @@ function CategoryEditRow({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// KALENDER-SEKTION
+// CALENDAR SECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function CalendarSection() {
   const t = useT();
@@ -1454,7 +1454,7 @@ function CalendarSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SPRACH-SEKTION
+// LANGUAGE SECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function LanguageSection() {
   const t = useT();
@@ -1512,7 +1512,7 @@ function LanguageSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// INAKTIVITÄTS-TIMEOUT — persönliche Überschreibung des globalen Wertes
+// INACTIVITY TIMEOUT — personal override of the global value
 // ═══════════════════════════════════════════════════════════════════════════════
 function InactivitySection() {
   interface Prefs { inactivityTimeoutMinutes: number | null; inactivityTimeoutMinutesGlobal: number }
@@ -1558,7 +1558,7 @@ function InactivitySection() {
   function handleSave() {
     if (!isValid) return;
     if (!usePersonal) {
-      saveMutation.mutate(null); // null = globale Einstellung verwenden
+      saveMutation.mutate(null); // null = use global setting
     } else {
       saveMutation.mutate(numVal);
     }
@@ -1575,13 +1575,13 @@ function InactivitySection() {
         </p>
       </div>
 
-      {/* Globale Einstellung anzeigen */}
+      {/* Show global setting */}
       <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-800">
         <span className="font-medium">Globale Einstellung des Servers:</span>{' '}
         {globalVal === 0 ? 'Deaktiviert' : `${globalVal} Minuten`}
       </div>
 
-      {/* Persönliche Überschreibung */}
+      {/* Personal override */}
       <div className="space-y-3">
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
@@ -1610,7 +1610,7 @@ function InactivitySection() {
               <span className="text-sm text-gray-500">Minuten (0 = deaktiviert)</span>
             </div>
 
-            {/* Schnell-Buttons */}
+            {/* Quick buttons */}
             <div className="flex flex-wrap gap-2">
               {QUICK.map(({ label, value }) => (
                 <button
@@ -1661,19 +1661,19 @@ function InactivitySection() {
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════════════
-// ANSICHT
+// VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 function ViewSection() {
   const { density, setDensity, readingPane, setReadingPane, groupByConversation, setGroupByConversation } = useUiPrefs();
 
-  // Lesebereich-Optionen
+  // Reading pane options
   const paneOptions: { value: ReadingPane; label: string; desc: string; Icon: React.ElementType }[] = [
     { value: 'right',  label: 'Rechts',   desc: 'Lesebereich rechts neben der Nachrichtenliste (Standard)', Icon: PanelRight  },
     { value: 'bottom', label: 'Unten',    desc: 'Lesebereich unterhalb der Nachrichtenliste',               Icon: PanelBottom },
     { value: 'off',    label: 'Aus',      desc: 'Kein Lesebereich — Nachrichten im Vollbildmodus öffnen',  Icon: EyeOff      },
   ];
 
-  // Dichte-Optionen
+  // Density options
   const densityOptions: { value: Density; label: string; desc: string }[] = [
     { value: 'compact',     label: 'Kompakt',      desc: 'Schmale Zeilen — mehr Nachrichten auf einen Blick' },
     { value: 'normal',      label: 'Normal',       desc: 'Ausgeglichene Darstellung (Standard)' },
@@ -1687,7 +1687,7 @@ function ViewSection() {
         <p className="text-sm text-gray-600">Layout und Darstellungsoptionen für CoreMail anpassen.</p>
       </div>
 
-      {/* ── Lesebereich ─────────────────────────────────────────────────────── */}
+      {/* ── Reading pane ────────────────────────────────────────────────────── */}
       <div>
         <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
           <Layout size={15} className="text-gray-500" />
@@ -1722,7 +1722,7 @@ function ViewSection() {
         </div>
       </div>
 
-      {/* ── Nachrichtendichte ────────────────────────────────────────────────── */}
+      {/* ── Message density ──────────────────────────────────────────────────── */}
       <div>
         <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
           <Rows3 size={15} className="text-gray-500" />
@@ -1756,7 +1756,7 @@ function ViewSection() {
         </div>
       </div>
 
-      {/* ── Konversationsansicht ─────────────────────────────────────────────── */}
+      {/* ── Conversation view ────────────────────────────────────────────────── */}
       <div>
         <h3 className="text-sm font-semibold text-gray-800 mb-3">Konversationen</h3>
         <Toggle
@@ -1771,7 +1771,7 @@ function ViewSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AUFBEWAHRUNGSRICHTLINIEN — Read-only Übersicht der PERSONAL-Tags
+// RETENTION POLICIES — read-only overview of the PERSONAL tags
 // ═══════════════════════════════════════════════════════════════════════════════
 function RetentionSection() {
   const t = useT();
@@ -1826,8 +1826,8 @@ function RetentionSection() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ExternalClientsSection (v3.18.40)
 //
-// Zeigt alle Setup-Daten für externe Clients (Outlook + CalDAV-Plugin,
-// Apple Kalender, Thunderbird, eM Client, iPhone, Android).
+// Shows all setup data for external clients (Outlook + CalDAV plugin,
+// Apple Calendar, Thunderbird, eM Client, iPhone, Android).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface ClientConfig {
@@ -1889,7 +1889,7 @@ function ExternalClientsSection() {
         </p>
       </header>
 
-      {/* Outlook Hinweis-Banner */}
+      {/* Outlook notice banner */}
       <div className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Info size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -1922,7 +1922,7 @@ function ExternalClientsSection() {
         </div>
       </div>
 
-      {/* App-Password-Hinweis */}
+      {/* App password notice */}
       {cfg.requiresAppPassword && (
         <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3">
           <Key size={18} className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
@@ -2018,7 +2018,7 @@ function ExternalClientsSection() {
         <CopyRow label="Passwort" value={cfg.requiresAppPassword ? '(App-Passwort)' : '(dein Login-Passwort)'} mono={false} />
       </div>
 
-      {/* Outlook CalDav Synchronizer Anleitung */}
+      {/* Outlook CalDav Synchronizer guide */}
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
         <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-3">
           <ExternalLink size={16} className="text-accent" /> Outlook CalDav Synchronizer einrichten
@@ -2118,7 +2118,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HAUPT-EXPORT
+// MAIN EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 export function SettingsPage() {
   const [section, setSection] = useState<Section>('profile');
@@ -2126,7 +2126,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-1 overflow-hidden bg-white">
-      {/* Linke Navigation — OWA-Stil */}
+      {/* Left navigation — OWA style */}
       <aside className="w-56 shrink-0 border-r border-gray-200 pt-4 bg-white overflow-y-auto">
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
@@ -2146,7 +2146,7 @@ export function SettingsPage() {
         ))}
       </aside>
 
-      {/* Rechter Inhaltsbereich — Externe Clients braucht mehr Breite für URLs */}
+      {/* Right content area — external clients needs more width for URLs */}
       <div className="flex-1 overflow-y-auto p-8 bg-white">
         <div className={section === 'externalClients' ? 'max-w-5xl' : 'max-w-xl'}>
           <SectionComp />

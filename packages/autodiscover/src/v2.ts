@@ -19,7 +19,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
 
   const cfg = await getServerConfig();
 
-  // Outlook fragt zuerst AutodiscoverV1 um den v1-Endpunkt zu finden
+  // Outlook first asks for AutodiscoverV1 to find the v1 endpoint
   if (protocol === 'autodiscoverv1') {
     res.json({
       Protocol: 'AutodiscoverV1',
@@ -28,7 +28,12 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
     return;
   }
 
+  // v5.8.0: EWS only as part of the optional Exchange path (MAPI/HTTP).
   if (protocol === 'ews') {
+    if (!cfg.mapiHttpEnabled) {
+      res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: 'EWS is disabled (enable "MAPI over HTTP + EWS" in BCP → Server)' });
+      return;
+    }
     res.json({
       Protocol: 'EWS',
       Url: cfg.ewsUrl,

@@ -1,14 +1,14 @@
 /**
- * Admin-API: Freigegebene Postfächer (Shared Mailboxes)
+ * Admin API: shared mailboxes
  *
- * GET    /api/v1/admin/shared-mailboxes                        — Liste
- * POST   /api/v1/admin/shared-mailboxes                        — Anlegen
+ * GET    /api/v1/admin/shared-mailboxes                        — list
+ * POST   /api/v1/admin/shared-mailboxes                        — create
  * GET    /api/v1/admin/shared-mailboxes/:id                    — Detail
- * PUT    /api/v1/admin/shared-mailboxes/:id                    — Bearbeiten
- * DELETE /api/v1/admin/shared-mailboxes/:id                    — Löschen
- * GET    /api/v1/admin/shared-mailboxes/:id/permissions        — Berechtigungen
- * POST   /api/v1/admin/shared-mailboxes/:id/permissions        — Berechtigung hinzufügen
- * DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId — Berechtigung entfernen
+ * PUT    /api/v1/admin/shared-mailboxes/:id                    — edit
+ * DELETE /api/v1/admin/shared-mailboxes/:id                    — delete
+ * GET    /api/v1/admin/shared-mailboxes/:id/permissions        — permissions
+ * POST   /api/v1/admin/shared-mailboxes/:id/permissions        — add permission
+ * DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId — remove permission
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -77,7 +77,7 @@ adminSharedMailboxesRouter.post('/', async (req: Request, res: Response) => {
       },
       select: SELECT,
     });
-    // Mailbox + Default-Ordner sofort provisionieren (analog zu regulären User-Mailboxen)
+    // Provision mailbox + default folders immediately (analogous to regular user mailboxes)
     const prov = await ensureSharedMailboxProvisioned(item.id).catch((e: unknown) => {
       log.error({ err: e, sharedMailboxId: item.id }, 'Shared mailbox folder provisioning failed');
       return null;
@@ -150,8 +150,8 @@ adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Res
 });
 
 // ── POST /:id/permissions ─────────────────────────────────────────────────────
-// Body: { userId, permissions: ['FULL_ACCESS','SEND_AS'] }  oder Legacy { userId, permission: '…' }
-// Setzt für den User alle in `permissions` aufgeführten Berechtigungen (Set-Semantik).
+// Body: { userId, permissions: ['FULL_ACCESS','SEND_AS'] }  or legacy { userId, permission: '…' }
+// Sets all permissions listed in `permissions` for the user (set semantics).
 adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
   const PERM_VALUES = ['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY'] as const;
@@ -167,7 +167,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
 
   const actorId = (req as Request & { userId?: string }).userId ?? 'system';
   try {
-    // Replace-Strategie: alle bestehenden für (mailbox, user) löschen, dann neu setzen
+    // Replace strategy: delete all existing for (mailbox, user), then set anew
     await prisma.$transaction([
       prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId, userId: p.data.userId } }),
       prisma.sharedMailboxPerm.createMany({
@@ -186,7 +186,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   }
 });
 
-// ── DELETE /:id/permissions/:userId — entfernt ALLE Berechtigungen des Users ──
+// ── DELETE /:id/permissions/:userId — removes ALL permissions of the user ─────
 adminSharedMailboxesRouter.delete('/:id/permissions/:userId', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
   const userId = req.params['userId'] ?? '';
@@ -197,7 +197,7 @@ adminSharedMailboxesRouter.delete('/:id/permissions/:userId', async (req: Reques
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
 
-// ── DELETE /:id/permissions/:userId/:permission — entfernt EINE Berechtigung ──
+// ── DELETE /:id/permissions/:userId/:permission — removes ONE permission ──────
 adminSharedMailboxesRouter.delete('/:id/permissions/:userId/:permission', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
   const userId = req.params['userId'] ?? '';

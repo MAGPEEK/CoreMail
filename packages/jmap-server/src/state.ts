@@ -1,12 +1,12 @@
 /**
- * State-Strings (RFC 8620 §1.6.2) pro Account und Datentyp.
+ * State strings (RFC 8620 §1.6.2) per account and data type.
  *
  * Email/Thread: `<maxMsgModSeq>.<mailboxHighestModSeq>.<maxCreatedMs>.<count>`
- *   - REST/JMAP setzen bei Änderungen modSeq = Date.now() (ms, > 1e12)
- *   - SMTP-Inbound/IMAP erhöhen den Mailbox-Zähler highestModSeq (klein)
- *   Beide Semantiken werden getrennt mitgeführt, damit /changes nichts verpasst.
- * Mailbox: `<count>.<maxCreatedMs>.<hash>` — Hash über alle sichtbaren Felder.
- * Sonstige (Identity, Quota, Principal, …): Hash des Inhalts.
+ *   - REST/JMAP set modSeq = Date.now() on changes (ms, > 1e12)
+ *   - SMTP inbound/IMAP increment the mailbox counter highestModSeq (small)
+ *   Both semantics are tracked separately so /changes misses nothing.
+ * Mailbox: `<count>.<maxCreatedMs>.<hash>` — hash over all visible fields.
+ * Others (Identity, Quota, Principal, …): hash of the content.
  */
 import { prisma } from '@coremail/storage';
 import {

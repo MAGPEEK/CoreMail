@@ -7,8 +7,8 @@ interface UndoOptions {
 }
 
 /**
- * Zeigt einen Toast mit „Rückgängig"-Button.
- * Der Toast verschwindet nach `duration` ms automatisch.
+ * Shows a toast with an "Undo" button.
+ * The toast disappears automatically after `duration` ms.
  */
 export function showUndoToast({ message, onUndo, duration = 5000 }: UndoOptions): void {
   toast.custom((t) => (

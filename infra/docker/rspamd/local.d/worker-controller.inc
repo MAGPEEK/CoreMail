@@ -1,7 +1,7 @@
-# rspamd Controller — Passwort für das Web-UI und API
-# Generiere mit: rspamadm pw --encrypt
-# secure_ip: diese Netzwerke dürfen ohne Passwort auf die API zugreifen
-# (deckt alle typischen Docker-Bridge-Netze ab)
+# rspamd controller — password for the web UI and API
+# Generate with: rspamadm pw --encrypt
+# secure_ip: these networks may access the API without a password
+# (covers all typical Docker bridge networks)
 password = "";
 enable_password = "";
 bind_socket = "0.0.0.0:11334";

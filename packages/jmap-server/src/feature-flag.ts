@@ -1,8 +1,8 @@
 /**
- * JMAP-Feature-Flag (v5.7.1) — analog zu ews-server/mapi/feature-flag.ts.
- * `ServerSettings.jmapEnabled` (Default true). Aus → /jmap/* und
- * /.well-known/jmap liefern 404. 60s-Cache, Invalidation über Redis
- * CHANNEL_SETTINGS_RELOAD. Fail-open (Default des Schemas ist „an").
+ * JMAP feature flag (v5.7.1) — analogous to ews-server/mapi/feature-flag.ts.
+ * `ServerSettings.jmapEnabled` (default true). Off → /jmap/* and
+ * /.well-known/jmap return 404. 60s cache, invalidation via Redis
+ * CHANNEL_SETTINGS_RELOAD. Fail-open (the schema default is "on").
  */
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -23,7 +23,7 @@ export async function isJmapEnabled(): Promise<boolean> {
     });
     cached = s?.jmapEnabled ?? true;
   } catch (err) {
-    log.warn({ err }, 'ServerSettings nicht lesbar — JMAP bleibt an (Schema-Default)');
+    log.warn({ err }, 'ServerSettings not readable — JMAP stays enabled (schema default)');
     cached = true;
   }
   cacheExpiry = now + CACHE_TTL_MS;

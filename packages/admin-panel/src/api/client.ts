@@ -110,18 +110,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       }
     }
     clearToken();
-    // Admin-Panel liegt unter /bcp — React Router basename="/bcp"
+    // Admin panel lives under /bcp — React Router basename="/bcp"
     window.location.href = '/bcp/login';
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText })) as { error: string; code?: string };
-    // v3.18.19 D5: Forced 2FA — Backend liefert 403 mit code=MFA_REQUIRED wenn
-    // requireMfaForAdmins=true und User keine MFA aktiviert hat. Frontend leitet
-    // auf MFA-Setup-Seite. (Verhindert dass User in Endlos-Fehler-Loop landen.)
+    // v3.18.19 D5: Forced 2FA — backend returns 403 with code=MFA_REQUIRED when
+    // requireMfaForAdmins=true and the user has no MFA enabled. Frontend redirects
+    // to the MFA setup page. (Prevents users from ending up in an endless error loop.)
     if (res.status === 403 && body.code === 'MFA_REQUIRED') {
-      // Vermeide doppelte Redirects wenn schon auf der MFA-Seite
+      // Avoid duplicate redirects when already on the MFA page
       if (!window.location.pathname.startsWith('/bcp/mfa-required')) {
         window.location.href = '/bcp/mfa-required';
       }

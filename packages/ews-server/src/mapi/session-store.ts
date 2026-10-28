@@ -1,18 +1,18 @@
 /**
- * MAPI/HTTP Session-Store (v4.0.0)
+ * MAPI/HTTP session store (v4.0.0)
  *
- * Redis-backed Persistenz für MAPI- und NSPI-Sessions. Jede Outlook-Verbindung
- * öffnet via Connect/Bind eine Session mit Cookie. Der Server hält pro Session
- * einen State (User-Identity, ROP-Handle-Table). Sessions laufen automatisch
- * ab (TTL); Outlook erneuert sie bei jedem Call.
+ * Redis-backed persistence for MAPI and NSPI sessions. Every Outlook connection
+ * opens a session with a cookie via Connect/Bind. The server keeps state per
+ * session (user identity, ROP handle table). Sessions expire automatically
+ * (TTL); Outlook renews them on every call.
  *
- * Cookie-Format:
+ * Cookie format:
  *   Set-Cookie: MapiSession=<token>; HttpOnly; SameSite=Strict; Path=/mapi/
  *   Set-Cookie: NspiSession=<token>; HttpOnly; SameSite=Strict; Path=/mapi/nspi/
  *
- * Redis-Keys:
- *   mapi:session:<token>     → JSON state (TTL 600s, renew bei jedem Access)
- *   mapi:nspi-session:<token> → analog
+ * Redis keys:
+ *   mapi:session:<token>     → JSON state (TTL 600s, renewed on every access)
+ *   mapi:nspi-session:<token> → likewise
  */
 
 import { createLogger, getRedisClient } from '@coremail/core';
@@ -20,7 +20,7 @@ import { randomBytes } from 'node:crypto';
 
 const log = createLogger('mapi:session');
 
-const SESSION_TTL_SECONDS = 600;   // 10 Minuten
+const SESSION_TTL_SECONDS = 600;   // 10 minutes
 const KEY_PREFIX_MAPI     = 'mapi:session:';
 const KEY_PREFIX_NSPI     = 'mapi:nspi-session:';
 
@@ -30,9 +30,9 @@ export interface MapiSessionState {
   displayName:   string;
   createdAt:     number;          // unix-ms
   lastSeen:      number;          // unix-ms
-  /** ROP-Handle-Table: int32 (handle-id) → opaque object descriptor. */
+  /** ROP handle table: int32 (handle-id) → opaque object descriptor. */
   handleTable:   Record<number, unknown>;
-  /** Nächstes freies Handle (incrementing counter). */
+  /** Next free handle (incrementing counter). */
   nextHandle:    number;
 }
 
@@ -44,11 +44,11 @@ export interface NspiSessionState {
 }
 
 function genToken(): string {
-  // 24 Bytes = 192 Bit Entropie → Base64URL (32 Zeichen)
+  // 24 bytes = 192 bits of entropy → Base64URL (32 characters)
   return randomBytes(24).toString('base64url');
 }
 
-// ── MAPI-Session (emsmdb) ────────────────────────────────────────────────────
+// ── MAPI session (emsmdb) ────────────────────────────────────────────────────
 
 export async function createMapiSession(opts: {
   userId: string;
@@ -72,7 +72,7 @@ export async function createMapiSession(opts: {
     'EX',
     SESSION_TTL_SECONDS,
   );
-  log.debug({ token: token.slice(0, 8), userId: opts.userId }, 'MAPI-Session erstellt');
+  log.debug({ token: token.slice(0, 8), userId: opts.userId }, 'MAPI session created');
   return { token, state };
 }
 
@@ -83,7 +83,7 @@ export async function getMapiSession(token: string): Promise<MapiSessionState | 
   if (!raw) return null;
   try {
     const state = JSON.parse(raw) as MapiSessionState;
-    // last-seen-Renewal + TTL-Refresh
+    // last-seen renewal + TTL refresh
     state.lastSeen = Date.now();
     await redis.set(
       KEY_PREFIX_MAPI + token,
@@ -101,13 +101,13 @@ export async function getMapiSession(token: string): Promise<MapiSessionState | 
 export async function deleteMapiSession(token: string): Promise<void> {
   if (!token) return;
   await getRedisClient().del(KEY_PREFIX_MAPI + token);
-  log.debug({ token: token.slice(0, 8) }, 'MAPI-Session gelöscht');
+  log.debug({ token: token.slice(0, 8) }, 'MAPI session deleted');
 }
 
 /**
- * Allokiert ein neues ROP-Handle in der Session. Speichert das opaque Object
- * unter dem neuen Index und persistiert die aktualisierte State zurück nach
- * Redis. Liefert das neue Handle.
+ * Allocates a new ROP handle in the session. Stores the opaque object
+ * under the new index and persists the updated state back to
+ * Redis. Returns the new handle.
  */
 export async function allocateRopHandle(
   token: string,
@@ -124,7 +124,7 @@ export async function allocateRopHandle(
   return handle;
 }
 
-// ── NSPI-Session (nspi) ──────────────────────────────────────────────────────
+// ── NSPI session (nspi) ──────────────────────────────────────────────────────
 
 export async function createNspiSession(opts: {
   userId: string;
@@ -166,9 +166,9 @@ export async function deleteNspiSession(token: string): Promise<void> {
   await getRedisClient().del(KEY_PREFIX_NSPI + token);
 }
 
-// ── Cookie-Parser ────────────────────────────────────────────────────────────
+// ── Cookie parser ────────────────────────────────────────────────────────────
 
-/** Parst einen Cookie-Header und gibt den ersten Wert für den gewünschten Cookie zurück. */
+/** Parses a Cookie header and returns the first value for the requested cookie. */
 export function getCookieValue(cookieHeader: string | undefined, name: string): string | null {
   if (!cookieHeader) return null;
   const parts = cookieHeader.split(';');

@@ -10,7 +10,7 @@ const log = createLogger('pop3-server');
 const PORT_PLAIN = parseInt(process.env['POP3_PORT']  ?? '110', 10);
 const PORT_TLS   = parseInt(process.env['POP3S_PORT'] ?? '995', 10);
 
-// ── TLS-Konfiguration (DB-backed) ─────────────────────────────────────────────
+// ── TLS configuration (DB-backed) ─────────────────────────────────────────────
 let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
 
 // ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
@@ -34,7 +34,7 @@ async function refreshHostname(): Promise<void> {
 
 async function refreshTlsConfig(): Promise<void> {
   try {
-    // v5.2.8: Cert direkt aus certificates-Tabelle via services[]='POP3'
+    // v5.2.8: cert directly from the certificates table via services[]='POP3'
     const found = await loadProtocolCert('POP3');
 
     if (found) {
@@ -43,10 +43,10 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // Kein passendes Cert in DB → self-signed Fallback mit fixem CN=mail.localhost
-    // (nur beim allerersten Start sinnvoll).  Der Admin tauscht es später im BCP
-    // gegen ein echtes Cert; ein fixer CN verhindert Neuausstellung beim Umbenennen
-    // des publicHostname.
+    // No matching cert in DB → self-signed fallback with fixed CN=mail.localhost
+    // (only useful on the very first start).  The admin later replaces it in the BCP
+    // with a real cert; a fixed CN prevents re-issuance when publicHostname
+    // is renamed.
     const SELF_SIGNED_HOSTNAME = 'mail.localhost';
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No protocol cert in DB — generating self-signed certificate for POP3');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
@@ -62,7 +62,7 @@ async function refreshTlsConfig(): Promise<void> {
   }
 }
 
-// ── Tracked-Server-Typ ────────────────────────────────────────────────────────
+// ── Tracked server type ───────────────────────────────────────────────────────
 interface TrackedPop3Server {
   server:  net.Server | tls.Server;
   sockets: Set<net.Socket>;
@@ -70,7 +70,7 @@ interface TrackedPop3Server {
 
 const servers = new Map<number, TrackedPop3Server>();
 
-// ── Reload-Mutex ──────────────────────────────────────────────────────────────
+// ── Reload mutex ──────────────────────────────────────────────────────────────
 let _reloading = false;
 let _pendingReload = false;
 
@@ -84,7 +84,7 @@ function scheduleReload(): void {
   });
 }
 
-// ── Server-Lifecycle ──────────────────────────────────────────────────────────
+// ── Server lifecycle ──────────────────────────────────────────────────────────
 
 interface ListenerConfig { port: number; ssl: boolean }
 
@@ -116,28 +116,28 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
 }
 
 /**
- * Schließt einen POP3-Listener definitiv:
+ * Shuts down a POP3 listener definitively:
  *
- * 1. Alle verfolgten Sockets per .destroy() sofort beenden
- * 2. server.close() → _handle.close() → OS-Port sofort freigegeben
- * 3. _handle direkt schließen als Nuklear-Option
+ * 1. Terminate all tracked sockets immediately via .destroy()
+ * 2. server.close() → _handle.close() → OS port released immediately
+ * 3. Close _handle directly as the nuclear option
  *
- * Synchron — kein async/await nötig.
+ * Synchronous — no async/await needed.
  */
 function closePop3Server(tracked: TrackedPop3Server, port: number): void {
   const count = tracked.sockets.size;
 
-  // Alle aktiven Verbindungen sofort zerstören
+  // Destroy all active connections immediately
   for (const s of tracked.sockets) { try { s.destroy(); } catch { /* ignore */ } }
   tracked.sockets.clear();
 
-  // server.close() → _handle.close() → OS-Port synchron freigegeben
+  // server.close() → _handle.close() → OS port released synchronously
   try {
     tracked.server.close(() =>
       log.debug({ port }, 'POP3 server.close() callback fired'));
   } catch { /* server may already be closed */ }
 
-  // Nuklear-Option: _handle direkt schließen
+  // Nuclear option: close _handle directly
   const handle = (tracked.server as any)._handle;
   if (handle?.close) {
     try { handle.close(); (tracked.server as any)._handle = null; } catch { /* ignore */ }
@@ -146,7 +146,7 @@ function closePop3Server(tracked: TrackedPop3Server, port: number): void {
   log.info({ port, closedConnections: count }, 'POP3 listener stopped');
 }
 
-// ── Listener-Reload ───────────────────────────────────────────────────────────
+// ── Listener reload ───────────────────────────────────────────────────────────
 
 async function reloadListeners(): Promise<void> {
   try {
@@ -155,7 +155,7 @@ async function reloadListeners(): Promise<void> {
 
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'POP3 reload');
 
-    // Neu aktive Ports starten — per-listener error isolation
+    // Start newly active ports — per-listener error isolation
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
         try {
@@ -170,10 +170,10 @@ async function reloadListeners(): Promise<void> {
       }
     }
 
-    // Deaktivierte/gelöschte Ports schließen (synchron)
+    // Close deactivated/removed ports (synchronously)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);   // Vor dem Close aus Map entfernen
+        servers.delete(port);   // Remove from map before closing
         closePop3Server(tracked, port);
       }
     }

@@ -127,7 +127,7 @@ app.get('/health', (_req, res) => {
 });
 
 // ── GET /dns-integrity ────────────────────────────────────────────────────────
-// Führt DNS-Poisoning-Integritätscheck durch (für Admin-Panel).
+// Runs the DNS-poisoning integrity check (for the admin panel).
 app.get('/dns-integrity', async (_req, res) => {
   try {
     const { runDnsIntegrityCheck, getDnsHardeningStatus } = await import('./dns-hardened.js');
@@ -163,7 +163,7 @@ async function main() {
     log.warn({ err }, 'Redis subscription failed — security settings will not hot-reload');
   }
 
-  // DNS-Hardening initialisieren (trusted resolvers + Integrity-Check)
+  // Initialize DNS hardening (trusted resolvers + integrity check)
   try {
     const { initDnsHardening } = await import('./dns-hardened.js');
     await initDnsHardening();
@@ -171,7 +171,7 @@ async function main() {
     log.warn({ err }, 'DNS hardening init failed (non-fatal) — using system resolver');
   }
 
-  // DNSBL-Zonen seeden falls Tabelle noch leer
+  // Seed DNSBL zones if the table is still empty
   try {
     const { seedDnsblZonesIfEmpty } = await import('./dnsbl/index.js');
     await seedDnsblZonesIfEmpty();

@@ -1,5 +1,5 @@
 /**
- * Blob/* (RFC 9404): upload (inline), get (Inhalt per Methode), lookup.
+ * Blob/* (RFC 9404): upload (inline), get (content via method), lookup.
  */
 import { createHash } from 'node:crypto';
 import { registerMethod } from '../dispatcher.js';

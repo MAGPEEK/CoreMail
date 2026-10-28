@@ -5,15 +5,15 @@ import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
 import { mapiRouter } from './mapi/handler.js';
 import { requireMapiEnabled, invalidateMapiFlagCache } from './mapi/feature-flag.js';
-// v5.6.0: OAuth2/JWT-Bearer entfernt (siehe core/auth/jwt.ts und
-// ews-server/auth/middleware.ts). v5.7.0: MAPI/HTTP optional zurück.
+// v5.6.0: OAuth2/JWT Bearer removed (see core/auth/jwt.ts and
+// ews-server/auth/middleware.ts). v5.7.0: MAPI/HTTP back as optional.
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
 
 async function main() {
   await connectDatabase();
-  // v5.6.0: initJwtKeys() entfernt
+  // v5.6.0: initJwtKeys() removed
 
   const app = express();
 
@@ -28,16 +28,23 @@ async function main() {
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'ews-server' }));
 
-  // v3.18.38: Outlook LTSC probt mit GET /EWS/Exchange.asmx BEVOR es überhaupt
-  // einen Authorization-Header sendet. Bisher haben wir 200 OK + WSDL-Stub
-  // zurückgegeben → Outlook nahm an, dass keine Auth nötig ist, schickte nie
-  // Credentials, und das Setup endete mit "Private Ordner" statt der Mailbox.
-  // KRITISCH: jeder EWS-Request (GET wie POST) MUSS bei fehlendem Auth-Header
-  // 401 + WWW-Authenticate: Basic realm="..." zurückgeben, damit Outlook den
-  // Credential-Prompt zeigt.
+  // v3.18.38: Outlook LTSC probes with GET /EWS/Exchange.asmx BEFORE it sends
+  // any Authorization header at all. Previously we returned 200 OK + WSDL stub
+  // → Outlook assumed no auth was needed, never sent credentials, and the
+  // setup ended with "Personal Folders" instead of the mailbox.
+  // CRITICAL: every EWS request (GET as well as POST) MUST return
+  // 401 + WWW-Authenticate: Basic realm="..." when the auth header is missing,
+  // so Outlook shows the credential prompt.
+  //
+  // v5.8.0: EWS is no longer a standalone client path (Outlook 2024 LTSC /
+  // M365 do not speak Basic-auth EWS against third-party servers). EWS remains
+  // only as a companion protocol to MAPI over HTTP (free/busy, OOF, OAB,
+  // Autodiscover follow-up calls) and hangs off the same switch
+  // (ServerSettings.mapiHttpEnabled). Off → 404, like /mapi.
+  app.use('/EWS', requireMapiEnabled);
   app.post('/EWS/Exchange.asmx', ewsAuthMiddleware, handleEwsRequest);
   app.get('/EWS/Exchange.asmx', ewsAuthMiddleware, (_req, res) => {
-    // WSDL stub for Outlook service discovery (nur für authentifizierte Clients)
+    // WSDL stub for Outlook service discovery (authenticated clients only)
     res.set('Content-Type', 'text/xml; charset=utf-8');
     res.send(`<?xml version="1.0" encoding="utf-8"?>
 <wsdl:definitions
@@ -48,32 +55,32 @@ async function main() {
 </wsdl:definitions>`);
   });
 
-  // OAB (Offline Address Book) — v3.18.38: 401 statt 404, damit Outlook das
-  // Profil nicht als incomplete markiert.
-  app.use('/OAB', ewsAuthMiddleware, (_req, res) => {
+  // OAB (Offline Address Book) — v3.18.38: 401 instead of 404 so Outlook does
+  // not mark the profile as incomplete.
+  app.use('/OAB', requireMapiEnabled, ewsAuthMiddleware, (_req, res) => {
     res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
 
-  // MAPI over HTTP — v5.7.0 optional (BCP → Server → „MAPI over HTTP").
-  // Gate zuerst: 404 wenn deaktiviert (auch /healthcheck.htm, damit Outlook
-  // den Endpoint gar nicht erst als Exchange erkennt). Dann v3.18.38-Regel:
-  // ewsAuthMiddleware vor dem Router, damit Outlook beim Connect Credentials
-  // sendet — Ausnahme /healthcheck.htm (anonyme Connectivity-Probe).
+  // MAPI over HTTP — v5.7.0 optional (BCP → Server → "MAPI over HTTP").
+  // Gate first: 404 when disabled (including /healthcheck.htm, so Outlook
+  // does not even detect the endpoint as Exchange). Then the v3.18.38 rule:
+  // ewsAuthMiddleware before the router so Outlook sends credentials on
+  // connect — exception /healthcheck.htm (anonymous connectivity probe).
   app.use('/mapi', requireMapiEnabled, (req, res, next) => {
     if (req.path === '/healthcheck.htm') return next();
     return ewsAuthMiddleware(req, res, next);
   }, mapiRouter);
 
-  // Settings-Änderungen aus dem BCP sofort übernehmen (sonst bis 60s Cache).
+  // Pick up settings changes from the BCP immediately (otherwise up to 60s cache).
   try {
     const sub = getRedisClient().duplicate();
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
       invalidateMapiFlagCache();
-      log.info('MAPI-Flag-Cache invalidiert (Redis-Signal)');
+      log.info('MAPI flag cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — MAPI-Flag läuft nach 60s ab');
+    log.warn({ err }, 'Redis subscription failed — MAPI flag expires after 60s');
   }
 
   app.listen(PORT, () => {

@@ -48,8 +48,8 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
 
   const open = (m: SharedMailboxEntry) => {
     if (!canRead(m)) return;
-    // Im selben Tab öffnen — schöner als window.open für nahtlosen Wechsel.
-    // Wer eine separate Ansicht möchte, kann Cmd/Ctrl+Klick → neuer Tab.
+    // Open in the same tab — nicer than window.open for a seamless switch.
+    // Anyone wanting a separate view can Cmd/Ctrl+click → new tab.
     onClose();
     navigate(`/shared-mailbox/${m.id}`);
   };

@@ -24,13 +24,13 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Wartungsmodus
+  // Maintenance mode
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
   const [selfServicePasswordReset, setSelfServicePasswordReset] = useState(true);
 
-  // Wartungsstatus + öffentliche Einstellungen beim Laden abrufen (kein Auth nötig)
+  // Fetch maintenance status + public settings on load (no auth required)
   useEffect(() => {
     fetch('/api/v1/maintenance')
       .then((r) => r.json())
@@ -38,7 +38,7 @@ export function LoginPage() {
         setMaintenanceMode(d.maintenanceMode ?? false);
         setMaintenanceMessage(d.maintenanceMessage ?? '');
       })
-      .catch(() => { /* ignorieren — kein Banner bei Netzwerkfehler */ });
+      .catch(() => { /* ignore — no banner on network error */ });
 
     fetch('/api/v1/admin/settings/public')
       .then((r) => r.json())
@@ -55,7 +55,7 @@ export function LoginPage() {
     }
   }, [step]);
 
-  // ── Step 1: E-Mail + Passwort ────────────────────────────────────────────────
+  // ── Step 1: Email + password ─────────────────────────────────────────────────
   const handleSubmitCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -71,7 +71,7 @@ export function LoginPage() {
         await finalizeLogin(accessToken, refreshToken);
       }
     } catch (err: unknown) {
-      // Wartungsmodus-Fehler explizit behandeln
+      // Handle maintenance mode error explicitly
       const msg = err instanceof Error ? err.message : '';
       if (msg.startsWith('maintenance:')) {
         setError(msg.replace('maintenance:', '').trim());
@@ -83,7 +83,7 @@ export function LoginPage() {
     }
   };
 
-  // ── Step 2: MFA-Code ─────────────────────────────────────────────────────────
+  // ── Step 2: MFA code ─────────────────────────────────────────────────────────
   const handleSubmitMfa = async (e: React.FormEvent) => {
     e.preventDefault();
     const code = otpDigits.join('');
@@ -107,7 +107,7 @@ export function LoginPage() {
     const profile = await api.get<UserProfile>('/user/profile');
     setProfile(profile.id, profile.email, profile.displayName, profile.role);
 
-    // v5.6.0: OAuth2-Consent-Flow komplett entfernt — Login geht direkt zu /mail.
+    // v5.6.0: OAuth2 consent flow completely removed — login goes directly to /mail.
     navigate('/mail');
   };
 
@@ -138,7 +138,7 @@ export function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
 
-      {/* ── Wartungsmodus-Banner (über der Login-Card) ── */}
+      {/* ── Maintenance mode banner (above the login card) ── */}
       {maintenanceMode && (
         <div className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-white px-4 py-3 flex items-start gap-3 shadow-lg">
           <AlertTriangle size={18} className="mt-0.5 shrink-0" />
@@ -169,7 +169,7 @@ export function LoginPage() {
           </div>
         </div>
 
-        {/* ── SCHRITT 1: Anmeldedaten ── */}
+        {/* ── STEP 1: Credentials ── */}
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
@@ -224,7 +224,7 @@ export function LoginPage() {
           </form>
         )}
 
-        {/* ── SCHRITT 2: MFA-Code ── */}
+        {/* ── STEP 2: MFA code ── */}
         {step === 'mfa' && (
           <form onSubmit={handleSubmitMfa} className="space-y-5">
             <div className="text-center">

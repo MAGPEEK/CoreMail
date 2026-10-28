@@ -1,11 +1,11 @@
 /**
- * Table-ROP-Handler (v4.1.0)
+ * Table ROP handler (v4.1.0)
  *
- * Implementiert:
- *   - RopSetColumns   (MS-OXCTABL §2.2.2.2) — wählt Spalten der Tabelle
- *   - RopQueryRows    (MS-OXCTABL §2.2.2.7) — holt Zeilen
- *   - RopGetRowCount  — gibt Anzahl Zeilen zurück
- *   - RopRelease      (MS-OXCROPS §2.2.15.3) — schließt Object
+ * Implements:
+ *   - RopSetColumns   (MS-OXCTABL §2.2.2.2) — selects the table's columns
+ *   - RopQueryRows    (MS-OXCTABL §2.2.2.7) — fetches rows
+ *   - RopGetRowCount  — returns the number of rows
+ *   - RopRelease      (MS-OXCROPS §2.2.15.3) — closes an object
  */
 
 import { prisma } from '@coremail/storage';
@@ -27,8 +27,8 @@ const log = createLogger('mapi:rop:table');
 /**
  * RopSetColumns
  *
- * Speichert die gewählten PropertyTags im Table-Object für nachfolgende
- * QueryRows. v4.1.0: persistieren wir in der Session-State HandleTable.
+ * Stores the selected PropertyTags in the table object for subsequent
+ * QueryRows. v4.1.0: we persist them in the session-state handle table.
  */
 export async function handleRopSetColumns(
   rop: RopRequest,
@@ -48,7 +48,7 @@ export async function handleRopSetColumns(
     columns.push(r.readUint32());
   }
 
-  // Columns in der Handle-Table speichern (mutate + persist)
+  // Store columns in the handle table (mutate + persist)
   const updated: RopObject = { ...input.object, columns };
   await persistHandle(sessionToken, input.handle, updated);
 
@@ -87,7 +87,7 @@ export async function handleRopQueryRows(
   }
   const columns = tableObj.columns ?? defaultHierarchyColumns();
 
-  // Rows aus DB laden (je nach tableType)
+  // Load rows from the DB (depending on tableType)
   let rows: Map<number, unknown>[] = [];
   if (tableObj.tableType === 'hierarchy') {
     const folders = await prisma.folder.findMany({
@@ -101,7 +101,7 @@ export async function handleRopQueryRows(
     }).catch(() => []);
     rows = folders.map((f) => folderToPropRow({ ...f, updatedAt: f.createdAt }, tableObj.parentFolderId));
 
-    // v4.6.0: Virtuelle PIM-Folder auf Root-Ebene injizieren
+    // v4.6.0: Inject virtual PIM folders at root level
     if (tableObj.parentFolderId === '' && rows.length < rowCount) {
       for (const vf of VIRTUAL_FOLDERS) {
         rows.push(virtualFolderToPropRow(vf, tableObj.userId));
@@ -109,11 +109,11 @@ export async function handleRopQueryRows(
       }
     }
   } else if (tableObj.tableType === 'contents') {
-    // v4.6.0: Virtuelle PIM-Folder
+    // v4.6.0: Virtual PIM folders
     if (tableObj.parentFolderId.startsWith('virtual-')) {
       rows = await loadVirtualContents(tableObj.parentFolderId, tableObj.userId, rowCount);
     } else {
-      // v4.8.0: Restriction anwenden (falls vorhanden)
+      // v4.8.0: Apply restriction (if present)
       const restriction = (tableObj as { restriction?: ParsedRestriction | null }).restriction ?? null;
       const restrictionWhere = restrictionToPrismaWhere(restriction);
       const messages = await prisma.message.findMany({
@@ -126,7 +126,7 @@ export async function handleRopQueryRows(
       rows = messages.map((m) => messageToPropRow(m));
     }
   } else if (tableObj.tableType === 'attachments') {
-    // v4.4.0: parentFolderId enthält tatsächlich die MessageId
+    // v4.4.0: parentFolderId actually contains the MessageId
     const attachments = await prisma.attachment.findMany({
       where: { messageId: tableObj.parentFolderId },
       select: { id: true, filename: true, mimeType: true, size: true, contentId: true,
@@ -137,7 +137,7 @@ export async function handleRopQueryRows(
     rows = attachments.map((a, idx) => attachmentToPropRow(a, idx));
   }
 
-  // Response zusammenbauen
+  // Assemble response
   const w = new MapiWriter();
   w.writeUint8(RopId.QueryRows);
   w.writeUint8(rop.inputHandleIndex ?? 0);
@@ -176,7 +176,7 @@ export async function handleRopGetRowCount(
       where: { messageId: tableObj.parentFolderId },
     }).catch(() => 0);
   } else if (tableObj.parentFolderId.startsWith('virtual-')) {
-    // v4.6.0: Virtuelle PIM-Contents-Counts
+    // v4.6.0: Virtual PIM contents counts
     switch (tableObj.parentFolderId) {
       case 'virtual-calendar':
         count = await prisma.calendarEvent.count({ where: { calendar: { userId: tableObj.userId } } }).catch(() => 0);
@@ -205,7 +205,7 @@ export async function handleRopGetRowCount(
 }
 
 /**
- * RopRelease — schließt ein Object.
+ * RopRelease — closes an object.
  */
 export async function handleRopRelease(
   rop: RopRequest,
@@ -216,8 +216,8 @@ export async function handleRopRelease(
   if (input) {
     await releaseRopObject(sessionToken, input.handle);
   }
-  // RopRelease hat keine Response (MS-OXCROPS §2.2.15.3)
-  // — wir geben einen leeren Buffer zurück (Dispatcher ignoriert das).
+  // RopRelease has no response (MS-OXCROPS §2.2.15.3)
+  // — we return an empty buffer (the dispatcher ignores it).
   return Buffer.alloc(0);
 }
 
@@ -257,7 +257,7 @@ function folderToPropRow(f: FolderRecord, _parentFolderId: string): Map<number, 
 }
 
 /**
- * v4.6.0: Property-Row für virtuelle PIM-Folder (Calendar/Contacts/Tasks/Notes).
+ * v4.6.0: Property row for virtual PIM folders (Calendar/Contacts/Tasks/Notes).
  */
 function virtualFolderToPropRow(
   vf: { id: string; name: string; displayName: string; containerClass: string },
@@ -267,7 +267,7 @@ function virtualFolderToPropRow(
   const m = new Map<number, unknown>();
   m.set(PR.PR_DISPLAY_NAME_W, vf.displayName);
   m.set(PR.PR_FOLDER_ID, cuidToFolderId64(vf.id));
-  m.set(PR.PR_CONTENT_COUNT, 0);     // wird per QueryRows on-demand bestimmt
+  m.set(PR.PR_CONTENT_COUNT, 0);     // determined on demand via QueryRows
   m.set(PR.PR_CONTENT_UNREAD, 0);
   m.set(PR.PR_SUBFOLDERS, false);
   m.set(PR.PR_CONTAINER_CLASS_W, vf.containerClass);
@@ -315,12 +315,12 @@ function attachmentToPropRow(a: AttachmentRecord, idx: number): Map<number, unkn
   m.set(PR.PR_DISPLAY_NAME_W, a.filename);
   m.set(PR.PR_ATTACH_MIME_TAG_W, a.mimeType);
   m.set(PR.PR_ATTACH_SIZE, a.size);
-  m.set(PR.PR_ATTACH_METHOD, 1);  // afByValue (Inline-Daten via OpenStream)
+  m.set(PR.PR_ATTACH_METHOD, 1);  // afByValue (inline data via OpenStream)
   if (a.contentId) m.set(PR.PR_ATTACH_CONTENT_ID_W, a.contentId);
   return m;
 }
 
-// ── v4.6.0 — Virtuelle PIM-Folder Contents-Loader ───────────────────────────
+// ── v4.6.0 — Virtual PIM folder contents loader ───────────────────────────
 
 async function loadVirtualContents(
   virtualId: string,
@@ -447,8 +447,8 @@ function writeError(ropId: number, rop: RopRequest, errorCode: number): Buffer {
 void makePropTag; void PropType;
 
 /**
- * Persistiert ein Object zurück in die Session-HandleTable (für Updates wie
- * RopSetColumns die das Object mutieren).
+ * Persists an object back into the session handle table (for updates like
+ * RopSetColumns that mutate the object).
  */
 async function persistHandle(token: string, handle: number, obj: RopObject): Promise<void> {
   const { getRedisClient } = await import('@coremail/core');

@@ -1,23 +1,23 @@
 /**
  * Named Properties (v5.1.0)
  *
- * Outlook adressiert Calendar/Contact/Task/Note-Properties NICHT über fixe
- * uint16 PropertyIds (wie PR_SUBJECT_W = 0x0037), sondern über GUID+LID-Paare
- * ("Property Set ID" + "Long ID"). Beispiel:
+ * Outlook addresses Calendar/Contact/Task/Note properties NOT via fixed
+ * uint16 PropertyIds (like PR_SUBJECT_W = 0x0037) but via GUID+LID pairs
+ * ("Property Set ID" + "Long ID"). Example:
  *
  *   PSETID_Appointment = {00062002-0000-0000-C000-000000000046}
- *   LID 0x820D = "AppointmentStartWhole" (Start-Datum eines Termins, PT_SYSTIME)
+ *   LID 0x820D = "AppointmentStartWhole" (start date of an appointment, PT_SYSTIME)
  *
- * Der Server muss diese Named Properties zur Laufzeit auf lokale uint16-IDs
- * im Range 0x8000-0xFFFF mappen ("Property Mapping"). Outlook fragt das mit:
+ * The server must map these named properties at runtime to local uint16 IDs
+ * in the range 0x8000-0xFFFF ("property mapping"). Outlook requests this with:
  *
- *   RopGetPropertyIdsFromNames: Liste von {GUID, LID, Kind} → Liste uint16-IDs
+ *   RopGetPropertyIdsFromNames: list of {GUID, LID, Kind} → list of uint16 IDs
  *   RopGetNamesFromPropertyIds: reverse mapping
  *
- * Wir halten den Cache im Session-State (mapi:session:<token>.namedPropMap).
- * Beim ersten OpenMessage(IPM.Appointment) wird die mapping aufgebaut.
+ * We keep the cache in the session state (mapi:session:<token>.namedPropMap).
+ * The mapping is built on the first OpenMessage(IPM.Appointment).
  *
- * MS-OXPROPS § 2.x dokumentiert die kanonischen LIDs für jeden PropertySet.
+ * MS-OXPROPS § 2.x documents the canonical LIDs for each property set.
  */
 
 import { createLogger } from '@coremail/core';
@@ -38,12 +38,12 @@ export const PS_PUBLIC_STRINGS  = '00020329-0000-0000-c000-000000000046';
 
 // ── Named Property Kinds (MS-OXCDATA §2.6) ───────────────────────────────
 
-export const NAMED_KIND_LID    = 0x00;   // 32-bit numerischer LID
-export const NAMED_KIND_NAME   = 0x01;   // Unicode-String
+export const NAMED_KIND_LID    = 0x00;   // 32-bit numeric LID
+export const NAMED_KIND_NAME   = 0x01;   // Unicode string
 
 // ── Standard Named Property LIDs ──────────────────────────────────────────
 
-/** Standard LIDs für PSETID_Appointment (MS-OXOCAL §2.2.x). */
+/** Standard LIDs for PSETID_Appointment (MS-OXOCAL §2.2.x). */
 export const LID_APPOINTMENT_SEQUENCE      = 0x8201;
 export const LID_BUSY_STATUS               = 0x8205;
 export const LID_LOCATION                  = 0x8208;
@@ -60,7 +60,7 @@ export const LID_REMINDER_DELTA            = 0x8501;
 export const LID_REMINDER_SET              = 0x8503;
 export const LID_REMINDER_SIGNAL_TIME      = 0x8560;
 
-/** Standard LIDs für PSETID_Address (MS-OXOCNTC §2.2.x). */
+/** Standard LIDs for PSETID_Address (MS-OXOCNTC §2.2.x). */
 export const LID_EMAIL1_DISPLAY_NAME       = 0x8080;
 export const LID_EMAIL1_ADDRESS_TYPE       = 0x8082;
 export const LID_EMAIL1_EMAIL_ADDRESS      = 0x8083;
@@ -70,7 +70,7 @@ export const LID_FILE_AS                   = 0x8005;
 export const LID_INSTANT_MESSAGING_ADDRESS = 0x8062;
 export const LID_WORK_ADDRESS              = 0x801B;
 
-/** Standard LIDs für PSETID_Task (MS-OXOTASK §2.2.x). */
+/** Standard LIDs for PSETID_Task (MS-OXOTASK §2.2.x). */
 export const LID_TASK_STATUS               = 0x8101;
 export const LID_PERCENT_COMPLETE          = 0x8102;
 export const LID_TASK_START_DATE           = 0x8104;
@@ -79,7 +79,7 @@ export const LID_TASK_DATE_COMPLETED       = 0x810F;
 export const LID_TASK_COMPLETE             = 0x811C;
 export const LID_TASK_OWNER                = 0x811F;
 
-/** Standard LIDs für PSETID_Note (MS-OXONOTE §2.2.x). */
+/** Standard LIDs for PSETID_Note (MS-OXONOTE §2.2.x). */
 export const LID_NOTE_COLOR                = 0x8B00;
 export const LID_NOTE_WIDTH                = 0x8B02;
 export const LID_NOTE_HEIGHT               = 0x8B03;
@@ -89,21 +89,21 @@ export const LID_NOTE_HEIGHT               = 0x8B03;
 export interface NamedProperty {
   kind: typeof NAMED_KIND_LID | typeof NAMED_KIND_NAME;
   guid: string;                          // lowercase canonical
-  lid?: number;                          // wenn kind === LID
-  name?: string;                         // wenn kind === NAME
+  lid?: number;                          // if kind === LID
+  name?: string;                         // if kind === NAME
 }
 
 export interface NamedPropertyMap {
-  /** lokale uint16-IDs im Range 0x8000-0xFFFF, indexed by serialized key */
+  /** local uint16 IDs in the range 0x8000-0xFFFF, indexed by serialized key */
   byKey: Record<string, number>;
   /** reverse mapping: uint16 → NamedProperty */
   byId:  Record<number, NamedProperty>;
-  /** nächster zu vergebender uint16 ID (start: 0x8000) */
+  /** next uint16 ID to assign (start: 0x8000) */
   nextId: number;
 }
 
 /**
- * Eindeutiger String-Schlüssel für eine NamedProperty (für Hash-Lookup).
+ * Unique string key for a NamedProperty (for hash lookup).
  */
 export function namedPropKey(np: NamedProperty): string {
   const g = np.guid.toLowerCase();
@@ -113,7 +113,7 @@ export function namedPropKey(np: NamedProperty): string {
 }
 
 /**
- * Lädt (oder initialisiert) die Named-Property-Map einer Session.
+ * Loads (or initializes) the named-property map of a session.
  */
 export async function getNamedPropMap(sessionToken: string): Promise<NamedPropertyMap> {
   const session = await getMapiSession(sessionToken);
@@ -123,8 +123,8 @@ export async function getNamedPropMap(sessionToken: string): Promise<NamedProper
 }
 
 /**
- * Mappt eine Liste von NamedProperty-Anfragen auf uint16-IDs.
- * Vergibt neue IDs für noch unbekannte Namen.
+ * Maps a list of NamedProperty requests to uint16 IDs.
+ * Assigns new IDs for names not yet known.
  */
 export function resolveNamedProperties(
   map: NamedPropertyMap,
@@ -156,7 +156,7 @@ export function reverseNamedProperties(
 }
 
 /**
- * Persistiert die Named-Property-Map zurück in die Session.
+ * Persists the named-property map back into the session.
  */
 export async function saveNamedPropMap(sessionToken: string, map: NamedPropertyMap): Promise<void> {
   const { getRedisClient } = await import('@coremail/core');
@@ -171,7 +171,7 @@ export async function saveNamedPropMap(sessionToken: string, map: NamedPropertyM
 }
 
 /**
- * Convenience: erzeugt eine NamedProperty für einen PSETID_*+LID-Eintrag.
+ * Convenience: creates a NamedProperty for a PSETID_*+LID entry.
  */
 export function lidProp(guid: string, lid: number): NamedProperty {
   return { kind: NAMED_KIND_LID, guid: guid.toLowerCase(), lid };

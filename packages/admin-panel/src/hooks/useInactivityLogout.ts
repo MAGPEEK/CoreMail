@@ -1,28 +1,28 @@
 /**
  * useInactivityLogout — BCP (Admin Panel)
  *
- * Liest inactivityTimeoutMinutes aus dem Public-Config-Endpoint und meldet
- * den Admin nach X Minuten ohne Maus-/Tastatureingabe automatisch ab.
+ * Reads inactivityTimeoutMinutes from the public config endpoint and logs
+ * the admin out automatically after X minutes without mouse/keyboard input.
  *
- * - 0 = deaktiviert (kein auto-logout)
- * - Warnt 60 Sekunden vor dem Logout via Toast
- * - Events die den Timer zurücksetzen: mousemove, mousedown, keydown, touchstart, scroll, visibilitychange
+ * - 0 = disabled (no auto-logout)
+ * - Warns 60 seconds before logout via toast
+ * - Events that reset the timer: mousemove, mousedown, keydown, touchstart, scroll, visibilitychange
  */
 
 import { useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { clearToken } from '../api/client.js';
 
-const WARN_BEFORE_MS = 60_000; // 1 Minute Vorwarnung
+const WARN_BEFORE_MS = 60_000; // 1 minute advance warning
 
 export function useInactivityLogout() {
   const timeoutRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warnToastId    = useRef<string | null>(null);
-  const limitMsRef     = useRef<number>(0); // 0 = deaktiviert
+  const limitMsRef     = useRef<number>(0); // 0 = disabled
 
   useEffect(() => {
-    // Public-Config laden (kein Auth nötig)
+    // Load public config (no auth required)
     void fetch('/api/v1/admin/settings/public')
       .then((r) => r.ok ? r.json() as Promise<{ inactivityTimeoutMinutes?: number }> : null)
       .then((cfg) => {
@@ -30,14 +30,14 @@ export function useInactivityLogout() {
         limitMsRef.current = minutes > 0 ? minutes * 60_000 : 0;
         if (limitMsRef.current > 0) scheduleLogout();
       })
-      .catch(() => { /* Fehler ignorieren — kein auto-logout */ });
+      .catch(() => { /* Ignore errors — no auto-logout */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const reset = () => {
       if (limitMsRef.current === 0) return;
-      // Warn-Toast verwerfen wenn vorhanden
+      // Dismiss warning toast if present
       if (warnToastId.current) {
         toast.dismiss(warnToastId.current);
         warnToastId.current = null;
@@ -67,7 +67,7 @@ export function useInactivityLogout() {
     const limit = limitMsRef.current;
     if (limit === 0) return;
 
-    // Vorwarnung (falls Timeout > 2× WARN_BEFORE_MS)
+    // Advance warning (if timeout > 2× WARN_BEFORE_MS)
     if (limit > WARN_BEFORE_MS * 2) {
       warnTimeoutRef.current = setTimeout(() => {
         const mins = Math.round(WARN_BEFORE_MS / 60_000);
@@ -78,12 +78,12 @@ export function useInactivityLogout() {
       }, limit - WARN_BEFORE_MS);
     }
 
-    // Eigentlicher Logout
+    // Actual logout
     timeoutRef.current = setTimeout(() => {
       if (warnToastId.current) toast.dismiss(warnToastId.current);
       toast('Sitzung abgelaufen — du wurdest automatisch abgemeldet.', { icon: '🔒', duration: 5000 });
       clearToken();
-      // BCP liegt unter /bcp
+      // BCP lives under /bcp
       setTimeout(() => { window.location.href = '/bcp/login'; }, 800);
     }, limit);
   }

@@ -1,14 +1,14 @@
 /**
- * Admin-API: SMTP-Warteschlangenverwaltung (BullMQ)
+ * Admin API: SMTP queue management (BullMQ)
  *
- * GET  /api/v1/admin/queues/stats                — Zähler je Queue-State
- * GET  /api/v1/admin/queues/jobs                 — Jobs (paginiert, filterbar nach state)
- * POST /api/v1/admin/queues/jobs/:id/retry       — Einzelnen Job wiederholen
- * POST /api/v1/admin/queues/retry-failed         — Alle fehlgeschlagenen Jobs wiederholen
- * DELETE /api/v1/admin/queues/jobs/:id           — Einzelnen Job löschen
- * POST /api/v1/admin/queues/flush                — Queue nach State leeren
- * GET  /api/v1/admin/queues/settings             — Queue-Einstellungen
- * PUT  /api/v1/admin/queues/settings             — Queue-Einstellungen aktualisieren
+ * GET  /api/v1/admin/queues/stats                — counters per queue state
+ * GET  /api/v1/admin/queues/jobs                 — jobs (paginated, filterable by state)
+ * POST /api/v1/admin/queues/jobs/:id/retry       — retry a single job
+ * POST /api/v1/admin/queues/retry-failed         — retry all failed jobs
+ * DELETE /api/v1/admin/queues/jobs/:id           — delete a single job
+ * POST /api/v1/admin/queues/flush                — flush queue by state
+ * GET  /api/v1/admin/queues/settings             — queue settings
+ * PUT  /api/v1/admin/queues/settings             — update queue settings
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { Queue, type Job } from 'bullmq';
@@ -23,7 +23,7 @@ adminQueuesRouter.use(requireAdmin);
 
 const OUTBOUND_QUEUE_NAME = 'smtp-outbound';
 
-/** Öffnet eine Queue-Verbindung, führt fn aus, schließt sie danach. */
+/** Opens a queue connection, runs fn, closes it afterwards. */
 async function withQueue<T>(fn: (q: Queue) => Promise<T>): Promise<T> {
   const q = new Queue(OUTBOUND_QUEUE_NAME, {
     connection: createBullMqConnection(),
@@ -57,7 +57,7 @@ function serializeJob(job: Job) {
     failedReason:  job.failedReason,
     stacktrace:    (job.stacktrace ?? []).slice(0, 3),
     dkimDomain:    d.dkimDomain,
-    // rawMessage wird NICHT serialisiert (kann MB groß sein)
+    // rawMessage is NOT serialized (can be MBs in size)
   };
 }
 

@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# CoreMail — Docker Hub Build & Push (2-Container-Architektur)
+# CoreMail — Docker Hub build & push (2-container architecture)
 #
-# Baut die zwei CoreMail-Images und pusht sie zu Docker Hub.
-# GitHub Actions übernimmt das automatisch bei jedem Version-Tag.
+# Builds the CoreMail images and pushes them to Docker Hub.
+# GitHub Actions does this automatically on every version tag.
 #
-# Verwendung:
+# Usage:
 #   bash scripts/docker-push.sh [VERSION] [--no-push]
 #
-# Beispiele:
-#   bash scripts/docker-push.sh              # Version aus CHANGELOG
-#   bash scripts/docker-push.sh 0.9.0        # explizite Version
-#   bash scripts/docker-push.sh 0.9.0 --no-push  # nur bauen, nicht pushen
+# Examples:
+#   bash scripts/docker-push.sh              # version from CHANGELOG
+#   bash scripts/docker-push.sh 0.9.0        # explicit version
+#   bash scripts/docker-push.sh 0.9.0 --no-push  # build only, do not push
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# ── Konfiguration ────────────────────────────────────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────────
 REGISTRY="docker.io"
 ORG="magpeek"
 
-# Version aus CHANGELOG extrahieren falls nicht angegeben
+# Extract version from CHANGELOG if not specified
 if [ -z "${1:-}" ] || [[ "$1" == --* ]]; then
   VERSION=$(grep -m1 '^\## \[[0-9]' CHANGELOG.md | sed 's/.*\[\([0-9][^]]*\)\].*/\1/')
 else
@@ -49,13 +49,13 @@ echo "  Commit    : ${GIT_SHA}"
 echo "  Push      : ${PUSH}"
 echo ""
 echo "  1 Image: magpeek/coremail-app"
-echo "  (Datenbank: Standard-Images postgres/redis/minio — kein eigenes Image)"
+echo "  (Database: standard images postgres/redis/minio — no custom image)"
 echo ""
 
 FAILED=()
 BUILT=()
 
-# ── Build-Funktion ────────────────────────────────────────────────────────────
+# ── Build function ────────────────────────────────────────────────────────────
 build_image() {
   local NAME="$1"
   local DOCKERFILE="$2"
@@ -63,7 +63,7 @@ build_image() {
   local TAG_VERSIONED="${IMAGE}:${VERSION}"
   local TAG_LATEST="${IMAGE}:latest"
 
-  echo "▶ Baue ${NAME}:${VERSION} ..."
+  echo "▶ Building ${NAME}:${VERSION} ..."
   echo "  Dockerfile : ${DOCKERFILE}"
   echo "  Image      : ${TAG_VERSIONED}"
 
@@ -88,29 +88,29 @@ build_image() {
     "${EXTRA_ARGS[@]}" \
     .; then
     BUILT+=("${NAME}:${VERSION}")
-    echo "  ✓ ${NAME} erfolgreich gebaut"
+    echo "  ✓ ${NAME} built successfully"
   else
     FAILED+=("${NAME}")
-    echo "  ✗ ${NAME} FEHLGESCHLAGEN" >&2
+    echo "  ✗ ${NAME} FAILED" >&2
   fi
   echo ""
 }
 
-# ── Das einzige CoreMail-Image ────────────────────────────────────────────────
-# Alle Node.js-Services + OWA/ECP-Frontends (kein nginx — api-gateway übernimmt)
+# ── The only CoreMail image ───────────────────────────────────────────────────
+# All Node.js services + OWA/ECP frontends (no nginx — api-gateway takes over)
 
 build_image "coremail-app" "infra/docker/Dockerfile.app"
 
-# ── Zusammenfassung ──────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────────
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                     Zusammenfassung                          ║"
+echo "║                        Summary                               ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "  Erfolgreich: ${#BUILT[@]} / $((${#BUILT[@]} + ${#FAILED[@]}))"
+echo "  Successful: ${#BUILT[@]} / $((${#BUILT[@]} + ${#FAILED[@]}))"
 
 if [ ${#BUILT[@]} -gt 0 ]; then
   echo ""
-  echo "  Gepushte Images:"
+  echo "  Pushed images:"
   for img in "${BUILT[@]}"; do
     echo "    ✓ docker.io/${ORG}/${img}"
   done
@@ -118,7 +118,7 @@ fi
 
 if [ ${#FAILED[@]} -gt 0 ]; then
   echo ""
-  echo "  Fehlgeschlagen:"
+  echo "  Failed:"
   for svc in "${FAILED[@]}"; do
     echo "    ✗ ${svc}"
   done
@@ -129,7 +129,7 @@ if [ "$PUSH" = true ]; then
   echo ""
   echo "  Docker Hub: https://hub.docker.com/r/${ORG}/coremail-app"
   echo ""
-  echo "  Schnellstart:"
+  echo "  Quick start:"
   echo "    docker compose -f infra/docker/docker-compose.yml up -d"
   echo ""
   echo "  Synology NAS:"

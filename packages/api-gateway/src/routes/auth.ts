@@ -1,6 +1,6 @@
 /**
- * Auth-Routen direkt im api-gateway — kein HTTP-Proxy nötig.
- * Login / Refresh / Logout / Passwort-Reset ohne Umweg über auth-service.
+ * Auth routes directly in the api-gateway — no HTTP proxy needed.
+ * Login / refresh / logout / password reset without a detour via auth-service.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -13,21 +13,21 @@ import type { UserRole } from '@coremail/core/types';
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
 
-const MFA_CHALLENGE_TTL    = 10 * 60; // 10 Minuten
+const MFA_CHALLENGE_TTL    = 10 * 60; // 10 minutes
 const MFA_CHALLENGE_PREFIX = 'auth:mfa:challenge:';
 
-// Passwort-Reset: Rate-Limit im Redis (3 Requests pro IP/E-Mail pro Stunde)
+// Password reset: rate limit in Redis (3 requests per IP/email per hour)
 const RESET_RATE_PREFIX  = 'pwreset:rate:';
 const RESET_RATE_LIMIT   = 3;
-const RESET_RATE_WINDOW  = 3600; // 1 Stunde in Sekunden
-const RESET_TOKEN_TTL    = 15 * 60; // 15 Minuten
+const RESET_RATE_WINDOW  = 3600; // 1 hour in seconds
+const RESET_TOKEN_TTL    = 15 * 60; // 15 minutes
 
-/** SHA-256-Hash eines Token-Strings. */
+/** SHA-256 hash of a token string. */
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Sendet eine E-Mail via internem SMTP-Submission (localhost:587). */
+/** Sends an email via internal SMTP submission (localhost:587). */
 async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
   const fromAddr = settings?.adminEmail?.trim() || `noreply@${settings?.publicHostname || 'mail.local'}`;
@@ -37,7 +37,7 @@ async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
     host: '127.0.0.1',
     port: 587,
     secure: false,
-    ignoreTLS: true, // intern, kein TLS nötig
+    ignoreTLS: true, // internal, no TLS needed
     tls: { rejectUnauthorized: false },
   });
 
@@ -81,7 +81,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    // verifyPassword nutzt sha256(password + PEPPER) → bcrypt — gleiche Logik wie hashPassword
+    // verifyPassword uses sha256(password + PEPPER) → bcrypt — same logic as hashPassword
     const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
       log.warn({ email }, 'Login failed: wrong password');
@@ -89,7 +89,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    // ── MFA-Prüfung ────────────────────────────────────────────────────────────
+    // ── MFA check ──────────────────────────────────────────────────────────────
     const mfa = await prisma.userMfa.findUnique({ where: { userId: user.id } });
     const mfaEnabled = mfa?.totpEnabled === true ||
       (Array.isArray(mfa?.webAuthnCredentials) && (mfa?.webAuthnCredentials as unknown[]).length > 0);
@@ -109,7 +109,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    // ── Kein MFA — direkt Token ausstellen ─────────────────────────────────────
+    // ── No MFA — issue tokens directly ─────────────────────────────────────────
     const sessionId = randomUUID();
     const accessToken = signAccessToken({
       sub:        user.id,
@@ -191,34 +191,34 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
 });
 
 // ── POST /auth/forgot-password ────────────────────────────────────────────────
-// Sicherheitsprinzipien:
-//   1. Kein User-Enumeration: Antwort ist immer identisch (200 OK)
-//   2. Rate-Limit: max 3 Requests pro IP + E-Mail pro Stunde (Redis)
-//   3. Token: crypto.randomBytes(32) = 256 bit Entropie
-//   4. Token im DB: SHA-256-Hash (nie Klartext)
-//   5. Nur aktiv, wenn GlobalSettings.selfServicePasswordReset = true
+// Security principles:
+//   1. No user enumeration: the response is always identical (200 OK)
+//   2. Rate limit: max 3 requests per IP + email per hour (Redis)
+//   3. Token: crypto.randomBytes(32) = 256 bit entropy
+//   4. Token in DB: SHA-256 hash (never plaintext)
+//   5. Only active when GlobalSettings.selfServicePasswordReset = true
 authRouter.post('/forgot-password', async (req: Request, res: Response) => {
   const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
   if (!parsed.success) {
-    // Gleiche Antwort — kein Fingerprinting
+    // Same response — no fingerprinting
     res.json({ ok: true });
     return;
   }
   const { email } = parsed.data;
   const ip = req.ip ?? 'unknown';
 
-  // Immer gleiche Antwort zurückgeben — kein User-Enumeration möglich
+  // Always return the same response — no user enumeration possible
   const ALWAYS_OK = () => res.json({ ok: true });
 
   try {
-    // 1. Feature-Flag prüfen
+    // 1. Check feature flag
     const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
     if (settings?.selfServicePasswordReset === false) {
       log.info({ email, ip }, 'Password reset disabled by admin');
       ALWAYS_OK(); return;
     }
 
-    // 2. Rate-Limit prüfen (pro IP + pro E-Mail — beide Schlüssel)
+    // 2. Check rate limit (per IP + per email — both keys)
     const redis = getRedisClient();
     const rateKeyIp    = `${RESET_RATE_PREFIX}ip:${ip}`;
     const rateKeyEmail = `${RESET_RATE_PREFIX}email:${email.toLowerCase()}`;
@@ -227,16 +227,16 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
       redis.incr(rateKeyIp),
       redis.incr(rateKeyEmail),
     ]);
-    // TTL nur beim ersten Increment setzen
+    // Set TTL only on the first increment
     if (ipCount === 1) await redis.expire(rateKeyIp, RESET_RATE_WINDOW);
     if (emailCount === 1) await redis.expire(rateKeyEmail, RESET_RATE_WINDOW);
 
     if (ipCount > RESET_RATE_LIMIT || emailCount > RESET_RATE_LIMIT) {
       log.warn({ email, ip, ipCount, emailCount }, 'Password reset rate limit exceeded');
-      ALWAYS_OK(); return; // Kein Fehler-Response — kein Enumeration
+      ALWAYS_OK(); return; // No error response — no enumeration
     }
 
-    // 3. Benutzer suchen (nur aktive LOCAL-User)
+    // 3. Look up user (active LOCAL users only)
     const user = await prisma.user.findFirst({
       where: { email: email.toLowerCase(), active: true, authSource: 'LOCAL' },
       select: { id: true, email: true },
@@ -247,12 +247,12 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
       ALWAYS_OK(); return;
     }
 
-    // 4. Alte Token löschen (max 1 aktiver Token pro User)
+    // 4. Delete old tokens (max 1 active token per user)
     await prisma.passwordResetToken.deleteMany({
       where: { userId: user.id, usedAt: null },
     });
 
-    // 5. Neuen Token generieren und hashen
+    // 5. Generate and hash a new token
     const rawToken = randomBytes(32).toString('hex'); // 64-char hex, 256 bit
     const tokenHash = hashToken(rawToken);
     const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL * 1000);
@@ -261,13 +261,13 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
       data: { userId: user.id, tokenHash, expiresAt, ipAddress: ip },
     });
 
-    // 6. Reset-URL aufbauen
+    // 6. Build the reset URL
     const base = settings?.useHttps
       ? `https://${settings.publicHostname}`
       : `http://${settings?.publicHostname ?? 'localhost'}:${settings?.httpPort ?? 3000}`;
     const resetUrl = `${base}/reset-password?token=${rawToken}`;
 
-    // 7. E-Mail senden (fire-and-forget — Fehler loggen, aber nicht an Benutzer)
+    // 7. Send email (fire-and-forget — log errors, but do not expose to the user)
     sendResetEmail(user.email, resetUrl).catch((err) => {
       log.error({ err, email: user.email }, 'Failed to send password reset email');
     });
@@ -276,17 +276,17 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
     ALWAYS_OK();
   } catch (err) {
     log.error({ err, email, ip }, 'forgot-password error');
-    ALWAYS_OK(); // Auch bei Fehler: keine Information leaken
+    ALWAYS_OK(); // Even on error: leak no information
   }
 });
 
 // ── POST /auth/reset-password ─────────────────────────────────────────────────
-// Nimmt den Klartext-Token + neues Passwort und setzt das Passwort.
-// Sicherheitsprinzipien:
-//   1. Token wird SHA-256-gehasht und gegen DB geprüft
-//   2. Token muss nicht abgelaufen und nicht bereits benutzt sein
-//   3. Passwort wird mit bcrypt + pepper gehasht
-//   4. Alle Sessions des Users werden nach dem Reset ungültig
+// Takes the plaintext token + new password and sets the password.
+// Security principles:
+//   1. Token is SHA-256 hashed and checked against the DB
+//   2. Token must not be expired and not already used
+//   3. Password is hashed with bcrypt + pepper
+//   4. All sessions of the user become invalid after the reset
 const ResetPasswordSchema = z.object({
   token:       z.string().min(32).max(128),
   newPassword: z.string().min(1).max(128),
@@ -302,7 +302,7 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
   const ip = req.ip ?? 'unknown';
 
   try {
-    // 1. Token hashen + in DB suchen
+    // 1. Hash token + look it up in the DB
     const tokenHash = hashToken(token);
     const resetToken = await prisma.passwordResetToken.findUnique({
       where: { tokenHash },
@@ -320,7 +320,7 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
       return;
     }
 
-    // 2. Passwort-Policy prüfen
+    // 2. Check password policy
     const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
     const minLen = settings?.minPasswordLength ?? 8;
     if (newPassword.length < minLen) {
@@ -328,11 +328,11 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. Neues Passwort hashen — hashPassword nutzt sha256(password + PEPPER) → bcrypt
+    // 3. Hash new password — hashPassword uses sha256(password + PEPPER) → bcrypt
     const { hashPassword } = await import('@coremail/core');
     const passwordHash = await hashPassword(newPassword);
 
-    // 4. Token als benutzt markieren + Passwort setzen + alle Sessions löschen (atomar via Transaction)
+    // 4. Mark token as used + set password + delete all sessions (atomic via transaction)
     await prisma.$transaction([
       prisma.passwordResetToken.update({
         where: { id: resetToken.id },
@@ -356,7 +356,7 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
 });
 
 // ── GET /auth/reset-password/verify ──────────────────────────────────────────
-// Prüft ob ein Token noch gültig ist (für Frontend-Feedback vor dem Formular)
+// Checks whether a token is still valid (for frontend feedback before the form)
 authRouter.get('/reset-password/verify', async (req: Request, res: Response) => {
   const token = typeof req.query['token'] === 'string' ? req.query['token'] : '';
   if (!token || token.length < 32) {

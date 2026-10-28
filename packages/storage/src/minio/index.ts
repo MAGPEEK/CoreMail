@@ -26,35 +26,35 @@ export async function ensureBuckets(): Promise<void> {
     await client.makeBucket(bucket, 'eu-central-1');
     log.info({ bucket }, 'Bucket created');
   }
-  // v3.18.24 E4: Lifecycle-Policies setzen damit temporäre Objekte automatisch
-  // gelöscht werden — verhindert dass der MinIO-Bucket über Jahre vollläuft.
+  // v3.18.24 E4: set lifecycle policies so temporary objects are deleted
+  // automatically — prevents the MinIO bucket from filling up over the years.
   await ensureLifecyclePolicies();
 }
 
 /**
- * v3.18.24 E4: MinIO-Lifecycle-Policies — automatisches Cleanup für temporäre
- * Objekte nach festen Aufbewahrungsfristen.
+ * v3.18.24 E4: MinIO lifecycle policies — automatic cleanup of temporary
+ * objects after fixed retention periods.
  *
- * Prefix-basierte Regeln (per Konvention in den Object-Keys, siehe Helper unten):
- *  - `outbound-queue/`  → expire 7 Tage (BullMQ-Outbound-Anhänge,
- *                         werden nach Send-Erfolg ohnehin gelöscht,
- *                         Lifecycle ist Sicherheitsnetz für tote Jobs)
- *  - `quarantine/`       → expire 90 Tage (rspamd-quarantäne)
- *  - `backups/`          → expire 365 Tage (Backup-Retention)
+ * Prefix-based rules (by convention in the object keys, see helpers below):
+ *  - `outbound-queue/`  → expire 7 days (BullMQ outbound attachments,
+ *                         deleted anyway after a successful send,
+ *                         lifecycle is the safety net for dead jobs)
+ *  - `quarantine/`       → expire 90 days (rspamd quarantine)
+ *  - `backups/`          → expire 365 days (backup retention)
  *
- * NICHT in Lifecycle: `attachments/` und `raw/` (E-Mail-Anhänge + Raw-Messages),
- * weil die direkt zu Messages gehören und beim Message-Delete einzeln entfernt
- * werden.
+ * NOT in lifecycle: `attachments/` and `raw/` (e-mail attachments + raw messages),
+ * because they belong directly to messages and are removed individually when
+ * a message is deleted.
  *
- * Idempotent: setBucketLifecycle() überschreibt die Policy jedes Mal — bei jedem
- * Container-Start wird der aktuelle State garantiert.
+ * Idempotent: setBucketLifecycle() overwrites the policy every time — the current
+ * state is guaranteed on every container start.
  */
 async function ensureLifecyclePolicies(): Promise<void> {
   const client = getMinioClient();
   const bucket = config.MINIO_BUCKET_ATTACHMENTS;
   try {
-    // MinIO SDK akzeptiert Object oder XML-String — wir nutzen Object-Form.
-    // Format laut MinIO Node-SDK: { Rule: [{ ID, Status, Filter, Expiration }] }
+    // The MinIO SDK accepts an object or XML string — we use the object form.
+    // Format per MinIO Node SDK: { Rule: [{ ID, Status, Filter, Expiration }] }
     const policy = {
       Rule: [
         {
@@ -70,8 +70,8 @@ async function ensureLifecyclePolicies(): Promise<void> {
           Expiration: { Days: 90 },
         },
         {
-          // v5.7.1: JMAP Blob-Uploads (RFC 8620 §6.1) — Clients müssen den
-          // Blob zeitnah referenzieren; nach 7 Tagen räumt MinIO auf.
+          // v5.7.1: JMAP blob uploads (RFC 8620 §6.1) — clients must reference the
+          // blob promptly; MinIO cleans up after 7 days.
           ID: 'coremail-jmap-upload-7d',
           Status: 'Enabled',
           Filter: { Prefix: 'jmap-upload/' },
@@ -85,14 +85,14 @@ async function ensureLifecyclePolicies(): Promise<void> {
         },
       ],
     };
-    // setBucketLifecycle ist erst seit MinIO Node SDK v7.1 stabil — eslint-disable
-    // für any cast falls Typdefinition nicht vorhanden ist.
+    // setBucketLifecycle is only stable since MinIO Node SDK v7.1 — eslint-disable
+    // for the any cast in case the type definition is missing.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (client as any).setBucketLifecycle(bucket, policy);
     log.info({ bucket, rules: policy.Rule.length }, 'Lifecycle policy applied');
   } catch (err) {
-    // Bei älteren MinIO-Versionen oder Permission-Problemen → nur WARN, kein Throw
-    // (Bucket-Existenz und normale Operationen sollen nicht blockieren).
+    // On older MinIO versions or permission problems → WARN only, no throw
+    // (bucket existence and normal operations must not be blocked).
     log.warn({ err, bucket }, 'Failed to set bucket lifecycle policy — continuing without');
   }
 }
@@ -128,7 +128,7 @@ export function attachmentKey(messageId: string, filename: string): string {
   return `attachments/${messageId}/${filename}`;
 }
 
-/** v5.7.1: JMAP Upload-Blobs (RFC 8620 §6.1), Lifecycle 7 Tage. */
+/** v5.7.1: JMAP upload blobs (RFC 8620 §6.1), lifecycle 7 days. */
 export function jmapUploadKey(accountId: string, blobId: string): string {
   return `jmap-upload/${accountId}/${blobId}`;
 }
@@ -146,9 +146,9 @@ export function backupKey(jobId: string, format: string): string {
 }
 
 /**
- * MinIO-Pfad für Anhänge eines ausgehenden Queue-Jobs.
- * Diese Objekte werden beim Aufbau der MIME-Nachricht im Worker heruntergeladen
- * und nach erfolgreicher Zustellung bereinigt.
+ * MinIO path for attachments of an outbound queue job.
+ * These objects are downloaded by the worker when building the MIME message
+ * and cleaned up after successful delivery.
  */
 export function outboundAttachKey(jobId: string, filename: string): string {
   return `outbound-queue/${jobId}/${filename}`;

@@ -14,7 +14,7 @@ export async function authenticateLocal(
 
   if (!user || !user.active || !user.passwordHash) return null;
 
-  // verifyPassword verwendet dieselbe sha256+pepper Logik wie hashPassword in @coremail/core
+  // verifyPassword uses the same sha256+pepper logic as hashPassword in @coremail/core
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) return null;
 
@@ -45,7 +45,7 @@ export async function authenticateAppPassword(
   });
 
   for (const ap of appPasswords) {
-    // App-Passwords werden mit hashPassword() (sha256+pepper+bcrypt) erstellt → verifyPassword verwenden
+    // App passwords are created with hashPassword() (sha256+pepper+bcrypt) → use verifyPassword
     const valid = await verifyPassword(password, ap.hash);
     if (valid) {
       await prisma.appPassword.update({

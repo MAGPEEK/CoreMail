@@ -1,6 +1,6 @@
 /**
- * State-String-Codecs (RFC 8620 §1.6.2) — reine Funktionen ohne DB-Zugriff.
- * Format siehe state.ts.
+ * State string codecs (RFC 8620 §1.6.2) — pure functions without DB access.
+ * See state.ts for the format.
  */
 import { createHash } from 'node:crypto';
 

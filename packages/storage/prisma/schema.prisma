@@ -1,7 +1,7 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["fullTextSearch"]
-  // Explizit nur OpenSSL-3-Target — "native" weglassen da Auto-Detection in Alpine fehlschlägt
+  // Explicitly OpenSSL 3 target only — omit "native" because auto-detection fails on Alpine
   binaryTargets   = ["linux-musl-openssl-3.0.x"]
 }
 
@@ -42,14 +42,14 @@ enum LogLevel {
 enum JobStatus {
   PENDING
   PROCESSING
-  // v3.18.26 — erweitert für Backup-Job-Lifecycle (RTO/RPO-Tracking)
-  SCHEDULED        // wartet auf nächsten Cron-Tick
-  RUNNING          // gerade in Bearbeitung (synonym zu PROCESSING, klarer benannt)
-  RETRYING         // nach Fehler retry läuft
+  // v3.18.26 — extended for backup job lifecycle (RTO/RPO tracking)
+  SCHEDULED        // waiting for the next cron tick
+  RUNNING          // currently processing (synonym for PROCESSING, clearer name)
+  RETRYING         // retry in progress after a failure
   COMPLETED
   FAILED
-  ABORTED          // User hat manuell abgebrochen
-  EXPIRED          // Snapshot wurde durch Retention gelöscht
+  ABORTED          // manually aborted by the user
+  EXPIRED          // snapshot was deleted by retention
 }
 
 enum AuthSource {
@@ -58,7 +58,7 @@ enum AuthSource {
   OIDC
 }
 
-// v5.6.1: enum GroupType entfernt (DistributionGroup-Feature gelöscht)
+// v5.6.1: enum GroupType removed (DistributionGroup feature deleted)
 
 enum ResourceType {
   ROOM
@@ -80,7 +80,7 @@ model Domain {
   sharedMailboxes    SharedMailbox[]
   ldapConfig         LdapConfig?
   oidcProviders      OidcProvider[]
-  // v5.6.1: distributionGroups-Relation entfernt
+  // v5.6.1: distributionGroups relation removed
   resourceMailboxes  ResourceMailbox[]
   aliases            EmailAlias[]
   createdAt          DateTime             @default(now())
@@ -115,7 +115,7 @@ model User {
   certificates    UserCertificate[]
   smimeSettings   SmimeSettings?
   pushSubscriptions PushSubscription[]
-  // v5.6.0: OAuth-Relationen (oauthCodes/Tokens/Consents) entfernt
+  // v5.6.0: OAuth relations (oauthCodes/Tokens/Consents) removed
   categories          Category[]
   aliases             EmailAlias[]        @relation("UserAliases")
   passwordResetTokens PasswordResetToken[]
@@ -131,16 +131,16 @@ model User {
 // Authentication
 // ─────────────────────────────────────────────
 
-// Passwort-Reset-Token (Self-Service)
-// - Token wird als SHA-256-Hash gespeichert (nie im Klartext)
-// - Ablauf nach 15 Minuten (konfigurierbar via ServerSettings)
-// - Einmalig verwendbar (usedAt wird beim Einlösen gesetzt)
+// Password reset token (self-service)
+// - Token is stored as a SHA-256 hash (never in plaintext)
+// - Expires after 15 minutes (configurable via ServerSettings)
+// - Single use (usedAt is set on redemption)
 model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String
-  tokenHash String    @unique  // SHA-256(token) — Klartext-Token nur per E-Mail
+  tokenHash String    @unique  // SHA-256(token) — plaintext token only sent by e-mail
   expiresAt DateTime
-  usedAt    DateTime?           // null = noch nicht eingelöst
+  usedAt    DateTime?           // null = not redeemed yet
   ipAddress String    @default("")
   createdAt DateTime  @default(now())
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -271,7 +271,7 @@ model Folder {
   sortOrder   Int       @default(0)
   color       String?
   createdAt   DateTime  @default(now())
-  // Personal-Tag auf Ordner (User-Zuweisung)
+  // Personal tag on folder (user assignment)
   retentionTag   RetentionTag? @relation("FolderRetentionTag", fields: [retentionTagId], references: [id])
   retentionTagId String?
 
@@ -307,23 +307,23 @@ model Message {
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
   snoozeUntil  DateTime?   // hide until this time, then reappear in inbox
-  // Phase 10: Spam-Persistenz (rspamd-Score zum Zeitpunkt der Zustellung)
-  spamScore    Float?      // null = nicht gescannt, 0..15 = rspamd-Score
-  // Phase 10: Senden planen — Mail wird sofort in „Gesendete Elemente" angelegt,
-  // aber erst zum geplanten Zeitpunkt via BullMQ-delay versendet.
-  scheduledAt     DateTime?   // Zeitpunkt für geplanten Versand
+  // Phase 10: spam persistence (rspamd score at delivery time)
+  spamScore    Float?      // null = not scanned, 0..15 = rspamd score
+  // Phase 10: scheduled send — the mail is created in "Sent Items" immediately,
+  // but only sent at the scheduled time via BullMQ delay.
+  scheduledAt     DateTime?   // time of the scheduled send
   scheduledStatus String?     // 'PENDING' | 'SENT' | 'CANCELLED' | null
-  scheduledJobId  String?     // BullMQ-Job-ID zum Stornieren (delay-Job in smtp-outbound)
-  // ── Retention (Phase 9 / Exchange-2019-konform) ────────────────────────────
-  // Vom MFA berechneter oder vom User gesetzter effektiver Tag
+  scheduledJobId  String?     // BullMQ job ID for cancellation (delay job in smtp-outbound)
+  // ── Retention (Phase 9 / Exchange 2019 compliant) ────────────────────────────
+  // Effective tag computed by the MFA or set by the user
   retentionTag     RetentionTag? @relation("MessageRetentionTag", fields: [retentionTagId], references: [id])
   retentionTagId   String?
-  // Berechneter Zeitpunkt, ab dem die Tag-Aktion ausgeführt wird (date + retentionDays)
+  // Computed time from which the tag action is executed (date + retentionDays)
   retentionExpiresAt DateTime?
-  // Wann das Item via MFA in „Recoverable Items\Deletions" verschoben wurde (Soft Delete)
+  // When the item was moved to "Recoverable Items\Deletions" by the MFA (soft delete)
   softDeletedAt    DateTime?
-  // v5.7.1: JMAP Thread-Zuordnung (RFC 8621 §3). Lazy vom jmap-server gesetzt:
-  // Antwort (inReplyTo) auf bekannte Nachricht → deren threadId, sonst eigene id.
+  // v5.7.1: JMAP thread assignment (RFC 8621 §3). Set lazily by the jmap-server:
+  // reply (inReplyTo) to a known message → its threadId, otherwise own id.
   threadId         String?
   attachments  Attachment[]
   categories   MessageCategory[]
@@ -361,7 +361,7 @@ model Attachment {
 }
 
 // ─────────────────────────────────────────────
-// Mail-Kategorien (Outlook-Style Tags)
+// Mail categories (Outlook-style tags)
 // ─────────────────────────────────────────────
 model Category {
   id         String   @id @default(cuid())
@@ -413,21 +413,21 @@ model SharedMailbox {
   @@map("shared_mailboxes")
 }
 
-// ── E-Mail-Aliase ────────────────────────────────────────────────────────────
-// Ein Alias ist eine zusätzliche Empfangs-Adresse, deren Mails an ein bestehendes
-// Postfach (User oder Shared Mailbox) ausgeliefert werden. Exakt EIN Target muss
-// gesetzt sein (targetUserId XOR targetSharedId) — wird in Application-Code
-// validiert, Prisma kann das nicht direkt ausdrücken.
+// ── E-mail aliases ────────────────────────────────────────────────────────────
+// An alias is an additional receiving address whose mail is delivered to an existing
+// mailbox (user or shared mailbox). Exactly ONE target must be
+// set (targetUserId XOR targetSharedId) — validated in application code,
+// Prisma cannot express this directly.
 model EmailAlias {
   id              String         @id @default(cuid())
-  // Vollständige E-Mail-Adresse, z.B. "info@firma.com" — case-insensitive unique
+  // Full e-mail address, e.g. "info@firma.com" — case-insensitive unique
   address         String         @unique
-  // Local-Part vor dem @ (für UI-Anzeige, Sortierung)
+  // Local part before the @ (for UI display, sorting)
   localPart       String
-  // Die Domain, die der Alias-Adresse gehört (FK)
+  // The domain the alias address belongs to (FK)
   domain          Domain         @relation(fields: [domainId], references: [id], onDelete: Cascade)
   domainId        String
-  // Target: User-Postfach
+  // Target: user mailbox
   targetUser      User?          @relation("UserAliases", fields: [targetUserId], references: [id], onDelete: Cascade)
   targetUserId    String?
   // Target: Shared Mailbox
@@ -454,17 +454,17 @@ model SharedMailboxPerm {
   grantedAt       DateTime             @default(now())
   grantedBy       String
 
-  // Mehrere Permissions pro User möglich (Exchange-Style: Full Access + Send As + …)
+  // Multiple permissions per user possible (Exchange-style: Full Access + Send As + …)
   @@unique([sharedMailboxId, userId, permission])
   @@index([sharedMailboxId, userId])
   @@map("shared_mailbox_perms")
 }
 
 // ─────────────────────────────────────────────
-// Mailbox-Delegierung (User-Postfach-Zugriffsrechte)
+// Mailbox delegation (user mailbox access rights)
 // ─────────────────────────────────────────────
-// Ermöglicht User B Zugriff auf das Postfach von User A (Exchange Delegate Access)
-// Permissions analog zu SharedMailboxPerm: FULL_ACCESS / SEND_AS / SEND_ON_BEHALF / READ_ONLY
+// Gives user B access to the mailbox of user A (Exchange Delegate Access)
+// Permissions analogous to SharedMailboxPerm: FULL_ACCESS / SEND_AS / SEND_ON_BEHALF / READ_ONLY
 model MailboxDelegate {
   id          String               @id @default(cuid())
   mailbox     Mailbox              @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
@@ -490,7 +490,7 @@ model Calendar {
   userId      String
   name        String
   color       String          @default("#0078D4")
-  icon        String?         // lucide-Icon-Name (z. B. "Home", "Plane")
+  icon        String?         // lucide icon name (e.g. "Home", "Plane")
   sortOrder   Int             @default(0)
   isDefault   Boolean         @default(false)
   syncToken   String          @default("")
@@ -517,9 +517,9 @@ model CalendarShare {
   granteeId  String
   permission CalendarPermType
   comment    String?
-  // v3.18.16 A3: Grantee-lokale Farbe (überschreibt Owner-Farbe nur für diesen User)
+  // v3.18.16 A3: grantee-local color (overrides the owner color only for this user)
   localColor String?
-  // v3.18.16 A8: Grantee-lokale Sortierung in „Geteilt mit mir"-Sektion
+  // v3.18.16 A8: grantee-local sort order in the "Shared with me" section
   sortOrder  Int              @default(0)
   createdAt  DateTime         @default(now())
 
@@ -546,16 +546,16 @@ model CalendarEvent {
   organizer   String?
   attendees   Json     @default("[]")
   status      String   @default("CONFIRMED")
-  // v3.18.15: Privacy-Level für geteilte Kalender. Werte: PUBLIC | PRIVATE | CONFIDENTIAL
-  //  PUBLIC       → Details für Owner und alle Grantees sichtbar (Default)
-  //  PRIVATE      → Grantees sehen nur „Beschäftigt", keine Details (Subject/Location/Notes maskiert)
-  //  CONFIDENTIAL → Grantees sehen Termin gar nicht (komplett ausgeblendet)
-  // Owner sieht ALLE Events unverändert. Mapping zu iCal `CLASS:` (RFC 5545 §3.8.1.3).
+  // v3.18.15: privacy level for shared calendars. Values: PUBLIC | PRIVATE | CONFIDENTIAL
+  //  PUBLIC       → details visible to owner and all grantees (default)
+  //  PRIVATE      → grantees only see "Busy", no details (subject/location/notes masked)
+  //  CONFIDENTIAL → grantees do not see the event at all (completely hidden)
+  // The owner sees ALL events unchanged. Maps to iCal `CLASS:` (RFC 5545 §3.8.1.3).
   classification String @default("PUBLIC")
-  // v3.18.25 A5: iMIP/iTIP — Sequence-Counter wird bei jedem UPDATE (Subject,
-  // Datum, Attendee-Änderung) inkrementiert. Mail-Clients (Outlook, Gmail) zeigen
-  // nur die HÖCHSTE Sequence — alte REPLY-Mails mit niedrigerer Sequence werden
-  // ignoriert.
+  // v3.18.25 A5: iMIP/iTIP — sequence counter is incremented on every UPDATE (subject,
+  // date, attendee change). Mail clients (Outlook, Gmail) only show
+  // the HIGHEST sequence — old REPLY mails with a lower sequence are
+  // ignored.
   sequence    Int      @default(0)
   changeKey   String   @default("")
   createdAt   DateTime @default(now())
@@ -648,7 +648,7 @@ model UserSettings {
   oofUseTimeRange         Boolean   @default(false)
   oofStart                DateTime?
   oofEnd                  DateTime?
-  // Persönlicher Inaktivitäts-Timeout (null = globale Einstellung verwenden)
+  // Personal inactivity timeout (null = use global setting)
   inactivityTimeoutMinutes Int?
   updatedAt               DateTime  @updatedAt
 
@@ -689,16 +689,16 @@ model BackupJob {
   errorMsg    String?
   createdAt   DateTime  @default(now())
   completedAt DateTime?
-  // v3.18.26 — erweiterte Status-Logging-Felder (Research siehe v3.18.26)
+  // v3.18.26 — extended status logging fields (see v3.18.26 research)
   startedAt   DateTime?
-  durationMs  Int?              // (finishedAt - startedAt) — für RTO-Messung
-  sizeBytes   BigInt?           // Backup-Größe im S3-Bucket
-  messageCount Int?             // Wie viele Nachrichten waren im Backup
+  durationMs  Int?              // (finishedAt - startedAt) — for RTO measurement
+  sizeBytes   BigInt?           // backup size in the S3 bucket
+  messageCount Int?             // how many messages the backup contained
   errorClass  String?           // NETWORK | STORAGE | PERMISSION | CORRUPT | UNKNOWN
   retryCount  Int       @default(0)
   triggeredBy String    @default("MANUAL")  // CRON | MANUAL | EVENT | RESTORE | API
   progressMeta Json?    @default("{}")      // { phase, current, total, currentFolder }
-  scheduleId  String?              // Verweis auf BackupSchedule wenn aus Schedule getriggert
+  scheduleId  String?              // reference to BackupSchedule when triggered by a schedule
 
   @@index([userId])
   @@index([status])
@@ -706,22 +706,22 @@ model BackupJob {
   @@map("backup_jobs")
 }
 
-/// v3.18.26 — Backup-Zeitplanung in der DB statt Env-Variable.
-/// Admin kann Cron-Expressions definieren, Format wählen, Ziel-User filtern.
+/// v3.18.26 — backup scheduling in the DB instead of an env variable.
+/// Admins can define cron expressions, choose a format, filter target users.
 model BackupSchedule {
   id           String    @id @default(cuid())
-  name         String                              // Sprechender Name z. B. „Daily Full Backup"
-  cron         String                              // Cron-Expression z. B. „0 2 * * *"
+  name         String                              // descriptive name, e.g. "Daily Full Backup"
+  cron         String                              // cron expression, e.g. "0 2 * * *"
   enabled      Boolean   @default(true)
   scope        String    @default("full")          // user | full | domain
   format       String    @default("zip")           // mbox | zip | eml
-  targetUserId String?                              // null = alle User
-  retentionDays Int      @default(30)              // Nach so vielen Tagen wird der Snapshot gelöscht
+  targetUserId String?                              // null = all users
+  retentionDays Int      @default(30)              // snapshot is deleted after this many days
   lastRunAt    DateTime?
-  lastStatus   String?                              // letzter JobStatus
-  lastJobId    String?                              // Verweis auf letzten BackupJob
-  nextRunAt    DateTime?                            // berechnet vom Scheduler
-  createdBy    String?                              // userId des Admins der Schedule erstellt hat
+  lastStatus   String?                              // last JobStatus
+  lastJobId    String?                              // reference to the last BackupJob
+  nextRunAt    DateTime?                            // computed by the scheduler
+  createdBy    String?                              // userId of the admin who created the schedule
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -835,10 +835,10 @@ model UserCertificate {
   @@map("user_certificates")
 }
 
-// v5.6.1: DistributionGroup + DistributionGroupMember Models gelöscht.
-// Tabellen werden via `prisma db push --accept-data-loss` beim Container-
-// Start gedroppt. Empfehlung für Verteiler-Mails: externe Tools wie
-// Sympa, GNU mailman, oder einfache Email-Aliases im Mail-Client.
+// v5.6.1: DistributionGroup + DistributionGroupMember models deleted.
+// Tables are dropped via `prisma db push --accept-data-loss` on container
+// start. Recommendation for distribution-list mail: external tools such as
+// Sympa, GNU mailman, or simple e-mail aliases in the mail client.
 
 // ─────────────────────────────────────────────
 // Phase 7 — Resource Mailboxes (Rooms & Equipment)
@@ -901,8 +901,8 @@ model ResourceBooking {
   @@map("resource_bookings")
 }
 
-// (Phase 7 Public Folders — komplett entfernt in v3.18.31)
-// (Phase 8 eDiscovery & Legal Hold — komplett entfernt in v3.18.5)
+// (Phase 7 Public Folders — completely removed in v3.18.31)
+// (Phase 8 eDiscovery & Legal Hold — completely removed in v3.18.5)
 
 // ─────────────────────────────────────────────
 // Phase 8 — Transport Rules
@@ -947,7 +947,7 @@ model SmimeSettings {
   @@map("smime_settings")
 }
 
-// (Phase 9 Journaling — komplett entfernt in v3.13.6)
+// (Phase 9 Journaling — completely removed in v3.13.6)
 
 // ─────────────────────────────────────────────
 // Phase 9 — Retention Policies
@@ -972,12 +972,12 @@ model RetentionPolicy {
   name        String
   description String               @default("")
   enabled     Boolean              @default(true)
-  // ── Legacy-Felder (vor Tags) — neue Policies haben hier Defaults und nutzen ausschließlich `tags` ──
+  // ── Legacy fields (pre-tags) — new policies keep defaults here and use `tags` exclusively ──
   retentionDays Int                 @default(0)
   action      RetentionAction       @default(ARCHIVE)
   targetFolder String?
   scope       RetentionScope        @default(ALL_ITEMS)
-  // ── Neu (Exchange-2019-konformes Tag-Modell) ──
+  // ── New (Exchange 2019 compliant tag model) ──
   policyTags  RetentionPolicyTag[]
   assignments RetentionPolicyAssignment[]
   createdBy   String
@@ -987,14 +987,14 @@ model RetentionPolicy {
   @@map("retention_policies")
 }
 
-// ── Retention Tag — analog zu Exchange 2019: DPT / RPT / Personal ─────────────
+// ── Retention Tag — analogous to Exchange 2019: DPT / RPT / Personal ─────────────
 enum RetentionTagType {
-  DPT       // Default Policy Tag — gilt für alle Items, wenn nichts spezifischeres greift
-  RPT       // Retention Policy Tag — bindet an einen Standard-Ordner
-  PERSONAL  // Personal Tag — User wendet ihn manuell auf Items/Ordner an
+  DPT       // Default Policy Tag — applies to all items when nothing more specific matches
+  RPT       // Retention Policy Tag — binds to a default folder
+  PERSONAL  // Personal Tag — applied manually by the user to items/folders
 }
 
-// Welcher Standard-Ordner ein RPT bindet
+// Which default folder an RPT binds to
 enum RetentionFolderTarget {
   INBOX
   SENT_ITEMS
@@ -1004,15 +1004,15 @@ enum RetentionFolderTarget {
   OUTBOX
   RECOVERABLE_ITEMS
   ARCHIVE
-  ALL_OTHER  // für DPT-Bindung "alle anderen Ordner"
+  ALL_OTHER  // for DPT binding "all other folders"
 }
 
-// Die drei Exchange-2019-Aktionen
+// The three Exchange 2019 actions
 enum RetentionTagAction {
-  MOVE_TO_ARCHIVE             // → Archiv-Ordner
-  DELETE_AND_ALLOW_RECOVERY   // → Recoverable Items\Deletions (Soft Delete, 14 Tage)
-  PERMANENTLY_DELETE          // → Recoverable Items\Purges (Hard Delete falls kein Hold)
-  MARK_AS_PAST_RETENTION_LIMIT // nur Kennzeichnung, keine Bewegung (für Reporting)
+  MOVE_TO_ARCHIVE             // → Archive folder
+  DELETE_AND_ALLOW_RECOVERY   // → Recoverable Items\Deletions (soft delete, 14 days)
+  PERMANENTLY_DELETE          // → Recoverable Items\Purges (hard delete if no hold)
+  MARK_AS_PAST_RETENTION_LIMIT // marking only, no move (for reporting)
 }
 
 model RetentionTag {
@@ -1021,11 +1021,11 @@ model RetentionTag {
   description     String                @default("")
   type            RetentionTagType
   action          RetentionTagAction    @default(DELETE_AND_ALLOW_RECOVERY)
-  retentionDays   Int                   // Tage bis Aktion getriggert wird
-  // Nur für RPT: an welchen Standardordner gebunden
+  retentionDays   Int                   // days until the action is triggered
+  // RPT only: which default folder it is bound to
   folderTarget    RetentionFolderTarget?
   enabled         Boolean               @default(true)
-  isSystem        Boolean               @default(false) // Built-in (z.B. "Default 2-Year Delete"), nicht löschbar
+  isSystem        Boolean               @default(false) // built-in (e.g. "Default 2-Year Delete"), not deletable
   policyTags      RetentionPolicyTag[]
   messages        Message[]             @relation("MessageRetentionTag")
   folders         Folder[]              @relation("FolderRetentionTag")
@@ -1037,7 +1037,7 @@ model RetentionTag {
   @@map("retention_tags")
 }
 
-// ── M:N — Tags in Policies ────────────────────────────────────────────────────
+// ── M:N — tags in policies ────────────────────────────────────────────────────
 model RetentionPolicyTag {
   policy    RetentionPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
   policyId  String
@@ -1049,18 +1049,18 @@ model RetentionPolicyTag {
   @@map("retention_policy_tags")
 }
 
-// ── Managed Folder Assistant — Run-Historie ───────────────────────────────────
+// ── Managed Folder Assistant — run history ───────────────────────────────────
 model ManagedFolderRun {
   id                 String   @id @default(cuid())
   startedAt          DateTime @default(now())
   completedAt        DateTime?
-  // Hartes Limit pro Run (Work-Cycle-Begrenzung); 0 = unbegrenzt
+  // Hard limit per run (work-cycle cap); 0 = unlimited
   workCycleSeconds   Int      @default(0)
   mailboxesScanned   Int      @default(0)
   itemsScanned       Int      @default(0)
   itemsArchived      Int      @default(0)
   itemsSoftDeleted   Int      @default(0)  // → Deletions
-  itemsHardDeleted   Int      @default(0)  // → Purges / gelöscht
+  itemsHardDeleted   Int      @default(0)  // → Purges / deleted
   itemsSkippedHold   Int      @default(0)
   throttled          Boolean  @default(false)
   errorMessage       String?
@@ -1125,20 +1125,20 @@ model AuditLog {
 // Security Attack Events (MITRE ATT&CK Logging)
 // ─────────────────────────────────────────────
 
-// Angriffsereeignis-Log — persistiert Sicherheitsvorfälle für Admin-Dashboard
-// + historische Auswertung. Wird von SMTP-IP-Limiter, Security-Filter, etc. befüllt.
+// Attack event log — persists security incidents for the admin dashboard
+// + historical analysis. Populated by the SMTP IP limiter, security filter, etc.
 model AttackEvent {
   id        String   @id @default(cuid())
   timestamp DateTime @default(now())
-  // Angriffstyp: AUTH_BRUTE_FORCE | IP_RATE_LIMIT | DNSBL_HIT | VIRUS | SPAM | DMARC_FAIL | RELAY_ATTEMPT
+  // Attack type: AUTH_BRUTE_FORCE | IP_RATE_LIMIT | DNSBL_HIT | VIRUS | SPAM | DMARC_FAIL | RELAY_ATTEMPT
   type      String
-  // Quell-IP des Angreifers
+  // Source IP of the attacker
   ip        String
-  // Optionaler Ziel-Benutzer / E-Mail-Adresse
+  // Optional target user / e-mail address
   target    String?
-  // Zusatz-Details (JSON: count, zone, score, etc.)
+  // Additional details (JSON: count, zone, score, etc.)
   detail    Json?
-  // Dienst, der den Angriff erkannte
+  // Service that detected the attack
   service   String   @default("smtp")
 
   @@index([timestamp])
@@ -1151,9 +1151,9 @@ model AttackEvent {
 // Phase 10 — VAPID Push Subscriptions
 // ─────────────────────────────────────────────
 
-// v5.7.1: JMAP PushSubscription (RFC 8620 §7.2) — getrennt von der
-// MWA-VAPID-Tabelle, weil JMAP deviceClientId/verificationCode/expires/types
-// braucht. Nicht account-gebunden, gehört dem authentifizierten User.
+// v5.7.1: JMAP PushSubscription (RFC 8620 §7.2) — separate from the
+// MWA VAPID table because JMAP needs deviceClientId/verificationCode/expires/types.
+// Not bound to an account, belongs to the authenticated user.
 model JmapPushSubscription {
   id               String    @id @default(cuid())
   userId           String
@@ -1164,7 +1164,7 @@ model JmapPushSubscription {
   verificationCode String?
   verified         Boolean   @default(false)
   expires          DateTime?
-  types            String[]  // leer = alle Typen
+  types            String[]  // empty = all types
   createdAt        DateTime  @default(now())
 
   @@unique([userId, deviceClientId])
@@ -1190,19 +1190,19 @@ model PushSubscription {
   @@map("push_subscriptions")
 }
 
-// v5.6.0: OAuth2 / Modern Auth komplett entfernt.
+// v5.6.0: OAuth2 / Modern Auth completely removed.
 // Models OAuthClient, OAuthConsent, OAuthAuthorizationCode, OAuthToken
-// wurden in v5.6.0 gelöscht. Tabellen werden via `prisma db push
-// --accept-data-loss` beim Container-Start gedroppt.
+// were deleted in v5.6.0. Tables are dropped via `prisma db push
+// --accept-data-loss` on container start.
 //
-// MFA-Bypass für Mail-Clients: App-Passwörter (AppPassword-Model)
-// — funktioniert mit IMAP, SMTP, POP3, EWS.
+// MFA bypass for mail clients: app passwords (AppPassword model)
+// — works with IMAP, SMTP, POP3, EWS.
 
-// ── SMTP-Server-Einstellungen (Singleton) ────────────────────────────────────
+// ── SMTP server settings (singleton) ────────────────────────────────────
 model SmtpSettings {
   id                   String   @id @default("singleton")
 
-  // ESMTP-Erweiterungen (disabled = nicht angeboten)
+  // ESMTP extensions (disabled = not advertised)
   extStarttls          Boolean  @default(true)
   extAuthPlain         Boolean  @default(true)
   extAuthLogin         Boolean  @default(true)
@@ -1215,10 +1215,10 @@ model SmtpSettings {
   extDsn               Boolean  @default(true)
   extChunking          Boolean  @default(false)
 
-  // Lokale Zustellung
+  // Local delivery
   localDeliveryEnabled Boolean  @default(true)
 
-  // SMTP-Banner
+  // SMTP banner
   bannerOverride       Boolean  @default(false)
   bannerText           String   @default("")
 
@@ -1228,13 +1228,13 @@ model SmtpSettings {
   relayRequireAuth     Boolean  @default(true)
   relayTrustedIps      Json     @default("[]")
 
-  // Greylisting (SMTP-Ebene)
+  // Greylisting (SMTP level)
   greylistingEnabled   Boolean  @default(true)
   greylistWaitSec      Int      @default(300)
   greylistTtlHours     Int      @default(4)
   greylistWhitelist    Json     @default("[]")
 
-  // Verbindungseinstellungen
+  // Connection settings
   maxConnections       Int      @default(100)
   maxConnectionsPerIp  Int      @default(10)
   maxMessageSizeMb     Int      @default(25)
@@ -1243,17 +1243,17 @@ model SmtpSettings {
   greetingDelaySec     Int      @default(0)
   maxAuthFailures      Int      @default(5)
 
-  // Ausgehende Zustellung
-  // outboundMode: "mx" = direkte MX-Zustellung (Standard) | "smarthost" = Relay über festen Host
+  // Outbound delivery
+  // outboundMode: "mx" = direct MX delivery (default) | "smarthost" = relay via a fixed host
   outboundMode         String   @default("mx")
   smarthostHost        String   @default("")
   smarthostPort        Int      @default(587)
-  smarthostTls         Boolean  @default(true)   // STARTTLS (opportunistisch)
-  smarthostImplicitTls Boolean  @default(false)  // Implizites TLS (Port 465-Stil)
+  smarthostTls         Boolean  @default(true)   // STARTTLS (opportunistic)
+  smarthostImplicitTls Boolean  @default(false)  // Implicit TLS (port 465 style)
   smarthostUsername    String   @default("")
-  smarthostPassword    String   @default("")     // Klartext — liegt nur lokal in DB
+  smarthostPassword    String   @default("")     // plaintext — stored locally in the DB only
 
-  // Spam-/Virenfilter vor ausgehender Zustellung (rspamd + ClamAV)
+  // Spam/virus filter before outbound delivery (rspamd + ClamAV)
   outboundFilterEnabled Boolean @default(true)
 
   updatedAt            DateTime @updatedAt
@@ -1261,7 +1261,7 @@ model SmtpSettings {
   @@map("smtp_settings")
 }
 
-// ── Sicherheitseinstellungen (Singleton) ─────────────────────────────────────
+// ── Security settings (singleton) ─────────────────────────────────────
 model SecuritySettings {
   id                    String   @id @default("singleton")
   // Greylisting
@@ -1271,14 +1271,14 @@ model SecuritySettings {
   // DNSBL
   dnsblEnabled          Boolean  @default(true)
   dnsblZones            Json     @default("[\"zen.spamhaus.org\",\"bl.spamcop.net\"]")
-  // GeoIP-Länderfilter
+  // GeoIP country filter
   geoipMode             String   @default("DISABLED")
   geoipCountries        Json     @default("[]")
-  // Anhänge-Filter
+  // Attachment filter
   attachmentEnabled     Boolean  @default(true)
   attachmentMaxSizeMb   Int      @default(50)
   attachmentBlockedExt  Json     @default("[\"exe\",\"vbs\",\"js\",\"bat\",\"cmd\",\"scr\",\"pif\",\"msi\",\"hta\",\"com\"]")
-  // Rspamd — Grundeinstellungen
+  // Rspamd — basic settings
   rspamdEnabled              Boolean  @default(true)
   rspamdGreylistScore        Float    @default(4.0)
   rspamdSpamScore            Float    @default(6.0)
@@ -1287,21 +1287,21 @@ model SecuritySettings {
   rspamdAutolearn            Boolean  @default(true)
   rspamdAutolearnSpam        Float    @default(12.0)
   rspamdAutolearnHam         Float    @default(-0.5)
-  // Rspamd — E-Mail-Header
+  // Rspamd — e-mail headers
   rspamdAddSpamHeader        Boolean  @default(true)
   rspamdExtendedHeaders      Boolean  @default(true)
   rspamdRewriteSubject       Boolean  @default(false)
   rspamdSubjectTag           String   @default("[SPAM]")
-  // Rspamd — Module
+  // Rspamd — modules
   rspamdPhishingEnabled      Boolean  @default(true)
   rspamdFuzzyEnabled         Boolean  @default(true)
   rspamdUrlEnabled           Boolean  @default(true)
   rspamdMxCheckEnabled       Boolean  @default(true)
-  // ClamAV — Grundeinstellungen
+  // ClamAV — basic settings
   clamavEnabled              Boolean  @default(true)
   clamavAction               String   @default("quarantine")  // quarantine | reject | pass
   clamavBlockOnFailure       Boolean  @default(false)
-  // ClamAV — Scan-Optionen
+  // ClamAV — scan options
   clamavScanArchives         Boolean  @default(true)
   clamavScanHtml             Boolean  @default(true)
   clamavBlockEncryptedArch   Boolean  @default(false)
@@ -1312,19 +1312,19 @@ model SecuritySettings {
   @@map("security_settings")
 }
 
-// ── Queue-Einstellungen (Singleton) ──────────────────────────────────────────
+// ── Queue settings (singleton) ──────────────────────────────────────────
 model QueueSettings {
   id                      String   @id @default("singleton")
-  // Retry-Verhalten
+  // Retry behavior
   maxRetryAttempts        Int      @default(10)
   retryBackoffDelaySec    Int      @default(60)
-  // Aufbewahrungsfristen
+  // Retention periods
   deadLetterRetentionDays Int      @default(7)
   outboundRetentionHours  Int      @default(48)
   completedRetentionHours Int      @default(24)
-  // Automatische Bereinigung
+  // Automatic cleanup
   autoFlushDead           Boolean  @default(false)
-  // Benachrichtigungen
+  // Notifications
   notifyOnDeadLetter      Boolean  @default(true)
   updatedAt               DateTime @updatedAt
 
@@ -1332,16 +1332,16 @@ model QueueSettings {
 }
 
 // ─────────────────────────────────────────────
-// DNSBL — pro Zone konfigurierbar (statt String-Array)
+// DNSBL — configurable per zone (instead of a string array)
 // ─────────────────────────────────────────────
 
 enum DnsblAction {
-  REJECT       // direkt ablehnen (550)
-  TAG          // Mail durchlassen, aber als Spam markieren / Score erhöhen
-  SCORE_ONLY   // nur für rspamd-Score, keine eigene Aktion
+  REJECT       // reject directly (550)
+  TAG          // let the mail through but mark as spam / increase score
+  SCORE_ONLY   // rspamd score only, no action of its own
 }
 
-// DNS-Hostname (z. B. zen.spamhaus.org) als unique; weitere Felder pro Zone
+// DNS hostname (e.g. zen.spamhaus.org) as unique; further fields per zone
 model DnsblZone {
   id           String      @id @default(cuid())
   host         String      @unique
@@ -1349,12 +1349,12 @@ model DnsblZone {
   description  String?
   enabled      Boolean     @default(true)
   action       DnsblAction @default(REJECT)
-  // Score-Gewichtung (0–100) für rspamd-Integration
+  // Score weight (0–100) for rspamd integration
   weight       Int         @default(5)
-  // true = DNSWL (Whitelist); Treffer überspringt weitere Filter
+  // true = DNSWL (whitelist); a hit skips further filters
   isWhitelist  Boolean     @default(false)
   sortOrder    Int         @default(0)
-  // Built-in Preset (nicht löschbar, nur deaktivierbar)
+  // Built-in preset (not deletable, can only be disabled)
   isBuiltin    Boolean     @default(false)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
@@ -1370,7 +1370,7 @@ model DnsblHit {
   zoneId    String
   ip        String
   hitAt     DateTime  @default(now())
-  // Antwort-Code des DNSBL-Servers (z. B. 127.0.0.2)
+  // Response code of the DNSBL server (e.g. 127.0.0.2)
   response  String?
 
   @@index([zoneId, hitAt])
@@ -1379,16 +1379,16 @@ model DnsblHit {
   @@map("dnsbl_hits")
 }
 
-// ── Server-Einstellungen (Singleton) ─────────────────────────────────────────
-// Speichert öffentliche URLs für Autodiscover, EWS, OWA, EAS, IMAP, SMTP.
-// Outlook 2019/2022/365 liest diese über Autodiscover automatisch aus.
+// ── Server settings (singleton) ─────────────────────────────────────────
+// Stores public URLs for Autodiscover, EWS, OWA, EAS, IMAP, SMTP.
+// Outlook 2019/2022/365 reads these automatically via Autodiscover.
 model ServerSettings {
   id              String   @id @default("singleton")
-  // Öffentlicher Hostname (für Autodiscover + TLS-Zertifikat)
+  // Public hostname (for Autodiscover + TLS certificate)
   publicHostname  String   @default("mail.local")
-  // Protokoll: http oder https
+  // Protocol: http or https
   useHttps        Boolean  @default(false)
-  // HTTP-Port (extern, z.B. 8080 auf Synology oder 443 hinter Reverse Proxy)
+  // HTTP port (external, e.g. 8080 on Synology or 443 behind a reverse proxy)
   httpPort        Int      @default(8080)
   // Exchange Web Services (Outlook Desktop)
   ewsUrl          String   @default("http://mail.local:8080/EWS/Exchange.asmx")
@@ -1396,7 +1396,7 @@ model ServerSettings {
   owaUrl          String   @default("http://mail.local:8080/owa/")
   // Exchange ActiveSync (Mobile)
   easUrl          String   @default("http://mail.local:8080/Microsoft-Server-ActiveSync")
-  // Autodiscover-Basis-URL
+  // Autodiscover base URL
   autodiscoverBase String  @default("http://mail.local:8080")
   // IMAP
   imapHost        String   @default("mail.local")
@@ -1410,7 +1410,7 @@ model ServerSettings {
   smtpHost        String   @default("mail.local")
   smtpPort        Int      @default(587)
   smtpTls         Boolean  @default(true)
-  // ── Organisation ─────────────────────────────────────────────────────────
+  // ── Organization ─────────────────────────────────────────────────────────
   orgName         String   @default("CoreMail")
   orgDescription  String   @default("")
   adminEmail      String   @default("")
@@ -1419,56 +1419,56 @@ model ServerSettings {
   welcomeMessage  String   @default("")
   logoUrl         String   @default("")
 
-  // ── Mail-Grenzen ──────────────────────────────────────────────────────────
+  // ── Mail limits ──────────────────────────────────────────────────────────
   maxMessageSizeMb    Int  @default(25)
   maxAttachmentSizeMb Int  @default(25)
   trashRetentionDays  Int  @default(30)
 
-  // ── Sicherheitsrichtlinien ────────────────────────────────────────────────
+  // ── Security policies ────────────────────────────────────────────────
   minPasswordLength          Int     @default(8)
   maxLoginAttempts           Int     @default(5)
   sessionTimeoutMinutes      Int     @default(480)
-  // 0 = deaktiviert; > 0 = Minuten bis automatischer Logout bei Inaktivität im Browser
+  // 0 = disabled; > 0 = minutes until automatic logout on browser inactivity
   inactivityTimeoutMinutes   Int     @default(30)
   requireMfaForAdmins        Boolean @default(false)
-  // v3.18.30: Audit-Log global ein/aus. Default an. Toggle wird selbst auditiert.
+  // v3.18.30: audit log globally on/off. Default on. The toggle itself is audited.
   auditLogEnabled            Boolean @default(true)
   allowSelfRegistration      Boolean @default(false)
-  // Erlaubt Benutzern, ihr Passwort selbst per E-Mail-Link zurückzusetzen
+  // Allows users to reset their own password via an e-mail link
   selfServicePasswordReset   Boolean @default(true)
 
-  // ── Protokolle ────────────────────────────────────────────────────────────
-  // v5.7.0: MAPI over HTTP (Outlook „Exchange-Konto") optional zuschaltbar.
-  // Default AUS: /mapi/* liefert 404 und Autodiscover annonciert kein
-  // <Protocol Type="mapiHttp"> → Outlook richtet sich als IMAP-Konto ein.
-  // Hot-Reload via Redis CHANNEL_SETTINGS_RELOAD (kein Container-Neustart).
+  // ── Protocols ────────────────────────────────────────────────────────────
+  // v5.7.0: MAPI over HTTP (Outlook "Exchange account") can optionally be enabled.
+  // Default OFF: /mapi/* returns 404 and Autodiscover does not announce a
+  // <Protocol Type="mapiHttp"> → Outlook sets itself up as an IMAP account.
+  // Hot reload via Redis CHANNEL_SETTINGS_RELOAD (no container restart).
   mapiHttpEnabled    Boolean @default(false)
-  // v5.7.1: JMAP (RFC 8620/8621 + Erweiterungen) auf /jmap/* und
-  // /.well-known/jmap. Default AN; aus → 404. Hot-Reload wie MAPI.
+  // v5.7.1: JMAP (RFC 8620/8621 + extensions) on /jmap/* and
+  // /.well-known/jmap. Default ON; off → 404. Hot reload like MAPI.
   jmapEnabled        Boolean @default(true)
 
-  // ── Wartung ───────────────────────────────────────────────────────────────
+  // ── Maintenance ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)
   maintenanceMessage String  @default("Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.")
 
-  // ── TLS-Zertifikat (SMTP/IMAP/POP3 implizites TLS: Ports 465, 993, 995) ──────
-  // Wird beim ersten Start automatisch als selbstsigniertes Zertifikat generiert.
-  // Kann über das Admin-Panel durch ein offizielles Let's-Encrypt-Zertifikat ersetzt werden.
-  tlsCert  String?  // PEM-kodiertes Zertifikat (Certificate)
-  tlsKey   String?  // PEM-kodierter privater Schlüssel (Private Key)
+  // ── TLS certificate (SMTP/IMAP/POP3 implicit TLS: ports 465, 993, 995) ──────
+  // Generated automatically as a self-signed certificate on first start.
+  // Can be replaced with an official Let's Encrypt certificate via the admin panel.
+  tlsCert  String?  // PEM-encoded certificate
+  tlsKey   String?  // PEM-encoded private key
 
-  // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated entfernt
-  // (RS256-Keys waren für OAuth2/OIDC — komplett aus Stack raus).
-  // JWT wieder mit HS256 + JWT_SECRET env-Variable.
+  // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated removed
+  // (RS256 keys were for OAuth2/OIDC — completely out of the stack).
+  // JWT back to HS256 + JWT_SECRET env variable.
 
   updatedAt       DateTime @updatedAt
 
   @@map("server_settings")
 }
 
-// ── Service-Listeners ──────────────────────────────────────────────────────────
-// Konfigurierbare Listener pro Protokoll-Service (SMTP / IMAP / POP3)
-// Zeigt welche Adressen + Ports ein Service lauscht, ob TLS aktiv ist, etc.
+// ── Service listeners ──────────────────────────────────────────────────────────
+// Configurable listeners per protocol service (SMTP / IMAP / POP3)
+// Shows which addresses + ports a service listens on, whether TLS is active, etc.
 
 enum ServiceType {
   SMTP_RECEIVE
@@ -1490,11 +1490,11 @@ model ServiceListener {
   @@map("service_listeners")
 }
 
-// ── Mail-Connectors (Sende- / Empfangsconnectors) ─────────────────────────────
+// ── Mail connectors (send / receive connectors) ─────────────────────────────
 
 enum ConnectorType {
-  SEND      // Ausgehende Verbindungen zu Relay-/Smarthost
-  RECEIVE   // Eingehende Verbindungen (akzeptierte Quellen)
+  SEND      // Outbound connections to relay/smarthost
+  RECEIVE   // Inbound connections (accepted sources)
 }
 
 model MailConnector {
@@ -1503,19 +1503,19 @@ model MailConnector {
   description      String        @default("")
   type             ConnectorType
   enabled          Boolean       @default(true)
-  // SEND: Ziel-SMTP-Host / RECEIVE: Quelladressen (CIDR)
+  // SEND: target SMTP host / RECEIVE: source addresses (CIDR)
   host             String        @default("")
   port             Int           @default(25)
   tls              Boolean       @default(false)
   requireTls       Boolean       @default(false)
-  // RECEIVE: Erlaubte Quell-IPs/Ranges (CIDR, leer = alle)
+  // RECEIVE: allowed source IPs/ranges (CIDR, empty = all)
   sourceIps        String[]
-  // SEND: Für welche Domains gilt dieser Connector (leer = Fallback für alle)
+  // SEND: which domains this connector applies to (empty = fallback for all)
   targetDomains    String[]
-  // Auth-Credentials für SEND
+  // Auth credentials for SEND
   username         String?
-  password         String?       // klartext intern (sollte vault-gesichert sein)
-  // Priorität (niedrigerer Wert = höhere Priorität)
+  password         String?       // plaintext internally (should be vault-secured)
+  // Priority (lower value = higher priority)
   priority         Int           @default(0)
   createdBy        String
   createdAt        DateTime      @default(now())
@@ -1525,20 +1525,20 @@ model MailConnector {
   @@map("mail_connectors")
 }
 
-// ── Organisation & Sharing-Richtlinien ────────────────────────────────────────
+// ── Organization & sharing policies ────────────────────────────────────────
 
 model SharingPolicy {
   id          String   @id @default(cuid())
   name        String
   description String   @default("")
   enabled     Boolean  @default(true)
-  // Domains die Kalender-/Kontakt-Freigaben empfangen dürfen
-  // Leer = alle externen Domains erlaubt
+  // Domains allowed to receive calendar/contact shares
+  // Empty = all external domains allowed
   allowedDomains String[]
-  // Was darf geteilt werden
+  // What may be shared
   allowCalendar  Boolean @default(true)
   allowContacts  Boolean @default(false)
-  // FreeBusy vs. volle Kalenderdetails
+  // FreeBusy vs. full calendar details
   calendarDetail String  @default("FREEBUSY") // FREEBUSY | LIMITED | FULL
   isDefault      Boolean @default(false)
   createdAt      DateTime @default(now())
@@ -1551,55 +1551,55 @@ model AddressList {
   id          String   @id @default(cuid())
   name        String
   description String   @default("")
-  // LDAP-artiger Filter: {type: "all"|"users"|"groups"|"rooms", domainId?, department?}
+  // LDAP-like filter: {type: "all"|"users"|"groups"|"rooms", domainId?, department?}
   filter      Json     @default("{}")
-  isGal       Boolean  @default(false) // Globale Adressliste
+  isGal       Boolean  @default(false) // Global address list
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@map("address_lists")
 }
 
-// ── SSL/TLS Zertifikat-Verwaltung ─────────────────────────────────────────────
+// ── SSL/TLS certificate management ─────────────────────────────────────────────
 
 enum CertType {
-  LETSENCRYPT  // Automatisch via ACME HTTP-01
-  CUSTOM       // Manuell hochgeladen (PEM)
-  SELF_SIGNED  // Selbstsigniert (intern generiert)
+  LETSENCRYPT  // Automatic via ACME HTTP-01
+  CUSTOM       // Manually uploaded (PEM)
+  SELF_SIGNED  // Self-signed (generated internally)
 }
 
 enum CertStatus {
-  PENDING   // Ausstellung läuft / noch nicht ausgestellt
-  ACTIVE    // Gültig
-  EXPIRING  // Läuft in ≤ 30 Tagen ab
-  EXPIRED   // Abgelaufen
-  ERROR     // Fehler beim Ausstellen / Erneuern
-  RENEWING  // Erneuerung läuft
+  PENDING   // issuance in progress / not issued yet
+  ACTIVE    // valid
+  EXPIRING  // expires in ≤ 30 days
+  EXPIRED   // expired
+  ERROR     // error during issuance / renewal
+  RENEWING  // renewal in progress
 }
 
 model Certificate {
   id          String     @id @default(cuid())
-  name        String                          // Anzeigename, z.B. "mail.example.com Wildcard"
-  domains     String[]                        // Primäre Domain + SANs
-  services    String[]                        // Zugewiesene Services: OWA, ECP, SMTP, IMAP, POP3, EWS, DAV
+  name        String                          // display name, e.g. "mail.example.com Wildcard"
+  domains     String[]                        // primary domain + SANs
+  services    String[]                        // assigned services: OWA, ECP, SMTP, IMAP, POP3, EWS, DAV
   type        CertType   @default(LETSENCRYPT)
   status      CertStatus @default(PENDING)
-  // PEM-Daten (verschlüsselt im Klartext für internen Einsatz)
-  certPem     String?                         // Zertifikat (öffentlich)
-  keyPem      String?                         // Privat-Schlüssel
-  chainPem    String?                         // CA-Chain
-  // Zeitstempel
+  // PEM data (stored in plaintext for internal use)
+  certPem     String?                         // certificate (public)
+  keyPem      String?                         // private key
+  chainPem    String?                         // CA chain
+  // Timestamps
   issuedAt    DateTime?
   expiresAt   DateTime?
   autoRenew      Boolean    @default(true)
-  // Integrierter HTTPS-Reverse-Proxy (nur ein Zertifikat gleichzeitig aktiv)
+  // Integrated HTTPS reverse proxy (only one certificate active at a time)
   isActiveHttps    Boolean    @default(false)
-  // Protokoll-TLS: SMTP / IMAP / POP3 lesen aus ServerSettings.tlsCert/tlsKey.
-  // isActiveProtocol markiert welches Zertifikat gerade dort hinterlegt ist (nur eines).
+  // Protocol TLS: SMTP / IMAP / POP3 read from ServerSettings.tlsCert/tlsKey.
+  // isActiveProtocol marks which certificate is currently stored there (only one).
   isActiveProtocol Boolean    @default(false)
-  // Let's Encrypt Account Key (PEM) — pro Server gespeichert
+  // Let's Encrypt account key (PEM) — stored per server
   acmeAccount String?                         // ACME Account Key PEM
-  acmeEmail   String?                         // E-Mail für Let's Encrypt Benachrichtigungen
+  acmeEmail   String?                         // e-mail for Let's Encrypt notifications
   lastError   String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -1607,5 +1607,5 @@ model Certificate {
   @@map("certificates")
 }
 
-// (ExternalMailContact — komplett entfernt in v3.18.33. Externe Empfänger
-// werden direkt als Adresse im Compose-Fenster eingetragen.)
+// (ExternalMailContact — completely removed in v3.18.33. External recipients
+// are entered directly as an address in the compose window.)

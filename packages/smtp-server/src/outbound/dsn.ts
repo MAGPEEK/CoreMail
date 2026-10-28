@@ -1,10 +1,10 @@
 /**
- * DSN (Delivery Status Notification, RFC 3464) — Bounce-Generator.
+ * DSN (Delivery Status Notification, RFC 3464) — bounce generator.
  *
- * Wenn eine Mail nach Erschöpfung aller Retries (oder bei sofortigem 5xx) nicht
- * zugestellt werden konnte, sendet der Mailserver eine standardisierte Bounce-Mail
- * an MAIL FROM zurück. Ohne DSN würden Absender nie erfahren dass ihre Mail
- * nicht angekommen ist — Gold-Standard bei jedem RFC-konformen MTA.
+ * When a mail could not be delivered after all retries are exhausted (or on an
+ * immediate 5xx), the mail server sends a standardized bounce mail back to
+ * MAIL FROM. Without DSN, senders would never learn that their mail did not
+ * arrive — the gold standard for every RFC-compliant MTA.
  */
 
 import { storeInboundMessage } from '../handlers/message.js';
@@ -14,12 +14,12 @@ import { prisma } from '@coremail/storage';
 const log = createLogger('smtp:dsn');
 
 /**
- * Heuristik: gegeben einen Fehler-String (z.B. nodemailer-Exception), extrahiere
- * den SMTP-Reply-Code falls vorhanden, sonst null.
+ * Heuristic: given an error string (e.g. nodemailer exception), extract
+ * the SMTP reply code if present, otherwise null.
  */
 export function extractSmtpCode(err: unknown): { code: number | null; isPermanent: boolean } {
   const msg = err instanceof Error ? err.message : String(err);
-  // Suche nach 3-stelligem SMTP-Code (häufige Patterns):
+  // Look for a 3-digit SMTP code (common patterns):
   //   "550 5.1.1 User unknown"
   //   "421 4.7.0 Try again later"
   //   "smtp: 553 sorry, ..."
@@ -28,19 +28,19 @@ export function extractSmtpCode(err: unknown): { code: number | null; isPermanen
   const code = parseInt(m[0]!, 10);
   // 5xx = permanent (RFC 5321 §4.2.1)
   // 4xx = transient (try again)
-  // 2xx = success (sollte hier nicht vorkommen)
+  // 2xx = success (should not occur here)
   const isPermanent = code >= 500 && code < 600;
   return { code, isPermanent };
 }
 
 /**
- * Generiert eine RFC-3464-konforme Bounce-Mail und stellt sie via
- * storeInboundMessage() lokal an MAIL FROM zu (wenn lokal) oder verwirft sie
- * (wenn extern — sonst wären Bounce-Schleifen möglich; externe Sender bekommen
- * die Info ohnehin oft schon vom MX-Server via Sync-Reject).
+ * Generates an RFC 3464-compliant bounce mail and delivers it locally via
+ * storeInboundMessage() to MAIL FROM (if local) or discards it
+ * (if external — otherwise bounce loops would be possible; external senders
+ * usually get the info from the MX server via synchronous reject anyway).
  *
- * Wenn MAIL FROM leer ist (= bereits eine Bounce-Mail!) → null-sender, keine
- * neue Bounce generieren (RFC 5321 §6.1, „double-bounce prevention").
+ * If MAIL FROM is empty (= already a bounce mail!) → null sender, do not
+ * generate a new bounce (RFC 5321 §6.1, "double-bounce prevention").
  */
 export async function sendDsnBounce(opts: {
   originalFrom:     string;
@@ -51,13 +51,13 @@ export async function sendDsnBounce(opts: {
   smtpCode:         number | null;
   serverHostname:   string;
 }): Promise<void> {
-  // RFC 5321 §6.1: keine Bounce für leere MAIL FROM (= "<>" Bounce-Mail selbst)
+  // RFC 5321 §6.1: no bounce for empty MAIL FROM (= "<>" bounce mail itself)
   if (!opts.originalFrom || opts.originalFrom === '<>') {
-    log.info({ originalTo: opts.originalTo }, 'DSN unterdrückt: leere MAIL FROM (double-bounce-Schutz)');
+    log.info({ originalTo: opts.originalTo }, 'DSN suppressed: empty MAIL FROM (double-bounce protection)');
     return;
   }
 
-  // Nur an lokale Empfänger → für externe ist der MX-Bounce zuverlässiger
+  // Only to local recipients → for external ones the MX bounce is more reliable
   const [, domain] = opts.originalFrom.toLowerCase().split('@');
   if (!domain) return;
   const localDomain = await prisma.domain.findFirst({
@@ -65,7 +65,7 @@ export async function sendDsnBounce(opts: {
     select: { id: true },
   });
   if (!localDomain) {
-    log.info({ to: opts.originalFrom }, 'DSN unterdrückt: externer Absender (MX-Server liefert eigenes Bounce)');
+    log.info({ to: opts.originalFrom }, 'DSN suppressed: external sender (MX server delivers its own bounce)');
     return;
   }
 
@@ -74,7 +74,7 @@ export async function sendDsnBounce(opts: {
   const codeLine = opts.smtpCode ? `${opts.smtpCode}` : 'unbekannt';
   const recipients = opts.originalTo.join(', ');
 
-  // Multipart/report-Format (RFC 3464)
+  // multipart/report format (RFC 3464)
   const boundary = `dsn-boundary-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const subject = `Unzustellbar: ${opts.originalSubject || '(kein Betreff)'}`;
   const refsLine = opts.originalMessageId ? `References: ${opts.originalMessageId}\r\nIn-Reply-To: ${opts.originalMessageId}\r\n` : '';
@@ -129,15 +129,15 @@ ${reportPart}
 
   try {
     await storeInboundMessage(Buffer.from(raw, 'utf8'), {
-      fromAddr: '',     // null-sender für Bounce (RFC 5321)
+      fromAddr: '',     // null sender for bounce (RFC 5321)
       rcptTo:   opts.originalFrom,
       toJunk:   false,
     });
     log.info(
       { to: opts.originalFrom, code: opts.smtpCode, originalMessageId: opts.originalMessageId },
-      'DSN-Bounce zugestellt',
+      'DSN bounce delivered',
     );
   } catch (err) {
-    log.error({ err, to: opts.originalFrom }, 'DSN-Bounce-Zustellung fehlgeschlagen');
+    log.error({ err, to: opts.originalFrom }, 'DSN bounce delivery failed');
   }
 }

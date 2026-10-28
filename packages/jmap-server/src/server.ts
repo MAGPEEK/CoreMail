@@ -1,16 +1,16 @@
 /**
- * CoreMail JMAP-Server (v5.7.1) — Port 3006
+ * CoreMail JMAP server (v5.7.1) — port 3006
  *
  * RFC 8620 (Core), 8621 (Mail), 8887 (WebSocket), 9404 (Blob), 9425 (Quota),
- * 9670 (Sharing/Principals), 9749 (VAPID). Erreichbar über den api-gateway:
- *   GET  /.well-known/jmap            → 301 auf die Session-Resource
- *   GET  /jmap/session                → Session (Auth: Basic App-Passwort | Bearer JWT)
- *   POST /jmap/api                    → Method-Calls
- *   POST /jmap/upload/:accountId/     → Blob-Upload
+ * 9670 (Sharing/Principals), 9749 (VAPID). Reachable via the api-gateway:
+ *   GET  /.well-known/jmap            → 301 to the session resource
+ *   GET  /jmap/session                → session (auth: Basic app password | Bearer JWT)
+ *   POST /jmap/api                    → method calls
+ *   POST /jmap/upload/:accountId/     → blob upload
  *   GET  /jmap/download/:accountId/:blobId/:name?accept=
  *   GET  /jmap/eventsource            → Server-Sent Events
- *   WS   /jmap/ws                     → JMAP over WebSocket (Subprotokoll "jmap")
- * Schalter: BCP → Server → „JMAP" (ServerSettings.jmapEnabled, Default an).
+ *   WS   /jmap/ws                     → JMAP over WebSocket (subprotocol "jmap")
+ * Switch: BCP → Server → "JMAP" (ServerSettings.jmapEnabled, default on).
  */
 import express from 'express';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
@@ -29,7 +29,7 @@ import { startChangeBus } from './push/bus.js';
 import './methods/index.js';
 import type { JmapUser } from './types.js';
 
-// Express-Module-Augmentation greift nicht zuverlässig über Paketgrenzen → lokaler Typ
+// Express module augmentation does not apply reliably across package boundaries → local type
 type AuthedRequest = express.Request & { jmapUser?: JmapUser };
 
 const log = createLogger('jmap-server');
@@ -49,10 +49,10 @@ async function main(): Promise<void> {
     sub.on('message', () => {
       invalidateJmapFlagCache();
       invalidateSettingsCache();
-      log.info('Settings-Cache invalidiert (Redis-Signal)');
+      log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — Caches laufen nach 60s ab');
+    log.warn({ err }, 'Redis subscription failed — caches expire after 60s');
   }
 
   const app = express();
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'jmap-server' }));
 
-  // CORS — JMAP-Web-Clients (RFC 8620 §8.5 empfiehlt CORS-Support)
+  // CORS — JMAP web clients (RFC 8620 §8.5 recommends CORS support)
   app.use(['/jmap', '/.well-known/jmap'], (req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', req.get('Origin') ?? '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -103,18 +103,18 @@ async function main(): Promise<void> {
       if ((err as { type?: string }).type === 'entity.too.large') {
         problem(res, new RequestError('limit', 400, 'Request too large', { limit: 'maxSizeRequest' })); return;
       }
-      log.error({ err }, 'Unbehandelter Fehler in /jmap/api');
+      log.error({ err }, 'Unhandled error in /jmap/api');
       problem(res, new RequestError('serverFail', 500));
     }
   });
-  // Body-Parser-Fehler (ungültiges JSON / zu groß) landen hier
+  // Body parser errors (invalid JSON / too large) end up here
   app.use('/jmap/api', (err: Error & { type?: string }, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (res.headersSent) { next(err); return; }
     if (err.type === 'entity.too.large') { problem(res, new RequestError('limit', 400, 'Request too large', { limit: 'maxSizeRequest' })); return; }
     problem(res, new RequestError('notJSON', 400, 'Request body is not valid JSON'));
   });
 
-  // Blob-Upload (RFC 8620 §6.1)
+  // Blob upload (RFC 8620 §6.1)
   app.post('/jmap/upload/:accountId', jmapAuthMiddleware, express.raw({ type: () => true, limit: LIMITS.maxSizeUpload }), async (req, res) => {
     const accounts = await resolveAccounts((req as AuthedRequest).jmapUser!);
     const account = accounts.get(String(req.params['accountId']));
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     next(err);
   });
 
-  // Blob-Download (RFC 8620 §6.2)
+  // Blob download (RFC 8620 §6.2)
   app.get('/jmap/download/:accountId/:blobId/:name?', jmapAuthMiddleware, async (req, res) => {
     const accounts = await resolveAccounts((req as AuthedRequest).jmapUser!);
     const account = accounts.get(String(req.params['accountId']));

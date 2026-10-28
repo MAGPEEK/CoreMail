@@ -28,8 +28,8 @@ import toast from 'react-hot-toast';
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
 /**
- * v3.18.27: EventEditDialog ersetzt das alte inline new-event Modal.
- * Doppelklick auf Event → Edit-Mode mit existingId; Datum-Select → Create-Mode.
+ * v3.18.27: EventEditDialog replaces the old inline new-event modal.
+ * Double-click on event → edit mode with existingId; date select → create mode.
  */
 type EventDialogState =
   | null
@@ -44,7 +44,7 @@ export function CalendarPage() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  // v3.18.21: Filter-State auf der Page lifted, damit fcEvents tatsächlich gefiltert werden
+  // v3.18.21: Filter state lifted to the page so fcEvents are actually filtered
   const [filters, setFilters] = useState<Record<FilterKey, boolean>>(() => ({ ...FILTER_DEFAULT }));
   const calendarRef = useRef<FullCalendar | null>(null);
 
@@ -62,15 +62,15 @@ export function CalendarPage() {
     calendarRef.current?.getApi()?.gotoDate(d);
   };
 
-  // hiddenDays/locale memoizen, damit FullCalendar nicht bei jedem Re-Render neue Props bekommt
+  // Memoize hiddenDays/locale so FullCalendar does not get new props on every re-render
   const hiddenDays = useMemo(() => (view === 'workWeek' ? [0, 6] : []), [view]);
   const fcLocale = useMemo(() => LOCALE_MAP[lang] ?? deLocale, [lang]);
 
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn: () => api.get<Calendar[]>('/calendar'),
-    // v3.18.17: SSE-Push via useMailEvents() invalidiert den Cache live —
-    // 60s-Polling als Sicherheits-Fallback (falls SSE-Verbindung tot ist)
+    // v3.18.17: SSE push via useMailEvents() invalidates the cache live —
+    // 60s polling as a safety fallback (in case the SSE connection is dead)
     staleTime: 30_000,
     refetchOnWindowFocus: true,
     refetchInterval: 5 * 60_000,
@@ -86,14 +86,14 @@ export function CalendarPage() {
     queryFn: () => api.get<Task[]>('/tasks'),
   });
 
-  // Default-Kalender für neue Events: bevorzugt eigener Default, dann erster eigener.
-  // Geteilte READ-only Kalender niemals als Default verwenden.
+  // Default calendar for new events: prefer own default, then the first own calendar.
+  // Never use shared READ-only calendars as default.
   const defaultWritableCalId = useMemo(() => {
     const writable = (calendars ?? []).filter((c) => c.permission !== 'READ' && !c.shared);
     return writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? '';
   }, [calendars]);
 
-  // v3.18.27: Datum-Auswahl im FullCalendar → Create-Dialog
+  // v3.18.27: Date selection in FullCalendar → create dialog
   const handleDateSelect = (info: DateSelectArg) => {
     setEventDialog({
       mode: 'create',
@@ -106,8 +106,8 @@ export function CalendarPage() {
     });
   };
 
-  // v3.18.27: Klick auf existierendes Event → Edit-Dialog (NICHT mehr Delete-Confirm).
-  // Permission-Check macht der EventEditDialog selbst via canWrite-Flag im GET-Response.
+  // v3.18.27: Click on existing event → edit dialog (NO LONGER delete confirm).
+  // The permission check is done by EventEditDialog itself via the canWrite flag in the GET response.
   const handleEventClick = (info: EventClickArg) => {
     if (info.event.id.startsWith('task-')) {
       toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
@@ -116,7 +116,7 @@ export function CalendarPage() {
     setEventDialog({ mode: 'edit', eventId: info.event.id });
   };
 
-  // v3.18.21: Aufgaben nur wenn Filter „Aufgaben" aktiv
+  // v3.18.21: Tasks only when the "Aufgaben" (tasks) filter is active
   const taskEvents = !filters['Aufgaben'] ? [] : (tasks ?? [])
     .filter((t) => !!t.dueDate)
     .map((t) => ({
@@ -134,7 +134,7 @@ export function CalendarPage() {
     ...(events ?? [])
       .filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))
       .filter((ev) => {
-        // v3.18.21: Filter anwenden
+        // v3.18.21: Apply filters
         const cal = calendars?.find((c) => c.id === ev.calendarId);
         if (!filters['Geteilte Kalender'] && cal?.shared) return false;
         if (!filters['Wiederholende Termine'] && ev.recurring) return false;
@@ -153,7 +153,7 @@ export function CalendarPage() {
           allDay: false,
           backgroundColor: cal?.color ?? '#0078D4',
           borderColor: 'transparent',
-          // READ-Shares: per-event editable=false (verhindert Drag/Resize)
+          // READ shares: per-event editable=false (prevents drag/resize)
           editable: !isReadOnly,
           startEditable: !isReadOnly,
           durationEditable: !isReadOnly,
@@ -171,7 +171,7 @@ export function CalendarPage() {
         onSelectDate={handleSelectDate}
       />
 
-      {/* Hauptbereich: Toolbar + FullCalendar */}
+      {/* Main area: toolbar + FullCalendar */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <CalendarToolbar
           view={view}
@@ -189,12 +189,12 @@ export function CalendarPage() {
             setShareDialogOpen(true);
           }}
           onPrint={() => {
-            // v3.18.21: Nur Kalender drucken (Sidebar, Toolbar, App-Chrome via
-            // print:hidden in print.css ausgeblendet). class auf <html> setzen
-            // damit FullCalendar full-width für den Print-Job rendert.
+            // v3.18.21: Print only the calendar (sidebar, toolbar, app chrome hidden via
+            // print:hidden in print.css). Set class on <html>
+            // so FullCalendar renders full-width for the print job.
             document.documentElement.classList.add('coremail-printing');
             window.print();
-            // Cleanup nach Print-Dialog (sowohl bei Abbruch als auch nach Druck)
+            // Cleanup after the print dialog (both on cancel and after printing)
             setTimeout(() => {
               document.documentElement.classList.remove('coremail-printing');
             }, 500);
@@ -225,7 +225,7 @@ export function CalendarPage() {
       </div>
 
       {/* New event dialog */}
-      {/* v3.18.27: Outlook-Style Event-Dialog für Create & Edit */}
+      {/* v3.18.27: Outlook-style event dialog for create & edit */}
       {eventDialog && (
         <EventEditDialog
           eventId={eventDialog.mode === 'edit' ? eventDialog.eventId : null}
@@ -236,7 +236,7 @@ export function CalendarPage() {
         />
       )}
 
-      {/* v3.18.18: Share-Dialog via Toolbar-Button („Kalender teilen") */}
+      {/* v3.18.18: Share dialog via toolbar button ("Share calendar") */}
       {shareDialogOpen && (() => {
         const owned = (calendars ?? []).filter((c) => !c.shared);
         const initial = owned.find((c) => c.isDefault) ?? owned[0];

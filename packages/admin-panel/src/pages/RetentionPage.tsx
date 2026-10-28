@@ -81,10 +81,10 @@ function daysLabel(d: number): string {
   return `${d} Tag${d !== 1 ? 'e' : ''}`;
 }
 
-// ─── Vorlagen (Exchange-2019-typische Aufbewahrungs-Szenarien) ─────────────
-// Jede Vorlage besteht aus: einem Tag + einer Policy (die diesen Tag bündelt)
-// + GLOBAL-Assignment auf alle Postfächer. Wird per 1-Klick atomar via
-// Frontend-Orchestrierung angelegt.
+// ─── Templates (typical Exchange 2019 retention scenarios) ─────────────────
+// Each template consists of: a tag + a policy (bundling that tag)
+// + GLOBAL assignment to all mailboxes. Created atomically with one click via
+// frontend orchestration.
 
 interface RetentionTemplate {
   id:          string;
@@ -218,12 +218,12 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
   async function applyTemplate(tpl: RetentionTemplate) {
     setBusyId(tpl.id);
     try {
-      // 1. Tag anlegen
+      // 1. Create tag
       const tag = await api.post<{ id: string }>('/admin/compliance/retention/tags', {
         ...tpl.tag,
         enabled: true,
       });
-      // 2. Policy anlegen (legacy-Felder leer, Tags steuern alles)
+      // 2. Create policy (legacy fields empty, tags control everything)
       const policy = await api.post<{ id: string }>('/admin/compliance/retention', {
         name: tpl.policyName,
         description: tpl.description,
@@ -232,9 +232,9 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
         action: 'ARCHIVE',
         scope: 'ALL_ITEMS',
       });
-      // 3. Tag an Policy hängen
+      // 3. Attach tag to policy
       await api.post(`/admin/compliance/retention/${policy.id}/tags/${tag.id}`, {});
-      // 4. GLOBAL-Assignment auf alle Postfächer
+      // 4. GLOBAL assignment to all mailboxes
       await api.post(`/admin/compliance/retention/${policy.id}/assignments`, {
         target: 'GLOBAL', targetId: '',
       });
@@ -443,7 +443,7 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
   );
 }
 
-// ─── Policy Modal mit Tag-Picker ──────────────────────────────────────────────
+// ─── Policy modal with tag picker ─────────────────────────────────────────────
 
 function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | null; allTags: RetentionTag[]; onClose: () => void }) {
   const qc = useQueryClient();
@@ -464,7 +464,7 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
     setSelectedTags(next);
   };
 
-  // DPT-Validierung: maximal 1 DPT
+  // DPT validation: at most 1 DPT
   const dptCount = [...selectedTags].filter((id) => allTags.find((t) => t.id === id)?.type === 'DPT').length;
 
   const save = useMutation({
@@ -473,7 +473,7 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
         name: form.name,
         description: form.description,
         enabled: form.enabled,
-        // Legacy-Defaults — neue Policies steuern alles über Tags
+        // Legacy defaults — new policies control everything via tags
         retentionDays: 0,
         action: 'ARCHIVE',
         scope: 'ALL_ITEMS',
@@ -482,7 +482,7 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
         ? await api.put<RetentionPolicy>(`/admin/compliance/retention/${policy.id}`, body)
         : await api.post<RetentionPolicy>('/admin/compliance/retention', body);
 
-      // Tags reconcilen
+      // Reconcile tags
       const existingTagIds = new Set((policy?.policyTags ?? []).map((pt) => pt.tagId));
       const toAdd    = [...selectedTags].filter((id) => !existingTagIds.has(id));
       const toRemove = [...existingTagIds].filter((id) => !selectedTags.has(id));

@@ -1,22 +1,22 @@
 /**
  * NSPI (Name Service Provider Interface) Handler v5.1.0
  *
- * Implementiert volle MS-OXNSPI Binary-Operationen für native Outlook-
- * Adressbuch-Operationen. Ersetzt den SUCCESS-empty Fallback aus v4.7.0.
+ * Implements full MS-OXNSPI binary operations for native Outlook
+ * address-book operations. Replaces the SUCCESS-empty fallback from v4.7.0.
  *
- * Implementiert:
- *   - GetSpecialTable     (Address-Book Hierarchy = "Global Address List")
- *   - QueryRows           (Pagination durch alle GAL-Einträge)
- *   - GetMatches          (Restriction-basierte Suche)
- *   - ResolveNames        (String-Match auf displayName/email)
- *   - GetProps            (Properties eines Eintrags per MinId)
+ * Implemented:
+ *   - GetSpecialTable     (address-book hierarchy = "Global Address List")
+ *   - QueryRows           (pagination through all GAL entries)
+ *   - GetMatches          (restriction-based search)
+ *   - ResolveNames        (string match on displayName/email)
+ *   - GetProps            (properties of one entry by MinId)
  *   - DnToMinId           (DN → MinId)
- *   - GetPropList         (Liste verfügbarer Properties)
+ *   - GetPropList         (list of available properties)
  *
- * Identitäts-Mapping:
- *   MinEntryID = FNV-1a-32bit-Hash(userId/groupId) im Range [0x10000000, 0xFFFFFFFF]
+ * Identity mapping:
+ *   MinEntryID = FNV-1a 32-bit hash(userId/groupId) in the range [0x10000000, 0xFFFFFFFF]
  *
- * Property-Set (per Eintrag):
+ * Property set (per entry):
  *   PR_DISPLAY_NAME_W, PR_EMAIL_ADDRESS_W, PR_SMTP_ADDRESS_W,
  *   PR_ADDRTYPE_W ('SMTP'), PR_OBJECT_TYPE (6=MAILUSER/8=DISTLIST),
  *   PR_DISPLAY_TYPE (0=MAILUSER/1=DISTLIST), PR_ACCOUNT_W
@@ -32,13 +32,13 @@ import { PR } from './rop-types.js';
 
 const log = createLogger('mapi:nspi');
 
-/** MS-OXOABK §2.2.1.x — DisplayType/ObjectType-Konstanten. */
+/** MS-OXOABK §2.2.1.x — DisplayType/ObjectType constants. */
 const DT_MAILUSER  = 0;
 const DT_DISTLIST  = 1;
 const OT_MAILUSER  = 6;
 const OT_DISTLIST  = 8;
 
-/** Standard-Property-Set für einen NSPI-Row. */
+/** Standard property set for an NSPI row. */
 const STANDARD_COLUMNS = [
   PR.PR_DISPLAY_NAME_W,
   PR.PR_EMAIL_ADDRESS_W,
@@ -55,21 +55,21 @@ export interface NspiRow {
   isGroup: boolean;
 }
 
-/** FNV-1a 32-bit Hash für MinEntryID. */
+/** FNV-1a 32-bit hash for MinEntryID. */
 function fnv1a32(s: string): number {
   let h = 0x811C9DC5 >>> 0;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  // MinId muss im 0x10000000-0xFFFFFFFF range sein (MS-OXNSPI §2.2.x)
+  // MinId must be in the 0x10000000-0xFFFFFFFF range (MS-OXNSPI §2.2.x)
   return (h | 0x10000000) >>> 0;
 }
 
 /**
- * Lädt alle GAL-Einträge eines Mailservers (aktive User).
- * v5.6.1: DistributionGroup entfernt — `isGroup` bleibt im Row-Typ für
- * PR_OBJECT_TYPE/PR_DISPLAY_TYPE, ist aber immer false.
+ * Loads all GAL entries of a mail server (active users).
+ * v5.6.1: DistributionGroup removed — `isGroup` stays in the row type for
+ * PR_OBJECT_TYPE/PR_DISPLAY_TYPE, but is always false.
  */
 async function loadGalRows(): Promise<NspiRow[]> {
   const users = await prisma.user.findMany({
@@ -89,11 +89,11 @@ async function loadGalRows(): Promise<NspiRow[]> {
 }
 
 /**
- * Serialisiert einen NSPI-Row als PropertyRow (für die in der Response
- * geforderten Columns).
+ * Serializes an NSPI row as a PropertyRow (for the columns requested
+ * in the response).
  */
 function writeNspiRow(w: MapiWriter, row: NspiRow, columns: number[]): void {
-  // PropertyRow Flag-Byte (0 = no errors)
+  // PropertyRow flag byte (0 = no errors)
   w.writeUint8(0);
   for (const col of columns) {
     const id = (col >>> 16) & 0xFFFF;
@@ -119,7 +119,7 @@ function writeNspiRow(w: MapiWriter, row: NspiRow, columns: number[]): void {
         writeUnicodeValue(w, type, row.email.split('@')[0] ?? row.email);
         break;
       default:
-        // Unsupported: leer-zurückgeben
+        // Unsupported: return empty
         writeDefaultForType(w, type);
         break;
     }
@@ -150,18 +150,18 @@ function writeDefaultForType(w: MapiWriter, type: number): void {
   }
 }
 
-// ── HTTP-Handler ─────────────────────────────────────────────────────────────
+// ── HTTP handler ─────────────────────────────────────────────────────────────
 
 /**
- * Vollständige NSPI-Implementierung. Wird vom handler.ts aufgerufen
- * (ersetzt das v4.7.0 SUCCESS-empty Pattern).
+ * Complete NSPI implementation. Called from handler.ts
+ * (replaces the v4.7.0 SUCCESS-empty pattern).
  */
 export async function handleNspiOperation(
   req: Request, res: Response, requestId: string, requestType: string,
 ): Promise<void> {
   const headers = parseMapiHeaders(req);
   const sessionToken = headers.cookies['NspiSession'] ?? '';
-  // Session-Check ist im handler.ts oberhalb (wir gehen davon aus dass bereits validiert)
+  // The session check is in handler.ts above (we assume it has already been validated)
   void sessionToken;
 
   switch (requestType) {
@@ -192,7 +192,7 @@ export async function handleNspiOperation(
 }
 
 /**
- * GetSpecialTable — gibt die Address-Book Hierarchy zurück (nur "Global Address List").
+ * GetSpecialTable — returns the address-book hierarchy (only "Global Address List").
  */
 async function handleGetSpecialTable(res: Response, requestId: string): Promise<void> {
   const w = new MapiWriter();
@@ -201,7 +201,7 @@ async function handleGetSpecialTable(res: Response, requestId: string): Promise<
   w.writeUint32(0);                        // CodePage (default)
   w.writeUint32(1);                        // RowCount = 1 (just GAL)
 
-  // Eine Row für "Global Address List"
+  // One row for "Global Address List"
   const galRow: NspiRow = {
     minId: 0x00000001,
     displayName: 'Globale Adressliste',
@@ -216,22 +216,22 @@ async function handleGetSpecialTable(res: Response, requestId: string): Promise<
 }
 
 /**
- * QueryRows — paginiert durch GAL-Einträge (v5.2.0 mit Cursor-Pagination).
+ * QueryRows — paginates through GAL entries (v5.2.0 with cursor pagination).
  *
- * Request-Body (MS-OXNSPI §2.2.x simplified):
+ * Request body (MS-OXNSPI §2.2.x simplified):
  *   Flags(uint32) | Reserved(uint32) | StartMid(uint32) | RowCount(uint32)
  *   | ColumnCount(uint32) | Columns(uint32[])
  *
  * Response:
  *   StatusCode + ErrorCode + CodePage + RowCount + Rows
  *
- * v5.2.0: Cursor-Pagination via StartMid. Wenn StartMid > 0, suchen wir
- * den Index dieser MinEntryID und liefern ab da. Sort: alphabetisch nach
+ * v5.2.0: Cursor pagination via StartMid. If StartMid > 0, we look up
+ * the index of that MinEntryID and deliver from there. Sort: alphabetical by
  * displayName.
  */
 async function handleQueryRows(req: Request, res: Response, requestId: string): Promise<void> {
   let rows = await loadGalRows();
-  // v5.2.0: Default-Sort alphabetisch
+  // v5.2.0: default sort alphabetical
   rows.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
 
   // Parse request: skip header (16 bytes), get StartMid + RowCount
@@ -245,7 +245,7 @@ async function handleQueryRows(req: Request, res: Response, requestId: string): 
     }
   } catch { /* defaults */ }
 
-  // Cursor-Pagination
+  // Cursor pagination
   let startIdx = 0;
   if (startMid > 0) {
     const idx = rows.findIndex((r) => r.minId === startMid);
@@ -268,10 +268,10 @@ async function handleQueryRows(req: Request, res: Response, requestId: string): 
 }
 
 /**
- * ResolveNames + GetMatches — String-Match auf displayName/email.
+ * ResolveNames + GetMatches — string match on displayName/email.
  *
- * Request-Body: enthält Liste von Suchstrings als UTF-16-LE.
- * Wir extrahieren alle UTF-16-LE-Strings aus dem Body und matchen.
+ * Request body: contains a list of search strings as UTF-16-LE.
+ * We extract all UTF-16-LE strings from the body and match them.
  */
 async function handleResolveNames(req: Request, res: Response, requestId: string): Promise<void> {
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -295,9 +295,9 @@ async function handleResolveNames(req: Request, res: Response, requestId: string
 }
 
 /**
- * GetProps — liefert Properties eines spezifischen Eintrags per MinId.
+ * GetProps — returns the properties of a specific entry by MinId.
  *
- * Request-Body: MinEntryID(uint32) + Flags + Columns.
+ * Request body: MinEntryID(uint32) + Flags + Columns.
  */
 async function handleGetProps(req: Request, res: Response, requestId: string): Promise<void> {
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -325,12 +325,12 @@ async function handleGetProps(req: Request, res: Response, requestId: string): P
 }
 
 /**
- * DnToMinId — konvertiert einen Legacy-DN-String in eine MinEntryID.
+ * DnToMinId — converts a legacy DN string to a MinEntryID.
  */
 async function handleDnToMinId(req: Request, res: Response, requestId: string): Promise<void> {
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   const dn = extractFirstUtf16String(body);
-  // DN-Format: /o=CoreMail/ou=.../cn=Recipients/cn=<email-or-id>
+  // DN format: /o=CoreMail/ou=.../cn=Recipients/cn=<email-or-id>
   const m = dn.match(/cn=([^/]+)$/i);
   const lookup = m?.[1] ?? '';
   const rows = await loadGalRows();
@@ -349,7 +349,7 @@ async function handleDnToMinId(req: Request, res: Response, requestId: string): 
 }
 
 /**
- * GetPropList — liefert die Liste verfügbarer Properties für GAL-Einträge.
+ * GetPropList — returns the list of available properties for GAL entries.
  */
 async function handleGetPropList(res: Response, requestId: string): Promise<void> {
   const w = new MapiWriter();
@@ -376,13 +376,13 @@ function writeSuccessEmpty(res: Response, requestId: string): void {
 }
 
 /**
- * Extrahiert den ersten UTF-16-LE null-terminierten String aus einem Buffer.
- * Fragile aber für unsere Zwecke ausreichend (Outlook sendet ResolveNames-
- * Strings typischerweise als reine UTF-16-Sequenz).
+ * Extracts the first UTF-16-LE null-terminated string from a buffer.
+ * Fragile but sufficient for our purposes (Outlook typically sends ResolveNames
+ * strings as a pure UTF-16 sequence).
  */
 function extractFirstUtf16String(buf: Buffer): string {
   if (buf.length < 2) return '';
-  // Suche nach 0x00 0x00 als Terminator
+  // Search for 0x00 0x00 as the terminator
   let end = buf.length;
   for (let i = 0; i + 1 < buf.length; i += 2) {
     if (buf[i] === 0 && buf[i + 1] === 0) { end = i; break; }

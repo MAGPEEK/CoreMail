@@ -1,9 +1,9 @@
 /**
  * CoreMail Message → JMAP Email (RFC 8621 §4).
- * bodyStructure wird aus den DB-Feldern synthetisiert:
- *   multipart/mixed[ multipart/alternative[ text/plain, text/html ], Anhänge… ]
- * Header-Properties (`headers`, `header:*`, `references`) werden nur bei Bedarf
- * aus der Rohnachricht gelesen (MinIO + mailparser).
+ * bodyStructure is synthesized from the DB fields:
+ *   multipart/mixed[ multipart/alternative[ text/plain, text/html ], attachments… ]
+ * Header properties (`headers`, `header:*`, `references`) are only read from the
+ * raw message on demand (MinIO + mailparser).
  */
 import type { EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, JsonObject } from '../types.js';
 import { flagsToKeywords } from './keywords.js';
@@ -179,7 +179,7 @@ function splitAddresses(s: string): EmailAddress[] {
   return out;
 }
 
-// ── Hauptmapper ──────────────────────────────────────────────────────────────
+// ── Main mapper ──────────────────────────────────────────────────────────────
 
 export async function toJmapEmail(msg: MappableMessage, threadId: string, opts: MapOptions): Promise<JsonObject> {
   const props = opts.properties ?? DEFAULT_EMAIL_PROPERTIES;
@@ -254,7 +254,7 @@ export async function toJmapEmail(msg: MappableMessage, threadId: string, opts: 
       }
       default:
         if (p.startsWith('header:')) out[p] = headerProp(headerLines, p);
-        // unbekannte Properties werden vom Aufrufer vorher als invalidArguments abgewiesen
+        // unknown properties are rejected beforehand by the caller as invalidArguments
     }
   }
   return out;

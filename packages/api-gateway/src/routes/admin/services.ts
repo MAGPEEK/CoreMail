@@ -1,13 +1,13 @@
 /**
- * Admin-API: Service-Listeners
+ * Admin API: service listeners
  *
- * GET    /api/v1/admin/services/overview                          — Übersicht aller Services
- * GET    /api/v1/admin/services/listeners/:service                — Listener eines Services
- * POST   /api/v1/admin/services/listeners/:service                — Listener hinzufügen
- * PUT    /api/v1/admin/services/listeners/:id                     — Listener bearbeiten
- * PATCH  /api/v1/admin/services/listeners/:id/toggle              — Listener aktivieren/deaktivieren
- * DELETE /api/v1/admin/services/listeners/:id                     — Listener löschen
- * POST   /api/v1/admin/services/listeners/:service/restore-defaults — Standard-Ports wiederherstellen
+ * GET    /api/v1/admin/services/overview                          — overview of all services
+ * GET    /api/v1/admin/services/listeners/:service                — listeners of a service
+ * POST   /api/v1/admin/services/listeners/:service                — add listener
+ * PUT    /api/v1/admin/services/listeners/:id                     — edit listener
+ * PATCH  /api/v1/admin/services/listeners/:id/toggle              — enable/disable listener
+ * DELETE /api/v1/admin/services/listeners/:id                     — delete listener
+ * POST   /api/v1/admin/services/listeners/:service/restore-defaults — restore default ports
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -19,11 +19,11 @@ const log = createLogger('admin:services');
 export const adminServicesRouter: RouterType = Router();
 adminServicesRouter.use(requireAdmin);
 
-// ── Gültige Service-Typen ─────────────────────────────────────────────────────
+// ── Valid service types ───────────────────────────────────────────────────────
 const SERVICE_TYPES = ['SMTP_RECEIVE', 'SMTP_SEND', 'IMAP', 'POP3'] as const;
 type SvcType = typeof SERVICE_TYPES[number];
 
-// Slug → DB-Enum (URL benutzt Bindestriche, DB Unterstriche)
+// Slug → DB enum (URL uses hyphens, DB underscores)
 function slugToEnum(slug: string): SvcType | null {
   const upper = slug.toUpperCase().replace(/-/g, '_');
   return (SERVICE_TYPES as readonly string[]).includes(upper) ? upper as SvcType : null;
@@ -38,7 +38,7 @@ const ListenerSchema = z.object({
   active:  z.boolean().default(true),
 });
 
-// ── Default-Listener pro Service (werden beim ersten Abruf gesät) ──────────────
+// ── Default listeners per service (seeded on first fetch) ──────────────────────
 const DEFAULTS: { service: SvcType; address: string; port: number; ssl: boolean }[] = [
   { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 25,  ssl: false },
   { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 465, ssl: true  },
@@ -60,7 +60,7 @@ async function ensureDefaults(service: SvcType) {
   }
 }
 
-/** Publiziert ein Redis-Reload-Signal für den zuständigen Service-Prozess. */
+/** Publishes a Redis reload signal for the responsible service process. */
 async function publishReload(service: SvcType): Promise<void> {
   try {
     const redis = getRedisClient();
@@ -73,7 +73,7 @@ async function publishReload(service: SvcType): Promise<void> {
 // ── GET /overview ─────────────────────────────────────────────────────────────
 adminServicesRouter.get('/overview', async (_req: Request, res: Response) => {
   try {
-    // Seed alle Services mit Defaults, falls leer
+    // Seed all services with defaults if empty
     for (const svc of SERVICE_TYPES) {
       await ensureDefaults(svc);
     }
@@ -156,7 +156,7 @@ adminServicesRouter.patch('/listeners/:id/toggle', async (req: Request, res: Res
     });
     log.info({ id, active: listener.active }, 'Listener toggled');
 
-    // Signal den zuständigen Service, seine Listener neu zu laden
+    // Signal the responsible service to reload its listeners
     try {
       const redis = getRedisClient();
       await redis.publish(
@@ -177,7 +177,7 @@ adminServicesRouter.patch('/listeners/:id/toggle', async (req: Request, res: Res
 adminServicesRouter.delete('/listeners/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   try {
-    // Erst lesen (für Service-Typ), dann löschen, dann Reload-Signal
+    // Read first (for the service type), then delete, then reload signal
     const existing = await prisma.serviceListener.findUniqueOrThrow({ where: { id } });
     await prisma.serviceListener.delete({ where: { id } });
     log.info({ id, service: existing.service, port: existing.port }, 'Listener deleted');
@@ -200,14 +200,14 @@ adminServicesRouter.post('/listeners/:service/restore-defaults', async (req: Req
       return;
     }
 
-    // Alle bestehenden Listener löschen, dann Defaults mit active=true anlegen
+    // Delete all existing listeners, then create defaults with active=true
     await prisma.serviceListener.deleteMany({ where: { service: svc } });
     await prisma.serviceListener.createMany({
       data: defs.map(d => ({ ...d, active: true })),
     });
     log.info({ service: svc, count: defs.length }, 'Listener defaults restored');
 
-    // Reload-Signal senden damit Ports sofort neu gestartet werden
+    // Send reload signal so ports are restarted immediately
     await publishReload(svc);
 
     const listeners = await prisma.serviceListener.findMany({

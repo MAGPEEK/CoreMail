@@ -1,32 +1,32 @@
 /**
  * MS-OXCFXICS — Bulk Data Transfer & Sync (v5.2.0)
  *
- * Outlook Cached Mode (Default ab 2007) synchronisiert die lokale .ost-Datei
- * mit dem Server via "FastTransfer" und "ICS" (Incremental Change Synchronization).
+ * Outlook Cached Mode (default since 2007) synchronizes the local .ost file
+ * with the server via "FastTransfer" and "ICS" (Incremental Change Synchronization).
  *
- * Sync-Workflow:
- *   1. Outlook ruft RopSyncConfigure auf einem Folder-Handle → bekommt
- *      ein FastTransfer-Source-Handle.
- *   2. Outlook ruft RopFastTransferSourceGetBuffer wiederholt bis EndOfStream.
- *      Server liefert ICS-Records (FXOpcode + Data) der Form:
+ * Sync workflow:
+ *   1. Outlook calls RopSyncConfigure on a folder handle → gets
+ *      a FastTransfer source handle.
+ *   2. Outlook calls RopFastTransferSourceGetBuffer repeatedly until EndOfStream.
+ *      The server delivers ICS records (FXOpcode + data) of the form:
  *        - PtypInteger32 (PR_*-Property)
  *        - PtypString (UTF-16-LE)
  *        - Nested Property-Groups
- *   3. Outlook persistiert lokal in OST.
- *   4. State-Sync: Outlook lädt SyncState (ICS-Tokens) auf via
- *      RopSyncUploadStateStream* — Server delta-sendet seitdem
- *      neue/geänderte Items.
+ *   3. Outlook persists locally in the OST.
+ *   4. State sync: Outlook uploads the SyncState (ICS tokens) via
+ *      RopSyncUploadStateStream* — the server then delta-sends
+ *      new/changed items since.
  *
- * v5.2.0 Implementation: pragmatischer Ansatz.
- *   - SyncConfigure liefert FastTransfer-Source-Handle.
- *   - GetBuffer liefert eine simple Stream-Repräsentation der Folder-Contents
- *     (TaggedProperties pro Message in flattened Stream).
- *   - State-Tracking nutzt eine in-memory map cursor → folderId,lastModSeq.
- *   - Volle Delta-Sync (echte ICS-Change-Numbers per Item) ist v5.3.0+.
+ * v5.2.0 implementation: pragmatic approach.
+ *   - SyncConfigure returns a FastTransfer source handle.
+ *   - GetBuffer returns a simple stream representation of the folder contents
+ *     (TaggedProperties per message in a flattened stream).
+ *   - State tracking uses an in-memory map cursor → folderId,lastModSeq.
+ *   - Full delta sync (real ICS change numbers per item) is v5.3.0+.
  *
- * Damit funktioniert Outlook Cached Mode: Initial-Sync schlägt durch (alle
- * Mails landen lokal), Delta-Sync bekommt SUCCESS-empty (kein Crash, Outlook
- * macht typically einen Full-Pull alle paar Stunden).
+ * This makes Outlook Cached Mode work: the initial sync goes through (all
+ * mails land locally), delta sync gets SUCCESS-empty (no crash, Outlook
+ * typically does a full pull every few hours).
  */
 
 import { prisma } from '@coremail/storage';
@@ -50,7 +50,7 @@ const log = createLogger('mapi:rop:sync');
  *        | Restriction(variable) | Extended(uint32) | PropertyTagCount(uint16)
  *        | PropertyTags(uint32[])
  *
- * Antwort: ReturnValue (OutputHandle = FastTransfer Source)
+ * Response: ReturnValue (OutputHandle = FastTransfer source)
  */
 export async function handleRopSyncConfigure(
   rop: RopRequest,
@@ -64,19 +64,19 @@ export async function handleRopSyncConfigure(
   const userId = input.object.userId;
   const folderId = input.object.kind === 'folder' ? input.object.folderId : '';
 
-  // FastTransfer-Source-Handle anlegen — als spezielles Stream-Object mit
-  // serializedPosition = 0 (Initial). Wir nutzen das stream-kind mit
-  // einer special property-tag 0xFFFFFFFE als Marker.
+  // Create the FastTransfer source handle — as a special stream object with
+  // serializedPosition = 0 (initial). We use the stream kind with
+  // a special property tag 0xFFFFFFFE as a marker.
   const buffer = await buildSyncStream(userId, folderId);
   const handle = await putRopObject(sessionToken, {
     kind: 'stream',
     userId,
     messageId: null,
-    propertyTag: 0xFFFFFFFE,            // Marker: FastTransfer-Source
+    propertyTag: 0xFFFFFFFE,            // Marker: FastTransfer source
     buffer,
     offset: 0,
     writable: false,
-    parentMessageHandle: input.handle,   // referenziert den parent folder-handle
+    parentMessageHandle: input.handle,   // references the parent folder handle
   });
   if (handle === null) {
     return writeErr(RopId.SyncConfigure, rop, MapiStatusCode.EC_INVALID_SESSION);
@@ -95,7 +95,7 @@ export async function handleRopSyncConfigure(
  *
  * Payload: BufferSize(uint16) | MaxBufferSize(uint16)
  *
- * Antwort: ReturnValue + TransferStatus(uint16) + InProgressCount(uint16)
+ * Response: ReturnValue + TransferStatus(uint16) + InProgressCount(uint16)
  *        + TotalStepCount(uint16) + Reserved(uint8) + TransferBufferSize(uint16)
  *        + TransferBuffer(variable)
  *
@@ -144,7 +144,7 @@ export async function handleRopFastTransferSourceGetBuffer(
 /**
  * v5.2.0: RopFastTransferSourceCopyFolder
  *
- * Wie SyncConfigure, aber auf einen einzelnen Folder begrenzt.
+ * Like SyncConfigure, but limited to a single folder.
  */
 export async function handleRopFastTransferSourceCopyFolder(
   rop: RopRequest,
@@ -157,7 +157,7 @@ export async function handleRopFastTransferSourceCopyFolder(
 /**
  * v5.2.0: RopFastTransferSourceCopyMessages
  *
- * Wie SyncConfigure aber filtert auf eine Liste von MessageIds.
+ * Like SyncConfigure but filters on a list of MessageIds.
  */
 export async function handleRopFastTransferSourceCopyMessages(
   rop: RopRequest,
@@ -181,7 +181,7 @@ export async function handleRopFastTransferSourceCopyProperties(
 /**
  * v5.2.0: RopFastTransferDestinationConfigure + PutBuffer
  *
- * Outlook → Server. Wir akzeptieren mit SUCCESS aber verarbeiten nicht.
+ * Outlook → server. We accept with SUCCESS but do not process.
  */
 export async function handleRopFastTransferDestinationConfigure(
   rop: RopRequest,
@@ -232,8 +232,8 @@ export async function handleRopFastTransferDestinationPutBuffer(
 // ─── ICS Sync ROPs ───────────────────────────────────────────────────────────
 
 /**
- * v5.2.0: RopSyncImportMessageChange — Outlook lädt Änderungen hoch.
- * Wir akzeptieren mit SUCCESS.
+ * v5.2.0: RopSyncImportMessageChange — Outlook uploads changes.
+ * We accept with SUCCESS.
  */
 export async function handleRopSyncImportMessageChange(
   rop: RopRequest,
@@ -244,7 +244,7 @@ export async function handleRopSyncImportMessageChange(
   w.writeUint8(RopId.SyncImportMessageChange);
   w.writeUint8(rop.outputHandleIndex ?? rop.inputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  w.writeUint64(0n);    // MessageId-Server-Reply
+  w.writeUint64(0n);    // MessageId server reply
   return w.toBuffer();
 }
 
@@ -359,14 +359,14 @@ export async function handleRopGetLocalReplicaIds(
   const r = new MapiReader(rop.payload);
   let idCount = 1;
   try { idCount = r.readUint32(); } catch { /* default */ }
-  // Liefere idCount uint64-IDs in einem zusammenhängenden Range.
+  // Return idCount uint64 IDs in a contiguous range.
   const w = new MapiWriter();
   w.writeUint8(RopId.GetLocalReplicaIds);
   w.writeUint8(rop.inputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  // ReplGuid (16 Bytes)
+  // ReplGuid (16 bytes)
   w.writeBuffer(Buffer.alloc(16));
-  // GlobalCount (6 Bytes, MS-OXCDATA §2.2.1.3)
+  // GlobalCount (6 bytes, MS-OXCDATA §2.2.1.3)
   const startBuf = Buffer.alloc(6);
   startBuf.writeUIntLE(Date.now() & 0xFFFFFFFFFFFF, 0, 6);
   w.writeBuffer(startBuf);
@@ -389,7 +389,7 @@ export async function handleRopSyncGetTransferState(
   if (!userId) {
     return writeErr(RopId.SyncGetTransferState, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
-  // Leerer State-Stream — Outlook akzeptiert das als „kein vorheriger State".
+  // Empty state stream — Outlook accepts this as "no previous state".
   const handle = await putRopObject(sessionToken, {
     kind: 'stream', userId, messageId: null, propertyTag: 0xFFFFFFFB,
     buffer: Buffer.alloc(0), offset: 0, writable: false,
@@ -407,21 +407,21 @@ export async function handleRopSyncGetTransferState(
 // ─── ICS Stream Builder ──────────────────────────────────────────────────────
 
 /**
- * Erzeugt einen ICS-FastTransfer-Stream für die Folder-Contents.
+ * Builds an ICS FastTransfer stream for the folder contents.
  *
- * Vereinfachtes Format (MS-OXCFXICS §3.2.5.x):
- *   Pro Message: TaggedPropertyValues — minimum PR_MID, PR_SUBJECT_W,
+ * Simplified format (MS-OXCFXICS §3.2.5.x):
+ *   Per message: TaggedPropertyValues — minimum PR_MID, PR_SUBJECT_W,
  *                PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W, PR_MESSAGE_DELIVERY_TIME,
  *                PR_MESSAGE_FLAGS, PR_MESSAGE_SIZE.
  *
- * Wir liefern maximal 200 Messages pro Sync — Outlook holt sich den Rest
- * via wiederholten SyncConfigure-Calls falls nötig.
+ * We deliver at most 200 messages per sync — Outlook fetches the rest
+ * via repeated SyncConfigure calls if needed.
  *
- * Echte ICS-Records hätten OPCODE-Marker (StartMessage=0x40000003,
- * EndMessage=0x40000004 etc.) — die simplifizierte Version ohne Opcodes
- * wird von Outlook als „Fragmentierter Stream" interpretiert und triggert
- * normalerweise einen Fallback auf RopOpenMessage-pro-Item statt full-sync.
- * Damit funktioniert Cached Mode degraded-aber-stable.
+ * Real ICS records would have OPCODE markers (StartMessage=0x40000003,
+ * EndMessage=0x40000004 etc.) — the simplified version without opcodes
+ * is interpreted by Outlook as a "fragmented stream" and normally triggers
+ * a fallback to RopOpenMessage-per-item instead of full sync.
+ * This makes Cached Mode work degraded-but-stable.
  */
 async function buildSyncStream(userId: string, folderId: string): Promise<Buffer> {
   if (!folderId) return Buffer.alloc(0);

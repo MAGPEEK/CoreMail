@@ -432,7 +432,7 @@ function OverviewSection({
   );
 }
 
-// ─── Jobs Section (Ausgehend / Retry / Dead Letter) ───────────────────────────
+// ─── Jobs Section (Outbound / Retry / Dead Letter) ────────────────────────────
 
 function JobsSection({
   stateFilter, title, description, badge, emptyText, showRetry = false, showRetryAll = false,

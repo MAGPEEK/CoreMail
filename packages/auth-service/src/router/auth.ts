@@ -77,7 +77,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
-  // Wartungsmodus: nur ORGANIZATION_MANAGEMENT und SERVER_MANAGEMENT dürfen sich anmelden
+  // Maintenance mode: only ORGANIZATION_MANAGEMENT and SERVER_MANAGEMENT may log in
   const ADMIN_ROLES: UserRole[] = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'];
   if (!ADMIN_ROLES.includes(user.role as UserRole)) {
     const settings = await prisma.serverSettings.findUnique({
@@ -85,7 +85,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       select: { maintenanceMode: true, maintenanceMessage: true },
     });
     if (settings?.maintenanceMode) {
-      log.info({ userId: user.id, email: user.email }, 'Login blocked — Wartungsmodus aktiv');
+      log.info({ userId: user.id, email: user.email }, 'Login blocked — maintenance mode active');
       res.status(503).json({
         error:   'maintenance',
         message: settings.maintenanceMessage ||

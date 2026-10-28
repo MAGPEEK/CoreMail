@@ -1,5 +1,5 @@
 /**
- * VacationResponse/* (RFC 8621 §8) — Singleton auf UserSettings.oof*.
+ * VacationResponse/* (RFC 8621 §8) — singleton on UserSettings.oof*.
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';

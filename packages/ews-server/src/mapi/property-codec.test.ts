@@ -1,8 +1,8 @@
 /**
- * Tests für mapi/property-codec.ts — Round-Trip-Validation für die
- * Property-Value-Encoder/Decoder die in allen ROP-Handlern verwendet werden.
+ * Tests for mapi/property-codec.ts — round-trip validation for the
+ * property-value encoder/decoder used in all ROP handlers.
  *
- * Ausführung: pnpm --filter @coremail/ews-server exec tsx --test src/mapi/property-codec.test.ts
+ * Run: pnpm --filter @coremail/ews-server exec tsx --test src/mapi/property-codec.test.ts
  */
 
 import { test } from 'node:test';
@@ -50,7 +50,7 @@ test('PT_BOOLEAN round-trip', () => {
   }
 });
 
-test('PT_UNICODE round-trip (mit Umlauten und Emojis)', () => {
+test('PT_UNICODE round-trip (with umlauts and emojis)', () => {
   const tests = ['', 'hello', 'Grüße aus München', '日本語テスト', '😀 Emoji'];
   for (const s of tests) {
     const w = new MapiWriter();
@@ -100,18 +100,18 @@ test('writePropertyRow: Multi-Column-Mapping', () => {
   writePropertyRow(w, cols, values);
   const buf = w.toBuffer();
   const r = new MapiReader(buf);
-  // Erst Flag-Byte (0 = no errors)
+  // Flag byte first (0 = no errors)
   assert.equal(r.readUint8(), 0);
   assert.equal(readPropertyValue(r, PropType.Unicode), 'Hallo');
   assert.equal(readPropertyValue(r, PropType.Int32), 0x01);
   assert.equal(readPropertyValue(r, PropType.Int32), 1024);
 });
 
-test('writePropertyRow: missing value → Default-für-Type', () => {
+test('writePropertyRow: missing value → default for type', () => {
   const cols = [PR.PR_SUBJECT_W, PR.PR_MESSAGE_FLAGS];
   const values = new Map<number, unknown>([
     [PR.PR_SUBJECT_W, 'OnlyOne'],
-    // PR_MESSAGE_FLAGS fehlt — sollte als 0 geschrieben werden
+    // PR_MESSAGE_FLAGS missing — should be written as 0
   ]);
   const w = new MapiWriter();
   writePropertyRow(w, cols, values);

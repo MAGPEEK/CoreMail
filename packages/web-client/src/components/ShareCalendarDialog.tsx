@@ -7,18 +7,18 @@ import type { Calendar, CalendarShare } from '../api/types.js';
 import { useT } from '../i18n/useT.js';
 
 /**
- * v3.18.14 Calendar Sharing — Dialog zum Verwalten der Freigaben eines eigenen
- * Kalenders. Wird über Sidebar-Kontextmenü „Teilen und Berechtigungen" geöffnet,
- * oder über den Toolbar-Button „Kalender teilen" (dann mit `allowCalendarPicker`).
+ * v3.18.14 Calendar Sharing — dialog for managing the shares of one's own
+ * calendar. Opened via the sidebar context menu "Share and permissions",
+ * or via the toolbar button "Share calendar" (then with `allowCalendarPicker`).
  *
- * v3.18.18: erweitert um (1) Kalender-Picker im Header wenn aus Toolbar
- * aufgerufen, (2) CalDAV-URL-Sektion am Ende für externen Zugriff.
+ * v3.18.18: extended with (1) calendar picker in the header when opened from
+ * the toolbar, (2) CalDAV URL section at the end for external access.
  *
- * Funktionen:
- *  - Benutzer-Autocomplete (reuse `/contacts?q=`)
+ * Features:
+ *  - User autocomplete (reuse `/contacts?q=`)
  *  - Permission-Select: Read / Read+Write
- *  - Liste bestehender Freigaben mit Permission-Toggle und Löschen
- *  - CalDAV-URLs zum Kopieren (Account-URL + Pro-Kalender-URL)
+ *  - List of existing shares with permission toggle and delete
+ *  - CalDAV URLs to copy (account URL + per-calendar URL)
  */
 
 interface ContactSuggest {
@@ -46,7 +46,7 @@ type Perm = 'READ' | 'WRITE';
 export function ShareCalendarDialog({
   calendar: initialCalendar,
   onClose,
-  /** Liste eigener Kalender für Picker-Modus (Toolbar-Aufruf) */
+  /** List of own calendars for picker mode (toolbar call) */
   ownedCalendars,
 }: {
   calendar: Calendar;
@@ -56,7 +56,7 @@ export function ShareCalendarDialog({
   const qc = useQueryClient();
   const t = useT();
 
-  // v3.18.18: Wenn ownedCalendars übergeben → Picker-Modus
+  // v3.18.18: If ownedCalendars is passed → picker mode
   const [selectedCalId, setSelectedCalId] = useState<string>(initialCalendar.id);
   const calendar = useMemo(() => {
     if (!ownedCalendars) return initialCalendar;
@@ -71,7 +71,7 @@ export function ShareCalendarDialog({
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Liste bestehender Freigaben für aktuell selektierten Kalender
+  // List of existing shares for the currently selected calendar
   const { data: shares = [], isLoading: sharesLoading } = useQuery<CalendarShare[]>({
     queryKey: ['calendar-shares', calendar.id],
     queryFn: () => api.get<CalendarShare[]>(`/calendar/${calendar.id}/shares`),
@@ -79,20 +79,20 @@ export function ShareCalendarDialog({
     refetchOnWindowFocus: true,
   });
 
-  // v3.18.18: CalDAV-URLs einmal laden (für alle eigenen Kalender)
+  // v3.18.18: Load CalDAV URLs once (for all own calendars)
   const { data: caldavInfo } = useQuery<CalDavInfo>({
     queryKey: ['caldav-info'],
     queryFn: () => api.get<CalDavInfo>('/calendar/caldav-info'),
     staleTime: 5 * 60_000,
   });
 
-  // Aktuelle CalDAV-URL für den selektierten Kalender finden
+  // Find the current CalDAV URL for the selected calendar
   const currentCalDavUrl = caldavInfo?.calendars.find((c) => c.id === calendar.id)?.url ?? '';
 
-  // Auto-Filter: bereits zugewiesene User aus Vorschlägen ausblenden
+  // Auto filter: hide already assigned users from suggestions
   const assignedIds = new Set(shares.map((s) => s.granteeId));
 
-  // Suggest-Query (nur User-Treffer)
+  // Suggest query (user hits only)
   const { data: contacts = [] } = useQuery<ContactSuggest[]>({
     queryKey: ['contact-suggest-share', debouncedQ],
     queryFn: () => api.get<ContactSuggest[]>(`/contacts?q=${encodeURIComponent(debouncedQ)}`),
@@ -196,7 +196,7 @@ export function ShareCalendarDialog({
                 {t('cal_share_title')}
               </h2>
               {ownedCalendars && ownedCalendars.length > 1 ? (
-                /* v3.18.18: Calendar-Picker im Header bei Toolbar-Aufruf */
+                /* v3.18.18: Calendar picker in the header when called from the toolbar */
                 <div className="relative mt-0.5">
                   <select
                     value={selectedCalId}
@@ -228,7 +228,7 @@ export function ShareCalendarDialog({
 
         {/* Body */}
         <div className="px-6 py-4 space-y-4">
-          {/* Permission-Auswahl + Input */}
+          {/* Permission selection + input */}
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
               {t('cal_share_add_user')}
@@ -277,7 +277,7 @@ export function ShareCalendarDialog({
             )}
           </div>
 
-          {/* Bestehende Freigaben */}
+          {/* Existing shares */}
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
               {t('cal_share_current')}
@@ -329,7 +329,7 @@ export function ShareCalendarDialog({
             )}
           </div>
 
-          {/* Hinweis Permissions */}
+          {/* Permissions note */}
           <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded p-3 text-xs text-blue-700 dark:text-blue-300">
             <div className="flex items-start gap-2">
               <Eye size={14} className="mt-0.5 shrink-0" />
@@ -343,7 +343,7 @@ export function ShareCalendarDialog({
             </div>
           </div>
 
-          {/* v3.18.18: CalDAV-URL für externen Zugriff */}
+          {/* v3.18.18: CalDAV URL for external access */}
           {caldavInfo && (
             <div className="border border-gray-200 dark:border-gray-700 rounded p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
@@ -374,7 +374,7 @@ export function ShareCalendarDialog({
                 </div>
               </div>
 
-              {/* Pro-Kalender-URL (nur aktuell selektierten zeigen) */}
+              {/* Per-calendar URL (show only the currently selected one) */}
               {currentCalDavUrl && (
                 <div>
                   <label className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-2 mb-1">

@@ -1,12 +1,12 @@
 /**
- * Admin-API: LDAP / Active Directory
+ * Admin API: LDAP / Active Directory
  *
- * GET    /api/v1/admin/ldap                    — Alle konfigurierten Domains
- * GET    /api/v1/admin/ldap/:domainId           — LDAP-Konfiguration für Domain
- * PUT    /api/v1/admin/ldap/:domainId           — Erstellen / Aktualisieren
- * DELETE /api/v1/admin/ldap/:domainId           — Löschen
- * POST   /api/v1/admin/ldap/:domainId/test      — Verbindungstest
- * POST   /api/v1/admin/ldap/:domainId/sync      — Manuellen Sync starten
+ * GET    /api/v1/admin/ldap                    — all configured domains
+ * GET    /api/v1/admin/ldap/:domainId           — LDAP configuration for a domain
+ * PUT    /api/v1/admin/ldap/:domainId           — create / update
+ * DELETE /api/v1/admin/ldap/:domainId           — delete
+ * POST   /api/v1/admin/ldap/:domainId/test      — connection test
+ * POST   /api/v1/admin/ldap/:domainId/sync      — start manual sync
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { createConnection } from 'node:net';
@@ -97,7 +97,7 @@ adminLdapRouter.post('/:domainId/test', async (req: Request, res: Response) => {
   const cfg = await prisma.ldapConfig.findUnique({ where: { domainId } });
   if (!cfg) { res.status(404).json({ error: 'Konfiguration nicht gefunden' }); return; }
 
-  // TCP-Erreichbarkeit prüfen (Port-Verbindungstest)
+  // Check TCP reachability (port connection test)
   const reachable = await new Promise<boolean>(resolve => {
     const sock = createConnection({ host: cfg.host, port: cfg.port });
     const timeout = setTimeout(() => { sock.destroy(); resolve(false); }, 5000);
@@ -120,7 +120,7 @@ adminLdapRouter.post('/:domainId/sync', async (req: Request, res: Response) => {
   if (!cfg) { res.status(404).json({ error: 'Konfiguration nicht gefunden' }); return; }
   if (!cfg.syncEnabled) { res.status(409).json({ error: 'Synchronisation ist deaktiviert' }); return; }
 
-  // Sync-Zeitstempel aktualisieren (echter Sync läuft im auth-ldap-Service)
+  // Update sync timestamp (the real sync runs in the auth-ldap service)
   await prisma.ldapConfig.update({
     where: { domainId },
     data: { lastSyncAt: new Date() },

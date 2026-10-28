@@ -24,8 +24,8 @@ type DialogState =
 
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 
-// Ordner-Namen die nicht als Mail-Ordner angezeigt werden sollen —
-// Tasks und Notes sind eigenständige Pages mit eigenen Datenmodellen.
+// Folder names that should not be shown as mail folders —
+// Tasks and Notes are standalone pages with their own data models.
 const HIDDEN_FOLDER_NAMES = new Set(['Tasks', 'Notes']);
 
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -83,16 +83,16 @@ function FolderItem({
   isDragDisabled?: boolean;
   contextKey?: string;
 }) {
-  // dnd-kit verlangt eindeutige IDs — Context-Key sorgt dafür dass Favoriten
-  // und Haupt-Render nicht kollidieren
+  // dnd-kit requires unique IDs — the context key ensures that favorites
+  // and the main render do not collide
   const dndId = contextKey ? `${contextKey}|${folder.id}` : folder.id;
-  // Outer = Drop-Target (jeder Folder kann Ziel sein)
+  // Outer = drop target (every folder can be a target)
   const { isOver, setNodeRef: setDropRef } = useDroppable({
     id: `folder-drop:${dndId}`,
     data: { kind: 'folder', folderId: folder.id, folderName: folder.name },
   });
 
-  // Inner = Drag-Source (nur Custom-Folder + nicht im Favoriten-Mirror)
+  // Inner = drag source (custom folders only + not in the favorites mirror)
   const dragDisabled = isSystem || !!isDragDisabled;
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
     id: `folder-drag:${dndId}`,
@@ -109,7 +109,7 @@ function FolderItem({
         isOver ? 'ring-2 ring-accent ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
       }`}
     >
-      {/* Animierter Akzentbalken links bei aktivem Ordner */}
+      {/* Animated accent bar on the left for the active folder */}
       {selected && (
         <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-accent rounded-r animate-slide-in-left" aria-hidden />
       )}
@@ -180,7 +180,7 @@ export function FolderTree({ onNewMail }: Props) {
     refetchInterval: 60_000,
   });
 
-  // Verfügbare PERSONAL-Aufbewahrungstags (vom Admin konfiguriert)
+  // Available PERSONAL retention tags (configured by the admin)
   const { data: retentionTags } = useQuery({
     queryKey: ['retention-tags'],
     queryFn: () => api.get<RetentionTag[]>('/retention-tags'),
@@ -254,13 +254,13 @@ export function FolderTree({ onNewMail }: Props) {
     },
   });
 
-  // Tasks/Notes herausfiltern — diese werden als eigenständige Pages gerendert,
-  // nicht als Mail-Ordner in der Sidebar.
+  // Filter out Tasks/Notes — these are rendered as standalone pages,
+  // not as mail folders in the sidebar.
   const all = (folders ?? []).filter((f) => !HIDDEN_FOLDER_NAMES.has(f.name));
 
-  // ── Hierarchie aufbauen ────────────────────────────────────────────────────
-  // Custom-Folder ohne parentId werden virtuell unter INBOX gehängt, damit es
-  // keine separate „Meine Ordner"-Sektion mehr braucht und alte Ordner sichtbar bleiben.
+  // ── Build hierarchy ────────────────────────────────────────────────────────
+  // Custom folders without parentId are virtually attached under INBOX, so that
+  // no separate "My folders" section is needed anymore and old folders stay visible.
   const childrenOf = useMemo(() => {
     const byParent = new Map<string, FolderType[]>();
     const inbox = all.find((f) => f.name === 'INBOX');
@@ -269,7 +269,7 @@ export function FolderTree({ onNewMail }: Props) {
       if (f.parentId) {
         key = f.parentId;
       } else if (!SYSTEM_SET.has(f.name) && inbox) {
-        // Custom-Folder ohne Parent → virtuell unter INBOX
+        // Custom folder without parent → virtually under INBOX
         key = inbox.id;
       } else {
         key = '__root__';
@@ -278,7 +278,7 @@ export function FolderTree({ onNewMail }: Props) {
       arr.push(f);
       byParent.set(key, arr);
     }
-    // Sortiere Kinder nach sortOrder, dann Name
+    // Sort children by sortOrder, then name
     for (const list of byParent.values()) {
       list.sort((a, b) => {
         const so = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
@@ -365,8 +365,8 @@ export function FolderTree({ onNewMail }: Props) {
       );
     }
 
-    // Aufbewahrungsrichtlinie zuweisen — auch für System-Ordner verfügbar
-    // (Exchange-Verhalten: Personal Tags können an jeden Ordner gehängt werden)
+    // Assign retention policy — also available for system folders
+    // (Exchange behavior: personal tags can be attached to any folder)
     const tagChildren: ContextMenuItem[] = (retentionTags ?? []).map((tg) => {
       const isCurrent = folder.retentionTagId === tg.id;
       return {
@@ -435,7 +435,7 @@ export function FolderTree({ onNewMail }: Props) {
     setMenu({ x: e.clientX, y: e.clientY, items: buildFolderMenu(folder) });
   };
 
-  // Rekursives Rendering eines Ordnerbaums
+  // Recursive rendering of a folder tree
   const renderFolderTree = (folder: FolderType, indent: number, contextKey = 'tree'): ReactNode => {
     const isSystem = folder.isSystem ?? SYSTEM_SET.has(folder.name);
     const children = childrenOf.get(folder.id) ?? [];
@@ -446,8 +446,8 @@ export function FolderTree({ onNewMail }: Props) {
       <div key={`${contextKey}|${folder.id}`}>
         <FolderItem
           folder={folder}
-          // Tree-Marker nur dann, wenn die Auswahl auch im Tree-Kontext getätigt wurde.
-          // Verhindert doppelte Markierung in Favoriten + Haupt-Tree.
+          // Tree marker only when the selection was made in the tree context.
+          // Prevents double highlighting in favorites + main tree.
           selected={selectedFolderSource !== 'fav' && folder.id === selectedFolderId}
           isSystem={isSystem}
           hasChildren={hasChildren}
@@ -480,7 +480,7 @@ export function FolderTree({ onNewMail }: Props) {
     </div>
   );
 
-  // Stelle sicher dass useT bei Sprachwechsel re-rendert
+  // Make sure useT re-renders on language change
   void lang;
 
   return (
@@ -508,7 +508,7 @@ export function FolderTree({ onNewMail }: Props) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-1 pb-3">
-        {/* Favoriten */}
+        {/* Favorites */}
         {favorites.length > 0 && (
           <>
             <SectionHeader label={t('favorites')} collapsed={favoritesCollapsed} onToggle={toggleFavorites} />
@@ -518,7 +518,7 @@ export function FolderTree({ onNewMail }: Props) {
                   <FolderItem
                     key={`fav-${f.id}`}
                     folder={f}
-                    // selected nur, wenn die Auswahl IM Favoriten-Bereich getätigt wurde
+                    // selected only when the selection was made IN the favorites section
                     selected={selectedFolderSource === 'fav' && f.id === selectedFolderId}
                     isSystem={SYSTEM_SET.has(f.name)}
                     hasChildren={false}
@@ -537,7 +537,7 @@ export function FolderTree({ onNewMail }: Props) {
           </>
         )}
 
-        {/* System-Ordner + Hierarchie */}
+        {/* System folders + hierarchy */}
         <SectionHeader
           label={t('folders')}
           collapsed={folderTreeCollapsed}
@@ -557,7 +557,7 @@ export function FolderTree({ onNewMail }: Props) {
             {systemFolders.map((f) => renderFolderTree(f, 0))}
           </div>
         )}
-        {/* Öffentliche Ordner komplett entfernt in v3.18.31 */}
+        {/* Public folders completely removed in v3.18.31 */}
       </nav>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
@@ -571,7 +571,7 @@ export function FolderTree({ onNewMail }: Props) {
           onCancel={() => setDialog(null)}
           validate={(v) => /[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null}
           onConfirm={async (name) => {
-            // Default: neue Ordner werden als Sub-Ordner des Posteingangs angelegt
+            // Default: new folders are created as subfolders of the inbox
             const inbox = all.find((f) => f.name === 'INBOX');
             await createFolder.mutateAsync({ name, parentId: inbox?.id ?? null });
             setDialog(null);

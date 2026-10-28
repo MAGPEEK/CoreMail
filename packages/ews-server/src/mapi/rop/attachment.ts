@@ -1,22 +1,22 @@
 /**
- * Attachment-ROP-Handler (v4.4.0)
+ * Attachment ROP handler (v4.4.0)
  *
- * Implementiert:
- *   - RopGetAttachmentTable    (MS-OXCMSG §2.2.2.1) — Tabelle der Anhänge
+ * Implements:
+ *   - RopGetAttachmentTable    (MS-OXCMSG §2.2.2.1) — table of attachments
  *   - RopOpenAttachment        (MS-OXCMSG §2.2.2.9)
  *   - RopCreateAttachment      (MS-OXCMSG §2.2.2.8)
  *   - RopDeleteAttachment      (MS-OXCMSG §2.2.2.10)
  *   - RopSaveChangesAttachment (MS-OXCMSG §2.2.2.11)
  *
- * Property-Mapping (Prisma Attachment → MAPI):
+ * Property mapping (Prisma Attachment → MAPI):
  *   filename       → PR_ATTACH_FILENAME_W + PR_ATTACH_LONG_FILENAME_W
  *   mimeType       → PR_ATTACH_MIME_TAG_W
  *   size           → PR_ATTACH_SIZE
  *   contentId      → PR_ATTACH_CONTENT_ID_W
- *   storagePath    → opaque MinIO-Key (nicht exposed)
+ *   storagePath    → opaque MinIO key (not exposed)
  *
- * Datei-Inhalt wird via RopOpenStream(PR_ATTACH_DATA_BIN) + RopReadStream
- * gelesen (s. stream.ts).
+ * File content is read via RopOpenStream(PR_ATTACH_DATA_BIN) + RopReadStream
+ * (see stream.ts).
  */
 
 import { prisma, uploadBuffer, downloadBuffer } from '@coremail/storage';
@@ -37,10 +37,10 @@ const log = createLogger('mapi:rop:attachment');
  *
  * Payload: TableFlags(uint8)
  *
- * Antwort: ReturnValue
+ * Response: ReturnValue
  *
- * Erstellt ein Table-Object-Handle das die Attachments der parent Message
- * repräsentiert. Der Inhalt wird per SetColumns+QueryRows abgeholt.
+ * Creates a table object handle representing the attachments of the parent
+ * message. The content is fetched via SetColumns+QueryRows.
  */
 export async function handleRopGetAttachmentTable(
   rop: RopRequest,
@@ -59,7 +59,7 @@ export async function handleRopGetAttachmentTable(
     kind: 'table',
     userId: input.object.userId,
     tableType: 'attachments',
-    parentFolderId: input.object.messageId,   // bei attachments-Tabelle: MessageId
+    parentFolderId: input.object.messageId,   // for the attachments table: MessageId
   });
   if (handle === null) {
     return writeAttError(RopId.GetAttachmentTable, rop, MapiStatusCode.EC_INVALID_SESSION);
@@ -78,7 +78,7 @@ export async function handleRopGetAttachmentTable(
  *
  * Payload: OpenAttachmentFlags(uint8) | AttachmentId(uint32)
  *
- * Antwort: ReturnValue
+ * Response: ReturnValue
  */
 export async function handleRopOpenAttachment(
   rop: RopRequest,
@@ -95,7 +95,7 @@ export async function handleRopOpenAttachment(
 
   const r = new MapiReader(rop.payload);
   r.readUint8();                              // OpenAttachmentFlags
-  const attachNum = r.readUint32();           // Index in der Attachments-Liste
+  const attachNum = r.readUint32();           // index in the attachments list
 
   const atts = await prisma.attachment.findMany({
     where: { messageId: input.object.messageId },
@@ -104,7 +104,7 @@ export async function handleRopOpenAttachment(
   });
   const att = atts[attachNum];
   if (!att) {
-    log.warn({ attachNum, messageId: input.object.messageId }, 'OpenAttachment: Index nicht gefunden');
+    log.warn({ attachNum, messageId: input.object.messageId }, 'OpenAttachment: index not found');
     return writeAttError(RopId.OpenAttachment, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
@@ -130,10 +130,10 @@ export async function handleRopOpenAttachment(
 /**
  * v4.4.0: RopCreateAttachment
  *
- * Antwort: ReturnValue + AttachmentId(uint32)
+ * Response: ReturnValue + AttachmentId(uint32)
  *
- * Legt ein neues Attachment-Handle an, das beim SaveChangesAttachment in die
- * DB + MinIO persistiert wird.
+ * Creates a new attachment handle that is persisted to DB + MinIO on
+ * SaveChangesAttachment.
  */
 export async function handleRopCreateAttachment(
   rop: RopRequest,
@@ -145,7 +145,7 @@ export async function handleRopCreateAttachment(
     return writeAttError(RopId.CreateAttachment, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
 
-  // attachNum = nächster Index
+  // attachNum = next index
   let attachNum = 0;
   if (input.object.messageId !== null) {
     attachNum = await prisma.attachment.count({
@@ -156,7 +156,7 @@ export async function handleRopCreateAttachment(
   const handle = await putRopObject(sessionToken, {
     kind: 'attachment',
     userId: input.object.userId,
-    messageId: input.object.messageId ?? '',  // für Draft mit messageId=null: leer bis SaveChangesMessage
+    messageId: input.object.messageId ?? '',  // for a draft with messageId=null: empty until SaveChangesMessage
     attachmentId: null,
     attachNum,
     pendingProperties: {},
@@ -206,7 +206,7 @@ export async function handleRopDeleteAttachment(
     try {
       await prisma.attachment.delete({ where: { id: att.id } });
     } catch (e) {
-      log.warn({ err: e, attId: att.id }, 'DeleteAttachment DB-Delete fehlgeschlagen');
+      log.warn({ err: e, attId: att.id }, 'DeleteAttachment DB delete failed');
     }
   }
 
@@ -221,7 +221,7 @@ export async function handleRopDeleteAttachment(
 /**
  * v4.4.0: RopSaveChangesAttachment
  *
- * Persistiert pending-Buffer + pending-Properties in DB+MinIO.
+ * Persists pending buffer + pending properties to DB+MinIO.
  */
 export async function handleRopSaveChangesAttachment(
   rop: RopRequest,
@@ -234,7 +234,7 @@ export async function handleRopSaveChangesAttachment(
   }
   const att = input.object;
   if (!att.messageId) {
-    log.warn({ handle: input.handle }, 'SaveChangesAttachment: parent Message noch nicht persistiert');
+    log.warn({ handle: input.handle }, 'SaveChangesAttachment: parent message not yet persisted');
     return writeAttError(RopId.SaveChangesAttachment, rop, MapiStatusCode.EC_INVALID_PARAMETER);
   }
 
@@ -249,17 +249,17 @@ export async function handleRopSaveChangesAttachment(
     ? att.pendingBuffer
     : Buffer.from((att.pendingBuffer as unknown as { data: number[] })?.data ?? []);
 
-  // SHA256 + MinIO-Upload
+  // SHA256 + MinIO upload
   const sha256 = crypto.createHash('sha256').update(pendBuf).digest('hex');
   const storagePath = `attachments/${att.messageId}/${sha256}`;
   try {
     await uploadBuffer(storagePath, pendBuf, mimeType);
   } catch (e) {
-    log.error({ err: e, storagePath }, 'SaveChangesAttachment: MinIO-Upload fehlgeschlagen');
+    log.error({ err: e, storagePath }, 'SaveChangesAttachment: MinIO upload failed');
     return writeAttError(RopId.SaveChangesAttachment, rop, MapiStatusCode.EC_NOT_SUPPORTED);
   }
 
-  // DB-Insert oder Update
+  // DB insert or update
   let newId: string;
   if (att.attachmentId === null) {
     const created = await prisma.attachment.create({
@@ -286,7 +286,7 @@ export async function handleRopSaveChangesAttachment(
     newId = att.attachmentId;
   }
 
-  // Handle aktualisieren
+  // Update handle
   await updateRopObject(sessionToken, input.handle, {
     attachmentId: newId,
     pendingProperties: {},
@@ -297,7 +297,7 @@ export async function handleRopSaveChangesAttachment(
   w.writeUint8(RopId.SaveChangesAttachment);
   w.writeUint8(rop.inputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  log.info({ attId: newId, size: pendBuf.length, filename }, 'SaveChangesAttachment persistiert');
+  log.info({ attId: newId, size: pendBuf.length, filename }, 'SaveChangesAttachment persisted');
   return w.toBuffer();
 }
 
@@ -311,11 +311,11 @@ function writeAttError(ropId: number, rop: RopRequest, errorCode: number): Buffe
   return w.toBuffer();
 }
 
-// ── Re-Export: Attachment-DownloadBuffer-Helper für stream.ts (v4.4.0) ──
+// ── Re-export: attachment download-buffer helper for stream.ts (v4.4.0) ──
 
 /**
- * Liest die Attachment-Bytes aus MinIO via storagePath. Wird von stream.ts
- * für RopOpenStream auf einem Attachment-Handle benutzt.
+ * Reads the attachment bytes from MinIO via storagePath. Used by stream.ts
+ * for RopOpenStream on an attachment handle.
  */
 export async function loadAttachmentBytes(attachmentId: string): Promise<Buffer | null> {
   const att = await prisma.attachment.findUnique({
@@ -326,7 +326,7 @@ export async function loadAttachmentBytes(attachmentId: string): Promise<Buffer 
   try {
     return await downloadBuffer(att.storagePath);
   } catch (e) {
-    log.warn({ err: e, attId: attachmentId }, 'loadAttachmentBytes: MinIO-Download fehlgeschlagen');
+    log.warn({ err: e, attId: attachmentId }, 'loadAttachmentBytes: MinIO download failed');
     return null;
   }
 }

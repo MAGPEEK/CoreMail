@@ -1,7 +1,7 @@
 /**
- * Delta-Berechnung für Email/changes und Thread/changes aus den State-Teilen.
- * Gelöschte Nachrichten sind nicht nachvollziehbar (keine Tombstones) →
- * cannotCalculateChanges, der Client lädt neu (RFC 8620 §5.2).
+ * Delta computation for Email/changes and Thread/changes from the state parts.
+ * Deleted messages cannot be traced (no tombstones) →
+ * cannotCalculateChanges, the client reloads (RFC 8620 §5.2).
  */
 import { prisma } from '@coremail/storage';
 import { cannotCalculateChanges } from '../errors.js';
@@ -10,7 +10,7 @@ import type { AccountContext } from '../types.js';
 
 export interface Changes { created: string[]; updated: string[] }
 
-const COUNTER_LIMIT = 100_000_000_000n; // modSeq < 1e11 = Mailbox-Zähler, sonst Date.now()
+const COUNTER_LIMIT = 100_000_000_000n; // modSeq < 1e11 = mailbox counter, otherwise Date.now()
 
 export async function changedMessageIds(account: AccountContext, old: EmailStateParts, now: EmailStateParts): Promise<Changes> {
   if (old.maxModSeq === now.maxModSeq && old.highestModSeq === now.highestModSeq
@@ -32,7 +32,7 @@ export async function changedMessageIds(account: AccountContext, old: EmailState
   const created = rows.filter((r) => r.createdAt.getTime() > old.maxCreatedMs).map((r) => r.id);
   const createdSet = new Set(created);
   const updated = rows.filter((r) => !createdSet.has(r.id)).map((r) => r.id);
-  // Zählerprobe: alte Anzahl + neu erstellt muss der aktuellen entsprechen, sonst wurde gelöscht
+  // Counter check: old count + newly created must equal the current count, otherwise something was deleted
   if (old.count + created.length !== now.count) throw cannotCalculateChanges();
   return { created, updated };
 }
