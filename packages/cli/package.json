@@ -1,9 +1,9 @@
 {
   "name": "@coremail/cli",
-  "version": "5.8.0",
+  "version": "5.9.0",
   "private": true,
   "type": "module",
-  "description": "CoreMail Admin-CLI — Benutzer, Postfächer, Konnektoren, SMTP-Banner und Zertifikate über die Admin-API",
+  "description": "CoreMail admin CLI — users, mailboxes, connectors, SMTP banner and certificates via the Admin API",
   "bin": {
     "coremail": "./dist/index.js"
   },
