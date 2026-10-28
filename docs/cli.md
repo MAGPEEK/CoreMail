@@ -1,93 +1,93 @@
-# CoreMail Admin-CLI `coremail` (seit v5.8.0)
+# CoreMail Admin CLI `coremail` (since v5.8.0)
 
-Die CLI verwaltet Benutzer, Postfächer, Shared Mailboxes, Konnektoren, das
-SMTP-Banner und TLS-Zertifikate über dieselbe REST-Admin-API, die auch das
-Admin-Panel (BCP) nutzt. Damit gelten dieselben Rollen (`ORGANIZATION_MANAGEMENT`,
-`SERVER_MANAGEMENT`), dieselben Validierungen und derselbe Audit-Log.
+The CLI manages users, mailboxes, Shared Mailboxes, connectors, the
+SMTP banner and TLS certificates through the same REST admin API that the
+admin panel (BCP) uses. The same roles (`ORGANIZATION_MANAGEMENT`,
+`SERVER_MANAGEMENT`), the same validations and the same audit log therefore apply.
 
-## Aufruf
+## Invocation
 
-Die CLI ist im App-Image enthalten:
+The CLI is included in the app image:
 
 ```bash
 docker exec -it coremail coremail --help
 docker exec -it coremail coremail user list
 ```
 
-Tipp: Alias auf dem Host anlegen:
+Tip: create an alias on the host:
 
 ```bash
 alias coremail='docker exec -it coremail coremail'
 ```
 
-Außerhalb des Containers (z. B. vom Admin-Rechner) funktioniert die CLI gegen jede
-erreichbare CoreMail-Instanz:
+Outside the container (e.g. from the admin workstation) the CLI works against any
+reachable CoreMail instance:
 
 ```bash
-coremail --server https://mail.example.de login -u admin@example.de
+coremail --server https://mail.example.com login -u admin@example.com
 ```
 
-Alle Befehle unterstützen `--json` für maschinenlesbare Ausgabe
+All commands support `--json` for machine-readable output
 (`coremail --json user list | jq`).
 
-## Anmeldung
+## Login
 
-| Weg | Beschreibung |
+| Method | Description |
 |-----|--------------|
-| `coremail login` | fragt E-Mail, Passwort und ggf. MFA-Code (TOTP oder Backup-Code) ab; Sitzung wird in `~/.config/coremail/credentials.json` (Rechte 0600) gespeichert und per Refresh-Token automatisch verlängert |
-| `COREMAIL_ADMIN_EMAIL` + `COREMAIL_ADMIN_PASSWORD` (+ `COREMAIL_ADMIN_TOTP`) | Login ohne Prompt, z. B. in Skripten |
-| `COREMAIL_TOKEN` | fertiges Admin-Access-Token (JWT) direkt verwenden |
-| `COREMAIL_API_URL` | Basis-URL der API (Default `http://localhost:3000`, im Container richtig) |
-| `COREMAIL_CLI_CREDENTIALS` | anderer Pfad für die Sitzungsdatei |
+| `coremail login` | prompts for email, password and, if required, MFA code (TOTP or backup code); the session is stored in `~/.config/coremail/credentials.json` (mode 0600) and renewed automatically via refresh token |
+| `COREMAIL_ADMIN_EMAIL` + `COREMAIL_ADMIN_PASSWORD` (+ `COREMAIL_ADMIN_TOTP`) | login without a prompt, e.g. in scripts |
+| `COREMAIL_TOKEN` | use a ready-made admin access token (JWT) directly |
+| `COREMAIL_API_URL` | base URL of the API (default `http://localhost:3000`, correct inside the container) |
+| `COREMAIL_CLI_CREDENTIALS` | alternative path for the session file |
 
-Im Container ist `localhost:3000` der api-gateway, deshalb ist dort keine URL nötig.
-Bei Konten mit WebAuthn-only-MFA bitte TOTP zusätzlich einrichten oder `COREMAIL_TOKEN` nutzen.
+Inside the container, `localhost:3000` is the api-gateway, so no URL is needed there.
+For accounts with WebAuthn-only MFA, please set up TOTP in addition or use `COREMAIL_TOKEN`.
 
 ```bash
-coremail login -u admin@example.de          # interaktiv
-coremail whoami                              # gespeicherte Sitzung anzeigen
+coremail login -u admin@example.com          # interactive
+coremail whoami                              # show the stored session
 coremail logout
 ```
 
-## Benutzer (`user`)
+## Users (`user`)
 
-Jeder Benutzer besitzt genau ein Postfach; `user create` legt beides an.
+Each user owns exactly one mailbox; `user create` creates both.
 
 ```bash
-coremail user list [--domain example.de] [--inactive]
-coremail user show max@example.de            # inkl. Ordnerübersicht
-coremail user create max@example.de --name "Max Muster" [--password …] [--role USER] [--quota 5GB] [--domain example.de]
-coremail user update max@example.de [--name …] [--role SERVER_MANAGEMENT] [--quota 20GB] [--enable|--disable]
-coremail user set-password max@example.de [--password …]
-coremail user delete max@example.de [--yes]
+coremail user list [--domain example.com] [--inactive]
+coremail user show john@example.com          # including folder overview
+coremail user create john@example.com --name "John Doe" [--password …] [--role USER] [--quota 5GB] [--domain example.com]
+coremail user update john@example.com [--name …] [--role SERVER_MANAGEMENT] [--quota 20GB] [--enable|--disable]
+coremail user set-password john@example.com [--password …]
+coremail user delete john@example.com [--yes]
 ```
 
-Ohne `--password` fragt die CLI interaktiv (ohne Echo); alternativ `COREMAIL_NEW_PASSWORD`.
-Rollen: `USER, HELP_DESK, RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT, HYGIENE_MANAGEMENT,
+Without `--password` the CLI prompts interactively (without echo); alternatively `COREMAIL_NEW_PASSWORD`.
+Roles: `USER, HELP_DESK, RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT, HYGIENE_MANAGEMENT,
 SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT`.
 
-## Postfächer (`mailbox`)
+## Mailboxes (`mailbox`)
 
-Sicht auf Belegung und Ordner der Benutzerpostfächer.
+View of usage and folders of the user mailboxes.
 
 ```bash
 coremail mailbox list [--sort used|quota|email]
-coremail mailbox show max@example.de         # Ordner mit Zählern
-coremail mailbox quota max@example.de 10GB
-coremail mailbox recalculate [max@example.de]   # Belegung neu berechnen (ein oder alle)
+coremail mailbox show john@example.com       # folders with counters
+coremail mailbox quota john@example.com 10GB
+coremail mailbox recalculate [john@example.com]   # recalculate usage (one or all)
 ```
 
 ## Shared Mailboxes (`shared`)
 
-Team-Postfächer mit Berechtigungen `FULL_ACCESS`, `SEND_AS`, `SEND_ON_BEHALF`, `READ_ONLY`.
+Team mailboxes with permissions `FULL_ACCESS`, `SEND_AS`, `SEND_ON_BEHALF`, `READ_ONLY`.
 
 ```bash
 coremail shared list
-coremail shared show team@example.de
-coremail shared create team@example.de --name "Team Vertrieb" [--quota 20GB]
-coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS   # ersetzt bestehende Rechte des Benutzers
-coremail shared revoke team@example.de max@example.de
-coremail shared delete team@example.de [--yes]
+coremail shared show team@example.com
+coremail shared create team@example.com --name "Sales Team" [--quota 20GB]
+coremail shared grant team@example.com john@example.com FULL_ACCESS SEND_AS   # replaces the user's existing rights
+coremail shared revoke team@example.com john@example.com
+coremail shared delete team@example.com [--yes]
 ```
 
 ## Domains (`domain`)
@@ -96,21 +96,21 @@ coremail shared delete team@example.de [--yes]
 coremail domain list
 ```
 
-## Konnektoren (`connector`)
+## Connectors (`connector`)
 
-| Name | Bedeutung |
+| Name | Meaning |
 |------|-----------|
-| `smtp` (`smtp-receive`) | SMTP-Empfang: Listener 25, 465 (TLS), 587 |
-| `smtp-send` | SMTP Submission |
+| `smtp` (`smtp-receive`) | SMTP receive: listeners 25, 465 (TLS), 587 |
+| `smtp-send` | SMTP submission |
 | `imap` | IMAP 143 / IMAPS 993 |
 | `pop3` | POP3 110 / POP3S 995 |
-| `jmap` | JMAP (`/jmap`, `/.well-known/jmap`) — Schalter in den Server-Einstellungen |
-| `mapi` | MAPI over HTTP + EWS (`/mapi`, `/EWS`) — Schalter in den Server-Einstellungen |
+| `jmap` | JMAP (`/jmap`, `/.well-known/jmap`) — switch in the server settings |
+| `mapi` | MAPI over HTTP + EWS (`/mapi`, `/EWS`) — switch in the server settings |
 
 ```bash
-coremail connector status                    # alle Dienste, Ports, TLS, Zustand
-coremail connector disable pop3              # alle POP3-Listener aus
-coremail connector enable pop3 --port 995    # nur einen Port
+coremail connector status                    # all services, ports, TLS, state
+coremail connector disable pop3              # all POP3 listeners off
+coremail connector enable pop3 --port 995    # a single port only
 coremail connector enable jmap | disable mapi
 
 coremail connector listener list [imap]
@@ -120,37 +120,37 @@ coremail connector listener delete <id>
 coremail connector listener restore-defaults smtp
 ```
 
-Listener-Änderungen greifen über das Redis-Signal sofort; die Container-Port-Freigaben
-in `docker-compose.yml` müssen zum Port passen.
+Listener changes take effect immediately via the Redis signal; the container port mappings
+in `docker-compose.yml` must match the port.
 
-## SMTP-Banner (`smtp banner`)
+## SMTP banner (`smtp banner`)
 
 ```bash
-coremail smtp banner                         # anzeigen
-coremail smtp banner set "mail.example.de ESMTP"
-coremail smtp banner reset                   # zurück auf Standard (220 <Hostname> ESMTP CoreMail)
+coremail smtp banner                         # show
+coremail smtp banner set "mail.example.com ESMTP"
+coremail smtp banner reset                   # back to default (220 <hostname> ESMTP CoreMail)
 ```
 
-## Zertifikate (`cert`)
+## Certificates (`cert`)
 
 ```bash
 coremail cert list
-coremail cert show mail.example.de           # ID, Name oder Domain
-coremail cert self-signed --domains mail.example.de,imap.example.de [--services SMTP,IMAP,POP3] [--days 365]
-coremail cert letsencrypt --domains mail.example.de,autodiscover.example.de --email admin@example.de \
+coremail cert show mail.example.com          # ID, name or domain
+coremail cert self-signed --domains mail.example.com,imap.example.com [--services SMTP,IMAP,POP3] [--days 365]
+coremail cert letsencrypt --domains mail.example.com,autodiscover.example.com --email admin@example.com \
     [--services SMTP,IMAP,POP3] [--no-auto-renew] [--staging]
-coremail cert activate mail.example.de --https --protocol   # HTTPS-Proxy (443) und/oder SMTP/IMAP/POP3
-coremail cert deactivate-https mail.example.de
-coremail cert renew mail.example.de
+coremail cert activate mail.example.com --https --protocol   # HTTPS proxy (443) and/or SMTP/IMAP/POP3
+coremail cert deactivate-https mail.example.com
+coremail cert renew mail.example.com
 coremail cert delete <id|name|domain> [--yes]
 ```
 
-Let's Encrypt nutzt HTTP-01: Port 80 des Hosts muss auf CoreMail zeigen
-(`"80:3000"` in der Compose) und die Domains müssen per DNS auf den Server zeigen.
-Die Ausstellung läuft asynchron; `cert show` zeigt Status und ggf. den letzten Fehler.
+Let's Encrypt uses HTTP-01: port 80 of the host must point to CoreMail
+(`"80:3000"` in the Compose file) and the domains must point to the server via DNS.
+Issuance runs asynchronously; `cert show` shows the status and, if applicable, the last error.
 
-## Verhalten und Exit-Codes
+## Behavior and exit codes
 
-- Löschende Befehle fragen nach, außer mit `--yes`; ohne Terminal (Skript) ist `--yes` Pflicht.
-- Exit-Code 0 bei Erfolg, 1 bei Fehler (Meldung auf stderr, bei API-Fehlern mit HTTP-Status).
-- Jede Änderung erscheint im BCP-Audit-Log mit dem angemeldeten Admin als Akteur.
+- Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.
+- Exit code 0 on success, 1 on error (message on stderr, with HTTP status for API errors).
+- Every change appears in the BCP audit log with the logged-in admin as the actor.
