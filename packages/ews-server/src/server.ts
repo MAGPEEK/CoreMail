@@ -77,10 +77,10 @@ async function main() {
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
       invalidateMapiFlagCache();
-      log.info('MAPI-Flag-Cache invalidiert (Redis-Signal)');
+      log.info('MAPI flag cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — MAPI-Flag läuft nach 60s ab');
+    log.warn({ err }, 'Redis subscription failed — MAPI flag expires after 60s');
   }
 
   app.listen(PORT, () => {

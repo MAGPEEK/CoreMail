@@ -72,7 +72,7 @@ export async function handleRopRestrict(
   try {
     restriction = parseRestriction(r);
   } catch (err) {
-    log.warn({ err }, 'RopRestrict: Restriction-Parse-Fehler — Restriction wird ignoriert');
+    log.warn({ err }, 'RopRestrict: restriction parse error — restriction ignored');
   }
 
   await updateRopObject(sessionToken, input.handle, {

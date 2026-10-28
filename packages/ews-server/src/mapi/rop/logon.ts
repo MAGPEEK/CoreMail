@@ -82,7 +82,7 @@ export async function handleRopLogon(
   }).catch(() => null);
 
   if (!user || !user.mailbox) {
-    log.warn({ userId: session.userId }, 'RopLogon: User/Mailbox nicht gefunden');
+    log.warn({ userId: session.userId }, 'RopLogon: user/mailbox not found');
     return writeLogonError(rop, MapiStatusCode.EC_OBJECT_NOT_FOUND);
   }
 
@@ -150,7 +150,7 @@ export async function handleRopLogon(
   w.writeUint64(dateToFiletime(new Date()));       // GwartTime
   w.writeUint32(0);                                 // StoreState
 
-  log.info({ userId: user.id, mailboxId: user.mailbox.id, handle: mailboxHandle }, 'RopLogon erfolgreich');
+  log.info({ userId: user.id, mailboxId: user.mailbox.id, handle: mailboxHandle }, 'RopLogon successful');
   return w.toBuffer();
 }
 

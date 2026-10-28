@@ -61,7 +61,7 @@ export async function handleRopRegisterNotification(
     r.readUint8();    // Reserved
     r.readUint8();    // WantWholeStore
   } catch (err) {
-    log.warn({ err }, 'RegisterNotification: Payload-Parse-Fehler');
+    log.warn({ err }, 'RegisterNotification: payload parse error');
   }
 
   // Attach the subscription dynamically to the handle — the JSON round-trip through Redis
@@ -91,7 +91,7 @@ export async function publishNotifyEvent(event: NotifyEvent): Promise<void> {
     await redis.publish(notifyChannelFor(event.userId), JSON.stringify(event));
     log.debug({ event }, 'publishNotifyEvent OK');
   } catch (err) {
-    log.warn({ err }, 'publishNotifyEvent fehlgeschlagen');
+    log.warn({ err }, 'publishNotifyEvent failed');
   }
 }
 

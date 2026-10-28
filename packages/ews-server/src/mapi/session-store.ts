@@ -72,7 +72,7 @@ export async function createMapiSession(opts: {
     'EX',
     SESSION_TTL_SECONDS,
   );
-  log.debug({ token: token.slice(0, 8), userId: opts.userId }, 'MAPI-Session erstellt');
+  log.debug({ token: token.slice(0, 8), userId: opts.userId }, 'MAPI session created');
   return { token, state };
 }
 
@@ -101,7 +101,7 @@ export async function getMapiSession(token: string): Promise<MapiSessionState | 
 export async function deleteMapiSession(token: string): Promise<void> {
   if (!token) return;
   await getRedisClient().del(KEY_PREFIX_MAPI + token);
-  log.debug({ token: token.slice(0, 8) }, 'MAPI-Session gelöscht');
+  log.debug({ token: token.slice(0, 8) }, 'MAPI session deleted');
 }
 
 /**

@@ -104,7 +104,7 @@ export async function handleRopOpenAttachment(
   });
   const att = atts[attachNum];
   if (!att) {
-    log.warn({ attachNum, messageId: input.object.messageId }, 'OpenAttachment: Index nicht gefunden');
+    log.warn({ attachNum, messageId: input.object.messageId }, 'OpenAttachment: index not found');
     return writeAttError(RopId.OpenAttachment, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
@@ -206,7 +206,7 @@ export async function handleRopDeleteAttachment(
     try {
       await prisma.attachment.delete({ where: { id: att.id } });
     } catch (e) {
-      log.warn({ err: e, attId: att.id }, 'DeleteAttachment DB-Delete fehlgeschlagen');
+      log.warn({ err: e, attId: att.id }, 'DeleteAttachment DB delete failed');
     }
   }
 
@@ -234,7 +234,7 @@ export async function handleRopSaveChangesAttachment(
   }
   const att = input.object;
   if (!att.messageId) {
-    log.warn({ handle: input.handle }, 'SaveChangesAttachment: parent Message noch nicht persistiert');
+    log.warn({ handle: input.handle }, 'SaveChangesAttachment: parent message not yet persisted');
     return writeAttError(RopId.SaveChangesAttachment, rop, MapiStatusCode.EC_INVALID_PARAMETER);
   }
 
@@ -255,7 +255,7 @@ export async function handleRopSaveChangesAttachment(
   try {
     await uploadBuffer(storagePath, pendBuf, mimeType);
   } catch (e) {
-    log.error({ err: e, storagePath }, 'SaveChangesAttachment: MinIO-Upload fehlgeschlagen');
+    log.error({ err: e, storagePath }, 'SaveChangesAttachment: MinIO upload failed');
     return writeAttError(RopId.SaveChangesAttachment, rop, MapiStatusCode.EC_NOT_SUPPORTED);
   }
 
@@ -297,7 +297,7 @@ export async function handleRopSaveChangesAttachment(
   w.writeUint8(RopId.SaveChangesAttachment);
   w.writeUint8(rop.inputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  log.info({ attId: newId, size: pendBuf.length, filename }, 'SaveChangesAttachment persistiert');
+  log.info({ attId: newId, size: pendBuf.length, filename }, 'SaveChangesAttachment persisted');
   return w.toBuffer();
 }
 
@@ -326,7 +326,7 @@ export async function loadAttachmentBytes(attachmentId: string): Promise<Buffer 
   try {
     return await downloadBuffer(att.storagePath);
   } catch (e) {
-    log.warn({ err: e, attId: attachmentId }, 'loadAttachmentBytes: MinIO-Download fehlgeschlagen');
+    log.warn({ err: e, attId: attachmentId }, 'loadAttachmentBytes: MinIO download failed');
     return null;
   }
 }

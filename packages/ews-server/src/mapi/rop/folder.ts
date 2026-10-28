@@ -65,7 +65,7 @@ export async function handleRopOpenFolder(
   }
 
   if (!folder) {
-    log.warn({ folderId64: folderId64.toString(16), userId }, 'RopOpenFolder: Folder nicht gefunden');
+    log.warn({ folderId64: folderId64.toString(16), userId }, 'RopOpenFolder: folder not found');
     return writeOpenFolderError(rop, MapiStatusCode.EC_NOT_FOUND);
   }
 

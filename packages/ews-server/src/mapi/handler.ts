@@ -74,7 +74,7 @@ mapiRouter.post('/emsmdb/', async (req: Request, res: Response) => {
   try {
     await handleEmsmdb(req, res);
   } catch (err) {
-    log.error({ err }, 'EMSMDB Handler-Fehler');
+    log.error({ err }, 'EMSMDB handler error');
     if (!res.headersSent) {
       sendMapiError(res, {
         requestId: req.get('x-requestid') ?? '',
@@ -160,7 +160,7 @@ mapiRouter.post('/nspi/', async (req: Request, res: Response) => {
     }
 
     default: {
-      log.warn({ requestType: headers.requestType }, 'Unbekannter NSPI-RequestType');
+      log.warn({ requestType: headers.requestType }, 'Unknown NSPI RequestType');
       sendMapiError(res, { requestId, responseCode: ResponseCode.INVALID_X_REQUEST_TYPE });
     }
   }

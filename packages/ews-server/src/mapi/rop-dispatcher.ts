@@ -97,7 +97,7 @@ export async function dispatchRopBuffer(
   try {
     parsed = parseRopBuffer(executeBody);
   } catch (err) {
-    log.warn({ err, bodyLen: executeBody.length }, 'ROP-Buffer-Parsing fehlgeschlagen');
+    log.warn({ err, bodyLen: executeBody.length }, 'ROP buffer parsing failed');
     return { responseBuffer: Buffer.alloc(0), serverObjectHandles: [] };
   }
 
@@ -105,7 +105,7 @@ export async function dispatchRopBuffer(
     ropCount: parsed.rops.length,
     handleCount: parsed.serverObjectHandles.length,
     rops: parsed.rops.map((r) => `0x${r.ropId.toString(16)}`),
-  }, 'Dispatching ROP-Stream');
+  }, 'Dispatching ROP stream');
 
   for (const rop of parsed.rops) {
     try {
@@ -114,7 +114,7 @@ export async function dispatchRopBuffer(
         builder.appendRop(responseBuf);
       }
     } catch (err) {
-      log.error({ err, ropId: `0x${rop.ropId.toString(16)}` }, 'ROP-Handler-Fehler');
+      log.error({ err, ropId: `0x${rop.ropId.toString(16)}` }, 'ROP handler error');
       writeNotSupportedRop(builder, rop.ropId, rop.outputHandleIndex ?? 0);
     }
   }

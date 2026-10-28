@@ -199,10 +199,10 @@ async function onMessage(
       });
       log.info(
         { from, externalDeliveries, originalTo: to },
-        'Externe Verteilergruppen-Mitglieder werden via Outbound-Queue weitergeleitet',
+        'External distribution-group members are forwarded via outbound queue',
       );
     } catch (err) {
-      log.error({ err, externalDeliveries }, 'Outbound-Forward für Verteilergruppen-Mitglieder fehlgeschlagen');
+      log.error({ err, externalDeliveries }, 'Outbound forward for distribution-group members failed');
     }
   }
 

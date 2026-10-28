@@ -134,14 +134,14 @@ export async function storeInboundMessage(
     if (transportOutcome.rejected) {
       log.warn(
         { rcptTo: opts.rcptTo, from: opts.fromAddr, reason: transportOutcome.rejectReason },
-        'Mail durch TransportRule abgelehnt — keine Zustellung',
+        'Mail rejected by TransportRule — no delivery',
       );
       return;
     }
     if (transportOutcome.quarantined) {
       log.info(
         { rcptTo: opts.rcptTo, from: opts.fromAddr, ruleIds: transportOutcome.appliedRuleIds },
-        'Mail durch TransportRule in Quarantäne verschoben',
+        'Mail moved to quarantine by TransportRule',
       );
       // TODO: enqueue into quarantine table (v3.18.10+)
       return;
@@ -158,7 +158,7 @@ export async function storeInboundMessage(
       parsed = await parseRawMessage(effectiveBuffer);
     }
   } catch (err) {
-    log.error({ err }, 'TransportRules-Auswertung fehlgeschlagen — Mail wird unverändert zugestellt');
+    log.error({ err }, 'TransportRules evaluation failed — delivering mail unchanged');
   }
 
   // ── User inbox rules (Outlook-style, v3.18.0) ────────────────────────────────
@@ -217,7 +217,7 @@ export async function storeInboundMessage(
   }
 
   if (ruleDiscard) {
-    log.info({ rcptTo: opts.rcptTo, from: parsed.fromAddr }, 'Mail verworfen durch Rule (hardDelete)');
+    log.info({ rcptTo: opts.rcptTo, from: parsed.fromAddr }, 'Mail discarded by rule (hardDelete)');
     return;
   }
 

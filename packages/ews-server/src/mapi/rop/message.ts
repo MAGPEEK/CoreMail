@@ -118,7 +118,7 @@ export async function handleRopOpenMessage(
   w.writeUint16(0);                    // RecipientCount = 0 (added in v4.3)
   w.writeUint16(0);                    // ColumnCount = 0
   w.writeUint8(0);                     // RowCount = 0
-  log.info({ messageId: message.id, handle }, 'RopOpenMessage erfolgreich');
+  log.info({ messageId: message.id, handle }, 'RopOpenMessage successful');
   return w.toBuffer();
 }
 
@@ -422,7 +422,7 @@ export async function handleRopCreateMessage(
   });
   const folder = folders.find((f) => cuidToFolderId64(f.id) === folderId64);
   if (!folder) {
-    log.warn({ folderId64: folderId64.toString(16), userId }, 'CreateMessage: Folder nicht gefunden');
+    log.warn({ folderId64: folderId64.toString(16), userId }, 'CreateMessage: folder not found');
     return writeMsgError(RopId.CreateMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
@@ -446,7 +446,7 @@ export async function handleRopCreateMessage(
   w.writeUint8(rop.outputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
   w.writeUint8(0);                      // HasMessageId = false (we only deliver the ID on save)
-  log.info({ folder: folder.name, handle }, 'RopCreateMessage Draft angelegt');
+  log.info({ folder: folder.name, handle }, 'RopCreateMessage draft created');
   return w.toBuffer();
 }
 
@@ -484,7 +484,7 @@ export async function handleRopSetProperties(
       // JSON-safe encoding for session persistence in Redis
       updates[String(tag)] = jsonifyPropValue(value);
     } catch (err) {
-      log.warn({ err, i }, 'SetProperties: Property-Parse-Fehler — Rest wird übersprungen');
+      log.warn({ err, i }, 'SetProperties: property parse error — skipping remainder');
       break;
     }
   }
@@ -658,7 +658,7 @@ export async function handleRopSaveChangesMessage(
   w.writeUint64(cuidToFolderId64(newMessageId));
   log.info({
     messageClass, subject: subject.substring(0, 60), recipientCount: recipients.length, messageId: newMessageId,
-  }, 'RopSaveChangesMessage persistiert');
+  }, 'RopSaveChangesMessage persisted');
   return w.toBuffer();
 }
 
@@ -682,7 +682,7 @@ export async function handleRopSubmitMessage(
     return writeMsgError(RopId.SubmitMessage, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
   if (input.object.messageId === null) {
-    log.warn({ handle: input.handle }, 'SubmitMessage auf nicht-gespeicherter Draft');
+    log.warn({ handle: input.handle }, 'SubmitMessage on unsaved draft');
     return writeMsgError(RopId.SubmitMessage, rop, MapiStatusCode.EC_INVALID_PARAMETER);
   }
 
@@ -748,7 +748,7 @@ export async function handleRopSubmitMessage(
       },
     }, { jobId: trackingId });
   } catch (err) {
-    log.error({ err, msgId: msg.id }, 'SubmitMessage: Queue-Add fehlgeschlagen');
+    log.error({ err, msgId: msg.id }, 'SubmitMessage: queue add failed');
     return writeMsgError(RopId.SubmitMessage, rop, MapiStatusCode.EC_NOT_SUPPORTED);
   }
 
@@ -765,7 +765,7 @@ export async function handleRopSubmitMessage(
       });
     }
   } catch (e) {
-    log.warn({ err: e, msgId: msg.id }, 'SubmitMessage: Move-to-Sent fehlgeschlagen (non-fatal)');
+    log.warn({ err: e, msgId: msg.id }, 'SubmitMessage: move to Sent failed (non-fatal)');
   }
 
   // Response: ReturnValue
@@ -773,7 +773,7 @@ export async function handleRopSubmitMessage(
   w.writeUint8(RopId.SubmitMessage);
   w.writeUint8(rop.inputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  log.info({ msgId: msg.id, recipientCount: smtpRecipients.length, trackingId }, 'RopSubmitMessage zur Outbound-Queue eingereiht');
+  log.info({ msgId: msg.id, recipientCount: smtpRecipients.length, trackingId }, 'RopSubmitMessage enqueued to outbound queue');
   return w.toBuffer();
 }
 
@@ -838,7 +838,7 @@ function parseModifyRecipientsPayload(payload: Buffer): Array<{
       }
     }
   } catch (err) {
-    log.warn({ err, parsedCount: recipients.length }, 'parseModifyRecipientsPayload: vorzeitiger Abbruch');
+    log.warn({ err, parsedCount: recipients.length }, 'parseModifyRecipientsPayload: aborted early');
   }
   return recipients;
 }

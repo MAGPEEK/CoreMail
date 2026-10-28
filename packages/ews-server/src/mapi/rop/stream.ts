@@ -135,7 +135,7 @@ export async function handleRopOpenStream(
       break;
     }
     default:
-      log.warn({ propertyTag: propertyTag.toString(16) }, 'OpenStream: unbekannter PropertyTag');
+      log.warn({ propertyTag: propertyTag.toString(16) }, 'OpenStream: unknown PropertyTag');
       return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_NOT_SUPPORTED);
   }
 
@@ -332,7 +332,7 @@ export async function handleRopCommitStream(
       binaryValue = buf;
       break;
     default:
-      log.warn({ tag: streamObj.propertyTag.toString(16) }, 'CommitStream: unbekannter Property-Tag — überspringe Persist');
+      log.warn({ tag: streamObj.propertyTag.toString(16) }, 'CommitStream: unknown property tag — skipping persist');
       // SUCCESS anyway so Outlook does not hang
       break;
   }
@@ -350,7 +350,7 @@ export async function handleRopCommitStream(
           data: dataPatch as never,
         });
       } catch (e) {
-        log.warn({ err: e, msgId: streamObj.messageId }, 'CommitStream DB-Update fehlgeschlagen');
+        log.warn({ err: e, msgId: streamObj.messageId }, 'CommitStream DB update failed');
       }
     }
   } else if (streamObj.parentMessageHandle !== undefined) {
