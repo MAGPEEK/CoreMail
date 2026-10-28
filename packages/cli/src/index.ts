@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * coremail — Admin-CLI für CoreMail (v5.8.0)
+ * coremail — admin CLI for CoreMail
  *
- * Läuft im App-Container (`docker exec coremail coremail …`) oder überall, wo die
- * Admin-API erreichbar ist (`--server https://mail.example.de`). Nutzt dieselbe
- * REST-Admin-API wie das BCP → gleiche Rechteprüfung, gleiches Audit-Log.
+ * Runs inside the app container (`docker exec coremail coremail …`) or anywhere the
+ * Admin API is reachable (`--server https://mail.example.com`). Uses the same REST
+ * Admin API as the BCP → same permission checks, same audit log.
  */
 import { createRequire } from 'node:module';
 import { Command } from 'commander';
@@ -24,11 +24,11 @@ const pkg = require('../package.json') as { version: string };
 const program = new Command();
 program
   .name('coremail')
-  .description('CoreMail Admin-CLI — Benutzer, Postfächer, Shared Mailboxes, Konnektoren, SMTP-Banner, Zertifikate')
-  .version(pkg.version, '-V, --version', 'Version anzeigen')
-  .option('-s, --server <url>', 'Basis-URL der Admin-API (Default: COREMAIL_API_URL oder http://localhost:3000)')
-  .option('--json', 'Ausgabe als JSON')
-  .showHelpAfterError('(--help für Hilfe)')
+  .description('CoreMail admin CLI — users, mailboxes, shared mailboxes, connectors, SMTP banner, certificates')
+  .version(pkg.version, '-V, --version', 'show version')
+  .option('-s, --server <url>', 'base URL of the Admin API (default: COREMAIL_API_URL or http://localhost:3000)')
+  .option('--json', 'output as JSON')
+  .showHelpAfterError('(--help for help)')
   .configureHelp({ sortSubcommands: true });
 
 let client: CoreMailClient | null = null;
@@ -48,24 +48,24 @@ registerSmtp(program, api, json);
 registerCert(program, api, json);
 
 program.addHelpText('after', `
-Beispiele:
-  coremail login -u admin@example.de
-  coremail user list --domain example.de
-  coremail user create max@example.de --name "Max Muster" --quota 10GB
-  coremail shared create team@example.de --name "Team" && coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS
+Examples:
+  coremail login -u admin@example.com
+  coremail user list --domain example.com
+  coremail user create max@example.com --name "Max Muster" --quota 10GB
+  coremail shared create team@example.com --name "Team" && coremail shared grant team@example.com max@example.com FULL_ACCESS SEND_AS
   coremail connector status
   coremail connector disable pop3 && coremail connector enable jmap
   coremail connector listener set <id> --port 1143 --ssl false
-  coremail smtp banner set "mail.example.de ESMTP"
-  coremail cert letsencrypt --domains mail.example.de,autodiscover.example.de --email admin@example.de --services SMTP,IMAP,POP3
-  coremail cert activate mail.example.de --https --protocol
+  coremail smtp banner set "mail.example.com ESMTP"
+  coremail cert letsencrypt --domains mail.example.com,autodiscover.example.com --email admin@example.com --services SMTP,IMAP,POP3
+  coremail cert activate mail.example.com --https --protocol
 
-Umgebung:
+Environment:
   COREMAIL_API_URL  COREMAIL_TOKEN  COREMAIL_ADMIN_EMAIL  COREMAIL_ADMIN_PASSWORD  COREMAIL_ADMIN_TOTP  COREMAIL_CLI_CREDENTIALS
 `);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
-  if (err instanceof ApiError) process.stderr.write(`Fehler (HTTP ${err.status}): ${err.message}\n`);
-  else process.stderr.write(`Fehler: ${err instanceof Error ? err.message : String(err)}\n`);
+  if (err instanceof ApiError) process.stderr.write(`Error (HTTP ${err.status}): ${err.message}\n`);
+  else process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

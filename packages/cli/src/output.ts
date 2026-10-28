@@ -1,5 +1,5 @@
 /**
- * Ausgabe-Helfer: Tabellen (Standard), JSON (`--json`), Bestätigungen, Prompts.
+ * Output helpers: tables (default), JSON (`--json`), confirmations, prompts.
  */
 import { createInterface } from 'node:readline';
 
@@ -9,9 +9,9 @@ export function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 }
 
-/** Einfache Spaltentabelle ohne Abhängigkeiten. */
+/** Simple column table without dependencies. */
 export function printTable(rows: Array<Record<string, unknown>>, columns: Array<{ key: string; label: string }>): void {
-  if (rows.length === 0) { process.stdout.write('(keine Einträge)\n'); return; }
+  if (rows.length === 0) { process.stdout.write('(no entries)\n'); return; }
   const cells = rows.map((r) => columns.map((c) => fmtCell(r[c.key])));
   const widths = columns.map((c, i) => Math.max(c.label.length, ...cells.map((row) => row[i]!.length)));
   const line = (vals: string[]): string => vals.map((v, i) => v.padEnd(widths[i]!)).join('  ').trimEnd() + '\n';
@@ -22,7 +22,7 @@ export function printTable(rows: Array<Record<string, unknown>>, columns: Array<
 
 function fmtCell(v: unknown): string {
   if (v === null || v === undefined) return '—';
-  if (typeof v === 'boolean') return v ? 'ja' : 'nein';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
   if (v instanceof Date) return v.toISOString();
   if (Array.isArray(v)) return v.map((x) => fmtCell(x)).join(', ');
   if (typeof v === 'object') return JSON.stringify(v);
@@ -39,10 +39,10 @@ export function formatBytes(n: number | string | bigint | null | undefined): str
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-/** "5GB", "500MB", "1073741824" → Bytes */
+/** "5GB", "500MB", "1073741824" → bytes */
 export function parseBytes(s: string): number {
   const m = /^\s*(\d+(?:\.\d+)?)\s*([kmgt]?b?)\s*$/i.exec(s);
-  if (!m) throw new Error(`Ungültige Größe: ${s} (z. B. 5GB, 500MB)`);
+  if (!m) throw new Error(`Invalid size: ${s} (e.g. 5GB, 500MB)`);
   const num = parseFloat(m[1]!);
   const unit = m[2]!.toLowerCase().replace('b', '');
   const factor: Record<string, number> = { '': 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4 };
@@ -64,7 +64,7 @@ export async function prompt(question: string): Promise<string> {
   }
 }
 
-/** Passwort-Eingabe ohne Echo (bei nicht-interaktivem stdin: Zeile lesen). */
+/** Password input without echo (falls back to a plain line when stdin is not a TTY). */
 export async function promptHidden(question: string): Promise<string> {
   if (!process.stdin.isTTY) return prompt(question);
   process.stderr.write(question);
@@ -95,12 +95,12 @@ export async function promptHidden(question: string): Promise<string> {
 
 export async function confirm(question: string, yes: boolean): Promise<boolean> {
   if (yes) return true;
-  if (!process.stdin.isTTY) throw new Error('Bestätigung erforderlich — mit --yes bestätigen (nicht-interaktiv)');
-  const a = (await prompt(`${question} [j/N] `)).toLowerCase();
-  return a === 'j' || a === 'ja' || a === 'y' || a === 'yes';
+  if (!process.stdin.isTTY) throw new Error('Confirmation required — pass --yes when running non-interactively');
+  const a = (await prompt(`${question} [y/N] `)).toLowerCase();
+  return a === 'y' || a === 'yes' || a === 'j' || a === 'ja';
 }
 
 export function fail(message: string): never {
-  process.stderr.write(`Fehler: ${message}\n`);
+  process.stderr.write(`Error: ${message}\n`);
   process.exit(1);
 }

@@ -1,12 +1,12 @@
 /**
- * HTTP-Client für die CoreMail Admin-API (`/api/v1/admin/*`) inkl. Login,
- * MFA (TOTP/Backup-Code), Token-Refresh und Credential-Datei.
+ * HTTP client for the CoreMail Admin API (`/api/v1/admin/*`) including login,
+ * MFA (TOTP/backup code), token refresh and the credentials file.
  *
- * Konfiguration (Priorität absteigend):
- *   --server / COREMAIL_API_URL          Basis-URL (Default http://localhost:3000)
- *   COREMAIL_TOKEN                        fertiges Admin-Access-Token (JWT)
- *   COREMAIL_ADMIN_EMAIL + _PASSWORD      automatischer Login ohne Prompt
- *   ~/.config/coremail/credentials.json   gespeicherte Sitzung (`coremail login`)
+ * Configuration (highest priority first):
+ *   --server / COREMAIL_API_URL          base URL (default http://localhost:3000)
+ *   COREMAIL_TOKEN                        ready-made admin access token (JWT)
+ *   COREMAIL_ADMIN_EMAIL + _PASSWORD      automatic login without prompt
+ *   ~/.config/coremail/credentials.json   saved session (`coremail login`)
  */
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -87,7 +87,7 @@ export class CoreMailClient {
           saveCredentials(this.creds);
           this.token = r.accessToken;
           return;
-        } catch { /* Refresh fehlgeschlagen → neu anmelden */ }
+        } catch { /* refresh failed → log in again */ }
       }
     }
 
@@ -96,10 +96,10 @@ export class CoreMailClient {
     if (email && password) { await this.login(email, password); return; }
 
     if (!process.stdin.isTTY) {
-      throw new Error('Nicht angemeldet. `coremail login` ausführen oder COREMAIL_TOKEN bzw. COREMAIL_ADMIN_EMAIL/COREMAIL_ADMIN_PASSWORD setzen.');
+      throw new Error('Not logged in. Run `coremail login` or set COREMAIL_TOKEN or COREMAIL_ADMIN_EMAIL/COREMAIL_ADMIN_PASSWORD.');
     }
-    process.stderr.write(`Anmeldung an ${this.server}\n`);
-    await this.login(await prompt('Admin-E-Mail: '), await promptHidden('Passwort: '));
+    process.stderr.write(`Logging in to ${this.server}\n`);
+    await this.login(await prompt('Admin email: '), await promptHidden('Password: '));
   }
 
   async login(email: string, password: string, totp?: string): Promise<Credentials> {
@@ -108,13 +108,13 @@ export class CoreMailClient {
     );
     let tokens: { accessToken?: string; refreshToken?: string; expiresIn?: number } = first;
     if (first.mfaRequired) {
-      if (first.method === 'webauthn') throw new Error('Dieses Konto nutzt WebAuthn — die CLI unterstützt nur TOTP/Backup-Codes. Alternativ COREMAIL_TOKEN setzen.');
-      const code = totp ?? (process.env['COREMAIL_ADMIN_TOTP'] || (process.stdin.isTTY ? await prompt('MFA-Code (TOTP oder Backup-Code): ') : ''));
-      if (!code) throw new Error('MFA erforderlich — Code über --totp oder COREMAIL_ADMIN_TOTP übergeben.');
+      if (first.method === 'webauthn') throw new Error('This account uses WebAuthn — the CLI supports TOTP/backup codes only. Alternatively set COREMAIL_TOKEN.');
+      const code = totp ?? (process.env['COREMAIL_ADMIN_TOTP'] || (process.stdin.isTTY ? await prompt('MFA code (TOTP or backup code): ') : ''));
+      if (!code) throw new Error('MFA required — pass the code via --totp or COREMAIL_ADMIN_TOTP.');
       const body = /^\d{6}$/.test(code) ? { challengeToken: first.challengeToken, code } : { challengeToken: first.challengeToken, backupCode: code };
       tokens = await this.rawJson('POST', '/auth/mfa/verify', body, false);
     }
-    if (!tokens.accessToken) throw new Error('Login fehlgeschlagen: kein Access-Token erhalten');
+    if (!tokens.accessToken) throw new Error('Login failed: no access token received');
     this.creds = {
       server: this.server, email,
       accessToken: tokens.accessToken,
@@ -141,7 +141,7 @@ export class CoreMailClient {
         signal: AbortSignal.timeout(60_000),
       });
     } catch (err) {
-      throw new Error(`Server ${this.server} nicht erreichbar: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Server ${this.server} not reachable: ${err instanceof Error ? err.message : String(err)}`);
     }
     const text = await resp.text();
     let data: unknown = null;
@@ -149,8 +149,8 @@ export class CoreMailClient {
     if (!resp.ok) {
       const obj = (data && typeof data === 'object' ? data : {}) as { error?: string; code?: string; details?: unknown };
       let msg = obj.error ?? (typeof data === 'string' && data ? data : `HTTP ${resp.status}`);
-      if (resp.status === 401) msg = `${msg} — Anmeldung abgelaufen oder ungültig (\`coremail login\`)`;
-      if (resp.status === 403 && obj.code === 'MFA_REQUIRED') msg = 'Admin-Zugriff erfordert MFA — im MWA aktivieren oder requireMfaForAdmins deaktivieren';
+      if (resp.status === 401) msg = `${msg} — session expired or invalid (\`coremail login\`)`;
+      if (resp.status === 403 && obj.code === 'MFA_REQUIRED') msg = 'Admin access requires MFA — enable it in the MWA or disable requireMfaForAdmins';
       if (obj.details) msg += `\n${JSON.stringify(obj.details, null, 2)}`;
       throw new ApiError(resp.status, msg, data);
     }
@@ -164,7 +164,7 @@ export class CoreMailClient {
   delete<T>(path: string): Promise<T> { return this.rawJson<T>('DELETE', path, undefined, true); }
 }
 
-// ── Gemeinsame Auflöser ──────────────────────────────────────────────────────
+// ── Shared resolvers ──────────────────────────────────────────────────────
 
 export interface UserRow {
   id: string; email: string; displayName: string; role: string; active: boolean;
@@ -179,7 +179,7 @@ export async function resolveUser(api: CoreMailClient, ref: string): Promise<Use
   const users = await listUsers(api);
   const needle = ref.toLowerCase();
   const u = users.find((x) => x.id === ref || x.email.toLowerCase() === needle);
-  if (!u) throw new Error(`Benutzer nicht gefunden: ${ref}`);
+  if (!u) throw new Error(`User not found: ${ref}`);
   return u;
 }
 
@@ -193,7 +193,7 @@ export async function listDomains(api: CoreMailClient): Promise<DomainRow[]> {
 export async function resolveDomain(api: CoreMailClient, ref: string): Promise<DomainRow> {
   const domains = await listDomains(api);
   const d = domains.find((x) => x.id === ref || x.name.toLowerCase() === ref.toLowerCase());
-  if (!d) throw new Error(`Domain nicht gefunden: ${ref} (vorhanden: ${domains.map((x) => x.name).join(', ') || 'keine'})`);
+  if (!d) throw new Error(`Domain not found: ${ref} (available: ${domains.map((x) => x.name).join(', ') || 'none'})`);
   return d;
 }
 
@@ -211,6 +211,6 @@ export async function listShared(api: CoreMailClient): Promise<SharedRow[]> {
 export async function resolveShared(api: CoreMailClient, ref: string): Promise<SharedRow> {
   const list = await listShared(api);
   const s = list.find((x) => x.id === ref || x.email.toLowerCase() === ref.toLowerCase());
-  if (!s) throw new Error(`Shared Mailbox nicht gefunden: ${ref}`);
+  if (!s) throw new Error(`Shared mailbox not found: ${ref}`);
   return s;
 }
