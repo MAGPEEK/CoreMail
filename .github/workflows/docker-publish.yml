@@ -15,9 +15,9 @@ jobs:
   build:
     name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
-    # Ein Build dauert normal 5–12 min. Ohne Timeout hängt ein QEMU/arm64-Build
-    # gelegentlich bis zum GitHub-Default (6 h) — so schlägt er nach 45 min fehl
-    # und kann per „Re-run failed jobs" wiederholt werden.
+    # A build normally takes 5–12 min. Without a timeout a QEMU/arm64 build
+    # occasionally hangs until the GitHub default (6 h) — this way it fails after 45 min
+    # and can be repeated via "Re-run failed jobs".
     timeout-minutes: 45
     permissions:
       contents: read
@@ -80,13 +80,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
           tags: |
-            # Git-Tag v1.2.3 → 1.2.3 + 1.2 + 1 + latest
+            # Git tag v1.2.3 → 1.2.3 + 1.2 + 1 + latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # main-Branch → edge
+            # main branch → edge
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            # SHA für Traceability
+            # SHA for traceability
             type=sha,prefix=sha-,format=short
           labels: |
             org.opencontainers.image.title=CoreMail ${{ matrix.service }}
@@ -99,10 +99,10 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          # Pull Requests pushen nichts (push: false) — dort reicht amd64 als
-          # Build-Check. Der QEMU-emulierte arm64-Build hing auf PR-Läufen
-          # wiederholt in „Build and push" (zufälliger Job, >45 min). Auf main
-          # und Tags bleibt es Multi-Arch (amd64 + arm64).
+          # Pull requests push nothing (push: false) — there amd64 is enough as a
+          # build check. The QEMU-emulated arm64 build repeatedly hung on PR runs
+          # in "Build and push" (random job, >45 min). On main and tags it
+          # remains multi-arch (amd64 + arm64).
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -110,7 +110,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  # Zusammenfassungs-Job — schlägt fehl wenn irgendein Build fehlschlug
+  # Summary job — fails if any build failed
   publish-summary:
     name: Publish Summary
     runs-on: ubuntu-latest

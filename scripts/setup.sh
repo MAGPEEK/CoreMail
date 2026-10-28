@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# CoreMail — Ersteinrichtung: erzeugt .env mit zufälligen Schlüsseln.
-# Danach: docker compose -f infra/docker/docker-compose.yml up -d
+# CoreMail — initial setup: generates .env with random keys.
+# Afterwards: docker compose -f infra/docker/docker-compose.yml up -d
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,14 +11,14 @@ echo "  CoreMail — Setup"
 echo "══════════════════════════════════════════════════════════"
 
 for tool in docker openssl; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "✗ $tool nicht gefunden — bitte installieren."; exit 1; }
+  command -v "$tool" >/dev/null 2>&1 || { echo "✗ $tool not found — please install it."; exit 1; }
 done
-docker compose version >/dev/null 2>&1 || { echo "✗ 'docker compose' (v2) nicht verfügbar."; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "✗ 'docker compose' (v2) not available."; exit 1; }
 
 if [ -f .env ]; then
-  echo "✓ .env vorhanden — wird nicht überschrieben."
+  echo "✓ .env exists — will not be overwritten."
   if grep -q "CHANGE-ME" .env; then
-    echo "⚠  .env enthält noch CHANGE-ME-Platzhalter. Bitte ersetzen (openssl rand -hex 32)."
+    echo "⚠  .env still contains CHANGE-ME placeholders. Please replace them (openssl rand -hex 32)."
   fi
 else
   cp .env.example .env
@@ -31,28 +31,28 @@ else
     -e "s|^MINIO_ROOT_PASSWORD=.*|MINIO_ROOT_PASSWORD=$(rnd 20)|" \
     .env && rm -f .env.bak
   chmod 600 .env
-  echo "✓ .env mit zufälligen Schlüsseln erzeugt (chmod 600)."
+  echo "✓ .env created with random keys (chmod 600)."
 fi
 
-# Compose liest .env aus dem Verzeichnis der Compose-Datei bzw. dem Aufrufverzeichnis.
-# Ein Symlink neben die Compose-Datei macht beides möglich.
+# Compose reads .env from the directory of the Compose file or from the invocation directory.
+# A symlink next to the Compose file makes both work.
 if [ ! -e infra/docker/.env ]; then
   ln -s ../../.env infra/docker/.env
-  echo "✓ infra/docker/.env → ../../.env verknüpft"
+  echo "✓ infra/docker/.env → ../../.env linked"
 fi
 
 mkdir -p infra/docker/rspamd/local.d
 
 cat <<MSG
 
-Nächste Schritte:
-  1. Stack starten:
+Next steps:
+  1. Start the stack:
        docker compose -f infra/docker/docker-compose.yml up -d
-  2. Nach ca. 90 s im Browser öffnen:
-       http://<server-ip>:3000/bcp/      → Setup-Assistent (Admin-Konto + Domain)
-  3. DNS setzen (A/MX/SPF/DKIM/DMARC — Vorlage im BCP → Domains → DNS-Einrichtung)
-  4. Zertifikat holen (BCP → SSL/TLS oder):
+  2. After approx. 90 s open in the browser:
+       http://<server-ip>:3000/bcp/      → setup wizard (admin account + domain)
+  3. Set DNS (A/MX/SPF/DKIM/DMARC — template in BCP → Domains → DNS setup)
+  4. Obtain a certificate (BCP → SSL/TLS or):
        docker exec -it coremail coremail cert letsencrypt --domains mail.example.de \\
          --email admin@example.de --services SMTP,IMAP,POP3
-  Admin-CLI: docker exec -it coremail coremail --help
+  Admin CLI: docker exec -it coremail coremail --help
 MSG

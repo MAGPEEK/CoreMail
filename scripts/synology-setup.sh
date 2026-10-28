@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail — Synology NAS Ersteinrichtung
+# CoreMail — Synology NAS initial setup
 #
-# Dieses Skript per SSH auf der Synology ausführen (als root oder sudo):
+# Run this script via SSH on the Synology (as root or with sudo):
 #   NAS_HOSTNAME=192.168.1.100 bash synology-setup.sh
 #
-# Voraussetzungen auf der Synology:
-#   1. SSH aktiviert (DSM → Systemsteuerung → Terminal & SNMP → SSH aktivieren)
-#   2. Docker / Container Manager installiert (via Package Center)
-#   3. Volume "volume1" vorhanden (Standard-Synology-Volume)
+# Prerequisites on the Synology:
+#   1. SSH enabled (DSM → Control Panel → Terminal & SNMP → Enable SSH)
+#   2. Docker / Container Manager installed (via Package Center)
+#   3. Volume "volume1" present (default Synology volume)
 #
-# Was das Skript tut:
-#   1. Verzeichnisstruktur unter /volume1/docker/coremail/ anlegen
-#   2. docker-compose.synology.yml kopieren
-#   3. Stack starten
+# What the script does:
+#   1. Create the directory structure under /volume1/docker/coremail/
+#   2. Copy docker-compose.synology.yml
+#   3. Start the stack
 #
 # TLS/HTTPS:
-#   CoreMail läuft auf Port 8080 (HTTP).
-#   Für HTTPS DSM Application Portal nutzen:
-#   DSM → Systemsteuerung → Application Portal → Reverseproxy
-#   Quelle: https://<deine-domain.de> → Ziel: http://localhost:8080
+#   CoreMail runs on port 8080 (HTTP).
+#   For HTTPS use the DSM Application Portal:
+#   DSM → Control Panel → Application Portal → Reverse Proxy
+#   Source: https://<your-domain.de> → Destination: http://localhost:8080
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-# ── Konfiguration ─────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 COREMAIL_BASE="/volume1/docker/coremail"
 NAS_HOSTNAME="${NAS_HOSTNAME:-mail.local}"
 
@@ -35,79 +35,79 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║         CoreMail v0.9.2 — Synology Ersteinrichtung          ║"
+echo "║         CoreMail v0.9.2 — Synology initial setup            ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Basis-Verzeichnis : ${COREMAIL_BASE}"
-echo "NAS Hostname      : ${NAS_HOSTNAME}"
+echo "Base directory    : ${COREMAIL_BASE}"
+echo "NAS hostname      : ${NAS_HOSTNAME}"
 echo ""
 
-# ── 1. Verzeichnisstruktur ────────────────────────────────────────────────────
-echo "[1/3] Verzeichnisse anlegen..."
+# ── 1. Directory structure ────────────────────────────────────────────────────
+echo "[1/3] Creating directories..."
 mkdir -p \
   "${COREMAIL_BASE}/data/postgres" \
   "${COREMAIL_BASE}/data/redis" \
   "${COREMAIL_BASE}/data/minio"
-echo "      ✓ ${COREMAIL_BASE}/ angelegt"
+echo "      ✓ ${COREMAIL_BASE}/ created"
 
-# ── 2. docker-compose.yml kopieren ───────────────────────────────────────────
-echo "[2/3] docker-compose.synology.yml kopieren..."
+# ── 2. Copy docker-compose.yml ───────────────────────────────────────────────
+echo "[2/3] Copying docker-compose.synology.yml..."
 COMPOSE_SRC="${REPO_ROOT}/infra/docker/docker-compose.synology.yml"
 if [ -f "${COMPOSE_SRC}" ]; then
   cp "${COMPOSE_SRC}" "${COREMAIL_BASE}/docker-compose.yml"
   echo "      ✓ docker-compose.yml → ${COREMAIL_BASE}/docker-compose.yml"
 
-  # Hostname einsetzen
+  # Insert hostname
   if [ "${NAS_HOSTNAME}" != "mail.local" ]; then
     sed -i "s/mail\.local/${NAS_HOSTNAME}/g" "${COREMAIL_BASE}/docker-compose.yml"
-    echo "      ✓ Hostname '${NAS_HOSTNAME}' eingetragen"
+    echo "      ✓ Hostname '${NAS_HOSTNAME}' inserted"
   fi
 else
-  echo "      ⚠  ${COMPOSE_SRC} nicht gefunden — bitte manuell kopieren"
+  echo "      ⚠  ${COMPOSE_SRC} not found — please copy manually"
 fi
 
-# ── 3. Stack starten ──────────────────────────────────────────────────────────
-echo "[3/3] Docker Stack starten..."
+# ── 3. Start the stack ────────────────────────────────────────────────────────
+echo "[3/3] Starting Docker stack..."
 cd "${COREMAIL_BASE}"
 
 if ! command -v docker &>/dev/null; then
-  echo "      ⚠  'docker' nicht im PATH — Container Manager nicht installiert?"
-  echo "      Manuell starten: cd ${COREMAIL_BASE} && docker compose up -d"
+  echo "      ⚠  'docker' not in PATH — Container Manager not installed?"
+  echo "      Start manually: cd ${COREMAIL_BASE} && docker compose up -d"
   exit 0
 fi
 
 docker compose up -d --pull always
 
-# ── Ergebnis ──────────────────────────────────────────────────────────────────
+# ── Result ────────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                     Setup abgeschlossen!                     ║"
+echo "║                       Setup complete!                        ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "  Alle Services sind nach ca. 60–90 Sekunden bereit."
+echo "  All services are ready after approx. 60–90 seconds."
 echo ""
 echo "  Status:  docker compose -f ${COREMAIL_BASE}/docker-compose.yml ps"
 echo "  Logs:    docker compose -f ${COREMAIL_BASE}/docker-compose.yml logs -f"
 echo ""
 echo "  ┌──────────────────────────────────────────────────────────┐"
-echo "  │  Zugriff                                                 │"
+echo "  │  Access                                                  │"
 echo "  ├──────────────────────────────────────────────────────────┤"
 echo "  │  OWA Webmail:  http://${NAS_HOSTNAME}:8080/owa/           │"
 echo "  │  ECP Admin:    http://${NAS_HOSTNAME}:8080/ecp/           │"
 echo "  │  MinIO:        http://${NAS_HOSTNAME}:9001                │"
 echo "  └──────────────────────────────────────────────────────────┘"
 echo ""
-echo "  HTTPS (empfohlen für Produktion):"
-echo "  DSM → Systemsteuerung → Application Portal → Reverseproxy"
-echo "  Quelle: https://${NAS_HOSTNAME}  →  Ziel: http://localhost:8080"
+echo "  HTTPS (recommended for production):"
+echo "  DSM → Control Panel → Application Portal → Reverse Proxy"
+echo "  Source: https://${NAS_HOSTNAME}  →  Destination: http://localhost:8080"
 echo ""
-echo "  Erster Admin-Account anlegen:"
+echo "  Create the first admin account:"
 echo "  curl -X POST http://${NAS_HOSTNAME}:8080/api/v1/admin/setup \\"
 echo "    -H 'Content-Type: application/json' \\"
 echo "    -d '{\"email\":\"admin@${NAS_HOSTNAME}\",\"password\":\"Test1234!\",\"displayName\":\"Admin\"}'"
 echo ""
-echo "  ⚠  WICHTIG: JWT_SECRET und PEPPER in ${COREMAIL_BASE}/docker-compose.yml"
-echo "     vor dem Produktiveinsatz durch Zufallswerte ersetzen:"
+echo "  ⚠  IMPORTANT: Replace JWT_SECRET and PEPPER in ${COREMAIL_BASE}/docker-compose.yml"
+echo "     with random values before production use:"
 echo "     openssl rand -hex 32   # → JWT_SECRET"
 echo "     openssl rand -hex 32   # → PEPPER"
 echo ""

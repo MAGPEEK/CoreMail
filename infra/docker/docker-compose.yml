@@ -1,110 +1,110 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 5.8.0 — Docker Compose (Produktion, 1 Host)
+#  CoreMail 5.9.0 — Docker Compose (production, single host)
 #
-#  Inbetriebnahme in 3 Schritten:
+#  Getting started in 3 steps:
 #
-#    1. Konfiguration anlegen (im Repo-Root):
-#         bash scripts/setup.sh            # erzeugt .env mit zufälligen Schlüsseln
-#       oder von Hand:
-#         cp .env.example .env             # und die 5 CHANGE-ME-Werte ersetzen
+#    1. Create the configuration (in the repo root):
+#         bash scripts/setup.sh            # generates .env with random keys
+#       or by hand:
+#         cp .env.example .env             # and replace the 5 CHANGE-ME values
 #
-#    2. Stack starten:
+#    2. Start the stack:
 #         docker compose -f infra/docker/docker-compose.yml up -d
-#       Beim ersten Start legt CoreMail das Datenbankschema an (ca. 60–90 s).
+#       On first start CoreMail creates the database schema (approx. 60–90 s).
 #
-#    3. Einrichten im Browser:
-#         http://<server-ip>:3000/bcp/     → Setup-Assistent: Admin-Konto + Domain
-#       Danach im BCP unter SSL/TLS ein Zertifikat (Let's Encrypt) holen — ab dann
-#       ist https://mail.<domain>/ erreichbar. Alternativ per CLI:
+#    3. Set up in the browser:
+#         http://<server-ip>:3000/bcp/     → setup wizard: admin account + domain
+#       Then obtain a certificate (Let's Encrypt) in the BCP under SSL/TLS — from
+#       then on https://mail.<domain>/ is reachable. Alternatively via CLI:
 #         docker exec -it coremail coremail cert letsencrypt \
 #           --domains mail.example.de --email admin@example.de --services SMTP,IMAP,POP3
 #
-#  Was in der .env stehen MUSS (alles andere hat sinnvolle Defaults):
-#    POSTGRES_PASSWORD, REDIS_PASSWORD, MINIO_ROOT_PASSWORD  — Datenbank-Passwörter
-#    JWT_SECRET, PEPPER                                       — je 64 Hex-Zeichen (openssl rand -hex 32)
+#  What MUST be set in .env (everything else has sensible defaults):
+#    POSTGRES_PASSWORD, REDIS_PASSWORD, MINIO_ROOT_PASSWORD  — database passwords
+#    JWT_SECRET, PEPPER                                       — 64 hex characters each (openssl rand -hex 32)
 #
-#  Ports am Host (Firewall/Router freigeben):
-#    25  SMTP Empfang (Pflicht für eingehende Mail)   143/993  IMAP / IMAPS
-#    587 SMTP Submission (Mail-Clients, STARTTLS)     110/995  POP3 / POP3S (optional)
-#    465 SMTPS (implizites TLS)                       80       HTTP → Let's-Encrypt-Challenge + Redirect
-#    443 HTTPS (Webmail, Admin-Panel, JMAP, EWS, ActiveSync, CalDAV, Autodiscover)
-#    3000 HTTP ohne TLS — für die Ersteinrichtung und hinter einem eigenen Reverse-Proxy
+#  Host ports (open in firewall/router):
+#    25  SMTP inbound (required for incoming mail)   143/993  IMAP / IMAPS
+#    587 SMTP submission (mail clients, STARTTLS)    110/995  POP3 / POP3S (optional)
+#    465 SMTPS (implicit TLS)                        80       HTTP → Let's Encrypt challenge + redirect
+#    443 HTTPS (webmail, admin panel, JMAP, EWS, ActiveSync, CalDAV, Autodiscover)
+#    3000 HTTP without TLS — for initial setup and behind your own reverse proxy
 #
-#  Container: coremail (alle Dienste) · postgres · redis · minio · rspamd · clamav
-#  Alle Daten liegen in benannten Docker-Volumes (siehe unten) → Backup = Volumes sichern.
+#  Containers: coremail (all services) · postgres · redis · minio · rspamd · clamav
+#  All data lives in named Docker volumes (see below) → backup = back up the volumes.
 # ═════════════════════════════════════════════════════════════════════════════
 
 services:
 
   # ───────────────────────────────────────────────────────────────────────────
-  #  coremail — die Anwendung (SMTP/IMAP/POP3/JMAP/EWS/ActiveSync/CalDAV,
-  #  REST-API, Webmail „MWA", Admin-Panel „BCP", Admin-CLI `coremail`)
+  #  coremail — the application (SMTP/IMAP/POP3/JMAP/EWS/ActiveSync/CalDAV,
+  #  REST API, webmail "MWA", admin panel "BCP", admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.8.0}
-    # Eigenen Build statt Docker-Hub-Image verwenden:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.9.0}
+    # Use your own build instead of the Docker Hub image:
     # build:
     #   context: ../..
     #   dockerfile: infra/docker/Dockerfile.app
     container_name: coremail
     restart: unless-stopped
     environment:
-      # ── Pflicht: Schlüssel aus .env (Start bricht mit Hinweis ab, wenn leer) ──
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env  →  openssl rand -hex 32}
-      PEPPER:     ${PEPPER:?PEPPER fehlt in .env  →  openssl rand -hex 32}
+      # ── Required: keys from .env (startup aborts with a hint if empty) ──────
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
+      PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
 
-      # ── Datenbanken (Hostnamen = Container-Namen in diesem Compose) ──────────
-      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt in .env}@postgres:5432/coremail
-      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD fehlt in .env}@redis:6379
+      # ── Databases (hostnames = container names in this Compose file) ────────
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}@postgres:5432/coremail
+      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
       MINIO_ENDPOINT:   minio
       MINIO_PORT:       "9000"
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD fehlt in .env}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD missing in .env}
       MINIO_BUCKET:     mail-attachments
-      # Backups landen im selben MinIO (Bucket coremail-backups)
+      # Backups go to the same MinIO (bucket coremail-backups)
       S3_ENDPOINT:   http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
 
-      # ── Spam- und Virenschutz (Container unten) ──────────────────────────────
+      # ── Spam and virus protection (containers below) ─────────────────────────
       RSPAMD_URL:  http://rspamd:11334
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
 
-      # ── Betrieb ──────────────────────────────────────────────────────────────
+      # ── Operation ────────────────────────────────────────────────────────────
       NODE_ENV:  production
       LOG_LEVEL: ${LOG_LEVEL:-info}            # error | warn | info | debug
       TZ:        ${TZ:-Europe/Berlin}
-      # Interner Dienst im selben Container — nicht ändern
+      # Internal service in the same container — do not change
       SECURITY_FILTER_URL: http://localhost:3002
 
-      # ── Zeitpläne (Cron, UTC) ────────────────────────────────────────────────
-      BACKUP_SCHEDULE:       ${BACKUP_SCHEDULE:-0 2 * * *}   # tägliches Vollbackup
+      # ── Schedules (cron, UTC) ────────────────────────────────────────────────
+      BACKUP_SCHEDULE:       ${BACKUP_SCHEDULE:-0 2 * * *}   # daily full backup
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
-      RETENTION_SCHEDULE:    ${RETENTION_SCHEDULE:-0 3 * * *} # Aufbewahrungsrichtlinien
+      RETENTION_SCHEDULE:    ${RETENTION_SCHEDULE:-0 3 * * *} # retention policies
 
-      # ── Optional: Browser-Push für Webmail (npx web-push generate-vapid-keys) ─
+      # ── Optional: browser push for webmail (npx web-push generate-vapid-keys) ─
       VAPID_PUBLIC_KEY:  ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
 
-      # ── Optional: anderer HTTPS-Port, wenn 443 am Host belegt ist ────────────
-      # HTTPS_PORT: "8443"     # dann unten auch "8443:8443" mappen
+      # ── Optional: different HTTPS port if 443 is already in use on the host ──
+      # HTTPS_PORT: "8443"     # then also map "8443:8443" below
 
     ports:
-      - "25:25"       # SMTP Empfang (Server → Server)
-      - "465:465"     # SMTPS (implizites TLS)
-      - "587:587"     # SMTP Submission (Mail-Clients, STARTTLS)
+      - "25:25"       # SMTP inbound (server → server)
+      - "465:465"     # SMTPS (implicit TLS)
+      - "587:587"     # SMTP submission (mail clients, STARTTLS)
       - "143:143"     # IMAP (STARTTLS)
-      - "993:993"     # IMAPS (implizites TLS)
-      - "110:110"     # POP3 (STARTTLS)         — kann entfernt werden, wenn kein POP3 gewünscht
-      - "995:995"     # POP3S (implizites TLS)  — dito
-      - "80:3000"     # HTTP: Let's-Encrypt-Challenge (HTTP-01) + Weiterleitung auf HTTPS
-      - "443:443"     # HTTPS: integrierter TLS-Proxy (Zertifikat im BCP → SSL/TLS)
-      - "3000:3000"   # HTTP ohne TLS: Ersteinrichtung; hinter eigenem Reverse-Proxy (Traefik,
-                      # Caddy, nginx, Synology) → nur diesen Port nutzen, 80/443 oben entfernen
+      - "993:993"     # IMAPS (implicit TLS)
+      - "110:110"     # POP3 (STARTTLS)         — can be removed if POP3 is not wanted
+      - "995:995"     # POP3S (implicit TLS)    — same
+      - "80:3000"     # HTTP: Let's Encrypt challenge (HTTP-01) + redirect to HTTPS
+      - "443:443"     # HTTPS: integrated TLS proxy (certificate in BCP → SSL/TLS)
+      - "3000:3000"   # HTTP without TLS: initial setup; behind your own reverse proxy (Traefik,
+                      # Caddy, nginx, Synology) → use only this port, remove 80/443 above
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -117,7 +117,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
-    # Ressourcen-Obergrenze (gegen Lastspitzen); bei >100 Nutzern erhöhen
+    # Resource limits (against load spikes); increase for >100 users
     deploy:
       resources:
         limits:
@@ -126,7 +126,7 @@ services:
     networks: [coremail]
 
   # ───────────────────────────────────────────────────────────────────────────
-  #  Infrastruktur — Standard-Images, keine Anpassung nötig
+  #  Infrastructure — standard images, no customization needed
   # ───────────────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -163,7 +163,7 @@ services:
     networks: [coremail]
 
   minio:
-    # Objektspeicher für Anhänge, Roh-Mails, Quarantäne und Backups
+    # Object storage for attachments, raw mails, quarantine and backups
     image: minio/minio:latest
     container_name: coremail-minio
     restart: unless-stopped
@@ -174,7 +174,7 @@ services:
     volumes:
       - miniodata:/data
     ports:
-      - "127.0.0.1:9001:9001"   # MinIO-Konsole nur lokal (ssh -L 9001:localhost:9001 <server>)
+      - "127.0.0.1:9001:9001"   # MinIO console local only (ssh -L 9001:localhost:9001 <server>)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 30s
@@ -184,7 +184,7 @@ services:
     networks: [coremail]
 
   rspamd:
-    # Spamfilter (Bayes, DKIM/SPF/DMARC-Auswertung, Fuzzy, URL-Listen)
+    # Spam filter (Bayes, DKIM/SPF/DMARC evaluation, fuzzy, URL lists)
     image: rspamd/rspamd:4.0.0
     container_name: coremail-rspamd
     restart: unless-stopped
@@ -200,12 +200,12 @@ services:
     networks: [coremail]
 
   clamav:
-    # Virenscanner; lädt beim ersten Start die Signaturen (~300 MB, einige Minuten)
+    # Virus scanner; downloads the signatures on first start (~300 MB, a few minutes)
     image: clamav/clamav:stable
     container_name: coremail-clamav
     restart: unless-stopped
     environment:
-      CLAMAV_NO_FRESHCLAMD: "false"   # tägliche Signatur-Updates
+      CLAMAV_NO_FRESHCLAMD: "false"   # daily signature updates
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:
@@ -217,11 +217,11 @@ services:
     networks: [coremail]
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Daten — diese Volumes sichern (docker run --rm -v coremail_pgdata:/d alpine tar …)
-#    pgdata      PostgreSQL: Nutzer, Ordner, Mail-Metadaten, Einstellungen
-#    miniodata   MinIO: Mail-Inhalte, Anhänge, Backups
-#    redisdata   Redis: Sitzungen, Warteschlangen (verzichtbar)
-#    rspamd-data Bayes-Lerndaten        clamav-data Virensignaturen (werden neu geladen)
+#  Data — back up these volumes (docker run --rm -v coremail_pgdata:/d alpine tar …)
+#    pgdata      PostgreSQL: users, folders, mail metadata, settings
+#    miniodata   MinIO: mail contents, attachments, backups
+#    redisdata   Redis: sessions, queues (expendable)
+#    rspamd-data Bayes training data    clamav-data virus signatures (re-downloaded)
 # ─────────────────────────────────────────────────────────────────────────────
 volumes:
   pgdata:
