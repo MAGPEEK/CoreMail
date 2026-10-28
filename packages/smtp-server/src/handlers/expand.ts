@@ -1,17 +1,17 @@
 import { prisma } from '@coremail/storage';
 
 /**
- * Löst Empfängeradressen auf:
- *  1. E-Mail-Aliase (EmailAlias) → Target-Primäradresse (User oder SharedMailbox)
- *  2. Reguläre Empfänger (User/SharedMailbox/ResourceMailbox) → unverändert
+ * Resolves recipient addresses:
+ *  1. Email aliases (EmailAlias) → target primary address (User or SharedMailbox)
+ *  2. Regular recipients (User/SharedMailbox/ResourceMailbox) → unchanged
  *
- * v5.6.1: DistributionGroup-Expansion entfernt (Feature komplett raus).
- * Cycle-Schutz via `visited`-Set verhindert Endlosschleifen bei zyklischen
- * Aliasen.
+ * v5.6.1: DistributionGroup expansion removed (feature completely dropped).
+ * Cycle protection via the `visited` set prevents endless loops on cyclic
+ * aliases.
  *
- * **WICHTIG**: Diese Funktion wird VOR `storeInboundMessage()` aufgerufen damit
- * lokale Empfänger immer auf eine konkrete User-/SharedMailbox-Adresse aufgelöst
- * werden. Sonst würden Aliase silent verworfen.
+ * **IMPORTANT**: This function is called BEFORE `storeInboundMessage()` so that
+ * local recipients are always resolved to a concrete User/SharedMailbox address.
+ * Otherwise aliases would be silently dropped.
  */
 export async function expandRecipients(
   rcptTo: string[],
@@ -22,7 +22,7 @@ export async function expandRecipients(
   for (const email of rcptTo) {
     const normalised = email.toLowerCase();
 
-    // 1. E-Mail-Alias? → ersetzen durch Target-Primäradresse
+    // 1. Email alias? → replace with target primary address
     const alias = await prisma.emailAlias.findFirst({
       where: { address: normalised, active: true },
       include: {
@@ -43,7 +43,7 @@ export async function expandRecipients(
       }
     }
 
-    // 2. Regulärer Empfänger (User / SharedMailbox / ResourceMailbox)
+    // 2. Regular recipient (User / SharedMailbox / ResourceMailbox)
     result.push(normalised);
   }
 

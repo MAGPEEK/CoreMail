@@ -8,7 +8,7 @@ import { submissionHandlers } from './submission/handler.js';
 import { verifySmtpCredentials } from './auth/verifier.js';
 import { startOutboundWorker } from './outbound/queue.js';
 import { invalidateOutboundConfigCache } from './outbound/relay.js';
-// Journaling-Feature komplett entfernt in v3.13.6
+// Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:server');
 
@@ -22,24 +22,24 @@ const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
 // Fallback: SMTP_HOSTNAME / MAIL_HOSTNAME env vars (deprecated, for migration)
 let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
 
-// ── TLS-Konfiguration (für Ports 465 / implizites TLS) ────────────────────────
-// Wird beim Start aus der DB geladen oder als selbstsigniertes Zertifikat generiert.
-// Null = noch nicht geladen; undefined = kein Cert verfügbar (soll nie vorkommen).
+// ── TLS configuration (for port 465 / implicit TLS) ───────────────────────────
+// Loaded from the DB at startup or generated as a self-signed certificate.
+// Null = not loaded yet; undefined = no cert available (should never happen).
 let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
-// Self-signed Certs werden von strikten MTAs (z.B. Microsoft Exchange) abgelehnt.
-// Auf Port 25 (Inbound) wird STARTTLS deshalb NICHT beworben wenn Cert self-signed.
+// Self-signed certs are rejected by strict MTAs (e.g. Microsoft Exchange).
+// Therefore STARTTLS is NOT advertised on port 25 (inbound) when the cert is self-signed.
 let _tlsCertSelfSigned: boolean = true;
 
-// ── Banner-Konfiguration (SmtpSettings) ───────────────────────────────────────
-// Leer = Standard-Banner ("hostname ESMTP CoreMail"); gesetzt = benutzerdefiniert.
+// ── Banner configuration (SmtpSettings) ───────────────────────────────────────
+// Empty = default banner ("hostname ESMTP CoreMail"); set = custom.
 let _bannerText: string = '';
 
-// ── ESMTP-Erweiterungen + maxSize + maxRcpt (alle aus SmtpSettings) ──────────
-// Werden als Getter an die Session-Config übergeben → Live-Updates ohne
-// Listener-Neustart wirken.
+// ── ESMTP extensions + maxSize + maxRcpt (all from SmtpSettings) ─────────────
+// Passed to the session config as getters → live updates take effect without
+// restarting the listeners.
 import { DEFAULT_ESMTP_EXTENSIONS, type EsmtpExtensions } from './core/types.js';
 let _esmtp: EsmtpExtensions = { ...DEFAULT_ESMTP_EXTENSIONS };
-let _maxSize: number = 25 * 1024 * 1024; // 25 MB Default (matched SmtpSettings.maxMessageSizeMb default)
+let _maxSize: number = 25 * 1024 * 1024; // 25 MB default (matches SmtpSettings.maxMessageSizeMb default)
 let _maxRcpt: number = 100;
 
 async function refreshSmtpSettings(): Promise<void> {
@@ -51,7 +51,7 @@ async function refreshSmtpSettings(): Promise<void> {
         extStarttls: true, extAuthPlain: true, extAuthLogin: true,
         extPipelining: true, extSize: true, ext8bitmime: true,
         extEnhancedStatus: true,
-        // extAuthCramMd5, extSmtputf8, extDsn, extChunking nicht mehr gelesen — hardcoded false
+        // extAuthCramMd5, extSmtputf8, extDsn, extChunking no longer read — hardcoded false
         maxMessageSizeMb: true, maxRecipients: true,
       },
     });
@@ -64,11 +64,11 @@ async function refreshSmtpSettings(): Promise<void> {
       size:           s?.extSize           ?? true,
       bit8mime:       s?.ext8bitmime       ?? true,
       enhancedStatus: s?.extEnhancedStatus ?? true,
-      // Bewusst hardcoded false — Server hat keine Implementierung dieser Extensions:
-      //   CRAM-MD5 (RFC 4954) — handleAuth kennt nur PLAIN+LOGIN, würde 504 zurückgeben
-      //   SMTPUTF8 (RFC 6531) — UTF-8 in Envelope-Adressen nicht gesondert behandelt
-      //   DSN (RFC 3461)      — kein NOTIFY/ORCPT/ENVID/RET-Parsing, kein multipart/report
-      //   CHUNKING (RFC 3030) — BDAT-Command wird vom Parser nicht erkannt
+      // Deliberately hardcoded false — the server has no implementation of these extensions:
+      //   CRAM-MD5 (RFC 4954) — handleAuth only knows PLAIN+LOGIN, would return 504
+      //   SMTPUTF8 (RFC 6531) — UTF-8 in envelope addresses not handled specially
+      //   DSN (RFC 3461)      — no NOTIFY/ORCPT/ENVID/RET parsing, no multipart/report
+      //   CHUNKING (RFC 3030) — BDAT command is not recognized by the parser
       authCramMd5:    false,
       smtputf8:       false,
       dsn:            false,
@@ -82,7 +82,7 @@ async function refreshSmtpSettings(): Promise<void> {
   }
 }
 
-// Backwards-Compat-Alias — alte Aufrufer im server.ts unten
+// Backwards-compat alias — legacy callers further down in server.ts
 const refreshBanner = refreshSmtpSettings;
 
 async function refreshHostname(): Promise<void> {
@@ -110,32 +110,32 @@ async function refreshHostname(): Promise<void> {
 }
 
 /**
- * Lädt das TLS-Zertifikat aus der DB.
- * Falls keines vorhanden ist, wird ein selbstsigniertes Zertifikat generiert
- * und für spätere Starts in der DB gespeichert.
+ * Loads the TLS certificate from the DB.
+ * If none exists, a self-signed certificate is generated
+ * and stored in the DB for subsequent starts.
  */
 /**
- * Erkennt ob ein PEM-Zertifikat self-signed ist (Issuer == Subject).
- * Self-signed Certs werden von strikten MTAs (Microsoft Exchange, Google) abgelehnt
- * → wir bewerben STARTTLS dann nicht auf Port 25 damit MTAs in Plain zustellen.
+ * Detects whether a PEM certificate is self-signed (Issuer == Subject).
+ * Self-signed certs are rejected by strict MTAs (Microsoft Exchange, Google)
+ * → in that case we do not advertise STARTTLS on port 25 so MTAs deliver in plain.
  */
 function isCertSelfSigned(certPem: string): boolean {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
     const cert = new X509Certificate(certPem);
-    // X509Certificate.issuer und subject sind RFC2253 strings — vergleichen sich exakt
+    // X509Certificate.issuer and subject are RFC2253 strings — compare exactly
     return cert.issuer === cert.subject;
   } catch {
-    // Im Fehlerfall pessimistisch annehmen self-signed (sicherer Default)
+    // On error, pessimistically assume self-signed (safe default)
     return true;
   }
 }
 
 /**
- * Prüft ob das Cert für `expectedHostname` ausgestellt wurde (CN oder SAN match).
- * Wenn nicht: Cert-Hostname-Mismatch → strikte MTAs (Outlook 365) lehnen ab.
- * Liefert true wenn match, false wenn mismatch.
+ * Checks whether the cert was issued for `expectedHostname` (CN or SAN match).
+ * If not: cert hostname mismatch → strict MTAs (Outlook 365) reject.
+ * Returns true on match, false on mismatch.
  */
 function certMatchesHostname(certPem: string, expectedHostname: string): boolean {
   try {
@@ -143,10 +143,10 @@ function certMatchesHostname(certPem: string, expectedHostname: string): boolean
     const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
     const cert = new X509Certificate(certPem);
     const lower = expectedHostname.toLowerCase();
-    // Subject CN extrahieren (z.B. "CN=mail.example.com, O=...")
+    // Extract subject CN (e.g. "CN=mail.example.com, O=...")
     const subjectMatch = /CN=([^,]+)/i.exec(cert.subject);
     if (subjectMatch && subjectMatch[1]?.toLowerCase().trim() === lower) return true;
-    // SAN durchsuchen (X509Certificate.subjectAltName: "DNS:foo.com, DNS:bar.com")
+    // Search SANs (X509Certificate.subjectAltName: "DNS:foo.com, DNS:bar.com")
     const san = cert.subjectAltName ?? '';
     const sanEntries = san.split(',').map((s) => s.trim().toLowerCase());
     if (sanEntries.includes(`dns:${lower}`)) return true;
@@ -158,9 +158,9 @@ function certMatchesHostname(certPem: string, expectedHostname: string): boolean
 
 async function refreshTlsConfig(): Promise<void> {
   try {
-    // v5.2.8: Cert direkt aus der certificates-Tabelle via services[]-Array
-    // anhand des Service-Namens (hier: 'SMTP'). Fallback auf legacy
-    // ServerSettings.tlsCert für Pre-v5.2.8-Setups.
+    // v5.2.8: cert directly from the certificates table via the services[] array
+    // by service name (here: 'SMTP'). Fallback to legacy
+    // ServerSettings.tlsCert for pre-v5.2.8 setups.
     const found = await loadProtocolCert('SMTP');
 
     if (found) {
@@ -177,17 +177,17 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // Kein Zertifikat in der DB → selbstsigniertes Default-Cert mit fixem
-    // CN=mail.localhost generieren.  Der Admin tauscht es später im BCP
-    // gegen ein echtes Cert; ein fixer CN verhindert dass das Self-Signed-
-    // Cert beim Umbenennen des publicHostname neu ausgestellt wird.
+    // No certificate in the DB → generate a self-signed default cert with a fixed
+    // CN=mail.localhost.  The admin later replaces it in the BCP
+    // with a real cert; a fixed CN prevents the self-signed cert from being
+    // re-issued whenever publicHostname is renamed.
     const SELF_SIGNED_HOSTNAME = 'mail.localhost';
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No TLS cert in DB — generating self-signed certificate');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
     _tlsCertSelfSigned = true;
 
-    // In DB speichern damit alle anderen Mail-Protokolle dasselbe Zertifikat verwenden
+    // Store in DB so that all other mail protocols use the same certificate
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
       create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: keyPem },
@@ -199,10 +199,10 @@ async function refreshTlsConfig(): Promise<void> {
   }
 }
 
-/** Submission-Ports (Auth required) */
+/** Submission ports (auth required) */
 const SUBMISSION_PORTS = new Set([SMTP_PORT_465, SMTP_PORT_587]);
 
-// ── Tracked-Server-Typ ────────────────────────────────────────────────────────
+// ── Tracked server type ───────────────────────────────────────────────────────
 
 interface TrackedSmtpServer {
   handle:  SmtpServerHandle;
@@ -211,7 +211,7 @@ interface TrackedSmtpServer {
 
 const servers = new Map<number, TrackedSmtpServer>();
 
-// ── Reload-Mutex ──────────────────────────────────────────────────────────────
+// ── Reload mutex ──────────────────────────────────────────────────────────────
 let _reloading     = false;
 let _pendingReload = false;
 
@@ -225,7 +225,7 @@ function scheduleReload(): void {
   });
 }
 
-// ── Server-Lifecycle ──────────────────────────────────────────────────────────
+// ── Server lifecycle ──────────────────────────────────────────────────────────
 
 /**
  * Creates the appropriate SMTP server for a given port:
@@ -236,16 +236,16 @@ function scheduleReload(): void {
 function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
   const isSubmission = SUBMISSION_PORTS.has(port);
 
-  // Hostname, Banner, maxSize, maxRcpt und ESMTP-Flags als Getter — jede neue
-  // Session bekommt den aktuellen Wert aus _esmtp / _maxSize / _bannerText.
-  // Ermöglicht Live-Updates ohne Listener-Neustart.
+  // Hostname, banner, maxSize, maxRcpt and ESMTP flags as getters — every new
+  // session gets the current value from _esmtp / _maxSize / _bannerText.
+  // Enables live updates without restarting listeners.
   const config = Object.defineProperties(
     {
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
-      // TLS aus dem DB-backed _tlsConfig — zum Erstellungszeitpunkt des Listeners gesetzt.
-      // Für Zertifikat-Rotation werden die betroffenen Listener neu gestartet.
+      // TLS from the DB-backed _tlsConfig — fixed at listener creation time.
+      // For certificate rotation the affected listeners are restarted.
       tls: _tlsConfig ?? undefined,
     } as Parameters<typeof createSmtpServer>[0],
     {
@@ -254,11 +254,11 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
-      // STARTTLS IMMER bewerben (auf allen Ports inkl. 25 Inbound). MX-Tools-Scoring
-      // belohnt TLS-Verfügbarkeit. Opportunistic TLS funktioniert für die meisten MTAs.
-      // Voraussetzung: self-signed Cert hat KORREKTE Hostname-CN (wird in refreshTlsConfig
-      // automatisch geprüft und bei Mismatch neu generiert). Für vollständige Outlook-365-
-      // Kompatibilität: Let's Encrypt-Cert via BCP → SSL/TLS anfordern.
+      // ALWAYS advertise STARTTLS (on all ports incl. 25 inbound). MX-Tools scoring
+      // rewards TLS availability. Opportunistic TLS works for most MTAs.
+      // Prerequisite: the self-signed cert has the CORRECT hostname CN (checked automatically
+      // in refreshTlsConfig and regenerated on mismatch). For full Outlook 365
+      // compatibility: request a Let's Encrypt cert via BCP → SSL/TLS.
       advertiseStarttls: { get: () => true, enumerable: true, configurable: true },
     },
   );
@@ -299,7 +299,7 @@ function closeSmtpServer(tracked: TrackedSmtpServer, port: number): void {
   log.info({ port, closedConnections: count }, 'SMTP listener stopped');
 }
 
-// ── Listener-Reload ───────────────────────────────────────────────────────────
+// ── Listener reload ───────────────────────────────────────────────────────────
 
 async function reloadListeners(): Promise<void> {
   try {
@@ -309,7 +309,7 @@ async function reloadListeners(): Promise<void> {
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'SMTP reload');
 
     // Start newly active ports — per-listener error isolation:
-    // Ein Fehler bei einem Port (z.B. fehlendes TLS-Cert) darf andere Ports nicht blockieren.
+    // A failure on one port (e.g. missing TLS cert) must not block the other ports.
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
         try {
@@ -343,8 +343,8 @@ async function main(): Promise<void> {
   await connectDatabase();
   await ensureBuckets();
   await refreshHostname();
-  await refreshTlsConfig(); // Zertifikat laden oder self-signed generieren
-  await refreshBanner();    // Banner-Text aus SmtpSettings laden
+  await refreshTlsConfig(); // load certificate or generate self-signed
+  await refreshBanner();    // load banner text from SmtpSettings
 
   const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
   if (existing === 0) {
@@ -369,12 +369,12 @@ async function main(): Promise<void> {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
-      void refreshBanner(); // alle SMTP-Settings (Banner, ESMTP-Flags, maxSize, maxRcpt)
-      // Outbound-Smarthost/Relay-Cache invalidieren — neue Provider-Credentials
-      // wirken so direkt beim nächsten Send-Versuch (statt erst nach 60s TTL).
+      void refreshBanner(); // all SMTP settings (banner, ESMTP flags, maxSize, maxRcpt)
+      // Invalidate outbound smarthost/relay cache — new provider credentials
+      // thus take effect on the next send attempt (instead of after the 60s TTL).
       invalidateOutboundConfigCache();
-      // TLS-Zertifikat neu laden — bei Cert-Rotation müssen laufende Listener
-      // neu gestartet werden (scheduleReload räumt Server aus servers-Map und erstellt neue).
+      // Reload TLS certificate — on cert rotation, running listeners must be
+      // restarted (scheduleReload removes servers from the servers map and creates new ones).
       void refreshTlsConfig().then(() => scheduleReload());
       return;
     }

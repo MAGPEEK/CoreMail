@@ -75,8 +75,8 @@ async function onRcptTo(
   _authUser: AuthUser | null,
 ): Promise<string | null> {
   try {
-    // Lokale Zustellung global deaktivierbar via SmtpSettings.localDeliveryEnabled.
-    // Reject mit 5.7.1 (verboten), damit der externe MTA nicht weiter zustellt.
+    // Local delivery can be disabled globally via SmtpSettings.localDeliveryEnabled.
+    // Reject with 5.7.1 (prohibited) so the external MTA stops delivering.
     const settings = await prisma.smtpSettings.findUnique({
       where: { id: 'singleton' }, select: { localDeliveryEnabled: true },
     });
@@ -163,7 +163,7 @@ async function onMessage(
   const deliveryAddresses = await expandRecipients(to);
 
   // 3. Split into local vs. external (Distribution groups may contain external
-  //    members like „partner@kunde.com" — these need outbound forwarding, not
+  //    members like "partner@kunde.com" — these need outbound forwarding, not
   //    local mailbox storage. Without this split, external members were silently
   //    dropped (Bug-Fix v3.18.7).
   const localDeliveries:    string[] = [];
@@ -230,9 +230,9 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
   const [user, sharedMailbox, resourceMailbox, alias] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
-    // v5.6.1: distributionGroup-Lookup entfernt (Feature komplett raus)
+    // v5.6.1: distributionGroup lookup removed (feature completely dropped)
     prisma.resourceMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
-    // Alias muss aktiv sein und Target ebenfalls aktiv
+    // Alias must be active and the target must be active as well
     prisma.emailAlias.findFirst({
       where: {
         address: email,
@@ -249,9 +249,9 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
   return !!(user ?? sharedMailbox ?? resourceMailbox ?? alias);
 }
 
-// expandRecipients-Helper wurde nach handlers/expand.ts verschoben damit sie auch
-// vom Outbound-Queue-Worker und vom Submission-Handler genutzt werden kann
-// (lokale Zustellung braucht Alias-Auflösung VOR storeInboundMessage).
+// The expandRecipients helper was moved to handlers/expand.ts so it can also be
+// used by the outbound queue worker and the submission handler
+// (local delivery needs alias resolution BEFORE storeInboundMessage).
 
 // ── Helper: processResourceMailboxes ─────────────────────────────────────────
 
@@ -426,7 +426,7 @@ async function quarantineMessage(
     },
   });
 
-  // MAIL_FLOW — Nachrichtenablaufverfolgung
+  // MAIL_FLOW — message flow tracing
   void prisma.systemLog.create({
     data: {
       level: 'WARN',

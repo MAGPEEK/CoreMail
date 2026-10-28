@@ -4,7 +4,7 @@ import { resolveHardened } from '../dns-hardened.js';
 
 const log = createLogger('security-filter:dnsbl');
 
-// Fallback-Zonen falls die DB noch leer ist (z. B. beim ersten Start vor dem Seed)
+// Fallback zones in case the DB is still empty (e.g. on first start before the seed)
 export const DEFAULT_DNSBL_ZONES = [
   'zen.spamhaus.org',
   'bl.spamcop.net',
@@ -23,7 +23,7 @@ export interface DnsblZoneConfig {
 
 export interface DnsblHit {
   zone: DnsblZoneConfig;
-  /** Antwort-Adresse (z. B. 127.0.0.2) */
+  /** Answer address (e.g. 127.0.0.2) */
   response: string;
 }
 
@@ -31,13 +31,13 @@ export interface DnsblResult {
   listed: boolean;
   whitelisted: boolean;
   hits: DnsblHit[];
-  /** Aggregierter Score (Summe der weights) */
+  /** Aggregated score (sum of weights) */
   totalScore: number;
-  /** Stärkste Aktion über alle Hits (REJECT > TAG > SCORE_ONLY) */
+  /** Strongest action across all hits (REJECT > TAG > SCORE_ONLY) */
   action: DnsblAction | null;
 }
 
-// ── DNS-Cache (1h TTL) ────────────────────────────────────────────────────────
+// ── DNS cache (1h TTL) ────────────────────────────────────────────────────────
 interface CacheEntry { result: { listed: boolean; response?: string }; expiresAt: number }
 const dnsCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1h
@@ -50,7 +50,7 @@ function getCache(key: string): CacheEntry['result'] | undefined {
 }
 function setCache(key: string, result: CacheEntry['result']): void {
   dnsCache.set(key, { result, expiresAt: Date.now() + CACHE_TTL_MS });
-  // Soft Cleanup: alle 200 Einträge alte Einträge entfernen
+  // Soft cleanup: every 200 entries, remove stale entries
   if (dnsCache.size > 1000) {
     const now = Date.now();
     for (const [k, v] of dnsCache) {
@@ -60,7 +60,7 @@ function setCache(key: string, result: CacheEntry['result']): void {
 }
 export function clearDnsblCache(): void { dnsCache.clear(); }
 
-// ── IP-Helpers ────────────────────────────────────────────────────────────────
+// ── IP helpers ────────────────────────────────────────────────────────────────
 function isIpv4(ip: string): boolean { return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip); }
 function isIpv6(ip: string): boolean { return ip.includes(':'); }
 
@@ -112,7 +112,7 @@ function isPrivateIp(ip: string): boolean {
   return true;
 }
 
-// ── DNS-Query (mit 2s Timeout) ────────────────────────────────────────────────
+// ── DNS query (with 2s timeout) ───────────────────────────────────────────────
 async function queryZone(reversed: string, zone: string, ip: string): Promise<{ listed: boolean; response?: string }> {
   const cacheKey = `${zone}|${ip}`;
   const cached = getCache(cacheKey);
@@ -133,18 +133,18 @@ async function queryZone(reversed: string, zone: string, ip: string): Promise<{ 
   }
 }
 
-// ── Haupt-Funktion ────────────────────────────────────────────────────────────
+// ── Main function ─────────────────────────────────────────────────────────────
 
 /**
- * Prüft eine Sender-IP gegen alle aktiven DNSBL-Zonen aus der DB.
- * Fallback auf DEFAULT_DNSBL_ZONES wenn DB noch leer ist.
- * Schreibt Hits asynchron in die `dnsbl_hits`-Tabelle.
+ * Checks a sender IP against all active DNSBL zones from the DB.
+ * Falls back to DEFAULT_DNSBL_ZONES if the DB is still empty.
+ * Writes hits asynchronously to the `dnsbl_hits` table.
  */
 export async function checkDnsbl(ip: string): Promise<DnsblResult> {
   const empty: DnsblResult = { listed: false, whitelisted: false, hits: [], totalScore: 0, action: null };
   if (!ip || isPrivateIp(ip)) return empty;
 
-  // Aktive Zonen aus DB laden (oder Fallback)
+  // Load active zones from DB (or fallback)
   let zones: DnsblZoneConfig[];
   try {
     const rows = await prisma.dnsblZone.findMany({
@@ -179,7 +179,7 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
   const reversed = reverseIp(ip);
   if (!reversed) return empty;
 
-  // Whitelist zuerst — wenn ein Whitelist-Hit, brechen wir ab
+  // Whitelist first — on a whitelist hit, we stop
   const whitelistZones = zones.filter((z) => z.isWhitelist);
   const blacklistZones = zones.filter((z) => !z.isWhitelist);
 
@@ -191,20 +191,20 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
     }
   }
 
-  // Blacklist parallel abfragen
+  // Query blacklists in parallel
   const results = await Promise.all(
     blacklistZones.map(async (z) => ({ zone: z, ...(await queryZone(reversed, z.host, ip)) })),
   );
   const hits = results.filter((r) => r.listed).map((r) => ({ zone: r.zone, response: r.response ?? '' }));
 
-  // Hits asynchron protokollieren (nicht blockierend)
+  // Log hits asynchronously (non-blocking)
   if (hits.length > 0) {
     void prisma.dnsblHit.createMany({
       data: hits.map((h) => ({ zoneId: h.zone.id, ip, ...(h.response ? { response: h.response } : {}) })),
     }).catch((err) => log.warn({ err }, 'Failed to log DNSBL hits'));
   }
 
-  // Aggregation: stärkste Aktion gewinnt (REJECT > TAG > SCORE_ONLY)
+  // Aggregation: strongest action wins (REJECT > TAG > SCORE_ONLY)
   const totalScore = hits.reduce((s, h) => s + h.zone.weight, 0);
   let action: DnsblAction | null = null;
   const hasReject = hits.some((h) => h.zone.action === 'REJECT');
@@ -217,8 +217,8 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
 }
 
 /**
- * Live-Test: prüft eine IP gegen alle (auch deaktivierte) Zonen.
- * Wird vom Admin-Panel verwendet.
+ * Live test: checks an IP against all zones (including disabled ones).
+ * Used by the admin panel.
  */
 export async function testDnsbl(ip: string): Promise<{ zone: DnsblZoneConfig; listed: boolean; response?: string }[]> {
   const rows = await prisma.dnsblZone.findMany({
@@ -233,7 +233,7 @@ export async function testDnsbl(ip: string): Promise<{ zone: DnsblZoneConfig; li
   );
 }
 
-// ── Eingebaute Presets (Seed bei DB-leer) ─────────────────────────────────────
+// ── Built-in presets (seeded when DB is empty) ────────────────────────────────
 export const BUILTIN_DNSBL_PRESETS: Array<Omit<DnsblZoneConfig, 'id'> & { description: string; sortOrder: number }> = [
   { host: 'zen.spamhaus.org',         name: 'Spamhaus ZEN',         description: 'Kombiniert SBL+CSS+XBL+PBL — der De-facto-Standard',                action: 'REJECT', weight: 10, isWhitelist: false, sortOrder: 10 },
   { host: 'bl.spamcop.net',           name: 'SpamCop',              description: 'Community-betriebene Liste reportet-Spammer-IPs',                    action: 'REJECT', weight: 6,  isWhitelist: false, sortOrder: 20 },
@@ -246,8 +246,8 @@ export const BUILTIN_DNSBL_PRESETS: Array<Omit<DnsblZoneConfig, 'id'> & { descri
 ];
 
 /**
- * Seed-Funktion — wird beim Start des security-filter-Service ausgeführt.
- * Legt die Built-in-Presets an, falls die Tabelle leer ist.
+ * Seed function — runs at startup of the security-filter service.
+ * Creates the built-in presets if the table is empty.
  */
 export async function seedDnsblZonesIfEmpty(): Promise<void> {
   const count = await prisma.dnsblZone.count();
@@ -258,7 +258,7 @@ export async function seedDnsblZonesIfEmpty(): Promise<void> {
       host: p.host,
       name: p.name,
       description: p.description,
-      enabled: !p.isWhitelist || p.host === 'list.dnswl.org', // alle aktiv per Default
+      enabled: !p.isWhitelist || p.host === 'list.dnswl.org', // all active by default
       action: p.action,
       weight: p.weight,
       isWhitelist: p.isWhitelist,

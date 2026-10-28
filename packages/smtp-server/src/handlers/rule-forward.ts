@@ -7,9 +7,9 @@ const log = createLogger('smtp:rule-forward');
 const LOOP_HEADER = 'X-CoreMail-RuleForwarded';
 
 /**
- * Prüft den Loop-Schutz-Header. Wenn die Mail bereits durch eine Rule
- * weitergeleitet wurde (egal welcher User), wird `true` zurückgegeben →
- * keine erneute Forward-Aktion.
+ * Checks the loop-protection header. If the mail has already been forwarded
+ * by a rule (regardless of which user), `true` is returned →
+ * no further forward action.
  */
 export function isRuleForwardedAlready(rawBuffer: Buffer): boolean {
   const headerEnd = rawBuffer.indexOf('\r\n\r\n');
@@ -18,8 +18,8 @@ export function isRuleForwardedAlready(rawBuffer: Buffer): boolean {
 }
 
 /**
- * Hängt Header an den Buffer an (Trennung Header-Body via CRLFCRLF).
- * Wenn das Trennzeichen fehlt, wird der Header einfach am Ende angefügt.
+ * Appends headers to the buffer (header/body separated by CRLFCRLF).
+ * If the separator is missing, the header is simply appended at the end.
  */
 function addHeaders(rawBuffer: Buffer, extraHeaders: Record<string, string>): Buffer {
   const headerEnd = rawBuffer.indexOf('\r\n\r\n');
@@ -38,21 +38,21 @@ function addHeaders(rawBuffer: Buffer, extraHeaders: Record<string, string>): Bu
 
 export interface RuleForwardOpts {
   rawBuffer:      Buffer;
-  toAddress:      string;        // Ziel-Adresse (von der Regel)
+  toAddress:      string;        // target address (from the rule)
   forwardingUser: { id: string; email: string };
   mode:           'forward' | 'redirect';
-  originalFrom:   string;        // From: der Original-Mail (für Envelope bei redirect)
+  originalFrom:   string;        // From: of the original mail (for the envelope on redirect)
 }
 
 /**
- * Reicht eine ausgehende Forward/Redirect-Mail an die SMTP-Outbound-Queue weiter.
+ * Hands an outgoing forward/redirect mail to the SMTP outbound queue.
  *
- * - `forward`: User wird zum Absender (Resent-From/Resent-To Header),
- *   Envelope-From = User-Mail. Empfänger sieht „weitergeleitet von User".
- * - `redirect`: Original-Header bleiben unangetastet, Envelope-From = Original-Sender.
- *   Empfänger sieht die Mail so als käme sie direkt vom Original-Absender.
+ * - `forward`: the user becomes the sender (Resent-From/Resent-To headers),
+ *   envelope-from = user's mail. Recipient sees "forwarded by user".
+ * - `redirect`: original headers stay untouched, envelope-from = original sender.
+ *   Recipient sees the mail as if it came directly from the original sender.
  *
- * In beiden Fällen wird der Loop-Schutz-Header gesetzt.
+ * In both cases the loop-protection header is set.
  */
 export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
   if (isRuleForwardedAlready(opts.rawBuffer)) {
@@ -76,8 +76,8 @@ export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
 
   const augmented = addHeaders(opts.rawBuffer, extra);
 
-  // Für `redirect`: Envelope-From bleibt = Original-Sender, damit Bounce zum
-  // Ursprungs-Absender geht. Für `forward`: User übernimmt die Verantwortung.
+  // For `redirect`: envelope-from stays = original sender, so bounces go to the
+  // originating sender. For `forward`: the user takes responsibility.
   const envelopeFrom = opts.mode === 'redirect' ? opts.originalFrom : opts.forwardingUser.email;
 
   await enqueueOutbound({

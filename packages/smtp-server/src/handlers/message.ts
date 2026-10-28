@@ -2,7 +2,7 @@ import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, ap
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
-// Journaling-Feature komplett entfernt in v3.13.6
+// Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
 
@@ -19,8 +19,8 @@ export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
 ): Promise<void> {
-  // Find recipient — kann User (Postfach) oder SharedMailbox sein.
-  // (Public-Folder-Pfad entfernt in v3.18.31 — Feature komplett entfernt)
+  // Find recipient — can be a User (mailbox) or a SharedMailbox.
+  // (Public folder path removed in v3.18.31 — feature completely removed)
   const [user, sharedMailbox] = await Promise.all([
     prisma.user.findFirst({
       where: { email: opts.rcptTo.toLowerCase(), active: true },
@@ -32,8 +32,8 @@ export async function storeInboundMessage(
     }),
   ]);
 
-  // Common-Mode: User-Postfach. Fallback: SharedMailbox (für lokale Zustellung).
-  // Wenn beides null → unbekannter Empfänger (Mail wird verworfen).
+  // Common case: user mailbox. Fallback: SharedMailbox (for local delivery).
+  // If both are null → unknown recipient (mail is discarded).
   let mailbox = user?.mailbox ?? sharedMailbox?.mailbox ?? null;
   const ownerType: 'user' | 'shared' = user?.mailbox ? 'user' : 'shared';
 
@@ -42,7 +42,7 @@ export async function storeInboundMessage(
     return;
   }
 
-  // ── Phase 9: S/MIME — decrypt + verify (NUR User-Postfächer, nicht SharedMailbox)
+  // ── Phase 9: S/MIME — decrypt + verify (user mailboxes ONLY, not SharedMailbox)
   let processedBuffer = rawBuffer;
   let smimeDecrypted = false;
   let smimeVerifyResult: Record<string, unknown> = {};
@@ -68,16 +68,16 @@ export async function storeInboundMessage(
   }
 
   // Use decrypted buffer (or original) for parsing and storage
-  // `let` weil TransportRules den Buffer modifizieren können (addHeader, disclaimer)
+  // `let` because TransportRules may modify the buffer (addHeader, disclaimer)
   let effectiveBuffer = smimeDecrypted ? processedBuffer : rawBuffer;
-  // mailbox wurde oben aus user?.mailbox bzw. sharedMailbox?.mailbox aufgelöst
-  // → muss als non-null behandelt werden (early-return-check oben)
+  // mailbox was resolved above from user?.mailbox or sharedMailbox?.mailbox
+  // → must be treated as non-null (early-return check above)
   mailbox = mailbox!;
 
-  // ── USER-JUNK-Sperrliste prüfen ──────────────────────────────────────────────
-  // Wenn ein User einen Absender manuell als Junk markiert hat (Aktion 'spam' in
-  // der MWA), wird ein Blacklist-Eintrag mit scope='USER-JUNK' für diese UserID
-  // gespeichert. Mails von diesem Absender landen dann immer im Junk-Ordner.
+  // ── Check USER-JUNK blocklist ────────────────────────────────────────────────
+  // When a user has manually marked a sender as junk ('spam' action in the
+  // MWA), a blacklist entry with scope='USER-JUNK' is stored for that user ID.
+  // Mails from that sender then always land in the Junk folder.
   let forceJunk = opts.toJunk;
   if (!forceJunk && user) {
     const junkRule = await prisma.blacklist.findFirst({
@@ -95,7 +95,7 @@ export async function storeInboundMessage(
   }
 
   // Find the target folder (INBOX or Junk)
-  // WICHTIG: Ordner heißt 'Junk' (nicht 'Junk E-Mail') und 'INBOX' (nicht 'Inbox')
+  // IMPORTANT: folder is named 'Junk' (not 'Junk E-Mail') and 'INBOX' (not 'Inbox')
   const targetFolderName = forceJunk ? 'Junk' : 'INBOX';
   const folder = mailbox.folders.find(
     (f: { name: string }) => f.name === targetFolderName,
@@ -110,10 +110,10 @@ export async function storeInboundMessage(
 
   let parsed = await parseRawMessage(effectiveBuffer);
 
-  // ── iTIP-REPLY-Handler (v3.18.25 A5) ────────────────────────────────────────
-  // Wenn die eingehende Mail eine REPLY auf eine Termin-Einladung ist, updaten
-  // wir den Attendee-Status im entsprechenden CalendarEvent. Die Mail wird
-  // TROTZDEM normal in die Inbox zugestellt (User-Awareness wie bei Outlook).
+  // ── iTIP REPLY handler (v3.18.25 A5) ────────────────────────────────────────
+  // If the incoming mail is a REPLY to a calendar invitation, we update the
+  // attendee status in the corresponding CalendarEvent. The mail is STILL
+  // delivered normally to the inbox (user awareness, like Outlook).
   try {
     const handled = await processITipInbound(effectiveBuffer);
     if (handled) {
@@ -123,9 +123,9 @@ export async function storeInboundMessage(
     log.warn({ err, rcptTo: opts.rcptTo }, 'iTIP processing failed — continuing normal delivery');
   }
 
-  // ── Transport Rules (Server-weit, Admin-konfiguriert, v3.18.9) ──────────────
-  // Wird VOR User-Mail-Rules ausgewertet — modifiziert Header/Subject/Body und
-  // kann Mail komplett rejecten oder in Quarantäne schieben.
+  // ── Transport rules (server-wide, admin-configured, v3.18.9) ─────────────────
+  // Evaluated BEFORE user mail rules — modifies header/subject/body and
+  // can reject the mail entirely or move it to quarantine.
   try {
     const transportOutcome = await applyTransportRules(parsed, {
       envelopeRcpt: opts.rcptTo,
@@ -143,10 +143,10 @@ export async function storeInboundMessage(
         { rcptTo: opts.rcptTo, from: opts.fromAddr, ruleIds: transportOutcome.appliedRuleIds },
         'Mail durch TransportRule in Quarantäne verschoben',
       );
-      // TODO: in Quarantäne-Tabelle einreihen (v3.18.10+)
+      // TODO: enqueue into quarantine table (v3.18.10+)
       return;
     }
-    // Wenn Buffer-Modifikationen nötig: Buffer anpassen + neu parsen
+    // If buffer modifications are needed: adjust buffer + re-parse
     if (
       transportOutcome.headerAdds.length > 0 ||
       transportOutcome.headerRemoves.length > 0 ||
@@ -161,14 +161,14 @@ export async function storeInboundMessage(
     log.error({ err }, 'TransportRules-Auswertung fehlgeschlagen — Mail wird unverändert zugestellt');
   }
 
-  // ── User Inbox Rules (Outlook-Style, v3.18.0) ────────────────────────────────
-  // Engine kann folderId überschreiben, Flags/Kategorien setzen, Forward triggern
-  // oder die Mail komplett verwerfen (hardDelete). Nur für User-Postfächer.
+  // ── User inbox rules (Outlook-style, v3.18.0) ────────────────────────────────
+  // Engine can override folderId, set flags/categories, trigger a forward
+  // or discard the mail entirely (hardDelete). User mailboxes only.
   let ruleFolderId   = folder.id;
   let ruleFlags: string[] = [];
   let ruleCategories: string[] = [];
   let rulePinned     = false;
-  let ruleDiscard    = false;          // hardDelete → Mail wird gar nicht persistiert
+  let ruleDiscard    = false;          // hardDelete → mail is not persisted at all
   const ruleCopyTargets: string[] = [];
   if (ownerType === 'user' && user) {
     try {
@@ -179,7 +179,7 @@ export async function storeInboundMessage(
       rulePinned = outcome.pinned;
       ruleCopyTargets.push(...outcome.copyTargets);
 
-      // forceJunk Override: Regel kann zwingend in Junk schicken
+      // forceJunk override: rule can force delivery to Junk
       if (outcome.forceJunk) {
         const junk = mailbox.folders.find((f: { name: string }) => f.name === 'Junk');
         if (junk) ruleFolderId = junk.id;
@@ -189,12 +189,12 @@ export async function storeInboundMessage(
         const trash = mailbox.folders.find((f: { name: string }) => f.name === 'Trash');
         if (trash) ruleFolderId = trash.id;
       }
-      // hard-delete = verwerfen, kein Speichern
+      // hard-delete = discard, do not store
       if (outcome.deleted === 'hard') {
         ruleDiscard = true;
       }
 
-      // Forwards/Redirects fire-and-forget (BullMQ-Queue)
+      // Forwards/redirects fire-and-forget (BullMQ queue)
       for (const fwd of outcome.forwards) {
         void enqueueRuleForward({
           rawBuffer:      effectiveBuffer,
@@ -246,7 +246,7 @@ export async function storeInboundMessage(
     ? JSON.stringify({ ...smimeVerifyResult, decrypted: smimeDecrypted })
     : null;
 
-  // Create message record (folderId + flags ggf. von Mail-Rules überschrieben)
+  // Create message record (folderId + flags possibly overridden by mail rules)
   const message = await prisma.message.create({
     data: {
       folderId: ruleFolderId,
@@ -270,12 +270,12 @@ export async function storeInboundMessage(
       changeKey: modSeq.toString(),
       ...(rulePinned ? { pinnedAt: new Date() } : {}),
       ...(smimeHeader ? { smimeMeta: smimeHeader } : {}),
-      // v3.18.6: rspamd-Score persistieren — für Frontend-Spam-Banner und Score-Badge
+      // v3.18.6: persist rspamd score — for frontend spam banner and score badge
       ...(typeof opts.spamScore === 'number' ? { spamScore: opts.spamScore } : {}),
     },
   });
 
-  // Rule-Categories zuordnen (best-effort, kein Hard-Fail)
+  // Assign rule categories (best-effort, no hard fail)
   if (ruleCategories.length > 0) {
     await Promise.allSettled(
       ruleCategories.map((categoryId) =>
@@ -286,9 +286,9 @@ export async function storeInboundMessage(
     );
   }
 
-  // Rule-CopyTargets: zusätzliche Message-Records in weiteren Ordnern anlegen
+  // Rule copy targets: create additional message records in further folders
   for (const copyFolderId of ruleCopyTargets) {
-    if (copyFolderId === ruleFolderId) continue; // schon Hauptkopie
+    if (copyFolderId === ruleFolderId) continue; // already the main copy
     try {
       const copyMailbox = await prisma.mailbox.update({
         where: { id: mailbox.id },
@@ -345,9 +345,9 @@ export async function storeInboundMessage(
     });
   }
 
-  // Update folder counters — Counter geht auf den TATSÄCHLICHEN Zielordner
-  // (kann durch Mail-Rule überschrieben sein). unreadCount nur erhöhen wenn
-  // die Mail nicht via Rule schon als gelesen markiert wurde.
+  // Update folder counters — counter applies to the ACTUAL target folder
+  // (may be overridden by a mail rule). Only increment unreadCount if
+  // the mail was not already marked as read by a rule.
   const incrementUnread = ruleFlags.includes('\\Seen') ? 0 : 1;
   await prisma.folder.update({
     where: { id: ruleFolderId },
@@ -358,7 +358,7 @@ export async function storeInboundMessage(
     },
   });
 
-  // Update quota usage — entweder User- oder SharedMailbox-Tabelle
+  // Update quota usage — either the User or the SharedMailbox table
   if (ownerType === 'user' && user) {
     await prisma.user.update({
       where: { id: user.id },
@@ -372,8 +372,8 @@ export async function storeInboundMessage(
   }
 
   // Publish real-time notification
-  // Für SharedMailbox: an alle User mit Permission FULL_ACCESS/READ_ONLY publishen,
-  // damit Empfänger in MWA Live-Update sehen
+  // For SharedMailbox: publish to all users with FULL_ACCESS/READ_ONLY permission,
+  // so recipients see a live update in the MWA
   const redis = getRedisClient();
   const notifyUserIds: string[] = [];
   if (ownerType === 'user' && user) {
@@ -403,7 +403,7 @@ export async function storeInboundMessage(
         isJunk: opts.toJunk,
       }),
     );
-    // v4.5.0: parallel publish auf MAPI-Notify-Channel für native Outlook-Push
+    // v4.5.0: publish in parallel to the MAPI notify channel for native Outlook push
     await redis.publish(
       `coremail:mapi:notify:${notifyUserId}`,
       JSON.stringify({
@@ -416,7 +416,7 @@ export async function storeInboundMessage(
     ).catch(() => { /* MAPI optional, non-fatal */ });
   }
 
-  // MAIL_FLOW — Nachrichtenablaufverfolgung
+  // MAIL_FLOW — message flow tracing
   void prisma.systemLog.create({
     data: {
       level: 'INFO',

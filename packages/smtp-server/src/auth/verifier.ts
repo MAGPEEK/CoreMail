@@ -4,10 +4,10 @@
  * Checks regular user passwords and app passwords.
  * Returns an AuthUser on success, null on failure.
  *
- * Brute-Force-Schutz (OWASP A07 / MITRE T1110):
- * - Nach SMTP_AUTH_FAIL_THRESHOLD fehlgeschlagenen Versuchen pro IP wird
- *   die IP via Redis für SMTP_AUTH_BAN_S Sekunden gesperrt.
- * - Erfolgreiche Auth löscht den Fehlzähler.
+ * Brute-force protection (OWASP A07 / MITRE T1110):
+ * - After SMTP_AUTH_FAIL_THRESHOLD failed attempts per IP, the IP is
+ *   banned via Redis for SMTP_AUTH_BAN_S seconds.
+ * - Successful auth clears the failure counter.
  */
 
 import { verifyPassword, createLogger } from '@coremail/core';
@@ -20,7 +20,7 @@ const log = createLogger('smtp:auth');
 export async function verifySmtpCredentials(
   username: string,
   password: string,
-  /** Client IP — für Brute-Force-Tracking; optional für Abwärtskompatibilität */
+  /** Client IP — for brute-force tracking; optional for backwards compatibility */
   clientIp?: string,
 ): Promise<AuthUser | null> {
   if (!username || !password) return null;
