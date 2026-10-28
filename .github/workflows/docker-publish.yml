@@ -27,6 +27,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Monolithischer App-Container (magpeek/coremail-app) — das Image,
+          # das docker-compose tatsächlich startet. Tag v1.2.3 → 1.2.3, 1.2, 1, latest.
+          - service: app
+            dockerfile: infra/docker/Dockerfile.app
           - service: storage-api
             dockerfile: packages/storage/Dockerfile
           - service: auth-service

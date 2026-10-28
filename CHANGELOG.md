@@ -11,6 +11,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+- CI: `docker-publish.yml` baut jetzt auch `magpeek/coremail-app` (`infra/docker/Dockerfile.app`, amd64 + arm64). Bei Version-Tags entstehen `X.Y.Z`, `X.Y`, `X` und `latest` — `scripts/docker-push.sh` ist nur noch der manuelle Fallback.
+
 ---
 
 ## [5.7.1] — 2026-10-27 — JMAP-Server (RFC 8620/8621 + 8887/9404/9425/9670/9749)
