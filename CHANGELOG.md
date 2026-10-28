@@ -3,9 +3,9 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
-> **Hinweis:** Aus Übersichtsgründen sind hier nur die drei jüngsten Releases gelistet.
-> Die komplette Historie aller älteren Versionen ist über die git history einsehbar:
-> `git log -p --follow CHANGELOG.md` oder über das GitHub-Repository.
+> **Note:** For readability, only the three most recent releases are listed here.
+> The complete history of all older versions is available via the git history:
+> `git log -p --follow CHANGELOG.md` or via the GitHub repository.
 
 ---
 
@@ -13,598 +13,623 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [5.8.0] — 2026-10-28 — Admin-CLI `coremail`, neue Docker-Compose, EWS an MAPI gekoppelt
-
-### Added
-
-**Admin-CLI `coremail`** — neues Paket `packages/cli/` (commander), im App-Image als
-`/usr/local/bin/coremail` installiert (`docker exec -it coremail coremail --help`).
-Spricht dieselbe REST-Admin-API wie das BCP → gleiche Rollenprüfung, gleicher Audit-Log.
-
-| Gruppe | Befehle |
-|--------|---------|
-| `login` / `logout` / `whoami` | Admin-Login mit Passwort + MFA (TOTP/Backup-Code), Sitzung in `~/.config/coremail/credentials.json` (0600), automatischer Token-Refresh; alternativ `COREMAIL_TOKEN` oder `COREMAIL_ADMIN_EMAIL`/`_PASSWORD`/`_TOTP` |
-| `user` | `list [--domain] [--inactive]`, `show`, `create --name [--password] [--role] [--quota] [--domain]`, `update [--name|--role|--quota|--enable|--disable]`, `set-password`, `delete [--yes]` |
-| `mailbox` | `list [--sort used|quota|email]`, `show` (Ordner + Zähler), `quota <size>`, `recalculate [user]` |
-| `shared` | `list`, `show`, `create --name [--quota]`, `grant <shared> <user> <perms…>`, `revoke`, `delete` |
-| `domain` | `list` |
-| `connector` | `status` (SMTP/SMTP-Send/IMAP/POP3-Listener + JMAP + MAPI/EWS), `enable|disable <svc> [--port]`, `listener list|add|set|delete|restore-defaults` |
-| `smtp banner` | `show`, `set <text>`, `reset` |
-| `cert` | `list`, `show`, `self-signed --domains [--services] [--days]`, `letsencrypt --domains --email [--services] [--staging] [--no-auto-renew]`, `activate --https/--protocol`, `deactivate-https`, `renew`, `delete` |
-
-- Globale Optionen `--server <url>`, `--json`; Löschbefehle fragen nach (`--yes` für Skripte);
-  Exit-Code 1 bei Fehlern mit HTTP-Status. Größen als `5GB`/`500MB`.
-- Doku: `docs/cli.md`; README-Abschnitt „Admin-CLI“.
+## [5.9.0] — 2026-10-28 — English-only repository
 
 ### Changed
 
-- **`infra/docker/docker-compose.yml` neu geschrieben**: nur noch die Parameter, die der
-  Stack wirklich braucht (interne Service-URLs/-Ports haben Defaults im Image). Die fünf
-  Pflichtwerte (`JWT_SECRET`, `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
-  `MINIO_ROOT_PASSWORD`) werden mit `${VAR:?…}` geprüft → `docker compose up` bricht mit
-  sprechender Meldung ab statt halb zu starten. Kopfkommentar mit 3-Schritte-Anleitung,
-  Port-Übersicht, Volume-Erklärung; `COREMAIL_VERSION`, `TZ` als Variablen; MinIO-Konsole
-  weiterhin nur `127.0.0.1`.
-- **`.env.example` neu**: Pflicht (5 Werte) klar von optional getrennt, alles Optionale auskommentiert.
-- **`scripts/setup.sh` neu**: prüft Docker/openssl, erzeugt `.env` mit `openssl rand`
-  (chmod 600), verlinkt sie neben die Compose-Datei, zeigt die nächsten Schritte.
-  Alte nginx-Dev-Zertifikat-Schritte entfernt.
-- **EWS an den MAPI-Schalter gekoppelt**: `/EWS/Exchange.asmx` und `/OAB/*` liefern 404,
-  solange `ServerSettings.mapiHttpEnabled` aus ist (Default). Autodiscover v2
-  `?Protocol=EWS` antwortet dann `NoSuchProtocol`. EWS ist kein eigenständiger
-  Client-Weg mehr (Outlook 2024 LTSC/M365 sprechen kein Basic-Auth-EWS gegen
-  Fremdserver), bleibt aber als Begleitprotokoll von MAPI over HTTP (Frei/Gebucht,
-  Abwesenheit, OAB). BCP-Karte heißt jetzt „MAPI over HTTP + EWS“.
-- README: EWS aus Protokoll-Übersicht, Client-Tabelle und Zugriff-Tabelle als eigener
-  Weg entfernt; Compose-/Konfigurations-Abschnitte auf die neue Datei umgestellt; JMAP in
-  Feature-Tabelle; Image-Tags auf 5.8.0.
-- `docs/deployment-docker.md`: EWS-Zeilen angepasst, JMAP-URL ergänzt.
+- **Everything on GitHub is English now**: `README.md` (German version kept as
+  `README.de.md` with a language switch at the top), `CHANGELOG.md` including the full
+  history, `CLAUDE.md`, `COMMANDS.md`, `docs/**` (JMAP, CLI, Docker deployment, release
+  notes), all code comments in every package (`packages/*/src`, Prisma schema), and all
+  infrastructure comments (`docker-compose*.yml`, `Dockerfile.app`, supervisord, entrypoint,
+  rspamd/nginx configs, scripts, GitHub workflow, `.env.example`).
+- **Admin CLI output is English** (`coremail …` messages, table headers, help texts,
+  prompts). The `--yes`/`-y` flag and all command names are unchanged.
+- `docker-compose.yml`: the `${VAR:?…}` guard messages for the five required `.env`
+  values are English.
+- No functional changes: UI strings of MWA/BCP (i18n DE/EN) and API response texts are
+  untouched. The image tag for this release is `magpeek/coremail-app:5.9.0`; it also
+  contains everything from 5.8.0 (admin CLI, new Docker Compose, EWS tied to the MAPI
+  switch), which did not get its own image.
 
-### Docs
+### Security
 
-- `docs/jmap.md`: Architektur-Diagramm, Client-Einrichtung (Ltt.rs, Thunderbird, Web-Apps),
-  curl-Beispiele (Lesen, Flags/Verschieben, Senden mit `onSuccessUpdateEmail`, Anhänge,
-  EventSource, WebSocket, Blob/Quota) und FAQ.
-- `docs/releases/v5.7.1.md` und `docs/releases/v5.8.0.md`: Release-Notes für GitHub Releases
-  inkl. Vorschlag für Repository-Beschreibung und Topics.
-
-### Upgrade-Hinweise
-
-- Wer Outlook bisher über EWS (ohne MAPI) angebunden hatte, aktiviert im BCP → Server
-  „MAPI over HTTP + EWS“ oder stellt auf IMAP um.
-- Bestehende `.env`-Dateien bleiben gültig; die neue Compose liest dieselben Variablen.
-  Entfallene Compose-Variablen (interne Ports/URLs) sind als Image-Defaults hinterlegt.
+- `CLAUDE.md`: removed a plaintext SSH root password of the live server from the
+  repository (rotate the password on the host).
 
 ---
 
-## [5.7.1] — 2026-10-27 — JMAP-Server (RFC 8620/8621 + 8887/9404/9425/9670/9749)
+## [5.8.0] — 2026-10-28 — Admin CLI `coremail`, new Docker Compose, EWS tied to MAPI
 
 ### Added
 
-**Neues Paket `packages/jmap-server/` (Port 3006)** — JSON Meta Application
-Protocol als moderner IMAP/SMTP-Ersatz, hinter dem api-gateway erreichbar:
+**Admin CLI `coremail`** — new package `packages/cli/` (commander), installed in the app image as
+`/usr/local/bin/coremail` (`docker exec -it coremail coremail --help`).
+Talks to the same REST admin API as the BCP → same role checks, same audit log.
 
-| Pfad | Zweck |
+| Group | Commands |
+|--------|---------|
+| `login` / `logout` / `whoami` | Admin login with password + MFA (TOTP/backup code), session in `~/.config/coremail/credentials.json` (0600), automatic token refresh; alternatively `COREMAIL_TOKEN` or `COREMAIL_ADMIN_EMAIL`/`_PASSWORD`/`_TOTP` |
+| `user` | `list [--domain] [--inactive]`, `show`, `create --name [--password] [--role] [--quota] [--domain]`, `update [--name|--role|--quota|--enable|--disable]`, `set-password`, `delete [--yes]` |
+| `mailbox` | `list [--sort used|quota|email]`, `show` (folders + counters), `quota <size>`, `recalculate [user]` |
+| `shared` | `list`, `show`, `create --name [--quota]`, `grant <shared> <user> <perms…>`, `revoke`, `delete` |
+| `domain` | `list` |
+| `connector` | `status` (SMTP/SMTP-Send/IMAP/POP3 listeners + JMAP + MAPI/EWS), `enable|disable <svc> [--port]`, `listener list|add|set|delete|restore-defaults` |
+| `smtp banner` | `show`, `set <text>`, `reset` |
+| `cert` | `list`, `show`, `self-signed --domains [--services] [--days]`, `letsencrypt --domains --email [--services] [--staging] [--no-auto-renew]`, `activate --https/--protocol`, `deactivate-https`, `renew`, `delete` |
+
+- Global options `--server <url>`, `--json`; delete commands prompt for confirmation (`--yes` for scripts);
+  exit code 1 on errors with HTTP status. Sizes as `5GB`/`500MB`.
+- Docs: `docs/cli.md`; README section "Admin CLI".
+
+### Changed
+
+- **`infra/docker/docker-compose.yml` rewritten**: only the parameters the stack
+  actually needs (internal service URLs/ports have defaults in the image). The five
+  required values (`JWT_SECRET`, `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
+  `MINIO_ROOT_PASSWORD`) are checked with `${VAR:?…}` → `docker compose up` aborts with
+  a meaningful message instead of starting half-way. Header comment with 3-step guide,
+  port overview, volume explanation; `COREMAIL_VERSION`, `TZ` as variables; MinIO console
+  still bound to `127.0.0.1` only.
+- **`.env.example` new**: required (5 values) clearly separated from optional, everything optional commented out.
+- **`scripts/setup.sh` new**: checks Docker/openssl, generates `.env` with `openssl rand`
+  (chmod 600), symlinks it next to the Compose file, shows the next steps.
+  Old nginx dev-certificate steps removed.
+- **EWS tied to the MAPI switch**: `/EWS/Exchange.asmx` and `/OAB/*` return 404
+  as long as `ServerSettings.mapiHttpEnabled` is off (default). Autodiscover v2
+  `?Protocol=EWS` then answers `NoSuchProtocol`. EWS is no longer a standalone
+  client path (Outlook 2024 LTSC/M365 do not speak Basic-Auth EWS against
+  third-party servers), but remains as a companion protocol of MAPI over HTTP (free/busy,
+  out-of-office, OAB). The BCP card is now called "MAPI over HTTP + EWS".
+- README: EWS removed as a standalone path from the protocol overview, client table and access table;
+  Compose/configuration sections switched to the new file; JMAP in the
+  feature table; image tags bumped to 5.8.0.
+- `docs/deployment-docker.md`: EWS lines adjusted, JMAP URL added.
+
+### Docs
+
+- `docs/jmap.md`: architecture diagram, client setup (Ltt.rs, Thunderbird, web apps),
+  curl examples (reading, flags/moving, sending with `onSuccessUpdateEmail`, attachments,
+  EventSource, WebSocket, Blob/Quota) and FAQ.
+- `docs/releases/v5.7.1.md` and `docs/releases/v5.8.0.md`: release notes for GitHub Releases
+  including a proposal for the repository description and topics.
+
+### Upgrade Notes
+
+- Anyone who previously connected Outlook via EWS (without MAPI) enables
+  "MAPI over HTTP + EWS" in BCP → Server or switches to IMAP.
+- Existing `.env` files remain valid; the new Compose reads the same variables.
+  Dropped Compose variables (internal ports/URLs) are stored as image defaults.
+
+---
+
+## [5.7.1] — 2026-10-27 — JMAP Server (RFC 8620/8621 + 8887/9404/9425/9670/9749)
+
+### Added
+
+**New package `packages/jmap-server/` (port 3006)** — JSON Meta Application
+Protocol as a modern IMAP/SMTP replacement, reachable behind the api-gateway:
+
+| Path | Purpose |
 |------|-------|
-| `GET /.well-known/jmap` | Discovery → 301 auf `/jmap/session` (RFC 8620 §2.2) |
-| `GET /jmap/session` | Session-Resource mit Capabilities, Accounts, URLs |
-| `POST /jmap/api` | Method-Calls (Result-References, Creation-Ids, Limits) |
+| `GET /.well-known/jmap` | Discovery → 301 to `/jmap/session` (RFC 8620 §2.2) |
+| `GET /jmap/session` | Session resource with capabilities, accounts, URLs |
+| `POST /jmap/api` | Method calls (result references, creation ids, limits) |
 | `POST /jmap/upload/{accountId}/` · `GET /jmap/download/{accountId}/{blobId}/{name}` | Blobs |
 | `GET /jmap/eventsource` | Push via Server-Sent Events (`types`, `closeafter`, `ping`) |
-| `WS /jmap/ws` | JMAP over WebSocket, Subprotokoll `jmap` (RFC 8887) |
+| `WS /jmap/ws` | JMAP over WebSocket, subprotocol `jmap` (RFC 8887) |
 
-- **RFC 8620 Core**: Session, `Core/echo`, Standard-Fehler (`urn:ietf:params:jmap:error:*`,
-  Method-/SetErrors), `PushSubscription/get|set` mit PushVerification-Flow
-  (neue Tabelle `jmap_push_subscriptions`), State-Strings pro Datentyp.
+- **RFC 8620 Core**: session, `Core/echo`, standard errors (`urn:ietf:params:jmap:error:*`,
+  method/set errors), `PushSubscription/get|set` with PushVerification flow
+  (new table `jmap_push_subscriptions`), state strings per data type.
 - **RFC 8621 Mail**: `Mailbox/get|changes|query|set`, `Email/get|changes|query|set|copy|import|parse`,
   `Thread/get|changes`, `Identity/get|changes|set`, `EmailSubmission/get|changes|query|set`
-  (inkl. `onSuccessUpdateEmail`/`onSuccessDestroyEmail`, verzögertes Senden +
-  Abbruch über die BullMQ-Queue `smtp-outbound`), `SearchSnippet/get`,
-  `VacationResponse/get|set` (auf `UserSettings.oof*`).
+  (incl. `onSuccessUpdateEmail`/`onSuccessDestroyEmail`, delayed sending +
+  cancellation via the BullMQ queue `smtp-outbound`), `SearchSnippet/get`,
+  `VacationResponse/get|set` (on `UserSettings.oof*`).
 - **RFC 8887 WebSocket**: `Request`/`Response`/`RequestError`/`StateChange`,
-  `WebSocketPushEnable|Disable`; Upgrade wird vom api-gateway (HTTP + integrierter
-  TLS-Proxy) an den jmap-server weitergereicht.
-- **RFC 9404 Blob**: `Blob/upload` (asText/asBase64/blobId-Slices), `Blob/get`
+  `WebSocketPushEnable|Disable`; the upgrade is forwarded by the api-gateway (HTTP + integrated
+  TLS proxy) to the jmap-server.
+- **RFC 9404 Blob**: `Blob/upload` (asText/asBase64/blobId slices), `Blob/get`
   (`data:*`, `digest:sha`, `digest:sha-256`, `size`, offset/length), `Blob/lookup`.
-- **RFC 9425 Quota**: `Quota/get|changes|query|queryChanges` aus `quotaBytes`/`usedBytes`.
-- **RFC 9670 Sharing**: `Principal/*` (User = individual, Shared Mailbox = group),
-  `ShareNotification/*` (derzeit leer), `urn:ietf:params:jmap:principals:owner` pro Account.
-- **RFC 9749 VAPID**: Session-Capability `urn:ietf:params:jmap:webpush-vapid`
-  mit `applicationServerKey` aus `VAPID_PUBLIC_KEY`.
-- **Accounts**: eigenes Postfach (`accountId = userId`), Shared Mailboxes
-  (`shared-<id>`, FULL_ACCESS/READ_ONLY), delegierte Postfächer (MailboxDelegate).
-- **Auth**: Bearer (Session-JWT, auch `?access_token=` für EventSource/WS) und
-  Basic (Passwort; bei MFA nur App-Passwort; LDAP/OIDC über auth-service), 60s-Cache.
-- **Threads**: neue Spalte `Message.threadId` (lazy aus `inReplyTo` abgeleitet).
-- **Schalter**: `ServerSettings.jmapEnabled @default(true)`, BCP → Server →
-  Karte „JMAP", Hot-Reload über Redis `settings:reload`; aus → 404.
-- **MinIO**: Lifecycle `jmap-upload/` 7 Tage, Helper `jmapUploadKey()`.
-- Unit-Tests (`node --test`): Dispatcher/Result-References, Keywords, State-Codecs.
-- Doku: `docs/jmap.md` (Einrichtung, Clients, Methodenübersicht, Grenzen).
+- **RFC 9425 Quota**: `Quota/get|changes|query|queryChanges` from `quotaBytes`/`usedBytes`.
+- **RFC 9670 Sharing**: `Principal/*` (user = individual, Shared Mailbox = group),
+  `ShareNotification/*` (currently empty), `urn:ietf:params:jmap:principals:owner` per account.
+- **RFC 9749 VAPID**: session capability `urn:ietf:params:jmap:webpush-vapid`
+  with `applicationServerKey` from `VAPID_PUBLIC_KEY`.
+- **Accounts**: own mailbox (`accountId = userId`), Shared Mailboxes
+  (`shared-<id>`, FULL_ACCESS/READ_ONLY), delegated mailboxes (MailboxDelegate).
+- **Auth**: Bearer (session JWT, also `?access_token=` for EventSource/WS) and
+  Basic (password; with MFA only app password; LDAP/OIDC via auth-service), 60s cache.
+- **Threads**: new column `Message.threadId` (lazily derived from `inReplyTo`).
+- **Switch**: `ServerSettings.jmapEnabled @default(true)`, BCP → Server →
+  card "JMAP", hot reload via Redis `settings:reload`; off → 404.
+- **MinIO**: lifecycle `jmap-upload/` 7 days, helper `jmapUploadKey()`.
+- Unit tests (`node --test`): dispatcher/result references, keywords, state codecs.
+- Docs: `docs/jmap.md` (setup, clients, method overview, limitations).
 
-### Bekannte Grenzen
+### Known Limitations
 
-- `Email/queryChanges`, `Mailbox/queryChanges`: `cannotCalculateChanges` (Client lädt neu).
-- Gelöschte Nachrichten haben keine Tombstones → `Email/changes` liefert nach einem
-  Hard-Delete `cannotCalculateChanges`.
-- Eine E-Mail liegt in genau einem Ordner (`maxMailboxesPerEmail: 1`).
-- Filter `header`, `*InThreadHaveKeyword` → `unsupportedFilter`; Sort `to` → `unsupportedSort`.
-- `bodyStructure` wird aus den DB-Feldern synthetisiert (text/plain, text/html, Anhänge).
+- `Email/queryChanges`, `Mailbox/queryChanges`: `cannotCalculateChanges` (client reloads).
+- Deleted messages have no tombstones → `Email/changes` returns
+  `cannotCalculateChanges` after a hard delete.
+- An email lives in exactly one folder (`maxMailboxesPerEmail: 1`).
+- Filters `header`, `*InThreadHaveKeyword` → `unsupportedFilter`; sort `to` → `unsupportedSort`.
+- `bodyStructure` is synthesized from the DB fields (text/plain, text/html, attachments).
 
 ### Infra
 
 - `Dockerfile.app`, `supervisord-app.conf`, `docker-compose*.yml` (`JMAP_SERVICE_URL`, `JMAP_PORT`),
-  Root-`tsconfig.json`: Paket `jmap-server` registriert.
+  root `tsconfig.json`: package `jmap-server` registered.
 
 ---
 
-## [5.7.0] — 2026-10-27 — MAPI over HTTP optional zurück + Build-Härtung
+## [5.7.0] — 2026-10-27 — MAPI over HTTP optionally back + build hardening
 
 ### Added
 
-**MAPI over HTTP als optionales Feature (Default AUS).** Der in v5.4.0
-entfernte MAPI/HTTP-Stack (v4.0–v5.2, MS-OXCMAPIHTTP/ROPS/NSPI, ~9.000 LOC)
-ist aus der Git-Historie wiederhergestellt und hinter einen Schalter gelegt:
+**MAPI over HTTP as an optional feature (default OFF).** The MAPI/HTTP stack
+removed in v5.4.0 (v4.0–v5.2, MS-OXCMAPIHTTP/ROPS/NSPI, ~9,000 LOC)
+has been restored from the git history and put behind a switch:
 
-- Neues Feld `ServerSettings.mapiHttpEnabled Boolean @default(false)`.
-- BCP → Server → Karte „MAPI over HTTP“ mit Checkbox + Einschränkungs-Hinweis.
-- `PUT /api/v1/admin/servers/settings` akzeptiert `mapiHttpEnabled` (optional,
-  damit ältere BCP-Builds weiter speichern können).
-- ews-server: `src/mapi/feature-flag.ts` — `isMapiHttpEnabled()` mit 60s-Cache,
-  Invalidation über Redis `CHANNEL_SETTINGS_RELOAD` (Hot-Reload, kein Neustart).
-  Gate `requireMapiEnabled` liefert **404** auf `/mapi/*` (inkl.
-  `/healthcheck.htm`) solange der Schalter aus ist. Fail-closed bei DB-Fehler.
-- api-gateway: Proxy `/mapi` → ews-server wieder aktiv, `/mapi` in `API_PREFIXES`.
-- autodiscover: `<Protocol Type="mapiHttp">` nur wenn `cfg.mapiHttpEnabled`;
-  `ServerConfig.mapiHttpEnabled` (Env-Fallback `ENABLE_MAPI_HTTP=true` ohne DB).
-- NSPI-GAL ohne DistributionGroup (v5.6.1-Anpassung), nur aktive User.
-- 35 MAPI-Codec-Tests (`node --test`) laufen wieder.
+- New field `ServerSettings.mapiHttpEnabled Boolean @default(false)`.
+- BCP → Server → card "MAPI over HTTP" with checkbox + limitation notice.
+- `PUT /api/v1/admin/servers/settings` accepts `mapiHttpEnabled` (optional,
+  so that older BCP builds can keep saving).
+- ews-server: `src/mapi/feature-flag.ts` — `isMapiHttpEnabled()` with 60s cache,
+  invalidation via Redis `CHANNEL_SETTINGS_RELOAD` (hot reload, no restart).
+  Gate `requireMapiEnabled` returns **404** on `/mapi/*` (incl.
+  `/healthcheck.htm`) as long as the switch is off. Fail-closed on DB error.
+- api-gateway: proxy `/mapi` → ews-server active again, `/mapi` in `API_PREFIXES`.
+- autodiscover: `<Protocol Type="mapiHttp">` only if `cfg.mapiHttpEnabled`;
+  `ServerConfig.mapiHttpEnabled` (env fallback `ENABLE_MAPI_HTTP=true` without DB).
+- NSPI GAL without DistributionGroup (v5.6.1 adjustment), active users only.
+- 35 MAPI codec tests (`node --test`) run again.
 
-**Nicht enthalten**: ADFS-Emulation (v5.3.0) — bleibt entfernt. Damit gilt:
-Outlook 2013–2021 verbinden per Basic-Auth als Exchange-Konto; Outlook 2024
-LTSC / M365 Classic erzwingen Modern Auth gegen Entra/ADFS und bleiben beim
-IMAP-Weg; neues Outlook + Outlook für Mac unterstützen kein MAPI.
+**Not included**: ADFS emulation (v5.3.0) — remains removed. This means:
+Outlook 2013–2021 connect via Basic Auth as an Exchange account; Outlook 2024
+LTSC / M365 Classic enforce Modern Auth against Entra/ADFS and stay on the
+IMAP path; new Outlook + Outlook for Mac do not support MAPI.
 
 ### Changed
 
-- **pnpm festgepinnt**: `packageManager: pnpm@11.28.9` in der Root-
-  `package.json`, `Dockerfile.app` nutzt `corepack prepare pnpm@11` statt
-  `pnpm@latest` (pnpm 12 via corepack brach den Install).
-- **Frontend-Builds emittieren kein JS mehr neben den Quellen**: `noEmit: true`
-  in `admin-panel`/`web-client` tsconfig. 70 veraltete, eingecheckte
-  `src/**/*.js`-Artefakte (Stand v3.18.34, inkl. `OAuthClientsPage.js`) entfernt.
-- Veraltete Kommentare zu OAuth2/ADFS/MAPI/Verteilergruppen bereinigt
+- **pnpm pinned**: `packageManager: pnpm@11.28.9` in the root
+  `package.json`, `Dockerfile.app` uses `corepack prepare pnpm@11` instead of
+  `pnpm@latest` (pnpm 12 via corepack broke the install).
+- **Frontend builds no longer emit JS next to the sources**: `noEmit: true`
+  in `admin-panel`/`web-client` tsconfig. 70 stale, checked-in
+  `src/**/*.js` artifacts (as of v3.18.34, incl. `OAuthClientsPage.js`) removed.
+- Stale comments about OAuth2/ADFS/MAPI/distribution groups cleaned up
   (api-gateway `server.ts`, `contacts.ts`, ews-server `auth/middleware.ts`,
   smtp-server `inbound/handler.ts`, `schema.prisma`).
 
 ### Migration
 
-- `prisma db push` legt `server_settings.mapiHttpEnabled` (false) an — nicht
-  destruktiv. Verhalten nach dem Upgrade identisch zu v5.6.1, bis der Schalter
-  im BCP gesetzt wird.
+- `prisma db push` creates `server_settings.mapiHttpEnabled` (false) — non-
+  destructive. Behavior after the upgrade is identical to v5.6.1 until the switch
+  is set in the BCP.
 
 ---
 
-## [5.6.1] — 2026-05-27 — Verteilergruppen (DistributionGroups) komplett entfernt
+## [5.6.1] — 2026-05-27 — Distribution groups (DistributionGroups) completely removed
 
 ### Removed (Major)
 
-**Distribution Groups (Verteilergruppen) komplett aus dem Stack entfernt.**
-User-Entscheidung: „Entferne auch Verteilergruppen". In der Praxis wurden
-Verteilergruppen selten genutzt — moderne Teams bevorzugen Shared Mailboxes
-(`/admin/shared-mailboxes/`) für Team-Postfächer mit Aliasen oder externe
-Listserv-Tools für reine Verteiler. Reduziert Code-Komplexität und einen
-Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery), v3.18.31 (Public
+**Distribution groups completely removed from the stack.**
+User decision: "Remove distribution groups as well". In practice,
+distribution groups were rarely used — modern teams prefer Shared Mailboxes
+(`/admin/shared-mailboxes/`) for team mailboxes with aliases, or external
+listserv tools for pure distribution lists. Reduces code complexity and one
+maintenance point in the BCP. Analogous to v3.18.5 (eDiscovery), v3.18.31 (Public
 Folders), v3.18.33 (ExternalMailContacts), v5.4.0 (MAPI), v5.6.0 (OAuth2).
 
 ### Prisma Schema (DESTRUCTIVE Migration)
 
-**2 Models + 1 Enum gelöscht** — Tabellen werden via `prisma db push
---accept-data-loss` beim Container-Start gedroppt:
+**2 models + 1 enum deleted** — tables are dropped via `prisma db push
+--accept-data-loss` at container start:
 - `DistributionGroup` → table `distribution_groups`
 - `DistributionGroupMember` → table `distribution_group_members`
 - enum `GroupType { STATIC, DYNAMIC }`
-- `Domain.distributionGroups` Relation entfernt
+- `Domain.distributionGroups` relation removed
 
 ### Frontend (BCP / admin-panel)
 
-- **BCP `/groups/` Page**: gelöscht (`packages/admin-panel/src/pages/GroupsPage.tsx`)
-- Sidebar-Eintrag „Verteilergruppen" + Users-Icon-Import entfernt
-- Route `/groups` aus `main.tsx` entfernt
-- i18n-Keys `nav_groups` (DE+EN) entfernt
-- OrganisationPage GAL-Section: „Verteilergruppen"-Spalte entfernt
-- SmtpConfigPage Lokale-Zustellung-Hinweis: „Verteilergruppen werden aufgelöst" entfernt
+- **BCP `/groups/` page**: deleted (`packages/admin-panel/src/pages/GroupsPage.tsx`)
+- Sidebar entry "Distribution groups" + Users icon import removed
+- Route `/groups` removed from `main.tsx`
+- i18n keys `nav_groups` (DE+EN) removed
+- OrganisationPage GAL section: "Distribution groups" column removed
+- SmtpConfigPage local-delivery hint: "Distribution groups are resolved" removed
 
 ### Backend (api-gateway)
 
-- **`packages/api-gateway/src/routes/admin/groups.ts`**: gelöscht
-- Mount `/api/v1/admin/groups` aus server.ts entfernt
-- **EMS REST-Bridge** (`routes/admin/ems.ts`): alle DistributionGroup-CRUD-
-  Endpoints entfernt (~150 LOC) inkl. `formatGroup()` Helper:
+- **`packages/api-gateway/src/routes/admin/groups.ts`**: deleted
+- Mount `/api/v1/admin/groups` removed from server.ts
+- **EMS REST bridge** (`routes/admin/ems.ts`): all DistributionGroup CRUD
+  endpoints removed (~150 LOC) incl. `formatGroup()` helper:
   - `GET/POST /distribution-groups`
   - `GET/PUT/DELETE /distribution-groups/:id`
   - `GET/POST/DELETE /distribution-groups/:id/members`
-  - Cmdlet-Routes für Get-/New-/Set-/Remove-DistributionGroup +
-    Get-/Add-/Remove-DistributionGroupMember entfernt
-- **PowerShell Remoting** (`routes/powershell.ts`): 6 DistributionGroup-
-  Cmdlets aus `SUPPORTED_CMDLETS` Set entfernt
-- **GAL-Endpoint** (`routes/contacts.ts`):
-  - `/contacts?q=` Autocomplete: DistributionGroup-Suche entfernt
-  - `/contacts/gal` (sowohl Suche als auch Detail): DistributionGroup-
-    Quelle entfernt, `GROUP`-Kind aus `GalEntry`-Type entfernt
+  - Cmdlet routes for Get-/New-/Set-/Remove-DistributionGroup +
+    Get-/Add-/Remove-DistributionGroupMember removed
+- **PowerShell Remoting** (`routes/powershell.ts`): 6 DistributionGroup
+  cmdlets removed from the `SUPPORTED_CMDLETS` set
+- **GAL endpoint** (`routes/contacts.ts`):
+  - `/contacts?q=` autocomplete: DistributionGroup search removed
+  - `/contacts/gal` (both search and detail): DistributionGroup
+    source removed, `GROUP` kind removed from `GalEntry` type
 - **Dashboard** (`routes/admin/dashboard.ts`): `distributionGroup.count()`
-  → konstant 0
-- **Organisation** (`routes/admin/organisation.ts`): GAL-Section
-  `groups`-Array bleibt leer
+  → constant 0
+- **Organisation** (`routes/admin/organisation.ts`): GAL section
+  `groups` array stays empty
 
 ### Backend (smtp-server)
 
-- **`packages/smtp-server/src/handlers/expand.ts`**: komplett rewritten —
-  `expandRecipients()` löst nur noch EmailAliase auf (Cycle-Protection via
-  visited Set bleibt erhalten); kein DistributionGroup-Lookup mehr.
+- **`packages/smtp-server/src/handlers/expand.ts`**: completely rewritten —
+  `expandRecipients()` now only resolves email aliases (cycle protection via
+  visited set is preserved); no more DistributionGroup lookup.
 - **`packages/smtp-server/src/inbound/handler.ts`**: `verifyRecipient()`
-  Promise.all entfernt DistributionGroup-Lookup; eingehende Mails an
-  ehemalige Gruppen-Adressen werden als unbekannter Empfänger
-  abgewiesen (550 5.1.1).
+  Promise.all drops the DistributionGroup lookup; inbound mails to
+  former group addresses are rejected as unknown recipient
+  (550 5.1.1).
 
-### Migrations-Hinweis
+### Migration Note
 
-Bestehende DistributionGroups + Mitgliedschaften gehen mit dem Upgrade
-unwiderruflich verloren. Use-Case-Empfehlung:
-- **Team-Postfach mit gemeinsamer Inbox** → Shared Mailbox + Mitglieder
-  via Permissions
-- **Reiner Verteiler (Outbound)** → externer Listserv (Mailman, listmonk)
-  oder pflegen der Empfängerliste direkt in den User-Clients
+Existing DistributionGroups + memberships are irrevocably lost with the
+upgrade. Use-case recommendation:
+- **Team mailbox with a shared inbox** → Shared Mailbox + members
+  via permissions
+- **Pure distribution list (outbound)** → external listserv (Mailman, listmonk)
+  or maintain the recipient list directly in the user clients
 
 ---
 
-## [5.6.0] — 2026-05-27 — OAuth2 / Modern Auth komplett aus dem Stack entfernt
+## [5.6.0] — 2026-05-27 — OAuth2 / Modern Auth completely removed from the stack
 
 ### Removed (Major)
 
-**OAuth2 / Modern Auth / JWT-RS256-Infrastruktur komplett gelöscht.** User-
-Entscheidung: „Entfernen und aus Code entfernen bcp OAuth2 / Modern Auth".
+**OAuth2 / Modern Auth / JWT RS256 infrastructure completely deleted.** User
+decision: "Remove and strip from the code: BCP OAuth2 / Modern Auth".
 
-Hintergrund: Nach MAPI-Removal in v5.4.0 + IMAP-OAuth-Decision in v5.5.0 hat
-OAuth2 keinen praktischen Use-Case mehr im Stack. Mail-Clients nutzen IMAP/
-SMTP/POP3 mit App-Passwörtern (MFA-tauglich). MWA + BCP nutzen Session-JWTs
-über `/auth/login`. Komplette OAuth2-Codebase ist toter Ballast.
+Background: After the MAPI removal in v5.4.0 + the IMAP OAuth decision in v5.5.0,
+OAuth2 has no practical use case left in the stack. Mail clients use IMAP/
+SMTP/POP3 with app passwords (MFA-capable). MWA + BCP use session JWTs
+via `/auth/login`. The complete OAuth2 codebase is dead weight.
 
 ### Frontend
 
-- **BCP `/oauth-clients/` Page**: gelöscht (`packages/admin-panel/src/pages/OAuthClientsPage.tsx`)
-- BCP Sidebar-Eintrag „OAuth2 Clients" + i18n-Keys entfernt
-- BCP Route `/oauth-clients` entfernt
-- **MWA `/oauth-consent/` Page**: gelöscht (`packages/web-client/src/pages/OAuthConsentPage.tsx`)
-- MWA Route `/oauth-consent` entfernt
-- MWA LoginPage: OAuth2-Flow-Detection entfernt (Login geht direkt zu `/mail`)
+- **BCP `/oauth-clients/` page**: deleted (`packages/admin-panel/src/pages/OAuthClientsPage.tsx`)
+- BCP sidebar entry "OAuth2 Clients" + i18n keys removed
+- BCP route `/oauth-clients` removed
+- **MWA `/oauth-consent/` page**: deleted (`packages/web-client/src/pages/OAuthConsentPage.tsx`)
+- MWA route `/oauth-consent` removed
+- MWA LoginPage: OAuth2 flow detection removed (login goes directly to `/mail`)
 
 ### Backend
 
-- **`packages/auth-service/src/oauth2/`**: komplettes Verzeichnis gelöscht (Router + 970 LOC)
-- **`packages/api-gateway/src/routes/admin/oauth-clients.ts`**: gelöscht
-- api-gateway: `/oauth2/*` Proxy entfernt
-- api-gateway: `/api/v1/admin/oauth/*` Mount entfernt
-- api-gateway: `/.well-known/openid-configuration` + `/.well-known/jwks.json` Handler entfernt
-- auth-service: `/oauth2` Mount entfernt
-- ews-server middleware: Bearer-Branch komplett entfernt (Audience-Validation, OAuth-Token-Revocation-Check) — nur noch Basic-Auth
+- **`packages/auth-service/src/oauth2/`**: entire directory deleted (router + 970 LOC)
+- **`packages/api-gateway/src/routes/admin/oauth-clients.ts`**: deleted
+- api-gateway: `/oauth2/*` proxy removed
+- api-gateway: `/api/v1/admin/oauth/*` mount removed
+- api-gateway: `/.well-known/openid-configuration` + `/.well-known/jwks.json` handlers removed
+- auth-service: `/oauth2` mount removed
+- ews-server middleware: Bearer branch completely removed (audience validation, OAuth token revocation check) — Basic Auth only
 
-### JWT zurück auf HS256
+### JWT back to HS256
 
-- **`packages/core/src/auth/jwt-keys.ts`**: gelöscht (RS256-Key-Management war nur für JWKS)
-- `packages/core/src/auth/jwt.ts`: komplett rewritten zurück auf HS256 mit `JWT_SECRET` env-Var (wie pre-v5.2.17)
-- `initJwtKeys()` aus api-gateway, auth-service, ews-server, backup-service, caldav-server startup entfernt
+- **`packages/core/src/auth/jwt-keys.ts`**: deleted (RS256 key management was only for JWKS)
+- `packages/core/src/auth/jwt.ts`: completely rewritten back to HS256 with the `JWT_SECRET` env var (as pre-v5.2.17)
+- `initJwtKeys()` removed from api-gateway, auth-service, ews-server, backup-service, caldav-server startup
 
 ### Prisma Schema (DESTRUCTIVE Migration)
 
-**4 Models gelöscht** — Tabellen werden via `prisma db push --accept-data-loss` beim Container-Start gedroppt:
+**4 models deleted** — tables are dropped via `prisma db push --accept-data-loss` at container start:
 - `OAuthClient` → table `oauth_clients`
 - `OAuthAuthorizationCode` → table `oauth_authorization_codes`
 - `OAuthToken` → table `oauth_tokens`
 - `OAuthConsent` → table `oauth_consents`
 
-**`User` Relationen** entfernt: `oauthCodes`, `oauthTokens`, `oauthConsents`.
+**`User` relations** removed: `oauthCodes`, `oauthTokens`, `oauthConsents`.
 
-**`ServerSettings` Felder entfernt:** `jwtPrivateKey`, `jwtPublicKey`,
+**`ServerSettings` fields removed:** `jwtPrivateKey`, `jwtPublicKey`,
 `jwtKeyId`, `jwtKeyCreated`.
 
-### Was bleibt
+### What remains
 
-- **App-Passwörter** (`AppPassword`-Model + `/auth/app-passwords` Router) — der pragmatische MFA-Bypass für IMAP/SMTP/POP3/EWS
-- **Session-JWTs** (HS256-signiert mit `JWT_SECRET`) für REST-API + MWA/BCP-Login
-- **MFA/TOTP/WebAuthn** (`UserMfa`-Model + `/auth/mfa` Router) — für interaktive Logins
-- **SSO/OIDC-Provider-Integration** (`SsoConfig`-Model + `/sso` Routes) — für External-IdP-Login (NICHT für unsere eigenen Tokens)
+- **App passwords** (`AppPassword` model + `/auth/app-passwords` router) — the pragmatic MFA bypass for IMAP/SMTP/POP3/EWS
+- **Session JWTs** (HS256-signed with `JWT_SECRET`) for REST API + MWA/BCP login
+- **MFA/TOTP/WebAuthn** (`UserMfa` model + `/auth/mfa` router) — for interactive logins
+- **SSO/OIDC provider integration** (`SsoConfig` model + `/sso` routes) — for external IdP login (NOT for our own tokens)
 
-### Migration-Impact
+### Migration Impact
 
-- Bestehende OAuth-Clients-Daten gehen verloren (sind aber nie genutzt worden in dieser Installation)
-- RS256-JWTs werden invalid → User loggen einmal neu ein (HS256-JWTs werden ausgestellt)
-- API-Konsumenten die unsere `/oauth2/token` nutzten müssten auf `/auth/login` umsteigen (keine bekannt)
+- Existing OAuth client data is lost (but was never used in this installation)
+- RS256 JWTs become invalid → users log in again once (HS256 JWTs are issued)
+- API consumers that used our `/oauth2/token` would have to switch to `/auth/login` (none known)
 
-### Stack-Vereinfachung
+### Stack Simplification
 
-| Vorher (v5.5.0) | Nachher (v5.6.0) |
+| Before (v5.5.0) | After (v5.6.0) |
 |-----------------|------------------|
-| 2 Frontend-Pages (OAuthClientsPage + OAuthConsentPage) | — |
-| 1 Backend-Router (oauth2/router.ts, 970 LOC) | — |
-| 1 Backend-Modul (jwt-keys.ts, 130 LOC) | — |
-| 1 Admin-API-Router (oauth-clients.ts, 220 LOC) | — |
-| 4 Prisma-Models + Relationen | — |
-| JWT-Keys in DB persistiert | JWT_SECRET env-Var |
-| 9 Endpunkte unter /oauth2/* | — |
-| 2 Well-Known-Endpoints | — |
+| 2 frontend pages (OAuthClientsPage + OAuthConsentPage) | — |
+| 1 backend router (oauth2/router.ts, 970 LOC) | — |
+| 1 backend module (jwt-keys.ts, 130 LOC) | — |
+| 1 admin API router (oauth-clients.ts, 220 LOC) | — |
+| 4 Prisma models + relations | — |
+| JWT keys persisted in DB | JWT_SECRET env var |
+| 9 endpoints under /oauth2/* | — |
+| 2 well-known endpoints | — |
 
-**Total entfernt: ~1.500 LOC** zusätzlich zu MAPI's 12.000 LOC aus v5.4.0.
+**Total removed: ~1,500 LOC** in addition to MAPI's 12,000 LOC from v5.4.0.
 
 ---
 
-## [5.5.0] — 2026-05-27 — IMAP4rev2 RFC-Compliance + Doku-Update
+## [5.5.0] — 2026-05-27 — IMAP4rev2 RFC compliance + docs update
 
 ### Added
 
-**IMAP RFC 3501 + RFC 9051 (IMAP4rev2) Compliance:**
+**IMAP RFC 3501 + RFC 9051 (IMAP4rev2) compliance:**
 
-| Feature | RFC | Wirkung |
+| Feature | RFC | Effect |
 |---------|-----|---------|
-| **AUTHENTICATE PLAIN** | 3501 §6.2.2 + 4616 | SASL-Standard, statt nur LOGIN-Command |
-| **AUTHENTICATE LOGIN** | obsolet aber häufig | Multi-Step `Username:` → `Password:` |
-| **SASL-IR** | 4959 | Initial-Response in selber Zeile |
-| **UNSELECT** | 3691 / IMAP4rev2 Pflicht | Folder abwählen ohne EXPUNGE (vs CLOSE) |
-| **ID** | 2971 | Client/Server-Identifikation |
-| **STARTTLS** | 3501 §6.2.1 | Stub auf Port 143 (zeigt auf 993 hin — voller Upgrade braucht Socket-Refactor) |
+| **AUTHENTICATE PLAIN** | 3501 §6.2.2 + 4616 | SASL standard, instead of only the LOGIN command |
+| **AUTHENTICATE LOGIN** | obsolete but common | Multi-step `Username:` → `Password:` |
+| **SASL-IR** | 4959 | Initial response on the same line |
+| **UNSELECT** | 3691 / IMAP4rev2 mandatory | Deselect folder without EXPUNGE (vs CLOSE) |
+| **ID** | 2971 | Client/server identification |
+| **STARTTLS** | 3501 §6.2.1 | Stub on port 143 (points to 993 — a full upgrade needs a socket refactor) |
 
-**CAPABILITY-Liste erweitert um:** `IMAP4rev2`, `MOVE`, `UNSELECT`, `UIDPLUS`, `STATUS=SIZE`. Plus dynamische `STARTTLS`/`LOGINDISABLED`-Toggle (nur auf Plain-Connection).
+**CAPABILITY list extended with:** `IMAP4rev2`, `MOVE`, `UNSELECT`, `UIDPLUS`, `STATUS=SIZE`. Plus dynamic `STARTTLS`/`LOGINDISABLED` toggle (only on plain connections).
 
-### Architektur-Entscheidung: KEIN XOAUTH2 für Mail-Protokolle
+### Architecture decision: NO XOAUTH2 for mail protocols
 
-Recherche-Ergebnis (Grommunio + Mozilla + Microsoft Docs):
-- **Apple Mail**: hardcoded Provider-Liste (iCloud/Gmail/Microsoft/Yahoo) — keine UI für custom OAuth-Server
-- **Outlook 2024 LTSC**: Microsoft hat explizit erklärt: kein OAuth für POP/IMAP
-- **Thunderbird**: theoretisch ja, praktisch `prefs.js`-Hack pro Account → Endnutzer-untauglich
-- **eM Client / K-9 Mail**: nur große Provider
+Research result (Grommunio + Mozilla + Microsoft Docs):
+- **Apple Mail**: hardcoded provider list (iCloud/Gmail/Microsoft/Yahoo) — no UI for custom OAuth servers
+- **Outlook 2024 LTSC**: Microsoft has explicitly stated: no OAuth for POP/IMAP
+- **Thunderbird**: theoretically yes, in practice a `prefs.js` hack per account → unsuitable for end users
+- **eM Client / K-9 Mail**: large providers only
 
-**Verdict**: XOAUTH2 für non-Microsoft-Server hat ~1% reale Userbase (mutt/isync-Power-User). Diese können stattdessen **App-Passwörter** verwenden, die bereits implementiert sind. OAuth2-Server bleibt unter `/oauth2/*` für REST-API + Web-App-Integration.
+**Verdict**: XOAUTH2 for non-Microsoft servers has a ~1% real user base (mutt/isync power users). They can use **app passwords** instead, which are already implemented. The OAuth2 server remains under `/oauth2/*` for REST API + web app integration.
 
-### Changed — Doku komplett aktualisiert
+### Changed — docs completely updated
 
 **README.md:**
-- MAPI-Sektion entfernt
-- "Outlook nativ verbinden"-Sektion → **"Clients verbinden"** mit IMAP-Setup-Tabelle für alle gängigen Clients (Outlook 2024 LTSC, Apple Mail, Thunderbird, eM Client, K-9, iOS Mail)
-- App-Passwörter-Sektion mit Step-by-Step-Anleitung
-- IMAP4rev2-Badge statt MAPI/HTTP-Badge
-- Versionsverlauf aktualisiert: v5.x = "IMAP4rev2 + RFC-Compliance + MAPI-Cleanup"
+- MAPI section removed
+- "Connect Outlook natively" section → **"Connecting clients"** with IMAP setup table for all common clients (Outlook 2024 LTSC, Apple Mail, Thunderbird, eM Client, K-9, iOS Mail)
+- App passwords section with step-by-step guide
+- IMAP4rev2 badge instead of MAPI/HTTP badge
+- Version history updated: v5.x = "IMAP4rev2 + RFC compliance + MAPI cleanup"
 
 **CLAUDE.md:**
-- "Aktuelle Version" → 5.5.0
-- Neue Sektion "Architektur-Entscheidungen (v5.4.0+)" — MAPI-Removal-Begründung, OAuth2-Scope, IMAP4rev2-Status
-- `/mapi/*` aus Routing-Tabelle entfernt
-- "MAPI over HTTP"-Sektion → Hinweis auf v5.4.0-Removal
+- "Current version" → 5.5.0
+- New section "Architecture decisions (v5.4.0+)" — MAPI removal rationale, OAuth2 scope, IMAP4rev2 status
+- `/mapi/*` removed from the routing table
+- "MAPI over HTTP" section → note about the v5.4.0 removal
 
 ---
 
-## [5.4.0] — 2026-05-27 — MAPI komplett aus dem Stack entfernt
+## [5.4.0] — 2026-05-27 — MAPI completely removed from the stack
 
 ### Removed (Major)
 
-**MAPI-over-HTTP-Implementation komplett gelöscht.** User-Entscheidung:
-„verwerfe das Konzept MAPI und entferne es". Hintergrund: Outlook 2024
-LTSC erzwingt Modern Auth auf Exchange-Endpoints und akzeptiert keine
-non-Microsoft-OAuth-Provider. Custom-ADFS-Emulation hätte 3-4 Wochen
-Aufwand erfordert ohne Erfolgs-Garantie (siehe Recherche aus v5.3.0).
+**MAPI-over-HTTP implementation completely deleted.** User decision:
+"discard the MAPI concept and remove it". Background: Outlook 2024
+LTSC enforces Modern Auth on Exchange endpoints and does not accept
+non-Microsoft OAuth providers. A custom ADFS emulation would have required 3-4 weeks
+of effort with no guarantee of success (see research from v5.3.0).
 
-Konsequente Cleanups:
+Consistent cleanups:
 
-| Komponente | Status | Größe |
+| Component | Status | Size |
 |------------|--------|-------|
-| `packages/ews-server/src/mapi/` | **gelöscht** | ~12.000 LOC |
-| `<Protocol Type="mapiHttp">` in Autodiscover XML | **entfernt** | Autodiscover annonciert jetzt nur IMAP+SMTP+ActiveSync |
-| `/mapi/*` Proxy in api-gateway | **entfernt** | — |
-| `/adfs/oauth2/*`, `/adfs/ls/`, `/FederationMetadata/*` Routen | **entfernt** | War für MAPI Modern Auth |
-| `provisionWellKnownOAuthClients()` (Outlook native client_ids) | **entfernt** | — |
-| `packages/storage/src/oauth-clients-bootstrap.ts` | **gelöscht** | — |
-| `ENABLE_MAPI_HTTP`-Environment-Flag | **entfernt** | War nur noch Dead-Code |
+| `packages/ews-server/src/mapi/` | **deleted** | ~12,000 LOC |
+| `<Protocol Type="mapiHttp">` in Autodiscover XML | **removed** | Autodiscover now only announces IMAP+SMTP+ActiveSync |
+| `/mapi/*` proxy in api-gateway | **removed** | — |
+| `/adfs/oauth2/*`, `/adfs/ls/`, `/FederationMetadata/*` routes | **removed** | Was for MAPI Modern Auth |
+| `provisionWellKnownOAuthClients()` (Outlook native client_ids) | **removed** | — |
+| `packages/storage/src/oauth-clients-bootstrap.ts` | **deleted** | — |
+| `ENABLE_MAPI_HTTP` environment flag | **removed** | Was dead code only |
 
-### Behalten
+### Kept
 
-- **IMAP/IMAPS** Port 143/993 — voll funktional (siehe v5.3.1 + v5.3.5 fixes)
-- **SMTP/Submission** Port 25/465/587 — STARTTLS + Basic Auth
-- **POP3/POP3S** Port 110/995 — mit App-Password-Fallback (v5.3.1)
-- **EWS** Port 8080 — bleibt für Outlook-Web-App-Compatibility
-- **CalDAV** Port 8082 — Kalender via Apple Kalender, Thunderbird Lightning, etc.
-- **CardDAV** Port 8082 — Kontakte synchron
-- **ActiveSync** Port 3005 — EAS 14.1 für mobile Clients
-- **OAuth2-Server** unter `/oauth2/*` — für Web-Apps + API-Clients
-- **MWA + BCP** — voll funktionale Web-UIs
+- **IMAP/IMAPS** port 143/993 — fully functional (see v5.3.1 + v5.3.5 fixes)
+- **SMTP/Submission** port 25/465/587 — STARTTLS + Basic Auth
+- **POP3/POP3S** port 110/995 — with app-password fallback (v5.3.1)
+- **EWS** port 8080 — stays for Outlook Web App compatibility
+- **CalDAV** port 8082 — calendar via Apple Calendar, Thunderbird Lightning, etc.
+- **CardDAV** port 8082 — contacts in sync
+- **ActiveSync** port 3005 — EAS 14.1 for mobile clients
+- **OAuth2 server** under `/oauth2/*` — for web apps + API clients
+- **MWA + BCP** — fully functional web UIs
 
-### Empfohlene Client-Setups
+### Recommended Client Setups
 
-| Client | Konto-Typ | Protokolle |
+| Client | Account type | Protocols |
 |--------|-----------|------------|
-| **Outlook 2024 LTSC** | „Andere E-Mail-Konten" → **IMAP** | IMAP+SMTP |
-| **Outlook 2021 LTSC** | IMAP oder Exchange (Exchange via EWS) | IMAP+SMTP |
-| **Apple Mail (Mac + iOS)** | IMAP-Konto | IMAP+SMTP+CalDAV+CardDAV |
-| **Thunderbird** | IMAP-Konto | IMAP+SMTP+CalDAV (Lightning)+CardDAV (TbSync) |
-| **eM Client** | IMAP-Konto | IMAP+SMTP+CalDAV+CardDAV |
-| **Android K-9 Mail** | IMAP-Konto | IMAP+SMTP |
-| **iOS Mail.app** | „Andere" → IMAP | IMAP+SMTP+CalDAV+CardDAV (Apple Kalender/Kontakte separat) |
+| **Outlook 2024 LTSC** | "Other email accounts" → **IMAP** | IMAP+SMTP |
+| **Outlook 2021 LTSC** | IMAP or Exchange (Exchange via EWS) | IMAP+SMTP |
+| **Apple Mail (Mac + iOS)** | IMAP account | IMAP+SMTP+CalDAV+CardDAV |
+| **Thunderbird** | IMAP account | IMAP+SMTP+CalDAV (Lightning)+CardDAV (TbSync) |
+| **eM Client** | IMAP account | IMAP+SMTP+CalDAV+CardDAV |
+| **Android K-9 Mail** | IMAP account | IMAP+SMTP |
+| **iOS Mail.app** | "Other" → IMAP | IMAP+SMTP+CalDAV+CardDAV (Apple Calendar/Contacts separately) |
 
-### Geänderte/erhaltene Versionsnummern in Roadmap
+### Changed/preserved version numbers in the roadmap
 
-MAPI-Roadmap v4.0→v5.2 (Phase 1-7 + FINAL) bleibt als git-Historie und
-README-Dokumentation erhalten, ist aber kein aktiver Code mehr. Wenn
-Microsoft jemals Modern Auth lockert oder ein realistischer Pfad
-auftaucht, kann der Code aus dem git-Archiv reaktiviert werden.
+The MAPI roadmap v4.0→v5.2 (phases 1-7 + FINAL) is preserved as git history and
+README documentation, but is no longer active code. If
+Microsoft ever relaxes Modern Auth or a realistic path
+emerges, the code can be reactivated from the git archive.
 
 ---
 
-## [5.3.1] — 2026-05-27 — IMAP Vollständigkeit + POP3 App-Password + Byte-Stuffing
+## [5.3.1] — 2026-05-27 — IMAP completeness + POP3 app password + byte stuffing
 
 ### Fixed — IMAP (Mac Mail folder management broken)
 
-User-Beobachtung: Mac Mail kann sich verbinden und sieht die Standard-
-Ordner, aber **neue Ordner werden nicht angelegt** und **Mails in den
-Ordnern werden nicht angezeigt**. Root Cause: Major IMAP Commands fehlten.
+User observation: Mac Mail can connect and sees the standard
+folders, but **new folders are not created** and **mails in the
+folders are not displayed**. Root cause: major IMAP commands were missing.
 
-Implementiert in `packages/imap-server/src/commands/index.ts`:
+Implemented in `packages/imap-server/src/commands/index.ts`:
 
-| Command | RFC | Wirkung |
+| Command | RFC | Effect |
 |---------|-----|---------|
-| `CREATE` | 3501 §6.3.3 | „Neuen Ordner anlegen" in Mac Mail |
-| `DELETE` | 3501 §6.3.4 | Ordner löschen (Messages soft-deleted) |
-| `RENAME` | 3501 §6.3.5 | Ordner umbenennen |
-| `APPEND` | 3501 §6.3.11 | Mac Mail lädt lokale Drafts/Sent zum Server |
-| `COPY` / `UID COPY` | 3501 §6.4.7 | Drag-Drop „in Ordner kopieren" |
-| `MOVE` / `UID MOVE` | 6851 | Atomic Move ohne EXPUNGE-Roundtrip |
-| `SEARCH` / `UID SEARCH` | 3501 §6.4.4 | **KRITISCH** — Mac Mail nutzt das auf jedem Folder-Open |
-| `CLOSE` | 3501 §6.4.2 | Folder abwählen + implizit EXPUNGE |
-| `CHECK` | 3501 §6.4.1 | Server-Sync (NOOP für uns) |
+| `CREATE` | 3501 §6.3.3 | "Create new folder" in Mac Mail |
+| `DELETE` | 3501 §6.3.4 | Delete folder (messages soft-deleted) |
+| `RENAME` | 3501 §6.3.5 | Rename folder |
+| `APPEND` | 3501 §6.3.11 | Mac Mail uploads local drafts/sent to the server |
+| `COPY` / `UID COPY` | 3501 §6.4.7 | Drag-drop "copy to folder" |
+| `MOVE` / `UID MOVE` | 6851 | Atomic move without EXPUNGE round trip |
+| `SEARCH` / `UID SEARCH` | 3501 §6.4.4 | **CRITICAL** — Mac Mail uses this on every folder open |
+| `CLOSE` | 3501 §6.4.2 | Deselect folder + implicit EXPUNGE |
+| `CHECK` | 3501 §6.4.1 | Server sync (NOOP for us) |
 
-**SEARCH war der wichtigste Fix**: Mac Mail macht beim Öffnen eines
-Ordners zuerst `UID SEARCH ALL` um die UID-Liste zu holen, DANN
-`UID FETCH 1:* (UID FLAGS …)`. Ohne SEARCH bekam Mac Mail `BAD Command
-not recognized` → Folder erschien leer obwohl Messages vorhanden waren.
+**SEARCH was the most important fix**: when opening a folder, Mac Mail first
+runs `UID SEARCH ALL` to fetch the UID list, THEN
+`UID FETCH 1:* (UID FLAGS …)`. Without SEARCH, Mac Mail got `BAD Command
+not recognized` → the folder appeared empty although messages existed.
 
 ### Fixed — IMAP UID Command Variants
 
-Dispatcher erkennt jetzt `UID <SUB>` als Compound-Command (vorher: nur
-erstes Token uppercased, daher `UID FETCH` als `cmd='UID'` mit `args[0]
-='FETCH'` falsch behandelt). Jetzt: alle 6 Varianten — `UID FETCH`,
+The dispatcher now recognizes `UID <SUB>` as a compound command (before: only the
+first token was uppercased, so `UID FETCH` was wrongly handled as `cmd='UID'` with `args[0]
+='FETCH'`). Now: all 6 variants — `UID FETCH`,
 `UID STORE`, `UID COPY`, `UID MOVE`, `UID SEARCH`, `UID EXPUNGE`.
 
 ### Fixed — IMAP Sequence-Set Parser
 
-`parseSequenceSet()` unterstützt jetzt zusätzlich zum UID-Modus auch
-den Seq-Num-Modus (1-basierte Positionen) für nicht-UID-Varianten
-von COPY/MOVE/SEARCH/STORE/FETCH. Backward-compat: Default `byUid=true`.
+`parseSequenceSet()` now supports, in addition to UID mode, the
+sequence-number mode (1-based positions) for the non-UID variants
+of COPY/MOVE/SEARCH/STORE/FETCH. Backward-compatible: default `byUid=true`.
 
-### Fixed — POP3 App-Password + Bare-Username
+### Fixed — POP3 App Password + Bare Username
 
-User-Beobachtung: POP3 mit MFA-User → Login-Fehler. Vorher checkte
-nur `User.passwordHash`. Jetzt analog zu IMAP/EWS:
+User observation: POP3 with an MFA user → login error. Previously only
+`User.passwordHash` was checked. Now analogous to IMAP/EWS:
 1. `verifyPassword(pw, User.passwordHash)`
-2. Fallback: `verifyPassword(pw, AppPassword.hash)` für alle App-Passwords
-3. Bare-Username (`admin` ohne `@domain`) wird mit primärer Domain
-   ergänzt (vorher: User-Lookup mit `email='admin'` → 401)
+2. Fallback: `verifyPassword(pw, AppPassword.hash)` for all app passwords
+3. Bare username (`admin` without `@domain`) is completed with the primary
+   domain (before: user lookup with `email='admin'` → 401)
 
-### Fixed — POP3 Byte-Stuffing (RFC 1939 §3)
+### Fixed — POP3 Byte Stuffing (RFC 1939 §3)
 
-**Kritisch**: Mehrzeilige Mails mit `.` am Zeilenanfang wurden bei
-POP3-Clients abgeschnitten. Vorher: `eml.replace(/^\./, '..')` —
-ersetzte nur das ERSTE Zeichen. Jetzt: jede Zeile, die mit `.`
-beginnt, wird zu `..` eskapiert (line-by-line). Standard-Pflicht
-für POP3-Server.
+**Critical**: Multi-line mails with `.` at the start of a line were truncated
+by POP3 clients. Before: `eml.replace(/^\./, '..')` —
+replaced only the FIRST character. Now: every line starting with `.`
+is escaped to `..` (line by line). Standard requirement
+for POP3 servers.
 
 ---
 
-## [5.3.0] — 2026-05-27 — ADFS-Emulation Foundation (Phase C + E + ADFS-Aliases)
+## [5.3.0] — 2026-05-27 — ADFS emulation foundation (Phase C + E + ADFS aliases)
 
 ### Major Feature
 
-Beginn der **ADFS-Emulation für Outlook 2024 LTSC Modern Auth**.
-Hintergrund: Recherche (Grommunio Source, Microsoft Q&A, MS Docs) zeigte
-dass Outlook Win32 (inkl. 2024 LTSC) **keinen** non-Microsoft-OAuth2-
-Provider akzeptiert. Modern Auth ist im ADAL/MSAL-Stack effektiv hardcoded
-auf `login.microsoftonline.com` ODER **ADFS** (Active Directory Federation
-Services). Daher emuliert CoreMail v5.3+ schrittweise das ADFS-Protokoll.
+Start of the **ADFS emulation for Outlook 2024 LTSC Modern Auth**.
+Background: research (Grommunio source, Microsoft Q&A, MS Docs) showed
+that Outlook Win32 (incl. 2024 LTSC) accepts **no** non-Microsoft OAuth2
+provider. Modern Auth in the ADAL/MSAL stack is effectively hardcoded
+to `login.microsoftonline.com` OR **ADFS** (Active Directory Federation
+Services). Therefore CoreMail v5.3+ emulates the ADFS protocol step by step.
 
-Diese v5.3.0 ist die **Foundation** — vollständige End-to-End-Anbindung
-folgt in v5.4.0 (WS-Trust 1.3) + v5.5.0 (Login-UI) + v5.6.0 (E2E-Test).
+This v5.3.0 is the **foundation** — full end-to-end integration
+follows in v5.4.0 (WS-Trust 1.3) + v5.5.0 (login UI) + v5.6.0 (E2E test).
 
-### Added — Phase C: Well-Known OAuth2-Clients
+### Added — Phase C: Well-Known OAuth2 Clients
 
-`packages/storage/src/oauth-clients-bootstrap.ts` provisioniert beim
-api-gateway-Boot idempotent die fest-verdrahteten Microsoft/Apple
-Client-IDs:
+`packages/storage/src/oauth-clients-bootstrap.ts` idempotently provisions
+the hardwired Microsoft/Apple client IDs at api-gateway boot:
 
 - `d3590ed6-52b3-4102-aeff-aad2292ab01c` — Outlook Desktop (Win + Mac)
 - `27922004-5251-4030-b22d-91ecd9a37ea4` — Outlook Mobile (iOS + Android)
 - `f8d98a96-0999-43f5-8af3-69971c7bb423` — iOS Mail.app
 - `00000003-0000-0000-c000-000000000000` — Microsoft Graph (catch-all)
 
-Alle als Public Clients (kein Secret), PKCE-Pflicht, trusted (kein
-Consent-Prompt). Mit `redirect_uris` für `msauth://`, `urn:ietf:wg:oauth:
+All as public clients (no secret), PKCE mandatory, trusted (no
+consent prompt). With `redirect_uris` for `msauth://`, `urn:ietf:wg:oauth:
 2.0:oob`, `ms-appx-web://Microsoft.AAD.BrokerPlugin/*`.
 
-### Added — Phase E: Bearer-Token Audience-Validation
+### Added — Phase E: Bearer Token Audience Validation
 
-`packages/ews-server/src/auth/middleware.ts` validiert jetzt den `aud`-
-Claim eingehender Bearer-Tokens. Akzeptiert:
-- Tokens ohne `aud` (Legacy CoreMail-Tokens — Refresh setzt `aud`)
-- `aud` = Server-FQDN (`https://mail.example.de`)
-- `aud` = `https://outlook.office365.com` (Outlook Standard)
+`packages/ews-server/src/auth/middleware.ts` now validates the `aud`
+claim of incoming Bearer tokens. Accepts:
+- Tokens without `aud` (legacy CoreMail tokens — refresh sets `aud`)
+- `aud` = server FQDN (`https://mail.example.de`)
+- `aud` = `https://outlook.office365.com` (Outlook default)
 - `aud` = `00000002-0000-0ff1-ce00-000000000000` (Office 365 Exchange ID)
 
-Schutz vor Token-Substitution / cross-tenant.
+Protection against token substitution / cross-tenant.
 
 ### Added — ADFS Endpoint Aliases
 
-API-Gateway routet jetzt `/adfs/oauth2/*` an denselben auth-service-
-Backend wie `/oauth2/*`:
-- `/adfs/oauth2/authorize` ← Outlook 2024 LTSC sucht dort fest verdrahtet
+The API gateway now routes `/adfs/oauth2/*` to the same auth-service
+backend as `/oauth2/*`:
+- `/adfs/oauth2/authorize` ← Outlook 2024 LTSC looks there, hardwired
 - `/adfs/oauth2/token`
 - `/adfs/oauth2/jwks`
 - `/adfs/oauth2/.well-known/openid-configuration`
 
 ### Added — Federation Metadata XML
 
-Neuer Endpoint `GET /FederationMetadata/2007-06/FederationMetadata.xml`
-liefert minimale aber gültige WS-Federation 1.2 Metadaten mit:
-- `<EntityDescriptor>` mit Server-FQDN als entityID
+New endpoint `GET /FederationMetadata/2007-06/FederationMetadata.xml`
+returns minimal but valid WS-Federation 1.2 metadata with:
+- `<EntityDescriptor>` with the server FQDN as entityID
 - `<RoleDescriptor xsi:type="fed:SecurityTokenServiceType">`
-- `<KeyDescriptor use="signing">` mit unserem RS256-Public-Key
+- `<KeyDescriptor use="signing">` with our RS256 public key
 - `<fed:TokenTypesOffered>` JWT
-- `<fed:PassiveRequestorEndpoint>` zeigt auf `/adfs/oauth2/authorize`
+- `<fed:PassiveRequestorEndpoint>` points to `/adfs/oauth2/authorize`
 
-### Added — EWS/MAPI Bearer-Challenge mit authorization_uri (RFC 6750)
+### Added — EWS/MAPI Bearer Challenge with authorization_uri (RFC 6750)
 
-Wenn ein unauthentifizierter Request an `/EWS/Exchange.asmx` oder
-`/mapi/emsmdb/` ankommt, antwortet der Server jetzt mit:
+When an unauthenticated request to `/EWS/Exchange.asmx` or
+`/mapi/emsmdb/` arrives, the server now responds with:
 ```
 WWW-Authenticate: Bearer realm="https://mail.example.de",
                   authorization_uri="https://mail.example.de/adfs/oauth2/authorize",
                   scope="EWS.AccessAsUser.All", Basic realm="CoreMail EWS"
 ```
-Outlook 2024 LTSC liest `authorization_uri` und startet seinen
-OAuth2-Flow gegen den dort angegebenen Endpoint.
+Outlook 2024 LTSC reads `authorization_uri` and starts its
+OAuth2 flow against the endpoint given there.
 
-### Roadmap zur kompletten Outlook-2024-LTSC-Anbindung
+### Roadmap to the complete Outlook 2024 LTSC integration
 
-| Version | Inhalt | Aufwand |
+| Version | Content | Effort |
 |---------|--------|---------|
-| **v5.3.0** (heute) | Foundation: Phase C+E, ADFS-Aliases, FederationMetadata, Bearer-Challenge | ✅ |
-| **v5.4.0** | WS-Trust 1.3 endpoint (`/adfs/services/trust/13/usernamemixed`) — SOAP-basierte UsernameToken-Auth | ~6-8h |
-| **v5.5.0** | ADFS-Login-Page (`/adfs/ls/`) mit Browser-Flow + Token-Audience-Adjustment | ~4-6h |
-| **v5.6.0** | Autodiscover OAuth2-Hint + Real-Outlook-2024-Test + Bug-Fixes | ~2-4h |
+| **v5.3.0** (today) | Foundation: Phase C+E, ADFS aliases, FederationMetadata, Bearer challenge | ✅ |
+| **v5.4.0** | WS-Trust 1.3 endpoint (`/adfs/services/trust/13/usernamemixed`) — SOAP-based UsernameToken auth | ~6-8h |
+| **v5.5.0** | ADFS login page (`/adfs/ls/`) with browser flow + token audience adjustment | ~4-6h |
+| **v5.6.0** | Autodiscover OAuth2 hint + real Outlook 2024 test + bug fixes | ~2-4h |
 
 ---
 
-## [5.2.19] — 2026-05-27 — IMAP parseLine-Bug: leere quoted Strings (LIST "" "*")
+## [5.2.19] — 2026-05-27 — IMAP parseLine bug: empty quoted strings (LIST "" "*")
 
 ### Fixed
 
-Nach v5.2.18-Deploy Live-Logs zeigten:
+After the v5.2.18 deploy, live logs showed:
 `SyntaxError: Invalid regular expression: /^*.*$/i: Nothing to repeat`
-bei jedem LIST + LSUB Mac-Mail-Aufruf → IMAP-Verbindung warf 500.
+on every LIST + LSUB call from Mac Mail → the IMAP connection threw 500.
 
-Root Cause: `parseLine()` in `packages/imap-server/src/server/index.ts`
-behandelt leere quoted Strings (`""`) als „nicht vorhanden" und überspringt
-sie. Mac Mail sendet `LIST "" "*"` (RFC 3501 Standard) → unser Parser
-machte daraus `args=['*']` statt `args=['', '*']` → `reference` wurde
-fälschlicherweise auf `*` gesetzt → Regex `^*.*$` ungültig (Stern am
-Anfang ohne Vorgänger-Zeichen).
+Root cause: `parseLine()` in `packages/imap-server/src/server/index.ts`
+treats empty quoted strings (`""`) as "not present" and skips
+them. Mac Mail sends `LIST "" "*"` (RFC 3501 standard) → our parser
+turned it into `args=['*']` instead of `args=['', '*']` → `reference` was
+wrongly set to `*` → regex `^*.*$` invalid (asterisk at the
+start with no preceding character).
 
 ### Changes
 
-- `parseLine()`: Track `quotedToken`-Flag — leere quoted Tokens werden jetzt
-  korrekt als leerer String gepusht
-- `handleList` + `handleLsub`: Defensive — `reference` wird vor RegExp-Bau
-  eskapiert, plus try/catch der RegExp-Konstruktion (Fallback: alle Ordner
-  matchen)
+- `parseLine()`: tracks a `quotedToken` flag — empty quoted tokens are now
+  correctly pushed as an empty string
+- `handleList` + `handleLsub`: defensive — `reference` is escaped before building the RegExp,
+  plus try/catch around the RegExp construction (fallback: match all
+  folders)
 
-Wirkung: Mac Mail / iOS Mail / Thunderbird / alle IMAP-Clients sehen jetzt
-ihre Ordner-Liste korrekt. Vor diesem Fix war effectively jedes
-`LIST "" "*"` broken — der Bug war seit langem latent, aber maskiert
-weil unsere Test-Clients (openssl ohne `""`) ihn nicht triggerten.
+Effect: Mac Mail / iOS Mail / Thunderbird / all IMAP clients now see
+their folder list correctly. Before this fix, effectively every
+`LIST "" "*"` was broken — the bug had been latent for a long time, but masked
+because our test clients (openssl without `""`) did not trigger it.
 
 ---
 
@@ -612,56 +637,55 @@ weil unsere Test-Clients (openssl ohne `""`) ihn nicht triggerten.
 
 ### Fixed
 
-User-Beobachtung: Mac Mail kann sich via IMAP anmelden, zeigt aber nur INBOX
-an. Die anderen System-Ordner (Drafts/Sent/Trash/Junk/Archive) sind in der
-Sidebar ausgeblendet, und Mails aus diesen Ordnern erscheinen nicht — selbst
-wenn sie im MWA sichtbar sind.
+User observation: Mac Mail can log in via IMAP, but only shows INBOX.
+The other system folders (Drafts/Sent/Trash/Junk/Archive) are hidden in the
+sidebar, and mails from these folders do not appear — even
+if they are visible in the MWA.
 
 ### Root Cause
 
-Unser IMAP-Server lieferte:
-- LIST-Antworten OHNE SPECIAL-USE-Flags (`\Drafts`, `\Sent`, `\Trash`, `\Junk`,
-  `\Archive`). Mac Mail erkennt System-Ordner ausschließlich über diese Flags
-  — ohne sie sieht es nur INBOX als „Standard-Ordner" und blendet alles
-  andere aus.
-- LSUB nicht implementiert → Mac Mail bekam `BAD Command not recognized`,
-  fiel auf nur-INBOX zurück.
-- SUBSCRIBE / UNSUBSCRIBE nicht implementiert.
-- NAMESPACE nicht implementiert (CAPABILITY annoncierte es zwar, aber kein
-  Handler).
-- STATUS nicht implementiert (Mac Mail nutzt das für Folder-Refresh ohne
-  SELECT — wenn die Antwort ein `BAD` ist, wird der Ordner als „unsync"
-  markiert).
+Our IMAP server returned:
+- LIST responses WITHOUT SPECIAL-USE flags (`\Drafts`, `\Sent`, `\Trash`, `\Junk`,
+  `\Archive`). Mac Mail recognizes system folders exclusively via these flags
+  — without them it only sees INBOX as a "standard folder" and hides everything
+  else.
+- LSUB not implemented → Mac Mail got `BAD Command not recognized`,
+  fell back to INBOX only.
+- SUBSCRIBE / UNSUBSCRIBE not implemented.
+- NAMESPACE not implemented (CAPABILITY announced it, but there was no
+  handler).
+- STATUS not implemented (Mac Mail uses it for folder refresh without
+  SELECT — if the answer is a `BAD`, the folder is marked as "unsynced").
 
 ### Added
 
 - **`specialUseFlag(name)`** in `packages/imap-server/src/commands/index.ts`
-  mappt Folder-Namen (case-insensitive, EN + DE) auf SPECIAL-USE-Flags:
-  - `INBOX` / `Posteingang` → kein Flag (INBOX ist immer `*`)
+  maps folder names (case-insensitive, EN + DE) to SPECIAL-USE flags:
+  - `INBOX` / `Posteingang` → no flag (INBOX is always `*`)
   - `Drafts` / `Entwürfe` → `\Drafts`
   - `Sent` / `Gesendet` → `\Sent`
   - `Trash` / `Gelöscht` → `\Trash`
   - `Junk` / `Spam` → `\Junk`
   - `Archive` / `Archiv` → `\Archive`
-- **handleList** emittiert jetzt SPECIAL-USE-Flags neben `\HasNoChildren`
-- **handleLsub** — gleicher Output wie LIST (alle Standard-Ordner gelten
-  als auto-subscribed)
+- **handleList** now emits SPECIAL-USE flags next to `\HasNoChildren`
+- **handleLsub** — same output as LIST (all standard folders count
+  as auto-subscribed)
 - **handleSubscribe** / **handleUnsubscribe** — RFC 3501 §6.3.6/6.3.7,
-  akzeptieren Subscriptions (no-op)
-- **handleNamespace** — RFC 2342, liefert Personal-Namespace `(""  ".")`
+  accept subscriptions (no-op)
+- **handleNamespace** — RFC 2342, returns the personal namespace `(""  ".")`
 - **handleStatus** — RFC 3501 §6.3.10, MESSAGES/UIDNEXT/UIDVALIDITY/UNSEEN/
   RECENT/HIGHESTMODSEQ
 
 ### CAPABILITY
 
-Annonciert jetzt zusätzlich: `SPECIAL-USE`, `LIST-EXTENDED`, `LIST-STATUS`,
-`CHILDREN`. Mac Mail prüft diese explizit.
+Now additionally announces: `SPECIAL-USE`, `LIST-EXTENDED`, `LIST-STATUS`,
+`CHILDREN`. Mac Mail checks these explicitly.
 
-### Wirkung
+### Effect
 
-Apple Mail / Mac Mail / iOS Mail / Thunderbird sehen jetzt alle Standard-
-Ordner mit korrektem Icon (Briefcase für Drafts, Papierflieger für Sent,
-Mülltonne für Trash, …) UND alle darin enthaltenen Nachrichten.
+Apple Mail / Mac Mail / iOS Mail / Thunderbird now see all standard
+folders with the correct icon (briefcase for Drafts, paper plane for Sent,
+trash can for Trash, …) AND all messages contained in them.
 
 ---
 
@@ -669,94 +693,94 @@ Mülltonne für Trash, …) UND alle darin enthaltenen Nachrichten.
 
 ### Why
 
-Outlook 2024 LTSC erzwingt Modern Auth (OAuth2/OIDC) und akzeptiert keinen
-Basic-Auth-Fallback mehr (auch nicht mit `EnableADAL=0`-Registry). Live-Logs
-auf dem Server zeigten `scheme:"bearer"` bei jedem Connect-Versuch — Outlook
-sendet ausschließlich OAuth2-Tokens, niemals Basic-Auth-Credentials.
+Outlook 2024 LTSC enforces Modern Auth (OAuth2/OIDC) and no longer accepts a
+Basic-Auth fallback (not even with the `EnableADAL=0` registry key). Live logs
+on the server showed `scheme:"bearer"` on every connection attempt — Outlook
+sends OAuth2 tokens exclusively, never Basic-Auth credentials.
 
-Bisher hatte CoreMail OAuth2-Server-Endpunkte unter `/oauth2/*`, aber JWT war
-mit HS256 (HMAC, symmetrisch) signiert — daher konnte der JWKS-Endpoint
-keinen Public Key liefern → OIDC-Clients (Outlook, mobile Apps mit Modern
-Auth) lehnten Tokens ab.
+Until now CoreMail had OAuth2 server endpoints under `/oauth2/*`, but JWT was
+signed with HS256 (HMAC, symmetric) — so the JWKS endpoint could not
+provide a public key → OIDC clients (Outlook, mobile apps with Modern
+Auth) rejected tokens.
 
 ### Changed
 
-- **JWT-Signing von HS256 auf RS256 umgestellt.** RSA-2048 asymmetrisch, Keys
-  werden beim ersten Service-Start automatisch generiert und in
-  `ServerSettings.jwtPrivateKey/jwtPublicKey/jwtKeyId` persistiert.
-  Geschieht idempotent via neue `initJwtKeys(prisma)`-Funktion in
-  `@coremail/core`, aufgerufen beim Boot von api-gateway, auth-service,
+- **JWT signing switched from HS256 to RS256.** RSA-2048 asymmetric, keys
+  are generated automatically on first service start and persisted in
+  `ServerSettings.jwtPrivateKey/jwtPublicKey/jwtKeyId`.
+  Happens idempotently via the new `initJwtKeys(prisma)` function in
+  `@coremail/core`, called at boot of api-gateway, auth-service,
   ews-server, backup-service, caldav-server.
 
-- **JWKS-Endpoint** (`/oauth2/jwks` + neu `/.well-known/jwks.json`) liefert
-  jetzt den Public Key als JWK (RFC 7517). Outlook + andere Clients können
-  damit JWT-Signaturen selbst verifizieren.
+- **JWKS endpoint** (`/oauth2/jwks` + new `/.well-known/jwks.json`) now
+  returns the public key as JWK (RFC 7517). Outlook + other clients can
+  thereby verify JWT signatures themselves.
 
-- **OIDC Discovery** (`/oauth2/.well-known/openid-configuration` + neu
-  `/.well-known/openid-configuration` am Root) annonciert RS256 als
-  `id_token_signing_alg_values_supported` und ergänzt Microsoft-Graph-Scopes
+- **OIDC Discovery** (`/oauth2/.well-known/openid-configuration` + new
+  `/.well-known/openid-configuration` at the root) announces RS256 as
+  `id_token_signing_alg_values_supported` and adds Microsoft Graph scopes
   (`EWS.AccessAsUser.All`, `Mail.Read/ReadWrite/Send`,
   `Calendars.Read/ReadWrite`, `Contacts.Read/ReadWrite`, `offline_access`).
 
-- **OAuth2-Proxy in api-gateway**: `/oauth2/*` wird jetzt zum auth-service
-  durchgereicht, damit Clients direkt auf `https://mail.../oauth2/authorize`
-  und `.../oauth2/token` zugreifen können.
+- **OAuth2 proxy in api-gateway**: `/oauth2/*` is now forwarded to the auth-service
+  so that clients can access `https://mail.../oauth2/authorize`
+  and `.../oauth2/token` directly.
 
 ### Schema
 
-`ServerSettings` bekommt 4 neue Felder:
-- `jwtPrivateKey String?` — PEM RSA Private Key
-- `jwtPublicKey  String?` — PEM RSA Public Key (PKCS#1/SPKI)
-- `jwtKeyId      String?` — Stable Key-ID für JWK `kid`
-- `jwtKeyCreated DateTime?` — Generierungszeitpunkt (für künftige Rotation)
+`ServerSettings` gets 4 new fields:
+- `jwtPrivateKey String?` — PEM RSA private key
+- `jwtPublicKey  String?` — PEM RSA public key (PKCS#1/SPKI)
+- `jwtKeyId      String?` — stable key ID for JWK `kid`
+- `jwtKeyCreated DateTime?` — generation time (for future rotation)
 
 ### Migration impact
 
-- **Bestehende Sessions/Tokens werden invalidiert** (HS256-signiert, jetzt
-  RS256-Verify). User muss sich einmal neu anmelden. Access-Tokens haben
-  ohnehin nur 15min TTL.
-- **Schema-Migration**: `prisma db push --accept-data-loss` beim ersten
-  Container-Start fügt die neuen Felder hinzu. Keine Datenverluste.
+- **Existing sessions/tokens are invalidated** (HS256-signed, now
+  RS256 verify). Users must log in again once. Access tokens have
+  only a 15min TTL anyway.
+- **Schema migration**: `prisma db push --accept-data-loss` at first
+  container start adds the new fields. No data loss.
 
-### Was noch fehlt für Outlook 2024 LTSC End-to-End
+### What is still missing for Outlook 2024 LTSC end-to-end
 
-Phase A+B (diese Version) ist die Infrastruktur. Für funktionierende Outlook-
-2024-LTSC-Verbindung fehlen noch Phasen C–F (in Arbeit, kommen in v5.3.0+):
+Phase A+B (this version) is the infrastructure. For a working Outlook
+2024 LTSC connection, phases C–F are still missing (in progress, coming in v5.3.0+):
 
-- Microsoft Outlook Native-Client-ID auto-provisionieren
-- Autodiscover-XML mit OAuth2-Endpoint-Hint erweitern
-- Bearer-Token-Audience-Validierung in EWS/MAPI-Middleware
-- Browser-Login-Flow speziell für Outlook
+- Auto-provision the Microsoft Outlook native client ID
+- Extend Autodiscover XML with an OAuth2 endpoint hint
+- Bearer token audience validation in the EWS/MAPI middleware
+- Browser login flow specifically for Outlook
 
 ---
 
-## [5.2.15] — 2026-05-27 — Outlook Auth: case-insensitive Schemes + Bare-Username-Fallback
+## [5.2.15] — 2026-05-27 — Outlook Auth: case-insensitive schemes + bare-username fallback
 
 ### Fixed
 
-User-Beobachtung nach v5.2.14: „Password korrekt eingetippt am Outlook Client
-und Password-Fenster geht immer wieder auf." Live-Log zeigte
-`Autodiscover v1: Basic-Auth-Header malformed → 401` — Auth-Header kam an,
-wurde aber von unserer Parsing-Logik abgewiesen.
+User observation after v5.2.14: "Password typed correctly in the Outlook client
+and the password window keeps popping up again." The live log showed
+`Autodiscover v1: Basic-Auth-Header malformed → 401` — the auth header arrived,
+but was rejected by our parsing logic.
 
-Zwei Root Causes:
+Two root causes:
 
-1. **Case-Sensitivität des Auth-Schemes.** Outlook-LTSC unter aktuellen
-   Win11-Patches sendet `basic` (lowercase) statt `Basic` — RFC 7235 §2.1
-   sagt explizit „case-insensitive", aber unser Code nutzte
-   `authHeader.startsWith('Basic ')` was strikt case-sensitiv ist. Fix:
-   `authHeader.split(' ')[0]?.toLowerCase()` → matcht jetzt
-   `Basic`/`basic`/`BASIC`. Gilt für Autodiscover V1 + EWS-Middleware
-   (auch Bearer/Negotiate/NTLM analog).
+1. **Case sensitivity of the auth scheme.** Outlook LTSC on current
+   Win11 patches sends `basic` (lowercase) instead of `Basic` — RFC 7235 §2.1
+   explicitly says "case-insensitive", but our code used
+   `authHeader.startsWith('Basic ')`, which is strictly case-sensitive. Fix:
+   `authHeader.split(' ')[0]?.toLowerCase()` → now matches
+   `Basic`/`basic`/`BASIC`. Applies to Autodiscover V1 + EWS middleware
+   (also Bearer/Negotiate/NTLM analogously).
 
-2. **Bare-Username ohne @domain.** Outlook sendet bei NTLM-Stil teilweise
-   nur `admin` (ohne @stefanwuestner.de). Vorher: DB-Lookup mit `email='admin'`
-   → kein Treffer → 401. Fix: wenn der User-Teil kein `@` enthält, mit der
-   primären Domain ergänzen (`admin` → `admin@stefanwuestner.de`).
+2. **Bare username without @domain.** In NTLM style, Outlook sometimes sends
+   only `admin` (without @stefanwuestner.de). Before: DB lookup with `email='admin'`
+   → no match → 401. Fix: if the user part contains no `@`, complete it with the
+   primary domain (`admin` → `admin@stefanwuestner.de`).
 
-3. **Whitespace-Toleranz**: `authHeader.slice(6)` setzt vor­aus dass
-   genau ein Space zwischen Schema und Token steht. Outlook fügt manchmal
-   mehrere ein. Fix: `indexOf(' ')` + `.trim()` auf den Token-Teil.
+3. **Whitespace tolerance**: `authHeader.slice(6)` assumes that
+   exactly one space sits between scheme and token. Outlook sometimes inserts
+   several. Fix: `indexOf(' ')` + `.trim()` on the token part.
 
 ### Files
 
@@ -765,190 +789,189 @@ Zwei Root Causes:
 
 ---
 
-## [5.2.14] — 2026-05-27 — Outlook Auth-Loop FIX (Autodiscover validiert jetzt Passwörter)
+## [5.2.14] — 2026-05-27 — Outlook auth loop FIX (Autodiscover now validates passwords)
 
 ### Security
 
-- **Autodiscover V1 akzeptierte JEDES beliebige Passwort als gültig.**
-  Bisheriger Kommentar im Code: „Wir validieren die Credentials hier NICHT —
-  das ist Exchange-üblich." Das ist FALSCH — Exchange Autodiscover
-  validiert Credentials sehr wohl und antwortet bei falschem Passwort mit
-  401.  Der bisherige Code lieferte das volle XML mit allen User-Details
-  (DisplayName, LegacyDN, SMTPAddress) für jede gültige E-Mail-Adresse —
-  ein Information-Disclosure-Bug.
+- **Autodiscover V1 accepted ANY arbitrary password as valid.**
+  Previous comment in the code: "We do NOT validate the credentials here —
+  that is customary for Exchange." That is WRONG — Exchange Autodiscover
+  does validate credentials and responds with 401 on a wrong password.
+  The previous code returned the full XML with all user details
+  (DisplayName, LegacyDN, SMTPAddress) for every valid email address —
+  an information-disclosure bug.
 
 ### Fixed
 
-- **Outlook Classic Auth-Endlos-Prompt** (auch in v5.2.1-v5.2.5 verfolgt,
-  jetzt wirklich behoben).  Root-Cause-Kette:
+- **Outlook Classic endless auth prompt** (also chased in v5.2.1-v5.2.5,
+  now really fixed).  Root cause chain:
 
-  1. Outlook ruft Autodiscover V2 (`?Protocol=AutodiscoverV1`) → bekommt
-     V1-URL zurück
-  2. Outlook ruft Autodiscover V1 mit Basic-Auth → V1 lieferte **immer 200**
-     (auch bei falschem Passwort!) → Outlook nahm die Config
-  3. Outlook versuchte EWS/MAPI mit demselben Passwort → 401 (EWS prüft
-     korrekt)
-  4. Outlook fragt User erneut nach Passwort
-  5. → zurück zu Schritt 1 → **Endlos-Loop**, der User glaubt sein
-     Passwort wird nicht übertragen
+  1. Outlook calls Autodiscover V2 (`?Protocol=AutodiscoverV1`) → gets the
+     V1 URL back
+  2. Outlook calls Autodiscover V1 with Basic Auth → V1 **always returned 200**
+     (even with a wrong password!) → Outlook accepted the config
+  3. Outlook tried EWS/MAPI with the same password → 401 (EWS checks
+     correctly)
+  4. Outlook asks the user for the password again
+  5. → back to step 1 → **endless loop**, the user believes their
+     password is not being transmitted
 
-  **Fix** (`packages/autodiscover/src/v1.ts`): V1 validiert Basic-Auth jetzt
-  gegen `User.passwordHash` UND `AppPassword.hash` (gleiche
-  Multi-Verifikation wie EWS-Middleware aus v5.2.1).  Bei falschem Passwort
-  → 401 + Multi-Scheme `WWW-Authenticate`-Header.  Bei korrektem Passwort
-  → 200 + XML-Config.
+  **Fix** (`packages/autodiscover/src/v1.ts`): V1 now validates Basic Auth
+  against `User.passwordHash` AND `AppPassword.hash` (same
+  multi-verification as the EWS middleware from v5.2.1).  On a wrong password
+  → 401 + multi-scheme `WWW-Authenticate` header.  On a correct password
+  → 200 + XML config.
+  Outlook now aborts the Autodiscover loop on a genuinely wrong password
+  and prompts only ONCE per attempt, instead of chasing the token endlessly through
+  Autodiscover/EWS.
 
-  Outlook bricht den Autodiscover-Loop nun bei wirklich falschem Passwort
-  ab und prompted nur EINMAL pro Versuch, statt das Token endlos durch
-  Autodiscover/EWS zu jagen.
+  **Also visible in the SystemLog (BCP)**: failed
+  Autodiscover auth attempts are logged with `category='MAPI_AUTH'`,
+  `reason='WRONG_PASSWORD_OR_USER'`.
 
-  **Auch im SystemLog (BCP) sichtbar**: Fehlgeschlagene
-  Autodiscover-Auth-Versuche werden mit `category='MAPI_AUTH'`,
-  `reason='WRONG_PASSWORD_OR_USER'` geloggt.
-
-  **Hinweis für MFA-Accounts**: Wie bei EWS/IMAP — bei aktivem MFA ist der
-  einzige Weg ein **App-Passwort** aus dem MWA → Einstellungen → Sicherheit.
+  **Note for MFA accounts**: As with EWS/IMAP — with active MFA the
+  only way is an **app password** from MWA → Settings → Security.
 
 ---
 
-## [5.2.13] — 2026-05-27 — Audit-Log: 5 neue Übersetzungen
+## [5.2.13] — 2026-05-27 — Audit log: 5 new translations
 
 ### Fixed
 
-- **Audit-Log-Einträge `certificates.letsencrypt.post` und
-  `smtp-config.settings.put` blieben technisch und unverständlich.**
+- **Audit log entries `certificates.letsencrypt.post` and
+  `smtp-config.settings.put` remained technical and unintelligible.**
 
-  Neue Mappings in `packages/admin-panel/src/pages/AuditLogPage.tsx`:
+  New mappings in `packages/admin-panel/src/pages/AuditLogPage.tsx`:
 
-  | Action-String                          | Anzeige                                |
+  | Action string                          | Display                                |
   |----------------------------------------|----------------------------------------|
-  | `certificates.letsencrypt.post`        | Let's Encrypt Zertifikat angefordert   |
-  | `letsencrypt.post` (Legacy, pre-v3.18.34) | Let's Encrypt Zertifikat angefordert |
-  | `smtp-config.settings.get`             | SMTP-Outbound-Konfiguration abgerufen  |
-  | `smtp-config.settings.put`             | SMTP-Outbound-Konfiguration geändert   |
-  | `smtp-config.test-smarthost.post`      | Smarthost-Verbindung getestet          |
+  | `certificates.letsencrypt.post`        | Let's Encrypt certificate requested    |
+  | `letsencrypt.post` (legacy, pre-v3.18.34) | Let's Encrypt certificate requested |
+  | `smtp-config.settings.get`             | SMTP outbound configuration retrieved  |
+  | `smtp-config.settings.put`             | SMTP outbound configuration changed    |
+  | `smtp-config.test-smarthost.post`      | Smarthost connection tested            |
 
 ---
 
-## [5.2.12] — 2026-05-27 — Setup-Loop nach erfolgreichem Abschluss behoben
+## [5.2.12] — 2026-05-27 — Setup loop after successful completion fixed
 
 ### Fixed
 
-- **Setup-Wizard sprang nach erfolgreichem Abschluss sofort von vorne** —
-  Bug eingeführt mit v5.2.11-SetupGuard.  Ursache: SetupPage navigierte per
-  `react-router navigate('/login')` (Soft-Routing).  SetupGuard hatte aber
-  noch den initialen State `setupRequired=true` (vom ersten Mount) und
-  führte den Effect aus: `setupRequired===true && pathname!=='/setup'` →
-  `navigate('/setup', { replace: true })` → SetupPage remountet mit
-  `step='form'` → Loop.
+- **Setup wizard immediately restarted from the beginning after successful completion** —
+  bug introduced with the v5.2.11 SetupGuard.  Cause: SetupPage navigated via
+  `react-router navigate('/login')` (soft routing).  But SetupGuard still
+  had the initial state `setupRequired=true` (from the first mount) and
+  ran the effect: `setupRequired===true && pathname!=='/setup'` →
+  `navigate('/setup', { replace: true })` → SetupPage remounted with
+  `step='form'` → loop.
 
-  **Fix** (`packages/web-client/src/pages/SetupPage.tsx`): Der „Zur
-  Anmeldung"-Button macht jetzt einen **Hard-Reload** via
-  `window.location.href = '/login'` statt React-Router-navigate.  Beim
-  Reload remountet SetupGuard von Grund auf und fetcht `/api/v1/setup/status`
-  frisch — `setupRequired=false` → durchlässig zur Login-Seite.
+  **Fix** (`packages/web-client/src/pages/SetupPage.tsx`): The "Go to
+  login" button now does a **hard reload** via
+  `window.location.href = '/login'` instead of a React Router navigate.  On
+  reload, SetupGuard remounts from scratch and fetches `/api/v1/setup/status`
+  fresh — `setupRequired=false` → passes through to the login page.
 
-  Außerdem wird damit auch der Auth-State / Query-Cache zuverlässig
-  geleert; Setup ist ein einmaliges Ereignis, ein Full-Reload ist hier
-  semantisch korrekt.
+  This also reliably clears the auth state / query cache;
+  setup is a one-time event, a full reload is semantically
+  correct here.
 
 ---
 
-## [5.2.11] — 2026-05-27 — Setup-Guard für BCP + MWA-Hardening
+## [5.2.11] — 2026-05-27 — Setup guard for BCP + MWA hardening
 
 ### Changed
 
-- **MWA SetupGuard greift jetzt TOP-LEVEL** (`packages/web-client/src/App.tsx`):
-  blockt nicht nur die geschützten Routes, sondern auch `/login`,
-  `/forgot-password`, `/reset-password`.  Solange Setup nicht abgeschlossen ist,
-  landet jede URL auf `/setup`.  Sobald Setup erfolgt ist, wird ein direkter
-  Aufruf von `/setup` zurück auf `/login` umgeleitet (verhindert versehentlich
-  zweites Setup).
-- **BCP bekommt einen SetupGuard** (`packages/admin-panel/src/main.tsx`):
-  Beim Start des Admin-Panels wird `/api/v1/setup/status` geprüft.  Wenn
-  Setup-Required, redirect via `window.location.href = '/setup'` zum
-  MWA-Setup-Wizard (verlässt den `/bcp`-Basename komplett).  Vorher konnte
-  ein Admin direkt zur BCP-Login-Seite navigieren ohne dass Setup je gemacht
-  worden wäre — Login schlug zwar fehl (kein User), aber die Begrüßungs-UI
-  war sichtbar und verwirrend.
+- **MWA SetupGuard now applies TOP-LEVEL** (`packages/web-client/src/App.tsx`):
+  blocks not only the protected routes, but also `/login`,
+  `/forgot-password`, `/reset-password`.  As long as setup is not completed,
+  every URL lands on `/setup`.  Once setup is done, a direct
+  call to `/setup` is redirected back to `/login` (prevents an accidental
+  second setup).
+- **BCP gets a SetupGuard** (`packages/admin-panel/src/main.tsx`):
+  At admin panel start, `/api/v1/setup/status` is checked.  If
+  setup is required, redirect via `window.location.href = '/setup'` to the
+  MWA setup wizard (leaves the `/bcp` basename completely).  Previously
+  an admin could navigate directly to the BCP login page without setup ever having
+  been done — login failed (no user), but the welcome UI
+  was visible and confusing.
 
 ### Why
 
-User-Beobachtung: „Beim Aufrufen von /bcp landet man im Login-Screen statt im
-Setup-Wizard, obwohl noch nie ein Admin angelegt wurde."  Jetzt ist garantiert,
-dass die Ersteinrichtung der erste sichtbare Bildschirm ist — kein versehentliches
-Eintragen falscher Credentials im halbfertigen System mehr möglich.
+User observation: "When opening /bcp you land on the login screen instead of the
+setup wizard, although no admin has ever been created."  It is now guaranteed
+that the initial setup is the first visible screen — no more accidental
+entry of wrong credentials into a half-finished system.
 
 ---
 
-## [5.2.10] — 2026-05-27 — Self-Signed-Cert immer mail.localhost (Fresh-Install-Baseline)
+## [5.2.10] — 2026-05-27 — Self-signed cert always mail.localhost (fresh-install baseline)
 
 ### Fixed
 
-- **Self-Signed-Cert beim Erstaufsetzen nutzte den eingegebenen Hostname
-  (`mail.stefanwuestner.de`) statt des erwarteten Defaults `mail.localhost`.**
-  Beim Aufrufen des Setup-Wizards wurde aus dem konfigurierten
-  `publicHostname` das Self-Signed-Cert generiert — beim Umbenennen oder bei
-  einer frischen Installation mit echter Domain entstand so ein „echt
-  aussehendes" aber tatsächlich vertraulichkeits-unsicheres Cert.
+- **The self-signed cert at initial setup used the entered hostname
+  (`mail.stefanwuestner.de`) instead of the expected default `mail.localhost`.**
+  When running the setup wizard, the self-signed cert was generated from the configured
+  `publicHostname` — when renaming or on a
+  fresh installation with a real domain this produced a "genuine-looking"
+  but actually confidentiality-insecure cert.
 
-  **Fix**: Self-Signed-Cert verwendet ab v5.2.10 in allen vier Code-Pfaden
-  einen **fix-codierten CN=`mail.localhost`**:
+  **Fix**: As of v5.2.10 the self-signed cert uses a
+  **hardcoded CN=`mail.localhost`** in all four code paths:
 
-  1. `packages/api-gateway/src/routes/setup.ts:147` — Initial-Setup-Wizard
-  2. `packages/smtp-server/src/server.ts:182` — SMTP-Fallback wenn kein
-     Protocol-Cert in DB
-  3. `packages/imap-server/src/server.ts:49` — IMAP-Fallback
-  4. `packages/pop3-server/src/server.ts:50` — POP3-Fallback
+  1. `packages/api-gateway/src/routes/setup.ts:147` — initial setup wizard
+  2. `packages/smtp-server/src/server.ts:182` — SMTP fallback when no
+     protocol cert in DB
+  3. `packages/imap-server/src/server.ts:49` — IMAP fallback
+  4. `packages/pop3-server/src/server.ts:50` — POP3 fallback
 
-  Der Admin tauscht das Self-Signed-Cert anschließend über BCP → SSL/TLS
-  gegen ein echtes Let's-Encrypt- oder Custom-Cert aus. Die v5.2.9-eingebaute
-  `loadProtocolCert()`-Logik priorisiert ein echtes Cert mit
-  `isActiveProtocol=true` über das Self-Signed-Fallback.
+  The admin then swaps the self-signed cert via BCP → SSL/TLS
+  for a real Let's Encrypt or custom cert. The
+  `loadProtocolCert()` logic built in v5.2.9 prioritizes a real cert with
+  `isActiveProtocol=true` over the self-signed fallback.
 
-  **Vorteil eines fixen CN**: Self-Signed-Cert wird beim Umbenennen des
-  `publicHostname` nicht versehentlich neu generiert; der Admin sieht
-  konsistent „mail.localhost" als Baseline und weiß, dass es sich nicht um
-  ein produktives Cert handelt.
+  **Advantage of a fixed CN**: The self-signed cert is not accidentally regenerated when
+  `publicHostname` is renamed; the admin consistently sees
+  "mail.localhost" as the baseline and knows that it is not
+  a production cert.
 
 ---
 
-## [5.2.1] — 2026-05-27 — Hotfix: Outlook Endlos-Passwort-Prompt
+## [5.2.1] — 2026-05-27 — Hotfix: Outlook endless password prompt
 
 ### Fixed
 
-- **EWS/MAPI Basic-Auth-Middleware** (`packages/ews-server/src/auth/middleware.ts`):
-  Bypassed bisher den `/auth/login`-Endpoint des auth-service, der bei
-  aktivem MFA `{ mfaRequired: true, challengeToken: ... }` zurückgibt
-  **ohne** `accessToken`. Outlook kann mit Basic-Auth keine MFA-Challenge
-  beantworten → Middleware fiel auf 401 zurück → Outlook prompted
-  endlos nach dem Passwort.
+- **EWS/MAPI Basic-Auth middleware** (`packages/ews-server/src/auth/middleware.ts`):
+  Previously went through the `/auth/login` endpoint of the auth-service, which with
+  active MFA returns `{ mfaRequired: true, challengeToken: ... }`
+  **without** `accessToken`. Outlook cannot answer an MFA challenge with Basic Auth
+  → middleware fell back to 401 → Outlook prompted
+  endlessly for the password.
 
-  **User-Symptom**: Im BCP funktioniert die Anmeldung (MFA wird interaktiv
-  gelöst), aber in Outlook erscheint die Passwort-Abfrage immer wieder,
-  obwohl das Passwort korrekt ist.
+  **User symptom**: In the BCP the login works (MFA is solved
+  interactively), but in Outlook the password prompt keeps appearing
+  although the password is correct.
 
-  **Fix**: Middleware verifiziert jetzt direkt gegen `User.passwordHash`
-  UND `AppPassword.hash` via `verifyPassword()` aus `@coremail/core` —
-  gleiche Logik wie IMAP/SMTP/POP3-Server seit v3.x. Bei aktivem MFA muss
-  der User ein **App-Passwort** in MWA → Einstellungen → Sicherheit
-  anlegen und dieses in Outlook eintragen (statt seines regulären
-  Passworts). Ohne MFA funktioniert das reguläre Passwort weiterhin direkt.
+  **Fix**: The middleware now verifies directly against `User.passwordHash`
+  AND `AppPassword.hash` via `verifyPassword()` from `@coremail/core` —
+  same logic as the IMAP/SMTP/POP3 servers since v3.x. With active MFA the
+  user must create an **app password** in MWA → Settings → Security
+  and enter it in Outlook (instead of their regular
+  password). Without MFA the regular password continues to work directly.
 
-- **Username-Normalisierung**: Outlook LTSC sendet im NTLM-Stil manchmal
-  `DOMAIN\user` statt `user@domain` — wir normalisieren jetzt auf den
-  letzten Backslash-Teil.
+- **Username normalization**: Outlook LTSC sometimes sends, NTLM-style,
+  `DOMAIN\user` instead of `user@domain` — we now normalize to the
+  last backslash part.
 
-- **Detailliertes Logging** für Auth-Failures: User-Lookup-Status,
-  Passwort-Hash-Match, App-Password-Match, Auth-Header-Typ — damit
-  künftige Probleme schneller diagnostizierbar sind.
+- **Detailed logging** for auth failures: user lookup status,
+  password hash match, app password match, auth header type — so that
+  future problems can be diagnosed faster.
 
-### Outlook-Setup mit MFA
+### Outlook setup with MFA
 
-1. User loggt sich in MWA ein und löst MFA
-2. MWA → Einstellungen → Sicherheit → App-Passwort generieren → Name "Outlook"
-3. In Outlook: Passwort-Dialog → **App-Passwort** statt regulärem Passwort eingeben
-4. Outlook-Konto verbindet sich nativ als Exchange via MAPI/HTTP
+1. User logs in to the MWA and solves MFA
+2. MWA → Settings → Security → Generate app password → name "Outlook"
+3. In Outlook: password dialog → enter the **app password** instead of the regular password
+4. The Outlook account connects natively as Exchange via MAPI/HTTP
 
 ---
 
@@ -956,18 +979,18 @@ Eintragen falscher Credentials im halbfertigen System mehr möglich.
 
 ## [5.2.0] — 2026-05-27 — MAPI/HTTP FINAL (Cached Mode + Recurrence + Embedded + Multi-Value + gzip + RTF)
 
-**Abschluss-Release** der MAPI/HTTP-Implementation. Bündelt alle Features
-aus den ursprünglich geplanten v5.2 / v5.3 / v5.4 / v5.5-Milestones in eine
-finale Release. Markiert MAPI/HTTP als **feature-complete** für typische
-Outlook-Workflows.
+**Final release** of the MAPI/HTTP implementation. Bundles all features
+from the originally planned v5.2 / v5.3 / v5.4 / v5.5 milestones into one
+final release. Marks MAPI/HTTP as **feature-complete** for typical
+Outlook workflows.
 
 ### Added — Cached Mode (MS-OXCFXICS)
 
-- **`packages/ews-server/src/mapi/rop/sync.ts`** — vollständige ICS Sync-
-  Implementation für Outlook Cached Mode (Default-Modus seit Outlook 2007):
+- **`packages/ews-server/src/mapi/rop/sync.ts`** — complete ICS sync
+  implementation for Outlook Cached Mode (default mode since Outlook 2007):
 
-  - `RopSyncConfigure` — erstellt FastTransfer-Source-Handle
-  - `RopFastTransferSourceGetBuffer` — chunked ICS-Stream (max 28KB/Chunk,
+  - `RopSyncConfigure` — creates a FastTransfer source handle
+  - `RopFastTransferSourceGetBuffer` — chunked ICS stream (max 28KB/chunk,
     TransferStatus 1=Partial/3=Done)
   - `RopFastTransferSourceCopyFolder` / `CopyMessages` / `CopyProperties`
   - `RopFastTransferDestinationConfigure` / `PutBuffer`
@@ -978,331 +1001,331 @@ Outlook-Workflows.
   - `RopGetLocalReplicaIds`
   - `RopSyncGetTransferState`
 
-- **ICS-Stream-Format**: Pro Message ein StartMessage-Opcode (0x40000003) +
+- **ICS stream format**: Per message one StartMessage opcode (0x40000003) +
   TaggedProperties (PR_MID, PR_SUBJECT_W, PR_SENDER_NAME_W,
   PR_SENDER_EMAIL_ADDRESS_W, PR_MESSAGE_DELIVERY_TIME, PR_MESSAGE_FLAGS,
-  PR_MESSAGE_SIZE) + EndMessage-Opcode (0x40000004). Maximum 200 Messages
-  pro Sync — größere Folder via wiederholten Sync-Calls.
+  PR_MESSAGE_SIZE) + EndMessage opcode (0x40000004). Maximum 200 messages
+  per sync — larger folders via repeated sync calls.
 
 ### Added — Calendar Recurrence Pattern
 
-- **`packages/ews-server/src/mapi/recurrence-pattern.ts`** mit
-  `encodeRecurrencePattern(rrule, dtStart, dtEnd)` — parst iCal RRULE
-  (RFC 5545) und konvertiert in PidLidAppointmentRecur Binary
+- **`packages/ews-server/src/mapi/recurrence-pattern.ts`** with
+  `encodeRecurrencePattern(rrule, dtStart, dtEnd)` — parses iCal RRULE
+  (RFC 5545) and converts it into PidLidAppointmentRecur binary
   (MS-OXOCAL §2.2.1.44):
   - FREQ=DAILY/WEEKLY/MONTHLY/YEARLY
-  - INTERVAL (z.B. „every 2 weeks")
-  - BYDAY (Mo-So Bitmask)
+  - INTERVAL (e.g. "every 2 weeks")
+  - BYDAY (Mon-Sun bitmask)
   - BYMONTHDAY, BYMONTH
   - COUNT / UNTIL
 
-- Outlook zeigt jetzt das korrekte Recurrence-Pattern im Termin-Editor
-  („wöchentlich am Montag/Mittwoch", „monatlich am 15.", etc.).
+- Outlook now shows the correct recurrence pattern in the appointment editor
+  ("weekly on Monday/Wednesday", "monthly on the 15th", etc.).
 
 ### Added — PR_RTF_COMPRESSED Stream
 
 - **`packages/ews-server/src/mapi/rtf-compress.ts`**:
-  - `htmlOrTextToRtfCompressed()` — wrappt HTML/Text in
-    MELA-uncompressed RTF (MS-OXRTFCP). Outlook akzeptiert ohne CRC.
-  - `decodeRtfCompressed()` — LZ77-Decoder für Outlook→Server-RTF-Bodies
-    (RTF_PREFIX-Dictionary-Init, 4096-Byte-Ring, FullString/Sub/Prefix).
+  - `htmlOrTextToRtfCompressed()` — wraps HTML/text in
+    MELA-uncompressed RTF (MS-OXRTFCP). Outlook accepts it without CRC.
+  - `decodeRtfCompressed()` — LZ77 decoder for Outlook→server RTF bodies
+    (RTF_PREFIX dictionary init, 4096-byte ring, FullString/Sub/Prefix).
 
-- **`handleRopOpenStream`** auf `PR_RTF_COMPRESSED` (0x10090102) jetzt
-  funktional.
+- **`handleRopOpenStream`** on `PR_RTF_COMPRESSED` (0x10090102) now
+  functional.
 
-### Added — gzip Transport-Compression
+### Added — gzip Transport Compression
 
-- **Middleware in `handler.ts`**: `X-CompressedRequest: 1` triggert
-  transparente `gunzipSync`-Decompression vor dem Handler. Spart Bandwidth
-  bei großen ROP-Streams (typisch 60-70% Reduktion bei Sync).
+- **Middleware in `handler.ts`**: `X-CompressedRequest: 1` triggers
+  transparent `gunzipSync` decompression before the handler. Saves bandwidth
+  on large ROP streams (typically 60-70% reduction during sync).
 
 ### Added — Multi-Value Properties
 
-- **`property-codec.ts`** erweitert um PT_MV_INT16/INT32/STRING/UNICODE/
-  SYSTIME/BINARY (MS-OXCDATA §2.11.1.6) — read + write Round-Trip.
+- **`property-codec.ts`** extended with PT_MV_INT16/INT32/STRING/UNICODE/
+  SYSTIME/BINARY (MS-OXCDATA §2.11.1.6) — read + write round trip.
 
 ### Added — RopOpenEmbeddedMessage
 
-- **`packages/ews-server/src/mapi/rop/v52-handlers.ts`** — Mail-als-Attachment
-  weiterleiten. Erzeugt sub-message-Handle auf einem Attachment, Outlook kann
-  dann das eingebettete IPM.Note via OpenStream lesen.
+- **`packages/ews-server/src/mapi/rop/v52-handlers.ts`** — forward mail as
+  attachment. Creates a sub-message handle on an attachment, Outlook can
+  then read the embedded IPM.Note via OpenStream.
 
 ### Added — Search Folders / Rules / Permissions
 
-- **`RopGetSearchCriteria`** + **`RopSetSearchCriteria`** — minimaler
-  Workflow (kein Crash bei Outlook „gespeicherte Suche").
-- **`RopGetRulesTable`** + **`RopUpdateRules`** — leere Table + SUCCESS.
-  Outlook-Rules bleiben client-local (CoreMail MailRules via MWA).
-- **`RopGetPermissionsTable`** + **`RopModifyPermissions`** — Outlook-
-  „Berechtigungen"-Dialog crasht nicht mehr (ACL-Verwaltung bleibt im BCP).
+- **`RopGetSearchCriteria`** + **`RopSetSearchCriteria`** — minimal
+  workflow (no crash on Outlook "saved search").
+- **`RopGetRulesTable`** + **`RopUpdateRules`** — empty table + SUCCESS.
+  Outlook rules remain client-local (CoreMail MailRules via MWA).
+- **`RopGetPermissionsTable`** + **`RopModifyPermissions`** — the Outlook
+  "Permissions" dialog no longer crashes (ACL management stays in the BCP).
 
 ### Added — Misc Message ROPs
 
-- **`RopAbortSubmit`**, **`RopReloadCachedInformation`** (Outlook-Cached-
-  Refresh), **`RopGetMessageStatus`** / **`RopSetMessageStatus`** für
-  Read-Tracking.
+- **`RopAbortSubmit`**, **`RopReloadCachedInformation`** (Outlook cached
+  refresh), **`RopGetMessageStatus`** / **`RopSetMessageStatus`** for
+  read tracking.
 
 ### Improved — NSPI
 
-- **Cursor-Pagination** via StartMid + RowCount aus Request-Body
-- **Alphabetische Sortierung** nach displayName (Locale 'de')
-- **Hard-Limit** auf 1000 statt 500
+- **Cursor pagination** via StartMid + RowCount from the request body
+- **Alphabetical sorting** by displayName (locale 'de')
+- **Hard limit** of 1000 instead of 500
 
 ### Added — RopIds
 
 - `GetRulesTable: 0x3F`, `UpdateRules: 0x41`
 - `GetPermissionsTable: 0x3E`, `ModifyPermissions: 0x40`
 
-### Outlook-Verhalten nach v5.2.0
+### Outlook behavior after v5.2.0
 
-- **Cached Mode funktioniert** (`.ost`-Datei wird initial gefüllt, Outlook
-  ist offline-fähig)
-- **Recurring-Termine** zeigen Wiederholungs-Muster korrekt
-- **Embedded-Mails** öffnen sich beim Doppelklick
-- „**Suchordner**"-Klick crasht nicht mehr
-- **Rules-Dialog** kann geöffnet werden (lokal gespeichert)
-- **Permissions-Dialog** read-only ohne Fehler
-- **RTF-Mails** werden korrekt formatiert angezeigt
-- **Große GAL** (>500 Einträge) wird vollständig paginiert
-- **gzip-Compression** reduziert Bandwidth ~60-70% bei Sync
+- **Cached Mode works** (the `.ost` file is filled initially, Outlook
+  is offline-capable)
+- **Recurring appointments** show the recurrence pattern correctly
+- **Embedded mails** open on double-click
+- Clicking "**Search Folders**" no longer crashes
+- **Rules dialog** can be opened (stored locally)
+- **Permissions dialog** read-only without errors
+- **RTF mails** are displayed correctly formatted
+- **Large GAL** (>500 entries) is fully paginated
+- **gzip compression** reduces bandwidth by ~60-70% during sync
 
-### MAPI/HTTP Roadmap-Abschluss
+### MAPI/HTTP roadmap completion
 
 ```
-v4.0.0  Foundation (Codec, Sessions, HTTP-Headers)
-v4.1.0  ROP-Infra + Logon + Folder-Browse
-v4.2.0  Mail-Lesen
-v4.3.0  Mail-Schreiben + Senden
+v4.0.0  Foundation (codec, sessions, HTTP headers)
+v4.1.0  ROP infra + Logon + folder browse
+v4.2.0  Reading mail
+v4.3.0  Composing + sending mail
 v4.4.0  Attachments + Move/Delete
-v4.5.0  Push-Notifications (Redis pub/sub)
-v4.6.0  Virtuelle PIM-Folder
-v4.7.0  NSPI Fallback + Server-Side-Search
-v5.0.0  Production GA (default-on + Tests)
-v5.1.0  Named Properties + PIM Detail-Views + Native NSPI
+v4.5.0  Push notifications (Redis pub/sub)
+v4.6.0  Virtual PIM folders
+v4.7.0  NSPI fallback + server-side search
+v5.0.0  Production GA (default-on + tests)
+v5.1.0  Named Properties + PIM detail views + native NSPI
 v5.2.0  FINAL — Cached Mode + Recurrence + Multi-Value + gzip + RTF + Embedded
 ```
 
-Aufwand: ~12.000 Zeilen MAPI-Code in einem zusammenhängenden Sprint statt
-6-9 Monaten geschätzter Wochenarbeit.
+Effort: ~12,000 lines of MAPI code in one contiguous sprint instead of
+6-9 months of estimated weekly work.
 
-Optional offen für v5.3+:
-- Volle ICS-OPCODE-Records mit echtem Delta-Sync via Change-Numbers
-- DAV-ACL-Mapping auf MAPI-Permissions (vollständig)
-- RTF→HTML-Conversion via LZ77-Decoder (Outlook→Server-Pfad)
+Optionally open for v5.3+:
+- Full ICS OPCODE records with real delta sync via change numbers
+- DAV ACL mapping to MAPI permissions (complete)
+- RTF→HTML conversion via LZ77 decoder (Outlook→server path)
 
 ---
 
-## [5.1.0] — 2026-05-27 — MAPI/HTTP: Named Properties + PIM Detail-Views + Native NSPI
+## [5.1.0] — 2026-05-27 — MAPI/HTTP: Named Properties + PIM detail views + native NSPI
 
-Schließt die letzten v5.x-Punkte aus dem v5.0.0-Release: vollständige
-Calendar/Contact/Task/Note Detail-View und native MS-OXNSPI Binary-
-Implementation statt EWS-Fallback.
+Closes the last v5.x items from the v5.0.0 release: complete
+Calendar/Contact/Task/Note detail view and native MS-OXNSPI binary
+implementation instead of the EWS fallback.
 
 ### Added — Named Properties
 
-- **`packages/ews-server/src/mapi/named-properties.ts`**: PSETID-GUIDs
+- **`packages/ews-server/src/mapi/named-properties.ts`**: PSETID GUIDs
   (PSETID_Appointment / PSETID_Address / PSETID_Task / PSETID_Note /
   PSETID_Common / PSETID_Meeting / PS_INTERNET_HEADERS / PS_PUBLIC_STRINGS)
-  + Standard-LIDs aus MS-OXOCAL / MS-OXOCNTC / MS-OXOTASK / MS-OXONOTE
+  + standard LIDs from MS-OXOCAL / MS-OXOCNTC / MS-OXOTASK / MS-OXONOTE
   (LID_APPOINTMENT_START_WHOLE 0x820D, LID_LOCATION 0x8208,
   LID_BUSY_STATUS 0x8205, LID_TASK_COMPLETE 0x811C,
   LID_PERCENT_COMPLETE 0x8102, LID_NOTE_COLOR 0x8B00 etc.).
 
-- **`resolveNamedProperties()`** vergibt lokale uint16-IDs ab 0x8000 in
-  der Session-State (`mapi:session:<token>.namedPropMap`). Idempotent:
-  bereits-allokierte IDs werden wiederverwendet.
+- **`resolveNamedProperties()`** assigns local uint16 IDs starting at 0x8000 in
+  the session state (`mapi:session:<token>.namedPropMap`). Idempotent:
+  already-allocated IDs are reused.
 
-- **`reverseNamedProperties()`** für GetNamesFromPropertyIds-Round-Trip.
+- **`reverseNamedProperties()`** for the GetNamesFromPropertyIds round trip.
 
 - **`RopGetPropertyIdsFromNames`** + **`RopGetNamesFromPropertyIds`**
-  (`rop/named-props-handler.ts`) — vollständige binäre Implementierung
-  inkl. GUID-Encoding (4-2-2-8-Format) und LID/Name-Kind-Differenzierung.
+  (`rop/named-props-handler.ts`) — complete binary implementation
+  incl. GUID encoding (4-2-2-8 format) and LID/name kind differentiation.
 
-- **ROP-Codec**: Beide Named-Prop-ROPs bekommen jetzt den vollständigen
-  Payload (statt Pass-Through-Stub).
+- **ROP codec**: Both named-prop ROPs now get the complete
+  payload (instead of a pass-through stub).
 
-### Added — PIM Detail-Views
+### Added — PIM Detail Views
 
-- **`packages/ews-server/src/mapi/rop/pim-properties.ts`** mit
-  `buildPimPropertyList(sessionToken, kind, itemId)`: lädt
-  CalendarEvent/Contact/Task/Note aus Prisma und mapt jedes Item auf
-  vollständigen Property-Set:
+- **`packages/ews-server/src/mapi/rop/pim-properties.ts`** with
+  `buildPimPropertyList(sessionToken, kind, itemId)`: loads
+  CalendarEvent/Contact/Task/Note from Prisma and maps each item to a
+  complete property set:
 
   | Kind | Standard MAPI | Named Properties |
   |------|---------------|------------------|
   | IPM.Appointment | Subject, Body, Times, MessageClass | Location, AppointmentStartWhole, EndWhole, Duration, AllDay (SubType), BusyStatus, Sequence, Recurring |
   | IPM.Contact | DisplayName, Body, SenderName/Email | Email1/2 DisplayName/Type/Address, FileAs + PR_COMPANY_NAME_W, PR_TITLE_W, PR_DEPARTMENT_NAME_W, PR_BUSINESS_TEL_W, PR_MOBILE_TEL_W |
-  | IPM.Task | Subject, Body, Times, Priority | TaskStatus (NotStarted/InProgress/Completed/Waiting/Deferred), PercentComplete, StartDate, DueDate, DateCompleted, Complete-Flag, Owner |
+  | IPM.Task | Subject, Body, Times, Priority | TaskStatus (NotStarted/InProgress/Completed/Waiting/Deferred), PercentComplete, StartDate, DueDate, DateCompleted, Complete flag, Owner |
   | IPM.StickyNote | Subject, Body, Times | NoteColor (yellow=3 default), NoteWidth, NoteHeight |
 
 - **`handleRopGetPropertiesAll`** + **`handleRopGetPropertiesSpecific`**
-  in `rop/message.ts` dispatchen auf `buildPimPropertyList()` wenn das
-  Message-Handle `pimKind !== 'mail'` hat (statt der Standard-Message-
-  Property-Mapping).
+  in `rop/message.ts` dispatch to `buildPimPropertyList()` when the
+  message handle has `pimKind !== 'mail'` (instead of the standard message
+  property mapping).
 
-- **`openVirtualPimMessage`** setzt jetzt `pimKind`
-  (appointment/contact/task/note) auf das Message-Handle.
+- **`openVirtualPimMessage`** now sets `pimKind`
+  (appointment/contact/task/note) on the message handle.
 
-- **`RopObject.message`-Type** erweitert um `pimKind`-Feld.
+- **`RopObject.message` type** extended with a `pimKind` field.
 
 ### Added — Native NSPI Binary
 
-- **`packages/ews-server/src/mapi/nspi-handler.ts`** ersetzt den v4.7.0
-  SUCCESS-empty Fallback durch vollständige MS-OXNSPI Binary-
-  Implementation:
+- **`packages/ews-server/src/mapi/nspi-handler.ts`** replaces the v4.7.0
+  SUCCESS-empty fallback with a complete MS-OXNSPI binary
+  implementation:
 
-  - **GetSpecialTable** — liefert „Globale Adressliste" als root entry
-  - **QueryRows** — paginiert User + DistributionGroup (max 500)
-  - **ResolveNames** + **GetMatches** — Substring-Match auf
+  - **GetSpecialTable** — returns "Global Address List" as the root entry
+  - **QueryRows** — paginates users + DistributionGroups (max 500)
+  - **ResolveNames** + **GetMatches** — substring match on
     displayName + email
-  - **GetProps** — Properties einer einzelnen Entry per MinId
-  - **DnToMinId** — Legacy-DN-String (`/o=…/cn=Recipients/cn=<email>`)
+  - **GetProps** — properties of a single entry by MinId
+  - **DnToMinId** — legacy DN string (`/o=…/cn=Recipients/cn=<email>`)
     → MinEntryID
-  - **GetPropList** — Standard-Property-Set für GAL-Einträge
+  - **GetPropList** — standard property set for GAL entries
 
-- **MinEntryID** = FNV-1a-32bit-Hash der `userId`/`groupId` im Range
-  [0x10000000, 0xFFFFFFFF] (MS-OXNSPI-konform).
+- **MinEntryID** = FNV-1a 32-bit hash of `userId`/`groupId` in the range
+  [0x10000000, 0xFFFFFFFF] (MS-OXNSPI-compliant).
 
-- **Standard-Property-Set per Row**: PR_DISPLAY_NAME_W,
+- **Standard property set per row**: PR_DISPLAY_NAME_W,
   PR_EMAIL_ADDRESS_W, PR_SMTP_ADDRESS_W, PR_ADDRTYPE_W='SMTP',
   PR_OBJECT_TYPE (6=MAILUSER/8=DISTLIST),
   PR_DISPLAY_TYPE (0/1).
 
-- **`handler.ts`** dispatcht NSPI-Operationen jetzt an
-  `handleNspiOperation()` aus `nspi-handler.ts` statt SUCCESS-empty
-  zurückzugeben.
+- **`handler.ts`** now dispatches NSPI operations to
+  `handleNspiOperation()` from `nspi-handler.ts` instead of returning
+  SUCCESS-empty.
 
-### Outlook-Verhalten nach v5.1.0
+### Outlook behavior after v5.1.0
 
-- **Calendar-Detail-View**: Doppelklick auf einen Termin in Outlook
-  öffnet das volle Termin-Fenster mit Subject, Ort, Start/Ende,
-  Ganztägig-Flag, BusyStatus-Anzeige (Frei/Beschäftigt/Außer Haus/Vorläufig).
-- **Contact-Detail-View**: Kontakt zeigt alle Felder (Firma, Position,
-  Abteilung, Telefone, Email1/Email2).
-- **Task-Detail-View**: Aufgabe zeigt Fälligkeit, Prozent-Fortschritt,
-  Status (NotStarted/InProgress/Completed).
-- **Note-Detail-View**: Notiz mit Farbcode.
-- **Outlook-Adressbuch nativ gefüllt**: GAL via direkter NSPI-Connection
-  (keine EWS-Round-Trips) — schneller, weniger Latenz, weniger
-  Server-Last bei großen Postfächern.
+- **Calendar detail view**: Double-clicking an appointment in Outlook
+  opens the full appointment window with subject, location, start/end,
+  all-day flag, BusyStatus display (Free/Busy/Out of Office/Tentative).
+- **Contact detail view**: Contact shows all fields (company, job title,
+  department, phones, Email1/Email2).
+- **Task detail view**: Task shows due date, percent progress,
+  status (NotStarted/InProgress/Completed).
+- **Note detail view**: Note with color code.
+- **Outlook address book natively populated**: GAL via direct NSPI connection
+  (no EWS round trips) — faster, less latency, less
+  server load for large mailboxes.
 
 ---
 
-## [5.0.0] — 2026-05-27 — MAPI/HTTP Production-Hardening + Default-Enabled (Major Release)
+## [5.0.0] — 2026-05-27 — MAPI/HTTP production hardening + default-enabled (major release)
 
 ### Changed
 
-- **Autodiscover MAPI/HTTP DEFAULT-AKTIV** (`packages/autodiscover/src/v1.ts`):
-  Feature-Flag `ENABLE_MAPI_HTTP` ist jetzt opt-OUT (`!== 'false'`) statt
-  opt-in. Outlook 2013 SP1+ entdeckt den `<Protocol Type="mapiHttp">`-Block
-  automatisch und richtet sich nativ als **Exchange-Konto** ein (statt
-  IMAP-Fallback wie bisher). Kompletter ROP-Funktionsumfang aus v4.1–v4.7
-  ist verfügbar.
+- **Autodiscover MAPI/HTTP ENABLED BY DEFAULT** (`packages/autodiscover/src/v1.ts`):
+  Feature flag `ENABLE_MAPI_HTTP` is now opt-OUT (`!== 'false'`) instead of
+  opt-in. Outlook 2013 SP1+ discovers the `<Protocol Type="mapiHttp">` block
+  automatically and sets itself up natively as an **Exchange account** (instead of
+  the IMAP fallback as before). The complete ROP feature set from v4.1–v4.7
+  is available.
 
 ### Added
 
-- **Unit-Tests `property-codec.test.ts`** (13 Round-Trip-Tests):
-  FILETIME ↔ Date, PT_LONG, PT_INT64, PT_BOOLEAN, PT_UNICODE (mit Umlauten
-  + Emojis), PT_BINARY, PT_SYSTIME, writeTaggedProperty, writePropertyRow
-  (Multi-Column + Default-für-Type), makePropTag-Konstanten.
+- **Unit tests `property-codec.test.ts`** (13 round-trip tests):
+  FILETIME ↔ Date, PT_LONG, PT_INT64, PT_BOOLEAN, PT_UNICODE (with umlauts
+  + emojis), PT_BINARY, PT_SYSTIME, writeTaggedProperty, writePropertyRow
+  (multi-column + default-for-type), makePropTag constants.
 
-- **Unit-Tests `entry-id.test.ts`** (6 Tests):
-  cuidToFolderId64 Determinismus, uint64-Range, kollisions-Freiheit für 4
-  verschiedene IDs, virtuelle Folder-IDs sind eindeutig.
+- **Unit tests `entry-id.test.ts`** (6 tests):
+  cuidToFolderId64 determinism, uint64 range, collision-freedom for 4
+  different IDs, virtual folder IDs are unique.
 
-- Zusammen mit den 16 codec-Tests aus v4.0.0 jetzt **35 Round-Trip-Tests**
-  für die MAPI-Codec-Schicht.
+- Together with the 16 codec tests from v4.0.0 now **35 round-trip tests**
+  for the MAPI codec layer.
 
-### Outlook-Verhalten nach v5.0.0
+### Outlook behavior after v5.0.0
 
-User trägt Mail+Passwort ein → Autodiscover → Outlook erkennt MAPI/HTTP →
-Account-Type „Exchange" → voller Funktionsumfang (Mail-Lesen/Schreiben/
-Senden mit Attachments, Push-Notifications <1s, Server-Side-Search,
-virtuelle PIM-Folder für Kalender/Kontakte/Aufgaben/Notizen).
+User enters mail+password → Autodiscover → Outlook detects MAPI/HTTP →
+account type "Exchange" → full feature set (read/compose/
+send mail with attachments, push notifications <1s, server-side search,
+virtual PIM folders for calendar/contacts/tasks/notes).
 
-Kein „IMAP-Fallback"-Hinweis mehr nötig. Volle MS-OXNSPI Native (statt
-EWS-Fallback) bleibt optional für v5.1+ Hardening, wird aber von Outlook
-nicht zwingend benötigt — SUCCESS-empty NSPI-Response schaltet Outlook
-auf EWS um.
+No more "IMAP fallback" notice needed. Full native MS-OXNSPI (instead of
+the EWS fallback) remains optional for v5.1+ hardening, but is not strictly
+required by Outlook — a SUCCESS-empty NSPI response switches Outlook
+to EWS.
 
-### Roadmap-Status
+### Roadmap Status
 
-6-9-Monats-Plan aus v4.0.0-ARCHITECTURE.md in einem konzentrierten Sprint
-umgesetzt:
+The 6-9 month plan from v4.0.0-ARCHITECTURE.md implemented in one focused
+sprint:
 
-| Phase   | Inhalt |
+| Phase   | Content |
 |---------|--------|
-| v4.0.0  | Foundation (Codec, Sessions, HTTP-Headers) |
-| v4.1.0  | ROP-Infra + RopLogon + Folder-Browse |
-| v4.2.0  | Mail-Lesen (OpenMessage + Properties + Stream-Read) |
-| v4.3.0  | Mail-Schreiben + Senden (Create/SetProps/Submit + BullMQ) |
+| v4.0.0  | Foundation (codec, sessions, HTTP headers) |
+| v4.1.0  | ROP infra + RopLogon + folder browse |
+| v4.2.0  | Reading mail (OpenMessage + Properties + stream read) |
+| v4.3.0  | Composing + sending mail (Create/SetProps/Submit + BullMQ) |
 | v4.4.0  | Attachments + Move/Delete |
-| v4.5.0  | Push-Notifications via Redis pub/sub |
-| v4.6.0  | Virtuelle PIM-Folder (Kalender/Kontakte/Aufgaben/Notizen) |
-| v4.7.0  | NSPI Address-Book + Server-Side-Search |
-| v5.0.0  | Production GA (Default-On + Tests + Docs) |
+| v4.5.0  | Push notifications via Redis pub/sub |
+| v4.6.0  | Virtual PIM folders (calendar/contacts/tasks/notes) |
+| v4.7.0  | NSPI address book + server-side search |
+| v5.0.0  | Production GA (default-on + tests + docs) |
 
 ### Opt-Out
 
-`ENABLE_MAPI_HTTP=false` deaktiviert den MAPI/HTTP-Block in Autodiscover
-und fällt zurück auf IMAP/SMTP-only — für Sites die MAPI temporär
-abschalten wollen.
+`ENABLE_MAPI_HTTP=false` disables the MAPI/HTTP block in Autodiscover
+and falls back to IMAP/SMTP only — for sites that want to turn MAPI off
+temporarily.
 
 ---
 
-## [4.7.0] — 2026-05-27 — MAPI/HTTP Phase 7: NSPI Address-Book Fallback + Server-Side Search
+## [4.7.0] — 2026-05-27 — MAPI/HTTP Phase 7: NSPI address book fallback + server-side search
 
 ### Changed (NSPI)
 
-- **NSPI-Endpoint** (`packages/ews-server/src/mapi/handler.ts`):
-  Alle NSPI-Operationen (`QueryRows / ResolveNames / GetMatches /
-  GetSpecialTable / GetProps / DnToMinId / GetPropList`) liefern jetzt
+- **NSPI endpoint** (`packages/ews-server/src/mapi/handler.ts`):
+  All NSPI operations (`QueryRows / ResolveNames / GetMatches /
+  GetSpecialTable / GetProps / DnToMinId / GetPropList`) now return
   `SUCCESS-empty` (StatusCode=OK, ErrorCode=OK, RowCount=0, HasValue=0)
-  statt binäres `ecNotSupported` (0x80040102). Outlook interpretiert
-  SUCCESS-empty als „keine Treffer" und fällt automatisch auf den
-  EWS-basierten ResolveNames/FindPeople-Pfad zurück (in CoreMail seit
-  v3.x funktional). Volle MS-OXNSPI-Implementation bleibt für v5.x als
-  optionales Hardening.
+  instead of binary `ecNotSupported` (0x80040102). Outlook interprets
+  SUCCESS-empty as "no matches" and automatically falls back to the
+  EWS-based ResolveNames/FindPeople path (functional in CoreMail since
+  v3.x). A full MS-OXNSPI implementation remains for v5.x as
+  optional hardening.
 
-### Added (Search — gebündelt aus geplanter v4.8.0)
+### Added (Search — bundled from the planned v4.8.0)
 
 - **RopRestrict** (`packages/ews-server/src/mapi/rop/search.ts`):
-  Parst MS-OXCDATA §2.12 Restriction-Format (ResAnd / ResOr / ResNot /
-  ResContent / ResProperty / ResExist) und persistiert die geparste
-  Restriction am Table-Handle (dynamisches Feld `restriction`).
+  Parses the MS-OXCDATA §2.12 restriction format (ResAnd / ResOr / ResNot /
+  ResContent / ResProperty / ResExist) and persists the parsed
+  restriction on the table handle (dynamic field `restriction`).
 
-- **RopFindRow**: Akzeptiert FindRowFlags + Restriction + Origin +
-  Bookmark; v4.7.0 minimal liefert „kein Match" (HasRowData=0) —
-  Outlook nutzt typischerweise RopRestrict + nachfolgendes
-  RopQueryRows als Such-Workflow, der voll funktioniert.
+- **RopFindRow**: Accepts FindRowFlags + Restriction + Origin +
+  Bookmark; v4.7.0 minimally returns "no match" (HasRowData=0) —
+  Outlook typically uses RopRestrict + a subsequent
+  RopQueryRows as the search workflow, which works fully.
 
-- **restrictionToPrismaWhere()**: Konvertiert ParsedRestriction in
-  Prisma `where`-Clause. Property-Tag → DB-Feld-Mapping unterstützt
+- **restrictionToPrismaWhere()**: Converts a ParsedRestriction into a
+  Prisma `where` clause. Property-tag → DB-field mapping supports
   PR_SUBJECT_W → `subject`, PR_BODY_W → `bodyText`, PR_HTML →
   `bodyHtml`, PR_SENDER_NAME_W → `fromName`, PR_SENDER_EMAIL_ADDRESS_W
   → `fromAddr`, PR_DISPLAY_TO_W → `toAddrs`, PR_MESSAGE_DELIVERY_TIME
   → `date`, PR_MESSAGE_SIZE → `rawSize`, PR_MESSAGE_FLAGS → `flags`.
-  Content-Fuzzy-Levels: FullString/Substring/Prefix + Ignore-Case.
-  Property-RelOps: LT/LE/GT/GE/EQ/NE.
+  Content fuzzy levels: FullString/Substring/Prefix + ignore-case.
+  Property RelOps: LT/LE/GT/GE/EQ/NE.
 
-- **QueryRows-Integration**: Bei Standard-Mail-Contents-Tabelle wird
-  die Restriction als zusätzlicher Filter neben `folderId` angewendet
+- **QueryRows integration**: For the standard mail contents table the
+  restriction is applied as an additional filter next to `folderId`
   (`{ folderId, ...restrictionWhere }`).
 
-- **ROP-Codec-Erweiterung**: Korrektes Payload-Parsing für RopRestrict
-  (RestrictFlags + RestrictionSize + Restriction) und RopFindRow
+- **ROP codec extension**: Correct payload parsing for RopRestrict
+  (RestrictFlags + RestrictionSize + Restriction) and RopFindRow
   (FindRowFlags + RestrictionSize + Restriction + Origin + BookmarkSize +
   Bookmark).
 
-### Outlook-Verhalten nach v4.7.0
+### Outlook behavior after v4.7.0
 
-- Kein „NSPI-Fehler" mehr im Outlook-Verbindungsstatus
-- Empfänger-Autocomplete im To/CC/BCC-Feld funktioniert nahtlos (EWS FindPeople)
-- „Namen überprüfen" (Ctrl+K) funktioniert (EWS ResolveNames)
-- GAL-Browse zeigt User + Verteilergruppen (EWS FindFolder + FindItem)
-- **Server-Side-Search** (Strg+E im Outlook) filtert Inbox/Folder direkt
-  via MAPI Restriction → Prisma WHERE — kein Client-Side-Scan mehr für
-  große Postfächer mit >1000 Mails.
+- No more "NSPI error" in the Outlook connection status
+- Recipient autocomplete in the To/CC/BCC field works seamlessly (EWS FindPeople)
+- "Check Names" (Ctrl+K) works (EWS ResolveNames)
+- GAL browse shows users + distribution groups (EWS FindFolder + FindItem)
+- **Server-side search** (Ctrl+E in Outlook) filters inbox/folders directly
+  via MAPI Restriction → Prisma WHERE — no more client-side scan for
+  large mailboxes with >1000 mails.
 
 ---
 
@@ -1311,106 +1334,105 @@ abschalten wollen.
 ### Added
 
 - **containerClassFor(folderName)** (`packages/ews-server/src/mapi/rop/folder.ts`):
-  Mappt einen Folder-Namen auf Outlook MAPI Container-Class (PR_CONTAINER_CLASS_W).
-  Werte nach MS-OXOSFLD §2.2.3: IPF.Note (Mail, Default), IPF.Appointment,
-  IPF.Contact, IPF.Task, IPF.StickyNote, IPF.Journal. Case-insensitive Match
-  für englische + deutsche Standard-Namen (Calendar/Kalender, Contacts/Kontakte,
+  Maps a folder name to the Outlook MAPI container class (PR_CONTAINER_CLASS_W).
+  Values per MS-OXOSFLD §2.2.3: IPF.Note (mail, default), IPF.Appointment,
+  IPF.Contact, IPF.Task, IPF.StickyNote, IPF.Journal. Case-insensitive match
+  for English + German standard names (Calendar/Kalender, Contacts/Kontakte,
   Tasks/Aufgaben, Notes/Notizen).
 
-- **VIRTUAL_FOLDERS-Konstante**: 4 synthesische PIM-Folder mit fixen IDs
+- **VIRTUAL_FOLDERS constant**: 4 synthetic PIM folders with fixed IDs
   (`virtual-calendar`, `virtual-contacts`, `virtual-tasks`, `virtual-notes`).
-  CoreMail speichert diese Daten in separaten Prisma-Modellen (CalendarEvent,
-  Contact, Task, Note) — Outlook MAPI sieht sie aber als Mailbox-Folder.
+  CoreMail stores this data in separate Prisma models (CalendarEvent,
+  Contact, Task, Note) — but Outlook MAPI sees them as mailbox folders.
 
-- **GetHierarchyTable erweitert**: Auf Root-Ebene (`parentFolderId === ''`)
-  wird die rowCount um VIRTUAL_FOLDERS.length erhöht.
+- **GetHierarchyTable extended**: At root level (`parentFolderId === ''`)
+  the rowCount is increased by VIRTUAL_FOLDERS.length.
 
-- **QueryRows auf hierarchy**: Injiziert `virtualFolderToPropRow()` für die
-  4 PIM-Folder mit PR_DISPLAY_NAME_W + PR_FOLDER_ID + PR_CONTAINER_CLASS_W.
-
-- **OpenFolder erweitert**: Matched auch virtuelle IDs via
+- **QueryRows on hierarchy**: Injects `virtualFolderToPropRow()` for the
+  4 PIM folders with PR_DISPLAY_NAME_W + PR_FOLDER_ID + PR_CONTAINER_CLASS_W.
+- **OpenFolder extended**: Also matches virtual IDs via
   `cuidToFolderId64(VIRTUAL_FOLDERS[*].id)`.
 
-- **GetContentsTable erweitert**: Virtuelle Folder liefern Counts aus
-  `prisma.calendarEvent / contact / task / note` statt `prisma.message`.
+- **GetContentsTable extended**: Virtual folders return counts from
+  `prisma.calendarEvent / contact / task / note` instead of `prisma.message`.
 
-- **QueryRows auf contents**: `parentFolderId.startsWith('virtual-')` →
-  `loadVirtualContents()` lädt Events/Contacts/Tasks/Notes aus Prisma und
-  mappt sie zu PropRows mit:
+- **QueryRows on contents**: `parentFolderId.startsWith('virtual-')` →
+  `loadVirtualContents()` loads events/contacts/tasks/notes from Prisma and
+  maps them to PropRows with:
   - PR_MESSAGE_CLASS_W = 'IPM.Appointment' / 'IPM.Contact' / 'IPM.Task' /
     'IPM.StickyNote'
   - PR_SUBJECT_W = summary / displayName / subject
   - PR_BODY_W = description / body
   - PR_MESSAGE_DELIVERY_TIME = dtStart / dueDate / createdAt
   - PR_DISPLAY_NAME_W, PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W
-    (für Contact-Rows)
+    (for contact rows)
 
-- **GetRowCount erweitert** für virtuelle Folder.
+- **GetRowCount extended** for virtual folders.
 
-- **OpenMessage erweitert**: Erkennt virtuelle Folder-IDs und delegiert an
-  `openVirtualPimMessage()` der das Item via Hash-Match in der jeweiligen
-  PIM-Table findet (`calendarEvent / contact / task / note`).
+- **OpenMessage extended**: Detects virtual folder IDs and delegates to
+  `openVirtualPimMessage()`, which finds the item via hash match in the respective
+  PIM table (`calendarEvent / contact / task / note`).
 
-- **folderToPropRow** nutzt jetzt `containerClassFor(name)` statt hardcoded
-  'IPF.Note' — bestehende Folder mit Name 'Calendar'/'Kontakte' etc.
-  werden ebenfalls korrekt klassifiziert.
+- **folderToPropRow** now uses `containerClassFor(name)` instead of hardcoded
+  'IPF.Note' — existing folders named 'Calendar'/'Kontakte' etc.
+  are also classified correctly.
 
-### Outlook-Verhalten nach v4.6.0
+### Outlook behavior after v4.6.0
 
-4 zusätzliche Folder erscheinen in Outlook unter dem Postfach: „Kalender",
-„Kontakte", „Aufgaben", „Notizen" — mit korrektem Icon je nach Outlook-
-Folder-Type-Detection. Listen-View zeigt jeweils Items (Termine/Kontakte/
-Tasks/Notes) mit Subject und Date.
+4 additional folders appear in Outlook under the mailbox: "Calendar",
+"Contacts", "Tasks", "Notes" — with the correct icon according to Outlook's
+folder-type detection. The list view shows the respective items (appointments/contacts/
+tasks/notes) with subject and date.
 
-Read-only Browsing der PIM-Daten ist funktional. Volle Property-Round-Trip
-auf einzelne Items (Detail-Anzeige der Termine, Kontakte etc.) braucht
-noch volles Named-Property-Mapping (PSETID_Appointment etc.) — kommt in
-v5.0.0 oder optional als v4.6.1 Patch. Für volle bidirektionale Kalender/
-Kontakte-Sync empfehlen wir weiterhin den „Outlook CalDav Synchronizer"
-aus dem Setup-Page (Settings → Externe Clients).
+Read-only browsing of the PIM data is functional. A full property round trip
+on individual items (detail display of appointments, contacts etc.) still
+needs full named-property mapping (PSETID_Appointment etc.) — coming in
+v5.0.0 or optionally as a v4.6.1 patch. For full bidirectional calendar/
+contact sync we continue to recommend the "Outlook CalDav Synchronizer"
+from the setup page (Settings → External Clients).
 
 ---
 
-## [4.5.0] — 2026-05-26 — MAPI/HTTP Phase 5: Push-Notifications via Redis pub/sub
+## [4.5.0] — 2026-05-26 — MAPI/HTTP Phase 5: Push notifications via Redis pub/sub
 
 ### Added
 
 - **RopRegisterNotification** (`packages/ews-server/src/mapi/rop/notification.ts`):
-  Outlook abonniert per ROP gewünschte Event-Typen (NewMail / MessageDeleted /
-  MessageModified / FolderChanged) auf einem Folder- oder Mailbox-Handle.
-  Subscription wird dynamisch am Handle persistiert (subscription-Feld via
-  JSON-Round-Trip durch Redis).
+  Outlook subscribes via ROP to the desired event types (NewMail / MessageDeleted /
+  MessageModified / FolderChanged) on a folder or mailbox handle.
+  The subscription is dynamically persisted on the handle (subscription field via
+  JSON round trip through Redis).
 
-- **NotificationWait echter Long-Poll** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
-  Bisher pollte Outlook mit langen NotificationWait-Requests, die nach 30s
-  mit EventPending=false zurückkamen → spürbare Verzögerung. Jetzt:
-  duplicate()-ed ioredis-Client (subscribe braucht dedizierten Connection
-  nach ioredis-Pflicht), subscribe auf `coremail:mapi:notify:<userId>`,
-  Race zwischen Redis-Event und 30s-Timeout, sauberer Cleanup (unsubscribe +
-  disconnect + clearTimeout) bei beiden Ausgängen, plus `req.on('close')`
-  für Client-Disconnect-Handling. Antwortet sofort bei Event mit
-  EventPending=1, sonst nach Timeout mit EventPending=0.
+- **NotificationWait real long-poll** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
+  Until now Outlook polled with long NotificationWait requests that returned after 30s
+  with EventPending=false → noticeable delay. Now:
+  duplicate()-ed ioredis client (subscribe needs a dedicated connection
+  per ioredis requirement), subscribe to `coremail:mapi:notify:<userId>`,
+  race between Redis event and 30s timeout, clean cleanup (unsubscribe +
+  disconnect + clearTimeout) on both outcomes, plus `req.on('close')`
+  for client disconnect handling. Responds immediately on event with
+  EventPending=1, otherwise after timeout with EventPending=0.
 
-- **publishNotifyEvent-Helper** in `rop/notification.ts` mit
-  `notifyChannelFor(userId)`-Channel-Generator. Event-Shape:
+- **publishNotifyEvent helper** in `rop/notification.ts` with
+  `notifyChannelFor(userId)` channel generator. Event shape:
   `{ kind, userId, folderId?, messageId?, subject? }`.
 
-- **SMTP-Hook** (`packages/smtp-server/src/handlers/message.ts`):
-  `storeInboundMessage()` published nach der bestehenden `CHANNEL_MAIL_NEW`-
-  Publish jetzt zusätzlich auf `coremail:mapi:notify:<userId>` mit
-  MAPI-Notify-Event (`{kind:'NewMail', userId, folderId, messageId, subject}`)
-  — non-fatal `.catch(() => {})` für Backward-Compatibility wenn MAPI
-  nicht aktiv.
+- **SMTP hook** (`packages/smtp-server/src/handlers/message.ts`):
+  `storeInboundMessage()` now additionally publishes, after the existing `CHANNEL_MAIL_NEW`
+  publish, to `coremail:mapi:notify:<userId>` with a
+  MAPI notify event (`{kind:'NewMail', userId, folderId, messageId, subject}`)
+  — non-fatal `.catch(() => {})` for backward compatibility when MAPI
+  is not active.
 
-- **NotifyEvent-TypeScript-Interface** exportiert für andere Module die
-  Push-Events triggern (z.B. künftige Hooks für MessageDeleted / FolderChanged).
+- **NotifyEvent TypeScript interface** exported for other modules that
+  trigger push events (e.g. future hooks for MessageDeleted / FolderChanged).
 
-### Outlook-Verhalten nach v4.5.0
+### Outlook behavior after v4.5.0
 
-Neue Mail erscheint innerhalb von <1s in Outlook (statt vorher bis zu 30s
-warten). Toast-Notifikation bei neuer Mail funktioniert. Folder-Refresh-
-Cache wird invalidiert. Battery-Drain auf mobilen Outlook-Clients deutlich
-reduziert (kein Dauer-Polling mehr).
+New mail appears in Outlook within <1s (instead of waiting up to 30s
+before). Toast notification on new mail works. The folder refresh
+cache is invalidated. Battery drain on mobile Outlook clients significantly
+reduced (no more constant polling).
 
 ---
 
@@ -1419,3905 +1441,3901 @@ reduziert (kein Dauer-Polling mehr).
 ### Added
 
 - **RopGetAttachmentTable** (`packages/ews-server/src/mapi/rop/attachment.ts`):
-  Erstellt ein Table-Object-Handle für die Attachments einer Message. Neuer
-  Tabellen-Typ `attachments` (in `RopObject.table.tableType`), bei dem
-  `parentFolderId` die MessageId enthält.
+  Creates a table object handle for the attachments of a message. New
+  table type `attachments` (in `RopObject.table.tableType`), where
+  `parentFolderId` contains the MessageId.
 
-- **RopOpenAttachment**: Lädt Attachment via Index (PR_ATTACH_NUM aus QueryRows),
-  erzeugt Attachment-Handle.
+- **RopOpenAttachment**: Loads the attachment via index (PR_ATTACH_NUM from QueryRows),
+  creates an attachment handle.
 
-- **RopCreateAttachment**: Legt Draft-Attachment-Handle an (`attachmentId=null`,
-  `pendingBuffer`, `pendingProperties`). Bei SaveChangesAttachment wird in
-  DB+MinIO persistiert. AttachmentId = nächster freier Index in der
-  Message-Attachment-Liste.
+- **RopCreateAttachment**: Creates a draft attachment handle (`attachmentId=null`,
+  `pendingBuffer`, `pendingProperties`). On SaveChangesAttachment it is
+  persisted in DB+MinIO. AttachmentId = next free index in the
+  message attachment list.
 
-- **RopDeleteAttachment**: Entfernt Attachment-DB-Record.
+- **RopDeleteAttachment**: Removes the attachment DB record.
 
-- **RopSaveChangesAttachment**: SHA256-Hash, MinIO-Upload zu
-  `attachments/{messageId}/{sha256}`, DB-Insert (oder Update bei bestehender
-  Attachment) mit `filename/mimeType/size/sha256/storagePath/contentId`.
+- **RopSaveChangesAttachment**: SHA256 hash, MinIO upload to
+  `attachments/{messageId}/{sha256}`, DB insert (or update for an existing
+  attachment) with `filename/mimeType/size/sha256/storagePath/contentId`.
 
 - **RopDeleteMessages** (`packages/ews-server/src/mapi/rop/folder-ops.ts`):
-  Parst MessageId-Array (uint64-FNV-Hashes), löscht via `prisma.message.delete`,
-  dekrementiert Folder-Counter. Response liefert PartialCompletion-Flag.
+  Parses the MessageId array (uint64 FNV hashes), deletes via `prisma.message.delete`,
+  decrements folder counters. Response returns the PartialCompletion flag.
 
-- **RopMoveCopyMessages**: Source-Handle (input) + Destination-Handle (output),
-  parst WantCopy-Flag + MessageId-Array. Move = Folder-Update, Copy = duplicate
-  Message via `prisma.message.create` mit allen Original-Feldern. Updates
-  Folder-Counter (Source -= moved, Dest += moved).
+- **RopMoveCopyMessages**: Source handle (input) + destination handle (output),
+  parses WantCopy flag + MessageId array. Move = folder update, copy = duplicate
+  message via `prisma.message.create` with all original fields. Updates
+  folder counters (source -= moved, dest += moved).
 
-- **OpenStream auf Attachment**: Erweiterung von `handleRopOpenStream` —
-  bei `kind === 'attachment'` wird PR_ATTACH_DATA_BIN aus MinIO via
-  `loadAttachmentBytes()` geladen (oder leer für Draft-Attachment).
-  WriteStream akkumuliert in `pendingBuffer`, CommitStream persistiert
+- **OpenStream on attachment**: Extension of `handleRopOpenStream` —
+  for `kind === 'attachment'`, PR_ATTACH_DATA_BIN is loaded from MinIO via
+  `loadAttachmentBytes()` (or empty for a draft attachment).
+  WriteStream accumulates in `pendingBuffer`, CommitStream persists
   via SaveChangesAttachment.
 
-- **ROP-Codec**: Korrekte Payload-Parsing für GetAttachmentTable (TableFlags),
+- **ROP codec**: Correct payload parsing for GetAttachmentTable (TableFlags),
   OpenAttachment (AttachmentId uint32), CreateAttachment, DeleteAttachment,
   SaveChangesAttachment, DeleteMessages (WantAsync + NotifyNonRead +
   MessageIdCount + MessageIds[uint64]), MoveCopyMessages (DestHandleIndex +
   WantAsync + WantCopy + MessageIds[uint64]).
 
-- **RopObject erweitert**:
-  - `attachment`-Variante mit `attachmentId:string|null`, `attachNum`,
+- **RopObject extended**:
+  - `attachment` variant with `attachmentId:string|null`, `attachNum`,
     `pendingProperties`, `pendingBuffer`
-  - `table`-Variante mit neuem `tableType:'attachments'`
+  - `table` variant with new `tableType:'attachments'`
 
-- **table.ts erweitert**: `attachmentToPropRow()` mappt Attachment →
+- **table.ts extended**: `attachmentToPropRow()` maps attachment →
   PR_ATTACH_NUM/LONG_FILENAME_W/MIME_TAG_W/SIZE/METHOD/CONTENT_ID_W.
-  GetRowCount unterstützt 'attachments'-Tabellen.
+  GetRowCount supports 'attachments' tables.
 
-- **buildMessagePropertyList erweitert**: Lädt `_count.attachments` aus Prisma
-  und setzt `PR_HAS_ATTACH=true` + `PR_MESSAGE_FLAGS` HasAttach-Bit (0x10).
+- **buildMessagePropertyList extended**: Loads `_count.attachments` from Prisma
+  and sets `PR_HAS_ATTACH=true` + `PR_MESSAGE_FLAGS` HasAttach bit (0x10).
 
-- **SubmitMessage erweitert**: Lädt `msg.attachments` (filename/mimeType/
-  storagePath/size) aus DB und füllt `OutboundJob.message.attachments` mit
-  `{filename, minioPath, contentType, size}` — der existierende Worker baut
-  RFC-5322 mit echten Anhängen via `buildRawFromMessage`.
+- **SubmitMessage extended**: Loads `msg.attachments` (filename/mimeType/
+  storagePath/size) from the DB and fills `OutboundJob.message.attachments` with
+  `{filename, minioPath, contentType, size}` — the existing worker builds
+  RFC 5322 with real attachments via `buildRawFromMessage`.
 
-- **Neue Property-Tags**: PR_ATTACH_NUM, PR_ATTACH_METHOD,
+- **New property tags**: PR_ATTACH_NUM, PR_ATTACH_METHOD,
   PR_ATTACH_LONG_FILENAME_W, PR_ATTACH_FILENAME_W, PR_ATTACH_MIME_TAG_W,
   PR_ATTACH_SIZE, PR_ATTACH_CONTENT_ID_W, PR_ATTACH_DATA_BIN,
   PR_ATTACHMENT_LINKID.
 
-### Outlook-Verhalten nach v4.4.0
+### Outlook behavior after v4.4.0
 
-Anhang an neue Mail anhängen (Drag&Drop oder „Datei einfügen") funktioniert
-end-to-end — gespeichert in MinIO, beim Senden in Outbound-Queue mit
-`minioPath` weitergereicht, Worker lädt + signiert + sendet. Empfangene Mails
-mit Attachments: Outlook zeigt Paperclip-Icon, Anhang-Liste, Doppelklick
-öffnet Datei. Mails verschieben (Drag-and-Drop in andere Ordner) +
-Mehrfach-Lösch über Delete-Taste funktioniert. Push-Notifications bei neuer
-Mail: noch nicht (v4.5.0).
+Attaching a file to a new mail (drag & drop or "Insert file") works
+end-to-end — stored in MinIO, passed to the outbound queue with
+`minioPath` on send, the worker loads + signs + sends. Received mails
+with attachments: Outlook shows the paperclip icon, attachment list, double-click
+opens the file. Moving mails (drag-and-drop into other folders) +
+multi-delete via the Delete key works. Push notifications on new
+mail: not yet (v4.5.0).
 
 ---
 
-## [4.3.0] — 2026-05-26 — MAPI/HTTP Phase 3: Mail-Schreiben + Senden
+## [4.3.0] — 2026-05-26 — MAPI/HTTP Phase 3: Composing + sending mail
 
 ### Added
 
 - **RopCreateMessage** (`packages/ews-server/src/mapi/rop/message.ts`):
-  Legt eine neue Draft-Message-Handle an (`messageId=null`, `isDraft=true`,
-  `pendingProperties={}`, `pendingRecipients=[]`). Folder-Lookup über
-  CUID→uint64 FNV-1a-Hash. Response: ReturnValue + HasMessageId(0).
+  Creates a new draft message handle (`messageId=null`, `isDraft=true`,
+  `pendingProperties={}`, `pendingRecipients=[]`). Folder lookup via
+  CUID→uint64 FNV-1a hash. Response: ReturnValue + HasMessageId(0).
 
-- **RopSetProperties**: Parst PropertyValueArray (PropertyValueSize +
-  PropertyValueCount + TaggedPropertyValues) und akkumuliert die Tagged-
-  Property-Values in `pendingProperties` am Message-Handle. JSON-safe
-  Encoding für Session-Persistierung in Redis (Buffer → {_t:'Buffer',data},
+- **RopSetProperties**: Parses the PropertyValueArray (PropertyValueSize +
+  PropertyValueCount + TaggedPropertyValues) and accumulates the tagged
+  property values in `pendingProperties` on the message handle. JSON-safe
+  encoding for session persistence in Redis (Buffer → {_t:'Buffer',data},
   BigInt → {_t:'BigInt',v}, Date → {_t:'Date',iso}).
 
-- **RopModifyRecipients**: Parst die ColumnCount/Columns + RowCount/Rows-
-  Struktur aus MS-OXCMSG §2.2.3.1.2. Extrahiert RecipientType (1=TO/2=CC/3=BCC)
-  + DisplayName + EmailAddress aus den RecipientRow-Header-Bytes. Speichert
-  die Liste in `pendingRecipients` am Message-Handle.
+- **RopModifyRecipients**: Parses the ColumnCount/Columns + RowCount/Rows
+  structure from MS-OXCMSG §2.2.3.1.2. Extracts RecipientType (1=TO/2=CC/3=BCC)
+  + DisplayName + EmailAddress from the RecipientRow header bytes. Stores
+  the list in `pendingRecipients` on the message handle.
 
-- **RopSaveChangesMessage**: Persistiert Draft-Properties+Recipients in die
-  Prisma-DB. Bei `messageId === null` (neue Draft) wird ein neuer Message-
-  Record im aktuellen Folder (typischerweise Drafts) angelegt mit
-  `flags: ['\\Draft']`, UID-Increment auf Mailbox, ModSeq-Update. Bei
-  bestehender Message: Update. Response: FolderId(uint64) + MessageId(uint64).
+- **RopSaveChangesMessage**: Persists draft properties+recipients to the
+  Prisma DB. With `messageId === null` (new draft) a new message
+  record is created in the current folder (typically Drafts) with
+  `flags: ['\\Draft']`, UID increment on the mailbox, ModSeq update. For an
+  existing message: update. Response: FolderId(uint64) + MessageId(uint64).
 
 - **RopWriteStream** (`packages/ews-server/src/mapi/rop/stream.ts`):
-  Hängt Data an den Stream-Buffer an (am aktuellen Offset). Outlook ruft
-  WriteStream wiederholt für lange Bodies — der Buffer wird im Stream-Handle
-  akkumuliert bis CommitStream. Unterstützt Overwrite-in-place und
-  Sparse-Write (Padding mit Null-Bytes wenn Offset > Buffer-Länge).
+  Appends data to the stream buffer (at the current offset). Outlook calls
+  WriteStream repeatedly for long bodies — the buffer is accumulated in the stream handle
+  until CommitStream. Supports overwrite-in-place and
+  sparse write (padding with null bytes if offset > buffer length).
 
-- **RopCommitStream**: Schreibt den akkumulierten Stream-Buffer in die
-  parent Message. Bei gespeicherter Message: direktes Prisma-Update auf
-  bodyText/bodyHtml/subject (UTF-16-LE-Decode für PR_BODY_W/PR_SUBJECT_W,
-  UTF-8 für PR_HTML). Bei Draft-Stream: Update der `pendingProperties`
-  am parent Message-Handle.
+- **RopCommitStream**: Writes the accumulated stream buffer into the
+  parent message. For a saved message: direct Prisma update on
+  bodyText/bodyHtml/subject (UTF-16-LE decode for PR_BODY_W/PR_SUBJECT_W,
+  UTF-8 for PR_HTML). For a draft stream: update of `pendingProperties`
+  on the parent message handle.
 
-- **RopSubmitMessage**: Reicht die persistierte Message via BullMQ
-  smtp-outbound-Queue zum Versand ein. Baut StructuredMessage aus
-  Prisma-Message + lädt DKIM-Key der Sender-Domain + From/To/CC/BCC.
-  Verschiebt die Message nach Submit in den Sent-Folder (oder loggt
-  Warning bei Fehler — non-fatal). Lokale BullMQ-Queue-Instanz auf
-  Queue-Name `'smtp-outbound'` (gemeinsame Vereinbarung mit dem
-  Consumer im smtp-server, kein Cross-Package-Import nötig).
+- **RopSubmitMessage**: Submits the persisted message for sending via the BullMQ
+  smtp-outbound queue. Builds a StructuredMessage from the
+  Prisma message + loads the DKIM key of the sender domain + From/To/CC/BCC.
+  Moves the message to the Sent folder after submit (or logs a
+  warning on error — non-fatal). Local BullMQ queue instance on
+  queue name `'smtp-outbound'` (shared convention with the
+  consumer in the smtp-server, no cross-package import needed).
 
-- **RopObject-Type erweitert**: Die `message`-Variante hat jetzt
+- **RopObject type extended**: The `message` variant now has
   `messageId: string | null`, `isDraft`, `pendingProperties` (Record),
-  `pendingRecipients` (Array). Die `stream`-Variante hat
-  `writable`, `parentMessageHandle` für Draft-Streams.
+  `pendingRecipients` (Array). The `stream` variant has
+  `writable`, `parentMessageHandle` for draft streams.
 
-- **Helper `updateRopObject`** (`rop-handle-table.ts`): Patch-Update
-  eines bestehenden Handle-Objects in Redis (für Pending-Property-
-  Akkumulation während eines Compose-Workflows).
+- **Helper `updateRopObject`** (`rop-handle-table.ts`): Patch update
+  of an existing handle object in Redis (for pending-property
+  accumulation during a compose workflow).
 
-- **PR_*-Konstanten ergänzt**: PR_EMAIL_ADDRESS_W, PR_ADDRTYPE_W,
+- **PR_* constants added**: PR_EMAIL_ADDRESS_W, PR_ADDRTYPE_W,
   PR_SMTP_ADDRESS_W, PR_7BIT_DISPLAY_NAME_W, PR_RECIPIENT_TYPE,
   PR_RECIPIENT_FLAGS, PR_RECIPIENT_DISPLAY_NAME_W, PR_OBJECT_TYPE,
   PR_DISPLAY_TYPE.
 
-- **ROP-Codec ModifyRecipients-Payload**: Bisher wurde nur 64 Bytes geslicet
-  und der Rest verworfen — jetzt bekommt der Handler den vollständigen
-  Rest des Buffers, weil ModifyRecipients keine fest definierte Größe hat.
+- **ROP codec ModifyRecipients payload**: Until now only 64 bytes were sliced
+  and the rest discarded — now the handler gets the complete
+  rest of the buffer, because ModifyRecipients has no fixed size.
 
 ### Dependencies
 
-- **`bullmq` zu `@coremail/ews-server`-Dependencies hinzugefügt** —
-  für die direkte Queue-Anbindung an `'smtp-outbound'`.
+- **`bullmq` added to the `@coremail/ews-server` dependencies** —
+  for the direct queue connection to `'smtp-outbound'`.
 
-### Outlook-Verhalten nach v4.3.0
+### Outlook behavior after v4.3.0
 
-Compose-Window in Outlook: neue Mail anlegen, Subject + Body + Recipients
-eintippen, „Senden" klicken → Mail kommt beim Empfänger an. Sent-Folder
-zeigt die Kopie. Reply/Forward via Outlook-Buttons funktioniert genauso
-(Outlook lädt Original via v4.2.0 → schreibt Draft via v4.3.0 → submitted).
-Attachments: noch leer (kommen in v4.4.0). Push-Notification bei neuer
-Mail: noch nicht (kommt in v4.5.0).
+Compose window in Outlook: create a new mail, type subject + body + recipients,
+click "Send" → the mail arrives at the recipient. The Sent folder
+shows the copy. Reply/Forward via the Outlook buttons works the same way
+(Outlook loads the original via v4.2.0 → writes a draft via v4.3.0 → submitted).
+Attachments: still empty (coming in v4.4.0). Push notification on new
+mail: not yet (coming in v4.5.0).
 
 ---
 
-## [4.2.0] — 2026-05-26 — MAPI/HTTP Phase 2: Mail-Lesen (OpenMessage + Stream-Read)
+## [4.2.0] — 2026-05-26 — MAPI/HTTP Phase 2: Reading mail (OpenMessage + stream read)
 
 ### Added
 
 - **RopOpenMessage** (`packages/ews-server/src/mapi/rop/message.ts`):
-  Öffnet eine Message anhand `FolderId` + `MessageId` aus der Contents-Table,
-  legt einen Message-Handle in der Session-Handle-Table ab. Response liefert
+  Opens a message by `FolderId` + `MessageId` from the contents table,
+  stores a message handle in the session handle table. Response returns
   ReturnValue + HasNamedProperties + SubjectPrefix/NormalizedSubject + Recipients/Columns/Rows.
-  Folder-ID-Lookup über CUID→uint64-FNV-1a-Hash (siehe `entry-id.ts`).
+  Folder ID lookup via CUID→uint64 FNV-1a hash (see `entry-id.ts`).
 
-- **RopGetPropertiesAll** + **RopGetPropertiesSpecific**: Beide Handler liefern
-  die vollständige Liste aller Message-Properties (oder eine vom Client
-  spezifizierte Auswahl). `buildMessagePropertyList` mappt Prisma-`Message` →
-  MAPI-Properties: PR_SUBJECT_W, PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W,
+- **RopGetPropertiesAll** + **RopGetPropertiesSpecific**: Both handlers return
+  the complete list of all message properties (or a selection specified by the
+  client). `buildMessagePropertyList` maps Prisma `Message` →
+  MAPI properties: PR_SUBJECT_W, PR_SENDER_NAME_W, PR_SENDER_EMAIL_ADDRESS_W,
   PR_SENT_REPRESENTING_*, PR_DISPLAY_TO_W/CC_W/BCC_W, PR_MESSAGE_DELIVERY_TIME,
   PR_CLIENT_SUBMIT_TIME, PR_MESSAGE_FLAGS, PR_MESSAGE_SIZE, PR_BODY_W, PR_HTML,
   PR_MESSAGE_CLASS_W (IPM.Note), PR_HAS_ATTACH, PR_INTERNET_MESSAGE_ID_W,
   PR_PRIORITY, PR_IMPORTANCE.
 
 - **RopOpenStream** (`packages/ews-server/src/mapi/rop/stream.ts`):
-  Öffnet einen Stream auf eine Message-Property. PR_BODY_W (UTF-16-LE),
-  PR_HTML (UTF-8), PR_SUBJECT_W (UTF-16-LE). Property-Wert wird komplett
-  in den Stream-Object-Buffer geladen, Response liefert StreamSize.
+  Opens a stream on a message property. PR_BODY_W (UTF-16-LE),
+  PR_HTML (UTF-8), PR_SUBJECT_W (UTF-16-LE). The property value is loaded completely
+  into the stream object buffer, the response returns StreamSize.
 
-- **RopReadStream**: Chunked Read mit Offset-Tracking in der Session.
-  Max 30 KB pro Chunk (MAX_STREAM_CHUNK_BYTES) — Outlook erwartet
-  Antworten unter 32 KB. ReadStream-Request-Format: Uint16 ByteCount,
-  oder 0xBABE-Marker + Uint32 ExtendedByteCount für große Reads.
+- **RopReadStream**: Chunked read with offset tracking in the session.
+  Max 30 KB per chunk (MAX_STREAM_CHUNK_BYTES) — Outlook expects
+  responses under 32 KB. ReadStream request format: Uint16 ByteCount,
+  or 0xBABE marker + Uint32 ExtendedByteCount for large reads.
 
-- **RopGetStreamSize**: Liefert Buffer-Größe in Bytes.
+- **RopGetStreamSize**: Returns the buffer size in bytes.
 
-- **ROP-Codec-Erweiterung** (`packages/ews-server/src/mapi/rop-codec.ts`):
-  Parsing für OpenMessage, GetPropertiesAll, GetPropertiesSpecific,
+- **ROP codec extension** (`packages/ews-server/src/mapi/rop-codec.ts`):
+  Parsing for OpenMessage, GetPropertiesAll, GetPropertiesSpecific,
   OpenStream, ReadStream, GetStreamSize, CreateMessage, SaveChangesMessage,
   SetProperties, SubmitMessage, WriteStream, CommitStream, SetMessageReadFlag,
-  SetReadFlags. Plus Stub-Parsing für v4.4+ ROPs (MoveCopyMessages,
+  SetReadFlags. Plus stub parsing for v4.4+ ROPs (MoveCopyMessages,
   DeleteMessages, OpenAttachment, CreateAttachment, RegisterNotification,
   ModifyRecipients, ReadRecipients, RemoveAllRecipients,
-  GetPropertyIdsFromNames, GetNamesFromPropertyIds) — alle konsumieren
-  ihren Payload und werden vom Dispatcher mit ecNotSupported beantwortet,
-  so dass der ROP-Stream nicht abreißt.
+  GetPropertyIdsFromNames, GetNamesFromPropertyIds) — all consume
+  their payload and are answered by the dispatcher with ecNotSupported,
+  so that the ROP stream does not break off.
 
-- **ROP-Dispatcher-Erweiterung**: Switch-Cases für alle v4.2.0-Handler
-  (echte Implementierung) + v4.3.0-Stubs (CreateMessage, SetProperties,
-  SaveChangesMessage, SubmitMessage, WriteStream, CommitStream — alle
-  return ecNotSupported, werden in v4.3.0 implementiert).
+- **ROP dispatcher extension**: Switch cases for all v4.2.0 handlers
+  (real implementation) + v4.3.0 stubs (CreateMessage, SetProperties,
+  SaveChangesMessage, SubmitMessage, WriteStream, CommitStream — all
+  return ecNotSupported, implemented in v4.3.0).
 
-- **RopId**: `MoveCopyMessages` (0x33) + `DeleteMessages` (0x1E) ergänzt
-  in `rop-types.ts` (Vorbereitung v4.4.0).
+- **RopId**: `MoveCopyMessages` (0x33) + `DeleteMessages` (0x1E) added
+  in `rop-types.ts` (preparation for v4.4.0).
 
-### Outlook-Verhalten nach v4.2.0
+### Outlook behavior after v4.2.0
 
-Profile-Build (Logon + Folder-Browse aus v4.1.0) ist unverändert. Neu:
-Outlook kann jetzt die Liste von Mails in der Inbox öffnen UND eine
-einzelne Mail mit Subject, Sender, Body anzeigen. Schreiben (Reply/Forward/
-Compose), Senden, Attachments, Notifications: noch ecNotSupported, kommen
-in v4.3.0 (Mail-Schreiben) + v4.4.0 (Attachments) + v4.5.0 (Push).
+Profile build (Logon + folder browse from v4.1.0) is unchanged. New:
+Outlook can now open the list of mails in the inbox AND display a
+single mail with subject, sender, body. Writing (Reply/Forward/
+Compose), sending, attachments, notifications: still ecNotSupported, coming
+in v4.3.0 (composing mail) + v4.4.0 (attachments) + v4.5.0 (push).
 
 ---
 
-## [4.1.0] — 2026-05-26 — MAPI/HTTP Phase 1: ROP-Infrastruktur + Logon + Folder-Browse
+## [4.1.0] — 2026-05-26 — MAPI/HTTP Phase 1: ROP infrastructure + Logon + folder browse
 
 ### Added
 
-- **ROP-Stream-Codec** (`packages/ews-server/src/mapi/rop-codec.ts`): Parser
-  für den binären ROP-Buffer aus EcDoRpcExt2 — RopSize-Header, ROP-Header
-  (RopId + LogonId + Input/Output-Handle-Indexes), Server-Object-Handle-Table.
-  `RopResponseBuilder` für Spiegelung in die Response.
+- **ROP stream codec** (`packages/ews-server/src/mapi/rop-codec.ts`): Parser
+  for the binary ROP buffer from EcDoRpcExt2 — RopSize header, ROP header
+  (RopId + LogonId + input/output handle indexes), server object handle table.
+  `RopResponseBuilder` for mirroring into the response.
 
-- **ROP-Types-Konstanten** (`packages/ews-server/src/mapi/rop-types.ts`):
-  RopId-Enum mit allen relevanten ROPs aus MS-OXCROPS (Logon, OpenFolder,
+- **ROP types constants** (`packages/ews-server/src/mapi/rop-types.ts`):
+  RopId enum with all relevant ROPs from MS-OXCROPS (Logon, OpenFolder,
   GetHierarchyTable, GetContentsTable, SetColumns, QueryRows, OpenMessage,
-  CreateMessage, SubmitMessage, RegisterNotification, ...). PropType-Enum
-  (PT_LONG, PT_UNICODE, PT_BINARY, PT_SYSTIME, etc.). Property-Tag-Dictionary
-  mit den wichtigsten PR_* aus MS-OXPROPS (Folder, Mailbox, Message).
+  CreateMessage, SubmitMessage, RegisterNotification, ...). PropType enum
+  (PT_LONG, PT_UNICODE, PT_BINARY, PT_SYSTIME, etc.). Property tag dictionary
+  with the most important PR_* from MS-OXPROPS (folder, mailbox, message).
 
-- **Property-Codec** (`packages/ews-server/src/mapi/property-codec.ts`):
-  `writePropertyValue` + `readPropertyValue` für die 8 wichtigsten
-  PropertyTypes. FILETIME ↔ JavaScript-Date-Konvertierung. `writeTaggedProperty`
-  + `writePropertyRow` für Table-Row-Serialisierung.
+- **Property codec** (`packages/ews-server/src/mapi/property-codec.ts`):
+  `writePropertyValue` + `readPropertyValue` for the 8 most important
+  PropertyTypes. FILETIME ↔ JavaScript Date conversion. `writeTaggedProperty`
+  + `writePropertyRow` for table row serialization.
 
-- **EntryID-Helpers** (`packages/ews-server/src/mapi/entry-id.ts`):
-  EntryID-Encoder/Decoder mit CoreMail-eigenem ProviderUID. CUID → uint64
-  FNV-1a-Hash für PR_FOLDER_ID.
+- **EntryID helpers** (`packages/ews-server/src/mapi/entry-id.ts`):
+  EntryID encoder/decoder with CoreMail's own ProviderUID. CUID → uint64
+  FNV-1a hash for PR_FOLDER_ID.
 
-- **ROP-Handle-Table** (`packages/ews-server/src/mapi/rop-handle-table.ts`):
-  Typed Object-Descriptors (mailbox, folder, message, table, stream,
-  attachment) in der Session-State persistiert. `putRopObject`,
+- **ROP handle table** (`packages/ews-server/src/mapi/rop-handle-table.ts`):
+  Typed object descriptors (mailbox, folder, message, table, stream,
+  attachment) persisted in the session state. `putRopObject`,
   `getRopObject`, `releaseRopObject`, `resolveHandleIndex`.
 
-- **ROP-Dispatcher** (`packages/ews-server/src/mapi/rop-dispatcher.ts`):
-  Hauptdispatch-Funktion die binären Execute-Request parsed, jeden ROP an
-  seinen Handler dispatched, Response-Buffers sammelt, und finalen
-  ROP-Stream-Response baut.
+- **ROP dispatcher** (`packages/ews-server/src/mapi/rop-dispatcher.ts`):
+  Main dispatch function that parses the binary Execute request, dispatches each ROP to
+  its handler, collects response buffers, and builds the final
+  ROP stream response.
 
-- **Handler v4.1.0**:
-  - `rop/logon.ts`: **RopLogon** — Outlook-Mailbox-Login, lädt User aus
-    Prisma, baut Folder-IDs-Array (Inbox, Drafts, Sent, Trash, Subtree),
-    erstellt Mailbox-Handle in der Session. Response mit MailboxGuid,
+- **Handlers v4.1.0**:
+  - `rop/logon.ts`: **RopLogon** — Outlook mailbox login, loads the user from
+    Prisma, builds the folder IDs array (Inbox, Drafts, Sent, Trash, Subtree),
+    creates the mailbox handle in the session. Response with MailboxGuid,
     ReplGuid, LogonTime, GwartTime, StoreState.
   - `rop/folder.ts`: **RopOpenFolder**, **RopGetHierarchyTable**,
-    **RopGetContentsTable** (Stub-Count).
+    **RopGetContentsTable** (stub count).
   - `rop/table.ts`: **RopSetColumns**, **RopQueryRows**, **RopGetRowCount**,
-    **RopRelease**. Property-Row-Serialisierung mit dynamischer Spaltenwahl.
+    **RopRelease**. Property row serialization with dynamic column selection.
 
-- **Execute-Handler-Refactor** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
-  `handleExecute` nutzt jetzt `dispatchRopBuffer` statt `ecNotSupported` zu
-  liefern. Outlook sieht real funktionierende ROPs.
+- **Execute handler refactor** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
+  `handleExecute` now uses `dispatchRopBuffer` instead of returning `ecNotSupported`.
+  Outlook sees genuinely working ROPs.
 
-### Skeleton-Files für nachfolgende Phasen
+### Skeleton files for subsequent phases
 
-- `rop/message.ts` — v4.2.0 (Mail-Lesen) + v4.3.0 (Mail-Schreiben)
-- `rop/stream.ts` — v4.2.0 (Read) + v4.3.0 (Write)
-- `rop/submit.ts` — v4.3.0 (Mail-Senden via BullMQ-Bridge)
+- `rop/message.ts` — v4.2.0 (reading mail) + v4.3.0 (composing mail)
+- `rop/stream.ts` — v4.2.0 (read) + v4.3.0 (write)
+- `rop/submit.ts` — v4.3.0 (sending mail via BullMQ bridge)
 - `rop/attachment.ts` — v4.4.0
-- `rop/notification.ts` — v4.5.0 (Push via Redis-pub/sub)
-- `rop/calendar.ts` — v4.6.0 (IPM.Appointment Property-Mapping)
+- `rop/notification.ts` — v4.5.0 (push via Redis pub/sub)
+- `rop/calendar.ts` — v4.6.0 (IPM.Appointment property mapping)
 - `rop/contacts.ts` — v4.7.0 (NSPI + IPM.Contact)
 
-Jedes Skeleton-File enthält detaillierten Implementations-Plan + Property-
-Mapping + Microsoft-Spec-Referenzen.
+Each skeleton file contains a detailed implementation plan + property
+mapping + Microsoft spec references.
 
 ### Tests
 
-- 16 Codec-Round-Trip-Tests alle grün
-  (uint8/16/32/64, ASCII/UTF-16-LE Strings, GUIDs, Complex Connect-Request-
-  Sequence, Range-Errors)
+- 16 codec round-trip tests all green
+  (uint8/16/32/64, ASCII/UTF-16-LE strings, GUIDs, complex Connect request
+  sequence, range errors)
 
-### Outlook-Funktionalität
+### Outlook functionality
 
-Mit v4.1.0 kann Outlook nach Connect:
-- ✅ RopLogon erfolgreich durchführen
-- ✅ Folder-Hierarchie-Tabelle anfordern
-- ✅ Standard-Ordner (Inbox, Drafts, Sent, Trash) sehen
-- ❌ Mails lesen (kommt in v4.2.0 — `OpenMessage`/`GetProperties`/`ReadStream`)
-- ❌ Mails schreiben (kommt in v4.3.0)
-- ❌ Push-Notifications (kommt in v4.5.0)
+With v4.1.0, after Connect Outlook can:
+- ✅ Perform RopLogon successfully
+- ✅ Request the folder hierarchy table
+- ✅ See the standard folders (Inbox, Drafts, Sent, Trash)
+- ❌ Read mails (coming in v4.2.0 — `OpenMessage`/`GetProperties`/`ReadStream`)
+- ❌ Write mails (coming in v4.3.0)
+- ❌ Push notifications (coming in v4.5.0)
 
-Outlook-Profil-Build geht nach Connect deutlich weiter als in v4.0.0, aber
-beim ersten Mail-Klick wird ecNotSupported zurückkommen.
+The Outlook profile build gets considerably further after Connect than in v4.0.0, but
+the first mail click will return ecNotSupported.
 
 ---
 
-## [4.0.0] — 2026-05-26 — MAPI-over-HTTP Foundation + Externe Clients Setup-Page
+## [4.0.0] — 2026-05-26 — MAPI-over-HTTP foundation + External Clients setup page
 
-**Major-Version-Bump**: Beginn der MAPI-over-HTTP-Implementation für native
-Outlook-Exchange-Anbindung. Diese Foundation legt Protokoll-Layer, Codec,
-Session-Store, Architektur-Plan. Volle Outlook-Funktionalität kommt iterativ
-in v4.0.x / v4.1.0+ (siehe `packages/ews-server/src/mapi/ARCHITECTURE.md`).
+**Major version bump**: Start of the MAPI-over-HTTP implementation for native
+Outlook Exchange integration. This foundation lays down the protocol layer, codec,
+session store, architecture plan. Full Outlook functionality comes iteratively
+in v4.0.x / v4.1.0+ (see `packages/ews-server/src/mapi/ARCHITECTURE.md`).
 
 ### Added
 
-- **MAPI/HTTP Foundation** (`packages/ews-server/src/mapi/`):
-  - `ARCHITECTURE.md`: Vollständiger Implementations-Plan inkl. Protokoll-
-    Layer, ROP-Mapping, Versions-Roadmap v4.0.0 → v5.0.0
-  - `codec.ts`: Binary-Buffer-Reader/Writer für MS-OXCRPC Wire-Format
-    (Little-Endian uint8/16/32/64, ASCII/UTF-16-LE null-terminated Strings,
-    GUIDs in MS-DTYP-Format, AUX-Header-Blocks)
-  - `codec.test.ts`: 16 Round-Trip-Tests für alle Read/Write-Pairs (alle grün)
-  - `http-headers.ts`: Header-Parsing + Response-Header-Setting (X-RequestType,
+- **MAPI/HTTP foundation** (`packages/ews-server/src/mapi/`):
+  - `ARCHITECTURE.md`: Complete implementation plan incl. protocol
+    layer, ROP mapping, version roadmap v4.0.0 → v5.0.0
+  - `codec.ts`: Binary buffer reader/writer for the MS-OXCRPC wire format
+    (little-endian uint8/16/32/64, ASCII/UTF-16-LE null-terminated strings,
+    GUIDs in MS-DTYP format, AUX header blocks)
+  - `codec.test.ts`: 16 round-trip tests for all read/write pairs (all green)
+  - `http-headers.ts`: Header parsing + response header setting (X-RequestType,
     X-RequestId, X-ResponseCode, X-ExpirationInfo, X-PendingPeriod,
-    Set-Cookie-Management)
-  - `session-store.ts`: Redis-backed Session-Store für emsmdb + nspi mit
-    10-Min-TTL und Auto-Renew bei jedem Call
-  - `emsmdb-handler.ts`: Binary Connect/Disconnect/NotificationWait funktional;
-    Execute liefert `ecNotSupported` (ROPs kommen in v4.1.0+)
-  - `handler.ts` Refactor: Express `raw()` body-parser für `/mapi/emsmdb/` +
-    `/mapi/nspi/` (binäre Bodies statt JSON)
+    Set-Cookie management)
+  - `session-store.ts`: Redis-backed session store for emsmdb + nspi with
+    10-min TTL and auto-renew on every call
+  - `emsmdb-handler.ts`: Binary Connect/Disconnect/NotificationWait functional;
+    Execute returns `ecNotSupported` (ROPs come in v4.1.0+)
+  - `handler.ts` refactor: Express `raw()` body parser for `/mapi/emsmdb/` +
+    `/mapi/nspi/` (binary bodies instead of JSON)
 
-- **Autodiscover MAPI/HTTP Protocol-Block** (feature-flagged):
-  Env `ENABLE_MAPI_HTTP=true` aktiviert `<Protocol Type="mapiHttp" Version="1">`
-  in der Autodiscover-Response. Default off, weil ROP-Execution noch nicht
-  funktional ist. Sobald RopLogon+Folder-Browse in v4.1.0 fertig: default on.
+- **Autodiscover MAPI/HTTP protocol block** (feature-flagged):
+  Env `ENABLE_MAPI_HTTP=true` enables `<Protocol Type="mapiHttp" Version="1">`
+  in the Autodiscover response. Default off, because ROP execution is not yet
+  functional. Once RopLogon+folder browse are done in v4.1.0: default on.
 
-- **Setup-Page „Externe Clients & Outlook" im OWA** (aus v3.18.40 vorgezogen):
-  `packages/web-client/src/pages/SettingsPage.tsx` neue Section + Backend-
-  Endpoint `GET /api/v1/user/client-config`. Zeigt IMAP/SMTP-Daten, CalDAV-
-  + CardDAV-URLs, App-Passwort-Hinweis bei MFA, Step-by-Step für „Outlook
-  CalDav Synchronizer"-Plugin (kostenlos, OSS) — bis MAPI/HTTP voll
-  funktioniert die ausgereifte Lösung für Kalender + Kontakte in Outlook.
+- **Setup page "External Clients & Outlook" in OWA** (pulled forward from v3.18.40):
+  `packages/web-client/src/pages/SettingsPage.tsx` new section + backend
+  endpoint `GET /api/v1/user/client-config`. Shows IMAP/SMTP data, CalDAV
+  + CardDAV URLs, app-password notice with MFA, step-by-step for the "Outlook
+  CalDav Synchronizer" plugin (free, OSS) — until MAPI/HTTP fully
+  works, the mature solution for calendar + contacts in Outlook.
 
-### Roadmap (v4.x — siehe `ARCHITECTURE.md`)
+### Roadmap (v4.x — see `ARCHITECTURE.md`)
 
-| Version | Inhalt | Aufwand |
+| Version | Content | Effort |
 |---------|--------|---------|
-| v4.0.0  | Foundation (Codec, Session, Connect-Handshake)         | ✅ aktuell |
-| v4.1.0  | RopLogon + Folder-Browse (Outlook kann Login + Folders) | ~2 Wo. |
-| v4.2.0  | Mail-Lesen (RopGetContentsTable, OpenMessage, Stream)   | ~2 Wo. |
-| v4.3.0  | Mail-Schreiben + Senden (CreateMessage, SubmitMessage)  | ~1 Wo. |
-| v4.4.0  | Attachments + Move/Delete                                | ~1 Wo. |
-| v4.5.0  | Push-Notifications (NotificationWait + Redis-pub/sub)   | ~2 Wo. |
-| v4.6.0  | Calendar (IPM.Appointment)                              | ~3 Wo. |
-| v4.7.0  | Contacts (NSPI QueryRows + IPM.Contact)                 | ~2 Wo. |
-| v4.8.0  | Search (RopFindRow, Restrict)                            | ~2 Wo. |
-| v5.0.0  | Production Hardening + Outlook-Compat-Tests             | ~4 Wo. |
+| v4.0.0  | Foundation (codec, session, Connect handshake)         | ✅ current |
+| v4.1.0  | RopLogon + folder browse (Outlook can log in + see folders) | ~2 wks |
+| v4.2.0  | Reading mail (RopGetContentsTable, OpenMessage, Stream)   | ~2 wks |
+| v4.3.0  | Composing + sending mail (CreateMessage, SubmitMessage)  | ~1 wk |
+| v4.4.0  | Attachments + Move/Delete                                | ~1 wk |
+| v4.5.0  | Push notifications (NotificationWait + Redis pub/sub)   | ~2 wks |
+| v4.6.0  | Calendar (IPM.Appointment)                              | ~3 wks |
+| v4.7.0  | Contacts (NSPI QueryRows + IPM.Contact)                 | ~2 wks |
+| v4.8.0  | Search (RopFindRow, Restrict)                            | ~2 wks |
+| v5.0.0  | Production hardening + Outlook compat tests             | ~4 wks |
 
-**Geschätzter Gesamtaufwand**: 6–9 Monate für 2-Personen-Team.
+**Estimated total effort**: 6–9 months for a 2-person team.
 
 ### Migration / Breaking
 
-Keine Breaking Changes — alle bestehenden Funktionen unverändert. Outlook
-nutzt bis v4.1.0 weiterhin den IMAP-Fallback aus v3.18.39.
+No breaking changes — all existing functions unchanged. Outlook
+continues to use the IMAP fallback from v3.18.39 until v4.1.0.
 
 ---
 
-## [3.18.40] — 2026-05-26 — Externe Clients & Outlook Setup-Page in OWA
+## [3.18.40] — 2026-05-26 — External Clients & Outlook setup page in OWA
 
 ### Added
 
-- **Neue OWA-Settings-Section „Externe Clients & Outlook"**
+- **New OWA settings section "External Clients & Outlook"**
   (`packages/web-client/src/pages/SettingsPage.tsx`, `packages/api-gateway/src/routes/user.ts`):
-  Zentrale Setup-Hilfe-Seite für alle externen Clients. Zeigt prominent:
-  - **IMAP/SMTP/POP3-Daten** mit Copy-Buttons (Host, Port, Verschlüsselung)
-  - **CalDAV Account-URL** + direkte URLs pro Kalender
-  - **CardDAV Account-URL** + Default-Adressbuch-URL
-  - **App-Passwort-Hinweis** wenn MFA aktiv ist
-  - **Schritt-für-Schritt-Anleitung für „Outlook CalDav Synchronizer"**
-    (kostenloses OSS-Plugin) — Kalender + Kontakte über Outlook nutzen
-  - **Hinweise zu Alternativen**: OWA im Browser, Apple Kalender/Kontakte,
+  Central setup help page for all external clients. Prominently shows:
+  - **IMAP/SMTP/POP3 data** with copy buttons (host, port, encryption)
+  - **CalDAV account URL** + direct URLs per calendar
+  - **CardDAV account URL** + default address book URL
+  - **App-password notice** when MFA is active
+  - **Step-by-step guide for "Outlook CalDav Synchronizer"**
+    (free OSS plugin) — use calendar + contacts via Outlook
+  - **Notes on alternatives**: OWA in the browser, Apple Calendar/Contacts,
     Thunderbird + TbSync, eM Client, DAVx⁵ (Android)
 
-- **Neuer Backend-Endpoint** `GET /api/v1/user/client-config`
-  (`packages/api-gateway/src/routes/user.ts`): Liefert konsolidiert alle
-  Setup-Daten — Email/DisplayName, IMAP/SMTP/POP3-Hosts aus `ServerSettings`,
-  CalDAV-Account-URL + pro Kalender, CardDAV-Account- + Default-URL,
-  `requiresAppPassword`-Flag basierend auf User-MFA-Status.
+- **New backend endpoint** `GET /api/v1/user/client-config`
+  (`packages/api-gateway/src/routes/user.ts`): Returns all setup data
+  consolidated — email/displayName, IMAP/SMTP/POP3 hosts from `ServerSettings`,
+  CalDAV account URL + per calendar, CardDAV account + default URL,
+  `requiresAppPassword` flag based on the user's MFA status.
 
-### Hintergrund
+### Background
 
-Microsoft Outlook Desktop hat keinen nativen CalDAV/CardDAV-Support eingebaut.
-Volle MAPI-over-HTTP-Implementierung (für native Outlook-Exchange-Anbindung
-mit Kalender + Kontakte) ist mehrere Wochen Arbeit und kommt als eigenes
-zukünftiges Feature. Bis dahin ist der „Outlook CalDav Synchronizer"
-(GitHub: `aluxnimm/outlookcaldavsynchronizer`) der ausgereifte OSS-Plugin-
-Weg für Outlook-User. Die neue Settings-Page bündelt alle nötigen Daten
-+ liefert die Installations-Anleitung direkt im UI.
+Microsoft Outlook Desktop has no native CalDAV/CardDAV support built in.
+A full MAPI-over-HTTP implementation (for native Outlook Exchange integration
+with calendar + contacts) is several weeks of work and comes as a separate
+future feature. Until then, the "Outlook CalDav Synchronizer"
+(GitHub: `aluxnimm/outlookcaldavsynchronizer`) is the mature OSS plugin
+path for Outlook users. The new settings page bundles all necessary data
++ provides the installation guide directly in the UI.
 
 ---
 
-## [3.18.39] — 2026-05-26 — Outlook: EXCH+EXPR aus Autodiscover entfernt → IMAP-Fallback
+## [3.18.39] — 2026-05-26 — Outlook: EXCH+EXPR removed from Autodiscover → IMAP fallback
 
 ### Fixed
 
-- **Outlook-LTSC hing minutenlang im RPC/TCP-Connect-Loop, dann Fehler
-  „Diese Ordnergruppe kann nicht geöffnet werden — Fehler bei der Anmeldung
-  bei Exchange"** (`packages/autodiscover/src/v1.ts`): User-Verbindungsstatus
-  zeigte mehrere VIDs mit Status „wird hergestellt" und Protokoll **RPC/TCP**
-  auf `mail.<domain>`. Root Cause: Unsere Autodiscover-Response lieferte
-  `<Protocol Type="EXCH">` und `<Protocol Type="EXPR">` Blöcke — beide
-  signalisieren Outlook, dass der Server **MAPI/RPC** kann (intra-Exchange-RPC
-  bzw. RPC-over-HTTPS via `rpcproxy.dll`). Wir haben aber nur **EWS** + Stubs
-  von MAPI-over-HTTP implementiert. Outlook versuchte minutenlang RPC-Connects,
-  die hängen blieben.
+- **Outlook LTSC hung for minutes in an RPC/TCP connect loop, then error
+  "This set of folders cannot be opened — error logging on
+  to Exchange"** (`packages/autodiscover/src/v1.ts`): The user's connection status
+  showed several VIDs with status "connecting" and protocol **RPC/TCP**
+  on `mail.<domain>`. Root cause: Our Autodiscover response returned
+  `<Protocol Type="EXCH">` and `<Protocol Type="EXPR">` blocks — both
+  signal to Outlook that the server supports **MAPI/RPC** (intra-Exchange RPC
+  or RPC-over-HTTPS via `rpcproxy.dll`). But we have only implemented **EWS** + stubs
+  of MAPI-over-HTTP. Outlook attempted RPC connects for minutes,
+  which hung.
 
-  **Pragmatischer Fix** bis volle MAPI/HTTP-Implementation:
-  **EXCH- und EXPR-Blöcke ENTFERNT** aus Autodiscover-XML. Outlook erkennt:
-  - Server ist kein Exchange-Server für direkte MAPI-Profile
-  - Fällt automatisch auf **IMAP-Account-Konfiguration** zurück
-  - Mail funktioniert sofort via `<Protocol Type="IMAP">` + `<Protocol Type="SMTP">`
-  - Kalender + Kontakte gehen via CalDAV/CardDAV (Apple Kalender,
-    Thunderbird, eM Client) oder direkt über OWA im Browser
+  **Pragmatic fix** until the full MAPI/HTTP implementation:
+  **EXCH and EXPR blocks REMOVED** from the Autodiscover XML. Outlook recognizes:
+  - The server is not an Exchange server for direct MAPI profiles
+  - Automatically falls back to **IMAP account configuration**
+  - Mail works immediately via `<Protocol Type="IMAP">` + `<Protocol Type="SMTP">`
+  - Calendar + contacts go via CalDAV/CardDAV (Apple Calendar,
+    Thunderbird, eM Client) or directly via OWA in the browser
 
-  Outlook konfiguriert das Konto dann automatisch als „IMAP" (User sieht
-  weiterhin den Email-Adress-only-Setup-Flow, aber die Verbindung wird
-  IMAP statt Exchange).
+  Outlook then automatically configures the account as "IMAP" (the user still
+  sees the email-address-only setup flow, but the connection becomes
+  IMAP instead of Exchange).
 
 ### Roadmap
 
-Volle MAPI-over-HTTP-Implementierung (`EcDoConnectEx`, ROP-Verbose-Binary-
-Protocol, NSPI Bind/QueryRows) für native Outlook-Exchange-Anbindung ist
-mehrere Wochen Arbeit. Bis dahin ist IMAP der pragmatische Pfad für
-Outlook-Desktop-User.
+A full MAPI-over-HTTP implementation (`EcDoConnectEx`, ROP verbose binary
+protocol, NSPI Bind/QueryRows) for native Outlook Exchange integration is
+several weeks of work. Until then, IMAP is the pragmatic path for
+Outlook desktop users.
 
 ---
 
-## [3.18.38] — 2026-05-26 — Outlook-LTSC „kein Passwort-Prompt" + Autodiscover-Vervollständigung
+## [3.18.38] — 2026-05-26 — Outlook LTSC "no password prompt" + Autodiscover completion
 
 ### Fixed
 
-- **KRITISCHER ROOT CAUSE: EWS antwortete auf ersten Request mit 200 OK
-  statt 401 — Outlook fragt nie nach Passwort** (`packages/ews-server/src/server.ts`):
-  User-Symptom: Outlook „verband" sich nach Autodiscover ohne Credential-
-  Prompt, zeigte aber dann nur „Private Ordner" (lokales PST) statt der
-  Exchange-Mailbox, plus Fehlermeldung „Microsoft Exchange-Informationsdienst
-  Ihres Profils enthält nicht alle erforderlichen Informationen". Root Cause:
-  Outlook LTSC probt zuerst `GET /EWS/Exchange.asmx` BEVOR es überhaupt
-  einen `Authorization`-Header sendet. Der bisherige GET-Handler lieferte
-  unauthentifiziert 200 + WSDL-Stub zurück → Outlook nahm an, dass keine
-  Auth nötig ist, schickte nie Credentials, und das Setup landete bei der
-  lokalen Standard-PST („Private Ordner"). **Fix**: `ewsAuthMiddleware` jetzt
-  auch vor dem GET-Handler und vor dem `/mapi/*`-Router (außer
-  `/mapi/healthcheck.htm` — bleibt anonym für Outlook-Probe). MAPI- und
-  OAB-Endpoints senden jetzt auch korrekt `WWW-Authenticate: Basic
-  realm="CoreMail EWS"` bei fehlendem Auth-Header.
+- **CRITICAL ROOT CAUSE: EWS answered the first request with 200 OK
+  instead of 401 — Outlook never asks for a password** (`packages/ews-server/src/server.ts`):
+  User symptom: Outlook "connected" after Autodiscover without a credential
+  prompt, but then only showed "Personal Folders" (local PST) instead of the
+  Exchange mailbox, plus the error message "The Microsoft Exchange information service
+  in your profile is missing required information". Root cause:
+  Outlook LTSC first probes `GET /EWS/Exchange.asmx` BEFORE it sends
+  any `Authorization` header at all. The previous GET handler returned
+  200 + WSDL stub unauthenticated → Outlook assumed no
+  auth was needed, never sent credentials, and the setup landed on the
+  local default PST ("Personal Folders"). **Fix**: `ewsAuthMiddleware` now
+  also before the GET handler and before the `/mapi/*` router (except
+  `/mapi/healthcheck.htm` — stays anonymous for the Outlook probe). MAPI and
+  OAB endpoints now also correctly send `WWW-Authenticate: Basic
+  realm="CoreMail EWS"` when the auth header is missing.
 
-- **`auth-service` URL war falsch** (`packages/ews-server/src/auth/middleware.ts`):
-  Basic-Auth-Fallback im EWS rief `http://auth-service:3001/auth/login` —
-  Port 3001 ist aber die `storage-api`, nicht der `auth-service` (der auf
-  3003 läuft). Plus im monolithischen App-Container ist alles unter
-  `localhost` erreichbar, nicht unter Service-Hostnames. Fix: env-Variable
-  `AUTH_SERVICE_URL` mit Default `http://localhost:3003/auth/login`.
+- **`auth-service` URL was wrong** (`packages/ews-server/src/auth/middleware.ts`):
+  The Basic-Auth fallback in EWS called `http://auth-service:3001/auth/login` —
+  but port 3001 is the `storage-api`, not the `auth-service` (which runs on
+  3003). Plus, in the monolithic app container everything is reachable under
+  `localhost`, not under service hostnames. Fix: env variable
+  `AUTH_SERVICE_URL` with default `http://localhost:3003/auth/login`.
 
-- **Autodiscover v1 XML hatte Outlook-Pflichtfelder fehlend bzw. falsch**
-  (`packages/autodiscover/src/v1.ts`): Recherche an Microsoft Docs +
-  Grommunio-Implementierung ergab:
-  - `AuthPackage` MUSS `Basic` (capital B) sein — manche Outlook-LTSC-Builds
-    sind case-sensitive. War `basic` (kleines b).
-  - `<User><LegacyDN>` Pflicht: Outlook nutzt es als interne User-Identity
-    (Format `/o=CoreMail/ou=Exchange Administrative Group
-    (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>`). Fehlte komplett.
-  - `<User><AutoDiscoverSMTPAddress>` ergänzt (Pflicht für Profile-Binding).
-  - `<GroupingInformation>default</GroupingInformation>` im EXPR-Block —
-    required ab Exchange 2013 SP1 für Sharing-Discovery.
-  - `<PublicFolderInformation><SmtpAddress>publicfolder@<root-domain>` als
-    Dummy — Outlook loggt sonst „PublicFolder discovery failed" und
-    klassifiziert das Profil als incomplete.
-  - `ServerDN`/`MdbDN` mit korrekter Exchange-2019-Topologie
-    (`Exchange Administrative Group (FYDIBOHF23SPDLT)` statt nur
+- **Autodiscover v1 XML had Outlook-mandatory fields missing or wrong**
+  (`packages/autodiscover/src/v1.ts`): Research of Microsoft Docs +
+  the Grommunio implementation showed:
+  - `AuthPackage` MUST be `Basic` (capital B) — some Outlook LTSC builds
+    are case-sensitive. Was `basic` (lowercase b).
+  - `<User><LegacyDN>` mandatory: Outlook uses it as the internal user identity
+    (format `/o=CoreMail/ou=Exchange Administrative Group
+    (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>`). Was missing completely.
+  - `<User><AutoDiscoverSMTPAddress>` added (mandatory for profile binding).
+  - `<GroupingInformation>default</GroupingInformation>` in the EXPR block —
+    required since Exchange 2013 SP1 for sharing discovery.
+  - `<PublicFolderInformation><SmtpAddress>publicfolder@<root-domain>` as
+    dummy — otherwise Outlook logs "PublicFolder discovery failed" and
+    classifies the profile as incomplete.
+  - `ServerDN`/`MdbDN` with correct Exchange 2019 topology
+    (`Exchange Administrative Group (FYDIBOHF23SPDLT)` instead of just
     `Exchange`).
-  - `<EcpUrl>` ergänzt (zeigt auf OWA — Outlook nutzt es für Web-Open-Link).
+  - `<EcpUrl>` added (points to OWA — Outlook uses it for the web-open link).
 
-### Hintergrund-Recherche
+### Background research
 
-Quellen: Microsoft Learn (MS-OXDSCLI, MS-OXCMAPIHTTP, POX Autodiscover),
-msxfaq.de (HTTP-401-Negotiate-Flow), Grommunio Docs (KB Outlook bugs),
-Mailcow Docs (kein EWS, daher kein Outlook-Exchange-Support). Vergleiche
-zu Stalwart + Mailcow (Open-Source-Mailserver) bestätigen: ohne EWS +
-korrektes 401-Verhalten kann Outlook keine Exchange-Profile bauen.
+Sources: Microsoft Learn (MS-OXDSCLI, MS-OXCMAPIHTTP, POX Autodiscover),
+msxfaq.de (HTTP 401 Negotiate flow), Grommunio Docs (KB Outlook bugs),
+Mailcow Docs (no EWS, hence no Outlook Exchange support). Comparisons
+with Stalwart + Mailcow (open-source mail servers) confirm: without EWS +
+correct 401 behavior, Outlook cannot build Exchange profiles.
 
 ---
 
-## [3.18.37] — 2026-05-26 — Outlook-LTSC Autodiscover-XML erweitert + Audit-Übersetzungen
+## [3.18.37] — 2026-05-26 — Outlook LTSC Autodiscover XML extended + audit translations
 
 ### Fixed
 
-- **Outlook LTSC (Exchange 2019) konnte sich nicht verbinden trotz korrekt
-  geliefertem Autodiscover** (`packages/autodiscover/src/v1.ts`): Die
-  XML-Response hatte nur einen minimalen `<Protocol><Type>EXCH</Type>...`-
-  Block ohne `AuthPackage`, `OABUrl`, `ASUrl`, `OOFUrl`, `MdbDN`,
-  `ServerVersion` und ohne den **EXPR-Block** (Outlook Anywhere / MAPI-
-  over-HTTP-Fallback). Outlook 2016+ erwartet diese Felder zwingend —
-  ohne sie bricht der Setup-Wizard mit „Da hat etwas nicht geklappt" ab.
+- **Outlook LTSC (Exchange 2019) could not connect despite correctly
+  delivered Autodiscover** (`packages/autodiscover/src/v1.ts`): The
+  XML response had only a minimal `<Protocol><Type>EXCH</Type>...`
+  block without `AuthPackage`, `OABUrl`, `ASUrl`, `OOFUrl`, `MdbDN`,
+  `ServerVersion` and without the **EXPR block** (Outlook Anywhere / MAPI-
+  over-HTTP fallback). Outlook 2016+ strictly expects these fields —
+  without them the setup wizard aborts with "Something went wrong".
 
-  **Fix**: Autodiscover-v1-XML erweitert um:
-  - `<AuthPackage>basic</AuthPackage>` (Outlook braucht expliziten Auth-Typ)
-  - `<ServerVersion>73C0834F</ServerVersion>` (Exchange-2019-kompatibler Server-Version-Token)
-  - `<MdbDN>` + `<ServerDN>` (Exchange-Topologie-Identifikatoren)
-  - `<ASUrl>`, `<OOFUrl>`, `<OABUrl>` (Availability-Service, Out-of-Office, Offline-Adressbuch)
+  **Fix**: Autodiscover v1 XML extended with:
+  - `<AuthPackage>basic</AuthPackage>` (Outlook needs an explicit auth type)
+  - `<ServerVersion>73C0834F</ServerVersion>` (Exchange-2019-compatible server version token)
+  - `<MdbDN>` + `<ServerDN>` (Exchange topology identifiers)
+  - `<ASUrl>`, `<OOFUrl>`, `<OABUrl>` (Availability Service, Out-of-Office, Offline Address Book)
   - `<EmwsUrl>` (Exchange Management Web Service)
   - `<OWAUrl AuthenticationMethod="Basic, Fba">`
-  - **Komplett neuer `<Protocol><Type>EXPR</Type>`-Block** für Outlook Anywhere
+  - **Completely new `<Protocol><Type>EXPR</Type>` block** for Outlook Anywhere
     /MAPI-over-HTTP (SSL=on, AuthPackage=basic, ServerExclusiveConnect=on)
-  - `<MicrosoftOnline>False</MicrosoftOnline>` (signalisiert On-Premises-Setup)
+  - `<MicrosoftOnline>False</MicrosoftOnline>` (signals an on-premises setup)
 
-- **Audit-Log: Legacy-Action-Strings (vor v3.18.34 Path-Fix) nicht übersetzt**
-  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Alte Audit-Einträge
-  vor dem Path-Mutation-Fix wurden mit Short-Action-Strings (`anomalies.get`,
-  `full.post`, `jobs.delete`, `tags.post`, `members.delete`) gespeichert.
-  Das v3.18.34 `ACTION_MAP` hatte nur die NEUEN Long-Forms (z.B.
-  `audit-log.anomalies.get`). **Fix**: 25+ zusätzliche Einträge für
-  Legacy-Short-Forms + neue v3.18.37-Formats (`servers.settings.put`,
+- **Audit log: legacy action strings (before the v3.18.34 path fix) not translated**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Old audit entries
+  before the path-mutation fix were stored with short action strings (`anomalies.get`,
+  `full.post`, `jobs.delete`, `tags.post`, `members.delete`).
+  The v3.18.34 `ACTION_MAP` only had the NEW long forms (e.g.
+  `audit-log.anomalies.get`). **Fix**: 25+ additional entries for
+  legacy short forms + new v3.18.37 formats (`servers.settings.put`,
   `servers.settings.derive.post`, `retention.tags.*`, `dashboard.get`,
   `services.put`, etc.).
 
-- **Audit-Log Akteur-Spalte: leerer `actorEmail` zeigte gar nichts**
-  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Bei System-Aktionen
-  (z. B. Cron-getriggert) ist `actorEmail` leer. Fix: Fallback-Anzeige
-  `System (cmpla8p1…)` statt leere Zelle.
+- **Audit log actor column: empty `actorEmail` showed nothing at all**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): For system actions
+  (e.g. cron-triggered) `actorEmail` is empty. Fix: fallback display
+  `System (cmpla8p1…)` instead of an empty cell.
 
 ---
 
-## [3.18.36] — 2026-05-26 — Hostname-Auto-Derive + Bilder-Privacy-Banner gehärtet
+## [3.18.36] — 2026-05-26 — Hostname auto-derive + image privacy banner hardened
 
 ### Fixed
 
-- **Server-URLs werden jetzt dynamisch aus dem `publicHostname` abgeleitet —
-  nicht mehr fest auf `mail.local:8080`** (`packages/api-gateway/src/lib/server-urls.ts`,
+- **Server URLs are now derived dynamically from `publicHostname` —
+  no longer fixed to `mail.local:8080`** (`packages/api-gateway/src/lib/server-urls.ts`,
   `packages/api-gateway/src/routes/setup.ts`, `packages/api-gateway/src/routes/admin/domains.ts`):
-  Bisheriges Verhalten: Schema-Defaults schreiben `ewsUrl`/`owaUrl`/`easUrl`/
-  `autodiscoverBase` als `http://mail.local:8080/...` beim ersten Container-
-  Start. Wer eine echte Domain konfiguriert (z. B. `mail.firma.de`) musste
-  die URLs manuell in BCP → Server-Einstellungen ändern, sonst lieferte
-  Autodiscover Outlook unbrauchbare URLs. Das funktioniert für 1 Test-User
-  manuell, aber NICHT für die 1000+ User mit individuellen Domains.
+  Previous behavior: schema defaults write `ewsUrl`/`owaUrl`/`easUrl`/
+  `autodiscoverBase` as `http://mail.local:8080/...` at first container
+  start. Anyone configuring a real domain (e.g. `mail.firma.de`) had to
+  change the URLs manually in BCP → Server settings, otherwise
+  Autodiscover gave Outlook unusable URLs. That works for 1 test user
+  manually, but NOT for the 1000+ users with individual domains.
 
-  **Fix**: Neuer zentraler Helper `lib/server-urls.ts` mit:
-  - `deriveServerUrls(publicHostname, useHttps, httpPort)` — berechnet alle
-    URLs aus dem Hostname (Autodiscover-Host nach Microsoft-Spec
+  **Fix**: New central helper `lib/server-urls.ts` with:
+  - `deriveServerUrls(publicHostname, useHttps, httpPort)` — computes all
+    URLs from the hostname (Autodiscover host per Microsoft spec
     `autodiscover.<root-domain>`).
-  - `syncFromPrimaryDomain(domainName)` — setzt `publicHostname` auf
-    `mail.<domain>` wenn er noch Default ist, leitet alle URLs ab.
-  - `syncServerUrlsFromHostname()` — idempotenter Re-Sync, läuft beim
-    api-gateway-Start UND ist von außen aufrufbar.
+  - `syncFromPrimaryDomain(domainName)` — sets `publicHostname` to
+    `mail.<domain>` if it is still the default, derives all URLs.
+  - `syncServerUrlsFromHostname()` — idempotent re-sync, runs at
+    api-gateway start AND can be called from outside.
 
-  Eingehängt in:
-  - `POST /api/v1/setup/complete` — Setup-Wizard speichert in einer
-    Transaktion Domain + Admin-User + `publicHostname=mail.<setup-domain>` +
-    alle abgeleiteten URLs. Vorher blieb `publicHostname=mail.local`.
-  - `POST /api/v1/admin/domains` — wenn die erste Domain angelegt wird
-    (= automatisch `primary=true`), werden Hostname + URLs daraus
-    abgeleitet.
-  - `POST /api/v1/admin/domains/:id/make-primary` — wenn eine andere
-    Domain primary wird, werden URLs nur dann auf den neuen Hostname
-    umgestellt wenn `publicHostname` noch Default ist. Eine bereits
-    explizit gesetzte Konfiguration bleibt respektiert.
-  - `PUT  /api/v1/admin/servers/settings` — beim Save mit stale URLs
-    (`mail.local` oder `:8080`) wird automatisch nachgezogen.
-  - api-gateway Startup — als Sicherheitsnetz für bestehende Installationen.
+  Hooked into:
+  - `POST /api/v1/setup/complete` — the setup wizard saves, in one
+    transaction, domain + admin user + `publicHostname=mail.<setup-domain>` +
+    all derived URLs. Previously `publicHostname=mail.local` remained.
+  - `POST /api/v1/admin/domains` — when the first domain is created
+    (= automatically `primary=true`), hostname + URLs are derived
+    from it.
+  - `POST /api/v1/admin/domains/:id/make-primary` — when another
+    domain becomes primary, URLs are only switched to the new hostname
+    if `publicHostname` is still the default. An already
+    explicitly set configuration is respected.
+  - `PUT  /api/v1/admin/servers/settings` — on save with stale URLs
+    (`mail.local` or `:8080`) they are updated automatically.
+  - api-gateway startup — as a safety net for existing installations.
 
-  Redis-Publish auf `coremail:settings:reload` informiert den autodiscover-
-  Service sofort, sodass Outlook keine veralteten URLs sieht.
+  A Redis publish on `coremail:settings:reload` informs the autodiscover
+  service immediately, so Outlook never sees outdated URLs.
 
-### Fixed (zusätzlich)
+### Fixed (additionally)
 
-- **Bilder-Privacy-Banner aus v3.18.10 funktionierte in der Praxis nicht** —
+- **The image privacy banner from v3.18.10 did not work in practice** —
 
-- **Bilder-Privacy-Banner aus v3.18.10 funktionierte in der Praxis nicht** —
-  externe Bilder wurden direkt geladen, das blaue „X externe Bilder wurden
-  blockiert"-Banner erschien nie (`packages/web-client/src/components/MessageReader.tsx`):
-  Root Cause: `DOMPurify.sanitize(html)` lief OHNE Konfiguration und entfernte
-  unsere Privacy-Markierungen (`data-coremail-ext-src` Attribut, transparenter
-  `data:image/png;base64,...`-Placeholder als src) standardmäßig. Damit wurde
-  der Block-Mechanismus durch den Sanitize-Schritt direkt wieder ausgehebelt.
+- **The image privacy banner from v3.18.10 did not work in practice** —
+  external images were loaded directly, the blue "X external images were
+  blocked" banner never appeared (`packages/web-client/src/components/MessageReader.tsx`):
+  Root cause: `DOMPurify.sanitize(html)` ran WITHOUT configuration and removed
+  our privacy markers (`data-coremail-ext-src` attribute, transparent
+  `data:image/png;base64,...` placeholder as src) by default. Thus the
+  blocking mechanism was immediately undone again by the sanitize step.
 
-  **Fix**: `sanitize()` mit explizier Konfiguration neu gebaut:
+  **Fix**: `sanitize()` rebuilt with explicit configuration:
   - `ADD_ATTR: ['data-coremail-ext-src', 'data-coremail-unresolved-cid',
-    'data-coremail-ext-bg']` — unsere Markierungen erlaubt
-  - `ALLOWED_URI_REGEXP` erlaubt `data:image/...;base64,...` (Placeholder)
+    'data-coremail-ext-bg']` — our markers allowed
+  - `ALLOWED_URI_REGEXP` allows `data:image/...;base64,...` (placeholder)
   - `FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'object', 'embed',
-    'meta', 'base']` — Tracking-Vektoren raus
+    'meta', 'base']` — tracking vectors out
   - `FORBID_ATTR: ['onload', 'onerror', 'onclick', …, 'srcset']` —
-    Event-Handler + Responsive-Image-Tracker raus
+    event handlers + responsive-image trackers out
 
 ### Added
 
-- **CSS `background-image: url(...)` wird ebenfalls geblockt**
-  (`packages/web-client/src/components/MessageReader.tsx`): Häufiger Tracker-
-  Vektor in HTML-Mails (z.B. `<div style="background-image:url(http://tracker
-  .com/pixel.png)">`). `processExternalImages()` extrahiert `background-image`
-  aus inline-`style`-Attributen, neutralisiert externe URLs und speichert das
-  Original in `data-coremail-ext-bg`. Beim „Bilder anzeigen"-Klick wird die
-  CSS-Property wieder eingesetzt.
+- **CSS `background-image: url(...)` is also blocked**
+  (`packages/web-client/src/components/MessageReader.tsx`): Common tracker
+  vector in HTML mails (e.g. `<div style="background-image:url(http://tracker
+  .com/pixel.png)">`). `processExternalImages()` extracts `background-image`
+  from inline `style` attributes, neutralizes external URLs and stores the
+  original in `data-coremail-ext-bg`. On the "Show images" click the
+  CSS property is reinserted.
 
 ### Changed
 
-- **„Bilder anzeigen"-Toggle räumt zusätzlich Placeholder-Styles auf**
-  (`packages/web-client/src/components/MessageReader.tsx`): Der dünne
-  gestrichelte Rahmen + `opacity:0.5`, der blockierte Bilder kennzeichnet,
-  wird nach dem Klick automatisch entfernt — Bilder erscheinen normal statt
-  weiterhin „gedimmt" mit Rahmen.
+- **"Show images" toggle additionally cleans up placeholder styles**
+  (`packages/web-client/src/components/MessageReader.tsx`): The thin
+  dashed border + `opacity:0.5` that marks blocked images
+  is removed automatically after the click — images appear normally instead of
+  still "dimmed" with a border.
 
 ---
 
-## [3.18.35] — 2026-05-26 — Outlook LTSC Verbindungs-Fix (Autodiscover-Routing + URL-Auto-Sync)
+## [3.18.35] — 2026-05-26 — Outlook LTSC connection fix (Autodiscover routing + URL auto-sync)
 
 ### Fixed
 
-- **KRITISCH: Outlook LTSC „Da hat etwas nicht geklappt" — Autodiscover-Endpunkt
-  lieferte Express-404**
-  (`packages/api-gateway/src/server.ts`): Der API-Gateway routete
-  `/Autodiscover/Autodiscover.xml` und `/autodiscover/autodiscover.json/v1.0/...`
-  an den **EWS-Server** (Port 8080), obwohl dort gar keine Autodiscover-Routen
-  implementiert sind. Der **autodiscover-Server** auf Port 8081 hat die echten
-  Handler (`handleAutodiscoverV1` + `handleAutodiscoverV2`), wurde aber nie
-  aufgerufen. Outlook bekam vom EWS-Server `Cannot POST /Autodiscover/
-  Autodiscover.xml` (Express-Default-404) und konnte deshalb nicht konfigurieren.
-  **Fix**: Neue Env-Variable `AUTODISCOVER_SERVICE_URL` (Default
-  `http://localhost:8081`). Routes `/Autodiscover` und `/autodiscover` werden
-  jetzt korrekt zum autodiscover-Server proxied.
+- **CRITICAL: Outlook LTSC "Something went wrong" — Autodiscover endpoint
+  returned an Express 404**
+  (`packages/api-gateway/src/server.ts`): The API gateway routed
+  `/Autodiscover/Autodiscover.xml` and `/autodiscover/autodiscover.json/v1.0/...`
+  to the **EWS server** (port 8080), although no Autodiscover routes are
+  implemented there at all. The **autodiscover server** on port 8081 has the real
+  handlers (`handleAutodiscoverV1` + `handleAutodiscoverV2`), but was never
+  called. Outlook got `Cannot POST /Autodiscover/
+  Autodiscover.xml` (Express default 404) from the EWS server and therefore could not configure.
+  **Fix**: New env variable `AUTODISCOVER_SERVICE_URL` (default
+  `http://localhost:8081`). Routes `/Autodiscover` and `/autodiscover` are
+  now correctly proxied to the autodiscover server.
 
-- **EWS-/Owa-/EAS-URLs zeigten auf internen Port :8080** statt auf den
-  externen HTTPS-Port (`packages/api-gateway/src/server.ts`,
-  `packages/api-gateway/src/routes/admin/servers.ts`): Beim Setup wurden die
-  `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase`-Felder in `ServerSettings`
-  initial mit `http://mail.local:8080/...` befüllt (Schema-Defaults). Wenn
-  der Admin später `publicHostname` änderte (z.B. via BCP → Server-
-  Einstellungen), wurden die abgeleiteten URLs aber NICHT mit-migriert →
-  Autodiscover lieferte für Outlook unerreichbare interne URLs.
-  - **Startup-Migration** (`syncAutodiscoverUrls()`): Beim api-gateway-Start
-    werden URLs auto-korrigiert, wenn `publicHostname != mail.local` aber URLs
-    noch `mail.local` oder `:8080` enthalten. Berechnet `ewsUrl`/`owaUrl`/
-    `easUrl` aus `publicHostname` + `useHttps` + `httpPort` und
-    `autodiscoverBase` aus der Root-Domain (Microsoft-Spec:
+- **EWS/OWA/EAS URLs pointed to the internal port :8080** instead of the
+  external HTTPS port (`packages/api-gateway/src/server.ts`,
+  `packages/api-gateway/src/routes/admin/servers.ts`): During setup the
+  `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase` fields in `ServerSettings`
+  were initially filled with `http://mail.local:8080/...` (schema defaults). When
+  the admin later changed `publicHostname` (e.g. via BCP → Server
+  settings), the derived URLs were NOT migrated along →
+  Autodiscover delivered internal URLs unreachable for Outlook.
+  - **Startup migration** (`syncAutodiscoverUrls()`): At api-gateway start,
+    URLs are auto-corrected if `publicHostname != mail.local` but the URLs
+    still contain `mail.local` or `:8080`. Computes `ewsUrl`/`owaUrl`/
+    `easUrl` from `publicHostname` + `useHttps` + `httpPort` and
+    `autodiscoverBase` from the root domain (Microsoft spec:
     `autodiscover.<root-domain>`).
-  - **PUT /admin/servers/settings** repariert ebenfalls stale URLs beim Save
-    automatisch, wenn der Admin den Hostname ohne URL-Anpassung speichert.
+  - **PUT /admin/servers/settings** also repairs stale URLs on save
+    automatically when the admin saves the hostname without adjusting URLs.
 
-- **Autodiscover-Settings-Cache TTL 60s** verzögerte Sichtbarkeit von
-  URL-Änderungen (`packages/autodiscover/src/server.ts`): Der autodiscover-
-  Service hatte einen 60-Sekunden-In-Memory-Cache für `ServerSettings`, ohne
-  Redis-Subscription. **Fix**: Subscription auf Channel
-  `coremail:settings:reload` — `invalidateSettingsCache()` wird sofort bei
-  Settings-Update aufgerufen, damit neue URLs ohne 60s-Wartezeit aktiv sind.
+- **Autodiscover settings cache TTL 60s** delayed the visibility of
+  URL changes (`packages/autodiscover/src/server.ts`): The autodiscover
+  service had a 60-second in-memory cache for `ServerSettings`, without
+  Redis subscription. **Fix**: Subscription to channel
+  `coremail:settings:reload` — `invalidateSettingsCache()` is called immediately on
+  settings update, so new URLs are active without the 60s wait.
 
 ---
 
-## [3.18.34] — 2026-05-26 — Audit-Log-Path-Fix + Backup-Watchdog + UX-Cleanup
+## [3.18.34] — 2026-05-26 — Audit log path fix + backup watchdog + UX cleanup
 
 ### Fixed
 
-- **KRITISCH: Audit-Log zeigte unleserliche CUID-Aktionen** wie
-  `cmplad51y000v13k3j0nbipt5.post` statt `certificates.activate-https.post`
-  (`packages/api-gateway/src/lib/audit.ts`). Root Cause: `auditMiddleware` las
-  `req.path` INNERHALB des `res.on('finish')`-Callbacks. Zu dem Zeitpunkt hatte
-  Express den Path bereits beim Descend in Sub-Router mutiert — für
-  `POST /api/v1/admin/certificates/<cuid>/activate-https` zeigte `req.path`
-  dann nur noch `/<cuid>/activate-https` (relativ zum Certificates-Sub-Router-
-  Mount) statt `/certificates/<cuid>/activate-https`. Daraus baute der
-  Action-Builder fälschlich `<cuid>.post`. **Fix**: `req.path` wird jetzt am
-  Middleware-Eintritt in `capturedPath` gespeichert und im Finish-Callback
-  verwendet. **Zusätzlich**: neuer **CUID-bewusster Action-Builder**
-  (`buildAction()`) — CUIDs werden aus dem Action-String herausgefiltert und
-  separat als `targetId` gespeichert. Aus `DELETE /backups/jobs/<cuid>` wird
-  jetzt `action='backups.jobs.delete'` + `targetId=<cuid>`.
+- **CRITICAL: Audit log showed unreadable CUID actions** such as
+  `cmplad51y000v13k3j0nbipt5.post` instead of `certificates.activate-https.post`
+  (`packages/api-gateway/src/lib/audit.ts`). Root cause: `auditMiddleware` read
+  `req.path` INSIDE the `res.on('finish')` callback. By that time
+  Express had already mutated the path while descending into sub-routers — for
+  `POST /api/v1/admin/certificates/<cuid>/activate-https`, `req.path`
+  then only showed `/<cuid>/activate-https` (relative to the certificates sub-router
+  mount) instead of `/certificates/<cuid>/activate-https`. From this the
+  action builder wrongly built `<cuid>.post`. **Fix**: `req.path` is now
+  stored in `capturedPath` at middleware entry and used in the finish
+  callback. **Additionally**: new **CUID-aware action builder**
+  (`buildAction()`) — CUIDs are filtered out of the action string and
+  stored separately as `targetId`. `DELETE /backups/jobs/<cuid>` now becomes
+  `action='backups.jobs.delete'` + `targetId=<cuid>`.
 
 ### Added
 
-- **40+ neue Action-Übersetzungen im Audit-Log**
-  (`packages/admin-panel/src/pages/AuditLogPage.tsx` `ACTION_MAP`): Neue
-  Mappings für `backups.jobs.delete` → „Backup-Job gelöscht",
-  `audit-log.anomalies.get` → „Anomalien-Report abgerufen",
-  `certificates.activate-https.post` → „Zertifikat für HTTPS aktiviert",
-  `settings.security.put` → „Sicherheitseinstellungen geändert",
-  `groups.members.delete` → „Gruppenmitglied entfernt" und viele weitere für
-  Zertifikate, Aliase, Shared Mailboxes, Transport Rules, Quarantine, Queues,
-  OAuth-Clients, Backup-Schedules.
+- **40+ new action translations in the audit log**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx` `ACTION_MAP`): New
+  mappings for `backups.jobs.delete` → "Backup job deleted",
+  `audit-log.anomalies.get` → "Anomaly report retrieved",
+  `certificates.activate-https.post` → "Certificate activated for HTTPS",
+  `settings.security.put` → "Security settings changed",
+  `groups.members.delete` → "Group member removed" and many more for
+  certificates, aliases, Shared Mailboxes, transport rules, quarantine, queues,
+  OAuth clients, backup schedules.
 
-- **Backup-Service: Startup-Orphan-Cleanup + Watchdog**
+- **Backup service: startup orphan cleanup + watchdog**
   (`packages/backup-service/src/server.ts`):
-  - **Orphan-Cleanup** beim Start: Backup-Jobs mit Status `RUNNING`/`PENDING`/
-    `RETRYING`/`PROCESSING`/`SCHEDULED` älter als 60s werden automatisch als
-    `FAILED` markiert mit `errorMsg='Container wurde während Backup
-    neugestartet — Job abgebrochen.'` Verhindert „Backup läuft endlos"-UI-
-    Anzeige nach Container-Restart.
-  - **Watchdog-Timer** (alle 5 Min.): Jobs mit Status `RUNNING`/`PROCESSING`/
-    `RETRYING` älter als 30 Min. werden als `FAILED` markiert mit
+  - **Orphan cleanup** at start: backup jobs with status `RUNNING`/`PENDING`/
+    `RETRYING`/`PROCESSING`/`SCHEDULED` older than 60s are automatically marked as
+    `FAILED` with `errorMsg='Container wurde während Backup
+    neugestartet — Job abgebrochen.'` Prevents the "backup runs forever" UI
+    display after a container restart.
+  - **Watchdog timer** (every 5 min): jobs with status `RUNNING`/`PROCESSING`/
+    `RETRYING` older than 30 min are marked as `FAILED` with
     `errorMsg='Watchdog: Job > 30 Min. ohne Fortschritt — abgebrochen.'`
 
 ### Changed
 
-- **Backup-Zeitplan-Editor: minutengenau (0..59) statt 5-Minuten-Raster**
-  (`packages/admin-panel/src/pages/BackupsPage.tsx`): Vorher konnte der Admin
-  die Minute nur in 5er-Schritten wählen (12 Optionen). Jetzt alle 60 Minuten
-  (0..59) verfügbar — User-Wunsch.
+- **Backup schedule editor: minute-exact (0..59) instead of a 5-minute grid**
+  (`packages/admin-panel/src/pages/BackupsPage.tsx`): Previously the admin
+  could only choose the minute in steps of 5 (12 options). Now all 60 minutes
+  (0..59) available — user request.
 
 ### Removed
 
-- **Rotes „Anomalien erkannt"-Banner aus Audit-Log entfernt**
-  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): Das Banner über der
-  Audit-Tabelle (mit „2 Anomalien erkannt — Auswertung: letzte 5 Min Bursts,
-  24h kritische Aktionen, Off-Hours") war in der Praxis verwirrend — es
-  zeigte u.a. eigene Settings-Änderungen als „kritische Aktion" an. Audit-Log
-  selbst zeigt alle relevanten Aktionen mit klaren Farbcodierungen (rot =
-  Löschungen, amber = kritisch, blau = Updates). `anomalies`-Query +
-  `AnomaliesResponse`-Interface komplett entfernt. Backend-Endpoint
-  `/admin/audit-log/anomalies` bleibt erhalten (kann via PDF/JSON-Export
-  weiterhin abgerufen werden).
+- **Red "Anomalies detected" banner removed from the audit log**
+  (`packages/admin-panel/src/pages/AuditLogPage.tsx`): The banner above the
+  audit table (with "2 anomalies detected — evaluation: last 5 min bursts,
+  24h critical actions, off-hours") was confusing in practice — among other things it
+  showed one's own settings changes as a "critical action". The audit log
+  itself shows all relevant actions with clear color coding (red =
+  deletions, amber = critical, blue = updates). `anomalies` query +
+  `AnomaliesResponse` interface completely removed. Backend endpoint
+  `/admin/audit-log/anomalies` is kept (can still be retrieved via PDF/JSON
+  export).
 
 ---
 
-## [3.18.33] — 2026-05-26 — Externe Kontakte komplett entfernt
+## [3.18.33] — 2026-05-26 — External contacts completely removed
 
 ### Removed
 
-- **Feature „Externe Kontakte" (ExternalMailContact) komplett aus dem Code entfernt.**
-  Externe Empfänger werden ab sofort:
-  - Im Compose-Fenster direkt als E-Mail-Adresse eingegeben (Outlook-Standard),
-  - als `EXTERNAL`-Mitglieder von Verteilergruppen gepflegt — der Member-Type
-    `EXTERNAL` in `DistributionGroupMember` bleibt unverändert erhalten.
+- **Feature "External contacts" (ExternalMailContact) completely removed from the code.**
+  External recipients are from now on:
+  - entered directly as an email address in the compose window (Outlook standard),
+  - maintained as `EXTERNAL` members of distribution groups — the member type
+    `EXTERNAL` in `DistributionGroupMember` remains unchanged.
 
-  Begründung: Die Pflege eines separaten externen Adressbuchs wurde in der
-  Praxis selten genutzt — externe Adressen sind typischerweise individuell pro
-  User relevant (private Kontakte) oder pro Gruppe (z. B. „Lieferanten-Verteiler").
-  Reduziert Code-Komplexität, vereinfacht die GAL-Ansicht (User + Verteilergruppen)
-  und entfernt einen Wartungspunkt im BCP. Analog zu v3.18.5 (eDiscovery) und
+  Rationale: Maintaining a separate external address book was rarely used in
+  practice — external addresses are typically relevant individually per
+  user (private contacts) or per group (e.g. "supplier distribution list").
+  Reduces code complexity, simplifies the GAL view (users + distribution groups)
+  and removes a maintenance point in the BCP. Analogous to v3.18.5 (eDiscovery) and
   v3.18.31 (Public Folders).
 
   **Schema** (`packages/storage/prisma/schema.prisma`):
-  - Model `ExternalMailContact` entfernt
-  - Tabelle `external_mail_contacts` wird beim Container-Start via
-    `prisma db push --accept-data-loss` gedroppt
-  - **Migration ist destruktiv**: alle bestehenden externen Kontakte gehen
-    verloren
+  - Model `ExternalMailContact` removed
+  - Table `external_mail_contacts` is dropped at container start via
+    `prisma db push --accept-data-loss`
+  - **Migration is destructive**: all existing external contacts are
+    lost
 
   **Backend** (`packages/api-gateway/src/`):
-  - `routes/admin/external-contacts.ts` — gelöscht (Admin-CRUD)
-  - Route-Mount `/api/v1/admin/contacts` entfernt
+  - `routes/admin/external-contacts.ts` — deleted (admin CRUD)
+  - Route mount `/api/v1/admin/contacts` removed
   - `routes/contacts.ts`:
-    - `/contacts?q=…` (Compose-Autocomplete) liefert nur noch User + Verteilergruppen
-    - `/contacts/gal` (Browse-GAL): `type=external`-Filter liefert leere Liste,
-      damit alte Frontend-Aufrufe nicht brechen
+    - `/contacts?q=…` (compose autocomplete) now only returns users + distribution groups
+    - `/contacts/gal` (browse GAL): the `type=external` filter returns an empty list,
+      so that old frontend calls do not break
 
   **BCP** (`packages/admin-panel/src/`):
-  - `pages/ExternalContactsPage.tsx` — gelöscht
-  - `components/Sidebar.tsx` — Eintrag „Ext. Kontakte" + `BookUser`-Icon-Import entfernt
-  - `main.tsx` — Route `/ext-contacts` + Import entfernt
-  - `i18n/translations.ts` — i18n-Keys `nav_ext_contacts` (DE+EN) entfernt
-  - `pages/GroupsPage.tsx` — `ext-`-Prefix-Branches in `pickSuggestion()` und
-    `typeBadge`-Map entfernt (toter Code seit GAL keine `ext-`-IDs mehr liefert)
+  - `pages/ExternalContactsPage.tsx` — deleted
+  - `components/Sidebar.tsx` — entry "Ext. contacts" + `BookUser` icon import removed
+  - `main.tsx` — route `/ext-contacts` + import removed
+  - `i18n/translations.ts` — i18n keys `nav_ext_contacts` (DE+EN) removed
+  - `pages/GroupsPage.tsx` — `ext-` prefix branches in `pickSuggestion()` and
+    `typeBadge` map removed (dead code since the GAL no longer returns `ext-` IDs)
 
   **MWA** (`packages/web-client/src/`):
-  - `pages/ContactsPage.tsx` — GAL-Filter-Toggle „Extern" entfernt; Detail-Panel
-    rendert nur noch `USER`/`GROUP`-Kinds; `EXTERNAL`-Conditional-Renders entfernt
+  - `pages/ContactsPage.tsx` — GAL filter toggle "External" removed; detail panel
+    only renders `USER`/`GROUP` kinds; `EXTERNAL` conditional renders removed
 
 ---
 
-## [3.18.32] — 2026-05-26 — TLS-Proxy: SNI-Multi-Cert-Support (Outlook-Autodiscover-Fix)
+## [3.18.32] — 2026-05-26 — TLS proxy: SNI multi-cert support (Outlook Autodiscover fix)
 
 ### Fixed
 
-- **Outlook-Autodiscover lieferte „Zertifikatsfehler" trotz korrekt ausgestelltem
-  `autodiscover.<domain>`-Zertifikat** (`packages/api-gateway/src/tls-proxy.ts`):
-  Der integrierte HTTPS-Proxy (Port 443) lud nur das eine Zertifikat mit
-  `isActiveHttps=true` und bediente damit ALLE eingehenden TLS-Verbindungen.
-  Wenn Outlook auf `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml`
-  zugriff, sah der Client das `mail.<domain>`-Zertifikat → Hostname-Mismatch →
-  `ERR_CERT_COMMON_NAME_INVALID` / Outlook zeigte Zertifikatswarnung.
+- **Outlook Autodiscover reported a "certificate error" despite a correctly issued
+  `autodiscover.<domain>` certificate** (`packages/api-gateway/src/tls-proxy.ts`):
+  The integrated HTTPS proxy (port 443) loaded only the one certificate with
+  `isActiveHttps=true` and served ALL incoming TLS connections with it.
+  When Outlook accessed `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml`,
+  the client saw the `mail.<domain>` certificate → hostname mismatch →
+  `ERR_CERT_COMMON_NAME_INVALID` / Outlook showed a certificate warning.
 
-  **Fix**: TLS-Proxy auf **SNI-Multi-Cert-Support** refactort.
-  - Beim Reload werden ALLE Certs mit `status='ACTIVE'` geladen, nicht nur das
-    mit `isActiveHttps=true`.
-  - Pro Cert wird ein `tls.SecureContext` erstellt und allen Hostnames zugeordnet
-    (CN + alle SANs aus dem PEM + `domains[]`-Array aus der DB).
-  - Wildcard-Certs (`*.example.com`) werden separat gehalten und per Suffix-Match
-    aufgelöst (RFC 6125 — genau eine Sub-Label-Ebene).
-  - `SNICallback` wählt pro Verbindung anhand des vom Client gesendeten
-    Servernames: exact-match → wildcard-match → Default-Cert.
-  - Default-Cert (für unbekannte SNI oder Verbindungen ohne SNI) ist das Cert
-    mit `isActiveHttps=true`; Fallback: das neueste ACTIVE-Cert.
+  **Fix**: TLS proxy refactored to **SNI multi-cert support**.
+  - On reload, ALL certs with `status='ACTIVE'` are loaded, not just the one
+    with `isActiveHttps=true`.
+  - Per cert a `tls.SecureContext` is created and assigned to all hostnames
+    (CN + all SANs from the PEM + `domains[]` array from the DB).
+  - Wildcard certs (`*.example.com`) are kept separately and resolved via suffix
+    match (RFC 6125 — exactly one sub-label level).
+  - `SNICallback` selects per connection based on the server name sent by
+    the client: exact match → wildcard match → default cert.
+  - The default cert (for unknown SNI or connections without SNI) is the cert
+    with `isActiveHttps=true`; fallback: the newest ACTIVE cert.
 
-- **Neu ausgestellte ACME- + Self-Signed- + Upload-Certs triggern jetzt sofort
+- **Newly issued ACME + self-signed + uploaded certs now immediately trigger
   `coremail:tls:reload`** (`packages/api-gateway/src/routes/admin/certificates.ts`):
-  Vorher wurde der Reload nur beim manuellen „HTTPS aktivieren"-Klick (Toggle
-  `isActiveHttps`) ausgelöst — mit Multi-Cert-SNI sollen aber alle ACTIVE-Certs
-  sofort verfügbar sein, ohne dass jemand HTTPS umschaltet. Trigger ergänzt in
-  drei Code-Pfaden: ACME-Issuance (Let's-Encrypt-Ausstellung), Self-Signed-
-  Generierung, Cert-Upload.
+  Previously the reload was only triggered on the manual "Enable HTTPS" click (toggle
+  `isActiveHttps`) — with multi-cert SNI, however, all ACTIVE certs should be
+  available immediately without anyone toggling HTTPS. Trigger added in
+  three code paths: ACME issuance (Let's Encrypt issuance), self-signed
+  generation, cert upload.
 
 ### Migration
 
-Bestehende Setups: Beim ersten Reload nach Deploy wird die SNI-Map automatisch
-aus allen ACTIVE-Certs aufgebaut. Bestehende Verbindungen werden nicht unterbrochen.
-Wer das `autodiscover.<domain>`-Cert noch nicht ausgestellt hat: BCP → SSL/TLS →
-ACME-Zertifikat anfordern mit Domain `autodiscover.<domain>` — danach funktioniert
-Outlook-Autodiscover sofort, ohne dass „HTTPS aktivieren" geklickt werden muss.
+Existing setups: On the first reload after deploy the SNI map is built automatically
+from all ACTIVE certs. Existing connections are not interrupted.
+Anyone who has not yet issued the `autodiscover.<domain>` cert: BCP → SSL/TLS →
+request an ACME certificate with domain `autodiscover.<domain>` — after that
+Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ---
 
-## [3.18.31] — 2026-05-25 — Öffentliche Ordner komplett entfernt
+## [3.18.31] — 2026-05-25 — Public folders completely removed
 
 ### Removed
 
-- **Feature „Öffentliche Ordner" (Public Folders) komplett aus dem Code entfernt.**
-  Exchange-Style-Konzept (mit ACL `READ`/`WRITE`/`FULL` + Mail-Enabled-Variante
-  seit v3.18.9) wird vom Markt heute kaum noch genutzt. Moderne Teams bevorzugen
-  **Shared Mailboxes** (`/admin/shared-mailboxes/`) und **Distribution Groups**
-  (`/admin/groups/`) für die typischen Use-Cases (Team-Postfach, Verteiler,
-  kollaborative Inbox). Reduziert Code-Komplexität und Wartungsaufwand —
-  analog zu v3.18.5 (eDiscovery/LegalHold-Removal).
+- **Feature "Public Folders" completely removed from the code.**
+  The Exchange-style concept (with ACL `READ`/`WRITE`/`FULL` + mail-enabled variant
+  since v3.18.9) is hardly used by the market today. Modern teams prefer
+  **Shared Mailboxes** (`/admin/shared-mailboxes/`) and **distribution groups**
+  (`/admin/groups/`) for the typical use cases (team mailbox, distribution list,
+  collaborative inbox). Reduces code complexity and maintenance effort —
+  analogous to v3.18.5 (eDiscovery/LegalHold removal).
 
   **Backend** (`packages/api-gateway/src/`):
-  - `routes/public-folders.ts` — gelöscht (User-Endpoints `GET/POST/PUT/DELETE`)
-  - `routes/admin/public-folders.ts` — gelöscht (Admin-CRUD + ACL-Management)
-  - `server.ts` — Mount-Punkte `/api/v1/public-folders` + `/api/v1/admin/public-folders` entfernt
+  - `routes/public-folders.ts` — deleted (user endpoints `GET/POST/PUT/DELETE`)
+  - `routes/admin/public-folders.ts` — deleted (admin CRUD + ACL management)
+  - `server.ts` — mount points `/api/v1/public-folders` + `/api/v1/admin/public-folders` removed
 
-  **SMTP-Server** (`packages/smtp-server/src/`):
-  - `inbound/handler.ts` `verifyRecipient()` — `publicFolder.findFirst()`-Lookup entfernt
-  - `handlers/message.ts` `storeInboundMessage()` — Public-Folder-Branch entfernt;
-    Mails an ehemalige Public-Folder-Adressen werden jetzt als unbekannter
-    Empfänger verworfen (Standard-Behandlung)
+  **SMTP server** (`packages/smtp-server/src/`):
+  - `inbound/handler.ts` `verifyRecipient()` — `publicFolder.findFirst()` lookup removed
+  - `handlers/message.ts` `storeInboundMessage()` — public-folder branch removed;
+    mails to former public-folder addresses are now discarded as unknown
+    recipient (standard handling)
 
   **BCP** (`packages/admin-panel/src/`):
-  - `pages/PublicFoldersPage.tsx` — gelöscht
-  - `components/Sidebar.tsx` — Eintrag „Öffentl. Ordner" + `FolderOpen`-Icon-Import entfernt
-  - `main.tsx` — Route `/public-folders` + Import entfernt
-  - `i18n/translations.ts` — i18n-Keys `nav_public_folders` (DE+EN) entfernt
+  - `pages/PublicFoldersPage.tsx` — deleted
+  - `components/Sidebar.tsx` — entry "Public folders" + `FolderOpen` icon import removed
+  - `main.tsx` — route `/public-folders` + import removed
+  - `i18n/translations.ts` — i18n keys `nav_public_folders` (DE+EN) removed
 
   **MWA** (`packages/web-client/src/`):
-  - `components/FolderTree.tsx` — Sektion `PublicFoldersSection` + `PublicFolderViewerModal`-
-    Komponenten + ungenutzte Icon-Imports (`FolderTree`, `X`, `Mail`) entfernt
+  - `components/FolderTree.tsx` — section `PublicFoldersSection` + `PublicFolderViewerModal`
+    components + unused icon imports (`FolderTree`, `X`, `Mail`) removed
 
-  **Datenbank** (`packages/storage/prisma/schema.prisma`):
-  - Models `PublicFolder` + `PublicFolderMessage` entfernt
-  - Tabellen `public_folders` + `public_folder_messages` werden beim Container-Start
-    via `prisma db push --accept-data-loss` gedroppt
-  - **Migration ist destruktiv**: alle bestehenden Public Folders + deren
-    Mails gehen verloren (vergleichbar mit eDiscovery-Removal in v3.18.5)
+  **Database** (`packages/storage/prisma/schema.prisma`):
+  - Models `PublicFolder` + `PublicFolderMessage` removed
+  - Tables `public_folders` + `public_folder_messages` are dropped at container start
+    via `prisma db push --accept-data-loss`
+  - **Migration is destructive**: all existing public folders + their
+    mails are lost (comparable to the eDiscovery removal in v3.18.5)
 
 ---
 
-## [3.18.30] — 2026-05-25 — BigInt-Crashfix + Audit-Log-Toggle + Audit-Translations
+## [3.18.30] — 2026-05-25 — BigInt crash fix + audit log toggle + audit translations
 
 ### Fixed
 
-- **KRITISCH: backup-service Crashloop wegen `BigInt`-Serialisierung**
-  (`packages/backup-service/src/server.ts`): Seit v3.18.26 hat `BackupJob.sizeBytes`
-  den Prisma-Typ `BigInt` (für korrekte Repräsentation von Backup-Größen > 4 GB).
-  Beim ersten Aufruf von `/jobs` oder `/users` warf Node mit
-  `TypeError: Do not know how to serialize a BigInt` → supervisord restartete den
-  Container endlos → **ALLE Backup-Endpoints lieferten 500**, was wiederum die
-  vom User gemeldeten Symptome erklärt:
-  - „Einzelne Mailbox sichern zeigt keine Benutzer an" → `/users` crashte
-  - „Jobs zeigt keinen Status" → `/jobs` crashte
-  Fix: Globaler Monkey-Patch von `express.response.json` am Modul-Top mit
-  rekursivem `BigInt → string`-Replacer in `JSON.stringify`. Wirkt damit für
-  alle bestehenden und zukünftigen Endpoints, ohne dass einzelne Handler
-  angepasst werden müssen.
+- **CRITICAL: backup-service crash loop due to `BigInt` serialization**
+  (`packages/backup-service/src/server.ts`): Since v3.18.26 `BackupJob.sizeBytes`
+  has the Prisma type `BigInt` (for correct representation of backup sizes > 4 GB).
+  On the first call to `/jobs` or `/users` Node threw
+  `TypeError: Do not know how to serialize a BigInt` → supervisord restarted the
+  container endlessly → **ALL backup endpoints returned 500**, which in turn explains the
+  symptoms reported by the user:
+  - "Back up single mailbox shows no users" → `/users` crashed
+  - "Jobs shows no status" → `/jobs` crashed
+  Fix: Global monkey patch of `express.response.json` at module top with a
+  recursive `BigInt → string` replacer in `JSON.stringify`. Thus applies to
+  all existing and future endpoints without individual handlers having to be
+  adjusted.
 
 ### Added
 
-- **Audit-Log-Toggle in Sicherheitseinstellungen**
+- **Audit log toggle in the security settings**
   (`packages/storage/prisma/schema.prisma`,
   `packages/api-gateway/src/lib/audit.ts`,
   `packages/api-gateway/src/routes/admin/global-settings.ts`,
   `packages/admin-panel/src/pages/SettingsPage.tsx`):
-  Neues Feld `ServerSettings.auditLogEnabled` (Default `true`) erlaubt
-  Admins, das globale Audit-Logging ein-/auszuschalten. Toggle in
-  BCP → Einstellungen → Sicherheit. **Critical-Action-Override**: Regex
+  New field `ServerSettings.auditLogEnabled` (default `true`) allows
+  admins to switch global audit logging on/off. Toggle in
+  BCP → Settings → Security. **Critical-action override**: regex
   `ALWAYS_AUDIT` (`/^(settings\.|audit\.|user\.role|oauth\.client|mailbox\.delete|domain\.delete)/i`)
-  loggt sicherheits- und compliance-relevante Aktionen IMMER — auch bei
-  ausgeschaltetem Toggle. Compliance-Hintergrund (DSGVO Art. 32, SOX, HIPAA,
-  TISAX, ISO 27001): Sonst könnte ein Admin Audit ausschalten, Daten
-  exfiltrieren und wieder einschalten — unentdeckt. Der Toggle-Wechsel
-  selbst wird als `audit.enabled` / `audit.disabled` mit Diff im
-  `changes`-Feld protokolliert. **In-Memory-Cache** (60s TTL) verhindert
-  DB-Hit auf jedem Audit-Write; Invalidierung via `invalidateAuditCache()`
-  nach jedem Save.
+  ALWAYS logs security- and compliance-relevant actions — even with the
+  toggle switched off. Compliance background (GDPR Art. 32, SOX, HIPAA,
+  TISAX, ISO 27001): otherwise an admin could switch off audit, exfiltrate
+  data and switch it back on — undetected. The toggle change
+  itself is logged as `audit.enabled` / `audit.disabled` with a diff in the
+  `changes` field. **In-memory cache** (60s TTL) prevents a
+  DB hit on every audit write; invalidation via `invalidateAuditCache()`
+  after every save.
 
-- **Human-Readable Action-Labels im Audit-Log**
+- **Human-readable action labels in the audit log**
   (`packages/admin-panel/src/pages/AuditLogPage.tsx`):
-  Aktionen wie `settings.put` oder `mailboxes.delete` werden jetzt mit
-  einer `ACTION_MAP` in lesbare Beschreibungen übersetzt — z.B.
-  „Einstellungen geändert", „Postfach gelöscht", „Vollbackup gestartet",
-  „Kalender freigegeben", „Audit-Log DEAKTIVIERT" (mit roter Critical-Tone).
-  Über 40 Mappings für Settings, Mailboxes, Domains, Auth, OAuth, Backups,
-  Calendar-Sharing, Rules, Roles, Gateway. Hover-Tooltip zeigt den
-  Original-Action-String für SIEM-Querverweise. Heuristik-Fallback nach
-  Verb (`post`/`create`/`delete`/...) für unbekannte Aktionen.
+  Actions such as `settings.put` or `mailboxes.delete` are now translated with
+  an `ACTION_MAP` into readable descriptions — e.g.
+  "Settings changed", "Mailbox deleted", "Full backup started",
+  "Calendar shared", "Audit log DISABLED" (with red critical tone).
+  Over 40 mappings for settings, mailboxes, domains, auth, OAuth, backups,
+  calendar sharing, rules, roles, gateway. Hover tooltip shows the
+  original action string for SIEM cross-references. Heuristic fallback by
+  verb (`post`/`create`/`delete`/...) for unknown actions.
 
 ---
 
-## [3.18.29] — 2026-05-25 — Backup-Archiv: Download + Delete für S3-Objekte
+## [3.18.29] — 2026-05-25 — Backup archive: download + delete for S3 objects
 
 ### Added
 
-- **Download- und Delete-Buttons im „Backup-Archiv"-Tab**
+- **Download and delete buttons in the "Backup Archive" tab**
   (`packages/backup-service/src/server.ts`,
   `packages/api-gateway/src/routes/admin/backups.ts`,
   `packages/admin-panel/src/pages/BackupsPage.tsx`):
-  Vorher war die Archive-Tabelle read-only — User konnten Objekte nicht
-  einzeln herunterladen oder löschen. Jetzt zwei neue Backend-Endpoints:
-  - `GET /backup/admin/archive/download?key=<s3-key>` — Stream-Proxy für
-    direkten Download (analog zum `download/:jobId`-Endpoint, aber für
-    Objekte ohne BackupJob-Referenz z.B. alte/externe Imports)
-  - `DELETE /backup/admin/archive?key=<s3-key>` — Löscht das S3-Objekt
-    und nullt zusätzlich passende `BackupJob.downloadUrl`-Felder
-    (Status → EXPIRED) damit die UI keinen broken Link mehr zeigt
-  Frontend: neue Aktionsspalte mit Download- (HardDriveDownload) und
-  Trash-Button. Confirm-Dialog vor Delete („endgültig löschen, kann nicht
-  rückgängig gemacht werden"). Audit-Log-Entry `backup.archive.delete`.
+  Previously the archive table was read-only — users could not download or delete
+  objects individually. Now two new backend endpoints:
+  - `GET /backup/admin/archive/download?key=<s3-key>` — stream proxy for
+    direct download (analogous to the `download/:jobId` endpoint, but for
+    objects without a BackupJob reference, e.g. old/external imports)
+  - `DELETE /backup/admin/archive?key=<s3-key>` — deletes the S3 object
+    and additionally nulls matching `BackupJob.downloadUrl` fields
+    (status → EXPIRED) so the UI no longer shows a broken link
+  Frontend: new action column with download (HardDriveDownload) and
+  trash button. Confirm dialog before delete ("delete permanently, cannot
+  be undone"). Audit log entry `backup.archive.delete`.
 
 ---
 
-## [3.18.28] — 2026-05-25 — Calendar+Backup UX-Fixes (Hook-Bug, Tabs, Delete, Time-Input)
+## [3.18.28] — 2026-05-25 — Calendar+backup UX fixes (hook bug, tabs, delete, time input)
 
 ### Fixed
 
-- **KRITISCH: Erneutes Öffnen eines erstellten Termins → weiße Seite**
+- **CRITICAL: Reopening a created appointment → white page**
   (`packages/web-client/src/components/EventEditDialog.tsx`):
-  React-Rules-of-Hooks-Verletzung — `useMemo(currentCal)` wurde NACH einem
-  `if (existingLoading) return` aufgerufen. Beim ersten Render: 0 Memo,
-  beim zweiten: 1 Memo → React-Crash mit „Rendered more hooks than during
-  the previous render". Resultat: komplett weiße Modal-Seite, kein Reaction.
-  **Fix**: alle Hooks VOR jedem early-return platziert.
+  React Rules-of-Hooks violation — `useMemo(currentCal)` was called AFTER an
+  `if (existingLoading) return`. On the first render: 0 memos,
+  on the second: 1 memo → React crash with "Rendered more hooks than during
+  the previous render". Result: completely white modal page, no reaction.
+  **Fix**: all hooks placed BEFORE every early return.
 
-- **Backup-Jobs konnten weder gelöscht noch heruntergeladen werden**:
-  Download-URL zeigte auf `http://minio:9000` (Docker-intern, vom Browser
-  nicht erreichbar). Delete-Endpoint fehlte komplett.
-  **Fix Download**: neuer Stream-Proxy-Endpoint `GET /admin/backups/download/:jobId`
-  im backup-service streamt das S3-Object durch die api-gateway zum Browser.
-  Frontend nutzt Fetch + Blob + `URL.createObjectURL` für sauberen Datei-
-  Download.
-  **Fix Delete**: neuer Endpoint `DELETE /admin/backups/jobs/:id` löscht DB-
-  Record + S3-Object (best-effort, kein Throw bei fehlendem S3-Object).
-  Löschen-Button in jeder Job-Zeile mit Bestätigungs-Dialog.
+- **Backup jobs could neither be deleted nor downloaded**:
+  The download URL pointed to `http://minio:9000` (Docker-internal, not reachable
+  from the browser). The delete endpoint was missing completely.
+  **Fix download**: new stream proxy endpoint `GET /admin/backups/download/:jobId`
+  in the backup-service streams the S3 object through the api-gateway to the browser.
+  Frontend uses fetch + Blob + `URL.createObjectURL` for a clean file
+  download.
+  **Fix delete**: new endpoint `DELETE /admin/backups/jobs/:id` deletes the DB
+  record + S3 object (best-effort, no throw on missing S3 object).
+  Delete button in every job row with confirmation dialog.
 
 ### Changed
 
-- **Speichern-Button im Event-Dialog jetzt unten rechts** (vorher Header-
-  Toolbar oben links). Standard-Outlook-/Office-Pattern. Footer mit grauem
-  Hintergrund: Löschen-Button links, Abbrechen + Speichern rechts.
+- **Save button in the event dialog now bottom right** (previously header
+  toolbar top left). Standard Outlook/Office pattern. Footer with gray
+  background: delete button left, cancel + save right.
 
-- **Time-Input statt Dropdown-only**
+- **Time input instead of dropdown-only**
   (`packages/web-client/src/components/EventEditDialog.tsx`):
-  Vorher `<select>` mit 96 Optionen (15-min) — User konnte keine custom-Zeit
-  wie „13:42" eingeben. Jetzt `<input type="time" list="...">` mit
-  `<datalist>` — Browser zeigt 15-min-Vorschläge als Dropdown beim Fokus,
-  User kann aber jede beliebige Zeit frei tippen.
+  Previously a `<select>` with 96 options (15-min) — the user could not enter a custom time
+  such as "13:42". Now `<input type="time" list="...">` with
+  `<datalist>` — the browser shows 15-min suggestions as a dropdown on focus,
+  but the user can freely type any time.
 
-- **BackupsPage komplett refactored als Tab-Layout**:
-  5 Tabs („Jobs", „Schnellaktionen", „Zeitpläne", „Backup-Archiv",
-  „Restore (Import)") mit Badge-Counters. Vorher waren alle Sektionen
-  untereinander gestapelt — übersichtlicher und mobil-freundlicher.
+- **BackupsPage completely refactored as a tab layout**:
+  5 tabs ("Jobs", "Quick actions", "Schedules", "Backup Archive",
+  "Restore (Import)") with badge counters. Previously all sections were
+  stacked one below the other — clearer and more mobile-friendly.
 
-- **„S3-Snapshots" umbenannt zu „Backup-Archiv"** — AWS-Begriff vermieden,
-  klarere Sprache. Tab heißt „Backup-Archiv".
+- **"S3 Snapshots" renamed to "Backup Archive"** — AWS term avoided,
+  clearer language. The tab is called "Backup Archive".
 
-- **Zeitplan-Editor mit vollständigen Dropdowns**: Frequenz-Dropdown
-  (Stündlich/Täglich/Wöchentlich/Monatlich/Custom), Wochentag-Dropdown
-  (Mo–So), Stunde-Dropdown (0–23), Minute-Dropdown (5er-Schritte), Tag-des-
-  Monats-Dropdown (1–28), Retention-Dropdown (vorausgewählte Werte
-  7/14/30/60/90/180/365/730/1825/3650). Cron-Expression wird im Hintergrund
-  generiert und als read-only-Hinweis angezeigt. Nur bei „Custom" sieht User
-  das Cron-Textfeld direkt.
+- **Schedule editor with complete dropdowns**: frequency dropdown
+  (Hourly/Daily/Weekly/Monthly/Custom), weekday dropdown
+  (Mon–Sun), hour dropdown (0–23), minute dropdown (steps of 5), day-of-
+  month dropdown (1–28), retention dropdown (preselected values
+  7/14/30/60/90/180/365/730/1825/3650). The cron expression is generated in the background
+  and shown as a read-only hint. Only with "Custom" does the user see
+  the cron text field directly.
 
 ### Added
 
-- `streamObject()` + `deleteObject()` Helper in
+- `streamObject()` + `deleteObject()` helpers in
   `packages/backup-service/src/upload/s3.ts`
-- Audit-Log-Entry `backup.job.delete` für gelöschte Backup-Jobs
+- Audit log entry `backup.job.delete` for deleted backup jobs
 
 ---
 
-## [3.18.27] — 2026-05-25 — Outlook-Style Event-Dialog (Edit/Delete/Reschedule/Notes/Time-Picker)
+## [3.18.27] — 2026-05-25 — Outlook-style event dialog (edit/delete/reschedule/notes/time picker)
 
 ### Fixed
 
-- **Klick auf bestehenden Termin öffnete nur „Löschen?"-Dialog**
+- **Clicking an existing appointment only opened a "Delete?" dialog**
   (`packages/web-client/src/pages/CalendarPage.tsx`):
-  Vorher: `confirm('Termin XYZ löschen?')` — User konnte den Termin nicht
-  bearbeiten. **Fix**: Klick öffnet jetzt vollwertigen Edit-Dialog mit allen
-  Details (Titel, Datum, Zeit, Gäste mit Status, Ort, Notizen, Klassifizierung).
-  Permission-Check via `canWrite`-Flag im GET-Response: bei READ-Share wird
-  Dialog read-only gerendert mit „Nur Lesezugriff"-Badge.
+  Before: `confirm('Termin XYZ löschen?')` — the user could not edit the
+  appointment. **Fix**: Clicking now opens a full edit dialog with all
+  details (title, date, time, guests with status, location, notes, classification).
+  Permission check via the `canWrite` flag in the GET response: with a READ share the
+  dialog is rendered read-only with a "Read-only access" badge.
 
-- **Datum/Zeit-Eingabe war frickelig (datetime-local)**:
-  Manuelles Tippen der Uhrzeit, kein Dropdown — gerade auf Mobile umständlich.
-  **Fix**: Separate Date-Inputs + Time-Dropdowns mit 15-Minuten-Schritten
-  (00:00 bis 23:45 = 96 Optionen). „Ganztägig"-Checkbox blendet Zeit-Felder aus.
+- **Date/time input was fiddly (datetime-local)**:
+  Typing the time manually, no dropdown — cumbersome especially on mobile.
+  **Fix**: Separate date inputs + time dropdowns with 15-minute steps
+  (00:00 to 23:45 = 96 options). The "All day" checkbox hides the time fields.
 
 ### Added
 
-- **`EventEditDialog`-Komponente (Outlook-Style)**
+- **`EventEditDialog` component (Outlook-style)**
   (`packages/web-client/src/components/EventEditDialog.tsx`):
-  Vollwertiger Modal-Dialog für Create + Edit mit:
-  - **Header-Toolbar**: Speichern, Löschen (nur Edit), Status-Refresh, Schließen
-  - **Kalender-Picker**: Farbpunkt + Dropdown (im Edit-Mode disabled)
-  - **Titel-Input**: Outlook-Style große Überschrift
-  - **Attendee-Liste mit Live-PARTSTAT-Badges**:
-    - Grün CheckCircle für ACCEPTED, Rot XCircle für DECLINED,
-      Amber HelpCircle für TENTATIVE, Grau Clock für NEEDS-ACTION
-    - Autocomplete-Input mit Keyboard-Nav (↑↓/Enter/Tab/Esc) reuse `/contacts?q=`
-    - Counter unten: „X zugesagt · Y abgesagt · Z vielleicht · N ausstehend"
-    - Status refresht automatisch alle 30 Sekunden (live!)
-  - **Date+Time-Pickers**: HTML-Date-Input + Time-Dropdown (15-min Steps),
-    automatisches End-Date-Folgen wenn Start verschoben wird
-  - **Ort-Input** mit MapPin-Icon
-  - **Klassifizierungs-Dropdown** (Öffentlich / Privat / Vertraulich)
-  - **Notizen-Textarea** (6 Zeilen, vertical-resize)
-  - **Info-Footer**: Organisator-Name, SEQUENCE-Counter, Auto-Update-Hinweis
+  Full modal dialog for create + edit with:
+  - **Header toolbar**: Save, Delete (edit only), status refresh, Close
+  - **Calendar picker**: color dot + dropdown (disabled in edit mode)
+  - **Title input**: Outlook-style large heading
+  - **Attendee list with live PARTSTAT badges**:
+    - Green CheckCircle for ACCEPTED, red XCircle for DECLINED,
+      amber HelpCircle for TENTATIVE, gray Clock for NEEDS-ACTION
+    - Autocomplete input with keyboard nav (↑↓/Enter/Tab/Esc) reusing `/contacts?q=`
+    - Counter at the bottom: "X accepted · Y declined · Z maybe · N pending"
+    - Status refreshes automatically every 30 seconds (live!)
+  - **Date+time pickers**: HTML date input + time dropdown (15-min steps),
+    the end date follows automatically when the start is moved
+  - **Location input** with MapPin icon
+  - **Classification dropdown** (Public / Private / Confidential)
+  - **Notes textarea** (6 rows, vertical resize)
+  - **Info footer**: organizer name, SEQUENCE counter, auto-update hint
 
-- **`GET /api/v1/calendar/events/:id`** — Detail-Load für Edit-Dialog mit
-  `canWrite`/`readOnly`-Flags. Permission-Check via `canAccessCalendar`,
-  Privacy-Masking für PRIVATE-Events bei Grantees (Summary → „Beschäftigt",
-  Attendees ausgeblendet), CONFIDENTIAL liefert 404 für Foreign-Viewer.
+- **`GET /api/v1/calendar/events/:id`** — detail load for the edit dialog with
+  `canWrite`/`readOnly` flags. Permission check via `canAccessCalendar`,
+  privacy masking for PRIVATE events for grantees (summary → "Busy",
+  attendees hidden), CONFIDENTIAL returns 404 for foreign viewers.
 
 ### Changed
 
-- **CalendarPage** — alter inline-Dialog entfernt (war ~80 Zeilen JSX).
-  Ersetzt durch einheitlichen `EventEditDialog` für Create und Edit.
-  State vereinfacht: `eventDialog: { mode: 'create' | 'edit', ... } | null`.
-- **Toolbar „Neues Ereignis"** öffnet jetzt den Outlook-Style-Dialog
-  statt des alten Mini-Dialogs.
-- **Doppelklick / einfacher Klick auf Event**: öffnet Edit-Dialog (Doppel-
-  click wird von FullCalendar als zwei eventClicks gefeuert — beide öffnen
-  den gleichen Dialog, kein Konflikt).
-- **Attendee-Status-Refresh**: Edit-Dialog hat eigenen `refetchInterval: 30s`
-  + Manual-Refresh-Button im Header.
+- **CalendarPage** — old inline dialog removed (was ~80 lines of JSX).
+  Replaced by the unified `EventEditDialog` for create and edit.
+  State simplified: `eventDialog: { mode: 'create' | 'edit', ... } | null`.
+- **Toolbar "New event"** now opens the Outlook-style dialog
+  instead of the old mini dialog.
+- **Double-click / single click on event**: opens the edit dialog (a double-
+  click is fired by FullCalendar as two eventClicks — both open
+  the same dialog, no conflict).
+- **Attendee status refresh**: the edit dialog has its own `refetchInterval: 30s`
+  + manual refresh button in the header.
 
 ---
 
-## [3.18.26] — 2026-05-25 — Backup-Bugfixes + Per-Mailbox + Scheduling + Status-Log
+## [3.18.26] — 2026-05-25 — Backup bug fixes + per-mailbox + scheduling + status log
 
 ### Fixed
 
-- **Vollbackup-Button und Refresh-Button funktionierten nicht**
+- **Full-backup button and refresh button did not work**
   (`packages/backup-service/src/upload/s3.ts`,
   `packages/backup-service/src/server.ts`):
-  Root Cause: backup-service crashte beim ersten Aufruf von
-  `listBackups()` weil der MinIO-Bucket `coremail-backups` nicht
-  existierte (`NoSuchBucket` Error). supervisord startete den Container
-  alle paar Minuten neu — vom User aus gesehen reagierten Buttons nicht.
-  **Fix**: `ensureBackupBucket()` läuft beim Service-Start und legt den
-  Bucket idempotent an (HeadBucket → CreateBucket bei 404). `listBackups()`
-  zusätzlich fail-safe: bei NoSuchBucket Bucket erstellen + leere Liste
-  liefern statt zu crashen.
+  Root cause: the backup-service crashed on the first call to
+  `listBackups()` because the MinIO bucket `coremail-backups` did not
+  exist (`NoSuchBucket` error). supervisord restarted the container
+  every few minutes — from the user's point of view the buttons did not react.
+  **Fix**: `ensureBackupBucket()` runs at service start and creates the
+  bucket idempotently (HeadBucket → CreateBucket on 404). `listBackups()`
+  additionally fail-safe: on NoSuchBucket create the bucket + return an empty list
+  instead of crashing.
 
 ### Added
 
-- **Per-Mailbox-Backup**
+- **Per-mailbox backup**
   (`packages/backup-service/src/scheduler/index.ts`,
   `packages/backup-service/src/server.ts`,
   `packages/admin-panel/src/pages/BackupsPage.tsx`):
-  Neuer Endpoint `POST /admin/backups/mailbox/:userId` mit Body
-  `{ format: "zip" | "mbox" }`. Frontend: User-Picker (Dropdown aller
-  aktiven User) + Format-Auswahl + „Mailbox sichern"-Button. Snapshot
-  landet in MinIO unter `mailbox/{userId}/{timestamp}.{format}`.
+  New endpoint `POST /admin/backups/mailbox/:userId` with body
+  `{ format: "zip" | "mbox" }`. Frontend: user picker (dropdown of all
+  active users) + format selection + "Back up mailbox" button. The snapshot
+  lands in MinIO under `mailbox/{userId}/{timestamp}.{format}`.
 
-- **Backup-Zeitpläne (Cron) in DB statt Env-Variable**
-  (`packages/storage/prisma/schema.prisma` — neues Modell `BackupSchedule`,
+- **Backup schedules (cron) in the DB instead of an env variable**
+  (`packages/storage/prisma/schema.prisma` — new model `BackupSchedule`,
   `packages/backup-service/src/scheduler/index.ts`):
-  Admin kann Cron-Expressions im BCP verwalten — kein Container-Restart
-  nötig. Scheduler liest alle 60s aus DB und synchronisiert aktive
-  CronJobs. Felder: `name`, `cron`, `enabled`, `scope` (full/user),
+  Admins can manage cron expressions in the BCP — no container restart
+  needed. The scheduler reads from the DB every 60s and synchronizes active
+  CronJobs. Fields: `name`, `cron`, `enabled`, `scope` (full/user),
   `format`, `targetUserId`, `retentionDays`, `lastRunAt`, `lastStatus`.
-  Frontend mit Cron-Presets (täglich/wöchentlich/stündlich/alle 6h/
-  monatlich), Run-Now-Button pro Schedule, Edit/Delete-Buttons.
+  Frontend with cron presets (daily/weekly/hourly/every 6h/
+  monthly), run-now button per schedule, edit/delete buttons.
 
-- **Erweiterte Status-Log-Felder im BackupJob-Modell** (Research: siehe
-  `coremail/research/imip-itip.md` und RTO/RPO-Recherche):
-  - `startedAt`, `durationMs` — für RTO-Messung
-  - `sizeBytes`, `messageCount` — Backup-Volumetrie
+- **Extended status-log fields in the BackupJob model** (research: see
+  `coremail/research/imip-itip.md` and RTO/RPO research):
+  - `startedAt`, `durationMs` — for RTO measurement
+  - `sizeBytes`, `messageCount` — backup volumetrics
   - `errorClass` (NETWORK/STORAGE/PERMISSION/CORRUPT/UNKNOWN) +
-    `errorMessage` — strukturiertes Error-Reporting
+    `errorMessage` — structured error reporting
   - `retryCount`, `triggeredBy` (CRON/MANUAL/EVENT/RESTORE/API)
-  - `progressMeta` (JSONB) für Live-Phase „Reading mailbox X (3/12)"
-  - `scheduleId` — Verweis auf BackupSchedule wenn aus Cron getriggert
+  - `progressMeta` (JSONB) for the live phase "Reading mailbox X (3/12)"
+  - `scheduleId` — reference to the BackupSchedule when triggered from cron
 
-- **Erweiterte `JobStatus`-Enum-Werte** für vollständigen Backup-
-  Lifecycle: `SCHEDULED`, `RUNNING`, `RETRYING`, `ABORTED`, `EXPIRED`
-  zusätzlich zu den bisherigen `PENDING|PROCESSING|COMPLETED|FAILED`.
+- **Extended `JobStatus` enum values** for the complete backup
+  lifecycle: `SCHEDULED`, `RUNNING`, `RETRYING`, `ABORTED`, `EXPIRED`
+  in addition to the previous `PENDING|PROCESSING|COMPLETED|FAILED`.
 
 ### Changed
 
-- **`POST /backup/admin/full`** liefert jetzt sofort die Master-Job-ID
-  zurück (`202 { jobId }`) statt Fire-and-Forget. Frontend kann sofort
-  den RUNNING-Job in der Tabelle anzeigen.
-- **`runFullBackup()`** erstellt jetzt einen Master-Job mit `progress`-
-  Tracking statt nur per-User-Jobs ohne Übersicht. UI zeigt Progress-Bar
-  „X/Y User exportiert" während des Laufs.
-- **Refresh-Button** mit Toast-Feedback („Aktualisiert") damit User
-  visuell Bestätigung bekommt.
+- **`POST /backup/admin/full`** now immediately returns the master job ID
+  (`202 { jobId }`) instead of fire-and-forget. The frontend can immediately
+  show the RUNNING job in the table.
+- **`runFullBackup()`** now creates a master job with `progress`
+  tracking instead of just per-user jobs without an overview. The UI shows a progress bar
+  "X/Y users exported" during the run.
+- **Refresh button** with toast feedback ("Refreshed") so the user
+  gets visual confirmation.
 
 ### Removed / Explicitly Not Supported
 
-- **PST-Format** wird bewusst nicht unterstützt. Begründung im Frontend-
-  Banner: PST ist proprietäres Microsoft-Binärformat, alle verfügbaren
-  Open-Source-Libs (libpff, node-pst-extractor) sind read-only. Stattdessen
-  ZIP mit .eml-Dateien — Outlook akzeptiert das per Drag&Drop nativ.
+- **PST format** is deliberately not supported. Rationale in the frontend
+  banner: PST is a proprietary Microsoft binary format, all available
+  open-source libs (libpff, node-pst-extractor) are read-only. Instead
+  ZIP with .eml files — Outlook accepts that natively via drag & drop.
 
 ### Schema
 
-- Neues Modell `BackupSchedule` (Cron-Verwaltung in DB).
-- `BackupJob` erweitert um 10 neue Spalten (`startedAt`, `durationMs`,
+- New model `BackupSchedule` (cron management in the DB).
+- `BackupJob` extended with 10 new columns (`startedAt`, `durationMs`,
   `sizeBytes`, `messageCount`, `errorClass`, `retryCount`, `triggeredBy`,
   `progressMeta`, `scheduleId`).
-- `JobStatus`-Enum erweitert um 5 Werte.
+- `JobStatus` enum extended with 5 values.
 
 ---
 
-## [3.18.25] — 2026-05-25 — Calendar-Invitations (iMIP/iTIP, A5)
+## [3.18.25] — 2026-05-25 — Calendar invitations (iMIP/iTIP, A5)
 
 ### Added
 
-- **iMIP-REQUEST-Mails an Gäste beim Termin-Erstellen** (RFC 6047 / 5546)
+- **iMIP REQUEST mails to guests on appointment creation** (RFC 6047 / 5546)
   (`packages/api-gateway/src/lib/imip.ts`,
   `packages/api-gateway/src/routes/calendar.ts`):
-  Wenn ein Event mit Attendees angelegt wird, generiert das System eine
-  iMIP-konforme Einladungs-Mail per `ical-generator` mit:
-  - `multipart/alternative` → text/plain + text/html + `text/calendar; method=REQUEST` (für Gmail)
-  - `application/ics`-Attachment (für Outlook-Win32 RSVP-Buttons)
-  - Outlook-Quirks (`X-MICROSOFT-CDO-BUSYSTATUS`, `X-MS-OLK-FORCEINSPECTOROPEN`)
-  - Pflicht-Properties: UID (mit `@hostname`-Suffix), DTSTAMP, ORGANIZER,
-    ATTENDEE mit `RSVP=TRUE PARTSTAT=NEEDS-ACTION`, SEQUENCE, STATUS:CONFIRMED
-  Versand über bestehende BullMQ-Outbound-Queue (`smtp-outbound`) via
-  `rawMessage`-base64-Pfad — Retry + DKIM-Signing greifen automatisch.
+  When an event with attendees is created, the system generates an
+  iMIP-compliant invitation mail via `ical-generator` with:
+  - `multipart/alternative` → text/plain + text/html + `text/calendar; method=REQUEST` (for Gmail)
+  - `application/ics` attachment (for Outlook Win32 RSVP buttons)
+  - Outlook quirks (`X-MICROSOFT-CDO-BUSYSTATUS`, `X-MS-OLK-FORCEINSPECTOROPEN`)
+  - Mandatory properties: UID (with `@hostname` suffix), DTSTAMP, ORGANIZER,
+    ATTENDEE with `RSVP=TRUE PARTSTAT=NEEDS-ACTION`, SEQUENCE, STATUS:CONFIRMED
+  Sent via the existing BullMQ outbound queue (`smtp-outbound`) via the
+  `rawMessage` base64 path — retry + DKIM signing apply automatically.
 
-- **iMIP-Update bei Event-Änderung** — Bei `PUT /calendar/events/:id` werden
-  geänderte Felder erkannt (summary/dtStart/dtEnd/location/attendees). Wenn
-  sich relevante Felder ändern, wird `sequence++` und eine neue REQUEST-Mail
-  an alle Attendees gesendet (Mail-Clients erkennen am höheren SEQUENCE den
-  Update und ersetzen den bestehenden Eintrag).
+- **iMIP update on event change** — On `PUT /calendar/events/:id`,
+  changed fields are detected (summary/dtStart/dtEnd/location/attendees). If
+  relevant fields change, `sequence++` and a new REQUEST mail
+  is sent to all attendees (mail clients recognize the update by the higher SEQUENCE
+  and replace the existing entry).
 
-- **iMIP-CANCEL bei Event-Löschen** — Bei `DELETE /calendar/events/:id` wird
-  vor dem Delete eine CANCEL-Mail (`METHOD:CANCEL`, `STATUS:CANCELLED`,
-  `sequence++`) an alle Attendees gesendet. Gmail/Outlook zeigen Banner
-  „Termin abgesagt" und entfernen den Eintrag.
+- **iMIP CANCEL on event deletion** — On `DELETE /calendar/events/:id`, a
+  CANCEL mail (`METHOD:CANCEL`, `STATUS:CANCELLED`,
+  `sequence++`) is sent to all attendees before the delete. Gmail/Outlook show a banner
+  "Appointment cancelled" and remove the entry.
 
-- **iTIP-REPLY-Inbound-Handler** (Gast antwortet)
+- **iTIP REPLY inbound handler** (guest responds)
   (`packages/storage/src/itip-inbound.ts`,
   `packages/smtp-server/src/handlers/message.ts`):
-  Eingehende Mails werden auf `BEGIN:VCALENDAR ... METHOD:REPLY` gescannt
-  (Regex-basiert, kein schwerer ical-Parser im Hot-Path). Bei Match:
-  UID-Lookup auf `CalendarEvent`, SEQUENCE-Check (alte REPLYs werden
-  ignoriert, RFC 5546 §3.4.3), Attendee-Eintrag im JSON-Array updaten
-  (`partstat=ACCEPTED|DECLINED|TENTATIVE`). Mail wird TROTZDEM in die
-  Inbox zugestellt (User-Awareness wie bei Outlook).
+  Incoming mails are scanned for `BEGIN:VCALENDAR ... METHOD:REPLY`
+  (regex-based, no heavy ical parser in the hot path). On match:
+  UID lookup on `CalendarEvent`, SEQUENCE check (old REPLYs are
+  ignored, RFC 5546 §3.4.3), update the attendee entry in the JSON array
+  (`partstat=ACCEPTED|DECLINED|TENTATIVE`). The mail is NEVERTHELESS delivered to the
+  inbox (user awareness as in Outlook).
 
-- **Frontend: Gäste-Input im Neuer-Termin-Dialog**
+- **Frontend: guest input in the new-appointment dialog**
   (`packages/web-client/src/pages/CalendarPage.tsx`):
-  Neues Eingabefeld „Gäste einladen (kommagetrennt)" akzeptiert E-Mail-
-  Adressen wie `anna@example.com, bob@x.de`. Counter zeigt „X Gäste —
-  Einladungs-Mails werden beim Speichern versendet".
+  New input field "Invite guests (comma-separated)" accepts email
+  addresses such as `anna@example.com, bob@x.de`. Counter shows "X guests —
+  invitation mails will be sent on save".
 
 ### Schema
 
-- `CalendarEvent.attendees` (Json-Array) wird beim Create mit
-  `{ email, cn, partstat, role, rsvp }`-Objekten gefüllt.
-- `CalendarEvent.sequence` (Int, default 0) wird bei jedem relevanten
-  Update inkrementiert (war in v3.18.24 vorbereitet).
-- `CalendarEvent.uid` jetzt mit Hostname-Suffix `<id>@<publicHostname>`
-  (RFC 5545 §3.8.4.7 — globale Eindeutigkeit).
+- `CalendarEvent.attendees` (JSON array) is filled on create with
+  `{ email, cn, partstat, role, rsvp }` objects.
+- `CalendarEvent.sequence` (Int, default 0) is incremented on every relevant
+  update (prepared in v3.18.24).
+- `CalendarEvent.uid` now with hostname suffix `<id>@<publicHostname>`
+  (RFC 5545 §3.8.4.7 — global uniqueness).
 
 ### Dependencies
 
-- `ical-generator@10.2.0` in api-gateway (war in v3.18.24 installiert)
+- `ical-generator@10.2.0` in api-gateway (installed in v3.18.24)
 
 ---
 
-## [3.18.24] — 2026-05-25 — Performance E: MinIO Lifecycle-Policies
+## [3.18.24] — 2026-05-25 — Performance E: MinIO lifecycle policies
 
 ### Added
 
-- **E4 — MinIO Lifecycle-Policies für automatisches Cleanup**
+- **E4 — MinIO lifecycle policies for automatic cleanup**
   (`packages/storage/src/minio/index.ts`):
-  Bisher konnten temporäre Backup-, Quarantäne- und Outbound-Queue-Objekte
-  unbegrenzt im MinIO-Bucket wachsen — speziell „outbound-queue/"-Anhänge
-  von toten BullMQ-Jobs (z. B. nach Crash zwischen Job-Enqueue und Worker-
-  Pickup) blieben für immer liegen. Neuer Helper `ensureLifecyclePolicies()`
-  wird in `ensureBuckets()` aufgerufen und setzt drei prefix-basierte
-  Expiration-Regeln im Bucket:
-  - `outbound-queue/` → 7 Tage (Sicherheitsnetz für tote Jobs)
-  - `quarantine/`     → 90 Tage (rspamd-Quarantäne)
-  - `backups/`        → 365 Tage (Backup-Retention)
-  E-Mail-Anhänge (`attachments/`) und Raw-Messages (`raw/`) sind explizit
-  AUSGENOMMEN — die werden beim Message-Delete einzeln entfernt. Idempotent:
-  setBucketLifecycle() überschreibt die Policy jedes Mal, bei jedem
-  Container-Start wird der aktuelle State garantiert. Fail-safe: wenn MinIO
-  die Policy nicht akzeptiert (alte Version, Permission-Issue), nur WARN-
-  Log, kein Throw.
+  Until now, temporary backup, quarantine and outbound-queue objects
+  could grow unbounded in the MinIO bucket — especially `outbound-queue/` attachments
+  of dead BullMQ jobs (e.g. after a crash between job enqueue and worker
+  pickup) stayed forever. The new helper `ensureLifecyclePolicies()`
+  is called in `ensureBuckets()` and sets three prefix-based
+  expiration rules in the bucket:
+  - `outbound-queue/` → 7 days (safety net for dead jobs)
+  - `quarantine/`     → 90 days (rspamd quarantine)
+  - `backups/`        → 365 days (backup retention)
+  Email attachments (`attachments/`) and raw messages (`raw/`) are explicitly
+  EXCLUDED — they are removed individually on message delete. Idempotent:
+  setBucketLifecycle() overwrites the policy every time, so the current state is
+  guaranteed at every container start. Fail-safe: if MinIO
+  does not accept the policy (old version, permission issue), only a WARN
+  log, no throw.
 
 ### Added (Dependency)
 
-- `ical-generator@^10.2.0` als Vorbereitung für v3.18.25 iMIP-Calendar-
-  Invitations.
+- `ical-generator@^10.2.0` as preparation for v3.18.25 iMIP calendar
+  invitations.
 
 ### Schema
 
-- **`CalendarEvent.sequence Int @default(0)`** — Sequence-Counter für
-  iMIP-konforme Event-Updates (RFC 5546 §3.2). Mail-Clients (Outlook,
-  Gmail) ignorieren REPLY-Mails mit niedrigerer Sequence als der aktuell
-  gespeicherte Event-Stand. Vorbereitung für v3.18.25.
+- **`CalendarEvent.sequence Int @default(0)`** — sequence counter for
+  iMIP-compliant event updates (RFC 5546 §3.2). Mail clients (Outlook,
+  Gmail) ignore REPLY mails with a lower sequence than the currently
+  stored event state. Preparation for v3.18.25.
 
 ---
 
-## [3.18.23] — 2026-05-25 — Backup-Restore-UI im BCP (D3)
+## [3.18.23] — 2026-05-25 — Backup/restore UI in the BCP (D3)
 
 ### Added
 
-- **Neue BCP-Seite „Backup & Restore"**
+- **New BCP page "Backup & Restore"**
   (`packages/admin-panel/src/pages/BackupsPage.tsx`,
   `packages/admin-panel/src/components/Sidebar.tsx`,
   `packages/admin-panel/src/i18n/translations.ts`,
   `packages/api-gateway/src/routes/admin/backups.ts`,
   `packages/api-gateway/src/server.ts`):
 
-  Bisher war Backup-Verwaltung nur über CLI / direkten backup-service-Aufruf
-  möglich. Neue Admin-UI mit:
-  - **Backup-Jobs-Tabelle** — Datum, Scope (user/domain/full), Format
-    (mbox/eml/full), Status mit Icons (PENDING/RUNNING/COMPLETED/FAILED/
-    CANCELLED), Progress-Bar, Download-Link bei abgeschlossenen Jobs.
-    Auto-Polling alle 5s wenn ein Job RUNNING oder PENDING ist, sonst 60s
-    (Performance + Live-Updates).
-  - **S3-Snapshots-Tabelle** — Listet alle Backup-Objekte im MinIO/S3-Bucket
-    mit Key, Größe (formatiert KB/MB/GB), Last-Modified.
-  - **„Vollbackup starten"-Button** — Triggert `POST /admin/backups/full`,
-    Audit-Log-Entry `backup.full.trigger`.
-  - **MBOX-Import (Restore)** — File-Picker (Limit 500 MB) + Ziel-User-ID,
-    `POST /admin/backups/import/:userId` mit `Content-Type: application/mbox`,
-    Audit-Log-Entry `backup.mbox.import`.
+  Until now backup management was only possible via CLI / direct backup-service calls.
+  New admin UI with:
+  - **Backup jobs table** — date, scope (user/domain/full), format
+    (mbox/eml/full), status with icons (PENDING/RUNNING/COMPLETED/FAILED/
+    CANCELLED), progress bar, download link for completed jobs.
+    Auto-polling every 5s when a job is RUNNING or PENDING, otherwise 60s
+    (performance + live updates).
+  - **S3 snapshots table** — lists all backup objects in the MinIO/S3 bucket
+    with key, size (formatted KB/MB/GB), last-modified.
+  - **"Start full backup" button** — triggers `POST /admin/backups/full`,
+    audit log entry `backup.full.trigger`.
+  - **MBOX import (restore)** — file picker (limit 500 MB) + target user ID,
+    `POST /admin/backups/import/:userId` with `Content-Type: application/mbox`,
+    audit log entry `backup.mbox.import`.
 
-  Backend: Wrapper-Router `adminBackupsRouter` leitet `/api/v1/admin/backups/*`
-  an `BACKUP_SERVICE_URL` (default `http://localhost:3004`) weiter. Auth via
-  `requireAdmin`-Middleware + Authorization-Header-Forward. Audit-Log für
-  Trigger/Import. Side-effect-Import für Express-Augmentation `req.apiUser`.
+  Backend: wrapper router `adminBackupsRouter` forwards `/api/v1/admin/backups/*`
+  to `BACKUP_SERVICE_URL` (default `http://localhost:3004`). Auth via
+  `requireAdmin` middleware + Authorization header forwarding. Audit log for
+  trigger/import. Side-effect import for the Express augmentation `req.apiUser`.
 
-  Sidebar: neuer Nav-Eintrag „Backup & Restore" mit `HardDriveDownload`-
-  Icon. i18n-Key `nav_backups` in DE + EN.
+  Sidebar: new nav entry "Backup & Restore" with `HardDriveDownload`
+  icon. i18n key `nav_backups` in DE + EN.
 
 ---
 
-## [3.18.22] — 2026-05-25 — OAuth2-Consent-UI (Security)
+## [3.18.22] — 2026-05-25 — OAuth2 consent UI (Security)
 
 ### Security
 
-- **D1 — OAuth2 Auto-Grant entfernt, echte Consent-UI**
+- **D1 — OAuth2 auto-grant removed, real consent UI**
   (`packages/auth-service/src/oauth2/router.ts`,
   `packages/web-client/src/pages/LoginPage.tsx`,
   `packages/web-client/src/pages/OAuthConsentPage.tsx`,
   `packages/web-client/src/App.tsx`):
 
-  **Vorher (Security-Issue)**: `/oauth2/authorize/complete` granted Consent
-  blind beim ersten Aufruf eines nicht-trusted Clients — User hatten keine
-  Möglichkeit, eine Drittanbieter-App vor dem ersten Zugriff zu sehen oder
-  abzulehnen. Trotz „nicht-trusted" Markierung wurden alle angeforderten
-  Scopes automatisch genehmigt.
+  **Before (security issue)**: `/oauth2/authorize/complete` granted consent
+  blindly on the first call of a non-trusted client — users had no
+  opportunity to see or reject a third-party app before its first access.
+  Despite the "non-trusted" marking, all requested
+  scopes were approved automatically.
 
-  **Jetzt**: Backend liefert bei fehlender oder unvollständiger Einwilligung
+  **Now**: With missing or incomplete consent, the backend returns
   `200 { requiresConsent: true, client, requestedScopes, alreadyGrantedScopes,
-  newScopes }` statt direkt Code auszustellen. Frontend zeigt neue
-  ConsentPage mit:
-  - Client-Name + Beschreibung
-  - Liste der angeforderten Scopes mit deutschen Labels (z. B. „mail.send" →
-    „E-Mails senden in deinem Namen", „calendar.write" → „Termine erstellen,
-    ändern oder löschen")
-  - Bei bestehender Genehmigung mit zusätzlichen Scopes: nur die NEUEN Scopes
-    werden hervorgehoben, bereits erteilte als kleiner Hinweis unten
-  - Amber-Warnung „Du kannst diesen Zugriff jederzeit widerrufen"
-  - „Erlauben" und „Ablehnen"-Buttons
+  newScopes }` instead of issuing a code directly. The frontend shows the new
+  ConsentPage with:
+  - Client name + description
+  - List of requested scopes with German labels (e.g. "mail.send" →
+    "Send emails on your behalf", "calendar.write" → "Create, change
+    or delete appointments")
+  - With an existing grant plus additional scopes: only the NEW scopes
+    are highlighted, already granted ones as a small note at the bottom
+  - Amber warning "You can revoke this access at any time"
+  - "Allow" and "Deny" buttons
 
   Flow:
-  1. Drittanbieter-App → `GET /oauth2/authorize?client_id=...&...`
-  2. Auth-Service redirected zu `/owa/login?oauth2=1&client_id=...`
-  3. LoginPage erkennt `oauth2=1`, nach Login → `navigate('/oauth-consent?...')`
-  4. ConsentPage fragt Backend ob Consent nötig → bei `redirect` direkt zurück
-     zum Client (bereits genehmigt), bei `requiresConsent` UI zeigen
-  5. „Erlauben" → zweiter Call mit `consentConfirmed: true` → Backend
-     persistiert Consent + erstellt Code + liefert `redirect`-URL
-  6. „Ablehnen" → Client wird mit `error=access_denied` (RFC 6749 §4.1.2.1)
-     aufgerufen, kein Code ausgestellt
+  1. Third-party app → `GET /oauth2/authorize?client_id=...&...`
+  2. Auth-service redirects to `/owa/login?oauth2=1&client_id=...`
+  3. LoginPage detects `oauth2=1`, after login → `navigate('/oauth-consent?...')`
+  4. ConsentPage asks the backend whether consent is needed → on `redirect` straight back
+     to the client (already granted), on `requiresConsent` show the UI
+  5. "Allow" → second call with `consentConfirmed: true` → backend
+     persists the consent + creates the code + returns the `redirect` URL
+  6. "Deny" → client is called with `error=access_denied` (RFC 6749 §4.1.2.1),
+     no code is issued
 
-  Neue Route `/oauth-consent` im MWA, mit AuthGuard aber ohne Layout-Wrapper
-  (standalone Vollbild-Dialog).
+  New route `/oauth-consent` in the MWA, with AuthGuard but without the layout wrapper
+  (standalone full-screen dialog).
 
 ---
 
-## [3.18.21] — 2026-05-25 — Calendar-Toolbar Filter + Drucken funktionsfähig
+## [3.18.21] — 2026-05-25 — Calendar toolbar filter + printing now functional
 
 ### Fixed
 
-- **Filter-Button hatte keine Funktion**
+- **Filter button had no effect**
   (`packages/web-client/src/components/CalendarToolbar.tsx`,
   `packages/web-client/src/pages/CalendarPage.tsx`):
-  Dropdown öffnete sich zwar mit Toggle-Checkboxen, aber der State war
-  rein lokal in der Toolbar — wurde nie an CalendarPage weitergegeben.
-  Außerdem waren die alten Outlook-Begriffe („Besprechungen",
-  „Kategorien", „Anzeigen als") bedeutungslos für CoreMail.
-  **Fix**: Filter-Set auf 5 realistische, tatsächlich-mapbare Optionen
-  reduziert: Wiederholende Termine (rrule), Aufgaben, Private Termine
-  (classification=PRIVATE), Vertrauliche Termine (CONFIDENTIAL für Owner),
-  Geteilte Kalender (shared=true). State zu CalendarPage gelifted
-  (controlled component). `fcEvents` werden jetzt tatsächlich gefiltert.
+  The dropdown did open with toggle checkboxes, but the state was
+  purely local to the toolbar — it was never passed on to CalendarPage.
+  In addition, the old Outlook terms ("Meetings",
+  "Categories", "Show as") were meaningless for CoreMail.
+  **Fix**: filter set reduced to 5 realistic options that actually map to
+  data: Recurring events (rrule), Tasks, Private events
+  (classification=PRIVATE), Confidential events (CONFIDENTIAL for owner),
+  Shared calendars (shared=true). State lifted to CalendarPage
+  (controlled component). `fcEvents` are now actually filtered.
 
-- **„Drucken" druckte die komplette Seite mit Sidebar + Toolbar**
+- **"Print" printed the entire page including sidebar + toolbar**
   (`packages/web-client/src/pages/CalendarPage.tsx`,
   `packages/web-client/src/index.css`):
-  Vorher: simples `window.print()` ohne Print-CSS — Sidebar, Toolbar,
-  App-Chrome alles auf dem Druck. **Fix**: vor `window.print()` wird
-  `coremail-printing`-Class auf `<html>` gesetzt; neuer `@media print`-
-  Block in `index.css` blendet `aside`, `nav`, `header` und alle
-  `[data-coremail-toolbar]`-Elemente aus. Nach Print-Dialog wird die
-  Class via Timeout (500ms) wieder entfernt. Events bekommen Print-
-  geeignete Border (1px solid #888) damit sie auf Papier sichtbar bleiben.
+  Before: a plain `window.print()` without print CSS — sidebar, toolbar,
+  app chrome all ended up on the printout. **Fix**: before `window.print()` the
+  `coremail-printing` class is set on `<html>`; a new `@media print`
+  block in `index.css` hides `aside`, `nav`, `header` and all
+  `[data-coremail-toolbar]` elements. After the print dialog the
+  class is removed again via timeout (500ms). Events get a print-
+  friendly border (1px solid #888) so they remain visible on paper.
 
 ---
 
-## [3.18.20] — 2026-05-25 — Dark-Mode-Patches (LoginPage + SettingsPage)
+## [3.18.20] — 2026-05-25 — Dark-mode patches (LoginPage + SettingsPage)
 
 ### Changed
 
-- **MWA LoginPage Dark-Mode** (`packages/web-client/src/pages/LoginPage.tsx`):
-  Login-Card war komplett ohne `dark:`-Modifier — als erste Seite die ein
-  neuer User sieht, ein offensichtlicher Bug. Jetzt mit
-  `dark:bg-gray-900`, `dark:text-white`, `dark:text-gray-400` für Logo +
-  Subtitle. Card-Border `dark:border-gray-700` als subtile Abgrenzung.
+- **MWA LoginPage dark mode** (`packages/web-client/src/pages/LoginPage.tsx`):
+  The login card had no `dark:` modifiers at all — as the first page a
+  new user sees, an obvious bug. Now with
+  `dark:bg-gray-900`, `dark:text-white`, `dark:text-gray-400` for logo +
+  subtitle. Card border `dark:border-gray-700` as a subtle delimiter.
 
-- **MWA SettingsPage Dark-Mode (Sektion-Headers + Form-Labels)**
+- **MWA SettingsPage dark mode (section headers + form labels)**
   (`packages/web-client/src/pages/SettingsPage.tsx`):
-  Sektion-Überschriften (`text-lg font-semibold text-gray-900` → +
-  `dark:text-gray-100`), Sub-Texts (`text-sm text-gray-500 mt-0.5` → +
-  `dark:text-gray-400`), Form-Labels (`block text-sm font-medium
-  text-gray-700 mb-1` → + `dark:text-gray-300`) und disabled E-Mail-Input
-  (`bg-gray-50` → + `dark:bg-gray-800`) sind jetzt im Dark-Mode korrekt
-  lesbar.
+  Section headings (`text-lg font-semibold text-gray-900` → +
+  `dark:text-gray-100`), sub-texts (`text-sm text-gray-500 mt-0.5` → +
+  `dark:text-gray-400`), form labels (`block text-sm font-medium
+  text-gray-700 mb-1` → + `dark:text-gray-300`) and the disabled e-mail input
+  (`bg-gray-50` → + `dark:bg-gray-800`) are now correctly readable
+  in dark mode.
 
 ### Known
 
-- ComposeWindow (~22 Stellen) und SignatureSection (~9 Stellen) haben
-  noch einzelne nicht-dark-aware-Klassen. Wird in einer dedizierten
-  Dark-Mode-Sweep-Session in v3.19 aufgeräumt.
+- ComposeWindow (~22 places) and SignatureSection (~9 places) still
+  have individual non-dark-aware classes. Will be cleaned up in a dedicated
+  dark-mode sweep session in v3.19.
 
 ---
 
-## [3.18.19] — 2026-05-25 — Forced 2FA für Admin-Login (Security)
+## [3.18.19] — 2026-05-25 — Forced 2FA for admin login (Security)
 
 ### Security
 
-- **D5 — Pflicht-2FA für Admins** (`packages/api-gateway/src/middleware/auth.ts`,
+- **D5 — Mandatory 2FA for admins** (`packages/api-gateway/src/middleware/auth.ts`,
   `packages/admin-panel/src/api/client.ts`,
   `packages/admin-panel/src/pages/MfaRequiredPage.tsx`):
-  Wenn `ServerSettings.requireMfaForAdmins=true` (Toggle bestand bereits in
-  Sicherheits-Einstellungen, wurde aber nirgendwo enforced) und der Admin
-  hat KEINE MFA aktiviert → alle `/api/v1/admin/*`-Routen liefern jetzt
-  `403 { code: "MFA_REQUIRED" }`. Frontend-API-Client erkennt den Code und
-  leitet auf neue Pflicht-Setup-Seite `/bcp/mfa-required` mit Anleitung
-  („MWA öffnen → Einstellungen → Sicherheit → 2FA aktivieren → zurückkommen").
-  TOTP- oder WebAuthn-Credentials zählen beide als „MFA aktiviert".
-  Kein Chicken-and-Egg-Problem: MFA-Setup-Routes (`/auth/mfa/*`) sind
-  außerhalb der `/admin/*`-Sperre. Fail-safe: bei DB-Fehler im Check wird
-  durchgelassen (Logged als ERROR), damit Admins nicht ausgesperrt werden
-  bei Postgres-Ausfall.
+  When `ServerSettings.requireMfaForAdmins=true` (the toggle already existed in
+  the security settings but was never enforced anywhere) and the admin
+  has NO MFA enabled → all `/api/v1/admin/*` routes now return
+  `403 { code: "MFA_REQUIRED" }`. The frontend API client detects the code and
+  redirects to the new mandatory setup page `/bcp/mfa-required` with instructions
+  ("Open MWA → Settings → Security → enable 2FA → come back").
+  TOTP or WebAuthn credentials both count as "MFA enabled".
+  No chicken-and-egg problem: the MFA setup routes (`/auth/mfa/*`) are
+  outside the `/admin/*` lock. Fail-safe: on a DB error in the check the request
+  is let through (logged as ERROR) so admins are not locked out
+  during a Postgres outage.
 
 ---
 
-## [3.18.18] — 2026-05-25 — Toolbar-Share-Button + CalDAV-URL-Anzeige
+## [3.18.18] — 2026-05-25 — Toolbar share button + CalDAV URL display
 
 ### Fixed
 
-- **Toolbar „Kalender teilen" funktioniert jetzt**
+- **Toolbar "Share calendar" now works**
   (`packages/web-client/src/pages/CalendarPage.tsx`):
-  Der Button oben in der CalendarToolbar zeigte vorher nur einen Toast
-  („Wähle einen Kalender und klicke Teilen über das ⋯-Menü"). Jetzt
-  öffnet er den `ShareCalendarDialog` direkt — wenn der User mehrere
-  eigene Kalender hat, erscheint im Dialog-Header ein Auswahl-Dropdown
-  zum Wechseln. Bei nur einem eigenen Kalender wird dieser direkt
-  geöffnet. Wenn gar keiner vorhanden ist → Toast-Fehler.
+  The button at the top of the CalendarToolbar previously only showed a toast
+  ("Select a calendar and click Share via the ⋯ menu"). Now
+  it opens the `ShareCalendarDialog` directly — if the user has several
+  own calendars, a selection dropdown appears in the dialog header
+  for switching. With only one own calendar it is opened
+  directly. If none exists → toast error.
 
 ### Added
 
-- **CalDAV-URL-Anzeige für externen Kalender-Zugriff**
+- **CalDAV URL display for external calendar access**
   (`packages/api-gateway/src/routes/calendar.ts`,
   `packages/web-client/src/components/ShareCalendarDialog.tsx`,
   `packages/web-client/src/components/CalendarSidebar.tsx`):
-  Neuer Endpoint `GET /api/v1/calendar/caldav-info` liefert
-  - `accountUrl` für Auto-Discovery (`https://host/dav/calendars/{userId}/`)
-  - Pro-Kalender-URL für direkten Mount (`.../{calendarId}/`)
-  - Username + Auth-Hinweis (App-Passwort statt Login-Passwort wegen MFA)
-  Im Share-Dialog erscheint eine neue Sektion „Externer Zugriff (CalDAV)"
-  mit beiden URLs und Copy-to-Clipboard-Buttons. Im Sidebar-Kontextmenü
-  auf eigenen Kalendern gibt es zusätzlich „CalDAV-URL kopieren" für
-  Quick-Access. CalDAV wird konsequent über HTTPS empfohlen (Auth-Leak-
-  Schutz); nur wenn Admin explizit `useHttps=false` gesetzt hat (z. B.
-  hinter Reverse-Proxy), wird `http://` ausgegeben.
+  New endpoint `GET /api/v1/calendar/caldav-info` returns
+  - `accountUrl` for auto-discovery (`https://host/dav/calendars/{userId}/`)
+  - a per-calendar URL for direct mounting (`.../{calendarId}/`)
+  - username + auth hint (app password instead of login password because of MFA)
+  In the share dialog a new section "External access (CalDAV)" appears
+  with both URLs and copy-to-clipboard buttons. The sidebar context menu
+  on own calendars additionally offers "Copy CalDAV URL" for
+  quick access. CalDAV is consistently recommended over HTTPS (auth-leak
+  protection); only if the admin has explicitly set `useHttps=false` (e.g.
+  behind a reverse proxy) is `http://` emitted.
 
 ### Changed
 
-- **ShareCalendarDialog** akzeptiert jetzt optional `ownedCalendars`-Prop
-  für Picker-Modus. Bei Aufruf aus Sidebar-Kontextmenü bleibt der
-  Kalender fix; beim Aufruf aus Toolbar wird gewechselt werden können.
-  Header zeigt Picker-Dropdown nur wenn `ownedCalendars.length > 1`.
+- **ShareCalendarDialog** now accepts an optional `ownedCalendars` prop
+  for picker mode. When invoked from the sidebar context menu the
+  calendar stays fixed; when invoked from the toolbar it can be switched.
+  The header shows the picker dropdown only when `ownedCalendars.length > 1`.
 
 ---
 
-## [3.18.17] — 2026-05-25 — Calendar SSE-Push + Free/Busy-Query
+## [3.18.17] — 2026-05-25 — Calendar SSE push + free/busy query
 
 ### Added
 
-- **A2 — SSE-Push für Calendar-Share-Lifecycle**
+- **A2 — SSE push for the calendar share lifecycle**
   (`packages/core/src/redis/index.ts`, `packages/api-gateway/src/sse.ts`,
   `packages/api-gateway/src/routes/calendar.ts`,
   `packages/web-client/src/hooks/useMailEvents.ts`):
-  Neuer Redis-Channel `coremail:calendar:shares` (Konstante
-  `CHANNEL_CALENDAR_SHARES`). Backend published bei jeder Share-Lifecycle-
-  Aktion (create/update/delete/self_remove) ein JSON-Event mit
-  `affectedUserIds[]` (Owner + Grantee). SSE-Handler im api-gateway
-  abonniert den Channel und forwardet das Event als `event: calendar:shares`
-  nur an die SSE-Verbindungen der betroffenen User. Frontend-Hook
-  `useMailEvents()` invalidiert auf das Event hin die `['calendars']`- und
-  `['calendar-shares']`-Caches → instant Live-Sync ohne Polling. Toast
-  „🗓️ Ein Kalender wurde mit dir geteilt" bei `action=create`. Polling-
-  Intervall der Calendar-Query in CalendarPage von 60s auf 5min reduziert
-  (nur noch Sicherheits-Fallback falls SSE tot).
+  New Redis channel `coremail:calendar:shares` (constant
+  `CHANNEL_CALENDAR_SHARES`). The backend publishes a JSON event with
+  `affectedUserIds[]` (owner + grantee) on every share lifecycle
+  action (create/update/delete/self_remove). The SSE handler in the api-gateway
+  subscribes to the channel and forwards the event as `event: calendar:shares`
+  only to the SSE connections of the affected users. The frontend hook
+  `useMailEvents()` invalidates the `['calendars']` and
+  `['calendar-shares']` caches on that event → instant live sync without polling. Toast
+  "🗓️ A calendar was shared with you" on `action=create`. Polling
+  interval of the calendar query in CalendarPage reduced from 60s to 5min
+  (only a safety fallback in case SSE is dead).
 
-- **A4 — Free/Busy-Query über geteilte Kalender**
+- **A4 — Free/busy query across shared calendars**
   (`packages/api-gateway/src/routes/calendar.ts`):
-  Neuer Endpoint `POST /api/v1/calendar/freebusy`, Body
-  `{ userEmails[], start, end }`. Liefert pro angefragtem User alle
-  Busy-Slots aus Kalendern, auf die der Caller Zugriff hat (eigene + per
-  Share). CONFIDENTIAL-Events bleiben für Foreign-Caller ausgeblendet,
-  PRIVATE-Events werden als generic „Busy"-Slot OHNE Subject geliefert.
-  Self-Query (Caller fragt sich selbst) sieht alle Details. Range hart
-  begrenzt auf 90 Tage (DoS-Schutz), Liste auf 50 User. Response-Shape:
+  New endpoint `POST /api/v1/calendar/freebusy`, body
+  `{ userEmails[], start, end }`. Returns, per requested user, all
+  busy slots from calendars the caller has access to (own + via
+  share). CONFIDENTIAL events remain hidden for foreign callers,
+  PRIVATE events are returned as a generic "Busy" slot WITHOUT subject.
+  Self-query (caller asks about themselves) sees all details. Range hard-
+  limited to 90 days (DoS protection), list to 50 users. Response shape:
   `{ start, end, users: [{ email, displayName, found, busy: [{ start, end, type, subject? }] }] }`.
 
 ---
 
-## [3.18.16] — 2026-05-25 — Calendar Sharing Quick-Wins (Notification, Per-Grantee-Farbe, Reorder, Cleanup)
+## [3.18.16] — 2026-05-25 — Calendar sharing quick wins (notification, per-grantee color, reorder, cleanup)
 
 ### Added
 
-- **A1 — Notification-Mail an Grantee beim Teilen**
+- **A1 — Notification mail to grantee on sharing**
   (`packages/api-gateway/src/lib/internal-notify.ts`, `routes/calendar.ts`):
-  Wenn Owner einen Kalender freigibt, erhält der Empfänger automatisch eine
-  System-Mail in seine INBOX („X hat den Kalender ‚Y' mit dir geteilt" mit
-  Permission-Level). Neuer Helper `notifyUserInbox()` mit direkter Inbox-
-  Insertion via `prisma.message.create` — kein SMTP-Roundtrip, kein DKIM/
-  Spam-Check nötig, sofortige Sichtbarkeit. Nur bei *neuer* Share, nicht bei
-  Permission-Update via Upsert (verhindert Spam). HTML-Escaping gegen XSS.
+  When an owner shares a calendar, the recipient automatically receives a
+  system mail in their INBOX ("X shared the calendar 'Y' with you" with
+  permission level). New helper `notifyUserInbox()` with direct inbox
+  insertion via `prisma.message.create` — no SMTP round trip, no DKIM/
+  spam check needed, immediately visible. Only on a *new* share, not on a
+  permission update via upsert (prevents spam). HTML escaping against XSS.
 
-- **A3 — Per-Grantee-Farbe für geteilte Kalender**
+- **A3 — Per-grantee color for shared calendars**
   (`schema.prisma`, `routes/calendar.ts`, `components/CalendarSidebar.tsx`):
-  Grantees können freigegebene Kalender lokal umfärben, ohne dass die Owner-
-  Farbe geändert wird. Neues Feld `CalendarShare.localColor String?` und
-  Endpoint `PATCH /calendar/mine-shares/:shareId` mit Body `{ localColor }`.
-  Farb-Picker im Kontextmenü auf geteilten Kalendern; „Original-Farbe (vom
-  Owner)" setzt `localColor=null` zurück. `listAccessibleCalendars` liefert
-  `localColor ?? calendar.color` für Grantees.
+  Grantees can recolor shared calendars locally without changing the owner's
+  color. New field `CalendarShare.localColor String?` and
+  endpoint `PATCH /calendar/mine-shares/:shareId` with body `{ localColor }`.
+  Color picker in the context menu on shared calendars; "Original color (from
+  owner)" resets `localColor=null`. `listAccessibleCalendars` returns
+  `localColor ?? calendar.color` for grantees.
 
-- **A8 — Reorder für geteilte Kalender**
+- **A8 — Reorder for shared calendars**
   (`schema.prisma`, `routes/calendar.ts`, `components/CalendarSidebar.tsx`):
-  Grantees können die Reihenfolge der „Geteilt mit mir"-Sektion lokal
-  anpassen. Neues Feld `CalendarShare.sortOrder Int @default(0)` und Endpoint
-  `POST /calendar/mine-shares/reorder` (Body `{ ids[] }`, filtert auf
-  `granteeId === userId`). Kontextmenü „Nach oben" / „Nach unten" auf
-  geteilten Kalendern.
+  Grantees can locally adjust the order of the "Shared with me" section.
+  New field `CalendarShare.sortOrder Int @default(0)` and endpoint
+  `POST /calendar/mine-shares/reorder` (body `{ ids[] }`, filtered on
+  `granteeId === userId`). Context menu "Move up" / "Move down" on
+  shared calendars.
 
-- **`shareId`-Feld** im `GET /calendar`-Response (nur bei `shared: true`)
-  — Frontend benutzt es für Self-Removal, Color-Change, Reorder. Vorher
-  brauchte Self-Removal einen Roundtrip via `/mine-shares?calendarId=`,
-  jetzt direkt verfügbar.
+- **`shareId` field** in the `GET /calendar` response (only when `shared: true`)
+  — the frontend uses it for self-removal, color change, reorder. Previously
+  self-removal needed a round trip via `/mine-shares?calendarId=`,
+  now it is directly available.
 
 ### Changed
 
-- **CalendarSidebar — geteilte Kalender sortiert nach `sortOrder`** statt
-  alphabetisch nach Name. Tie-Break bleibt `localeCompare`.
-- **Self-Removal-Mutation** vereinfacht — nutzt jetzt `cal.shareId` direkt
-  statt Lookup über `mine-shares?calendarId=`.
+- **CalendarSidebar — shared calendars sorted by `sortOrder`** instead of
+  alphabetically by name. Tie-break remains `localeCompare`.
+- **Self-removal mutation** simplified — now uses `cal.shareId` directly
+  instead of a lookup via `mine-shares?calendarId=`.
 
 ### Removed
 
-- **C1 — `Calendar.acl Json`-Feld komplett entfernt**
+- **C1 — `Calendar.acl Json` field removed completely**
   (`packages/storage/prisma/schema.prisma`):
-  In v3.18.14 als `@deprecated` markiert (durch `CalendarShare` ersetzt).
-  Spalte wird beim Container-Start via `prisma db push --accept-data-loss`
-  automatisch gedroppt. Kein Code in `packages/` referenzierte das Feld —
-  `PublicFolder.acl` bleibt unverändert (anderes Modell).
+  Marked `@deprecated` in v3.18.14 (replaced by `CalendarShare`).
+  The column is dropped automatically at container start via `prisma db push --accept-data-loss`.
+  No code in `packages/` referenced the field —
+  `PublicFolder.acl` remains unchanged (different model).
 
 ---
 
-## [3.18.15] — 2026-05-25 — CalDAV-WRITE-Sharing + Private Events + Audit-Log + i18n
+## [3.18.15] — 2026-05-25 — CalDAV WRITE sharing + private events + audit log + i18n
 
 ### Added
 
-- **CalDAV-WRITE für Grantees mit voller RFC-3744-DAV-ACL**
+- **CalDAV WRITE for grantees with full RFC 3744 DAV ACL**
   (`packages/caldav-server/src/caldav/index.ts`):
-  In v3.18.14 konnten Apple Kalender / Thunderbird Lightning nur lesen.
-  Jetzt dürfen WRITE-Grantees auch PUT (Create/Update) und DELETE.
-  Schreib-Sperre für READ-Grantees bleibt. Volle RFC-3744-DAV-ACL:
-  - `<DAV:owner>` mit `<d:href>/dav/principals/{ownerId}/</d:href>`
-  - `<DAV:current-user-privilege-set>` mit feingranularen Privileges
+  In v3.18.14 Apple Calendar / Thunderbird Lightning could only read.
+  Now WRITE grantees may also PUT (create/update) and DELETE.
+  The write lock for READ grantees remains. Full RFC 3744 DAV ACL:
+  - `<DAV:owner>` with `<d:href>/dav/principals/{ownerId}/</d:href>`
+  - `<DAV:current-user-privilege-set>` with fine-grained privileges
     (`<d:read/>`, `<d:write/>`, `<d:write-content/>`, `<d:bind/>`, `<d:unbind/>`)
-  - `<DAV:acl>` Block (nur für OWNER sichtbar) mit ACE pro Grantee
-  - `Allow`-Header in OPTIONS jetzt mit `ACL`, `DAV`-Header mit `access-control`
-  Cross-Calendar-Manipulation-Protection: Grantee kann ein Event aus seiner
-  Sicht nicht in einen anderen Kalender verschieben.
+  - `<DAV:acl>` block (visible to OWNER only) with one ACE per grantee
+  - `Allow` header in OPTIONS now includes `ACL`, `DAV` header includes `access-control`
+  Cross-calendar manipulation protection: a grantee cannot move an event, from
+  their point of view, into a different calendar.
 
-- **Private und vertrauliche Termine (RFC 5545 `CLASS:`)**
+- **Private and confidential events (RFC 5545 `CLASS:`)**
   (`packages/storage/prisma/schema.prisma`, `packages/api-gateway/src/lib/calendar-access.ts`):
-  Neues Feld `CalendarEvent.classification` mit drei Werten:
-  - `PUBLIC` (Default): Grantees sehen alle Details
-  - `PRIVATE`: Grantees sehen nur „Beschäftigt" — Subject/Description/Location/
-    Attendees werden maskiert. Owner sieht alles unverändert.
-  - `CONFIDENTIAL`: Termin wird für Grantees komplett ausgeblendet
-  Mapping zu iCal `CLASS:`-Property (RFC 5545 §3.8.1.3) in beide Richtungen
-  (Backend → iCal beim Build, CalDAV-PUT → DB beim Parse). Maskierung greift
-  in REST `GET /calendar/events`, CalDAV `GET`, `PROPFIND` und `REPORT`.
-  WRITE-Grantees können CONFIDENTIAL-Events nicht ändern (sie wären sonst
-  trotz Maskierung manipulierbar).
+  New field `CalendarEvent.classification` with three values:
+  - `PUBLIC` (default): grantees see all details
+  - `PRIVATE`: grantees only see "Busy" — subject/description/location/
+    attendees are masked. The owner sees everything unchanged.
+  - `CONFIDENTIAL`: the event is completely hidden from grantees
+  Mapping to the iCal `CLASS:` property (RFC 5545 §3.8.1.3) in both directions
+  (backend → iCal on build, CalDAV PUT → DB on parse). Masking applies
+  in REST `GET /calendar/events`, CalDAV `GET`, `PROPFIND` and `REPORT`.
+  WRITE grantees cannot modify CONFIDENTIAL events (otherwise they would be
+  manipulable despite masking).
 
-- **Audit-Log für Sharing-Aktionen** (Compliance, DSGVO Art. 32)
+- **Audit log for sharing actions** (compliance, GDPR Art. 32)
   (`packages/api-gateway/src/routes/calendar.ts`):
-  Neue Audit-Aktionen — alle mit Actor, Ziel-Kalender, IP, User-Agent und
-  Diff im `changes`-Feld:
-  - `calendar.share.create` — beim Erstellen einer Freigabe
-  - `calendar.share.update` — bei Permission-Änderung (mit oldPermission/newPermission)
-  - `calendar.share.delete` — wenn Owner eine Freigabe entfernt
-  - `calendar.share.self_remove` — wenn Grantee sich selbst aus der Liste entfernt
-  Bisher waren Sharing-Aktionen NICHT auditiert — Lücke geschlossen.
+  New audit actions — all with actor, target calendar, IP, user agent and
+  diff in the `changes` field:
+  - `calendar.share.create` — when a share is created
+  - `calendar.share.update` — on permission change (with oldPermission/newPermission)
+  - `calendar.share.delete` — when the owner removes a share
+  - `calendar.share.self_remove` — when a grantee removes themselves from the list
+  Until now sharing actions were NOT audited — gap closed.
 
-- **i18n: EN, ES, IT-Übersetzungen für Sharing-UI**
+- **i18n: EN, ES, IT translations for the sharing UI**
   (`packages/web-client/src/i18n/translations.ts`):
-  25 neue Keys (`cal_share_*` und `cal_event_class_*`) in allen vier
-  Sprachen Deutsch/Englisch/Spanisch/Italienisch.
+  25 new keys (`cal_share_*` and `cal_event_class_*`) in all four
+  languages German/English/Spanish/Italian.
 
 ### Changed
+- **Event creation dialog** in the MWA now has a visibility dropdown
+  ("Public" / "Private" / "Confidential"). Default remains PUBLIC for
+  backward compatibility.
 
-- **Event-Erstellungs-Dialog** im MWA hat jetzt einen Sichtbarkeits-Dropdown
-  („Öffentlich" / „Privat" / „Vertraulich"). Default bleibt PUBLIC für
-  Rückwärts-Kompatibilität.
-
-- **CalDAV OPTIONS-Antwort** enthält jetzt `ACL` im Allow-Header und
-  `access-control` im DAV-Header — Apple Kalender erkennt damit volle
-  RFC-3744-Unterstützung.
+- **CalDAV OPTIONS response** now contains `ACL` in the Allow header and
+  `access-control` in the DAV header — Apple Calendar thereby detects full
+  RFC 3744 support.
 
 ### Schema
 
-- Neues Feld `CalendarEvent.classification String @default("PUBLIC")`.
-  Migration läuft automatisch via `prisma db push --accept-data-loss`.
-  Bestehende Events bekommen `PUBLIC` als Default — keine Verhaltensänderung
-  für nicht-geteilte Kalender.
+- New field `CalendarEvent.classification String @default("PUBLIC")`.
+  Migration runs automatically via `prisma db push --accept-data-loss`.
+  Existing events get `PUBLIC` as default — no behavior change
+  for non-shared calendars.
 
 ---
 
-## [3.18.14] — 2026-05-25 — Kalender teilen und berechtigen (Read/Write)
+## [3.18.14] — 2026-05-25 — Share calendars and grant permissions (read/write)
 
 ### Added
 
-- **Kalender-Sharing — internes Sharing zwischen Usern**
+- **Calendar sharing — internal sharing between users**
   (`packages/storage/prisma/schema.prisma`, `packages/api-gateway/src/routes/calendar.ts`,
   `packages/web-client/src/components/ShareCalendarDialog.tsx`):
-  User können ihre eigenen Kalender an andere User im selben System freigeben
-  mit READ- oder READ+WRITE-Permission. Geteilte Kalender erscheinen beim
-  Empfänger in einer neuen Sidebar-Sektion „Geteilt mit mir" mit Share-Icon
-  und Permission-Badge (R / R/W) sowie Owner-Name als Untertitel.
+  Users can share their own calendars with other users in the same system
+  with READ or READ+WRITE permission. Shared calendars appear for the
+  recipient in a new sidebar section "Shared with me" with a share icon
+  and permission badge (R / R/W) as well as the owner name as subtitle.
 
-- **Sharing-Dialog mit Benutzer-Autocomplete**
+- **Sharing dialog with user autocomplete**
   (`packages/web-client/src/components/ShareCalendarDialog.tsx`):
-  Klick auf „Teilen und Berechtigungen" im Kalender-Kontextmenü öffnet einen
-  vollwertigen Dialog statt der bisherigen „Bald verfügbar"-Notification.
-  - Benutzer-Autocomplete via `/contacts?q=` (220ms Debouncing, Keyboard-Nav
-    ↑↓/Enter/Tab/Escape, automatische Filterung nur auf interne User-Treffer,
-    bereits zugewiesene User werden ausgeblendet)
-  - Permission-Select (Nur lesen / Lesen und Schreiben)
-  - Liste der aktuellen Freigaben mit Permission-Toggle + Trash-Button
-  - Self-Share verhindert (Backend 400-Response)
-  - Info-Banner mit Erklärung READ vs WRITE und CalDAV-Hinweis
+  Clicking "Sharing and permissions" in the calendar context menu opens a
+  full-featured dialog instead of the previous "Coming soon" notification.
+  - User autocomplete via `/contacts?q=` (220ms debouncing, keyboard nav
+    ↑↓/Enter/Tab/Escape, automatic filtering to internal user hits only,
+    already-assigned users are hidden)
+  - Permission select (Read only / Read and write)
+  - List of current shares with permission toggle + trash button
+  - Self-share prevented (backend 400 response)
+  - Info banner explaining READ vs WRITE plus a CalDAV hint
 
-- **CalDAV Discovery für geteilte Kalender (Read-Only)**
+- **CalDAV discovery for shared calendars (read-only)**
   (`packages/caldav-server/src/caldav/index.ts`):
-  Externe Clients (Apple Kalender, Thunderbird Lightning) sehen jetzt in der
-  Calendar-Home-Set auch geteilte Kalender (mit `[Geteilt]`-Prefix im Displayname).
-  PROPFIND/REPORT/GET sind erlaubt. PUT/DELETE bleiben in v3.18.14 OWNER-only
-  (volle WRITE-CalDAV folgt in v3.18.15 mit RFC-3744-konformer DAV ACL).
-  `<DAV:current-user-privilege-set>` korrekt gesetzt: OWNER → `<d:all/>`,
-  Grantee → `<d:read/>`.
+  External clients (Apple Calendar, Thunderbird Lightning) now also see shared
+  calendars in the calendar-home-set (with `[Geteilt]` prefix in the display name).
+  PROPFIND/REPORT/GET are allowed. PUT/DELETE remain OWNER-only in v3.18.14
+  (full WRITE CalDAV follows in v3.18.15 with an RFC 3744-compliant DAV ACL).
+  `<DAV:current-user-privilege-set>` set correctly: OWNER → `<d:all/>`,
+  grantee → `<d:read/>`.
 
 ### Changed
 
-- **GET /api/v1/calendar** liefert jetzt eigene + geteilte Kalender mit Feldern
+- **GET /api/v1/calendar** now returns own + shared calendars with fields
   `shared`, `ownerId`, `ownerDisplayName`, `ownerEmail`, `permission`
-  (`OWNER`/`READ`/`WRITE`). Lazy-Provisioning nur noch bei komplett leerem Bestand.
+  (`OWNER`/`READ`/`WRITE`). Lazy provisioning only when there are no calendars at all.
 
-- **Event-Permission-Checks** in `POST/PUT/DELETE /calendar/events*` über neuen
-  zentralen Helper `canAccessCalendar(userId, calendarId, required)` in
-  `packages/api-gateway/src/lib/calendar-access.ts`. WRITE-Permission erforderlich
-  für Schreib-Operationen, READ reicht für `GET /events`. Owner haben immer
-  alle Rechte.
+- **Event permission checks** in `POST/PUT/DELETE /calendar/events*` via the new
+  central helper `canAccessCalendar(userId, calendarId, required)` in
+  `packages/api-gateway/src/lib/calendar-access.ts`. WRITE permission required
+  for write operations, READ suffices for `GET /events`. Owners always have
+  all rights.
 
-- **FullCalendar im MWA** rendert geteilte READ-only-Kalender als nicht editierbar
+- **FullCalendar in the MWA** renders shared READ-only calendars as non-editable
   (`editable: false`, `startEditable: false`, `durationEditable: false`).
-  Klick auf einen READ-only-Event zeigt Toast „Nur Lese-Berechtigung für diesen
-  Kalender" statt Delete-Confirm. Neuer-Termin-Dialog listet nur Kalender mit
-  Schreibrecht im Dropdown.
+  Clicking a READ-only event shows the toast "Read-only permission for this
+  calendar" instead of the delete confirm. The new-event dialog lists only calendars with
+  write permission in the dropdown.
 
-- **TanStack Query Calendar-Cache** mit `staleTime: 30s` + `refetchInterval: 60s`
-  + `refetchOnWindowFocus: true` — geänderte Freigaben (z. B. Owner widerruft
-  Permission) verschwinden binnen 60s aus der UI.
+- **TanStack Query calendar cache** with `staleTime: 30s` + `refetchInterval: 60s`
+  + `refetchOnWindowFocus: true` — changed shares (e.g. owner revokes a
+  permission) disappear from the UI within 60s.
 
 ### Schema
 
-- **Neue Tabelle `calendar_shares`** mit Feldern `id`, `calendarId`, `ownerId`,
-  `granteeId`, `permission` (Enum `READ`/`WRITE`), `comment`, `createdAt`.
-  Unique-Constraint `(calendarId, granteeId)` verhindert Duplikate, POST ist
-  idempotent (Upsert). Cascade-Delete bei Calendar/Owner/Grantee-Löschung.
-- **Neuer Enum `CalendarPermType`** mit Werten `READ`, `WRITE`.
-- **`Calendar.acl Json`** als `@deprecated` markiert — Entfernung in v3.19.
+- **New table `calendar_shares`** with fields `id`, `calendarId`, `ownerId`,
+  `granteeId`, `permission` (enum `READ`/`WRITE`), `comment`, `createdAt`.
+  Unique constraint `(calendarId, granteeId)` prevents duplicates, POST is
+  idempotent (upsert). Cascade delete on calendar/owner/grantee deletion.
+- **New enum `CalendarPermType`** with values `READ`, `WRITE`.
+- **`Calendar.acl Json`** marked `@deprecated` — removal in v3.19.
 
 ### API
 
-- `GET /api/v1/calendar/:id/shares` — Liste aller Freigaben für eigenen Kalender
-- `POST /api/v1/calendar/:id/shares` — Body `{ granteeId, permission, comment? }`,
-  Upsert-Verhalten, akzeptiert `gal-`-Prefix
-- `PUT /api/v1/calendar/:id/shares/:shareId` — Permission updaten
-- `DELETE /api/v1/calendar/:id/shares/:shareId` — Owner ODER Grantee (Self-Removal)
-- `GET /api/v1/calendar/mine-shares?calendarId=...` — Shares die mir gewährt
-  wurden (Grantee-Sicht, für Self-Removal-Flow nötig)
+- `GET /api/v1/calendar/:id/shares` — list of all shares for an own calendar
+- `POST /api/v1/calendar/:id/shares` — body `{ granteeId, permission, comment? }`,
+  upsert behavior, accepts `gal-` prefix
+- `PUT /api/v1/calendar/:id/shares/:shareId` — update permission
+- `DELETE /api/v1/calendar/:id/shares/:shareId` — owner OR grantee (self-removal)
+- `GET /api/v1/calendar/mine-shares?calendarId=...` — shares granted to me
+  (grantee view, needed for the self-removal flow)
 
 ---
 
-## [3.18.13] — 2026-05-25 — Externe Kontakte UI vereinfacht + GAL-Cache Live-Sync
+## [3.18.13] — 2026-05-25 — External contacts UI simplified + GAL cache live sync
 
 ### Changed
 
-- **BCP ExternalContactsPage — Vorname/Nachname-Felder entfernt**
+- **BCP ExternalContactsPage — first name/last name fields removed**
   (`packages/admin-panel/src/pages/ExternalContactsPage.tsx`):
-  Die getrennten Eingaben für Vorname und Nachname waren redundant — der
-  Anzeigename ist der einzig relevante Wert, der überall in MWA/GAL/Outlook
-  sichtbar ist. UI hat jetzt nur noch ein Pflichtfeld „Anzeigename". Backend
-  `firstName`/`lastName` bleiben in DB mit Default `""`-Fallback erhalten
-  (kein Schema-Bruch).
+  The separate inputs for first name and last name were redundant — the
+  display name is the only relevant value that is visible everywhere in MWA/GAL/Outlook.
+  The UI now has only one required field "Display name". Backend
+  `firstName`/`lastName` remain in the DB with a default `""` fallback
+  (no schema break).
 
 ### Fixed
 
-- **GAL im MWA zeigte neu angelegte externe Kontakte erst nach Reload**
+- **GAL in the MWA showed newly created external contacts only after a reload**
   (`packages/web-client/src/pages/ContactsPage.tsx`):
-  Wenn Admin in BCP einen neuen externen Kontakt oder eine Verteilergruppe
-  anlegte, war dieser im MWA Globalen Adressbuch nicht sichtbar — der
-  TanStack-Query-Cache hielt das alte Ergebnis 30 Sekunden lang stale-free.
+  When an admin created a new external contact or a distribution group in the BCP,
+  it was not visible in the MWA global address book — the
+  TanStack Query cache held the old result stale-free for 30 seconds.
   **Fix**: `staleTime: 0` + `refetchOnMount: true` + `refetchOnWindowFocus: true`
-  + `refetchInterval: 60_000` für die `/contacts/gal`-Query. Zusätzlich neuer
-  Refresh-Button (RefreshCw-Icon) in der Filter-Bar neben dem Counter — User
-  kann jederzeit manuell synchronisieren. Spinning-Animation während des
-  Fetches als visuelles Feedback.
+  + `refetchInterval: 60_000` for the `/contacts/gal` query. Additionally a new
+  refresh button (RefreshCw icon) in the filter bar next to the counter — the user
+  can synchronize manually at any time. Spinning animation during the
+  fetch as visual feedback.
 
 ---
 
-## [3.18.12] — 2026-05-24 — Public Folders: Browse-Modal, Folder-Icons, Auto-Hide ohne ACL
+## [3.18.12] — 2026-05-24 — Public folders: browse modal, folder icons, auto-hide without ACL
 
 ### Fixed
 
-- **Public Folders waren nicht zugreifbar trotz Vollzugriff**
+- **Public folders were not accessible despite full access**
   (`packages/web-client/src/components/FolderTree.tsx`):
-  Klick auf einen Public Folder zeigte nur einen Toast „Browse-Ansicht kommt
-  im nächsten Patch" — kein tatsächlicher Zugriff auf die Nachrichten möglich.
-  **Fix**: Neue `PublicFolderViewerModal`-Komponente — Klick öffnet 2-Spalten-
-  Modal (Liste links, Detail rechts) mit allen Nachrichten des Ordners.
-  Auto-Refresh 30s, sanitized HTML-Rendering, klickbare Empfänger-Avatare,
-  „X Nachrichten"-Counter im Footer.
+  Clicking a public folder only showed the toast "Browse view coming
+  in the next patch" — no actual access to the messages was possible.
+  **Fix**: new `PublicFolderViewerModal` component — a click opens a 2-column
+  modal (list left, detail right) with all messages of the folder.
+  Auto-refresh 30s, sanitized HTML rendering, clickable recipient avatars,
+  "X messages" counter in the footer.
 
-- **Falsche Symbole** — Public Folders hatten ein Users-Icon (Verteilergruppen-
-  Style), wirkten wie Kontakte statt Ordner.
-  **Fix**: `Folder`-Icon (amber, gefüllt) sowohl in der Sidebar als auch im
-  Modal-Header. `FolderTree`-Icon für die Sektion-Überschrift. Klare visuelle
-  Trennung zwischen Mail-Ordnern (Stack-Icon) und Public Folders (Folder-Icon).
+- **Wrong icons** — public folders had a Users icon (distribution-group
+  style) and looked like contacts rather than folders.
+  **Fix**: `Folder` icon (amber, filled) both in the sidebar and in the
+  modal header. `FolderTree` icon for the section heading. Clear visual
+  separation between mail folders (stack icon) and public folders (folder icon).
 
-- **Section erschien bei leerem Cache / während Loading**
-  Vorher: `if (folders.length === 0) return null` — vor erstem Fetch zeigte die
-  Section nichts, das ist korrekt, ABER wenn der Cache stale war (älterer User
-  hatte noch ACLs), wurde die Section initial gezeigt obwohl neu eingeloggter
-  User keine Berechtigung mehr hat.
-  **Fix**: Hide-Logik prüft jetzt `!isSuccess || !folders || folders.length === 0`
-  — Section ist garantiert unsichtbar bis Backend tatsächlich Daten geliefert
-  hat. Zusätzlich `refetchOnWindowFocus: true` + Polling-Intervall von 60s auf
-  30s reduziert: wenn Admin Zugriff entzieht, verschwindet die Section beim
-  nächsten Tab-Fokus oder spätestens nach 30s automatisch.
+- **Section appeared with an empty cache / during loading**
+  Before: `if (folders.length === 0) return null` — before the first fetch the
+  section showed nothing, which is correct, BUT when the cache was stale (an earlier user
+  still had ACLs), the section was initially shown even though the newly logged-in
+  user no longer had permission.
+  **Fix**: the hide logic now checks `!isSuccess || !folders || folders.length === 0`
+  — the section is guaranteed invisible until the backend has actually delivered
+  data. Additionally `refetchOnWindowFocus: true` + polling interval reduced from 60s to
+  30s: when an admin revokes access, the section disappears automatically on the
+  next tab focus or after 30s at the latest.
 
 ---
 
-## [3.18.11] — 2026-05-24 — MWA Globales Adressbuch (GAL-Browser)
+## [3.18.11] — 2026-05-24 — MWA global address book (GAL browser)
 
 ### Added
 
-- **ContactsPage — Tabs „Mein Adressbuch" / „Globales Adressbuch"**
+- **ContactsPage — tabs "My address book" / "Global address book"**
   (`packages/web-client/src/pages/ContactsPage.tsx`):
-  - Tab-Navigation in der Sidebar zwischen privaten Kontakten (Bestand) und GAL
-  - GAL liefert vereint aus 3 Quellen (alle aktiven internen User, externe
-    Kontakte aus dem Admin-Verzeichnis, Verteilergruppen)
-  - Such-Bar funktioniert für beide Tabs; bei GAL ohne Suche werden alle
-    Einträge alphabetisch sortiert gelistet (Browse-Modus)
-  - Typ-Filter (Alle / Personen / Extern / Gruppen) als kompakte Toggle-Bar
-  - Counter-Badge zeigt Gesamtanzahl der GAL-Treffer
-  - Klick auf GAL-Eintrag → Read-Only-Detail-Panel mit Avatar, Typ-Badge
-    (Verteilergruppe / Externer Kontakt / Interner Benutzer), E-Mail (klickbar
-    mailto:), Telefon/Mobil (klickbar tel:), Unternehmen, Abteilung, Domain,
-    Mitgliederzahl
-  - **„Neue Nachricht"-Button** öffnet das Compose-Window mit der GAL-Adresse
-    vorausgefüllt
-  - Hinweis im Detail-Panel: zentrale Verwaltung — User kann GAL-Einträge nicht
-    direkt bearbeiten
+  - Tab navigation in the sidebar between private contacts (existing) and GAL
+  - GAL returns a merged result from 3 sources (all active internal users, external
+    contacts from the admin directory, distribution groups)
+  - The search bar works for both tabs; for GAL without a search all
+    entries are listed alphabetically (browse mode)
+  - Type filter (All / People / External / Groups) as a compact toggle bar
+  - Counter badge shows the total number of GAL hits
+  - Clicking a GAL entry → read-only detail panel with avatar, type badge
+    (Distribution group / External contact / Internal user), e-mail (clickable
+    mailto:), phone/mobile (clickable tel:), company, department, domain,
+    member count
+  - **"New message" button** opens the compose window with the GAL address
+    pre-filled
+  - Note in the detail panel: centrally managed — the user cannot edit GAL entries
+    directly
 
-- **Backend `/api/v1/contacts/gal` erweitert** mit Browse-Modus + Typ-Filter:
-  - Ohne `q` → alle GAL-Einträge alphabetisch sortiert (Browse für GAL-Ansicht)
-  - Mit `q` (>=2 Zeichen) → Volltextsuche über alle 3 Quellen
-  - `type=all|users|external|groups` filtert die Quellen
-  - Paginiert: `limit` (max 500, default 300) + `offset`
+- **Backend `/api/v1/contacts/gal` extended** with browse mode + type filter:
+  - Without `q` → all GAL entries sorted alphabetically (browse for the GAL view)
+  - With `q` (>=2 characters) → full-text search across all 3 sources
+  - `type=all|users|external|groups` filters the sources
+  - Paginated: `limit` (max 500, default 300) + `offset`
   - Response: `{ entries: GalEntry[], total, limit, offset }`
-  - Strukturiertes `GalEntry`-Format mit `kind`, `displayName`, `email`,
-    optionalen Feldern `company`/`department`/`phone`/`mobile`/`domain`/
-    `memberCount` und ID-Prefix (`user-`/`ext-`/`grp-`)
+  - Structured `GalEntry` format with `kind`, `displayName`, `email`,
+    optional fields `company`/`department`/`phone`/`mobile`/`domain`/
+    `memberCount` and ID prefix (`user-`/`ext-`/`grp-`)
 
 ---
 
-## [3.18.10] — 2026-05-24 — Bilder-Privacy-Banner + Queue-Hardening (DSN, 5xx, dynamische Settings)
+## [3.18.10] — 2026-05-24 — Image privacy banner + queue hardening (DSN, 5xx, dynamic settings)
 
-### Added — Bilder-Privacy-Banner (Outlook/Gmail-Style)
+### Added — Image privacy banner (Outlook/Gmail style)
 
-- **Externe Bilder werden standardmäßig BLOCKIERT** zum Schutz vor Tracking-Pixeln
+- **External images are BLOCKED by default** to protect against tracking pixels
   (`packages/web-client/src/components/MessageReader.tsx`):
-  - HTML wird vor `dangerouslySetInnerHTML` durch `processExternalImages()` geleitet
-  - `<img src="cid:foo">` → wird durch MinIO-Attachment-URL ersetzt (inline-Bilder
-    OK, da Teil der Mail selbst — kein Tracking-Risiko)
-  - `<img src="data:...">` → durchgereicht (selbst-eingebettet)
-  - `<img src="http(s)://...">` → `src` wird durch 1×1-Transparent-PNG ersetzt,
-    Original wandert nach `data-coremail-ext-src` (für späteres Re-Aktivieren)
-- **Banner** oben im Body bei blockierten externen Bildern:
-  *„X externe Bilder wurden blockiert. Externe Bilder können verwendet werden,
-  um Ihr Lese-Verhalten zu verfolgen."* + Button „Bilder anzeigen"
-- Per-Message Toggle (`useState` mit `useEffect`-Reset bei Message-Wechsel),
-  damit unterschiedliche Mails unterschiedlich behandelt werden können
-- Backend-API: `/folders/:folderId/messages` und `/messages/:id` liefern jetzt
-  `contentId` und `inline` Felder pro Attachment (vorher fehlten sie)
+  - HTML is passed through `processExternalImages()` before `dangerouslySetInnerHTML`
+  - `<img src="cid:foo">` → replaced by the MinIO attachment URL (inline images
+    are OK since they are part of the mail itself — no tracking risk)
+  - `<img src="data:...">` → passed through (self-embedded)
+  - `<img src="http(s)://...">` → `src` is replaced by a 1×1 transparent PNG,
+    the original moves to `data-coremail-ext-src` (for later re-activation)
+- **Banner** at the top of the body when external images are blocked:
+  *"X external images were blocked. External images can be used
+  to track your reading behavior."* + button "Show images"
+- Per-message toggle (`useState` with `useEffect` reset on message change),
+  so that different mails can be treated differently
+- Backend API: `/folders/:folderId/messages` and `/messages/:id` now return
+  `contentId` and `inline` fields per attachment (they were missing before)
 
-### Added — Queue-Hardening Phase 1
+### Added — Queue hardening phase 1
 
 - **DSN (Delivery Status Notification, RFC 3464)** —
   `packages/smtp-server/src/outbound/dsn.ts`:
-  - Bei permanentem Versand-Fehler wird automatisch eine Bounce-Mail an `MAIL FROM`
-    zugestellt (multipart/report mit human-readable Text + RFC-3464 report-Part).
-  - **Double-Bounce-Schutz**: keine DSN für leere MAIL FROM (`<>`-Sender = bereits
-    Bounce-Mail) per RFC 5321 §6.1.
-  - DSN wird nur an **lokale Absender** generiert — externe Sender bekommen
-    Bounce vom MX-Server zuverlässiger (verhindert Backscatter-Spam).
-  - `MAILER-DAEMON@<hostname>` als Absender, `Auto-Submitted: auto-replied`,
-    `In-Reply-To` der Original-Message-ID für Thread-Verknüpfung.
+  - On a permanent delivery failure a bounce mail is automatically delivered to `MAIL FROM`
+    (multipart/report with human-readable text + RFC 3464 report part).
+  - **Double-bounce protection**: no DSN for an empty MAIL FROM (`<>` sender = already
+    a bounce mail) per RFC 5321 §6.1.
+  - DSNs are generated only for **local senders** — external senders get a
+    bounce from the MX server more reliably (prevents backscatter spam).
+  - `MAILER-DAEMON@<hostname>` as sender, `Auto-Submitted: auto-replied`,
+    `In-Reply-To` of the original Message-ID for thread linking.
 
-- **4xx vs 5xx-Semantik** —
+- **4xx vs 5xx semantics** —
   `packages/smtp-server/src/outbound/queue.ts`:
-  - Neuer `extractSmtpCode()`-Helper extrahiert SMTP-Reply-Codes aus
-    nodemailer-Error-Messages
-  - **5xx-Fehler** (permanent, z.B. 550 User unknown) werden **sofort** als final
-    markiert via `job.discard()` — kein 10×-Retry mehr (schont IP-Reputation,
-    Empfänger-MX wird nicht „gespammt")
-  - **4xx-Fehler** (transient, z.B. 421 Try again) durchlaufen normalen Retry mit
-    Exponential Backoff
-  - SMTP-Code wird im `MAIL_FLOW`-systemLog persistiert (vorher fehlte)
-  - Log-Message zeigt `[550]` etc. zur schnellen Erkennung im Admin-UI
+  - New `extractSmtpCode()` helper extracts SMTP reply codes from
+    nodemailer error messages
+  - **5xx errors** (permanent, e.g. 550 User unknown) are marked as final
+    **immediately** via `job.discard()` — no more 10× retry (protects IP reputation,
+    the recipient MX is not "spammed")
+  - **4xx errors** (transient, e.g. 421 Try again) go through the normal retry with
+    exponential backoff
+  - The SMTP code is persisted in the `MAIL_FLOW` systemLog (was missing before)
+  - The log message shows `[550]` etc. for quick recognition in the admin UI
 
-- **Dynamische Queue-Settings**:
-  - `enqueueOutbound()` liest jetzt `QueueSettings.maxRetryAttempts` und
-    `retryBackoffDelaySec` aus der DB — Admin kann Backoff anpassen ohne
-    Container-Neustart
-  - Fallback auf Defaults (10 attempts, 60s) wenn DB nicht erreichbar
+- **Dynamic queue settings**:
+  - `enqueueOutbound()` now reads `QueueSettings.maxRetryAttempts` and
+    `retryBackoffDelaySec` from the DB — the admin can adjust backoff without
+    a container restart
+  - Fallback to defaults (10 attempts, 60s) when the DB is unreachable
 
 ---
 
-## [3.18.9] — 2026-05-24 — TransportRule-Engine + Public-Folders + SharedMailbox SEND_AS/ON_BEHALF
+## [3.18.9] — 2026-05-24 — TransportRule engine + public folders + Shared Mailbox SEND_AS/ON_BEHALF
 
-### Fixed — TransportRule funktionierte gar nicht
+### Fixed — TransportRule did not work at all
 
-- **Bug**: `TransportRule` wurde in der DB gespeichert, aber **niemals im Mail-Flow ausgewertet**.
-  Es gab keine Engine — nur CRUD-Endpoints.
+- **Bug**: `TransportRule` was stored in the DB but **never evaluated in the mail flow**.
+  There was no engine — only CRUD endpoints.
 
-- **Fix**: Neue Engine `packages/storage/src/transport-rules.ts` mit
+- **Fix**: new engine `packages/storage/src/transport-rules.ts` with
   `applyTransportRules(parsed, ctx)` + `applyOutcomeToBuffer(buffer, outcome)`:
-  - 8 Conditions × 9 Operatoren mit AND-Verknüpfung (Exchange-Standard)
-  - 10 Aktionen: `addHeader`, `removeHeader`, `redirect`, `reject`, `addRecipient`,
+  - 8 conditions × 9 operators combined with AND (Exchange standard)
+  - 10 actions: `addHeader`, `removeHeader`, `redirect`, `reject`, `addRecipient`,
     `removeRecipient`, `setSubjectPrefix`, `setSubjectSuffix`, `quarantine`,
     `addDisclaimer`
-  - Hook in `storeInboundMessage()` direkt nach Parsing — vor User-Mail-Rules,
-    vor Spam-Junk-Decision. `reject` und `quarantine` brechen die Zustellung ab.
-  - Header/Subject/Disclaimer-Modifikationen werden direkt am RFC-822-Buffer
-    angewendet (Re-Parsing nach Modifikation für konsistente DB-Felder).
+  - Hook in `storeInboundMessage()` directly after parsing — before user mail rules,
+    before the spam/junk decision. `reject` and `quarantine` abort delivery.
+  - Header/subject/disclaimer modifications are applied directly to the RFC 822 buffer
+    (re-parsing after modification for consistent DB fields).
 
-### Fixed — Verteilergruppen-Mitglieder erhielten keine Mails (Inbound-Pfad)
+### Fixed — Distribution group members received no mails (inbound path)
 
-- Bereits in v3.18.8 für Outbound gefixt; v3.18.9 für Inbound nachgezogen:
-  Externe Member von lokalen Gruppen werden via `enqueueOutbound()` weitergeleitet.
+- Already fixed for outbound in v3.18.8; v3.18.9 follows up for inbound:
+  external members of local groups are forwarded via `enqueueOutbound()`.
 
-### Fixed — Public Folders mehrere Bugs
+### Fixed — Public folders, several bugs
 
-- **Schema**: `PublicFolder.email String? @unique` — Ordner ist jetzt mail-aktivierbar.
-- **SMTP Inbound**: `verifyRecipient()` und `storeInboundMessage()` erkennen jetzt
-  mail-aktivierte Public Folders. Mails landen als `PublicFolderMessage` direkt im
-  Ordner — kein Mailbox-Routing.
-- **BCP ACL-Editor**: Plain-Text-Input ersetzt durch Autocomplete-Dropdown
-  (Debouncing, Keyboard-Navigation, externe + Gruppen rausgefiltert da nur interne
-  User Public-Folder-Zugriff bekommen). Cache-Invalidierung nach Save erweitert
-  (`admin-public-folders` + ACL-Liste).
-- **MWA FolderTree**: Neue `PublicFoldersSection` zeigt Public Folders unter
-  persönlichen Ordnern. Lila Users-Icon + Tooltip mit E-Mail. Auto-Refresh 60s.
-  Klick zeigt vorerst Toast (Browse-Modus folgt in v3.18.10).
+- **Schema**: `PublicFolder.email String? @unique` — a folder can now be mail-enabled.
+- **SMTP inbound**: `verifyRecipient()` and `storeInboundMessage()` now recognize
+  mail-enabled public folders. Mails land as `PublicFolderMessage` directly in the
+  folder — no mailbox routing.
+- **BCP ACL editor**: plain-text input replaced by an autocomplete dropdown
+  (debouncing, keyboard navigation, external + groups filtered out since only internal
+  users get public-folder access). Cache invalidation after save extended
+  (`admin-public-folders` + ACL list).
+- **MWA FolderTree**: new `PublicFoldersSection` shows public folders below the
+  personal folders. Purple Users icon + tooltip with e-mail. Auto-refresh 60s.
+  A click shows a toast for now (browse mode follows in v3.18.10).
 
-### Added — Shared Mailbox SEND_AS / SEND_ON_BEHALF im REST `/mail/send`
+### Added — Shared Mailbox SEND_AS / SEND_ON_BEHALF in REST `/mail/send`
 
-- **Bisher**: SEND_AS funktionierte nur über SMTP-Submission (Ports 465/587).
-  REST `/mail/send` ignorierte Shared-Mailbox-Permissions, `from` war immer
-  hartcodiert auf `user.email`.
+- **Until now**: SEND_AS only worked via SMTP submission (ports 465/587).
+  REST `/mail/send` ignored Shared Mailbox permissions; `from` was always
+  hard-coded to `user.email`.
 
-- **Neu**: `POST /api/v1/mail/send` akzeptiert optional:
-  - `sendAs: string` (E-Mail) — User muss `SEND_AS` oder `FULL_ACCESS` haben
-  - `sendOnBehalfOf: string` (E-Mail) — User muss `SEND_ON_BEHALF` haben
+- **New**: `POST /api/v1/mail/send` optionally accepts:
+  - `sendAs: string` (e-mail) — the user must have `SEND_AS` or `FULL_ACCESS`
+  - `sendOnBehalfOf: string` (e-mail) — the user must have `SEND_ON_BEHALF`
 
-- **Permission-Check**: explicit `prisma.sharedMailboxPerm.findFirst()` mit
-  Permission + Mailbox-Verknüpfung. Fehlt die Permission → `403`.
+- **Permission check**: explicit `prisma.sharedMailboxPerm.findFirst()` with
+  permission + mailbox linkage. Missing permission → `403`.
 
-- **From-Header-Override**: bei `sendAs` wird `From: <shared>` gesetzt;
-  bei `sendOnBehalfOf` wird `From: <shared>` UND zusätzlich `Sender: <user>` —
-  Outlook/Apple Mail zeigen dann „User im Auftrag von Shared".
+- **From header override**: with `sendAs`, `From: <shared>` is set;
+  with `sendOnBehalfOf`, `From: <shared>` AND additionally `Sender: <user>` —
+  Outlook/Apple Mail then show "User on behalf of Shared".
 
-- **StructuredMessage.sender** als optionales Feld zur Queue ergänzt.
+- **StructuredMessage.sender** added as an optional field for the queue.
 
-### Added — Schema-Erweiterung
+### Added — Schema extension
 
 - `PublicFolder.email String? @unique`
 
 ---
-
-## [3.18.8] — 2026-05-24 — Fix: Externe Kontakte, Verteilergruppen-Routing, Autocomplete
+## [3.18.8] — 2026-05-24 — Fix: external contacts, distribution group routing, autocomplete
 
 ### Fixed
 
-- **ExternalContactsPage Cursor verlor sich beim Tippen**
+- **ExternalContactsPage cursor got lost while typing**
   (`packages/admin-panel/src/pages/ExternalContactsPage.tsx`):
-  Inline `Field`-Component-Helper innerhalb von `ContactModal` definiert →
-  bei jedem Render neue Component-Referenz → React unmount+remount des Inputs →
-  Cursor verloren. Fix: alle 8 Felder zu inline `<div><label><input>` umgebaut.
-  Selbes Pattern wie v3.17.44 eDiscovery-Fix und v3.17.43 RetentionPage.
+  Inline `Field` component helper defined inside `ContactModal` →
+  new component reference on every render → React unmount+remount of the input →
+  cursor lost. Fix: all 8 fields rebuilt as inline `<div><label><input>`.
+  Same pattern as the v3.17.44 eDiscovery fix and v3.17.43 RetentionPage.
 
-- **GroupsPage React Fragment-Key-Warning**:
-  `filtered.map(g => (<>...</>))` ohne Key → React-Warning. Fix:
+- **GroupsPage React fragment key warning**:
+  `filtered.map(g => (<>...</>))` without key → React warning. Fix:
   `<Fragment key={g.id}>...</Fragment>`.
 
-- **KRITISCHER FIX: Externe Verteilergruppen-Member erhielten keine Mails**
+- **CRITICAL FIX: external distribution group members received no mails**
   (`packages/smtp-server/src/outbound/queue.ts` + `inbound/handler.ts`):
-  `expandRecipients()` löst Verteilergruppen in einzelne Member-Adressen auf,
-  aber die expandierten Adressen wurden komplett als „lokal" an
-  `storeInboundMessage()` übergeben. Wenn eine Gruppe externe Member hatte
-  (z.B. `partner@kunde.com`), gingen diese silent verloren — keine Mail kam an,
-  kein Bounce, kein Log.
+  `expandRecipients()` resolves distribution groups into individual member addresses,
+  but the expanded addresses were all handed to `storeInboundMessage()` as
+  "local". If a group had external members
+  (e.g. `partner@kunde.com`), these were silently lost — no mail arrived,
+  no bounce, no log.
 
   **Fix**:
-  - Outbound (`queue.ts`): nach `expandRecipients` werden Adressen ERNEUT
-    auf lokal/extern geprüft. Externe Member werden zu `finalExternalRcpts`
-    hinzugefügt und via `relayMessage()` an MX/Smarthost zugestellt.
-  - Inbound (`handler.ts`): wenn ein externer Sender direkt an eine lokale
-    Verteilergruppe schickt und diese externe Member hat, werden die externen
-    Adressen via `enqueueOutbound()` weitergeleitet.
+  - Outbound (`queue.ts`): after `expandRecipients` the addresses are checked AGAIN
+    for local/external. External members are added to `finalExternalRcpts`
+    and delivered via `relayMessage()` to MX/smarthost.
+  - Inbound (`handler.ts`): when an external sender sends directly to a local
+    distribution group that has external members, the external
+    addresses are forwarded via `enqueueOutbound()`.
 
 ### Added
 
-- **Compose-Autocomplete zeigt jetzt alle Adressquellen**
+- **Compose autocomplete now shows all address sources**
   (`packages/api-gateway/src/routes/contacts.ts`):
-  `GET /api/v1/contacts?q=` liefert ab `q.length >= 2` eine vereinte Suche über:
-  1. Private Kontakte (`Contact`-Tabelle, eigener User)
-  2. Globale Adressliste — alle aktiven User
-  3. Externe Kontakte aus dem Admin-Verzeichnis (`ExternalMailContact`,
-     gefiltert `hiddenFromGal: false`)
-  4. Verteilergruppen (`DistributionGroup`, `active: true && hiddenFromGal: false`)
+  `GET /api/v1/contacts?q=` returns, from `q.length >= 2`, a unified search across:
+  1. Private contacts (`Contact` table, own user)
+  2. Global address list — all active users
+  3. External contacts from the admin directory (`ExternalMailContact`,
+     filtered `hiddenFromGal: false`)
+  4. Distribution groups (`DistributionGroup`, `active: true && hiddenFromGal: false`)
 
-  Dedup über E-Mail. ID-Prefix markiert Quelle (`gal-`, `ext-`, `grp-` oder
-  privat). Frontend `RecipientInput` und `MembersPanel` unterscheiden visuell.
+  Dedup by e-mail. An ID prefix marks the source (`gal-`, `ext-`, `grp-` or
+  private). Frontend `RecipientInput` and `MembersPanel` distinguish them visually.
 
-- **GroupsPage Mitglieder-Editor mit Autocomplete-Dropdown**
+- **GroupsPage member editor with autocomplete dropdown**
   (`packages/admin-panel/src/pages/GroupsPage.tsx` `MembersPanel`):
-  Plain-Text-Input ersetzt durch Suggest-Field mit Debouncing (220ms),
-  Pfeil-Up/Down + Enter/Tab + Escape, Type-Badge pro Treffer (User/Extern/
-  Gruppe/Privat). `memberType` wird automatisch aus dem ID-Prefix abgeleitet.
-  Bereits zugewiesene Member werden aus den Vorschlägen ausgeblendet.
+  Plain-text input replaced by a suggest field with debouncing (220ms),
+  arrow up/down + Enter/Tab + Escape, type badge per hit (User/External/
+  Group/Private). `memberType` is derived automatically from the ID prefix.
+  Already-assigned members are hidden from the suggestions.
 
 ---
 
-## [3.18.7] — 2026-05-24 — Spam-UX + Audit-Log v2 + Audit-Bug-Fix + Senden-Planen
+## [3.18.7] — 2026-05-24 — Spam UX + audit log v2 + audit bug fix + schedule send
 
 ### Fixed
 
-- **Audit-Log: Akteur und Ziel waren leer** (`packages/api-gateway/src/lib/audit.ts`):
-  `auditMiddleware` lief synchron VOR `requireAuth` (Auth ist pro Router gemountet,
-  nicht global) → `req.apiUser` war beim Loggen `undefined` → `actorId` / `actorEmail`
-  blieben null. Außerdem wurde `targetType` gar nicht gesetzt (nur `targetId`).
-  Fix: Logging wandert in `res.on('finish')` damit Auth bereits gelaufen ist;
-  `targetType` aus `pathParts[0]` (Ressource), HTTP-Status wird als `success`/
-  `errorMsg` ausgewertet.
+- **Audit log: actor and target were empty** (`packages/api-gateway/src/lib/audit.ts`):
+  `auditMiddleware` ran synchronously BEFORE `requireAuth` (auth is mounted per router,
+  not globally) → `req.apiUser` was `undefined` at logging time → `actorId` / `actorEmail`
+  stayed null. In addition `targetType` was not set at all (only `targetId`).
+  Fix: logging moves into `res.on('finish')` so that auth has already run;
+  `targetType` from `pathParts[0]` (resource), the HTTP status is evaluated as `success`/
+  `errorMsg`.
 
-### Added — Senden planen (Outlook-Style)
+### Added — Schedule send (Outlook style)
 
 - **Backend** (`packages/storage/prisma/schema.prisma` + `routes/mail.ts`):
-  - Neue Felder: `Message.scheduledAt: DateTime?`, `scheduledStatus: String?`
+  - New fields: `Message.scheduledAt: DateTime?`, `scheduledStatus: String?`
     (`PENDING|SENT|CANCELLED`), `scheduledJobId: String?`
-  - `POST /mail/send` akzeptiert optional `scheduledAt` (ISO-Datum) — Validierung:
-    mind. 30s in der Zukunft, max. 1 Jahr
-  - BullMQ-Job mit `delay: scheduledAt - now` eingereiht — Worker startet erst
-    zum geplanten Zeitpunkt
-  - Sent-Kopie sofort im „Gesendete Elemente"-Ordner mit `scheduledStatus: PENDING`
-    + `scheduledJobId` (für späteren Cancel)
-  - Date-Header der Mail wird auf `scheduledAt` gesetzt (Empfänger sieht geplanten
-    Zeitpunkt, nicht Erstell-Zeitpunkt)
-  - Neuer Endpoint `POST /mail/messages/:id/cancel-scheduled` — entfernt den
-    BullMQ-Job via `queue.getJob(id).remove()`, setzt Status auf CANCELLED
+  - `POST /mail/send` optionally accepts `scheduledAt` (ISO date) — validation:
+    at least 30s in the future, at most 1 year
+  - BullMQ job enqueued with `delay: scheduledAt - now` — the worker only starts
+    at the scheduled time
+  - Sent copy immediately in the "Sent Items" folder with `scheduledStatus: PENDING`
+    + `scheduledJobId` (for a later cancel)
+  - The mail's Date header is set to `scheduledAt` (the recipient sees the scheduled
+    time, not the creation time)
+  - New endpoint `POST /mail/messages/:id/cancel-scheduled` — removes the
+    BullMQ job via `queue.getJob(id).remove()`, sets status to CANCELLED
 - **Worker** (`packages/smtp-server/src/outbound/queue.ts`):
-  - Cancellation-Check beim Job-Start: wenn Message inzwischen `CANCELLED` → return
-    ohne Versand (Race-Schutz)
-  - Nach erfolgreichem Versand: `scheduledStatus: 'SENT'` setzen (Banner verschwindet)
+  - Cancellation check at job start: if the message is meanwhile `CANCELLED` → return
+    without sending (race protection)
+  - After successful sending: set `scheduledStatus: 'SENT'` (banner disappears)
 - **Frontend ComposeWindow**:
-  - Send-Button-Group: „Senden"-Button + Pfeil-Dropdown
-  - Schedule-Picker mit 3 Presets (Morgen früh, Morgen nachmittags, Nächsten Montag
-    — alle 8:00 bzw. 13:00) + Custom datetime-local Picker
-  - Validierung: min. 30s Zukunft
-  - Toast „Versand geplant für [Datum/Zeit]" nach Submit
+  - Send button group: "Send" button + arrow dropdown
+  - Schedule picker with 3 presets (Tomorrow morning, Tomorrow afternoon, Next Monday
+    — all at 8:00 or 13:00 respectively) + custom datetime-local picker
+  - Validation: min. 30s in the future
+  - Toast "Sending scheduled for [date/time]" after submit
 - **Frontend MessageReader**:
-  - Schedule-Banner Outlook-Style: blau (PENDING „Wird gesendet am…"), grün
-    (SENT „Geplanter Versand abgeschlossen"), grau (CANCELLED „Geplanter Versand
-    abgebrochen")
-  - „Planung abbrechen"-Button bei PENDING (löscht BullMQ-Job, Banner wechselt)
-- **Frontend MessageList**: `CalendarClock`-Icon (blau) in der Zeile bei
-  geplanten Mails — Tooltip mit konkretem Zeitpunkt
+  - Schedule banner Outlook style: blue (PENDING "Will be sent on…"), green
+    (SENT "Scheduled sending completed"), gray (CANCELLED "Scheduled sending
+    cancelled")
+  - "Cancel scheduling" button when PENDING (deletes the BullMQ job, banner switches)
+- **Frontend MessageList**: `CalendarClock` icon (blue) in the row for
+  scheduled mails — tooltip with the concrete time
 
-### Added — Spam-UX (Outlook-Style)
+### Added — Spam UX (Outlook style)
 
-### Added — Spam-UX (Outlook-Style)
+### Added — Spam UX (Outlook style)
 
-- **Spam-Score-Persistenz**: Neues `Message.spamScore: Float?` Feld im Prisma-Schema.
-  `storeInboundMessage()` speichert den rspamd-Score zum Zeitpunkt der Zustellung
-  (vorher transient — nur fürs Folder-Routing genutzt, dann verworfen).
-- **Spam-Banner im MessageReader** (Outlook-Style):
-  - Sichtbar wenn `spamScore ≥ 3.0` ODER Mail im Junk-Ordner liegt
-  - **Rot** (hohes Risiko) bei `spamScore ≥ 6.0` (rspamd-Reject-Schwelle)
-  - **Amber** bei mittlerem Risiko oder im Junk-Ordner
-  - Zeigt den konkreten rspamd-Score als Mono-Font
-  - „Als Junk" / „Kein Spam"-Button direkt im Banner für 1-Klick-Aktion
-- **Spam-Badge in MessageList**: `ShieldAlert`-Icon in der Zeile (gelb/rot je nach
-  Score), Tooltip mit konkretem Score
-- **`notSpam`-Bulk-Aktion** verbessert: setzt `spamScore: 0` auf der Message,
-  damit der Banner nach „Kein Spam"-Klick nicht weiter angezeigt wird
+- **Spam score persistence**: new `Message.spamScore: Float?` field in the Prisma schema.
+  `storeInboundMessage()` stores the rspamd score at the time of delivery
+  (previously transient — only used for folder routing, then discarded).
+- **Spam banner in the MessageReader** (Outlook style):
+  - Visible when `spamScore ≥ 3.0` OR the mail is in the Junk folder
+  - **Red** (high risk) at `spamScore ≥ 6.0` (rspamd reject threshold)
+  - **Amber** at medium risk or in the Junk folder
+  - Shows the concrete rspamd score in a mono font
+  - "Mark as junk" / "Not spam" button directly in the banner for a 1-click action
+- **Spam badge in the MessageList**: `ShieldAlert` icon in the row (yellow/red depending on
+  score), tooltip with the concrete score
+- **`notSpam` bulk action** improved: sets `spamScore: 0` on the message
+  so that the banner is no longer shown after clicking "Not spam"
 
-### Added — Audit-Log v2 (Compliance-grade Export & Anomalie-Erkennung)
+### Added — Audit log v2 (compliance-grade export & anomaly detection)
 
-- **Kryptografische SHA-256-Signatur für alle Exports**
+- **Cryptographic SHA-256 signature for all exports**
   (`packages/api-gateway/src/routes/admin/audit-log.ts`):
-  - CSV-Export: SHA-256-Hash des Payloads (inkl. UTF-8 BOM) im
-    `X-CoreMail-Signature: sha256=…`-Response-Header
-  - PDF-Export: in-Memory-Buffer-Capture statt direkter `doc.pipe(res)`, danach
-    Hash über den vollständigen PDF-Buffer
-  - **NEU: JSON-Export** für SIEM-Integration (Splunk, Azure Sentinel, ELK) —
-    `/admin/audit-log/export.json` mit strukturiertem `metadata`+`entries`-Objekt,
-    `schemaVersion: '1.0'`, ebenfalls SHA-256-signiert
-  - Zusätzliche Header: `X-CoreMail-Export-Entries`, `X-CoreMail-Export-Generated-At`
-  - `Access-Control-Expose-Headers` damit Frontend die Signatur lesen kann
-  - Verifikation extern: `shasum -a 256 audit-log-YYYY-MM-DD.csv` → muss exakt mit
-    dem Header übereinstimmen → beweist Auditoren dass die Datei nicht manipuliert
-    wurde
+  - CSV export: SHA-256 hash of the payload (incl. UTF-8 BOM) in the
+    `X-CoreMail-Signature: sha256=…` response header
+  - PDF export: in-memory buffer capture instead of direct `doc.pipe(res)`, then
+    hash over the complete PDF buffer
+  - **NEW: JSON export** for SIEM integration (Splunk, Azure Sentinel, ELK) —
+    `/admin/audit-log/export.json` with a structured `metadata`+`entries` object,
+    `schemaVersion: '1.0'`, also SHA-256-signed
+  - Additional headers: `X-CoreMail-Export-Entries`, `X-CoreMail-Export-Generated-At`
+  - `Access-Control-Expose-Headers` so the frontend can read the signature
+  - External verification: `shasum -a 256 audit-log-YYYY-MM-DD.csv` → must match
+    the header exactly → proves to auditors that the file was not
+    tampered with
 
-- **Anomalie-Erkennung** — neuer Endpoint `/admin/audit-log/anomalies`:
-  - **Burst-Detection**: ≥50 Aktionen vom selben Akteur in 5 Min (medium),
-    ≥200 Aktionen → high severity
-  - **Fehler-Burst**: ≥10 fehlgeschlagene Aktionen in 5 Min → high (mögl. Angriff)
-  - **Kritische Aktionen**: Regex-Pattern für `user.delete`, `mailbox.delete`,
+- **Anomaly detection** — new endpoint `/admin/audit-log/anomalies`:
+  - **Burst detection**: ≥50 actions by the same actor in 5 min (medium),
+    ≥200 actions → high severity
+  - **Failure burst**: ≥10 failed actions in 5 min → high (possible attack)
+  - **Critical actions**: regex pattern for `user.delete`, `mailbox.delete`,
     `domain.delete`, `transport-rules.*`, `oauth.*`, `settings.*`, `certificate.*`,
-    `gateway.*`, `connector.*`, `smime.*`, `setup.*` → immer high
-  - **Off-Hours-Activity**: Admin-Aktivität zwischen 00:00 und 06:00 Server-Zeit
+    `gateway.*`, `connector.*`, `smime.*`, `setup.*` → always high
+  - **Off-hours activity**: admin activity between 00:00 and 06:00 server time
     → low severity
-  - Dedup-Logik fasst identische Anomalien (Actor+Message) zusammen
-  - Frontend zeigt Top-50 als roter Banner mit Icons, Akteur, Zeitpunkt und
-    Severity-Badge — Auto-Refresh alle 60s
+  - Dedup logic merges identical anomalies (actor+message)
+  - The frontend shows the top 50 as a red banner with icons, actor, time and
+    severity badge — auto-refresh every 60s
 
-- **Meta-Logging gegen Insider-Threats**
+- **Meta-logging against insider threats**
   (`packages/api-gateway/src/lib/audit.ts`):
-  - **AUDIT_SENSITIVE_GET**: GET-Routen für Audit-Log-Exports (CSV/PDF/JSON) und
-    Anomalien werden jetzt ebenfalls auditiert. Wer Audit-Daten exportiert oder
-    Compliance-Auswertungen abruft, wird selbst protokolliert — kein silent
-    Daten-Abfluss durch Admins
-  - Erweiterter Code-Kommentar dokumentiert die Immutability-Garantie:
-    Audit-Log hat keinen DELETE-Endpoint, keinen UI-Toggle zum Ausschalten;
-    Versuche zur Manipulation erfordern Code-Deploy → über Git/CI/CD nachvollziehbar
-    (ISO 27001 / SOC 2 / TISAX / DSGVO konform)
+  - **AUDIT_SENSITIVE_GET**: GET routes for audit log exports (CSV/PDF/JSON) and
+    anomalies are now audited as well. Whoever exports audit data or
+    retrieves compliance reports is logged themselves — no silent
+    data exfiltration by admins
+  - Extended code comment documents the immutability guarantee:
+    the audit log has no DELETE endpoint, no UI toggle to switch it off;
+    tampering attempts require a code deploy → traceable via Git/CI/CD
+    (ISO 27001 / SOC 2 / TISAX / GDPR compliant)
 
 - **Frontend AuditLogPage** (`packages/admin-panel/src/pages/AuditLogPage.tsx`):
-  - **JSON-Export-Button** ergänzt (für SIEM)
-  - **Anomalien-Banner** oben auf der Seite — automatischer 60s-Refresh, scrollbar,
-    Severity-Farben (rot/amber/blau), Icons je nach Anomalie-Typ
-  - **Signatur-Hinweis** im Immutability-Banner: dokumentiert
-    `X-CoreMail-Signature: sha256=…`-Header und lokale Verifikation
-  - Bestehender Stats-Dashboard (KPI-Karten, Top-Akteure, Top-Aktionen) bleibt
+  - **JSON export button** added (for SIEM)
+  - **Anomalies banner** at the top of the page — automatic 60s refresh, scrollable,
+    severity colors (red/amber/blue), icons per anomaly type
+  - **Signature hint** in the immutability banner: documents the
+    `X-CoreMail-Signature: sha256=…` header and local verification
+  - The existing stats dashboard (KPI cards, top actors, top actions) remains
 
-### Schema-Migration
+### Schema migration
 
-- `Message.spamScore Float?` — wird beim nächsten Container-Start via
-  `prisma db push` automatisch hinzugefügt (kein Datenverlust, bestehende
-  Messages haben `null`)
+- `Message.spamScore Float?` — added automatically at the next container start via
+  `prisma db push` (no data loss, existing
+  messages have `null`)
 
 ---
 
-## [3.18.5] — 2026-05-24 — Removed: eDiscovery & Legal Hold komplett entfernt
+## [3.18.5] — 2026-05-24 — Removed: eDiscovery & Legal Hold removed completely
 
 ### Removed
 
-- **Phase-8-Features eDiscovery & Legal Hold vollständig aus dem Code entfernt**
-  (Backend, Frontend, Schema, Routes, i18n):
-  - **Schema** (`packages/storage/prisma/schema.prisma`): Models `EDiscoverySearch`,
-    `LegalHold` und Enum `EDiscoveryStatus` gelöscht.
-    `RetentionPolicy.respectLegalHold`-Feld entfernt (Default war `true`, hatte aber
-    keinen Effekt mehr da `LegalHold`-Records keine UI hatten zum Anlegen).
-  - **Backend**: `packages/api-gateway/src/routes/admin/ediscovery.ts` Datei gelöscht.
-    Import + Mount in `server.ts` entfernt (`/api/v1/admin/ediscovery` Route gibt
-    jetzt 404).
-  - **Retention-Route** (`routes/admin/retention.ts`): `respectLegalHold` aus
-    POST/PUT-Body, Validierung und Prisma-Update entfernt.
-  - **Backup-Worker** (`packages/backup-service/src/retention/worker.ts`):
-    `prisma.legalHold.findMany()`-Aufruf entfernt; `heldUserIds` ist jetzt ein
-    leeres Set (Signatur-Kompatibilität für nachgelagerte Funktionen).
-  - **Frontend**: `packages/admin-panel/src/pages/EDiscoveryPage.tsx` Datei gelöscht.
-    Sidebar-Eintrag „eDiscovery" entfernt, Route aus `main.tsx` ausgebaut,
-    `nav_ediscovery`-i18n-Key in DE+EN gelöscht, ungenutzter `SearchCheck`-Icon-Import
-    raus, RbacPage `COMPLIANCE_MANAGEMENT`-Beschreibung von „eDiscovery, Aufbewahrung"
-    → „Aufbewahrungsrichtlinien".
-  - **RetentionPage**: `respectLegalHold`-Feld aus `RetentionPolicy`-Type, Form-State,
-    Template-Creator und UI-Checkbox entfernt.
+- **Phase 8 features eDiscovery & Legal Hold fully removed from the code**
+  (backend, frontend, schema, routes, i18n):
+  - **Schema** (`packages/storage/prisma/schema.prisma`): models `EDiscoverySearch`,
+    `LegalHold` and enum `EDiscoveryStatus` deleted.
+    `RetentionPolicy.respectLegalHold` field removed (default was `true` but it
+    no longer had any effect since `LegalHold` records had no UI for creation).
+  - **Backend**: file `packages/api-gateway/src/routes/admin/ediscovery.ts` deleted.
+    Import + mount in `server.ts` removed (the `/api/v1/admin/ediscovery` route now
+    returns 404).
+  - **Retention route** (`routes/admin/retention.ts`): `respectLegalHold` removed from
+    POST/PUT body, validation and Prisma update.
+  - **Backup worker** (`packages/backup-service/src/retention/worker.ts`):
+    `prisma.legalHold.findMany()` call removed; `heldUserIds` is now an
+    empty set (signature compatibility for downstream functions).
+  - **Frontend**: file `packages/admin-panel/src/pages/EDiscoveryPage.tsx` deleted.
+    Sidebar entry "eDiscovery" removed, route removed from `main.tsx`,
+    `nav_ediscovery` i18n key deleted in DE+EN, unused `SearchCheck` icon import
+    removed, RbacPage `COMPLIANCE_MANAGEMENT` description changed from "eDiscovery, retention"
+    → "Retention policies".
+  - **RetentionPage**: `respectLegalHold` field removed from the `RetentionPolicy` type, form state,
+    template creator and UI checkbox.
 
-  **Bestandsdaten**: Bestehende `ediscovery_searches` + `legal_holds` Tabellen
-  werden beim nächsten `prisma db push --accept-data-loss` (im Container-Entrypoint)
-  automatisch gedroppt. `retention_policies.respect_legal_hold`-Spalte ebenfalls.
+  **Existing data**: existing `ediscovery_searches` + `legal_holds` tables
+  are dropped automatically at the next `prisma db push --accept-data-loss` (in the container entrypoint).
+  The `retention_policies.respect_legal_hold` column likewise.
 
-  **Migration**: Wer eine bestehende Installation upgradet und das Feature
-  tatsächlich nutzt: Bitte vor dem Upgrade eDiscovery-Exporte sichern.
-  Empfohlen wird dazu der `mbox`-Streaming-Export der vorhandenen Suchen
-  unter v3.18.4 oder älter — danach upgraden.
+  **Migration**: anyone upgrading an existing installation who actually uses
+  the feature: please back up eDiscovery exports before upgrading.
+  Recommended for this is the `mbox` streaming export of the existing searches
+  under v3.18.4 or older — then upgrade.
 
 ---
 
-## [3.18.4] — 2026-05-24 — Feature: Signaturen-Editor mit Bildern, Links, Schriftarten
+## [3.18.4] — 2026-05-24 — Feature: signature editor with images, links, fonts
 
 ### Added
 
-- **MWA Signaturen vollständig ausgebaut** — Gmail/Outlook-Level
-  (`packages/web-client/src/components/SignatureSection.tsx` — neue separate Komponente):
+- **MWA signatures fully built out** — Gmail/Outlook level
+  (`packages/web-client/src/components/SignatureSection.tsx` — new separate component):
 
-  **Formatierung:**
-  - Schriftart-Dropdown: 10 Optionen (Arial, Calibri, Georgia, Times New Roman,
-    Courier New, Verdana, Tahoma, Trebuchet MS, Comic Sans MS, Standard)
-  - Schriftgröße-Dropdown: 5 Stufen (Klein 12px / Normal 14px / Mittel 16px /
-    Groß 20px / Sehr groß 28px) — via Custom `FontSizeExt` TipTap-Extension
-    auf `textStyle`-Mark
-  - Bold / Italic / Unterstrichen / Durchgestrichen (mit korrektem U-Icon —
-    war vorher fälschlich „U" = Strikethrough!)
-  - Textfarbe (24 Farben) + Markierungsfarbe (12 Highlight-Farben)
-  - Ausrichtung (links, zentriert, rechts, Blocksatz)
-  - Aufzählungslisten + Nummerierte Listen + Zitat-Block
-  - Horizontale Trennlinie (`<hr>`)
-  - Undo / Redo / Formatierung entfernen
+  **Formatting:**
+  - Font dropdown: 10 options (Arial, Calibri, Georgia, Times New Roman,
+    Courier New, Verdana, Tahoma, Trebuchet MS, Comic Sans MS, Default)
+  - Font size dropdown: 5 levels (Small 12px / Normal 14px / Medium 16px /
+    Large 20px / Very large 28px) — via custom `FontSizeExt` TipTap extension
+    on the `textStyle` mark
+  - Bold / Italic / Underline / Strikethrough (with the correct U icon —
+    was previously wrongly "U" = strikethrough!)
+  - Text color (24 colors) + highlight color (12 highlight colors)
+  - Alignment (left, centered, right, justified)
+  - Bullet lists + numbered lists + quote block
+  - Horizontal rule (`<hr>`)
+  - Undo / Redo / Clear formatting
 
-  **Bilder einfügen** (für Logos, Profilbilder, Banner):
-  - Hochladen-Button → File-Picker (max 500 KB, base64-Embed)
-  - URL-Eingabe-Button
-  - Drag & Drop direkt in den Editor (mit Overlay „Bild hier ablegen")
-  - `@tiptap/extension-image` mit `allowBase64: true`
+  **Insert images** (for logos, profile pictures, banners):
+  - Upload button → file picker (max 500 KB, base64 embed)
+  - URL input button
+  - Drag & drop directly into the editor (with overlay "Drop image here")
+  - `@tiptap/extension-image` with `allowBase64: true`
 
-  **Links** mit interaktivem Prompt:
-  - Bei Selektion → markierten Text wird zum Link
-  - Ohne Selektion → URL wird als Linktext eingefügt
-  - Link bearbeiten/entfernen über denselben Button (Toggle bei aktivem Link)
+  **Links** with an interactive prompt:
+  - With a selection → the selected text becomes the link
+  - Without a selection → the URL is inserted as link text
+  - Edit/remove link via the same button (toggle on an active link)
 
-  **Vorschau-Modus**:
-  - „Vorschau"-Button oben rechts → zeigt die Signatur exakt so wie sie im
-    Mail-Reader des Empfängers erscheinen würde (HTML-Rendering ohne Editor-Chrome)
-  - „Editor"-Button schaltet zurück
+  **Preview mode**:
+  - "Preview" button top right → shows the signature exactly as it would appear in
+    the recipient's mail reader (HTML rendering without editor chrome)
+  - "Editor" button switches back
 
-  **Auto-Einfüge-Optionen** (wie vorher):
-  - Bei neuen E-Mails
-  - Bei Antworten und Weiterleitungen
+  **Auto-insert options** (as before):
+  - For new e-mails
+  - For replies and forwards
 
-  **Technisch:**
-  - Custom `FontSizeExt` mit `addGlobalAttributes()` auf TextStyle-Mark
-    (TipTap hat keine eigene FontSize-Extension)
-  - `applyFontSize()` Helper umgeht ChainedCommands-Type-Konflikte
-  - Inline-Bilder als data:URL eingebettet — kein MinIO-Upload nötig,
-    funktioniert in allen Mail-Clients (Gmail, Outlook, Apple Mail)
-  - 500-KB-Limit pro Bild verhindert übergewichtige Outbound-Mails
-  - Dark-Mode-fähige Toolbar
+  **Technical:**
+  - Custom `FontSizeExt` with `addGlobalAttributes()` on the TextStyle mark
+    (TipTap has no FontSize extension of its own)
+  - `applyFontSize()` helper works around ChainedCommands type conflicts
+  - Inline images embedded as data: URL — no MinIO upload needed,
+    works in all mail clients (Gmail, Outlook, Apple Mail)
+  - 500 KB limit per image prevents overweight outbound mails
+  - Dark-mode-capable toolbar
 
 ---
 
-## [3.18.3] — 2026-05-24 — Fix: BCP DNS-Check Counter + Status-Farben
+## [3.18.3] — 2026-05-24 — Fix: BCP DNS check counter + status colors
 
 ### Fixed
 
-- **BCP → SMTP & Routing → DNS-Einträge: Counter und gelbe Indikatoren waren inkonsistent**
+- **BCP → SMTP & Routing → DNS records: counter and yellow indicators were inconsistent**
   (`packages/admin-panel/src/pages/SmtpConfigPage.tsx`):
 
-  **Root Cause**: Der Backend-Endpoint liefert **7 Records** (`a, mx, spf, dkim, dmarc,
-  autodiscover, ptr`), aber das UI rendert nur **6** davon (der A-Record wird nicht
-  angezeigt). Der Counter `okCount` zählte aber alle 7 Records gegen ein
-  hardcoded `total = 6`. Ergebnis: Bei z.B. 6 ok + 1 warning (A unsichtbar, 1
-  Warning sichtbar) → „6 von 6" obwohl ein gelber Eintrag sichtbar war. Bei
-  5 ok + 2 warning → „5 von 6 — 1 fehlt" obwohl 2 gelb sichtbar.
+  **Root cause**: the backend endpoint returns **7 records** (`a, mx, spf, dkim, dmarc,
+  autodiscover, ptr`), but the UI renders only **6** of them (the A record is not
+  shown). The counter `okCount` however counted all 7 records against a
+  hard-coded `total = 6`. Result: with e.g. 6 ok + 1 warning (A invisible, 1
+  warning visible) → "6 of 6" although a yellow entry was visible. With
+  5 ok + 2 warning → "5 of 6 — 1 missing" although 2 were visibly yellow.
 
-  Außerdem: Warnings (z.B. SPF-Multi-Record, PTR-Mismatch) wurden im Status-Text
-  gar nicht erwähnt — sie waren weder „ok" noch „fehlend", fielen durchs Raster.
+  Also: warnings (e.g. SPF multi-record, PTR mismatch) were not mentioned in the status text
+  at all — they were neither "ok" nor "missing" and fell through the cracks.
 
   **Fix**:
-  - `VISIBLE_DNS_KEYS` = `['mx','spf','dkim','dmarc','autodiscover','ptr']` als
-    einzige Quelle der Wahrheit. `okCount`, `warnCount`, `missingCount` und `total`
-    werden konsistent aus dieser Liste berechnet.
-  - Status-Text differenziert jetzt klar: „5 von 6 Einträgen gesetzt — 1 mit
-    Warnung, 0 fehlen" / „4 von 6 — 1 mit Warnung, 1 fehlt" / etc.
-  - `StatusDot` zeigt jetzt **3 Farben** (grün = ok / gelb = warning / rot = missing)
-    statt nur grün/gelb. Badge analog mit ⚠ Warnung / ○ Nicht gefunden.
-  - Legende aktualisiert: korrekt grün/gelb/rot statt veraltetem orange für
-    „Resolver-Inkonsistenz" (gibts seit v3.17.34 nicht mehr — Multi-Resolver entfernt).
+  - `VISIBLE_DNS_KEYS` = `['mx','spf','dkim','dmarc','autodiscover','ptr']` as
+    the single source of truth. `okCount`, `warnCount`, `missingCount` and `total`
+    are calculated consistently from this list.
+  - The status text now differentiates clearly: "5 of 6 records set — 1 with
+    warning, 0 missing" / "4 of 6 — 1 with warning, 1 missing" / etc.
+  - `StatusDot` now shows **3 colors** (green = ok / yellow = warning / red = missing)
+    instead of only green/yellow. Badge analogously with ⚠ Warning / ○ Not found.
+  - Legend updated: correctly green/yellow/red instead of the outdated orange for
+    "resolver inconsistency" (gone since v3.17.34 — multi-resolver removed).
 
 ---
 
-## [3.18.2] — 2026-05-24 — UI-Cleanup, Button-Fix + Compose-Rollback
+## [3.18.2] — 2026-05-24 — UI cleanup, button fix + compose rollback
 
 ### Reverted
 
-- **Compose-Window auf pre-v3.18.1-Variante zurückgerollt** —
-  das Gmail-Style-Redesign aus v3.18.1 (3 Größen, Header-Drag, Schedule-Send-Dropdown,
-  Emoji-Picker, Footer-Format-Toolbar) wird zurückgenommen. Die alte Compose-Variante
-  (Outlook-angelehnt, Formatierungs-Toolbar oben, Senden rechts unten, Anhang+Entwurf
-  links unten) passt besser zur restlichen CoreMail-UI. `ComposeWindow.tsx` ist exakt
-  identisch zur Version aus v3.18.0.
+- **Compose window rolled back to the pre-v3.18.1 variant** —
+  the Gmail-style redesign from v3.18.1 (3 sizes, header drag, schedule-send dropdown,
+  emoji picker, footer format toolbar) is withdrawn. The old compose variant
+  (Outlook-inspired, formatting toolbar at the top, Send bottom right, attachment+draft
+  bottom left) fits the rest of the CoreMail UI better. `ComposeWindow.tsx` is exactly
+  identical to the version from v3.18.0.
 
 ### Changed
 
-- **MWA: „Outlook"-Erwähnungen aus user-facing UI-Texten entfernt**:
-  - `RulesSection.tsx`: Stop-Processing-Hinweis ohne Outlook-Vergleich
-  - `SettingsPage.tsx → Ansicht`: „Layout und Darstellungsoptionen für CoreMail anpassen"
-    (statt „— wie in Outlook oder Thunderbird")
-  - `SettingsPage.tsx → App-Passwörter`: „Für externe E-Mail-Clients ohne Hauptpasswort
-    verbinden" (statt „Für E-Mail-Clients (Outlook, Thunderbird) …")
+- **MWA: "Outlook" mentions removed from user-facing UI texts**:
+  - `RulesSection.tsx`: stop-processing hint without the Outlook comparison
+  - `SettingsPage.tsx → View`: "Customize layout and display options for CoreMail"
+    (instead of "— like in Outlook or Thunderbird")
+  - `SettingsPage.tsx → App passwords`: "Connect external e-mail clients without your main password"
+    (instead of "For e-mail clients (Outlook, Thunderbird) …")
 
-  Erhalten bleiben technisch notwendige Outlook-Referenzen (Autodiscover-Setup-Anleitung
-  in BCP, „Outlook Modern Auth" als OAuth2-Client-Beispiel im Admin-Panel, historische
-  Changelog/Compliance-Einträge), weil diese auf den realen Microsoft-Outlook-Client
-  als externen IMAP/EAS-Konsument zeigen.
+  Technically necessary Outlook references remain (Autodiscover setup guide
+  in the BCP, "Outlook Modern Auth" as an OAuth2 client example in the admin panel, historical
+  changelog/compliance entries), because these point to the real Microsoft Outlook client
+  as an external IMAP/EAS consumer.
 
 ### Fixed
 
-- **MWA: „+ Neue Regel"-Button schrumpfte bei knappen Viewport-Breiten** und brach
-  den Text um. Fix: `shrink-0 whitespace-nowrap px-4` — Button hält feste Breite,
-  Text bleibt einzeilig.
+- **MWA: "+ New rule" button shrank at narrow viewport widths** and wrapped
+  its text. Fix: `shrink-0 whitespace-nowrap px-4` — the button keeps a fixed width,
+  the text stays on one line.
 
 ---
 
-## [3.18.1] — 2026-05-24 — Feature: Gmail-Style Compose-Window Redesign
+## [3.18.1] — 2026-05-24 — Feature: Gmail-style compose window redesign
 
 ### Changed
 
-- **MWA Compose-Window komplett redesigned nach Gmail-Vorbild**
+- **MWA compose window completely redesigned after the Gmail model**
   (`packages/web-client/src/components/ComposeWindow.tsx`):
 
-  **Window-Modi:**
-  - **Small** (Default, Floating 600×640 unten rechts) — Header per Drag mit Maus verschiebbar
-  - **Large** (Vollbild, zentriert, max 1100px, 90vh) — Toggle per Maximize-Button im Header
-  - **Minimized** (Streifen 288px unten rechts mit Subject)
-  - Smooth Transition `transition-[width,height,inset] duration-300 ease-out` zwischen Größen
+  **Window modes:**
+  - **Small** (default, floating 600×640 bottom right) — header draggable with the mouse
+  - **Large** (full screen, centered, max 1100px, 90vh) — toggle via maximize button in the header
+  - **Minimized** (288px strip bottom right with subject)
+  - Smooth transition `transition-[width,height,inset] duration-300 ease-out` between sizes
 
-  **Footer-Toolbar (Gmail-Layout):**
-  - **Senden-Button mit Schedule-Dropdown** (▲): „Morgen früh", „Morgen nachmittags",
-    „Nächsten Montag" Presets + Custom datetime-local Picker — geplante Mails via
-    `scheduledAt`-FormData-Feld an `/mail/send`
-  - **Aa** Format-Toolbar-Toggle (ein/aus)
-  - **Paperclip** Anhang mit Badge (Anzahl Anhänge)
-  - **Link** (Insert/Edit Link)
-  - **Smile** Emoji-Picker (80 handpicked emojis, 10×8 Grid)
-  - **Image** Bild via URL einfügen
-  - **Lock** Confidential-Mode-Placeholder (Toast „kommt bald")
-  - **MoreVertical** Submenu: Vollbild-Toggle, Formatierung entfernen, Cc/Bcc toggle
-  - **Trash** Discard mit Confirmation
-  - **Draft-Status-Anzeige** rechts: „Speichern…" / „Entwurf gespeichert"
+  **Footer toolbar (Gmail layout):**
+  - **Send button with schedule dropdown** (▲): "Tomorrow morning", "Tomorrow afternoon",
+    "Next Monday" presets + custom datetime-local picker — scheduled mails via
+    the `scheduledAt` FormData field to `/mail/send`
+  - **Aa** format toolbar toggle (on/off)
+  - **Paperclip** attachment with badge (number of attachments)
+  - **Link** (insert/edit link)
+  - **Smile** emoji picker (80 handpicked emojis, 10×8 grid)
+  - **Image** insert image via URL
+  - **Lock** confidential-mode placeholder (toast "coming soon")
+  - **MoreVertical** submenu: full-screen toggle, clear formatting, Cc/Bcc toggle
+  - **Trash** discard with confirmation
+  - **Draft status display** on the right: "Saving…" / "Draft saved"
 
-  **UX-Features:**
-  - **Drag & Drop Files**: Drop-Overlay über gesamtem Compose-Fenster (Paperclip-Icon
-    + „Dateien hier ablegen zum Anhängen")
-  - **Tastatur-Shortcuts**: ⌘+Enter senden, ⌘+⇧+C Cc einblenden, ⌘+⇧+B Bcc, Esc schließen
-  - **Cc/Bcc** mit X-Button zum Ausblenden + Reset, fade-in-Animation beim Einblenden
-  - **Active-Scale-Animations** (active:scale-90) auf allen Buttons für taktiles Feedback
-  - **Dark-Mode** in allen Komponenten unterstützt (dark:bg/dark:border)
-  - **Header-Drag** im Small-Mode verschiebt Fenster auf dem Viewport (`transform: translate`)
-  - **Discard-Confirmation** nur bei nicht-leerem Inhalt (To/Cc/Bcc/Subject/Body/Attachments)
+  **UX features:**
+  - **Drag & drop files**: drop overlay over the entire compose window (paperclip icon
+    + "Drop files here to attach")
+  - **Keyboard shortcuts**: ⌘+Enter send, ⌘+⇧+C show Cc, ⌘+⇧+B Bcc, Esc close
+  - **Cc/Bcc** with X button to hide + reset, fade-in animation when shown
+  - **Active-scale animations** (active:scale-90) on all buttons for tactile feedback
+  - **Dark mode** supported in all components (dark:bg/dark:border)
+  - **Header drag** in small mode moves the window on the viewport (`transform: translate`)
+  - **Discard confirmation** only with non-empty content (To/Cc/Bcc/Subject/Body/Attachments)
 
-  Bestehende Hilfskomponenten (RecipientInput, ColorPicker, BlockTypeDropdown,
-  FontFamilyDropdown, ToolBtn, Sep) bleiben unverändert — sie sind gut, nur das
-  Main-Layout wurde neu gebaut.
+  Existing helper components (RecipientInput, ColorPicker, BlockTypeDropdown,
+  FontFamilyDropdown, ToolBtn, Sep) remain unchanged — they are good, only the
+  main layout was rebuilt.
 
 ---
 
-## [3.18.0] — 2026-05-24 — Feature: Outlook-Style Inbox Rules
+## [3.18.0] — 2026-05-24 — Feature: Outlook-style inbox rules
 
 ### Added
 
-- **Server-Side User Inbox Rules (analog Microsoft Exchange)**
-  Vollständige Outlook-Regeln-Funktion im Mail Web Access — Bedingungen, Aktionen,
-  Ausnahmen und Stop-Processing direkt im MWA verwaltbar. Regeln werden
-  serverseitig in der SMTP-Inbound-Pipeline angewendet, sobald eine Mail eintrifft —
-  unabhängig davon ob der Client offen ist. Funktioniert auch für IMAP/EWS/EAS-Zugriffe.
+- **Server-side user inbox rules (analogous to Microsoft Exchange)**
+  Complete Outlook rules functionality in Mail Web Access — conditions, actions,
+  exceptions and stop-processing manageable directly in the MWA. Rules are
+  applied server-side in the SMTP inbound pipeline as soon as a mail arrives —
+  regardless of whether the client is open. Also works for IMAP/EWS/EAS access.
 
   **Backend** (`packages/storage/src/mail-rules.ts`):
-  - Neues Schema: `MailRule.exceptions`, `MailRule.stopProcessing`, `MailRule.matchAll`
-    (`AND`/`OR`-Verknüpfung) — `@@index([userId, priority])` für sortierten Lookup.
-  - Rule-Engine: 11 Conditions (`from`, `to`, `cc`, `bcc`, `subject`, `body`,
+  - New schema: `MailRule.exceptions`, `MailRule.stopProcessing`, `MailRule.matchAll`
+    (`AND`/`OR` combination) — `@@index([userId, priority])` for sorted lookup.
+  - Rule engine: 11 conditions (`from`, `to`, `cc`, `bcc`, `subject`, `body`,
     `recipient`, `hasAttachment`, `size`, `importance`, `sentOnlyToMe`) × 10
-    Operatoren (`contains`, `notContains`, `equals`, `notEquals`, `startsWith`,
+    operators (`contains`, `notContains`, `equals`, `notEquals`, `startsWith`,
     `endsWith`, `regex`, `greaterThan`, `lessThan`, `is`).
-  - 12 Aktionen: `moveTo`, `copyTo`, `delete` (→ Trash), `hardDelete` (verwerfen),
+  - 12 actions: `moveTo`, `copyTo`, `delete` (→ Trash), `hardDelete` (discard),
     `markRead`, `markFlagged`, `pin`, `categorize`, `forward`, `redirect`,
     `markJunk`, `setImportance`.
-  - Forward/Redirect über bestehende `smtp-outbound` BullMQ-Queue mit Loop-Schutz
-    (`X-CoreMail-RuleForwarded`-Header verhindert Endlos-Forwards).
-  - Hook in `storeInboundMessage()`: nach Junk-Decision, vor Folder-Assignment —
-    kann Ziel-Ordner überschreiben, Flags/Kategorien setzen, Mail verwerfen oder
-    in mehrere Ordner kopieren.
+  - Forward/redirect via the existing `smtp-outbound` BullMQ queue with loop protection
+    (the `X-CoreMail-RuleForwarded` header prevents endless forwards).
+  - Hook in `storeInboundMessage()`: after the junk decision, before folder assignment —
+    can override the target folder, set flags/categories, discard the mail or
+    copy it into several folders.
 
   **API** (`packages/api-gateway/src/routes/user.ts`):
-  - `GET /user/rules`, `POST`, `PUT/:id`, `DELETE/:id` — CRUD mit Zod-Validation
-  - `PATCH /user/rules/:id/toggle` — schneller Enable/Disable
-  - `POST /user/rules/reorder` — Drag-Reorder-Persistenz via Transaktion
-  - `POST /user/rules/:id/run-now` — Regel retroaktiv auf bestehende Mails anwenden
-    (max. 5000, Forward/Redirect übersprungen für Sicherheit)
+  - `GET /user/rules`, `POST`, `PUT/:id`, `DELETE/:id` — CRUD with Zod validation
+  - `PATCH /user/rules/:id/toggle` — quick enable/disable
+  - `POST /user/rules/reorder` — drag-reorder persistence via transaction
+  - `POST /user/rules/:id/run-now` — apply a rule retroactively to existing mails
+    (max. 5000, forward/redirect skipped for safety)
 
   **Frontend** (MWA):
-  - **Settings → „Regeln"** (`packages/web-client/src/components/RulesSection.tsx`):
-    Liste aller Regeln mit Toggle, Drag-Reorder (dnd-kit), Bearbeiten, Löschen
-    und „Jetzt ausführen". Empty-State mit CTA.
+  - **Settings → "Rules"** (`packages/web-client/src/components/RulesSection.tsx`):
+    list of all rules with toggle, drag-reorder (dnd-kit), edit, delete
+    and "Run now". Empty state with CTA.
   - **RuleEditorModal** (`packages/web-client/src/components/RuleEditorModal.tsx`):
-    Outlook-Style 3-Schritt-Wizard — „Wenn die Nachricht eintrifft und …" /
-    „Folgendes tun:" / „Außer wenn …" mit Folder-Picker, Category-Picker,
-    E-Mail-Input für Forward/Redirect. `AND`/`OR`-Wahl, Stop-Processing-Checkbox.
-  - **Kontextmenü „Regeln" in MessageList**: Rechtsklick auf Mail →
-    „Regel erstellen …" öffnet Editor mit vorausgefüllter „Von"-Bedingung
-    oder „Regeln verwalten …" springt zur Settings-Seite.
+    Outlook-style 3-step wizard — "When the message arrives and …" /
+    "Do the following:" / "Except if …" with folder picker, category picker,
+    e-mail input for forward/redirect. `AND`/`OR` choice, stop-processing checkbox.
+  - **Context menu "Rules" in MessageList**: right-click on a mail →
+    "Create rule …" opens the editor with a pre-filled "From" condition
+    or "Manage rules …" jumps to the settings page.
 
 ---
 
-## [3.17.50] — 2026-05-24 — Fix: MWA Quelltext-Kontextmenü öffnet Modal statt Tab
+## [3.17.50] — 2026-05-24 — Fix: MWA source context menu opens modal instead of tab
 
 ### Fixed
 
-- **MWA: „Quelltext anzeigen" im Rechtsklick-Menü öffnet RFC-822-Modal statt Browser-Tab**
+- **MWA: "View source" in the right-click menu opens the RFC 822 modal instead of a browser tab**
   (`web-client/src/components/MessageList.tsx`):
-  Der Kontextmenü-Eintrag „Quelltext anzeigen" in der Nachrichtenliste öffnete den
-  Rohtext via `window.open()` in einem neuen Browser-Tab (Browser versuchte die Datei
-  herunterzuladen). Fix: Fetch-Request mit `?token=`-Auth, anschließend Anzeige im
-  gleichen RFC-822-Quelltext-Modal wie in `MessageReader` (Overlay, scrollbar,
-  Monospace-Font, EML-Download-Button, Schließen per ESC-Klick auf Backdrop).
+  The context menu entry "View source" in the message list opened the
+  raw text via `window.open()` in a new browser tab (the browser tried to download
+  the file). Fix: fetch request with `?token=` auth, then display in the
+  same RFC 822 source modal as in `MessageReader` (overlay, scrollable,
+  monospace font, EML download button, close via ESC/click on backdrop).
 
 ---
 
-## [3.17.49] — 2026-05-24 — Fix: MWA Quelltext/EML Auth, Junk-Logik, Antwort-Indikator
+## [3.17.49] — 2026-05-24 — Fix: MWA source/EML auth, junk logic, reply indicator
 
 ### Fixed
 
-- **MWA: Quelltext anzeigen → 401 Unauthorized behoben**
+- **MWA: View source → 401 Unauthorized fixed**
   (`web-client/src/components/MessageReader.tsx`):
-  Der `fetch()`-Aufruf für den RFC-822-Quelltext wurde ohne Authentifizierung abgesetzt
-  (kein `Authorization`-Header in Browser-initiiertem Fetch). Fix: Bearer-Token als
-  `?token=…` Query-Parameter (wird vom auth-Middleware bereits für SSE unterstützt),
-  gelesen aus `useAuthStore().accessToken`. Fehler beim Laden werden jetzt im Modal
-  angezeigt statt still zu scheitern.
+  The `fetch()` call for the RFC 822 source was issued without authentication
+  (no `Authorization` header in a browser-initiated fetch). Fix: bearer token as
+  `?token=…` query parameter (already supported by the auth middleware for SSE),
+  read from `useAuthStore().accessToken`. Loading errors are now shown in the modal
+  instead of failing silently.
 
-- **MWA: EML-Download → 401 Unauthorized behoben**
+- **MWA: EML download → 401 Unauthorized fixed**
   (`web-client/src/components/MessageReader.tsx`, `MessageList.tsx`):
-  Browser-Navigation (`<a href>` und `window.open()`) unterstützt keine Custom-Headers.
-  Fix: Gleiches `?token=…`-Muster für alle EML-Download- und Quelltext-Links in
-  MessageReader und MessageList Kontext-Menü.
+  Browser navigation (`<a href>` and `window.open()`) does not support custom headers.
+  Fix: the same `?token=…` pattern for all EML download and source links in
+  MessageReader and the MessageList context menu.
 
-- **MWA: „Kein Junk"-Button im Junk-Ordner fehlte**
+- **MWA: "Not junk" button was missing in the Junk folder**
   (`web-client/src/components/MessageReader.tsx`):
-  Das Kontext-Menü zeigte immer „Als Junk markieren" unabhängig vom aktuellen Ordner.
-  Fix: `isJunkFolder`-Erkennung über `selectedFolderId` + Folders-Query; bedingte
-  Menüeinträge — Junk-Ordner zeigt „Kein Junk (False Positive)" mit ShieldOff-Icon,
-  alle anderen Ordner zeigen „Als Junk markieren".
+  The context menu always showed "Mark as junk" regardless of the current folder.
+  Fix: `isJunkFolder` detection via `selectedFolderId` + folders query; conditional
+  menu entries — the Junk folder shows "Not junk (false positive)" with a ShieldOff icon,
+  all other folders show "Mark as junk".
 
-- **Zukünftige Mails von manuell als Junk markierten Absendern landen automatisch im Junk**
+- **Future mails from senders manually marked as junk land in Junk automatically**
   (`api-gateway/src/routes/mail.ts`, `smtp-server/src/handlers/message.ts`):
-  Aktion `spam` im Bulk-Endpunkt schreibt jetzt zusätzlich einen `Blacklist`-Eintrag
-  mit `scope: 'USER-JUNK'` für jeden einzigartigen Absender. `storeInboundMessage()`
-  prüft diese Einträge bei eingehenden Mails und leitet bei Match in den Junk-Ordner.
-  Aktion `notSpam` entfernt entsprechende Einträge. Beide Aktionen triggern rspamd
-  Bayes-Training (`learnspam`/`learnham`) für verbesserte Spam-Erkennung.
+  The `spam` action in the bulk endpoint now additionally writes a `Blacklist` entry
+  with `scope: 'USER-JUNK'` for each unique sender. `storeInboundMessage()`
+  checks these entries on incoming mails and routes to the Junk folder on a match.
+  The `notSpam` action removes the corresponding entries. Both actions trigger rspamd
+  Bayes training (`learnspam`/`learnham`) for improved spam detection.
 
-- **MWA: Antwort-Indikator auf beantworteten Mails**
+- **MWA: reply indicator on answered mails**
   (`web-client/src/components/MessageReader.tsx`, `MessageList.tsx`):
-  Mails auf die geantwortet wurde erhielten kein visuelles Kennzeichen (wie Outlook's
-  Antwort-Pfeil). Fix:
-  - `MessageReader`: Antworten/Allen-antworten-Buttons setzen jetzt das IMAP-Flag
-    `\Answered` via `patchMutation` (`markAnswered()`-Funktion).
-  - `MessageList`: Blaues `Reply`-Icon in der Icons-Spalte wenn `flags` das Flag
-    `\Answered` enthält.
+  Mails that had been replied to received no visual marker (like Outlook's
+  reply arrow). Fix:
+  - `MessageReader`: the Reply/Reply-all buttons now set the IMAP flag
+    `\Answered` via `patchMutation` (`markAnswered()` function).
+  - `MessageList`: blue `Reply` icon in the icons column when `flags` contains the
+    `\Answered` flag.
 
 ---
 
-## [3.17.48] — 2026-05-24 — Fix: SMTP PIPELINING Race Condition (503 bei Server-to-Server)
+## [3.17.48] — 2026-05-24 — Fix: SMTP PIPELINING race condition (503 on server-to-server)
 
 ### Fixed
 
-- **SMTP: 503 5.5.1 Bad sequence of commands bei eingehenden Mails behoben**
+- **SMTP: 503 5.5.1 Bad sequence of commands on incoming mails fixed**
   (`smtp-server/src/core/session.ts`):
 
-  **Root Cause**: Der SMTP-Server bewarb `PIPELINING` (RFC 2920) und externe MTAs
-  (Gmail, Postfix, Exchange) nutzten es korrekt — sie sendeten `MAIL FROM`, `RCPT TO`
-  und `DATA` in einem Schwung. Da `handleMailFrom()` und `handleRcptTo()` asynchrone
-  Handler sind (`await onMailFrom()` → DB-Abfrage, Security-Filter), änderte sich der
-  State (`READY → MAIL → RCPT`) erst nach dem `await`. Bis dahin hatte der synchrone
-  Dispatch-Loop `RCPT TO` und `DATA` bereits verarbeitet — beide sahen State `'READY'`
-  statt `'MAIL'`/`'RCPT'` → beide wurden mit `503 5.5.1 Bad sequence of commands`
-  abgewiesen. Das `250 OK` für `MAIL FROM` kam danach zu spät und fehlplatziert.
-  Externe Absender (Gmail, Postfix, Exchange) bekamen ihre Mails als permanent
-  fehlgeschlagen zurück.
+  **Root cause**: the SMTP server advertised `PIPELINING` (RFC 2920) and external MTAs
+  (Gmail, Postfix, Exchange) used it correctly — they sent `MAIL FROM`, `RCPT TO`
+  and `DATA` in one go. Since `handleMailFrom()` and `handleRcptTo()` are asynchronous
+  handlers (`await onMailFrom()` → DB query, security filter), the
+  state (`READY → MAIL → RCPT`) only changed after the `await`. By then the synchronous
+  dispatch loop had already processed `RCPT TO` and `DATA` — both saw state `'READY'`
+  instead of `'MAIL'`/`'RCPT'` → both were rejected with `503 5.5.1 Bad sequence of commands`.
+  The `250 OK` for `MAIL FROM` arrived afterwards, too late and misplaced.
+  External senders (Gmail, Postfix, Exchange) got their mails back as permanently
+  failed.
 
-  **Fix**: Command-Queue (`cmdQueue: Promise<void>`) — alle SMTP-Commands werden
-  über `enqueueCommand()` in eine verkettete Promise-Kette eingereiht und laufen
-  strikt sequenziell:
+  **Fix**: command queue (`cmdQueue: Promise<void>`) — all SMTP commands are
+  enqueued via `enqueueCommand()` into a chained promise chain and run
+  strictly sequentially:
   ```
   EHLO → [250] → MAIL FROM → await onMailFrom() → [250] → RCPT TO → await onRcptTo() → [250] → DATA → [354]
   ```
-  Responses kommen jetzt garantiert in der richtigen Reihenfolge, egal wie schnell
-  der sendende MTA piplined. AUTH-Multi-Step und `finishData()` ebenfalls in die Queue
-  eingereiht.
+  Responses now arrive in the correct order guaranteed, no matter how fast
+  the sending MTA pipelines. AUTH multi-step and `finishData()` are enqueued
+  as well.
 
 ---
 
-## [3.17.47] — 2026-05-23 — Feature: BCP DNS-Einrichtungs-Panel
+## [3.17.47] — 2026-05-23 — Feature: BCP DNS setup panel
 
 ### Added
 
-- **DNS-Einrichtungs-Panel in BCP → Domains → Domain bearbeiten** (`DomainsPage.tsx`):
-  Neuer Button „DNS-Einrichtung prüfen" öffnet ein vollständiges Einrichtungs-Panel
-  mit allen 7 DNS-Einträgen, die für einen vollständig konfigurierten Mailserver
-  benötigt werden. Werte werden automatisch aus der aktuellen SSL/TLS-Konfiguration
-  (publicHostname) und dem DKIM-Schlüssel abgeleitet:
-  - **A-Record** — Mailserver-IP (aus live-aufgelöster Server-IP)
-  - **MX-Record** — Maileingang auf Mailserver-Hostname
-  - **SPF-Record** — mit echter Server-IP (`v=spf1 ip4:<IP> ~all`)
-  - **DKIM-Record** — vollständiger p=-Wert inkl. 255-Zeichen-Chunk-Option
-    (aufklappbar, für DNS-Provider mit 255-Zeichen-Limit)
-  - **DMARC-Record** — fertige Vorlage mit rua= für die Domain
-  - **Autodiscover** — CNAME auf Mailserver-Hostname
-  - **PTR/Reverse-DNS** — mit Hinweis auf Server-Hoster
-  Jeder Eintrag zeigt: Typ-Badge (farbig), Status (✅/❌), kopierbarer Host-/Name-Wert
-  und kopierbarer Inhalt-Wert. Modal wechselt auf max-w-2xl wenn Panel geöffnet ist.
+- **DNS setup panel in BCP → Domains → Edit domain** (`DomainsPage.tsx`):
+  New button "Check DNS setup" opens a complete setup panel
+  with all 7 DNS records needed for a fully configured mail server.
+  Values are derived automatically from the current SSL/TLS configuration
+  (publicHostname) and the DKIM key:
+  - **A record** — mail server IP (from the live-resolved server IP)
+  - **MX record** — inbound mail to the mail server hostname
+  - **SPF record** — with the real server IP (`v=spf1 ip4:<IP> ~all`)
+  - **DKIM record** — complete p= value incl. 255-character chunk option
+    (expandable, for DNS providers with a 255-character limit)
+  - **DMARC record** — ready-made template with rua= for the domain
+  - **Autodiscover** — CNAME to the mail server hostname
+  - **PTR/reverse DNS** — with a note about the server hoster
+  Each record shows: type badge (colored), status (✅/❌), copyable host/name value
+  and copyable content value. The modal switches to max-w-2xl when the panel is open.
 
 ### Changed
 
-- **DNS-Check Backend verbessert** (`api-gateway/routes/admin/domains.ts`):
-  - Server-IP wird vom Hostnamen live aufgelöst und in der Antwort als `serverIp` zurückgegeben
-  - SPF `expected`-Wert enthält jetzt die echte Server-IP statt Platzhalter
-  - DKIM `ok`-Flag vergleicht jetzt den vollständigen Schlüssel (whitespace-normalisiert),
-    nicht nur ob irgendeín DKIM-Record existiert
-  - PTR-Check nutzt bereits aufgelöste Server-IP (kein zweites DNS-Lookup)
-  - Neue `a`-Record-Sektion in der API-Antwort
+- **DNS check backend improved** (`api-gateway/routes/admin/domains.ts`):
+  - The server IP is resolved live from the hostname and returned in the response as `serverIp`
+  - The SPF `expected` value now contains the real server IP instead of a placeholder
+  - The DKIM `ok` flag now compares the complete key (whitespace-normalized),
+    not just whether any DKIM record exists
+  - The PTR check uses the already-resolved server IP (no second DNS lookup)
+  - New `a` record section in the API response
 
 ---
 
-## [3.17.46] — 2026-05-23 — Fix: DKIM Public Key Format (SPKI → PKCS#1)
+## [3.17.46] — 2026-05-23 — Fix: DKIM public key format (SPKI → PKCS#1)
 
 ### Fixed
 
-- **DKIM DNS-Eintrag syntaktisch korrekt** (`api-gateway/routes/admin/domains.ts`):
-  Public Key wurde bisher im SPKI-Format (SubjectPublicKeyInfo, mit Algorithm-OID-Wrapper)
-  exportiert — DKIM erwartet jedoch PKCS#1 (reiner RSAPublicKey ohne OID). Fix:
-  `pubKey.export({ type: 'spki', format: 'der' })` → `type: 'pkcs1'` an allen drei
-  Stellen (dkim-record, regenerate-dkim, dns-check). Der generierte `p=`-Wert im BCP
-  ist nun RFC 6376-konform und besteht die DNS-Verifikation.
+- **DKIM DNS record syntactically correct** (`api-gateway/routes/admin/domains.ts`):
+  The public key was previously exported in SPKI format (SubjectPublicKeyInfo, with algorithm OID wrapper)
+  — DKIM however expects PKCS#1 (plain RSAPublicKey without OID). Fix:
+  `pubKey.export({ type: 'spki', format: 'der' })` → `type: 'pkcs1'` in all three
+  places (dkim-record, regenerate-dkim, dns-check). The generated `p=` value in the BCP
+  is now RFC 6376-compliant and passes DNS verification.
 
 ---
 
-## [3.17.45] — 2026-05-22 — Feature: Queue-Übersicht kompakt + Verwerfen-Funktion
+## [3.17.45] — 2026-05-22 — Feature: compact queue overview + discard function
 
 ### Changed
 
-- **BCP Queue-Übersicht komplett überarbeitet** (`QueuesPage.tsx`):
-  - Stats-Karten (5 große Cards) → kompakter horizontaler Strip mit Zahlen + Icon
-  - Verbose Zustandserklärungskarten am Ende entfernt
-  - Verteilungs-Balkendiagramm entfernt (redundant mit Inline-Stats)
-  - **Direkte Queue-Tabelle in der Übersicht**: Zeigt alle ausstehenden Nachrichten
-    (waiting / active / delayed / failed) mit Status-Badge, Absender, Empfänger,
-    Alter und Versuche — kein Navigieren in Unterabschnitte nötig
+- **BCP queue overview completely reworked** (`QueuesPage.tsx`):
+  - Stats cards (5 large cards) → compact horizontal strip with numbers + icon
+  - Verbose state explanation cards at the bottom removed
+  - Distribution bar chart removed (redundant with inline stats)
+  - **Direct queue table in the overview**: shows all pending messages
+    (waiting / active / delayed / failed) with status badge, sender, recipient,
+    age and attempts — no navigating into sub-sections needed
 
 ### Added
 
-- **„Verwerfen"-Schaltfläche direkt in der Übersicht**: Jede ausstehende Nachricht
-  kann mit einem Klick endgültig verworfen werden (Bestätigungsdialog). Für
-  Retry- und Dead-Letter-Einträge zusätzlich „Jetzt wiederholen"-Schaltfläche.
-- **„Verwerfen" in allen Job-Tabellen** jetzt als beschrifteter Button statt Icon,
-  deutlich besser erkennbar.
-- Zeigt bis zu 25 Einträge in der Übersicht; bei mehr → Links zu Unterabschnitten.
+- **"Discard" button directly in the overview**: every pending message
+  can be discarded permanently with one click (confirmation dialog). For
+  retry and dead-letter entries additionally a "Retry now" button.
+- **"Discard" in all job tables** now as a labeled button instead of an icon,
+  much more recognizable.
+- Shows up to 25 entries in the overview; with more → links to the sub-sections.
 
 ### Fixed
 
-- **Zwei Refresh-Buttons auf einen reduziert**: Der Refresh-Button in jedem
-  Unterabschnitt (`JobsSection`) wurde entfernt. Nur noch ein globaler Refresh im
-  Seitenheader — aktualisiert Stats, Jobs und Übersicht gleichzeitig.
+- **Two refresh buttons reduced to one**: the refresh button in every
+  sub-section (`JobsSection`) was removed. Only a single global refresh in the
+  page header remains — it refreshes stats, jobs and overview at the same time.
 
 ---
 
-## [3.17.44] — 2026-05-22 — Fix: eDiscovery-Suchmaske verliert Fokus nach jedem Buchstaben
+## [3.17.44] — 2026-05-22 — Fix: eDiscovery search form loses focus after every letter
 
 ### Fixed
 
-- **BCP eDiscovery — Eingabefeld-Fokus-Bug** (`EDiscoveryPage.tsx`): Die interne
-  `Field`-Hilfskomponente war innerhalb der `CreateSearchModal`-Funktion definiert.
-  React erzeugt bei jeder Render-Phase eine neue Komponenten-Referenz → Input wird
-  unmounted/remounted → Fokus geht verloren → nach jedem eingetippten Zeichen musste
-  erneut ins Feld geklickt werden.
+- **BCP eDiscovery — input field focus bug** (`EDiscoveryPage.tsx`): the internal
+  `Field` helper component was defined inside the `CreateSearchModal` function.
+  React creates a new component reference in every render phase → the input is
+  unmounted/remounted → focus is lost → after every typed character the field
+  had to be clicked again.
 
-  Fix: `Field` auf Modul-Ebene als `SearchField` ausgelagert (explizite `value` +
-  `onChange`-Props statt `k: keyof typeof form`). Alle 8 Verwendungen im Modal
-  aktualisiert. React behält jetzt die DOM-Referenz über Re-Renders hinweg.
+  Fix: `Field` moved to module level as `SearchField` (explicit `value` +
+  `onChange` props instead of `k: keyof typeof form`). All 8 usages in the modal
+  updated. React now keeps the DOM reference across re-renders.
 
 ---
 
-## [3.17.43] — 2026-05-22 — Fix: Audit-Log schreibt keine Einträge
+## [3.17.43] — 2026-05-22 — Fix: audit log writes no entries
 
 ### Fixed
 
-- **`auditMiddleware` Pfad-Bug** (`lib/audit.ts`): Das Middleware ist via
-  `app.use('/api/v1/admin', auditMiddleware)` gemountet. Express liefert
-  innerhalb des Middleware `req.path` **ohne** das Mount-Prefix — also
-  `/mailboxes/123` statt `/api/v1/admin/mailboxes/123`. Die Bedingung
-  `req.path.startsWith('/api/v1/admin/')` war daher **niemals wahr** →
-  kein einziger Audit-Eintrag wurde je in die DB geschrieben.
+- **`auditMiddleware` path bug** (`lib/audit.ts`): the middleware is mounted via
+  `app.use('/api/v1/admin', auditMiddleware)`. Inside the middleware Express
+  provides `req.path` **without** the mount prefix — i.e.
+  `/mailboxes/123` instead of `/api/v1/admin/mailboxes/123`. The condition
+  `req.path.startsWith('/api/v1/admin/')` was therefore **never true** →
+  not a single audit entry was ever written to the DB.
 
-  Fix: Prefix-Check entfernt (redundant wenn bereits auf `/api/v1/admin`
-  gemountet). `pathParts`-Extraktion auf relativen Pfad umgestellt
+  Fix: prefix check removed (redundant when already mounted on `/api/v1/admin`).
+  `pathParts` extraction switched to the relative path
   (`req.path.replace(/^\//, '').split('/')`).
 
 ---
 
-## [3.17.42] — 2026-05-22 — Feature: Zertifikate bearbeiten (Name, Services, Auto-Renew)
+## [3.17.42] — 2026-05-22 — Feature: edit certificates (name, services, auto-renew)
 
 ### Added
 
-- **BCP SSL/TLS — Zertifikat bearbeiten** (`CertificatesPage.tsx`): Stift-Symbol (✏️)
-  in der Aktionsspalte öffnet ein Bearbeitungs-Modal für jedes Zertifikat.
-  Editierbar: Name, Services-Zuordnung (SMTP/IMAP/POP3 mit Exklusivitäts-Anzeige),
-  Auto-Renew (nur für Let's Encrypt Zertifikate).
-  Read-only angezeigt: Typ, Status, Domains, HTTPS-Proxy-Status, Protokoll-TLS-Status.
-  Ruft `PUT /api/v1/admin/certificates/:id` auf.
+- **BCP SSL/TLS — edit certificate** (`CertificatesPage.tsx`): a pencil icon (✏️)
+  in the actions column opens an edit modal for each certificate.
+  Editable: name, service assignment (SMTP/IMAP/POP3 with exclusivity display),
+  auto-renew (only for Let's Encrypt certificates).
+  Shown read-only: type, status, domains, HTTPS proxy status, protocol TLS status.
+  Calls `PUT /api/v1/admin/certificates/:id`.
 
 ### Fixed
 
-- **`PUT /:id` Route** (`routes/admin/certificates.ts`): `isActiveProtocol` fehlte
-  im Prisma-`select` — wurde nicht im Response zurückgegeben. Behoben.
+- **`PUT /:id` route** (`routes/admin/certificates.ts`): `isActiveProtocol` was missing
+  from the Prisma `select` — was not returned in the response. Fixed.
 
 ---
 
-## [3.17.41] — 2026-05-22 — Fix: ACME-Prozess bricht nach 5 Minuten ab
+## [3.17.41] — 2026-05-22 — Fix: ACME process aborts after 5 minutes
 
 ### Fixed
 
-- **ACME-Timeout** (`routes/admin/certificates.ts`): `runAcmeIssuance()` läuft
-  nicht mehr endlos. `Promise.race()` bricht den ACME-Prozess nach 5 Minuten ab
-  und setzt das Zertifikat auf `ERROR` — auch wenn `client.auto()` hängt (Port 80
-  nicht erreichbar, Let's Encrypt antwortet nicht, etc.).
+- **ACME timeout** (`routes/admin/certificates.ts`): `runAcmeIssuance()` no longer
+  runs forever. `Promise.race()` aborts the ACME process after 5 minutes
+  and sets the certificate to `ERROR` — even if `client.auto()` hangs (port 80
+  unreachable, Let's Encrypt not responding, etc.).
 
-- **Startup-Bereinigung** (`server.ts`): Beim Container-Start werden Zertifikate
-  die länger als 10 Minuten im Status `PENDING` oder `RENEWING` stecken automatisch
-  auf `ERROR` gesetzt. Verhindert dauerhaft hängende Certs nach einem Neustart.
+- **Startup cleanup** (`server.ts`): at container start, certificates
+  stuck in status `PENDING` or `RENEWING` for longer than 10 minutes are automatically
+  set to `ERROR`. Prevents permanently hanging certs after a restart.
 
-- **Doppelstart-Schutz** (Renew-Route): `POST /:id/renew` gibt jetzt `409 Conflict`
-  zurück wenn das Cert bereits `PENDING` oder `RENEWING` ist — kein paralleler
-  zweiter ACME-Prozess mehr möglich.
+- **Double-start protection** (renew route): `POST /:id/renew` now returns `409 Conflict`
+  if the cert is already `PENDING` or `RENEWING` — no parallel
+  second ACME process possible anymore.
 
-- **BCP SSL/TLS UI**: Renew-Button (↻) ist für `PENDING`-Certs deaktiviert und
-  zeigt einen Spinner + Tooltip „ACME-Prozess läuft noch — bitte warten".
+- **BCP SSL/TLS UI**: the renew button (↻) is disabled for `PENDING` certs and
+  shows a spinner + tooltip "ACME process still running — please wait".
 
 ---
 
-## [3.17.40] — 2026-05-22 — Fix: Exklusive Service-Zuordnung bei Zertifikaten
+## [3.17.40] — 2026-05-22 — Fix: exclusive service assignment for certificates
 
 ### Fixed
 
-- **Exklusive Service-Zuordnung** (`routes/admin/certificates.ts` + `CertificatesPage.tsx`):
-  SMTP, IMAP und POP3 können jeweils nur einem Zertifikat gleichzeitig zugeordnet sein.
-  Beim Erstellen oder Aktualisieren eines Zertifikats mit Services werden diese Services
-  automatisch aus allen anderen Zertifikaten entfernt (`claimServices()`-Funktion).
+- **Exclusive service assignment** (`routes/admin/certificates.ts` + `CertificatesPage.tsx`):
+  SMTP, IMAP and POP3 can each be assigned to only one certificate at a time.
+  When creating or updating a certificate with services, these services are
+  automatically removed from all other certificates (`claimServices()` function).
 
-- **BCP SSL/TLS UI — Service-Selector**: Bereits von einem anderen Cert beanspruchte Services
-  werden orange markiert (⚠ Warnsymbol + Tooltip „Aktuell bei ‚Cert X' — wird übernommen").
-  Bei Auswahl erscheint ein Hinweis-Banner welche Services beim Speichern übertragen werden.
+- **BCP SSL/TLS UI — service selector**: services already claimed by another cert
+  are marked orange (⚠ warning symbol + tooltip "Currently on 'Cert X' — will be taken over").
+  On selection a hint banner appears listing which services will be transferred on save.
 
 ---
 
-## [3.17.39] — 2026-05-22 — Fix: publicHostname automatisch bei Zertifikat-Aktivierung aktualisieren
+## [3.17.39] — 2026-05-22 — Fix: update publicHostname automatically on certificate activation
 
 ### Fixed
 
-- **`applyProtocolCert()` aktualisiert jetzt `publicHostname`** (`routes/admin/certificates.ts`):
-  Beim Aktivieren eines Zertifikats für SMTP/IMAP/POP3 (Server-Symbol) wird
-  `server_settings.publicHostname` auf die primäre Domain des Zertifikats gesetzt.
-  Zuvor zeigte der SMTP-Banner weiterhin den alten Hostnamen (`mail.localhost`) auch
-  wenn ein CA-signiertes Zertifikat für `mail.example.de` aktiviert war.
+- **`applyProtocolCert()` now updates `publicHostname`** (`routes/admin/certificates.ts`):
+  When activating a certificate for SMTP/IMAP/POP3 (server icon),
+  `server_settings.publicHostname` is set to the certificate's primary domain.
+  Previously the SMTP banner continued to show the old hostname (`mail.localhost`) even
+  when a CA-signed certificate for `mail.example.de` was activated.
 
-- **`activate-protocol`-Route** selektiert jetzt auch `domains` und übergibt sie an
-  `applyProtocolCert()` — zuvor fehlte dieses Feld im `select`.
+- **`activate-protocol` route** now also selects `domains` and passes them to
+  `applyProtocolCert()` — previously this field was missing from the `select`.
 
-- **ACME Auto-Aktivierung** (`runAcmeIssuance`): Wenn ein Let's Encrypt-Zertifikat
-  erfolgreich ausgestellt wurde und `services` SMTP/IMAP/POP3 enthält, wird
-  `applyProtocolCert()` automatisch nach der Ausstellung aufgerufen. Bisher musste
-  der Admin nach jeder ACME-Ausstellung manuell das Server-Symbol klicken.
+- **ACME auto-activation** (`runAcmeIssuance`): when a Let's Encrypt certificate
+  has been issued successfully and `services` contains SMTP/IMAP/POP3,
+  `applyProtocolCert()` is called automatically after issuance. Until now
+  the admin had to click the server icon manually after every ACME issuance.
 
 ---
 
-## [3.17.38] — 2026-05-22 — Auto-Self-Signed-Cert bei Setup + Spam-Filter aktivierbar/deaktivierbar
+## [3.17.38] — 2026-05-22 — Auto self-signed cert at setup + spam filter can be enabled/disabled
 
 ### Added
 
-- **Auto Self-Signed-Cert bei Setup** (`api-gateway` → `routes/setup.ts`):
-  Nach erfolgreichem Initial-Setup (`POST /api/v1/setup/complete`) wird automatisch ein
-  selbstsigniertes Zertifikat (RSA-2048, 10 Jahre) für den `publicHostname` generiert
-  und in die `certificates`-Tabelle geschrieben. Das Cert ist sofort in BCP → SSL/TLS
-  sichtbar, als Standard-Protokoll-TLS (`isActiveProtocol: true`) für SMTP/IMAP/POP3
-  aktiviert und wird in `server_settings.tlsCert/tlsKey` geschrieben — SMTP/IMAP/POP3
-  übernehmen es sofort via Redis-`settings:reload`.
+- **Auto self-signed cert at setup** (`api-gateway` → `routes/setup.ts`):
+  After a successful initial setup (`POST /api/v1/setup/complete`) a
+  self-signed certificate (RSA-2048, 10 years) for the `publicHostname` is generated automatically
+  and written to the `certificates` table. The cert is immediately visible in BCP → SSL/TLS,
+  activated as the default protocol TLS (`isActiveProtocol: true`) for SMTP/IMAP/POP3
+  and written to `server_settings.tlsCert/tlsKey` — SMTP/IMAP/POP3
+  pick it up immediately via Redis `settings:reload`.
 
-- **Spam-Filter-Toggle mit Hot-Reload** (`security-filter` → `server.ts`, `pipeline/index.ts`):
-  `rspamdEnabled` und `clamavEnabled` aus `SecuritySettings` werden beim Start aus der DB
-  geladen. Bei Änderung in BCP → Schutzfilter → Rspamd/Antivirus und anschließendem
-  Speichern löst `settings:reload` über Redis einen sofortigen Reload im Security-Filter
-  aus — kein Container-Neustart nötig. Pipeline-Stages 4c (ClamAV) und 4d (rspamd)
-  werden bei `enabled: false` vollständig übersprungen.
+- **Spam filter toggle with hot reload** (`security-filter` → `server.ts`, `pipeline/index.ts`):
+  `rspamdEnabled` and `clamavEnabled` from `SecuritySettings` are loaded from the DB
+  at startup. On a change in BCP → Protection filters → Rspamd/Antivirus followed by
+  save, `settings:reload` via Redis triggers an immediate reload in the security filter
+  — no container restart needed. Pipeline stages 4c (ClamAV) and 4d (rspamd)
+  are skipped completely when `enabled: false`.
 
 ### Changed
 
-- **`PipelineConfig`-Interface** (`security-filter/pipeline/index.ts`): Neue optionale
-  Felder `rspamdEnabled?: boolean` und `clamavEnabled?: boolean` — Default `true`
-  (kompatibel mit bestehenden Aufrufen).
+- **`PipelineConfig` interface** (`security-filter/pipeline/index.ts`): new optional
+  fields `rspamdEnabled?: boolean` and `clamavEnabled?: boolean` — default `true`
+  (compatible with existing calls).
 
-- **`security-filter/server.ts`**: Lädt SecuritySettings beim Start aus DB und
-  abonniert Redis-Channel `settings:reload` für Hot-Reload. Neue Funktion
+- **`security-filter/server.ts`**: loads SecuritySettings from the DB at startup and
+  subscribes to the Redis channel `settings:reload` for hot reload. New function
   `loadSecuritySettings()`.
 
 ### Fixed
 
-- **`routes/admin/security.ts`** — `PUT /admin/security/settings` publiziert jetzt
-  `settings:reload` via Redis nach dem Speichern, damit die security-filter sofort
-  `rspamdEnabled`/`clamavEnabled` übernimmt (ohne Container-Neustart).
+- **`routes/admin/security.ts`** — `PUT /admin/security/settings` now publishes
+  `settings:reload` via Redis after saving so the security filter immediately
+  picks up `rspamdEnabled`/`clamavEnabled` (without a container restart).
 
 ---
 
-## [3.17.37] — 2026-05-22 — BCP SSL/TLS: Banner entfernt, Services auf SMTP/IMAP/POP3 reduziert
+## [3.17.37] — 2026-05-22 — BCP SSL/TLS: banner removed, services reduced to SMTP/IMAP/POP3
 
 ### Changed
 
-- **BCP → SSL/TLS → Zertifikate**: Grauer Info-Banner bei fehlendem HTTPS-Zertifikat entfernt —
-  die Seite zeigt keinen Banner wenn kein Cert aktiv ist (grüner Banner bleibt bei aktivem HTTPS).
+- **BCP → SSL/TLS → Certificates**: gray info banner for a missing HTTPS certificate removed —
+  the page shows no banner when no cert is active (the green banner remains with active HTTPS).
 
-- **Service-Auswahl in Zertifikat-Formularen** (Let's Encrypt, Upload, Self-Signed): Reduziert
-  auf `SMTP`, `IMAP`, `POP3` — Web-Services (MWA, BCP, EWS, CalDAV, Autodiscover) entfernt,
-  da HTTPS ausschließlich über das Schloss-Symbol aktiviert wird und nicht über die Services-Liste.
+- **Service selection in certificate forms** (Let's Encrypt, upload, self-signed): reduced
+  to `SMTP`, `IMAP`, `POP3` — web services (MWA, BCP, EWS, CalDAV, Autodiscover) removed,
+  since HTTPS is activated exclusively via the lock icon and not via the services list.
 
 ---
 
-## [3.17.36] — 2026-05-22 — HTTPS_PROXY_ENABLED entfernt — integrierter Proxy immer aktiv
+## [3.17.36] — 2026-05-22 — HTTPS_PROXY_ENABLED removed — integrated proxy always active
 
 ### Removed
 
-- **`HTTPS_PROXY_ENABLED`-Umgebungsvariable** vollständig entfernt aus `tls-proxy.ts`,
-  `routes/admin/certificates.ts`, `docker-compose.yml` und `docker-compose.synology.yml`.
-  Der integrierte HTTPS-Proxy ist immer aktiv — er startet Port 443 nur wenn ein
-  Zertifikat mit `isActiveHttps: true` vorhanden ist, ansonsten bleibt Port 443 geschlossen.
-  Kein Konfigurations-Toggle mehr nötig.
+- **`HTTPS_PROXY_ENABLED` environment variable** removed completely from `tls-proxy.ts`,
+  `routes/admin/certificates.ts`, `docker-compose.yml` and `docker-compose.synology.yml`.
+  The integrated HTTPS proxy is always active — it starts port 443 only when a
+  certificate with `isActiveHttps: true` exists, otherwise port 443 stays closed.
+  No configuration toggle needed anymore.
 
-- **`isTlsProxyEnabled()`-Export** aus `tls-proxy.ts` entfernt.
+- **`isTlsProxyEnabled()` export** removed from `tls-proxy.ts`.
 
-- **`enabled`-Feld** aus der `/tls-proxy-info`-API-Response entfernt.
+- **`enabled` field** removed from the `/tls-proxy-info` API response.
 
-- **„Integrierter HTTPS-Proxy deaktiviert"-Banner** aus BCP → SSL/TLS entfernt.
-  Der Banner zeigt jetzt nur noch zwei Zustände: HTTPS aktiv (grün) oder kein
-  HTTPS-Zertifikat aktiv (grau mit Hinweis).
-
----
-
-## [3.17.35] — 2026-05-22 — Zertifikat-Logik: Vollständige Entkopplung HTTPS/Protokoll + Self-Signed-Default
-
-### Changed
-
-- **Zertifikat-Aktivierung entkoppelt** (`api-gateway` → `routes/admin/certificates.ts`):
-  HTTPS-Proxy (Schloss-Symbol) und Protokoll-TLS (Server-Symbol) für SMTP/IMAP/POP3 sind
-  vollständig **unabhängig** — ein Zertifikat kann nur für HTTPS, nur für Protokolle, oder
-  für beides aktiv sein. `activate-https` berührt `isActiveProtocol` nicht mehr.
-
-- **Self-Signed-Standard**: `server_settings.tlsCert/tlsKey = NULL` ist der Normalzustand.
-  SMTP/IMAP/POP3 generieren automatisch ein Self-Signed-Cert aus `publicHostname` wenn
-  keine explizite Aktivierung erfolgt ist. Kein implizites Auto-Aktivieren beim Erstellen
-  oder Hochladen eines Zertifikats.
-
-- **Startup-Sync** (`syncProtocolCertState()`): Ersetzt die alte `migrateCertProtocolBinding()`
-  — prüft beim Container-Start ob `server_settings.tlsCert` vorhanden aber kein
-  `isActiveProtocol: true`-Cert in der DB existiert (verwaistes Cert) und bereinigt dies.
-
-- **Zertifikat löschen — vollständige Bereinigung**: Wird ein Zertifikat gelöscht das
-  `isActiveProtocol: true` ist, werden `server_settings.tlsCert/tlsKey` auf NULL gesetzt
-  und SMTP/IMAP/POP3 laden sofort das Self-Signed-Fallback. War das Cert für HTTPS aktiv,
-  wird der HTTPS-Proxy ebenfalls deaktiviert.
-
-- **BCP — Zertifikate-Seite** (`admin-panel` → `CertificatesPage.tsx`):
-  Server-Symbol (SMTP/IMAP/POP3) ist jetzt **immer** für alle ACTIVE/EXPIRING-Certs
-  sichtbar — unabhängig vom HTTPS-Status. Toast-Meldungen und Tooltips korrekt getrennt.
-  Lösch-Bestätigung warnt wenn das Cert für HTTPS oder Protokoll-TLS aktiv ist.
-  Info-Banner erklärt die Unabhängigkeit beider Aktivierungsarten.
+- **"Integrated HTTPS proxy disabled" banner** removed from BCP → SSL/TLS.
+  The banner now shows only two states: HTTPS active (green) or no
+  HTTPS certificate active (gray with hint).
 
 ---
 
-## [3.17.34] — 2026-05-22 — DNS-Check: Lokaler Resolver, kein Resolver-Banner/Badges/Details
+## [3.17.35] — 2026-05-22 — Certificate logic: full decoupling of HTTPS/protocol + self-signed default
 
 ### Changed
 
-- **DNS-Eintragscheck** (`api-gateway` → `routes/admin/domains.ts`): Verwendet jetzt den
-  **lokalen DNS-Resolver** des Servers (`dns.promises`) statt drei externen Resolvern
-  (Google/Cloudflare/Quad9). API-Response vereinfacht: nur noch `ok`, `found`, `warning?`
-  pro Eintrag — kein `resolvers[]`, `consistent`, `checkedAt`, `resolversUsed` mehr.
+- **Certificate activation decoupled** (`api-gateway` → `routes/admin/certificates.ts`):
+  HTTPS proxy (lock icon) and protocol TLS (server icon) for SMTP/IMAP/POP3 are
+  fully **independent** — a certificate can be active for HTTPS only, for protocols only, or
+  for both. `activate-https` no longer touches `isActiveProtocol`.
+
+- **Self-signed default**: `server_settings.tlsCert/tlsKey = NULL` is the normal state.
+  SMTP/IMAP/POP3 automatically generate a self-signed cert from `publicHostname` when
+  no explicit activation has taken place. No implicit auto-activation when creating
+  or uploading a certificate.
+
+- **Startup sync** (`syncProtocolCertState()`): replaces the old `migrateCertProtocolBinding()`
+  — checks at container start whether `server_settings.tlsCert` exists but no
+  `isActiveProtocol: true` cert exists in the DB (orphaned cert) and cleans this up.
+
+- **Delete certificate — full cleanup**: if a certificate is deleted that is
+  `isActiveProtocol: true`, `server_settings.tlsCert/tlsKey` are set to NULL
+  and SMTP/IMAP/POP3 immediately load the self-signed fallback. If the cert was active for HTTPS,
+  the HTTPS proxy is deactivated as well.
+
+- **BCP — certificates page** (`admin-panel` → `CertificatesPage.tsx`):
+  the server icon (SMTP/IMAP/POP3) is now **always** visible for all ACTIVE/EXPIRING certs
+  — regardless of HTTPS status. Toast messages and tooltips correctly separated.
+  The delete confirmation warns when the cert is active for HTTPS or protocol TLS.
+  An info banner explains the independence of both activation types.
+
+---
+
+## [3.17.34] — 2026-05-22 — DNS check: local resolver, no resolver banner/badges/details
+
+### Changed
+
+- **DNS record check** (`api-gateway` → `routes/admin/domains.ts`): now uses the
+  server's **local DNS resolver** (`dns.promises`) instead of three external resolvers
+  (Google/Cloudflare/Quad9). API response simplified: only `ok`, `found`, `warning?`
+  per record — no more `resolvers[]`, `consistent`, `checkedAt`, `resolversUsed`.
 
 ### Removed
 
-- **Externe-Resolver-Banner** (BCP → SMTP & Routing → DNS-Einträge): Der blaue
-  Info-Banner „Externe Resolver: Google (8.8.8.8) Cloudflare (1.1.1.1) Quad9 (9.9.9.9)"
-  wurde entfernt.
+- **External resolver banner** (BCP → SMTP & Routing → DNS records): the blue
+  info banner "External resolvers: Google (8.8.8.8) Cloudflare (1.1.1.1) Quad9 (9.9.9.9)"
+  was removed.
 
-- **Per-Resolver-Badges**: Die farbigen Google/Cloudflare/Quad9-Badges mit Latenzanzeige
-  unter jedem DNS-Eintrag wurden entfernt.
+- **Per-resolver badges**: the colored Google/Cloudflare/Quad9 badges with latency display
+  under each DNS record were removed.
 
-- **Aufklappbare Resolver-Detailansicht**: Der „▼ Resolver-Details anzeigen"-Link mit
-  IP, Latenz und gefundenem Wert pro Resolver wurde entfernt.
+- **Expandable resolver detail view**: the "▼ Show resolver details" link with
+  IP, latency and found value per resolver was removed.
 
-- **Inkonsistenz-Warnung**: Der orangene „Resolver-Inkonsistenz"-Hinweis wurde entfernt
-  (nicht mehr relevant ohne Multi-Resolver-Abfrage).
+- **Inconsistency warning**: the orange "Resolver inconsistency" hint was removed
+  (no longer relevant without multi-resolver querying).
 
-- **„Geprüft um HH:MM:SS"-Zeitstempel** im DNS-Header entfernt (keine `checkedAt`-
-  Information mehr in der API-Antwort).
-
----
-
-## [3.17.33] — 2026-05-22 — Fix: Redis-Kanal in Startup-Migration (CHANNEL_SETTINGS_RELOAD)
-
-### Fixed
-
-- **🔧 Startup-Migration `migrateCertProtocolBinding()`**: Falsche Redis-Channel-
-  Bezeichnung `'coremail:settings:reload'` wurde durch die korrekte Konstante
-  `CHANNEL_SETTINGS_RELOAD` (`'settings:reload'`) aus `@coremail/core` ersetzt.
-  Ohne diesen Fix wurden SMTP/IMAP/POP3-Server beim ersten Container-Start nach
-  dem Upgrade nicht über das neue TLS-Zertifikat informiert — die Protokoll-Server
-  liefen trotz korrekter DB-Einträge weiter mit dem alten selbstsignierten Cert.
+- **"Checked at HH:MM:SS" timestamp** in the DNS header removed (no more `checkedAt`
+  information in the API response).
 
 ---
 
-## [3.17.32] — 2026-05-22 — Fix: TLS-Cert Logik — ein Cert für alle Protokolle (SMTP 503 behoben)
+## [3.17.33] — 2026-05-22 — Fix: Redis channel in startup migration (CHANNEL_SETTINGS_RELOAD)
 
 ### Fixed
 
-- **🔒 503 5.5.1 Bad sequence of commands — Root Cause behoben**: Das Zertifikat
-  für `mail.stefanwuestner.de` wurde NUR für den HTTPS-Proxy (MWA/BCP) aktiviert,
-  SMTP/IMAP/POP3 nutzten weiterhin das alte selbstsignierte Zertifikat aus
-  `ServerSettings.tlsCert/tlsKey`. Externe MTAs (Google, Outlook) lehnten den
-  STARTTLS-Handshake ab → 503.
+- **🔧 Startup migration `migrateCertProtocolBinding()`**: the wrong Redis channel
+  name `'coremail:settings:reload'` was replaced by the correct constant
+  `CHANNEL_SETTINGS_RELOAD` (`'settings:reload'`) from `@coremail/core`.
+  Without this fix the SMTP/IMAP/POP3 servers were not informed about the new TLS certificate
+  at the first container start after the upgrade — the protocol servers
+  kept running with the old self-signed cert despite correct DB entries.
 
-- **🏗️ `activate-https` aktiviert jetzt IMMER auch SMTP/IMAP/POP3**: Wenn das
-  Schloss-Symbol angeklickt wird, schreibt der Server das Zertifikat ATOMAR in
-  `ServerSettings.tlsCert/tlsKey` UND sendet `CHANNEL_SETTINGS_RELOAD` — alle
-  Mail-Protokoll-Server laden das neue Cert sofort ohne Neustart.
+---
 
-- **🛑 Entfernt: MWA+BCP Services-Pflicht für Schloss-Button**: Der Lock-Button
-  war bisher nur sichtbar wenn das Cert explizit die Services `MWA` und `BCP`
-  hatte — eine willkürliche Hürde ohne technischen Grund. Jetzt zeigt jedes
-  gültige Zertifikat (ACTIVE/EXPIRING) den Lock-Button.
+## [3.17.32] — 2026-05-22 — Fix: TLS cert logic — one cert for all protocols (SMTP 503 fixed)
+
+### Fixed
+
+- **🔒 503 5.5.1 Bad sequence of commands — root cause fixed**: the certificate
+  for `mail.stefanwuestner.de` was activated ONLY for the HTTPS proxy (MWA/BCP);
+  SMTP/IMAP/POP3 continued to use the old self-signed certificate from
+  `ServerSettings.tlsCert/tlsKey`. External MTAs (Google, Outlook) rejected the
+  STARTTLS handshake → 503.
+
+- **🏗️ `activate-https` now ALWAYS also activates SMTP/IMAP/POP3**: when the
+  lock icon is clicked, the server writes the certificate ATOMICALLY to
+  `ServerSettings.tlsCert/tlsKey` AND sends `CHANNEL_SETTINGS_RELOAD` — all
+  mail protocol servers load the new cert immediately without a restart.
+
+- **🛑 Removed: MWA+BCP services requirement for the lock button**: the lock button
+  was previously only visible when the cert explicitly had the services `MWA` and `BCP`
+  — an arbitrary hurdle without technical reason. Now every
+  valid certificate (ACTIVE/EXPIRING) shows the lock button.
 
 ### Added
 
-- **`isActiveProtocol` Feld** (`Certificate`-Prisma-Modell): Zeigt im BCP an welches
-  Zertifikat aktuell für SMTP/IMAP/POP3 (Ports 465/993/995) aktiv ist —
-  unabhängig vom HTTPS-Proxy-Status.
+- **`isActiveProtocol` field** (`Certificate` Prisma model): shows in the BCP which
+  certificate is currently active for SMTP/IMAP/POP3 (ports 465/993/995) —
+  independent of the HTTPS proxy status.
 
-- **`POST /admin/certificates/:id/activate-protocol`**: Neuer Endpunkt für Setups
-  mit externem Reverse Proxy (Traefik, Caddy, Synology DSM) wo der integrierte
-  HTTPS-Proxy deaktiviert ist, aber der Mailserver ein CA-signiertes Cert für
-  SMTP/IMAP/POP3 benötigt.
+- **`POST /admin/certificates/:id/activate-protocol`**: new endpoint for setups
+  with an external reverse proxy (Traefik, Caddy, Synology DSM) where the integrated
+  HTTPS proxy is disabled but the mail server needs a CA-signed cert for
+  SMTP/IMAP/POP3.
 
-- **Server-Icon im BCP** (`CertificatesPage`): Neues <Server>-Symbol neben dem
-  Schloss — klickt man darauf, wird das Cert nur für Protokoll-TLS aktiviert
-  (ohne HTTPS-Proxy). Zeigt blaue Farbe wenn `isActiveProtocol: true`.
+- **Server icon in the BCP** (`CertificatesPage`): new <Server> icon next to the
+  lock — clicking it activates the cert for protocol TLS only
+  (without the HTTPS proxy). Shows blue when `isActiveProtocol: true`.
 
-- **Detail-Ansicht** (aufgeklappte Zeile): Zeigt jetzt BEIDE Status separat —
-  _HTTPS-Proxy (Port 443)_ und _Protokoll-TLS (SMTP/IMAP/POP3)_ mit eigenem
-  Icon, damit der Admin sofort sieht was wo aktiv ist.
+- **Detail view** (expanded row): now shows BOTH statuses separately —
+  _HTTPS proxy (port 443)_ and _protocol TLS (SMTP/IMAP/POP3)_ each with its own
+  icon, so the admin sees immediately what is active where.
 
 ### Changed
 
-- **`deactivate-https`**: Stoppt nur den HTTPS-Proxy, berührt `isActiveProtocol`
-  NICHT — SMTP/IMAP/POP3 laufen mit dem gleichen Cert weiter wenn der Admin
-  von integriertem Proxy auf externen Traefik/Caddy wechselt.
+- **`deactivate-https`**: stops only the HTTPS proxy, does NOT touch `isActiveProtocol`
+  — SMTP/IMAP/POP3 keep running with the same cert when the admin
+  switches from the integrated proxy to external Traefik/Caddy.
 
 ---
 
-## [3.17.31] — 2026-05-22 — DNS-Prüfung: Echte Multi-Resolver-Verifikation
+## [3.17.31] — 2026-05-22 — DNS check: real multi-resolver verification
 
 ### Added
 
-- **🔍 Echte DNS-Verifikation via externe Resolver** (`api-gateway` → `routes/admin/domains.ts`):
-  Anstatt den Docker-internen Resolver (127.0.0.11, oft gecacht/veraltet) zu befragen,
-  werden MX, SPF, DKIM, DMARC, Autodiscover und PTR/FCrDNS jetzt direkt bei
-  **Google (8.8.8.8)**, **Cloudflare (1.1.1.1)** und **Quad9 (9.9.9.9)** geprüft.
-  `dns.promises.Resolver.setServers()` — kein Umweg über das System-DNS.
+- **🔍 Real DNS verification via external resolvers** (`api-gateway` → `routes/admin/domains.ts`):
+  Instead of querying the Docker-internal resolver (127.0.0.11, often cached/stale),
+  MX, SPF, DKIM, DMARC, Autodiscover and PTR/FCrDNS are now checked directly at
+  **Google (8.8.8.8)**, **Cloudflare (1.1.1.1)** and **Quad9 (9.9.9.9)**.
+  `dns.promises.Resolver.setServers()` — no detour through the system DNS.
 
-- **🌐 PTR / FCrDNS-Prüfung**: Reverse-DNS `A → PTR → Rück-A` wird automatisch auf
-  echten öffentlichen Resolvern verifiziert. Status grün nur wenn PTR zum eigenen
-  Hostnamen auflöst (Forward-confirmed, Pflicht für Gmail).
+- **🌐 PTR / FCrDNS check**: reverse DNS `A → PTR → back-to-A` is automatically verified on
+  real public resolvers. Status green only when the PTR resolves to the own
+  hostname (forward-confirmed, mandatory for Gmail).
 
-- **⚠️ SPF-Mehrfach-Record-Erkennung**: RFC 7208 §3.2 erlaubt genau einen SPF-TXT-
-  Record. Wenn zwei vorhanden sind → `permerror` bei allen Empfängern. Das BCP
-  zeigt jetzt eine explizite rote Warnung + Korrekturhinweis.
+- **⚠️ SPF multi-record detection**: RFC 7208 §3.2 allows exactly one SPF TXT
+  record. If two exist → `permerror` at all recipients. The BCP
+  now shows an explicit red warning + correction hint.
 
-- **📊 Per-Resolver-Badges im BCP** (`admin-panel` → `SmtpConfigPage.tsx`):
-  Jede DNS-Zeile zeigt farbige Badges für Google/Cloudflare/Quad9 mit Latenz
-  (grün = gefunden, rot = nicht gefunden/Fehler). Aufklappbare Detailansicht
-  pro Resolver mit exaktem Befund und Fehlermeldung.
+- **📊 Per-resolver badges in the BCP** (`admin-panel` → `SmtpConfigPage.tsx`):
+  each DNS row shows colored badges for Google/Cloudflare/Quad9 with latency
+  (green = found, red = not found/error). Expandable detail view
+  per resolver with the exact finding and error message.
+- **🔄 Consistency warning**: when two resolvers return different values
+  (e.g. freshly propagating records) → orange "Inconsistency" warning.
 
-- **🔄 Konsistenz-Warnung**: Wenn zwei Resolver unterschiedliche Werte zurückgeben
-  (z. B. frisch propagierende Einträge) → orangene „Inkonsistenz"-Warnung.
-
-- **🕐 Zeitstempel + Resolver-Info-Banner**: DNS-Ergebnis zeigt Prüfzeitpunkt und
-  welche öffentlichen Resolver befragt wurden.
+- **🕐 Timestamp + resolver info banner**: the DNS result shows the check time and
+  which public resolvers were queried.
 
 ### Fixed
 
-- **Docker-DNS-Phantom**: Interne DNS-Ergebnisse stimmten nicht mit dem überein,
-  was externe MTAs (Gmail, Outlook) tatsächlich sehen. Die neue Multi-Resolver-
-  Prüfung spiegelt die Realität der öffentlichen DNS-Infrastruktur wider.
+- **Docker DNS phantom**: internal DNS results did not match what
+  external MTAs (Gmail, Outlook) actually see. The new multi-resolver
+  check reflects the reality of the public DNS infrastructure.
 
 ---
 
-## [3.17.30] — 2026-05-22 — Outbound E-Mail-Pipeline komplett neu gebaut (Google-konform)
+## [3.17.30] — 2026-05-22 — Outbound e-mail pipeline completely rebuilt (Google-compliant)
 
 ### Changed
 
-- **🏗️ Strukturierter BullMQ-Job statt base64-Blob**: `POST /api/v1/mail/send` übergibt
-  ab sofort eine strukturierte Nachricht (`StructuredMessage`) an den Worker — kein
-  `rawMessage: base64`-Feld mehr. Das entlastet Redis erheblich (keine großen Blobs mehr).
+- **🏗️ Structured BullMQ job instead of base64 blob**: `POST /api/v1/mail/send` now
+  hands a structured message (`StructuredMessage`) to the worker — no more
+  `rawMessage: base64` field. This relieves Redis considerably (no more large blobs).
 
-- **📎 Anhänge via MinIO**: Hochgeladene Anhänge werden sofort in MinIO gespeichert
-  (`outbound-queue/{jobId}/{filename}`). Der Worker lädt sie beim MIME-Aufbau herunter
-  und bereinigt sie nach erfolgreicher Zustellung automatisch.
+- **📎 Attachments via MinIO**: uploaded attachments are stored in MinIO immediately
+  (`outbound-queue/{jobId}/{filename}`). The worker downloads them when building the MIME
+  and cleans them up automatically after successful delivery.
 
-- **✍️ DKIM jetzt via nodemailer Transport-Option** (nicht mehr manuelles mailauth-Prepend):
+- **✍️ DKIM now via nodemailer transport option** (no more manual mailauth prepend):
   ```typescript
   nodemailer.createTransport({ host, ..., dkim: { domainName, keySelector, privateKey } })
   ```
-  Das ist die robustere und von nodemailer empfohlene Methode. Die Signatur wird korrekt
-  über den gesamten Message-Stream gebildet — kein Fehler durch nachträgliches
-  Header-Einfügen mehr möglich.
+  This is the more robust method recommended by nodemailer. The signature is correctly
+  computed over the entire message stream — no more errors from inserting
+  headers afterwards.
 
-- **🗂️ Sent-Kopie sauber getrennt**: Der RFC-5322-Buffer für den „Gesendete Elemente"-
-  Ordner wird weiterhin in-memory aufgebaut (mit den bereits im RAM befindlichen Anhängen)
-  — unabhängig vom Queue-Worker.
+- **🗂️ Sent copy cleanly separated**: the RFC 5322 buffer for the "Sent Items"
+  folder continues to be built in-memory (with the attachments already in RAM)
+  — independent of the queue worker.
 
-- **🧹 relay.ts bereinigt**: `ensureRfc5322Headers()` und `signMessage()` (mailauth) entfernt.
-  RFC-5322-Pflicht-Header (From, Message-ID, Date) werden von api-gateway und SMTP-
-  Submission-Handler garantiert; die Safety-Net-Funktion ist nicht mehr nötig.
+- **🧹 relay.ts cleaned up**: `ensureRfc5322Headers()` and `signMessage()` (mailauth) removed.
+  RFC 5322 mandatory headers (From, Message-ID, Date) are guaranteed by the api-gateway and the SMTP
+  submission handler; the safety-net function is no longer needed.
 
-- **📦 SMTP-Submission-Pfad kompatibel**: `OutboundJob.rawMessage` (base64) bleibt für
-  den SMTP-Submission-Pfad (Ports 465/587) erhalten — E-Mail-Clients liefern vollständige
-  RFC-5322-Nachrichten, keine Strukturierung nötig.
+- **📦 SMTP submission path compatible**: `OutboundJob.rawMessage` (base64) remains for
+  the SMTP submission path (ports 465/587) — e-mail clients deliver complete
+  RFC 5322 messages, no structuring needed.
 
 ### Fixed
 
-- **Order-Bug**: DKIM-Signierung und Header-Sicherheits-Check waren in der falschen
-  Reihenfolge — Headers wurden nach der Signierung eingefügt, was die DKIM-Signatur
-  ungültig gemacht hätte. Mit Transport-DKIM entfällt dieses Problem komplett.
+- **Order bug**: DKIM signing and the header safety check were in the wrong
+  order — headers were inserted after signing, which would have invalidated the DKIM
+  signature. With transport DKIM this problem disappears completely.
 
 ---
 
-## [3.17.29] — 2026-05-22 — Fix: RFC 5322 Compliance — From & Message-ID Header
+## [3.17.29] — 2026-05-22 — Fix: RFC 5322 compliance — From & Message-ID headers
 
 ### Fixed
 
-- **🎯 Gmail 550 5.7.1 — From Header & Message-ID Header missing**: Ausgehende
-  E-Mails wurden von Gmail mit folgenden Fehlern abgelehnt:
+- **🎯 Gmail 550 5.7.1 — From header & Message-ID header missing**: outgoing
+  e-mails were rejected by Gmail with the following errors:
   - `550 5.7.1 ... 'From' header is missing`
   - `550 5.7.1 Messages missing a valid Message-ID header are not accepted`
 
-  **Root Cause (api-gateway `routes/mail.ts`)**: Der `From`-Header wurde als
-  Template-Literal gebaut: `"${user.displayName}" <${user.email}>`.
-  - Wenn `displayName = null` → `"null" <email>` (ungültige Anzeige-Name-Zeichenfolge)
-  - Wenn `displayName = ""` → `"" <email>` — leerer Quoted-String verletzt RFC 5322
-    §3.4 (quoted-string MUSS mindestens ein Zeichen enthalten). Strenge Parser
-    wie Gmail werten das als „From-Header fehlt".
+  **Root cause (api-gateway `routes/mail.ts`)**: the `From` header was built as a
+  template literal: `"${user.displayName}" <${user.email}>`.
+  - If `displayName = null` → `"null" <email>` (invalid display-name string)
+  - If `displayName = ""` → `"" <email>` — an empty quoted string violates RFC 5322
+    §3.4 (quoted-string MUST contain at least one character). Strict parsers
+    like Gmail treat that as "From header missing".
 
-  **Fix 1 — `api-gateway/routes/mail.ts`**: Wechsel auf Nodemailer-Objekt-Format:
+  **Fix 1 — `api-gateway/routes/mail.ts`**: switch to the Nodemailer object format:
   ```
   from: displayName ? { name: displayName, address: user.email } : { address: user.email }
   ```
-  Nodemailer kodiert den Anzeige-Namen korrekt per RFC 2047 (falls Non-ASCII)
-  und lässt ihn weg wenn er leer ist → `From: <email>` (sauber und gültig).
-  Außerdem `date: new Date()` explizit gesetzt (RFC 5322 §3.6.1 Pflicht-Header).
+  Nodemailer encodes the display name correctly per RFC 2047 (if non-ASCII)
+  and omits it when empty → `From: <email>` (clean and valid).
+  Additionally `date: new Date()` set explicitly (RFC 5322 §3.6.1 mandatory header).
 
-  **Fix 2 — `smtp-server/outbound/relay.ts`**: Neue `ensureRfc5322Headers()`-
-  Funktion als Sicherheitsnetz: Prüft vor jeder MX-/Smarthost-Zustellung ob
-  `From`, `Message-ID` und `Date` im Header-Block vorhanden sind. Fehlen sie,
-  werden sie automatisch vorangestellt und der Vorgang wird als WARN geloggt.
-  Schützt alle Outbound-Pfade (REST-API + SMTP-Submission).
+  **Fix 2 — `smtp-server/outbound/relay.ts`**: new `ensureRfc5322Headers()`
+  function as a safety net: checks before every MX/smarthost delivery whether
+  `From`, `Message-ID` and `Date` are present in the header block. If missing,
+  they are automatically prepended and the event is logged as WARN.
+  Protects all outbound paths (REST API + SMTP submission).
 
 ---
 
-## [3.17.28] — 2026-05-21 — Fix: Self-Signed-Cert mit falscher CN (Outlook 503 root cause)
+## [3.17.28] — 2026-05-21 — Fix: self-signed cert with wrong CN (Outlook 503 root cause)
 
 ### Fixed
 
-- **🎯 Outlook-365 503-Bounce — root cause gefunden**: Das gespeicherte self-signed
-  Zertifikat hatte `CN=mail.localhost` statt `CN=mail.stefanwuestner.de`. Beim
-  ersten Container-Start war `publicHostname` in der DB noch leer, also wurde das
-  Cert mit Default-`mail.localhost` generiert und gespeichert. Spätere Restarts
-  haben dieses Cert wiederverwendet → ewiger CN-Mismatch.
+- **🎯 Outlook 365 503 bounce — root cause found**: the stored self-signed
+  certificate had `CN=mail.localhost` instead of `CN=mail.stefanwuestner.de`. At the
+  first container start `publicHostname` in the DB was still empty, so the
+  cert was generated and stored with the default `mail.localhost`. Later restarts
+  reused this cert → eternal CN mismatch.
 
-  TLS-Handshake klappte (OpenSSL bestätigt das), aber Outlook 365 validiert die
-  **CN gegen den verbundenen Hostname** und lehnt bei Mismatch ab → ECONNRESET
-  → NDR mit „503 5.5.1 Bad sequence of commands".
+  The TLS handshake worked (OpenSSL confirms that), but Outlook 365 validates the
+  **CN against the connected hostname** and rejects on mismatch → ECONNRESET
+  → NDR with "503 5.5.1 Bad sequence of commands".
 
   **Fix in `smtp-server/src/server.ts`** `refreshTlsConfig()`:
-  - Beim Cert-Load wird `certMatchesHostname()` geprüft (neue Helper-Funktion)
-  - Self-signed Cert mit Mismatch → automatisch neu generiert mit aktuellem
-    `_hostname` und in DB gespeichert
-  - CA-signierte Certs (LE/Custom) werden NICHT neu generiert (könnten gültige
-    SAN-Listen für mehrere Domains haben)
+  - On cert load, `certMatchesHostname()` is checked (new helper function)
+  - A self-signed cert with a mismatch → automatically regenerated with the current
+    `_hostname` and stored in the DB
+  - CA-signed certs (LE/custom) are NOT regenerated (they could have valid
+    SAN lists for multiple domains)
 
-  Beim nächsten Container-Restart (oder Hostname-Änderung via BCP) wird das
-  Cert automatisch korrigiert.
+  At the next container restart (or hostname change via BCP) the
+  cert is corrected automatically.
 
-- **STARTTLS auf Port 25 wieder aktiviert**: Da das Cert jetzt die korrekte CN
-  hat, akzeptieren auch Outlook 365 / strikte MTAs den TLS-Handshake. MX-Tools
-  zeigt „Supports TLS" ✅.
+- **STARTTLS on port 25 re-enabled**: since the cert now has the correct CN,
+  Outlook 365 / strict MTAs also accept the TLS handshake. MX-Tools
+  shows "Supports TLS" ✅.
 
 ### Removed
 
-- **Auto-Let's-Encrypt-Bootstrap aus v3.17.27 entfernt**: Admin fordert LE
-  manuell via BCP → SSL/TLS → „Let's Encrypt anfordern" an. Datei
-  `packages/api-gateway/src/lib/auto-letsencrypt.ts` gelöscht.
+- **Auto Let's Encrypt bootstrap from v3.17.27 removed**: the admin requests LE
+  manually via BCP → SSL/TLS → "Request Let's Encrypt". File
+  `packages/api-gateway/src/lib/auto-letsencrypt.ts` deleted.
 
-### Hinweis: Self-Signed vs. Let's Encrypt
+### Note: self-signed vs. Let's Encrypt
 
-Das self-signed Cert ist jetzt **kompatibel** (korrekte CN/SAN). Aber:
-- MTAs die **strict cert chain validation** machen (manche Banken) lehnen
-  weiterhin ab — die brauchen einen vertrauenswürdigen Issuer
-- Für 100% MTA-Kompatibilität: Let's Encrypt-Cert in BCP manuell anfordern
+The self-signed cert is now **compatible** (correct CN/SAN). But:
+- MTAs that do **strict cert chain validation** (some banks) still
+  reject — they need a trusted issuer
+- For 100% MTA compatibility: request a Let's Encrypt cert manually in the BCP
 
 ---
 
-## [3.17.27] — 2026-05-21 — Auto-Let's-Encrypt beim Container-Start + STARTTLS-Revert
+## [3.17.27] — 2026-05-21 — Auto Let's Encrypt at container start + STARTTLS revert
 
 ### Fixed
 
-- **Outlook 365 lieferte wieder 503 mit v3.17.26**: Das STARTTLS-Advertise mit
-  self-signed Cert hatte Outlook-365-Bounces erneut ausgelöst. Self-signed +
-  STARTTLS ist NICHT kompatibel mit strikten MTAs — kein graceful Plain-Fallback.
-  Fix: Self-signed → STARTTLS auf Port 25 wieder OFF (Verhalten von v3.17.19).
+- **Outlook 365 returned 503 again with v3.17.26**: advertising STARTTLS with a
+  self-signed cert had triggered Outlook 365 bounces again. Self-signed +
+  STARTTLS is NOT compatible with strict MTAs — no graceful plain fallback.
+  Fix: self-signed → STARTTLS on port 25 OFF again (behavior of v3.17.19).
 
 ### Added
 
-- **Automatische Let's Encrypt-Anforderung beim Container-Start**:
-  Neuer Helper `packages/api-gateway/src/lib/auto-letsencrypt.ts`.
-  30 Sekunden nach Server-Start wird geprüft:
-  1. `ServerSettings.publicHostname` ist gesetzt UND nicht-lokal (kein `*.local`/`*.lan`/`localhost`)
-  2. Kein aktives `LETSENCRYPT`- oder `CUSTOM`-Cert deckt den Hostname ab
-  3. Email aus `ServerSettings.adminEmail` ODER Fallback `admin@{root-domain}`
+- **Automatic Let's Encrypt request at container start**:
+  New helper `packages/api-gateway/src/lib/auto-letsencrypt.ts`.
+  30 seconds after server start the following is checked:
+  1. `ServerSettings.publicHostname` is set AND non-local (no `*.local`/`*.lan`/`localhost`)
+  2. No active `LETSENCRYPT` or `CUSTOM` cert covers the hostname
+  3. E-mail from `ServerSettings.adminEmail` OR fallback `admin@{root-domain}`
 
-  Wenn alle Bedingungen erfüllt → ACME HTTP-01 Challenge gestartet (production,
-  nicht staging). Bei Erfolg: Cert wird ACTIVE, `ServerSettings.tlsCert`/`tlsKey`
-  werden gesetzt, `CHANNEL_SETTINGS_RELOAD` wird gepublisht — alle Protokolle
-  (SMTP/IMAP/POP3) laden den neuen Cert. **STARTTLS wird automatisch aktiviert**
-  weil `isCertSelfSigned()` nun `false` zurückgibt.
+  If all conditions are met → ACME HTTP-01 challenge started (production,
+  not staging). On success: the cert becomes ACTIVE, `ServerSettings.tlsCert`/`tlsKey`
+  are set, `CHANNEL_SETTINGS_RELOAD` is published — all protocols
+  (SMTP/IMAP/POP3) load the new cert. **STARTTLS is activated automatically**
+  because `isCertSelfSigned()` now returns `false`.
 
-  Bei Fehler: Log-Warning, kein Crash. Manuelle Anforderung via
-  BCP → SSL/TLS → „Let's Encrypt anfordern" weiterhin möglich.
+  On error: log warning, no crash. Manual request via
+  BCP → SSL/TLS → "Request Let's Encrypt" still possible.
 
-  **Voraussetzungen für Erfolg:**
-  - Port 80 von außen erreichbar (HTTP-01 Challenge)
-  - DNS-A-Record für `publicHostname` zeigt auf Server-IP
-  - Keine Let's-Encrypt-Rate-Limit-Sperre (50 Certs/Domain/Woche)
+  **Prerequisites for success:**
+  - Port 80 reachable from outside (HTTP-01 challenge)
+  - DNS A record for `publicHostname` points to the server IP
+  - No Let's Encrypt rate-limit lockout (50 certs/domain/week)
 
 ### Refactored
 
-- `runAcmeIssuance()` in `routes/admin/certificates.ts` als `export` markiert
-  damit sie auch vom Auto-LE-Bootstrap genutzt werden kann
+- `runAcmeIssuance()` in `routes/admin/certificates.ts` marked as `export`
+  so it can also be used by the auto-LE bootstrap
 
 ---
 
-## [3.17.26] — 2026-05-21 — Fix: MX-Tools "Does not support TLS" — STARTTLS wieder aktiv
+## [3.17.26] — 2026-05-21 — Fix: MX-Tools "Does not support TLS" — STARTTLS active again
 
 ### Fixed
 
-- **MX-Tools-Warnung „SMTP TLS Warning - Does not support TLS"**:
-  In v3.17.19 wurde STARTTLS auf Port 25 für self-signed Certs hart deaktiviert
-  um Outlook-365-Handshake-Fehler zu vermeiden. Resultat: MX-Tools sah kein TLS
-  → Warning. Auch wenn die meisten MTAs (Gmail, Apple, ProtonMail, AOL …)
-  Opportunistic TLS mit self-signed Certs akzeptieren.
+- **MX-Tools warning "SMTP TLS Warning - Does not support TLS"**:
+  In v3.17.19 STARTTLS on port 25 was hard-disabled for self-signed certs
+  to avoid Outlook 365 handshake errors. Result: MX-Tools saw no TLS
+  → warning. Even though most MTAs (Gmail, Apple, ProtonMail, AOL …)
+  accept opportunistic TLS with self-signed certs.
 
-  **Korrekter Trade-off**: Opportunistic TLS ist **immer besser** als kein TLS:
-  - ~95% der MTAs akzeptieren self-signed im opportunistic-Modus
-  - Strikte MTAs (Microsoft 365) fallen auf Plain zurück bei TLS-Handshake-Fehler
-    (kein Bounce, nur kein TLS für diese Verbindung)
-  - MX-Tools-Scoring belohnt TLS-Verfügbarkeit
+  **Correct trade-off**: opportunistic TLS is **always better** than no TLS:
+  - ~95% of MTAs accept self-signed in opportunistic mode
+  - Strict MTAs (Microsoft 365) fall back to plain on a TLS handshake error
+    (no bounce, just no TLS for that connection)
+  - MX-Tools scoring rewards TLS availability
 
-  Fix: `advertiseStarttls: true` immer (statt `!_tlsCertSelfSigned`).
-  STARTTLS wird jetzt auch mit self-signed Cert in EHLO beworben.
+  Fix: `advertiseStarttls: true` always (instead of `!_tlsCertSelfSigned`).
+  STARTTLS is now advertised in EHLO even with a self-signed cert.
 
-### Dauerhafte Lösung für Outlook-365-Kompatibilität
+### Permanent solution for Outlook 365 compatibility
 
-Für vollständige TLS-Validierung in strikten MTAs (Microsoft 365, manche
-Banken) ein **Let's Encrypt-Zertifikat** über BCP → SSL/TLS → Zertifikate →
-„Let's Encrypt anfordern" für `mail.{domain}` ausstellen. Sobald aktiv:
-- MX-Tools: ✅ TLS-Score voll
-- Outlook 365: ✅ akzeptiert Cert ohne Probleme
-- Self-signed Fallback wird nicht mehr genutzt
+For full TLS validation in strict MTAs (Microsoft 365, some
+banks), issue a **Let's Encrypt certificate** via BCP → SSL/TLS → Certificates →
+"Request Let's Encrypt" for `mail.{domain}`. Once active:
+- MX-Tools: ✅ full TLS score
+- Outlook 365: ✅ accepts the cert without problems
+- The self-signed fallback is no longer used
 
-**Voraussetzungen für Let's Encrypt**:
-- Port 80 von außen erreichbar (HTTP-01 Challenge)
-- DNS-A-Record `mail.{domain}` zeigt auf Server-IP
+**Prerequisites for Let's Encrypt**:
+- Port 80 reachable from outside (HTTP-01 challenge)
+- DNS A record `mail.{domain}` points to the server IP
 
 ---
 
-## [3.17.25] — 2026-05-21 — MWA: Aufbewahrungsrichtlinien per Rechtsklick
+## [3.17.25] — 2026-05-21 — MWA: retention policies via right-click
 
 ### Added
 
-- **MWA → Settings → Aufbewahrungsrichtlinien** (neue Sektion unter „Konto"):
-  Zeigt alle vom Administrator aktivierten PERSONAL-Aufbewahrungstags mit Name,
-  Beschreibung, Aufbewahrungstagen und Aktion. Read-only — Tags werden vom Admin
-  in BCP angelegt; User wählen sie per Rechtsklick auf Ordner aus.
+- **MWA → Settings → Retention policies** (new section under "Account"):
+  shows all PERSONAL retention tags enabled by the administrator with name,
+  description, retention days and action. Read-only — tags are created by the admin
+  in the BCP; users select them via right-click on folders.
 
-- **MWA → Ordnerbaum Rechtsklick → „Aufbewahrungsrichtlinie zuweisen"**:
-  Submenu mit allen verfügbaren PERSONAL-Tags. Aktuell zugewiesener Tag
-  bekommt ✓-Häkchen. Unten „Entfernen"-Eintrag um Zuweisung zu löschen.
-  Funktioniert für System- UND Custom-Ordner (Exchange-Verhalten).
+- **MWA → folder tree right-click → "Assign retention policy"**:
+  submenu with all available PERSONAL tags. The currently assigned tag
+  gets a ✓ checkmark. At the bottom a "Remove" entry to delete the assignment.
+  Works for system AND custom folders (Exchange behavior).
 
-- **🕒-Badge** im Ordnerbaum: Ordner mit aktiver Aufbewahrungsrichtlinie zeigen
-  ein kleines Uhr-Icon nach dem Ordnernamen — Tooltip mit Tag-Name + Tagen.
+- **🕒 badge** in the folder tree: folders with an active retention policy show
+  a small clock icon after the folder name — tooltip with tag name + days.
 
 ### Backend
 
-- **`GET /api/v1/retention-tags`** (neu, `requireAuth`): Listet aktivierte
-  PERSONAL-Tags sortiert nach Aufbewahrungstagen.
-- **`PATCH /api/v1/mail/folders/:id/retention-tag`** (neu): Body `{ tagId: string | null }`.
-  Owner-Verifikation; Tag muss PERSONAL und enabled sein.
-- **`PATCH /api/v1/mail/messages/:id/retention-tag`** (neu): Wie oben für Messages.
-- **`GET /api/v1/mail/folders`** erweitert: Liefert jetzt `retentionTagId` +
-  `retentionTag { id, name, retentionDays, action }` Relation mit.
+- **`GET /api/v1/retention-tags`** (new, `requireAuth`): lists enabled
+  PERSONAL tags sorted by retention days.
+- **`PATCH /api/v1/mail/folders/:id/retention-tag`** (new): body `{ tagId: string | null }`.
+  Owner verification; the tag must be PERSONAL and enabled.
+- **`PATCH /api/v1/mail/messages/:id/retention-tag`** (new): as above for messages.
+- **`GET /api/v1/mail/folders`** extended: now also returns `retentionTagId` +
+  the `retentionTag { id, name, retentionDays, action }` relation.
 
 ### Frontend
 
-- 11 neue i18n-Keys (`retention_*`) in DE/EN/ES/IT
-- `Folder`-Type um `retentionTagId` + `retentionTag` erweitert
-- ContextMenu unterstützte bereits Submenus — nur Nutzung erweitert
+- 11 new i18n keys (`retention_*`) in DE/EN/ES/IT
+- `Folder` type extended with `retentionTagId` + `retentionTag`
+- ContextMenu already supported submenus — only the usage was extended
 
 ---
 
-## [3.17.24] — 2026-05-21 — BCP Compliance-Info-Seite aktualisiert
+## [3.17.24] — 2026-05-21 — BCP compliance info page updated
 
 ### Changed
 
-- **BCP → Compliance → Info**: Highlights-Liste um v3.17.12 bis v3.17.23
-  ergänzt (12 neue Einträge mit detaillierten Beschreibungen jeder Version).
-  Version-Anzeige im Header aktualisiert (3.17.23 → 3.17.24).
+- **BCP → Compliance → Info**: highlights list extended with v3.17.12 through v3.17.23
+  (12 new entries with detailed descriptions of each version).
+  Version display in the header updated (3.17.23 → 3.17.24).
 
 ---
 
-## [3.17.23] — 2026-05-21 — Audit-Log: Komplettüberarbeitung mit PDF-Export + Statistik
+## [3.17.23] — 2026-05-21 — Audit log: complete overhaul with PDF export + statistics
 
 ### Fixed
 
-- **CSV-Export schlug mit 401 fehl**: `window.open(…/export…)` öffnete neuen Tab
-  ohne `Authorization`-Header. Fix: neuer Helper `exportUrl()` in api/client.ts
-  hängt `?token=…` an die URL — `requireAuth` akzeptiert Token via Query bereits
-  seit v3.17.18 (SSE-Fix).
+- **CSV export failed with 401**: `window.open(…/export…)` opened a new tab
+  without an `Authorization` header. Fix: new helper `exportUrl()` in api/client.ts
+  appends `?token=…` to the URL — `requireAuth` has accepted the token via query
+  since v3.17.18 (SSE fix).
 
-- **Datums-Filter zeigte keine Daten**: `new Date('2026-05-20T23:59:59')` wurde
-  als **lokale Zeit** interpretiert → in Berlin CEST (UTC+2) lag der UTC-Wert
-  vor dem Tagesbeginn des From-Datums. Fix: explizit UTC mit
+- **Date filter showed no data**: `new Date('2026-05-20T23:59:59')` was
+  interpreted as **local time** → in Berlin CEST (UTC+2) the UTC value lay
+  before the start of day of the From date. Fix: explicitly UTC with
   `…T00:00:00.000Z` / `…T23:59:59.999Z`.
 
-- **Purge-Route inkonsistent**: Frontend sendete `?olderThanDays=`, Backend las
-  `req.body.before` — `400 Bad Request` bei jeder Bereinigung. **Komplett entfernt**
-  — Audit-Logs sind per Compliance schreibgeschützt (siehe „Removed").
+- **Purge route inconsistent**: the frontend sent `?olderThanDays=`, the backend read
+  `req.body.before` — `400 Bad Request` on every cleanup. **Removed completely**
+  — audit logs are write-protected for compliance (see "Removed").
 
-- **React Fragment key-Warning**: `<>...</>` ohne key bei Listen-Render durch
-  `<React.Fragment key={e.id}>` ersetzt.
+- **React Fragment key warning**: `<>...</>` without key in list rendering replaced by
+  `<React.Fragment key={e.id}>`.
 
 ### Added
 
-- **PDF-Export** (`GET /api/v1/admin/audit-log/export.pdf`): A4 quer mit Header,
-  Filter-Zusammenfassung, Tabelle (Zeitpunkt/Akteur/Aktion/Ziel/Status),
-  Seitennummern. Cap 1000 Einträge (größere Mengen → CSV). Verwendet `pdfkit`.
+- **PDF export** (`GET /api/v1/admin/audit-log/export.pdf`): A4 landscape with header,
+  filter summary, table (time/actor/action/target/status),
+  page numbers. Cap of 1000 entries (larger volumes → CSV). Uses `pdfkit`.
 
-- **Statistik-Dashboard** (oben auf der Audit-Log-Seite, auto-refresh 30s):
-  - 4 KPI-Karten: Gesamt-Einträge, letzte 24h, letzte 7 Tage, Fehlerquote
-  - Top-10 Akteure (Balkendiagramm)
-  - Top-10 Aktionen (Balkendiagramm)
-  - Neuer Endpunkt: `GET /api/v1/admin/audit-log/stats`
+- **Statistics dashboard** (at the top of the audit log page, auto-refresh 30s):
+  - 4 KPI cards: total entries, last 24h, last 7 days, error rate
+  - Top 10 actors (bar chart)
+  - Top 10 actions (bar chart)
+  - New endpoint: `GET /api/v1/admin/audit-log/stats`
 
-- **Erweiterte Filter**:
-  - `actorEmail` (Substring-Suche)
-  - `ipAddress` (exakt)
-  - `searchText` (durchsucht `action`, `targetName`, `errorMsg`)
-  - 2-zeilen-Layout im Frontend mit Reset-Button
+- **Extended filters**:
+  - `actorEmail` (substring search)
+  - `ipAddress` (exact)
+  - `searchText` (searches `action`, `targetName`, `errorMsg`)
+  - 2-row layout in the frontend with reset button
 
-- **CSV-Export mit allen Spalten + UTF-8-BOM** (Excel-kompatibel):
+- **CSV export with all columns + UTF-8 BOM** (Excel-compatible):
   timestamp, actorId, actorEmail, action, targetType, targetId, targetName,
   ipAddress, userAgent, success, errorMsg, changes (JSON)
 
-- **Schreibgeschützt-Banner** im BCP (dismissible, persistiert in localStorage):
-  „Audit-Log ist schreibgeschützt — Einträge können auch von Admins nicht gelöscht
-  oder verändert werden (Compliance-Anforderung)"
+- **Write-protected banner** in the BCP (dismissible, persisted in localStorage):
+  "The audit log is write-protected — entries cannot be deleted
+  or modified, even by admins (compliance requirement)"
 
-- **userAgent in Detail-Ansicht** der ausgeklappten Zeile
+- **userAgent in the detail view** of the expanded row
 
 ### Removed
 
-- **`DELETE /api/v1/admin/audit-log/purge`**: Audit-Logs sind **immutable**
-  (DSGVO, SOX, HIPAA, ISO 27001 Anforderung — Non-Repudiation).
-  Frontend „Bereinigen"-Button entfernt. Bei späteren Retention-Bedürfnissen
-  läuft das über die System-`RetentionPolicy` (außerhalb Admin-API).
+- **`DELETE /api/v1/admin/audit-log/purge`**: audit logs are **immutable**
+  (GDPR, SOX, HIPAA, ISO 27001 requirement — non-repudiation).
+  Frontend "Purge" button removed. Should retention needs arise later,
+  that runs through the system `RetentionPolicy` (outside the admin API).
 
-### Auditlog — Kernfunktionen (siehe BCP → Compliance → Audit-Log):
+### Audit log — core functions (see BCP → Compliance → Audit log):
 
-| Säule | Umsetzung |
+| Pillar | Implementation |
 |---|---|
-| **Accountability** | `actorId` + `actorEmail` + `ipAddress` + `userAgent` pro Eintrag |
-| **Forensik** | Volltext-Suche, Zeitraum-Filter, JSON-`changes`-Diff |
-| **Compliance** | Schreibgeschützt, kein Delete-Endpoint, CSV/PDF-Export |
-| **Systemüberwachung** | Live-Statistik (24h/7d), Top-Akteure + Top-Aktionen |
+| **Accountability** | `actorId` + `actorEmail` + `ipAddress` + `userAgent` per entry |
+| **Forensics** | full-text search, time range filter, JSON `changes` diff |
+| **Compliance** | write-protected, no delete endpoint, CSV/PDF export |
+| **System monitoring** | live statistics (24h/7d), top actors + top actions |
 
 ---
 
-## [3.17.22] — 2026-05-21 — Fix: Lokale Zustellung — Aliase, Verteilergruppen + SharedMailbox
+## [3.17.22] — 2026-05-21 — Fix: local delivery — aliases, distribution groups + SharedMailbox
 
 ### Fixed
 
-Audit der lokalen Zustellung (Outbound-Queue + Submission-Port) deckte zwei
-strukturelle Bugs auf. Mails an lokale Adressen wurden in mehreren Fällen
-**silent verworfen** ohne Bounce-Nachricht oder Logging über „Mailbox not found".
+An audit of local delivery (outbound queue + submission port) uncovered two
+structural bugs. Mails to local addresses were in several cases
+**silently discarded** without a bounce message or any logging beyond "Mailbox not found".
 
-- **Outbound-Queue (`smtp-server/outbound/queue.ts`) löste keine Aliase auf**:
-  Beim Versand aus der MWA (POST /api/v1/mail/send) ging die Mail in die BullMQ-
-  Queue. Der Worker prüfte zwar die Domain (local vs. external) aber rief
-  `storeInboundMessage()` direkt mit der Original-Adresse auf. Bei einem
-  E-Mail-Alias (z.B. `vertrieb@stefanwuestner.de` → `info@stefanwuestner.de`)
-  oder einer Verteilergruppe konnte storeInboundMessage den User nicht finden
+- **Outbound queue (`smtp-server/outbound/queue.ts`) did not resolve aliases**:
+  when sending from the MWA (POST /api/v1/mail/send) the mail went into the BullMQ
+  queue. The worker did check the domain (local vs. external) but called
+  `storeInboundMessage()` directly with the original address. For an
+  e-mail alias (e.g. `vertrieb@stefanwuestner.de` → `info@stefanwuestner.de`)
+  or a distribution group, storeInboundMessage could not find the user
   → "Mailbox not found — dropping message".
 
-- **Submission-Handler (Port 587/465) hatte denselben Bug**:
-  Mail-Clients (Thunderbird/Apple Mail) die direkt an die Submission-Ports
-  senden umgingen ebenfalls die Alias-Auflösung.
+- **Submission handler (ports 587/465) had the same bug**:
+  mail clients (Thunderbird/Apple Mail) sending directly to the submission ports
+  also bypassed alias resolution.
 
-- **`storeInboundMessage()` kannte nur User-Postfächer, keine SharedMailbox**:
-  Selbst nach Alias-Auflösung: wenn der Alias auf eine SharedMailbox zeigt,
-  wurde die Mail verworfen weil die Funktion nur `prisma.user.findFirst(...)`
-  abfragte. Jetzt parallel auch `prisma.sharedMailbox.findFirst(...)`.
+- **`storeInboundMessage()` only knew user mailboxes, no SharedMailbox**:
+  even after alias resolution: if the alias pointed to a SharedMailbox,
+  the mail was discarded because the function only queried `prisma.user.findFirst(...)`.
+  Now `prisma.sharedMailbox.findFirst(...)` is queried in parallel as well.
 
 ### Changed
 
-- **`expandRecipients()` aus `inbound/handler.ts` in `handlers/expand.ts` extrahiert**
-  damit alle drei Eintrittspfade (Port 25 inbound, Port 587/465 submission,
-  BullMQ outbound queue) dieselbe Logik nutzen
-- **SharedMailbox-Quota** wird jetzt auch bei lokaler Zustellung inkrementiert
-- **SSE `mail:new`-Event** wird bei SharedMailbox an alle User mit
-  `FULL_ACCESS` oder `READ_ONLY` Permission publiziert → Live-Update im
-  Posteingang aller Berechtigten
+- **`expandRecipients()` extracted from `inbound/handler.ts` into `handlers/expand.ts`**
+  so that all three entry paths (port 25 inbound, port 587/465 submission,
+  BullMQ outbound queue) use the same logic
+- **SharedMailbox quota** is now also incremented on local delivery
+- **SSE `mail:new` event** is published for a SharedMailbox to all users with
+  `FULL_ACCESS` or `READ_ONLY` permission → live update in the
+  inbox of everyone with access
 
 ---
 
-## [3.17.21] — 2026-05-21 — ESMTP-Audit: Stub-only Extensions entfernt
+## [3.17.21] — 2026-05-21 — ESMTP audit: stub-only extensions removed
 
 ### Removed
 
-Audit aller ESMTP-Erweiterungen — entfernt wurden alle die in EHLO beworben aber
-**nicht implementiert** waren (Server hätte gegen die jeweilige RFC verstoßen):
+Audit of all ESMTP extensions — everything advertised in EHLO but
+**not implemented** was removed (the server would have violated the respective RFC):
 
-- **AUTH CRAM-MD5 (RFC 4954/2195)** — `handleAuth` erkennt nur `PLAIN` und `LOGIN`,
-  CRAM-MD5-Anfragen wurden mit `504 Unrecognized authentication type` abgewiesen.
-  Toggle aus BCP entfernt, Default hardcoded `false`.
+- **AUTH CRAM-MD5 (RFC 4954/2195)** — `handleAuth` only recognizes `PLAIN` and `LOGIN`;
+  CRAM-MD5 requests were rejected with `504 Unrecognized authentication type`.
+  Toggle removed from the BCP, default hard-coded `false`.
 
-- **SMTPUTF8 (RFC 6531)** — UTF-8 in Envelope-Adressen wurde nicht gesondert behandelt
-  (kein puny-Code-Mapping, kein Unicode-Normalization). Wenn beworben, hätten internationale
-  Adressen (z.B. `用户@例子.公司`) zu inkonsistentem Verhalten geführt.
+- **SMTPUTF8 (RFC 6531)** — UTF-8 in envelope addresses was not handled specially
+  (no punycode mapping, no Unicode normalization). If advertised, international
+  addresses (e.g. `用户@例子.公司`) would have led to inconsistent behavior.
 
-- **CHUNKING / BDAT (RFC 3030)** — Der Befehl `BDAT` wurde vom Command-Parser nicht
-  erkannt und mit `500 Command not recognized: BDAT` abgewiesen.
+- **CHUNKING / BDAT (RFC 3030)** — the `BDAT` command was not recognized by the command parser
+  and rejected with `500 Command not recognized: BDAT`.
 
-### Verifizierte Implementierungen (bleiben aktiv)
+### Verified implementations (remain active)
 
 | Extension | RFC | Status |
 |---|---|---|
-| STARTTLS | 3207 | ✅ Voll funktional, TLS-Upgrade implementiert |
+| STARTTLS | 3207 | ✅ Fully functional, TLS upgrade implemented |
 | AUTH PLAIN | 4954 | ✅ `handleAuthPlain` |
 | AUTH LOGIN | 4954 | ✅ `handleAuthLoginStart` |
-| PIPELINING | 2920 | ✅ Buffer-basiertes Parsing (`lineBuffer`-Schleife in `onData`) |
-| SIZE | 1870 | ✅ `SIZE=` Parameter geparst + `maxSize`-Check |
-| 8BITMIME | 6152 | ✅ Buffer-basiert (binary encoding) — kein 7-bit-Downgrade |
-| ENHANCEDSTATUSCODES | 2034 | ✅ Alle Codes folgen `x.y.z`-Format |
+| PIPELINING | 2920 | ✅ Buffer-based parsing (`lineBuffer` loop in `onData`) |
+| SIZE | 1870 | ✅ `SIZE=` parameter parsed + `maxSize` check |
+| 8BITMIME | 6152 | ✅ Buffer-based (binary encoding) — no 7-bit downgrade |
+| ENHANCEDSTATUSCODES | 2034 | ✅ All codes follow the `x.y.z` format |
 
-DB-Felder `extAuthCramMd5`, `extSmtputf8`, `extDsn`, `extChunking` bleiben aus
-Backwards-Compat in der Datenbank, werden aber im Server hardcoded ignoriert.
+The DB fields `extAuthCramMd5`, `extSmtputf8`, `extDsn`, `extChunking` remain in the
+database for backwards compatibility but are ignored by the server (hard-coded).
 
 ---
 
-## [3.17.20] — 2026-05-21 — Remove: DSN-Werbung entfernt (war ungenutzt)
+## [3.17.20] — 2026-05-21 — Remove: DSN advertisement removed (was unused)
 
 ### Removed
 
-- **DSN (Delivery Status Notifications, RFC 3461)**: Der SMTP-Server hat DSN
-  in der EHLO-Antwort beworben aber NICHT implementiert:
-  - Keine Verarbeitung von `NOTIFY=`, `ORCPT=`, `ENVID=`, `RET=` Parametern
-    in MAIL FROM / RCPT TO (wurden vom Regex stillschweigend weggeworfen)
-  - Keine `multipart/report` + `message/delivery-status` Generierung beim Bounce
-  - Keine SUCCESS/FAILURE/DELAY-Reports
+- **DSN (Delivery Status Notifications, RFC 3461)**: the SMTP server advertised DSN
+  in the EHLO response but did NOT implement it:
+  - No processing of `NOTIFY=`, `ORCPT=`, `ENVID=`, `RET=` parameters
+    in MAIL FROM / RCPT TO (they were silently discarded by the regex)
+  - No `multipart/report` + `message/delivery-status` generation on bounce
+  - No SUCCESS/FAILURE/DELAY reports
 
-  RFC 3461 verbietet das Bewerben einer Capability ohne Implementierung.
-  Entfernt:
-  - `DSN` aus EHLO-Response (`packages/smtp-server/src/core/session.ts`)
-  - `DEFAULT_ESMTP_EXTENSIONS.dsn` jetzt `false` (Standard hard-codiert)
-  - Toggle aus BCP → SMTP & Routing → ESMTP-Erweiterungen entfernt
-  - Zod-Schema für `extDsn` in `routes/admin/smtp-config.ts` entfernt
-  - DB-Feld `extDsn` bleibt erhalten (Backwards-Compat, wird aber ignoriert)
+  RFC 3461 forbids advertising a capability without implementing it.
+  Removed:
+  - `DSN` from the EHLO response (`packages/smtp-server/src/core/session.ts`)
+  - `DEFAULT_ESMTP_EXTENSIONS.dsn` now `false` (default hard-coded)
+  - Toggle removed from BCP → SMTP & Routing → ESMTP extensions
+  - Zod schema for `extDsn` in `routes/admin/smtp-config.ts` removed
+  - DB field `extDsn` remains (backwards compatibility, but ignored)
 
-  Wenn DSN in einer späteren Version implementiert wird, kann der Toggle
-  zurückkommen — solange aber stub-only: weg.
-
----
-
-## [3.17.19] — 2026-05-21 — Fix: STARTTLS auf Port 25 mit self-signed Cert (Outlook 503)
-
-### Fixed
-
-- **Mails von Microsoft Outlook / Exchange werden mit `503 5.5.1 Bad sequence
-  of commands` abgewiesen**: Der SMTP-Server bewarb STARTTLS auf Port 25 mit
-  einem self-signed Zertifikat. Strikte MTAs wie Microsoft Exchange initiieren
-  daraufhin den TLS-Handshake, lehnen das self-signed Cert ab (ECONNRESET) und
-  geben einen 503-Fehler zurück.
-
-  Fix: Self-signed Erkennung via `X509Certificate.issuer === subject`. Auf
-  **Port 25 (Inbound)** wird STARTTLS NICHT mehr beworben wenn Cert self-signed
-  ist — MTAs stellen dann in Plain zu (immer noch RFC-konform, opportunistic
-  TLS wird übersprungen). Submission-Ports (465/587) bewerben STARTTLS weiterhin
-  (eigene Clients akzeptieren self-signed mit `tls.rejectUnauthorized: false`).
-
-  Nach Installation eines CA-signed Zertifikats (z.B. Let's Encrypt über BCP →
-  SSL/TLS) wird STARTTLS auf Port 25 automatisch aktiviert.
+  If DSN is implemented in a later version, the toggle can
+  come back — but as long as it is stub-only: gone.
 
 ---
 
-## [3.17.18] — 2026-05-21 — Posteingang Auto-Refresh + manueller Refresh-Button
+## [3.17.19] — 2026-05-21 — Fix: STARTTLS on port 25 with self-signed cert (Outlook 503)
 
 ### Fixed
 
-- **SSE-Events kamen nie an** (Posteingang aktualisierte sich nicht selbst):
-  EventSource kann keine `Authorization`-Header senden, der api-gateway hat aber
-  nur Bearer-Token aus dem Header gelesen → SSE-Verbindung schlug 401 fehl.
-  Fix: `requireAuth`-Middleware akzeptiert jetzt zusätzlich `?token=…` als
-  Query-Parameter (Fallback nur wenn kein Header). Frontend übergibt Token
-  als Query in der EventSource-URL.
+- **Mails from Microsoft Outlook / Exchange are rejected with `503 5.5.1 Bad sequence
+  of commands`**: the SMTP server advertised STARTTLS on port 25 with
+  a self-signed certificate. Strict MTAs like Microsoft Exchange then initiate
+  the TLS handshake, reject the self-signed cert (ECONNRESET) and
+  return a 503 error.
+
+  Fix: self-signed detection via `X509Certificate.issuer === subject`. On
+  **port 25 (inbound)** STARTTLS is NO longer advertised when the cert is self-signed
+  — MTAs then deliver in plain (still RFC-compliant, opportunistic
+  TLS is skipped). Submission ports (465/587) continue to advertise STARTTLS
+  (own clients accept self-signed with `tls.rejectUnauthorized: false`).
+
+  After installing a CA-signed certificate (e.g. Let's Encrypt via BCP →
+  SSL/TLS) STARTTLS on port 25 is activated automatically.
+
+---
+
+## [3.17.18] — 2026-05-21 — Inbox auto-refresh + manual refresh button
+
+### Fixed
+
+- **SSE events never arrived** (the inbox did not refresh itself):
+  EventSource cannot send `Authorization` headers, but the api-gateway
+  only read bearer tokens from the header → the SSE connection failed with 401.
+  Fix: the `requireAuth` middleware now additionally accepts `?token=…` as a
+  query parameter (fallback only when no header). The frontend passes the token
+  as a query in the EventSource URL.
 
 ### Added
 
-- **Live-Aktualisierung im Posteingang**: Sobald eine neue Mail eingeht
-  (SSE-Event `mail:new` aus Redis-Channel `mail:new`), wird die Folder- und
-  Messages-Liste automatisch neu geladen. Dezenter Toast zeigt
-  Absender + Betreff der neuen Nachricht.
-- **Manueller Refresh-Button**: Neben „Neue E-Mail" im Ordnerbaum erscheint
-  ein 🔄 Icon-Button (mit Tooltip „Ordner aktualisieren") der Folders +
-  Messages sofort neu lädt (`refetchQueries`, kein Hintergrund-Refetch)
-- i18n-Keys `refresh_folders` / `refresh_done` in DE/EN/ES/IT
+- **Live update in the inbox**: as soon as a new mail arrives
+  (SSE event `mail:new` from the Redis channel `mail:new`), the folder and
+  message lists are reloaded automatically. A subtle toast shows
+  sender + subject of the new message.
+- **Manual refresh button**: next to "New e-mail" in the folder tree a
+  🔄 icon button appears (with tooltip "Refresh folders") that reloads folders +
+  messages immediately (`refetchQueries`, no background refetch)
+- i18n keys `refresh_folders` / `refresh_done` in DE/EN/ES/IT
 
 ---
 
-## [3.17.17] — 2026-05-21 — Fix: Autodiscover-URL nutzt jetzt eigene CNAME
+## [3.17.17] — 2026-05-21 — Fix: Autodiscover URL now uses its own CNAME
 
 ### Fixed
 
-- **Autodiscover-URL nutzte denselben Hostnamen wie alle anderen Pfade**:
-  Bei `mail.stefanwuestner.de` als Hostname generierte „URLs ableiten" auch
-  `http://mail.stefanwuestner.de:8080` für Autodiscover. Outlook erwartet aber
-  nach **Microsoft Exchange Spec** IMMER `autodiscover.{primary-domain}` zuerst —
-  also `http://autodiscover.stefanwuestner.de:8080`.
+- **The Autodiscover URL used the same hostname as all other paths**:
+  with `mail.stefanwuestner.de` as hostname, "Derive URLs" also generated
+  `http://mail.stefanwuestner.de:8080` for Autodiscover. Outlook however, per the
+  **Microsoft Exchange spec**, ALWAYS expects `autodiscover.{primary-domain}` first —
+  i.e. `http://autodiscover.stefanwuestner.de:8080`.
 
-  Fix in `routes/admin/servers.ts` `/settings/derive`-Endpoint:
-  - Hostname mit ≥ 3 Labels (z.B. `mail.stefanwuestner.de`) → erste Subdomain
-    abschneiden → `autodiscover.stefanwuestner.de`
-  - Hostname mit 2 Labels (z.B. `stefanwuestner.de`) → `autodiscover.stefanwuestner.de`
-  - Hostname beginnt bereits mit `autodiscover.` → unverändert (kein Doppel-Präfix)
+  Fix in `routes/admin/servers.ts` `/settings/derive` endpoint:
+  - Hostname with ≥ 3 labels (e.g. `mail.stefanwuestner.de`) → strip the first subdomain
+    → `autodiscover.stefanwuestner.de`
+  - Hostname with 2 labels (e.g. `stefanwuestner.de`) → `autodiscover.stefanwuestner.de`
+  - Hostname already starts with `autodiscover.` → unchanged (no double prefix)
 
-  DNS-Hinweis im BCP (Outlook-Anleitung) verwendet jetzt dieselbe Logik:
-  zeigt `autodiscover.{root-domain} CNAME {publicHostname}` korrekt an
+  The DNS hint in the BCP (Outlook guide) now uses the same logic:
+  correctly shows `autodiscover.{root-domain} CNAME {publicHostname}`
 
 ---
 
-## [3.17.16] — 2026-05-21 — Fix: Login schlägt fehl (api-gateway hatte Duplikat-Auth mit altem Pepper-Bug)
+## [3.17.16] — 2026-05-21 — Fix: login fails (api-gateway had duplicate auth with the old pepper bug)
 
 ### Fixed
 
-- **Login funktioniert immer noch nicht** trotz Fix in v3.17.13: Der `api-gateway`
-  hat eine EIGENE `/auth/login`-Route (`packages/api-gateway/src/routes/auth.ts`),
-  die NICHT zum auth-service proxyed wird. Diese Route hatte exakt denselben
-  Pepper-Bug: `bcrypt.compare(password + pepper, hash)` statt sha256+pepper.
-  Damit verifizierte die Login-Route am Port 3000 niemals korrekt — am Port 3003
-  direkt (auth-service) funktioniert es bereits seit v3.17.13.
+- **Login still does not work** despite the fix in v3.17.13: the `api-gateway`
+  has its OWN `/auth/login` route (`packages/api-gateway/src/routes/auth.ts`)
+  that is NOT proxied to the auth-service. This route had exactly the same
+  pepper bug: `bcrypt.compare(password + pepper, hash)` instead of sha256+pepper.
+  Thus the login route on port 3000 never verified correctly — on port 3003
+  directly (auth-service) it has worked since v3.17.13.
 
-  Fix: `verifyPassword()` und `hashPassword()` aus `@coremail/core` verwendet in:
-  - `routes/auth.ts` — Login + Passwort-Reset
-  - `routes/setup.ts` — Initial-Setup Admin-User
-  - `routes/user.ts` — Passwort-Änderung (current + new password)
+  Fix: `verifyPassword()` and `hashPassword()` from `@coremail/core` used in:
+  - `routes/auth.ts` — login + password reset
+  - `routes/setup.ts` — initial setup admin user
+  - `routes/user.ts` — password change (current + new password)
 
-  Alle bcrypt-Direktimporte in diesen Dateien entfernt.
+  All direct bcrypt imports in these files removed.
 
 ---
 
-## [3.17.15] — 2026-05-21 — Verteilergruppen-Fix, Token-Refresh, BCP-Bereinigung
+## [3.17.15] — 2026-05-21 — Distribution group fix, token refresh, BCP cleanup
 
 ### Fixed
 
-- **Verteilergruppen „Invalid request"**: Formular sendete komplette E-Mail-Adresse
-  als Freitext (z.B. nur „verteilung" ohne @domain) → Zod-Validierung scheiterte.
-  Formular jetzt wie Benutzerverwaltung: lokaler Teil + `@` + Domain-Dropdown nebeneinander.
-  E-Mail wird aus `localPart@domain.name` zusammengesetzt bevor sie ans Backend geht
+- **Distribution groups "Invalid request"**: the form sent the complete e-mail address
+  as free text (e.g. only "verteilung" without @domain) → Zod validation failed.
+  The form now works like user management: local part + `@` + domain dropdown side by side.
+  The e-mail is assembled from `localPart@domain.name` before it goes to the backend
 
-- **Auto-Logout trotz aktiver Nutzung**: JWT Access Token hat 15 Minuten TTL.
-  BCP und MWA speicherten nur das Access Token, nie das Refresh Token.
-  Bei 401 wurde sofort zur Login-Seite weitergeleitet.
-  Fix in `admin-panel/src/api/client.ts` und `web-client/src/api/client.ts`:
-  - Refresh Token wird bei Login in localStorage gespeichert
-  - Proaktive Erneuerung wenn Token < 120s vor Ablauf steht (JWT exp dekodiert ohne Library)
-  - Bei 401 wird erst einmal Refresh versucht + Request wiederholt, nur bei erneutem Fehler → Login
+- **Auto-logout despite active use**: the JWT access token has a 15-minute TTL.
+  BCP and MWA stored only the access token, never the refresh token.
+  On 401 the user was redirected to the login page immediately.
+  Fix in `admin-panel/src/api/client.ts` and `web-client/src/api/client.ts`:
+  - The refresh token is stored in localStorage at login
+  - Proactive renewal when the token is < 120s from expiry (JWT exp decoded without a library)
+  - On 401 a refresh is attempted first + the request is repeated; only on a repeated failure → login
 
 ### Added
 
-- **Verteilergruppen in MWA Empfänger-Autocomplete**: Beim Tippen einer Adresse im
-  Compose-Fenster werden jetzt auch Verteilergruppen vorgeschlagen (via `GET /admin/groups/gal`),
-  parallel zu Kontakten. Gruppen werden mit lila Avatar und `[Gruppe]`-Badge angezeigt
+- **Distribution groups in the MWA recipient autocomplete**: when typing an address in the
+  compose window, distribution groups are now suggested as well (via `GET /admin/groups/gal`),
+  alongside contacts. Groups are shown with a purple avatar and a `[Gruppe]` badge
 
 ### Removed
 
-- **BCP → Ressourcenpostfächer** (`/resources`): Seite und Navigation entfernt
-- **BCP → Organisation** (`/organisation`): Seite und Navigation entfernt
-- Beide zugehörigen Page-Dateien gelöscht (`ResourcesPage.tsx`, `OrganisationPage.tsx`)
+- **BCP → Resource mailboxes** (`/resources`): page and navigation removed
+- **BCP → Organisation** (`/organisation`): page and navigation removed
+- Both associated page files deleted (`ResourcesPage.tsx`, `OrganisationPage.tsx`)
 
 ---
 
-## [3.17.14] — 2026-05-21 — Mailbox-Delegierung + User aktiv/inaktiv
+## [3.17.14] — 2026-05-21 — Mailbox delegation + user active/inactive
 
 ### Added
 
-- **Mailbox-Delegierung (Delegate Access)**: User B kann auf das Postfach von User A zugreifen —
-  analog zur Shared-Mailbox-Logik (Exchange Delegate Access):
-  - Neues Prisma-Modell `MailboxDelegate` mit `SharedMailboxPermType`-Enum:
+- **Mailbox delegation (delegate access)**: user B can access the mailbox of user A —
+  analogous to the Shared Mailbox logic (Exchange delegate access):
+  - New Prisma model `MailboxDelegate` with the `SharedMailboxPermType` enum:
     `FULL_ACCESS` / `READ_ONLY` / `SEND_AS` / `SEND_ON_BEHALF`
-  - Admin-API `GET/POST/DELETE /api/v1/admin/mailboxes/:id/delegates`
-  - User-API `GET /api/v1/mail/delegated-mailboxes` — gibt alle Postfächer zurück
-    auf die der angemeldete User delegierten Zugriff hat
-  - **BCP → Postfächer** — aufgeklappte Zeile zeigt jetzt Abschnitt „Delegate Access":
-    bestehende Delegierungen mit Berechtigung + Entziehen-Button,
-    Formular zum Gewähren (User-Dropdown + Berechtigungs-Dropdown)
+  - Admin API `GET/POST/DELETE /api/v1/admin/mailboxes/:id/delegates`
+  - User API `GET /api/v1/mail/delegated-mailboxes` — returns all mailboxes
+    the logged-in user has delegated access to
+  - **BCP → Mailboxes** — the expanded row now shows a "Delegate Access" section:
+    existing delegations with permission + revoke button,
+    form to grant (user dropdown + permission dropdown)
 
-- **User aktiv/inaktiv** (BCP → Postfächer): Bereits implementiert (Toggle-Button
-  war schon vorhanden), explizit verifiziert: `active: false` blockiert Login
-  in `authenticateLocal()` und `authenticateAppPassword()` vollständig
+- **User active/inactive** (BCP → Mailboxes): already implemented (the toggle button
+  already existed), explicitly verified: `active: false` completely blocks login
+  in `authenticateLocal()` and `authenticateAppPassword()`
 
 ---
 
-## [3.17.13] — 2026-05-21 — Fix: Login schlägt fehl (Passwort-Pepper-Mismatch)
+## [3.17.13] — 2026-05-21 — Fix: login fails (password pepper mismatch)
 
 ### Fixed
 
-- **Login schlägt fehl mit „Invalid credentials"** obwohl Passwort korrekt gesetzt ist:
-  `auth-service/src/local/index.ts` verwendete eine eigene Pepper-Logik
-  (`password + PEPPER` → direkt bcrypt.compare) während `@coremail/core`'s `hashPassword()`
-  beim Anlegen des Users `sha256(password + PEPPER)` → bcrypt verwendet.
-  Beide Funktionen unterschieden sich → Hash und Verify kamen nie überein.
+- **Login fails with "Invalid credentials"** although the password is set correctly:
+  `auth-service/src/local/index.ts` used its own pepper logic
+  (`password + PEPPER` → direct bcrypt.compare) while `@coremail/core`'s `hashPassword()`
+  used `sha256(password + PEPPER)` → bcrypt when creating the user.
+  The two functions differed → hash and verify never matched.
 
-  Fix: `authenticateLocal()` und `authenticateAppPassword()` nutzen jetzt
-  `verifyPassword()` aus `@coremail/core` — dieselbe sha256+pepper Logik wie `hashPassword()`.
-  `bcrypt`-Direktimport in `local/index.ts` entfernt.
+  Fix: `authenticateLocal()` and `authenticateAppPassword()` now use
+  `verifyPassword()` from `@coremail/core` — the same sha256+pepper logic as `hashPassword()`.
+  Direct `bcrypt` import in `local/index.ts` removed.
 
-- **App-Passwörter (IMAP/SMTP/POP3)** waren vom selben Bug betroffen:
-  `bcrypt.compare(rawPassword, hash)` statt `verifyPassword()` → IMAP/SMTP-Auth mit
-  App-Passwort schlug ebenfalls fehl. Ebenfalls auf `verifyPassword()` umgestellt.
+- **App passwords (IMAP/SMTP/POP3)** were affected by the same bug:
+  `bcrypt.compare(rawPassword, hash)` instead of `verifyPassword()` → IMAP/SMTP auth with
+  an app password also failed. Likewise switched to `verifyPassword()`.
 
 ---
 
-## [3.17.12] — 2026-05-21 — BCP Vollständige Übersetzung (EN/DE) + Versionsabgleich
+## [3.17.12] — 2026-05-21 — BCP complete translation (EN/DE) + version alignment
 
 ### Changed
 
-- **Alle Package-Versionen synchronisiert**: Alle 17 `packages/*/package.json` hatten
-  noch Version `3.7.9` — jetzt einheitlich `3.17.12`. `/healthz`-Endpoint und
-  BCP → System-Informationen zeigen jetzt die korrekte Version
+- **All package versions synchronized**: all 17 `packages/*/package.json` still had
+  version `3.7.9` — now uniformly `3.17.12`. The `/healthz` endpoint and
+  BCP → System information now show the correct version
 
-- **BCP vollständig übersetzt (Englisch/Deutsch)**: Alle verbleibenden Seiten verwenden jetzt
-  `useT()` und `t()`-Keys statt hartkodierten deutschen Strings:
-  - **MailboxesPage** — Tabelle, Modals (Neu, Bearbeiten, Löschen), Quota-Balken, Rollen
-  - **DomainsPage** — DNS-Einträge, DKIM-Schlüssel-Modal, Domains-Tabelle, alle Aktionen
-  - **QueuesPage** — Übersicht, Jobs-Tabelle, Einstellungen, alle Status-Labels
-  - **DashboardPage** — KPI-Karten, Widget-Einstellungen, Server-Info, Angriffs-Events-Widget
-  - **QuarantinePage** — Statistikkarten, Filter, Tabelle, Detail-Panel, Cleanup-Modal
+- **BCP fully translated (English/German)**: all remaining pages now use
+  `useT()` and `t()` keys instead of hard-coded German strings:
+  - **MailboxesPage** — table, modals (New, Edit, Delete), quota bars, roles
+  - **DomainsPage** — DNS records, DKIM key modal, domains table, all actions
+  - **QueuesPage** — overview, jobs table, settings, all status labels
+  - **DashboardPage** — KPI cards, widget settings, server info, attack events widget
+  - **QuarantinePage** — statistics cards, filters, table, detail panel, cleanup modal
 
-- **translations.ts** erweitert auf ~1288 Schlüssel (vorher ~350):
-  Neue Sektionen für Postfächer, Domains, Logs, Queues, Dashboard, Quarantäne, Schutzfilter
+- **translations.ts** extended to ~1288 keys (previously ~350):
+  new sections for mailboxes, domains, logs, queues, dashboard, quarantine, protection filters
 
 ---
 
-## [3.17.11] — 2026-05-21 — Multi-Fix: Mail-Body, lokale Zustellung, MessageTrace, Queue-Refresh, Übersetzungen
+## [3.17.11] — 2026-05-21 — Multi-fix: mail body, local delivery, MessageTrace, queue refresh, translations
 
 ### Fixed
 
-- **Mail-Body enthält rohe MIME-Header**: `buildRawMime()` verwendete `newline: 'unix'` (LF-only).
-  nodemailer's `smtp-connection` normalisiert Buffer-Inhalte im DATA-Kanal NICHT (nur Strings).
-  Der empfangende MTA konnte den Header/Body-Separator `\r\n\r\n` nicht finden → gesamter
-  MIME-Inhalt wurde als Klartext-Body angezeigt. Fix: `newline: 'crlf'` (RFC 5321 konform)
+- **Mail body contains raw MIME headers**: `buildRawMime()` used `newline: 'unix'` (LF only).
+  nodemailer's `smtp-connection` does NOT normalize buffer contents in the DATA channel (only strings).
+  The receiving MTA could not find the header/body separator `\r\n\r\n` → the entire
+  MIME content was displayed as a plain-text body. Fix: `newline: 'crlf'` (RFC 5321-compliant)
 
-- **Mails an lokale Adressen (admin@stefanwuestner.de) kommen nicht an**: MWA-Send-Endpoint
-  (`POST /api/v1/mail/send`) schickte ALLE Empfänger in die Outbound-Queue ohne Local-Domain-Check.
-  Queue-Worker versuchte MX-Delivery nach außen — scheiterte. Fix: Queue-Worker prüft jetzt
-  vor `relayMessage()` ob die Empfänger-Domain in der lokalen Domain-Tabelle ist; lokale
-  Empfänger werden direkt via `storeInboundMessage()` ins Postfach geschrieben
+- **Mails to local addresses (admin@stefanwuestner.de) do not arrive**: the MWA send endpoint
+  (`POST /api/v1/mail/send`) sent ALL recipients into the outbound queue without a local-domain check.
+  The queue worker attempted outbound MX delivery — and failed. Fix: the queue worker now checks
+  before `relayMessage()` whether the recipient domain is in the local domain table; local
+  recipients are written directly into the mailbox via `storeInboundMessage()`
 
-- **MessageTrace zeigt nie Ergebnisse**: API-Client fügt `/api/v1` automatisch als Präfix hinzu.
-  `MessageTracePage` verwendete als Pfad `/api/v1/admin/message-trace` → doppelter Präfix `/api/v1/api/v1/...`
-  → 404. Fix: Pfad korrigiert zu `/admin/message-trace` (ohne Präfix)
+- **MessageTrace never shows results**: the API client automatically adds `/api/v1` as a prefix.
+  `MessageTracePage` used `/api/v1/admin/message-trace` as the path → double prefix `/api/v1/api/v1/...`
+  → 404. Fix: path corrected to `/admin/message-trace` (without prefix)
 
-- **Queue-Refresh-Button geht nicht**: Page-Level-Button rief `invalidateQueries` (background
-  refetch, kein visuelles Feedback) statt `refetchQueries` (sofortiger aktiver Refetch) auf.
-  Fix: `qc.refetchQueries({ queryKey: ['admin-queue-jobs'] })` und `['admin-queue-stats']`
+- **Queue refresh button does not work**: the page-level button called `invalidateQueries` (background
+  refetch, no visual feedback) instead of `refetchQueries` (immediate active refetch).
+  Fix: `qc.refetchQueries({ queryKey: ['admin-queue-jobs'] })` and `['admin-queue-stats']`
 
-- **Spam landet im Posteingang statt im Junk-Ordner**: `storeInboundMessage()` suchte nach
-  Ordner `'Junk E-Mail'` (Outlook-Sprache) — der Ordner heißt `'Junk'`. Fallback war INBOX.
-  Fix: `'Junk'` und `'INBOX'` als korrekte Ordnernamen
+- **Spam lands in the inbox instead of the Junk folder**: `storeInboundMessage()` looked for the
+  folder `'Junk E-Mail'` (Outlook wording) — the folder is called `'Junk'`. Fallback was INBOX.
+  Fix: `'Junk'` and `'INBOX'` as the correct folder names
 
-- **MessageTrace: JUNK-Status fehlte** in Statusfilter und Badge-Anzeige. Hinzugefügt.
+- **MessageTrace: JUNK status was missing** in the status filter and badge display. Added.
 
 ### Added
 
-- **Gesendete Elemente (Sent-Ordner)**: Beim Senden über MWA wird jetzt automatisch eine Kopie
-  im Sent-Ordner des Absenders gespeichert (war bisher nie implementiert). Große Mails (>256 KB)
-  werden in MinIO abgelegt, kleine direkt in der DB. Flags: `\\Seen` (bereits gelesen markiert)
+- **Sent Items (Sent folder)**: when sending via the MWA a copy is now automatically stored
+  in the sender's Sent folder (was never implemented before). Large mails (>256 KB)
+  are stored in MinIO, small ones directly in the DB. Flags: `\\Seen` (marked as already read)
 
-- **MessageTrace Auto-Load**: Öffnet jetzt mit den letzten Einträgen — kein manuelles Klicken
-  auf "Suchen" mehr nötig. Reset-Button setzt alle Filter zurück und zeigt alle Einträge
+- **MessageTrace auto-load**: now opens with the latest entries — no more manual clicking
+  on "Search" required. The reset button clears all filters and shows all entries
 
-- **MAIL_FLOW-Log im API-Gateway**: `POST /api/v1/mail/send` schreibt jetzt sofort einen
-  `ACCEPTED`-SystemLog-Eintrag, damit Mails die über MWA gesendet werden sofort in der
-  MessageTrace sichtbar sind (auch bevor die Queue sie verarbeitet)
-
----
-
-## [3.17.10] — 2026-05-21 — Fix: Kopier-Buttons bei DNS-Einträgen
-
-### Fixed
-
-- **BCP → Domains → DKIM DNS-Eintrag / BCP → SMTP & Routing → DNS-Einträge**: Kopier-Buttons
-  funktionierten nicht — `navigator.clipboard` ist im HTTP-Kontext (non-secure, z. B. DSM
-  Application Portal) `undefined` und wirft einen Fehler.
-  - Neuer gemeinsamer Helper `packages/admin-panel/src/utils/clipboard.ts`:
-    `copyToClipboard()` versucht zuerst `navigator.clipboard.writeText()` (Secure Context)
-    und fällt automatisch auf `document.execCommand('copy')` zurück (HTTP-Kompatibilität)
-  - `DomainsPage.tsx`: beide Copy-Buttons (DNS-Name + TXT-Wert) nutzen jetzt `copyToClipboard()`
-    mit korrektem `await` und `toast.error('Kopieren fehlgeschlagen')` im Fehlerfall
-  - `SmtpConfigPage.tsx`: `CopyBtn`-Komponente nutzt `copyToClipboard()` statt direktem
-    `navigator.clipboard.writeText()`; Fehlerfall zeigt Toast statt lautlosem Versagen
+- **MAIL_FLOW log in the API gateway**: `POST /api/v1/mail/send` now immediately writes an
+  `ACCEPTED` SystemLog entry so that mails sent via the MWA are visible in the
+  MessageTrace right away (even before the queue processes them)
 
 ---
 
-## [3.17.9] — 2026-05-20 — Fix: DKIM-Record laden schlägt fehl wenn kein Schlüssel vorhanden
+## [3.17.10] — 2026-05-21 — Fix: copy buttons on DNS records
 
 ### Fixed
 
-- **BCP → Domains → DKIM DNS-Eintrag anzeigen**: Fehler „DKIM-Record konnte nicht geladen werden"
-  wenn `dkimPrivateKey` in der Datenbank leer war (Domains die vor der automatischen
-  Schlüssel-Generierung angelegt wurden hatten einen leeren Eintrag).
-  - Backend `GET /:id/dkim-record` generiert jetzt automatisch ein RSA-2048-Schlüsselpaar
-    und speichert es wenn keines vorhanden ist — Fehler tritt nicht mehr auf
-  - Backend `GET /:id/dns-check` ist ebenfalls abgesichert (try/catch + `ensureDkimKey`)
-  - Neuer Endpoint `POST /:id/regenerate-dkim` — explizites Neu-Generieren des Schlüsselpaares
+- **BCP → Domains → DKIM DNS record / BCP → SMTP & Routing → DNS records**: copy buttons
+  did not work — `navigator.clipboard` is `undefined` in an HTTP context (non-secure, e.g. DSM
+  Application Portal) and throws an error.
+  - New shared helper `packages/admin-panel/src/utils/clipboard.ts`:
+    `copyToClipboard()` first tries `navigator.clipboard.writeText()` (secure context)
+    and automatically falls back to `document.execCommand('copy')` (HTTP compatibility)
+  - `DomainsPage.tsx`: both copy buttons (DNS name + TXT value) now use `copyToClipboard()`
+    with a correct `await` and `toast.error('Kopieren fehlgeschlagen')` on error
+  - `SmtpConfigPage.tsx`: the `CopyBtn` component uses `copyToClipboard()` instead of a direct
+    `navigator.clipboard.writeText()`; the error case shows a toast instead of failing silently
+
+---
+
+## [3.17.9] — 2026-05-20 — Fix: loading the DKIM record fails when no key exists
+
+### Fixed
+
+- **BCP → Domains → Show DKIM DNS record**: error "DKIM record could not be loaded"
+  when `dkimPrivateKey` in the database was empty (domains created before the automatic
+  key generation had an empty entry).
+  - Backend `GET /:id/dkim-record` now automatically generates an RSA-2048 key pair
+    and stores it when none exists — the error no longer occurs
+  - Backend `GET /:id/dns-check` is secured as well (try/catch + `ensureDkimKey`)
+  - New endpoint `POST /:id/regenerate-dkim` — explicit regeneration of the key pair
 
 ### Added
 
-- **BCP → Domains → DKIM**: Schaltfläche „Neu generieren" (erscheint nach dem ersten Laden)
-  — generiert ein neues RSA-2048-Schlüsselpaar mit Bestätigungsdialog (Warnung: DNS-Eintrag
-  muss danach aktualisiert werden); Lade-Spinner während Fetch/Generierung
-- Ladeindikator im DKIM-Button („Lädt…") während API-Aufruf
+- **BCP → Domains → DKIM**: button "Regenerate" (appears after the first load)
+  — generates a new RSA-2048 key pair with a confirmation dialog (warning: the DNS record
+  must be updated afterwards); loading spinner during fetch/generation
+- Loading indicator in the DKIM button ("Loading…") during the API call
 
 ---
 
-## [3.17.8] — 2026-05-20 — Nachrichtenablaufverfolgung fix + RFC 822 Quelltext
+## [3.17.8] — 2026-05-20 — Message trace fix + RFC 822 source
 
 ### Fixed
 
-- **Nachrichtenablaufverfolgung (Message Trace)**: Suche lieferte keine Ergebnisse, weil der
-  SMTP-Server niemals `SystemLog`-Einträge mit `category='MAIL_FLOW'` schrieb.
-  - SMTP-Inbound (`handlers/message.ts`): schreibt jetzt `DELIVERED` / `JUNK` nach jeder Zustellung
-  - SMTP-Inbound (`inbound/handler.ts`): schreibt `REJECTED` (Spamfilter-Ablehnung) und
-    `QUARANTINE` (Virenquarantäne) mit Sender, Empfänger, Betreff, Größe, SpamScore, Grund
-  - SMTP-Submission (`submission/handler.ts`): schreibt `ACCEPTED` nach Annahme einer Ausgangsmail
-  - SMTP-Outbound (`outbound/queue.ts`): schreibt `DELIVERED` nach erfolgreicher Zustellung,
-    `DEFERRED` bei vorübergehendem Fehler (Retry ausstehend), `REJECTED` bei endgültigem Fehlschlag
-  - Alle Events sind in BCP → Verwaltung → Nachrichtenablaufverfolgung suchbar und filterbar
+- **Message trace**: the search returned no results because the
+  SMTP server never wrote `SystemLog` entries with `category='MAIL_FLOW'`.
+  - SMTP inbound (`handlers/message.ts`): now writes `DELIVERED` / `JUNK` after every delivery
+  - SMTP inbound (`inbound/handler.ts`): writes `REJECTED` (spam filter rejection) and
+    `QUARANTINE` (virus quarantine) with sender, recipient, subject, size, spam score, reason
+  - SMTP submission (`submission/handler.ts`): writes `ACCEPTED` after accepting an outgoing mail
+  - SMTP outbound (`outbound/queue.ts`): writes `DELIVERED` after successful delivery,
+    `DEFERRED` on a temporary error (retry pending), `REJECTED` on final failure
+  - All events are searchable and filterable in BCP → Management → Message trace
 
 ### Added
 
-- **RFC 822 Quelltext-Ansicht** in MWA-Nachrichtenleser:
-  - „Quelltext anzeigen" öffnet jetzt einen modalen Dialog statt eines neuen Browser-Tabs
-  - Zeigt vollständiges RFC 822-konformes MIME-Format (Header + Body) mit Monospace-Schrift
-  - Download-Button `.eml herunterladen` direkt im Quelltext-Modal
-  - Backend `GET /api/v1/mail/messages/:id/raw`: serviert jetzt das originale RFC 822-Dokument
-    aus MinIO wenn vorhanden (grosse Nachrichten); Fallback rekonstruiert `multipart/alternative`
-    (Text + HTML) gemäß RFC 2045 korrekt mit MIME-Boundary
+- **RFC 822 source view** in the MWA message reader:
+  - "View source" now opens a modal dialog instead of a new browser tab
+  - Shows the complete RFC 822-compliant MIME format (headers + body) in a monospace font
+  - Download button `Download .eml` directly in the source modal
+  - Backend `GET /api/v1/mail/messages/:id/raw`: now serves the original RFC 822 document
+    from MinIO when available (large messages); the fallback reconstructs `multipart/alternative`
+    (text + HTML) correctly per RFC 2045 with a MIME boundary
 
 ---
 
-## [3.17.7] — 2026-05-20 — DNS-Reiter: Tabellen-UI, grüne/gelbe Statusampeln
+## [3.17.7] — 2026-05-20 — DNS tab: table UI, green/yellow status lights
 
 ### Changed
 
-- **BCP → SMTP → DNS-Einträge**: Komplettes UI-Redesign — von Karten zu sauberer Tabellenansicht
-  - **● grüner Punkt** = Eintrag im DNS gesetzt (Existenzprüfung)
-  - **● gelber Punkt** = Eintrag nicht gefunden
-  - **● blauer Punkt** = PTR — manuell beim Hosting-Anbieter zu setzen
-  - Legende unten: grün / gelb / blau erklärt
-  - Status-Banner: „X von 5 Einträgen gesetzt"
-  - Jede Zeile: Name-Feld + Wert-Feld, je mit Kopier-Button
-  - Gefundener DNS-Wert wird grün (gesetzt) oder gelb (abweichend) angezeigt
-- **Backend `dns-check`**: MX-Check nutzt jetzt reinen Existenzcheck (`records.length > 0`);
-  Autodiscover-Check prüft ob CNAME überhaupt vorhanden ist (nicht mehr Hostnamen-Vergleich)
+- **BCP → SMTP → DNS records**: complete UI redesign — from cards to a clean table view
+  - **● green dot** = record set in DNS (existence check)
+  - **● yellow dot** = record not found
+  - **● blue dot** = PTR — to be set manually at the hosting provider
+  - Legend at the bottom: green / yellow / blue explained
+  - Status banner: "X of 5 records set"
+  - Each row: name field + value field, each with a copy button
+  - The found DNS value is shown in green (set) or yellow (deviating)
+- **Backend `dns-check`**: the MX check now uses a pure existence check (`records.length > 0`);
+  the Autodiscover check tests whether a CNAME exists at all (no more hostname comparison)
 
 ---
 
-## [3.17.6] — 2026-05-20 — DNS-Reiter in SMTP-Konfiguration
+## [3.17.6] — 2026-05-20 — DNS tab in SMTP configuration
 
 ### Added
 
-- **BCP → SMTP-Konfiguration → DNS-Einträge**: Neuer Reiter zeigt alle für den Mailbetrieb
-  erforderlichen DNS-Records an — MX, SPF, DKIM, DMARC, Autodiscover, PTR.
-  - Domain-Auswahl via Pill-Tabs (bei mehreren Domains)
-  - Jeder Eintrag zeigt DNS-Typ, erwarteten Wert, Kopier-Button
-  - **Live-DNS-Prüfung** via `GET /api/v1/admin/domains/:id/dns-check` — grünes Häkchen wenn
-    Eintrag gesetzt, gelbes Warnsymbol wenn fehlend; zeigt aktuell gesetzten Wert aus DNS
-  - Status-Zusammenfassung: „X von 5 Einträgen korrekt"
-  - Schaltfläche „DNS neu prüfen" für manuelle Aktualisierung
-  - PTR-Karte mit Hinweis zum Setzen beim Hosting-Anbieter
-- **Backend** `GET /api/v1/admin/domains/:id/dns-check`: Prüft MX, SPF (TXT), DKIM (TXT),
-  DMARC (TXT), Autodiscover (CNAME) parallel via Node.js `dns/promises`; generiert je einen
-  erwarteten und den tatsächlich gefundenen Wert
+- **BCP → SMTP configuration → DNS records**: a new tab shows all DNS records required
+  for mail operation — MX, SPF, DKIM, DMARC, Autodiscover, PTR.
+  - Domain selection via pill tabs (with multiple domains)
+  - Each record shows DNS type, expected value, copy button
+  - **Live DNS check** via `GET /api/v1/admin/domains/:id/dns-check` — green checkmark when
+    the record is set, yellow warning symbol when missing; shows the currently set value from DNS
+  - Status summary: "X of 5 records correct"
+  - Button "Re-check DNS" for manual refresh
+  - PTR card with a note about setting it at the hosting provider
+- **Backend** `GET /api/v1/admin/domains/:id/dns-check`: checks MX, SPF (TXT), DKIM (TXT),
+  DMARC (TXT), Autodiscover (CNAME) in parallel via Node.js `dns/promises`; generates for each an
+  expected value and the actually found value
 
 ---
 
-## [3.17.5] — 2026-05-20 — Fix: BullMQ Queue-Name enthält keinen Doppelpunkt
+## [3.17.5] — 2026-05-20 — Fix: BullMQ queue name contains no colon
 
 ### Fixed
 
-- **Senden schlägt fehl ("Nachricht konnte nicht in die Warteschlange eingereiht werden")**:
-  BullMQ v5 verbietet Doppelpunkte (`:`) in Queue-Namen. Die Outbound-Queue in
-  `api-gateway/routes/mail.ts` hieß `'smtp:outbound'` — BullMQ warf sofort beim
-  Erstellen des Queue-Objekts `Error: Queue name cannot contain :`.
-  Fix: Queue-Name auf `'smtp-outbound'` geändert (wie bereits korrekt im `smtp-server`).
+- **Sending fails ("Message could not be enqueued")**:
+  BullMQ v5 forbids colons (`:`) in queue names. The outbound queue in
+  `api-gateway/routes/mail.ts` was called `'smtp:outbound'` — BullMQ immediately threw
+  `Error: Queue name cannot contain :` when creating the queue object.
+  Fix: queue name changed to `'smtp-outbound'` (as already correct in the `smtp-server`).
 
 ---
 
-## [3.17.4] — 2026-05-20 — Fix: BullMQ-Verbindung in api-gateway (NetworkError beim Senden)
+## [3.17.4] — 2026-05-20 — Fix: BullMQ connection in api-gateway (NetworkError on send)
 
 ### Fixed
 
-- **Senden schlägt fehl (NetworkError)**: Die Outbound-Queue in `api-gateway/routes/mail.ts` nutzte
-  `getRedisClient()` (shared, `maxRetriesPerRequest: 3`) statt `createBullMqConnection()` (`null`).
-  BullMQ v5 erfordert `maxRetriesPerRequest: null` für interne Blocking-Befehle — mit der falschen
-  Verbindung crashte `queue.add()` den api-gateway-Prozess (Node.js 22: `--unhandled-rejections=throw`),
-  was im Browser als `NetworkError when attempting to fetch resource` erschien.
-  Fix: `createBullMqConnection()` wie in `smtp-server/outbound/queue.ts` korrekt verwendet.
-- **Zusätzlich**: `queue.add()` in try/catch — bei echten Queue-Fehlern gibt der Server jetzt
-  `500 { error: '...' }` zurück statt die Verbindung zu droppen.
+- **Sending fails (NetworkError)**: the outbound queue in `api-gateway/routes/mail.ts` used
+  `getRedisClient()` (shared, `maxRetriesPerRequest: 3`) instead of `createBullMqConnection()` (`null`).
+  BullMQ v5 requires `maxRetriesPerRequest: null` for internal blocking commands — with the wrong
+  connection `queue.add()` crashed the api-gateway process (Node.js 22: `--unhandled-rejections=throw`),
+  which appeared in the browser as `NetworkError when attempting to fetch resource`.
+  Fix: `createBullMqConnection()` used correctly as in `smtp-server/outbound/queue.ts`.
+- **Additionally**: `queue.add()` in try/catch — on real queue errors the server now returns
+  `500 { error: '...' }` instead of dropping the connection.
 
 ---
 
-## [3.17.3] — 2026-05-20 — Service-TLS-Binding: SMTP/IMAP/POP3 echte Zertifikate, HTTPS-Proxy nur MWA+BCP
+## [3.17.3] — 2026-05-20 — Service TLS binding: SMTP/IMAP/POP3 real certificates, HTTPS proxy only MWA+BCP
 
 ### Added
 
-- **Protokoll-TLS-Binding**: Wenn ein Zertifikat den Services `SMTP`, `IMAP` oder `POP3` zugeordnet wird,
-  werden `certPem`/`keyPem` automatisch in `ServerSettings.tlsCert/tlsKey` geschrieben und alle drei
-  Protokoll-Server laden das Zertifikat sofort via `CHANNEL_SETTINGS_RELOAD` neu — kein Container-Neustart nötig.
-  Gilt für: Let's Encrypt (nach Ausstellung), Upload, Self-Signed, PUT-Services-Änderung.
-- **`applyProtocolCert()` Helper** in `certificates.ts` — zentraler Binding-Punkt für SMTP/IMAP/POP3-TLS
-- **BCP: Service-Farben** in der Zertifikat-Tabelle — blau: MWA/BCP (HTTPS-Proxy), grün: SMTP/IMAP/POP3 (Protokoll-TLS), grau: EWS/CALDAV/AUTODISCOVER
-- **BCP: „Protokoll-TLS"-Zeile** in der Detailansicht — zeigt welche Protokoll-Services aktiv gebunden sind
-- **BCP: ServiceSelector-Hinweis** — erklärt MWA+BCP = HTTPS-Proxy vs. SMTP/IMAP/POP3 = Protokoll-TLS
+- **Protocol TLS binding**: when a certificate is assigned to the services `SMTP`, `IMAP` or `POP3`,
+  `certPem`/`keyPem` are automatically written to `ServerSettings.tlsCert/tlsKey` and all three
+  protocol servers reload the certificate immediately via `CHANNEL_SETTINGS_RELOAD` — no container restart needed.
+  Applies to: Let's Encrypt (after issuance), upload, self-signed, PUT services change.
+- **`applyProtocolCert()` helper** in `certificates.ts` — central binding point for SMTP/IMAP/POP3 TLS
+- **BCP: service colors** in the certificate table — blue: MWA/BCP (HTTPS proxy), green: SMTP/IMAP/POP3 (protocol TLS), gray: EWS/CALDAV/AUTODISCOVER
+- **BCP: "Protocol TLS" row** in the detail view — shows which protocol services are actively bound
+- **BCP: ServiceSelector hint** — explains MWA+BCP = HTTPS proxy vs. SMTP/IMAP/POP3 = protocol TLS
 
 ### Changed
 
-- **`activate-https` Guard**: HTTPS-Proxy kann nur aktiviert werden wenn das Zertifikat sowohl `MWA` als
-  auch `BCP` im `services`-Array hat — gibt klare 400-Fehlermeldung wenn Services fehlen
-- **BCP: LockOpen-Button** erscheint nur noch bei Zertifikaten mit MWA+BCP (vorher bei allen ACTIVE/EXPIRING)
-- **BCP: Grauer Status-Banner** erklärt jetzt explizit "MWA + BCP zuweisen" statt nur "Schloss klicken"
-- **BCP: HTTPS (Port 443) Detailzeile** zeigt drei Zustände: Aktiv / Bereit (MWA+BCP) / MWA+BCP benötigt
+- **`activate-https` guard**: the HTTPS proxy can only be activated when the certificate has both `MWA` and
+  `BCP` in the `services` array — returns a clear 400 error message when services are missing
+- **BCP: LockOpen button** now appears only for certificates with MWA+BCP (previously for all ACTIVE/EXPIRING)
+- **BCP: gray status banner** now explicitly explains "assign MWA + BCP" instead of just "click the lock"
+- **BCP: HTTPS (port 443) detail row** shows three states: Active / Ready (MWA+BCP) / MWA+BCP required
 
 ---
 
-## [3.17.2] — 2026-05-20 — HTTPS-Proxy: explizit deaktivierbar für externen Reverse Proxy
+## [3.17.2] — 2026-05-20 — HTTPS proxy: explicitly disableable for an external reverse proxy
 
 ### Added
 
-- **`HTTPS_PROXY_ENABLED=false`** — neuer Env-Schalter deaktiviert den integrierten TLS-Proxy vollständig.
-  Setzen wenn ein externer Reverse Proxy (Traefik, Caddy, nginx, DSM Application Portal …) TLS terminiert.
-  Dann kann Port `443:443` aus `docker-compose.yml` entfernt / auskommentiert werden.
-- **`GET /api/v1/admin/certificates/tls-proxy-info`** — neuer Admin-Endpoint gibt `{ enabled, port, activeCert }` zurück
-- **`docker-compose.synology.yml`**: `HTTPS_PROXY_ENABLED: "false"` voreingestellt (DSM übernimmt TLS)
-- **`.env.example`**: Abschnitt für `HTTPS_PROXY_ENABLED` + `HTTPS_PORT` ergänzt
+- **`HTTPS_PROXY_ENABLED=false`** — new env switch disables the integrated TLS proxy completely.
+  Set it when an external reverse proxy (Traefik, Caddy, nginx, DSM Application Portal …) terminates TLS.
+  Then port `443:443` can be removed / commented out in `docker-compose.yml`.
+- **`GET /api/v1/admin/certificates/tls-proxy-info`** — new admin endpoint returns `{ enabled, port, activeCert }`
+- **`docker-compose.synology.yml`**: `HTTPS_PROXY_ENABLED: "false"` preset (DSM handles TLS)
+- **`.env.example`**: section for `HTTPS_PROXY_ENABLED` + `HTTPS_PORT` added
 
 ### Changed
 
-- **BCP Zertifikate — dreizustandiger Status-Banner**:
-  - 🟡 Gelb: Proxy deaktiviert (`HTTPS_PROXY_ENABLED=false`) — externer Reverse Proxy aktiv
-  - 🟢 Grün: Proxy aktiv + Zertifikat gewählt — zeigt Port + Domain
-  - ⬜ Grau: Proxy bereit, aber noch kein Zertifikat aktiviert — mit Hinweis auf `HTTPS_PROXY_ENABLED=false`
-- **`docker-compose.yml`**: `HTTPS_PROXY_ENABLED`-Variable und Kommentar „OPTION A / OPTION B" für klare Wahl
-- **`tls-proxy.ts`**: `isTlsProxyEnabled()` exportiert; startup-Log bei deaktiviertem Proxy
+- **BCP certificates — three-state status banner**:
+  - 🟡 Yellow: proxy disabled (`HTTPS_PROXY_ENABLED=false`) — external reverse proxy active
+  - 🟢 Green: proxy active + certificate selected — shows port + domain
+  - ⬜ Gray: proxy ready, but no certificate activated yet — with a hint about `HTTPS_PROXY_ENABLED=false`
+- **`docker-compose.yml`**: `HTTPS_PROXY_ENABLED` variable and comment "OPTION A / OPTION B" for a clear choice
+- **`tls-proxy.ts`**: `isTlsProxyEnabled()` exported; startup log when the proxy is disabled
 
 ---
 
-## [3.17.0] — 2026-05-20 — Integrierter HTTPS-Reverse-Proxy (TLS-Termination)
+## [3.17.0] — 2026-05-20 — Integrated HTTPS reverse proxy (TLS termination)
 
 ### Added
 
-- **Integrierter HTTPS-Reverse-Proxy (Port 443)**  
-  – CoreMail kann HTTPS nun direkt ohne externen Reverse Proxy (Traefik, Caddy, nginx) terminieren  
-  – Nach Ausstellung eines Let's Encrypt- oder eigenen Zertifikats in BCP → SSL/TLS: Button
-    **„Als HTTPS aktivieren"** (Schloss-Symbol) startet den TLS-Proxy sofort per Hot-Reload  
-  – Genau ein Zertifikat kann gleichzeitig aktiv sein; Hot-Swap ohne Container-Neustart via
-    Redis-Kanal `coremail:tls:reload`  
-  – Deaktivierung durch erneuten Klick auf das grüne Schloss-Symbol  
-  – `docker-compose.yml`: Port `443:443` hinzugefügt  
-- **BCP Zertifikate — HTTPS-Status-Banner**  
-  – Grünes Banner zeigt aktives Zertifikat + Domain; graues Banner wenn kein HTTPS aktiv  
-  – Detailzeile (ausgeklappt) zeigt „HTTPS (Port 443): Aktiv / Inaktiv" mit Lock-Icon  
-- **`packages/api-gateway/src/tls-proxy.ts`** — neues Modul für HTTPS-Server-Lifecycle
-  (start, graceful stop 5 s, hot-reload via Redis-Subscription)  
-- **Prisma-Schema**: `Certificate.isActiveHttps Boolean @default(false)`
+- **Integrated HTTPS reverse proxy (port 443)**  
+  – CoreMail can now terminate HTTPS directly without an external reverse proxy (Traefik, Caddy, nginx)  
+  – After issuing a Let's Encrypt or own certificate in BCP → SSL/TLS: the button
+    **"Activate as HTTPS"** (lock icon) starts the TLS proxy immediately via hot reload  
+  – Exactly one certificate can be active at a time; hot swap without container restart via
+    the Redis channel `coremail:tls:reload`  
+  – Deactivation by clicking the green lock icon again  
+  – `docker-compose.yml`: port `443:443` added  
+- **BCP certificates — HTTPS status banner**  
+  – A green banner shows the active certificate + domain; a gray banner when no HTTPS is active  
+  – The detail row (expanded) shows "HTTPS (port 443): Active / Inactive" with a lock icon  
+- **`packages/api-gateway/src/tls-proxy.ts`** — new module for the HTTPS server lifecycle
+  (start, graceful stop 5 s, hot reload via Redis subscription)  
+- **Prisma schema**: `Certificate.isActiveHttps Boolean @default(false)`
 
 ### Changed
 
-- **BCP Zertifikate**: Aktionen-Spalte zeigt `LockOpen`-Icon (grau) für aktivierbare Certs
-  und `Lock`-Icon (grün) für das aktive HTTPS-Zertifikat
+- **BCP certificates**: the actions column shows a `LockOpen` icon (gray) for activatable certs
+  and a `Lock` icon (green) for the active HTTPS certificate
 
 ---
 
-## [3.16.9] — 2026-05-20 — Bugfix: Let's Encrypt Port 80 + besseres UI-Feedback
+## [3.16.9] — 2026-05-20 — Bugfix: Let's Encrypt port 80 + better UI feedback
 
 ### Fixed
 
-- **docker-compose.yml**: Port `80:3000` ergänzt — ACME HTTP-01 Challenge jetzt
-  von Let's Encrypt erreichbar (vorher hängte der Prozess bis Timeout)
-- **BCP Zertifikate**: Sichtbarer Status-Banner bei PENDING (blau) und ERROR (rot)
-  direkt über der Tabelle — kein stilles "nichts passiert" mehr
-- **BCP Zertifikate**: Fehlermeldung im Expand-Panel jetzt mit Titel + lesbarem
-  `pre`-Block statt rohem Mono-Text
-- **certificates.ts**: Log-Hinweis bei ACME-Challenge: "Port 80 must be reachable"
+- **docker-compose.yml**: port `80:3000` added — the ACME HTTP-01 challenge is now
+  reachable by Let's Encrypt (previously the process hung until timeout)
+- **BCP certificates**: visible status banner for PENDING (blue) and ERROR (red)
+  directly above the table — no more silent "nothing happens"
+- **BCP certificates**: the error message in the expand panel now has a title + readable
+  `pre` block instead of raw mono text
+- **certificates.ts**: log hint on ACME challenge: "Port 80 must be reachable"
 
 ---
 
-## [3.16.8] — 2026-05-20 — Bugfix: MessageList-Panel lässt sich nicht verschieben
+## [3.16.8] — 2026-05-20 — Bugfix: MessageList panel cannot be resized
 
 ### Fixed
 
-- **MWA Mail — Resizable Panel (MessageList)**: `w-80 shrink-0` im Haupt-Return überschrieb
-  das `style={{ width }}` des Parent-Div → Panel war nicht verschiebbar und zeigte nur den
-  leeren Nachrichtenzähler. Korrigiert auf `w-full h-full overflow-hidden`.
+- **MWA Mail — resizable panel (MessageList)**: `w-80 shrink-0` in the main return overrode
+  the `style={{ width }}` of the parent div → the panel was not resizable and only showed the
+  empty message counter. Corrected to `w-full h-full overflow-hidden`.
 
 ---
 
-## [3.16.7] — 2026-05-20 — BCP: Info-Fenster auf v3.16.6 aktualisiert
+## [3.16.7] — 2026-05-20 — BCP: info window updated to v3.16.6
 
 ### Changed
 
-- **BCP Info-Fenster** — VERSION auf 3.16.6 aktualisiert, BUILD_DATE 2026-05-20  
-  – 6 neue HIGHLIGHTS-Einträge (3.16.6 → 3.14.0) mit vollständigen Release-Notes  
-  – Zeigt damit alle Releases seit 3.13.12 korrekt an
+- **BCP info window** — VERSION updated to 3.16.6, BUILD_DATE 2026-05-20  
+  – 6 new HIGHLIGHTS entries (3.16.6 → 3.14.0) with complete release notes  
+  – Thus correctly shows all releases since 3.13.12
 
 ---
 
-## [3.16.6] — 2026-05-20 — MWA: Empfänger-Autocomplete, resizable Panels, Ansicht-Einstellungen
+## [3.16.6] — 2026-05-20 — MWA: recipient autocomplete, resizable panels, view settings
 
 ### Added
 
-- **MWA Compose — Empfänger-Autocomplete (An / CC / BCC)**  
-  – Beim Tippen in An-, CC- und BCC-Felder werden passende Kontakte aus dem Adressbuch vorgeschlagen (ab 1 Zeichen, 220 ms Debounce)  
-  – Dropdown mit Name, E-Mail-Adresse und Firma; Tastaturnavigation (↑/↓/Enter/Tab/Escape)  
-  – Mehrere Empfänger durch Komma getrennt; Auswahl ersetzt den aktuellen Fragment und setzt den Cursor hinter das neue Komma  
-  – Suche via `GET /api/v1/contacts?q=...` (serverseitig, max. 8 Treffer angezeigt)
-- **MWA Mail — Resizable Panels**  
-  – Trennlinien zwischen Ordnerstruktur ↔ Nachrichtenliste ↔ Lesebereich sind per Maus in der Breite anpassbar  
-  – Breiten werden in `localStorage` unter `coremail:panel-widths` gespeichert und beim nächsten Laden wiederhergestellt  
-  – Standardbreiten: Ordnerstruktur 208 px (w-52), Nachrichtenliste 320 px (w-80); Minima/Maxima verhindert Überschneidungen
-- **Einstellungen → Ansicht** (neue Sektion)  
-  – **Lesebereich**: Rechts (Standard), Unten (Nachrichtenliste + Reader vertikal geteilt) oder Aus (nur Liste, kein Reader)  
-  – **Nachrichtendichte**: Kompakt / Normal / Komfortabel — Zeilenhöhe der Nachrichtenliste  
-  – **Konversationen gruppieren**: Toggle für konversationsbasierte Bündelung (Vorbereitung)  
-  – Alle Einstellungen persistent via Zustand-Store (`coremail-ui-prefs` in localStorage)
+- **MWA Compose — recipient autocomplete (To / CC / BCC)**  
+  – While typing in the To, CC and BCC fields, matching contacts from the address book are suggested (from 1 character, 220 ms debounce)  
+  – Dropdown with name, e-mail address and company; keyboard navigation (↑/↓/Enter/Tab/Escape)  
+  – Multiple recipients separated by comma; a selection replaces the current fragment and places the cursor after the new comma  
+  – Search via `GET /api/v1/contacts?q=...` (server-side, max. 8 hits shown)
+- **MWA Mail — resizable panels**  
+  – The dividers between folder tree ↔ message list ↔ reading pane can be resized with the mouse  
+  – Widths are stored in `localStorage` under `coremail:panel-widths` and restored on the next load  
+  – Default widths: folder tree 208 px (w-52), message list 320 px (w-80); minima/maxima prevent overlaps
+- **Settings → View** (new section)  
+  – **Reading pane**: Right (default), Bottom (message list + reader split vertically) or Off (list only, no reader)  
+  – **Message density**: Compact / Normal / Comfortable — row height of the message list  
+  – **Group conversations**: toggle for conversation-based bundling (preparation)  
+  – All settings persistent via a Zustand store (`coremail-ui-prefs` in localStorage)
 
 ---
 
-## [3.16.1] — 2026-05-20 — Aufgaben-Erinnerung: Kalender-Sync + Echtzeit-Popup
+## [3.16.1] — 2026-05-20 — Task reminders: calendar sync + real-time popup
 
 ### Added
 
-- **MWA Aufgaben — Erinnerung mit Kalender-Integration**  
-  – Beim Erstellen oder Bearbeiten einer Aufgabe mit gesetzter Erinnerung (Datum + Uhrzeit) wird automatisch ein Kalender-Termin angelegt (`🔔 Erinnerung: <Betreff>`, 30 Min. Dauer) via `POST /calendar/events` — best-effort, kein Task-Fehler bei Kalender-Fehler  
-  – Gilt sowohl für `createMutation` (neue Aufgabe) als auch für `updateMutation` (Edit-Modal per Doppelklick)
-- **MWA Aufgaben — Erinnerungs-Popup zur gesetzten Uhrzeit**  
-  – Der 60-Sekunden-Intervall-Check `checkDueDates()` prüft jetzt zusätzlich `task.reminder`: sobald der Zeitstempel ≤ `now`, erscheint ein `toast` „🔔 Erinnerung: <Betreff>" (12 Sek. Anzeigedauer)  
-  – Eigene `notifiedReminderIds`-Ref verhindert doppelte Popups je Session (unabhängig von der Fälligkeits-Benachrichtigung)
-- **MWA Aufgaben — Erinnerungsfeld visuell hervorgehoben**  
-  – Bell-Icon im Formular jetzt amber (`text-amber-400`) statt grau, tooltip erklärt die Doppelfunktion (Kalender + Popup)
+- **MWA Tasks — reminder with calendar integration**  
+  – When creating or editing a task with a reminder set (date + time), a calendar event is created automatically (`🔔 Erinnerung: <subject>`, 30 min. duration) via `POST /calendar/events` — best effort, no task error on a calendar error  
+  – Applies to both `createMutation` (new task) and `updateMutation` (edit modal via double-click)
+- **MWA Tasks — reminder popup at the set time**  
+  – The 60-second interval check `checkDueDates()` now additionally checks `task.reminder`: as soon as the timestamp is ≤ `now`, a `toast` "🔔 Reminder: <subject>" appears (12 sec. display duration)  
+  – A dedicated `notifiedReminderIds` ref prevents duplicate popups per session (independent of the due-date notification)
+- **MWA Tasks — reminder field visually highlighted**  
+  – The bell icon in the form is now amber (`text-amber-400`) instead of gray; the tooltip explains the dual function (calendar + popup)
 
 ---
-
-## [3.16.0] — 2026-05-20 — MWA/BCP Feature-Update (Aufgaben, Kontakte, Suche, Schriftarten, Dashboard)
+## [3.16.0] — 2026-05-20 — MWA/BCP feature update (tasks, contacts, search, fonts, dashboard)
 
 ### Added
 
-- **MWA Aufgaben — Bearbeitung per Doppelklick**  
-  – Doppelklick auf eine Aufgabe öffnet ein Modal mit vorausgefüllten Feldern (Betreff, Notizen, Priorität, Fälligkeitsdatum, Erinnerung)  
-  – Separates `updateMutation` schreibt vollständige Änderungen via `PUT /tasks/:id`
-- **MWA Aufgaben → Kalender-Synchronisation**  
-  – Neu erstellte Aufgaben mit Fälligkeitsdatum werden automatisch als Kalender-Termin eingetragen (`POST /calendar/events`)  
-  – Invalidiert `calendar-events`-Query; Fehler werden best-effort verschluckt (kein Task-Create-Failure)
-- **MWA Aufgaben — Fälligkeitspopup**  
-  – `useEffect` prüft alle 60 Sekunden, ob Aufgaben heute fällig sind  
-  – Zeigt `toast` mit Aufgabentitel; jede Aufgabe wird nur einmal je Session benachrichtigt (via `useRef<Set>`)
-- **MWA Kalender — Aufgaben als Ereignisse**  
-  – Aufgaben mit `dueDate` erscheinen im FullCalendar als ganztägige Ereignisse (amber `#f59e0b` / grau für erledigt)  
-  – Klick auf Aufgaben-Event zeigt Toast statt Löschdialog; Prefix `📋` / `✓` im Titel
-- **MWA Kontakte — Outlook-kompatible Felder**  
-  – Neue Felder: `email2`, `mobile`, `department`, `jobTitle`, `notes`  
-  – Edit-Formular in Sektionen: „Allgemein" (2-Spalten-Grid), „E-Mail & Telefon" (2-Spalten-Grid), „Notizen" (Textarea)  
-  – Detailansicht zeigt alle ausgefüllten Felder mit Icon + Label; Emails/Telefon clickable  
-  – Kontaktliste zeigt `jobTitle` als zweite Zeile (statt nur E-Mail)  
-  – `Contact`-Interface in `api/types.ts` um alle neuen Felder erweitert
-- **MWA E-Mail-Suche — Scope-Auswahl + Typeahead**  
-  – Neue Suchleiste oberhalb der Filterliste in `MessageList`  
-  – Scope-Umschalter: „Ordner" (client-seitige Filterung) / „Alle" (API-Query `/mail/folders/search?q=...`)  
-  – Typeahead: ab 2 Zeichen Eingabe werden bis zu 5 Treffer aus dem geladenen Ordner als Vorschläge angezeigt  
-  – Löschen-Button (`×`) leert die Suche; `Alle`-Scope deaktiviert den lokalen Filter
-- **MWA E-Mail-Verfassen — Schriftart-Auswahl**  
-  – Neues Tiptap-Extension `@tiptap/extension-font-family` (v2.27.2, passt zur bestehenden Tiptap-v2-Stack)  
-  – Dropdown mit 8 Schriftarten: Standard, Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS  
-  – Dropdown-Label und -Einträge werden jeweils in der entsprechenden Schrift dargestellt  
-  – Positioniert zwischen Block-Typ und Fett/Kursiv in der Formatierungsleiste
-- **BCP Dashboard — Alle Widgets draggable**  
-  – Alle 8 bisher fehlenden Widgets (`queue-status`, `mails-chart`, `storage-ranking`, `domains-chart`, `recent-errors`, `recent-audit`, `recent-logins`, `system-strip`) jetzt in `<DraggableCard>` eingebettet  
-  – IIFE-Slot-Pattern für Queue+Mails, Speicher+Domains und Fehler+Audit+Angriff (konsistent mit KPI- und Server-Sektion)  
-  – `recent-logins` und `system-strip` als einzelne draggable Einheiten
+- **MWA Tasks — editing via double-click**  
+  – Double-clicking a task opens a modal with pre-filled fields (subject, notes, priority, due date, reminder)  
+  – A separate `updateMutation` writes complete changes via `PUT /tasks/:id`
+- **MWA Tasks → calendar synchronization**  
+  – Newly created tasks with a due date are automatically entered as a calendar event (`POST /calendar/events`)  
+  – Invalidates the `calendar-events` query; errors are swallowed best-effort (no task-create failure)
+- **MWA Tasks — due-date popup**  
+  – A `useEffect` checks every 60 seconds whether tasks are due today  
+  – Shows a `toast` with the task title; each task is notified only once per session (via `useRef<Set>`)
+- **MWA Calendar — tasks as events**  
+  – Tasks with a `dueDate` appear in FullCalendar as all-day events (amber `#f59e0b` / gray for completed)  
+  – Clicking a task event shows a toast instead of the delete dialog; prefix `📋` / `✓` in the title
+- **MWA Contacts — Outlook-compatible fields**  
+  – New fields: `email2`, `mobile`, `department`, `jobTitle`, `notes`  
+  – Edit form in sections: "General" (2-column grid), "E-mail & phone" (2-column grid), "Notes" (textarea)  
+  – The detail view shows all filled fields with icon + label; e-mails/phone clickable  
+  – The contact list shows `jobTitle` as the second line (instead of only the e-mail)  
+  – `Contact` interface in `api/types.ts` extended with all new fields
+- **MWA e-mail search — scope selection + typeahead**  
+  – New search bar above the filter list in `MessageList`  
+  – Scope switch: "Folder" (client-side filtering) / "All" (API query `/mail/folders/search?q=...`)  
+  – Typeahead: from 2 characters of input, up to 5 hits from the loaded folder are shown as suggestions  
+  – Clear button (`×`) empties the search; the `All` scope disables the local filter
+- **MWA e-mail compose — font selection**  
+  – New Tiptap extension `@tiptap/extension-font-family` (v2.27.2, matches the existing Tiptap v2 stack)  
+  – Dropdown with 8 fonts: Default, Arial, Calibri, Georgia, Times New Roman, Courier New, Verdana, Trebuchet MS  
+  – Dropdown label and entries are each rendered in the corresponding font  
+  – Positioned between block type and bold/italic in the formatting bar
+- **BCP Dashboard — all widgets draggable**  
+  – All 8 previously missing widgets (`queue-status`, `mails-chart`, `storage-ranking`, `domains-chart`, `recent-errors`, `recent-audit`, `recent-logins`, `system-strip`) are now wrapped in `<DraggableCard>`  
+  – IIFE slot pattern for queue+mails, storage+domains and errors+audit+attack (consistent with the KPI and server sections)  
+  – `recent-logins` and `system-strip` as individual draggable units
 
 ### Fixed
 
-- **DNS-Hardening Startup-Check**: Integrity-Check-Ziele von `example.com` (IANA-IP nicht mehr gültig, jetzt Cloudflare CDN) auf stabile Infra-Records umgestellt: `one.one.one.one → 1.1.1.1` und `dns.google → 8.8.8.8`
+- **DNS hardening startup check**: integrity check targets switched from `example.com` (IANA IP no longer valid, now Cloudflare CDN) to stable infra records: `one.one.one.one → 1.1.1.1` and `dns.google → 8.8.8.8`
 
 ---
 
-## [3.15.0] — 2026-05-20 — Security+ (Passwort-Reset, Angriffserkennung, DNS-Hardening)
+## [3.15.0] — 2026-05-20 — Security+ (password reset, attack detection, DNS hardening)
 
 ### Added
 
-- **Passwort-Selbstzurücksetzung (OWASP A07-konform)**  
-  – `POST /auth/forgot-password`: Rate-limitiert (3 req/h pro IP + E-Mail), SHA-256-Hashing, keine User-Enumeration (immer `{ok:true}`)  
-  – `POST /auth/reset-password`: Atomare Transaktion (Token markiert + Passwort gesetzt + alle Sessions gelöscht)  
-  – `GET /auth/reset-password/verify?token=...`: Schnellprüfung für Frontend  
-  – Token-TTL: 15 min; SHA-256-Hash im DB-gespeichert (Klartext nie persistiert)  
-  – Admin-Toggle in BCP: Einstellungen → Sicherheit → „Passwort-Selbstzurücksetzung" (de-/aktiviert den Flow global)  
-  – MWA Login-Seite: „Passwort vergessen?"-Link (nur sichtbar wenn Feature aktiv)  
-  – MWA: `ForgotPasswordPage` + `ResetPasswordPage` mit Passwortstärke-Indikator
-- **Angriffserkennung Live-Dashboard (BCP)**  
-  – Neues Prisma-Modell `AttackEvent` (ip, type, detail, service, timestamp) — persistent in PostgreSQL  
-  – Redis-Kanal `admin:attack` → SSE-Broadcast an alle Admin-Verbindungen in Echtzeit  
-  – BCP-Dashboard-Widget „Angriffs-Erkennung (Live)": Zähler letzte 1h/24h, Top-IPs, Top-Angriffstypen, letzte 10 Events, „UNTER ANGRIFF"-Banner bei ≥10 Events/h  
-  – Admin-API `GET /api/v1/admin/security/attacks` (paginiert/filterbar), `/summary`, `DELETE` (Purge vor Datum)  
-  – `ip-limiter` im SMTP publiziert bei jedem Auth-Fehlschlag und Ban ein Attack-Event
-- **DNS-Poisoning-Schutz (MITRE T1584.002)**  
-  – Neues Modul `security-filter/src/dns-hardened.ts`: Erzwingt Trusted Resolver (8.8.8.8, 1.1.1.1, 9.9.9.9) statt System-/Container-DNS  
-  – Cross-Resolver-Validation: Zwei unabhängige Resolver werden verglichen; Divergenz → Warnung im Log  
-  – Startup-Integritäts-Check: Bekannte stable A-Records (example.com) werden gegen hartcodierte Erwartungen validiert  
-  – DNSBL-Modul nutzt jetzt `resolveHardened()` statt `dns.promises.resolve4()`  
-  – Admin-API `GET /api/v1/admin/security/dns-check` → Echtzeit-Integritätsreport via security-filter-Proxy  
-  – Konfigurierbar via `TRUSTED_DNS_SERVERS` (kommagetrennte IP-Liste)
-- **Per-User-Inaktivitäts-Timeout (MWA)**  
-  – Benutzer können unter MWA → Einstellungen → Allgemein → „Automatischer Logout" einen persönlichen Timeout (Minuten) setzen  
-  – Eigene Einstellung überschreibt die globale Admin-Vorgabe; 0 = deaktiviert; null = global übernehmen  
-  – Backend: `GET/PUT /api/v1/user/preferences` liefert/speichert `inactivityTimeoutMinutes`  
-  – Prisma-Modell `UserSettings.inactivityTimeoutMinutes (Int?)` ergänzt  
-  – MWA `useInactivityLogout`-Hook lädt beide Einstellungen parallel und respektiert User-Override
+- **Password self-reset (OWASP A07-compliant)**  
+  – `POST /auth/forgot-password`: rate-limited (3 req/h per IP + e-mail), SHA-256 hashing, no user enumeration (always `{ok:true}`)  
+  – `POST /auth/reset-password`: atomic transaction (token marked + password set + all sessions deleted)  
+  – `GET /auth/reset-password/verify?token=...`: quick check for the frontend  
+  – Token TTL: 15 min; SHA-256 hash stored in the DB (plaintext never persisted)  
+  – Admin toggle in the BCP: Settings → Security → "Password self-reset" (enables/disables the flow globally)  
+  – MWA login page: "Forgot password?" link (only visible when the feature is active)  
+  – MWA: `ForgotPasswordPage` + `ResetPasswordPage` with password strength indicator
+- **Attack detection live dashboard (BCP)**  
+  – New Prisma model `AttackEvent` (ip, type, detail, service, timestamp) — persistent in PostgreSQL  
+  – Redis channel `admin:attack` → SSE broadcast to all admin connections in real time  
+  – BCP dashboard widget "Attack detection (live)": counters for the last 1h/24h, top IPs, top attack types, last 10 events, "UNDER ATTACK" banner at ≥10 events/h  
+  – Admin API `GET /api/v1/admin/security/attacks` (paginated/filterable), `/summary`, `DELETE` (purge before date)  
+  – The `ip-limiter` in SMTP publishes an attack event on every auth failure and ban
+- **DNS poisoning protection (MITRE T1584.002)**  
+  – New module `security-filter/src/dns-hardened.ts`: enforces trusted resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9) instead of system/container DNS  
+  – Cross-resolver validation: two independent resolvers are compared; divergence → warning in the log  
+  – Startup integrity check: known stable A records (example.com) are validated against hard-coded expectations  
+  – The DNSBL module now uses `resolveHardened()` instead of `dns.promises.resolve4()`  
+  – Admin API `GET /api/v1/admin/security/dns-check` → real-time integrity report via the security-filter proxy  
+  – Configurable via `TRUSTED_DNS_SERVERS` (comma-separated IP list)
+- **Per-user inactivity timeout (MWA)**  
+  – Users can set a personal timeout (minutes) under MWA → Settings → General → "Automatic logout"  
+  – The own setting overrides the global admin default; 0 = disabled; null = inherit global  
+  – Backend: `GET/PUT /api/v1/user/preferences` returns/stores `inactivityTimeoutMinutes`  
+  – Prisma model `UserSettings.inactivityTimeoutMinutes (Int?)` added  
+  – The MWA `useInactivityLogout` hook loads both settings in parallel and respects the user override
 
 ### Security
 
-- **Angriffsereignisse** werden persistent in `AttackEvent`-Tabelle gespeichert (Forensik/Audit-Trail)  
-- **Redis-Pub/Sub** für Attack-Events entkoppelt SMTP-Lockout von Dashboard ohne Performance-Impact  
-- **Passwort-Reset-Tokens**: Einfacher Rate-Limiter verhindert Token-Flooding; SHA-256 schützt DB vor Plaintext-Leak  
-- **SSE-Endpoint** prüft Admin-Rolle bevor Attack-Events gebrodcastet werden (`ORGANIZATION_MANAGEMENT` / `SERVER_MANAGEMENT` / …)
+- **Attack events** are stored persistently in the `AttackEvent` table (forensics/audit trail)  
+- **Redis pub/sub** for attack events decouples the SMTP lockout from the dashboard without performance impact  
+- **Password reset tokens**: a simple rate limiter prevents token flooding; SHA-256 protects the DB from a plaintext leak  
+- **The SSE endpoint** checks the admin role before attack events are broadcast (`ORGANIZATION_MANAGEMENT` / `SERVER_MANAGEMENT` / …)
 
 ---
 
-## [3.14.0] — 2026-05-20 — Security Hardening (Pentest-Auswertung)
+## [3.14.0] — 2026-05-20 — Security hardening (pentest evaluation)
 
 ### Security
 
-- **SMTP — Brute-Force-Lockout (OWASP A07 / MITRE T1110)**: Neues `ip-limiter`-Modul  
-  – Redis-backed: Nach 5 fehlgeschlagenen Auth-Versuchen in 5 min wird die IP für 10 min gesperrt (421)  
-  – Konfigurierbar via Env: `SMTP_AUTH_FAIL_THRESHOLD`, `SMTP_AUTH_WINDOW_S`, `SMTP_AUTH_BAN_S`  
-  – Erfolgreicher Login löscht den Fehlzähler
-- **SMTP — Per-IP-Verbindungslimit (MITRE T1499)**: Max. 10 gleichzeitige Verbindungen + Max. 30 neue Verbindungen/min pro IP (Sliding Window)  
-  – Konfigurierbar via `SMTP_MAX_CONNS_PER_IP`, `SMTP_NEW_CONN_PER_MIN`  
-  – Private/Loopback-IPs ausgenommen
-- **SMTP — VRFY-Command deaktiviert**: Antwortet jetzt mit `502 5.5.1 VRFY not supported` statt dem mehrdeutigen `252` (verhindert User-Enumeration)
-- **MinIO-Konsole (Port 9001) nur noch auf localhost gebunden**: In beiden `docker-compose`-Dateien auf `127.0.0.1:9001:9001` geändert — kein WAN-Zugriff mehr möglich
-- **Container-Ressourcenlimits** in `docker-compose.yml` ergänzt: `cpus: 2`, `memory: 2g` (via `deploy.resources.limits`) — DoS-Schutz auf Host-Ebene
-- **SMTP-Auth-IP-Weitergabe**: Client-IP wird jetzt an `verifyCredentials` durchgereicht, damit Brute-Force-Zähler korrekt pro IP zählen
+- **SMTP — brute-force lockout (OWASP A07 / MITRE T1110)**: new `ip-limiter` module  
+  – Redis-backed: after 5 failed auth attempts in 5 min the IP is blocked for 10 min (421)  
+  – Configurable via env: `SMTP_AUTH_FAIL_THRESHOLD`, `SMTP_AUTH_WINDOW_S`, `SMTP_AUTH_BAN_S`  
+  – A successful login clears the failure counter
+- **SMTP — per-IP connection limit (MITRE T1499)**: max. 10 concurrent connections + max. 30 new connections/min per IP (sliding window)  
+  – Configurable via `SMTP_MAX_CONNS_PER_IP`, `SMTP_NEW_CONN_PER_MIN`  
+  – Private/loopback IPs exempt
+- **SMTP — VRFY command disabled**: now responds with `502 5.5.1 VRFY not supported` instead of the ambiguous `252` (prevents user enumeration)
+- **MinIO console (port 9001) now bound to localhost only**: changed to `127.0.0.1:9001:9001` in both `docker-compose` files — no more WAN access possible
+- **Container resource limits** added in `docker-compose.yml`: `cpus: 2`, `memory: 2g` (via `deploy.resources.limits`) — DoS protection at host level
+- **SMTP auth IP pass-through**: the client IP is now passed to `verifyCredentials` so brute-force counters count correctly per IP
 
 ### Fixed
 
-- **SMTP-Banner** enthüllt jetzt keine interne Hostname-Fehlkonfiguration mehr (`mail.localhost`) — Hostname wird immer aus DB-`publicHostname` gelesen, Env-Fallback als Seed
+- **SMTP banner** no longer reveals an internal hostname misconfiguration (`mail.localhost`) — the hostname is always read from the DB `publicHostname`, env fallback as seed
 
 ---
 
-## [3.13.12] — 2026-05-20 — Tasks-Fehler, doppelte Ordner, SharedMailbox-Sprache
+## [3.13.12] — 2026-05-20 — Tasks error, duplicate folders, SharedMailbox language
 
 ### Fixed
 
-- **Aufgaben — „Invalid"-Fehler beim Erstellen**: Frontend sendete `title`, Backend erwartet `subject` (Prisma-Schema-Feldname). `Task`-Interface in `types.ts` auf `subject`/`body` korrigiert; `TasksPage` sendet jetzt korrekte Felder
-- **Posteingang — doppelte Ordner „Aufgaben"/„Task"**: `Notes` und `Tasks` wurden fälschlicherweise als reguläre Mail-Ordner provisioniert. Beide aus `DEFAULT_FOLDERS` in `provision-mailbox.ts` entfernt (sind eigenständige Datenmodelle). `FolderTree` filtert sie für Bestandsbenutzer heraus
-- **SharedMailbox — falsche Sprache**: Ordner-Labels waren hardcodiert englisch/deutsch gemischt; jetzt via `useT()` in der vom User eingestellten Sprache (DE/EN/ES/IT)
-- **SharedMailbox — Datumformat**: `fmtDate()` nutzt jetzt die Benutzersprache statt hartem `'de-DE'`
-- **SharedMailbox — Ordner-Reihenfolge**: Folder-Sidebar folgt jetzt der gleichen Reihenfolge wie die normale Mailbox (`INBOX → Entwürfe → Gesendet → Papierkorb → Junk → Archiv`, dann benutzerdefinierte Ordner) statt nur `sortOrder + displayName`
+- **Tasks — "Invalid" error on creation**: the frontend sent `title`, the backend expects `subject` (Prisma schema field name). `Task` interface in `types.ts` corrected to `subject`/`body`; `TasksPage` now sends the correct fields
+- **Inbox — duplicate folders "Aufgaben"/"Task"**: `Notes` and `Tasks` were wrongly provisioned as regular mail folders. Both removed from `DEFAULT_FOLDERS` in `provision-mailbox.ts` (they are separate data models). `FolderTree` filters them out for existing users
+- **SharedMailbox — wrong language**: folder labels were hard-coded mixed English/German; now via `useT()` in the language set by the user (DE/EN/ES/IT)
+- **SharedMailbox — date format**: `fmtDate()` now uses the user's language instead of a hard `'de-DE'`
+- **SharedMailbox — folder order**: the folder sidebar now follows the same order as the normal mailbox (`INBOX → Drafts → Sent → Trash → Junk → Archive`, then custom folders) instead of only `sortOrder + displayName`
 
 ### Changed
 
-- **Aufgaben-Seite ausgebaut**: Erweitertes Formular mit Priorität, Fälligkeitsdatum, Erinnerung, Notiz-Textfeld; aufklappbare Body-Anzeige pro Aufgabe; Überfällig-Markierung in Rot; Löschen nur mit Bestätigung
-- **SharedMailbox-Sidebar-Stil** angepasst: Aktiver Akzentbalken links, Hover-Effekte und Icon-Größen identisch zur normalen FolderTree-Sidebar
+- **Tasks page built out**: extended form with priority, due date, reminder, note text field; expandable body display per task; overdue marking in red; delete only with confirmation
+- **SharedMailbox sidebar style** adjusted: active accent bar on the left, hover effects and icon sizes identical to the normal FolderTree sidebar
 
 ---
 
-## [3.13.11] — 2026-05-20 — Automatischer Logout bei Inaktivität
+## [3.13.11] — 2026-05-20 — Automatic logout on inactivity
 
 ### Added
 
-- **Neues Sicherheitsfeld „Automatischer Logout bei Inaktivität"** in den Global Settings (Sicherheitsrichtlinien-Sektion)
-  - Wert in Minuten: `0` = deaktiviert, `1`–`1440` Minuten konfigurierbar
-  - Standard: 30 Minuten
-  - Schnell-Buttons: Deaktiviert / 5 / 10 / 15 / 30 / 60 / 120 min
-  - Warnung bei < 5 Minuten (könnte Benutzer stören)
-- **`GET /api/v1/admin/settings/public`** — neuer öffentlicher Endpoint (kein Auth), liefert `orgName`, `logoUrl`, `language`, `inactivityTimeoutMinutes`, `maintenanceMode`, `maintenanceMessage` — für MWA/BCP vor dem Login abrufbar
-- **`useInactivityLogout`-Hook** — implementiert Browser-seitige Inaktivitätserkennung in BCP und MWA:
-  - Hört auf `mousemove`, `mousedown`, `keydown`, `touchstart`, `scroll`, `visibilitychange`
-  - Timer wird bei jeder Aktivität zurückgesetzt
-  - 60-Sekunden-Vorwarnung via Toast bevor der Logout ausgelöst wird
-  - Automatische Weiterleitung zur Login-Seite nach Ablauf
+- **New security field "Automatic logout on inactivity"** in the global settings (security policies section)
+  - Value in minutes: `0` = disabled, `1`–`1440` minutes configurable
+  - Default: 30 minutes
+  - Quick buttons: Disabled / 5 / 10 / 15 / 30 / 60 / 120 min
+  - Warning below 5 minutes (could annoy users)
+- **`GET /api/v1/admin/settings/public`** — new public endpoint (no auth), returns `orgName`, `logoUrl`, `language`, `inactivityTimeoutMinutes`, `maintenanceMode`, `maintenanceMessage` — retrievable by MWA/BCP before login
+- **`useInactivityLogout` hook** — implements browser-side inactivity detection in BCP and MWA:
+  - Listens to `mousemove`, `mousedown`, `keydown`, `touchstart`, `scroll`, `visibilitychange`
+  - The timer is reset on every activity
+  - 60-second advance warning via toast before the logout is triggered
+  - Automatic redirect to the login page after expiry
 
 ### Changed
 
-- Session-Timeout-Feld in den Einstellungen in „Session-Timeout (Token)" umbenannt und Hinweistext präzisiert — verdeutlicht den Unterschied zu Inaktivitäts-Timeout
+- The session timeout field in the settings renamed to "Session timeout (token)" and the hint text clarified — makes the difference from the inactivity timeout clear
 
 ---
 
-## [3.13.10] — 2026-05-20 — Bugfix: Vorlage anwenden schlug fehl (retentionDays-Validierung)
+## [3.13.10] — 2026-05-20 — Bugfix: applying a template failed (retentionDays validation)
 
 ### Fixed
 
-- **Kritischer Bugfix** — „Aus Vorlage"-Button in der Aufbewahrungsrichtlinien-Seite schlug mit `retentionDays must be at least 1` fehl
-- Ursache: Im tag-basierten Exchange-2019-System (DPT/RPT/Personal-Tags) hält die **Policy** selbst keine Frist — das machen die Tags. Das Frontend sendet deshalb korrekt `retentionDays: 0` beim Anlegen der Policy
-- Die Backend-Validierung in `POST /admin/compliance/retention` und `PUT /admin/compliance/retention/:id` war zu streng (`< 1` statt `< 0`) und blockierte das
-- Fix: `0` ist jetzt erlaubt (Bedeutung: Frist wird durch die angehängten Tags gesteuert); negative Werte werden weiterhin abgelehnt
-- Alle 8 Vorlage-Szenarien (Papierkorb, Junk, Inbox, Gesendet, Entwürfe, Compliance 7 Jahre, Standard 3 Jahre, 5 Jahre wiederherstellbar) können jetzt per Klick angelegt werden
+- **Critical bugfix** — the "From template" button on the retention policies page failed with `retentionDays must be at least 1`
+- Cause: in the tag-based Exchange 2019 system (DPT/RPT/personal tags) the **policy** itself holds no period — the tags do. The frontend therefore correctly sends `retentionDays: 0` when creating the policy
+- The backend validation in `POST /admin/compliance/retention` and `PUT /admin/compliance/retention/:id` was too strict (`< 1` instead of `< 0`) and blocked this
+- Fix: `0` is now allowed (meaning: the period is controlled by the attached tags); negative values are still rejected
+- All 8 template scenarios (Trash, Junk, Inbox, Sent, Drafts, Compliance 7 years, Default 3 years, 5 years recoverable) can now be created with a click
 
 ---
 
-## [3.13.9] — 2026-05-20 — Aufbewahrungsrichtlinien aus Vorlagen + MFA-Buttons entfernt
+## [3.13.9] — 2026-05-20 — Retention policies from templates + MFA buttons removed
 
-### Removed — Hauptansicht entrümpelt
+### Removed — main view decluttered
 
-- **„MFA jetzt"-Button** aus dem Header der `RetentionPage` entfernt — der Worker läuft automatisch im 24h-Work-Cycle, kein Admin muss manuell triggern
-- **„MFA-Historie"-Button** raus + `RunsModal`-Komponente komplett gelöscht — interne Worker-Telemetrie gehört nicht in die Compliance-Konfiguration
-- `runNow`-Mutation und `ManagedFolderRun`-Interface aus dem Component-State entfernt
+- **"MFA now" button** removed from the header of the `RetentionPage` — the worker runs automatically in a 24h work cycle, no admin needs to trigger it manually
+- **"MFA history" button** removed + `RunsModal` component deleted completely — internal worker telemetry does not belong in the compliance configuration
+- `runNow` mutation and `ManagedFolderRun` interface removed from the component state
 
-### Added — 1-Klick-Vorlagen
+### Added — 1-click templates
 
-- **„Aus Vorlage"-Button** neben „Neue Richtlinie" (nur im Policies-Tab)
-- **`TemplatePickerModal`** mit 8 fertigen Szenarien:
+- **"From template" button** next to "New policy" (only in the Policies tab)
+- **`TemplatePickerModal`** with 8 ready-made scenarios:
 
-| Szenario | Tag-Typ · Folder · Aktion · Frist |
+| Scenario | Tag type · Folder · Action · Period |
 |---|---|
-| Papierkorb nach 30 Tagen leeren | RPT · DELETED_ITEMS · DELETE_AND_ALLOW_RECOVERY · 30 d |
-| Junk nach 14 Tagen endgültig löschen | RPT · JUNK_EMAIL · PERMANENTLY_DELETE · 14 d |
-| Posteingang nach 1 Jahr archivieren | RPT · INBOX · MOVE_TO_ARCHIVE · 365 d |
-| Gesendet nach 2 Jahren archivieren | RPT · SENT_ITEMS · MOVE_TO_ARCHIVE · 730 d |
-| Entwürfe nach 90 Tagen löschen | RPT · DRAFTS · DELETE_AND_ALLOW_RECOVERY · 90 d |
-| Compliance 7 Jahre (Markierung) | DPT · ALL_OTHER · MARK_AS_PAST_RETENTION_LIMIT · 2555 d |
-| Standard 3 Jahre → Archiv | DPT · ALL_OTHER · MOVE_TO_ARCHIVE · 1095 d |
-| 5 Jahre wiederherstellbar löschen | DPT · ALL_OTHER · DELETE_AND_ALLOW_RECOVERY · 1825 d |
+| Empty Trash after 30 days | RPT · DELETED_ITEMS · DELETE_AND_ALLOW_RECOVERY · 30 d |
+| Permanently delete Junk after 14 days | RPT · JUNK_EMAIL · PERMANENTLY_DELETE · 14 d |
+| Archive Inbox after 1 year | RPT · INBOX · MOVE_TO_ARCHIVE · 365 d |
+| Archive Sent after 2 years | RPT · SENT_ITEMS · MOVE_TO_ARCHIVE · 730 d |
+| Delete Drafts after 90 days | RPT · DRAFTS · DELETE_AND_ALLOW_RECOVERY · 90 d |
+| Compliance 7 years (marking) | DPT · ALL_OTHER · MARK_AS_PAST_RETENTION_LIMIT · 2555 d |
+| Default 3 years → archive | DPT · ALL_OTHER · MOVE_TO_ARCHIVE · 1095 d |
+| 5 years recoverable delete | DPT · ALL_OTHER · DELETE_AND_ALLOW_RECOVERY · 1825 d |
 
-- Klick auf eine Vorlage löst **atomar** aus (Frontend-Orchestrierung):
-  1. `POST /admin/compliance/retention/tags` — Tag anlegen
-  2. `POST /admin/compliance/retention` — Policy anlegen (Legacy-Felder leer)
-  3. `POST /admin/compliance/retention/:policyId/tags/:tagId` — Tag an Policy hängen
-  4. `POST /admin/compliance/retention/:policyId/assignments` — GLOBAL-Zuweisung
-- Damit ist eine produktive Regel in **einem Klick** einsatzbereit
-- Eigene Regeln „from scratch" weiterhin via „Neue Richtlinie"-Button verfügbar
+- Clicking a template triggers **atomically** (frontend orchestration):
+  1. `POST /admin/compliance/retention/tags` — create tag
+  2. `POST /admin/compliance/retention` — create policy (legacy fields empty)
+  3. `POST /admin/compliance/retention/:policyId/tags/:tagId` — attach tag to policy
+  4. `POST /admin/compliance/retention/:policyId/assignments` — GLOBAL assignment
+- A productive rule is thereby ready for use in **one click**
+- Own rules "from scratch" remain available via the "New policy" button
 
-### Changed — Page-Header
+### Changed — page header
 
-- Subtitle umformuliert: „Definiere, wann E-Mails automatisch archiviert oder gelöscht werden — per Vorlage oder eigener Regel" (vorher: technische Beschreibung mit „Managed Folder Assistant · Recoverable Items")
+- Subtitle rephrased: "Define when e-mails are automatically archived or deleted — via template or your own rule" (previously: a technical description with "Managed Folder Assistant · Recoverable Items")
 
 ---
 
-## [3.13.8] — 2026-05-19 — Shared Mailboxes mit voller Ordnerstruktur + User-Folder-CRUD
+## [3.13.8] — 2026-05-19 — Shared Mailboxes with full folder structure + user folder CRUD
 
 ### Added — Provisioning
 
 - **`ensureSharedMailboxProvisioned(sharedMailboxId)`** in `packages/api-gateway/src/lib/provision-mailbox.ts`
-  - Idempotent — analog zur User-Variante
-  - Erstellt `Mailbox`-Record (via `sharedBoxId`) und die 8 Default-Folders: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`, `Notes`, `Tasks`
-  - Backfill: fehlende Standard-Ordner werden bei bestehenden Mailboxen ergänzt
-- **Auto-Call** in `POST /admin/shared-mailboxes` — neue Postfächer haben sofort die volle Ordnerstruktur
-- **Repair-Endpoint** `POST /admin/shared-mailboxes/:id/provision` — Backfill auf Bestand
+  - Idempotent — analogous to the user variant
+  - Creates the `Mailbox` record (via `sharedBoxId`) and the 8 default folders: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`, `Notes`, `Tasks`
+  - Backfill: missing standard folders are added for existing mailboxes
+- **Auto-call** in `POST /admin/shared-mailboxes` — new mailboxes immediately have the full folder structure
+- **Repair endpoint** `POST /admin/shared-mailboxes/:id/provision` — backfill for existing ones
 
-### Added — Folder-CRUD für Shared Mailboxes (nur FULL_ACCESS)
+### Added — Folder CRUD for Shared Mailboxes (FULL_ACCESS only)
 
 In `packages/api-gateway/src/routes/user.ts`:
 
-- `POST   /user/shared-mailboxes/:id/folders` — Ordner anlegen (mit optionalem `parentId` für Unterordner)
-- `PATCH  /user/shared-mailboxes/:id/folders/:folderId` — Umbenennen, verschieben (`parentId`), Farbe, Favorit, Sortierung
-- `DELETE /user/shared-mailboxes/:id/folders/:folderId` — Löschen (mit Children-Check)
-- `POST   /user/shared-mailboxes/:id/folders/:folderId/empty` — alle Nachrichten im Ordner löschen
-- Cycle-Check beim Reparenten — Ordner kann nicht in seinen eigenen Subtree verschoben werden
-- **Standard-Ordner geschützt**: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Outbox` lassen sich nicht umbenennen, verschieben oder löschen (403)
+- `POST   /user/shared-mailboxes/:id/folders` — create folder (with optional `parentId` for subfolders)
+- `PATCH  /user/shared-mailboxes/:id/folders/:folderId` — rename, move (`parentId`), color, favorite, sort order
+- `DELETE /user/shared-mailboxes/:id/folders/:folderId` — delete (with children check)
+- `POST   /user/shared-mailboxes/:id/folders/:folderId/empty` — delete all messages in the folder
+- Cycle check on reparenting — a folder cannot be moved into its own subtree
+- **Standard folders protected**: `INBOX`, `Drafts`, `Sent`, `Trash`, `Junk`, `Outbox` cannot be renamed, moved or deleted (403)
 
-### Added — Web-Client UI (`SharedMailboxPage.tsx`)
+### Added — Web client UI (`SharedMailboxPage.tsx`)
 
-- **„+ Neuer Ordner"-Inline-Eingabe** oben in der Folder-Sidebar (nur bei FULL_ACCESS), gestrichelter Akzent-Border
-- **Hover-Aktionen** pro User-Folder rechts: Bleistift (Umbenennen) + Mülleimer (Löschen)
-- **Inline-Rename** mit Enter/Esc, OK-Button, Validierungs-State
-- Standard-Ordner zeigen keine Action-Icons (Frontend + Backend stimmen überein)
-- Lösch-Confirm-Dialog mit Datenverlust-Warnung
-- `READ_ONLY`-User sehen weder „Neuer Ordner" noch Action-Icons
+- **"+ New folder" inline input** at the top of the folder sidebar (FULL_ACCESS only), dashed accent border
+- **Hover actions** per user folder on the right: pencil (rename) + trash can (delete)
+- **Inline rename** with Enter/Esc, OK button, validation state
+- Standard folders show no action icons (frontend + backend agree)
+- Delete confirm dialog with data-loss warning
+- `READ_ONLY` users see neither "New folder" nor action icons
 
 ---
 
-## [3.13.7] — 2026-05-19 — Transportregeln aus Vorlagen (Exchange-2019-Templates)
+## [3.13.7] — 2026-05-19 — Transport rules from templates (Exchange 2019 templates)
 
 ### Added
 
-- **„Aus Vorlage"-Button** auf `TransportRulesPage` (neben „Neue Regel")
-- **`TemplatePickerModal`** mit 9 vorgefertigten Regel-Vorlagen, in 4 Kategorien filterbar
-- Pro Vorlage: Icon + Beschreibung + Conditions/Actions vorbefüllt
-- Klick auf Vorlage → `RuleModal` öffnet vorbefüllt; Admin passt Platzhalter (`@DEINE-DOMAIN.com`) an und speichert
+- **"From template" button** on `TransportRulesPage` (next to "New rule")
+- **`TemplatePickerModal`** with 9 ready-made rule templates, filterable in 4 categories
+- Per template: icon + description + conditions/actions pre-filled
+- Clicking a template → `RuleModal` opens pre-filled; the admin adjusts placeholders (`@DEINE-DOMAIN.com`) and saves
 
-### Mitgelieferte Vorlagen
+### Included templates
 
-| Kategorie | Vorlage | Conditions → Actions |
+| Category | Template | Conditions → Actions |
 |---|---|---|
-| **Kennzeichnung** | [EXTERN]-Markierung im Betreff | `from notContains @firma.com` → Subject-Präfix |
-| **Compliance** | Disclaimer für ausgehende Mails | `to notContains @firma.com` → addDisclaimer |
-| **Compliance** | BCC an Compliance-Postfach | `to contains @firma.com` → addRecipient compliance@ |
-| **Compliance** | Kreditkarten-Detection (PCI-DSS) | `body regex \b\d{13,16}\b` → quarantine |
-| **Sicherheit** | Spam-Score > 5 quarantänieren | `spamScore > 5` → quarantine |
-| **Sicherheit** | Malware-Endungen | `subject regex \.(exe|bat|scr|cmd|vbs|js|jar|hta)\b` → quarantine |
-| **Sicherheit** | CEO-Phishing-Schutz | `from regex (ceo|geschäftsführer|chef).*@(?!firma)` → Subject-Präfix „⚠ MÖGLICHES PHISHING" |
-| **Governance** | Größenlimit 25 MB | `size > 26214400` → reject |
-| **Governance** | DLP-Marker für externe Anhänge | `hasAttachment is true` + `to notContains @firma.com` → addHeader X-Coremail-External-Attachment |
+| **Labeling** | [EXTERN] marker in the subject | `from notContains @firma.com` → subject prefix |
+| **Compliance** | Disclaimer for outgoing mails | `to notContains @firma.com` → addDisclaimer |
+| **Compliance** | BCC to compliance mailbox | `to contains @firma.com` → addRecipient compliance@ |
+| **Compliance** | Credit card detection (PCI-DSS) | `body regex \b\d{13,16}\b` → quarantine |
+| **Security** | Quarantine spam score > 5 | `spamScore > 5` → quarantine |
+| **Security** | Malware extensions | `subject regex \.(exe|bat|scr|cmd|vbs|js|jar|hta)\b` → quarantine |
+| **Security** | CEO phishing protection | `from regex (ceo|geschäftsführer|chef).*@(?!firma)` → subject prefix "⚠ MÖGLICHES PHISHING" |
+| **Governance** | Size limit 25 MB | `size > 26214400` → reject |
+| **Governance** | DLP marker for external attachments | `hasAttachment is true` + `to notContains @firma.com` → addHeader X-Coremail-External-Attachment |
 
 ### Changed — `RuleModal`
 
-- Neuer optionaler `initial`-Prop: nimmt eine Template-Rule-Struktur und prefilled `name`, `description`, `priority`, `conditions`, `actions`
-- Bei `rule`-Prop (Edit-Modus) wird `initial` ignoriert
-- Eigene Regeln „from scratch" weiterhin via „Neue Regel"-Button (ohne Template)
+- New optional `initial` prop: takes a template rule structure and pre-fills `name`, `description`, `priority`, `conditions`, `actions`
+- With the `rule` prop (edit mode) `initial` is ignored
+- Own rules "from scratch" remain available via the "New rule" button (without template)
 
 ---
 
 
-> Ältere Releases (v3.13.6 und früher zurück bis v0.1) sind über `git log CHANGELOG.md`
-> oder die [GitHub-Releases](https://github.com/MAGPEEK/CoreMail/releases) erreichbar.
+> Older releases (v3.13.6 and earlier back to v0.1) are available via `git log CHANGELOG.md`
+> or the [GitHub releases](https://github.com/MAGPEEK/CoreMail/releases).
