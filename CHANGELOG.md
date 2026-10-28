@@ -11,6 +11,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Docs
+
+- `docs/jmap.md`: Architektur-Diagramm, Client-Einrichtung (Ltt.rs, Thunderbird, Web-Apps),
+  curl-Beispiele (Lesen, Flags/Verschieben, Senden mit `onSuccessUpdateEmail`, Anhänge,
+  EventSource, WebSocket, Blob/Quota) und FAQ.
+- `docs/releases/v5.7.1.md`: Release-Notes zum Tag v5.7.1 inkl. Vorschlag für
+  Repository-Beschreibung und Topics.
+
 ---
 
 ## [5.7.1] — 2026-10-27 — JMAP-Server (RFC 8620/8621 + 8887/9404/9425/9670/9749)
