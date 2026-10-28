@@ -1,4 +1,4 @@
-/** Capability-URNs der implementierten RFCs. */
+/** Capability URNs of the implemented RFCs. */
 export const CAP_CORE = 'urn:ietf:params:jmap:core';                     // RFC 8620
 export const CAP_MAIL = 'urn:ietf:params:jmap:mail';                     // RFC 8621
 export const CAP_SUBMISSION = 'urn:ietf:params:jmap:submission';         // RFC 8621

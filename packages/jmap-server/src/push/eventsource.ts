@@ -1,5 +1,5 @@
 /**
- * EventSource-Push (RFC 8620 §7.3): GET /jmap/eventsource?types=…&closeafter=…&ping=…
+ * EventSource push (RFC 8620 §7.3): GET /jmap/eventsource?types=…&closeafter=…&ping=…
  */
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';

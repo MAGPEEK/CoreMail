@@ -1,13 +1,13 @@
 /**
- * MAPI ROP-Types (v4.1.0)
+ * MAPI ROP types (v4.1.0)
  *
- * Konstanten und Typ-Definitionen für die Remote Operations (ROPs) gemäß
- * MS-OXCROPS §2.2. Wir implementieren initial die ROPs, die Outlook beim
- * Profile-Build nach Connect zwingend braucht.
+ * Constants and type definitions for the Remote Operations (ROPs) per
+ * MS-OXCROPS §2.2. Initially we implement the ROPs that Outlook strictly
+ * requires during profile build after Connect.
  */
 
 /**
- * ROP-IDs (MS-OXCROPS §2.2.2). Das erste Byte jedes ROP-Buffers.
+ * ROP IDs (MS-OXCROPS §2.2.2). The first byte of every ROP buffer.
  */
 export const RopId = {
   // Logon
@@ -140,7 +140,7 @@ export const RopId = {
 export type RopIdValue = typeof RopId[keyof typeof RopId];
 
 /**
- * Property-Type (MS-OXCDATA §2.11.1) — oberes Byte einer PropertyTag.
+ * Property type (MS-OXCDATA §2.11.1) — upper word of a PropertyTag.
  */
 export const PropType = {
   Unspecified:    0x0000,   // PT_UNSPECIFIED
@@ -171,10 +171,10 @@ export const PropType = {
 export type PropTypeValue = typeof PropType[keyof typeof PropType];
 
 /**
- * Property-Tag = PropertyId (uint16) | (PropertyType << 16).
- * Outlook addressiert Properties über die Kombination ID+Type.
+ * Property tag = PropertyId (uint16) | (PropertyType << 16).
+ * Outlook addresses properties via the combination ID+Type.
  *
- * Beispiel: PR_DISPLAY_NAME_W = 0x3001001F
+ * Example: PR_DISPLAY_NAME_W = 0x3001001F
  *   PropertyId = 0x3001
  *   PropertyType = 0x001F (Unicode)
  */
@@ -191,8 +191,8 @@ export function getPropType(tag: number): number {
 }
 
 /**
- * Standard-Property-Tags (MS-OXPROPS), die wir initial unterstützen.
- * Die Liste wird mit jeder ROP-Phase erweitert.
+ * Standard property tags (MS-OXPROPS) that we support initially.
+ * The list grows with every ROP phase.
  */
 export const PR = {
   // ── Folder Properties ──────────────────────────────────────────────────
@@ -267,7 +267,7 @@ export const PR = {
   PR_ATTACH_DATA_BIN:           makePropTag(0x3701, PropType.Binary),
   PR_ATTACH_DATA_OBJ:           makePropTag(0x3701, PropType.Object),
   PR_ATTACHMENT_LINKID:         makePropTag(0x7FFA, PropType.Int32),
-  // PR_DISPLAY_NAME_W (0x3001) wird auch für Attachment-DisplayName verwendet.
+  // PR_DISPLAY_NAME_W (0x3001) is also used for the attachment display name.
 
   // ── Recipient Properties (MS-OXOABK / MS-OXOMSG) ───────────────────────
   PR_EMAIL_ADDRESS_W:           makePropTag(0x3003, PropType.Unicode),

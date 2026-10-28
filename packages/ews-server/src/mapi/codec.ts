@@ -1,11 +1,11 @@
 /**
  * MAPI Binary Codec (v4.0.0)
  *
- * Buffer-Reader und -Writer für das MAPI/HTTP Wire-Format.
- * Alle Multi-Byte-Werte sind Little-Endian (Microsoft-Konvention).
+ * Buffer reader and writer for the MAPI/HTTP wire format.
+ * All multi-byte values are little-endian (Microsoft convention).
  *
- * Siehe ARCHITECTURE.md für Format-Details.
- * Referenz: MS-OXCRPC §2.2 (Wire Format), MS-OXCROPS §2 (ROP-Stream).
+ * See ARCHITECTURE.md for format details.
+ * Reference: MS-OXCRPC §2.2 (Wire Format), MS-OXCROPS §2 (ROP stream).
  */
 
 const TEXT_ENCODER = new TextEncoder();
@@ -13,20 +13,20 @@ const TEXT_DECODER_ASCII = new TextDecoder('ascii');
 const TEXT_DECODER_UTF16LE = new TextDecoder('utf-16le');
 
 /**
- * Liest sequentiell aus einem Buffer. Pointer (`offset`) wandert automatisch.
- * Wirft `RangeError` bei Over-Read.
+ * Reads sequentially from a buffer. The pointer (`offset`) advances automatically.
+ * Throws `RangeError` on over-read.
  */
 export class MapiReader {
   private offset = 0;
   constructor(private readonly buf: Buffer) {}
 
-  /** Aktuelle Position im Buffer. */
+  /** Current position in the buffer. */
   get position(): number { return this.offset; }
-  /** Restliche Bytes im Buffer. */
+  /** Remaining bytes in the buffer. */
   get remaining(): number { return this.buf.length - this.offset; }
-  /** Total-Länge des Buffers. */
+  /** Total length of the buffer. */
   get length(): number { return this.buf.length; }
-  /** Auf bestimmte Position springen. */
+  /** Jump to a specific position. */
   seek(pos: number): void {
     if (pos < 0 || pos > this.buf.length) {
       throw new RangeError(`seek(${pos}) out of range [0..${this.buf.length}]`);
@@ -62,7 +62,7 @@ export class MapiReader {
     this.offset += 4;
     return v;
   }
-  /** uint64 als BigInt (MAPI verwendet 64-bit Folder-IDs / Message-IDs). */
+  /** uint64 as BigInt (MAPI uses 64-bit folder IDs / message IDs). */
   readUint64(): bigint {
     this.ensure(8);
     const v = this.buf.readBigUInt64LE(this.offset);
@@ -86,8 +86,8 @@ export class MapiReader {
   // ── Strings (null-terminated) ─────────────────────────────────────────────
 
   /**
-   * Liest einen ASCII null-terminierten String (single-byte chars).
-   * Konsumiert auch das Null-Byte.
+   * Reads an ASCII null-terminated string (single-byte chars).
+   * Also consumes the null byte.
    */
   readAsciiString(): string {
     const start = this.offset;
@@ -97,13 +97,13 @@ export class MapiReader {
       throw new RangeError(`readAsciiString: no null terminator after offset ${start}`);
     }
     const str = TEXT_DECODER_ASCII.decode(this.buf.subarray(start, end));
-    this.offset = end + 1; // konsumiert Null-Terminator
+    this.offset = end + 1; // consumes the null terminator
     return str;
   }
 
   /**
-   * Liest einen UTF-16-LE null-terminierten String (2 Bytes pro Char,
-   * Terminator = 2 Bytes 0x0000). Wird oft für Properties verwendet
+   * Reads a UTF-16-LE null-terminated string (2 bytes per char,
+   * terminator = 2 bytes 0x0000). Often used for properties
    * (PT_UNICODE).
    */
   readUtf16String(): string {
@@ -117,13 +117,13 @@ export class MapiReader {
       throw new RangeError(`readUtf16String: no null terminator after offset ${start}`);
     }
     const str = TEXT_DECODER_UTF16LE.decode(this.buf.subarray(start, end));
-    this.offset = end + 2; // konsumiert Null-Terminator (2 Bytes)
+    this.offset = end + 2; // consumes the null terminator (2 bytes)
     return str;
   }
 
   // ── GUIDs (16 Bytes, MS-DTYP §2.3.4.2) ────────────────────────────────────
 
-  /** Liest eine GUID als Buffer (16 Bytes). */
+  /** Reads a GUID as a buffer (16 bytes). */
   readGuid(): Buffer {
     this.ensure(16);
     const out = Buffer.from(this.buf.subarray(this.offset, this.offset + 16));
@@ -131,10 +131,10 @@ export class MapiReader {
     return out;
   }
 
-  /** Liest eine GUID und gibt die Standard-Schreibweise zurück: AABBCCDD-EEFF-GGHH-IIJJ-KKLLMMNNOOPP */
+  /** Reads a GUID and returns the standard notation: AABBCCDD-EEFF-GGHH-IIJJ-KKLLMMNNOOPP */
   readGuidString(): string {
     const g = this.readGuid();
-    // MS-GUID-Format: Data1 (uint32 LE), Data2 (uint16 LE), Data3 (uint16 LE), Data4 (8 Bytes BE)
+    // MS GUID format: Data1 (uint32 LE), Data2 (uint16 LE), Data3 (uint16 LE), Data4 (8 bytes BE)
     const d1 = g.readUInt32LE(0).toString(16).padStart(8, '0');
     const d2 = g.readUInt16LE(4).toString(16).padStart(4, '0');
     const d3 = g.readUInt16LE(6).toString(16).padStart(4, '0');
@@ -143,9 +143,9 @@ export class MapiReader {
     return `${d1}-${d2}-${d3}-${d4}-${d5}`;
   }
 
-  // ── Buffer-Slice ───────────────────────────────────────────────────────────
+  // ── Buffer slice ───────────────────────────────────────────────────────────
 
-  /** Liest n Bytes als raw Buffer. */
+  /** Reads n bytes as a raw buffer. */
   readBuffer(n: number): Buffer {
     this.ensure(n);
     const out = Buffer.from(this.buf.subarray(this.offset, this.offset + n));
@@ -155,17 +155,17 @@ export class MapiReader {
 }
 
 /**
- * Schreibt sequentiell in einen wachsenden Buffer.
- * Liefert via `.toBuffer()` das fertige Ergebnis.
+ * Writes sequentially into a growing buffer.
+ * Returns the finished result via `.toBuffer()`.
  */
 export class MapiWriter {
   private chunks: Buffer[] = [];
   private len = 0;
 
-  /** Aktuelle Gesamtlänge des Buffers. */
+  /** Current total length of the buffer. */
   get length(): number { return this.len; }
 
-  /** Gibt den fertigen Buffer zurück (Copy). */
+  /** Returns the finished buffer (copy). */
   toBuffer(): Buffer {
     return Buffer.concat(this.chunks, this.len);
   }
@@ -210,16 +210,16 @@ export class MapiWriter {
 
   // ── Strings ────────────────────────────────────────────────────────────────
 
-  /** ASCII (single-byte) string mit null-terminator. */
+  /** ASCII (single-byte) string with null terminator. */
   writeAsciiString(s: string): void {
     const b = Buffer.from(s, 'ascii');
     this.push(b);
     this.writeUint8(0); // null-terminator
   }
 
-  /** UTF-16-LE string mit null-terminator (2 Bytes 0x0000). */
+  /** UTF-16-LE string with null terminator (2 bytes 0x0000). */
   writeUtf16String(s: string): void {
-    // TextEncoder unterstützt UTF-16-LE nicht direkt — manuelle Codierung
+    // TextEncoder does not support UTF-16-LE directly — manual encoding
     const b = Buffer.allocUnsafe(s.length * 2);
     for (let i = 0; i < s.length; i++) {
       b.writeUInt16LE(s.charCodeAt(i), i * 2);
@@ -230,7 +230,7 @@ export class MapiWriter {
 
   // ── GUIDs ──────────────────────────────────────────────────────────────────
 
-  /** Schreibt eine GUID (16 Bytes). */
+  /** Writes a GUID (16 bytes). */
   writeGuid(guid: Buffer): void {
     if (guid.length !== 16) {
       throw new TypeError(`writeGuid: expected 16 bytes, got ${guid.length}`);
@@ -238,7 +238,7 @@ export class MapiWriter {
     this.push(Buffer.from(guid));
   }
 
-  /** Parst die Standard-GUID-Schreibweise und schreibt sie. */
+  /** Parses the standard GUID notation and writes it. */
   writeGuidString(s: string): void {
     const clean = s.replace(/[{}-]/g, '');
     if (clean.length !== 32) {
@@ -253,17 +253,17 @@ export class MapiWriter {
     this.push(b);
   }
 
-  // ── Buffer-Append ──────────────────────────────────────────────────────────
+  // ── Buffer append ──────────────────────────────────────────────────────────
 
-  /** Hängt einen vorhandenen Buffer an. */
+  /** Appends an existing buffer. */
   writeBuffer(b: Buffer): void {
     this.push(Buffer.from(b));
   }
 }
 
 /**
- * MAPI-Status- und Fehler-Codes (MS-OXCRPC §2.2.5).
- * Nicht erschöpfend — nur die Codes die wir aktuell verwenden.
+ * MAPI status and error codes (MS-OXCRPC §2.2.5).
+ * Not exhaustive — only the codes we currently use.
  */
 export const MapiStatusCode = {
   SUCCESS:                  0x00000000,
@@ -279,7 +279,7 @@ export const MapiStatusCode = {
 } as const;
 
 /**
- * X-Response-Codes für den HTTP-Header `X-ResponseCode` (MS-OXCMAPIHTTP §2.2.3.4).
+ * X-Response codes for the HTTP header `X-ResponseCode` (MS-OXCMAPIHTTP §2.2.3.4).
  */
 export const ResponseCode = {
   SUCCESS:                  0,
@@ -295,8 +295,8 @@ export const ResponseCode = {
 } as const;
 
 /**
- * AUX-Header-Types (MS-OXCRPC §2.2.2.2). Wir senden minimal, damit Outlook
- * den Server als kompatibel erkennt.
+ * AUX header types (MS-OXCRPC §2.2.2.2). We send the minimum so Outlook
+ * recognizes the server as compatible.
  */
 export const AuxType = {
   PERF_REQUESTID:    0x01,

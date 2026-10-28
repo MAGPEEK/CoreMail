@@ -1,18 +1,18 @@
 /**
  * MAPI over HTTP — Router (v4.0.0)
  *
- * v4.0.0 Foundation: Refactor des bestehenden JSON-Stubs auf binäres
- * MS-OXCMAPIHTTP-Protokoll. emsmdb/Connect/Disconnect funktional, Execute
- * gibt ecNotSupported zurück. NSPI Bind/Unbind funktional, QueryRows/
- * ResolveNames behalten JSON-Stub als Fallback bis volle NSPI-Implementation
+ * v4.0.0 foundation: refactor of the existing JSON stub to the binary
+ * MS-OXCMAPIHTTP protocol. emsmdb/Connect/Disconnect functional, Execute
+ * returns ecNotSupported. NSPI Bind/Unbind functional, QueryRows/
+ * ResolveNames keep the JSON stub as a fallback until the full NSPI implementation
  * (v4.7.0).
  *
  * Endpoints:
  *   POST /mapi/emsmdb/         → Binary MAPI (Connect/Execute/Disconnect/NotificationWait)
- *   POST /mapi/nspi/           → NSPI (Bind/Unbind binär, QueryRows JSON-Stub)
- *   GET  /mapi/healthcheck.htm → 200 OK + Body "MAPI" (anonym)
+ *   POST /mapi/nspi/           → NSPI (Bind/Unbind binary, QueryRows JSON stub)
+ *   GET  /mapi/healthcheck.htm → 200 OK + body "MAPI" (anonymous)
  *
- * Siehe ARCHITECTURE.md für Implementations-Roadmap.
+ * See ARCHITECTURE.md for the implementation roadmap.
  */
 
 import express, { Router, type Router as RouterType, type Request, type Response } from 'express';
@@ -30,8 +30,8 @@ import {
 const log = createLogger('mapi');
 export const mapiRouter: RouterType = Router();
 
-// ─── Body-Parser: raw Buffer für /emsmdb/ und /nspi/ ─────────────────────────
-// MAPI-Bodies sind BINÄR — kein JSON, kein text. Express muss als Buffer parsen.
+// ─── Body parser: raw Buffer for /emsmdb/ and /nspi/ ─────────────────────────
+// MAPI bodies are BINARY — no JSON, no text. Express must parse them as a Buffer.
 mapiRouter.use((req, res, next) => {
   if (req.path === '/emsmdb/' || req.path === '/nspi/') {
     return express.raw({
@@ -42,10 +42,10 @@ mapiRouter.use((req, res, next) => {
   return next();
 });
 
-// ─── v5.2.0: gzip/deflate-Decompression für X-CompressedRequest ──────────────
-// Outlook 2016+ kann Request-Bodies mit gzip komprimieren (MS-OXCMAPIHTTP §2.2.3.2.6).
-// Wir dekomprimieren transparent vor dem Handler. Spart bei großen ROP-Streams
-// (Search, Sync) Bandwidth, besonders über mobile Netze.
+// ─── v5.2.0: gzip/deflate decompression for X-CompressedRequest ──────────────
+// Outlook 2016+ can gzip-compress request bodies (MS-OXCMAPIHTTP §2.2.3.2.6).
+// We decompress transparently before the handler. Saves bandwidth on large ROP streams
+// (Search, Sync), especially over mobile networks.
 mapiRouter.use(async (req, res, next) => {
   if (req.path !== '/emsmdb/' && req.path !== '/nspi/') return next();
   const compressed = req.headers['x-compressedrequest'];
@@ -61,14 +61,14 @@ mapiRouter.use(async (req, res, next) => {
   next();
 });
 
-// ─── Healthcheck (anonym) ────────────────────────────────────────────────────
+// ─── Healthcheck (anonymous) ────────────────────────────────────────────────────
 
 mapiRouter.get('/healthcheck.htm', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.status(200).send('MAPI');
 });
 
-// ─── EMSMDB (Mailbox-Server) ─────────────────────────────────────────────────
+// ─── EMSMDB (mailbox server) ─────────────────────────────────────────────────
 
 mapiRouter.post('/emsmdb/', async (req: Request, res: Response) => {
   try {
@@ -111,7 +111,7 @@ mapiRouter.post('/nspi/', async (req: Request, res: Response) => {
       }
       const { token } = await createNspiSession({ userId: user.id, email: user.email });
 
-      // Binary Response: nur StatusCode + ErrorCode (NSPI ist einfacher als emsmdb)
+      // Binary response: only StatusCode + ErrorCode (NSPI is simpler than emsmdb)
       const w = new MapiWriter();
       w.writeUint32(MapiStatusCode.SUCCESS);  // StatusCode
       w.writeUint32(MapiStatusCode.SUCCESS);  // ErrorCode
@@ -146,9 +146,9 @@ mapiRouter.post('/nspi/', async (req: Request, res: Response) => {
     case 'GetProps':
     case 'DnToMinId':
     case 'GetPropList': {
-      // v5.1.0: Volle NSPI Binary-Implementation. Outlook bekommt jetzt
-      // echte GAL-Daten (aktive User) via MS-OXNSPI binary
-      // RowSet — kein EWS-Fallback mehr nötig.
+      // v5.1.0: Full NSPI binary implementation. Outlook now gets
+      // real GAL data (active users) via MS-OXNSPI binary
+      // RowSet — no EWS fallback needed anymore.
       const session = await getNspiSession(headers.cookies['NspiSession'] ?? '');
       if (!session) {
         sendMapiError(res, { requestId, responseCode: ResponseCode.EXPIRED_COOKIE });

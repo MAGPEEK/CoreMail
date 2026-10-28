@@ -1,7 +1,7 @@
 /**
- * Folder-Operations-Handler (v4.4.0)
+ * Folder operations handler (v4.4.0)
  *
- * Implementiert:
+ * Implements:
  *   - RopDeleteMessages      (MS-OXCMSG §2.2.3.3)
  *   - RopMoveCopyMessages    (MS-OXCMSG §2.2.7.1)
  */
@@ -22,7 +22,7 @@ const log = createLogger('mapi:rop:folder-ops');
  * Payload: WantAsynchronous(uint8) | NotifyNonRead(uint8)
  *        | MessageIdCount(uint16) | MessageIds(uint64[])
  *
- * Antwort: ReturnValue + PartialCompletion(uint8)
+ * Response: ReturnValue + PartialCompletion(uint8)
  */
 export async function handleRopDeleteMessages(
   rop: RopRequest,
@@ -45,7 +45,7 @@ export async function handleRopDeleteMessages(
     ids64.push(r.readUint64());
   }
 
-  // Messages auflösen über 64-bit Hash
+  // Resolve messages via 64-bit hash
   const messages = await prisma.message.findMany({
     where: { folderId, folder: { mailbox: { userId } } },
     select: { id: true },
@@ -62,7 +62,7 @@ export async function handleRopDeleteMessages(
       partial = true;
     }
   }
-  // Folder-Counter aktualisieren
+  // Update folder counters
   if (deleted > 0) {
     try {
       await prisma.folder.update({
@@ -91,7 +91,7 @@ export async function handleRopDeleteMessages(
  *
  * Source = inputHandleIndex (folder), Destination = outputHandleIndex (folder).
  *
- * Antwort: ReturnValue + PartialCompletion(uint8)
+ * Response: ReturnValue + PartialCompletion(uint8)
  */
 export async function handleRopMoveCopyMessages(
   rop: RopRequest,
@@ -129,7 +129,7 @@ export async function handleRopMoveCopyMessages(
   for (const t of targets) {
     try {
       if (wantCopy) {
-        // Copy: vollständigen Record duplizieren (Mailbox-UID-Increment)
+        // Copy: duplicate the complete record (mailbox UID increment)
         const orig = await prisma.message.findUnique({ where: { id: t.id } });
         if (orig) {
           const { id: _id, createdAt: _c, ...rest } = orig;
@@ -148,7 +148,7 @@ export async function handleRopMoveCopyMessages(
     }
   }
 
-  // Folder-Counter
+  // Folder counters
   if (moved > 0) {
     try {
       await prisma.folder.update({

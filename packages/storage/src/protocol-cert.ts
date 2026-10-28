@@ -1,20 +1,20 @@
 /**
- * Protocol-TLS-Cert-Loader (v5.2.8+)
+ * Protocol TLS cert loader (v5.2.8+)
  *
- * Lädt das passende TLS-Zertifikat für einen Protokoll-Server (SMTP/IMAP/POP3)
- * **direkt aus der `certificates`-Tabelle** anhand der `services`-Liste.
+ * Loads the matching TLS certificate for a protocol server (SMTP/IMAP/POP3)
+ * **directly from the `certificates` table** based on the `services` list.
  *
- * Sucht in der Reihenfolge:
- *   1. ACTIVE Cert mit `isActiveProtocol = true` UND `services` enthält den
- *      gewünschten Service-Namen (z.B. 'SMTP', 'IMAP', 'POP3').
- *   2. Fallback: legacy `ServerSettings.tlsCert` + `tlsKey` (für ältere
- *      Setups bevor v5.2.8 — pre-services-Modell).
- *   3. Wenn nichts gefunden: liefert `null`, der Caller generiert ein
- *      self-signed Cert (nur beim allerersten Start sinnvoll).
+ * Lookup order:
+ *   1. ACTIVE cert with `isActiveProtocol = true` AND `services` containing the
+ *      requested service name (e.g. 'SMTP', 'IMAP', 'POP3').
+ *   2. Fallback: legacy `ServerSettings.tlsCert` + `tlsKey` (for older
+ *      setups before v5.2.8 — pre-services model).
+ *   3. If nothing is found: returns `null`, the caller generates a
+ *      self-signed cert (only sensible on the very first start).
  *
- * Diese Architektur ersetzt den fragilen ServerSettings.tlsCert-Sync der bis
- * v5.2.7 von Hand in `applyProtocolCert()` aktualisiert wurde und vom
- * smtp-server auf jedem Restart überschrieben werden konnte.
+ * This architecture replaces the fragile ServerSettings.tlsCert sync that until
+ * v5.2.7 was updated by hand in `applyProtocolCert()` and could be
+ * overwritten by the smtp-server on every restart.
  */
 
 import { prisma } from './prisma/index.js';
@@ -28,12 +28,12 @@ export interface ProtocolCert {
 }
 
 /**
- * @param service 'SMTP' | 'IMAP' | 'POP3' (case-insensitive, intern uppercase)
+ * @param service 'SMTP' | 'IMAP' | 'POP3' (case-insensitive, uppercase internally)
  */
 export async function loadProtocolCert(service: string): Promise<ProtocolCert | null> {
   const svc = service.toUpperCase();
 
-  // 1. Cert mit services[svc] + isActiveProtocol
+  // 1. Cert with services[svc] + isActiveProtocol
   const cert = await prisma.certificate.findFirst({
     where: {
       status:           'ACTIVE',

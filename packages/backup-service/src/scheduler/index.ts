@@ -11,28 +11,28 @@ import { uploadToS3, getSignedDownloadUrl } from '../upload/s3.js';
 
 const log = createLogger('backup:scheduler');
 
-// v3.18.26: Map cron-string → running CronJob; aktualisiert bei Schedule-CRUD
+// v3.18.26: Map cron string → running CronJob; updated on schedule CRUD
 const activeJobs = new Map<string, CronJob>();
-// v3.18.26: Master-CronJob für DB-Reload alle Minuten (erkennt UI-Änderungen)
+// v3.18.26: master CronJob for DB reload every minute (detects UI changes)
 let scheduleReloader: CronJob | null = null;
 
 /**
- * v3.18.26: Scheduler liest jetzt aus DB-Tabelle `BackupSchedule` statt nur
- * aus Env-Variable. Env-BACKUP_SCHEDULE bleibt als Fallback für Bootstrapping
- * (falls noch keine Schedules in der DB existieren). Reloader prüft alle 60s
- * ob sich Schedules geändert haben und passt aktive CronJobs an.
+ * v3.18.26: the scheduler now reads from the DB table `BackupSchedule` instead of
+ * only the env variable. Env BACKUP_SCHEDULE remains as a fallback for bootstrapping
+ * (if no schedules exist in the DB yet). The reloader checks every 60s
+ * whether schedules changed and adjusts active CronJobs.
  */
 export function startBackupScheduler() {
   const retentionSchedule = process.env['RETENTION_SCHEDULE'] ?? '0 3 * * *';
   log.info({ retentionSchedule }, 'Starting backup scheduler — loading from DB');
 
-  // Initial laden
+  // Initial load
   void reloadSchedules();
 
-  // Reloader: alle 60s DB neu lesen, Schedules synchronisieren
+  // Reloader: re-read the DB every 60s, synchronize schedules
   scheduleReloader = new CronJob('* * * * *', () => { void reloadSchedules(); }, null, true, 'UTC');
 
-  // Retention-Policy bleibt aus Env (eigener Worker)
+  // Retention policy stays env-driven (separate worker)
   const retentionJob = new CronJob(
     retentionSchedule,
     async () => {
@@ -53,14 +53,14 @@ export function startBackupScheduler() {
 }
 
 /**
- * v3.18.26: Aktive Cron-Jobs mit DB-Inhalt synchronisieren.
+ * v3.18.26: synchronize active cron jobs with DB content.
  */
 async function reloadSchedules(): Promise<void> {
   try {
     const dbSchedules = await prisma.backupSchedule.findMany({ where: { enabled: true } });
     const dbIds = new Set(dbSchedules.map((s) => s.id));
 
-    // Entfernte oder deaktivierte Schedules: stop + remove
+    // Removed or disabled schedules: stop + remove
     for (const [id, job] of activeJobs) {
       if (!dbIds.has(id)) {
         job.stop();
@@ -69,7 +69,7 @@ async function reloadSchedules(): Promise<void> {
       }
     }
 
-    // Neue oder geänderte Schedules: starten
+    // New or changed schedules: start
     for (const schedule of dbSchedules) {
       const existing = activeJobs.get(schedule.id);
       const currentCron = existing?.cronTime?.source as string | undefined;
@@ -115,7 +115,7 @@ async function reloadSchedules(): Promise<void> {
         activeJobs.set(schedule.id, job);
         log.info({ scheduleId: schedule.id, cron: schedule.cron, name: schedule.name }, 'Schedule registered');
       } catch (err) {
-        // ungültige Cron-Expression — DB-Update + skip
+        // invalid cron expression — DB update + skip
         log.error({ err, scheduleId: schedule.id, cron: schedule.cron }, 'Invalid cron expression');
         await prisma.backupSchedule.update({
           where: { id: schedule.id },
@@ -134,8 +134,8 @@ interface RunOpts {
 }
 
 /**
- * v3.18.26 fix: Schreibt EINEN Master-Job upfront mit status=RUNNING, dann
- * pro User Child-Jobs. Frontend sieht sofort einen RUNNING-Job.
+ * v3.18.26 fix: writes ONE master job upfront with status=RUNNING, then
+ * child jobs per user. The frontend immediately sees a RUNNING job.
  */
 export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string }> {
   const startedAt = new Date();
@@ -163,7 +163,7 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
 
       for (let i = 0; i < users.length; i++) {
         const user = users[i]!;
-        // Progress-Update am Master-Job
+        // Progress update on the master job
         await prisma.backupJob.update({
           where: { id: masterJob.id },
           data: {
@@ -251,8 +251,8 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
 }
 
 /**
- * v3.18.26: Per-Mailbox-Backup (Admin-Aktion oder Schedule).
- * Synchron returnable jobId, async Worker macht den Rest.
+ * v3.18.26: per-mailbox backup (admin action or schedule).
+ * Synchronously returnable jobId, the async worker does the rest.
  */
 export async function runSingleMailboxBackup(opts: {
   userId: string;
@@ -326,7 +326,7 @@ export async function runSingleMailboxBackup(opts: {
 }
 
 /**
- * Klassifiziert Fehler nach typischen Backup-Failure-Modes für RTO-Reporting.
+ * Classifies errors by typical backup failure modes for RTO reporting.
  */
 function classifyError(err: unknown): string {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
@@ -338,8 +338,8 @@ function classifyError(err: unknown): string {
 }
 
 /**
- * v3.18.26 BC-Layer: alte Funktion mit gleicher Signatur wie vorher (für
- * Imports in restore/server.ts die noch nicht migriert sind).
+ * v3.18.26 BC layer: old function with the same signature as before (for
+ * imports in restore/server.ts that are not migrated yet).
  */
 export async function runUserBackup(
   userId: string,

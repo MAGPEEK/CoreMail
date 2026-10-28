@@ -1,23 +1,23 @@
 /**
- * Search-ROP-Handler (v4.8.0)
+ * Search ROP handler (v4.8.0)
  *
- * Implementiert:
- *   - RopRestrict   (MS-OXCTABL §2.2.2.4) — Filter auf Content-Tabelle setzen
- *   - RopFindRow    (MS-OXCTABL §2.2.2.13) — finde nächste Zeile die matcht
+ * Implements:
+ *   - RopRestrict   (MS-OXCTABL §2.2.2.4) — set a filter on the contents table
+ *   - RopFindRow    (MS-OXCTABL §2.2.2.13) — find the next matching row
  *
- * Restriction-Format (MS-OXCDATA §2.12):
- *   RestrictType(uint8) + Restriction-spezifische Felder
+ * Restriction format (MS-OXCDATA §2.12):
+ *   RestrictType(uint8) + restriction-specific fields
  *
- * Unterstützte RestrictTypes für v4.8.0 MVP:
- *   ResAnd (0x00)       — AND von child restrictions
+ * Supported RestrictTypes for the v4.8.0 MVP:
+ *   ResAnd (0x00)       — AND of child restrictions
  *   ResOr  (0x01)       — OR
  *   ResNot (0x02)
  *   ResContent (0x03)   — Property contains/equals/starts-with value
  *   ResProperty (0x04)  — Property comparison (EQ/GT/LT)
  *   ResExist (0x08)     — Property is set
  *
- * Restriction wird in `columns`-Slot des Table-Handles persistiert (zusätzlich
- * zu Spalten) und beim nächsten QueryRows als Prisma where-Clause angewendet.
+ * The restriction is persisted in the table handle's `columns` slot (in addition
+ * to the columns) and applied as a Prisma where clause on the next QueryRows.
  */
 
 import { prisma } from '@coremail/storage';
@@ -53,7 +53,7 @@ const RELOP_EQ       = 4;
 const RELOP_NE       = 5;
 
 /**
- * v4.8.0: RopRestrict — speichert Restriction am Table-Handle für QueryRows.
+ * v4.8.0: RopRestrict — stores the restriction on the table handle for QueryRows.
  */
 export async function handleRopRestrict(
   rop: RopRequest,
@@ -92,16 +92,16 @@ export async function handleRopRestrict(
 }
 
 /**
- * v4.8.0: RopFindRow — sucht in einer Content-Tabelle die nächste Zeile,
- * die der Restriction entspricht.
+ * v4.8.0: RopFindRow — searches a contents table for the next row
+ * that matches the restriction.
  *
  * Response (MS-OXCTABL §2.2.2.13.2):
  *   ReturnValue + RowNoLongerVisible(1) + HasRowData(1) + Row(variable)
  *
- * v4.8.0 minimal: liefert "kein Match" (HasRowData=0). Volle Implementation
- * bräuchte Cursor-Position-Tracking + Restriction-Matching gegen die nächste
- * Zeile aus dem Backing-Store. Für Outlook-Search-Folder-Workflows ist
- * RopRestrict + nachfolgendes RopQueryRows der Hauptpfad.
+ * v4.8.0 minimal: returns "no match" (HasRowData=0). A full implementation
+ * would need cursor-position tracking + restriction matching against the next
+ * row from the backing store. For Outlook search-folder workflows,
+ * RopRestrict + subsequent RopQueryRows is the main path.
  */
 export async function handleRopFindRow(
   rop: RopRequest,
@@ -123,7 +123,7 @@ export async function handleRopFindRow(
   return w.toBuffer();
 }
 
-// ── Restriction-Parsing & Prisma-Mapping ──────────────────────────────────
+// ── Restriction parsing & Prisma mapping ──────────────────────────────────
 
 export type ParsedRestriction =
   | { kind: 'and'; sub: ParsedRestriction[] }
@@ -148,7 +148,7 @@ function parseRestriction(r: MapiReader): ParsedRestriction {
     case RES_CONTENT: {
       const fuzzy = r.readUint32();
       const tag = r.readUint32();
-      // PropertyValue (tag + value), aber Outlook sendet manchmal duplicate
+      // PropertyValue (tag + value), but Outlook sometimes sends a duplicate
       r.readUint32();                   // duplicate-tag
       const value = readPropertyValue(r, getPropType(tag));
       return { kind: 'content', tag, fuzzy, value };
@@ -170,8 +170,8 @@ function parseRestriction(r: MapiReader): ParsedRestriction {
 }
 
 /**
- * Konvertiert eine ParsedRestriction in eine Prisma `where`-Clause für die
- * Message-Tabelle. Unbekannte Tags werden ignoriert (no-op match-all-true).
+ * Converts a ParsedRestriction into a Prisma `where` clause for the
+ * Message table. Unknown tags are ignored (no-op match-all-true).
  */
 export function restrictionToPrismaWhere(restr: ParsedRestriction | null): Record<string, unknown> {
   if (!restr) return {};
@@ -214,7 +214,7 @@ export function restrictionToPrismaWhere(restr: ParsedRestriction | null): Recor
 }
 
 function tagToPrismaField(tag: number): string | null {
-  // Property-Type wird ignoriert — wir matchen nur PropertyId
+  // The property type is ignored — we only match the PropertyId
   const id = getPropId(tag);
   switch (id) {
     case 0x0037: return 'subject';                // PR_SUBJECT_W

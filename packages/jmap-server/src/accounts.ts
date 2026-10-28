@@ -1,8 +1,8 @@
 /**
- * Account-Auflösung: welche Postfächer sieht der authentifizierte User?
- *  1. eigenes Postfach           → accountId = userId
+ * Account resolution: which mailboxes does the authenticated user see?
+ *  1. own mailbox                → accountId = userId
  *  2. Shared Mailboxes           → accountId = `shared-<id>` (FULL_ACCESS | READ_ONLY | SEND_AS)
- *  3. delegierte Fremdpostfächer → accountId = userId des Besitzers (MailboxDelegate)
+ *  3. delegated foreign mailboxes → accountId = userId of the owner (MailboxDelegate)
  */
 import { prisma } from '@coremail/storage';
 import type { AccountContext, JmapUser } from './types.js';
@@ -44,7 +44,7 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
     });
   }
 
-  // Shared Mailboxes — mehrere Permission-Rows pro Box möglich
+  // Shared mailboxes — multiple permission rows per box possible
   const sharedAgg = new Map<string, { perms: Set<string>; box: (typeof perms)[number]['sharedMailbox'] }>();
   for (const p of perms) {
     const entry = sharedAgg.get(p.sharedMailbox.id) ?? { perms: new Set<string>(), box: p.sharedMailbox };
@@ -55,7 +55,7 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
     if (!box.mailbox) continue;
     const full = ps.has('FULL_ACCESS');
     const readOnly = !full && ps.has('READ_ONLY');
-    if (!full && !readOnly) continue; // nur SEND_AS/SEND_ON_BEHALF → kein Postfachzugriff
+    if (!full && !readOnly) continue; // only SEND_AS/SEND_ON_BEHALF → no mailbox access
     accounts.set(`${SHARED_PREFIX}${id}`, {
       accountId: `${SHARED_PREFIX}${id}`,
       mailboxId: box.mailbox.id,
@@ -88,7 +88,7 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
   return accounts;
 }
 
-/** accountId → alle User, die über diesen Account benachrichtigt werden sollen. */
+/** accountId → all users that should be notified about this account. */
 export async function usersForAccount(accountId: string): Promise<string[]> {
   if (accountId.startsWith(SHARED_PREFIX)) {
     const perms = await prisma.sharedMailboxPerm.findMany({

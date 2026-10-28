@@ -1,18 +1,17 @@
 /**
- * Calendar-ROP-Mapping — Phase v4.6.0
+ * Calendar ROP mapping — phase v4.6.0
  *
- * STUB — Implementation kommt in v4.6.0.
+ * STUB — implementation arrives in v4.6.0.
  *
- * Outlook behandelt Kalender-Termine als **Messages** mit MessageClass
- * `IPM.Appointment` in einem speziellen Folder (`PR_CONTAINER_CLASS_W =
- * "IPF.Appointment"`). Es gibt keine separaten Calendar-ROPs — wir nutzen
- * dieselben Message- + Stream-ROPs wie für Mail.
+ * Outlook treats calendar appointments as **messages** with MessageClass
+ * `IPM.Appointment` in a special folder (`PR_CONTAINER_CLASS_W =
+ * "IPF.Appointment"`). There are no separate calendar ROPs — we use
+ * the same message + stream ROPs as for mail.
  *
- * Was wir in v4.6.0 ergänzen:
- *   - Folder-Discovery: Calendar-Folder = `CalendarSection` aus Prisma →
- *     Hierarchy-Tabelle muss diesen mit PR_CONTAINER_CLASS_W="IPF.Appointment"
- *     ausweisen.
- *   - Property-Mapping `CalendarEvent` ↔ MAPI Appointment Properties:
+ * What we add in v4.6.0:
+ *   - Folder discovery: calendar folder = `CalendarSection` from Prisma →
+ *     the hierarchy table must flag it with PR_CONTAINER_CLASS_W="IPF.Appointment".
+ *   - Property mapping `CalendarEvent` ↔ MAPI appointment properties:
  *     - Summary/Subject     → PR_SUBJECT_W
  *     - Description         → PR_BODY_W
  *     - Location            → PidLidLocation (named property)
@@ -20,22 +19,22 @@
  *     - EndDate             → PidLidAppointmentEndWhole
  *     - AllDay              → PidLidAppointmentSubType
  *     - Attendees           → RecipientList + PidLidAppointmentRecur
- *     - Recurrence          → PidLidAppointmentRecur (Pattern-Binary)
+ *     - Recurrence          → PidLidAppointmentRecur (pattern binary)
  *     - BusyStatus          → PidLidBusyStatus
  *     - Reminder            → PidLidReminderSet + PidLidReminderMinutes
  *
- * Named Properties:
- *   Outlook nutzt für Appointment-Felder GUID-prefixed named properties
+ * Named properties:
+ *   Outlook uses GUID-prefixed named properties for appointment fields
  *   (PSETID_Appointment = "00062002-0000-0000-C000-000000000046").
- *   Diese werden via RopGetPropertyIdsFromNames in lokale PropertyIds aufgelöst.
- *   In v4.6.0 brauchen wir einen Named-Property-Cache.
+ *   These are resolved to local PropertyIds via RopGetPropertyIdsFromNames.
+ *   In v4.6.0 we need a named-property cache.
  *
  * Free/Busy:
- *   Via existing /api/v1/calendar/freebusy Endpoint, im MAPI als
- *   PR_FREEBUSY_DATA Property.
+ *   Via the existing /api/v1/calendar/freebusy endpoint, in MAPI as the
+ *   PR_FREEBUSY_DATA property.
  *
- * iMIP/iTIP-Integration:
- *   Bei RopSubmitMessage(IPM.Appointment) → bestehender iMIP-Sender aus
- *   packages/api-gateway/src/lib/imip.ts wiederverwenden.
+ * iMIP/iTIP integration:
+ *   On RopSubmitMessage(IPM.Appointment) → reuse the existing iMIP sender from
+ *   packages/api-gateway/src/lib/imip.ts.
  */
 export {};

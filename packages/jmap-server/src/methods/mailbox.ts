@@ -1,7 +1,7 @@
 /**
- * Mailbox/* (RFC 8621 §2). Ein JMAP-Mailbox-Objekt ist ein CoreMail-Folder.
- * totalThreads/unreadThreads werden mit totalEmails/unreadEmails angenähert
- * (CoreMail hält keine Thread-Zähler).
+ * Mailbox/* (RFC 8621 §2). A JMAP Mailbox object is a CoreMail folder.
+ * totalThreads/unreadThreads are approximated with totalEmails/unreadEmails
+ * (CoreMail keeps no thread counters).
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
@@ -81,7 +81,7 @@ registerMethod('Mailbox/changes', CAP_MAIL, async (args, ctx) => {
     where: { mailboxId: account.mailboxId }, select: { id: true, createdAt: true },
   });
   const created = folders.filter((f) => f.createdAt.getTime() > old.maxCreatedMs).map((f) => f.id);
-  // Gelöschte Ordner kennen wir nicht mehr → Client muss komplett neu laden
+  // Deleted folders are no longer known → client must reload completely
   if (old.count + created.length !== folders.length) throw cannotCalculateChanges();
   const createdSet = new Set(created);
   return {
@@ -140,7 +140,7 @@ registerMethod('Mailbox/query', CAP_MAIL, async (args, ctx) => {
       for (const f of (byParent.get(parent) ?? []).sort(cmp)) { ordered.push(f); walk(f.id); }
     };
     walk(null);
-    // Ordner, deren Eltern ausgefiltert wurden, hinten anhängen
+    // Append folders whose parents were filtered out at the end
     for (const f of folders) if (!ordered.includes(f) && f.parentId && !present.has(f.parentId)) ordered.push(f);
   } else {
     ordered = [...folders].sort(cmp);
@@ -264,7 +264,7 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
   };
 });
 
-// Hilfsfunktion für andere Module
+// Helper for other modules
 export async function folderInAccount(account: AccountContext, folderId: string): Promise<{ id: string; name: string } | null> {
   return prisma.folder.findFirst({ where: { id: folderId, mailboxId: account.mailboxId }, select: { id: true, name: true } });
 }

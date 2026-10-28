@@ -1,17 +1,17 @@
 /**
- * MAPI/HTTP-Header-Handling (v4.0.0)
+ * MAPI/HTTP header handling (v4.0.0)
  *
- * MS-OXCMAPIHTTP §2.2.3 definiert die HTTP-Layer-Header für Outlook ↔ Server.
- * Wir validieren Request-Header und setzen Response-Header korrekt.
+ * MS-OXCMAPIHTTP §2.2.3 defines the HTTP-layer headers for Outlook ↔ server.
+ * We validate request headers and set response headers correctly.
  */
 
 import type { Request, Response } from 'express';
 import { ResponseCode } from './codec.js';
 
 /**
- * Bekannte X-RequestType-Werte (MS-OXCMAPIHTTP §2.2.3.2).
- * Server müssen alle erkennen und ggf. `InvalidXRequestType` (HTTP 200 mit
- * X-ResponseCode=4) zurückgeben für unbekannte Werte.
+ * Known X-RequestType values (MS-OXCMAPIHTTP §2.2.3.2).
+ * Servers must recognize all of them and return `InvalidXRequestType` (HTTP 200 with
+ * X-ResponseCode=4) for unknown values.
  */
 export type RequestType =
   | 'Connect'       // emsmdb: open mailbox session
@@ -29,9 +29,9 @@ export type RequestType =
   | 'GetPropList';  // nspi: list available properties
 
 /**
- * Server-Application-String. Outlook verwendet das nur zur Anzeige in
- * Diagnostics — der konkrete Wert ist nicht protokoll-relevant, sollte aber
- * eine Exchange-2019-kompatible Version enthalten.
+ * Server application string. Outlook only uses this for display in
+ * diagnostics — the concrete value is not protocol-relevant, but it should
+ * contain an Exchange-2019-compatible version.
  */
 export const SERVER_APP_STRING = 'Exchange/15.20.1118.7';
 
@@ -45,7 +45,7 @@ export interface ParsedMapiHeaders {
   cookies:        Record<string, string>;
 }
 
-/** Parst die MAPI-spezifischen Request-Header. */
+/** Parses the MAPI-specific request headers. */
 export function parseMapiHeaders(req: Request): ParsedMapiHeaders {
   const cookieHeader = req.get('cookie') ?? '';
   const cookies: Record<string, string> = {};
@@ -66,8 +66,8 @@ export function parseMapiHeaders(req: Request): ParsedMapiHeaders {
 }
 
 /**
- * Setzt die Pflicht-Response-Header für MAPI/HTTP. Outlook ignoriert
- * Response-Bodies wenn `X-ResponseCode` nicht im Header steht (oder != 0).
+ * Sets the mandatory response headers for MAPI/HTTP. Outlook ignores
+ * response bodies if `X-ResponseCode` is missing from the header (or != 0).
  */
 export function setMapiResponseHeaders(
   res: Response,
@@ -75,8 +75,8 @@ export function setMapiResponseHeaders(
     requestId:     string;
     responseCode?: number;          // default: SUCCESS
     expirationMs?: number;          // X-ExpirationInfo, default 600_000
-    pendingMs?:    number;          // X-PendingPeriod (für NotificationWait)
-    setCookie?:    string;          // optional: ganzer Set-Cookie-Header-Wert
+    pendingMs?:    number;          // X-PendingPeriod (for NotificationWait)
+    setCookie?:    string;          // optional: full Set-Cookie header value
   },
 ): void {
   const code = opts.responseCode ?? ResponseCode.SUCCESS;
@@ -95,15 +95,15 @@ export function setMapiResponseHeaders(
 }
 
 /**
- * Sendet eine Error-Response (Header-Only, leerer Body). MS-OXCMAPIHTTP
- * §2.2.3.4 — bei einigen Response-Codes ist der Body leer / ignored.
+ * Sends an error response (header only, empty body). MS-OXCMAPIHTTP
+ * §2.2.3.4 — for some response codes the body is empty / ignored.
  */
 export function sendMapiError(
   res: Response,
   opts: {
     requestId:    string;
     responseCode: number;
-    httpStatus?:  number;  // default 200 (MAPI Errors sind in X-ResponseCode, nicht im HTTP-Status)
+    httpStatus?:  number;  // default 200 (MAPI errors live in X-ResponseCode, not in the HTTP status)
   },
 ): void {
   setMapiResponseHeaders(res, {

@@ -1,31 +1,31 @@
 /**
- * MAPI Property-Codec (v4.1.0)
+ * MAPI property codec (v4.1.0)
  *
- * Encoded/Decodes MAPI Property-Values nach MS-OXCDATA §2.11. Properties haben
- * TaggedPropertyValue (PropertyTag + Value) oder TypedPropertyValue
+ * Encodes/decodes MAPI property values per MS-OXCDATA §2.11. Properties come as
+ * TaggedPropertyValue (PropertyTag + Value) or TypedPropertyValue
  * (PropertyType + Value).
  *
- * Wir unterstützen initial:
+ * Initially we support:
  *   - PT_LONG (Int32)
  *   - PT_INT64
  *   - PT_BOOLEAN
  *   - PT_UNICODE
  *   - PT_BINARY
- *   - PT_SYSTIME (FILETIME, 8 Bytes, 100ns ticks seit 1601-01-01 UTC)
+ *   - PT_SYSTIME (FILETIME, 8 bytes, 100ns ticks since 1601-01-01 UTC)
  *
- * Weitere Typen kommen mit folgenden Phasen (Multi-Value-Arrays etc.).
+ * Further types arrive with later phases (multi-value arrays etc.).
  */
 
 import { MapiReader, MapiWriter } from './codec.js';
 import { PropType, getPropType } from './rop-types.js';
 
 /**
- * FILETIME-Konvertierung: Unix-ms ↔ MAPI-PT_SYSTIME.
- * FILETIME ist 100ns-Ticks seit 1601-01-01 00:00:00 UTC (BigInt).
+ * FILETIME conversion: Unix ms ↔ MAPI PT_SYSTIME.
+ * FILETIME is 100ns ticks since 1601-01-01 00:00:00 UTC (BigInt).
  *
- * Differenz Unix-Epoch (1970) ↔ FILETIME-Epoch (1601) = 11644473600 Sekunden.
+ * Difference Unix epoch (1970) ↔ FILETIME epoch (1601) = 11644473600 seconds.
  */
-const FT_EPOCH_DIFF_NS = 11644473600n * 10000000n; // in 100ns-ticks
+const FT_EPOCH_DIFF_NS = 11644473600n * 10000000n; // in 100ns ticks
 
 export function dateToFiletime(d: Date | null | undefined): bigint {
   if (!d) return 0n;
@@ -37,8 +37,8 @@ export function filetimeToDate(ft: bigint): Date {
 }
 
 /**
- * Schreibt einen einzelnen Property-Value (ohne Tag, nur Value) basierend
- * auf dem PropertyType.
+ * Writes a single property value (without tag, value only) based
+ * on the PropertyType.
  */
 export function writePropertyValue(
   w: MapiWriter,
@@ -60,20 +60,20 @@ export function writePropertyValue(
       w.writeUint8(value ? 1 : 0);
       return;
     case PropType.Unicode: {
-      // PT_UNICODE: null-terminierter UTF-16-LE String. Outlook expects keine
-      // länge — der String wird bis zum 00 00 gelesen.
+      // PT_UNICODE: null-terminated UTF-16-LE string. Outlook expects no
+      // length — the string is read up to the 00 00.
       w.writeUtf16String(String(value ?? ''));
       return;
     }
     case PropType.String8: {
-      // ASCII / codepage. Wir senden UTF-8 (Outlook akzeptiert)
+      // ASCII / codepage. We send UTF-8 (Outlook accepts it)
       const bytes = Buffer.from(String(value ?? ''), 'utf-8');
       w.writeBuffer(bytes);
-      w.writeUint8(0); // null-terminator
+      w.writeUint8(0); // null terminator
       return;
     }
     case PropType.SysTime: {
-      // FILETIME = 8 Bytes
+      // FILETIME = 8 bytes
       let ft: bigint;
       if (value instanceof Date) ft = dateToFiletime(value);
       else if (typeof value === 'bigint') ft = value;
@@ -83,14 +83,14 @@ export function writePropertyValue(
       return;
     }
     case PropType.Binary: {
-      // length-prefixed (uint16) Bytes
+      // length-prefixed (uint16) bytes
       const buf = value instanceof Buffer ? value : Buffer.from(String(value ?? ''), 'utf-8');
       w.writeUint16(buf.length);
       w.writeBuffer(buf);
       return;
     }
     case PropType.ClassId: {
-      // 16-Byte GUID
+      // 16-byte GUID
       const guid = value instanceof Buffer && value.length === 16
         ? value
         : Buffer.alloc(16);
@@ -151,7 +151,7 @@ export function writePropertyValue(
 }
 
 /**
- * Liest einen Property-Value (ohne Tag) zurück.
+ * Reads a property value (without tag) back.
  */
 export function readPropertyValue(r: MapiReader, propType: number): unknown {
   switch (propType) {
@@ -216,7 +216,7 @@ export function readPropertyValue(r: MapiReader, propType: number): unknown {
 }
 
 /**
- * Schreibt einen TaggedPropertyValue (PropertyTag + Value).
+ * Writes a TaggedPropertyValue (PropertyTag + Value).
  */
 export function writeTaggedProperty(
   w: MapiWriter,
@@ -228,21 +228,21 @@ export function writeTaggedProperty(
 }
 
 /**
- * Property-Row: ein Array von Property-Werten für eine Tabellen-Zeile.
- * Format: HasError flag (1B) + per-Column value [+ ErrorPropertyValue].
+ * Property row: an array of property values for one table row.
+ * Format: HasError flag (1B) + per-column value [+ ErrorPropertyValue].
  */
 export function writePropertyRow(
   w: MapiWriter,
   columnTags: number[],
   values: Map<number, unknown>,
 ): void {
-  // Outlook erwartet pro Row zuerst einen "Flag" (0=no errors, 1=has errors)
-  // Wir setzen 0 — Errors haben wir keine.
+  // Outlook expects a "flag" first per row (0=no errors, 1=has errors)
+  // We set 0 — we have no errors.
   w.writeUint8(0);
   for (const tag of columnTags) {
     const value = values.get(tag);
     if (value === undefined) {
-      // Default-Wert für den Type
+      // Default value for the type
       writePropertyValue(w, getPropType(tag), defaultValueForType(getPropType(tag)));
     } else {
       writePropertyValue(w, getPropType(tag), value);

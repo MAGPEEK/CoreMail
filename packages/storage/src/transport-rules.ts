@@ -1,21 +1,21 @@
 /**
- * TransportRule-Engine — Server-weite Regeln (Admin-konfiguriert, Exchange-Style).
+ * TransportRule engine — server-wide rules (admin-configured, Exchange-style).
  *
- * Im Gegensatz zu MailRule (pro User) werden TransportRules auf JEDER eingehenden
- * und ausgehenden Mail evaluiert. Sie modifizieren die Mail vor der Zustellung
- * (Header, Subject, Disclaimer) oder steuern das Routing (reject, redirect,
+ * Unlike MailRule (per user), TransportRules are evaluated on EVERY incoming
+ * and outgoing mail. They modify the mail before delivery
+ * (headers, subject, disclaimer) or control routing (reject, redirect,
  * addRecipient, quarantine).
  *
- * Aufruf: `applyTransportRules(parsed, opts)` liefert ein TransportOutcome zurück.
- *   Die aufrufende Stelle (smtp-server/handlers/message.ts oder api-gateway send)
- *   muss das Outcome dann interpretieren:
- *     - `rejected`         → Mail wird verworfen (5xx-Bounce)
- *     - `quarantined`      → Mail wandert in Quarantäne-Tabelle, kein Postfach-Zustellen
- *     - `redirectedTo`     → Empfänger wird ersetzt
- *     - `additionalRcpts`  → zusätzliche Empfänger (BCC-ähnlich)
- *     - `headerChanges`    → Header die im RFC-822-Buffer ergänzt werden
- *     - `subjectPrefix/Suffix` → werden vor/an `parsed.subject` gehängt
- *     - `disclaimer`       → HTML-Block der an bodyHtml gehängt wird
+ * Usage: `applyTransportRules(parsed, opts)` returns a TransportOutcome.
+ *   The caller (smtp-server/handlers/message.ts or api-gateway send)
+ *   must then interpret the outcome:
+ *     - `rejected`         → mail is discarded (5xx bounce)
+ *     - `quarantined`      → mail goes to the quarantine table, no mailbox delivery
+ *     - `redirectedTo`     → recipient is replaced
+ *     - `additionalRcpts`  → additional recipients (BCC-like)
+ *     - `headerChanges`    → headers added to the RFC 822 buffer
+ *     - `subjectPrefix/Suffix` → prepended/appended to `parsed.subject`
+ *     - `disclaimer`       → HTML block appended to bodyHtml
  */
 
 import { prisma } from './prisma/index.js';
@@ -39,9 +39,9 @@ export interface TransportOutcome {
   rejected:          boolean;
   rejectReason?:     string;
   quarantined:       boolean;
-  redirectedTo:      string[];   // ersetzt Original-Empfänger
-  additionalRcpts:   string[];   // BCC-ähnlich zusätzlich
-  removedRcpts:      string[];   // aus Original entfernen
+  redirectedTo:      string[];   // replaces original recipients
+  additionalRcpts:   string[];   // additional, BCC-like
+  removedRcpts:      string[];   // remove from original
   headerAdds:        { name: string; value: string }[];
   headerRemoves:     string[];
   subjectPrefix:     string;
@@ -51,9 +51,9 @@ export interface TransportOutcome {
 }
 
 interface TransportEvalContext {
-  /** Wer ist das Original-Recipient (relevant für `to`/`cc`-Felder im Match) */
+  /** Who the original recipient is (relevant for `to`/`cc` fields in the match) */
   envelopeRcpt?: string;
-  /** rspamd-Score (falls verfügbar) */
+  /** rspamd score (if available) */
   spamScore?:   number;
 }
 
@@ -103,7 +103,7 @@ function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: st
 }
 
 function ruleMatches(conditions: TransportCondition[], parsed: ParsedMessage, ctx: TransportEvalContext): boolean {
-  // Conditions sind AND-verknüpft (Exchange Transport Rules Standard)
+  // Conditions are AND-combined (Exchange Transport Rules standard)
   if (conditions.length === 0) return true;
   return conditions.every((c) => evaluateOp(getFieldValue(c.field, parsed, ctx), c.op, c.value));
 }
@@ -151,7 +151,7 @@ export async function applyTransportRules(
     for (const action of actions) {
       switch (action.type) {
         case 'addHeader': {
-          // value format: "X-Header-Name: value"  oder "X-Header-Name=value"
+          // value format: "X-Header-Name: value"  or "X-Header-Name=value"
           const sep = action.value.indexOf(':') >= 0 ? ':' : '=';
           const idx = action.value.indexOf(sep);
           if (idx > 0) {
@@ -165,7 +165,7 @@ export async function applyTransportRules(
           if (action.value.trim()) outcome.headerRemoves.push(action.value.trim());
           break;
         case 'redirect':
-          // Komma-separierte Liste — ersetzt Original-Empfänger
+          // comma-separated list — replaces original recipients
           outcome.redirectedTo.push(...action.value.split(',').map((s) => s.trim()).filter(Boolean));
           break;
         case 'reject':
@@ -193,7 +193,7 @@ export async function applyTransportRules(
       }
     }
 
-    // Reject ist terminal — keine weiteren Regeln auswerten
+    // Reject is terminal — do not evaluate further rules
     if (outcome.rejected) {
       log.info({ ruleId: raw.id, ruleName: raw.name, reason: outcome.rejectReason }, 'Mail wegen TransportRule abgelehnt');
       break;
@@ -208,9 +208,9 @@ export async function applyTransportRules(
 }
 
 /**
- * Wendet die Header/Subject/Disclaimer-Modifikationen aus dem Outcome auf einen
- * RFC-822-Buffer an. Lokale Helper-Funktion damit die aufrufende Stelle nicht
- * MIME-Parsing selbst machen muss.
+ * Applies the header/subject/disclaimer modifications from the outcome to an
+ * RFC 822 buffer. Local helper so the caller does not have to do
+ * MIME parsing itself.
  */
 export function applyOutcomeToBuffer(buffer: Buffer, outcome: TransportOutcome): Buffer {
   if (
@@ -224,12 +224,12 @@ export function applyOutcomeToBuffer(buffer: Buffer, outcome: TransportOutcome):
   }
 
   const headerEnd = buffer.indexOf('\r\n\r\n');
-  if (headerEnd < 0) return buffer; // Keine RFC-822-Trennung gefunden → nichts tun
+  if (headerEnd < 0) return buffer; // No RFC 822 header/body separator found → do nothing
 
   let headerText = buffer.subarray(0, headerEnd).toString('utf8');
   let bodyBuf    = buffer.subarray(headerEnd + 4);
 
-  // Subject-Manipulation
+  // Subject manipulation
   if (outcome.subjectPrefix || outcome.subjectSuffix) {
     headerText = headerText.replace(
       /^Subject:\s*(.*)$/im,
@@ -237,21 +237,21 @@ export function applyOutcomeToBuffer(buffer: Buffer, outcome: TransportOutcome):
     );
   }
 
-  // Header-Removes (case-insensitive, alle Vorkommen)
+  // Header removes (case-insensitive, all occurrences)
   for (const name of outcome.headerRemoves) {
     const re = new RegExp(`^${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}:.*(?:\\r?\\n[ \\t].*)*\\r?\\n`, 'gim');
     headerText = headerText.replace(re, '');
   }
 
-  // Header-Adds
+  // Header adds
   for (const h of outcome.headerAdds) {
     headerText += `\r\n${h.name}: ${h.value}`;
   }
 
-  // Disclaimer (nur HTML-Body modifizieren — Plain-Text-Fallback skipped für MVP)
+  // Disclaimer (modify HTML body only — plain-text fallback skipped for MVP)
   if (outcome.disclaimerHtml) {
     const bodyStr = bodyBuf.toString('utf8');
-    // Einfache Heuristik: vor </body> einfügen, sonst am Ende anhängen
+    // Simple heuristic: insert before </body>, otherwise append at the end
     const modified = bodyStr.includes('</body>')
       ? bodyStr.replace('</body>', `${outcome.disclaimerHtml}\n</body>`)
       : bodyStr + outcome.disclaimerHtml;

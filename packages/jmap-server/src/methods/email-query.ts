@@ -1,5 +1,5 @@
 /**
- * Email/query — Filter (RFC 8621 §4.4.1) → Prisma-WHERE, Sortierung, Thread-Collapse.
+ * Email/query — filter (RFC 8621 §4.4.1) → Prisma WHERE, sorting, thread collapse.
  */
 import { prisma } from '@coremail/storage';
 import { unsupportedFilter, unsupportedSort, MethodError } from '../errors.js';
@@ -89,8 +89,8 @@ export function parseSort(sort: unknown): SortSpec[] {
 export interface QueryRow { id: string; threadId: string | null; inReplyTo: string | null; flags: string[] }
 
 /**
- * Lädt die sortierten Ids (max. 10 000) für Filter + Sort. hasKeyword-Sort
- * wird im Speicher angewendet, alles andere in der DB.
+ * Loads the sorted ids (max. 10 000) for filter + sort. hasKeyword sort
+ * is applied in memory, everything else in the DB.
  */
 export async function queryEmailIds(account: AccountContext, filter: unknown, sort: SortSpec[], collapseThreads: boolean): Promise<string[]> {
   const where: Where = { AND: [{ folder: { mailboxId: account.mailboxId } }, { deletedAt: null }, filterToWhere(filter)] };
@@ -107,7 +107,7 @@ export async function queryEmailIds(account: AccountContext, filter: unknown, so
 
   const kwSort = sort.find((s) => s.field === 'hasKeyword');
   if (kwSort) {
-    // stabil: Nachrichten mit Keyword zuerst (asc) bzw. zuletzt (desc)
+    // stable: messages with the keyword first (asc) or last (desc)
     rows.sort((a, b) => {
       const av = a.flags.includes(kwSort.keyword!) ? 1 : 0;
       const bv = b.flags.includes(kwSort.keyword!) ? 1 : 0;

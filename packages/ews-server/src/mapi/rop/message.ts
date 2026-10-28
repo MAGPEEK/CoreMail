@@ -1,5 +1,5 @@
 /**
- * Message-ROP-Handler (v4.2.0 + v4.3.0)
+ * Message ROP handler (v4.2.0 + v4.3.0)
  *
  * v4.2.0: RopOpenMessage, RopGetPropertiesAll, RopGetPropertiesSpecific
  * v4.3.0: RopCreateMessage, RopSetProperties, RopSaveChangesMessage,
@@ -22,10 +22,10 @@ import { buildPimPropertyList } from './pim-properties.js';
 import type { RopRequest } from '../rop-codec.js';
 
 /**
- * Lokale BullMQ-Queue-Handle für die smtp-outbound-Queue. Wir importieren
- * `Queue` direkt aus 'bullmq' (statt aus smtp-server) um Cross-Package-
- * Abhängigkeiten zu vermeiden — der Queue-Name ('smtp-outbound') ist die
- * gemeinsame Vereinbarung mit dem Consumer im smtp-server.
+ * Local BullMQ queue handle for the smtp-outbound queue. We import
+ * `Queue` directly from 'bullmq' (instead of from smtp-server) to avoid
+ * cross-package dependencies — the queue name ('smtp-outbound') is the
+ * shared convention with the consumer in smtp-server.
  */
 let _mapiOutboundQueue: Queue | null = null;
 function getMapiOutboundQueue(): Queue {
@@ -62,7 +62,7 @@ export async function handleRopOpenMessage(
   r.readUint8();                        // OpenModeFlags
   const messageId64 = r.readUint64();
 
-  // userId aus dem Input-Handle
+  // userId from the input handle
   const userId = input.object.kind === 'mailbox' ? input.object.userId
               : input.object.kind === 'folder'  ? input.object.userId
               : null;
@@ -70,13 +70,13 @@ export async function handleRopOpenMessage(
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_INVALID_PARAMETER);
   }
 
-  // v4.6.0: Virtuelle PIM-Folder zuerst prüfen
+  // v4.6.0: Check virtual PIM folders first
   const vf = VIRTUAL_FOLDERS.find((v) => cuidToFolderId64(v.id) === folderId64);
   if (vf) {
     return openVirtualPimMessage(rop, sessionToken, userId, vf.id, messageId64);
   }
 
-  // Folder via 64-bit-Hash auflösen (Standard-Mail-Folder)
+  // Resolve folder via 64-bit hash (standard mail folder)
   const folders = await prisma.folder.findMany({
     where: { mailbox: { userId } },
     select: { id: true },
@@ -86,7 +86,7 @@ export async function handleRopOpenMessage(
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Message via 64-bit-Hash auflösen
+  // Resolve message via 64-bit hash
   const messages = await prisma.message.findMany({
     where: { folderId: folder.id },
     select: { id: true },
@@ -96,7 +96,7 @@ export async function handleRopOpenMessage(
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Message-Handle in Tabelle anlegen
+  // Create message handle in the table
   const handle = await putRopObject(sessionToken, {
     kind: 'message', userId, folderId: folder.id, messageId: message.id,
   });
@@ -107,22 +107,22 @@ export async function handleRopOpenMessage(
   // Response: RopId, OutputHandleIndex, ReturnValue, HasNamedProperties (1B),
   //   SubjectPrefix (string), NormalizedSubject (string), RecipientCount (uint16),
   //   ColumnCount (uint16), Columns (uint32[]), RowCount (uint8), Rows (variable)
-  // v4.2.0 vereinfacht — keine RecipientList
+  // v4.2.0 simplified — no RecipientList
   const w = new MapiWriter();
   w.writeUint8(RopId.OpenMessage);
   w.writeUint8(rop.outputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
   w.writeUint8(0);                     // HasNamedProperties = false
   w.writeUtf16String('');              // SubjectPrefix
-  w.writeUtf16String('');              // NormalizedSubject (wird via GetProperties geliefert)
-  w.writeUint16(0);                    // RecipientCount = 0 (v4.3 ergänzt)
+  w.writeUtf16String('');              // NormalizedSubject (delivered via GetProperties)
+  w.writeUint16(0);                    // RecipientCount = 0 (added in v4.3)
   w.writeUint16(0);                    // ColumnCount = 0
   w.writeUint8(0);                     // RowCount = 0
   log.info({ messageId: message.id, handle }, 'RopOpenMessage erfolgreich');
   return w.toBuffer();
 }
 
-/** v4.2.0: RopGetPropertiesAll — alle Properties einer Message zurückgeben. */
+/** v4.2.0: RopGetPropertiesAll — return all properties of a message. */
 export async function handleRopGetPropertiesAll(
   rop: RopRequest,
   sessionToken: string,
@@ -133,12 +133,12 @@ export async function handleRopGetPropertiesAll(
     return writeMsgError(RopId.GetPropertiesAll, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
   if (input.object.messageId === null) {
-    // Draft noch nicht persistiert — v4.3.0 liefert hier akkumulierte Properties
+    // Draft not yet persisted — v4.3.0 returns accumulated properties here
     return writeMsgError(RopId.GetPropertiesAll, rop, MapiStatusCode.EC_NOT_FOUND);
   }
   const messageId: string = input.object.messageId;
 
-  // v5.1.0: PIM-Item-Dispatch
+  // v5.1.0: PIM item dispatch
   let props: Map<number, unknown>;
   if (input.object.pimKind && input.object.pimKind !== 'mail') {
     props = await buildPimPropertyList(sessionToken, input.object.pimKind, messageId);
@@ -195,7 +195,7 @@ export async function handleRopGetPropertiesSpecific(
     tags.push(r.readUint32());
   }
 
-  // v5.1.0: PIM-Item-Dispatch
+  // v5.1.0: PIM item dispatch
   let allProps: Map<number, unknown>;
   if (input.object.pimKind && input.object.pimKind !== 'mail') {
     allProps = await buildPimPropertyList(sessionToken, input.object.pimKind, messageId);
@@ -212,7 +212,7 @@ export async function handleRopGetPropertiesSpecific(
     }
     allProps = buildMessagePropertyList({ ...msg, hasAttach: (msg._count?.attachments ?? 0) > 0 });
   }
-  // Response: nur die requested tags, gleiche Reihenfolge wie tags[]
+  // Response: only the requested tags, same order as tags[]
   const w = new MapiWriter();
   w.writeUint8(RopId.GetPropertiesSpecific);
   w.writeUint8(rop.inputHandleIndex ?? 0);
@@ -280,7 +280,7 @@ function buildMessagePropertyList(msg: MessageData): Map<number, unknown> {
   m.set(PR.PR_MESSAGE_CLASS_W, 'IPM.Note');
   m.set(PR.PR_HAS_ATTACH, msg.hasAttach ?? false);
   if (msg.hasAttach) {
-    // PR_MESSAGE_FLAGS HasAttach-Bit (0x10) hinzufügen
+    // Add the PR_MESSAGE_FLAGS HasAttach bit (0x10)
     const cur = m.get(PR.PR_MESSAGE_FLAGS) as number | undefined;
     m.set(PR.PR_MESSAGE_FLAGS, (cur ?? 0) | 0x10);
   }
@@ -364,8 +364,8 @@ async function openVirtualPimMessage(
     return writeMsgError(RopId.OpenMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // v5.1.0: pimKind im Handle setzen → GetPropertiesAll/Specific
-  // dispatcht auf buildPimPropertyList für volle Detail-View.
+  // v5.1.0: Set pimKind on the handle → GetPropertiesAll/Specific
+  // dispatch to buildPimPropertyList for the full detail view.
   const handle = await putRopObject(sessionToken, {
     kind: 'message', userId, folderId: virtualFolderId, messageId: foundId, pimKind,
   });
@@ -387,17 +387,17 @@ async function openVirtualPimMessage(
   return w.toBuffer();
 }
 
-// ── v4.3.0 — Mail-Schreiben + Senden ────────────────────────────────────────
+// ── v4.3.0 — Composing + sending mail ────────────────────────────────────────
 
 /**
  * v4.3.0: RopCreateMessage
  *
  * Payload: CodePageId(uint16) | FolderId(uint64) | AssociatedFlag(uint8)
  *
- * Antwort: ReturnValue + HasMessageId(1B = 0)
+ * Response: ReturnValue + HasMessageId(1B = 0)
  *
- * Wir legen ein Draft-Message-Handle an (messageId = null bis SaveChangesMessage),
- * mit leerer pendingProperties + pendingRecipients-Akkumulation.
+ * We create a draft message handle (messageId = null until SaveChangesMessage),
+ * with empty pendingProperties + pendingRecipients accumulation.
  */
 export async function handleRopCreateMessage(
   rop: RopRequest,
@@ -415,7 +415,7 @@ export async function handleRopCreateMessage(
   const folderId64 = r.readUint64();
   r.readUint8();                        // AssociatedFlag
 
-  // Folder via 64-bit-Hash auflösen
+  // Resolve folder via 64-bit hash
   const folders = await prisma.folder.findMany({
     where: { mailbox: { userId } },
     select: { id: true, name: true },
@@ -426,12 +426,12 @@ export async function handleRopCreateMessage(
     return writeMsgError(RopId.CreateMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Draft-Message-Handle anlegen
+  // Create draft message handle
   const handle = await putRopObject(sessionToken, {
     kind: 'message',
     userId,
     folderId: folder.id,
-    messageId: null,                    // wird bei SaveChangesMessage gesetzt
+    messageId: null,                    // set on SaveChangesMessage
     isDraft: true,
     pendingProperties: {},
     pendingRecipients: [],
@@ -445,7 +445,7 @@ export async function handleRopCreateMessage(
   w.writeUint8(RopId.CreateMessage);
   w.writeUint8(rop.outputHandleIndex ?? 0);
   w.writeUint32(MapiStatusCode.SUCCESS);
-  w.writeUint8(0);                      // HasMessageId = false (wir liefern ID erst bei Save)
+  w.writeUint8(0);                      // HasMessageId = false (we only deliver the ID on save)
   log.info({ folder: folder.name, handle }, 'RopCreateMessage Draft angelegt');
   return w.toBuffer();
 }
@@ -455,11 +455,11 @@ export async function handleRopCreateMessage(
  *
  * Payload: PropertyValueSize(uint16) | PropertyValueCount(uint16) | PropertyValues
  *
- * Antwort: ReturnValue + PropertyProblemCount(uint16 = 0)
+ * Response: ReturnValue + PropertyProblemCount(uint16 = 0)
  *
- * Wir akkumulieren TaggedPropertyValues in `pendingProperties` auf dem
- * Message-Handle (Stringified-Tag → unknown). Bei SaveChangesMessage werden
- * sie in die Prisma-Message gemappt.
+ * We accumulate TaggedPropertyValues in `pendingProperties` on the
+ * message handle (stringified tag → unknown). On SaveChangesMessage they
+ * are mapped onto the Prisma message.
  */
 export async function handleRopSetProperties(
   rop: RopRequest,
@@ -472,7 +472,7 @@ export async function handleRopSetProperties(
   }
 
   const r = new MapiReader(rop.payload);
-  r.readUint16();                       // PropertyValueSize (Bytes-Länge)
+  r.readUint16();                       // PropertyValueSize (byte length)
   const count = r.readUint16();
   const updates: Record<string, unknown> = { ...(input.object.pendingProperties ?? {}) };
 
@@ -481,7 +481,7 @@ export async function handleRopSetProperties(
       const tag = r.readUint32();
       const propType = getPropType(tag);
       const value = readPropertyValue(r, propType);
-      // JSON-safe encoding für die Session-Persistierung in Redis
+      // JSON-safe encoding for session persistence in Redis
       updates[String(tag)] = jsonifyPropValue(value);
     } catch (err) {
       log.warn({ err, i }, 'SetProperties: Property-Parse-Fehler — Rest wird übersprungen');
@@ -507,14 +507,14 @@ export async function handleRopSetProperties(
  * Payload: ColumnCount(uint16) | Columns[ColumnCount] (uint32 each = PropertyTag)
  *        | RowCount(uint16) | Rows[RowCount] (ModifyRecipientRow)
  *
- * Jede ModifyRecipientRow:
- *   RowId(uint32) | RecipientType(uint8) | RecipientRow-Bytes
- *   RecipientRow: RecipientFlags(uint16) | DisplayName-Bytes-Block | EmailAddress-Bytes-Block | ...
+ * Each ModifyRecipientRow:
+ *   RowId(uint32) | RecipientType(uint8) | RecipientRow bytes
+ *   RecipientRow: RecipientFlags(uint16) | DisplayName byte block | EmailAddress byte block | ...
  *
- * Für v4.3.0 MVP extrahieren wir nur:
+ * For the v4.3.0 MVP we only extract:
  *   - RecipientType (1=TO, 2=CC, 3=BCC)
- *   - DisplayName + EmailAddress aus den Columns (typischerweise PR_DISPLAY_NAME_W
- *     + PR_EMAIL_ADDRESS_W oder PR_SMTP_ADDRESS_W)
+ *   - DisplayName + EmailAddress from the columns (typically PR_DISPLAY_NAME_W
+ *     + PR_EMAIL_ADDRESS_W or PR_SMTP_ADDRESS_W)
  */
 export async function handleRopModifyRecipients(
   rop: RopRequest,
@@ -542,11 +542,11 @@ export async function handleRopModifyRecipients(
  *
  * Payload: ResponseHandleIndex(uint8) | SaveFlags(uint8)
  *
- * Antwort: ReturnValue + InputHandleIndex + FolderId(uint64) + MessageId(uint64)
+ * Response: ReturnValue + InputHandleIndex + FolderId(uint64) + MessageId(uint64)
  *
- * Persistiert die akkumulierten Properties+Recipients in die Prisma-DB. Bei
- * Draft (messageId === null) wird ein neuer DB-Record angelegt; ansonsten
- * Update.
+ * Persists the accumulated properties+recipients to the Prisma DB. For a
+ * draft (messageId === null) a new DB record is created; otherwise
+ * an update.
  */
 export async function handleRopSaveChangesMessage(
   rop: RopRequest,
@@ -562,7 +562,7 @@ export async function handleRopSaveChangesMessage(
   const props = handleObj.pendingProperties ?? {};
   const recipients = handleObj.pendingRecipients ?? [];
 
-  // Properties extrahieren (Tags als String-Keys, Outlook liefert sie als uint32)
+  // Extract properties (tags as string keys, Outlook delivers them as uint32)
   const getProp = (tag: number): unknown => props[String(tag)];
   const subject = String(getProp(PR.PR_SUBJECT_W) ?? '');
   const bodyText = String(getProp(PR.PR_BODY_W) ?? '');
@@ -570,12 +570,12 @@ export async function handleRopSaveChangesMessage(
   const bodyHtml = bodyHtmlVal !== undefined ? jsonValueToString(bodyHtmlVal) : '';
   const messageClass = String(getProp(PR.PR_MESSAGE_CLASS_W) ?? 'IPM.Note');
 
-  // Recipients in toAddrs/ccAddrs/bccAddrs aufteilen
+  // Split recipients into toAddrs/ccAddrs/bccAddrs
   const toAddrs = recipients.filter((r) => r.type === 'TO').map((r) => r.address);
   const ccAddrs = recipients.filter((r) => r.type === 'CC').map((r) => r.address);
   const bccAddrs = recipients.filter((r) => r.type === 'BCC').map((r) => r.address);
 
-  // From-Adresse aus User-Mailbox
+  // From address from the user's mailbox
   const user = await prisma.user.findUnique({
     where: { id: handleObj.userId },
     select: { email: true, displayName: true },
@@ -586,7 +586,7 @@ export async function handleRopSaveChangesMessage(
 
   let newMessageId: string;
   if (handleObj.messageId === null) {
-    // Neue Draft: in Drafts-Folder anlegen
+    // New draft: create in the Drafts folder
     const mailbox = await prisma.mailbox.findFirst({
       where: { userId: handleObj.userId },
       select: { id: true, uidNext: true, highestModSeq: true },
@@ -622,13 +622,13 @@ export async function handleRopSaveChangesMessage(
     });
     newMessageId = created.id;
 
-    // Folder-Counter erhöhen
+    // Increment folder counters
     await prisma.folder.update({
       where: { id: handleObj.folderId },
       data:  { totalCount: { increment: 1 }, changeKey: modSeq.toString() },
     });
   } else {
-    // Existing Message: Update
+    // Existing message: update
     await prisma.message.update({
       where: { id: handleObj.messageId },
       data: {
@@ -640,7 +640,7 @@ export async function handleRopSaveChangesMessage(
     newMessageId = handleObj.messageId;
   }
 
-  // Handle aktualisieren: messageId + Pendings leeren
+  // Update handle: set messageId + clear pendings
   await updateRopObject(sessionToken, input.handle, {
     messageId: newMessageId,
     isDraft: false,
@@ -667,10 +667,10 @@ export async function handleRopSaveChangesMessage(
  *
  * Payload: SubmitFlags(uint8)
  *
- * Antwort: ReturnValue
+ * Response: ReturnValue
  *
- * Reicht die Message via BullMQ smtp-outbound-Queue zum Versand ein.
- * Importiert dynamisch aus @coremail/smtp-server um Circular-Imports zu vermeiden.
+ * Submits the message for delivery via the BullMQ smtp-outbound queue.
+ * Imports dynamically from @coremail/smtp-server to avoid circular imports.
  */
 export async function handleRopSubmitMessage(
   rop: RopRequest,
@@ -701,7 +701,7 @@ export async function handleRopSubmitMessage(
     return writeMsgError(RopId.SubmitMessage, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // User + Domain für DKIM-Schlüssel
+  // User + domain for the DKIM key
   const user = await prisma.user.findUnique({
     where: { id: input.object.userId },
     select: { id: true, email: true, displayName: true, domain: { select: {
@@ -752,7 +752,7 @@ export async function handleRopSubmitMessage(
     return writeMsgError(RopId.SubmitMessage, rop, MapiStatusCode.EC_NOT_SUPPORTED);
   }
 
-  // Mail in „Sent" verschieben: Folder lookup → update
+  // Move mail to "Sent": folder lookup → update
   try {
     const sent = await prisma.folder.findFirst({
       where: { mailbox: { userId: user.id }, name: 'Sent' },
@@ -780,18 +780,18 @@ export async function handleRopSubmitMessage(
 // ── Helpers v4.3.0 ────────────────────────────────────────────────────────
 
 /**
- * Parst den MS-OXCMSG §2.2.3.1.2 RopModifyRecipients-Payload.
+ * Parses the MS-OXCMSG §2.2.3.1.2 RopModifyRecipients payload.
  *
  * Format:
  *   ColumnCount(uint16) | Columns[ColumnCount] (uint32 each = PropertyTag)
  *   RowCount(uint16) | Rows[RowCount]
  *
- * Jede Row (ModifyRecipientRow):
- *   RowId(uint32) | RecipientType(uint8) | RecipientRow-Bytes
+ * Each row (ModifyRecipientRow):
+ *   RowId(uint32) | RecipientType(uint8) | RecipientRow bytes
  *
- * Die RecipientRow ist selbst eine variable Struktur — wir extrahieren nur das
- * Notwendige (DisplayName + EmailAddress). Bei Parse-Fehlern brechen wir den
- * Loop ab und liefern bisher geparste Recipients.
+ * The RecipientRow is itself a variable structure — we only extract what is
+ * necessary (DisplayName + EmailAddress). On parse errors we abort the
+ * loop and return the recipients parsed so far.
  */
 function parseModifyRecipientsPayload(payload: Buffer): Array<{
   type: 'TO' | 'CC' | 'BCC'; name: string; address: string;
@@ -812,7 +812,7 @@ function parseModifyRecipientsPayload(payload: Buffer): Array<{
       const recType = r.readUint8();        // 1=TO, 2=CC, 3=BCC
       // RecipientRow header
       const recipientFlags = r.readUint16();
-      // Wenn das R-flag gesetzt ist, kommt PR_ADDRTYPE
+      // If the R flag is set, PR_ADDRTYPE follows
       const hasAddrType = (recipientFlags & 0x0008) !== 0;
       const hasEmailAddr = (recipientFlags & 0x0010) !== 0;
       const hasDispName = (recipientFlags & 0x0020) !== 0;
@@ -826,10 +826,10 @@ function parseModifyRecipientsPayload(payload: Buffer): Array<{
       if (hasTransmittableDispName) r.readUtf16String();
 
       // Properties (column-values)
-      r.readUint16();                       // RecipientColumnCount (Outlook setzt dies)
-      // Wir überspringen das Property-Parsing (komplex). Wenn keine Email
-      // aus den Header-Bytes gewonnen wurde, nehmen wir DisplayName als
-      // Fallback (Outlook tippt z.B. „User Name <name@dom.de>")
+      r.readUint16();                       // RecipientColumnCount (Outlook sets this)
+      // We skip the property parsing (complex). If no e-mail was obtained
+      // from the header bytes, we use DisplayName as a
+      // fallback (Outlook types e.g. "User Name <name@dom.de>")
       const addr = emailAddress || extractEmailFromName(displayName) || displayName;
 
       const type: 'TO' | 'CC' | 'BCC' = recType === 2 ? 'CC' : recType === 3 ? 'BCC' : 'TO';
@@ -849,8 +849,8 @@ function extractEmailFromName(s: string): string | null {
 }
 
 /**
- * Wandelt einen Property-Value für JSON-Persistierung in eine Session-State
- * geeignete Form (Buffer → { type:'Buffer', data:[...] }, BigInt → String).
+ * Converts a property value for JSON persistence into a form suitable for
+ * session state (Buffer → { type:'Buffer', data:[...] }, BigInt → String).
  */
 function jsonifyPropValue(value: unknown): unknown {
   if (value instanceof Buffer) {

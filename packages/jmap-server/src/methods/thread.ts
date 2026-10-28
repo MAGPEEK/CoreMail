@@ -1,5 +1,5 @@
 /**
- * Thread/* (RFC 8621 §3). Threads sind abgeleitet (Message.threadId).
+ * Thread/* (RFC 8621 §3). Threads are derived (Message.threadId).
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
@@ -12,7 +12,7 @@ import type { JsonObject } from '../types.js';
 
 registerMethod('Thread/get', CAP_MAIL, async (args, ctx) => {
   const { account, ids } = parseGetArgs(args, ctx);
-  if (!ids) throw requestTooLarge(); // Thread/get ohne ids: alle Threads wären zu groß
+  if (!ids) throw requestTooLarge(); // Thread/get without ids: all threads would be too large
   const list: JsonObject[] = [];
   const notFound: string[] = [];
   for (const id of ids) {

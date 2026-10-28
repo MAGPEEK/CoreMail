@@ -1,7 +1,7 @@
 /**
- * Öffentliche Basis-URL + Limits für die Session-Resource.
- * Quelle: ServerSettings (publicHostname/useHttps/httpPort), Fallback auf
- * Host-Header des Requests. 60s-Cache, Reload über Redis settings:reload.
+ * Public base URL + limits for the session resource.
+ * Source: ServerSettings (publicHostname/useHttps/httpPort), fallback to the
+ * request's Host header. 60s cache, reload via Redis settings:reload.
  */
 import type { Request } from 'express';
 import { prisma } from '@coremail/storage';
@@ -43,17 +43,17 @@ export function invalidateSettingsCache(): void {
   cacheExpiry = 0;
 }
 
-/** Basis-URL ohne trailing slash, z.B. https://mail.example.de */
+/** Base URL without trailing slash, e.g. https://mail.example.de */
 export async function publicBaseUrl(req: Request): Promise<string> {
   const s = await loadSettings();
   if (s.publicHostname && s.publicHostname !== 'mail.local') {
-    // gleiche Regel wie api-gateway/lib/server-urls.ts deriveServerUrls()
+    // same rule as api-gateway/lib/server-urls.ts deriveServerUrls()
     const proto = s.useHttps ? 'https' : 'http';
     const portSuffix = (s.useHttps && s.httpPort === 443) || (!s.useHttps && s.httpPort === 80)
       ? '' : `:${s.httpPort}`;
     return `${proto}://${s.publicHostname}${portSuffix}`;
   }
-  // Fallback: aus dem Request (hinter Proxy: X-Forwarded-*)
+  // Fallback: from the request (behind a proxy: X-Forwarded-*)
   const proto = (req.get('X-Forwarded-Proto') ?? req.protocol ?? 'http').split(',')[0]!.trim();
   const host = (req.get('X-Forwarded-Host') ?? req.get('Host') ?? 'localhost').split(',')[0]!.trim();
   return `${proto}://${host}`;

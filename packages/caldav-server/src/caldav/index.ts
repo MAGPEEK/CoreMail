@@ -24,13 +24,13 @@ function principalHref(userId: string): string {
 }
 
 /**
- * v3.18.14 Calendar Sharing — CalDAV-Helper.
- * v3.18.15: WRITE-Sharing freigeschaltet; volle DAV ACL nach RFC 3744.
+ * v3.18.14 Calendar Sharing — CalDAV helpers.
+ * v3.18.15: WRITE sharing enabled; full DAV ACL per RFC 3744.
  *
- * Liefert die Permission des `viewerUserId` auf `calendarId`:
- *  - 'OWNER' wenn `viewerUserId === calendar.userId`
- *  - 'WRITE' / 'READ' wenn CalendarShare existiert
- *  - null wenn kein Zugriff besteht
+ * Returns the permission of `viewerUserId` on `calendarId`:
+ *  - 'OWNER' if `viewerUserId === calendar.userId`
+ *  - 'WRITE' / 'READ' if a CalendarShare exists
+ *  - null if there is no access
  */
 async function getDavAccess(
   viewerUserId: string,
@@ -55,11 +55,11 @@ async function getDavAccess(
 }
 
 /**
- * v3.18.15 Privacy-Masking auf CalDAV-Antworten.
- *  - PUBLIC: unverändert
- *  - PRIVATE: SUMMARY → "Beschäftigt", DESCRIPTION/LOCATION entfernt
- *  - CONFIDENTIAL: gibt null zurück → Event wird ausgeblendet
- *  Owner sieht ALLES.
+ * v3.18.15 privacy masking on CalDAV responses.
+ *  - PUBLIC: unchanged
+ *  - PRIVATE: SUMMARY → "Beschäftigt" (busy), DESCRIPTION/LOCATION removed
+ *  - CONFIDENTIAL: returns null → event is hidden
+ *  The owner sees EVERYTHING.
  */
 function maskIcalForGrantee(icalData: string, classification: string, isOwner: boolean): string | null {
   if (isOwner) return icalData;
@@ -74,7 +74,7 @@ function maskIcalForGrantee(icalData: string, classification: string, isOwner: b
   return icalData;
 }
 
-/** RFC 3744 — privilege set element je nach Permission. */
+/** RFC 3744 — privilege set element depending on permission. */
 function appendPrivilegeSet(
   cups: ReturnType<typeof create>,
   permission: 'OWNER' | 'WRITE' | 'READ',
@@ -97,7 +97,7 @@ function appendPrivilegeSet(
   }
 }
 
-/** RFC 3744 — minimal-konformer <DAV:acl>-Block. */
+/** RFC 3744 — minimally compliant <DAV:acl> block. */
 function appendAclProperty(
   prop: ReturnType<typeof create>,
   ownerId: string,
@@ -214,7 +214,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
     select: { id: true, dtStart: true, dtEnd: true, summary: true, classification: true },
   });
 
-  // ACL-Liste nur für Owner-Sicht relevant (Grantees sehen ihre eigene Permission via cups)
+  // ACL list only relevant for the owner view (grantees see their own permission via cups)
   const shares = access.permission === 'OWNER'
     ? await prisma.calendarShare.findMany({
         where: { calendarId },
@@ -240,7 +240,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   }
   calPropstat.ele('d:status').txt('HTTP/1.1 200 OK');
 
-  // Event-Listing — Confidential werden ausgeblendet, sonst nur href+etag (Body via GET/REPORT)
+  // Event listing — confidential ones are hidden, otherwise only href+etag (body via GET/REPORT)
   for (const event of events) {
     if (access.permission !== 'OWNER' && (event.classification ?? 'PUBLIC').toUpperCase() === 'CONFIDENTIAL') continue;
     const evResponse = doc.ele('d:response');
@@ -255,7 +255,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   res.status(207).set('Content-Type', 'application/xml; charset=utf-8').send(xmlResponse(doc));
 });
 
-// GET /:userId/:calendarId/:eventId.ics — fetch iCalendar data (mit Privacy-Masking)
+// GET /:userId/:calendarId/:eventId.ics — fetch iCalendar data (with privacy masking)
 caldavRouter.get('/calendars/:userId/:calendarId/:eventId', async (req: Request, res: Response) => {
   const { userId, calendarId, eventId } = req.params as {
     userId: string; calendarId: string; eventId: string;
@@ -284,7 +284,7 @@ caldavRouter.get('/calendars/:userId/:calendarId/:eventId', async (req: Request,
 });
 
 // PUT /:userId/:calendarId/:eventId.ics — create or update event
-// v3.18.15: OWNER + WRITE-Grantees dürfen schreiben
+// v3.18.15: OWNER + WRITE grantees may write
 caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request, res: Response) => {
   const { userId, calendarId, eventId } = req.params as {
     userId: string; calendarId: string; eventId: string;
@@ -320,12 +320,12 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request,
   });
 
   if (existing) {
-    // Cross-Calendar-Manipulation verhindern
+    // Prevent cross-calendar manipulation
     if (existing.calendarId !== calendarId) {
       res.status(403).send('Forbidden — event belongs to another calendar');
       return;
     }
-    // Grantee mit WRITE darf KEINE Events ändern, die OWNER als CONFIDENTIAL markiert hat
+    // A grantee with WRITE may NOT modify events the OWNER marked as CONFIDENTIAL
     if (access.permission !== 'OWNER' && (existing.classification ?? 'PUBLIC').toUpperCase() === 'CONFIDENTIAL') {
       res.status(403).send('Forbidden — event is confidential');
       return;
@@ -345,7 +345,7 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', async (req: Request,
   }
 });
 
-// DELETE /:userId/:calendarId/:eventId.ics — OWNER + WRITE-Grantees
+// DELETE /:userId/:calendarId/:eventId.ics — OWNER + WRITE grantees
 caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', async (req: Request, res: Response) => {
   const { userId, calendarId, eventId } = req.params as {
     userId: string; calendarId: string; eventId: string;
@@ -367,7 +367,7 @@ caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', async (req: Reque
   });
   if (!event) { res.status(404).send('Not Found'); return; }
 
-  // WRITE-Grantees dürfen keine CONFIDENTIAL-Events löschen
+  // WRITE grantees may not delete CONFIDENTIAL events
   if (access.permission !== 'OWNER' && (event.classification ?? 'PUBLIC').toUpperCase() === 'CONFIDENTIAL') {
     res.status(403).send('Forbidden — event is confidential');
     return;
@@ -393,7 +393,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
   res.status(201).send();
 });
 
-// REPORT — calendar-query for sync (mit Privacy-Masking)
+// REPORT — calendar-query for sync (with privacy masking)
 caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Response, next) => {
   if (req.method !== 'REPORT') { next(); return; }
 
@@ -414,7 +414,7 @@ caldavRouter.all('/calendars/:userId/:calendarId', async (req: Request, res: Res
 
   for (const event of events) {
     const masked = maskIcalForGrantee(event.icalData, event.classification, access.permission === 'OWNER');
-    if (masked === null) continue; // CONFIDENTIAL für Grantee
+    if (masked === null) continue; // CONFIDENTIAL for grantee
     const r = doc.ele('d:response');
     r.ele('d:href').txt(`${caldavBase(userId)}/${calendarId}/${event.id}.ics`);
     const ps = r.ele('d:propstat');

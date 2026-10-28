@@ -1,8 +1,8 @@
 /**
- * Änderungs-Bus: Redis mail:new / mail:update → betroffener JMAP-Account →
- *  - lokale Listener (EventSource-/WebSocket-Verbindungen)
- *  - Web-Push an verifizierte PushSubscriptions der berechtigten User
- * StateChange-Objekte werden pro Account aus den aktuellen States gebaut.
+ * Change bus: Redis mail:new / mail:update → affected JMAP account →
+ *  - local listeners (EventSource/WebSocket connections)
+ *  - Web Push to verified PushSubscriptions of the authorized users
+ * StateChange objects are built per account from the current states.
  */
 import { EventEmitter } from 'node:events';
 import { prisma } from '@coremail/storage';
@@ -88,7 +88,7 @@ export function startChangeBus(): void {
         if (!accountId && p.userId) accountId = p.userId;
         if (!accountId) return;
         changeBus.emit('change', accountId);
-        // Web-Push gebündelt (max. 1× pro Sekunde pro Account)
+        // Web Push batched (max. 1× per second per account)
         if (!pendingPush.has(accountId)) {
           pendingPush.set(accountId, setTimeout(() => {
             pendingPush.delete(accountId);

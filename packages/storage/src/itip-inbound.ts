@@ -1,18 +1,18 @@
 /**
- * v3.18.25 A5: iTIP Inbound-Handler.
+ * v3.18.25 A5: iTIP inbound handler.
  *
- * Wird in `storeInboundMessage()` aufgerufen für jede eingehende Mail.
- * Sucht im Raw-Buffer nach einem VCALENDAR-Block mit `METHOD:REPLY` und
- * updated dann den entsprechenden CalendarEvent.attendees-Eintrag.
+ * Called from `storeInboundMessage()` for every incoming mail.
+ * Searches the raw buffer for a VCALENDAR block with `METHOD:REPLY` and
+ * then updates the corresponding CalendarEvent.attendees entry.
  *
- * Bewusst minimalistisch — keine schwere ical-parser-Lib im Inbound-Pfad
- * (Performance!), nur Regex-basiertes Extraction der relevanten Felder.
- * Fehlende oder unvollständige VCALENDAR-Blöcke werden silent ignoriert.
+ * Deliberately minimal — no heavy ical parser lib in the inbound path
+ * (performance!), only regex-based extraction of the relevant fields.
+ * Missing or incomplete VCALENDAR blocks are silently ignored.
  *
- * Unterstützt:
- *  - METHOD:REPLY mit PARTSTAT=ACCEPTED|DECLINED|TENTATIVE
- *  - SEQUENCE-Vergleich (alte REPLYs werden ignoriert)
- *  - UID-Matching (case-insensitive)
+ * Supports:
+ *  - METHOD:REPLY with PARTSTAT=ACCEPTED|DECLINED|TENTATIVE
+ *  - SEQUENCE comparison (old REPLYs are ignored)
+ *  - UID matching (case-insensitive)
  */
 import { prisma } from './prisma/index.js';
 
@@ -27,19 +27,19 @@ const VCAL_RE = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i;
 const METHOD_RE = /^METHOD:(\S+)\s*$/im;
 const UID_RE = /^UID:(.+?)\s*$/im;
 const SEQUENCE_RE = /^SEQUENCE:(\d+)\s*$/im;
-// ATTENDEE-Zeile mit PARTSTAT + mailto:
-// Beispiele:
+// ATTENDEE line with PARTSTAT + mailto:
+// Examples:
 //   ATTENDEE;PARTSTAT=ACCEPTED;CN="Bob":mailto:bob@gmail.com
 //   ATTENDEE;CN=Bob;PARTSTAT=DECLINED:mailto:bob@x.de
 const ATTENDEE_RE = /^ATTENDEE([^:]*?);?\s*PARTSTAT=([A-Z-]+)([^:]*?):mailto:([^\s>]+)\s*$/im;
 
 /**
- * Extrahiert das REPLY-VCALENDAR aus einem Raw-Mail-Buffer.
- * Returns null wenn kein REPLY gefunden / kein VCALENDAR / kein passender Attendee.
+ * Extracts the REPLY VCALENDAR from a raw mail buffer.
+ * Returns null if no REPLY found / no VCALENDAR / no matching attendee.
  */
 export function extractITipReply(rawBuffer: Buffer): ParsedReply | null {
   const text = rawBuffer.toString('utf8');
-  // RFC 5545 erlaubt Line-Folding mit „\r\n " — vor Regex-Parsing entfalten
+  // RFC 5545 allows line folding with "\r\n " — unfold before regex parsing
   const unfolded = text.replace(/\r?\n[ \t]/g, '');
   const vcalMatch = VCAL_RE.exec(unfolded);
   if (!vcalMatch) return null;
@@ -71,10 +71,10 @@ export function extractITipReply(rawBuffer: Buffer): ParsedReply | null {
 }
 
 /**
- * Verarbeitet eine eingehende iTIP-REPLY-Mail: finde Event per UID, prüfe
- * SEQUENCE, update attendees-Array. Fire-and-forget, Errors werden geloggt.
+ * Processes an incoming iTIP REPLY mail: find event by UID, check
+ * SEQUENCE, update attendees array. Fire-and-forget, errors are logged.
  *
- * Returns `true` wenn ein Event tatsächlich geupdated wurde, sonst `false`.
+ * Returns `true` if an event was actually updated, otherwise `false`.
  */
 export async function processITipInbound(rawBuffer: Buffer): Promise<boolean> {
   let reply: ParsedReply | null;
@@ -91,10 +91,10 @@ export async function processITipInbound(rawBuffer: Buffer): Promise<boolean> {
   });
   if (!event) return false;
 
-  // SEQUENCE-Check: alte REPLYs ignorieren (RFC 5546 §3.4.3)
+  // SEQUENCE check: ignore old REPLYs (RFC 5546 §3.4.3)
   if (reply.sequence < event.sequence) return false;
 
-  // Attendees-Array updaten
+  // Update attendees array
   const attendees = Array.isArray(event.attendees) ? [...event.attendees] : [];
   let updated = false;
   for (let i = 0; i < attendees.length; i++) {
