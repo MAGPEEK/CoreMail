@@ -13,11 +13,15 @@ Sie enthält alle wichtigen Kontextinformationen über das CoreMail-Projekt.
 ```
 
 **Ziel**: Coremail Mailserver für 10–500 User (KMU)
-**Aktuelle Version**: `5.7.1` (JMAP-Server RFC 8620/8621 + Erweiterungen; v5.7.0 MAPI over HTTP optional zurück, Default aus + Build-Härtung; Verteilergruppen raus v5.6.1 + OAuth2-Server raus v5.6.0 + IMAP4rev2 v5.5.0)
+**Aktuelle Version**: `5.8.0` (Admin-CLI `coremail` + neue docker-compose + EWS an MAPI-Schalter gekoppelt; v5.7.1 JMAP-Server RFC 8620/8621 + Erweiterungen; v5.7.0 MAPI over HTTP optional zurück, Default aus + Build-Härtung; Verteilergruppen raus v5.6.1 + OAuth2-Server raus v5.6.0 + IMAP4rev2 v5.5.0)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
 ## Architektur-Entscheidungen (v5.4.0+)
+
+- **Admin-CLI (v5.8.0)**: Paket `packages/cli/` (commander 12), Binary `coremail` im App-Image (`/usr/local/bin/coremail` → `packages/cli/dist/index.js`). Spricht ausschließlich die REST-Admin-API (`/api/v1/admin/*`, `/auth/login`, `/auth/mfa/verify`, `/auth/refresh`) — kein Prisma-Direktzugriff, damit Rollen + Audit-Log greifen. Sitzung in `~/.config/coremail/credentials.json` (0600) oder `COREMAIL_TOKEN`/`COREMAIL_ADMIN_EMAIL`+`_PASSWORD`(+`_TOTP`). Befehlsgruppen: `user`, `mailbox`, `shared`, `domain`, `connector` (Listener via `/admin/services/listeners/<slug>`, JMAP/MAPI via `/admin/servers/settings`), `smtp banner` (`/admin/smtp-config/settings`), `cert` (`/admin/certificates`). Shared-Mailbox-Liste liefert `{items,total}`; Mailbox-Liste liefert Array. Doku `docs/cli.md`. Tests: `node --import tsx --test src/output.test.ts`.
+- **EWS an MAPI-Schalter gekoppelt (v5.8.0)**: `/EWS/*` + `/OAB/*` im ews-server hinter `requireMapiEnabled` (gleiches Flag `ServerSettings.mapiHttpEnabled`), Autodiscover v2 `Protocol=EWS` → 404 wenn aus. EWS ist kein eigener Client-Weg mehr, nur Begleitprotokoll von MAPI/HTTP. BCP-Karte „MAPI over HTTP + EWS“.
+- **docker-compose (v5.8.0)**: `infra/docker/docker-compose.yml` reduziert auf Pflicht-Parameter mit `${VAR:?Meldung}`-Prüfung; interne Service-URLs/-Ports nicht mehr gesetzt (Code-Defaults, Ausnahme `SECURITY_FILTER_URL=http://localhost:3002`, weil ein Default auf `security-filter:3002` zeigt). `scripts/setup.sh` erzeugt `.env` + Symlink `infra/docker/.env`.
 
 - **MAPI/HTTP optional (v5.7.0, war in v5.4.0 entfernt)**: Code aus v5.2 wiederhergestellt in `packages/ews-server/src/mapi/`, hinter `ServerSettings.mapiHttpEnabled` (Default **false**). Schalter: BCP → Server → „MAPI over HTTP“. Gate `requireMapiEnabled` (`mapi/feature-flag.ts`, 60s-Cache + Redis `CHANNEL_SETTINGS_RELOAD`) → `/mapi/*` 404 wenn aus; Autodiscover liefert `mapiHttp`-Block nur wenn an. **Einschränkung**: Outlook 2024 LTSC / M365 Classic erzwingen Modern Auth gegen Entra/ADFS → dort IMAP („Andere E-Mail-Konten"); MAPI funktioniert für Outlook 2013–2021 (Basic-Auth). ADFS-Emulation (v5.3.0) bleibt entfernt. Neues Outlook + Outlook für Mac: kein MAPI.
 - **JMAP-Server (v5.7.1)**: neues Paket `packages/jmap-server/` (Port 3006), api-gateway proxied `/jmap/*` + `/.well-known/jmap` (inkl. WebSocket-Upgrade `/jmap/ws` auf HTTP-Server und TLS-Proxy). RFC 8620 Core (Session, Dispatcher mit Result-References, Blobs, EventSource, PushSubscription), 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals, 9749 VAPID. Schalter `ServerSettings.jmapEnabled` (Default **true**), BCP → Server → „JMAP". Auth: Bearer-JWT oder Basic (App-Passwort bei MFA). Accounts: `userId` (eigen), `shared-<id>` (Shared Mailbox), delegierte Postfächer. `Message.threadId` lazy aus `inReplyTo`. States: Email `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>`, Mailbox `<count>.<maxCreatedMs>.<hash>` — Deletes ohne Tombstones → `cannotCalculateChanges`. EmailSubmission in Redis (`jmap:sub:*`, 7d), Versand über BullMQ `smtp-outbound` mit `rawMessage`. Blob-Ids: `m-<msgId>`, `a-<attId>`, `p-<msgId>-text|html`, `u-<hex>` (Upload, MinIO `jmap-upload/`, 7d). Doku: `docs/jmap.md`.
@@ -57,6 +61,7 @@ coremail/
 │   ├── autodiscover/      # Autodiscover v1 + v2 (Port 8081)
 │   ├── caldav-server/     # CalDAV + CardDAV (Port 8082)
 │   ├── jmap-server/       # JMAP RFC 8620/8621 + 8887/9404/9425/9670/9749 (Port 3006)
+│   ├── cli/               # Admin-CLI `coremail` (REST-Admin-API, im Image /usr/local/bin/coremail)
 │   ├── api-gateway/       # REST API + SSE (Port 3000)
 │   ├── auth-service/      # Lokal/LDAP/OIDC/MFA (Port 3003)
 │   ├── auth-ldap/         # LDAP-Connector (intern)
@@ -96,7 +101,7 @@ CoreMail verwendet ab v0.9.1 eine konsolidierte **2-Container-Architektur**:
 **HTTP-Routing ohne nginx**: Der `api-gateway` auf Port 3000 übernimmt alle HTTP-Routen:
 - `/owa/` `/bcp/` — Express.static (Frontend-Bundles aus `/app/www/`)
 - `/auth/` → proxy zu auth-service (localhost:3003)
-- `/EWS/` `/mapi/` `/Autodiscover/` → proxy zu ews-server (localhost:8080) — `/mapi/*` optional seit v5.7.0 (404 wenn aus)
+- `/EWS/` `/mapi/` `/OAB/` → proxy zu ews-server (localhost:8080) — optional seit v5.7.0/v5.8.0 (404 wenn „MAPI over HTTP + EWS“ aus)
 - `/Microsoft-Server-ActiveSync` → proxy zu activesync (localhost:3005)
 - `/dav/` → proxy zu caldav-server (localhost:8082)
 - `/jmap/` `/.well-known/jmap` → proxy zu jmap-server (localhost:3006), WebSocket `/jmap/ws` — seit v5.7.1
@@ -805,4 +810,4 @@ Außerdem: **`@coremail/core` ist die Quelle der Wahrheit** — `bcrypt` nie dir
 Routen importieren wenn User-Passwörter betroffen sind (außer für OAuth-Client-Secrets
 und MFA-Backup-Codes — die brauchen keinen Pepper).
 
-*Letzte Aktualisierung: 2026-10-27 (v5.7.1 — JMAP-Server; v5.7.0 — MAPI over HTTP optional zurück + Build-Härtung; v5.6.1 — Verteilergruppen entfernt; v5.6.0 — OAuth2 / Modern Auth entfernt; v5.5.0 — IMAP4rev2 Compliance; v5.4.0 — MAPI komplett raus)*
+*Letzte Aktualisierung: 2026-10-28 (v5.8.0 — Admin-CLI, neue Compose, EWS↔MAPI; v5.7.1 — JMAP-Server; v5.7.0 — MAPI over HTTP optional zurück + Build-Härtung; v5.6.1 — Verteilergruppen entfernt; v5.6.0 — OAuth2 / Modern Auth entfernt; v5.5.0 — IMAP4rev2 Compliance; v5.4.0 — MAPI komplett raus)*

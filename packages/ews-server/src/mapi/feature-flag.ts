@@ -1,10 +1,11 @@
 /**
- * MAPI over HTTP — Feature-Flag (v5.7.0)
+ * MAPI over HTTP + EWS — Feature-Flag (v5.7.0, EWS seit v5.8.0)
  *
- * MAPI/HTTP ist optional und per BCP → Server → „MAPI over HTTP" zuschaltbar
+ * Der Outlook-„Exchange-Konto"-Pfad (MAPI/HTTP samt Begleitprotokoll EWS und
+ * OAB) ist optional und per BCP → Server → „MAPI over HTTP + EWS" zuschaltbar
  * (`ServerSettings.mapiHttpEnabled`, Default false). Ist der Schalter aus,
- * liefert `/mapi/*` 404 und Autodiscover annonciert kein mapiHttp-Protokoll,
- * sodass Outlook sich sauber als IMAP-Konto einrichtet.
+ * liefern `/mapi/*`, `/EWS/*` und `/OAB/*` 404 und Autodiscover annonciert
+ * weder mapiHttp noch EWS, sodass Outlook sich sauber als IMAP-Konto einrichtet.
  *
  * 60s-In-Memory-Cache; der ews-server invalidiert ihn über das Redis-Signal
  * CHANNEL_SETTINGS_RELOAD, das der api-gateway nach jedem Settings-Save sendet.
@@ -41,8 +42,8 @@ export function invalidateMapiFlagCache(): void {
   cacheExpiry = 0;
 }
 
-/** Express-Gate: 404 solange MAPI/HTTP im BCP deaktiviert ist. */
+/** Express-Gate: 404 solange „MAPI over HTTP + EWS" im BCP deaktiviert ist. */
 export async function requireMapiEnabled(_req: Request, res: Response, next: NextFunction): Promise<void> {
   if (await isMapiHttpEnabled()) return next();
-  res.status(404).set('Content-Type', 'text/plain').send('MAPI over HTTP is disabled');
+  res.status(404).set('Content-Type', 'text/plain').send('Exchange protocols (MAPI over HTTP / EWS) are disabled');
 }

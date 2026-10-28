@@ -35,6 +35,13 @@ async function main() {
   // KRITISCH: jeder EWS-Request (GET wie POST) MUSS bei fehlendem Auth-Header
   // 401 + WWW-Authenticate: Basic realm="..." zurückgeben, damit Outlook den
   // Credential-Prompt zeigt.
+  //
+  // v5.8.0: EWS ist kein eigenständiger Client-Weg mehr (Outlook 2024 LTSC /
+  // M365 sprechen kein Basic-Auth-EWS gegen Fremdserver). EWS bleibt nur als
+  // Begleitprotokoll zu MAPI over HTTP (Frei/Gebucht, Abwesenheit, OAB,
+  // Autodiscover-Folgeaufrufe) und hängt am selben Schalter
+  // (ServerSettings.mapiHttpEnabled). Aus → 404, wie /mapi.
+  app.use('/EWS', requireMapiEnabled);
   app.post('/EWS/Exchange.asmx', ewsAuthMiddleware, handleEwsRequest);
   app.get('/EWS/Exchange.asmx', ewsAuthMiddleware, (_req, res) => {
     // WSDL stub for Outlook service discovery (nur für authentifizierte Clients)
@@ -50,7 +57,7 @@ async function main() {
 
   // OAB (Offline Address Book) — v3.18.38: 401 statt 404, damit Outlook das
   // Profil nicht als incomplete markiert.
-  app.use('/OAB', ewsAuthMiddleware, (_req, res) => {
+  app.use('/OAB', requireMapiEnabled, ewsAuthMiddleware, (_req, res) => {
     res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
 

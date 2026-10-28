@@ -45,7 +45,7 @@ Der App-Container enthält **alle CoreMail-Dienste**, verwaltet von `supervisord
 | smtp-server | 25 / 465 / 587 | SMTP Inbound + Outbound |
 | imap-server | 143 / 993 | IMAP4rev1 + IDLE + CONDSTORE |
 | pop3-server | 110 / 995 | POP3 |
-| ews-server | 8080 | Exchange Web Services (SOAP) + MAPI over HTTP |
+| ews-server | 8080 | MAPI over HTTP + EWS (optional, Default aus — BCP → Server) |
 | autodiscover | 8081 | Autodiscover v1 + v2 |
 | caldav-server | 8082 | CalDAV + CardDAV |
 | backup-service | 3004 | MBOX/EML-Export + S3-Backup |
@@ -54,7 +54,7 @@ Der App-Container enthält **alle CoreMail-Dienste**, verwaltet von `supervisord
 Der `api-gateway` übernimmt das gesamte HTTP-Routing ohne nginx:
 - `/` und `/bcp/` → statische Frontend-Bundles (MWA/BCP aus `/app/www/`)
 - `/auth/` → auth-service (localhost:3003)
-- `/EWS/`, `/mapi/`, `/Autodiscover/` → ews-server (localhost:8080)
+- `/EWS/`, `/mapi/`, `/OAB/` → ews-server (localhost:8080) — 404, solange „MAPI over HTTP + EWS“ aus ist
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
 - `/dav/` → caldav-server (localhost:8082)
 - `/api/v1/`, `/PowerShell/` → direkte Handler
@@ -168,7 +168,8 @@ curl -k -X POST https://<hostname>/api/v1/admin/setup \
 | MWA Webmail | `https://<hostname>/` |
 | BCP Admin-Panel | `https://<hostname>/bcp/` |
 | MinIO Web-Konsole | `http://localhost:9001` (nur lokal!) |
-| EWS (Outlook Desktop) | `https://<hostname>/EWS/Exchange.asmx` |
+| JMAP | `https://<hostname>/.well-known/jmap` |
+| EWS (nur mit aktiviertem MAPI over HTTP, Outlook 2013–2021) | `https://<hostname>/EWS/Exchange.asmx` |
 | ActiveSync (Mobil) | `https://<hostname>/Microsoft-Server-ActiveSync` |
 | Autodiscover | `https://<hostname>/Autodiscover/Autodiscover.xml` |
 
