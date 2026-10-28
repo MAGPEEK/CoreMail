@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.8.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-5.9.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -22,7 +22,7 @@
 
 **🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. Optional zuschaltbar: **MAPI over HTTP + EWS** für Outlook 2013–2021 als „Exchange-Konto“. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v5.8.0** — **Admin-CLI `coremail`** ([Doku](docs/cli.md)) · **neue, kommentierte `docker-compose.yml`** mit Pflicht-Check der .env · EWS nur noch zusammen mit MAPI over HTTP (Default aus) · JMAP-Server (v5.7.1, [Doku](docs/jmap.md)) · Verteilergruppen entfernt (v5.6.1) · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v5.9.0** — Repository komplett auf Englisch (diese deutsche Fassung bleibt erhalten) · **Admin-CLI `coremail`** ([Doku](docs/cli.md)) · **neue, kommentierte `docker-compose.yml`** mit Pflicht-Check der .env · EWS nur noch zusammen mit MAPI over HTTP (Default aus) · JMAP-Server (v5.7.1, [Doku](docs/jmap.md)) · Verteilergruppen entfernt (v5.6.1) · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Hinweis zu Outlook (v5.7.0)**: MAPI over HTTP ist wieder enthalten, aber **standardmäßig aus** (BCP → Server → „MAPI over HTTP“). Aktiviert verbinden sich Outlook 2013–2021 als natives Exchange-Konto (Basic-Auth). Outlook 2024 LTSC und Microsoft 365 Classic erzwingen Modern Auth gegen Microsoft Entra/ADFS — dort bleibt **Outlook → „Andere E-Mail-Konten" → IMAP** der Weg, Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning). Das neue Outlook und Outlook für Mac unterstützen kein MAPI.
 >
@@ -315,7 +315,7 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:5.8.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
+| `coremail` | `magpeek/coremail-app:5.9.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -332,7 +332,7 @@ Die Datei `infra/docker/docker-compose.yml` ist seit v5.8.0 auf das Nötigste re
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.8.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.9.0}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER fehlt in .env  →  openssl rand -hex 32}
@@ -433,7 +433,7 @@ REDIS_PASSWORD=…
 MINIO_ROOT_PASSWORD=…
 
 # ── Optional (Defaults in Klammern) ────────────────────────
-#COREMAIL_VERSION=5.8.0         # Image-Tag
+#COREMAIL_VERSION=5.9.0         # Image-Tag
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
 #MINIO_ROOT_USER=minioadmin
@@ -597,7 +597,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:5.8.0
+docker pull magpeek/coremail-app:5.9.0
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -610,6 +610,7 @@ docker pull magpeek/coremail-app:5.8.0
 
 | Version | Highlights |
 |---------|-----------|
+| **v5.9.0** | **Repository komplett auf Englisch**: README, CHANGELOG, Doku, Code- und Infra-Kommentare, CLI-Ausgaben; deutsches README bleibt als `README.de.md`. Enthält die v5.8.0-Features als erstes veröffentlichtes Image (`magpeek/coremail-app:5.9.0`). |
 | **v5.8.0** | **Admin-CLI `coremail`** (neues Paket `cli`, im Image unter `/usr/local/bin/coremail`): Benutzer/Postfächer/Shared Mailboxes anzeigen, anlegen, löschen; Konnektoren SMTP/IMAP/POP3/JMAP/MAPI ein-/ausschalten, Listener-Ports/TLS; SMTP-Banner; Zertifikate (Self-Signed, Let's Encrypt, aktivieren, erneuern). **Neue `docker-compose.yml`**: nur die nötigen Parameter, Pflichtwerte mit Startabbruch-Prüfung, `setup.sh` erzeugt die `.env`. **EWS an MAPI-Schalter gekoppelt**: `/EWS/*`, `/OAB/*` und Autodiscover-EWS nur noch mit „MAPI over HTTP + EWS“ (Default aus). |
 | **v5.7.1** | **JMAP-Server** — neues Paket `jmap-server` (Port 3006): RFC 8620 Core, 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals/Sharing, 9749 VAPID. Discovery `/.well-known/jmap`, Push via EventSource + WebSocket, Schalter im BCP (Default an). Siehe [docs/jmap.md](docs/jmap.md). |
 | **v5.7.0** | **MAPI over HTTP optional zurück** (Default aus, Schalter im BCP, Hot-Reload, 404 wenn aus). pnpm auf 11 gepinnt, 70 veraltete `src/*.js`-Artefakte entfernt, `noEmit` in Frontend-tsconfigs. |
@@ -679,7 +680,7 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v5.8.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v5.9.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
