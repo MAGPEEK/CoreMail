@@ -161,8 +161,8 @@ adminEmsRouter.delete('/mailboxes/:identity', async (req: Request, res: Response
   res.status(204).end();
 });
 
-// v5.6.1: Get-/New-/Set-/Remove-DistributionGroup-Endpoints entfernt
-// (DistributionGroup-Feature komplett raus). Powershell-Cmdlets liefern 404.
+// v5.6.1: Get-/New-/Set-/Remove-DistributionGroup endpoints removed
+// (DistributionGroup feature completely gone). PowerShell cmdlets return 404.
 
 // ──────────────────────────────────────────────────────────────────
 // Get-AcceptedDomain / New-AcceptedDomain / Remove-AcceptedDomain
@@ -345,7 +345,7 @@ const CMDLET_MAP: Record<string, string> = {
   'New-Mailbox': 'POST /mailboxes',
   'Set-Mailbox': 'PUT /mailboxes/{identity}',
   'Remove-Mailbox': 'DELETE /mailboxes/{identity}',
-  // v5.6.1: DistributionGroup-Cmdlets entfernt
+  // v5.6.1: DistributionGroup cmdlets removed
   'Get-AcceptedDomain': 'GET /accepted-domains',
   'New-AcceptedDomain': 'POST /accepted-domains',
   'Get-TransportRule': 'GET /transport-rules',

@@ -1,9 +1,9 @@
 /**
- * Admin-API: Server-Einstellungen / Virtuelle Verzeichnisse
+ * Admin API: server settings / virtual directories
  *
- * GET  /api/v1/admin/servers/settings  — aktuelle Einstellungen lesen
- * PUT  /api/v1/admin/servers/settings  — Einstellungen speichern
- * POST /api/v1/admin/servers/settings/derive — URLs automatisch aus Hostname ableiten
+ * GET  /api/v1/admin/servers/settings  — read current settings
+ * PUT  /api/v1/admin/servers/settings  — save settings
+ * POST /api/v1/admin/servers/settings/derive — derive URLs automatically from hostname
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -34,10 +34,10 @@ const SettingsSchema = z.object({
   smtpPort:         z.number().int().min(1).max(65535),
   smtpTls:          z.boolean(),
   orgName:          z.string().min(1),
-  // v5.7.0: MAPI over HTTP optional (Default aus). Optional im Request, damit
-  // ältere BCP-Builds ohne das Feld weiterhin speichern können.
+  // v5.7.0: MAPI over HTTP optional (default off). Optional in the request so
+  // that older BCP builds without the field can still save.
   mapiHttpEnabled:  z.boolean().optional(),
-  // v5.7.1: JMAP (RFC 8620/8621) an/aus — Default an
+  // v5.7.1: JMAP (RFC 8620/8621) on/off — default on
   jmapEnabled:      z.boolean().optional(),
 });
 
@@ -65,11 +65,11 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
   }
 
   try {
-    // v3.18.35+36: Wenn der Admin nur publicHostname/useHttps/httpPort ändert
-    // ohne die abgeleiteten URLs anzupassen, wären diese veraltet und
-    // Outlook-Autodiscover lieferte falsche Adressen. Wir prüfen: enthält der
-    // Request alte mail.local-URLs ODER zeigen URLs noch auf Port 8080 obwohl
-    // httpPort != 8080? Dann auto-derive aus publicHostname.
+    // v3.18.35+36: if the admin only changes publicHostname/useHttps/httpPort
+    // without adjusting the derived URLs, they would be stale and Outlook
+    // Autodiscover would return wrong addresses. We check: does the request
+    // contain old mail.local URLs OR do URLs still point to port 8080 although
+    // httpPort != 8080? Then auto-derive from publicHostname.
     const requestUrls = [parsed.data.ewsUrl, parsed.data.owaUrl, parsed.data.easUrl, parsed.data.autodiscoverBase];
     const hasStaleUrls = requestUrls.some((u) => /mail\.local/i.test(u)) ||
                          (parsed.data.httpPort !== 8080 && requestUrls.some((u) => /:8080/.test(u)));
@@ -82,7 +82,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
       log.info({ publicHostname: parsed.data.publicHostname }, 'Auto-derived URLs from publicHostname (stale mail.local detected)');
     }
 
-    // exactOptionalPropertyTypes: undefined darf nicht an Prisma durchgereicht werden
+    // exactOptionalPropertyTypes: undefined must not be passed through to Prisma
     const { mapiHttpEnabled, jmapEnabled, ...rest } = parsed.data;
     const data = {
       ...rest,
@@ -111,7 +111,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/admin/servers/settings/derive
-// URLs automatisch aus Hostname + Port ableiten (Komfort-Endpunkt für ECP)
+// Derive URLs automatically from hostname + port (convenience endpoint for ECP)
 adminServersRouter.post('/settings/derive', async (req: Request, res: Response) => {
   const schema = z.object({
     publicHostname: z.string().min(1),
@@ -126,22 +126,22 @@ adminServersRouter.post('/settings/derive', async (req: Request, res: Response) 
 
   const { publicHostname, useHttps, httpPort } = parsed.data;
   const proto = useHttps ? 'https' : 'http';
-  // Standard-Port weglassen (443 für https, 80 für http)
+  // Omit the standard port (443 for https, 80 for http)
   const portSuffix = (useHttps && httpPort === 443) || (!useHttps && httpPort === 80)
     ? ''
     : `:${httpPort}`;
   const base = `${proto}://${publicHostname}${portSuffix}`;
 
-  // Autodiscover MUSS auf eigener CNAME laufen (Microsoft Exchange Spec):
-  // Outlook sucht IMMER zuerst `autodiscover.{primary-domain}` ab.
-  // Hostname `mail.stefanwuestner.de` → autodiscover-Host `autodiscover.stefanwuestner.de`
-  // Hostname `stefanwuestner.de` (kein Subdomain) → `autodiscover.stefanwuestner.de`
-  // Falls Hostname schon mit `autodiscover.` beginnt → unverändert
+  // Autodiscover MUST run on its own CNAME (Microsoft Exchange spec):
+  // Outlook ALWAYS checks `autodiscover.{primary-domain}` first.
+  // Hostname `mail.stefanwuestner.de` → autodiscover host `autodiscover.stefanwuestner.de`
+  // Hostname `stefanwuestner.de` (no subdomain) → `autodiscover.stefanwuestner.de`
+  // If the hostname already starts with `autodiscover.` → unchanged
   const autodiscoverHost = (() => {
     if (publicHostname.startsWith('autodiscover.')) return publicHostname;
     const labels = publicHostname.split('.');
-    // ≥ 3 Labels → erste Subdomain abschneiden (mail.stefanwuestner.de → stefanwuestner.de)
-    // ≤ 2 Labels → Root-Domain direkt verwenden
+    // ≥ 3 labels → strip the first subdomain (mail.stefanwuestner.de → stefanwuestner.de)
+    // ≤ 2 labels → use the root domain directly
     const rootDomain = labels.length >= 3 ? labels.slice(1).join('.') : publicHostname;
     return `autodiscover.${rootDomain}`;
   })();

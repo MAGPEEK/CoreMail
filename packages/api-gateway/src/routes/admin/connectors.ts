@@ -1,12 +1,12 @@
 /**
- * Admin-API: Mail-Connectors (Sende- / Empfangsconnectors)
+ * Admin API: mail connectors (send / receive connectors)
  *
- * GET    /api/v1/admin/connectors           — Liste (nach Typ filterbar)
- * POST   /api/v1/admin/connectors           — Erstellen
+ * GET    /api/v1/admin/connectors           — list (filterable by type)
+ * POST   /api/v1/admin/connectors           — create
  * GET    /api/v1/admin/connectors/:id       — Detail
- * PUT    /api/v1/admin/connectors/:id       — Bearbeiten
- * PATCH  /api/v1/admin/connectors/:id/toggle — Aktivieren/Deaktivieren
- * DELETE /api/v1/admin/connectors/:id       — Löschen
+ * PUT    /api/v1/admin/connectors/:id       — edit
+ * PATCH  /api/v1/admin/connectors/:id/toggle — enable/disable
+ * DELETE /api/v1/admin/connectors/:id       — delete
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -46,7 +46,7 @@ adminConnectorsRouter.get('/', async (req: Request, res: Response) => {
       host: true, port: true, tls: true, requireTls: true,
       sourceIps: true, targetDomains: true, priority: true,
       username: true, createdAt: true,
-      // password bewusst ausblenden
+      // deliberately hide password
     },
   });
   res.json(connectors);

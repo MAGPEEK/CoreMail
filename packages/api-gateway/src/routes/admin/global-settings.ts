@@ -1,12 +1,12 @@
 /**
- * Admin-API: Globale Servereinstellungen
+ * Admin API: global server settings
  *
- * GET  /api/v1/admin/settings          — alle Einstellungen lesen
- * PUT  /api/v1/admin/settings          — alle Einstellungen speichern
- * PUT  /api/v1/admin/settings/org      — nur Organisations-Sektion
- * PUT  /api/v1/admin/settings/mail     — nur Mail-Grenzen
- * PUT  /api/v1/admin/settings/security — nur Sicherheitsrichtlinien
- * PUT  /api/v1/admin/settings/maintenance — Wartungsmodus an/aus
+ * GET  /api/v1/admin/settings          — read all settings
+ * PUT  /api/v1/admin/settings          — save all settings
+ * PUT  /api/v1/admin/settings/org      — organisation section only
+ * PUT  /api/v1/admin/settings/mail     — mail limits only
+ * PUT  /api/v1/admin/settings/security — security policies only
+ * PUT  /api/v1/admin/settings/maintenance — maintenance mode on/off
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -19,8 +19,8 @@ const log = createLogger('admin:global-settings');
 export const adminGlobalSettingsRouter: RouterType = Router();
 
 // ── GET /api/v1/admin/settings/public ─────────────────────────────────────────
-// Öffentlicher Endpunkt (kein Auth-Erfordernis) — gibt nur nicht-sensible
-// Einstellungen zurück, die Frontend-Apps (MWA + BCP) vor dem Login brauchen.
+// Public endpoint (no auth required) — returns only non-sensitive settings
+// that the frontend apps (MWA + BCP) need before login.
 adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) => {
   try {
     const cfg = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
@@ -40,7 +40,7 @@ adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) =>
 
 adminGlobalSettingsRouter.use(requireAdmin);
 
-// ── Singleton laden / erstellen ───────────────────────────────────────────────
+// ── Load / create singleton ───────────────────────────────────────────────────
 async function getOrCreate() {
   return prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
@@ -49,7 +49,7 @@ async function getOrCreate() {
   });
 }
 
-// ── Zod-Schemas pro Sektion ────────────────────────────────────────────────────
+// ── Zod schemas per section ────────────────────────────────────────────────────
 
 const OrgSchema = z.object({
   orgName:        z.string().min(1).max(100),
@@ -71,13 +71,13 @@ const SecuritySchema = z.object({
   minPasswordLength:          z.number().int().min(4).max(64).default(8),
   maxLoginAttempts:           z.number().int().min(1).max(100).default(5),
   sessionTimeoutMinutes:      z.number().int().min(5).max(10080).default(480),
-  // 0 = deaktiviert; 1–1440 = Minuten bis automatischer Logout bei Browser-Inaktivität
+  // 0 = disabled; 1–1440 = minutes until automatic logout on browser inactivity
   inactivityTimeoutMinutes:   z.number().int().min(0).max(1440).default(30),
   requireMfaForAdmins:        z.boolean().default(false),
   allowSelfRegistration:      z.boolean().default(false),
   selfServicePasswordReset:   z.boolean().default(true),
-  // v3.18.30: Audit-Log global ein/aus. Toggle wird ungeachtet seines eigenen
-  // Werts immer als kritisches Event geloggt (siehe ALWAYS_AUDIT in audit.ts).
+  // v3.18.30: audit log globally on/off. The toggle is always logged as a
+  // critical event regardless of its own value (see ALWAYS_AUDIT in audit.ts).
   auditLogEnabled:            z.boolean().default(true),
 });
 
@@ -139,9 +139,9 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
     return;
   }
 
-  // v3.18.30: Audit-Toggle-Wechsel SPEZIELL loggen, BEVOR der Cache invalidiert wird.
-  // Auch wenn der Admin Audit gleich ausschaltet — diese Aktion bleibt durch ALWAYS_AUDIT
-  // („audit.*" + „settings.*") garantiert protokolliert.
+  // v3.18.30: log audit-toggle changes SPECIFICALLY, BEFORE the cache is invalidated.
+  // Even if the admin is about to turn auditing off — this action is guaranteed to be
+  // logged via ALWAYS_AUDIT („audit.*" + „settings.*").
   const before = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
     select: { auditLogEnabled: true },
@@ -172,7 +172,7 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
     });
   }
 
-  // Cache der audit-Middleware invalidieren, damit Toggle sofort greift.
+  // Invalidate the audit middleware cache so the toggle takes effect immediately.
   invalidateAuditCache();
 
   log.info(parsed.data, 'Sicherheitsrichtlinien aktualisiert');

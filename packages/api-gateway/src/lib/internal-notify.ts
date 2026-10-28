@@ -1,13 +1,13 @@
 /**
  * Internal Notification Helper (v3.18.16)
  *
- * Stellt System-Benachrichtigungen (z. B. Calendar-Share-Einladung) direkt in
- * das INBOX-Postfach des Empfängers ein, ohne den Umweg über die SMTP-Outbound-
- * Queue. Schneller, kein DKIM/Spam-Check nötig, funktioniert auch wenn der
- * MX-Server gerade unter Last steht.
+ * Delivers system notifications (e.g. calendar share invitation) directly into
+ * the recipient's INBOX, without the detour via the SMTP outbound queue.
+ * Faster, no DKIM/spam check needed, also works when the MX server is
+ * currently under load.
  *
- * Sender ist immer `system@<publicHostname>` damit klar erkennbar ist, dass es
- * sich um eine automatische Mail handelt.
+ * The sender is always `system@<publicHostname>` so it is clearly recognizable
+ * as an automated mail.
  */
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -15,24 +15,24 @@ import { createLogger } from '@coremail/core';
 const log = createLogger('internal-notify');
 
 export interface InternalNotifyOpts {
-  /** User-ID des Empfängers (NICHT E-Mail-Adresse) */
+  /** User ID of the recipient (NOT the email address) */
   recipientUserId: string;
-  /** Anzeigename des Absenders (z. B. „CoreMail System" oder Owner-Name) */
+  /** Display name of the sender (e.g. „CoreMail System" or owner name) */
   fromName: string;
-  /** E-Mail-Adresse des Absenders (z. B. owner@domain oder system@domain) */
+  /** Email address of the sender (e.g. owner@domain or system@domain) */
   fromAddr: string;
   subject: string;
   bodyText: string;
-  /** Optional HTML-Body; wenn weggelassen, wird `bodyText` als <pre> gewrappt */
+  /** Optional HTML body; if omitted, `bodyText` is wrapped as <pre> */
   bodyHtml?: string;
-  /** Zusätzliche Headers für Threading (selten genutzt) */
+  /** Additional headers for threading (rarely used) */
   inReplyTo?: string;
   messageId?: string;
 }
 
 /**
- * Stellt eine Notification-Mail direkt in die INBOX des Empfängers ein.
- * Fire-and-forget — Fehler werden geloggt aber nicht propagiert.
+ * Delivers a notification mail directly into the recipient's INBOX.
+ * Fire-and-forget — errors are logged but not propagated.
  */
 export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
   try {
@@ -45,7 +45,7 @@ export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
       return;
     }
 
-    // INBOX-Folder finden (typisch displayName="Inbox" oder name="Inbox")
+    // Find the INBOX folder (typically displayName="Inbox" or name="Inbox")
     const inbox = mailbox.folders.find(
       (f) => f.name === 'Inbox' || f.displayName === 'Inbox' || f.name === 'INBOX',
     );
@@ -54,9 +54,9 @@ export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
       return;
     }
 
-    // UID / modSeq inkrementieren — standard IMAP-Pattern. Wir lesen aktuelle
-    // Werte und legen +1 an. Race-Condition-Risiko ist akzeptabel für system-
-    // generierte Mails (eine pro Share, niedrige Frequenz).
+    // Increment UID / modSeq — standard IMAP pattern. We read the current
+    // values and add +1. The race-condition risk is acceptable for system-
+    // generated mails (one per share, low frequency).
     const lastMessage = await prisma.message.findFirst({
       where: { folderId: inbox.id },
       orderBy: { uid: 'desc' },
@@ -73,7 +73,7 @@ export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
         folderId: inbox.id,
         uid: nextUid,
         modSeq: nextModSeq,
-        flags: [],  // ungelesen
+        flags: [],  // unread
         subject: opts.subject,
         fromAddr: opts.fromAddr,
         fromName: opts.fromName,

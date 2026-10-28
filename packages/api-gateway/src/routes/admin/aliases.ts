@@ -1,18 +1,18 @@
 /**
- * Admin API — E-Mail-Aliase
+ * Admin API — email aliases
  *
- * Aliase sind zusätzliche Empfangs-Adressen, die zu einer Haupt-Mailbox
- * (User oder Shared Mailbox) gehören. Eingehende Mails an die Alias-Adresse
- * werden vom SMTP-Server in das Postfach des Targets ausgeliefert.
+ * Aliases are additional receiving addresses that belong to a primary mailbox
+ * (user or shared mailbox). Incoming mails to the alias address are delivered
+ * by the SMTP server into the target's mailbox.
  *
  * Routes:
- *   GET    /api/v1/admin/aliases                         — alle Aliase listen
- *   GET    /api/v1/admin/mailboxes/:id/aliases           — User-Aliases
- *   POST   /api/v1/admin/mailboxes/:id/aliases           — User-Alias anlegen
- *   GET    /api/v1/admin/shared-mailboxes/:id/aliases    — SharedMailbox-Aliases
- *   POST   /api/v1/admin/shared-mailboxes/:id/aliases    — SharedMailbox-Alias anlegen
- *   PATCH  /api/v1/admin/aliases/:aliasId                — Alias bearbeiten (active, description)
- *   DELETE /api/v1/admin/aliases/:aliasId                — Alias löschen
+ *   GET    /api/v1/admin/aliases                         — list all aliases
+ *   GET    /api/v1/admin/mailboxes/:id/aliases           — user aliases
+ *   POST   /api/v1/admin/mailboxes/:id/aliases           — create user alias
+ *   GET    /api/v1/admin/shared-mailboxes/:id/aliases    — SharedMailbox aliases
+ *   POST   /api/v1/admin/shared-mailboxes/:id/aliases    — create SharedMailbox alias
+ *   PATCH  /api/v1/admin/aliases/:aliasId                — edit alias (active, description)
+ *   DELETE /api/v1/admin/aliases/:aliasId                — delete alias
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -27,7 +27,7 @@ adminAliasesRouter.use(requireAdmin);
 const LOCAL_PART_RE = /^[a-z0-9._+-]+$/;
 
 const CreateBody = z.object({
-  // Entweder vollständige E-Mail ODER localPart + domainId
+  // Either a full email address OR localPart + domainId
   address:   z.string().email().optional(),
   localPart: z.string().min(1).max(64).optional(),
   domainId:  z.string().optional(),
@@ -36,9 +36,9 @@ const CreateBody = z.object({
 });
 
 /**
- * Helper — baut die finale Alias-Adresse aus Input.
- * Wenn `address` gesetzt: Domain wird aus der E-Mail extrahiert und gegen DB validiert.
- * Sonst muss `localPart + domainId` gesetzt sein und Domain in DB existieren.
+ * Helper — builds the final alias address from input.
+ * If `address` is set: the domain is extracted from the email and validated against the DB.
+ * Otherwise `localPart + domainId` must be set and the domain must exist in the DB.
  */
 async function resolveAliasInput(input: z.infer<typeof CreateBody>): Promise<
   { ok: true; address: string; localPart: string; domainId: string }
@@ -69,8 +69,8 @@ async function resolveAliasInput(input: z.infer<typeof CreateBody>): Promise<
 }
 
 /**
- * Prüft Kollision: Alias darf nicht an existierende User-/SharedMailbox-/Alias-Adresse
- * kollidieren. Returns null wenn frei, sonst Fehlerstring.
+ * Checks for collisions: an alias must not collide with an existing user/SharedMailbox/alias
+ * address. Returns null if free, otherwise an error string.
  */
 async function checkAddressCollision(address: string, excludeAliasId?: string): Promise<string | null> {
   const lower = address.toLowerCase();
@@ -94,7 +94,7 @@ const ALIAS_SELECT = {
   targetShared: { select: { id: true, email: true, displayName: true } },
 } as const;
 
-// ── GET /admin/aliases — alle ────────────────────────────────────────────────
+// ── GET /admin/aliases — all ─────────────────────────────────────────────────
 
 adminAliasesRouter.get('/aliases', async (_req: Request, res: Response) => {
   const aliases = await prisma.emailAlias.findMany({
@@ -104,7 +104,7 @@ adminAliasesRouter.get('/aliases', async (_req: Request, res: Response) => {
   res.json(aliases);
 });
 
-// ── User-Aliases ─────────────────────────────────────────────────────────────
+// ── User aliases ─────────────────────────────────────────────────────────────
 
 adminAliasesRouter.get('/mailboxes/:id/aliases', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -124,7 +124,7 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
   const user = await prisma.user.findUnique({ where: { id }, select: { id: true, domainId: true } });
   if (!user) { res.status(404).json({ error: 'User nicht gefunden' }); return; }
 
-  // Default-Domain = die des Users (für localPart-only-Mode)
+  // Default domain = the user's (for localPart-only mode)
   const input = { ...p.data, domainId: p.data.domainId ?? user.domainId };
   const resolved = await resolveAliasInput(input);
   if (!resolved.ok) { res.status(400).json({ error: resolved.error }); return; }
@@ -147,7 +147,7 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
   res.status(201).json(alias);
 });
 
-// ── SharedMailbox-Aliases ────────────────────────────────────────────────────
+// ── SharedMailbox aliases ────────────────────────────────────────────────────
 
 adminAliasesRouter.get('/shared-mailboxes/:id/aliases', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };

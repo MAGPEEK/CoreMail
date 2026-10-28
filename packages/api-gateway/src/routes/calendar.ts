@@ -20,9 +20,9 @@ import {
 } from '../lib/imip.js';
 
 /**
- * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE-Handler
- * forwards it to all affectedUserIds (Owner + Grantee). Frontend invalidates
- * TanStack Query Cache → instant UI update statt 60s-Polling.
+ * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE handler
+ * forwards it to all affectedUserIds (owner + grantee). Frontend invalidates
+ * TanStack Query cache → instant UI update instead of 60s polling.
  */
 function publishShareEvent(
   action: 'create' | 'update' | 'delete' | 'self_remove',
@@ -36,7 +36,7 @@ function publishShareEvent(
       JSON.stringify({ action, calendarId, affectedUserIds, ...extra }),
     );
   } catch {
-    // best-effort — Redis-Ausfall darf nicht den Hauptpfad blocken
+    // best-effort — a Redis outage must not block the main path
   }
 }
 
@@ -47,10 +47,10 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// ─── BullMQ Outbound Queue (für iMIP, v3.18.25) ─────────────────────────────
-// Singleton-Pattern wie in routes/mail.ts. Eigene Redis-Connection für BullMQ
-// — getRedisClient() ist shared mit maxRetriesPerRequest:3, BullMQ braucht
-// dedizierte Connection für Blocking-Commands.
+// ─── BullMQ Outbound Queue (for iMIP, v3.18.25) ─────────────────────────────
+// Singleton pattern as in routes/mail.ts. Dedicated Redis connection for BullMQ
+// — getRedisClient() is shared with maxRetriesPerRequest:3, BullMQ needs a
+// dedicated connection for blocking commands.
 let _outboundQueue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_outboundQueue) {
@@ -68,9 +68,9 @@ function getOutboundQueue(): Queue {
 }
 
 /**
- * v3.18.25 A5: Sendet iMIP-Einladungen an alle Attendees (REQUEST oder CANCEL).
- * Fire-and-forget — Fehler werden geloggt, blockieren aber nicht den Hauptpfad
- * (Event ist ja schon in der DB).
+ * v3.18.25 A5: Sends iMIP invitations to all attendees (REQUEST or CANCEL).
+ * Fire-and-forget — errors are logged but do not block the main path
+ * (the event is already in the DB).
  */
 async function sendInvitations(opts: {
   ev: { id: string; uid: string; summary: string; description: string;
@@ -93,7 +93,7 @@ async function sendInvitations(opts: {
     }));
   if (attendees.length === 0) return;
 
-  // PublicHostname aus ServerSettings (für UID-Domain)
+  // publicHostname from ServerSettings (for the UID domain)
   const settings = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
     select: { publicHostname: true },
@@ -121,21 +121,21 @@ async function sendInvitations(opts: {
       trackingId: `imip-${opts.method}-${opts.ev.id}`,
     });
   } catch (err) {
-    // Fail-safe: Event existiert bereits in DB, Einladung scheitert nur an Queue/SMTP
-    // — wir loggen und gehen weiter. User kann später via „Einladung neu senden"-Button
-    // retry triggern (zukünftig).
+    // Fail-safe: the event already exists in the DB, only the invitation failed at queue/SMTP
+    // — we log and move on. The user can later trigger a retry via a „Resend invitation"
+    // button (future).
     // eslint-disable-next-line no-console
     console.error('[iMIP] failed to enqueue invitation', { eventId: opts.ev.id, err });
   }
 }
 
-// GET /api/v1/calendar — eigene + geteilte Kalender
+// GET /api/v1/calendar — own + shared calendars
 calendarRouter.get('/', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
 
   let calendars = await listAccessibleCalendars(userId);
 
-  // Lazy provisioning: nur wenn User noch GAR keinen eigenen Kalender hat.
+  // Lazy provisioning: only if the user has NO own calendar at all yet.
   if (!calendars.some((c) => !c.shared)) {
     await prisma.calendar.create({
       data: { userId, name: 'Kalender', color: '#0078D4', isDefault: true, sortOrder: 0 },
@@ -173,7 +173,7 @@ calendarRouter.post('/', async (req: Request, res: Response) => {
   res.status(201).json(calendar);
 });
 
-// PATCH /api/v1/calendar/:id  (nur Owner)
+// PATCH /api/v1/calendar/:id  (owner only)
 const PatchCalSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
@@ -199,7 +199,7 @@ calendarRouter.patch('/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// DELETE /api/v1/calendar/:id  (nur Owner; Default-Kalender geschützt)
+// DELETE /api/v1/calendar/:id  (owner only; default calendar protected)
 calendarRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const cal = await prisma.calendar.findFirst({ where: { id, userId: req.apiUser!.userId } });
@@ -209,7 +209,7 @@ calendarRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// POST /api/v1/calendar/reorder  Body: { ids: string[] }  (nur eigene)
+// POST /api/v1/calendar/reorder  Body: { ids: string[] }  (own only)
 const ReorderSchema = z.object({ ids: z.array(z.string()).min(1).max(50) });
 calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   const parsed = ReorderSchema.safeParse(req.body);
@@ -231,13 +231,13 @@ calendarRouter.post('/reorder', async (req: Request, res: Response) => {
   res.json({ ok: true, count: sequence.length });
 });
 
-// ─── CalDAV-Info (v3.18.18) ─────────────────────────────────────────────────
+// ─── CalDAV info (v3.18.18) ─────────────────────────────────────────────────
 
 // GET /api/v1/calendar/caldav-info
-// Liefert die CalDAV-URLs für den aktuellen User — eine "Account-URL" für
-// Auto-Discovery in Apple Kalender / Thunderbird plus eine direkte URL pro
-// eigenem Kalender. Inklusive Hinweis zum Auth (Bearer-Token funktioniert
-// nicht in CalDAV-Clients — App-Passwort nötig).
+// Returns the CalDAV URLs for the current user — one "account URL" for
+// auto-discovery in Apple Calendar / Thunderbird plus a direct URL per
+// own calendar. Includes an auth hint (bearer token does not work in
+// CalDAV clients — app password required).
 calendarRouter.get('/caldav-info', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
 
@@ -258,9 +258,9 @@ calendarRouter.get('/caldav-info', async (req: Request, res: Response) => {
   ]);
 
   const hostname = settings?.publicHostname ?? req.get('host') ?? 'mail.local';
-  // CalDAV immer über HTTPS empfehlen (Auth-Leak sonst). Wenn Admin den Server
-  // explizit auf HTTP konfiguriert hat (z. B. hinter Reverse-Proxy), respektieren
-  // wir das aber, sonst geht Auto-Discovery vom Apple Kalender nicht.
+  // Always recommend HTTPS for CalDAV (auth leak otherwise). If the admin has
+  // explicitly configured the server for HTTP (e.g. behind a reverse proxy), we
+  // respect that, otherwise Apple Calendar auto-discovery does not work.
   const proto = settings?.useHttps === false ? 'http' : 'https';
   const port = settings?.httpPort ?? 443;
   const isStandardPort = (proto === 'https' && port === 443) || (proto === 'http' && port === 80);
@@ -268,28 +268,28 @@ calendarRouter.get('/caldav-info', async (req: Request, res: Response) => {
   const baseUrl = `${proto}://${hostname}${portSuffix}`;
 
   res.json({
-    // Auto-Discovery (Apple Kalender, Thunderbird): User gibt nur baseUrl ein
-    // und der Client entdeckt alle Kalender via PROPFIND.
+    // Auto-discovery (Apple Calendar, Thunderbird): the user enters only baseUrl
+    // and the client discovers all calendars via PROPFIND.
     accountUrl: `${baseUrl}/dav/calendars/${userId}/`,
-    // Pro-Kalender-URL für direkten Mount (z. B. nur einen Kalender abonnieren)
+    // Per-calendar URL for direct mount (e.g. subscribe to a single calendar only)
     calendars: calendars.map((c) => ({
       id: c.id,
       name: c.name,
       isDefault: c.isDefault,
       url: `${baseUrl}/dav/calendars/${userId}/${c.id}/`,
     })),
-    // Auth-Hinweis: CalDAV-Clients brauchen ein App-Passwort, nicht das normale
-    // Login-Passwort (das wäre durch MFA blockiert).
+    // Auth hint: CalDAV clients need an app password, not the normal
+    // login password (which would be blocked by MFA).
     username: user?.email ?? '',
     authHint: 'app-password',
   });
 });
 
-// ─── Grantee-lokale Settings (v3.18.16 A3 + A8) ─────────────────────────────
+// ─── Grantee-local settings (v3.18.16 A3 + A8) ──────────────────────────────
 
 // PATCH /api/v1/calendar/mine-shares/:shareId
 // Body: { localColor?: string|null, sortOrder?: number }
-// Nur Grantee selbst — Owner-Farbe wird NICHT geändert.
+// Grantee only — the owner's color is NOT changed.
 const PatchMineShareSchema = z.object({
   localColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
   sortOrder: z.number().int().optional(),
@@ -317,7 +317,7 @@ calendarRouter.patch('/mine-shares/:shareId', async (req: Request, res: Response
 });
 
 // POST /api/v1/calendar/mine-shares/reorder  Body: { ids: string[] }
-// Setzt sortOrder analog /calendar/reorder für eigene Freigaben.
+// Sets sortOrder analogous to /calendar/reorder for own shares.
 calendarRouter.post('/mine-shares/reorder', async (req: Request, res: Response) => {
   const parsed = ReorderSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -338,10 +338,10 @@ calendarRouter.post('/mine-shares/reorder', async (req: Request, res: Response) 
   res.json({ ok: true, count: sequence.length });
 });
 
-// ─── Sharing-Endpoints ──────────────────────────────────────────────────────
+// ─── Sharing endpoints ──────────────────────────────────────────────────────
 
-// GET /api/v1/calendar/mine-shares — Shares die mir gewährt wurden
-// (Grantee-Sicht). Optional Filter ?calendarId=...
+// GET /api/v1/calendar/mine-shares — shares granted to me
+// (grantee view). Optional filter ?calendarId=...
 calendarRouter.get('/mine-shares', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const calendarIdFilter = typeof req.query['calendarId'] === 'string'
@@ -374,7 +374,7 @@ calendarRouter.get('/mine-shares', async (req: Request, res: Response) => {
   })));
 });
 
-// GET /api/v1/calendar/:id/shares — Liste aller Freigaben (nur Owner)
+// GET /api/v1/calendar/:id/shares — list of all shares (owner only)
 calendarRouter.get('/:id/shares', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const userId = req.apiUser!.userId;
@@ -436,7 +436,7 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
   });
   if (!grantee) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-  // Upsert: erneuter POST mit gleicher granteeId → Update
+  // Upsert: repeated POST with the same granteeId → update
   const share = await prisma.calendarShare.upsert({
     where: { calendarId_granteeId: { calendarId: id, granteeId } },
     update: {
@@ -452,7 +452,7 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     },
   });
 
-  // v3.18.15 Audit-Log: Share-Erstellung/-Update (Compliance)
+  // v3.18.15 audit log: share create/update (compliance)
   audit({
     actorId: userId,
     actorEmail: req.apiUser!.email,
@@ -464,7 +464,7 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     ...auditContext(req),
   });
 
-  // v3.18.17 A2: SSE-Push für Live-Sync
+  // v3.18.17 A2: SSE push for live sync
   publishShareEvent(
     share.createdAt.getTime() < Date.now() - 5000 ? 'update' : 'create',
     id,
@@ -472,11 +472,11 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
     { permission: parsed.data.permission },
   );
 
-  // v3.18.16 A1: Notification-Mail in Grantee-Inbox — nur bei *neuer* Share,
-  // nicht bei Permission-Update via Upsert (sonst Spam).
-  const wasUpdate = share.createdAt.getTime() < Date.now() - 5000; // grobe Heuristik
+  // v3.18.16 A1: notification mail in the grantee inbox — only for a *new* share,
+  // not for a permission update via upsert (would be spam otherwise).
+  const wasUpdate = share.createdAt.getTime() < Date.now() - 5000; // rough heuristic
   if (!wasUpdate) {
-    const ownerName = req.apiUser!.email; // displayName ggf. via lookup, hier KISS
+    const ownerName = req.apiUser!.email; // displayName could be looked up, KISS here
     const permLabel = parsed.data.permission === 'WRITE' ? 'Lesen und Schreiben' : 'Nur lesen';
     void notifyUserInbox({
       recipientUserId: grantee.id,
@@ -572,7 +572,7 @@ calendarRouter.put('/:id/shares/:shareId', async (req: Request, res: Response) =
   });
 });
 
-// DELETE /api/v1/calendar/:id/shares/:shareId — Owner ODER Grantee selbst
+// DELETE /api/v1/calendar/:id/shares/:shareId — owner OR the grantee themselves
 calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response) => {
   const { id, shareId } = req.params as { id: string; shareId: string };
   const userId = req.apiUser!.userId;
@@ -587,7 +587,7 @@ calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response
   });
   if (!share || share.calendarId !== id) { res.status(404).json({ error: 'Freigabe nicht gefunden' }); return; }
 
-  // Owner darf alles entfernen; Grantee darf eigene Share entfernen ("Aus meiner Liste")
+  // Owner may remove everything; grantee may remove their own share ("Aus meiner Liste")
   const isOwnerAction = share.ownerId === userId;
   const isGranteeSelfRemoval = share.granteeId === userId;
   if (!isOwnerAction && !isGranteeSelfRemoval) {
@@ -624,11 +624,11 @@ calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response
 
 // POST /api/v1/calendar/freebusy
 // Body: { userEmails: string[], start: ISO, end: ISO }
-// Liefert pro angefragtem User alle Busy-Slots aus Kalendern, auf die der
-// aufrufende User Zugriff hat (eigen + per Share). Für andere User werden nur
-// Slots aus Kalendern berücksichtigt, die der andere User dem aufrufenden User
-// freigegeben hat. CONFIDENTIAL bleibt ausgeblendet, PRIVATE wird als generic
-// „Busy" geliefert ohne Subject.
+// Returns, per requested user, all busy slots from calendars the calling user
+// has access to (own + via share). For other users only slots from calendars
+// that the other user has shared with the calling user are considered.
+// CONFIDENTIAL stays hidden, PRIVATE is returned as a generic „Busy"
+// without subject.
 const FreeBusySchema = z.object({
   userEmails: z.array(z.string().email()).min(1).max(50),
   start: z.string(),
@@ -645,13 +645,13 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid date range' });
     return;
   }
-  // Begrenzen auf max. 90 Tage (gegen DoS)
+  // Limit to max. 90 days (against DoS)
   if (end.getTime() - start.getTime() > 90 * 24 * 60 * 60 * 1000) {
     res.status(400).json({ error: 'Range too large (max 90 days)' });
     return;
   }
 
-  // Email → User-Mapping
+  // Email → user mapping
   const users = await prisma.user.findMany({
     where: { email: { in: parsed.data.userEmails.map((e) => e.toLowerCase()) }, active: true },
     select: { id: true, email: true, displayName: true },
@@ -672,16 +672,16 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
       continue;
     }
 
-    // Welche Kalender vom Ziel-User darf der Caller einsehen?
-    // - Eigene Kalender vom Caller (wenn er sich selbst anfragt)
-    // - Vom Ziel-User an Caller geteilte Kalender
+    // Which calendars of the target user may the caller see?
+    // - The caller's own calendars (when querying themselves)
+    // - Calendars shared by the target user with the caller
     const targetCalendars = await prisma.calendar.findMany({
       where: {
         userId: targetUser.id,
         OR: [
-          // Caller fragt sich selbst → alle eigenen
+          // Caller queries themselves → all own calendars
           ...(targetUser.id === callerId ? [{ userId: callerId }] : []),
-          // Caller hat Share vom Ziel-User
+          // Caller has a share from the target user
           { shares: { some: { granteeId: callerId } } },
         ],
       },
@@ -689,7 +689,7 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
     });
 
     if (targetCalendars.length === 0) {
-      // Caller hat keinen Zugriff auf Ziel-Kalender → leere Busy-Liste
+      // Caller has no access to target calendars → empty busy list
       result.push({
         email: requestedEmail,
         displayName: targetUser.displayName ?? null,
@@ -712,7 +712,7 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
     const busy = events
       .filter((e) => {
         const cls = (e.classification ?? 'PUBLIC').toUpperCase();
-        // CONFIDENTIAL → ausblenden für Caller (außer Caller ist Owner = Self-Query)
+        // CONFIDENTIAL → hide from caller (unless caller is owner = self-query)
         if (cls === 'CONFIDENTIAL' && targetUser.id !== callerId) return false;
         return true;
       })
@@ -723,7 +723,7 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
           start: e.dtStart.toISOString(),
           end: e.dtEnd.toISOString(),
           type: 'busy' as const,
-          // PRIVATE für Foreign-Caller → kein Subject
+          // PRIVATE for foreign caller → no subject
           ...(isPrivateForCaller ? {} : { subject: e.summary }),
         };
       });
@@ -742,8 +742,8 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
 // ─── Events ─────────────────────────────────────────────────────────────────
 
 // GET /api/v1/calendar/events?start=&end=&calendarId=
-// v3.18.15: Privacy-Masking aktiv — Grantees sehen private Events nur als „Beschäftigt",
-// confidential Events werden komplett ausgeblendet. Owner sieht alles unverändert.
+// v3.18.15: privacy masking active — grantees see private events only as „Beschäftigt",
+// confidential events are hidden completely. Owner sees everything unchanged.
 calendarRouter.get('/events', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const start = req.query['start'] ? new Date(String(req.query['start'])) : new Date();
@@ -752,7 +752,7 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const calendarIdParam = req.query['calendarId'] as string | undefined;
 
-  // Pro Kalender merken ob viewer Owner ist (für Masking-Entscheidung)
+  // Remember per calendar whether the viewer is owner (for the masking decision)
   const ownerByCalendar = new Map<string, boolean>();
   let calIds: string[];
   if (calendarIdParam) {
@@ -773,7 +773,7 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     orderBy: { dtStart: 'asc' },
   });
 
-  // Masking: PRIVATE → details ersetzt durch "Beschäftigt"; CONFIDENTIAL → ausgeblendet
+  // Masking: PRIVATE → details replaced by "Beschäftigt"; CONFIDENTIAL → hidden
   const masked = events
     .map((ev) => maskEventForViewer(ev, ownerByCalendar.get(ev.calendarId) === true))
     .filter((ev): ev is NonNullable<typeof ev> => ev !== null);
@@ -781,7 +781,7 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
   res.json(masked);
 });
 
-// v3.18.27 — GET /api/v1/calendar/events/:id (Detail-Load für Edit-Dialog)
+// v3.18.27 — GET /api/v1/calendar/events/:id (detail load for the edit dialog)
 calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
@@ -800,7 +800,7 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
   const access = await canAccessCalendar(userId, event.calendarId, 'READ');
   if (!access) { res.status(403).json({ error: 'Keine Leserechte' }); return; }
 
-  // Masking für PRIVATE/CONFIDENTIAL bei Grantees
+  // Masking for PRIVATE/CONFIDENTIAL for grantees
   if (!access.isOwner) {
     const cls = (event.classification ?? 'PUBLIC').toUpperCase();
     if (cls === 'CONFIDENTIAL') {
@@ -825,7 +825,7 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
   });
 });
 
-// POST /api/v1/calendar/events  (WRITE-Permission auf Ziel-Kalender)
+// POST /api/v1/calendar/events  (WRITE permission on target calendar)
 const AttendeeSchema = z.object({
   email: z.string().email(),
   cn: z.string().optional(),
@@ -841,9 +841,9 @@ const EventSchema = z.object({
   allDay: z.boolean().default(false),
   recurring: z.boolean().default(false),
   rrule: z.string().optional(),
-  // v3.18.15: Privacy-Level (PUBLIC=Default, PRIVATE=nur Beschäftigt, CONFIDENTIAL=unsichtbar)
+  // v3.18.15: privacy level (PUBLIC=default, PRIVATE=busy only, CONFIDENTIAL=invisible)
   classification: z.enum(['PUBLIC', 'PRIVATE', 'CONFIDENTIAL']).optional(),
-  // v3.18.25 A5: Attendees (Mail-Adressen Gäste) — wenn nicht-leer wird iMIP-REQUEST versendet
+  // v3.18.25 A5: attendees (guest mail addresses) — if non-empty an iMIP REQUEST is sent
   attendees: z.array(AttendeeSchema).max(100).optional(),
 });
 
@@ -857,7 +857,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const access = await canAccessCalendar(userId, calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
 
-  // Organizer = aktueller User (Self-Lookup für displayName)
+  // Organizer = current user (self-lookup for displayName)
   const organizer = await prisma.user.findUnique({
     where: { id: userId },
     select: { email: true, displayName: true },
@@ -869,7 +869,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
     ...(rrule !== undefined ? { rrule } : {}),
   });
 
-  // v3.18.25: UID mit Hostname-Suffix für globale Eindeutigkeit (RFC 5545 §3.8.4.7)
+  // v3.18.25: UID with hostname suffix for global uniqueness (RFC 5545 §3.8.4.7)
   const settings = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
     select: { publicHostname: true },
@@ -878,7 +878,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const rawEventId = randomUUID();
   const uid = buildEventUid(rawEventId, settings?.publicHostname ?? 'coremail.local');
 
-  // Attendees als JSON-Array speichern
+  // Store attendees as a JSON array
   const attendeesJson = attendees.map((a) => ({
     email: a.email,
     cn: a.cn ?? a.email,
@@ -905,7 +905,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
     },
   });
 
-  // v3.18.25 A5: iMIP-REQUEST an alle Attendees senden (fire-and-forget)
+  // v3.18.25 A5: send iMIP REQUEST to all attendees (fire-and-forget)
   if (attendees.length > 0) {
     void sendInvitations({
       ev: event,
@@ -918,7 +918,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   res.status(201).json(event);
 });
 
-// PUT /api/v1/calendar/events/:id  (WRITE-Permission auf Kalender des Events)
+// PUT /api/v1/calendar/events/:id  (WRITE permission on the event's calendar)
 calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
@@ -949,9 +949,9 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ...(rrule !== undefined ? { rrule } : {}),
   });
 
-  // v3.18.25 A5: Wenn relevante Felder geändert wurden → sequence++ +
-  // neue REQUEST-Mails an alle Attendees senden. „Relevante" Felder sind alle
-  // die in der iMIP-Mail erscheinen (summary, dtStart, dtEnd, location, attendees).
+  // v3.18.25 A5: if relevant fields changed → sequence++ and send new
+  // REQUEST mails to all attendees. „Relevant" fields are all those that
+  // appear in the iMIP mail (summary, dtStart, dtEnd, location, attendees).
   const willSendUpdate =
     (summary !== undefined && summary !== event.summary) ||
     (dtStart !== undefined && new Date(dtStart).getTime() !== event.dtStart.getTime()) ||
@@ -985,7 +985,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     },
   });
 
-  // v3.18.25 A5: REQUEST-Update an Attendees senden (mit erhöhter SEQUENCE)
+  // v3.18.25 A5: send REQUEST update to attendees (with incremented SEQUENCE)
   const finalAttendees = Array.isArray(updated.attendees) ? updated.attendees : [];
   if (willSendUpdate && finalAttendees.length > 0 && event.organizer) {
     const organizerUser = await prisma.user.findFirst({
@@ -1003,12 +1003,12 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// DELETE /api/v1/calendar/events/:id  (WRITE-Permission auf Kalender des Events)
+// DELETE /api/v1/calendar/events/:id  (WRITE permission on the event's calendar)
 calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
 
-  // v3.18.25 A5: Volle Event-Daten für CANCEL-Mail laden BEVOR Delete
+  // v3.18.25 A5: load full event data for the CANCEL mail BEFORE delete
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
     select: { id: true, calendarId: true, uid: true, summary: true, description: true,
@@ -1022,7 +1022,7 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
 
   await prisma.calendarEvent.delete({ where: { id } });
 
-  // v3.18.25 A5: CANCEL-Mails an alle Attendees (mit sequence+1)
+  // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
   const attList = Array.isArray(event.attendees) ? event.attendees : [];
   if (attList.length > 0 && event.organizer) {
     const organizerUser = await prisma.user.findFirst({

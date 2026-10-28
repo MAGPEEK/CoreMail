@@ -6,17 +6,17 @@ import { requireAuth } from '../middleware/auth.js';
 export const contactsRouter: RouterType = Router();
 contactsRouter.use(requireAuth);
 
-// GET /api/v1/contacts?q= — vereinte Suche über alle Adressquellen für den
-// Compose-Autocomplete (v3.18.7):
-//   1. Private Kontakte des Users (Contact-Tabelle)
-//   2. Globale Adressliste (alle aktiven User außer hiddenFromGal)
-//   (ExternalMailContact entfernt in v3.18.33, DistributionGroup in v5.6.1)
-// Wenn `q` leer ist, werden nur private Kontakte zurückgegeben (Fallback wie zuvor).
+// GET /api/v1/contacts?q= — unified search across all address sources for the
+// compose autocomplete (v3.18.7):
+//   1. The user's private contacts (Contact table)
+//   2. Global address list (all active users except hiddenFromGal)
+//   (ExternalMailContact removed in v3.18.33, DistributionGroup in v5.6.1)
+// If `q` is empty, only private contacts are returned (fallback as before).
 contactsRouter.get('/', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const userId = req.apiUser!.userId;
 
-  // Private Kontakte (immer berücksichtigt)
+  // Private contacts (always included)
   const privateWhere = q.length >= 2
     ? {
         userId,
@@ -34,16 +34,16 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     take: 100,
   });
 
-  // Bei kurzem/leerem Query: nur private Kontakte (für Adressbuch-Ansicht)
+  // For a short/empty query: private contacts only (for the address book view)
   if (q.length < 2) {
     res.json(privateContacts);
     return;
   }
 
-  // GAL (Domain-User) + Verteilergruppen parallel laden.
-  // (ExternalMailContact entfernt in v3.18.33 — externe Empfänger werden
-  // direkt im Compose-Fenster eingetippt oder als EXTERNAL-Mitglieder in
-  // Verteilergruppen gepflegt.)
+  // Load GAL (domain users) + distribution groups in parallel.
+  // (ExternalMailContact removed in v3.18.33 — external recipients are typed
+  // directly in the compose window or maintained as EXTERNAL members in
+  // distribution groups.)
   const [galUsers, distGroups] = await Promise.all([
     prisma.user.findMany({
       where: {
@@ -56,11 +56,11 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
       select: { id: true, email: true, displayName: true },
       take: 30,
     }),
-    // v5.6.1: DistributionGroup-Suche entfernt
+    // v5.6.1: DistributionGroup search removed
     Promise.resolve([] as Array<{ id: string; email: string; displayName: string }>),
   ]);
 
-  // Vereintes Format. Dedup über E-Mail.
+  // Unified format. Dedup by email.
   const seen = new Set<string>(privateContacts.map((c) => c.email.toLowerCase()));
   const merged: Array<{ id: string; displayName: string; email: string; company?: string }> = [
     ...privateContacts,
@@ -71,7 +71,7 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     seen.add(key);
     merged.push({ id: `gal-${u.id}`, displayName: u.displayName ?? u.email, email: u.email });
   }
-  // distGroups-Loop entfernt
+  // distGroups loop removed
   void distGroups;
   res.json(merged.slice(0, 50));
 });
@@ -149,9 +149,9 @@ contactsRouter.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/contacts/gal?q=&type=&limit=&offset= — Global Address List (Browse + Search)
-// Liefert die Einträge aus der User-Tabelle. (ExternalMailContact entfernt in
-// v3.18.33, DistributionGroup in v5.6.1 — die Type-Filter `external`/`group`
-// liefern leere Listen, damit alte Frontend-Aufrufe nicht brechen.)
+// Returns the entries from the User table. (ExternalMailContact removed in
+// v3.18.33, DistributionGroup in v5.6.1 — the type filters `external`/`group`
+// return empty lists so that old frontend calls do not break.)
 contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const type = String(req.query['type'] ?? 'all') as 'all' | 'users' | 'external' | 'groups';
@@ -160,7 +160,7 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
 
   const searchWhere = q.length >= 2 ? q.toLowerCase() : null;
 
-  // Zwei Quellen parallel — jeweils sortiert nach displayName/email
+  // Two sources in parallel — each sorted by displayName/email
   const userPromise = (type === 'all' || type === 'users')
     ? prisma.user.findMany({
         where: {
@@ -177,13 +177,13 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
       })
     : Promise.resolve([]);
 
-  // v5.6.1: DistributionGroup-GAL-Suche entfernt
+  // v5.6.1: DistributionGroup GAL search removed
   const groupsPromise: Promise<Array<never>> = Promise.resolve([]);
 
   const [users, groups] = await Promise.all([userPromise, groupsPromise]);
   void groups;
 
-  // Vereintes Format mit `kind` und `id`-Prefix als Stabilizer
+  // Unified format with `kind` and `id` prefix as stabilizer
   type GalEntry = {
     id: string;
     kind: 'USER';
@@ -202,7 +202,7 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
     })),
   ];
 
-  // Alphabetisch sortieren nach displayName (über alle Kinds), dann paginieren
+  // Sort alphabetically by displayName (across all kinds), then paginate
   entries.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
   const total = entries.length;
   const paged = entries.slice(offset, offset + limit);

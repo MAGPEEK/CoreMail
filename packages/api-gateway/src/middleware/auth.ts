@@ -17,8 +17,8 @@ declare module 'express' {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  // Bevorzugt: Authorization-Header. Fallback: ?token=… in Query
-  // (für EventSource/SSE, das keine Header senden kann)
+  // Preferred: Authorization header. Fallback: ?token=… in the query
+  // (for EventSource/SSE, which cannot send headers)
   const header = req.get('Authorization') ?? '';
   let rawToken: string | null = null;
   if (header.startsWith('Bearer ')) {
@@ -39,8 +39,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     req.apiUser = { userId: payload.sub, role: payload.role, email: payload.email };
     next();
   } catch (err) {
-    // jwt.verify() wirft TokenExpiredError, JsonWebTokenError, NotBeforeError etc.
-    // → immer 401 zurückgeben, nie als unhandled error propagieren
+    // jwt.verify() throws TokenExpiredError, JsonWebTokenError, NotBeforeError etc.
+    // → always return 401, never propagate as an unhandled error
     const message = err instanceof Error && err.name === 'TokenExpiredError'
       ? 'Token expired'
       : 'Invalid or expired token';
@@ -56,10 +56,10 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
       res.status(403).json({ error: 'Admin role required' });
       return;
     }
-    // v3.18.19 D5: Forced 2FA für Admins. Wenn Server-Setting
-    // requireMfaForAdmins=true und User hat KEINE MFA aktiviert → 403 mit
-    // code=MFA_REQUIRED. Frontend zeigt Force-Setup-Banner. MFA-Setup-Route
-    // läuft über /auth/mfa (nicht /admin/*) — keine Chicken-and-Egg-Sperre.
+    // v3.18.19 D5: forced 2FA for admins. If the server setting
+    // requireMfaForAdmins=true and the user has NO MFA enabled → 403 with
+    // code=MFA_REQUIRED. Frontend shows a force-setup banner. The MFA setup
+    // route goes via /auth/mfa (not /admin/*) — no chicken-and-egg lockout.
     void (async () => {
       try {
         const [settings, mfa] = await Promise.all([
