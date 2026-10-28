@@ -1,17 +1,17 @@
 /**
  * MAPI/HTTP emsmdb Handler (v4.0.0)
  *
- * Implementiert den HTTP-Layer für /mapi/emsmdb/.
- * Outlook-Aufrufe:
- *   - X-RequestType: Connect  → Session öffnen, Cookie ausstellen
- *   - X-RequestType: Execute  → ROP-Batch (NICHT implementiert → ecNotSupported)
- *   - X-RequestType: Disconnect → Session schließen
- *   - X-RequestType: NotificationWait → Long-Poll für Push-Events
+ * Implements the HTTP layer for /mapi/emsmdb/.
+ * Outlook calls:
+ *   - X-RequestType: Connect  → open session, issue cookie
+ *   - X-RequestType: Execute  → ROP batch (NOT implemented → ecNotSupported)
+ *   - X-RequestType: Disconnect → close session
+ *   - X-RequestType: NotificationWait → long-poll for push events
  *
- * v4.0.0 Status: Connect / Disconnect / NotificationWait funktional.
- * Execute liefert immer ecNotSupported — ROPs kommen in v4.1.0+ iterativ.
+ * v4.0.0 status: Connect / Disconnect / NotificationWait functional.
+ * Execute always returns ecNotSupported — ROPs arrive iteratively in v4.1.0+.
  *
- * Siehe ARCHITECTURE.md für Implementations-Roadmap.
+ * See ARCHITECTURE.md for the implementation roadmap.
  */
 
 import type { Request, Response } from 'express';
@@ -32,13 +32,13 @@ import { notifyChannelFor } from './rop/notification.js';
 const log = createLogger('mapi:emsmdb');
 
 /**
- * Server-DN-Prefix. Outlook prüft, dass DnPrefix konsistent mit dem
- * LegacyDN aus der Autodiscover-Response ist. Format nach MS-OXOABK.
+ * Server DN prefix. Outlook checks that DnPrefix is consistent with the
+ * LegacyDN from the Autodiscover response. Format per MS-OXOABK.
  */
 const SERVER_DN_PREFIX =
   '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)';
 
-/** Long-Poll-Dauer für NotificationWait (ms). Outlook akzeptiert bis 59 Min. */
+/** Long-poll duration for NotificationWait (ms). Outlook accepts up to 59 min. */
 const NOTIFICATION_POLL_TIMEOUT_MS = 30_000;
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
@@ -46,15 +46,15 @@ const NOTIFICATION_POLL_TIMEOUT_MS = 30_000;
 /**
  * Outlook → Server: EcDoConnectEx (MS-OXCRPC §3.1.4.1).
  *
- * Request-Body (binär):
- *   UserDn (ASCII null-terminated) — LegacyDN aus Autodiscover
+ * Request body (binary):
+ *   UserDn (ASCII null-terminated) — LegacyDN from Autodiscover
  *   Flags (uint32)
  *   DefaultCodePage (uint32)
  *   LcidString (uint32)
  *   LcidSort (uint32)
  *   AuxBuffer (variable AUX_HEADERs)
  *
- * Response-Body (binär):
+ * Response body (binary):
  *   StatusCode (uint32)
  *   ErrorCode (uint32)
  *   PollsMax (uint32)
@@ -65,14 +65,14 @@ const NOTIFICATION_POLL_TIMEOUT_MS = 30_000;
  *   AuxBuffer (variable)
  */
 async function handleConnect(req: Request, res: Response, requestId: string): Promise<void> {
-  // Body parsen
+  // Parse body
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   let userDn = '';
   if (body.length > 0) {
     try {
       const reader = new MapiReader(body);
       userDn = reader.readAsciiString();
-      // Restliche Felder ignorieren wir aktuell (Flags, Codepage, Lcid, AuxBuffer)
+      // We currently ignore the remaining fields (Flags, Codepage, Lcid, AuxBuffer)
     } catch (err) {
       log.warn({ err }, 'Connect: Body-Parsing fehlgeschlagen');
       sendMapiError(res, { requestId, responseCode: ResponseCode.INVALID_HEADER });
@@ -80,8 +80,8 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
     }
   }
 
-  // User-Identity kommt entweder aus dem MAPI-Header X-User-Identity, oder
-  // aus der EWS-Auth-Middleware (req.ewsUser, gefüllt durch Basic-Auth).
+  // User identity comes either from the MAPI header X-User-Identity, or
+  // from the EWS auth middleware (req.ewsUser, filled by Basic auth).
   const headers = parseMapiHeaders(req);
   const ewsUser = (req as Request & { ewsUser?: { userId: string; email: string; role: string } }).ewsUser;
   const email = headers.userIdentity || ewsUser?.email || '';
@@ -99,7 +99,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
 
   if (!user || !user.active) {
     log.warn({ email }, 'Connect: User nicht gefunden / inaktiv');
-    // Outlook erwartet StatusCode=ecLoginFailure im Body
+    // Outlook expects StatusCode=ecLoginFailure in the body
     const w = new MapiWriter();
     w.writeUint32(MapiStatusCode.EC_LOGIN_FAILURE);   // StatusCode
     w.writeUint32(MapiStatusCode.EC_LOGIN_FAILURE);   // ErrorCode
@@ -111,7 +111,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
     return;
   }
 
-  // Session erstellen + Cookie ausstellen
+  // Create session + issue cookie
   const { token } = await createMapiSession({
     userId:      user.id,
     email:       user.email,
@@ -120,16 +120,16 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
 
   log.info({ userId: user.id, email: user.email, userDn }, 'MAPI Connect erfolgreich');
 
-  // Binär-Response bauen
+  // Build binary response
   const w = new MapiWriter();
   w.writeUint32(MapiStatusCode.SUCCESS);  // StatusCode
   w.writeUint32(MapiStatusCode.SUCCESS);  // ErrorCode
-  w.writeUint32(60_000);                  // PollsMax (60s Long-Poll-Max)
+  w.writeUint32(60_000);                  // PollsMax (60s long-poll max)
   w.writeUint32(3);                       // RetryCount
   w.writeUint32(2_000);                   // RetryDelay (2s)
   w.writeAsciiString(SERVER_DN_PREFIX);   // DnPrefix
   w.writeAsciiString(user.displayName ?? user.email); // DisplayName
-  // AuxBuffer: minimal leer
+  // AuxBuffer: minimal, empty
 
   setMapiResponseHeaders(res, {
     requestId,
@@ -139,17 +139,17 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
   res.status(200).send(w.toBuffer());
 }
 
-// ─── Execute (ROP-Batch) — Stub ──────────────────────────────────────────────
+// ─── Execute (ROP batch) — Stub ──────────────────────────────────────────────
 
 /**
  * Outlook → Server: EcDoRpcExt2 (MS-OXCRPC §3.1.4.2).
  *
- * v4.0.0: noch keine ROPs implementiert. Wir antworten mit ecNotSupported,
- * was Outlook nicht crashen lässt aber das Profile-Building fehlschlagen
- * lässt. ROPs kommen in v4.1.0+ (RopLogon, RopOpenFolder, ...).
+ * v4.0.0: no ROPs implemented yet. We answer with ecNotSupported,
+ * which does not crash Outlook but makes profile building fail.
+ * ROPs arrive in v4.1.0+ (RopLogon, RopOpenFolder, ...).
  *
- * Solange das hier ecNotSupported zurückgibt, wird Outlook nach Connect
- * keine sinnvolle Verbindung aufbauen können.
+ * As long as this returns ecNotSupported, Outlook will not be able to
+ * establish a meaningful connection after Connect.
  */
 async function handleExecute(req: Request, res: Response, requestId: string): Promise<void> {
   const headers = parseMapiHeaders(req);
@@ -164,16 +164,16 @@ async function handleExecute(req: Request, res: Response, requestId: string): Pr
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   log.debug({ userId: session.userId, bodyLen: body.length }, 'Execute → ROP-Dispatcher');
 
-  // v4.1.0: ROP-Dispatcher übernimmt
+  // v4.1.0: the ROP dispatcher takes over
   const { dispatchRopBuffer } = await import('./rop-dispatcher.js');
   const result = await dispatchRopBuffer(body, sessionToken, session);
 
-  // Execute-Response-Hülle (MS-OXCRPC §2.2.4.2):
+  // Execute response envelope (MS-OXCRPC §2.2.4.2):
   //   StatusCode (uint32)
   //   ErrorCode (uint32)
   //   Flags (uint32)
   //   RopBufferSize (uint32)
-  //   RopBuffer (variable — = ROP-Stream + Handle-Table)
+  //   RopBuffer (variable — = ROP stream + handle table)
   //   AuxBufferSize (uint32) = 0
   const w = new MapiWriter();
   w.writeUint32(MapiStatusCode.SUCCESS); // StatusCode
@@ -208,21 +208,21 @@ async function handleDisconnect(req: Request, res: Response, requestId: string):
   res.status(200).send(w.toBuffer());
 }
 
-// ─── NotificationWait (Long-Poll, v4.5.0 Redis-Push) ─────────────────────────
+// ─── NotificationWait (long-poll, v4.5.0 Redis push) ─────────────────────────
 
 /**
- * Outlook hält diese Verbindung offen und wartet auf Server-Push-Events
- * (z.B. neue Mail). v4.5.0: echter Long-Poll mit Redis-pub/sub.
+ * Outlook keeps this connection open and waits for server push events
+ * (e.g. new mail). v4.5.0: real long-poll with Redis pub/sub.
  *
  * Workflow:
- *   1) Wenn keine Session: 401-equivalent.
- *   2) Subscribe Redis-Channel `coremail:mapi:notify:<userId>`.
- *   3) Race: (a) Event auf Channel → Response EventPending=true,
- *           (b) Timeout NOTIFICATION_POLL_TIMEOUT_MS → EventPending=false.
- *   4) Cleanup: unsubscribe + dispose dedicated Redis-Connection.
+ *   1) If no session: 401 equivalent.
+ *   2) Subscribe to Redis channel `coremail:mapi:notify:<userId>`.
+ *   3) Race: (a) event on channel → response EventPending=true,
+ *           (b) timeout NOTIFICATION_POLL_TIMEOUT_MS → EventPending=false.
+ *   4) Cleanup: unsubscribe + dispose dedicated Redis connection.
  *
- * Wir nutzen einen `duplicate()` des ioredis-Clients weil subscribe einen
- * dedizierten Connection braucht (ioredis-Pflicht).
+ * We use a `duplicate()` of the ioredis client because subscribe needs a
+ * dedicated connection (ioredis requirement).
  */
 async function handleNotificationWait(req: Request, res: Response, requestId: string): Promise<void> {
   const headers = parseMapiHeaders(req);
@@ -237,7 +237,7 @@ async function handleNotificationWait(req: Request, res: Response, requestId: st
   const channel = notifyChannelFor(userId);
   const sub = getRedisClient().duplicate();
 
-  // Race zwischen Event und Timeout
+  // Race between event and timeout
   const eventPending: boolean = await new Promise((resolve) => {
     const timer = setTimeout(() => {
       void cleanup();
@@ -268,7 +268,7 @@ async function handleNotificationWait(req: Request, res: Response, requestId: st
       resolve(false);
     });
 
-    // Wenn Outlook die Connection schließt, sauberer Abbruch
+    // Clean abort when Outlook closes the connection
     req.on('close', () => { void cleanup(); resolve(false); });
   });
 
@@ -284,7 +284,7 @@ async function handleNotificationWait(req: Request, res: Response, requestId: st
   log.debug({ userId, eventPending }, 'NotificationWait completed');
 }
 
-// ─── Router-Hook ─────────────────────────────────────────────────────────────
+// ─── Router hook ─────────────────────────────────────────────────────────────
 
 export async function handleEmsmdb(req: Request, res: Response): Promise<void> {
   const headers = parseMapiHeaders(req);

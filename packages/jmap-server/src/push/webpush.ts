@@ -1,7 +1,7 @@
 /**
- * Zustellung von JMAP-Push-Nachrichten (StateChange / PushVerification) an
- * PushSubscription-URLs: verschlüsselt per Web Push (RFC 8030/8291, VAPID
- * RFC 8292) wenn `keys` gesetzt sind, sonst als einfacher JSON-POST.
+ * Delivery of JMAP push messages (StateChange / PushVerification) to
+ * PushSubscription URLs: encrypted via Web Push (RFC 8030/8291, VAPID
+ * RFC 8292) when `keys` are set, otherwise as a plain JSON POST.
  */
 import webPush from 'web-push';
 import { createLogger } from '@coremail/core';

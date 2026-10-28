@@ -2,7 +2,7 @@
  * RTF Compression (v5.2.0)
  *
  * MS-OXRTFCP — RTF Compression Algorithm. PR_RTF_COMPRESSED (0x10090102)
- * Properties enthalten ein LZ77-komprimiertes RTF-Dokument mit Header:
+ * properties contain an LZ77-compressed RTF document with header:
  *
  *   uint32 CompressedSize
  *   uint32 UncompressedSize
@@ -10,13 +10,13 @@
  *   uint32 CRC
  *   <data>
  *
- * Wir liefern eine pragmatische Implementation: Outlook akzeptiert das
- * uncompressed-Magic ('MELA') auch wenn der CRC null ist. Damit können
- * wir HTML/Plain-Text-Bodies trivial in PR_RTF_COMPRESSED-Form ausliefern
- * ohne echten LZ77-Encoder schreiben zu müssen.
+ * We provide a pragmatic implementation: Outlook accepts the
+ * uncompressed magic ('MELA') even if the CRC is zero. That lets us
+ * deliver HTML/plain-text bodies trivially in PR_RTF_COMPRESSED form
+ * without having to write a real LZ77 encoder.
  *
- * Decoder ist auch implementiert für künftige Outlook→Server-RTF-Pfade
- * (Outlook sendet PR_RTF_COMPRESSED beim Compose mit RTF-Body).
+ * A decoder is also implemented for future Outlook→server RTF paths
+ * (Outlook sends PR_RTF_COMPRESSED when composing with an RTF body).
  */
 
 const MAGIC_COMPRESSED   = 0x75465A4C;  // 'LZFu' little-endian
@@ -25,8 +25,8 @@ const MAGIC_UNCOMPRESSED = 0x414C454D;  // 'MELA' little-endian
 const PREFIX = '{\\rtf1\\ansi\\mac\\deff0\\deftab720{\\fonttbl;}{\\f0\\fnil \\froman \\fswiss \\fmodern \\fscript \\fdecor MS Sans SerifSymbolArialTimes New RomanCourier{\\colortbl\\red0\\green0\\blue0\n\r\\par \\pard\\plain\\f0\\fs20\\b\\i\\u\\tab\\tx';
 
 /**
- * Wickelt einen Plain-RTF-String oder HTML-String in das PR_RTF_COMPRESSED-
- * Format mit MELA-Magic (uncompressed).
+ * Wraps a plain RTF string or HTML string in the PR_RTF_COMPRESSED
+ * format with MELA magic (uncompressed).
  */
 export function encodeRtfUncompressed(rtfOrText: string): Buffer {
   const body = Buffer.from(rtfOrText, 'utf-8');
@@ -41,11 +41,11 @@ export function encodeRtfUncompressed(rtfOrText: string): Buffer {
 }
 
 /**
- * Konvertiert einen Plain-Text oder HTML-String in echtes RTF, dann wrapt
- * mit PR_RTF_COMPRESSED-Header. Für simple Outlook-Read-Compatibility.
+ * Converts a plain-text or HTML string to real RTF, then wraps it
+ * with a PR_RTF_COMPRESSED header. For simple Outlook read compatibility.
  */
 export function htmlOrTextToRtfCompressed(html: string, plainText: string): Buffer {
-  // Outlook akzeptiert „escaped HTML in RTF" via \htmlrtf-Tag (MS-OXRTFEX §3.1).
+  // Outlook accepts "escaped HTML in RTF" via the \htmlrtf tag (MS-OXRTFEX §3.1).
   const safeText = (plainText || stripHtml(html))
     .replace(/\\/g, '\\\\')
     .replace(/\{/g, '\\{')
@@ -57,17 +57,17 @@ export function htmlOrTextToRtfCompressed(html: string, plainText: string): Buff
 }
 
 /**
- * Strip HTML tags zu Plain-Text Fallback.
+ * Strip HTML tags for a plain-text fallback.
  */
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
 }
 
 /**
- * Decoder: PR_RTF_COMPRESSED Buffer → RTF-String (best-effort).
- * Unterstützt nur das MELA-uncompressed-Format direkt. Für LZFu kommt
- * ein vollständiger LZ77-Decoder in v5.3+ (Outlook sendet typischerweise
- * MELA für kurze Bodies).
+ * Decoder: PR_RTF_COMPRESSED buffer → RTF string (best-effort).
+ * Only supports the MELA uncompressed format directly. For LZFu a
+ * complete LZ77 decoder arrives in v5.3+ (Outlook typically sends
+ * MELA for short bodies).
  */
 export function decodeRtfCompressed(buf: Buffer): string | null {
   if (buf.length < 16) return null;
@@ -84,9 +84,9 @@ export function decodeRtfCompressed(buf: Buffer): string | null {
 
 /**
  * MS-OXRTFCP §3.1.4 LZ77 Decoder.
- * - Init Dictionary mit RTF_PREFIX (207 bytes)
- * - Read Flag-Byte: 8 Bits, jedes Bit gibt an ob das nächste Byte literal (1)
- *   oder Reference (0) ist.
+ * - Init dictionary with RTF_PREFIX (207 bytes)
+ * - Read flag byte: 8 bits, each bit indicates whether the next byte is a literal (1)
+ *   or a reference (0).
  * - Reference: 2 Bytes BE. high 12 bits = offset in dictionary (0..4095),
  *   low 4 bits = length - 2 (so length range 2..17).
  * - Special: offset == current cursor → end-of-stream marker.
@@ -96,7 +96,7 @@ function decodeLZ77(buf: Buffer): string | null {
   const uncompressedSize = buf.readUint32LE(4);
   const data = buf.subarray(16);
 
-  // Dictionary mit dem festen RTF-Prefix initialisieren (4096-Byte-Ring).
+  // Initialize the dictionary with the fixed RTF prefix (4096-byte ring).
   const dict = Buffer.alloc(4096);
   Buffer.from(PREFIX, 'binary').copy(dict, 0);
   let cursor = PREFIX.length;

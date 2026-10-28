@@ -115,7 +115,7 @@ function strList(v: unknown): string[] {
 }
 
 async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { resolveId(id: string): string }): Promise<CreateParsed> {
-  // mailboxIds — CoreMail: genau ein Ordner
+  // mailboxIds — CoreMail: exactly one folder
   const mbIds = obj['mailboxIds'];
   if (!mbIds || typeof mbIds !== 'object' || Array.isArray(mbIds)) throw setError('invalidProperties', 'mailboxIds required', ['mailboxIds']);
   const folderIds = Object.entries(mbIds as JsonObject).filter(([, v]) => v === true).map(([k]) => ctx.resolveId(k));
@@ -130,7 +130,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { reso
 
   const receivedAt = parseDate(obj['receivedAt']) ?? undefined;
 
-  // Body: entweder bodyStructure oder textBody/htmlBody + bodyValues
+  // Body: either bodyStructure or textBody/htmlBody + bodyValues
   const bodyValues = (obj['bodyValues'] ?? {}) as Record<string, JsonObject>;
   const valueOf = (partId: unknown): string => {
     const bv = bodyValues[String(partId)];
@@ -183,7 +183,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { reso
     for (const a of (Array.isArray(obj['attachments']) ? obj['attachments'] : []) as JsonObject[]) await addAttachment(a);
   }
 
-  // Header
+  // Headers
   const extraHeaders: EmailHeader[] = [];
   for (const [k, v] of Object.entries(obj)) {
     if (!k.startsWith('header:')) continue;
@@ -229,7 +229,7 @@ export interface EmailSetResult {
   destroyed: string[]; notDestroyed: JsonObject;
 }
 
-/** Kern von Email/set — wird auch von EmailSubmission/set (onSuccess…) genutzt. */
+/** Core of Email/set — also used by EmailSubmission/set (onSuccess…). */
 export async function runEmailSet(
   account: AccountContext,
   ctx: { resolveId(id: string): string; createdIds: Map<string, string> },
@@ -272,7 +272,7 @@ export async function runEmailSet(
       if (!f) { r.notUpdated[id] = setError('invalidProperties', 'mailbox not found', ['mailboxIds']); continue; }
     }
     const newFlags = keywordsToFlags(kw);
-    // nicht-JMAP-Flags (z.B. \Recent) beibehalten
+    // keep non-JMAP flags (e.g. \Recent)
     for (const f of msg.flags) if (f.startsWith('\\') && !['\\Seen', '\\Flagged', '\\Answered', '\\Draft', '\\Forwarded'].includes(f)) newFlags.push(f);
     await applyEmailChange(account, msg, { flags: [...new Set(newFlags)], folderId: folderIds[0]! });
     r.updated[id] = null;
@@ -434,7 +434,7 @@ registerMethod('Email/parse', CAP_MAIL, async (args, ctx) => {
           .filter((x) => !['id', 'blobId', 'threadId', 'mailboxIds', 'keywords', 'receivedAt'].includes(x)),
       });
       delete email['id'];
-      // Part-Blobs geparster Nachrichten: pp<hex(blobId)>-(text|html|att<n>) → blobs.ts parst den Quell-Blob erneut
+      // Part blobs of parsed messages: pp<hex(blobId)>-(text|html|att<n>) → blobs.ts re-parses the source blob
       const hex = Buffer.from(blobId, 'utf8').toString('hex');
       const rewrite = (part: JsonObject): void => {
         const b = String(part['blobId'] ?? '');

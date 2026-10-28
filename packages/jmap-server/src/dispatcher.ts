@@ -1,7 +1,7 @@
 /**
- * Request-Verarbeitung (RFC 8620 §3.2–3.7): Capabilities prüfen, Method-Calls
- * sequenziell ausführen, Result-References (`#arg` → {resultOf,name,path})
- * auflösen, Creation-Ids (`#creationId`) weiterreichen, Fehler kapseln.
+ * Request processing (RFC 8620 §3.2–3.7): check capabilities, execute method calls
+ * sequentially, resolve result references (`#arg` → {resultOf,name,path}),
+ * pass creation ids (`#creationId`) through, wrap errors.
  */
 import { createLogger } from '@coremail/core';
 import { MethodError, RequestError } from './errors.js';
@@ -59,7 +59,7 @@ export function parseRequest(body: unknown): JmapRequest {
   };
 }
 
-// ── Result-References (RFC 8620 §3.7) ────────────────────────────────────────
+// ── Result references (RFC 8620 §3.7) ────────────────────────────────────────
 
 function evalPointer(value: unknown, tokens: string[]): unknown {
   if (tokens.length === 0) return value;
@@ -68,7 +68,7 @@ function evalPointer(value: unknown, tokens: string[]): unknown {
   if (t === '*') {
     if (!Array.isArray(value)) throw new MethodError('invalidResultReference', 'Wildcard on non-array');
     const results = value.map((v) => evalPointer(v, rest));
-    // JMAP-Erweiterung: Arrays werden flach zusammengeführt
+    // JMAP extension: arrays are merged flat
     return results.flatMap((r) => (Array.isArray(r) ? r : [r]));
   }
   if (Array.isArray(value)) {
@@ -102,7 +102,7 @@ function resolveReferences(args: JsonObject, responses: Invocation[]): JsonObjec
   return out;
 }
 
-// ── Ausführung ───────────────────────────────────────────────────────────────
+// ── Execution ───────────────────────────────────────────────────────────────
 
 export async function processRequest(
   req: JmapRequest,

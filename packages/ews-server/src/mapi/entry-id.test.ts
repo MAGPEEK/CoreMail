@@ -1,5 +1,5 @@
 /**
- * Tests für mapi/entry-id.ts — CUID ↔ uint64-Hash + EntryID-Encoding.
+ * Tests for mapi/entry-id.ts — CUID ↔ uint64 hash + EntryID encoding.
  */
 
 import { test } from 'node:test';
@@ -33,7 +33,7 @@ test('cuidToFolderId64: passt in uint64-Range', () => {
 test('cuidToFolderId64: empty string ist deterministisch', () => {
   const h = cuidToFolderId64('');
   assert.equal(typeof h, 'bigint');
-  // FNV-1a-offset basis ist 0xCBF29CE484222325 für 64-bit
+  // FNV-1a offset basis is 0xCBF29CE484222325 for 64-bit
   assert.ok(h !== 0n);
 });
 

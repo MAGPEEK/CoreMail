@@ -1,5 +1,5 @@
 /**
- * JMAP — gemeinsame Typen (RFC 8620 §3).
+ * JMAP — shared types (RFC 8620 §3).
  */
 import type { UserRole } from '@coremail/core';
 
@@ -30,10 +30,10 @@ export interface JmapUser {
 }
 
 /**
- * Ein JMAP-Account entspricht einem CoreMail-Postfach (Mailbox-Row):
- *  - Primär-Account: accountId = userId
- *  - Shared Mailbox:  accountId = `shared-<sharedMailboxId>`
- *  - Delegiertes Postfach eines anderen Users: accountId = dessen userId
+ * A JMAP account corresponds to a CoreMail mailbox (Mailbox row):
+ *  - primary account: accountId = userId
+ *  - shared mailbox:  accountId = `shared-<sharedMailboxId>`
+ *  - delegated mailbox of another user: accountId = that user's userId
  */
 export interface AccountContext {
   accountId: string;
@@ -51,12 +51,12 @@ export interface MethodContext {
   user: JmapUser;
   accounts: Map<string, AccountContext>;
   createdIds: Map<string, string>;
-  /** Bisherige Antworten dieses Requests (für Result-References). */
+  /** Responses of this request so far (for result references). */
   responses: Invocation[];
   using: Set<string>;
-  /** Löst `#creationId` auf eine echte Id auf (RFC 8620 §5.3). */
+  /** Resolves `#creationId` to a real id (RFC 8620 §5.3). */
   resolveId(id: string): string;
-  /** Wirft accountNotFound, wenn der Account nicht sichtbar ist. */
+  /** Throws accountNotFound if the account is not visible. */
   account(accountId: unknown): AccountContext;
 }
 
@@ -68,7 +68,7 @@ export interface MethodDefinition {
   handler: MethodHandler;
 }
 
-// ── Mail-Objekte (RFC 8621) ──────────────────────────────────────────────────
+// ── Mail objects (RFC 8621) ──────────────────────────────────────────────────
 
 export interface EmailAddress { name: string | null; email: string }
 export interface EmailHeader { name: string; value: string }

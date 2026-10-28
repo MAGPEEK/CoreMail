@@ -1,26 +1,25 @@
 /**
- * Submit-ROP-Handler — Phase v4.3.0 (Mail-Senden)
+ * Submit ROP handler — phase v4.3.0 (sending mail)
  *
- * STUB — Implementation kommt in v4.3.0.
+ * STUB — implementation arrives in v4.3.0.
  *
- * Geplante Handlers:
- *   - RopSubmitMessage     (MS-OXOMSG §2.2.6.1) — Mail in Sendewarteschlange
- *   - RopAbortSubmit       (MS-OXOMSG §2.2.6.4) — Submit abbrechen
+ * Planned handlers:
+ *   - RopSubmitMessage     (MS-OXOMSG §2.2.6.1) — mail into the send queue
+ *   - RopAbortSubmit       (MS-OXOMSG §2.2.6.4) — abort submit
  *   - RopGetTransportFolder (MS-OXOMSG §2.2.6.6)
  *
- * Submit-Flow:
- *   1. Outlook hat via RopCreateMessage/SetProperties/ModifyRecipients eine
- *      Message in einem temporären Folder (typischerweise Outbox = Drafts)
- *      konstruiert.
- *   2. Outlook ruft RopSubmitMessage(messageHandle, submitFlags).
+ * Submit flow:
+ *   1. Outlook has constructed a message in a temporary folder (typically
+ *      Outbox = Drafts) via RopCreateMessage/SetProperties/ModifyRecipients.
+ *   2. Outlook calls RopSubmitMessage(messageHandle, submitFlags).
  *   3. Server:
- *      a) Konvertiert Message-Properties zu RFC822/EML
- *      b) Push in BullMQ-Queue `smtp-outbound` (gleicher Pfad wie REST /mail/send)
- *      c) Verschiebt Message von Drafts nach Sent
- *      d) Antwortet mit StatusCode SUCCESS
- *   4. SMTP-Worker verarbeitet asynchron → DKIM-Sign → Relay
+ *      a) Converts message properties to RFC822/EML
+ *      b) Pushes into the BullMQ queue `smtp-outbound` (same path as REST /mail/send)
+ *      c) Moves the message from Drafts to Sent
+ *      d) Answers with StatusCode SUCCESS
+ *   4. The SMTP worker processes asynchronously → DKIM sign → relay
  *
- * Wiederverwendung: bestehende EML-Builder + BullMQ-Producer aus
+ * Reuse: existing EML builder + BullMQ producer from
  * packages/api-gateway/src/routes/mail.ts (POST /mail/send).
  */
 export {};

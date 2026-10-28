@@ -1,8 +1,8 @@
 /**
- * Thread-Zuordnung (RFC 8621 §3). CoreMail speichert keine Threads — wir
- * leiten sie lazy ab und persistieren in Message.threadId:
- *  - inReplyTo zeigt auf eine bekannte Nachricht im selben Postfach → deren threadId
- *  - sonst: eigene id ist Thread-Root
+ * Thread assignment (RFC 8621 §3). CoreMail does not store threads — we
+ * derive them lazily and persist them in Message.threadId:
+ *  - inReplyTo points to a known message in the same mailbox → its threadId
+ *  - otherwise: own id is the thread root
  */
 import { prisma } from '@coremail/storage';
 
@@ -24,7 +24,7 @@ export async function ensureThreadId(msg: ThreadInput, mailboxId?: string): Prom
   return threadId;
 }
 
-/** Bulk-Variante: liefert Map id → threadId, berechnet fehlende. */
+/** Bulk variant: returns Map id → threadId, computes missing ones. */
 export async function ensureThreadIds(
   msgs: ThreadInput[],
   mailboxId: string,

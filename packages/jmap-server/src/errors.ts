@@ -1,8 +1,8 @@
 /**
- * JMAP-Fehler (RFC 8620 §3.6).
- *  - RequestError: Request-Level, HTTP-Status + problem+json (RFC 7807)
- *  - MethodError:  Method-Level, als ["error", {type, …}, callId]
- *  - SetError:     pro Objekt in notCreated/notUpdated/notDestroyed
+ * JMAP errors (RFC 8620 §3.6).
+ *  - RequestError: request level, HTTP status + problem+json (RFC 7807)
+ *  - MethodError:  method level, as ["error", {type, …}, callId]
+ *  - SetError:     per object in notCreated/notUpdated/notDestroyed
  */
 import type { JsonObject } from './types.js';
 

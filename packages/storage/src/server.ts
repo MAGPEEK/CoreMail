@@ -2,11 +2,11 @@
  * Internal Storage API — accessed only by other CoreMail services.
  *
  * Security hardening (2026-05-16):
- *   - Alle req.body-Übergaben an Prisma verwenden explizite Whitelist-Felder.
- *   - Kein req.body direkt in data: { ...req.body } — verhindert Mass-Assignment.
- *   - Query-Parameter werden validiert und mit sicheren Defaults begrenzt.
- *   - Dieser Service ist NICHT aus dem Docker-Netzwerk erreichbar (kein Port-Expose).
- *   - Alle Prisma-Raw-Queries nutzen Tagged-Template-Literals → parametrisiert, SQLi-sicher.
+ *   - All req.body hand-offs to Prisma use explicit whitelisted fields.
+ *   - No req.body directly in data: { ...req.body } — prevents mass assignment.
+ *   - Query parameters are validated and capped with safe defaults.
+ *   - This service is NOT reachable from outside the Docker network (no port exposed).
+ *   - All Prisma raw queries use tagged template literals → parameterized, SQLi-safe.
  */
 import express from 'express';
 import { createLogger } from '@coremail/core/logger';
@@ -18,12 +18,12 @@ const log = createLogger('storage-api');
 const app = express();
 const PORT = parseInt(process.env['STORAGE_PORT'] ?? '3001', 10);
 
-// Body-Limit: 10 MB (für Mails mit Inline-Bildern im JSON-Body)
+// Body limit: 10 MB (for mails with inline images in the JSON body)
 app.use(express.json({ limit: '10mb' }));
 
-// ── ID-Validierung ───────────────────────────────────────────────────────────
-// Alle IDs in URL-Parametern sind CUIDs (cuid2-Format: 24+ alphanumerische Zeichen).
-// Ungültige IDs werden früh abgelehnt bevor sie Prisma erreichen.
+// ── ID validation ───────────────────────────────────────────────────────────
+// All IDs in URL parameters are CUIDs (cuid2 format: 24+ alphanumeric characters).
+// Invalid IDs are rejected early before they reach Prisma.
 function isValidId(id: unknown): id is string {
   return typeof id === 'string' && /^[a-z0-9]{20,32}$/i.test(id);
 }
@@ -58,7 +58,7 @@ app.get('/mailboxes/:userId', async (req, res) => {
 app.post('/mailboxes', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    // Whitelist: nur diese Felder dürfen bei der Mailbox-Anlage gesetzt werden
+    // Whitelist: only these fields may be set when creating a mailbox
     const userId = body['userId'];
     if (typeof userId !== 'string' || !isValidId(userId)) {
       return res.status(400).json({ error: 'invalid userId' });
@@ -89,7 +89,7 @@ app.get('/folders/:mailboxId', async (req, res) => {
 app.get('/folders/by-name/:mailboxId/:name', async (req, res) => {
   try {
     if (!validateId(req.params['mailboxId'], res)) return;
-    // Ordnernamen auf 255 Zeichen begrenzen
+    // Limit folder names to 255 characters
     const name = String(req.params['name'] ?? '').slice(0, 255);
     const folder = await prisma.folder.findFirst({
       where: { mailboxId: req.params['mailboxId'], name },
@@ -105,7 +105,7 @@ app.get('/folders/by-name/:mailboxId/:name', async (req, res) => {
 app.post('/folders', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    // Whitelist der erlaubten Felder für eine neue Ordner-Anlage
+    // Whitelist of allowed fields for creating a new folder
     const mailboxId   = body['mailboxId'];
     const name        = body['name'];
     const displayName = body['displayName'];
@@ -138,7 +138,7 @@ app.post('/folders', async (req, res) => {
 app.get('/messages/:folderId', async (req, res) => {
   try {
     if (!validateId(req.params['folderId'], res)) return;
-    // Limit und Offset validieren — keine negativen Werte, max 200 auf einmal
+    // Validate limit and offset — no negative values, max 200 at a time
     const rawLimit  = parseInt((req.query['limit']  as string | undefined) ?? '50', 10);
     const rawOffset = parseInt((req.query['offset'] as string | undefined) ?? '0',  10);
     const limit  = Math.min(Math.max(isNaN(rawLimit)  ? 50  : rawLimit,  1), 200);
@@ -181,12 +181,12 @@ app.post('/messages', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
 
-    // Pflichtfelder validieren
+    // Validate required fields
     if (!isValidId(body['folderId']))
       return res.status(400).json({ error: 'invalid folderId' });
 
-    // Whitelist: nur bekannte, sichere Felder an Prisma weitergeben.
-    // Verhindert Mass-Assignment (z.B. setzen von internen Feldern wie id, deletedAt).
+    // Whitelist: only pass known, safe fields to Prisma.
+    // Prevents mass assignment (e.g. setting internal fields like id, deletedAt).
     const folderId    = body['folderId'] as string;
     const uid         = typeof body['uid'] === 'number' ? body['uid'] : 0;
     const modSeq      = typeof body['modSeq'] === 'number' ? BigInt(body['modSeq']) : BigInt(0);
@@ -213,7 +213,7 @@ app.post('/messages', async (req, res) => {
       include: { attachments: true },
     });
 
-    // Ordnerzähler aktualisieren
+    // Update folder counters
     await prisma.folder.update({
       where: { id: msg.folderId },
       data: {
@@ -222,7 +222,7 @@ app.post('/messages', async (req, res) => {
       },
     });
 
-    // uidNext erhöhen — $executeRaw mit Template-Literal ist parametrisiert (SQLi-sicher)
+    // Increment uidNext — $executeRaw with a template literal is parameterized (SQLi-safe)
     await prisma.$executeRaw`
       UPDATE "Mailbox" m
       SET "uidNext" = "uidNext" + 1
@@ -236,14 +236,14 @@ app.post('/messages', async (req, res) => {
   }
 });
 
-// ── PATCH /messages/:id — Whitelist für erlaubte Update-Felder ─────────────
-// Nur diese Felder darf ein Service über PATCH ändern.
-// Kritische Felder (id, folderId, uid, bodyText, storagePath etc.) sind explizit ausgeschlossen.
+// ── PATCH /messages/:id — whitelist of allowed update fields ─────────────
+// Only these fields may be changed by a service via PATCH.
+// Critical fields (id, folderId, uid, bodyText, storagePath etc.) are explicitly excluded.
 const ALLOWED_MESSAGE_PATCH = new Set<string>([
-  'flags',       // Gelesen/Markiert/Beantwortet — IMAP und EWS
-  'changeKey',   // EWS-Synchronisations-Token
-  'modSeq',      // CONDSTORE-Sequenznummer
-  'deletedAt',   // Soft-Delete (nur null erlaubt zum Wiederherstellen)
+  'flags',       // Read/Flagged/Answered — IMAP and EWS
+  'changeKey',   // EWS synchronization token
+  'modSeq',      // CONDSTORE sequence number
+  'deletedAt',   // Soft delete (only null allowed, to restore)
 ]);
 
 app.patch('/messages/:id', async (req, res) => {
@@ -256,12 +256,12 @@ app.patch('/messages/:id', async (req, res) => {
     for (const [key, value] of Object.entries(body)) {
       if (!ALLOWED_MESSAGE_PATCH.has(key)) continue;
 
-      // Typ-Prüfung pro Feld
+      // Type check per field
       if (key === 'flags') {
         if (!Array.isArray(value)) continue;
         safeData['flags'] = (value as unknown[]).filter((f): f is string => typeof f === 'string');
       } else if (key === 'deletedAt') {
-        // null = Wiederherstellen, ansonsten: Zeitstempel setzen
+        // null = restore, otherwise: set timestamp
         safeData['deletedAt'] = value === null ? null : new Date();
       } else if (key === 'changeKey') {
         if (typeof value !== 'string') continue;
@@ -287,7 +287,7 @@ app.patch('/messages/:id', async (req, res) => {
   }
 });
 
-// Soft-delete (oder Hard-delete wenn ?hard=true)
+// Soft delete (or hard delete if ?hard=true)
 app.delete('/messages/:id', async (req, res) => {
   try {
     if (!validateId(req.params['id'], res)) return;
@@ -313,7 +313,7 @@ app.get('/attachments/:key(*)', async (req, res) => {
     const minio  = getMinioClient();
     const bucket = process.env['MINIO_BUCKET'] ?? 'mail-attachments';
     const key    = req.params['key'];
-    // Path-Traversal in MinIO-Keys verhindern
+    // Prevent path traversal in MinIO keys
     if (!key || key.includes('..') || key.startsWith('/')) {
       return res.status(400).json({ error: 'invalid key' });
     }
@@ -325,10 +325,10 @@ app.get('/attachments/:key(*)', async (req, res) => {
   }
 });
 
-// ── Users (read-only, für Auth-Delegation) ───────────────────────────────────
+// ── Users (read-only, for auth delegation) ───────────────────────────────────
 app.get('/users/by-email/:email', async (req, res) => {
   try {
-    // E-Mail-Format Basisprüfung
+    // Basic e-mail format check
     const email = String(req.params['email'] ?? '');
     if (!email.includes('@') || email.length > 320) {
       return res.status(400).json({ error: 'invalid email' });
@@ -349,7 +349,7 @@ app.get('/users/by-email/:email', async (req, res) => {
   }
 });
 
-// ── 404 + Fehler-Handler ──────────────────────────────────────────────────────
+// ── 404 + error handler ──────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'not found' }));
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

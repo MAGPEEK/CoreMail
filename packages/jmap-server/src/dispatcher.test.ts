@@ -14,20 +14,20 @@ const accounts = new Map<string, AccountContext>([['u1', {
 registerMethod('Test/echo', CAP_CORE, async (args) => args);
 registerMethod('Test/list', CAP_CORE, async () => ({ list: [{ id: 'x', tags: ['a', 'b'] }, { id: 'y', tags: ['c'] }] }));
 
-test('parseRequest lehnt fehlende Felder und unbekannte Capabilities ab', () => {
+test('parseRequest rejects missing fields and unknown capabilities', () => {
   assert.throws(() => parseRequest({}), (e: unknown) => e instanceof RequestError && e.type === 'notRequest');
   assert.throws(() => parseRequest({ using: ['urn:x'], methodCalls: [] }), (e: unknown) => e instanceof RequestError && e.type === 'unknownCapability');
   const r = parseRequest({ using: [CAP_CORE], methodCalls: [['Core/echo', { a: 1 }, 'c0']] });
   assert.equal(r.methodCalls.length, 1);
 });
 
-test('unknownMethod für nicht registrierte Methoden', async () => {
+test('unknownMethod for unregistered methods', async () => {
   const res = await processRequest(parseRequest({ using: [CAP_CORE], methodCalls: [['Nope/get', {}, 'c0']] }), user, accounts, 's');
   assert.deepEqual(res.methodResponses[0], ['error', { type: 'unknownMethod' }, 'c0']);
   assert.equal(res.sessionState, 's');
 });
 
-test('Result-References mit JSON-Pointer und * werden aufgelöst', async () => {
+test('result references with JSON pointer and * are resolved', async () => {
   const res = await processRequest(parseRequest({
     using: [CAP_CORE],
     methodCalls: [
@@ -45,7 +45,7 @@ test('Result-References mit JSON-Pointer und * werden aufgelöst', async () => {
   assert.equal((res.methodResponses[4]![1] as { type: string }).type, 'invalidArguments');
 });
 
-test('createdIds werden übernommen und zurückgegeben', async () => {
+test('createdIds are carried over and returned', async () => {
   const res = await processRequest(parseRequest({ using: [CAP_CORE], methodCalls: [['Test/echo', {}, 'c0']], createdIds: { a: 'real-a' } }), user, accounts, 's');
   assert.deepEqual(res.createdIds, { a: 'real-a' });
 });

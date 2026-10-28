@@ -1,16 +1,16 @@
 /**
  * Recurrence Pattern Binary Encoder (v5.2.0)
  *
- * MS-OXOCAL §2.2.1.44 — PidLidAppointmentRecur encoded als binary blob.
+ * MS-OXOCAL §2.2.1.44 — PidLidAppointmentRecur encoded as a binary blob.
  *
- * Struktur:
+ * Structure:
  *   uint16  RecurFrequency      (Daily/Weekly/Monthly/Yearly)
  *   uint16  PatternType         (0=Day, 1=Week, 2=Month, 3=MonthNth, ...)
  *   uint16  CalendarType        (0=Default Gregorian)
- *   uint32  FirstDateTime       (Minutes seit 0001-01-01)
- *   uint32  Period              (z.B. 2 für „every 2 weeks")
+ *   uint32  FirstDateTime       (minutes since 0001-01-01)
+ *   uint32  Period              (e.g. 2 for "every 2 weeks")
  *   uint32  SlidingFlag         (0)
- *   <PatternTypeSpecific>       (variable je nach PatternType)
+ *   <PatternTypeSpecific>       (varies by PatternType)
  *   uint32  EndType             (0x2021=Date, 0x2022=Count, 0x2023=Never)
  *   uint32  OccurrenceCount
  *   uint32  FirstDow            (0=Sunday)
@@ -18,13 +18,13 @@
  *   uint32  DeletedInstanceDates[]
  *   uint32  ModifiedInstanceCount
  *   uint32  ModifiedInstanceDates[]
- *   uint32  StartDate           (Minutes seit 0001-01-01)
- *   uint32  EndDate             (oder 0x5AE980DF für „Never")
+ *   uint32  StartDate           (minutes since 0001-01-01)
+ *   uint32  EndDate             (or 0x5AE980DF for "Never")
  *   <ExceptionInfo>             (zero exceptions in v5.2.0)
  *
- * Wir parsen iCal RRULE-Strings (z.B. "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE")
- * und konvertieren sie zu diesem Binary-Format. Outlook akzeptiert das und
- * zeigt das Recurrence-Pattern korrekt im Termin-Dialog.
+ * We parse iCal RRULE strings (e.g. "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE")
+ * and convert them to this binary format. Outlook accepts it and
+ * shows the recurrence pattern correctly in the appointment dialog.
  */
 
 const RECUR_FREQ_DAILY   = 0x200A;
@@ -44,12 +44,12 @@ const END_TYPE_NEVER     = 0x00002023;
 const NEVER_END_DATE_MINUTES = 0x5AE980DF;  // ~31 Dec 4500
 
 /**
- * Konvertiert ein Date in „Minuten seit 0001-01-01 00:00:00 UTC".
+ * Converts a Date to "minutes since 0001-01-01 00:00:00 UTC".
  */
 function dateToRecurMinutes(d: Date): number {
   const ref = Date.UTC(1, 0, 1);   // Year 1, Jan 1
-  // JavaScript Date kann das nicht direkt darstellen (year 0001 ist OK)
-  // Wir setzen ref explizit auf -62167219200000 (1 AD).
+  // JavaScript Date cannot represent this directly (year 0001 is OK)
+  // We set ref explicitly to -62167219200000 (1 AD).
   const refMs = -62167219200000;
   return Math.floor((d.getTime() - refMs) / 60000);
 }
@@ -59,10 +59,10 @@ const DAY_BITS = {
 };
 
 /**
- * Parst einen iCal-RRULE-String (RFC 5545) und konvertiert ihn in das
- * PidLidAppointmentRecur Binary-Format.
+ * Parses an iCal RRULE string (RFC 5545) and converts it to the
+ * PidLidAppointmentRecur binary format.
  *
- * Beispiele:
+ * Examples:
  *   "FREQ=DAILY"
  *   "FREQ=WEEKLY;INTERVAL=2"
  *   "FREQ=WEEKLY;BYDAY=MO,WE,FR"
@@ -103,10 +103,10 @@ export function encodeRecurrencePattern(
     case 'WEEKLY': {
       recurFreq = RECUR_FREQ_WEEKLY;
       patternType = PATTERN_TYPE_WEEK;
-      // 4-Byte WeekDay-Bitmask
+      // 4-byte weekday bitmask
       let mask = 0;
       if (byDay.length === 0) {
-        // Default: Wochentag aus dtStart
+        // Default: weekday from dtStart
         const dow = dtStart.getUTCDay();
         const bits = [DAY_BITS.SU, DAY_BITS.MO, DAY_BITS.TU, DAY_BITS.WE, DAY_BITS.TH, DAY_BITS.FR, DAY_BITS.SA];
         mask = bits[dow] ?? DAY_BITS.MO;
@@ -208,8 +208,8 @@ function parseIcalUntil(s: string): Date | null {
 }
 
 /**
- * Minimaler Binary-Builder. Wir nutzen ihn statt MapiWriter weil das hier
- * keine MAPI-Konvention ist (different endianness/alignment).
+ * Minimal binary builder. We use it instead of MapiWriter because this is
+ * not a MAPI convention here (different endianness/alignment).
  */
 class BinaryBuilder {
   private chunks: Buffer[] = [];

@@ -1,7 +1,7 @@
 /**
- * RFC-5322-Rohdaten: laden (MinIO) oder aus DB-Feldern rekonstruieren,
- * Header parsen (mailparser) und neue Nachrichten (Drafts, Email/set create)
- * mit nodemailer aufbauen.
+ * RFC 5322 raw data: load (MinIO) or reconstruct from DB fields,
+ * parse headers (mailparser) and build new messages (drafts, Email/set create)
+ * with nodemailer.
  */
 import nodemailer from 'nodemailer';
 import { simpleParser, type ParsedMail } from 'mailparser';
@@ -33,7 +33,7 @@ export function bodyPartBuffer(msg: { bodyText: string; bodyHtml: string }, kind
   return Buffer.from(kind === 'html' ? msg.bodyHtml : msg.bodyText, 'utf8');
 }
 
-/** Rohnachricht laden; ohne storagePath wird sie aus den DB-Feldern gebaut. */
+/** Load the raw message; without storagePath it is built from the DB fields. */
 export async function loadRawMessage(msg: DbMessageLike): Promise<Buffer> {
   if (msg.storagePath) {
     try {
@@ -121,7 +121,7 @@ export async function buildRfc822(o: BuildOptions): Promise<Buffer> {
   return Buffer.isBuffer(message) ? message : Buffer.from(String(message));
 }
 
-// ── Header-Parsing ───────────────────────────────────────────────────────────
+// ── Header parsing ───────────────────────────────────────────────────────────
 
 export interface ParsedHeaders {
   lines: EmailHeader[];
@@ -150,7 +150,7 @@ export function parseHeaders(raw: Buffer): Promise<ParsedHeaders> {
   return p;
 }
 
-// ── Adress-Hilfen ────────────────────────────────────────────────────────────
+// ── Address helpers ────────────────────────────────────────────────────────────
 
 export function parseAddress(s: string): EmailAddress {
   const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(s);

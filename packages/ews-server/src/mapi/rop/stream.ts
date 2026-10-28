@@ -1,12 +1,12 @@
 /**
- * Stream-ROP-Handler (v4.2.0 + v4.3.0)
+ * Stream ROP handler (v4.2.0 + v4.3.0)
  *
  * v4.2.0: RopOpenStream, RopReadStream, RopGetStreamSize
  * v4.3.0: RopWriteStream, RopCommitStream
  *
- * Stream-Object hält einen In-Memory-Buffer pro geöffnetem Property.
- * Bei OpenStream lädt der Server den vollständigen Property-Value aus DB/MinIO
- * in den Buffer; ReadStream gibt Chunks zurück; offset wird inkrementiert.
+ * The stream object holds an in-memory buffer per opened property.
+ * On OpenStream the server loads the complete property value from DB/MinIO
+ * into the buffer; ReadStream returns chunks; the offset is incremented.
  */
 
 import { prisma } from '@coremail/storage';
@@ -22,9 +22,9 @@ import { getRedisClient } from '@coremail/core';
 
 const log = createLogger('mapi:rop:stream');
 
-const MAX_STREAM_CHUNK_BYTES = 30_000;     // Outlook erwartet Chunks ≤ 32KB
+const MAX_STREAM_CHUNK_BYTES = 30_000;     // Outlook expects chunks ≤ 32KB
 
-/** v4.2.0+v4.4.0: RopOpenStream auf Message oder Attachment */
+/** v4.2.0+v4.4.0: RopOpenStream on a message or attachment */
 export async function handleRopOpenStream(
   rop: RopRequest,
   sessionToken: string,
@@ -40,7 +40,7 @@ export async function handleRopOpenStream(
   const openMode = r.readUint8();        // 0=ReadOnly, 1=ReadWrite, 2=Create
   const writable = openMode !== 0;
 
-  // ── v4.4.0: Attachment-Stream (PR_ATTACH_DATA_BIN) ─────────────────────
+  // ── v4.4.0: Attachment stream (PR_ATTACH_DATA_BIN) ─────────────────────
   if (input.object.kind === 'attachment') {
     const att = input.object;
     let buffer: Buffer = Buffer.alloc(0);
@@ -48,7 +48,7 @@ export async function handleRopOpenStream(
       const { loadAttachmentBytes } = await import('./attachment.js');
       buffer = (await loadAttachmentBytes(att.attachmentId)) ?? Buffer.alloc(0);
     } else if (writable) {
-      // RopCreateAttachment-Workflow: leerer Buffer für Outlook-Write
+      // RopCreateAttachment workflow: empty buffer for Outlook to write
       buffer = Buffer.isBuffer(att.pendingBuffer)
         ? att.pendingBuffer
         : Buffer.from((att.pendingBuffer as unknown as { data: number[] })?.data ?? []);
@@ -62,7 +62,7 @@ export async function handleRopOpenStream(
       buffer,
       offset: 0,
       writable,
-      parentMessageHandle: input.handle,    // wir nutzen das gleiche Feld auch für Attachment-Parent
+      parentMessageHandle: input.handle,    // we use the same field for the attachment parent too
     });
     if (handle === null) {
       return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
@@ -76,11 +76,11 @@ export async function handleRopOpenStream(
     return w.toBuffer();
   }
 
-  // ── Message-Stream (v4.2.0+v4.3.0) ─────────────────────────────────────
+  // ── Message stream (v4.2.0+v4.3.0) ─────────────────────────────────────
   if (input.object.kind !== 'message') {
     return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
-  // v4.3.0: Stream auf Draft (messageId === null) für Write-Compose erlauben
+  // v4.3.0: Allow a stream on a draft (messageId === null) for write-compose
   if (input.object.messageId === null) {
     const handle = await putRopObject(sessionToken, {
       kind: 'stream',
@@ -104,7 +104,7 @@ export async function handleRopOpenStream(
   }
   const messageId: string = input.object.messageId;
 
-  // Lade den Property-Value aus DB
+  // Load the property value from the DB
   const msg = await prisma.message.findUnique({
     where: { id: messageId },
     select: { bodyText: true, bodyHtml: true, subject: true },
@@ -113,7 +113,7 @@ export async function handleRopOpenStream(
     return writeStreamError(RopId.OpenStream, rop, MapiStatusCode.EC_NOT_FOUND);
   }
 
-  // Map PropertyTag → Property-Value
+  // Map PropertyTag → property value
   let buffer: Buffer;
   switch (propertyTag) {
     case PR.PR_BODY_W:
@@ -126,10 +126,10 @@ export async function handleRopOpenStream(
       buffer = encodeUtf16Le(msg.subject ?? '');
       break;
     case PR.PR_RTF_COMPRESSED: {
-      // v5.2.0: RTF-Body über PR_RTF_COMPRESSED (MS-OXRTFCP) liefern.
-      // Outlook bevorzugt RTF wenn HTML+RTF beide gesetzt sind. Wir bauen
-      // ein minimales RTF aus HTML/Text und wrappen es ins MELA-uncompressed
-      // Format — Outlook akzeptiert das ohne CRC-Validation.
+      // v5.2.0: Deliver the RTF body via PR_RTF_COMPRESSED (MS-OXRTFCP).
+      // Outlook prefers RTF when both HTML+RTF are set. We build
+      // a minimal RTF from HTML/text and wrap it in the MELA uncompressed
+      // format — Outlook accepts it without CRC validation.
       const { htmlOrTextToRtfCompressed } = await import('../rtf-compress.js');
       buffer = htmlOrTextToRtfCompressed(msg.bodyHtml ?? '', msg.bodyText ?? '');
       break;
@@ -184,8 +184,8 @@ export async function handleRopReadStream(
     return writeStreamError(RopId.ReadStream, rop, MapiStatusCode.EC_INVALID_SESSION);
   }
 
-  // Buffer aus Session laden — die JSON-Serialisierung hat Buffer in
-  // base64-Strings konvertiert, wir restaurieren das hier.
+  // Load buffer from the session — JSON serialization converted the Buffer
+  // into base64 strings, we restore it here.
   const streamBuffer = Buffer.isBuffer(streamObj.buffer)
     ? streamObj.buffer
     : Buffer.from((streamObj.buffer as unknown as { data: number[] }).data ?? []);
@@ -193,7 +193,7 @@ export async function handleRopReadStream(
   const chunkEnd = Math.min(chunkStart + requestedBytes, streamBuffer.length);
   const chunk = streamBuffer.subarray(chunkStart, chunkEnd);
 
-  // offset persistieren
+  // persist offset
   await updateStreamOffset(sessionToken, input.handle, chunkEnd);
 
   const w = new MapiWriter();
@@ -230,17 +230,17 @@ export async function handleRopGetStreamSize(
   return w.toBuffer();
 }
 
-// ── v4.3.0 — Stream-Write für Compose ────────────────────────────────────────
+// ── v4.3.0 — Stream write for compose ────────────────────────────────────────
 
 /**
  * v4.3.0: RopWriteStream
  *
  * Payload: DataSize(uint16) | Data(variable)
  *
- * Antwort: ReturnValue + WrittenBytes(uint16)
+ * Response: ReturnValue + WrittenBytes(uint16)
  *
- * Hängt Data an den Stream-Buffer an (am aktuellen Offset). Outlook ruft
- * WriteStream wiederholt für lange Bodies — wir akkumulieren bis CommitStream.
+ * Appends Data to the stream buffer (at the current offset). Outlook calls
+ * WriteStream repeatedly for long bodies — we accumulate until CommitStream.
  */
 export async function handleRopWriteStream(
   rop: RopRequest,
@@ -257,12 +257,12 @@ export async function handleRopWriteStream(
   const dataSize = r.readUint16();
   const data = r.readBuffer(dataSize);
 
-  // Bestehender Buffer (kann JSON-decoded sein)
+  // Existing buffer (may be JSON-decoded)
   const existing = Buffer.isBuffer(streamObj.buffer)
     ? streamObj.buffer
     : Buffer.from((streamObj.buffer as unknown as { data: number[] }).data ?? []);
 
-  // Daten am Offset einsetzen (typischerweise = Buffer-Ende)
+  // Insert data at the offset (typically = buffer end)
   let merged: Buffer;
   if (streamObj.offset === existing.length) {
     merged = Buffer.concat([existing, data]);
@@ -273,7 +273,7 @@ export async function handleRopWriteStream(
     const after = tailEnd < existing.length ? existing.subarray(tailEnd) : Buffer.alloc(0);
     merged = Buffer.concat([before, data, after]);
   } else {
-    // Offset hinter dem Buffer — mit Nullbytes auffüllen
+    // Offset beyond the buffer — pad with null bytes
     const pad = Buffer.alloc(streamObj.offset - existing.length);
     merged = Buffer.concat([existing, pad, data]);
   }
@@ -295,12 +295,12 @@ export async function handleRopWriteStream(
 /**
  * v4.3.0: RopCommitStream
  *
- * Antwort: ReturnValue
+ * Response: ReturnValue
  *
- * Schreibt den akkumulierten Stream-Buffer in die parent Message — entweder in
- * die persistierte Prisma-Message (bei bestehendem Stream auf gespeicherte
- * Message) oder in die `pendingProperties` der Draft (bei Stream auf
- * Draft-Message). Mapping PropertyTag → DB-Feld:
+ * Writes the accumulated stream buffer into the parent message — either into
+ * the persisted Prisma message (for a stream on a saved
+ * message) or into the draft's `pendingProperties` (for a stream on a
+ * draft message). Mapping PropertyTag → DB field:
  *   PR_BODY_W      → bodyText (UTF-16-LE-Decode)
  *   PR_HTML        → bodyHtml (UTF-8)
  *   PR_SUBJECT_W   → subject  (UTF-16-LE-Decode)
@@ -320,7 +320,7 @@ export async function handleRopCommitStream(
     ? streamObj.buffer
     : Buffer.from((streamObj.buffer as unknown as { data: number[] }).data ?? []);
 
-  // Decode je nach Property-Tag
+  // Decode depending on the property tag
   let stringValue: string | null = null;
   let binaryValue: Buffer | null = null;
   switch (streamObj.propertyTag) {
@@ -333,11 +333,11 @@ export async function handleRopCommitStream(
       break;
     default:
       log.warn({ tag: streamObj.propertyTag.toString(16) }, 'CommitStream: unbekannter Property-Tag — überspringe Persist');
-      // Trotzdem SUCCESS damit Outlook nicht hängt
+      // SUCCESS anyway so Outlook does not hang
       break;
   }
 
-  // Wenn parent eine gespeicherte Message ist: direkt DB-Update
+  // If the parent is a saved message: direct DB update
   if (streamObj.messageId !== null) {
     const dataPatch: Record<string, unknown> = {};
     if (streamObj.propertyTag === PR.PR_BODY_W) dataPatch['bodyText'] = stringValue;
@@ -354,8 +354,8 @@ export async function handleRopCommitStream(
       }
     }
   } else if (streamObj.parentMessageHandle !== undefined) {
-    // Draft-Stream → in parent message-Handle's pendingProperties schreiben
-    // (oder Attachment-Stream → pendingBuffer)
+    // Draft stream → write into the parent message handle's pendingProperties
+    // (or attachment stream → pendingBuffer)
     const parent = await getRopObject(sessionToken, streamObj.parentMessageHandle);
     if (parent && parent.kind === 'message') {
       const pending = { ...(parent.pendingProperties ?? {}) };
@@ -364,13 +364,13 @@ export async function handleRopCommitStream(
         pendingProperties: pending,
       } as Partial<RopObject>);
     } else if (parent && parent.kind === 'attachment') {
-      // v4.4.0: Attachment-Data-Stream → in pendingBuffer
+      // v4.4.0: Attachment data stream → into pendingBuffer
       if (streamObj.propertyTag === PR.PR_ATTACH_DATA_BIN) {
         await updateRopObject(sessionToken, streamObj.parentMessageHandle, {
           pendingBuffer: buf,
         } as Partial<RopObject>);
       } else {
-        // andere Properties (Filename, Mime) → pendingProperties
+        // other properties (filename, MIME) → pendingProperties
         const pending = { ...(parent.pendingProperties ?? {}) };
         pending[String(streamObj.propertyTag)] = stringValue ?? binaryValue?.toString('utf-8') ?? '';
         await updateRopObject(sessionToken, streamObj.parentMessageHandle, {

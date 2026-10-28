@@ -1,11 +1,11 @@
 /**
- * JMAP-Authentifizierung.
- *  - Bearer: Session-JWT (HS256, @coremail/core) — MWA/BCP und Web-Clients.
- *    Für EventSource/WebSocket (kein Header möglich) auch `?access_token=`.
- *  - Basic:  E-Mail + Passwort bzw. App-Passwort (Pflicht bei aktivem MFA).
- *    LDAP/OIDC-User ohne lokalen Hash → Login über auth-service.
- * Basic-Ergebnisse werden 60s im Speicher gecacht (JMAP-Clients senden viele
- * kleine Requests; bcrypt pro Request wäre zu teuer).
+ * JMAP authentication.
+ *  - Bearer: session JWT (HS256, @coremail/core) — MWA/BCP and web clients.
+ *    For EventSource/WebSocket (no header possible) also `?access_token=`.
+ *  - Basic:  e-mail + password or app password (mandatory when MFA is active).
+ *    LDAP/OIDC users without a local hash → login via auth-service.
+ * Basic results are cached in memory for 60s (JMAP clients send many
+ * small requests; bcrypt per request would be too expensive).
  */
 import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'node:crypto';
@@ -66,7 +66,7 @@ export async function authenticateBasic(email: string, password: string): Promis
     || (Array.isArray(user.mfa?.webAuthnCredentials) && (user.mfa.webAuthnCredentials as unknown[]).length > 0));
 
   let ok = false;
-  // 1) App-Passwörter (immer erlaubt — einziger Weg bei MFA)
+  // 1) App passwords (always allowed — the only way with MFA)
   for (const ap of user.appPasswords) {
     if (await verifyPassword(password, ap.hash).catch(() => false)) {
       ok = true;
@@ -74,11 +74,11 @@ export async function authenticateBasic(email: string, password: string): Promis
       break;
     }
   }
-  // 2) Primär-Passwort nur ohne MFA
+  // 2) Primary password only without MFA
   if (!ok && !hasMfa && user.passwordHash) {
     ok = await verifyPassword(password, user.passwordHash).catch(() => false);
   }
-  // 3) LDAP/OIDC: auth-service fragen
+  // 3) LDAP/OIDC: ask the auth-service
   if (!ok && !hasMfa && user.authSource !== 'LOCAL') {
     try {
       const resp = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
@@ -105,7 +105,7 @@ export async function authenticateBasic(email: string, password: string): Promis
   return jmapUser;
 }
 
-/** Credentials aus Authorization-Header oder Token-Query auflösen. */
+/** Resolve credentials from the Authorization header or token query. */
 export async function authenticateCredentials(header: string, tokenQuery: string | undefined): Promise<JmapUser | null> {
   if (header.startsWith('Bearer ')) return authenticateBearer(header.slice(7).trim());
   if (header.startsWith('Basic ')) {
@@ -118,7 +118,7 @@ export async function authenticateCredentials(header: string, tokenQuery: string
   return null;
 }
 
-/** Liest Credentials aus Header oder Query und liefert den User (oder null). */
+/** Reads credentials from header or query and returns the user (or null). */
 export async function authenticateRequest(req: Request): Promise<JmapUser | null> {
   const q = req.query['access_token'] ?? req.query['token'];
   return authenticateCredentials(req.get('Authorization') ?? '', typeof q === 'string' && q ? q : undefined);

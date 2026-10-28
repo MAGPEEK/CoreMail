@@ -1,5 +1,5 @@
 /**
- * Session-Resource (RFC 8620 §2) inkl. Capability-Objekten der Erweiterungen.
+ * Session resource (RFC 8620 §2) incl. capability objects of the extensions.
  */
 import type { AccountContext, JmapUser, JsonObject } from './types.js';
 import { hashState } from './state.js';
@@ -57,7 +57,7 @@ export function buildSession(user: JmapUser, accounts: Map<string, AccountContex
   if (own) {
     for (const c of [CAP_MAIL, CAP_SUBMISSION, CAP_VACATION, CAP_QUOTA, CAP_BLOB]) primary[c] = own.accountId;
   }
-  // Principals-Account: RFC 9670 — eigener Account dient als Principal-Verzeichnis
+  // Principals account: RFC 9670 — own account serves as the principal directory
   if (own) primary[CAP_PRINCIPALS] = own.accountId;
 
   const capabilities: JsonObject = {

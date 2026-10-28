@@ -15,8 +15,8 @@ export function createApp(): Express {
   app.use('/auth/app-passwords', appPasswordRouter);
   app.use('/auth/sessions', sessionRouter);
 
-  // v5.6.0: OAuth2/Modern Auth komplett aus dem Stack entfernt.
-  // MFA-kompatible Mail-Client-Anmeldung über App-Passwörter.
+  // v5.6.0: OAuth2/Modern Auth completely removed from the stack.
+  // MFA-compatible mail client login via app passwords.
 
   return app;
 }

@@ -1,10 +1,10 @@
 /**
- * TLS-Zertifikat-Utilities — CoreMail
+ * TLS certificate utilities — CoreMail
  *
- * Generiert selbstsignierte Zertifikate für SMTP (Port 465),
- * IMAP (Port 993) und POP3 (Port 995) implizites TLS.
+ * Generates self-signed certificates for SMTP (port 465),
+ * IMAP (port 993) and POP3 (port 995) implicit TLS.
  *
- * Erfordert: openssl im PATH (in Alpine-Containern standardmäßig verfügbar).
+ * Requires: openssl in PATH (available by default in Alpine containers).
  */
 
 import { execSync }                       from 'node:child_process';
@@ -13,20 +13,20 @@ import { tmpdir }                          from 'node:os';
 import { join }                            from 'node:path';
 
 export interface TlsCertPair {
-  /** PEM-kodiertes Zertifikat */
+  /** PEM-encoded certificate */
   certPem: string;
-  /** PEM-kodierter privater Schlüssel */
+  /** PEM-encoded private key */
   keyPem: string;
 }
 
 /**
- * Generiert ein selbstsigniertes RSA-2048 TLS-Zertifikat via openssl.
+ * Generates a self-signed RSA-2048 TLS certificate via openssl.
  *
- * - Gültig 10 Jahre
+ * - Valid for 10 years
  * - SAN: DNS:<hostname> + IP:127.0.0.1
- * - Kein Passwort (-nodes)
+ * - No password (-nodes)
  *
- * @throws Wenn openssl nicht im PATH ist oder die Generierung fehlschlägt.
+ * @throws If openssl is not in PATH or generation fails.
  */
 export function generateSelfSignedCert(hostname: string): TlsCertPair {
   const dir = mkdtempSync(join(tmpdir(), 'coremail-tls-'));
@@ -34,7 +34,7 @@ export function generateSelfSignedCert(hostname: string): TlsCertPair {
     const keyFile  = join(dir, 'key.pem');
     const certFile = join(dir, 'cert.pem');
 
-    // subjectAltName via -addext erfordert OpenSSL ≥ 1.1.1
+    // subjectAltName via -addext requires OpenSSL ≥ 1.1.1
     const cmd =
       `openssl req -x509 -newkey rsa:2048 ` +
       `-keyout "${keyFile}" -out "${certFile}" ` +
@@ -54,8 +54,8 @@ export function generateSelfSignedCert(hostname: string): TlsCertPair {
 }
 
 /**
- * Konvertiert ein PEM-Zertifikat und einen PEM-Schlüssel in Buffer-Objekte,
- * wie sie von node:tls.createServer() erwartet werden.
+ * Converts a PEM certificate and a PEM key into Buffer objects,
+ * as expected by node:tls.createServer().
  */
 export function tlsPemToBuffers(certPem: string, keyPem: string): { cert: Buffer; key: Buffer } {
   return {

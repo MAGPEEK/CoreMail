@@ -1,6 +1,6 @@
 /**
- * Quota/* (RFC 9425). Eine Quota pro Account: Speicher in Oktetten aus
- * User.quotaBytes/usedBytes bzw. SharedMailbox.quotaBytes/usedBytes.
+ * Quota/* (RFC 9425). One quota per account: storage in octets from
+ * User.quotaBytes/usedBytes or SharedMailbox.quotaBytes/usedBytes.
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';

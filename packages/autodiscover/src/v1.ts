@@ -6,13 +6,13 @@ import { getServerConfig } from './settings.js';
 const log = createLogger('autodiscover:v1');
 
 /**
- * v5.2.14: Verifiziert Basic-Auth-Credentials gegen User.passwordHash UND
- * AppPassword.hash (gleiche Logik wie EWS-Middleware).  Liefert true/false.
+ * v5.2.14: verifies Basic-Auth credentials against User.passwordHash AND
+ * AppPassword.hash (same logic as the EWS middleware).  Returns true/false.
  *
- * KRITISCH: Vorher akzeptierte V1 jedes beliebige Passwort als gültig — Outlook
- * bekam dann von Autodiscover ein OK, scheiterte aber an EWS/MAPI (401),
- * pollte Autodiscover wieder, bekam wieder OK → Endlos-Loop ohne Aussicht
- * dass der User je das richtige Passwort treffen würde.
+ * CRITICAL: previously V1 accepted any password as valid — Outlook
+ * then got an OK from Autodiscover but failed at EWS/MAPI (401),
+ * polled Autodiscover again, got OK again → endless loop with no chance
+ * that the user would ever hit the right password.
  */
 async function validateBasicAuth(email: string, password: string): Promise<boolean> {
   if (!email || !password) return false;
@@ -23,11 +23,11 @@ async function validateBasicAuth(email: string, password: string): Promise<boole
 
   if (!user || !user.active) return false;
 
-  // 1) Regulärer Passwort-Hash
+  // 1) Regular password hash
   if (user.passwordHash) {
     if (await verifyPassword(password, user.passwordHash).catch(() => false)) return true;
   }
-  // 2) Fallback: App-Passwort (Pflicht für MFA-Accounts)
+  // 2) Fallback: app password (mandatory for MFA accounts)
   const appPasswords = await prisma.appPassword.findMany({
     where: { userId: user.id },
     select: { id: true, hash: true },
@@ -43,19 +43,19 @@ async function validateBasicAuth(email: string, password: string): Promise<boole
   return false;
 }
 
-/** Normalisiert Outlook-Username (DOMAIN\user oder user@domain) auf E-Mail-Form. */
+/** Normalizes an Outlook username (DOMAIN\user or user@domain) to e-mail form. */
 function normalizeBasicAuthUser(rawUser: string): string {
   const bsIdx = rawUser.lastIndexOf('\\');
   return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
 }
 
-// v5.7.0: MAPI/HTTP ist optional (BCP → Server → „MAPI over HTTP",
-// ServerSettings.mapiHttpEnabled, Default AUS). Nur wenn aktiv wird
-// <Protocol Type="mapiHttp"> annonciert und Outlook richtet ein
-// „Exchange"-Konto ein. Sonst nur IMAP+SMTP+ActiveSync → IMAP-Konto.
-// Einschränkung: Outlook 2024 LTSC / M365 Classic erzwingen bei Exchange-
-// Konten Modern Auth gegen Entra/ADFS — dort bleibt IMAP der sichere Weg
-// (siehe v5.3.x/v5.4.0 im CHANGELOG). Outlook 2013–2021 verbinden per Basic.
+// v5.7.0: MAPI/HTTP is optional (BCP → Server → "MAPI over HTTP",
+// ServerSettings.mapiHttpEnabled, default OFF). Only when active is
+// <Protocol Type="mapiHttp"> announced and Outlook sets up an
+// "Exchange" account. Otherwise only IMAP+SMTP+ActiveSync → IMAP account.
+// Limitation: Outlook 2024 LTSC / M365 Classic enforce Modern Auth against
+// Entra/ADFS for Exchange accounts — there IMAP remains the safe route
+// (see v5.3.x/v5.4.0 in the CHANGELOG). Outlook 2013–2021 connect via Basic.
 
 function buildAutodiscoverResponse(
   email: string,
@@ -63,13 +63,13 @@ function buildAutodiscoverResponse(
   legacyDn: string,
   cfg: Awaited<ReturnType<typeof getServerConfig>>,
 ): string {
-  // v3.18.38: Outlook-LTSC-2019/2021/2024-kompatible Autodiscover-Response.
-  // KRITISCH (laut Recherche an Microsoft Docs + Grommunio-Implementierung):
-  //   - AuthPackage MUSS "Basic" (capital B) sein, manche Outlook-Builds sind case-sensitive
-  //   - <User><LegacyDN> ist Pflicht (Outlook verwendet es als interne User-Identity)
-  //   - <GroupingInformation> im EXPR-Block ab Exchange 2013 SP1
-  //   - <PublicFolderInformation> Dummy auch wenn keine Public Folders existieren
-  //   - MAPI/HTTP-Block (Type=mapiHttp) nur wenn cfg.mapiHttpEnabled (v5.7.0)
+  // v3.18.38: Outlook LTSC 2019/2021/2024 compatible Autodiscover response.
+  // CRITICAL (per research of Microsoft Docs + the Grommunio implementation):
+  //   - AuthPackage MUST be "Basic" (capital B), some Outlook builds are case-sensitive
+  //   - <User><LegacyDN> is mandatory (Outlook uses it as the internal user identity)
+  //   - <GroupingInformation> in the EXPR block since Exchange 2013 SP1
+  //   - <PublicFolderInformation> dummy even if no public folders exist
+  //   - MAPI/HTTP block (Type=mapiHttp) only if cfg.mapiHttpEnabled (v5.7.0)
   const ewsHost = (() => {
     try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
   })();
@@ -176,22 +176,22 @@ function extractEmailFromXml(body: string): string | null {
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
-  // v5.2.3-Fix: Outlook macht zuerst einen GET-Probe ohne Auth-Header auf
-  // den V1-Endpoint. Erwartet wird 401 + WWW-Authenticate (so weiß Outlook
-  // dass der Endpoint Auth unterstützt). Wenn wir stattdessen 400 zurückgeben
-  // bricht Outlook die Discovery ab und prompted endlos nach Passwort.
+  // v5.2.3 fix: Outlook first does a GET probe without an Auth header on
+  // the V1 endpoint. It expects 401 + WWW-Authenticate (that is how Outlook knows
+  // the endpoint supports auth). If we return 400 instead,
+  // Outlook aborts discovery and prompts endlessly for a password.
   //
-  // Lösung: Bei fehlender Authorization → 401 mit Multi-Scheme-Header,
-  // damit Outlook die Credentials sendet. Im zweiten Request (mit Auth)
-  // parsen wir dann den Body und liefern das XML.
+  // Solution: on missing Authorization → 401 with a multi-scheme header,
+  // so Outlook sends the credentials. In the second request (with auth)
+  // we then parse the body and return the XML.
   //
-  // Hinweis: Wir validieren die Credentials hier NICHT (Autodiscover liefert
-  // nur Setup-Daten, keine User-Daten). Das ist Exchange-üblich.
+  // Note: we do NOT validate the credentials here (Autodiscover only returns
+  // setup data, no user data). That is customary for Exchange.
   const authHeader = req.get('Authorization') ?? '';
-  // v5.2.15: Auth-Scheme case-insensitive matchen (RFC 7235 §2.1). Manche
-  // Outlook-Builds (insbesondere Outlook-LTSC unter aktuellen Win11-Patches)
-  // senden `basic` (lowercase). Express liefert den raw Value zurück, so
-  // dass startsWith('Basic ') case-sensitiv ist.
+  // v5.2.15: match the auth scheme case-insensitively (RFC 7235 §2.1). Some
+  // Outlook builds (especially Outlook LTSC on current Win11 patches)
+  // send `basic` (lowercase). Express returns the raw value, so
+  // startsWith('Basic ') is case-sensitive.
   const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
   if (!authHeader) {
     log.debug({ method: req.method, url: req.originalUrl }, 'Autodiscover v1: no auth, sending 401 challenge');
@@ -199,19 +199,19 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     res.status(401).send('Unauthorized');
     return;
   }
-  // Negotiate/NTLM-Token → wir lehnen ab und drängen auf Basic
+  // Negotiate/NTLM token → we reject and push for Basic
   if (authSchemeLower === 'negotiate' || authSchemeLower === 'ntlm') {
     log.debug({ scheme: authSchemeLower }, 'Autodiscover v1: Negotiate/NTLM → fordere Basic');
     res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }
-  // v5.3.2: Bearer-Token forensisch loggen — Outlook 2024 LTSC sendet nur
-  // noch Bearer. Wir entschlüsseln den JWT-Payload (NICHT verify, nur base64
-  // decoden) um zu sehen: iss (welcher Identity Provider?), aud (an wen
-  // gerichtet?), sub (welcher User?), scp (welche Scopes?). Damit wissen
-  // wir präzise, woher Outlook das Token hat und können entscheiden ob WS-
-  // Trust-Emulation oder ADFS-Login-UI nötig ist.
+  // v5.3.2: log Bearer tokens forensically — Outlook 2024 LTSC only sends
+  // Bearer. We decode the JWT payload (NOT verify, just base64
+  // decode) to see: iss (which identity provider?), aud (addressed to
+  // whom?), sub (which user?), scp (which scopes?). That tells us
+  // precisely where Outlook got the token from and lets us decide whether WS-
+  // Trust emulation or an ADFS login UI is needed.
   if (authSchemeLower === 'bearer') {
     const tokenStart = authHeader.indexOf(' ');
     const tok = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
@@ -237,7 +237,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       exp: claims['exp'],
       userAgent: req.get('User-Agent') ?? '',
     }, 'Autodiscover v1: Bearer-Token empfangen (forensisch decoded, nicht verified)');
-    // SystemLog für BCP-Sichtbarkeit
+    // SystemLog for BCP visibility
     void prisma.systemLog.create({
       data: {
         level:    'INFO',
@@ -253,8 +253,8 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
         },
       },
     }).catch(() => { /* non-fatal */ });
-    // Bearer von uns nicht akzeptiert (wir signieren nicht für Outlook-aud)
-    // — sende 401 mit ADFS-Challenge zurück
+    // Bearer not accepted by us (we do not sign for the Outlook aud)
+    // — send back 401 with an ADFS challenge
     const settings = await prisma.serverSettings.findUnique({
       where:  { id: 'singleton' },
       select: { publicHostname: true, useHttps: true, httpPort: true },
@@ -264,22 +264,22 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     const port = settings?.httpPort ?? 443;
     const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
     const base = `${scheme}://${hostname}${portSuffix}`;
-    // v5.3.4: Bearer rausgenommen — Outlook 2024 LTSC würde sonst Modern Auth
-    // bei login.microsoftonline.com starten statt Basic-Auth zu uns zu schicken.
+    // v5.3.4: Bearer removed — otherwise Outlook 2024 LTSC would start Modern Auth
+    // at login.microsoftonline.com instead of sending Basic auth to us.
     res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
     res.status(401).send('Unauthorized');
     return;
   }
 
-  // v5.2.14: KRITISCH — Basic-Auth muss VALIDIERT werden!
-  // Vorher akzeptierte V1 jedes Passwort. Outlook bekam dann gültiges XML
-  // mit FALSCHEM Passwort, scheiterte aber an EWS/MAPI (die korrekt prüfen),
-  // promptet User erneut, schickt erneut zu Autodiscover (das wieder OK
-  // sagt), → ENDLOS-LOOP.
-  let basicAuthUser: string | null = null;  // raw username (kann admin oder admin@domain sein)
+  // v5.2.14: CRITICAL — Basic auth must be VALIDATED!
+  // Previously V1 accepted any password. Outlook then got valid XML
+  // with a WRONG password, but failed at EWS/MAPI (which check correctly),
+  // prompted the user again, sent to Autodiscover again (which said OK
+  // again), → ENDLESS LOOP.
+  let basicAuthUser: string | null = null;  // raw username (can be admin or admin@domain)
   let basicAuthPassword: string | null = null;
   if (authSchemeLower === 'basic') {
-    // Whitespace-tolerant slicen (Outlook fügt manchmal mehrere Leerzeichen ein)
+    // Whitespace-tolerant slicing (Outlook sometimes inserts multiple spaces)
     const tokenStart = authHeader.indexOf(' ');
     const b64 = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
     try {
@@ -289,7 +289,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
         basicAuthUser     = normalizeBasicAuthUser(decoded.slice(0, colonIdx));
         basicAuthPassword = decoded.slice(colonIdx + 1);
       }
-    } catch { /* malformed header — wird unten als 401 behandelt */ }
+    } catch { /* malformed header — handled as 401 below */ }
   }
 
   if (!basicAuthUser || !basicAuthPassword) {
@@ -304,9 +304,9 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  // v5.2.15: Bare-Username Fallback. Outlook sendet bei NTLM-Style `DOMAIN\user`
-  // teilweise auch nur `user` (ohne @domain). Wenn kein @ enthalten ist, suchen
-  // wir den User in der primären Domain.
+  // v5.2.15: bare-username fallback. With NTLM-style `DOMAIN\user` Outlook
+  // sometimes sends only `user` (without @domain). If no @ is present, we
+  // look up the user in the primary domain.
   let basicAuthEmail = basicAuthUser;
   if (!basicAuthUser.includes('@')) {
     const primaryDomain = await prisma.domain.findFirst({
@@ -321,9 +321,9 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   const authOk = await validateBasicAuth(basicAuthEmail, basicAuthPassword);
   if (!authOk) {
-    // v5.2.16: Forensisches Logging um zu sehen WAS Outlook sendet ohne
-    // das Passwort selbst zu leaken: Länge + Code-Points der ersten/letzten
-    // 2 Zeichen (Trailing-Whitespace / Newline / Encoding-Issue erkennbar).
+    // v5.2.16: forensic logging to see WHAT Outlook sends without
+    // leaking the password itself: length + code points of the first/last
+    // 2 characters (trailing whitespace / newline / encoding issue detectable).
     const pwLen   = basicAuthPassword.length;
     const pwCodes = pwLen >= 4
       ? [basicAuthPassword.charCodeAt(0), basicAuthPassword.charCodeAt(1),
@@ -334,7 +334,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       pwLen, pwCodes,
       userAgent: req.get('User-Agent') ?? '',
     }, 'Autodiscover v1: Passwort + App-Passwort fehlgeschlagen');
-    // SystemLog für Audit (analog zu EWS-Middleware in writeAuthFailureLog)
+    // SystemLog for audit (analogous to the EWS middleware in writeAuthFailureLog)
     void prisma.systemLog.create({
       data: {
         level:    'WARN',
@@ -358,7 +358,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  // Auth OK — Email aus Body extrahieren (oder Fallback auf Basic-Auth-Email)
+  // Auth OK — extract e-mail from the body (or fall back to the Basic-Auth e-mail)
   let email: string | null = null;
   if (req.method === 'POST') {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
@@ -385,8 +385,8 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   ]);
 
   const displayName = user?.displayName ?? email;
-  // v3.18.38: LegacyDN ist Pflicht für MAPI-Profile (Outlook benutzt es als
-  // interne User-Identity). Format nach Microsoft-Spec.
+  // v3.18.38: LegacyDN is mandatory for MAPI profiles (Outlook uses it as the
+  // internal user identity). Format per Microsoft spec.
   const userId = user?.id ?? email.split('@')[0] ?? 'unknown';
   const legacyDn = `/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=${userId}`;
 

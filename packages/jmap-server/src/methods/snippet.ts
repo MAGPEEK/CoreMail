@@ -1,5 +1,5 @@
 /**
- * SearchSnippet/get (RFC 8621 §5) — Treffer-Hervorhebung mit <mark>.
+ * SearchSnippet/get (RFC 8621 §5) — hit highlighting with <mark>.
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';

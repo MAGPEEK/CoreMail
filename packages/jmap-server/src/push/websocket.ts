@@ -1,6 +1,6 @@
 /**
- * JMAP over WebSocket (RFC 8887): Subprotokoll "jmap", Request/Response-
- * Framing mit "@type", RequestError, Push via WebSocketPushEnable/Disable.
+ * JMAP over WebSocket (RFC 8887): subprotocol "jmap", request/response
+ * framing with "@type", RequestError, push via WebSocketPushEnable/Disable.
  */
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -27,7 +27,7 @@ export function attachWebSocket(server: Server, path = '/jmap/ws'): void {
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (url.pathname !== path) return; // andere Upgrades ignorieren (socket bleibt offen für andere Handler)
+    if (url.pathname !== path) return; // ignore other upgrades (socket stays open for other handlers)
     void (async () => {
       if (!(await isJmapEnabled())) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
       const token = url.searchParams.get('access_token') ?? url.searchParams.get('token') ?? undefined;
@@ -97,7 +97,7 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
           pushEnabled = true;
           const dt = msg['dataTypes'];
           pushTypes = Array.isArray(dt) && dt.length ? new Set((dt as unknown[]).map(String)) : undefined;
-          // pushState: Client hat Zustand → sofort aktuellen StateChange schicken
+          // pushState: client has state → send the current StateChange immediately
           if (typeof msg['pushState'] === 'string') {
             const accounts = await resolveAccounts(user);
             send(await buildStateChange(accountsOf(accounts), pushTypes));
