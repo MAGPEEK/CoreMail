@@ -1,14 +1,14 @@
 #!/bin/sh
 # CoreMail App Container — Entrypoint
-# 1. Warte auf PostgreSQL (unbegrenzt, mit Progress-Log alle 10 s)
-# 2. Synchronisiere Prisma-Schema (db push) mit Retry-Logik
-# 3. Starte supervisord
+# 1. Wait for PostgreSQL (unlimited, with progress log every 10 s)
+# 2. Synchronize Prisma schema (db push) with retry logic
+# 3. Start supervisord
 set -e
 
 log() { echo "[entrypoint] $*"; }
 
-# ── 1. PostgreSQL-Verbindung abwarten ────────────────────────────────────────
-# DATABASE_URL Format: postgresql://user:pass@host:port/db
+# ── 1. Wait for PostgreSQL connection ────────────────────────────────────────
+# DATABASE_URL format: postgresql://user:pass@host:port/db
 DB_HOST=$(echo "${DATABASE_URL}" | sed -n 's|.*@\([^:/]*\).*|\1|p')
 DB_PORT=$(echo "${DATABASE_URL}" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
 DB_PORT="${DB_PORT:-5432}"
@@ -18,18 +18,18 @@ WAITED=0
 until nc -z "${DB_HOST}" "${DB_PORT}" 2>/dev/null; do
   sleep 2
   WAITED=$((WAITED + 2))
-  # Alle 10 s Progress melden damit der Log nicht einfriert
+  # Report progress every 10 s so the log does not appear frozen
   if [ $((WAITED % 10)) -eq 0 ]; then
     log "Still waiting for PostgreSQL... (${WAITED}s elapsed)"
   fi
 done
 log "PostgreSQL TCP reachable after ${WAITED}s"
 
-# ── 2. Prisma-Schema anlegen / aktualisieren ──────────────────────────────────
-# Wichtig: nc -z prüft nur TCP-Konnektivität.
-# Auf Synology NAS (langsamer Volume-Mount) läuft die DB-Initialisierung
-# noch bis zu 2 Minuten, nachdem nc -z true meldet.
-# Daher: prisma db push mit Retry-Schleife bis zu 60 Versuchen (5 min).
+# ── 2. Create / update Prisma schema ─────────────────────────────────────────
+# Important: nc -z only checks TCP connectivity.
+# On Synology NAS (slow volume mount) the DB initialization keeps running
+# for up to 2 minutes after nc -z reports true.
+# Therefore: prisma db push with a retry loop of up to 60 attempts (5 min).
 
 log "Applying Prisma schema (db push) — with retry on slow init..."
 cd /app
@@ -51,6 +51,6 @@ while true; do
   sleep 5
 done
 
-# ── 3. supervisord starten ───────────────────────────────────────────────────
+# ── 3. Start supervisord ─────────────────────────────────────────────────────
 log "Starting supervisord..."
 exec "$@"

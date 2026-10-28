@@ -1,15 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # CoreMail — Monolithic App Container  (magpeek/coremail-app)
 #
-# Enthält alle Node.js-Services, nginx (Reverse Proxy + Static Files)
-# und alle Frontend-Bundles in einem einzigen Container.
-# Process-Manager: supervisord
+# Contains all Node.js services, nginx (reverse proxy + static files)
+# and all frontend bundles in a single container.
+# Process manager: supervisord
 #
-# Build (aus dem Repo-Root):
+# Build (from the repo root):
 #   docker build -f infra/docker/Dockerfile.app \
 #                -t magpeek/coremail-app:0.9.0 .
 #
-# Interne Ports (alle auf localhost):
+# Internal ports (all on localhost):
 #   80/443  nginx (HTTP/HTTPS)
 #   25/465/587  SMTP
 #   143/993     IMAP
@@ -21,19 +21,19 @@
 #   8082  caldav-server   3006  jmap-server
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Stage 1: Build aller Node.js-Pakete ──────────────────────────────────────
+# ── Stage 1: Build all Node.js packages ──────────────────────────────────────
 FROM node:22-alpine AS builder
 WORKDIR /app
-# Prisma Engine-Binary-Download im Builder überspringen (schlägt unter QEMU fehl).
-# Nur den JS-Client generieren (für TypeScript-Typen). Die echte Engine wird im Runner-Stage geladen.
+# Skip the Prisma engine binary download in the builder (fails under QEMU).
+# Only generate the JS client (for TypeScript types). The real engine is loaded in the runner stage.
 ENV PRISMA_CLI_QUERY_ENGINE_TYPE=library
 RUN corepack enable && corepack prepare pnpm@11 --activate
 RUN apk add --no-cache python3 make g++
 
-# Workspace-Konfiguration zuerst (Layer-Caching)
+# Workspace configuration first (layer caching)
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc tsconfig.base.json ./
 
-# package.json aller Services
+# package.json of all services
 COPY packages/core/package.json           ./packages/core/
 COPY packages/storage/package.json        ./packages/storage/
 COPY packages/smtp-server/package.json    ./packages/smtp-server/
@@ -54,7 +54,7 @@ COPY packages/cli/package.json            ./packages/cli/
 
 RUN pnpm install --frozen-lockfile
 
-# Quellcode kopieren
+# Copy source code
 COPY packages/core          ./packages/core
 COPY packages/storage       ./packages/storage
 COPY packages/smtp-server   ./packages/smtp-server
@@ -73,7 +73,7 @@ COPY packages/activesync        ./packages/activesync
 COPY packages/jmap-server       ./packages/jmap-server
 COPY packages/cli               ./packages/cli
 
-# Prisma-Client generieren und alle Pakete bauen
+# Generate Prisma client and build all packages
 RUN pnpm --filter @coremail/storage exec prisma generate
 RUN pnpm --filter @coremail/core build
 RUN pnpm --filter @coremail/storage build
@@ -93,7 +93,7 @@ RUN pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/jmap-server    build \
  && pnpm --filter @coremail/cli            build
 
-# ── Stage 2: Frontend-Build ───────────────────────────────────────────────────
+# ── Stage 2: Frontend build ───────────────────────────────────────────────────
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11 --activate
@@ -107,7 +107,7 @@ RUN pnpm install --frozen-lockfile
 COPY packages/web-client  ./packages/web-client
 COPY packages/admin-panel ./packages/admin-panel
 
-# Build-Zeit-Argumente (können beim Image-Build überschrieben werden)
+# Build-time arguments (can be overridden during the image build)
 ARG VITE_API_BASE_URL=/api/v1
 ARG VITE_EWS_URL=/EWS/Exchange.asmx
 
@@ -123,24 +123,24 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# ── System-Pakete ─────────────────────────────────────────────────────────────
-# libcap: setcap-Werkzeug — erlaubt dem node-Binary das Binden an Ports < 1024
-#         ohne Root-Rechte (cap_net_bind_service).
-# tini:   Init-Prozess (PID 1) — sauberes Signal-Handling, keine Zombie-Prozesse.
+# ── System packages ───────────────────────────────────────────────────────────
+# libcap: setcap tool — allows the node binary to bind to ports < 1024
+#         without root privileges (cap_net_bind_service).
+# tini:   init process (PID 1) — clean signal handling, no zombie processes.
 RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap
 
-# ── setcap: node darf Privilegierte Ports binden (25, 110, 143, …) ────────────
+# ── setcap: node may bind privileged ports (25, 110, 143, …) ──────────────────
 # cap_net_bind_service=+eip:
-#   e (effective)    — Capability ist beim Ausführen aktiv
-#   i (inheritable)  — Capability wird über setuid() auf Kindprozesse vererbt
-#   p (permitted)    — Capability ist im erlaubten Set
-# Damit können supervisord-Kindprozesse (user=node) trotz Nicht-Root-UID
-# privilegierte Ports binden, wenn no-new-privileges NICHT gesetzt ist.
+#   e (effective)    — capability is active when executing
+#   i (inheritable)  — capability is inherited by child processes via setuid()
+#   p (permitted)    — capability is in the permitted set
+# This lets supervisord child processes (user=node) bind privileged ports
+# despite a non-root UID, as long as no-new-privileges is NOT set.
 RUN setcap 'cap_net_bind_service=+eip' /usr/local/bin/node
 
 RUN corepack enable && corepack prepare pnpm@11 --activate
 
-# Workspace-Konfiguration
+# Workspace configuration
 COPY --from=builder /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/pnpm-lock.yaml ./
 COPY --from=builder /app/.npmrc ./
@@ -155,7 +155,7 @@ COPY --from=builder /app/packages/storage/package.json ./packages/storage/
 COPY --from=builder /app/packages/storage/dist         ./packages/storage/dist
 COPY --from=builder /app/packages/storage/prisma       ./packages/storage/prisma
 
-# alle Services
+# all services
 COPY --from=builder /app/packages/smtp-server/package.json    ./packages/smtp-server/
 COPY --from=builder /app/packages/smtp-server/dist            ./packages/smtp-server/dist
 COPY --from=builder /app/packages/imap-server/package.json    ./packages/imap-server/
@@ -187,48 +187,48 @@ COPY --from=builder /app/packages/jmap-server/dist            ./packages/jmap-se
 COPY --from=builder /app/packages/cli/package.json            ./packages/cli/
 COPY --from=builder /app/packages/cli/dist                    ./packages/cli/dist
 
-# Nur Produktions-Abhängigkeiten installieren.
-# python3 + make + g++ werden für native Module (bcrypt) benötigt die keine
-# prebuilt-Binary für alpine/arm64 haben — werden danach wieder entfernt.
+# Install production dependencies only.
+# python3 + make + g++ are needed for native modules (bcrypt) that have no
+# prebuilt binary for alpine/arm64 — they are removed again afterwards.
 RUN apk add --no-cache python3 make g++ \
  && pnpm install --frozen-lockfile --prod \
  && apk del python3 make g++ \
  && rm -rf /root/.cache /tmp/pnpm-*
-# Altes Prisma-Engine-Binary löschen damit BuildKit-Cache nicht greift
+# Delete the old Prisma engine binary so the BuildKit cache does not kick in
 RUN find /app/node_modules -path "*/.prisma/client/libquery_engine*" -delete 2>/dev/null || true
 RUN pnpm --filter @coremail/storage exec prisma generate
-# Symlink: linux-musl → linux-musl-openssl-3.0.x (Prisma Detection-Fallback absichern)
+# Symlink: linux-musl → linux-musl-openssl-3.0.x (safeguard Prisma detection fallback)
 RUN for f in $(find /app/node_modules -name "libquery_engine-linux-musl.so.node" 2>/dev/null); do \
     t=$(echo "$f" | sed "s/linux-musl\.so/linux-musl-openssl-3.0.x.so/"); \
     [ -f "$t" ] && ln -sf "$t" "$f" && echo "symlinked $f"; \
   done
 
-# Frontend-Bundles (statische Dateien)
+# Frontend bundles (static files)
 RUN mkdir -p /app/www
 COPY --from=frontend-builder /app/packages/web-client/dist  /app/www/owa
 COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/bcp
 
-# Admin-CLI: `docker exec coremail coremail --help`
+# Admin CLI: `docker exec coremail coremail --help`
 RUN chmod +x /app/packages/cli/dist/index.js \
  && ln -sf /app/packages/cli/dist/index.js /usr/local/bin/coremail
 
-# supervisord-Konfiguration
+# supervisord configuration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# ── Verzeichnisse + Berechtigungen ────────────────────────────────────────────
-# Alle Laufzeit-Verzeichnisse gehören dem node-User (uid 1000, gid 1000).
-# supervisord startet als root (PID 1 via tini) und wechselt via user=node
-# für jeden Kindprozess zu node — dafür braucht es SETUID/SETGID Capability.
+# ── Directories + permissions ─────────────────────────────────────────────────
+# All runtime directories belong to the node user (uid 1000, gid 1000).
+# supervisord starts as root (PID 1 via tini) and switches to node via user=node
+# for every child process — this requires the SETUID/SETGID capability.
 RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail \
  && chown -R node:node /app /var/log/supervisor /var/run/supervisor /tmp/coremail \
  && chmod 750 /var/log/supervisor /var/run/supervisor
 
 # Ports:
-#   3000 — HTTP (OWA, ECP, API, Auth, EWS-Proxy, ActiveSync-Proxy)
-#         → TLS-Terminierung extern (Traefik, Caddy, DSM Application Portal …)
-#   8080 — EWS/MAPI/Autodiscover (direkter Zugriff optional)
+#   3000 — HTTP (OWA, ECP, API, Auth, EWS proxy, ActiveSync proxy)
+#         → TLS termination external (Traefik, Caddy, DSM Application Portal …)
+#   8080 — EWS/MAPI/Autodiscover (direct access optional)
 #   25/465/587 — SMTP
 #   143/993    — IMAP
 #   110/995    — POP3
@@ -237,6 +237,6 @@ EXPOSE 3000 8080 25 465 587 143 993 110 995
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
   CMD curl -sf http://localhost:3000/healthz || exit 1
 
-# tini als Init-Prozess (sauberes Signal-Handling)
+# tini as init process (clean signal handling)
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/entrypoint.sh", "/usr/bin/supervisord", "-c", "/etc/supervisord.conf", "-n"]
