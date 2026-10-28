@@ -1,233 +1,233 @@
-# CoreMail — Docker-Deployment
+# CoreMail — Docker Deployment
 
-> **6-Container-Architektur** — alle CoreMail-Dienste laufen in einem einzigen App-Container (`magpeek/coremail-app`), verwaltet von `supervisord`. Rspamd, ClamAV, PostgreSQL, Redis und MinIO laufen in separaten Standard-Images.
+> **6-container architecture** — all CoreMail services run in a single app container (`magpeek/coremail-app`), managed by `supervisord`. Rspamd, ClamAV, PostgreSQL, Redis and MinIO run in separate standard images.
 
 ---
 
-## Inhalt
+## Contents
 
-1. [Übersicht](#übersicht)
-2. [Voraussetzungen](#voraussetzungen)
-3. [Schnellstart](#schnellstart)
-4. [Zugriff](#zugriff)
-5. [Konfigurationsreferenz (.env)](#konfigurationsreferenz-env)
-6. [Datenverwaltung](#datenverwaltung)
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Quick start](#quick-start)
+4. [Access](#access)
+5. [Configuration reference (.env)](#configuration-reference-env)
+6. [Data management](#data-management)
 7. [Updates](#updates)
 8. [Synology NAS](#synology-nas)
-9. [Fehlerbehebung](#fehlerbehebung)
-10. [Produktion — Checkliste](#produktion--checkliste)
+9. [Troubleshooting](#troubleshooting)
+10. [Production — checklist](#production--checklist)
 
 ---
 
-## Übersicht
+## Overview
 
-CoreMail verwendet eine **6-Container-Architektur**:
+CoreMail uses a **6-container architecture**:
 
-| Container | Image | Aufgabe |
+| Container | Image | Purpose |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:3.17.8` | Alle Mail-Dienste + Webmail (MWA) + Admin-Panel (BCP) |
-| `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy, URL) |
-| `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam-Updates |
-| `postgres` | `postgres:16-alpine` | Primäre Datenbank (Mails, Benutzer, Kalender, Kontakte) |
-| `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Events via SSE, Greylisting |
-| `minio` | `minio/minio` | S3-kompatibler Objektspeicher (Anhänge, Quarantäne, Backups) |
+| `coremail` | `magpeek/coremail-app:3.17.8` | All mail services + webmail (MWA) + admin panel (BCP) |
+| `rspamd` | `rspamd/rspamd:4.0.0` | Anti-spam engine (Bayes, DKIM/SPF/DMARC, fuzzy, URL) |
+| `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
+| `postgres` | `postgres:16-alpine` | Primary database (mails, users, calendars, contacts) |
+| `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live events via SSE, greylisting |
+| `minio` | `minio/minio` | S3-compatible object storage (attachments, quarantine, backups) |
 
-### Was ist im `coremail`-Container?
+### What is inside the `coremail` container?
 
-Der App-Container enthält **alle CoreMail-Dienste**, verwaltet von `supervisord`:
+The app container contains **all CoreMail services**, managed by `supervisord`:
 
-| Dienst | Interner Port | Beschreibung |
+| Service | Internal port | Description |
 |--------|--------------|-------------|
-| api-gateway | 3000 | REST API + SSE + HTTP-Routing (Haupteingang) |
-| auth-service | 3003 | Authentifizierung (Lokal / LDAP / OIDC / MFA) |
-| storage-api | 3001 | Datenbankabstraktion (PostgreSQL + MinIO) |
-| security-filter | 3002 | SPF/DKIM/DMARC/ARC + Anti-Spam-Pipeline |
-| smtp-server | 25 / 465 / 587 | SMTP Inbound + Outbound |
+| api-gateway | 3000 | REST API + SSE + HTTP routing (main entry point) |
+| auth-service | 3003 | Authentication (local / LDAP / OIDC / MFA) |
+| storage-api | 3001 | Database abstraction (PostgreSQL + MinIO) |
+| security-filter | 3002 | SPF/DKIM/DMARC/ARC + anti-spam pipeline |
+| smtp-server | 25 / 465 / 587 | SMTP inbound + outbound |
 | imap-server | 143 / 993 | IMAP4rev1 + IDLE + CONDSTORE |
 | pop3-server | 110 / 995 | POP3 |
-| ews-server | 8080 | MAPI over HTTP + EWS (optional, Default aus — BCP → Server) |
+| ews-server | 8080 | MAPI over HTTP + EWS (optional, off by default — BCP → Server) |
 | autodiscover | 8081 | Autodiscover v1 + v2 |
 | caldav-server | 8082 | CalDAV + CardDAV |
-| backup-service | 3004 | MBOX/EML-Export + S3-Backup |
+| backup-service | 3004 | MBOX/EML export + S3 backup |
 | activesync | 3005 | Exchange ActiveSync EAS 14.1 |
 
-Der `api-gateway` übernimmt das gesamte HTTP-Routing ohne nginx:
-- `/` und `/bcp/` → statische Frontend-Bundles (MWA/BCP aus `/app/www/`)
+The `api-gateway` handles all HTTP routing without nginx:
+- `/` and `/bcp/` → static frontend bundles (MWA/BCP from `/app/www/`)
 - `/auth/` → auth-service (localhost:3003)
-- `/EWS/`, `/mapi/`, `/OAB/` → ews-server (localhost:8080) — 404, solange „MAPI over HTTP + EWS“ aus ist
+- `/EWS/`, `/mapi/`, `/OAB/` → ews-server (localhost:8080) — 404 while "MAPI over HTTP + EWS" is off
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
 - `/dav/` → caldav-server (localhost:8082)
-- `/api/v1/`, `/PowerShell/` → direkte Handler
+- `/api/v1/`, `/PowerShell/` → direct handlers
 
-**TLS** wird entweder vom integrierten HTTPS-Proxy (Port 443, Standard) oder einem externen Reverse Proxy übernommen.
-
----
-
-## Voraussetzungen
-
-- Docker Engine ≥ 24.0 mit Docker Compose v2
-- Freie Ports: `443` (oder `3000` bei externem Proxy), `25`, `465`, `587`, `143`, `993`, `110`, `995`
-- Min. 2 GB RAM (empfohlen: 4 GB für komfortablen Betrieb mit allen Diensten)
-- Min. 10 GB freier Speicher + Speicherplatz für E-Mails/Anhänge
-- Unter Linux: Port 25 muss beim Hosting-Provider freigeschaltet sein
+**TLS** is handled either by the integrated HTTPS proxy (port 443, default) or by an external reverse proxy.
 
 ---
 
-## Schnellstart
+## Prerequisites
 
-### 1. Repository klonen
+- Docker Engine ≥ 24.0 with Docker Compose v2
+- Free ports: `443` (or `3000` with an external proxy), `25`, `465`, `587`, `143`, `993`, `110`, `995`
+- Min. 2 GB RAM (recommended: 4 GB for comfortable operation with all services)
+- Min. 10 GB free disk space + storage for emails/attachments
+- On Linux: port 25 must be unblocked by the hosting provider
+
+---
+
+## Quick start
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/MAGPEEK/CoreMail.git
 cd CoreMail
 ```
 
-### 2. Konfiguration
+### 2. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Pflichtfelder in `.env` setzen:
+Set the required fields in `.env`:
 
 ```bash
-# Starke Passwörter generieren
+# Generate strong passwords
 POSTGRES_PASSWORD=$(openssl rand -hex 20)
 REDIS_PASSWORD=$(openssl rand -hex 20)
 MINIO_ROOT_PASSWORD=$(openssl rand -hex 20)
 
-# Sicherheitsschlüssel generieren
+# Generate security keys
 JWT_SECRET=$(openssl rand -hex 32)
 PEPPER=$(openssl rand -hex 32)
 ```
 
-### 3. TLS konfigurieren
+### 3. Configure TLS
 
-**Option A — Integrierter HTTPS-Proxy (empfohlen für VPS/Dedicated):**
+**Option A — Integrated HTTPS proxy (recommended for VPS/dedicated servers):**
 
-CoreMail terminiert TLS selbst auf Port 443. Port `"443:443"` ist in der `docker-compose.yml` bereits gemappt. Nach dem Start Zertifikat im BCP unter **Server → SSL/TLS** hochladen und aktivieren. Hot-Reload ohne Neustart.
+CoreMail terminates TLS itself on port 443. Port `"443:443"` is already mapped in `docker-compose.yml`. After startup, upload and activate a certificate in the BCP under **Server → SSL/TLS**. Hot reload without restart.
 
 ```env
-# .env — Standard, kann weggelassen werden
+# .env — default, can be omitted
 HTTPS_PROXY_ENABLED=true
 ```
 
-**Option B — Externer Reverse Proxy (Traefik, Caddy, nginx, DSM):**
+**Option B — External reverse proxy (Traefik, Caddy, nginx, DSM):**
 
 ```env
 # .env
 HTTPS_PROXY_ENABLED=false
 ```
 
-In `infra/docker/docker-compose.yml` die Zeile `"443:443"` auskommentieren. CoreMail ist dann nur auf Port 3000 (HTTP) erreichbar — TLS übernimmt der Reverse Proxy.
+Comment out the line `"443:443"` in `infra/docker/docker-compose.yml`. CoreMail is then reachable only on port 3000 (HTTP) — the reverse proxy handles TLS.
 
-**Selbstsigniertes Zertifikat für Entwicklung:**
+**Self-signed certificate for development:**
 
 ```bash
 bash scripts/gen-dev-certs.sh
 ```
 
-### 4. Stack starten
+### 4. Start the stack
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
-Images werden automatisch von Docker Hub geladen. Nach ca. 60–90 Sekunden sind alle Dienste bereit.
+Images are pulled automatically from Docker Hub. All services are ready after about 60–90 seconds.
 
 ```bash
-# Status prüfen
+# Check status
 docker compose -f infra/docker/docker-compose.yml ps
 
-# Logs verfolgen
+# Follow logs
 docker compose -f infra/docker/docker-compose.yml logs -f
 ```
 
-### 5. Ersten Admin-Account anlegen
+### 5. Create the first admin account
 
-Beim ersten Aufruf von `https://<hostname>/bcp/` erscheint der Setup-Assistent.
+The setup wizard appears on the first visit to `https://<hostname>/bcp/`.
 
-Alternativ per API:
+Alternatively via API:
 
 ```bash
 curl -k -X POST https://<hostname>/api/v1/admin/setup \
   -H 'Content-Type: application/json' \
   -d '{
-    "email": "admin@deine-domain.de",
-    "password": "SicheresPasswort123!",
+    "email": "admin@your-domain.com",
+    "password": "SecurePassword123!",
     "displayName": "Administrator"
   }'
 ```
 
 ---
 
-## Zugriff
+## Access
 
-| Oberfläche | URL |
+| Interface | URL |
 |-----------|-----|
-| MWA Webmail | `https://<hostname>/` |
-| BCP Admin-Panel | `https://<hostname>/bcp/` |
-| MinIO Web-Konsole | `http://localhost:9001` (nur lokal!) |
+| MWA webmail | `https://<hostname>/` |
+| BCP admin panel | `https://<hostname>/bcp/` |
+| MinIO web console | `http://localhost:9001` (local only!) |
 | JMAP | `https://<hostname>/.well-known/jmap` |
-| EWS (nur mit aktiviertem MAPI over HTTP, Outlook 2013–2021) | `https://<hostname>/EWS/Exchange.asmx` |
-| ActiveSync (Mobil) | `https://<hostname>/Microsoft-Server-ActiveSync` |
+| EWS (only with MAPI over HTTP enabled, Outlook 2013–2021) | `https://<hostname>/EWS/Exchange.asmx` |
+| ActiveSync (mobile) | `https://<hostname>/Microsoft-Server-ActiveSync` |
 | Autodiscover | `https://<hostname>/Autodiscover/Autodiscover.xml` |
 
-**Mail-Ports:**
+**Mail ports:**
 
-| Port | Protokoll | Verschlüsselung |
+| Port | Protocol | Encryption |
 |------|-----------|----------------|
-| 25 | SMTP (eingehend, MTA-zu-MTA) | STARTTLS |
-| 465 | SMTPS Submission | Implizites TLS |
-| 587 | SMTP Submission | STARTTLS |
+| 25 | SMTP (inbound, MTA-to-MTA) | STARTTLS |
+| 465 | SMTPS submission | Implicit TLS |
+| 587 | SMTP submission | STARTTLS |
 | 143 | IMAP | STARTTLS |
-| 993 | IMAPS | Implizites TLS |
+| 993 | IMAPS | Implicit TLS |
 | 110 | POP3 | STARTTLS |
-| 995 | POP3S | Implizites TLS |
+| 995 | POP3S | Implicit TLS |
 
 ---
 
-## Konfigurationsreferenz (.env)
+## Configuration reference (.env)
 
-Die vollständige `.env`-Datei mit allen verfügbaren Variablen:
+The complete `.env` file with all available variables:
 
 ```bash
-# ─── Sicherheit ──────────────────────────────────────────────────────────────
-# JWT-Signaturschlüssel — mind. 32 Zeichen
-# Generieren: openssl rand -hex 32
+# ─── Security ────────────────────────────────────────────────────────────────
+# JWT signing key — at least 32 characters
+# Generate: openssl rand -hex 32
 JWT_SECRET=CHANGE-ME-openssl-rand-hex-32
 
-# bcrypt-Pepper für Passwort-Hashes — mind. 32 Zeichen
-# ACHTUNG: Änderung invalidiert alle bestehenden Passwörter!
+# bcrypt pepper for password hashes — at least 32 characters
+# WARNING: changing it invalidates all existing passwords!
 PEPPER=CHANGE-ME-openssl-rand-hex-32
 
-# ─── Datenbank ───────────────────────────────────────────────────────────────
+# ─── Database ────────────────────────────────────────────────────────────────
 POSTGRES_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 
 # ─── Redis ───────────────────────────────────────────────────────────────────
 REDIS_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 
-# ─── MinIO (S3-kompatibler Objektspeicher) ────────────────────────────────────
+# ─── MinIO (S3-compatible object storage) ─────────────────────────────────────
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 
-# ─── Betrieb ─────────────────────────────────────────────────────────────────
+# ─── Operation ───────────────────────────────────────────────────────────────
 NODE_ENV=production
 LOG_LEVEL=info                  # error | warn | info | debug
 
 # ─── Backup ──────────────────────────────────────────────────────────────────
-BACKUP_SCHEDULE=0 2 * * *       # täglich 02:00 UTC
+BACKUP_SCHEDULE=0 2 * * *       # daily at 02:00 UTC
 BACKUP_RETENTION_DAYS=30
-RETENTION_SCHEDULE=0 3 * * *    # Managed Folder Assistant, täglich 03:00 UTC
+RETENTION_SCHEDULE=0 3 * * *    # Managed Folder Assistant, daily at 03:00 UTC
 
 # ─── VAPID Web Push — optional ───────────────────────────────────────────────
-# Schlüssel generieren: npx web-push generate-vapid-keys
+# Generate keys: npx web-push generate-vapid-keys
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 VAPID_SUBJECT=mailto:admin@example.com
 
-# ─── SMTP-Gateway-Modus — optional ───────────────────────────────────────────
-# Relay zu einem vorgelagerten MTA (Exchange on-prem, Postfix, Office 365 …)
+# ─── SMTP gateway mode — optional ────────────────────────────────────────────
+# Relay to an upstream MTA (Exchange on-prem, Postfix, Office 365 …)
 GATEWAY_MODE=false
 # GATEWAY_UPSTREAM_HOST=smtp.intern.example.com
 # GATEWAY_UPSTREAM_PORT=25
@@ -237,129 +237,129 @@ GATEWAY_MODE=false
 # GATEWAY_DOMAINS=example.com,corp.internal
 GATEWAY_FILTER=true
 
-# ─── GeoIP / Country-Filtering — optional ────────────────────────────────────
-# Kostenloses MaxMind-Konto: https://www.maxmind.com/en/geolite2/signup
+# ─── GeoIP / country filtering — optional ────────────────────────────────────
+# Free MaxMind account: https://www.maxmind.com/en/geolite2/signup
 MAXMIND_ACCOUNT_ID=
 MAXMIND_LICENSE_KEY=
 
 # ─── S/MIME — optional ───────────────────────────────────────────────────────
 # SMIME_P12_PASSWORD=
 
-# ─── Integrierter HTTPS-Proxy — optional ─────────────────────────────────────
-# true  (Standard) — CoreMail terminiert TLS auf Port 443
-# false — Externen Reverse Proxy nutzen; Port 443:443 in docker-compose auskommentieren
+# ─── Integrated HTTPS proxy — optional ───────────────────────────────────────
+# true  (default) — CoreMail terminates TLS on port 443
+# false — use an external reverse proxy; comment out port 443:443 in docker-compose
 # HTTPS_PROXY_ENABLED=false
 # HTTPS_PORT=443
 
 # ─── Hostname — optional ─────────────────────────────────────────────────────
-# Migrations-Hinweis: wird einmalig in die Datenbank übernommen; danach
-# wird der Hostname über BCP → Server-Einstellungen verwaltet.
+# Migration note: imported into the database once; afterwards the
+# hostname is managed via BCP → Server settings.
 # MAIL_HOSTNAME=mail.example.com
 ```
 
-**Wichtige Variablen im Überblick:**
+**Key variables at a glance:**
 
-| Variable | Beschreibung | Pflicht |
+| Variable | Description | Required |
 |----------|-------------|---------|
-| `JWT_SECRET` | JWT-Signierungsschlüssel (min. 32 Zeichen) | Ja |
-| `PEPPER` | bcrypt-Pepper für Passwort-Hashes (min. 32 Zeichen) | Ja |
-| `POSTGRES_PASSWORD` | PostgreSQL-Datenbankpasswort | Ja |
-| `REDIS_PASSWORD` | Redis-Authentifizierungspasswort | Ja |
-| `MINIO_ROOT_PASSWORD` | MinIO-Administratorpasswort (min. 8 Zeichen) | Ja |
-| `LOG_LEVEL` | `error` / `warn` / `info` / `debug` | Nein (`info`) |
-| `HTTPS_PROXY_ENABLED` | Integrierter TLS-Proxy aktivieren | Nein (`true`) |
-| `GATEWAY_MODE` | SMTP-Gateway-/Relay-Modus | Nein (`false`) |
+| `JWT_SECRET` | JWT signing key (min. 32 characters) | Yes |
+| `PEPPER` | bcrypt pepper for password hashes (min. 32 characters) | Yes |
+| `POSTGRES_PASSWORD` | PostgreSQL database password | Yes |
+| `REDIS_PASSWORD` | Redis authentication password | Yes |
+| `MINIO_ROOT_PASSWORD` | MinIO administrator password (min. 8 characters) | Yes |
+| `LOG_LEVEL` | `error` / `warn` / `info` / `debug` | No (`info`) |
+| `HTTPS_PROXY_ENABLED` | Enable the integrated TLS proxy | No (`true`) |
+| `GATEWAY_MODE` | SMTP gateway/relay mode | No (`false`) |
 
 ---
 
-## Datenverwaltung
+## Data management
 
-### Docker Volumes
+### Docker volumes
 
-| Volume | Inhalt | Container |
+| Volume | Contents | Container |
 |--------|--------|----------|
-| `pgdata` | PostgreSQL-Datenbankdateien | postgres |
-| `redisdata` | Redis-AOF-Persistenz | redis |
-| `miniodata` | E-Mail-Anhänge, Quarantäne, Backups | minio |
-| `rspamd-data` | Rspamd-Daten, Bayes-Datenbank | rspamd |
+| `pgdata` | PostgreSQL database files | postgres |
+| `redisdata` | Redis AOF persistence | redis |
+| `miniodata` | Email attachments, quarantine, backups | minio |
+| `rspamd-data` | Rspamd data, Bayes database | rspamd |
 
-### Datenbank-Backup (manuell)
+### Database backup (manual)
 
 ```bash
-# PostgreSQL-Dump erstellen
+# Create a PostgreSQL dump
 docker exec coremail-postgres pg_dump -U coremail coremail | gzip \
   > coremail-db-$(date +%Y%m%d-%H%M).sql.gz
 
 echo "Backup: coremail-db-$(date +%Y%m%d-%H%M).sql.gz"
 ```
 
-### Datenbank-Restore
+### Database restore
 
 ```bash
-# Stack stoppen
+# Stop the stack
 docker compose -f infra/docker/docker-compose.yml stop
 
-# Backup einspielen
+# Restore the backup
 gunzip -c coremail-db-20260516-0200.sql.gz \
   | docker exec -i coremail-postgres psql -U coremail -d coremail
 
-# Stack wieder starten
+# Start the stack again
 docker compose -f infra/docker/docker-compose.yml start
 ```
 
-### Volume-Backup (vollständig)
+### Volume backup (complete)
 
 ```bash
-# Container stoppen
+# Stop the containers
 docker compose -f infra/docker/docker-compose.yml stop
 
-# Volumes sichern
+# Back up the volumes
 docker run --rm -v pgdata:/data -v "$(pwd)":/backup alpine \
   tar czf /backup/pgdata-$(date +%Y%m%d).tar.gz /data
 
 docker run --rm -v miniodata:/data -v "$(pwd)":/backup alpine \
   tar czf /backup/miniodata-$(date +%Y%m%d).tar.gz /data
 
-# Container wieder starten
+# Start the containers again
 docker compose -f infra/docker/docker-compose.yml start
 ```
 
-### Automatisches Backup (via CoreMail Backup-Service)
+### Automatic backup (via the CoreMail backup service)
 
-- Konfigurierbar über **BCP → Server → Backup**
-- Speichert in MinIO (lokal) oder einem externen S3-Bucket
-- Point-in-Time Recovery mit konfigurierbarer Retention (`BACKUP_RETENTION_DAYS`)
-- Manuell auslösen: `curl -X POST http://localhost:3000/api/v1/admin/backup/trigger -H "Authorization: Bearer $TOKEN"`
+- Configurable via **BCP → Server → Backup**
+- Stores to MinIO (local) or an external S3 bucket
+- Point-in-time recovery with configurable retention (`BACKUP_RETENTION_DAYS`)
+- Trigger manually: `curl -X POST http://localhost:3000/api/v1/admin/backup/trigger -H "Authorization: Bearer $TOKEN"`
 
 ---
 
 ## Updates
 
 ```bash
-# 1. Neue Images laden
+# 1. Pull new images
 docker compose -f infra/docker/docker-compose.yml pull
 
-# 2. Stack neu starten (Downtime < 30 Sekunden, Prisma-Migration läuft automatisch)
+# 2. Restart the stack (downtime < 30 seconds, Prisma migration runs automatically)
 docker compose -f infra/docker/docker-compose.yml up -d
 
-# 3. Status prüfen
+# 3. Check status
 docker compose -f infra/docker/docker-compose.yml ps
 curl -s http://localhost:3000/healthz | jq
 docker images | grep magpeek
 ```
 
-**Bestimmte Version einsetzen:**
+**Deploy a specific version:**
 
-In `infra/docker/docker-compose.yml` die Image-Zeile anpassen:
+Adjust the image line in `infra/docker/docker-compose.yml`:
 ```yaml
 image: magpeek/coremail-app:3.17.8
 ```
-Dann `docker compose up -d` ausführen.
+Then run `docker compose up -d`.
 
-**Rollback auf vorherige Version:**
+**Roll back to the previous version:**
 
 ```bash
-# Image-Tag in docker-compose.yml auf alte Version setzen und neu starten
+# Set the image tag in docker-compose.yml to the old version and restart
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
@@ -367,101 +367,101 @@ docker compose -f infra/docker/docker-compose.yml up -d
 
 ## Synology NAS
 
-Für Synology NAS und andere Heimserver existiert eine eigene Compose-Datei (`docker-compose.synology.yml`), die Port-Konflikte mit dem DSM-Webinterface (Port 80/443) vermeidet.
+For Synology NAS and other home servers there is a dedicated Compose file (`docker-compose.synology.yml`) that avoids port conflicts with the DSM web interface (ports 80/443).
 
-### Voraussetzungen (Synology)
+### Prerequisites (Synology)
 
-- Synology NAS mit DSM 7.x und Docker-Paket (oder Container Manager)
-- SSH-Zugang aktiviert
+- Synology NAS with DSM 7.x and the Docker package (or Container Manager)
+- SSH access enabled
 
-### Einrichtung
+### Setup
 
 ```bash
-# Per SSH auf der NAS
+# Via SSH on the NAS
 ssh admin@<NAS-IP>
 
-# Repository klonen (z. B. nach /volume1/docker/coremail)
+# Clone the repository (e.g. to /volume1/docker/coremail)
 git clone https://github.com/MAGPEEK/CoreMail.git /volume1/docker/coremail
 cd /volume1/docker/coremail
 
-# Konfiguration
+# Configuration
 cp .env.example .env
-# .env anpassen (Passwörter, ggf. HTTPS_PROXY_ENABLED=false)
+# Adjust .env (passwords, HTTPS_PROXY_ENABLED=false if needed)
 
-# Synology-Stack starten
+# Start the Synology stack
 docker compose -f infra/docker/docker-compose.synology.yml up -d
 ```
 
 ### Ports (Synology)
 
-| Port | Dienst |
+| Port | Service |
 |------|--------|
-| 8080 | HTTP (CoreMail API + Webinterface) |
+| 8080 | HTTP (CoreMail API + web interface) |
 | 25 | SMTP |
-| 465 / 587 | SMTPS / Submission |
+| 465 / 587 | SMTPS / submission |
 | 143 / 993 | IMAP / IMAPS |
 | 110 / 995 | POP3 / POP3S |
-| 9001 | MinIO Web-Konsole |
+| 9001 | MinIO web console |
 
-> Port 80 und 443 werden nicht gemappt, da diese vom DSM belegt sind.
+> Ports 80 and 443 are not mapped because they are used by DSM.
 
 ### TLS via DSM Application Portal
 
-1. **Synology DSM → Systemsteuerung → Application Portal → Reverse-Proxy** öffnen
-2. Neue Regel hinzufügen:
-   - Protokoll: HTTPS (443)
-   - Ziel: `http://localhost:8080`
-3. Im selben Dialog ein Let's Encrypt-Zertifikat für den Hostnamen ausstellen lassen
-4. CoreMail ist dann unter `https://<NAS-FQDN>/` erreichbar
+1. Open **Synology DSM → Control Panel → Application Portal → Reverse Proxy**
+2. Add a new rule:
+   - Protocol: HTTPS (443)
+   - Destination: `http://localhost:8080`
+3. In the same dialog, issue a Let's Encrypt certificate for the hostname
+4. CoreMail is then reachable at `https://<NAS-FQDN>/`
 
-### Zugriff (Synology)
+### Access (Synology)
 
 ```
-MWA Webmail:   https://<NAS-FQDN>/        (über DSM Reverse Proxy)
-BCP Admin:     https://<NAS-FQDN>/bcp/    (über DSM Reverse Proxy)
-MinIO Konsole: http://<NAS-IP>:9001       (nur im lokalen Netz)
+MWA webmail:   https://<NAS-FQDN>/        (via DSM reverse proxy)
+BCP admin:     https://<NAS-FQDN>/bcp/    (via DSM reverse proxy)
+MinIO console: http://<NAS-IP>:9001       (local network only)
 ```
 
 ---
 
-## Fehlerbehebung
+## Troubleshooting
 
-### Logs einsehen
+### Viewing logs
 
 ```bash
-# Alle Container live
+# All containers live
 docker compose -f infra/docker/docker-compose.yml logs -f
 
-# Nur coremail-Container
+# coremail container only
 docker logs -f coremail
 
-# Letzte 100 Zeilen
+# Last 100 lines
 docker logs --tail 100 coremail
 
-# Nur Fehler
+# Errors only
 docker logs coremail 2>&1 | grep -i "error\|fatal\|ERR"
 ```
 
-### Einzelne Dienste debuggen (supervisord)
+### Debugging individual services (supervisord)
 
 ```bash
-# Status aller Prozesse im Container
+# Status of all processes in the container
 docker exec coremail supervisorctl status
 
-# Logs eines bestimmten Dienstes live
+# Live logs of a specific service
 docker exec coremail supervisorctl tail -f smtp-server
 docker exec coremail supervisorctl tail -f api-gateway
 
-# Dienst neu starten
+# Restart a service
 docker exec coremail supervisorctl restart api-gateway
 docker exec coremail supervisorctl restart smtp-server
 docker exec coremail supervisorctl restart imap-server
 
-# Alle Dienste neu starten (Container bleibt laufen)
+# Restart all services (container keeps running)
 docker exec coremail supervisorctl restart all
 ```
 
-### Health-Checks
+### Health checks
 
 ```bash
 # CoreMail API
@@ -473,44 +473,44 @@ docker exec coremail-postgres pg_isready -U coremail -d coremail
 # Redis
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" ping
 
-# Ports im Container prüfen
+# Check ports inside the container
 docker exec coremail ss -tlnp
 ```
 
-### Häufige Probleme
+### Common problems
 
-| Problem | Ursache | Lösung |
+| Problem | Cause | Solution |
 |---------|---------|--------|
-| `coremail` startet nicht sofort | Abhängige Container noch nicht bereit | `depends_on: service_healthy` verzögert den Start — Warten, bis postgres/minio healthy |
-| Port 25 belegt | Lokaler MTA (Postfix/Sendmail läuft auf dem Host) | `systemctl stop postfix && systemctl disable postfix` |
-| Port 443 belegt | Anderer Dienst nutzt Port 443 | `HTTPS_PROXY_ENABLED=false` setzen + externen Proxy nutzen |
-| Langsamer erster Start | Prisma-Migrationen + freshclam-Download (ClamAV) | Normal — nach 60–120 Sekunden bereit |
-| BCP nicht erreichbar | Frontend-Bundle noch nicht gebaut | Container-Logs prüfen: `docker logs coremail` |
-| `supervisorctl status` zeigt FATAL | Prozess abgestürzt | Logs lesen: `docker exec coremail supervisorctl tail smtp-server` |
-| SMTP: „Connection refused" auf Port 25 | Port beim Provider geblockt | Hosting-Provider kontaktieren und Port 25 freischalten lassen |
-| Redis-Verbindungsfehler | Falsches `REDIS_PASSWORD` | `.env` prüfen, Stack neu starten |
+| `coremail` does not start immediately | Dependent containers not ready yet | `depends_on: service_healthy` delays the start — wait until postgres/minio are healthy |
+| Port 25 in use | Local MTA (Postfix/Sendmail running on the host) | `systemctl stop postfix && systemctl disable postfix` |
+| Port 443 in use | Another service uses port 443 | Set `HTTPS_PROXY_ENABLED=false` + use an external proxy |
+| Slow first start | Prisma migrations + freshclam download (ClamAV) | Normal — ready after 60–120 seconds |
+| BCP not reachable | Frontend bundle not built yet | Check container logs: `docker logs coremail` |
+| `supervisorctl status` shows FATAL | Process crashed | Read the logs: `docker exec coremail supervisorctl tail smtp-server` |
+| SMTP: "Connection refused" on port 25 | Port blocked by the provider | Contact the hosting provider and have port 25 unblocked |
+| Redis connection error | Wrong `REDIS_PASSWORD` | Check `.env`, restart the stack |
 
 ---
 
-## Produktion — Checkliste
+## Production — checklist
 
-- [ ] Starke zufällige Passwörter in `.env` gesetzt (`openssl rand -hex 32`)
-- [ ] `JWT_SECRET` und `PEPPER` auf mindestens 32 Zeichen (empfohlen: 64) gesetzt
-- [ ] TLS konfiguriert: integrierter Proxy (Zertifikat im BCP hochgeladen) oder externer Reverse Proxy
-- [ ] DNS-Einträge gesetzt: A/AAAA, MX, SPF, DKIM, DMARC — DNS-Check im BCP unter SMTP → DNS prüfen
-- [ ] Port 25 beim Hosting-Provider nicht blockiert (ggf. freischalten lassen)
-- [ ] Firewall: nur benötigte Ports freigegeben (25, 465, 587, 143, 993, 110, 995, 443)
-- [ ] MinIO-Konsole (Port 9001) nach außen gesperrt (localhost-only oder Firewall-Regel)
-- [ ] DKIM-Schlüssel im BCP generiert und DNS-Eintrag gesetzt
-- [ ] Automatisches Backup konfiguriert und Restore getestet
-- [ ] Log-Level auf `warn` oder `error` für Produktion gesetzt
-- [ ] VAPID-Schlüssel generiert (für Browser-Push-Benachrichtigungen, optional)
-- [ ] GeoIP-Filter konfiguriert (MaxMind-Account, optional)
+- [ ] Strong random passwords set in `.env` (`openssl rand -hex 32`)
+- [ ] `JWT_SECRET` and `PEPPER` set to at least 32 characters (recommended: 64)
+- [ ] TLS configured: integrated proxy (certificate uploaded in the BCP) or external reverse proxy
+- [ ] DNS records set: A/AAAA, MX, SPF, DKIM, DMARC — run the DNS check in the BCP under SMTP → DNS
+- [ ] Port 25 not blocked by the hosting provider (have it unblocked if necessary)
+- [ ] Firewall: only required ports open (25, 465, 587, 143, 993, 110, 995, 443)
+- [ ] MinIO console (port 9001) not exposed externally (localhost-only or firewall rule)
+- [ ] DKIM key generated in the BCP and DNS record set
+- [ ] Automatic backup configured and restore tested
+- [ ] Log level set to `warn` or `error` for production
+- [ ] VAPID keys generated (for browser push notifications, optional)
+- [ ] GeoIP filter configured (MaxMind account, optional)
 
 ---
 
-## Weiterführende Dokumentation
+## Further documentation
 
-- [Kubernetes-Deployment](../infra/k8s/) — Helm Chart für Cluster-Betrieb (HPA, PDB, Redis Cluster, CloudNativePG)
-- [COMMANDS.md](../COMMANDS.md) — CLI-Befehlsreferenz (Queues, Benutzer, Backup, Diagnose)
-- [CHANGELOG.md](../CHANGELOG.md) — Vollständige Versionshistorie
+- [Kubernetes deployment](../infra/k8s/) — Helm chart for cluster operation (HPA, PDB, Redis Cluster, CloudNativePG)
+- [COMMANDS.md](../COMMANDS.md) — CLI command reference (queues, users, backup, diagnostics)
+- [CHANGELOG.md](../CHANGELOG.md) — Complete version history

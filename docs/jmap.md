@@ -1,162 +1,162 @@
 # JMAP in CoreMail
 
-Seit **v5.7.1** enthält CoreMail einen JMAP-Server (`packages/jmap-server/`, Port 3006),
-der über den api-gateway unter `/jmap/*` und `/.well-known/jmap` erreichbar ist.
-JMAP (JSON Meta Application Protocol) ist der IETF-Standard für den Zugriff auf
-Postfächer über HTTPS/JSON und ersetzt IMAP + SMTP-Submission für moderne Clients.
+Since **v5.7.1**, CoreMail includes a JMAP server (`packages/jmap-server/`, port 3006),
+reachable through the api-gateway at `/jmap/*` and `/.well-known/jmap`.
+JMAP (JSON Meta Application Protocol) is the IETF standard for accessing
+mailboxes over HTTPS/JSON and replaces IMAP + SMTP submission for modern clients.
 
-## Umgesetzte RFCs
+## Implemented RFCs
 
-| RFC | Inhalt | Capability |
+| RFC | Scope | Capability |
 |-----|--------|------------|
-| [8620](https://www.rfc-editor.org/rfc/rfc8620) | Core: Session, Request/Response, `/get` `/changes` `/set` `/query`, Blobs, Push | `urn:ietf:params:jmap:core` |
+| [8620](https://www.rfc-editor.org/rfc/rfc8620) | Core: session, request/response, `/get` `/changes` `/set` `/query`, blobs, push | `urn:ietf:params:jmap:core` |
 | [8621](https://www.rfc-editor.org/rfc/rfc8621) | Mail: Mailbox, Thread, Email, SearchSnippet, Identity, EmailSubmission, VacationResponse | `urn:ietf:params:jmap:mail`, `…:submission`, `…:vacationresponse` |
 | [8887](https://www.rfc-editor.org/rfc/rfc8887) | JMAP over WebSocket | `urn:ietf:params:jmap:websocket` |
-| [9404](https://www.rfc-editor.org/rfc/rfc9404) | Blob-Management (`Blob/upload`, `Blob/get`, `Blob/lookup`) | `urn:ietf:params:jmap:blob` |
+| [9404](https://www.rfc-editor.org/rfc/rfc9404) | Blob management (`Blob/upload`, `Blob/get`, `Blob/lookup`) | `urn:ietf:params:jmap:blob` |
 | [9425](https://www.rfc-editor.org/rfc/rfc9425) | Quotas | `urn:ietf:params:jmap:quota` |
 | [9670](https://www.rfc-editor.org/rfc/rfc9670) | Sharing: Principal, ShareNotification | `urn:ietf:params:jmap:principals`, `…:principals:owner` |
-| [9749](https://www.rfc-editor.org/rfc/rfc9749) | VAPID für Web Push | `urn:ietf:params:jmap:webpush-vapid` |
+| [9749](https://www.rfc-editor.org/rfc/rfc9749) | VAPID for Web Push | `urn:ietf:params:jmap:webpush-vapid` |
 
-## Endpunkte
+## Endpoints
 
-| Methode/Pfad | Zweck |
+| Method/path | Purpose |
 |--------------|-------|
 | `GET /.well-known/jmap` | Discovery, 301 → `/jmap/session` |
-| `GET /jmap/session` | Session-Resource (Capabilities, Accounts, URLs, `state`) |
-| `POST /jmap/api` | Method-Calls, `Content-Type: application/json`, max. 10 MB, 64 Calls |
-| `POST /jmap/upload/{accountId}/` | Blob-Upload (max. 50 MB) → `{ accountId, blobId, type, size }` |
-| `GET /jmap/download/{accountId}/{blobId}/{name}?accept=` | Blob-Download |
+| `GET /jmap/session` | Session resource (capabilities, accounts, URLs, `state`) |
+| `POST /jmap/api` | Method calls, `Content-Type: application/json`, max. 10 MB, 64 calls |
+| `POST /jmap/upload/{accountId}/` | Blob upload (max. 50 MB) → `{ accountId, blobId, type, size }` |
+| `GET /jmap/download/{accountId}/{blobId}/{name}?accept=` | Blob download |
 | `GET /jmap/eventsource?types=*&closeafter=no&ping=30` | Push (Server-Sent Events) |
-| `GET /jmap/ws` (Upgrade) | JMAP over WebSocket, Subprotokoll `jmap` |
+| `GET /jmap/ws` (Upgrade) | JMAP over WebSocket, subprotocol `jmap` |
 
-Alle Pfade außer `/.well-known/jmap` verlangen Authentifizierung.
+All paths except `/.well-known/jmap` require authentication.
 
-## Architektur
+## Architecture
 
 ```
-JMAP-Client (Web-App, Thunderbird, Ltt.rs, curl)
+JMAP client (web app, Thunderbird, Ltt.rs, curl)
    │  HTTPS: POST /jmap/api · GET /jmap/eventsource · WSS /jmap/ws
    ▼
-api-gateway (Port 3000, optional TLS-Proxy 443)
-   │  Proxy /jmap/* und /.well-known/jmap, WebSocket-Upgrade durchgereicht
+api-gateway (port 3000, optional TLS proxy 443)
+   │  Proxies /jmap/* and /.well-known/jmap, WebSocket upgrade passed through
    ▼
-jmap-server (Port 3006)
-   ├─ auth.ts          Basic (App-Passwort) / Bearer (Session-JWT), 60s-Cache
-   ├─ accounts.ts      eigenes Postfach · shared-<id> · delegierte Postfächer
-   ├─ dispatcher.ts    Request → Method-Calls, Result-References, Fehler
+jmap-server (port 3006)
+   ├─ auth.ts          Basic (app password) / Bearer (session JWT), 60s cache
+   ├─ accounts.ts      own mailbox · shared-<id> · delegated mailboxes
+   ├─ dispatcher.ts    request → method calls, result references, errors
    ├─ methods/         Mailbox · Email · Thread · Identity · EmailSubmission ·
    │                   SearchSnippet · VacationResponse · Quota · Blob ·
    │                   Principal/ShareNotification · PushSubscription
-   ├─ mail/            Message ↔ Email-Mapper, RFC-5322-Rohdaten, Keywords, Threads
-   └─ push/            Redis-Bus → EventSource · WebSocket · Web Push (VAPID)
+   ├─ mail/            Message ↔ Email mapper, RFC 5322 raw data, keywords, threads
+   └─ push/            Redis bus → EventSource · WebSocket · Web Push (VAPID)
    │
    ├─ PostgreSQL (Prisma)   Folder / Message / Attachment / User / SharedMailbox …
-   ├─ MinIO                 Rohnachrichten, Anhänge, Upload-Blobs (jmap-upload/, 7 Tage)
-   ├─ Redis                 mail:new / mail:update, settings:reload, EmailSubmission-Objekte
-   └─ BullMQ smtp-outbound  Versand (gleicher Weg wie SMTP-Submission und Webmail)
+   ├─ MinIO                 raw messages, attachments, upload blobs (jmap-upload/, 7 days)
+   ├─ Redis                 mail:new / mail:update, settings:reload, EmailSubmission objects
+   └─ BullMQ smtp-outbound  sending (same path as SMTP submission and webmail)
 ```
 
-JMAP ist eine zusätzliche Sicht auf dieselben Daten wie IMAP und das Webmail — es gibt
-keine zweite Mail-Datenbank. Eine Änderung über JMAP (Flag, Verschieben, Entwurf) ist
-sofort in IMAP-Clients und im MWA sichtbar und umgekehrt.
+JMAP is an additional view of the same data as IMAP and the webmail — there is
+no second mail database. A change made via JMAP (flag, move, draft) is
+immediately visible in IMAP clients and in the MWA, and vice versa.
 
-## Authentifizierung
+## Authentication
 
-- **Basic**: `E-Mail:Passwort`. Bei aktivem MFA ist nur ein **App-Passwort** gültig
-  (MWA → Einstellungen → Sicherheit → App-Passwörter). LDAP-/OIDC-Konten ohne lokalen
-  Hash werden über den auth-service geprüft.
-- **Bearer**: Session-JWT aus `POST /auth/login` (für MWA/Web-Apps). Für EventSource
-  und WebSocket, die keine Header setzen können, auch als `?access_token=…`.
+- **Basic**: `email:password`. With MFA enabled, only an **app password** is valid
+  (MWA → Settings → Security → App passwords). LDAP/OIDC accounts without a local
+  hash are verified through the auth-service.
+- **Bearer**: session JWT from `POST /auth/login` (for MWA/web apps). For EventSource
+  and WebSocket, which cannot set headers, also as `?access_token=…`.
 
 ## Accounts
 
-| accountId | Postfach | Rechte |
+| accountId | Mailbox | Rights |
 |-----------|----------|--------|
-| `<userId>` | eigenes Postfach | voll |
-| `shared-<id>` | Shared Mailbox | `FULL_ACCESS` → schreibend, `READ_ONLY` → `isReadOnly` |
-| `<ownerUserId>` | delegiertes Postfach (MailboxDelegate) | nach Delegationsrecht |
+| `<userId>` | own mailbox | full |
+| `shared-<id>` | Shared Mailbox | `FULL_ACCESS` → writable, `READ_ONLY` → `isReadOnly` |
+| `<ownerUserId>` | delegated mailbox (MailboxDelegate) | according to the delegation right |
 
-`primaryAccounts` zeigt für Mail/Submission/Quota/Blob/Principals auf das eigene Postfach.
+`primaryAccounts` points to the own mailbox for mail/submission/quota/blob/principals.
 
-## Datenmodell-Abbildung
+## Data model mapping
 
 | JMAP | CoreMail |
 |------|----------|
-| Mailbox | `Folder`; `role` aus dem Ordnernamen (`INBOX`→inbox, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`) |
-| Email | `Message` (+ `Attachment`); `blobId = m-<id>`; eine E-Mail liegt in **genau einem** Ordner |
-| keywords | IMAP-Flags: `$seen`↔`\Seen`, `$flagged`↔`\Flagged`, `$answered`, `$draft`, `$forwarded` |
-| Thread | `Message.threadId` (lazy: `inReplyTo` → bekannte Nachricht → deren Thread) |
-| Identity | Primäradresse `u-<userId>`, Aliase `al-<id>`, Shared Mailbox mit SEND_AS `sm-<id>`; Signatur aus den MWA-Einstellungen |
-| EmailSubmission | Redis (7 Tage); Versand über die BullMQ-Queue `smtp-outbound`; `sendAt` in der Zukunft → verzögert, `undoStatus: canceled` bricht ab |
-| VacationResponse | `UserSettings.oof*` (Abwesenheit) |
-| Quota | `quotaBytes` / `usedBytes` (User bzw. Shared Mailbox), Ressource `octets` |
-| Principal | aktive User (`individual`), Shared Mailboxes (`group`) |
-| PushSubscription | Tabelle `jmap_push_subscriptions`, Verifikation per `PushVerification`-POST |
+| Mailbox | `Folder`; `role` derived from the folder name (`INBOX`→inbox, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`) |
+| Email | `Message` (+ `Attachment`); `blobId = m-<id>`; an email lives in **exactly one** folder |
+| keywords | IMAP flags: `$seen`↔`\Seen`, `$flagged`↔`\Flagged`, `$answered`, `$draft`, `$forwarded` |
+| Thread | `Message.threadId` (lazy: `inReplyTo` → known message → its thread) |
+| Identity | primary address `u-<userId>`, aliases `al-<id>`, Shared Mailbox with SEND_AS `sm-<id>`; signature from the MWA settings |
+| EmailSubmission | Redis (7 days); sending via the BullMQ queue `smtp-outbound`; `sendAt` in the future → delayed, `undoStatus: canceled` cancels |
+| VacationResponse | `UserSettings.oof*` (out of office) |
+| Quota | `quotaBytes` / `usedBytes` (user or Shared Mailbox), resource `octets` |
+| Principal | active users (`individual`), Shared Mailboxes (`group`) |
+| PushSubscription | table `jmap_push_subscriptions`, verification via `PushVerification` POST |
 
-## State-Strings
+## State strings
 
-- **Email/Thread**: `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>` — erfasst sowohl
-  REST/JMAP-Änderungen (`modSeq = Date.now()`) als auch SMTP/IMAP-Zähler.
+- **Email/Thread**: `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>` — captures both
+  REST/JMAP changes (`modSeq = Date.now()`) and SMTP/IMAP counters.
 - **Mailbox**: `<count>.<maxCreatedMs>.<hash>`.
-- Gelöschte Objekte haben keine Tombstones. Nach einem Hard-Delete liefert `/changes`
-  `cannotCalculateChanges`; der Client lädt die Liste neu (RFC-konform).
-- `*/queryChanges` ist nicht implementiert (`cannotCalculateChanges`).
+- Deleted objects have no tombstones. After a hard delete, `/changes` returns
+  `cannotCalculateChanges`; the client reloads the list (RFC-compliant).
+- `*/queryChanges` is not implemented (`cannotCalculateChanges`).
 
 ## Push
 
-- **EventSource**: `event: state` mit `StateChange`-Objekt (`Email`, `Thread`, `Mailbox`),
-  `event: ping` im gewählten Intervall, `closeafter=state` beendet nach dem ersten Event.
+- **EventSource**: `event: state` with a `StateChange` object (`Email`, `Thread`, `Mailbox`),
+  `event: ping` at the chosen interval, `closeafter=state` terminates after the first event.
 - **WebSocket**: `{"@type":"Request",…}` → `{"@type":"Response",…}`; `WebSocketPushEnable`
-  aktiviert `StateChange`-Nachrichten; Fehler als `RequestError`.
-- **Web Push**: verifizierte `PushSubscription`s erhalten `StateChange` verschlüsselt
-  (RFC 8291) mit VAPID-Signatur, wenn `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` gesetzt sind.
-  Der Public Key steht in der Session unter `urn:ietf:params:jmap:webpush-vapid`.
+  enables `StateChange` messages; errors as `RequestError`.
+- **Web Push**: verified `PushSubscription`s receive `StateChange` encrypted
+  (RFC 8291) with a VAPID signature when `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are set.
+  The public key is in the session under `urn:ietf:params:jmap:webpush-vapid`.
 
-Quelle der Änderungen ist der Redis-Kanal `mail:new` / `mail:update`, den SMTP-Inbound,
-REST-API und der jmap-server selbst bedienen — MWA und JMAP-Clients bleiben so synchron.
+The source of changes is the Redis channel `mail:new` / `mail:update`, which SMTP inbound,
+the REST API and the jmap-server itself feed — this keeps MWA and JMAP clients in sync.
 
-## Einrichtung
+## Setup
 
-1. **Schalter**: BCP → Server → Karte „JMAP“ (Standard: an). Aus → `/jmap/*` liefert 404,
-   die Umschaltung greift ohne Neustart.
-2. **Hostname**: Die Session-URLs werden aus BCP → Server → Hostname/HTTPS/Port gebildet.
-3. **DNS (optional, RFC 8620 §2.2)**: `_jmap._tcp.example.de. SRV 0 1 443 mail.example.de.`
-4. **Reverse Proxy**: Für `/jmap/ws` muss der Proxy WebSocket-Upgrades durchreichen
-   (`Upgrade`/`Connection`-Header). Der integrierte TLS-Proxy tut das bereits.
-5. **Umgebungsvariablen** (gesetzt in `docker-compose.yml`): `JMAP_PORT=3006`,
-   `JMAP_SERVICE_URL=http://localhost:3006`; optional `VAPID_*`.
+1. **Switch**: BCP → Server → "JMAP" card (default: on). Off → `/jmap/*` returns 404;
+   the switch takes effect without a restart.
+2. **Hostname**: The session URLs are built from BCP → Server → hostname/HTTPS/port.
+3. **DNS (optional, RFC 8620 §2.2)**: `_jmap._tcp.example.com. SRV 0 1 443 mail.example.com.`
+4. **Reverse proxy**: For `/jmap/ws` the proxy must pass WebSocket upgrades through
+   (`Upgrade`/`Connection` headers). The integrated TLS proxy already does this.
+5. **Environment variables** (set in `docker-compose.yml`): `JMAP_PORT=3006`,
+   `JMAP_SERVICE_URL=http://localhost:3006`; optionally `VAPID_*`.
 
-## Schnelltest
+## Quick test
 
-Siehe [Beispiele mit curl](#beispiele-mit-curl).
+See [Examples with curl](#examples-with-curl).
 
-## Clients einrichten
+## Setting up clients
 
-Voraussetzungen: `https://mail.example.de/.well-known/jmap` ist von außen erreichbar
-(DNS + Zertifikat), und für Konten mit MFA liegt ein **App-Passwort** vor (MWA →
-Einstellungen → Sicherheit → App-Passwörter).
+Prerequisites: `https://mail.example.com/.well-known/jmap` is reachable from outside
+(DNS + certificate), and accounts with MFA have an **app password** (MWA →
+Settings → Security → App passwords).
 
-| Client | Einrichtung |
+| Client | Setup |
 |--------|-------------|
-| **Ltt.rs** (Android, Open Source) | Konto hinzufügen → E-Mail-Adresse + App-Passwort. Die App findet den Server über `/.well-known/jmap`. Wenn der Hostname nicht aus der Domain ableitbar ist, Session-URL `https://mail.example.de/jmap/session` manuell eintragen. |
-| **Thunderbird** | JMAP-Unterstützung ist in Thunderbird in Arbeit und nicht in allen Versionen enthalten. Prüfe in deiner Version unter *Konto hinzufügen*, ob „JMAP“ als Kontotyp angeboten wird; sonst IMAP verwenden. |
-| **Eigene Web-App** (`jmap-client`, `jmap-js`, Fastmail `jmap-client-ts`) | `sessionUrl: 'https://mail.example.de/jmap/session'`, Auth-Header `Authorization: Bearer <JWT>` aus `POST /auth/login` oder `Basic`. CORS ist für `/jmap/*` freigegeben. |
-| **Skripte / Automatisierung** | `curl` mit Basic-Auth, siehe Beispiele unten. |
+| **Ltt.rs** (Android, open source) | Add account → email address + app password. The app discovers the server via `/.well-known/jmap`. If the hostname cannot be derived from the domain, enter the session URL `https://mail.example.com/jmap/session` manually. |
+| **Thunderbird** | JMAP support in Thunderbird is in progress and not included in all versions. Check under *Add account* in your version whether "JMAP" is offered as an account type; otherwise use IMAP. |
+| **Your own web app** (`jmap-client`, `jmap-js`, Fastmail `jmap-client-ts`) | `sessionUrl: 'https://mail.example.com/jmap/session'`, auth header `Authorization: Bearer <JWT>` from `POST /auth/login` or `Basic`. CORS is enabled for `/jmap/*`. |
+| **Scripts / automation** | `curl` with Basic auth, see examples below. |
 
-Der Server annonciert in der Session, was er kann (`capabilities`) — Clients, die eine
-Erweiterung nicht kennen, ignorieren sie.
+The server announces what it supports in the session (`capabilities`) — clients that do
+not know an extension ignore it.
 
-## Beispiele mit curl
+## Examples with curl
 
-Alle Beispiele nutzen `U=user@example.de:APP-PASSWORT` und `H=https://mail.example.de`.
-`ACCOUNT` ist die `accountId` aus der Session (`primaryAccounts["urn:ietf:params:jmap:mail"]`).
+All examples use `U=user@example.com:APP-PASSWORD` and `H=https://mail.example.com`.
+`ACCOUNT` is the `accountId` from the session (`primaryAccounts["urn:ietf:params:jmap:mail"]`).
 
-**Session lesen**
+**Read the session**
 ```bash
 curl -s -u "$U" "$H/jmap/session" | jq '{username, primaryAccounts, accounts: (.accounts | keys)}'
 ```
 
-**Ordner und die 10 neuesten Mails im Posteingang**
+**Folders and the 10 newest mails in the inbox**
 ```bash
 curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
   "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
@@ -171,9 +171,9 @@ curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
        "properties": ["subject", "from", "receivedAt", "preview", "keywords"] }, "g"]
   ]}' | jq .
 ```
-(`INBOX-ID` aus dem `Mailbox/get`-Ergebnis einsetzen — der Ordner mit `"role": "inbox"`.)
+(Insert `INBOX-ID` from the `Mailbox/get` result — the folder with `"role": "inbox"`.)
 
-**Als gelesen markieren und in den Papierkorb verschieben**
+**Mark as read and move to the trash**
 ```bash
 curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
   "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
@@ -181,7 +181,7 @@ curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
     "EMAIL-ID": { "keywords/$seen": true, "mailboxIds": { "TRASH-ID": true } } } }, "s" ]]}'
 ```
 
-**Mail senden (Entwurf anlegen → einreichen → in „Gesendet“ verschieben)**
+**Send a mail (create draft → submit → move to "Sent")**
 ```bash
 curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
   "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"],
@@ -189,44 +189,44 @@ curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
     ["Identity/get", { "accountId": "ACCOUNT" }, "i"],
     ["Email/set", { "accountId": "ACCOUNT", "create": { "draft": {
         "mailboxIds": { "DRAFTS-ID": true }, "keywords": { "$draft": true, "$seen": true },
-        "from": [{ "name": "Max Muster", "email": "user@example.de" }],
-        "to":   [{ "email": "empfaenger@example.org" }],
-        "subject": "Hallo per JMAP",
+        "from": [{ "name": "John Doe", "email": "user@example.com" }],
+        "to":   [{ "email": "recipient@example.org" }],
+        "subject": "Hello via JMAP",
         "textBody": [{ "partId": "t", "type": "text/plain" }],
-        "bodyValues": { "t": { "value": "Diese Mail kam über JMAP." } } } } }, "d"],
+        "bodyValues": { "t": { "value": "This mail was sent via JMAP." } } } } }, "d"],
     ["EmailSubmission/set", { "accountId": "ACCOUNT",
         "create": { "sub": { "identityId": "u-USER-ID", "emailId": "#draft" } },
         "onSuccessUpdateEmail": { "#sub": {
           "mailboxIds/DRAFTS-ID": null, "mailboxIds/SENT-ID": true, "keywords/$draft": null } } }, "x"]
   ]}' | jq .
 ```
-Die `identityId` (`u-<userId>`, `al-<aliasId>`, `sm-<sharedId>`) liefert `Identity/get`.
-Der From-Header muss zur Identität passen (`forbiddenFrom`). Mit `"sendAt": "2026-11-01T08:00:00Z"`
-wird verzögert gesendet; `EmailSubmission/set` mit `update: { "<id>": { "undoStatus": "canceled" } }`
-bricht ab, solange `undoStatus` noch `pending` ist.
+The `identityId` (`u-<userId>`, `al-<aliasId>`, `sm-<sharedId>`) is returned by `Identity/get`.
+The From header must match the identity (`forbiddenFrom`). With `"sendAt": "2026-11-01T08:00:00Z"`
+sending is delayed; `EmailSubmission/set` with `update: { "<id>": { "undoStatus": "canceled" } }`
+cancels as long as `undoStatus` is still `pending`.
 
-**Anhang hochladen und mitsenden**
+**Upload an attachment and send it along**
 ```bash
-BLOB=$(curl -s -u "$U" -H 'Content-Type: application/pdf' --data-binary @angebot.pdf \
+BLOB=$(curl -s -u "$U" -H 'Content-Type: application/pdf' --data-binary @quote.pdf \
   "$H/jmap/upload/ACCOUNT/" | jq -r .blobId)
-# … dann im Email/set-create: "attachments": [{ "blobId": "'$BLOB'", "type": "application/pdf", "name": "angebot.pdf" }]
+# … then in the Email/set create: "attachments": [{ "blobId": "'$BLOB'", "type": "application/pdf", "name": "quote.pdf" }]
 ```
 
-**Push per EventSource**
+**Push via EventSource**
 ```bash
 curl -N -s -u "$U" "$H/jmap/eventsource?types=Email,Mailbox&closeafter=no&ping=30"
 # event: state
 # data: {"@type":"StateChange","changed":{"ACCOUNT":{"Email":"…","Thread":"…","Mailbox":"…"}}}
 ```
 
-**Push per WebSocket** (z. B. mit `websocat`)
+**Push via WebSocket** (e.g. with `websocat`)
 ```bash
-websocat --protocol jmap -H "Authorization: Basic $(printf %s "$U" | base64)" "wss://mail.example.de/jmap/ws"
+websocat --protocol jmap -H "Authorization: Basic $(printf %s "$U" | base64)" "wss://mail.example.com/jmap/ws"
 {"@type":"WebSocketPushEnable","dataTypes":["Email","Mailbox"]}
 {"@type":"Request","id":"1","using":["urn:ietf:params:jmap:core"],"methodCalls":[["Core/echo",{"hello":"jmap"},"c"]]}
 ```
 
-**Blob-Inhalt per Methode (RFC 9404) und Quota (RFC 9425)**
+**Blob contents via method (RFC 9404) and quota (RFC 9425)**
 ```bash
 curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
   "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:blob", "urn:ietf:params:jmap:quota"],
@@ -238,43 +238,43 @@ curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
 
 ## FAQ
 
-**`/jmap/session` liefert 404.** JMAP ist im BCP ausgeschaltet (Server → „JMAP“) oder der
-Reverse Proxy leitet `/jmap/*` bzw. `/.well-known/jmap` nicht an CoreMail weiter.
+**`/jmap/session` returns 404.** JMAP is switched off in the BCP (Server → "JMAP") or the
+reverse proxy does not forward `/jmap/*` or `/.well-known/jmap` to CoreMail.
 
-**401 trotz richtigem Passwort.** Für das Konto ist MFA aktiv — JMAP akzeptiert dann nur
-App-Passwörter. LDAP-/OIDC-Konten ohne lokalen Hash werden über den auth-service geprüft;
-dessen Erreichbarkeit im Log (`jmap:auth`) kontrollieren.
+**401 despite the correct password.** MFA is enabled for the account — JMAP then accepts only
+app passwords. LDAP/OIDC accounts without a local hash are verified through the auth-service;
+check its reachability in the log (`jmap:auth`).
 
-**Der Client meldet `cannotCalculateChanges`.** Gewollt: Nach einem Hard-Delete oder bei
-ungültigem `sinceState` kennt der Server kein Delta und der Client lädt die Liste neu.
-JMAP-Clients behandeln das standardmäßig.
+**The client reports `cannotCalculateChanges`.** Intended: after a hard delete or with an
+invalid `sinceState` the server knows no delta and the client reloads the list.
+JMAP clients handle this by default.
 
-**WebSocket verbindet nicht, EventSource schon.** Der vorgelagerte Proxy (Traefik, Caddy,
-nginx, DSM) muss `Upgrade`/`Connection` für `/jmap/ws` durchreichen. Der integrierte
-TLS-Proxy von CoreMail tut das bereits.
+**WebSocket does not connect, EventSource does.** The upstream proxy (Traefik, Caddy,
+nginx, DSM) must pass `Upgrade`/`Connection` through for `/jmap/ws`. CoreMail's integrated
+TLS proxy already does this.
 
-**Wo sind Shared Mailboxes?** Als eigene Accounts in der Session (`shared-<id>`), sobald
-der User `FULL_ACCESS` oder `READ_ONLY` hat. Senden als Shared Mailbox über die Identität
-`sm-<id>` (benötigt `SEND_AS` oder `FULL_ACCESS`).
+**Where are Shared Mailboxes?** As separate accounts in the session (`shared-<id>`), as soon as
+the user has `FULL_ACCESS` or `READ_ONLY`. Send as a Shared Mailbox via the identity
+`sm-<id>` (requires `SEND_AS` or `FULL_ACCESS`).
 
-**Warum sehe ich im Webmail dieselben Änderungen sofort?** JMAP schreibt in dieselben
-Tabellen und veröffentlicht `mail:update` auf Redis — dieselbe Quelle, die das MWA per SSE
-und der jmap-server für Push nutzen.
+**Why do I see the same changes immediately in the webmail?** JMAP writes to the same
+tables and publishes `mail:update` on Redis — the same source the MWA uses via SSE
+and the jmap-server uses for push.
 
-**Kann ich Kalender und Kontakte per JMAP lesen?** Noch nicht. JMAP for Calendars/Contacts
-(JSCalendar/JSContact) sind nicht enthalten; dafür bleiben CalDAV/CardDAV zuständig.
+**Can I read calendars and contacts via JMAP?** Not yet. JMAP for Calendars/Contacts
+(JSCalendar/JSContact) are not included; CalDAV/CardDAV remain responsible for that.
 
-**Unterschied zu IMAP?** Ein HTTPS-Endpunkt statt zweier Protokolle (IMAP + SMTP), JSON
-statt Textprotokoll, gebündelte Aufrufe, echter Push statt IDLE/Polling, und ein
-Zustandsmodell (`state`), mit dem Clients effizient synchronisieren.
+**Difference from IMAP?** One HTTPS endpoint instead of two protocols (IMAP + SMTP), JSON
+instead of a text protocol, batched calls, real push instead of IDLE/polling, and a
+state model (`state`) that lets clients synchronize efficiently.
 
-## Grenzen (Stand v5.7.1)
+## Limitations (as of v5.7.1)
 
-- `Email/query`: Filter `header`, `allInThreadHaveKeyword` u. ä. → `unsupportedFilter`;
-  Sortierung nach `to` → `unsupportedSort`. Maximal 10 000 Treffer pro Query.
-- `bodyStructure` wird aus den gespeicherten Feldern synthetisiert
-  (text/plain, text/html, Anhänge) — kein 1:1-Abbild verschachtelter MIME-Bäume.
-- `Mailbox` erlaubt keine Rollenänderung; Systemordner sind nicht löschbar.
-- `ShareNotification` wird noch nicht erzeugt (leere Listen).
-- Kalender/Kontakte per JMAP (JSCalendar/JSContact) sind nicht enthalten — dafür
-  bleiben CalDAV/CardDAV zuständig.
+- `Email/query`: filters `header`, `allInThreadHaveKeyword` and similar → `unsupportedFilter`;
+  sorting by `to` → `unsupportedSort`. Maximum 10,000 hits per query.
+- `bodyStructure` is synthesized from the stored fields
+  (text/plain, text/html, attachments) — not a 1:1 image of nested MIME trees.
+- `Mailbox` does not allow role changes; system folders cannot be deleted.
+- `ShareNotification` is not generated yet (empty lists).
+- Calendars/contacts via JMAP (JSCalendar/JSContact) are not included — CalDAV/CardDAV
+  remain responsible for that.
