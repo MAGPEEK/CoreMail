@@ -153,7 +153,7 @@ export async function enqueueOutbound(job: OutboundJob): Promise<string> {
     attempts,
     backoff: { type: 'exponential', delay: backoffDelay },
   });
-  log.info({ jobId: result.id, to: job.to, attempts, backoffDelay }, 'Nachricht in Ausgangs-Queue eingereiht');
+  log.info({ jobId: result.id, to: job.to, attempts, backoffDelay }, 'Message enqueued to outbound queue');
   return result.id ?? '';
 }
 
@@ -165,7 +165,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
     async (job: Job<OutboundJob>) => {
       const { from, to, senderUserId, dkimDomain, dkimSelector, dkimPrivateKey } = job.data;
 
-      log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Zustellung gestartet');
+      log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivery started');
 
       // ── Schedule-send: cancellation check ────────────────────────────────
       // If the user cancelled the scheduled mail in the MWA via "cancel schedule",
@@ -178,7 +178,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           select: { id: true, scheduledStatus: true },
         });
         if (scheduled && scheduled.scheduledStatus === 'CANCELLED') {
-          log.info({ jobId: job.id, msgId: scheduled.id }, 'Geplanter Versand abgebrochen — Worker stoppt');
+          log.info({ jobId: job.id, msgId: scheduled.id }, 'Scheduled send cancelled — worker stops');
           return; // mark job as successful without sending
         }
       }
@@ -189,12 +189,12 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       let buffer: Buffer;
       if (job.data.message) {
         buffer = await buildRawFromMessage(job.data.message);
-        log.debug({ jobId: job.id }, 'RFC-5322-Buffer aus strukturierter Nachricht aufgebaut');
+        log.debug({ jobId: job.id }, 'RFC 5322 buffer built from structured message');
       } else if (job.data.rawMessage) {
         buffer = Buffer.from(job.data.rawMessage, 'base64');
-        log.debug({ jobId: job.id }, 'RFC-5322-Buffer aus base64-Rohdaten dekodiert');
+        log.debug({ jobId: job.id }, 'RFC 5322 buffer decoded from base64 raw data');
       } else {
-        throw new Error('OutboundJob ohne message und rawMessage — ungültiger Job');
+        throw new Error('OutboundJob without message and rawMessage — invalid job');
       }
 
       // ── Phase 9: S/MIME Auto-Sign / Auto-Encrypt ──────────────────────────
@@ -204,11 +204,11 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         });
         if (settings?.autoSign) {
           buffer = Buffer.from(await signMessageForUser(buffer, senderUserId));
-          log.debug({ jobId: job.id }, 'S/MIME-Signatur angewendet');
+          log.debug({ jobId: job.id }, 'S/MIME signature applied');
         }
         if (settings?.autoEncrypt && to.length === 1) {
           buffer = Buffer.from(await encryptMessageForRecipient(buffer, to[0]!));
-          log.debug({ jobId: job.id }, 'S/MIME-Verschlüsselung angewendet');
+          log.debug({ jobId: job.id }, 'S/MIME encryption applied');
         }
       }
 
@@ -258,7 +258,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           rcptTo:   rcpt,
           toJunk:   false,
         });
-        log.info({ rcpt, jobId: job.id }, 'Lokale Zustellung (outbound → Postfach)');
+        log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
       }
 
       // ── External delivery via MX / smarthost ──────────────────────────────
@@ -268,7 +268,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           ...(dkimSelector  ? { dkimSelector }  : {}),
           ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
         });
-        log.info({ to: dedupedExternal, jobId: job.id }, 'Externe Zustellung (Group/Alias-Expansion)');
+        log.info({ to: dedupedExternal, jobId: job.id }, 'External delivery (group/alias expansion)');
       }
 
       // ── MAIL_FLOW log ─────────────────────────────────────────────────────
@@ -293,16 +293,16 @@ export function startOutboundWorker(): Worker<OutboundJob> {
             direction:     'OUTBOUND',
           },
         },
-      }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
+      }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log failed'));
 
-      log.info({ jobId: job.id, to }, 'Nachricht zugestellt');
+      log.info({ jobId: job.id, to }, 'Message delivered');
 
       // Schedule-send: set status to SENT so the banner in the MWA disappears
       if (job.id) {
         await prisma.message.updateMany({
           where: { scheduledJobId: job.id, scheduledStatus: 'PENDING' },
           data:  { scheduledStatus: 'SENT' },
-        }).catch((e: unknown) => log.warn({ err: e }, 'scheduledStatus=SENT Update fehlgeschlagen'));
+        }).catch((e: unknown) => log.warn({ err: e }, 'scheduledStatus=SENT update failed'));
       }
     },
     {
@@ -313,17 +313,17 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
   // ── MinIO cleanup after completion ────────────────────────────────────────
   worker.on('completed', (job) => {
-    log.info({ jobId: job.id }, 'Zustellung abgeschlossen');
+    log.info({ jobId: job.id }, 'Delivery completed');
     if (job.data.message?.attachments.length) {
       void cleanupMinioAttachments(job.data.message).catch(
-        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO-Bereinigung fehlgeschlagen')
+        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO cleanup failed')
       );
     }
   });
 
   worker.on('failed', (job, err) => {
     if (!job?.data) {
-      log.error({ jobId: job?.id, err }, 'Zustellung fehlgeschlagen (kein Job-Data)');
+      log.error({ jobId: job?.id, err }, 'Delivery failed (no job data)');
       return;
     }
     const attemptsMax = job.opts.attempts ?? 10;
@@ -336,7 +336,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
     log.error(
       { jobId: job.id, err, smtpCode, isPermanent, isPermanent5xx, attemptsExhausted, attempt: job.attemptsMade },
-      isPermanent ? 'Zustellung permanent gescheitert' : 'Zustellung temporär gescheitert (wird retried)',
+      isPermanent ? 'Delivery permanently failed' : 'Delivery temporarily failed (will be retried)',
     );
 
     // On immediate 5xx stop: do not retry the job further (BullMQ.discard is sync)
@@ -347,7 +347,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
     // Clean up MinIO attachments only on permanent failure (retries need them)
     if (isPermanent && job.data.message?.attachments.length) {
       void cleanupMinioAttachments(job.data.message).catch(
-        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO-Bereinigung fehlgeschlagen')
+        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO cleanup failed')
       );
     }
 
@@ -366,7 +366,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
             serverHostname:   settings?.publicHostname ?? 'mail.local',
           });
         } catch (dsnErr) {
-          log.error({ err: dsnErr, jobId: job.id }, 'DSN-Generierung fehlgeschlagen');
+          log.error({ err: dsnErr, jobId: job.id }, 'DSN generation failed');
         }
       })();
     }

@@ -168,7 +168,7 @@ async function refreshTlsConfig(): Promise<void> {
       _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
       _tlsCertSelfSigned = isSelfSigned;
       if (isSelfSigned && !certMatchesHostname(found.certPem, _hostname)) {
-        log.warn({ hostname: _hostname }, 'SMTP self-signed cert subject != publicHostname — admin sollte im BCP ein passendes Cert aktivieren');
+        log.warn({ hostname: _hostname }, 'SMTP self-signed cert subject != publicHostname — admin should activate a matching cert in BCP');
       }
       log.info({
         selfSigned: _tlsCertSelfSigned, hostname: _hostname,

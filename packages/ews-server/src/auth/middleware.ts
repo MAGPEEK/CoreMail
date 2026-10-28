@@ -32,7 +32,7 @@ export async function ewsAuthMiddleware(
 
   // v5.6.0: Bearer branch removed entirely (OAuth2 gone). Basic auth only.
   if (authSchemeLower === 'bearer') {
-    log.debug({ ip: req.ip }, 'EWS: Bearer-Token nicht unterstützt — verwende Basic-Auth');
+    log.debug({ ip: req.ip }, 'EWS: Bearer token not supported — use Basic auth');
     res.set('WWW-Authenticate', 'Basic realm="CoreMail EWS"');
     res.status(401).send('Unauthorized');
     return;
@@ -64,7 +64,7 @@ export async function ewsAuthMiddleware(
     const decoded = Buffer.from(b64, 'base64').toString('utf8');
     const colonIdx = decoded.indexOf(':');
     if (colonIdx === -1) {
-      log.warn({ ip: req.ip }, 'EWS: Basic-Auth ohne Doppelpunkt');
+      log.warn({ ip: req.ip }, 'EWS: Basic auth without colon');
     } else {
       const rawUser = decoded.slice(0, colonIdx);
       const password = decoded.slice(colonIdx + 1);
@@ -91,7 +91,7 @@ export async function ewsAuthMiddleware(
         });
 
         if (!user || !user.active) {
-          log.warn({ email, found: !!user, active: user?.active }, 'EWS Basic-Auth: User nicht gefunden/aktiv');
+          log.warn({ email, found: !!user, active: user?.active }, 'EWS Basic auth: user not found/inactive');
           await writeAuthFailureLog(req, email, !user ? 'USER_NOT_FOUND' : 'USER_INACTIVE');
         } else {
           // 1) Try the regular password hash
@@ -99,7 +99,7 @@ export async function ewsAuthMiddleware(
           if (user.passwordHash) {
             authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
             if (authenticated) {
-              log.debug({ userId: user.id }, 'EWS Basic-Auth: User-Passwort OK');
+              log.debug({ userId: user.id }, 'EWS Basic auth: user password OK');
             }
           }
 
@@ -117,7 +117,7 @@ export async function ewsAuthMiddleware(
                   where: { id: ap.id },
                   data: { lastUsedAt: new Date() },
                 }).catch(() => { /* ignore */ });
-                log.debug({ userId: user.id, appPasswordId: ap.id }, 'EWS Basic-Auth: App-Passwort OK');
+                log.debug({ userId: user.id, appPasswordId: ap.id }, 'EWS Basic auth: app password OK');
                 break;
               }
             }
@@ -131,11 +131,11 @@ export async function ewsAuthMiddleware(
             return;
           }
 
-          log.warn({ email, ip: req.ip }, 'EWS Basic-Auth: Passwort + App-Passwort fehlgeschlagen');
+          log.warn({ email, ip: req.ip }, 'EWS Basic auth: password + app password failed');
           await writeAuthFailureLog(req, email, 'WRONG_PASSWORD', user.id);
         }
       } catch (err) {
-        log.error({ err, email }, 'EWS Basic-Auth: DB-Fehler');
+        log.error({ err, email }, 'EWS Basic auth: DB error');
         await writeAuthFailureLog(req, email, 'DB_ERROR');
       }
     }
@@ -218,7 +218,7 @@ async function writeAuthFailureLog(
         path: url,
       },
     },
-  }).catch((err: unknown) => log.error({ err }, 'SystemLog-Write für MAPI-Auth-Failure fehlgeschlagen'));
+  }).catch((err: unknown) => log.error({ err }, 'SystemLog write for MAPI auth failure failed'));
 }
 
 /**

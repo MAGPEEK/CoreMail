@@ -74,7 +74,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
       userDn = reader.readAsciiString();
       // We currently ignore the remaining fields (Flags, Codepage, Lcid, AuxBuffer)
     } catch (err) {
-      log.warn({ err }, 'Connect: Body-Parsing fehlgeschlagen');
+      log.warn({ err }, 'Connect: body parsing failed');
       sendMapiError(res, { requestId, responseCode: ResponseCode.INVALID_HEADER });
       return;
     }
@@ -87,7 +87,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
   const email = headers.userIdentity || ewsUser?.email || '';
 
   if (!email) {
-    log.warn({ userDn }, 'Connect ohne User-Identity');
+    log.warn({ userDn }, 'Connect without user identity');
     sendMapiError(res, { requestId, responseCode: ResponseCode.ANONYMOUS_NOT_ALLOWED });
     return;
   }
@@ -98,7 +98,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
   }).catch(() => null);
 
   if (!user || !user.active) {
-    log.warn({ email }, 'Connect: User nicht gefunden / inaktiv');
+    log.warn({ email }, 'Connect: user not found / inactive');
     // Outlook expects StatusCode=ecLoginFailure in the body
     const w = new MapiWriter();
     w.writeUint32(MapiStatusCode.EC_LOGIN_FAILURE);   // StatusCode
@@ -118,7 +118,7 @@ async function handleConnect(req: Request, res: Response, requestId: string): Pr
     displayName: user.displayName ?? user.email,
   });
 
-  log.info({ userId: user.id, email: user.email, userDn }, 'MAPI Connect erfolgreich');
+  log.info({ userId: user.id, email: user.email, userDn }, 'MAPI Connect successful');
 
   // Build binary response
   const w = new MapiWriter();
@@ -156,7 +156,7 @@ async function handleExecute(req: Request, res: Response, requestId: string): Pr
   const sessionToken = headers.cookies['MapiSession'] ?? '';
   const session = await getMapiSession(sessionToken);
   if (!session) {
-    log.warn({ token: sessionToken.slice(0, 8) }, 'Execute: ungültige/abgelaufene Session');
+    log.warn({ token: sessionToken.slice(0, 8) }, 'Execute: invalid/expired session');
     sendMapiError(res, { requestId, responseCode: ResponseCode.EXPIRED_COOKIE });
     return;
   }
@@ -263,7 +263,7 @@ async function handleNotificationWait(req: Request, res: Response, requestId: st
     });
 
     sub.subscribe(channel).catch((err: unknown) => {
-      log.warn({ err, userId }, 'NotificationWait: Redis-subscribe fehlgeschlagen — sofort-Response');
+      log.warn({ err, userId }, 'NotificationWait: Redis subscribe failed — responding immediately');
       void cleanup();
       resolve(false);
     });
@@ -302,7 +302,7 @@ export async function handleEmsmdb(req: Request, res: Response): Promise<void> {
     case 'Disconnect':        await handleDisconnect(req, res, requestId); return;
     case 'NotificationWait':  await handleNotificationWait(req, res, requestId); return;
     default:
-      log.warn({ requestType: headers.requestType }, 'Unbekannter X-RequestType');
+      log.warn({ requestType: headers.requestType }, 'Unknown X-RequestType');
       sendMapiError(res, { requestId, responseCode: ResponseCode.INVALID_X_REQUEST_TYPE });
   }
 }

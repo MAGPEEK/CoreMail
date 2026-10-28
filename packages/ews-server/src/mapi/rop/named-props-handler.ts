@@ -54,11 +54,11 @@ export async function handleRopGetPropertyIdsFromNames(
         const name = r.readUtf16String();
         requests.push({ kind, guid: guid.toLowerCase(), name });
       } else {
-        log.warn({ kind, i }, 'GetPropertyIdsFromNames: unbekannter Kind');
+        log.warn({ kind, i }, 'GetPropertyIdsFromNames: unknown Kind');
         break;
       }
     } catch (err) {
-      log.warn({ err, parsedCount: requests.length }, 'GetPropertyIdsFromNames: Parse-Fehler');
+      log.warn({ err, parsedCount: requests.length }, 'GetPropertyIdsFromNames: parse error');
       break;
     }
   }

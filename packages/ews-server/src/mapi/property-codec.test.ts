@@ -50,7 +50,7 @@ test('PT_BOOLEAN round-trip', () => {
   }
 });
 
-test('PT_UNICODE round-trip (mit Umlauten und Emojis)', () => {
+test('PT_UNICODE round-trip (with umlauts and emojis)', () => {
   const tests = ['', 'hello', 'Grüße aus München', '日本語テスト', '😀 Emoji'];
   for (const s of tests) {
     const w = new MapiWriter();
@@ -107,7 +107,7 @@ test('writePropertyRow: Multi-Column-Mapping', () => {
   assert.equal(readPropertyValue(r, PropType.Int32), 1024);
 });
 
-test('writePropertyRow: missing value → Default-für-Type', () => {
+test('writePropertyRow: missing value → default for type', () => {
   const cols = [PR.PR_SUBJECT_W, PR.PR_MESSAGE_FLAGS];
   const values = new Map<number, unknown>([
     [PR.PR_SUBJECT_W, 'OnlyOne'],

@@ -82,7 +82,7 @@ async function getOutboundConfig(): Promise<OutboundConfig> {
       outboundFilterEnabled: s?.outboundFilterEnabled ?? true,
     };
   } catch (err) {
-    log.warn({ err }, 'Outbound-Config nicht ladbar — MX-Zustellung als Fallback');
+    log.warn({ err }, 'Outbound config not loadable — falling back to MX delivery');
     _cachedConfig = {
       mode: 'mx', smarthostHost: '', smarthostPort: 587,
       smarthostTls: true, smarthostImplicitTls: false,
@@ -123,13 +123,13 @@ export async function relayMessage(
 
   if (dkimCfg) {
     log.debug({ domain: dkimCfg.domainName, selector: dkimCfg.keySelector },
-      'DKIM-Signierung aktiv');
+      'DKIM signing active');
   } else {
-    log.warn({ from }, 'Kein DKIM-Schlüssel konfiguriert — Nachricht wird unsigniert versendet');
+    log.warn({ from }, 'No DKIM key configured — sending message unsigned');
   }
 
   if (cfg.outboundFilterEnabled) {
-    log.debug({ from, to }, 'Ausgehender Filter aktiviert — Mail wurde vorab geprüft');
+    log.debug({ from, to }, 'Outbound filter enabled — mail was pre-checked');
   }
 
   if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
@@ -198,7 +198,7 @@ async function deliverToDomain(
 ): Promise<void> {
   const mxRecords = await resolveMx(domain);
   if (mxRecords.length === 0) {
-    throw new Error(`Keine MX-Records für ${domain} gefunden`);
+    throw new Error(`No MX records found for ${domain}`);
   }
 
   let lastError: Error | null = null;
@@ -231,11 +231,11 @@ async function deliverToDomain(
 
     } catch (err) {
       lastError = err as Error;
-      log.warn({ domain, mx: mx.exchange, err }, 'MX-Zustellung fehlgeschlagen — nächster MX');
+      log.warn({ domain, mx: mx.exchange, err }, 'MX delivery failed — trying next MX');
     }
   }
 
-  throw lastError ?? new Error(`Zustellung fehlgeschlagen für ${domain}`);
+  throw lastError ?? new Error(`Delivery failed for ${domain}`);
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────

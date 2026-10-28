@@ -58,7 +58,7 @@ export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
   if (isRuleForwardedAlready(opts.rawBuffer)) {
     log.warn(
       { userId: opts.forwardingUser.id, to: opts.toAddress },
-      'Loop-Schutz: Mail wurde bereits durch eine Rule weitergeleitet — überspringe',
+      'Loop protection: mail was already forwarded by a rule — skipping',
     );
     return;
   }
@@ -90,6 +90,6 @@ export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
 
   log.info(
     { userId: opts.forwardingUser.id, to: opts.toAddress, mode: opts.mode },
-    'Rule-Forward eingereiht',
+    'Rule forward enqueued',
   );
 }

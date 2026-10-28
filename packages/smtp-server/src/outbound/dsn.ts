@@ -53,7 +53,7 @@ export async function sendDsnBounce(opts: {
 }): Promise<void> {
   // RFC 5321 §6.1: no bounce for empty MAIL FROM (= "<>" bounce mail itself)
   if (!opts.originalFrom || opts.originalFrom === '<>') {
-    log.info({ originalTo: opts.originalTo }, 'DSN unterdrückt: leere MAIL FROM (double-bounce-Schutz)');
+    log.info({ originalTo: opts.originalTo }, 'DSN suppressed: empty MAIL FROM (double-bounce protection)');
     return;
   }
 
@@ -65,7 +65,7 @@ export async function sendDsnBounce(opts: {
     select: { id: true },
   });
   if (!localDomain) {
-    log.info({ to: opts.originalFrom }, 'DSN unterdrückt: externer Absender (MX-Server liefert eigenes Bounce)');
+    log.info({ to: opts.originalFrom }, 'DSN suppressed: external sender (MX server delivers its own bounce)');
     return;
   }
 
@@ -135,9 +135,9 @@ ${reportPart}
     });
     log.info(
       { to: opts.originalFrom, code: opts.smtpCode, originalMessageId: opts.originalMessageId },
-      'DSN-Bounce zugestellt',
+      'DSN bounce delivered',
     );
   } catch (err) {
-    log.error({ err, to: opts.originalFrom }, 'DSN-Bounce-Zustellung fehlgeschlagen');
+    log.error({ err, to: opts.originalFrom }, 'DSN bounce delivery failed');
   }
 }

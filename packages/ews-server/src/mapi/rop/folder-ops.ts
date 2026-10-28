@@ -58,7 +58,7 @@ export async function handleRopDeleteMessages(
       await prisma.message.delete({ where: { id: t.id } });
       deleted++;
     } catch (e) {
-      log.warn({ err: e, msgId: t.id }, 'DeleteMessages: einzelnes Delete fehlgeschlagen');
+      log.warn({ err: e, msgId: t.id }, 'DeleteMessages: single delete failed');
       partial = true;
     }
   }
@@ -70,7 +70,7 @@ export async function handleRopDeleteMessages(
         data: { totalCount: { decrement: deleted } },
       });
     } catch (e) {
-      log.warn({ err: e }, 'DeleteMessages: Folder-Counter-Update fehlgeschlagen');
+      log.warn({ err: e }, 'DeleteMessages: folder counter update failed');
     }
   }
 
@@ -143,7 +143,7 @@ export async function handleRopMoveCopyMessages(
       }
       moved++;
     } catch (e) {
-      log.warn({ err: e, msgId: t.id, copy: wantCopy }, 'MoveCopyMessages: einzelner Op fehlgeschlagen');
+      log.warn({ err: e, msgId: t.id, copy: wantCopy }, 'MoveCopyMessages: single op failed');
       partial = true;
     }
   }
@@ -162,7 +162,7 @@ export async function handleRopMoveCopyMessages(
         });
       }
     } catch (e) {
-      log.warn({ err: e }, 'MoveCopyMessages: Folder-Counter-Update fehlgeschlagen');
+      log.warn({ err: e }, 'MoveCopyMessages: folder counter update failed');
     }
   }
 

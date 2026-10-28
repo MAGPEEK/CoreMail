@@ -30,7 +30,7 @@ export async function isMapiHttpEnabled(): Promise<boolean> {
     cached = s?.mapiHttpEnabled ?? false;
   } catch (err) {
     // Fail-closed: no MAPI without the DB (Outlook falls back to IMAP).
-    log.warn({ err }, 'ServerSettings nicht lesbar — MAPI/HTTP bleibt aus');
+    log.warn({ err }, 'ServerSettings not readable — MAPI/HTTP stays off');
     cached = false;
   }
   cacheExpiry = now + CACHE_TTL_MS;
