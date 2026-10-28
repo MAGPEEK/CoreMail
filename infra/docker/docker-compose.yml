@@ -56,6 +56,7 @@ services:
       EWS_SERVICE_URL: http://localhost:8080
       EAS_SERVICE_URL: http://localhost:3005
       CALDAV_SERVICE_URL: http://localhost:8082
+      JMAP_SERVICE_URL: http://localhost:3006
 
       # Externe Sicherheits-Container
       RSPAMD_URL: http://rspamd:11334
@@ -72,6 +73,7 @@ services:
       EWS_PORT: "8080"
       AUTODISCOVER_PORT: "8081"
       CALDAV_PORT: "8082"
+      JMAP_PORT: "3006"
 
       # WebAuthn (für MFA, optional)
       # WEBAUTHN_RP_ID und WEBAUTHN_ORIGIN werden aus ServerSettings.publicHostname gelesen

@@ -15,6 +15,10 @@ jobs:
   build:
     name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
+    # Ein Build dauert normal 5–12 min. Ohne Timeout hängt ein QEMU/arm64-Build
+    # gelegentlich bis zum GitHub-Default (6 h) — so schlägt er nach 45 min fehl
+    # und kann per „Re-run failed jobs" wiederholt werden.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -41,6 +45,8 @@ jobs:
             dockerfile: packages/autodiscover/Dockerfile
           - service: caldav-server
             dockerfile: packages/caldav-server/Dockerfile
+          - service: jmap-server
+            dockerfile: packages/jmap-server/Dockerfile
           - service: api-gateway
             dockerfile: packages/api-gateway/Dockerfile
           - service: backup-service
@@ -93,7 +99,11 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          # Pull Requests pushen nichts (push: false) — dort reicht amd64 als
+          # Build-Check. Der QEMU-emulierte arm64-Build hing auf PR-Läufen
+          # wiederholt in „Build and push" (zufälliger Job, >45 min). Auf main
+          # und Tags bleibt es Multi-Arch (amd64 + arm64).
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

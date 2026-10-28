@@ -41,7 +41,7 @@ import { adminAuditLogRouter } from './routes/admin/audit-log.js';
 import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
 import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
-import { startTlsProxy } from './tls-proxy.js';
+import { startTlsProxy, setTlsUpgradeHandler } from './tls-proxy.js';
 // auto-letsencrypt entfernt — Admin fordert LE manuell via BCP → SSL/TLS an
 import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
 import { adminQuarantineRouter } from './routes/admin/quarantine.js';
@@ -128,6 +128,8 @@ const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
 // zu EWS routen, sonst antwortet Express mit "Cannot POST /Autodiscover/
 // Autodiscover.xml" und Outlook LTSC verbindet nicht.
 const AUTODISCOVER_URL = process.env['AUTODISCOVER_SERVICE_URL'] ?? 'http://localhost:8081';
+// v5.7.1: JMAP-Server (RFC 8620/8621 + Erweiterungen) auf Port 3006
+const JMAP_URL = process.env['JMAP_SERVICE_URL'] ?? 'http://localhost:3006';
 
 function internalProxy(targetBase: string): express.RequestHandler {
   const proxy = createProxyMiddleware({
@@ -150,7 +152,29 @@ function internalProxy(targetBase: string): express.RequestHandler {
 }
 
 app.use('/EWS',          internalProxy(EWS_URL));
-// v5.4.0: /mapi/* komplett entfernt
+// v5.7.0: MAPI over HTTP wieder im Stack — optional, Schalter in BCP → Server
+// (ServerSettings.mapiHttpEnabled). Der ews-server liefert 404 wenn aus.
+app.use('/mapi',         internalProxy(EWS_URL));
+// v5.7.1: JMAP — Schalter in BCP → Server → „JMAP" (jmap-server liefert 404 wenn aus).
+// WebSocket-Upgrades (/jmap/ws, RFC 8887) werden in start() auf dem HTTP-Server
+// und im TLS-Proxy an jmapProxy.upgrade weitergereicht.
+const jmapProxy = createProxyMiddleware({
+  target: JMAP_URL,
+  changeOrigin: true,
+  ws: true,
+  on: {
+    proxyReq: (proxyReq, req) => { proxyReq.path = (req as express.Request).originalUrl; },
+    error: (err, _req, res) => {
+      log.warn({ err, target: JMAP_URL }, 'JMAP proxy error');
+      if ('writeHead' in res && !('headersSent' in res && res.headersSent)) {
+        (res as express.Response).status(502).json({ error: 'Service temporarily unavailable' });
+      }
+    },
+  },
+});
+export const jmapUpgrade = jmapProxy.upgrade;
+app.use('/jmap',             jmapProxy as express.RequestHandler);
+app.use('/.well-known/jmap', jmapProxy as express.RequestHandler);
 app.use('/OAB',          internalProxy(EWS_URL));
 // v3.18.35: Autodiscover hat einen eigenen Service (Port 8081), nicht EWS.
 app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
@@ -164,10 +188,8 @@ const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:30
 app.use('/auth/mfa',           internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/app-passwords', internalProxy(AUTH_SERVICE_URL));
 app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
-// v5.6.0: /oauth2/* Proxy entfernt (OAuth2-Server raus)
-// v5.4.0: ADFS-Emulation entfernt (war für Outlook MAPI Modern Auth, MAPI
-// wurde aus dem Stack genommen). OAuth2-Server bleibt unter /oauth2/*
-// verfügbar für Web-Apps und Mobile-Clients.
+// v5.6.0: /oauth2/* Proxy entfernt (OAuth2-Server raus).
+// v5.4.0: ADFS-Emulation entfernt (war für Outlook-2024-LTSC Modern Auth).
 
 // ── Body-Parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB Limit (für Mail-Inhalte mit Inline-Bildern)
@@ -352,7 +374,7 @@ if (existsSync(owaDir)) {
   // SPA-Catch-All: alles, was nicht bisher zugeordnet wurde und KEINE
   // bekannte API-/Proxy-Route ist, ist eine OWA-Route → index.html zurück.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/.well-known/', '/EWS', '/OAB', '/Autodiscover', '/autodiscover',
+    '/api/', '/auth/', '/.well-known/', '/EWS', '/mapi', '/jmap', '/OAB', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
   ];
   app.get('*', (req, res, next) => {
@@ -382,11 +404,20 @@ async function start() {
   // v5.6.0: initJwtKeys() entfernt (RS256-Keys waren für OAuth2 — komplett raus)
   getRedisClient();
   log.info({ port: PORT }, 'API Gateway listening');
-  app.listen(PORT);
+  const httpServer = app.listen(PORT);
+  // v5.7.1: JMAP over WebSocket (RFC 8887) — Upgrade-Requests an den jmap-server durchreichen
+  httpServer.on('upgrade', (req, socket, head) => {
+    if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
+    else socket.destroy();
+  });
 
   // Integrierter HTTPS-Reverse-Proxy — startet automatisch wenn ein Zertifikat
   // in BCP → SSL/TLS → "Als HTTPS aktivieren" gesetzt wurde.
   // Hot-Reload bei Zertifikats-Aktivierung über Redis (kein Neustart nötig).
+  setTlsUpgradeHandler((req, socket, head) => {
+    if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
+    else socket.destroy();
+  });
   void startTlsProxy(app).catch(err =>
     log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
   );
