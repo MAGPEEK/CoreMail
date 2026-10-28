@@ -1,22 +1,22 @@
 /**
- * DNS-Hardening — Schutz gegen DNS-Cache-Poisoning (MITRE T1584.002)
+ * DNS hardening — protection against DNS cache poisoning (MITRE T1584.002)
  *
- * Schutzmechanismen:
+ * Protection mechanisms:
  *
- * 1. Hardcoded Trusted Resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9)
- *    — Umgeht poisonierbare System-Resolver / Docker-interne DNS
- *    — Konfigurierbar via SMTP_TRUSTED_DNS_SERVERS (kommagetrennt)
+ * 1. Hardcoded trusted resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9)
+ *    — Bypasses poisonable system resolvers / Docker-internal DNS
+ *    — Configurable via SMTP_TRUSTED_DNS_SERVERS (comma-separated)
  *
- * 2. Cross-Validation (optional)
- *    — Zwei Resolver werden verglichen; bei Abweichung → Warnung + Attack-Event
- *    — Verhindert partielle Cache-Poisoning-Attacken
+ * 2. Cross-validation (optional)
+ *    — Two resolvers are compared; on divergence → warning + attack event
+ *    — Prevents partial cache-poisoning attacks
  *
- * 3. Startup-Integrity-Check
- *    — Bekannte, unveränderliche A-Records (z.B. example.com) werden gegen
- *      erwartete IPs geprüft. Schlägt das fehl → ALARM
+ * 3. Startup integrity check
+ *    — Known, immutable A records (e.g. example.com) are checked against
+ *      expected IPs. If that fails → ALARM
  *
- * Aufruf: `initDnsHardening()` einmalig beim Server-Start.
- * Danach: `resolveHardened()` statt `dns.resolve4()` in DNSBL-Checks.
+ * Usage: call `initDnsHardening()` once at server start.
+ * Afterwards: `resolveHardened()` instead of `dns.resolve4()` in DNSBL checks.
  */
 
 import { Resolver } from 'dns';
@@ -24,42 +24,42 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('security-filter:dns-hardened');
 
-// ── Konfiguration ─────────────────────────────────────────────────────────────
+// ── Configuration ─────────────────────────────────────────────────────────────
 
-/** Vertrauenswürdige Resolver — werden direkt angesprochen, nicht System-DNS */
+/** Trusted resolvers — queried directly, not the system DNS */
 const TRUSTED_RESOLVERS: string[] = (
   process.env['TRUSTED_DNS_SERVERS'] ?? '8.8.8.8,1.1.1.1,9.9.9.9'
 ).split(',').map((s) => s.trim()).filter(Boolean);
 
-/** Timeout für einzelne DNS-Anfragen in ms */
+/** Timeout for individual DNS queries in ms */
 const DNS_TIMEOUT_MS = 3_000;
 
-/** Bekannte stabile Records für den Integrity-Check.
- *  Wir nutzen INFRA-Records die direkt zu bekannten Diensten gehören:
- *  - one.one.one.one  → Cloudflare DNS Anycast (1.1.1.1)  — seit 2018 stabil
- *  - dns.google       → Google DNS Anycast  (8.8.8.8)     — seit 2009 stabil
- *  Diese IPs sind Teil der öffentlichen Infrastruktur und ändern sich nicht.
+/** Known stable records for the integrity check.
+ *  We use INFRA records that belong directly to well-known services:
+ *  - one.one.one.one  → Cloudflare DNS anycast (1.1.1.1)  — stable since 2018
+ *  - dns.google       → Google DNS anycast  (8.8.8.8)     — stable since 2009
+ *  These IPs are part of public infrastructure and do not change.
  */
 const INTEGRITY_CHECKS: { fqdn: string; expectedIps: string[] }[] = [
   { fqdn: 'one.one.one.one', expectedIps: ['1.1.1.1', '1.0.0.1'] },
   { fqdn: 'dns.google',      expectedIps: ['8.8.8.8', '8.8.4.4'] },
 ];
 
-// ── Resolver-Instanzen ────────────────────────────────────────────────────────
+// ── Resolver instances ────────────────────────────────────────────────────────
 
-// Zwei unabhängige Resolver für Cross-Validation
+// Two independent resolvers for cross-validation
 const resolver1 = new Resolver({ timeout: DNS_TIMEOUT_MS });
 const resolver2 = new Resolver({ timeout: DNS_TIMEOUT_MS });
 
-// Primärer Resolver für normale Abfragen (bleibt bestehen)
+// Primary resolver for normal queries (persists)
 const primaryResolver = new Resolver({ timeout: DNS_TIMEOUT_MS });
 
-// Server zuweisen
+// Assign servers
 function assignServers(): void {
   if (TRUSTED_RESOLVERS.length === 0) return;
-  // Primärer Resolver
+  // Primary resolver
   primaryResolver.setServers(TRUSTED_RESOLVERS);
-  // Cross-Validator-Paar (erste / zweite Server)
+  // Cross-validator pair (first / second server)
   resolver1.setServers([TRUSTED_RESOLVERS[0]!]);
   resolver2.setServers([TRUSTED_RESOLVERS[Math.min(1, TRUSTED_RESOLVERS.length - 1)]!]);
 
@@ -77,11 +77,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-// ── Hauptfunktionen ───────────────────────────────────────────────────────────
+// ── Main functions ────────────────────────────────────────────────────────────
 
 /**
- * Löst einen FQDN via primärem vertrauenswürdigen Resolver auf.
- * Dropin-Replacement für `dns.promises.resolve4()`.
+ * Resolves an FQDN via the primary trusted resolver.
+ * Drop-in replacement for `dns.promises.resolve4()`.
  */
 export async function resolveHardened(fqdn: string): Promise<string[]> {
   return withTimeout(
@@ -97,9 +97,9 @@ export async function resolveHardened(fqdn: string): Promise<string[]> {
 }
 
 /**
- * Prüft einen FQDN mit zwei unabhängigen Resolvern und vergleicht die Ergebnisse.
- * Gibt `false` zurück (und loggt eine Warnung) wenn die Antworten divergieren.
- * Wird für besonders sicherheitskritische Lookups verwendet.
+ * Checks an FQDN with two independent resolvers and compares the results.
+ * Returns `false` (and logs a warning) if the answers diverge.
+ * Used for particularly security-critical lookups.
  */
 export async function crossValidateResolve(fqdn: string): Promise<{
   addresses: string[];
@@ -124,7 +124,7 @@ export async function crossValidateResolve(fqdn: string): Promise<{
 
   const [addrs1, addrs2] = await Promise.all([resolve1, resolve2]);
 
-  // Leere Antwort auf einer Seite = Fehler, kein echter Konflikt
+  // Empty answer on one side = error, not a real conflict
   if (addrs1.length === 0 || addrs2.length === 0) {
     return { addresses: addrs1.length ? addrs1 : addrs2, consistent: true, diverged: false };
   }
@@ -146,12 +146,12 @@ export async function crossValidateResolve(fqdn: string): Promise<{
   return { addresses: addrs1, consistent, diverged: !consistent };
 }
 
-// ── Startup-Integritäts-Prüfung ───────────────────────────────────────────────
+// ── Startup integrity check ───────────────────────────────────────────────────
 
 /**
- * Führt bekannte DNS-Lookups durch und vergleicht gegen hartcodierte Erwartungen.
- * Schlägt ein Check fehl, wird ein Warn-Log + Attack-Event erzeugt.
- * Gibt eine Liste der Befunde zurück (für Admin-API).
+ * Performs known DNS lookups and compares against hardcoded expectations.
+ * If a check fails, a warning log + attack event is generated.
+ * Returns a list of findings (for the admin API).
  */
 export async function runDnsIntegrityCheck(): Promise<DnsIntegrityResult[]> {
   const results: DnsIntegrityResult[] = [];
@@ -160,7 +160,7 @@ export async function runDnsIntegrityCheck(): Promise<DnsIntegrityResult[]> {
     try {
       const { addresses, consistent, diverged } = await crossValidateResolve(check.fqdn);
 
-      // Wenn erwartete IPs definiert sind: gegen Erwartung prüfen
+      // If expected IPs are defined: check against expectation
       let poisoningSuspected = false;
       let reason = '';
 
@@ -226,7 +226,7 @@ export interface DnsIntegrityResult {
   checkedAt:          string;
 }
 
-// ── Öffentlicher Status-Snapshot ───────────────────────────────────────────────
+// ── Public status snapshot ─────────────────────────────────────────────────────
 
 export function getDnsHardeningStatus(): {
   trustedResolvers: string[];
@@ -242,7 +242,7 @@ export function getDnsHardeningStatus(): {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-/** Einmalig beim Start aufrufen. Setzt trusted Resolver und startet Integrity-Check. */
+/** Call once at startup. Sets trusted resolvers and starts the integrity check. */
 export async function initDnsHardening(): Promise<void> {
   assignServers();
   log.info('DNS hardening initialized — running startup integrity check...');

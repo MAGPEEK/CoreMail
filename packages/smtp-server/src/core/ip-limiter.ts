@@ -1,20 +1,20 @@
 /**
  * SMTP IP Rate Limiter & Brute-Force Lockout
  *
- * Schutzziele (MITRE T1110 / OWASP A07):
+ * Protection goals (MITRE T1110 / OWASP A07):
  *
- * 1. Per-IP-Verbindungslimit (in-memory)
- *    — Maximale gleichzeitige Verbindungen pro IP: MAX_CONNS_PER_IP
- *    — Schützt gegen SMTP Mail-Bombing / Resource-Exhaustion (MITRE T1499)
+ * 1. Per-IP connection limit (in-memory)
+ *    — Maximum concurrent connections per IP: MAX_CONNS_PER_IP
+ *    — Protects against SMTP mail bombing / resource exhaustion (MITRE T1499)
  *
- * 2. Brute-Force-Lockout (Redis-backed — überlebt SMTP-Neustarts)
- *    — Nach AUTH_FAIL_THRESHOLD fehlgeschlagenen Auth-Versuchen innerhalb AUTH_WINDOW_S Sekunden:
- *      IP wird für AUTH_BAN_S Sekunden gesperrt.
- *    — Schützt Submission-Ports (465/587) vor Credential-Stuffing.
+ * 2. Brute-force lockout (Redis-backed — survives SMTP restarts)
+ *    — After AUTH_FAIL_THRESHOLD failed auth attempts within AUTH_WINDOW_S seconds:
+ *      the IP is banned for AUTH_BAN_S seconds.
+ *    — Protects submission ports (465/587) against credential stuffing.
  *
- * 3. New-Connection-Rate (in-memory, pro IP, Sliding Window)
- *    — Maximal NEW_CONN_PER_MIN neue Verbindungen pro Minute pro IP.
- *    — Schützt gegen SYN-Flooding des SMTP-Stacks.
+ * 3. New-connection rate (in-memory, per IP, sliding window)
+ *    — At most NEW_CONN_PER_MIN new connections per minute per IP.
+ *    — Protects against SYN flooding of the SMTP stack.
  */
 
 import { getRedisClient, createLogger, CHANNEL_ADMIN_ATTACK } from '@coremail/core';
@@ -22,50 +22,50 @@ import { prisma } from '@coremail/storage';
 
 const log = createLogger('smtp:ip-limiter');
 
-// ── Konfiguration ─────────────────────────────────────────────────────────────
+// ── Configuration ─────────────────────────────────────────────────────────────
 
-/** Maximale gleichzeitige Verbindungen pro IP */
+/** Maximum concurrent connections per IP */
 const MAX_CONNS_PER_IP = parseInt(process.env['SMTP_MAX_CONNS_PER_IP'] ?? '10', 10);
 
-/** Maximale neue Verbindungen pro Minute pro IP (Sliding Window) */
+/** Maximum new connections per minute per IP (sliding window) */
 const NEW_CONN_PER_MIN = parseInt(process.env['SMTP_NEW_CONN_PER_MIN'] ?? '30', 10);
 
-/** Anzahl Auth-Fehlversuche, bevor eine IP gebannt wird */
+/** Number of failed auth attempts before an IP is banned */
 const AUTH_FAIL_THRESHOLD = parseInt(process.env['SMTP_AUTH_FAIL_THRESHOLD'] ?? '5', 10);
 
-/** Zeitfenster für Auth-Fehlversuche in Sekunden */
+/** Time window for failed auth attempts in seconds */
 const AUTH_WINDOW_S = parseInt(process.env['SMTP_AUTH_WINDOW_S'] ?? '300', 10); // 5 min
 
-/** Ban-Dauer nach zu vielen Auth-Fehlern in Sekunden */
+/** Ban duration after too many auth failures in seconds */
 const AUTH_BAN_S = parseInt(process.env['SMTP_AUTH_BAN_S'] ?? '600', 10); // 10 min
 
-// Redis-Key-Präfix
+// Redis key prefixes
 const KEY_AUTH_FAIL  = 'smtp:authfail:';   // ZSET: IP → score = fail count, TTL
-const KEY_AUTH_BAN   = 'smtp:authban:';    // STRING mit TTL
+const KEY_AUTH_BAN   = 'smtp:authban:';    // STRING with TTL
 
-// ── In-Memory-Verbindungszähler ───────────────────────────────────────────────
+// ── In-memory connection counters ─────────────────────────────────────────────
 
-/** Aktive Verbindungen pro IP (aktuell aufgebaute Sockets) */
+/** Active connections per IP (currently open sockets) */
 const activeConns = new Map<string, number>();
 
-/** Neue Verbindungen pro IP: [{timestamp}] — Sliding Window */
+/** New connections per IP: [{timestamp}] — sliding window */
 const newConnTimestamps = new Map<string, number[]>();
 
-/** Gibt die normalisierte IP zurück (IPv4-mapped IPv6 → IPv4) */
+/** Returns the normalized IP (IPv4-mapped IPv6 → IPv4) */
 export function normalizeIp(ip: string): string {
   return ip.replace(/^::ffff:/, '');
 }
 
-// ── Verbindungs-Tracking ──────────────────────────────────────────────────────
+// ── Connection tracking ───────────────────────────────────────────────────────
 
 /**
- * Prüft, ob eine neue Verbindung von dieser IP erlaubt ist.
- * Gibt true zurück wenn OK, false wenn abzulehnen ist.
+ * Checks whether a new connection from this IP is allowed.
+ * Returns true if OK, false if it should be rejected.
  */
 export function checkAndTrackConnection(rawIp: string): boolean {
   const ip = normalizeIp(rawIp);
 
-  // Private / Loopback IPs grundsätzlich erlauben
+  // Always allow private / loopback IPs
   if (isPrivateIp(ip)) return true;
 
   // 1. Concurrent-Connection-Limit
@@ -87,12 +87,12 @@ export function checkAndTrackConnection(rawIp: string): boolean {
     return false;
   }
 
-  // Zähler erhöhen
+  // Increment counters
   activeConns.set(ip, current + 1);
   return true;
 }
 
-/** Muss aufgerufen werden wenn eine Verbindung getrennt wird. */
+/** Must be called when a connection is closed. */
 export function releaseConnection(rawIp: string): void {
   const ip = normalizeIp(rawIp);
   const current = activeConns.get(ip) ?? 1;
@@ -103,9 +103,9 @@ export function releaseConnection(rawIp: string): void {
   }
 }
 
-// ── Brute-Force Auth-Lockout (Redis-backed) ───────────────────────────────────
+// ── Brute-force auth lockout (Redis-backed) ───────────────────────────────────
 
-/** Prüft, ob eine IP aktuell gebannt ist (zu viele Auth-Fehlversuche). */
+/** Checks whether an IP is currently banned (too many failed auth attempts). */
 export async function isAuthBanned(rawIp: string): Promise<boolean> {
   const ip = normalizeIp(rawIp);
   if (isPrivateIp(ip)) return false;
@@ -123,8 +123,8 @@ export async function isAuthBanned(rawIp: string): Promise<boolean> {
 }
 
 /**
- * Registriert einen fehlgeschlagenen Auth-Versuch.
- * Wenn der Schwellwert erreicht wird → IP für AUTH_BAN_S sperren.
+ * Records a failed auth attempt.
+ * When the threshold is reached → ban the IP for AUTH_BAN_S.
  */
 export async function recordAuthFailure(rawIp: string): Promise<void> {
   const ip = normalizeIp(rawIp);
@@ -133,23 +133,23 @@ export async function recordAuthFailure(rawIp: string): Promise<void> {
     const redis = getRedisClient();
     const key = `${KEY_AUTH_FAIL}${ip}`;
 
-    // Atomare Erhöhung + Ablauf setzen
+    // Atomic increment + set expiry
     const count = await redis.incr(key);
     if (count === 1) {
-      // Erstes Fehlschlagen: TTL auf AUTH_WINDOW_S setzen
+      // First failure: set TTL to AUTH_WINDOW_S
       await redis.expire(key, AUTH_WINDOW_S);
     }
 
     log.info({ ip, count, threshold: AUTH_FAIL_THRESHOLD }, 'SMTP: auth failure recorded');
 
-    // Angriffsereeignis speichern + broadcasten
+    // Store + broadcast attack event
     void publishAttackEvent(ip, 'AUTH_BRUTE_FORCE', { count, threshold: AUTH_FAIL_THRESHOLD });
 
     if (count >= AUTH_FAIL_THRESHOLD) {
-      // IP sperren
+      // Ban IP
       const banKey = `${KEY_AUTH_BAN}${ip}`;
       await redis.set(banKey, String(count), 'EX', AUTH_BAN_S);
-      // Zähler zurücksetzen (für nächste Runde nach Ban-Ablauf)
+      // Reset counter (for the next round after the ban expires)
       await redis.del(key);
       log.warn({ ip, count, banSeconds: AUTH_BAN_S }, 'SMTP: IP auth-banned');
       void publishAttackEvent(ip, 'AUTH_BRUTE_FORCE', { count, banSeconds: AUTH_BAN_S, banned: true });
@@ -159,12 +159,12 @@ export async function recordAuthFailure(rawIp: string): Promise<void> {
   }
 }
 
-// ── Attack-Event-Publisher ────────────────────────────────────────────────────
+// ── Attack event publisher ────────────────────────────────────────────────────
 
 /**
- * Publiziert ein Angriffsereignis an:
- * 1. Redis CHANNEL_ADMIN_ATTACK (für SSE Live-Dashboard im BCP)
- * 2. PostgreSQL AttackEvent-Tabelle (für historische Auswertung)
+ * Publishes an attack event to:
+ * 1. Redis CHANNEL_ADMIN_ATTACK (for the SSE live dashboard in the BCP)
+ * 2. PostgreSQL AttackEvent table (for historical analysis)
  */
 async function publishAttackEvent(
   ip: string,
@@ -177,7 +177,7 @@ async function publishAttackEvent(
     const redis = getRedisClient();
     await redis.publish(CHANNEL_ADMIN_ATTACK, JSON.stringify(event));
 
-    // In DB persistieren (fire-and-forget — kein Await im kritischen Pfad)
+    // Persist in DB (fire-and-forget — no await in the critical path)
     type DbDetail = Exclude<Parameters<typeof prisma.attackEvent.create>[0]['data']['detail'], undefined>;
     prisma.attackEvent.create({
       data: { ip, type, ...(target ? { target } : {}), detail: detail as DbDetail, service: 'smtp' },
@@ -189,12 +189,12 @@ async function publishAttackEvent(
   }
 }
 
-/** Publiziert ein Verbindungs-Rate-Limit-Ereignis (für externe Aufrufer). */
+/** Publishes a connection rate-limit event (for external callers). */
 export function publishConnectionLimitEvent(ip: string, detail: Record<string, unknown>): void {
   void publishAttackEvent(ip, 'IP_RATE_LIMIT', detail);
 }
 
-/** Löscht den Auth-Fehlzähler nach erfolgreichem Login. */
+/** Clears the auth failure counter after a successful login. */
 export async function clearAuthFailures(rawIp: string): Promise<void> {
   const ip = normalizeIp(rawIp);
   if (isPrivateIp(ip)) return;
@@ -205,7 +205,7 @@ export async function clearAuthFailures(rawIp: string): Promise<void> {
   }
 }
 
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+// ── Helper functions ──────────────────────────────────────────────────────────
 
 function isPrivateIp(ip: string): boolean {
   return (

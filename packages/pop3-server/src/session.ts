@@ -103,14 +103,14 @@ export class POP3Session {
       if (!args[0]) return this.send('-ERR missing password');
 
       const password = args[0];
-      // v5.3.1: Normalisierung wie bei IMAP — DOMAIN\user oder bare username
-      // → email-form. Plus App-Password-Fallback für MFA-User.
+      // v5.3.1: normalization as in IMAP — DOMAIN\user or bare username
+      // → email form. Plus app-password fallback for MFA users.
       let email = this.user;
       const bsIdx = email.lastIndexOf('\\');
       if (bsIdx !== -1) email = email.slice(bsIdx + 1);
       email = email.trim().toLowerCase();
       if (!email.includes('@')) {
-        // bare username → mit primärer Domain ergänzen
+        // bare username → append primary domain
         const primaryDomain = await prisma.domain.findFirst({
           where:  { primary: true, active: true },
           select: { name: true },
@@ -124,12 +124,12 @@ export class POP3Session {
         return this.send('-ERR invalid credentials');
       }
 
-      // 1) Regulärer Passwort-Hash
+      // 1) Regular password hash
       let authenticated = false;
       if (user.passwordHash) {
         authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
       }
-      // 2) Fallback: App-Password (Pflicht für MFA-Accounts)
+      // 2) Fallback: app password (mandatory for MFA accounts)
       if (!authenticated) {
         const appPasswords = await prisma.appPassword.findMany({
           where: { userId: user.id },
@@ -250,11 +250,11 @@ export class POP3Session {
     const eml = buildEml(msg as Record<string, unknown>);
     this.send(`+OK ${eml.length} octets`);
 
-    // v5.3.1 FIX: Byte-Stuffing nach RFC 1939 §3 — JEDE Zeile, die mit "."
-    // beginnt, muss durch ".." eskapiert werden. Sonst wird die Mail bei
-    // Clients abgeschnitten, weil "." am Zeilenanfang das End-of-Message
-    // signalisiert. Vorher: nur erstes Zeichen via `replace(/^\./, '..')`
-    // → mehrzeilige Mails mit "." am Zeilenanfang wurden korrupt empfangen.
+    // v5.3.1 FIX: byte-stuffing per RFC 1939 §3 — EVERY line starting with "."
+    // must be escaped as "..". Otherwise the mail gets truncated by
+    // clients, because "." at the start of a line signals end-of-message.
+    // Previously: only the first character via `replace(/^\./, '..')`
+    // → multi-line mails with "." at the start of a line were received corrupted.
     const stuffLines = (text: string): string =>
       text.split(/\r?\n/).map((line) => line.startsWith('.') ? '.' + line : line).join('\r\n');
 

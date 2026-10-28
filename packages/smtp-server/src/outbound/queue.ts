@@ -8,59 +8,59 @@ import { extractSmtpCode, sendDsnBounce } from './dsn.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
-// Journaling-Feature komplett entfernt in v3.13.6
+// Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
 
-// ── Message-Format ────────────────────────────────────────────────────────────
+// ── Message format ────────────────────────────────────────────────────────────
 //
-// Ab v3.17.30: api-gateway übergibt strukturierte Nachrichten (kein base64-Blob
-// im Redis-Job mehr). Der Worker baut den RFC-5322-Buffer mit nodemailer auf.
-// SMTP-Submission (Ports 465/587) nutzt weiterhin rawMessage (base64) — E-Mail-
-// Clients liefern bereits vollständige RFC-5322-Nachrichten.
+// Since v3.17.30: api-gateway passes structured messages (no more base64 blob
+// in the Redis job). The worker builds the RFC 5322 buffer with nodemailer.
+// SMTP submission (ports 465/587) still uses rawMessage (base64) — email
+// clients already deliver complete RFC 5322 messages.
 
 export interface StructuredAttachment {
   filename:    string;
-  minioPath:   string;   // Schlüssel in MinIO (outbound-queue/{jobId}/{filename})
+  minioPath:   string;   // key in MinIO (outbound-queue/{jobId}/{filename})
   contentType: string;
   size:        number;
 }
 
 export interface StructuredMessage {
-  from:       string;    // Absender-E-Mail-Adresse
-  fromName:   string;    // Anzeigename (leer → kein Quoted-String)
-  /** Optionaler RFC-5322 §3.6.2 Sender-Header für „im Auftrag von" (SEND_ON_BEHALF). */
+  from:       string;    // sender email address
+  fromName:   string;    // display name (empty → no quoted string)
+  /** Optional RFC 5322 §3.6.2 Sender header for "on behalf of" (SEND_ON_BEHALF). */
   sender?:    string;
   to:         string[];
   cc:         string[];
-  bcc:        string[];  // nur SMTP-Envelope, NICHT im Header
+  bcc:        string[];  // SMTP envelope only, NOT in the header
   subject:    string;
   html:       string;
   text:       string;
   messageId:  string;    // <uuid@domain>
-  date:       string;    // ISO-String
+  date:       string;    // ISO string
   inReplyTo?:  string;
   references?: string;
   attachments: StructuredAttachment[];
 }
 
 export interface OutboundJob {
-  messageId:      string;    // Tracking-ID (nicht die E-Mail-Message-ID)
+  messageId:      string;    // tracking ID (not the email Message-ID)
   from:           string;    // SMTP-Envelope MAIL FROM
-  to:             string[];  // SMTP-Envelope RCPT TO (alle: To + CC + BCC)
-  senderUserId?:  string;    // für S/MIME Auto-Sign
+  to:             string[];  // SMTP envelope RCPT TO (all: To + CC + BCC)
+  senderUserId?:  string;    // for S/MIME auto-sign
   dkimDomain?:    string;
   dkimSelector?:  string;
   dkimPrivateKey?: string;
-  // Genau eines der folgenden Felder muss gesetzt sein:
-  message?:    StructuredMessage;  // Web-Client-Pfad (v3.17.30+)
-  rawMessage?: string;             // base64, SMTP-Submission-Pfad (Clients)
+  // Exactly one of the following fields must be set:
+  message?:    StructuredMessage;  // web client path (v3.17.30+)
+  rawMessage?: string;             // base64, SMTP submission path (clients)
 }
 
-// ── RFC-5322-Buffer aus strukturierter Nachricht aufbauen ─────────────────────
+// ── Build RFC 5322 buffer from structured message ─────────────────────────────
 
 async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
-  // Anhänge aus MinIO laden (parallel)
+  // Load attachments from MinIO (in parallel)
   const attachments: nodemailer.SendMailOptions['attachments'] = await Promise.all(
     msg.attachments.map(async (att) => ({
       filename:    att.filename,
@@ -71,7 +71,7 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
 
   const transport = nodemailer.createTransport({
     streamTransport: true,
-    newline: 'crlf',   // RFC 5321: SMTP erfordert CRLF-Zeilenenden
+    newline: 'crlf',   // RFC 5321: SMTP requires CRLF line endings
   });
 
   const fromField: nodemailer.SendMailOptions['from'] = msg.fromName
@@ -81,13 +81,13 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
   const info = await transport.sendMail({
     messageId: msg.messageId,
     from:      fromField,
-    // Sender: für SEND_ON_BEHALF — Outlook zeigt „Stefan im Auftrag von info@firma.de"
+    // Sender: for SEND_ON_BEHALF — Outlook shows "Stefan on behalf of info@firma.de"
     ...(msg.sender ? { sender: msg.sender } : {}),
     to:        msg.to,
     subject:   msg.subject,
     date:      new Date(msg.date),
     ...(msg.cc.length         ? { cc: msg.cc }                                : {}),
-    // BCC: NIE in den Message-Headern — nur im SMTP-Envelope (job.to)
+    // BCC: NEVER in the message headers — only in the SMTP envelope (job.to)
     ...(msg.html              ? { html: msg.html }                            : {}),
     ...(msg.text              ? { text: msg.text }                            : {}),
     ...(msg.inReplyTo         ? { inReplyTo:  msg.inReplyTo,
@@ -103,16 +103,16 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** MinIO-Anhänge eines Queue-Jobs nach erfolgreicher Zustellung bereinigen. */
+/** Clean up a queue job's MinIO attachments after successful delivery. */
 async function cleanupMinioAttachments(msg: StructuredMessage): Promise<void> {
   await Promise.allSettled(
     msg.attachments.map((att) => deleteObject(att.minioPath))
   );
 }
 
-// ── BullMQ-Queue ──────────────────────────────────────────────────────────────
+// ── BullMQ queue ──────────────────────────────────────────────────────────────
 
-const QUEUE_NAME = 'smtp-outbound'; // BullMQ v5: kein ':' im Queue-Namen erlaubt
+const QUEUE_NAME = 'smtp-outbound'; // BullMQ v5: no ':' allowed in queue names
 
 let _queue: Queue<OutboundJob> | null = null;
 
@@ -124,7 +124,7 @@ export function getOutboundQueue(): Queue<OutboundJob> {
         attempts: 10,
         backoff: {
           type: 'exponential',
-          delay: 60_000, // 1 min Initial-Delay, verdoppelt sich bei jedem Retry
+          delay: 60_000, // 1 min initial delay, doubles on every retry
         },
         removeOnComplete: { count: 100 },
         removeOnFail:     { count: 500 },
@@ -136,8 +136,8 @@ export function getOutboundQueue(): Queue<OutboundJob> {
 
 export async function enqueueOutbound(job: OutboundJob): Promise<string> {
   const queue = getOutboundQueue();
-  // Dynamische Settings aus DB (Admin kann maxRetryAttempts + Backoff anpassen
-  // ohne Container-Neustart) — Fallback auf Defaults wenn nicht konfiguriert.
+  // Dynamic settings from DB (admin can adjust maxRetryAttempts + backoff
+  // without a container restart) — fall back to defaults if not configured.
   let attempts = 10;
   let backoffDelay = 60_000;
   try {
@@ -146,7 +146,7 @@ export async function enqueueOutbound(job: OutboundJob): Promise<string> {
       attempts = settings.maxRetryAttempts;
       backoffDelay = settings.retryBackoffDelaySec * 1000;
     }
-  } catch { /* DB ggf. nicht erreichbar — Defaults nehmen */ }
+  } catch { /* DB may be unreachable — use defaults */ }
 
   const result = await queue.add('send', job, {
     jobId: `${job.messageId}-${Date.now()}`,
@@ -167,11 +167,11 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Zustellung gestartet');
 
-      // ── Schedule-Send: Cancellation-Check ────────────────────────────────
-      // Wenn der User die geplante Mail im MWA über „Planung abbrechen"
-      // storniert hat, wurde der Job zwar entfernt (BullMQ.remove()), aber
-      // wenn er bereits gestartet ist, muss der Worker selbst prüfen ob
-      // die Message inzwischen auf CANCELLED gesetzt wurde.
+      // ── Schedule-send: cancellation check ────────────────────────────────
+      // If the user cancelled the scheduled mail in the MWA via "cancel schedule",
+      // the job was removed (BullMQ.remove()), but if it has already started,
+      // the worker itself must check whether the message has meanwhile been
+      // set to CANCELLED.
       if (job.id) {
         const scheduled = await prisma.message.findFirst({
           where: { scheduledJobId: job.id },
@@ -179,13 +179,13 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         });
         if (scheduled && scheduled.scheduledStatus === 'CANCELLED') {
           log.info({ jobId: job.id, msgId: scheduled.id }, 'Geplanter Versand abgebrochen — Worker stoppt');
-          return; // Job als erfolgreich markieren ohne zu senden
+          return; // mark job as successful without sending
         }
       }
 
-      // ── RFC-5322-Buffer aufbauen ──────────────────────────────────────────
-      // Entweder aus strukturierter Nachricht (Web-Client-Pfad, v3.17.30+)
-      // oder aus base64-Rohdaten (SMTP-Submission-Pfad, Clients).
+      // ── Build RFC 5322 buffer ─────────────────────────────────────────────
+      // Either from a structured message (web client path, v3.17.30+)
+      // or from base64 raw data (SMTP submission path, clients).
       let buffer: Buffer;
       if (job.data.message) {
         buffer = await buildRawFromMessage(job.data.message);
@@ -212,7 +212,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         }
       }
 
-      // Helper: prüft ob eine Adresse zu einer lokalen Domain gehört
+      // Helper: checks whether an address belongs to a local domain
       async function isLocalAddress(addr: string): Promise<boolean> {
         const domain = addr.split('@')[1]?.toLowerCase();
         if (!domain) return false;
@@ -222,7 +222,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         return !!localDomain;
       }
 
-      // ── Phase 1: Empfänger in lokal vs. extern trennen ──────────────────
+      // ── Phase 1: split recipients into local vs. external ───────────────
       const localRcpts:    string[] = [];
       const externalRcpts: string[] = [];
 
@@ -231,16 +231,16 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         else                            externalRcpts.push(rcpt);
       }
 
-      // ── Phase 2: Lokale Empfänger expandieren (Aliase + Verteilergruppen) ──
+      // ── Phase 2: expand local recipients (aliases + distribution groups) ──
       const expandedLocalRcpts = localRcpts.length > 0
         ? await expandRecipients(localRcpts)
         : [];
 
-      // ── Phase 3: Nach Expansion ERNEUT lokal/extern trennen ─────────────
-      // KRITISCHER FIX (v3.18.7): Verteilergruppen können externe Mitglieder haben
-      // (z.B. „all@firma.de" mit Member „partner@kunde.com"). Vorher wurden ALLE
-      // expandierten Adressen als lokal an storeInboundMessage übergeben —
-      // externe Member gingen silent verloren (Mail kam nicht an).
+      // ── Phase 3: split local/external AGAIN after expansion ─────────────
+      // CRITICAL FIX (v3.18.7): distribution groups may have external members
+      // (e.g. "all@firma.de" with member "partner@kunde.com"). Previously ALL
+      // expanded addresses were passed to storeInboundMessage as local —
+      // external members were silently lost (mail never arrived).
       const finalLocalRcpts:    string[] = [];
       const finalExternalRcpts: string[] = [...externalRcpts];
 
@@ -251,7 +251,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       // Dedup externals
       const dedupedExternal = [...new Set(finalExternalRcpts)];
 
-      // ── Lokale Zustellung (direkt ins Postfach schreiben) ─────────────────
+      // ── Local delivery (write directly into the mailbox) ──────────────────
       for (const rcpt of finalLocalRcpts) {
         await storeInboundMessage(buffer, {
           fromAddr: from,
@@ -261,7 +261,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         log.info({ rcpt, jobId: job.id }, 'Lokale Zustellung (outbound → Postfach)');
       }
 
-      // ── Externe Zustellung via MX / Smarthost ─────────────────────────────
+      // ── External delivery via MX / smarthost ──────────────────────────────
       if (dedupedExternal.length > 0) {
         await relayMessage(buffer, from, dedupedExternal, {
           ...(dkimDomain    ? { dkimDomain }    : {}),
@@ -271,7 +271,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         log.info({ to: dedupedExternal, jobId: job.id }, 'Externe Zustellung (Group/Alias-Expansion)');
       }
 
-      // ── MAIL_FLOW-Log ─────────────────────────────────────────────────────
+      // ── MAIL_FLOW log ─────────────────────────────────────────────────────
       const allDelivered = [...finalLocalRcpts, ...dedupedExternal];
       void prisma.systemLog.create({
         data: {
@@ -297,7 +297,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
       log.info({ jobId: job.id, to }, 'Nachricht zugestellt');
 
-      // Schedule-Send: Status auf SENT setzen damit der Banner in MWA verschwindet
+      // Schedule-send: set status to SENT so the banner in the MWA disappears
       if (job.id) {
         await prisma.message.updateMany({
           where: { scheduledJobId: job.id, scheduledStatus: 'PENDING' },
@@ -306,12 +306,12 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       }
     },
     {
-      connection: createBullMqConnection(), // maxRetriesPerRequest: null (BullMQ-Pflicht)
+      connection: createBullMqConnection(), // maxRetriesPerRequest: null (required by BullMQ)
       concurrency: 10,
     },
   );
 
-  // ── MinIO-Bereinigung nach Abschluss ──────────────────────────────────────
+  // ── MinIO cleanup after completion ────────────────────────────────────────
   worker.on('completed', (job) => {
     log.info({ jobId: job.id }, 'Zustellung abgeschlossen');
     if (job.data.message?.attachments.length) {
@@ -327,9 +327,9 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       return;
     }
     const attemptsMax = job.opts.attempts ?? 10;
-    // v3.18.10: 5xx-Fehler sind PERMANENT — sofort als final markieren auch
-    // wenn noch Attempts übrig wären (sonst retried der Worker 10× ein
-    // 550 User unknown → IP-Reputation leidet, Empfänger-MX wird sauer).
+    // v3.18.10: 5xx errors are PERMANENT — mark as final immediately even
+    // if attempts remain (otherwise the worker retries a
+    // 550 User unknown 10× → IP reputation suffers, recipient MX gets annoyed).
     const { code: smtpCode, isPermanent: isPermanent5xx } = extractSmtpCode(err);
     const attemptsExhausted = job.attemptsMade >= attemptsMax;
     const isPermanent = isPermanent5xx || attemptsExhausted;
@@ -339,19 +339,19 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       isPermanent ? 'Zustellung permanent gescheitert' : 'Zustellung temporär gescheitert (wird retried)',
     );
 
-    // Bei sofortigem 5xx-Stop: Job nicht weiter retryen (BullMQ.discard ist sync)
+    // On immediate 5xx stop: do not retry the job further (BullMQ.discard is sync)
     if (isPermanent5xx && !attemptsExhausted) {
       try { job.discard(); } catch { /* ignore */ }
     }
 
-    // MinIO-Anhänge erst bei permanentem Fehler bereinigen (Retries brauchen sie)
+    // Clean up MinIO attachments only on permanent failure (retries need them)
     if (isPermanent && job.data.message?.attachments.length) {
       void cleanupMinioAttachments(job.data.message).catch(
         (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO-Bereinigung fehlgeschlagen')
       );
     }
 
-    // DSN-Bounce an MAIL FROM bei permanentem Failure
+    // DSN bounce to MAIL FROM on permanent failure
     if (isPermanent) {
       void (async () => {
         try {

@@ -27,11 +27,11 @@ export interface ImapSession {
   capabilities: string[];
   // CONDSTORE: track per-session modseq
   condstoreEnabled: boolean;
-  // v5.5.0: SASL state für AUTHENTICATE multi-step Mechanismen (LOGIN, PLAIN)
+  // v5.5.0: SASL state for AUTHENTICATE multi-step mechanisms (LOGIN, PLAIN)
   saslMech: 'PLAIN' | 'LOGIN' | null;
   saslStep: number;
   saslUser: string;
-  saslPendingTag: string | null;  // tag des AUTHENTICATE-Commands (für continuation)
+  saslPendingTag: string | null;  // tag of the AUTHENTICATE command (for continuation)
   // v5.5.0: tracks whether socket already TLS-upgraded (via STARTTLS) or
   // is implicit TLS from port 993
   isTls: boolean;
@@ -40,7 +40,7 @@ export interface ImapSession {
 function buildCapabilities(isTls: boolean, isAuthenticated: boolean): string[] {
   const caps: string[] = [
     'IMAP4rev1',
-    // v5.5.0: IMAP4rev2 (RFC 9051) Pflicht-Features sind bereits implementiert
+    // v5.5.0: IMAP4rev2 (RFC 9051) mandatory features are already implemented
     // (ENABLE, UTF8=ACCEPT, LITERAL+, IDLE, SASL-IR, ESEARCH, LIST-EXTENDED,
     //  LIST-STATUS, MOVE, NAMESPACE, SPECIAL-USE, UNSELECT, CONDSTORE)
     'IMAP4rev2',
@@ -56,20 +56,20 @@ function buildCapabilities(isTls: boolean, isAuthenticated: boolean): string[] {
     'QUOTA',
     'NAMESPACE',
     // v5.2.18: SPECIAL-USE (RFC 6154) + LIST-EXTENDED (RFC 5258) — Mac Mail
-    // braucht SPECIAL-USE-Flags um Drafts/Sent/Trash/Junk/Archive zu erkennen.
+    // needs SPECIAL-USE flags to recognize Drafts/Sent/Trash/Junk/Archive.
     'SPECIAL-USE',
     'LIST-EXTENDED',
     'LIST-STATUS',
     'CHILDREN',
-    // v5.5.0: RFC 9051 Features
+    // v5.5.0: RFC 9051 features
     'MOVE',           // RFC 6851
     'UNSELECT',       // RFC 3691
     'UIDPLUS',        // RFC 4315 (APPENDUID/COPYUID)
     'STATUS=SIZE',    // RFC 8438
   ];
   if (isTls || !isAuthenticated) {
-    // STARTTLS nur annoncieren wenn nicht-TLS-Verbindung (Port 143).
-    // Implizites TLS (Port 993) braucht es nicht.
+    // Only announce STARTTLS on non-TLS connections (port 143).
+    // Implicit TLS (port 993) does not need it.
     if (!isTls) caps.push('STARTTLS', 'LOGINDISABLED');
   }
   if (isTls) {
@@ -99,8 +99,8 @@ export function createSession(socket: Socket | TLSSocket, isTls: boolean): ImapS
 }
 
 /**
- * Aktualisiert die Capabilities einer Session — z.B. nach STARTTLS-Upgrade
- * oder nach erfolgreichem Login (LOGINDISABLED wird entfernt).
+ * Updates a session's capabilities — e.g. after a STARTTLS upgrade
+ * or after a successful login (LOGINDISABLED is removed).
  */
 export function refreshCapabilities(session: ImapSession): void {
   session.capabilities = buildCapabilities(

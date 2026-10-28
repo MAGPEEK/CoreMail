@@ -29,8 +29,8 @@ export interface SmtpHandlers {
 }
 
 /**
- * ESMTP-Erweiterungen analog `SmtpSettings`-Flags. Werden in der EHLO-Antwort
- * angeboten oder unterdrückt.
+ * ESMTP extensions mirroring the `SmtpSettings` flags. Advertised or suppressed
+ * in the EHLO response.
  */
 export interface EsmtpExtensions {
   starttls:       boolean;
@@ -49,37 +49,37 @@ export interface EsmtpExtensions {
 export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
   starttls: true, authPlain: true, authLogin: true,
   pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
-  // Bewusst false — diese Extensions sind im Server NICHT implementiert:
-  //   CRAM-MD5 (RFC 4954) — handleAuth erkennt nur PLAIN + LOGIN
-  //   SMTPUTF8 (RFC 6531) — UTF-8 Adressen werden nicht gesondert behandelt
-  //   DSN (RFC 3461)      — kein NOTIFY/ORCPT/ENVID-Parsing, kein multipart/report
-  //   CHUNKING (RFC 3030) — BDAT-Command wird vom Parser nicht erkannt
+  // Deliberately false — these extensions are NOT implemented in the server:
+  //   CRAM-MD5 (RFC 4954) — handleAuth only recognizes PLAIN + LOGIN
+  //   SMTPUTF8 (RFC 6531) — UTF-8 addresses are not handled specially
+  //   DSN (RFC 3461)      — no NOTIFY/ORCPT/ENVID parsing, no multipart/report
+  //   CHUNKING (RFC 3030) — BDAT command is not recognized by the parser
   authCramMd5: false, smtputf8: false, dsn: false, chunking: false,
 };
 
 export interface SmtpSessionConfig {
   hostname: string;
   /**
-   * Optionaler benutzerdefinierter Banner-Text nach "220 ".
-   * Wenn gesetzt, wird er statt des Standard-Banners „<hostname> ESMTP CoreMail" verwendet.
-   * Konfigurierbar via Admin-Panel → SMTP-Konfiguration → SMTP-Banner.
-   * Wird als Getter übergeben damit Live-Updates ohne Listener-Neustart wirken.
+   * Optional custom banner text after "220 ".
+   * If set, it is used instead of the default banner "<hostname> ESMTP CoreMail".
+   * Configurable via admin panel → SMTP configuration → SMTP banner.
+   * Passed as a getter so that live updates take effect without restarting listeners.
    */
   bannerText?: string;
-  /** Max. Nachrichtengröße in Bytes (aus SmtpSettings.maxMessageSizeMb × 1024²). */
+  /** Max. message size in bytes (from SmtpSettings.maxMessageSizeMb × 1024²). */
   maxSize: number;
   maxRcpt: number;
   requireAuth: boolean;
-  /** ESMTP-Erweiterungen — wenn `undefined`, gelten DEFAULT_ESMTP_EXTENSIONS. */
+  /** ESMTP extensions — if `undefined`, DEFAULT_ESMTP_EXTENSIONS apply. */
   esmtp?: EsmtpExtensions;
   tls?: { cert: Buffer; key: Buffer };
   /**
-   * Wenn true (Default), wird STARTTLS in der EHLO-Antwort beworben (sofern TLS-Config vorhanden).
-   * Auf Port 25 mit self-signed Cert: false setzen damit strikte MTAs (Microsoft Exchange)
-   * in Plain zustellen können statt am gescheiterten TLS-Handshake hängenzubleiben.
+   * If true (default), STARTTLS is advertised in the EHLO response (if a TLS config exists).
+   * On port 25 with a self-signed cert: set to false so that strict MTAs (Microsoft Exchange)
+   * can deliver in plain instead of getting stuck on a failed TLS handshake.
    */
   advertiseStarttls?: boolean;
   handlers: SmtpHandlers;
-  /** clientIp wird für Brute-Force-Tracking (ip-limiter) weitergegeben. */
+  /** clientIp is passed on for brute-force tracking (ip-limiter). */
   verifyCredentials?: (username: string, password: string, clientIp?: string) => Promise<AuthUser | null>;
 }
