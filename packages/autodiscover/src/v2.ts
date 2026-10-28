@@ -28,7 +28,12 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
     return;
   }
 
+  // v5.8.0: EWS nur noch als Teil des optionalen Exchange-Pfads (MAPI/HTTP).
   if (protocol === 'ews') {
+    if (!cfg.mapiHttpEnabled) {
+      res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: 'EWS is disabled (enable "MAPI over HTTP + EWS" in BCP → Server)' });
+      return;
+    }
     res.json({
       Protocol: 'EWS',
       Url: cfg.ewsUrl,

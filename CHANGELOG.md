@@ -11,13 +11,69 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+---
+
+## [5.8.0] — 2026-10-28 — Admin-CLI `coremail`, neue Docker-Compose, EWS an MAPI gekoppelt
+
+### Added
+
+**Admin-CLI `coremail`** — neues Paket `packages/cli/` (commander), im App-Image als
+`/usr/local/bin/coremail` installiert (`docker exec -it coremail coremail --help`).
+Spricht dieselbe REST-Admin-API wie das BCP → gleiche Rollenprüfung, gleicher Audit-Log.
+
+| Gruppe | Befehle |
+|--------|---------|
+| `login` / `logout` / `whoami` | Admin-Login mit Passwort + MFA (TOTP/Backup-Code), Sitzung in `~/.config/coremail/credentials.json` (0600), automatischer Token-Refresh; alternativ `COREMAIL_TOKEN` oder `COREMAIL_ADMIN_EMAIL`/`_PASSWORD`/`_TOTP` |
+| `user` | `list [--domain] [--inactive]`, `show`, `create --name [--password] [--role] [--quota] [--domain]`, `update [--name|--role|--quota|--enable|--disable]`, `set-password`, `delete [--yes]` |
+| `mailbox` | `list [--sort used|quota|email]`, `show` (Ordner + Zähler), `quota <size>`, `recalculate [user]` |
+| `shared` | `list`, `show`, `create --name [--quota]`, `grant <shared> <user> <perms…>`, `revoke`, `delete` |
+| `domain` | `list` |
+| `connector` | `status` (SMTP/SMTP-Send/IMAP/POP3-Listener + JMAP + MAPI/EWS), `enable|disable <svc> [--port]`, `listener list|add|set|delete|restore-defaults` |
+| `smtp banner` | `show`, `set <text>`, `reset` |
+| `cert` | `list`, `show`, `self-signed --domains [--services] [--days]`, `letsencrypt --domains --email [--services] [--staging] [--no-auto-renew]`, `activate --https/--protocol`, `deactivate-https`, `renew`, `delete` |
+
+- Globale Optionen `--server <url>`, `--json`; Löschbefehle fragen nach (`--yes` für Skripte);
+  Exit-Code 1 bei Fehlern mit HTTP-Status. Größen als `5GB`/`500MB`.
+- Doku: `docs/cli.md`; README-Abschnitt „Admin-CLI“.
+
+### Changed
+
+- **`infra/docker/docker-compose.yml` neu geschrieben**: nur noch die Parameter, die der
+  Stack wirklich braucht (interne Service-URLs/-Ports haben Defaults im Image). Die fünf
+  Pflichtwerte (`JWT_SECRET`, `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
+  `MINIO_ROOT_PASSWORD`) werden mit `${VAR:?…}` geprüft → `docker compose up` bricht mit
+  sprechender Meldung ab statt halb zu starten. Kopfkommentar mit 3-Schritte-Anleitung,
+  Port-Übersicht, Volume-Erklärung; `COREMAIL_VERSION`, `TZ` als Variablen; MinIO-Konsole
+  weiterhin nur `127.0.0.1`.
+- **`.env.example` neu**: Pflicht (5 Werte) klar von optional getrennt, alles Optionale auskommentiert.
+- **`scripts/setup.sh` neu**: prüft Docker/openssl, erzeugt `.env` mit `openssl rand`
+  (chmod 600), verlinkt sie neben die Compose-Datei, zeigt die nächsten Schritte.
+  Alte nginx-Dev-Zertifikat-Schritte entfernt.
+- **EWS an den MAPI-Schalter gekoppelt**: `/EWS/Exchange.asmx` und `/OAB/*` liefern 404,
+  solange `ServerSettings.mapiHttpEnabled` aus ist (Default). Autodiscover v2
+  `?Protocol=EWS` antwortet dann `NoSuchProtocol`. EWS ist kein eigenständiger
+  Client-Weg mehr (Outlook 2024 LTSC/M365 sprechen kein Basic-Auth-EWS gegen
+  Fremdserver), bleibt aber als Begleitprotokoll von MAPI over HTTP (Frei/Gebucht,
+  Abwesenheit, OAB). BCP-Karte heißt jetzt „MAPI over HTTP + EWS“.
+- README: EWS aus Protokoll-Übersicht, Client-Tabelle und Zugriff-Tabelle als eigener
+  Weg entfernt; Compose-/Konfigurations-Abschnitte auf die neue Datei umgestellt; JMAP in
+  Feature-Tabelle; Image-Tags auf 5.8.0.
+- `docs/deployment-docker.md`: EWS-Zeilen angepasst, JMAP-URL ergänzt.
+
 ### Docs
 
 - `docs/jmap.md`: Architektur-Diagramm, Client-Einrichtung (Ltt.rs, Thunderbird, Web-Apps),
   curl-Beispiele (Lesen, Flags/Verschieben, Senden mit `onSuccessUpdateEmail`, Anhänge,
   EventSource, WebSocket, Blob/Quota) und FAQ.
-- `docs/releases/v5.7.1.md`: Release-Notes zum Tag v5.7.1 inkl. Vorschlag für
-  Repository-Beschreibung und Topics.
+- `docs/releases/v5.7.1.md` und `docs/releases/v5.8.0.md`: Release-Notes für GitHub Releases
+  inkl. Vorschlag für Repository-Beschreibung und Topics.
+
+### Upgrade-Hinweise
+
+- Wer Outlook bisher über EWS (ohne MAPI) angebunden hatte, aktiviert im BCP → Server
+  „MAPI over HTTP + EWS“ oder stellt auf IMAP um.
+- Bestehende `.env`-Dateien bleiben gültig; die neue Compose liest dieselben Variablen.
+  Entfallene Compose-Variablen (interne Ports/URLs) sind als Image-Defaults hinterlegt.
 
 ---
 

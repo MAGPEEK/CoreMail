@@ -50,6 +50,7 @@ COPY packages/backup-service/package.json ./packages/backup-service/
 COPY packages/security-filter/package.json ./packages/security-filter/
 COPY packages/activesync/package.json     ./packages/activesync/
 COPY packages/jmap-server/package.json    ./packages/jmap-server/
+COPY packages/cli/package.json            ./packages/cli/
 
 RUN pnpm install --frozen-lockfile
 
@@ -70,6 +71,7 @@ COPY packages/backup-service    ./packages/backup-service
 COPY packages/security-filter   ./packages/security-filter
 COPY packages/activesync        ./packages/activesync
 COPY packages/jmap-server       ./packages/jmap-server
+COPY packages/cli               ./packages/cli
 
 # Prisma-Client generieren und alle Pakete bauen
 RUN pnpm --filter @coremail/storage exec prisma generate
@@ -88,7 +90,8 @@ RUN pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/backup-service build \
  && pnpm --filter @coremail/security-filter build \
  && pnpm --filter @coremail/activesync     build \
- && pnpm --filter @coremail/jmap-server    build
+ && pnpm --filter @coremail/jmap-server    build \
+ && pnpm --filter @coremail/cli            build
 
 # ── Stage 2: Frontend-Build ───────────────────────────────────────────────────
 FROM node:22-alpine AS frontend-builder
@@ -181,6 +184,8 @@ COPY --from=builder /app/packages/activesync/package.json     ./packages/actives
 COPY --from=builder /app/packages/activesync/dist             ./packages/activesync/dist
 COPY --from=builder /app/packages/jmap-server/package.json    ./packages/jmap-server/
 COPY --from=builder /app/packages/jmap-server/dist            ./packages/jmap-server/dist
+COPY --from=builder /app/packages/cli/package.json            ./packages/cli/
+COPY --from=builder /app/packages/cli/dist                    ./packages/cli/dist
 
 # Nur Produktions-Abhängigkeiten installieren.
 # python3 + make + g++ werden für native Module (bcrypt) benötigt die keine
@@ -202,6 +207,10 @@ RUN for f in $(find /app/node_modules -name "libquery_engine-linux-musl.so.node"
 RUN mkdir -p /app/www
 COPY --from=frontend-builder /app/packages/web-client/dist  /app/www/owa
 COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/bcp
+
+# Admin-CLI: `docker exec coremail coremail --help`
+RUN chmod +x /app/packages/cli/dist/index.js \
+ && ln -sf /app/packages/cli/dist/index.js /usr/local/bin/coremail
 
 # supervisord-Konfiguration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf

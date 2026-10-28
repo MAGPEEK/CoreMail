@@ -7,19 +7,20 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.7.1-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-5.8.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
-📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit, einfach herunterladen und starten  
+📄 **[docker-compose.yml](infra/docker/docker-compose.yml)** — sofort einsatzbereit: `.env` erzeugen, `up -d`, fertig  
+⌨️ **[docs/cli.md](docs/cli.md)** — Admin-CLI `coremail`: Benutzer, Postfächer, Konnektoren, SMTP-Banner, Zertifikate  
 📋 **[COMMANDS.md](COMMANDS.md)** — Befehlsreferenz: Dienste prüfen, Benutzer anlegen, Queues, Logs, Backup  
 📝 **[CHANGELOG.md](CHANGELOG.md)** — Vollständiger Versionsverlauf
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
-**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **EWS** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
+**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. Optional zuschaltbar: **MAPI over HTTP + EWS** für Outlook 2013–2021 als „Exchange-Konto“. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v5.7.1** — **JMAP-Server** (RFC 8620/8621/8887/9404/9425/9670/9749, [Doku](docs/jmap.md)) · MAPI over HTTP optional (Default aus, v5.7.0) · Verteilergruppen entfernt (v5.6.1) · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v5.8.0** — **Admin-CLI `coremail`** ([Doku](docs/cli.md)) · **neue, kommentierte `docker-compose.yml`** mit Pflicht-Check der .env · EWS nur noch zusammen mit MAPI over HTTP (Default aus) · JMAP-Server (v5.7.1, [Doku](docs/jmap.md)) · Verteilergruppen entfernt (v5.6.1) · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Hinweis zu Outlook (v5.7.0)**: MAPI over HTTP ist wieder enthalten, aber **standardmäßig aus** (BCP → Server → „MAPI over HTTP“). Aktiviert verbinden sich Outlook 2013–2021 als natives Exchange-Konto (Basic-Auth). Outlook 2024 LTSC und Microsoft 365 Classic erzwingen Modern Auth gegen Microsoft Entra/ADFS — dort bleibt **Outlook → „Andere E-Mail-Konten" → IMAP** der Weg, Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning). Das neue Outlook und Outlook für Mac unterstützen kein MAPI.
 >
@@ -35,6 +36,7 @@
 2. [Clients verbinden](#clients-verbinden)
 3. [Schnellstart](#schnellstart)
 4. [Docker Compose](#docker-compose)
+   - [Admin-CLI `coremail`](#admin-cli-coremail-seit-v580)
 5. [Zugriff](#zugriff)
 6. [Konfiguration](#konfiguration)
 7. [DNS-Einrichtung](#dns-einrichtung)
@@ -57,7 +59,9 @@
 | **IMAP4rev2** (Port 143 STARTTLS, 993 implicit-TLS) | ✅ | **9051** |
 | IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ✅ | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
 | **POP3** (Port 110 STLS, 995 implicit-TLS) + SASL PLAIN/LOGIN + App-Password-Support | ✅ | 1939 + 5034 |
-| EWS (Exchange Web Services) — Outlook Desktop 2010–2021 (SOAP/XML) | ✅ | MS-OXWSCORE |
+| **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
+| MAPI over HTTP + EWS — Outlook 2013–2021 „Exchange-Konto“ (optional, Default aus) | ⚙️ | MS-OXCMAPIHTTP, MS-OXWSCORE |
+| Admin-CLI `coremail` im Container (Benutzer, Postfächer, Konnektoren, Banner, Zertifikate) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
 | MWA — Mail Web Access (React, Exchange-ähnliches Layout) | ✅ |
@@ -178,7 +182,7 @@ CoreMail funktioniert mit allen Standard-Mail-Clients. Die empfohlene Konfigurat
 | Client | Konto-Typ | Mail | Kalender + Kontakte |
 |--------|-----------|------|---------------------|
 | **Outlook 2024 LTSC** | „Andere E-Mail-Konten" → **IMAP** | IMAP+SMTP | Outlook-CalDav-Synchronizer-Plugin (gratis OSS) |
-| **Outlook 2021 LTSC** | IMAP oder Exchange (via EWS) | IMAP+SMTP oder EWS | Outlook-CalDav-Synchronizer |
+| **Outlook 2013–2021** | **IMAP** (Standard) — oder „Exchange-Konto“, wenn im BCP **MAPI over HTTP + EWS** aktiviert ist | IMAP+SMTP oder MAPI | Outlook-CalDav-Synchronizer (IMAP) · nativ (MAPI) |
 | **Apple Mail** (Mac + iOS) | „Anderes Mail-Konto" → IMAP | IMAP+SMTP | Apple Kalender/Kontakte separat (CalDAV/CardDAV) |
 | **Thunderbird** | IMAP-Konto | IMAP+SMTP | Lightning (CalDAV) + TbSync (CardDAV) |
 | **eM Client** | IMAP-Konto | IMAP+SMTP | CalDAV+CardDAV nativ |
@@ -224,7 +228,7 @@ Bei aktiviertem 2FA können Mail-Clients das normale Passwort nicht mehr verwend
 
 ### Hinweis zu Outlook 2024 LTSC
 
-Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist dort die praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"). MAPI/HTTP ist seit v5.7.0 optional wieder enthalten (BCP → Server), hilft aber nur Outlook 2013–2021, die noch Basic-Auth gegen Exchange-Endpoints sprechen.
+Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist dort die praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"). Der Exchange-Pfad **MAPI over HTTP + EWS** ist optional (BCP → Server, Default aus) und hilft nur Outlook 2013–2021, die noch Basic-Auth sprechen. EWS ist seit v5.8.0 kein eigenständiger Client-Weg mehr: `/EWS/*` antwortet nur, wenn dieser Schalter aktiv ist.
 
 ---
 
@@ -246,25 +250,25 @@ cd CoreMail
 bash scripts/setup.sh
 ```
 
-Das Skript erstellt die `.env`-Datei mit zufällig generierten Schlüsseln. Alternativ manuell:
+Das Skript prüft Docker, erstellt die `.env` mit zufällig generierten Schlüsseln und zeigt die nächsten Schritte. Alternativ manuell:
 
 ```bash
 cp .env.example .env
 ```
 
-### 3. `.env` anpassen
+### 3. `.env` prüfen
+
+`scripts/setup.sh` hat die fünf Pflichtwerte bereits zufällig gesetzt. Bei manueller Einrichtung ersetzen:
 
 ```env
-MAIL_HOSTNAME=mail.meinedomain.de    # Vollqualifizierter Hostname
-
-POSTGRES_PASSWORD=sicheres-passwort
-REDIS_PASSWORD=sicheres-passwort
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=sicheres-passwort
-
 JWT_SECRET=<openssl rand -hex 32>
 PEPPER=<openssl rand -hex 32>
+POSTGRES_PASSWORD=<openssl rand -hex 20>
+REDIS_PASSWORD=<openssl rand -hex 20>
+MINIO_ROOT_PASSWORD=<openssl rand -hex 20>
 ```
+
+Der Mail-Hostname wird nicht in der `.env`, sondern im Setup-Assistenten bzw. im BCP gesetzt.
 
 ### 4. TLS konfigurieren
 
@@ -309,66 +313,49 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:3.17.8` | Alle Mail-Dienste + Webmail + Admin-Panel |
+| `coremail` | `magpeek/coremail-app:5.8.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
 | `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Updates |
 | `minio` | `minio/minio` | Objektspeicher für Anhänge, Quarantäne und Backups |
 
-Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, EWS, ActiveSync, CalDAV, Webmail und Admin-Panel — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP/API), Port 443 (HTTPS, optional) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
+Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, optional MAPI/EWS, Webmail, Admin-Panel und die Admin-CLI — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP), 80/443 (ACME + HTTPS) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
 
 ### Die `docker-compose.yml`
 
-Die vollständig kommentierte Datei liegt unter `infra/docker/docker-compose.yml`:
+Die Datei `infra/docker/docker-compose.yml` ist seit v5.8.0 auf das Nötigste reduziert und durchgehend kommentiert. Sie braucht genau **fünf Werte** aus der `.env` — fehlt einer, bricht `docker compose up` sofort mit einer sprechenden Meldung ab statt später mit einem halb gestarteten Stack:
 
 ```yaml
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:3.17.8
-    ports:
-      - "3000:3000"   # HTTP (API, Webmail, Admin-Panel, EWS, Autodiscover)
-      - "443:443"     # HTTPS (integrierter TLS-Proxy, deaktivierbar via .env)
-      - "25:25"       # SMTP eingehend
-      - "465:465"     # SMTPS (Implizites TLS)
-      - "587:587"     # SMTP Submission (STARTTLS)
-      - "143:143"     # IMAP (STARTTLS)
-      - "993:993"     # IMAPS (Implizites TLS)
-      - "110:110"     # POP3
-      - "995:995"     # POP3S
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.8.0}
     environment:
-      MAIL_HOSTNAME: mail.meinedomain.de
-      RSPAMD_URL: http://rspamd:11334
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env  →  openssl rand -hex 32}
+      PEPPER:     ${PEPPER:?PEPPER fehlt in .env  →  openssl rand -hex 32}
+      DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt in .env}@postgres:5432/coremail
+      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD fehlt in .env}@redis:6379
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD fehlt in .env}
+      RSPAMD_URL:  http://rspamd:11334
       CLAMAV_HOST: clamav
-      CLAMAV_PORT: "3310"
-      # ... vollständige Liste in der docker-compose.yml
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis:    { condition: service_started }
-      minio:    { condition: service_healthy }
-      rspamd:   { condition: service_healthy }
-      clamav:   { condition: service_healthy }
-
-  rspamd:
-    image: rspamd/rspamd:4.0.0
-
-  clamav:
-    image: clamav/clamav:stable
-    environment:
-      CLAMAV_NO_FRESHCLAMD: "false"
-
-  postgres:
-    image: postgres:16-alpine
-
-  redis:
-    image: redis:7-alpine
-
-  minio:
-    image: minio/minio:latest
     ports:
-      - "9001:9001"   # MinIO Web-Konsole (nur lokal erreichbar!)
+      - "25:25"     # SMTP Empfang          - "143:143"  # IMAP
+      - "465:465"   # SMTPS                 - "993:993"  # IMAPS
+      - "587:587"   # SMTP Submission       - "110:110"  # POP3  (optional)
+      - "80:3000"   # Let's-Encrypt + Redirect   - "995:995"  # POP3S (optional)
+      - "443:443"   # HTTPS (integrierter TLS-Proxy)
+      - "3000:3000" # HTTP ohne TLS — Ersteinrichtung / eigener Reverse-Proxy
+  postgres: { image: postgres:16-alpine }
+  redis:    { image: redis:7-alpine }
+  minio:    { image: minio/minio:latest }
+  rspamd:   { image: rspamd/rspamd:4.0.0 }
+  clamav:   { image: clamav/clamav:stable }
 ```
+
+Alles Weitere (Hostname, Domains, DNS-Vorlagen, Zertifikate, Konnektoren, Banner) wird **nach dem Start** im Admin-Panel unter `http://<server>:3000/bcp/` oder per CLI eingerichtet — nicht in der Compose-Datei. Interne Service-Ports und URLs haben im Image feste Defaults und tauchen in der Compose nicht mehr auf.
+
+Hinter einem eigenen Reverse-Proxy (Traefik, Caddy, nginx, Synology): die Zeilen `"80:3000"` und `"443:443"` entfernen und den Proxy auf `http://<server>:3000` zeigen lassen.
 
 ### Häufige Befehle
 
@@ -411,7 +398,8 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 |-----|-------------|
 | `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access) |
 | `https://<MAIL_HOSTNAME>/bcp/` | Admin-Panel (BCP — Backend Control Panel) |
-| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS (Outlook Desktop) |
+| `https://<MAIL_HOSTNAME>/.well-known/jmap` | JMAP-Discovery |
+| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` · `/mapi/` | Outlook „Exchange-Konto“ (nur bei aktivem **MAPI over HTTP + EWS**) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
 | `http://localhost:9001` | MinIO Web-Konsole (nur lokal) |
@@ -432,47 +420,30 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 
 ## Konfiguration
 
-Alle Einstellungen erfolgen über die `.env`-Datei. Die vollständige Referenz:
+Die `.env` enthält nur, was der Stack vor dem ersten Start wissen muss. `bash scripts/setup.sh` erzeugt sie mit Zufallswerten.
 
 ```env
-# ── Allgemein ──────────────────────────────────────────────
-NODE_ENV=production           # development | production
-LOG_LEVEL=info                # error | warn | info | debug
+# ── Pflicht ────────────────────────────────────────────────
+JWT_SECRET=…            # openssl rand -hex 32 — signiert Login-Tokens
+PEPPER=…                # openssl rand -hex 32 — NIE nachträglich ändern
+POSTGRES_PASSWORD=…     # interne Datenbank-Passwörter
+REDIS_PASSWORD=…
+MINIO_ROOT_PASSWORD=…
 
-# ── Datenbank ──────────────────────────────────────────────
-POSTGRES_PASSWORD=...
-
-# ── Redis ──────────────────────────────────────────────────
-REDIS_PASSWORD=...
-
-# ── Objektspeicher (Anhänge, Quarantäne, Backup) ──────────
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=...
-
-# ── Sicherheit ─────────────────────────────────────────────
-JWT_SECRET=...                # mind. 32 Zeichen, zufällig
-PEPPER=...                    # mind. 32 Zeichen, zufällig
-
-# ── TLS ────────────────────────────────────────────────────
-# HTTPS_PORT=443              # Alternativer Port falls 443 belegt
-
-# ── Anti-Spam (Rspamd) ─────────────────────────────────────
-RSPAMD_URL=http://rspamd:11334
-
-# ── Antivirus (ClamAV) ─────────────────────────────────────
-CLAMAV_HOST=clamav
-CLAMAV_PORT=3310
-
-# ── WebAuthn (MFA FIDO2) ───────────────────────────────────
-WEBAUTHN_RP_NAME=CoreMail
-WEBAUTHN_RP_ID=mail.domain.de
-WEBAUTHN_ORIGIN=https://mail.domain.de
-
-# ── GeoIP Country-Filter (optional) ───────────────────────
-# Kostenlose Registrierung: https://www.maxmind.com/en/geolite2/signup
-MAXMIND_ACCOUNT_ID=
-MAXMIND_LICENSE_KEY=
+# ── Optional (Defaults in Klammern) ────────────────────────
+#COREMAIL_VERSION=5.8.0         # Image-Tag
+#LOG_LEVEL=info                 # error | warn | info | debug
+#TZ=Europe/Berlin
+#MINIO_ROOT_USER=minioadmin
+#BACKUP_SCHEDULE=0 2 * * *      # Vollbackup (Cron, UTC)
+#BACKUP_RETENTION_DAYS=30
+#RETENTION_SCHEDULE=0 3 * * *   # Aufbewahrungsrichtlinien
+#COREMAIL_CPU_LIMIT=2  /  COREMAIL_MEM_LIMIT=2g
+#VAPID_PUBLIC_KEY= / VAPID_PRIVATE_KEY= / VAPID_SUBJECT=   # Browser-Push (npx web-push generate-vapid-keys)
+#HTTPS_PORT=8443                # falls 443 am Host belegt
 ```
+
+Hostname, Domains, Zertifikate, Konnektoren, Spam-/Virenschutz-Einstellungen, LDAP/SSO und Backups werden im **BCP** (`/bcp/`) oder per **CLI** verwaltet und in der Datenbank gespeichert.
 
 ---
 
@@ -531,6 +502,34 @@ Für die lokale Entwicklung genügen selbstsignierte Zertifikate:
 ```bash
 bash scripts/gen-dev-certs.sh
 ```
+
+---
+
+## Admin-CLI `coremail` (seit v5.8.0)
+
+Die CLI steckt im App-Image und spricht dieselbe Admin-API wie das BCP — gleiche Rollen, gleiche Prüfungen, gleicher Audit-Log. Vollständige Referenz: **[docs/cli.md](docs/cli.md)**.
+
+```bash
+alias coremail='docker exec -it coremail coremail'
+
+coremail login -u admin@example.de                   # Sitzung speichern (TOTP wird abgefragt)
+coremail user list --domain example.de               # Benutzer anzeigen
+coremail user create max@example.de --name "Max Muster" --quota 10GB
+coremail user delete max@example.de
+coremail mailbox list --sort used                    # Postfächer mit Belegung
+coremail shared create team@example.de --name "Team" # Shared Mailbox …
+coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS   # … berechtigen
+coremail connector status                            # SMTP/IMAP/POP3/JMAP/MAPI+EWS mit Ports und Zustand
+coremail connector disable pop3                      # Konnektor aus (an: enable; einzelner Port: --port 995)
+coremail connector listener set <id> --port 1143 --ssl false
+coremail smtp banner set "mail.example.de ESMTP"     # SMTP-Begrüßung (reset: Standard)
+coremail cert letsencrypt --domains mail.example.de,autodiscover.example.de \
+    --email admin@example.de --services SMTP,IMAP,POP3
+coremail cert activate mail.example.de --https --protocol
+coremail --json user list | jq                       # alles auch als JSON
+```
+
+Für Skripte: `COREMAIL_ADMIN_EMAIL`/`COREMAIL_ADMIN_PASSWORD` (plus `COREMAIL_ADMIN_TOTP`) oder ein fertiges `COREMAIL_TOKEN`; gegen entfernte Server `--server https://mail.example.de`.
 
 ---
 
@@ -596,7 +595,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:3.17.8
+docker pull magpeek/coremail-app:5.8.0
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -609,6 +608,7 @@ docker pull magpeek/coremail-app:3.17.8
 
 | Version | Highlights |
 |---------|-----------|
+| **v5.8.0** | **Admin-CLI `coremail`** (neues Paket `cli`, im Image unter `/usr/local/bin/coremail`): Benutzer/Postfächer/Shared Mailboxes anzeigen, anlegen, löschen; Konnektoren SMTP/IMAP/POP3/JMAP/MAPI ein-/ausschalten, Listener-Ports/TLS; SMTP-Banner; Zertifikate (Self-Signed, Let's Encrypt, aktivieren, erneuern). **Neue `docker-compose.yml`**: nur die nötigen Parameter, Pflichtwerte mit Startabbruch-Prüfung, `setup.sh` erzeugt die `.env`. **EWS an MAPI-Schalter gekoppelt**: `/EWS/*`, `/OAB/*` und Autodiscover-EWS nur noch mit „MAPI over HTTP + EWS“ (Default aus). |
 | **v5.7.1** | **JMAP-Server** — neues Paket `jmap-server` (Port 3006): RFC 8620 Core, 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals/Sharing, 9749 VAPID. Discovery `/.well-known/jmap`, Push via EventSource + WebSocket, Schalter im BCP (Default an). Siehe [docs/jmap.md](docs/jmap.md). |
 | **v5.7.0** | **MAPI over HTTP optional zurück** (Default aus, Schalter im BCP, Hot-Reload, 404 wenn aus). pnpm auf 11 gepinnt, 70 veraltete `src/*.js`-Artefakte entfernt, `noEmit` in Frontend-tsconfigs. |
 | **v5.6.1** | **Verteilergruppen (DistributionGroups) komplett entfernt** — selten genutzt, Use-Case besser mit Shared Mailboxes (Team-Postfächer) oder externem Listserv-Tool gelöst. Schema-Drop von 2 Tabellen + Enum, BCP-Page entfernt, EMS-Cmdlets entfernt. |
@@ -677,7 +677,7 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v5.2.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
-  <sub>IMAP4rev2 + SMTP + POP3 + EWS + CalDAV + CardDAV + ActiveSync</sub><br>
+  <b>CoreMail v5.8.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
