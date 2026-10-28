@@ -25,6 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   rspamd/nginx configs, scripts, GitHub workflow, `.env.example`).
 - **Admin CLI output is English** (`coremail …` messages, table headers, help texts,
   prompts). The `--yes`/`-y` flag and all command names are unchanged.
+- **Developer-facing log messages (pino) and test names are English** in all services.
+  Not changed on purpose: HTTP API response texts, SMTP/IMAP/POP3 protocol strings,
+  texts persisted to the database, mail/DSN content and the MWA/BCP i18n values.
 - `docker-compose.yml`: the `${VAR:?…}` guard messages for the five required `.env`
   values are English.
 - No functional changes: UI strings of MWA/BCP (i18n DE/EN) and API response texts are
