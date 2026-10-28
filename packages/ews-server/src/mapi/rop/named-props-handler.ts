@@ -1,13 +1,13 @@
 /**
- * Named-Properties ROP-Handler (v5.1.0)
+ * Named-properties ROP handler (v5.1.0)
  *
- * Implementiert:
+ * Implements:
  *   - RopGetPropertyIdsFromNames (MS-OXCPRPT §2.2.5.2)
  *   - RopGetNamesFromPropertyIds (MS-OXCPRPT §2.2.5.1)
  *
- * Beide ROPs verwalten das Mapping zwischen "Named Properties" (GUID + LID/Name)
- * und lokalen uint16-PropertyIds im 0x8000-0xFFFF-Range, das pro Session
- * konsistent bleibt.
+ * Both ROPs manage the mapping between "named properties" (GUID + LID/name)
+ * and local uint16 PropertyIds in the 0x8000-0xFFFF range, which stays
+ * consistent per session.
  */
 
 import { createLogger } from '@coremail/core';
@@ -28,7 +28,7 @@ const log = createLogger('mapi:rop:named-props');
  * Payload (MS-OXCPRPT §2.2.5.2.1):
  *   Flags(uint8) | PropertyNameCount(uint16) | PropertyNames(variable)
  *
- * Jeder PropertyName:
+ * Each PropertyName:
  *   Kind(uint8) | PropertySetGuid(16 bytes) | [LID(uint32) | NameSize(uint8) | Name(UTF-16-LE null-term)]
  *
  * Response:
@@ -54,11 +54,11 @@ export async function handleRopGetPropertyIdsFromNames(
         const name = r.readUtf16String();
         requests.push({ kind, guid: guid.toLowerCase(), name });
       } else {
-        log.warn({ kind, i }, 'GetPropertyIdsFromNames: unbekannter Kind');
+        log.warn({ kind, i }, 'GetPropertyIdsFromNames: unknown Kind');
         break;
       }
     } catch (err) {
-      log.warn({ err, parsedCount: requests.length }, 'GetPropertyIdsFromNames: Parse-Fehler');
+      log.warn({ err, parsedCount: requests.length }, 'GetPropertyIdsFromNames: parse error');
       break;
     }
   }
@@ -118,13 +118,13 @@ export async function handleRopGetNamesFromPropertyIds(
 }
 
 /**
- * Schreibt eine GUID im MS-DTYP-Format (4-2-2-8 bytes, gemischte Endianness).
- * Akzeptiert das kanonische "00062002-0000-0000-c000-000000000046"-Format.
+ * Writes a GUID in MS-DTYP format (4-2-2-8 bytes, mixed endianness).
+ * Accepts the canonical "00062002-0000-0000-c000-000000000046" format.
  */
 function writeGuidString(w: MapiWriter, guidStr: string): void {
   const hex = guidStr.replace(/-/g, '');
   if (hex.length !== 32) {
-    // Fallback: 16 Nullbytes
+    // Fallback: 16 null bytes
     w.writeBuffer(Buffer.alloc(16));
     return;
   }

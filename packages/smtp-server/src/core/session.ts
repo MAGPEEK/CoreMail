@@ -107,7 +107,7 @@ export class SmtpSession {
 
     this.resetTimer(T_GREETING);
     // RFC 5321 §4.2 — 220 Greeting: "220 <domain> <text>"
-    // bannerText überschreibt den Standard-Text wenn im Admin-Panel konfiguriert.
+    // bannerText overrides the default text when configured in the admin panel.
     const bannerBody = this.config.bannerText?.trim() || `${this.config.hostname} ESMTP CoreMail`;
     this.send(`220 ${bannerBody}`);
   }
@@ -304,22 +304,22 @@ export class SmtpSession {
     if (esmtp.pipelining)     lines.push('PIPELINING');
     if (esmtp.bit8mime)       lines.push('8BITMIME');
     if (esmtp.enhancedStatus) lines.push('ENHANCEDSTATUSCODES');
-    // Bewusst nicht beworben (Stub-only / nicht implementiert):
-    //   DSN (RFC 3461)       — kein Parsing von NOTIFY/ORCPT/ENVID/RET, keine multipart/report
-    //   SMTPUTF8 (RFC 6531)  — UTF-8 Envelope-Adressen werden nicht gesondert behandelt
-    //   CHUNKING (RFC 3030)  — BDAT-Command wird vom Parser nicht erkannt
+    // Deliberately not advertised (stub-only / not implemented):
+    //   DSN (RFC 3461)       — no parsing of NOTIFY/ORCPT/ENVID/RET, no multipart/report
+    //   SMTPUTF8 (RFC 6531)  — UTF-8 envelope addresses are not handled specially
+    //   CHUNKING (RFC 3030)  — BDAT command is not recognized by the parser
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
-    // AND advertiseStarttls != false. Auf Port 25 mit self-signed Cert wird das vom Server
-    // unterdrückt damit strikte MTAs (Microsoft Exchange) nicht am TLS-Handshake hängen.
+    // AND advertiseStarttls != false. On port 25 with a self-signed cert the server suppresses
+    // this so that strict MTAs (Microsoft Exchange) do not get stuck in the TLS handshake.
     const advertise = this.config.advertiseStarttls !== false;
     if (esmtp.starttls && this.config.tls && !this.tlsUpgraded && advertise) {
       lines.push('STARTTLS');
     }
 
     // AUTH only if verifyCredentials is configured AND at least one mech enabled
-    // CRAM-MD5 wird nicht beworben — handleAuth erkennt nur PLAIN + LOGIN, CRAM-MD5
-    // würde mit 504 Unrecognized abgewiesen werden.
+    // CRAM-MD5 is not advertised — handleAuth only recognizes PLAIN + LOGIN, CRAM-MD5
+    // would be rejected with 504 Unrecognized.
     if (this.config.verifyCredentials) {
       const mechs: string[] = [];
       if (esmtp.authPlain)   mechs.push('PLAIN');

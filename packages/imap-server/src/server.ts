@@ -8,7 +8,7 @@ const log = createLogger('imap:main');
 const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);
 
-// ── TLS-Konfiguration (für Port 993 / implizites TLS) ─────────────────────────
+// ── TLS configuration (for port 993 / implicit TLS) ───────────────────────────
 let _tlsConfig: ImapTlsConfig | null = null;
 
 // ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
@@ -32,7 +32,7 @@ async function refreshHostname(): Promise<void> {
 
 async function refreshTlsConfig(): Promise<void> {
   try {
-    // v5.2.8: Cert direkt aus certificates-Tabelle via services[]='IMAP'
+    // v5.2.8: cert directly from the certificates table via services[]='IMAP'
     const found = await loadProtocolCert('IMAP');
 
     if (found) {
@@ -41,16 +41,16 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // Kein passendes Cert in DB → self-signed Fallback mit fixem CN=mail.localhost
-    // (nur beim allerersten Start sinnvoll).  Der Admin tauscht es später im BCP
-    // gegen ein echtes Cert; ein fixer CN verhindert Neuausstellung beim Umbenennen
-    // des publicHostname.
+    // No matching cert in DB → self-signed fallback with fixed CN=mail.localhost
+    // (only useful on the very first start).  The admin later replaces it in the BCP
+    // with a real cert; a fixed CN prevents re-issuance when publicHostname
+    // is renamed.
     const SELF_SIGNED_HOSTNAME = 'mail.localhost';
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No protocol cert in DB — generating self-signed certificate for IMAP');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
-    // Self-signed in ServerSettings.tlsCert speichern als Fallback für andere Services
-    // beim erstmaligen Setup. activate-protocol überschreibt das später.
+    // Store self-signed cert in ServerSettings.tlsCert as fallback for other services
+    // during initial setup. activate-protocol overrides this later.
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
       create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: keyPem },
@@ -62,7 +62,7 @@ async function refreshTlsConfig(): Promise<void> {
   }
 }
 
-// ── Tracked-Server-Typ ────────────────────────────────────────────────────────
+// ── Tracked server type ───────────────────────────────────────────────────────
 interface TrackedImapServer {
   server:  ReturnType<typeof createImapServer>;
   sockets: Set<net.Socket>;
@@ -70,7 +70,7 @@ interface TrackedImapServer {
 
 const servers = new Map<number, TrackedImapServer>();
 
-// ── Reload-Mutex ──────────────────────────────────────────────────────────────
+// ── Reload mutex ──────────────────────────────────────────────────────────────
 let _reloading = false;
 let _pendingReload = false;
 
@@ -84,10 +84,10 @@ function scheduleReload(): void {
   });
 }
 
-// ── Server-Lifecycle ──────────────────────────────────────────────────────────
+// ── Server lifecycle ──────────────────────────────────────────────────────────
 
 function createTrackedImapServer(ssl: boolean): TrackedImapServer {
-  // TLS für implizites TLS (Port 993) übergeben; Plaintext (Port 143) ohne TLS
+  // Pass TLS for implicit TLS (port 993); plaintext (port 143) without TLS
   const server = createImapServer(ssl && _tlsConfig ? _tlsConfig : undefined);
   const sockets = new Set<net.Socket>();
   server.on('connection', (socket: net.Socket) => {
@@ -98,29 +98,29 @@ function createTrackedImapServer(ssl: boolean): TrackedImapServer {
 }
 
 /**
- * Schließt einen IMAP-Listener definitiv:
+ * Shuts down an IMAP listener definitively:
  *
- * 1. Alle verfolgten Sockets per .destroy() sofort beenden
- * 2. server.close() aufrufen (OS-Port wird synchron freigegeben)
- * 3. _handle direkt schließen als Absicherung
+ * 1. Terminate all tracked sockets immediately via .destroy()
+ * 2. Call server.close() (OS port is released synchronously)
+ * 3. Close _handle directly as a safeguard
  *
- * IMAP IDLE-Verbindungen haben 30-min-Timeout — ohne socket.destroy()
- * würde server.close() ewig warten. Durch destroy() sofortige Freigabe.
+ * IMAP IDLE connections have a 30-min timeout — without socket.destroy()
+ * server.close() would wait forever. destroy() releases immediately.
  */
 function closeImapServer(tracked: TrackedImapServer, port: number): void {
   const count = tracked.sockets.size;
 
-  // Alle aktiven Verbindungen sofort zerstören (auch IDLE-Verbindungen)
+  // Destroy all active connections immediately (including IDLE connections)
   for (const s of tracked.sockets) { try { s.destroy(); } catch { /* ignore */ } }
   tracked.sockets.clear();
 
-  // server.close() → _handle.close() → OS-Port synchron freigegeben
+  // server.close() → _handle.close() → OS port released synchronously
   try {
     tracked.server.close(() =>
       log.debug({ port }, 'IMAP server.close() callback fired'));
   } catch { /* server may already be closed */ }
 
-  // Nuklear-Option: _handle direkt schließen
+  // Nuclear option: close _handle directly
   const handle = (tracked.server as any)._handle;
   if (handle?.close) {
     try { handle.close(); (tracked.server as any)._handle = null; } catch { /* ignore */ }
@@ -129,7 +129,7 @@ function closeImapServer(tracked: TrackedImapServer, port: number): void {
   log.info({ port, closedConnections: count }, 'IMAP listener stopped');
 }
 
-// ── Listener-Reload ───────────────────────────────────────────────────────────
+// ── Listener reload ───────────────────────────────────────────────────────────
 
 async function reloadListeners(): Promise<void> {
   try {
@@ -138,7 +138,7 @@ async function reloadListeners(): Promise<void> {
 
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'IMAP reload');
 
-    // Neu aktive Ports starten
+    // Start newly active ports
     for (const l of listeners) {
       if (l.active && !servers.has(l.port)) {
         try {
@@ -153,10 +153,10 @@ async function reloadListeners(): Promise<void> {
       }
     }
 
-    // Deaktivierte/gelöschte Ports schließen (synchron)
+    // Close deactivated/removed ports (synchronously)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);   // Vor dem Close aus Map entfernen
+        servers.delete(port);   // Remove from map before closing
         closeImapServer(tracked, port);
       }
     }

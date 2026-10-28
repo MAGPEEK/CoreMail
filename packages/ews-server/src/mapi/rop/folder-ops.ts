@@ -1,7 +1,7 @@
 /**
- * Folder-Operations-Handler (v4.4.0)
+ * Folder operations handler (v4.4.0)
  *
- * Implementiert:
+ * Implements:
  *   - RopDeleteMessages      (MS-OXCMSG §2.2.3.3)
  *   - RopMoveCopyMessages    (MS-OXCMSG §2.2.7.1)
  */
@@ -22,7 +22,7 @@ const log = createLogger('mapi:rop:folder-ops');
  * Payload: WantAsynchronous(uint8) | NotifyNonRead(uint8)
  *        | MessageIdCount(uint16) | MessageIds(uint64[])
  *
- * Antwort: ReturnValue + PartialCompletion(uint8)
+ * Response: ReturnValue + PartialCompletion(uint8)
  */
 export async function handleRopDeleteMessages(
   rop: RopRequest,
@@ -45,7 +45,7 @@ export async function handleRopDeleteMessages(
     ids64.push(r.readUint64());
   }
 
-  // Messages auflösen über 64-bit Hash
+  // Resolve messages via 64-bit hash
   const messages = await prisma.message.findMany({
     where: { folderId, folder: { mailbox: { userId } } },
     select: { id: true },
@@ -58,11 +58,11 @@ export async function handleRopDeleteMessages(
       await prisma.message.delete({ where: { id: t.id } });
       deleted++;
     } catch (e) {
-      log.warn({ err: e, msgId: t.id }, 'DeleteMessages: einzelnes Delete fehlgeschlagen');
+      log.warn({ err: e, msgId: t.id }, 'DeleteMessages: single delete failed');
       partial = true;
     }
   }
-  // Folder-Counter aktualisieren
+  // Update folder counters
   if (deleted > 0) {
     try {
       await prisma.folder.update({
@@ -70,7 +70,7 @@ export async function handleRopDeleteMessages(
         data: { totalCount: { decrement: deleted } },
       });
     } catch (e) {
-      log.warn({ err: e }, 'DeleteMessages: Folder-Counter-Update fehlgeschlagen');
+      log.warn({ err: e }, 'DeleteMessages: folder counter update failed');
     }
   }
 
@@ -91,7 +91,7 @@ export async function handleRopDeleteMessages(
  *
  * Source = inputHandleIndex (folder), Destination = outputHandleIndex (folder).
  *
- * Antwort: ReturnValue + PartialCompletion(uint8)
+ * Response: ReturnValue + PartialCompletion(uint8)
  */
 export async function handleRopMoveCopyMessages(
   rop: RopRequest,
@@ -129,7 +129,7 @@ export async function handleRopMoveCopyMessages(
   for (const t of targets) {
     try {
       if (wantCopy) {
-        // Copy: vollständigen Record duplizieren (Mailbox-UID-Increment)
+        // Copy: duplicate the complete record (mailbox UID increment)
         const orig = await prisma.message.findUnique({ where: { id: t.id } });
         if (orig) {
           const { id: _id, createdAt: _c, ...rest } = orig;
@@ -143,12 +143,12 @@ export async function handleRopMoveCopyMessages(
       }
       moved++;
     } catch (e) {
-      log.warn({ err: e, msgId: t.id, copy: wantCopy }, 'MoveCopyMessages: einzelner Op fehlgeschlagen');
+      log.warn({ err: e, msgId: t.id, copy: wantCopy }, 'MoveCopyMessages: single op failed');
       partial = true;
     }
   }
 
-  // Folder-Counter
+  // Folder counters
   if (moved > 0) {
     try {
       await prisma.folder.update({
@@ -162,7 +162,7 @@ export async function handleRopMoveCopyMessages(
         });
       }
     } catch (e) {
-      log.warn({ err: e }, 'MoveCopyMessages: Folder-Counter-Update fehlgeschlagen');
+      log.warn({ err: e }, 'MoveCopyMessages: folder counter update failed');
     }
   }
 

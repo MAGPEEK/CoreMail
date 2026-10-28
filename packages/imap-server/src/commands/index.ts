@@ -89,24 +89,24 @@ export async function handleLogout(session: ImapSession, tag: string): Promise<v
 }
 
 // ─────────────────────────────────────────────
-// LIST — v5.2.18 mit SPECIAL-USE-Flags (RFC 6154)
+// LIST — v5.2.18 with SPECIAL-USE flags (RFC 6154)
 // ─────────────────────────────────────────────
 //
-// Mac Mail / Apple Mail erkennt die System-Ordner nur über SPECIAL-USE-Flags:
+// Mac Mail / Apple Mail only recognizes the system folders via SPECIAL-USE flags:
 //   \Drafts, \Sent, \Trash, \Junk, \Archive, \Flagged, \All
-// Ohne diese Flags zeigt Mac Mail nur INBOX an — die anderen Ordner sind
-// zwar im LIST enthalten, werden aber von Mac Mail nicht als "Standardordner"
-// erkannt und daher ausgeblendet.
+// Without these flags Mac Mail only shows INBOX — the other folders are
+// included in LIST but are not recognized by Mac Mail as "standard folders"
+// and are therefore hidden.
 
 /**
- * Mappt einen Folder-Namen (case-insensitive) auf das SPECIAL-USE-Flag.
- * Unterstützt sowohl englische (INBOX, Drafts, Sent, …) als auch typische
- * deutsche Aliase (Entwürfe, Gesendet, …) — falls jemand sein Schema mal
- * umbenennt.
+ * Maps a folder name (case-insensitive) to its SPECIAL-USE flag.
+ * Supports both English (INBOX, Drafts, Sent, …) and typical German
+ * aliases (Entwürfe, Gesendet, …) — in case someone renames their
+ * folder scheme.
  */
 function specialUseFlag(name: string): string | null {
   const n = name.toLowerCase();
-  if (n === 'inbox' || n === 'posteingang') return null; // INBOX hat KEIN SPECIAL-USE
+  if (n === 'inbox' || n === 'posteingang') return null; // INBOX has NO SPECIAL-USE
   if (n === 'drafts' || n === 'entwürfe' || n === 'entwurf') return '\\Drafts';
   if (n === 'sent' || n === 'gesendet' || n === 'sent items' || n === 'sent messages') return '\\Sent';
   if (n === 'trash' || n === 'gelöscht' || n === 'deleted items' || n === 'deleted messages') return '\\Trash';
@@ -133,15 +133,15 @@ export async function handleList(
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/%/g, '[^.]*');
-  // v5.2.19: Defensive — reference auch eskapieren falls Client sie mit
-  // Sonderzeichen sendet. Plus try/catch um RegExp damit ungültige Patterns
-  // nicht zum 500 führen sondern alle Ordner zurückgeben.
+  // v5.2.19: Defensive — also escape the reference in case the client sends it
+  // with special characters. Plus try/catch around RegExp so invalid patterns
+  // do not lead to a 500 but return all folders instead.
   const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
   let regex: RegExp;
   try {
     regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
   } catch {
-    // Fallback: alle Folder matchen
+    // Fallback: match all folders
     regex = /.*/;
   }
 
@@ -163,11 +163,11 @@ export async function handleList(
 }
 
 // ─────────────────────────────────────────────
-// LSUB — Mac Mail erste Abfrage nach Login (RFC 3501 §6.3.9)
+// LSUB — Mac Mail's first query after login (RFC 3501 §6.3.9)
 // ─────────────────────────────────────────────
-// Ohne LSUB-Handler antwortet unser Server mit "BAD" → Mac Mail nimmt an,
-// dass nur INBOX existiert. Wir behandeln alle Standard-Ordner als
-// automatisch subscribed.
+// Without an LSUB handler our server replies "BAD" → Mac Mail assumes
+// that only INBOX exists. We treat all standard folders as
+// automatically subscribed.
 export async function handleLsub(
   session: ImapSession,
   tag: string,
@@ -184,15 +184,15 @@ export async function handleLsub(
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
     .replace(/%/g, '[^.]*');
-  // v5.2.19: Defensive — reference auch eskapieren falls Client sie mit
-  // Sonderzeichen sendet. Plus try/catch um RegExp damit ungültige Patterns
-  // nicht zum 500 führen sondern alle Ordner zurückgeben.
+  // v5.2.19: Defensive — also escape the reference in case the client sends it
+  // with special characters. Plus try/catch around RegExp so invalid patterns
+  // do not lead to a 500 but return all folders instead.
   const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
   let regex: RegExp;
   try {
     regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
   } catch {
-    // Fallback: alle Folder matchen
+    // Fallback: match all folders
     regex = /.*/;
   }
 
@@ -203,7 +203,7 @@ export async function handleLsub(
 
   for (const folder of folders) {
     if (pattern === '*' || pattern === '%' || regex.test(folder.name)) {
-      // SPECIAL-USE-Flags auch im LSUB ausgeben — Mac Mail validiert
+      // Emit SPECIAL-USE flags in LSUB as well — Mac Mail validates them
       const flags: string[] = ['\\HasNoChildren'];
       const special = specialUseFlag(folder.name);
       if (special) flags.push(special);
@@ -217,8 +217,8 @@ export async function handleLsub(
 // ─────────────────────────────────────────────
 // SUBSCRIBE / UNSUBSCRIBE — RFC 3501 §6.3.6/6.3.7
 // ─────────────────────────────────────────────
-// Wir akzeptieren beides als no-op (alle Standard-Folder sind immer
-// subscribed). Mac Mail ruft SUBSCRIBE oft selbständig auf nach LIST.
+// We accept both as no-ops (all standard folders are always
+// subscribed). Mac Mail often calls SUBSCRIBE on its own after LIST.
 export async function handleSubscribe(
   session: ImapSession,
   tag: string,
@@ -241,17 +241,17 @@ export async function handleUnsubscribe(
   _args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-  // Wir erlauben Unsubscribe (no-op) — bei nächstem LSUB ist alles wieder
-  // subscribed. Mac Mail kann mit dem Verhalten umgehen.
+  // We allow unsubscribe (no-op) — on the next LSUB everything is
+  // subscribed again. Mac Mail copes with this behavior.
   sendOk(session, tag, 'UNSUBSCRIBE completed');
 }
 
 // ─────────────────────────────────────────────
 // NAMESPACE — RFC 2342
 // ─────────────────────────────────────────────
-// Personal namespace mit "." als Hierarchy-Delimiter. Keine Other-User
-// oder Shared-Namespaces (würden CoreMail-Shared-Mailboxes brauchen —
-// folgt evtl. später).
+// Personal namespace with "." as hierarchy delimiter. No other-user
+// or shared namespaces (would require CoreMail shared mailboxes —
+// may follow later).
 export function handleNamespace(session: ImapSession, tag: string): void {
   sendUntagged(session, 'NAMESPACE (("" ".")) NIL NIL');
   sendOk(session, tag, 'NAMESPACE completed');
@@ -260,8 +260,8 @@ export function handleNamespace(session: ImapSession, tag: string): void {
 // ─────────────────────────────────────────────
 // STATUS — RFC 3501 §6.3.10
 // ─────────────────────────────────────────────
-// Mac Mail nutzt STATUS um Folder-Übersicht zu refreshen ohne SELECT.
-// Liefert MESSAGES, UIDNEXT, UIDVALIDITY, UNSEEN, RECENT, HIGHESTMODSEQ.
+// Mac Mail uses STATUS to refresh the folder overview without SELECT.
+// Returns MESSAGES, UIDNEXT, UIDVALIDITY, UNSEEN, RECENT, HIGHESTMODSEQ.
 export async function handleStatus(
   session: ImapSession,
   tag: string,
@@ -301,7 +301,7 @@ export async function handleStatus(
 }
 
 // ─────────────────────────────────────────────
-// CREATE — RFC 3501 §6.3.3 (Mac Mail braucht das für „Neuen Ordner" + Drafts/Sent-Upload)
+// CREATE — RFC 3501 §6.3.3 (Mac Mail needs this for "New Folder" + Drafts/Sent upload)
 // ─────────────────────────────────────────────
 export async function handleCreate(
   session: ImapSession,
@@ -311,13 +311,13 @@ export async function handleCreate(
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   let name = unquote(args[0] ?? '');
   if (!name) { sendBad(session, tag, 'Folder name required'); return; }
-  // Trailing-Slash entfernen (Mac Mail sendet "Parent.Child." manchmal)
+  // Remove trailing slash (Mac Mail sometimes sends "Parent.Child.")
   name = name.replace(/[.\/]+$/, '');
   if (name.toUpperCase() === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be created');
     return;
   }
-  // Doppelte Ordner verhindern
+  // Prevent duplicate folders
   const existing = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name },
     select: { id: true },
@@ -356,7 +356,7 @@ export async function handleDeleteFolder(
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
-  // Soft-Delete der Messages, dann Folder löschen
+  // Soft-delete the messages, then delete the folder
   await prisma.message.updateMany({
     where: { folderId: folder.id, deletedAt: null },
     data:  { deletedAt: new Date() },
@@ -389,7 +389,7 @@ export async function handleRename(
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
-  // Konflikt mit existierendem Ordner?
+  // Conflict with an existing folder?
   const conflict = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name: newName },
     select: { id: true },
@@ -406,12 +406,12 @@ export async function handleRename(
 }
 
 // ─────────────────────────────────────────────
-// APPEND — RFC 3501 §6.3.11 (Mac Mail lädt Drafts/Sent zum Server)
+// APPEND — RFC 3501 §6.3.11 (Mac Mail uploads Drafts/Sent to the server)
 // ─────────────────────────────────────────────
-// Achtung: APPEND nutzt IMAP-Literals ({size}+) für den RFC-822-Body.
-// Der vollständige Body wird beim ersten Aufruf vom Server-Loop bereits
-// gepuffert (parseLine sammelt ihn). Args[0] = folder, args[1] = (flags),
-// args[2] = datetime?, letzter Token = literal body.
+// Note: APPEND uses IMAP literals ({size}+) for the RFC 822 body.
+// The complete body is already buffered by the server loop on the first
+// call (parseLine collects it). Args[0] = folder, args[1] = (flags),
+// args[2] = datetime?, last token = literal body.
 export async function handleAppend(
   session: ImapSession,
   tag: string,
@@ -420,9 +420,9 @@ export async function handleAppend(
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length < 2) { sendBad(session, tag, 'APPEND requires folder + body'); return; }
   const folderName = unquote(args[0] ?? '');
-  // Body ist immer der letzte Arg (Literal-Inhalt)
+  // Body is always the last arg (literal content)
   const body = args[args.length - 1] ?? '';
-  // Flags-Parse: zwischen ( und )
+  // Parse flags: between ( and )
   let flags: string[] = [];
   for (const a of args.slice(1, -1)) {
     const m = /^\((.*)\)$/.exec(a);
@@ -437,7 +437,7 @@ export async function handleAppend(
     return;
   }
 
-  // Minimal RFC-822-Parsing — Subject + From + To extrahieren
+  // Minimal RFC 822 parsing — extract Subject + From + To
   const headerBlock = body.split(/\r?\n\r?\n/)[0] ?? '';
   const getHeader = (name: string): string | undefined => {
     const re = new RegExp(`^${name}:\\s*(.+)$`, 'mi');
@@ -450,11 +450,11 @@ export async function handleAppend(
   const toAddrs  = toRaw ? toRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
   const msgId    = getHeader('message-id') ?? '';
 
-  // Body extrahieren (alles nach Header-Block)
+  // Extract body (everything after the header block)
   const bodyStart = body.indexOf('\r\n\r\n') >= 0 ? body.indexOf('\r\n\r\n') + 4 : body.indexOf('\n\n') + 2;
   const bodyText = bodyStart > 0 ? body.slice(bodyStart) : '';
 
-  // Mailbox UID hochzählen (atomar via increment)
+  // Increment mailbox UID (atomically via increment)
   const updated = await prisma.mailbox.update({
     where: { id: folder.mailboxId },
     data:  { uidNext: { increment: 1 } },
@@ -481,7 +481,7 @@ export async function handleAppend(
       messageId: msgId,
     },
   });
-  // Modseq des Mailbox erhöhen
+  // Increment the mailbox modseq
   await prisma.mailbox.update({
     where: { id: folder.mailboxId },
     data:  { highestModSeq: { increment: 1n } },
@@ -492,7 +492,7 @@ export async function handleAppend(
 }
 
 // ─────────────────────────────────────────────
-// COPY — RFC 3501 §6.4.7 (Mac Mail "in Ordner verschieben" = COPY + STORE \Deleted + EXPUNGE)
+// COPY — RFC 3501 §6.4.7 (Mac Mail "move to folder" = COPY + STORE \Deleted + EXPUNGE)
 // ─────────────────────────────────────────────
 export async function handleCopy(
   session: ImapSession,
@@ -511,12 +511,12 @@ export async function handleCopy(
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
 
-  // Messages der aktuellen Folder laden
+  // Load messages of the current folder
   const messages = await prisma.message.findMany({
     where: { folderId: session.selected.folderId, deletedAt: null },
     orderBy: { uid: 'asc' },
   });
-  // Sequence-Set parsen (UID oder Seq-Nr)
+  // Parse sequence set (UID or seq number)
   const uids = messages.map((m) => m.uid);
   const matchedUids = parseSequenceSet(seqSet, uids, byUid);
 
@@ -526,7 +526,7 @@ export async function handleCopy(
   }
 
   const sourceMsgs = messages.filter((m) => matchedUids.includes(m.uid));
-  // UIDs reservieren
+  // Reserve UIDs
   await prisma.mailbox.update({
     where: { id: target.mailboxId },
     data:  { uidNext: { increment: sourceMsgs.length } },
@@ -599,7 +599,7 @@ export async function handleMove(
     return;
   }
   const matched = messages.filter((m) => matchedUids.includes(m.uid));
-  // Atomic move: nur folderId updaten
+  // Atomic move: only update folderId
   await prisma.message.updateMany({
     where: { id: { in: matched.map((m) => m.id) } },
     data:  { folderId: target.id },
@@ -608,13 +608,13 @@ export async function handleMove(
 }
 
 // ─────────────────────────────────────────────
-// SEARCH — RFC 3501 §6.4.4 — Mac Mail nutzt das auf jedem Folder-Open!
+// SEARCH — RFC 3501 §6.4.4 — Mac Mail uses this on every folder open!
 // ─────────────────────────────────────────────
-// Minimal-Implementierung: SEARCH ALL, SEARCH UNSEEN, SEARCH SEEN,
+// Minimal implementation: SEARCH ALL, SEARCH UNSEEN, SEARCH SEEN,
 // SEARCH FLAGGED, SEARCH UNFLAGGED, SEARCH DELETED, SEARCH UNDELETED,
 // SEARCH NEW (UNSEEN+RECENT), SEARCH OLD (NOT RECENT), SEARCH RECENT.
-// Ohne SEARCH zeigt Mac Mail Folders als leer an, weil es zuerst SEARCH ALL
-// macht um die UID-Liste zu holen.
+// Without SEARCH, Mac Mail shows folders as empty because it first runs SEARCH ALL
+// to fetch the UID list.
 export async function handleSearch(
   session: ImapSession,
   tag: string,
@@ -623,7 +623,7 @@ export async function handleSearch(
 ): Promise<void> {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
 
-  // Sehr einfacher Filter-Parser
+  // Very simple filter parser
   const criteria = args.map((a) => a.toUpperCase());
   const where: Record<string, unknown> = {
     folderId:  session.selected.folderId,
@@ -635,7 +635,7 @@ export async function handleSearch(
   if (criteria.includes('UNFLAGGED')) Object.assign(where, { NOT: { flags: { has: '\\Flagged' } } });
   if (criteria.includes('DELETED'))   Object.assign(where, { flags: { has: '\\Deleted' } });
   if (criteria.includes('UNDELETED')) Object.assign(where, { NOT: { flags: { has: '\\Deleted' } } });
-  // NEW/RECENT: wir tracken RECENT nicht — interpretieren als UNSEEN (gleicher Effekt für Mac Mail)
+  // NEW/RECENT: we do not track RECENT — interpret as UNSEEN (same effect for Mac Mail)
   if (criteria.includes('NEW') || criteria.includes('RECENT')) {
     Object.assign(where, { NOT: { flags: { has: '\\Seen' } } });
   }
@@ -651,7 +651,7 @@ export async function handleSearch(
     sendUntagged(session, `SEARCH${uids.length ? ' ' + uids.join(' ') : ''}`);
     sendOk(session, tag, 'UID SEARCH completed');
   } else {
-    // SEARCH ohne UID liefert Sequenz-Nummern (1-basiert in sortierter Folder-Reihenfolge)
+    // SEARCH without UID returns sequence numbers (1-based in sorted folder order)
     const allMessages = await prisma.message.findMany({
       where: { folderId: session.selected.folderId, deletedAt: null },
       select: { uid: true },
@@ -668,14 +668,14 @@ export async function handleSearch(
 }
 
 // ─────────────────────────────────────────────
-// CLOSE — RFC 3501 §6.4.2 (Mailbox abwählen + implizit EXPUNGE)
+// CLOSE — RFC 3501 §6.4.2 (deselect mailbox + implicit EXPUNGE)
 // ─────────────────────────────────────────────
 export async function handleClose(
   session: ImapSession,
   tag: string,
 ): Promise<void> {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
-  // Implizit Messages mit \Deleted-Flag entfernen
+  // Implicitly remove messages with the \Deleted flag
   await prisma.message.updateMany({
     where: {
       folderId:  session.selected.folderId,
@@ -690,17 +690,17 @@ export async function handleClose(
 }
 
 // ─────────────────────────────────────────────
-// CHECK — RFC 3501 §6.4.1 (Server-Sync, im Wesentlichen NOOP für uns)
+// CHECK — RFC 3501 §6.4.1 (server sync, essentially a NOOP for us)
 // ─────────────────────────────────────────────
 export function handleCheck(session: ImapSession, tag: string): void {
   sendOk(session, tag, 'CHECK completed');
 }
 
 // ─────────────────────────────────────────────
-// UNSELECT — RFC 3691 / RFC 9051 IMAP4rev2 Pflicht
+// UNSELECT — RFC 3691 / RFC 9051 IMAP4rev2 mandatory
 // ─────────────────────────────────────────────
-// Schließt aktuell selektierten Folder, OHNE EXPUNGE auszuführen.
-// Im Gegensatz zu CLOSE bleiben \Deleted-Messages erhalten.
+// Closes the currently selected folder WITHOUT performing EXPUNGE.
+// Unlike CLOSE, \Deleted messages are preserved.
 export function handleUnselect(session: ImapSession, tag: string): void {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
   session.selected = null;
@@ -711,9 +711,9 @@ export function handleUnselect(session: ImapSession, tag: string): void {
 // ─────────────────────────────────────────────
 // ID — RFC 2971 (Client/Server Identification)
 // ─────────────────────────────────────────────
-// Client identifiziert sich mit ("name" "Thunderbird" "version" "115.0")
-// — wir antworten mit unserer Server-ID. Manche Clients senden ID
-// proaktiv, Server-Antwort darf NIL sein.
+// Client identifies itself with ("name" "Thunderbird" "version" "115.0")
+// — we reply with our server ID. Some clients send ID
+// proactively; the server response may be NIL.
 export function handleId(session: ImapSession, tag: string, _args: string[]): void {
   sendUntagged(session, 'ID ("name" "CoreMail" "version" "5.5.0" "vendor" "MAGPEEK" "support-url" "https://github.com/MAGPEEK/CoreMail")');
   sendOk(session, tag, 'ID completed');
@@ -722,14 +722,14 @@ export function handleId(session: ImapSession, tag: string, _args: string[]): vo
 // ─────────────────────────────────────────────
 // AUTHENTICATE — RFC 3501 §6.2.2 + RFC 4959 SASL-IR
 // ─────────────────────────────────────────────
-// Unterstützt: PLAIN (RFC 4616), LOGIN (deprecated aber weit verbreitet).
-// Mit SASL-IR-Capability darf der Client das initial-response direkt
-// mitsenden (`A1 AUTHENTICATE PLAIN <base64>`). Sonst Server fragt mit
-// `+ ` (challenge) → Client sendet base64-Response.
+// Supported: PLAIN (RFC 4616), LOGIN (deprecated but widespread).
+// With the SASL-IR capability the client may send the initial response
+// directly (`A1 AUTHENTICATE PLAIN <base64>`). Otherwise the server prompts with
+// `+ ` (challenge) → client sends the base64 response.
 //
-// XOAUTH2 wäre RFC 7628 — bewusst NICHT implementiert weil Mainstream-
-// Clients (Apple Mail, Outlook LTSC) keine UI für custom OAuth-Server
-// bieten. App-Passwörter sind der praktische MFA-Bypass.
+// XOAUTH2 would be RFC 7628 — deliberately NOT implemented because mainstream
+// clients (Apple Mail, Outlook LTSC) offer no UI for custom OAuth servers.
+// App passwords are the practical MFA bypass.
 export async function handleAuthenticate(
   session: ImapSession,
   tag: string,
@@ -744,7 +744,7 @@ export async function handleAuthenticate(
       await processPlainAuth(session, tag, initialResponse);
       return;
     }
-    // Kein SASL-IR → Server sendet leeres Continuation und wartet auf Response
+    // No SASL-IR → server sends an empty continuation and waits for the response
     session.saslMech = 'PLAIN';
     session.saslStep = 0;
     send(session, '+ ');
@@ -767,13 +767,13 @@ export async function handleAuthenticate(
     return;
   }
 
-  // v5.5.0: XOAUTH2 explizit NICHT implementiert — siehe Kommentar oben
+  // v5.5.0: XOAUTH2 explicitly NOT implemented — see comment above
   sendNo(session, tag, `[CANNOT] Unsupported SASL mechanism. Use PLAIN, LOGIN, or LOGIN command`);
 }
 
 /**
- * Wird vom dispatcher aufgerufen wenn session.saslMech gesetzt ist,
- * d.h. wir warten auf die nächste Continuation-Response.
+ * Called by the dispatcher when session.saslMech is set,
+ * i.e. we are waiting for the next continuation response.
  */
 export async function handleSaslContinuation(
   session: ImapSession,
@@ -781,7 +781,7 @@ export async function handleSaslContinuation(
   line: string,
 ): Promise<void> {
   const data = line.trim();
-  // Client kann mit "*" abbrechen
+  // Client may abort with "*"
   if (data === '*') {
     session.saslMech = null;
     session.saslStep = 0;
@@ -813,7 +813,7 @@ export async function handleSaslContinuation(
     return;
   }
 
-  // Fallback — kein aktiver Mech
+  // Fallback — no active mechanism
   sendBad(session, tag, 'Unexpected continuation');
 }
 
@@ -830,12 +830,12 @@ async function processPlainAuth(session: ImapSession, tag: string, b64Data: stri
 }
 
 /**
- * Interne Login-Verifikation für AUTHENTICATE PLAIN/LOGIN.
+ * Internal login verification for AUTHENTICATE PLAIN/LOGIN.
  * Reuses handleLogin-style verification but doesn't go through args parsing.
  */
 async function loginUser(session: ImapSession, tag: string, username: string, password: string): Promise<void> {
   let email = username.trim().toLowerCase();
-  // Bare-Username → @primary-domain
+  // Bare username → @primary-domain
   if (!email.includes('@')) {
     const primaryDomain = await prisma.domain.findFirst({
       where: { primary: true, active: true }, select: { name: true },
@@ -960,7 +960,7 @@ export async function handleFetch(
   const dataItems = new Set(
     dataItemsRaw.replace(/[()]/g, ' ').split(/\s+/).filter(Boolean).map((s) => s.toUpperCase())
   );
-  // Auch zusammengesetzte Items wie BODY[HEADER] etc. erkennen
+  // Also recognize compound items like BODY[HEADER] etc.
   const requestedBodyParts = [...dataItemsRaw.matchAll(/BODY(?:\.PEEK)?(\[[^\]]*\])/gi)]
     .map((m) => ({ raw: m[0], part: (m[1] ?? '').toUpperCase(), peek: /\.PEEK/i.test(m[0]) }));
 
@@ -970,7 +970,7 @@ export async function handleFetch(
     include: { attachments: { select: { filename: true, mimeType: true, size: true } } },
   });
 
-  // v5.3.5: parseSequenceSet jetzt mit byUid-Parameter
+  // v5.3.5: parseSequenceSet now takes a byUid parameter
   const isUidFetch = /UID FETCH/i.test(args.join(' ')) || false;
   const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid), isUidFetch);
 
@@ -979,7 +979,7 @@ export async function handleFetch(
     const num = seqNum + 1;
     const items: string[] = [];
 
-    // UID — Mac Mail braucht das immer für UID FETCH
+    // UID — Mac Mail always needs this for UID FETCH
     items.push(`UID ${msg.uid}`);
 
     // FLAGS
@@ -1002,11 +1002,11 @@ export async function handleFetch(
       items.push(`ENVELOPE ${buildEnvelope(msg)}`);
     }
 
-    // BODYSTRUCTURE / BODY (ohne Argument) — RFC 3501 §7.4.2 MIME structure
+    // BODYSTRUCTURE / BODY (without argument) — RFC 3501 §7.4.2 MIME structure
     if (dataItems.has('BODYSTRUCTURE') || dataItems.has('FULL')) {
       items.push(`BODYSTRUCTURE ${buildBodyStructure(msg)}`);
     } else if (dataItems.has('BODY')) {
-      // BODY ohne Argument = nicht-extensible BODYSTRUCTURE
+      // BODY without argument = non-extensible BODYSTRUCTURE
       items.push(`BODY ${buildBodyStructure(msg, false)}`);
     }
 
@@ -1021,13 +1021,13 @@ export async function handleFetch(
       } else if (partName === 'TEXT') {
         content = msg.bodyText || '';
       } else if (partName.startsWith('HEADER.FIELDS')) {
-        // BODY[HEADER.FIELDS (FROM TO SUBJECT)] etc. — wir liefern alle Header
+        // BODY[HEADER.FIELDS (FROM TO SUBJECT)] etc. — we return all headers
         content = buildRfc5322Headers(msg);
       } else {
         content = buildRfc5322(msg);
       }
       const bodyKey = bp.peek ? `BODY${bp.part}` : `BODY${bp.part}`;
-      // Beim non-PEEK setzen wir \Seen
+      // For non-PEEK we set \Seen
       if (!bp.peek && !msg.flags.includes('\\Seen')) {
         void prisma.message.update({
           where: { id: msg.id },
@@ -1062,10 +1062,10 @@ export async function handleFetch(
 }
 
 // ─────────────────────────────────────────────
-// FETCH-Helpers (v5.3.5)
+// FETCH helpers (v5.3.5)
 // ─────────────────────────────────────────────
 
-/** RFC 3501 §6.4.5 INTERNALDATE-Format: "01-Jan-2026 12:34:56 +0000" */
+/** RFC 3501 §6.4.5 INTERNALDATE format: "01-Jan-2026 12:34:56 +0000" */
 function formatInternalDate(d: Date): string {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const dd = String(d.getUTCDate()).padStart(2, '0');
@@ -1078,8 +1078,8 @@ function formatInternalDate(d: Date): string {
 }
 
 /**
- * Baut einen RFC-5322 / RFC-2822 konformen Mail-Body inkl. Headern.
- * Wenn HTML vorhanden ist, multipart/alternative; sonst text/plain.
+ * Builds an RFC 5322 / RFC 2822 compliant mail body including headers.
+ * If HTML is present, multipart/alternative; otherwise text/plain.
  */
 function buildRfc5322(msg: {
   date: Date; subject: string; fromAddr: string; fromName: string;
@@ -1116,7 +1116,7 @@ function buildRfc5322(msg: {
   return `${headers}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${msg.bodyText || ''}`;
 }
 
-/** RFC-5322 Header-Block (endet mit \r\n\r\n — Header-Body-Separator NICHT enthalten). */
+/** RFC 5322 header block (ends with \r\n\r\n — header/body separator NOT included). */
 function buildRfc5322Headers(msg: {
   date: Date; subject: string; fromAddr: string; fromName: string;
   toAddrs: string[]; ccAddrs: string[]; bccAddrs: string[];
@@ -1138,10 +1138,10 @@ function buildRfc5322Headers(msg: {
 
 /**
  * RFC 3501 §7.4.2 BODYSTRUCTURE.
- * Format für text/plain: ("text" "plain" ("charset" "utf-8") NIL NIL "8bit" SIZE LINES)
- * Wir liefern ein vereinfachtes single-part text/plain — Mac Mail akzeptiert das,
- * auch wenn der Body eigentlich HTML enthält (Body[TEXT] liefert dann den Plain-Text-
- * Anteil).
+ * Format for text/plain: ("text" "plain" ("charset" "utf-8") NIL NIL "8bit" SIZE LINES)
+ * We return a simplified single-part text/plain — Mac Mail accepts this,
+ * even if the body actually contains HTML (Body[TEXT] then returns the plain-text
+ * part).
  */
 function buildBodyStructure(msg: { bodyText: string; bodyHtml: string; rawSize: number },
                             _extensible = true): string {
@@ -1290,17 +1290,17 @@ function unquote(s: string): string {
 }
 
 /**
- * Parst eine IMAP-Sequenz-Set-Notation (RFC 3501 §9):
- *   "1,3,5:9"     — Elemente 1, 3, 5-9
- *   "1:*"         — alles
- *   "*"           — letztes Element
+ * Parses an IMAP sequence-set notation (RFC 3501 §9):
+ *   "1,3,5:9"     — elements 1, 3, 5-9
+ *   "1:*"         — everything
+ *   "*"           — last element
  *
- * Liefert die matching UIDs zurück.
+ * Returns the matching UIDs.
  *
- * @param set     Sequence-Set-String
- * @param uids    Array aller UIDs in der aktuellen Folder-View (sortiert)
- * @param byUid   true: input ist UID-Set (UID FETCH/STORE/COPY/MOVE),
- *                false: input ist Seq-Num-Set (1-basierte Positions in uids[])
+ * @param set     sequence-set string
+ * @param uids    array of all UIDs in the current folder view (sorted)
+ * @param byUid   true: input is a UID set (UID FETCH/STORE/COPY/MOVE),
+ *                false: input is a seq-num set (1-based positions in uids[])
  */
 function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
   if (!uids.length) return [];
@@ -1326,7 +1326,7 @@ function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
     return [...result];
   }
 
-  // Seq-Num-Modus: input sind 1-basierte Positionen in uids[]
+  // Seq-num mode: input are 1-based positions in uids[]
   const max = uids.length;
   const result = new Set<number>();
   for (const part of set.split(',')) {
@@ -1352,19 +1352,19 @@ function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
 }
 
 /**
- * RFC 3501 §7.4.2 — Envelope-Structure.
+ * RFC 3501 §7.4.2 — envelope structure.
  *
  * Fields (in order): date, subject, from, sender, reply-to, to, cc, bcc,
  * in-reply-to, message-id.
  *
- * KRITISCH: Address-Listen (from/sender/reply-to/to/cc/bcc) sind ENTWEDER
- *   - NIL (ohne Klammern!) wenn leer/null
- *   - (addr1 addr2 …) wenn nicht-leer — Klammern UMGEBEN die Liste
+ * CRITICAL: address lists (from/sender/reply-to/to/cc/bcc) are EITHER
+ *   - NIL (without parentheses!) when empty/null
+ *   - (addr1 addr2 …) when non-empty — parentheses SURROUND the list
  *
- * Vorher v5.3.5 (Bug): `(${replyTo})` lieferte `(NIL)` für leere reply-to.
- * Mac Mail's ENVELOPE-Parser bricht bei `(NIL)` ab und verwirft den
- * ganzen FETCH-Response → User sieht 0 Mails im Posteingang obwohl
- * Server `* 1 EXISTS` annonciert.
+ * Before v5.3.5 (bug): `(${replyTo})` yielded `(NIL)` for an empty reply-to.
+ * Mac Mail's ENVELOPE parser aborts on `(NIL)` and discards the
+ * whole FETCH response → user sees 0 mails in the inbox although the
+ * server announces `* 1 EXISTS`.
  */
 function buildEnvelope(msg: {
   date: Date;
@@ -1376,12 +1376,12 @@ function buildEnvelope(msg: {
   messageId: string | null;
   inReplyTo: string | null;
 }): string {
-  // String mit IMAP-Escaping (RFC 3501 §4.3 "quoted")
+  // String with IMAP escaping (RFC 3501 §4.3 "quoted")
   const q = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const date    = q(msg.date.toUTCString());
   const subject = q(msg.subject);
   const from    = formatAddrList([{ name: msg.fromName, email: msg.fromAddr }]);
-  const sender  = from;  // wenn nicht explizit gesetzt, sender = from (RFC 5322 §3.6.2)
+  const sender  = from;  // if not set explicitly, sender = from (RFC 5322 §3.6.2)
   const replyTo = msg.replyTo ? formatAddrList([{ name: '', email: msg.replyTo }]) : 'NIL';
   const to      = msg.toAddrs.length > 0 ? formatAddrList(msg.toAddrs.map((e) => ({ name: '', email: e }))) : 'NIL';
   const cc      = 'NIL';
@@ -1393,8 +1393,8 @@ function buildEnvelope(msg: {
 }
 
 /**
- * Formatiert eine Liste von Mail-Adressen als IMAP-Address-Struct-List.
- * Leere Liste → `NIL`. Nicht-leer → `(addr1 addr2 …)` mit umschließenden Klammern.
+ * Formats a list of mail addresses as an IMAP address-struct list.
+ * Empty list → `NIL`. Non-empty → `(addr1 addr2 …)` with surrounding parentheses.
  */
 function formatAddrList(addresses: { name: string; email: string }[]): string {
   if (addresses.length === 0) return 'NIL';
@@ -1404,7 +1404,7 @@ function formatAddrList(addresses: { name: string; email: string }[]): string {
 
 function formatAddr(name: string, email: string): string {
   // RFC 3501 §7.4.2 — address structure: (personal source-route mailbox host)
-  // Werte sind nstring (NIL oder "quoted") — niemals leere String-Literals "".
+  // Values are nstring (NIL or "quoted") — never empty string literals "".
   const [local = '', domain = ''] = email.split('@');
   const q = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const personal = name ? q(name) : 'NIL';

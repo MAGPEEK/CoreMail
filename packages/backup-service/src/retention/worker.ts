@@ -1,26 +1,26 @@
 /**
- * Managed Folder Assistant (MFA) — Exchange-2019-konform.
+ * Managed Folder Assistant (MFA) — Exchange 2019 compliant.
  *
- * Was der MFA pro Run tut:
- *   1. Für jede aktive Policy: bestimme betroffene Postfächer (GLOBAL/DOMAIN/USER).
- *   2. Für jedes Postfach: stelle sicher, dass die Recoverable-Items-Subordner
- *      (Recoverable Items, Recoverable Items/Deletions, /Purges) existieren.
- *   3. Für jede Mail im Postfach: berechne den effektiven Tag nach Hierarchie
- *        Personal (auf Item) → Personal (auf Folder) → RPT (für Ordner) → DPT (Policy)
- *   4. Wenn `date + tag.retentionDays < now` → führe Tag-Aktion aus:
- *        • MOVE_TO_ARCHIVE             — verschieben in "Archive"
- *        • DELETE_AND_ALLOW_RECOVERY   — verschieben in Recoverable Items/Deletions (Soft Delete, 14 Tage)
- *        • PERMANENTLY_DELETE          — verschieben in Recoverable Items/Purges
- *        • MARK_AS_PAST_RETENTION_LIMIT — nur Kennzeichnung
- *   5. Recovery-Sweep:
- *        • Items in /Deletions älter 14 Tage → /Purges
- *        • Items in /Purges + kein Legal Hold → DB-Delete (Speicherplatz frei)
- *   6. Throttling: WORK_CYCLE_SECONDS (default 24h, einstellbar via Env).
- *      Wenn überschritten, wird das Run-Limit gesetzt und der Run beendet.
+ * What the MFA does per run:
+ *   1. For each active policy: determine affected mailboxes (GLOBAL/DOMAIN/USER).
+ *   2. For each mailbox: make sure the Recoverable Items subfolders
+ *      (Recoverable Items, Recoverable Items/Deletions, /Purges) exist.
+ *   3. For each mail in the mailbox: compute the effective tag by hierarchy
+ *        Personal (on item) → Personal (on folder) → RPT (for folder) → DPT (policy)
+ *   4. If `date + tag.retentionDays < now` → execute the tag action:
+ *        • MOVE_TO_ARCHIVE             — move to "Archive"
+ *        • DELETE_AND_ALLOW_RECOVERY   — move to Recoverable Items/Deletions (soft delete, 14 days)
+ *        • PERMANENTLY_DELETE          — move to Recoverable Items/Purges
+ *        • MARK_AS_PAST_RETENTION_LIMIT — marking only
+ *   5. Recovery sweep:
+ *        • items in /Deletions older than 14 days → /Purges
+ *        • items in /Purges + no legal hold → DB delete (frees storage)
+ *   6. Throttling: WORK_CYCLE_SECONDS (default 24h, configurable via env).
+ *      When exceeded, the run limit is set and the run ends.
  *
- * Legacy: wenn eine Policy noch ohne Tags ist (alte v3.10.0-Policies), wird die
- * alte `retentionDays/action/scope`-Logik einmalig wie ein synthetischer DPT
- * behandelt, damit nichts an Wirkung verloren geht.
+ * Legacy: if a policy still has no tags (old v3.10.0 policies), the old
+ * `retentionDays/action/scope` logic is treated once like a synthetic DPT
+ * so that no effect is lost.
  */
 
 import { prisma } from '@coremail/storage/prisma';
@@ -65,21 +65,21 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
   };
 
   const deadlineMs = startMs + WORK_CYCLE_SEC * 1000;
-  log.info({ dryRun: DRY_RUN, workCycleSec: WORK_CYCLE_SEC, deletionsTtlDays: DELETIONS_TTL_D }, 'MFA Run gestartet');
+  log.info({ dryRun: DRY_RUN, workCycleSec: WORK_CYCLE_SEC, deletionsTtlDays: DELETIONS_TTL_D }, 'MFA run started');
 
   try {
-    // ── Schritt 1: Policies mit Tag-Bindung ───────────────────────────────────
+    // ── Step 1: policies with tag binding ───────────────────────────────────
     const policies = await prisma.retentionPolicy.findMany({
       where: { enabled: true },
       include: { assignments: true, policyTags: { include: { tag: true } } },
     });
 
-    // Legal Hold komplett entfernt in v3.18.5 — leeres Set für Kompatibilität
-    // mit den bestehenden Funktionssignaturen
+    // Legal Hold completely removed in v3.18.5 — empty set for compatibility
+    // with the existing function signatures
     const heldUserIds = new Set<string>();
 
-    // ── Schritt 2: Mailbox → Policies-Mapping aus den Assignments ────────────
-    // Hier reduzieren wir Policies-pro-User auf das, was wirklich angewendet wird.
+    // ── Step 2: mailbox → policies mapping from the assignments ────────────
+    // Here we reduce policies-per-user to what is actually applied.
     const userPolicies = await resolvePoliciesPerUser(policies);
 
     for (const [userId, applicablePolicies] of userPolicies.entries()) {
@@ -90,13 +90,13 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
         result.mailboxesScanned += 1;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log.error({ userId, err }, 'Mailbox-Run fehlgeschlagen');
+        log.error({ userId, err }, 'Mailbox run failed');
         result.errors.push(`User ${userId}: ${msg}`);
       }
     }
     result.policiesProcessed = policies.length;
 
-    // ── Schritt 3: Recovery-Sweep (Deletions → Purges → Delete) ──────────────
+    // ── Step 3: recovery sweep (Deletions → Purges → Delete) ──────────────
     if (Date.now() <= deadlineMs) {
       const sweep = await sweepRecoverableItems(heldUserIds);
       result.itemsHardDeleted += sweep.purged;
@@ -104,7 +104,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       result.throttled = true;
     }
   } catch (err) {
-    log.error({ err }, 'MFA-Run abgebrochen mit Fehler');
+    log.error({ err }, 'MFA run aborted with error');
     result.errors.push(err instanceof Error ? err.message : String(err));
   }
 
@@ -123,11 +123,11 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
     },
   });
 
-  log.info(result, 'MFA Run beendet');
+  log.info(result, 'MFA run finished');
   return result;
 }
 
-// ── Policies pro User auflösen ───────────────────────────────────────────────
+// ── Resolve policies per user ───────────────────────────────────────────────
 
 type PolicyWithTags = Awaited<ReturnType<typeof prisma.retentionPolicy.findMany<{
   include: { assignments: true; policyTags: { include: { tag: true } } };
@@ -158,7 +158,7 @@ async function resolvePoliciesPerUser(policies: PolicyWithTags[]): Promise<Map<s
   return result;
 }
 
-// ── Pro-Mailbox-Anwendung ────────────────────────────────────────────────────
+// ── Per-mailbox application ────────────────────────────────────────────────────
 
 async function applyForMailbox(
   userId: string,
@@ -173,19 +173,19 @@ async function applyForMailbox(
   });
   if (!mailbox) return;
 
-  // Recoverable-Items-Struktur sicherstellen
+  // Ensure the Recoverable Items structure
   const recovery = await ensureRecoverableItems(mailbox.id, mailbox.folders);
-  // Folder-Map nach Refresh
+  // Folder map after refresh
   const folders = await prisma.folder.findMany({
     where: { mailboxId: mailbox.id },
     select: { id: true, name: true, displayName: true, retentionTagId: true },
   });
 
-  // Effektive Tags pro Policy nach Hierarchie zusammensammeln
-  // Für die Auswertung pro Message brauchen wir:
-  //   - DPT (max 1 pro Policy)
-  //   - RPT pro folderTarget
-  // Personal-Tags kommen aus Message.retentionTagId und Folder.retentionTagId direkt.
+  // Collect effective tags per policy by hierarchy
+  // For the per-message evaluation we need:
+  //   - DPT (max 1 per policy)
+  //   - RPT per folderTarget
+  // Personal tags come directly from Message.retentionTagId and Folder.retentionTagId.
   const dpts: PolicyWithTags['policyTags'][number]['tag'][] = [];
   const rptByTarget = new Map<string, PolicyWithTags['policyTags'][number]['tag']>();
   for (const p of policies) {
@@ -196,7 +196,7 @@ async function applyForMailbox(
     }
   }
 
-  // Legacy: Policies ohne Tags → synthetischer DPT, damit alte Policies weiter wirken
+  // Legacy: policies without tags → synthetic DPT so old policies keep working
   for (const p of policies) {
     if (p.policyTags.length === 0 && p.retentionDays > 0) {
       dpts.push({
@@ -211,20 +211,20 @@ async function applyForMailbox(
     }
   }
 
-  // Schleife über Postfach-Ordner (außer Recoverable Items selbst)
+  // Loop over mailbox folders (except Recoverable Items itself)
   const skipFolderIds = new Set([recovery.rootId, recovery.deletionsId, recovery.purgesId]);
   for (const folder of folders) {
     if (skipFolderIds.has(folder.id)) continue;
     if (Date.now() > deadlineMs) { result.throttled = true; return; }
 
-    // Bestimme den auf den Ordner passenden RPT-Tag
+    // Determine the RPT tag matching the folder
     const folderTarget   = mapFolderNameToTarget(folder.name);
     const rpt            = folderTarget ? rptByTarget.get(folderTarget) ?? null : null;
     const folderPersonalTag = folder.retentionTagId
       ? await prisma.retentionTag.findUnique({ where: { id: folder.retentionTagId } })
       : null;
 
-    // Hole alle nicht-soft-gelöschten Items in diesem Ordner
+    // Fetch all non-soft-deleted items in this folder
     const messages = await prisma.message.findMany({
       where: { folderId: folder.id, deletedAt: null, softDeletedAt: null },
       select: { id: true, date: true, retentionTagId: true, rawSize: true },
@@ -232,7 +232,7 @@ async function applyForMailbox(
     result.itemsScanned += messages.length;
 
     for (const m of messages) {
-      // Hierarchie: Personal-on-Item → Personal-on-Folder → RPT → DPT[0]
+      // Hierarchy: personal-on-item → personal-on-folder → RPT → DPT[0]
       const personalTag = m.retentionTagId
         ? await prisma.retentionTag.findUnique({ where: { id: m.retentionTagId } })
         : null;
@@ -240,7 +240,7 @@ async function applyForMailbox(
       if (!effective || !effective.enabled) continue;
 
       const expiresAt = new Date(m.date.getTime() + effective.retentionDays * 86400_000);
-      if (expiresAt > new Date()) continue; // noch nicht abgelaufen
+      if (expiresAt > new Date()) continue; // not expired yet
 
       const isHeld = heldUserIds.has(userId);
 
@@ -282,12 +282,12 @@ async function moveMessage(messageId: string, targetFolderId: string): Promise<v
   });
 }
 
-// ── Recovery-Sweep ───────────────────────────────────────────────────────────
+// ── Recovery sweep ───────────────────────────────────────────────────────────
 
 async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged: number }> {
   const cutoff = new Date(Date.now() - DELETIONS_TTL_D * 86400_000);
 
-  // 1. Deletions älter als TTL → Purges
+  // 1. Deletions older than TTL → Purges
   const deletionFolders = await prisma.folder.findMany({
     where: { name: RECOVERABLE_DELETIONS },
     include: { mailbox: { select: { userId: true } } },
@@ -301,7 +301,7 @@ async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged
     });
   }
 
-  // 2. Purges + kein Hold → DB-Delete + Quota-Freigabe
+  // 2. Purges + no hold → DB delete + quota release
   let purged = 0;
   const purgeFolders = await prisma.folder.findMany({
     where: { name: RECOVERABLE_PURGES },
@@ -309,7 +309,7 @@ async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged
   });
   for (const pf of purgeFolders) {
     const ownerId = pf.mailbox.userId;
-    if (!ownerId) continue; // Shared- oder Resource-Mailbox — Quota wird dort nicht pro User abgerechnet
+    if (!ownerId) continue; // Shared or resource mailbox — quota is not accounted per user there
     if (heldUserIds.has(ownerId)) continue;
 
     const toDelete = await prisma.message.findMany({
@@ -340,12 +340,12 @@ async function ensureRecoverableItems(
   async function getOrCreate(name: string, displayName: string, parentId: string | null): Promise<string> {
     const found = existing.find((f) => f.name === name);
     if (found) return found.id;
-    // Higher UID gerendet kollidiert mit message.uid — Folder hat keine uid-Spalte, daher OK
+    // A higher UID would collide with message.uid — Folder has no uid column, so OK
     const created = await prisma.folder.create({
       data: {
         mailboxId, name, displayName,
         ...(parentId ? { parentId } : {}),
-        subscribed: false, // hidden für IMAP
+        subscribed: false, // hidden for IMAP
       },
       select: { id: true, name: true },
     });

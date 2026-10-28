@@ -1,7 +1,7 @@
 /**
- * PushSubscription/* (RFC 8620 §7.2) — nicht account-gebunden.
- * Verifikation: Server POSTet PushVerification an die URL, Client bestätigt
- * den verificationCode per /set update. Erst dann werden StateChanges gesendet.
+ * PushSubscription/* (RFC 8620 §7.2) — not bound to an account.
+ * Verification: the server POSTs a PushVerification to the URL, the client confirms
+ * the verificationCode via /set update. Only then are StateChanges sent.
  */
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
@@ -84,9 +84,9 @@ registerMethod('PushSubscription/set', CAP_CORE, async (args, ctx) => {
     });
     ctx.createdIds.set(cid, row.id);
     created[cid] = { id: row.id, expires: utc(expires) };
-    // PushVerification asynchron zustellen (RFC 8620 §7.2.2)
+    // Deliver PushVerification asynchronously (RFC 8620 §7.2.2)
     void sendPushMessage(row, { '@type': 'PushVerification', pushSubscriptionId: row.id, verificationCode })
-      .catch((err: unknown) => log.warn({ err, id: row.id }, 'PushVerification konnte nicht zugestellt werden'));
+      .catch((err: unknown) => log.warn({ err, id: row.id }, 'PushVerification could not be delivered'));
   }
 
   for (const [id, patch] of Object.entries(update)) {

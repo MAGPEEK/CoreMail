@@ -1,0 +1,25 @@
+{
+  "name": "@coremail/cli",
+  "version": "5.9.0",
+  "private": true,
+  "type": "module",
+  "description": "CoreMail admin CLI — users, mailboxes, connectors, SMTP banner and certificates via the Admin API",
+  "bin": {
+    "coremail": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/output.test.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,57 +1,57 @@
-# CoreMail — Befehlsreferenz
+# CoreMail — Command Reference
 
-Schnellreferenz für den Betrieb des CoreMail-Stacks über die Kommandozeile.  
-Alle `curl`-Befehle setzen einen laufenden Stack voraus und benötigen einen Admin-Token.
+Quick reference for operating the CoreMail stack from the command line.  
+All `curl` commands assume a running stack and require an admin token.
 
 ---
 
-## Inhalt
+## Contents
 
-1. [Container & Dienste](#1-container--dienste)
-2. [Admin-Token holen](#2-admin-token-holen)
-3. [Benutzer verwalten](#3-benutzer-verwalten)
-4. [Domains verwalten](#4-domains-verwalten)
-5. [Warteschlangen (SMTP-Queue)](#5-warteschlangen-smtp-queue)
-6. [Logs & Diagnose](#6-logs--diagnose)
-7. [Nachrichtenablaufverfolgung (Message Trace)](#7-nachrichtenablaufverfolgung-message-trace)
-8. [Datenbank direkt abfragen](#8-datenbank-direkt-abfragen)
-9. [Redis abfragen](#9-redis-abfragen)
-10. [SMTP testen](#10-smtp-testen)
-11. [Backup & Wiederherstellung](#11-backup--wiederherstellung)
+1. [Containers & services](#1-containers--services)
+2. [Get an admin token](#2-get-an-admin-token)
+3. [Manage users](#3-manage-users)
+4. [Manage domains](#4-manage-domains)
+5. [Queues (SMTP queue)](#5-queues-smtp-queue)
+6. [Logs & diagnostics](#6-logs--diagnostics)
+7. [Message trace](#7-message-trace)
+8. [Query the database directly](#8-query-the-database-directly)
+9. [Query Redis](#9-query-redis)
+10. [Test SMTP](#10-test-smtp)
+11. [Backup & restore](#11-backup--restore)
 12. [Updates](#12-updates)
 
 ---
 
-## 1. Container & Dienste
+## 1. Containers & services
 
-### Stack-Status
+### Stack status
 
 ```bash
-# Alle Container und ihr Gesundheitsstatus
+# All containers and their health status
 docker compose ps
 
-# Ressourcenverbrauch live (CPU, RAM, Netz)
+# Live resource usage (CPU, RAM, network)
 docker stats
 
-# Nur CoreMail-Container
+# CoreMail container only
 docker stats coremail
 ```
 
-### Health-Check
+### Health check
 
 ```bash
-# Gibt {"ok":true} zurück wenn der Stack bereit ist
+# Returns {"ok":true} when the stack is ready
 curl -s http://localhost:3000/healthz | jq
 ```
 
-### Alle internen Dienste prüfen (supervisord)
+### Check all internal services (supervisord)
 
 ```bash
-# Status aller Prozesse im Container
+# Status of all processes in the container
 docker exec coremail supervisorctl status
 ```
 
-Erwartete Ausgabe:
+Expected output:
 ```
 api-gateway                      RUNNING   pid 42, uptime 0:12:33
 auth-service                     RUNNING   pid 43, uptime 0:12:33
@@ -66,7 +66,7 @@ smtp-server                      RUNNING   pid 51, uptime 0:12:33
 storage-api                      RUNNING   pid 52, uptime 0:12:33
 ```
 
-### Einzelnen Dienst neu starten
+### Restart a single service
 
 ```bash
 docker exec coremail supervisorctl restart smtp-server
@@ -75,7 +75,7 @@ docker exec coremail supervisorctl restart api-gateway
 docker exec coremail supervisorctl restart ews-server
 ```
 
-### Alle Dienste neu starten (Container bleibt laufen)
+### Restart all services (container keeps running)
 
 ```bash
 docker exec coremail supervisorctl restart all
@@ -83,69 +83,69 @@ docker exec coremail supervisorctl restart all
 
 ---
 
-## 2. Admin-Token holen
+## 2. Get an admin token
 
-Für alle API-Befehle wird ein JWT-Token benötigt. Einmal speichern, dann für alle weiteren Befehle verwenden:
+All API commands require a JWT token. Store it once, then use it for all further commands:
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@meinedomain.de","password":"mein-passwort"}' \
+  -d '{"email":"admin@mydomain.com","password":"my-password"}' \
   | jq -r '.accessToken')
 
 echo $TOKEN
 ```
 
-> Den Token als Shell-Variable `$TOKEN` setzen — alle Befehle unten nutzen diese Variable.
+> Set the token as the shell variable `$TOKEN` — all commands below use this variable.
 
 ---
 
-## 3. Benutzer verwalten
+## 3. Manage users
 
-### Alle Benutzer auflisten
+### List all users
 
 ```bash
 curl -s http://localhost:3000/api/v1/admin/mailboxes \
   -H "Authorization: Bearer $TOKEN" | jq '.users[] | {email, displayName, role, usedBytes}'
 ```
 
-### Bestimmten Benutzer suchen
+### Find a specific user
 
 ```bash
-curl -s "http://localhost:3000/api/v1/admin/mailboxes?search=max.mustermann" \
+curl -s "http://localhost:3000/api/v1/admin/mailboxes?search=john.doe" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Neuen Benutzer erstellen
+### Create a new user
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "max.mustermann@meinedomain.de",
-    "displayName": "Max Mustermann",
-    "password": "sicheres-passwort",
+    "email": "john.doe@mydomain.com",
+    "displayName": "John Doe",
+    "password": "secure-password",
     "quotaBytes": 10737418240
   }' | jq
 ```
 
 > `quotaBytes`: 1 GB = 1073741824, 5 GB = 5368709120, 10 GB = 10737418240
 
-### Benutzer-Passwort ändern
+### Change a user's password
 
 ```bash
-# Benutzer-ID zuerst herausfinden
-USER_ID=$(curl -s "http://localhost:3000/api/v1/admin/mailboxes?search=max.mustermann" \
+# Look up the user ID first
+USER_ID=$(curl -s "http://localhost:3000/api/v1/admin/mailboxes?search=john.doe" \
   -H "Authorization: Bearer $TOKEN" | jq -r '.users[0].id')
 
 curl -s -X PUT "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"password": "neues-passwort"}' | jq
+  -d '{"password": "new-password"}' | jq
 ```
 
-### Benutzer-Quota ändern
+### Change a user's quota
 
 ```bash
 curl -s -X PUT "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID" \
@@ -154,10 +154,10 @@ curl -s -X PUT "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID" \
   -d '{"quotaBytes": 21474836480}' | jq   # 20 GB
 ```
 
-### Benutzer-Rolle ändern
+### Change a user's role
 
 ```bash
-# Verfügbare Rollen:
+# Available roles:
 # USER | HELP_DESK | RECIPIENT_MANAGEMENT | COMPLIANCE_MANAGEMENT
 # HYGIENE_MANAGEMENT | SERVER_MANAGEMENT | VIEW_ONLY_ORG | ORGANIZATION_MANAGEMENT
 
@@ -167,21 +167,21 @@ curl -s -X PUT "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID" \
   -d '{"role": "ORGANIZATION_MANAGEMENT"}' | jq
 ```
 
-### Benutzer löschen
+### Delete a user
 
 ```bash
 curl -s -X DELETE "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Mailbox manuell provisionieren (Ordner anlegen)
+### Provision a mailbox manually (create folders)
 
 ```bash
 curl -s -X POST "http://localhost:3000/api/v1/admin/mailboxes/$USER_ID/provision" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Quota aller Benutzer neu berechnen
+### Recalculate the quota of all users
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes/recalculate-all-quotas \
@@ -190,25 +190,25 @@ curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes/recalculate-all-quo
 
 ---
 
-## 4. Domains verwalten
+## 4. Manage domains
 
-### Alle Domains auflisten
+### List all domains
 
 ```bash
 curl -s http://localhost:3000/api/v1/admin/domains \
   -H "Authorization: Bearer $TOKEN" | jq '.[] | {name, primary, active}'
 ```
 
-### Neue Domain hinzufügen
+### Add a new domain
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/admin/domains \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name": "neuedomain.de"}' | jq
+  -d '{"name": "newdomain.com"}' | jq
 ```
 
-### DKIM-Record abrufen (für DNS-Eintrag)
+### Get the DKIM record (for the DNS entry)
 
 ```bash
 DOMAIN_ID=$(curl -s http://localhost:3000/api/v1/admin/domains \
@@ -220,39 +220,39 @@ curl -s "http://localhost:3000/api/v1/admin/domains/$DOMAIN_ID/dkim-record" \
 
 ---
 
-## 5. Warteschlangen (SMTP-Queue)
+## 5. Queues (SMTP queue)
 
-Die SMTP-Queue verwendet **BullMQ v5**. Queue-Name: `smtp-outbound` (kein Doppelpunkt — BullMQ v5 verbietet Doppelpunkte in Queue-Namen).
+The SMTP queue uses **BullMQ v5**. Queue name: `smtp-outbound` (no colon — BullMQ v5 forbids colons in queue names).
 
-### Queue-Übersicht (Anzahl je Status)
+### Queue overview (count per state)
 
 ```bash
 curl -s http://localhost:3000/api/v1/admin/queues \
   -H "Authorization: Bearer $TOKEN" | jq '.[] | {name, count}'
 ```
 
-### Nachrichten in der ausgehenden Queue anzeigen
+### Show messages in the outbound queue
 
 ```bash
-# Ausgehende Queue (aktive Jobs)
+# Outbound queue (active jobs)
 curl -s "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs?limit=20" \
   -H "Authorization: Bearer $TOKEN" \
   | jq '.jobs[] | {index, from: .data.envelope.from, to: .data.envelope.to, subject: .data.subject}'
 
-# Fehlgeschlagene Jobs (Dead Letter)
+# Failed jobs (dead letter)
 curl -s "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs?state=failed&limit=20" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Einzelne Nachricht aus Queue löschen
+### Delete a single message from the queue
 
 ```bash
-# Index aus der Jobsliste entnehmen
+# Take the index from the job list
 curl -s -X DELETE "http://localhost:3000/api/v1/admin/queues/smtp-outbound/jobs/0" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-### Queue leeren (alle fehlgeschlagenen Nachrichten löschen)
+### Flush the queue (delete all failed messages)
 
 ```bash
 curl -s -X POST "http://localhost:3000/api/v1/admin/queues/smtp-outbound/flush" \
@@ -261,41 +261,41 @@ curl -s -X POST "http://localhost:3000/api/v1/admin/queues/smtp-outbound/flush" 
 
 ---
 
-## 6. Logs & Diagnose
+## 6. Logs & diagnostics
 
-### Container-Logs (alle Dienste)
+### Container logs (all services)
 
 ```bash
-# Live-Stream
+# Live stream
 docker logs -f coremail
 
-# Letzte 100 Zeilen
+# Last 100 lines
 docker logs --tail 100 coremail
 
-# Nur Fehlermeldungen
+# Error messages only
 docker logs coremail 2>&1 | grep -i "error\|fatal\|ERR"
 ```
 
-### Logs eines bestimmten Dienstes
+### Logs of a specific service
 
 ```bash
-# supervisord leitet alle Logs nach stdout
+# supervisord forwards all logs to stdout
 docker exec coremail supervisorctl tail -f smtp-server
 docker exec coremail supervisorctl tail -f imap-server
 docker exec coremail supervisorctl tail -f api-gateway
 ```
 
-### Netzwerkverbindungen im Container prüfen
+### Check network connections in the container
 
 ```bash
-# Welche Ports lauschen?
+# Which ports are listening?
 docker exec coremail ss -tlnp
 
-# Aktive SMTP-Verbindungen
+# Active SMTP connections
 docker exec coremail ss -tnp | grep :25
 ```
 
-### Audit-Log der letzten Admin-Aktionen
+### Audit log of the latest admin actions
 
 ```bash
 curl -s "http://localhost:3000/api/v1/admin/audit-log?limit=20" \
@@ -303,7 +303,7 @@ curl -s "http://localhost:3000/api/v1/admin/audit-log?limit=20" \
   | jq '.entries[] | {timestamp, actorEmail, action, targetName, success}'
 ```
 
-### Dashboard-Statistiken
+### Dashboard statistics
 
 ```bash
 curl -s http://localhost:3000/api/v1/admin/dashboard \
@@ -312,201 +312,201 @@ curl -s http://localhost:3000/api/v1/admin/dashboard \
 
 ---
 
-## 7. Nachrichtenablaufverfolgung (Message Trace)
+## 7. Message trace
 
-Die Nachrichtenablaufverfolgung (Message Trace) protokolliert den vollständigen Weg jeder E-Mail durch den CoreMail-Stack — von der SMTP-Annahme über Spam-/Virenfilter bis zur Zustellung oder Ablehnung.
+The message trace logs the complete path of every email through the CoreMail stack — from SMTP acceptance through spam/virus filtering to delivery or rejection.
 
-### Nachrichten suchen
+### Search messages
 
 ```bash
-# Alle Filter sind optional — kombinierbar nach Bedarf
+# All filters are optional — combine as needed
 
-# Nach Absender filtern
-curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=absender@domain.de" \
+# Filter by sender
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=sender@domain.com" \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# Nach Empfänger filtern
-curl -s "http://localhost:3000/api/v1/admin/message-trace?recipient=empfaenger@domain.de" \
+# Filter by recipient
+curl -s "http://localhost:3000/api/v1/admin/message-trace?recipient=recipient@domain.com" \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# Nach Status filtern (DELIVERED | REJECTED | SPAM | QUARANTINED | FAILED | DEFERRED)
+# Filter by status (DELIVERED | REJECTED | SPAM | QUARANTINED | FAILED | DEFERRED)
 curl -s "http://localhost:3000/api/v1/admin/message-trace?status=REJECTED" \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# Zeitraum eingrenzen (ISO 8601)
+# Narrow down the time range (ISO 8601)
 curl -s "http://localhost:3000/api/v1/admin/message-trace?from=2026-05-01T00:00:00Z&to=2026-05-20T23:59:59Z" \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# Kombination: Absender + Status + Zeitraum
-curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=absender@domain.de&status=DELIVERED&from=2026-05-01T00:00:00Z" \
+# Combination: sender + status + time range
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=sender@domain.com&status=DELIVERED&from=2026-05-01T00:00:00Z" \
   -H "Authorization: Bearer $TOKEN" | jq '.messages[] | {timestamp, sender, recipient, subject, status, reason}'
 ```
 
-### Verfügbare Filterparameter
+### Available filter parameters
 
-| Parameter | Beschreibung | Beispiel |
+| Parameter | Description | Example |
 |-----------|-------------|---------|
-| `sender` | Absender-Adresse (exakt oder Partial-Match) | `sender=user@domain.de` |
-| `recipient` | Empfänger-Adresse | `recipient=user@domain.de` |
-| `status` | Zustellstatus | `status=DELIVERED` |
-| `from` | Zeitraum von (ISO 8601) | `from=2026-05-01T00:00:00Z` |
-| `to` | Zeitraum bis (ISO 8601) | `to=2026-05-31T23:59:59Z` |
-| `limit` | Maximale Anzahl Treffer | `limit=100` |
+| `sender` | Sender address (exact or partial match) | `sender=user@domain.com` |
+| `recipient` | Recipient address | `recipient=user@domain.com` |
+| `status` | Delivery status | `status=DELIVERED` |
+| `from` | Time range from (ISO 8601) | `from=2026-05-01T00:00:00Z` |
+| `to` | Time range to (ISO 8601) | `to=2026-05-31T23:59:59Z` |
+| `limit` | Maximum number of hits | `limit=100` |
 | `offset` | Pagination | `offset=100` |
 
-### CSV-Export
+### CSV export
 
 ```bash
-# Vollständiger Export (alle Felder) als CSV-Datei
-curl -s "http://localhost:3000/api/v1/admin/message-trace/export?sender=absender@domain.de" \
+# Full export (all fields) as a CSV file
+curl -s "http://localhost:3000/api/v1/admin/message-trace/export?sender=sender@domain.com" \
   -H "Authorization: Bearer $TOKEN" \
   -o "message-trace-$(date +%Y%m%d).csv"
 
-# Export mit Zeitraum
+# Export with a time range
 curl -s "http://localhost:3000/api/v1/admin/message-trace/export?from=2026-05-01T00:00:00Z&to=2026-05-31T23:59:59Z" \
   -H "Authorization: Bearer $TOKEN" \
-  -o "message-trace-mai-2026.csv"
+  -o "message-trace-may-2026.csv"
 ```
 
 ---
 
-## 8. Datenbank direkt abfragen
+## 8. Query the database directly
 
 ```bash
-# PostgreSQL-Shell öffnen
+# Open a PostgreSQL shell
 docker exec -it coremail-postgres psql -U coremail -d coremail
 
-# Oder einzelnen Befehl ausführen
+# Or run a single command
 docker exec coremail-postgres psql -U coremail -d coremail -c "<SQL>"
 ```
 
-### Nützliche SQL-Abfragen
+### Useful SQL queries
 
 ```bash
-# Alle Benutzer mit Quota-Auslastung
+# All users with quota usage
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT email, display_name, role, used_bytes/1024/1024 AS used_mb, quota_bytes/1024/1024 AS quota_mb FROM users ORDER BY used_bytes DESC;"
 
-# Anzahl Mails pro Benutzer
+# Number of mails per user
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT u.email, COUNT(m.id) AS mails FROM users u LEFT JOIN mailboxes mb ON mb.user_id = u.id LEFT JOIN folders f ON f.mailbox_id = mb.id LEFT JOIN messages m ON m.folder_id = f.id GROUP BY u.email ORDER BY mails DESC;"
 
-# Größte Anhänge
+# Largest attachments
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT filename, size/1024 AS size_kb, mime_type FROM attachments ORDER BY size DESC LIMIT 20;"
 
-# Alle Domains
+# All domains
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT name, is_primary, active, created_at FROM domains;"
 
-# Letzte 20 Audit-Log-Einträge
+# Last 20 audit log entries
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT created_at, actor_email, action, target_name, success FROM audit_logs ORDER BY created_at DESC LIMIT 20;"
 ```
 
 ---
 
-## 9. Redis abfragen
+## 9. Query Redis
 
 ```bash
-# Redis-CLI öffnen (Passwort aus .env)
+# Open the Redis CLI (password from .env)
 docker exec -it coremail-redis redis-cli -a "${REDIS_PASSWORD}"
 
-# Oder einzelnen Befehl
-docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" <BEFEHL>
+# Or run a single command
+docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" <COMMAND>
 ```
 
-### Nützliche Redis-Befehle
+### Useful Redis commands
 
 ```bash
-# BullMQ Queue-Längen (Queue-Name: smtp-outbound)
-# BullMQ v5 speichert Jobs unter: bull:{queuename}:*
+# BullMQ queue lengths (queue name: smtp-outbound)
+# BullMQ v5 stores jobs under: bull:{queuename}:*
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
   KEYS "bull:smtp-outbound:*" | wc -l
 
-# Wartende Jobs zählen
+# Count waiting jobs
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
   LLEN "bull:smtp-outbound:wait"
 
-# Fehlgeschlagene Jobs zählen
+# Count failed jobs
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" \
   ZCARD "bull:smtp-outbound:failed"
 
-# Aktive Sessions zählen
+# Count active sessions
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" KEYS "session:*" | wc -l
 
-# Greylisting-Einträge zählen
+# Count greylisting entries
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" KEYS "grey:*" | wc -l
 
-# Greylisting-Whitelist anzeigen
+# Show the greylisting whitelist
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" KEYS "grey:white:*"
 
-# Speicherverbrauch Redis
+# Redis memory usage
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" INFO memory | grep used_memory_human
 ```
 
 ---
 
-## 10. SMTP testen
+## 10. Test SMTP
 
-### Einfacher Verbindungstest (ohne Tool)
+### Simple connection test (without tools)
 
 ```bash
-# Testet ob Port 25 antwortet
-docker exec coremail nc -z localhost 25 && echo "SMTP Port 25: OK" || echo "SMTP Port 25: FEHLER"
-docker exec coremail nc -z localhost 587 && echo "SMTP Port 587: OK" || echo "SMTP Port 587: FEHLER"
-docker exec coremail nc -z localhost 993 && echo "IMAP Port 993: OK" || echo "IMAP Port 993: FEHLER"
+# Tests whether port 25 responds
+docker exec coremail nc -z localhost 25 && echo "SMTP port 25: OK" || echo "SMTP port 25: FAILED"
+docker exec coremail nc -z localhost 587 && echo "SMTP port 587: OK" || echo "SMTP port 587: FAILED"
+docker exec coremail nc -z localhost 993 && echo "IMAP port 993: OK" || echo "IMAP port 993: FAILED"
 ```
 
-### SMTP-Handshake manuell testen
+### Test the SMTP handshake manually
 
 ```bash
-# Verbindung zu Port 587 (Submission)
+# Connect to port 587 (submission)
 docker exec -it coremail openssl s_client -connect localhost:587 -starttls smtp
 ```
 
-### Testmail senden (mit swaks — außerhalb des Containers)
+### Send a test mail (with swaks — outside the container)
 
 ```bash
-# swaks installieren: brew install swaks (macOS) oder apt install swaks (Linux)
+# Install swaks: brew install swaks (macOS) or apt install swaks (Linux)
 swaks \
-  --to   empfaenger@externe-domain.de \
-  --from absender@meinedomain.de \
+  --to   recipient@external-domain.com \
+  --from sender@mydomain.com \
   --server localhost \
   --port 587 \
   --tls \
-  --auth-user absender@meinedomain.de \
-  --auth-password "passwort" \
-  --header "Subject: Testmail von CoreMail" \
-  --body "Dieser Test wurde erfolgreich zugestellt."
+  --auth-user sender@mydomain.com \
+  --auth-password "password" \
+  --header "Subject: Test mail from CoreMail" \
+  --body "This test was delivered successfully."
 ```
 
-### DKIM-Signierung prüfen (gesendete Mail)
+### Check DKIM signing (sent mail)
 
 ```bash
-# Prüft ob ausgehende Mails korrekt signiert werden
+# Checks whether outbound mails are signed correctly
 docker exec coremail-postgres psql -U coremail -d coremail -c \
   "SELECT dkim_selector, LEFT(dkim_private_key, 40) AS key_preview FROM domains WHERE is_primary = true;"
 ```
 
 ---
 
-## 11. Backup & Wiederherstellung
+## 11. Backup & restore
 
-### Datenbankbackup manuell erstellen
+### Create a database backup manually
 
 ```bash
-# PostgreSQL-Dump
+# PostgreSQL dump
 docker exec coremail-postgres pg_dump -U coremail coremail | gzip \
   > coremail-db-$(date +%Y%m%d-%H%M).sql.gz
 
-echo "Backup erstellt: coremail-db-$(date +%Y%m%d-%H%M).sql.gz"
+echo "Backup created: coremail-db-$(date +%Y%m%d-%H%M).sql.gz"
 ```
 
-### Datenbankbackup einspielen
+### Restore a database backup
 
 ```bash
-# Stack stoppen, Daten wiederherstellen, Stack neu starten
+# Stop the stack, restore the data, restart the stack
 docker compose down
 
 gunzip -c coremail-db-20260516-0200.sql.gz \
@@ -515,16 +515,16 @@ gunzip -c coremail-db-20260516-0200.sql.gz \
 docker compose up -d
 ```
 
-### MinIO-Inhalte auflisten (Anhänge)
+### List MinIO contents (attachments)
 
 ```bash
-# MinIO Client (mc) installieren: https://min.io/docs/minio/linux/reference/minio-mc.html
+# Install the MinIO client (mc): https://min.io/docs/minio/linux/reference/minio-mc.html
 mc alias set coremail http://localhost:9000 minioadmin "${MINIO_ROOT_PASSWORD}"
 mc ls coremail/mail-attachments
 mc du coremail/mail-attachments
 ```
 
-### Admin-Backup über API auslösen
+### Trigger an admin backup via the API
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/admin/backup/trigger \
@@ -535,82 +535,82 @@ curl -s -X POST http://localhost:3000/api/v1/admin/backup/trigger \
 
 ## 12. Updates
 
-### Auf neue Version aktualisieren
+### Update to a new version
 
 ```bash
-# 1. Neue Images laden
+# 1. Pull new images
 docker compose pull
 
-# 2. Stack neu starten (Downtime < 30 Sekunden)
+# 2. Restart the stack (downtime < 30 seconds)
 docker compose up -d
 
-# 3. Versionen prüfen
+# 3. Check versions
 docker images | grep magpeek
 docker compose ps
 curl -s http://localhost:3000/healthz | jq
 ```
 
-### Bestimmte Version einsetzen
+### Deploy a specific version
 
 ```bash
-# In docker-compose.yml die Image-Zeile anpassen:
+# Adjust the image line in docker-compose.yml:
 #   image: magpeek/coremail-app:3.17.8
-# Dann:
+# Then:
 docker compose up -d --pull always
 ```
 
-### Vollständige Neuinstallation (Daten behalten)
+### Full reinstall (keep data)
 
 ```bash
-# Alte Container entfernen (Volumes bleiben!)
+# Remove old containers (volumes are kept!)
 docker compose down
 
-# Neueste Images laden
+# Pull the latest images
 docker compose pull
 
-# Stack neu starten
+# Restart the stack
 docker compose up -d
 ```
 
 ---
 
-## Spickzettel
+## Cheat sheet
 
 ```bash
-# Stack starten / stoppen
+# Start / stop the stack
 docker compose up -d
 docker compose down
 
-# Health-Check
+# Health check
 curl -s http://localhost:3000/healthz | jq
 
-# Dienste im Container
+# Services in the container
 docker exec coremail supervisorctl status
 
-# Logs live
+# Live logs
 docker logs -f coremail
 
-# Admin-Token
+# Admin token
 TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"ADMIN@DOMAIN","password":"PASSWORT"}' | jq -r '.accessToken')
+  -d '{"email":"ADMIN@DOMAIN","password":"PASSWORD"}' | jq -r '.accessToken')
 
-# Benutzer anlegen
+# Create a user
 curl -s -X POST http://localhost:3000/api/v1/admin/mailboxes \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"email":"user@domain.de","displayName":"Name","password":"pw","quotaBytes":5368709120}' | jq
+  -d '{"email":"user@domain.com","displayName":"Name","password":"pw","quotaBytes":5368709120}' | jq
 
-# Queue-Status
+# Queue status
 curl -s http://localhost:3000/api/v1/admin/queues -H "Authorization: Bearer $TOKEN" | jq
 
-# Message Trace
-curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=user@domain.de&status=REJECTED" \
+# Message trace
+curl -s "http://localhost:3000/api/v1/admin/message-trace?sender=user@domain.com&status=REJECTED" \
   -H "Authorization: Bearer $TOKEN" | jq '.messages[] | {timestamp, recipient, subject, reason}'
 
-# Datenbank-Shell
+# Database shell
 docker exec -it coremail-postgres psql -U coremail -d coremail
 
-# BullMQ Queue-Länge (smtp-outbound)
+# BullMQ queue length (smtp-outbound)
 docker exec coremail-redis redis-cli -a "${REDIS_PASSWORD}" LLEN "bull:smtp-outbound:wait"
 
 # Update

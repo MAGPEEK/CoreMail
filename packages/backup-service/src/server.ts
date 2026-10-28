@@ -12,14 +12,14 @@ const log = createLogger('backup-service');
 const app = express();
 const PORT = parseInt(process.env['BACKUP_PORT'] ?? '3004', 10);
 
-// v3.18.30 KRITISCHER FIX: BigInt-Felder (BackupJob.sizeBytes) crashen
-// JSON.stringify(). Globaler Replacer wandelt BigInt → String. Verhindert
-// dass der gesamte backup-service bei jedem /jobs-Call crasht und supervisord
-// ihn neu startet — was die Symptom „keine User in Dropdown" + „kein Status
-// bei laufenden Jobs" verursacht hat.
+// v3.18.30 CRITICAL FIX: BigInt fields (BackupJob.sizeBytes) crash
+// JSON.stringify(). A global replacer converts BigInt → String. Prevents
+// the whole backup-service from crashing on every /jobs call and supervisord
+// restarting it — which caused the symptoms "no users in dropdown" + "no status
+// for running jobs".
 //
-// Monkey-Patch des res.json — alternativ könnte man pro Endpoint manuell
-// serialisieren, aber das ist fehleranfällig. Global ist sauberer.
+// Monkey-patch of res.json — alternatively one could serialize manually per
+// endpoint, but that is error-prone. Global is cleaner.
 const _origJson = express.response.json;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (express.response as any).json = function (this: express.Response, body: unknown): express.Response {
@@ -102,7 +102,7 @@ app.post('/backup/user/restore/:messageId', requireAuth, async (req, res) => {
 // ─── Admin backup ────────────────────────────────────────────────────────────
 
 // POST /backup/admin/full — trigger immediate full backup
-// v3.18.26: liefert Job-ID damit Frontend sofort den RUNNING-Job sehen kann
+// v3.18.26: returns the job ID so the frontend can see the RUNNING job immediately
 app.post('/backup/admin/full', requireAdmin, async (_req, res) => {
   try {
     const { jobId } = await runFullBackup({ triggeredBy: 'MANUAL' });
@@ -132,9 +132,9 @@ app.post('/backup/admin/mailbox/:userId', requireAdmin, async (req, res) => {
   }
 });
 
-// v3.18.26 — Backup-Schedules CRUD (DB-getrieben statt Env-Variable)
+// v3.18.26 — backup schedules CRUD (DB-driven instead of env variable)
 
-// GET /backup/admin/schedules — Alle Schedules listen
+// GET /backup/admin/schedules — list all schedules
 app.get('/backup/admin/schedules', requireAdmin, async (_req, res) => {
   const schedules = await prisma.backupSchedule.findMany({
     orderBy: { createdAt: 'desc' },
@@ -142,7 +142,7 @@ app.get('/backup/admin/schedules', requireAdmin, async (_req, res) => {
   res.json(schedules);
 });
 
-// POST /backup/admin/schedules — Neue Schedule anlegen
+// POST /backup/admin/schedules — create a new schedule
 app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
   const body = req.body as {
     name?: string; cron?: string; scope?: string; format?: string;
@@ -152,7 +152,7 @@ app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
     res.status(400).json({ error: 'name and cron required' });
     return;
   }
-  // Cron-Validierung: einfacher Smoke-Test via CronJob-Konstruktor
+  // Cron validation: simple smoke test via the CronJob constructor
   try {
     const { CronJob } = await import('cron');
     new CronJob(body.cron, () => undefined, null, false, 'UTC');
@@ -176,7 +176,7 @@ app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
   res.status(201).json(created);
 });
 
-// PUT /backup/admin/schedules/:id — Schedule bearbeiten
+// PUT /backup/admin/schedules/:id — edit a schedule
 app.put('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
   const body = req.body as {
@@ -212,7 +212,7 @@ app.delete('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /backup/admin/schedules/:id/run-now — Schedule manuell triggern
+// POST /backup/admin/schedules/:id/run-now — trigger a schedule manually
 app.post('/backup/admin/schedules/:id/run-now', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
   const schedule = await prisma.backupSchedule.findUnique({ where: { id } });
@@ -237,7 +237,7 @@ app.post('/backup/admin/schedules/:id/run-now', requireAdmin, async (req, res) =
   }
 });
 
-// v3.18.28 — Download eines Backup-Jobs als Stream (verwendet S3-internes GetObject)
+// v3.18.28 — download a backup job as a stream (uses S3-internal GetObject)
 app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
   const { jobId } = req.params as { jobId: string };
   const job = await prisma.backupJob.findUnique({ where: { id: jobId } });
@@ -259,9 +259,9 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
   }
 });
 
-// v3.18.29 — Backup-Archive Download (per S3-Key, nicht JobID — für Archive-Tab
-// wo Objekte ohne DB-Reference angezeigt werden, z.B. alte Backups vor
-// BackupJob-Tracking oder externe Imports in den Bucket).
+// v3.18.29 — backup archive download (by S3 key, not job ID — for the archive tab
+// where objects without a DB reference are shown, e.g. old backups from before
+// BackupJob tracking or external imports into the bucket).
 app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
@@ -282,15 +282,15 @@ app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
   }
 });
 
-// v3.18.29 — Backup-Archive löschen (S3-Object). Sucht zusätzlich nach
-// passenden BackupJob-Records und nullt ihre downloadUrl (damit der Job in
-// der UI nicht mit broken-Link erscheint).
+// v3.18.29 — delete a backup archive (S3 object). Additionally looks for
+// matching BackupJob records and nulls their downloadUrl (so the job does not
+// appear in the UI with a broken link).
 app.delete('/backup/admin/archive', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
   try {
     await deleteObject(key);
-    // BackupJob-Records mit dieser downloadUrl ausnullen (Cosmetic, optional)
+    // Null out BackupJob records with this downloadUrl (cosmetic, optional)
     await prisma.backupJob.updateMany({
       where: { downloadUrl: key },
       data: { downloadUrl: null, status: 'EXPIRED' },
@@ -303,12 +303,12 @@ app.delete('/backup/admin/archive', requireAdmin, async (req, res) => {
   }
 });
 
-// v3.18.28 — Backup-Job löschen (DB + S3-Object)
+// v3.18.28 — delete a backup job (DB + S3 object)
 app.delete('/backup/admin/jobs/:id', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
   const job = await prisma.backupJob.findUnique({ where: { id } });
   if (!job) { res.status(404).json({ error: 'Job nicht gefunden' }); return; }
-  // S3-Object löschen wenn vorhanden (best-effort, kein Throw bei Fehlern)
+  // Delete the S3 object if present (best-effort, no throw on errors)
   if (job.downloadUrl) {
     try { await deleteObject(job.downloadUrl); }
     catch (err) { log.warn({ err, jobId: id, s3Key: job.downloadUrl }, 'S3 delete failed — continuing with DB delete'); }
@@ -318,7 +318,7 @@ app.delete('/backup/admin/jobs/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// GET /backup/admin/users — Liste aller User für Mailbox-Backup-Picker
+// GET /backup/admin/users — list of all users for the mailbox backup picker
 app.get('/backup/admin/users', requireAdmin, async (_req, res) => {
   const users = await prisma.user.findMany({
     where: { active: true },
@@ -388,19 +388,19 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
 
 async function start() {
   await connectDatabase();
-  // v5.6.0: initJwtKeys() entfernt (HS256 zurück)
+  // v5.6.0: initJwtKeys() removed (back to HS256)
   getRedisClient();
 
-  // v3.18.26 Bugfix: Backup-Bucket idempotent erstellen — sonst crasht
-  // listBackups() bei jedem ersten Start mit NoSuchBucket.
+  // v3.18.26 bugfix: create the backup bucket idempotently — otherwise
+  // listBackups() crashes with NoSuchBucket on every first start.
   await ensureBackupBucket();
 
-  // v3.18.34: Orphan-Cleanup. Wenn der Container während eines Backups neu-
-  // gestartet wird, bleibt der master-job im Status RUNNING/PENDING/RETRYING/
-  // PROCESSING in der DB hängen und das Frontend zeigt „läuft endlos". Beim
-  // Start prüfen wir, ob solche Jobs älter als 60s sind (sicher: kein neu
-  // gerade gestarteter Job wird versehentlich markiert) und markieren sie als
-  // FAILED mit klarem Fehlertext.
+  // v3.18.34: orphan cleanup. If the container is restarted during a backup,
+  // the master job stays stuck in the DB with status RUNNING/PENDING/RETRYING/
+  // PROCESSING and the frontend shows "running forever". On
+  // start we check whether such jobs are older than 60s (safe: no job that
+  // just started gets marked by accident) and mark them as
+  // FAILED with a clear error text.
   try {
     const cutoff = new Date(Date.now() - 60 * 1000);
     const orphans = await prisma.backupJob.updateMany({
@@ -422,10 +422,10 @@ async function start() {
     log.error({ err }, 'Orphan-cleanup failed (non-fatal)');
   }
 
-  // v3.18.34: Watchdog. Wenn ein laufender Job > 30 Min. nicht fertig wird,
-  // ist mit hoher Wahrscheinlichkeit ein Deadlock — auto-FAIL.
-  const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;   // alle 5 Minuten prüfen
-  const STUCK_AFTER_MS       = 30 * 60 * 1000;  // 30 Minuten = stuck
+  // v3.18.34: watchdog. If a running job does not finish within 30 min,
+  // it is most likely a deadlock — auto-FAIL.
+  const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;   // check every 5 minutes
+  const STUCK_AFTER_MS       = 30 * 60 * 1000;  // 30 minutes = stuck
   setInterval(async () => {
     try {
       const cutoff = new Date(Date.now() - STUCK_AFTER_MS);

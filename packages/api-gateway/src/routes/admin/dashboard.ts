@@ -7,8 +7,8 @@ import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
 
-// Boot-Zeit + Coremail-Version einmalig ermitteln.
-// Reihenfolge: COREMAIL_VERSION-Env (Runtime-Override) → root package.json → 'unknown'.
+// Determine boot time + Coremail version once.
+// Order: COREMAIL_VERSION env (runtime override) → root package.json → 'unknown'.
 const PROCESS_STARTED_AT = new Date();
 let _appVersion: string | null = null;
 async function getAppVersion(): Promise<string> {
@@ -29,10 +29,10 @@ adminDashboardRouter.use(requireAdmin);
 
 const log = createLogger('api:admin:dashboard');
 
-// ── GET /api/v1/admin/dashboard/version — lightweight Version-Endpoint ─────
-// Wird von der „System-Informationen"-Page genutzt damit die angezeigte
-// Version immer mit dem deployten Container übereinstimmt (ohne dass das
-// Frontend bei jedem Patch-Release neu gebaut werden muss).
+// ── GET /api/v1/admin/dashboard/version — lightweight version endpoint ─────
+// Used by the „System-Informationen" page so that the displayed version
+// always matches the deployed container (without having to rebuild the
+// frontend on every patch release).
 adminDashboardRouter.get('/version', async (_req: Request, res: Response) => {
   res.json({
     version: await getAppVersion(),
@@ -40,24 +40,24 @@ adminDashboardRouter.get('/version', async (_req: Request, res: Response) => {
   });
 });
 
-// ── BullMQ Outbound-Queue-Referenz ────────────────────────────────────────────
+// ── BullMQ outbound queue reference ───────────────────────────────────────────
 let _queue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_queue) {
-    _queue = new Queue('smtp-outbound', { connection: createBullMqConnection() }); // BullMQ v5: kein ':', maxRetriesPerRequest: null
+    _queue = new Queue('smtp-outbound', { connection: createBullMqConnection() }); // BullMQ v5: no ':', maxRetriesPerRequest: null
   }
   return _queue;
 }
 
 // ── GET /api/v1/admin/dashboard ───────────────────────────────────────────────
-// Aggregiert alle Dashboard-Metriken in einem einzigen Aufruf.
+// Aggregates all dashboard metrics in a single call.
 adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const now = new Date();
     const sevenDaysAgo  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // ── Daten parallel abrufen ────────────────────────────────────────────────
+    // ── Fetch data in parallel ────────────────────────────────────────────────
     const [
       userTotal,
       userActive,
@@ -80,13 +80,13 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       securityHits24h,
       appVersion,
     ] = await Promise.all([
-      // Benutzer
+      // Users
       prisma.user.count(),
       prisma.user.count({ where: { active: true } }),
       prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
       prisma.user.aggregate({ _sum: { usedBytes: true } }),
 
-      // Top-10 Nutzer nach Speicherverbrauch
+      // Top-10 users by storage usage
       prisma.user.findMany({
         where: { active: true },
         orderBy: { usedBytes: 'desc' },
@@ -108,16 +108,16 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
         orderBy: { name: 'asc' },
       }),
 
-      // Nachrichten
+      // Messages
       prisma.message.count({ where: { deletedAt: null } }),
       prisma.message.count({ where: { deletedAt: null, date: { gte: sevenDaysAgo } } }),
       prisma.message.count({ where: { deletedAt: null, date: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } } }),
 
-      // v5.6.1: distributionGroup.count entfernt → liefert immer 0
+      // v5.6.1: distributionGroup.count removed → always returns 0
       Promise.resolve(0),
       prisma.sharedMailbox.count().catch(() => 0),
 
-      // Letzte 10 Fehler- und Warn-Logs
+      // Last 10 error and warn logs
       prisma.systemLog.findMany({
         where: { level: { in: ['ERROR', 'WARN'] }, timestamp: { gte: thirtyDaysAgo } },
         orderBy: { timestamp: 'desc' },
@@ -125,7 +125,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
         select: { id: true, timestamp: true, level: true, service: true, message: true },
       }).catch(() => [] as never[]),
 
-      // Letzte 8 Audit-Events
+      // Last 8 audit events
       prisma.auditLog.findMany({
         orderBy: { timestamp: 'desc' },
         take: 8,
@@ -135,7 +135,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
         },
       }).catch(() => [] as never[]),
 
-      // Nachrichten pro Tag (letzte 7 Tage) — Gruppierung in PostgreSQL
+      // Messages per day (last 7 days) — grouped in PostgreSQL
       prisma.$queryRaw<{ day: Date; count: bigint }[]>`
         SELECT DATE_TRUNC('day', date) AS day, COUNT(*)::bigint AS count
         FROM "messages"
@@ -144,15 +144,15 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
         ORDER BY day ASC
       `.catch(() => [] as { day: Date; count: bigint }[]),
 
-      // BullMQ Queue-Status
+      // BullMQ queue status
       getOutboundQueue().getJobCounts('waiting', 'active', 'failed', 'delayed', 'completed').catch(() => ({
         waiting: 0, active: 0, failed: 0, delayed: 0, completed: 0,
       })),
 
-      // Aktive Sessions (nicht abgelaufen)
+      // Active sessions (not expired)
       prisma.session.count({ where: { expiresAt: { gt: now } } }).catch(() => 0),
 
-      // Letzte erfolgreiche Logins (aus AuditLog mit action LIKE login)
+      // Last successful logins (from AuditLog with action LIKE login)
       prisma.auditLog.findMany({
         where: { action: { contains: 'login', mode: 'insensitive' }, success: true },
         orderBy: { timestamp: 'desc' },
@@ -160,14 +160,14 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
         select: { id: true, timestamp: true, actorEmail: true, ipAddress: true, userAgent: true },
       }).catch(() => [] as never[]),
 
-      // DNSBL-Hits in den letzten 24h
+      // DNSBL hits in the last 24h
       prisma.dnsblHit.count({ where: { hitAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } } }).catch(() => 0),
 
-      // Coremail-App-Version
+      // Coremail app version
       getAppVersion(),
     ]);
 
-    // ── Mails-pro-Tag-Daten normalisieren ─────────────────────────────────────
+    // ── Normalize mails-per-day data ──────────────────────────────────────────
     const dayMap = new Map<string, number>();
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
@@ -183,10 +183,10 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       count,
     }));
 
-    // ── Speicher gesamt ───────────────────────────────────────────────────────
+    // ── Total storage ─────────────────────────────────────────────────────────
     const totalUsedBytes  = Number(userStorageAgg._sum.usedBytes ?? 0);
 
-    // ── Server-Metriken aus dem Node-Prozess ────────────────────────────────
+    // ── Server metrics from the Node process ────────────────────────────────
     const mem = process.memoryUsage();
     const heapStats = v8.getHeapStatistics();
     const load = os.loadavg();
@@ -202,7 +202,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       memory: {
         heapUsed:    mem.heapUsed,
         heapTotal:   mem.heapTotal,
-        // V8 heap_size_limit = --max-old-space-size; das ist die echte Obergrenze
+        // V8 heap_size_limit = --max-old-space-size; this is the real upper bound
         heapLimit:   heapStats.heap_size_limit,
         rss:         mem.rss,
         systemTotal: os.totalmem(),
@@ -217,7 +217,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       },
     };
 
-    // ── Antwort zusammenbauen ─────────────────────────────────────────────────
+    // ── Assemble response ─────────────────────────────────────────────────────
     res.json({
       users: {
         total:    userTotal,
@@ -272,7 +272,7 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       generatedAt: now.toISOString(),
     });
   } catch (err) {
-    log.error({ err }, 'Dashboard-Fehler');
+    log.error({ err }, 'Dashboard error');
     res.status(500).json({ error: 'Dashboard nicht verfügbar' });
   }
 });

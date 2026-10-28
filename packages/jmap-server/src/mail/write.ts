@@ -1,7 +1,7 @@
 /**
- * Schreibpfade: Nachricht aus Rohdaten anlegen (Email/set create, Email/import,
- * Email/copy), Flags/Ordner ändern, löschen — inkl. Ordner-Zählern,
- * Mailbox-UID/ModSeq und Redis-Benachrichtigung (MWA-SSE + JMAP-Push).
+ * Write paths: create a message from raw data (Email/set create, Email/import,
+ * Email/copy), change flags/folder, delete — incl. folder counters,
+ * mailbox UID/ModSeq and Redis notification (MWA SSE + JMAP push).
  */
 import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
@@ -140,7 +140,7 @@ export async function destroyEmail(account: AccountContext, msg: { id: string; f
   await notify(account, msg.folderId, msg.id, 'update');
 }
 
-/** Redis-Signal: MWA-SSE (mail:new/mail:update) + JMAP-Push-Bus. */
+/** Redis signal: MWA SSE (mail:new/mail:update) + JMAP push bus. */
 export async function notify(account: AccountContext, folderId: string, messageId: string, kind: 'new' | 'update'): Promise<void> {
   try {
     await getRedisClient().publish(kind === 'new' ? CHANNEL_MAIL_NEW : CHANNEL_MAIL_UPDATE, JSON.stringify({
@@ -151,7 +151,7 @@ export async function notify(account: AccountContext, folderId: string, messageI
       source: 'jmap',
     }));
   } catch (err) {
-    log.warn({ err }, 'Redis-Publish fehlgeschlagen');
+    log.warn({ err }, 'Redis publish failed');
   }
 }
 
@@ -164,6 +164,6 @@ export async function notifyMailboxChange(account: AccountContext): Promise<void
       source: 'jmap',
     }));
   } catch (err) {
-    log.warn({ err }, 'Redis-Publish fehlgeschlagen');
+    log.warn({ err }, 'Redis publish failed');
   }
 }

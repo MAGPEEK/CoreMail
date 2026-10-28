@@ -21,9 +21,9 @@ const PRIORITY_LABEL: Record<string, string> = {
   HIGH:   'Hoch',
 };
 
-// ── localStorage — Erinnerungen persistent speichern ───────────────────────────
-// Key-Format: "taskId:reminderISO" → Popup feuert genau einmal pro (Task, Zeitpunkt).
-// Ändert der User den Zeitstempel, entsteht ein neuer Key → Popup feuert erneut. ✓
+// ── localStorage — persist reminders ───────────────────────────────────────────
+// Key format: "taskId:reminderISO" → popup fires exactly once per (task, timestamp).
+// If the user changes the timestamp, a new key is created → popup fires again. ✓
 
 const REMINDER_STORAGE_KEY = 'coremail:notified-reminders';
 
@@ -36,7 +36,7 @@ function loadNotifiedReminders(): Set<string> {
 
 function saveNotifiedReminders(set: Set<string>): void {
   try { localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify([...set])); }
-  catch { /* localStorage quota — ignorieren */ }
+  catch { /* localStorage quota — ignore */ }
 }
 
 function mkReminderKey(taskId: string, reminderIso: string): string {
@@ -45,15 +45,15 @@ function mkReminderKey(taskId: string, reminderIso: string): string {
 
 // ───────────────────────────────────────────────────────────────────────────────
 
-/** Addiert `minutes` Minuten zu einem datetime-local-String (YYYY-MM-DDTHH:mm). */
+/** Adds `minutes` minutes to a datetime-local string (YYYY-MM-DDTHH:mm). */
 function addMinutes(dtLocal: string, minutes: number): string {
   const d = new Date(dtLocal);
   d.setMinutes(d.getMinutes() + minutes);
-  // ISO ohne Sekunden/Timezone, damit es als Kalender-dtEnd passt
+  // ISO without seconds/timezone so it fits as calendar dtEnd
   return d.toISOString().slice(0, 16);
 }
 
-// ── Formular-Typen ─────────────────────────────────────────────────────────────
+// ── Form types ─────────────────────────────────────────────────────────────────
 interface NewTaskForm {
   subject:        string;
   body:           string;
@@ -91,14 +91,14 @@ export function TasksPage() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editForm, setEditForm]       = useState<EditTaskForm>(EMPTY_EDIT_FORM);
 
-  // Feature 3 – Fälligkeits-Benachrichtigungen: bereits notifizierte IDs
+  // Feature 3 – due date notifications: already notified IDs
   const notifiedIds         = useRef<Set<string>>(new Set());
-  // Erinnerungs-Popups: aus localStorage laden → überleben Page-Refresh
+  // Reminder popups: load from localStorage → survive page refresh
   const notifiedReminderIds = useRef<Set<string>>(loadNotifiedReminders());
 
-  // Ref damit checkDueDates im Interval immer aktuelle Tasks sieht (kein stale closure)
+  // Ref so checkDueDates always sees current tasks in the interval (no stale closure)
   const allTasksRef = useRef<Task[] | undefined>(undefined);
-  // Ref für User-E-Mail (für "Erinnerung per Mail")
+  // Ref for user email (for "reminder by mail")
   const userMeRef   = useRef<{ email: string } | undefined>(undefined);
 
   const statusFilter = filter === 'pending'
@@ -111,19 +111,19 @@ export function TasksPage() {
     select:   (all) => statusFilter ? all.filter((t) => statusFilter.includes(t.status)) : all,
   });
 
-  // Alle Aufgaben (ungefiltert) für Fälligkeitsprüfung
+  // All tasks (unfiltered) for due date check
   const { data: allTasks } = useQuery({
     queryKey: ['tasks', 'all'],
     queryFn:  () => api.get<Task[]>('/tasks'),
   });
 
-  // Feature 2 – Kalender-Sync: Standard-Kalender ermitteln
+  // Feature 2 – calendar sync: determine default calendar
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn:  () => api.get<{ id: string; name: string }[]>('/calendar'),
   });
 
-  // User-Profil für "Erinnerung per Mail" — korrekter Endpunkt: /user/profile
+  // User profile for "reminder by mail" — correct endpoint: /user/profile
   const { data: userMe } = useQuery({
     queryKey: ['user', 'profile'],
     queryFn:  () => api.get<{ email: string }>('/user/profile'),
@@ -131,7 +131,7 @@ export function TasksPage() {
   });
   useEffect(() => { if (userMe) userMeRef.current = userMe; }, [userMe]);
 
-  // ── Aufgabe erstellen ─────────────────────────────────────────────────────────
+  // ── Create task ───────────────────────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: (data: Omit<NewTaskForm, 'subject'> & { subject: string }) =>
       api.post('/tasks', {
@@ -149,18 +149,18 @@ export function TasksPage() {
       setShowForm(false);
       toast.success('Aufgabe erstellt');
 
-      // Sofortiges Feedback wenn Erinnerung gesetzt wurde
+      // Immediate feedback when a reminder was set
       if (variables.reminder) {
         const label = variables.reminderByMail ? 'Erinnerung + E-Mail' : 'Erinnerung';
         toast(`🔔 ${label}: ${format(new Date(variables.reminder), 'dd.MM. HH:mm')} Uhr`, { duration: 4000 });
       }
 
-      // Feature 2 – best-effort Kalender-Sync
+      // Feature 2 – best-effort calendar sync
       const calendarId = calendars?.[0]?.id;
       if (calendarId) {
         const syncs: Promise<unknown>[] = [];
 
-        // Fälligkeitsdatum → ganztägiges Ereignis
+        // Due date → all-day event
         if (variables.dueDate) {
           syncs.push(
             api.post('/calendar/events', {
@@ -173,7 +173,7 @@ export function TasksPage() {
           );
         }
 
-        // Erinnerung → Kalender-Termin zum exakten Zeitpunkt (30 min Dauer)
+        // Reminder → calendar event at the exact time (30 min duration)
         if (variables.reminder) {
           syncs.push(
             api.post('/calendar/events', {
@@ -196,7 +196,7 @@ export function TasksPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // ── Status umschalten ─────────────────────────────────────────────────────────
+  // ── Toggle status ─────────────────────────────────────────────────────────────
   const toggleMutation = useMutation({
     mutationFn: ({ id, completed }: { id: string; completed: boolean }) =>
       api.put(`/tasks/${id}`, { status: completed ? 'COMPLETED' : 'NOT_STARTED' }),
@@ -204,7 +204,7 @@ export function TasksPage() {
     onError:   (err: Error) => toast.error(err.message),
   });
 
-  // Feature 1 – Aufgabe vollständig bearbeiten
+  // Feature 1 – fully edit task
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<EditTaskForm> }) =>
       api.put(`/tasks/${id}`, {
@@ -221,15 +221,15 @@ export function TasksPage() {
       setEditForm(EMPTY_EDIT_FORM);
       toast.success('Aufgabe gespeichert');
 
-      // Sofortiges Feedback wenn Erinnerung gesetzt/geändert wurde.
-      // Kein manuelles Löschen aus dem Tracking-Set nötig — der compound key
-      // (taskId:reminderISO) ist für den neuen Zeitstempel automatisch neu. ✓
+      // Immediate feedback when a reminder was set/changed.
+      // No manual removal from the tracking set needed — the compound key
+      // (taskId:reminderISO) is automatically new for the new timestamp. ✓
       if (variables.data.reminder) {
         const label = variables.data.reminderByMail ? 'Erinnerung + E-Mail' : 'Erinnerung';
         toast(`🔔 ${label}: ${format(new Date(variables.data.reminder), 'dd.MM. HH:mm')} Uhr`, { duration: 4000 });
       }
 
-      // Kalender-Sync für Erinnerung nach Edit
+      // Calendar sync for reminder after edit
       if (variables.data.reminder) {
         const calendarId = calendars?.[0]?.id;
         if (calendarId) {
@@ -248,7 +248,7 @@ export function TasksPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // ── Aufgabe löschen ───────────────────────────────────────────────────────────
+  // ── Delete task ───────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/tasks/${id}`),
     onSuccess:  () => qc.invalidateQueries({ queryKey: ['tasks'] }),
@@ -261,7 +261,7 @@ export function TasksPage() {
     createMutation.mutate({ ...form, subject: form.subject.trim() });
   };
 
-  // Feature 1 – Doppelklick öffnet Edit-Modal
+  // Feature 1 – double-click opens edit modal
   const handleRowDoubleClick = (task: Task) => {
     setEditingTask(task);
     setEditForm({
@@ -304,12 +304,12 @@ export function TasksPage() {
     });
   };
 
-  // Ref mit aktuellen Tasks synchron halten — damit der Interval-Callback
-  // nie einen veralteten Snapshot sieht (kein stale-closure-Bug)
+  // Keep ref in sync with current tasks — so the interval callback
+  // never sees a stale snapshot (no stale-closure bug)
   useEffect(() => { allTasksRef.current = allTasks; }, [allTasks]);
 
-  // Feature 3 – Fälligkeits- und Erinnerungsprüfung
-  // useCallback + leere Deps → stabile Referenz; liest Daten stets über Refs
+  // Feature 3 – due date and reminder check
+  // useCallback + empty deps → stable reference; always reads data via refs
   const checkDueDates = useCallback(() => {
     const tasks = allTasksRef.current;
     if (!tasks) return;
@@ -319,7 +319,7 @@ export function TasksPage() {
     for (const task of tasks) {
       if (task.status === 'COMPLETED') continue;
 
-      // ① Fälligkeitsdatum erreicht (einmal pro Tag)
+      // ① Due date reached (once per day)
       if (task.dueDate && !notifiedIds.current.has(task.id)) {
         if (task.dueDate.slice(0, 10) === today) {
           notifiedIds.current.add(task.id);
@@ -327,9 +327,9 @@ export function TasksPage() {
         }
       }
 
-      // ② Erinnerung — compound key: jeder (Task, Zeitstempel) feuert exakt einmal,
-      //    auch nach Page-Reload (persistiert in localStorage).
-      //    Ändert der User den Zeitpunkt → neuer Key → feuert erneut. ✓
+      // ② Reminder — compound key: each (task, timestamp) fires exactly once,
+      //    even after page reload (persisted in localStorage).
+      //    If the user changes the time → new key → fires again. ✓
       if (task.reminder) {
         const rKey = mkReminderKey(task.id, task.reminder);
         if (!notifiedReminderIds.current.has(rKey) && new Date(task.reminder) <= now) {
@@ -337,14 +337,14 @@ export function TasksPage() {
           saveNotifiedReminders(notifiedReminderIds.current);
           toast(`🔔 Erinnerung: ${task.subject}`, { icon: '⏰', duration: 12_000 });
 
-          // Wenn "per E-Mail" gewünscht → Mail an eigene Adresse senden (best-effort)
-          // Falls userMeRef noch nicht befüllt ist (Timing beim ersten Mount-Check),
-          // wird das Profil on-demand nachgeladen.
+          // If "by email" is requested → send mail to own address (best-effort)
+          // If userMeRef is not yet populated (timing on the first mount check),
+          // the profile is loaded on demand.
           if (task.reminderByMail) {
             const sendReminderMail = async () => {
               const profile = userMeRef.current
                 ?? await api.get<{ email: string }>('/user/profile').catch(() => null);
-              if (profile && !userMeRef.current) userMeRef.current = profile; // cachen
+              if (profile && !userMeRef.current) userMeRef.current = profile; // cache
               if (!profile?.email) return;
               await api.post('/mail/send', {
                 to:       [profile.email],
@@ -358,20 +358,20 @@ export function TasksPage() {
         }
       }
     }
-  }, []); // stabil — kein Neuerstellen bei jedem Render
+  }, []); // stable — not recreated on every render
 
-  // Sofort prüfen wenn neue Daten vorliegen + alle 30 Sekunden
+  // Check immediately when new data arrives + every 30 seconds
   useEffect(() => {
     checkDueDates();
     const id = setInterval(checkDueDates, 30_000);
     return () => clearInterval(id);
-  }, [checkDueDates, allTasks]); // allTasks als Dep: sofort auslösen wenn Tasks sich ändern
+  }, [checkDueDates, allTasks]); // allTasks as dep: trigger immediately when tasks change
 
   return (
     <div className="flex flex-1 overflow-hidden bg-gray-50">
       <div className="w-full max-w-2xl mx-auto p-6 flex flex-col gap-4">
 
-        {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
+        {/* ── Header ─────────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-gray-900">Aufgaben</h1>
           <div className="flex gap-1 bg-white border border-gray-200 rounded p-0.5">
@@ -384,7 +384,7 @@ export function TasksPage() {
           </div>
         </div>
 
-        {/* ── Neue Aufgabe ────────────────────────────────────────────────────── */}
+        {/* ── New task ────────────────────────────────────────────────────────── */}
         {showForm ? (
           <form onSubmit={handleSubmit} className="bg-white border border-accent/30 rounded-lg shadow-sm p-4 space-y-3">
             <input
@@ -405,7 +405,7 @@ export function TasksPage() {
             />
 
             <div className="flex flex-wrap gap-3">
-              {/* Priorität */}
+              {/* Priority */}
               <div className="flex items-center gap-1.5">
                 <Flag size={13} className={PRIORITY_COLOR[form.priority]} />
                 <select
@@ -419,7 +419,7 @@ export function TasksPage() {
                 </select>
               </div>
 
-              {/* Fälligkeitsdatum */}
+              {/* Due date */}
               <div className="flex items-center gap-1.5">
                 <Calendar size={13} className="text-gray-400" />
                 <input
@@ -430,7 +430,7 @@ export function TasksPage() {
                 />
               </div>
 
-              {/* Erinnerung — Datum + Uhrzeit */}
+              {/* Reminder — date + time */}
               <div className="flex items-center gap-1.5" title="Erinnerung: Datum und Uhrzeit → erscheint im Kalender und als Popup">
                 <Bell size={13} className="text-amber-400" />
                 <input
@@ -441,7 +441,7 @@ export function TasksPage() {
                 />
               </div>
 
-              {/* Checkbox "per E-Mail" — nur sichtbar wenn Erinnerung gesetzt */}
+              {/* Checkbox "by email" — only visible when a reminder is set */}
               {form.reminder && (
                 <label className="flex items-center gap-1.5 cursor-pointer select-none" title="Erinnerungsmail in dein Postfach senden">
                   <input
@@ -476,7 +476,7 @@ export function TasksPage() {
           </button>
         )}
 
-        {/* ── Aufgabenliste ───────────────────────────────────────────────────── */}
+        {/* ── Task list ───────────────────────────────────────────────────────── */}
         <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           {isLoading && (
             <div className="py-8 text-center text-gray-400 text-sm">Lade Aufgaben…</div>
@@ -491,7 +491,7 @@ export function TasksPage() {
             const overdue = !done && task.dueDate && new Date(task.dueDate) < new Date();
             return (
               <div key={task.id}>
-                {/* Doppelklick öffnet Edit-Modal (Feature 1) */}
+                {/* Double-click opens edit modal (Feature 1) */}
                 <div
                   className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-50 transition-colors cursor-default"
                   onDoubleClick={() => handleRowDoubleClick(task)}
@@ -508,7 +508,7 @@ export function TasksPage() {
                       : <Circle      size={18} className="text-gray-300 hover:text-accent" />}
                   </button>
 
-                  {/* Betreff + Expand-Button */}
+                  {/* Subject + expand button */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <p className={`text-sm ${done ? 'line-through text-gray-400' : 'text-gray-800'}`}>
@@ -525,7 +525,7 @@ export function TasksPage() {
                     </div>
                   </div>
 
-                  {/* Meta-Infos + Aktionen */}
+                  {/* Meta info + actions */}
                   <div className="flex items-center gap-2 shrink-0">
                     <Flag size={13} className={PRIORITY_COLOR[task.priority]} />
                     {task.dueDate && (
@@ -566,7 +566,7 @@ export function TasksPage() {
                   </div>
                 </div>
 
-                {/* Body/Notizen aufgeklappt */}
+                {/* Body/notes expanded */}
                 {isOpen && hasBody && (
                   <div className="px-11 pb-3 text-sm text-gray-600 whitespace-pre-wrap leading-relaxed bg-gray-50/50">
                     {task.body}
@@ -586,7 +586,7 @@ export function TasksPage() {
         >
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
 
-            {/* Modal-Kopfzeile */}
+            {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
               <h2 className="text-base font-semibold text-gray-900">Aufgabe bearbeiten</h2>
               <button
@@ -598,7 +598,7 @@ export function TasksPage() {
               </button>
             </div>
 
-            {/* Modal-Formular */}
+            {/* Modal form */}
             <form onSubmit={handleEditSave} className="p-5 flex flex-col gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Betreff *</label>
@@ -678,7 +678,7 @@ export function TasksPage() {
                 )}
               </div>
 
-              {/* Aktionen */}
+              {/* Actions */}
               <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"

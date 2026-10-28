@@ -15,8 +15,8 @@ export async function createAppPassword(
   name: string,
 ): Promise<{ id: string; password: string }> {
   const password = generateAppPassword();
-  // Wichtig: hashPassword() aus @coremail/core nutzt bcrypt + PEPPER
-  // damit verifyPassword() im SMTP-/IMAP-/POP3-Server matcht.
+  // Important: hashPassword() from @coremail/core uses bcrypt + PEPPER
+  // so that verifyPassword() in the SMTP/IMAP/POP3 server matches.
   const hash = await hashPassword(password);
 
   const record = await prisma.appPassword.create({

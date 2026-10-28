@@ -20,8 +20,8 @@ interface SmtpSettings {
   extSize:              boolean;
   ext8bitmime:          boolean;
   extEnhancedStatus:    boolean;
-  // Folgende DB-Felder bleiben aus Backwards-Compat erhalten werden aber im Server
-  // hardcoded ignoriert (siehe smtp-server/server.ts), da nicht implementiert:
+  // The following DB fields are kept for backwards compatibility but are
+  // hard-coded ignored in the server (see smtp-server/server.ts) since not implemented:
   //   extAuthCramMd5, extSmtputf8, extDsn, extChunking
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
@@ -41,7 +41,7 @@ interface SmtpSettings {
   connectionTimeoutSec: number;
   greetingDelaySec:     number;
   maxAuthFailures:      number;
-  // Ausgehende Zustellung
+  // Outgoing delivery
   outboundMode:          'mx' | 'smarthost';
   smarthostHost:         string;
   smarthostPort:         number;
@@ -147,12 +147,12 @@ const EXT_DEFS: ExtDef[] = [
     desc: '8-Bit-Daten in SMTP-Nachrichten ohne MIME-Encoding erlauben' },
   { key: 'extEnhancedStatus', label: 'ENHANCEDSTATUSCODES', rfc: 'RFC 2034', risk: 'safe',
     desc: 'Erweiterte SMTP-Statuscodes (z.B. 5.7.1) für bessere Fehlerdiagnose' },
-  // Bewusst NICHT als Toggles verfügbar — diese Extensions sind im Server nicht implementiert
-  // und würden bei Aktivierung gegen die jeweilige RFC verstoßen (Server lügt über Capability):
-  //   CRAM-MD5 (RFC 2195/4954) — handleAuth kennt nur PLAIN+LOGIN, 504 bei CRAM-MD5
-  //   SMTPUTF8 (RFC 6531)      — UTF-8 in Envelope-Adressen wird nicht gesondert behandelt
-  //   DSN (RFC 3461)           — kein NOTIFY/ORCPT/ENVID/RET-Parsing, kein multipart/report
-  //   CHUNKING (RFC 3030)      — BDAT-Command wird vom Parser nicht erkannt
+  // Deliberately NOT available as toggles — these extensions are not implemented in the server
+  // and enabling them would violate the respective RFC (server would lie about its capabilities):
+  //   CRAM-MD5 (RFC 2195/4954) — handleAuth only knows PLAIN+LOGIN, 504 on CRAM-MD5
+  //   SMTPUTF8 (RFC 6531)      — UTF-8 in envelope addresses is not handled specially
+  //   DSN (RFC 3461)           — no NOTIFY/ORCPT/ENVID/RET parsing, no multipart/report
+  //   CHUNKING (RFC 3030)      — BDAT command is not recognized by the parser
 ];
 
 const RISK_BADGE: Record<Risk, string> = {
@@ -451,7 +451,7 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
         ))}
       </div>
 
-      {/* Ablauf-Illustration */}
+      {/* Flow illustration */}
       <div className="card p-4 space-y-3">
         <p className="text-sm font-semibold text-gray-700">Ablauf</p>
         <div className="flex items-start gap-3">
@@ -664,7 +664,7 @@ function RelayingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// OutgoingSection — Ausgehende Zustellung: MX direkt oder Smarthost
+// OutgoingSection — outgoing delivery: direct MX or smarthost
 // ═════════════════════════════════════════════════════════════════════════════
 
 function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Partial<SmtpSettings>) => void; pending: boolean }) {
@@ -674,13 +674,13 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
   const [tls, setTls]                 = useState(s.smarthostTls ?? true);
   const [implicitTls, setImplicitTls] = useState(s.smarthostImplicitTls ?? false);
   const [username, setUsername]       = useState(s.smarthostUsername ?? '');
-  const [password, setPassword]       = useState('');  // nie vorausgefüllt (Sicherheit)
+  const [password, setPassword]       = useState('');  // never prefilled (security)
   const [filterEnabled, setFilterEnabled] = useState(s.outboundFilterEnabled ?? true);
 
   const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [testMsg, setTestMsg]         = useState('');
 
-  // Implizites TLS → STARTTLS deaktivieren (gegenseitig exklusiv)
+  // Implicit TLS → disable STARTTLS (mutually exclusive)
   function handleImplicitTls(v: boolean) {
     setImplicitTls(v);
     if (v) setTls(false);
@@ -690,7 +690,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     if (v) setImplicitTls(false);
   }
 
-  // Port-Vorschläge je nach TLS-Modus
+  // Port suggestions depending on TLS mode
   const PORT_PRESETS = [
     { label: '25 – SMTP', port: 25 },
     { label: '587 – Submission', port: 587 },
@@ -793,7 +793,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
         </div>
       )}
 
-      {/* Spam-/Virenfilter */}
+      {/* Spam/virus filter */}
       <div className="card p-5 space-y-0">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Sicherheitsfilter</p>
         <ToggleRow
@@ -830,7 +830,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
               </div>
             </div>
 
-            {/* Port-Schnellauswahl */}
+            {/* Port quick select */}
             <div className="flex flex-wrap gap-1.5">
               <span className="text-xs text-gray-400 self-center">Schnell:</span>
               {PORT_PRESETS.map(p => (
@@ -1004,7 +1004,7 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
         ))}
       </div>
 
-      {/* Verbindungslimits */}
+      {/* Connection limits */}
       <div className="card p-5 space-y-0">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Verbindungslimits</p>
         <NumInput label="Maximale gleichzeitige Verbindungen"
@@ -1021,7 +1021,7 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
           value={vals.maxAuthFailures} onChange={v => set('maxAuthFailures', v)} min={1} max={100} />
       </div>
 
-      {/* Nachrichtengröße */}
+      {/* Message size */}
       <div className="card p-5 space-y-0">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Nachrichtengröße</p>
         <NumInput label="Maximale Nachrichtengröße"
@@ -1052,7 +1052,7 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// DnsSection — DNS-Einträge für Mail-Betrieb
+// DnsSection — DNS records for mail operation
 // ═════════════════════════════════════════════════════════════════════════════
 
 interface DomainItem { id: string; name: string; primary: boolean; dkimSelector: string }
@@ -1104,14 +1104,14 @@ function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
   );
 }
 
-// ── StatusDot — grün = ok, gelb = warning (existiert aber abweichend), rot = fehlt
+// ── StatusDot — green = ok, yellow = warning (exists but differs), red = missing
 function StatusDot({ ok, checking, warning }: { ok: boolean; checking: boolean; warning?: boolean }) {
   if (checking) return <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />;
   const color = ok ? 'bg-green-500' : warning ? 'bg-yellow-400' : 'bg-red-500';
   return <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${color}`} />;
 }
 
-// ── DnsRow — eine Zeile in der DNS-Tabelle ────────────────────────────────────
+// ── DnsRow — one row in the DNS table ─────────────────────────────────────────
 interface DnsRowProps {
   label:       string;
   description: string;
@@ -1122,13 +1122,13 @@ interface DnsRowProps {
 function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
   return (
     <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
-      {/* Status-Punkt */}
+      {/* Status dot */}
       <div className="flex items-start pt-0.5">
         <StatusDot ok={record.ok} checking={checking} warning={!!record.warning} />
       </div>
 
       <div className="space-y-2 min-w-0">
-        {/* Labelzeile */}
+        {/* Label row */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-semibold text-gray-900">{label}</span>
           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">
@@ -1147,7 +1147,7 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
 
         <p className="text-xs text-gray-400 leading-relaxed">{description}</p>
 
-        {/* Sonder-Warnung (z.B. Mehrere SPF-Records) */}
+        {/* Special warning (e.g. multiple SPF records) */}
         {!checking && record.warning && (
           <div className="flex items-start gap-1.5 bg-red-50 border border-red-200 rounded px-2 py-1.5">
             <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
@@ -1155,21 +1155,21 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
           </div>
         )}
 
-        {/* DNS-Name + Kopieren */}
+        {/* DNS name + copy */}
         <div className="flex items-center gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
           <span className="text-[10px] text-gray-400 font-medium mr-1 shrink-0">Name</span>
           <code className="flex-1 text-xs text-gray-600 font-mono break-all">{record.name}</code>
           <CopyBtn text={record.name} />
         </div>
 
-        {/* Erwarteter Wert + Kopieren */}
+        {/* Expected value + copy */}
         <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
           <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Wert</span>
           <code className="flex-1 text-xs text-gray-800 font-mono break-all leading-relaxed">{record.expected}</code>
           <CopyBtn text={record.expected} />
         </div>
 
-        {/* Aktuell in DNS gefunden */}
+        {/* Currently found in DNS */}
         {!checking && record.ok && record.found && (
           <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
             <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
@@ -1201,7 +1201,7 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
   );
 }
 
-// ── PTR-Zeile ─────────────────────────────────────────────────────────────────
+// ── PTR row ───────────────────────────────────────────────────────────────────
 function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: string; checking: boolean }) {
   return (
     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4">
@@ -1265,7 +1265,7 @@ function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: 
   );
 }
 
-// ── DnsSection (Hauptkomponente) ──────────────────────────────────────────────
+// ── DnsSection (main component) ───────────────────────────────────────────────
 function DnsSection() {
   const [selectedDomainId, setSelectedDomainId] = useState<string>('');
   const [checkKey, setCheckKey] = useState(0);
@@ -1288,9 +1288,9 @@ function DnsSection() {
     gcTime:    0,
   });
 
-  // 6 sichtbare Einträge: MX, SPF, DKIM, DMARC, Autodiscover, PTR
-  // (A-Record wird vom Backend zurückgegeben, aber NICHT im UI gerendert —
-  //  deshalb darf er auch nicht in den Counter einfließen, sonst Inkonsistenz)
+  // 6 visible entries: MX, SPF, DKIM, DMARC, Autodiscover, PTR
+  // (A record is returned by the backend but NOT rendered in the UI —
+  //  so it must not be included in the counter either, otherwise inconsistency)
   const VISIBLE_DNS_KEYS = ['mx', 'spf', 'dkim', 'dmarc', 'autodiscover', 'ptr'] as const;
   const visibleRecords = dnsCheck
     ? VISIBLE_DNS_KEYS.map(k => dnsCheck.records[k])
@@ -1359,7 +1359,7 @@ function DnsSection() {
         </button>
       </div>
 
-      {/* ── Domain-Tabs ─────────────────────────────────────────────────── */}
+      {/* ── Domain tabs ─────────────────────────────────────────────────── */}
       {domains.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {domains.map(d => (
@@ -1385,7 +1385,7 @@ function DnsSection() {
         </div>
       )}
 
-      {/* ── Status-Banner ──────────────────────────────────────────────── */}
+      {/* ── Status banner ──────────────────────────────────────────────── */}
       {dnsCheck && !checking && (
         <div className={`rounded-lg px-4 py-3 flex items-start gap-3 border ${
           allOk && !hasWarn ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
@@ -1409,7 +1409,7 @@ function DnsSection() {
         </div>
       )}
 
-      {/* ── DNS-Tabelle ─────────────────────────────────────────────────── */}
+      {/* ── DNS table ───────────────────────────────────────────────────── */}
       {domains.length > 0 && (
         <div className="card divide-y divide-gray-100 overflow-hidden">
           <div className="px-4 py-2 bg-gray-50 flex items-center gap-2">
@@ -1432,7 +1432,7 @@ function DnsSection() {
               />
             ))}
 
-            {/* PTR — jetzt mit echtem Check-Ergebnis */}
+            {/* PTR — now with real check result */}
             {(dnsCheck || selectedDomain) && (
               <PtrRow
                 record={dnsCheck?.records.ptr}
@@ -1444,7 +1444,7 @@ function DnsSection() {
         </div>
       )}
 
-      {/* ── Legende ────────────────────────────────────────────────────── */}
+      {/* ── Legend ─────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-5 text-xs text-gray-500 px-1 flex-wrap">
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gesetzt
@@ -1508,7 +1508,7 @@ export function SmtpConfigPage() {
 
       {/* ── Main content ────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-6">
-        {/* DNS-Reiter braucht keine SmtpSettings — immer renderfähig */}
+        {/* DNS tab needs no SmtpSettings — always renderable */}
         {section === 'dns' && <DnsSection />}
 
         {section !== 'dns' && (

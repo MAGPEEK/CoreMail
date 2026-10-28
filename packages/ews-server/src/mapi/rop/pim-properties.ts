@@ -1,11 +1,11 @@
 /**
- * PIM Property-Mapper (v5.1.0)
+ * PIM property mapper (v5.1.0)
  *
- * Lädt Calendar/Contact/Task/Note-Items aus Prisma und mapt sie auf vollständige
- * MAPI-Property-Sets (Standard + Named Properties via PSETID_*).
+ * Loads Calendar/Contact/Task/Note items from Prisma and maps them to complete
+ * MAPI property sets (standard + named properties via PSETID_*).
  *
- * Wird von handleRopGetPropertiesAll (in rop/message.ts) verwendet wenn das
- * Message-Handle einen `pimKind` gesetzt hat.
+ * Used by handleRopGetPropertiesAll (in rop/message.ts) when the
+ * message handle has a `pimKind` set.
  */
 
 import { prisma } from '@coremail/storage';
@@ -28,17 +28,17 @@ import { encodeRecurrencePattern } from '../recurrence-pattern.js';
 const log = createLogger('mapi:rop:pim-properties');
 
 /**
- * Erstellt die Property-Map für eine bestimmte PIM-Item. Allokiert auch die
- * benötigten Named Properties in der Session (idempotent — wird bei jedem
- * GetPropertiesAll-Call aufgerufen, aber bereits-allozierte IDs werden
- * wiederverwendet).
+ * Builds the property map for a specific PIM item. Also allocates the
+ * required named properties in the session (idempotent — called on every
+ * GetPropertiesAll call, but already-allocated IDs are
+ * reused).
  */
 export async function buildPimPropertyList(
   sessionToken: string,
   pimKind: 'appointment' | 'contact' | 'task' | 'note',
   itemId: string,
 ): Promise<Map<number, unknown>> {
-  // Standard-Named-Properties allokieren (oder reuse falls bereits da)
+  // Allocate standard named properties (or reuse if already present)
   const map = await getNamedPropMap(sessionToken);
 
   switch (pimKind) {
@@ -68,7 +68,7 @@ async function buildAppointmentProps(
   const m = new Map<number, unknown>();
   if (!ev) return m;
 
-  // Standard MAPI properties (immer als PR_*)
+  // Standard MAPI properties (always as PR_*)
   m.set(PR.PR_SUBJECT_W,             ev.summary);
   m.set(PR.PR_NORMALIZED_SUBJECT_W,  ev.summary);
   m.set(PR.PR_SUBJECT_PREFIX_W,      '');
@@ -103,7 +103,7 @@ async function buildAppointmentProps(
   const [idLocation, idStart, idEnd, idDuration, idSubType, idBusy, idSeq, idRecur, idRecurPat] = ids;
 
   // PT_UNICODE = 0x001F, PT_SYSTIME = 0x0040, PT_LONG = 0x0003, PT_BOOLEAN = 0x000B
-  // Property-Tag = (id << 16) | type
+  // Property tag = (id << 16) | type
   const tag = (id: number | undefined, type: number) => (((id ?? 0) & 0xFFFF) << 16) | (type & 0xFFFF);
 
   m.set(tag(idLocation, 0x001F),  ev.location);
@@ -112,11 +112,11 @@ async function buildAppointmentProps(
   const durationMin = Math.floor((ev.dtEnd.getTime() - ev.dtStart.getTime()) / 60000);
   m.set(tag(idDuration, 0x0003),  durationMin);
   m.set(tag(idSubType,  0x000B),  ev.allDay);
-  m.set(tag(idBusy,     0x0003),  2);                // 2 = Busy (Default)
+  m.set(tag(idBusy,     0x0003),  2);                // 2 = Busy (default)
   m.set(tag(idSeq,      0x0003),  ev.sequence);
   m.set(tag(idRecur,    0x000B),  ev.recurring);
 
-  // v5.2.0: Recurrence Pattern Binary für PidLidAppointmentRecur (PT_BINARY)
+  // v5.2.0: Recurrence pattern binary for PidLidAppointmentRecur (PT_BINARY)
   if (ev.recurring && ev.rrule) {
     try {
       const recurBin = encodeRecurrencePattern(ev.rrule, ev.dtStart, ev.dtEnd);
@@ -245,12 +245,12 @@ async function buildTaskProps(
   // TaskStatus: 0=NotStarted, 1=InProgress, 2=Completed, 3=Waiting, 4=Deferred
   const isComplete = t.completedAt !== null || t.status === 'COMPLETED';
   m.set(tag(idStatus,   0x0003), isComplete ? 2 : (t.status === 'IN_PROGRESS' ? 1 : 0));
-  m.set(tag(idPct,      0x0005), isComplete ? 1.0 : 0.0);    // PT_DOUBLE in echtem MAPI; vereinfacht
+  m.set(tag(idPct,      0x0005), isComplete ? 1.0 : 0.0);    // PT_DOUBLE in real MAPI; simplified
   m.set(tag(idStart,    0x0040), t.createdAt);
   if (t.dueDate)     m.set(tag(idDue,  0x0040), t.dueDate);
   if (t.completedAt) m.set(tag(idDone, 0x0040), t.completedAt);
   m.set(tag(idComplete, 0x000B), isComplete);
-  m.set(tag(idOwner,    0x001F), '');                          // Owner-email — vereinfacht
+  m.set(tag(idOwner,    0x001F), '');                          // Owner e-mail — simplified
 
   log.debug({ itemId, subject: t.subject }, 'buildTaskProps OK');
   return m;
@@ -292,7 +292,7 @@ async function buildNoteProps(
   const [idColor, idWidth, idHeight] = ids;
   const tag = (id: number | undefined, type: number) => (((id ?? 0) & 0xFFFF) << 16) | (type & 0xFFFF);
 
-  m.set(tag(idColor,  0x0003), 3);     // 3 = Yellow (Default)
+  m.set(tag(idColor,  0x0003), 3);     // 3 = Yellow (default)
   m.set(tag(idWidth,  0x0003), 200);
   m.set(tag(idHeight, 0x0003), 166);
 

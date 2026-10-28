@@ -22,10 +22,10 @@ export function getRedisClient(): Redis {
 }
 
 /**
- * Erstellt eine neue Redis-Verbindung speziell für BullMQ.
- * BullMQ v5 erfordert maxRetriesPerRequest: null (Blocking-Commands).
- * Gibt IMMER eine neue Instanz zurück (kein Singleton) — BullMQ verwaltet
- * seine Verbindungen selbst und schließt sie beim Worker/Queue-Destroy.
+ * Creates a new Redis connection specifically for BullMQ.
+ * BullMQ v5 requires maxRetriesPerRequest: null (blocking commands).
+ * ALWAYS returns a new instance (no singleton) — BullMQ manages
+ * its connections itself and closes them on worker/queue destroy.
  */
 export function createBullMqConnection(): Redis {
   const conn = new Redis(config.REDIS_URL, {

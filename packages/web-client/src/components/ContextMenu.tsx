@@ -5,16 +5,16 @@ export interface ContextMenuItem {
   label?: string;
   icon?: ReactNode;
   onClick?: () => void;
-  /** Untermenü-Items */
+  /** Submenu items */
   children?: ContextMenuItem[];
-  /** Trennlinie über/unter Item */
+  /** Divider above/below item */
   separator?: 'before' | 'after';
-  /** Visuell als zerstörerische Aktion (rot) */
+  /** Visually a destructive action (red) */
   danger?: boolean;
   disabled?: boolean;
-  /** Komplette Trennzeile oder spezieller Render */
+  /** Full divider row or special render */
   type?: 'divider' | 'color-grid';
-  /** Nur bei type='color-grid': Farben-Array + Pick-Handler + ggf. aktuelle Auswahl */
+  /** Only for type='color-grid': colors array + pick handler + optionally the current selection */
   colors?: string[];
   current?: string;
   onPick?: (color: string) => void;
@@ -32,7 +32,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const [pos, setPos] = useState({ x, y });
   const [submenuFor, setSubmenuFor] = useState<{ index: number; rect: DOMRect } | null>(null);
 
-  // Auto-Reposition wenn aus Viewport ragt
+  // Auto-reposition when overflowing the viewport
   useLayoutEffect(() => {
     if (!ref.current) return;
     const rect = ref.current.getBoundingClientRect();
@@ -45,8 +45,8 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      // Klicks INNERHALB eines ContextMenus (auch in Submenus, die als
-      // eigenes Portal gerendert werden) NICHT als outside-Klick werten.
+      // Do NOT treat clicks INSIDE a ContextMenu (including submenus rendered
+      // as their own portal) as outside clicks.
       const target = e.target as HTMLElement | null;
       if (target?.closest('[data-coremail-contextmenu]')) return;
       onClose();

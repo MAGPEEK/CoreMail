@@ -137,7 +137,7 @@ async function onMessage(
     }
   }
 
-  // Lokale Empfänger erst auflösen (Aliase, Verteilergruppen, Shared-Mailbox-Aliase)
+  // Resolve local recipients first (aliases, distribution groups, shared mailbox aliases)
   const expandedLocalRcpts = localRcpts.length > 0
     ? await expandRecipients(localRcpts)
     : [];
@@ -162,7 +162,7 @@ async function onMessage(
     });
   }
 
-  // MAIL_FLOW — Nachrichtenablaufverfolgung (Outbound ACCEPTED)
+  // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
   const headers = extractRawHeaders(raw);
   void prisma.systemLog.create({
     data: {

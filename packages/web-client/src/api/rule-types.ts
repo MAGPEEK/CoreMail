@@ -1,4 +1,4 @@
-// Geteilte Type-Definitionen für Mail-Rules (Frontend)
+// Shared type definitions for mail rules (frontend)
 
 export type RuleField =
   | 'from' | 'to' | 'cc' | 'bcc' | 'subject' | 'body' | 'recipient'

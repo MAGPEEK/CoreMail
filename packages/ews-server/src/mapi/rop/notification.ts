@@ -1,18 +1,18 @@
 /**
- * Notification-ROP-Handler (v4.5.0)
+ * Notification ROP handler (v4.5.0)
  *
- * Implementiert:
+ * Implements:
  *   - RopRegisterNotification (MS-OXCNOTIF §2.2.1.2)
  *
  * Workflow:
- *   1) Outlook ruft RopRegisterNotification auf einem Folder-Handle auf.
- *   2) Subscription wird am Handle persistiert (subscription-Feld via
- *      dynamic JSON-Attribut).
- *   3) Outlook polled via NotificationWait long-poll.
- *   4) Server subscribed Redis-Channel `coremail:mapi:notify:<userId>`.
- *   5) Bei neuer Mail published storeInboundMessage() ein Event auf den
- *      Channel.
- *   6) Long-poll-Handler antwortet sofort mit EventPending=true.
+ *   1) Outlook calls RopRegisterNotification on a folder handle.
+ *   2) The subscription is persisted on the handle (subscription field via
+ *      dynamic JSON attribute).
+ *   3) Outlook polls via the NotificationWait long-poll.
+ *   4) The server subscribes to the Redis channel `coremail:mapi:notify:<userId>`.
+ *   5) On new mail storeInboundMessage() publishes an event to the
+ *      channel.
+ *   6) The long-poll handler answers immediately with EventPending=true.
  */
 
 import { createLogger, getRedisClient } from '@coremail/core';
@@ -23,7 +23,7 @@ import type { RopRequest } from '../rop-codec.js';
 
 const log = createLogger('mapi:rop:notification');
 
-/** Redis-Channel-Name pro User. */
+/** Redis channel name per user. */
 export function notifyChannelFor(userId: string): string {
   return `coremail:mapi:notify:${userId}`;
 }
@@ -42,7 +42,7 @@ export interface NotifyEvent {
  * Payload: NotificationTypes(uint16) | Reserved(uint8) | WantWholeStore(uint8)
  *        | [FolderId(uint64) | MessageId(uint64)]?
  *
- * Antwort: ReturnValue
+ * Response: ReturnValue
  */
 export async function handleRopRegisterNotification(
   rop: RopRequest,
@@ -61,11 +61,11 @@ export async function handleRopRegisterNotification(
     r.readUint8();    // Reserved
     r.readUint8();    // WantWholeStore
   } catch (err) {
-    log.warn({ err }, 'RegisterNotification: Payload-Parse-Fehler');
+    log.warn({ err }, 'RegisterNotification: payload parse error');
   }
 
-  // Subscription dynamisch am Handle anhängen — JSON-Round-Trip durch Redis
-  // erhält das Feld trotz fehlendem Type.
+  // Attach the subscription dynamically to the handle — the JSON round-trip through Redis
+  // preserves the field despite the missing type.
   const patched = {
     ...input.object,
     subscription: { notificationTypes, registeredAt: Date.now() },
@@ -81,9 +81,9 @@ export async function handleRopRegisterNotification(
 }
 
 /**
- * Published ein Event auf den User-Notify-Channel. Wird (in einem nächsten
- * Step) von SMTP-Inbound `storeInboundMessage()` aufgerufen wenn eine neue
- * Mail in der Inbox landet.
+ * Publishes an event to the user's notify channel. Called (in a next
+ * step) by SMTP inbound `storeInboundMessage()` when a new
+ * mail lands in the inbox.
  */
 export async function publishNotifyEvent(event: NotifyEvent): Promise<void> {
   try {
@@ -91,7 +91,7 @@ export async function publishNotifyEvent(event: NotifyEvent): Promise<void> {
     await redis.publish(notifyChannelFor(event.userId), JSON.stringify(event));
     log.debug({ event }, 'publishNotifyEvent OK');
   } catch (err) {
-    log.warn({ err }, 'publishNotifyEvent fehlgeschlagen');
+    log.warn({ err }, 'publishNotifyEvent failed');
   }
 }
 

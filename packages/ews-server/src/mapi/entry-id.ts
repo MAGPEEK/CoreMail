@@ -1,39 +1,39 @@
 /**
- * MAPI EntryID-Helpers (v4.1.0)
+ * MAPI EntryID helpers (v4.1.0)
  *
- * EntryIDs sind opake Binary-Identifier für MAPI-Objekte (Folder, Message,
- * Mailbox). Format gemäß MS-OXCDATA §2.2:
+ * EntryIDs are opaque binary identifiers for MAPI objects (folder, message,
+ * mailbox). Format per MS-OXCDATA §2.2:
  *
  *   +-------------------+
- *   | Flags (4B)        | ← 0 für normale, sonst spezielle Flags
+ *   | Flags (4B)        | ← 0 for normal, otherwise special flags
  *   +-------------------+
- *   | ProviderUID (16B) | ← GUID des MAPI-Providers
+ *   | ProviderUID (16B) | ← GUID of the MAPI provider
  *   +-------------------+
- *   | Type-spezifische Daten...                |
+ *   | Type-specific data...                    |
  *   +-------------------+
  *
- * Wir verwenden für CoreMail einen eigenen ProviderUID und kodieren CUID
- * (25 chars) als ProviderData. Der Server kann jederzeit aus einer EntryID
- * den zugehörigen CUID extrahieren.
+ * For CoreMail we use our own ProviderUID and encode the CUID
+ * (25 chars) as ProviderData. The server can extract the associated CUID
+ * from an EntryID at any time.
  */
 
-/** Custom ProviderUID für CoreMail (16-Byte GUID, fix). */
+/** Custom ProviderUID for CoreMail (16-byte GUID, fixed). */
 export const COREMAIL_PROVIDER_UID = Buffer.from(
   '434f52454d41494c4d41504900000001', // "COREMAILMAPI\0\0\0\x01"
   'hex',
 );
 
-/** Folder-EntryID-Layout: Flags + ProviderUID + 'F' + CUID. */
+/** Folder EntryID layout: Flags + ProviderUID + 'F' + CUID. */
 export function encodeFolderEntryId(folderId: string): Buffer {
   return encodeEntryId('F', folderId);
 }
 
-/** Message-EntryID-Layout: Flags + ProviderUID + 'M' + CUID. */
+/** Message EntryID layout: Flags + ProviderUID + 'M' + CUID. */
 export function encodeMessageEntryId(messageId: string): Buffer {
   return encodeEntryId('M', messageId);
 }
 
-/** Mailbox-Owner-EntryID. */
+/** Mailbox owner EntryID. */
 export function encodeUserEntryId(userId: string): Buffer {
   return encodeEntryId('U', userId);
 }
@@ -46,21 +46,21 @@ function encodeEntryId(typeMarker: string, id: string): Buffer {
   COREMAIL_PROVIDER_UID.copy(buf, 4);
   buf.writeUInt8(typeMarker.charCodeAt(0), 20);
   idBytes.copy(buf, 21);
-  // letztes Byte bleibt 0 (null-terminator für ID)
+  // last byte stays 0 (null terminator for ID)
   return buf;
 }
 
 /**
- * Dekodiert eine EntryID zu { typeMarker, id }. Liefert null wenn ungültig
- * oder fremder Provider.
+ * Decodes an EntryID to { typeMarker, id }. Returns null if invalid
+ * or from a foreign provider.
  */
 export function decodeEntryId(buf: Buffer): { typeMarker: string; id: string } | null {
   if (buf.length < 22) return null;
-  // Provider-Match
+  // Provider match
   const providerSlice = buf.subarray(4, 20);
   if (!providerSlice.equals(COREMAIL_PROVIDER_UID)) return null;
   const typeMarker = String.fromCharCode(buf.readUInt8(20));
-  // ID lesen bis null-terminator
+  // Read ID up to the null terminator
   let end = 21;
   while (end < buf.length && buf[end] !== 0) end++;
   const id = buf.subarray(21, end).toString('ascii');
@@ -68,10 +68,10 @@ export function decodeEntryId(buf: Buffer): { typeMarker: string; id: string } |
 }
 
 /**
- * 64-Bit Folder-ID für PR_FOLDER_ID. Outlook erwartet einen uint64. Wir
- * generieren einen deterministischen 8-Byte-Hash aus der CUID (25 chars).
+ * 64-bit folder ID for PR_FOLDER_ID. Outlook expects a uint64. We
+ * generate a deterministic 8-byte hash from the CUID (25 chars).
  *
- * Algorithmus: FNV-1a 64-bit Hash.
+ * Algorithm: FNV-1a 64-bit hash.
  */
 export function cuidToFolderId64(cuid: string): bigint {
   let h = 0xcbf29ce484222325n;

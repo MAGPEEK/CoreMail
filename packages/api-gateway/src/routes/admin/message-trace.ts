@@ -1,11 +1,11 @@
 /**
- * Admin-API: Nachrichtenablaufverfolgung (Message Trace)
+ * Admin API: message trace
  *
- * GET /api/v1/admin/message-trace   — Nachrichten suchen (aus SystemLog MAIL_FLOW)
- * GET /api/v1/admin/message-trace/export — CSV-Export
+ * GET /api/v1/admin/message-trace   — search messages (from SystemLog MAIL_FLOW)
+ * GET /api/v1/admin/message-trace/export — CSV export
  *
- * Liest aus der SystemLog-Tabelle (category='MAIL_FLOW').
- * SMTP-Server schreibt dort bei jeder Mail einen Logeintrag.
+ * Reads from the SystemLog table (category='MAIL_FLOW').
+ * The SMTP server writes a log entry there for every mail.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage';

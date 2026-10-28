@@ -1,67 +1,67 @@
 /**
- * ROP-Stream-Codec (v4.1.0)
+ * ROP stream codec (v4.1.0)
  *
- * Format des ROP-Buffers innerhalb von EcDoRpcExt2 (MS-OXCRPC §2.2.2.2.1):
+ * Format of the ROP buffer inside EcDoRpcExt2 (MS-OXCRPC §2.2.2.2.1):
  *
  *   +-------------------+
- *   | RopSize  (uint16) | ← Anzahl Bytes der ROPs (ohne Handle-Table)
+ *   | RopSize  (uint16) | ← number of bytes of the ROPs (without handle table)
  *   +-------------------+
  *   | ROP1 (variable)   |
  *   | ROP2 (variable)   |
  *   | ...               |
  *   +-------------------+
- *   | ServerObjectHandleTable (Array von uint32) bis end-of-buffer
+ *   | ServerObjectHandleTable (array of uint32) up to end-of-buffer
  *   +-------------------+
  *
- * Jeder ROP:
+ * Each ROP:
  *   +-----------+----------------+-----------------+
  *   | RopId (1B)| LogonId (1B)   | Inputs/Outputs  |
  *   +-----------+----------------+-----------------+
  *
- * Die Input-/Output-Handles sind INDEXE in die ServerObjectHandleTable —
- * KEINE absoluten Handle-Werte. Der ROP-Handler löst sie über `handleTable[i]`
- * auf zum aktuellen Object-Handle (uint32, Session-lokal).
+ * The input/output handles are INDEXES into the ServerObjectHandleTable —
+ * NOT absolute handle values. The ROP handler resolves them via `handleTable[i]`
+ * to the current object handle (uint32, session-local).
  */
 
 import { MapiReader, MapiWriter } from './codec.js';
 import type { Request } from 'express';
 import { RopId, type RopIdValue } from './rop-types.js';
 
-/** Reserved uint32-Wert für „kein Object" (MS-OXCROPS §2.2.2.4). */
+/** Reserved uint32 value for "no object" (MS-OXCROPS §2.2.2.4). */
 export const HANDLE_NULL = 0xFFFFFFFF;
 
 /**
- * Ein einzelner ROP innerhalb einer Request. Wir behalten den Original-
- * Buffer-Slice für detailliertes Parsing pro Handler.
+ * A single ROP within a request. We keep the original
+ * buffer slice for detailed parsing per handler.
  */
 export interface RopRequest {
   ropId:              RopIdValue | number;
   logonId:            number;
-  /** Index in die HandleTable, oder undefined bei manchen ROPs wie Logon. */
+  /** Index into the handle table, or undefined for some ROPs like Logon. */
   inputHandleIndex?:  number;
   outputHandleIndex?: number;
-  /** Rest des ROP-Payloads (nach RopId/LogonId/Handle-Indexes). */
+  /** Rest of the ROP payload (after RopId/LogonId/handle indexes). */
   payload:            Buffer;
 }
 
 export interface RopRequestBuffer {
   rops:                  RopRequest[];
-  /** Array von Server-Object-Handles (uint32). Position = Index in den ROPs. */
+  /** Array of server object handles (uint32). Position = index in the ROPs. */
   serverObjectHandles:   number[];
 }
 
 /**
- * Parst den binären ROP-Stream aus einem Execute-Request-Body.
+ * Parses the binary ROP stream from an Execute request body.
  *
- * v4.1.0 implementiert NUR die ROPs die wir hier dispatchen können
+ * v4.1.0 implements ONLY the ROPs we can dispatch here
  * (RopLogon, RopOpenFolder, RopGetHierarchyTable, RopSetColumns,
- * RopQueryRows, RopRelease). Unbekannte ROPs bekommen einen rohen
- * Payload bis zum nächsten ROP-Boundary — die Dispatcher-Logik returnt
- * `ecNotSupported` und das Client merkt es.
+ * RopQueryRows, RopRelease). Unknown ROPs get a raw
+ * payload up to the next ROP boundary — the dispatcher logic returns
+ * `ecNotSupported` and the client notices.
  *
- * Die ROPs haben sehr unterschiedliche Strukturen — wir parsen hier nur
- * den GEMEINSAMEN Header (RopId + LogonId + Input/Output-Handle-Indexes),
- * und überlassen das ROP-spezifische Payload-Parsing dem Handler.
+ * The ROPs have very different structures — here we only parse
+ * the COMMON header (RopId + LogonId + input/output handle indexes),
+ * and leave the ROP-specific payload parsing to the handler.
  */
 export function parseRopBuffer(body: Buffer): RopRequestBuffer {
   if (body.length < 2) {
@@ -73,8 +73,8 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
     throw new RangeError(`RopSize ${ropSize} exceeds buffer length ${body.length - 2}`);
   }
 
-  // RopSize ist nach MS-OXCRPC inclusiv der eigenen 2 Bytes; manche Outlook-
-  // Builds senden es exklusiv. Wir interpretieren defensiv.
+  // Per MS-OXCRPC RopSize includes its own 2 bytes; some Outlook
+  // builds send it exclusive. We interpret defensively.
   const ropEndOffset = ropSize + 2 > body.length ? body.length : ropSize + 2;
 
   const rops: RopRequest[] = [];
@@ -88,9 +88,9 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
     let outputHandleIndex: number | undefined;
     let payloadEnd: number;
 
-    // ROP-spezifisches Header-Parsing. Wir kennen die strukturelle Länge der
-    // wichtigsten ROPs; für unbekannte versuchen wir konservativ den Rest des
-    // Buffers zu konsumieren (Dispatcher wird ecNotSupported zurückgeben).
+    // ROP-specific header parsing. We know the structural length of the
+    // most important ROPs; for unknown ones we conservatively try to consume the rest
+    // of the buffer (the dispatcher will return ecNotSupported).
     switch (ropId) {
       case RopId.Logon: {
         // RopLogon Request (MS-OXCSTOR §2.2.1.1.1):
@@ -98,10 +98,10 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         //   OpenFlags (4B), StoreState (4B), EssdnLen (uint16), Essdn (ASCII)
         logonId = reader.readUint8();
         outputHandleIndex = reader.readUint8();
-        // Rest als Payload bis Buffer-Ende für diesen ROP
+        // Rest as payload up to the buffer end for this ROP
         const remainingFromStart = body.length - reader.position;
         // RopLogon-Payload: LogonFlags(1) + OpenFlags(4) + StoreState(4) + EssdnLen(2) + Essdn(variable)
-        // Wir suchen die Essdn-Länge um exakt zu bestimmen
+        // We look for the Essdn length to determine it exactly
         if (remainingFromStart >= 11) {
           const peekPos = reader.position;
           reader.readUint8();                         // LogonFlags
@@ -110,13 +110,13 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
           const essdnLen = reader.readUint16();
           reader.readBuffer(Math.min(essdnLen, body.length - reader.position));
           payloadEnd = reader.position;
-          // Payload-Slice aus dem Original-Buffer
+          // Payload slice from the original buffer
           rops.push({
             ropId, logonId, outputHandleIndex,
             payload: Buffer.from(body.subarray(peekPos, payloadEnd)),
           });
         } else {
-          // Defekt: kompletter Rest
+          // Broken: take the complete rest
           payloadEnd = body.length;
           rops.push({
             ropId, logonId, outputHandleIndex,
@@ -263,7 +263,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
-      // v4.2.0 — Mail-Lesen
+      // v4.2.0 — Reading mail
       case RopId.OpenMessage: {
         // RopOpenMessage: LogonId(1), InputHandleIndex(1), OutputHandleIndex(1),
         //   CodePageId(uint16), FolderId(uint64), OpenModeFlags(uint8), MessageId(uint64)
@@ -330,7 +330,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
 
       case RopId.ReadStream: {
         // RopReadStream: LogonId(1), InputHandleIndex(1), ByteCount(uint16),
-        //   MaximumByteCount(uint32 — wenn ByteCount==0xBABE)
+        //   MaximumByteCount(uint32 — if ByteCount==0xBABE)
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
         const payloadStart = reader.position;
@@ -352,7 +352,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
-      // v4.3.0 — Mail-Schreiben + Senden
+      // v4.3.0 — Composing + sending mail
       case RopId.CreateMessage: {
         // RopCreateMessage: LogonId(1), InputHandleIndex(1), OutputHandleIndex(1),
         //   CodePageId(uint16), FolderId(uint64), AssociatedFlag(uint8)
@@ -535,7 +535,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
-      // v5.1.0 — Named Properties (variable-length, eigener Handler-Parse)
+      // v5.1.0 — Named Properties (variable-length, parsed by its own handler)
       case RopId.GetPropertyIdsFromNames:
       case RopId.GetNamesFromPropertyIds: {
         logonId = reader.readUint8();
@@ -577,7 +577,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
       case RopId.AbortSubmit: {
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
-        // OutputHandle für *Table-ROPs
+        // OutputHandle for *Table ROPs
         if (ropId === RopId.GetRulesTable || ropId === RopId.GetPermissionsTable) {
           outputHandleIndex = reader.readUint8();
         }
@@ -591,7 +591,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
         continue;
       }
 
-      // v5.2.0 — MS-OXCFXICS Sync ROPs (variable-length, eigener Handler-Parse)
+      // v5.2.0 — MS-OXCFXICS Sync ROPs (variable-length, parsed by their own handler)
       case RopId.FastTransferSourceGetBuffer:
       case RopId.FastTransferSourceCopyFolder:
       case RopId.FastTransferSourceCopyMessages:
@@ -611,7 +611,7 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
       case RopId.SyncGetTransferState: {
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
-        // OutputHandle für ROPs die einen neuen Handle ausstellen
+        // OutputHandle for ROPs that issue a new handle
         if (ropId === RopId.SyncConfigure ||
             ropId === RopId.FastTransferSourceCopyFolder ||
             ropId === RopId.FastTransferSourceCopyMessages ||
@@ -639,9 +639,9 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
       case RopId.ModifyRecipients:
       case RopId.ReadRecipients:
       case RopId.RemoveAllRecipients: {
-        // Variable-length ROPs ohne explizites Längen-Präfix:
-        // - ModifyRecipients (v4.3.0): wird vom Handler vollständig geparst.
-        // - Andere v4.5+ Stubs (ecNotSupported), die ihren Payload ignorieren.
+        // Variable-length ROPs without an explicit length prefix:
+        // - ModifyRecipients (v4.3.0): parsed completely by the handler.
+        // - Other v4.5+ stubs (ecNotSupported) that ignore their payload.
         logonId = reader.readUint8();
         inputHandleIndex = reader.readUint8();
         const remStart = reader.position;
@@ -649,15 +649,15 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
           ropId, logonId, inputHandleIndex,
           payload: Buffer.from(body.subarray(remStart, body.length)),
         });
-        // Stream-Parsing abbrechen — diese ROPs sind variabel-lang ohne
-        // Längen-Präfix, wir können nicht sicher zum nächsten ROP springen.
+        // Abort stream parsing — these ROPs are variable-length without a
+        // length prefix, we cannot safely jump to the next ROP.
         reader.seek(body.length);
         continue;
       }
 
       default: {
-        // Unbekannter ROP — wir konsumieren minimal (LogonId+InputHandleIndex)
-        // und stoppen. Dispatcher wird ecNotSupported zurückgeben.
+        // Unknown ROP — we consume the minimum (LogonId+InputHandleIndex)
+        // and stop. The dispatcher will return ecNotSupported.
         if (reader.remaining >= 2) {
           logonId = reader.readUint8();
           inputHandleIndex = reader.readUint8();
@@ -667,13 +667,13 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
           ...(inputHandleIndex !== undefined ? { inputHandleIndex } : {}),
           payload: Buffer.from(body.subarray(startOffset, reader.position)),
         });
-        // Da wir die genaue Länge nicht kennen → Abbruch des Stream-Parsings
+        // Since we do not know the exact length → abort stream parsing
         break;
       }
     }
   }
 
-  // Server-Object-Handle-Table: Rest des Buffers, je uint32
+  // Server object handle table: rest of the buffer, one uint32 each
   const handles: number[] = [];
   reader.seek(ropEndOffset);
   while (reader.remaining >= 4) {
@@ -684,19 +684,19 @@ export function parseRopBuffer(body: Buffer): RopRequestBuffer {
 }
 
 /**
- * Schreibt eine Response-ROP-Stream-Struktur in einen Buffer.
- * Spiegelung von parseRopBuffer für Output.
+ * Writes a response ROP stream structure into a buffer.
+ * Mirror of parseRopBuffer for output.
  */
 export class RopResponseBuilder {
   private rops: Buffer[] = [];
   private handles: number[] = [];
 
-  /** Hängt eine fertige ROP-Response (mit RopId + Payload) an. */
+  /** Appends a finished ROP response (with RopId + payload). */
   appendRop(buf: Buffer): void {
     this.rops.push(buf);
   }
 
-  /** Hängt einen Handle in die ServerObjectHandleTable. */
+  /** Appends a handle to the ServerObjectHandleTable. */
   appendHandle(h: number): void {
     this.handles.push(h);
   }
@@ -707,7 +707,7 @@ export class RopResponseBuilder {
     for (let i = 0; i < this.handles.length; i++) {
       handlePart.writeUInt32LE(this.handles[i]!, i * 4);
     }
-    // RopSize = inkl. der 2-Byte-Länge selbst (manche Outlook-Builds erwarten das)
+    // RopSize = including the 2-byte length itself (some Outlook builds expect that)
     const header = Buffer.allocUnsafe(2);
     header.writeUInt16LE(ropPart.length + 2, 0);
     return Buffer.concat([header, ropPart, handlePart]);
@@ -719,8 +719,8 @@ export class RopResponseBuilder {
 }
 
 /**
- * Hilfsfunktion: schreibt ein leeres ecNotSupported-ROP-Response in den Builder
- * (für einen unbekannten oder noch nicht implementierten ROP).
+ * Helper: writes an empty ecNotSupported ROP response into the builder
+ * (for an unknown or not-yet-implemented ROP).
  */
 export function writeNotSupportedRop(
   builder: RopResponseBuilder,
@@ -734,5 +734,5 @@ export function writeNotSupportedRop(
   builder.appendRop(w.toBuffer());
 }
 
-// Re-export hilfsweise für den Dispatcher.
+// Re-export as a convenience for the dispatcher.
 export { Request };

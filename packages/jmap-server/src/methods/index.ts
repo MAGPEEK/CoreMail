@@ -1,4 +1,4 @@
-/** Registriert alle JMAP-Methoden (Side-Effect-Imports). */
+/** Registers all JMAP methods (side-effect imports). */
 import './core.js';
 import './mailbox.js';
 import './email.js';

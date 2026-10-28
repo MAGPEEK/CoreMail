@@ -3,28 +3,28 @@ name: coremail
 # ─────────────────────────────────────────────────────────────────────────────
 # CoreMail v3.13.10 — Synology NAS / Container Manager
 #
-# Einrichtung per SSH:
+# Setup via SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
 #
-# Ports (kein Konflikt mit DSM):
+# Ports (no conflict with DSM):
 #   8080        — HTTP (OWA, ECP, API)
 #                 DSM Application Portal: *.domain.de → localhost:8080
 #   25/465/587  — SMTP
 #   143/993     — IMAP
 #   110/995     — POP3
-#   9001        — MinIO Konsole
+#   9001        — MinIO console
 #
-# TLS-Hinweis:
-#   DSM → Systemsteuerung → Application Portal → Reverseproxy
-#   Quelle: https://*.domain.de  →  Ziel: http://localhost:8080
+# TLS note:
+#   DSM → Control Panel → Application Portal → Reverse Proxy
+#   Source: https://*.domain.de  →  Destination: http://localhost:8080
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── CoreMail Hauptanwendung ─────────────────────────────────────────────────
+  # ── CoreMail main application ───────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:3.18.29
+    image: magpeek/coremail-app:5.9.0
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -40,11 +40,11 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-MinioSecret2024!}
       MINIO_BUCKET: mail-attachments
 
-      # ⚠ Vor Produktiveinsatz ersetzen: openssl rand -hex 32
+      # ⚠ Replace before production use: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-CHANGE-ME-openssl-rand-hex-32}
       PEPPER: ${PEPPER:-CHANGE-ME-openssl-rand-hex-32}
 
-      # Interne Service-URLs
+      # Internal service URLs
       STORAGE_API_URL: http://localhost:3001
       AUTH_SERVICE_URL: http://localhost:3003
       SECURITY_FILTER_URL: http://localhost:3002
@@ -53,12 +53,12 @@ services:
       CALDAV_SERVICE_URL: http://localhost:8082
       JMAP_SERVICE_URL: http://localhost:3006
 
-      # Externe Sicherheits-Container
+      # External security containers
       RSPAMD_URL: http://rspamd:11334
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
 
-      # Service-Ports
+      # Service ports
       API_PORT: "3000"
       STORAGE_PORT: "3001"
       SECURITY_FILTER_PORT: "3002"
@@ -70,8 +70,8 @@ services:
       CALDAV_PORT: "8082"
       JMAP_PORT: "3006"
 
-      # WebAuthn (für MFA, optional)
-      # WEBAUTHN_RP_ID und WEBAUTHN_ORIGIN werden aus ServerSettings.publicHostname gelesen
+      # WebAuthn (for MFA, optional)
+      # WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN are read from ServerSettings.publicHostname
       WEBAUTHN_RP_NAME: CoreMail
 
       S3_ENDPOINT: http://minio:9000
@@ -85,7 +85,7 @@ services:
       WWW_DIR: /app/www
 
       # VAPID Web Push
-      # Schlüssel generieren: npx web-push generate-vapid-keys
+      # Generate keys: npx web-push generate-vapid-keys
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
@@ -93,7 +93,7 @@ services:
 
 
     ports:
-      - "8080:3000"   # HTTP (Port 8080 außen → 3000 innen, kein DSM-Konflikt)
+      - "8080:3000"   # HTTP (port 8080 outside → 3000 inside, no DSM conflict)
       - "25:25"
       - "465:465"
       - "587:587"
@@ -115,7 +115,7 @@ services:
       start_period: 90s
     networks: [coremail]
 
-  # ── Rspamd 4.0 — Anti-Spam ──────────────────────────────────────────────────
+  # ── Rspamd 4.0 — anti-spam ──────────────────────────────────────────────────
 
   rspamd:
     image: rspamd/rspamd:4.0.0
@@ -134,7 +134,7 @@ services:
       start_period: 15s
     networks: [coremail]
 
-  # ── ClamAV — Open-Source Antivirus ──────────────────────────────────────────
+  # ── ClamAV — open-source antivirus ──────────────────────────────────────────
 
   clamav:
     image: clamav/clamav:stable
@@ -154,9 +154,9 @@ services:
       start_period: 120s
     networks: [coremail]
 
-  # ── Infrastruktur ────────────────────────────────────────────────────────────
-  # Volumes auf Synology-Pfade gemappt (/volume1/docker/coremail/...)
-  # damit Daten auch ohne Docker-Volumes persistent sind
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+  # Volumes mapped to Synology paths (/volume1/docker/coremail/...)
+  # so that data persists even without Docker volumes
 
   postgres:
     image: postgres:16-alpine
@@ -179,8 +179,8 @@ services:
     image: redis:7-alpine
     container_name: coremail-redis
     restart: unless-stopped
-    # Kein --appendonly (erzeugt Unterverzeichnis, Permission-Problem auf Synology)
-    # RDB-Snapshots schreiben nur eine einzelne dump.rdb → keine Permission-Probleme
+    # No --appendonly (creates a subdirectory, permission problem on Synology)
+    # RDB snapshots write only a single dump.rdb → no permission problems
     command: >
       redis-server
       --save 900 1
@@ -191,7 +191,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-RedisSecret2024}
     volumes:
       - /volume1/docker/coremail/data/redis:/data
-    user: "0:0"   # Als root starten damit dump.rdb auf Synology-Volume geschrieben werden kann
+    user: "0:0"   # Start as root so dump.rdb can be written to the Synology volume
     healthcheck:
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
@@ -210,7 +210,7 @@ services:
     volumes:
       - /volume1/docker/coremail/data/minio:/data
     ports:
-      - "127.0.0.1:9001:9001"   # MinIO Web-Konsole — NUR localhost (kein WAN-Zugriff!)
+      - "127.0.0.1:9001:9001"   # MinIO web console — localhost ONLY (no WAN access!)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 30s

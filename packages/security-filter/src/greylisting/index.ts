@@ -3,17 +3,17 @@ import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('security-filter:greylisting');
 
-// Defaults — werden überschrieben von SmtpSettings (TTL 60s in `getOpts()`)
+// Defaults — overridden by SmtpSettings (TTL 60s in `getOpts()`)
 const DEFAULT_WAIT_SECONDS     = 300;     // 5 min
 const DEFAULT_TTL_HOURS        = 4;
-const WHITELIST_TTL_SECONDS    = 2592000; // 30 Tage
+const WHITELIST_TTL_SECONDS    = 2592000; // 30 days
 
 const WHITELIST_PREFIX = 'greylist:white:';
 
 interface GreylistOpts {
   waitSec:    number;
   ttlSec:     number;
-  whitelist:  string[]; // IPs oder Sender-E-Mails / Domains (case-insensitive)
+  whitelist:  string[]; // IPs or sender emails / domains (case-insensitive)
   loadedAt:   number;
 }
 let _opts: GreylistOpts | null = null;
@@ -54,11 +54,11 @@ function isExempt(opts: GreylistOpts, ip: string, sender: string): boolean {
   const senderLc = sender.toLowerCase();
   const senderDomain = senderLc.includes('@') ? senderLc.split('@')[1] : '';
   for (const entry of opts.whitelist) {
-    if (entry === ip.toLowerCase()) return true;            // IP-Match
-    if (entry === senderLc) return true;                    // Sender-Adresse
+    if (entry === ip.toLowerCase()) return true;            // IP match
+    if (entry === senderLc) return true;                    // sender address
     if (senderDomain && entry === senderDomain) return true; // Domain
     if (entry.includes('/') && ip.startsWith(entry.split('/')[0]!.split('.').slice(0, 3).join('.'))) {
-      // /24-Approximation für CIDR-Notation — robustere CIDR-Logik wäre besser, aber das ist „good enough" für KMU.
+      // /24 approximation for CIDR notation — more robust CIDR logic would be better, but this is "good enough" for SMBs.
       return true;
     }
   }
@@ -84,7 +84,7 @@ export async function checkGreylist(
 
   const redis = getRedisClient();
 
-  // IP-Auto-Whitelist (durch früheren erfolgreichen Triplet-Match)
+  // IP auto-whitelist (from an earlier successful triplet match)
   const whiteKey = `${WHITELIST_PREFIX}${senderIp}`;
   const whitelisted = await redis.exists(whiteKey);
   if (whitelisted) {

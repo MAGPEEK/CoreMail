@@ -49,14 +49,14 @@ export async function sseHandler(req: Request, res: Response): Promise<void> {
       const payload = JSON.parse(message) as { userId?: string; [key: string]: unknown };
 
       if (channel === CHANNEL_ADMIN_ATTACK) {
-        // Attack events werden nur an Admin-SSE-Verbindungen weitergeleitet
+        // Attack events are forwarded to admin SSE connections only
         send('security:attack', payload);
         return;
       }
 
       if (channel === CHANNEL_CALENDAR_SHARES) {
-        // v3.18.17: Share-Lifecycle-Events kommen mit affectedUserIds[] —
-        // an alle in dieser Liste pushen (Owner + Grantee).
+        // v3.18.17: share lifecycle events come with affectedUserIds[] —
+        // push to everyone in this list (owner + grantee).
         const affected = (payload as { affectedUserIds?: unknown }).affectedUserIds;
         if (Array.isArray(affected) && affected.includes(userId)) {
           send('calendar:shares', payload);

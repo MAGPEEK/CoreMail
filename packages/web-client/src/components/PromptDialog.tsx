@@ -11,7 +11,7 @@ export interface PromptDialogProps {
   cancelText?: string;
   onConfirm: (value: string) => void | Promise<void>;
   onCancel: () => void;
-  /** Validierungs-Hook; gibt Fehlertext zurück oder null wenn ok */
+  /** Validation hook; returns error text or null if ok */
   validate?: (value: string) => string | null;
 }
 

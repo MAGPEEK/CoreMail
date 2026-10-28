@@ -1,15 +1,15 @@
 /**
- * v3.18.36: Zentraler Helper zum Ableiten und Speichern der Server-URLs aus
- * dem `publicHostname`. Wird aus mehreren Stellen aufgerufen:
+ * v3.18.36: central helper for deriving and storing the server URLs from
+ * `publicHostname`. Called from several places:
  *
- *   - `POST /api/v1/setup/complete`           (initiales Setup)
- *   - `POST /api/v1/admin/domains`            (erste Domain anlegen)
- *   - `POST /api/v1/admin/domains/:id/make-primary` (primäre Domain wechseln)
- *   - `PUT  /api/v1/admin/servers/settings`   (Hostname-Änderung im BCP)
+ *   - `POST /api/v1/setup/complete`           (initial setup)
+ *   - `POST /api/v1/admin/domains`            (create first domain)
+ *   - `POST /api/v1/admin/domains/:id/make-primary` (change primary domain)
+ *   - `PUT  /api/v1/admin/servers/settings`   (hostname change in BCP)
  *
- * Microsoft-Spec für Outlook-Autodiscover: `autodiscover.<root-domain>` muss
- * separat erreichbar sein (eigener CNAME). Für `mail.example.com` ist der
- * Autodiscover-Host also `autodiscover.example.com`.
+ * Microsoft spec for Outlook Autodiscover: `autodiscover.<root-domain>` must
+ * be reachable separately (own CNAME). For `mail.example.com` the
+ * Autodiscover host is therefore `autodiscover.example.com`.
  */
 import { prisma } from '@coremail/storage';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
@@ -27,7 +27,7 @@ export interface DerivedUrls {
 }
 
 /**
- * URLs aus dem Hostname + TLS-Setup ableiten — KEIN DB-Zugriff.
+ * Derive URLs from hostname + TLS setup — NO DB access.
  */
 export function deriveServerUrls(
   publicHostname: string,
@@ -40,12 +40,12 @@ export function deriveServerUrls(
     : `:${httpPort}`;
   const base = `${proto}://${publicHostname}${portSuffix}`;
 
-  // Autodiscover muss auf eigener CNAME laufen (Microsoft-Spec):
-  //   `autodiscover.<root-domain>` — Outlook sucht IMMER zuerst dort.
-  // Beispiele:
-  //   mail.example.com    → autodiscover.example.com  (Sub-Domain abschneiden)
-  //   example.com         → autodiscover.example.com  (direkt prefix)
-  //   autodiscover.x.com  → autodiscover.x.com        (schon korrekt)
+  // Autodiscover must run on its own CNAME (Microsoft spec):
+  //   `autodiscover.<root-domain>` — Outlook ALWAYS looks there first.
+  // Examples:
+  //   mail.example.com    → autodiscover.example.com  (strip sub-domain)
+  //   example.com         → autodiscover.example.com  (direct prefix)
+  //   autodiscover.x.com  → autodiscover.x.com        (already correct)
   const adHost = (() => {
     const lower = publicHostname.toLowerCase();
     if (lower.startsWith('autodiscover.')) return publicHostname;
@@ -66,11 +66,11 @@ export function deriveServerUrls(
 }
 
 /**
- * Idempotenter Sync: Berechnet URLs aus aktuellem `publicHostname` + `useHttps`
- * + `httpPort` in `ServerSettings` und schreibt sie zurück. Wenn URLs schon
- * stimmen, kein Write. Published bei Änderung `coremail:settings:reload`.
+ * Idempotent sync: computes URLs from the current `publicHostname` + `useHttps`
+ * + `httpPort` in `ServerSettings` and writes them back. If the URLs are already
+ * correct, no write. Publishes `coremail:settings:reload` on change.
  *
- * Rückgabe: true wenn URLs aktualisiert wurden, false sonst.
+ * Returns: true if URLs were updated, false otherwise.
  */
 export async function syncServerUrlsFromHostname(): Promise<boolean> {
   const s = await prisma.serverSettings.findUnique({
@@ -90,7 +90,7 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
   });
   if (!s) return false;
   if (!s.publicHostname || s.publicHostname === 'mail.local') {
-    log.debug('publicHostname noch leer/default — kein URL-Sync');
+    log.debug('publicHostname still empty/default — skipping URL sync');
     return false;
   }
 
@@ -111,9 +111,9 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
     where: { id: 'singleton' },
     data: derived,
   });
-  log.info({ publicHostname: s.publicHostname, ...derived }, 'Server-URLs aus publicHostname neu abgeleitet');
+  log.info({ publicHostname: s.publicHostname, ...derived }, 'Server URLs re-derived from publicHostname');
 
-  // Cache-Invalidation an autodiscover + andere Services
+  // Cache invalidation for autodiscover + other services
   await getRedisClient()
     .publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'urls' }))
     .catch(() => undefined);
@@ -122,14 +122,14 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
 }
 
 /**
- * Wird beim Anlegen / Wechseln der primären Domain aufgerufen. Setzt
- * `publicHostname` auf `mail.<primary-domain>` wenn er noch leer oder Default
- * ist, und leitet alle URLs daraus ab. Respektiert eine bereits explizit
- * gesetzte Konfiguration (kein Überschreiben falls Admin schon einen anderen
- * Hostname konfiguriert hat).
+ * Called when creating / changing the primary domain. Sets `publicHostname`
+ * to `mail.<primary-domain>` if it is still empty or the default, and
+ * derives all URLs from it. Respects an already explicitly set
+ * configuration (no overwrite if the admin has already configured a
+ * different hostname).
  *
- * @param primaryDomain die Domain die gerade primary geworden ist (z.B. "example.com")
- * @param force         wenn true, überschreibt auch eine bereits gesetzte publicHostname
+ * @param primaryDomain the domain that just became primary (e.g. "example.com")
+ * @param force         if true, also overwrites an already set publicHostname
  */
 export async function syncFromPrimaryDomain(primaryDomain: string, force = false): Promise<void> {
   const s = await prisma.serverSettings.findUnique({
@@ -140,13 +140,13 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
 
   const isDefault = !s.publicHostname || s.publicHostname === 'mail.local' || s.publicHostname === '';
   if (!isDefault && !force) {
-    log.debug({ publicHostname: s.publicHostname, primaryDomain }, 'publicHostname bereits gesetzt — kein Auto-Update');
-    // Trotzdem URLs syncen, falls jemand publicHostname geändert hat ohne URLs zu derive'n
+    log.debug({ publicHostname: s.publicHostname, primaryDomain }, 'publicHostname already set — no auto-update');
+    // Still sync URLs in case someone changed publicHostname without deriving the URLs
     await syncServerUrlsFromHostname();
     return;
   }
 
-  // Default-Hostname für die Domain ist `mail.<domain>` (Convention)
+  // Default hostname for the domain is `mail.<domain>` (convention)
   const newHostname = `mail.${primaryDomain}`;
   const derived = deriveServerUrls(newHostname, s.useHttps, s.httpPort);
 
@@ -157,7 +157,7 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
       ...derived,
     },
   });
-  log.info({ newHostname, primaryDomain, derived }, 'publicHostname + URLs aus erster/neuer primary Domain abgeleitet');
+  log.info({ newHostname, primaryDomain, derived }, 'publicHostname + URLs derived from first/new primary domain');
 
   await getRedisClient()
     .publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'hostname' }))

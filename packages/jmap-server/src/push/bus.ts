@@ -1,8 +1,8 @@
 /**
- * Änderungs-Bus: Redis mail:new / mail:update → betroffener JMAP-Account →
- *  - lokale Listener (EventSource-/WebSocket-Verbindungen)
- *  - Web-Push an verifizierte PushSubscriptions der berechtigten User
- * StateChange-Objekte werden pro Account aus den aktuellen States gebaut.
+ * Change bus: Redis mail:new / mail:update → affected JMAP account →
+ *  - local listeners (EventSource/WebSocket connections)
+ *  - Web Push to verified PushSubscriptions of the authorized users
+ * StateChange objects are built per account from the current states.
  */
 import { EventEmitter } from 'node:events';
 import { prisma } from '@coremail/storage';
@@ -47,7 +47,7 @@ async function pushToSubscribers(accountId: string, mailboxId: string | null): P
       filtered.changed[acc] = Object.fromEntries(Object.entries(states).filter(([t]) => !s.types.length || s.types.includes(t)));
     }
     try { await sendPushMessage(s, filtered as unknown as Record<string, unknown>); }
-    catch (err) { log.warn({ err, id: s.id }, 'Web-Push fehlgeschlagen'); }
+    catch (err) { log.warn({ err, id: s.id }, 'Web Push failed'); }
   }));
 }
 
@@ -88,7 +88,7 @@ export function startChangeBus(): void {
         if (!accountId && p.userId) accountId = p.userId;
         if (!accountId) return;
         changeBus.emit('change', accountId);
-        // Web-Push gebündelt (max. 1× pro Sekunde pro Account)
+        // Web Push batched (max. 1× per second per account)
         if (!pendingPush.has(accountId)) {
           pendingPush.set(accountId, setTimeout(() => {
             pendingPush.delete(accountId);
@@ -96,9 +96,9 @@ export function startChangeBus(): void {
           }, 1000));
         }
       } catch (err) {
-        log.warn({ err }, 'Ungültiges Redis-Event');
+        log.warn({ err }, 'Invalid Redis event');
       }
     })();
   });
-  log.info('Change-Bus gestartet (mail:new, mail:update)');
+  log.info('Change bus started (mail:new, mail:update)');
 }

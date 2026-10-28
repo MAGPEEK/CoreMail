@@ -7,7 +7,7 @@ import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface Domain {
   id:           string;
   name:         string;
@@ -20,21 +20,21 @@ interface Domain {
 interface DomainsResponse { domains: Domain[]; total: number; page: number; limit: number }
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
-// ── DNS-Check-Typen ───────────────────────────────────────────────────────────
+// ── DNS check types ───────────────────────────────────────────────────────────
 interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string }
 interface DnsCheckResult {
   domain: string; hostname: string; serverIp: string;
   records: { a: DnsRec; mx: DnsRec; spf: DnsRec; dkim: DnsRec; dmarc: DnsRec; autodiscover: DnsRec; ptr: DnsRec };
 }
 
-// ── DNS-Hilfsfunktionen (Modul-Ebene) ─────────────────────────────────────────
+// ── DNS helpers (module level) ────────────────────────────────────────────────
 function getHostPart(name: string, domain: string): string {
   if (name === domain) return '@';
   if (name.endsWith('.' + domain)) return name.slice(0, -(domain.length + 1));
   return name;
 }
 
-// ── CopyBtn (Modul-Ebene — keine Inline-Definition) ──────────────────────────
+// ── CopyBtn (module level — no inline definition) ────────────────────────────
 function CopyBtn({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -48,7 +48,7 @@ function CopyBtn({ value }: { value: string }) {
   );
 }
 
-// ── DnsRow (Modul-Ebene) ──────────────────────────────────────────────────────
+// ── DnsRow (module level) ─────────────────────────────────────────────────────
 interface DnsRowProps {
   label: string; record: DnsRec; domain: string;
   hostOverride?: string; valueOverride?: string; extra?: React.ReactNode;
@@ -86,7 +86,7 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
             </div>
           )}
           {extra}
-          {/* Aktuell im DNS — wenn abweichend */}
+          {/* Currently in DNS — if different */}
           {record.found && record.found !== record.expected && (
             <div className="mt-1.5 text-[10px] text-gray-400 bg-gray-50 rounded px-2 py-0.5 font-mono break-all">
               Im DNS: {record.found.slice(0, 80)}{record.found.length > 80 ? '…' : ''}
@@ -101,7 +101,7 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
   );
 }
 
-// ── DkimDnsRow — mit 255-Zeichen-Chunk-Ansicht ────────────────────────────────
+// ── DkimDnsRow — with 255-character chunk view ────────────────────────────────
 function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string; label: string }) {
   const [showChunked, setShowChunked] = useState(false);
   const full   = record.expected;
@@ -256,7 +256,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     try {
       const r = await api.post<DkimRecord>(`/admin/domains/${domain.id}/regenerate-dkim`, {});
       setDkimRecord(r);
-      setDnsCheck(null); // DNS-Panel invalidieren — neuer Key
+      setDnsCheck(null); // Invalidate DNS panel — new key
       toast.success(t('domain_dkim_regen_success'));
     } catch {
       toast.error(t('domain_dkim_regen_error'));
@@ -353,7 +353,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </div>
           )}
 
-          {/* ── DNS-Einrichtung ────────────────────────────────────────────── */}
+          {/* ── DNS setup ──────────────────────────────────────────────────── */}
           <div className="pt-1 border-t border-gray-100">
             <button
               onClick={() => void runDnsCheck()}
@@ -390,13 +390,13 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                   <DnsRow label={t('domain_dns_record_mx')} record={dnsCheck.records.mx} domain={dnsCheck.domain} />
                   {/* SPF */}
                   <DnsRow label={t('domain_dns_record_spf')} record={dnsCheck.records.spf} domain={dnsCheck.domain} />
-                  {/* DKIM — mit Chunked-Option */}
+                  {/* DKIM — with chunked option */}
                   <DkimDnsRow label={t('domain_dns_record_dkim')} record={dnsCheck.records.dkim} domain={dnsCheck.domain} />
                   {/* DMARC */}
                   <DnsRow label={t('domain_dns_record_dmarc')} record={dnsCheck.records.dmarc} domain={dnsCheck.domain} />
                   {/* Autodiscover */}
                   <DnsRow label={t('domain_dns_record_ac')} record={dnsCheck.records.autodiscover} domain={dnsCheck.domain} />
-                  {/* PTR — Host = Server-IP, Wert = Hostname */}
+                  {/* PTR — host = server IP, value = hostname */}
                   <DnsRow
                     label={t('domain_dns_record_ptr')}
                     record={dnsCheck.records.ptr}
@@ -412,7 +412,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
         </div>
 
         <div className="flex items-center justify-between mt-5">
-          {/* Löschen nur wenn nicht primär */}
+          {/* Delete only if not primary */}
           <button
             onClick={() => {
               if (confirm(`${t('domain_delete_confirm')} "${domain.name}"`)) deleteMutation.mutate();
@@ -441,7 +441,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   );
 }
 
-// ── Haupt-Komponente ──────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 export function DomainsPage() {
   const t = useT();
   const qc = useQueryClient();
@@ -488,21 +488,21 @@ export function DomainsPage() {
 
   return (
     <div className="min-h-full bg-gray-100">
-      {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 px-8 py-5">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">{t('domain_page_title')}</h1>
         </div>
       </div>
 
-      {/* ── Inhaltsbereich ─────────────────────────────────────────────────── */}
+      {/* ── Content area ───────────────────────────────────────────────────── */}
       <div className="p-8">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           {/* ── Toolbar ──────────────────────────────────────── */}
           <div className="flex items-center gap-4 p-5 border-b border-gray-200">
             <h2 className="text-lg font-bold text-gray-900 shrink-0">{t('domain_section_title')}</h2>
 
-            {/* Suche */}
+            {/* Search */}
             <div className="flex-1 max-w-lg">
               <input
                 type="text"
@@ -525,7 +525,7 @@ export function DomainsPage() {
             </button>
           </div>
 
-          {/* ── Tabelle ───────────────────────────────────────── */}
+          {/* ── Table ─────────────────────────────────────────── */}
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200">
@@ -595,9 +595,9 @@ export function DomainsPage() {
             </tbody>
           </table>
 
-          {/* ── Fußzeile: Pagination ──────────────────────────── */}
+          {/* ── Footer: pagination ────────────────────────────── */}
           <div className="flex items-center gap-3 px-6 py-3 border-t border-gray-200">
-            {/* Limit-Auswahl */}
+            {/* Limit selection */}
             <div className="relative flex items-center">
               <select
                 value={limit}
@@ -612,7 +612,7 @@ export function DomainsPage() {
 
             <div className="flex-1" />
 
-            {/* Seitennavigation */}
+            {/* Page navigation */}
             {totalPages > 1 && (
               <div className="flex items-center gap-1">
                 <button

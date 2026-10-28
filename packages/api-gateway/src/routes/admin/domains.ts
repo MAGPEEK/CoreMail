@@ -1,14 +1,14 @@
 /**
- * Admin-API: Domain-Verwaltung
+ * Admin API: domain management
  *
- * GET    /api/v1/admin/domains                    — alle Domains (gefiltert, paginiert)
- * GET    /api/v1/admin/domains/:id                — einzelne Domain
- * POST   /api/v1/admin/domains                    — neue Domain anlegen (DKIM auto-generiert)
- * PUT    /api/v1/admin/domains/:id                — Domain bearbeiten (name, active, dkimSelector)
- * PATCH  /api/v1/admin/domains/:id/toggle         — active umschalten
- * POST   /api/v1/admin/domains/:id/make-primary   — primäre Domain setzen
- * DELETE /api/v1/admin/domains/:id                — Domain löschen
- * GET    /api/v1/admin/domains/:id/dkim-record    — DNS TXT-Eintrag für DKIM
+ * GET    /api/v1/admin/domains                    — all domains (filtered, paginated)
+ * GET    /api/v1/admin/domains/:id                — single domain
+ * POST   /api/v1/admin/domains                    — create new domain (DKIM auto-generated)
+ * PUT    /api/v1/admin/domains/:id                — edit domain (name, active, dkimSelector)
+ * PATCH  /api/v1/admin/domains/:id/toggle         — toggle active
+ * POST   /api/v1/admin/domains/:id/make-primary   — set primary domain
+ * DELETE /api/v1/admin/domains/:id                — delete domain
+ * GET    /api/v1/admin/domains/:id/dkim-record    — DNS TXT record for DKIM
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -63,7 +63,7 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   const existing = await prisma.domain.findUnique({ where: { name: parsed.data.name } });
   if (existing) { res.status(409).json({ error: 'Domain already exists' }); return; }
 
-  // DKIM-Schlüsselpaar automatisch generieren
+  // Generate DKIM key pair automatically
   const { generateKeyPairSync } = await import('crypto');
   const { privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
@@ -71,7 +71,7 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
     publicKeyEncoding:  { type: 'spki',  format: 'pem' },
   });
 
-  // Erste Domain wird automatisch primär
+  // The first domain automatically becomes primary
   const isPrimary = (await prisma.domain.count()) === 0;
 
   const domain = await prisma.domain.create({
@@ -85,14 +85,14 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   });
   log.info({ name: parsed.data.name, primary: isPrimary }, 'Domain created');
 
-  // v3.18.36: Wenn dies die ERSTE Domain ist (= automatisch primary), den
-  // publicHostname + alle abgeleiteten URLs (EWS/OWA/EAS/Autodiscover-Base)
-  // automatisch ableiten. Schützt vor dem alten Bug: Schema-Default war
-  // `mail.local:8080`, was Outlook-Autodiscover für 1000+ User unbrauchbar
-  // machte, weil die URLs nirgends sichtbar lagen.
+  // v3.18.36: if this is the FIRST domain (= automatically primary), derive
+  // publicHostname + all derived URLs (EWS/OWA/EAS/Autodiscover base)
+  // automatically. Guards against the old bug: the schema default was
+  // `mail.local:8080`, which made Outlook Autodiscover unusable for 1000+
+  // users because the URLs were not visible anywhere.
   if (isPrimary) {
     await syncFromPrimaryDomain(parsed.data.name).catch((err: unknown) =>
-      log.warn({ err, domain: parsed.data.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+      log.warn({ err, domain: parsed.data.name }, 'Auto-derive of server URLs failed'),
     );
   }
 
@@ -146,19 +146,19 @@ adminDomainsRouter.post('/:id/make-primary', async (req: Request, res: Response)
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
 
-  // Alle anderen Domains als nicht-primär markieren, diese als primär
+  // Mark all other domains as non-primary, this one as primary
   await prisma.$transaction([
     prisma.domain.updateMany({ where: { primary: true  }, data: { primary: false } }),
     prisma.domain.update({ where: { id }, data: { primary: true } }),
   ]);
   log.info({ id, name: domain.name }, 'Domain set as primary');
 
-  // v3.18.36: Wenn publicHostname noch Default ist, an die neue primary
-  // Domain anpassen. Falls Admin bereits einen eigenen Hostname gesetzt hat,
-  // bleibt der erhalten — wir syncen aber die URLs (für den Fall dass nur
-  // publicHostname geändert wurde ohne URLs zu derive'n).
+  // v3.18.36: if publicHostname is still the default, adapt it to the new
+  // primary domain. If the admin has already set their own hostname, it is
+  // kept — but we sync the URLs (in case only publicHostname was changed
+  // without deriving the URLs).
   await syncFromPrimaryDomain(domain.name).catch((err: unknown) =>
-    log.warn({ err, domain: domain.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+    log.warn({ err, domain: domain.name }, 'Auto-derive of server URLs failed'),
   );
 
   const domains = await prisma.domain.findMany({
@@ -181,13 +181,13 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// ── Helper: DKIM-Schlüssel sicherstellen (auto-generieren falls leer) ─────────
+// ── Helper: ensure DKIM key (auto-generate if empty) ──────────────────────────
 async function ensureDkimKey(id: string): Promise<typeof import('@coremail/storage').prisma.domain extends never ? never : Awaited<ReturnType<typeof prisma.domain.findUnique>> & { dkimPrivateKey: string }> {
   let domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) return null as never;
 
   if (!domain.dkimPrivateKey || domain.dkimPrivateKey.trim() === '') {
-    // Kein Schlüssel vorhanden — RSA-2048-Paar generieren und speichern
+    // No key present — generate and store an RSA-2048 pair
     const { generateKeyPairSync } = await import('crypto');
     const { privateKey } = generateKeyPairSync('rsa', {
       modulusLength: 2048,
@@ -255,7 +255,7 @@ adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Respon
 });
 
 // ── GET /:id/dns-check ────────────────────────────────────────────────────────
-// Prüft alle relevanten DNS-Einträge über den lokalen DNS-Resolver des Servers.
+// Checks all relevant DNS records via the server's local DNS resolver.
 adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
 
@@ -273,7 +273,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   const domainName = domain.name;
   const dkimName   = `${domain.dkimSelector}._domainkey.${domainName}`;
 
-  // DKIM-Erwartungswert sicher ableiten
+  // Safely derive the expected DKIM value
   let dkimExpected = '';
   try {
     const pubKey    = createPublicKey(domain.dkimPrivateKey);
@@ -293,12 +293,12 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     }
   }
 
-  // ── Server-IP auflösen (für SPF-Record + PTR-Check) ──────────────────────────
+  // ── Resolve server IP (for SPF record + PTR check) ───────────────────────────
   let serverIp = '';
   try {
     const ips = await dns.resolve4(hostname);
     serverIp = ips[0] ?? '';
-  } catch { /* A-Record noch nicht gesetzt — serverIp bleibt leer */ }
+  } catch { /* A record not set yet — serverIp stays empty */ }
 
   // ── MX ──────────────────────────────────────────────────────────────────────
   const mx = await check(async () => {
@@ -307,7 +307,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     return recs.sort((a, b) => a.priority - b.priority).map(r => `${r.priority} ${r.exchange}`).join(', ');
   });
 
-  // ── SPF — mit Mehrfach-Record-Erkennung (RFC 7208 §3.2 Verletzung) ─────────
+  // ── SPF — with multiple-record detection (RFC 7208 §3.2 violation) ─────────
   const spfRaw = await check(async () => {
     const recs = await dns.resolveTxt(domainName);
     const flat = recs.map(c => c.join(''));
@@ -350,7 +350,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   });
 
   // ── PTR / FCrDNS ─────────────────────────────────────────────────────────────
-  // Nutzt die bereits aufgelöste serverIp — Forward-confirmed reverse DNS.
+  // Uses the already resolved serverIp — forward-confirmed reverse DNS.
   const ptr = await check(async () => {
     if (!serverIp) return null;
     const ptrs    = await dns.reverse(serverIp);
@@ -361,28 +361,28 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   });
   if (!ptr.ok) ptr.warning = 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers (Contabo, Hetzner, …) setzen.';
 
-  // ── Erwartungswerte ──────────────────────────────────────────────────────────
-  // SPF: echte Server-IP wenn bereits bekannt, sonst hostname-basiert
+  // ── Expected values ──────────────────────────────────────────────────────────
+  // SPF: real server IP if already known, otherwise hostname-based
   const spfExpected   = serverIp
     ? `v=spf1 ip4:${serverIp} ~all`
     : `v=spf1 a:${hostname} mx ~all`;
   const dmarcExpected = `v=DMARC1; p=quarantine; rua=mailto:dmarc@${domainName}; adkim=r; aspf=r`;
 
-  // DKIM: exakter Schlüsselvergleich (Whitespace-normalisiert, ignoriert DNS-Chunking)
+  // DKIM: exact key comparison (whitespace-normalized, ignores DNS chunking)
   const dkimKeyOk = dkimExpected !== '' && dkim.found !== null &&
     dkim.found.replace(/\s/g, '') === dkimExpected.replace(/\s/g, '');
 
-  // v5.2.5: Relative DNS-Namen wie sie der Provider erwartet
-  // (`_dmarc` statt `_dmarc.stefanwuestner.de`, `@` für Root, `mail` statt
-  // `mail.stefanwuestner.de`). Verhindert Doppel-Suffix wenn der User
-  // versehentlich den FQDN aus dem UI in das Provider-Feld kopiert.
+  // v5.2.5: relative DNS names as the provider expects them
+  // (`_dmarc` instead of `_dmarc.stefanwuestner.de`, `@` for root, `mail` instead
+  // of `mail.stefanwuestner.de`). Prevents a double suffix when the user
+  // accidentally copies the FQDN from the UI into the provider field.
   const relativeName = (fqdn: string): string => {
     if (fqdn === domainName) return '@';
     const suffix = `.${domainName}`;
     return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
   };
 
-  // Hostname auch relativ (z.B. "mail.stefanwuestner.de" → "mail")
+  // Hostname relative as well (e.g. "mail.stefanwuestner.de" → "mail")
   const aName = relativeName(hostname);
   const dkimNameRel = relativeName(dkimName);
 

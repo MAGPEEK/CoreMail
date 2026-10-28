@@ -22,11 +22,11 @@ function getClient(): S3Client {
 const BUCKET = process.env['BACKUP_BUCKET'] ?? 'coremail-backups';
 
 /**
- * v3.18.26 Bugfix: Wird beim Service-Start aufgerufen. Verhindert dass
- * listBackups() crasht weil der Bucket nicht existiert (NoSuchBucket-Error
- * killte den ganzen backup-service-Container).
+ * v3.18.26 bugfix: called on service start. Prevents
+ * listBackups() from crashing because the bucket does not exist (the NoSuchBucket error
+ * killed the whole backup-service container).
  *
- * Idempotent — wenn Bucket schon existiert (200 OK von HeadBucket): nichts tun.
+ * Idempotent — if the bucket already exists (200 OK from HeadBucket): do nothing.
  */
 export async function ensureBackupBucket(): Promise<void> {
   const client = getClient();
@@ -34,7 +34,7 @@ export async function ensureBackupBucket(): Promise<void> {
     await client.send(new HeadBucketCommand({ Bucket: BUCKET }));
     log.info({ bucket: BUCKET }, 'Backup bucket exists');
   } catch (err) {
-    // 404 NoSuchBucket → erstellen. Andere Errors → throwen.
+    // 404 NoSuchBucket → create. Other errors → throw.
     const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
     if (status === 404 || status === 301) {
       log.warn({ bucket: BUCKET }, 'Backup bucket missing — creating');
@@ -97,8 +97,8 @@ export async function listBackups(prefix: string): Promise<{ key: string; size: 
       lastModified: obj.LastModified ?? new Date(),
     }));
   } catch (err) {
-    // v3.18.26 Bugfix: NoSuchBucket darf den Service nicht crashen.
-    // Wir versuchen den Bucket zu erstellen und liefern dann leere Liste zurück.
+    // v3.18.26 bugfix: NoSuchBucket must not crash the service.
+    // We try to create the bucket and then return an empty list.
     const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
     if (status === 404) {
       log.warn({ bucket: BUCKET }, 'listBackups: bucket missing — triggering ensureBackupBucket');
@@ -111,16 +111,16 @@ export async function listBackups(prefix: string): Promise<{ key: string; size: 
 }
 
 export async function getSignedDownloadUrl(s3Key: string): Promise<string> {
-  // v3.18.28: Bekanntes Problem — http://minio:9000 ist nur intern erreichbar.
-  // Frontend nutzt stattdessen den Download-Stream-Endpoint /backup/admin/download/:jobId.
-  // Wir liefern hier den S3-Key zurück damit das Frontend ihn auf den richtigen
-  // Stream-Endpoint mappen kann.
+  // v3.18.28: known issue — http://minio:9000 is only reachable internally.
+  // The frontend uses the download stream endpoint /backup/admin/download/:jobId instead.
+  // We return the S3 key here so the frontend can map it to the right
+  // stream endpoint.
   return s3Key;
 }
 
 /**
- * v3.18.28: Object aus S3 als Stream zurück — wird im Express-Handler an den
- * Client gepiped. Funktioniert ohne presigned URL.
+ * v3.18.28: return an object from S3 as a stream — piped to the client in the
+ * Express handler. Works without a presigned URL.
  */
 export async function streamObject(s3Key: string): Promise<{ stream: Readable; contentLength?: number; contentType?: string }> {
   const client = getClient();
@@ -133,7 +133,7 @@ export async function streamObject(s3Key: string): Promise<{ stream: Readable; c
 }
 
 /**
- * v3.18.28: Object aus S3 löschen.
+ * v3.18.28: delete an object from S3.
  */
 export async function deleteObject(s3Key: string): Promise<void> {
   const client = getClient();

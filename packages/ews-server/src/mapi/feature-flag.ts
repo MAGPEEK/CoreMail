@@ -1,13 +1,14 @@
 /**
- * MAPI over HTTP — Feature-Flag (v5.7.0)
+ * MAPI over HTTP + EWS — feature flag (v5.7.0, EWS since v5.8.0)
  *
- * MAPI/HTTP ist optional und per BCP → Server → „MAPI over HTTP" zuschaltbar
- * (`ServerSettings.mapiHttpEnabled`, Default false). Ist der Schalter aus,
- * liefert `/mapi/*` 404 und Autodiscover annonciert kein mapiHttp-Protokoll,
- * sodass Outlook sich sauber als IMAP-Konto einrichtet.
+ * The Outlook "Exchange account" path (MAPI/HTTP including the companion protocols EWS and
+ * OAB) is optional and can be enabled via BCP → Server → "MAPI over HTTP + EWS"
+ * (`ServerSettings.mapiHttpEnabled`, default false). When the switch is off,
+ * `/mapi/*`, `/EWS/*` and `/OAB/*` return 404 and Autodiscover advertises
+ * neither mapiHttp nor EWS, so Outlook cleanly sets itself up as an IMAP account.
  *
- * 60s-In-Memory-Cache; der ews-server invalidiert ihn über das Redis-Signal
- * CHANNEL_SETTINGS_RELOAD, das der api-gateway nach jedem Settings-Save sendet.
+ * 60s in-memory cache; the ews-server invalidates it via the Redis signal
+ * CHANNEL_SETTINGS_RELOAD, which the api-gateway sends after every settings save.
  */
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -28,8 +29,8 @@ export async function isMapiHttpEnabled(): Promise<boolean> {
     });
     cached = s?.mapiHttpEnabled ?? false;
   } catch (err) {
-    // Fail-closed: ohne DB kein MAPI (Outlook fällt auf IMAP zurück).
-    log.warn({ err }, 'ServerSettings nicht lesbar — MAPI/HTTP bleibt aus');
+    // Fail-closed: no MAPI without the DB (Outlook falls back to IMAP).
+    log.warn({ err }, 'ServerSettings not readable — MAPI/HTTP stays off');
     cached = false;
   }
   cacheExpiry = now + CACHE_TTL_MS;
@@ -41,8 +42,8 @@ export function invalidateMapiFlagCache(): void {
   cacheExpiry = 0;
 }
 
-/** Express-Gate: 404 solange MAPI/HTTP im BCP deaktiviert ist. */
+/** Express gate: 404 as long as "MAPI over HTTP + EWS" is disabled in the BCP. */
 export async function requireMapiEnabled(_req: Request, res: Response, next: NextFunction): Promise<void> {
   if (await isMapiHttpEnabled()) return next();
-  res.status(404).set('Content-Type', 'text/plain').send('MAPI over HTTP is disabled');
+  res.status(404).set('Content-Type', 'text/plain').send('Exchange protocols (MAPI over HTTP / EWS) are disabled');
 }

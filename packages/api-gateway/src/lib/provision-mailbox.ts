@@ -15,8 +15,8 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('provision-mailbox');
 
-// Nur echte Mail-Ordner — Notes und Tasks sind eigenständige Datenbankmodelle
-// (prisma.Note, prisma.Task) und KEINE Mail-Ordner.
+// Only real mail folders — Notes and Tasks are separate database models
+// (prisma.Note, prisma.Task) and NOT mail folders.
 export const DEFAULT_FOLDERS = [
   { name: 'INBOX',   displayName: 'Inbox' },
   { name: 'Drafts',  displayName: 'Drafts' },
@@ -113,12 +113,12 @@ export async function ensureMailboxProvisioned(userId: string): Promise<Provisio
  * Ensure a SharedMailbox has the same fully-provisioned folder structure
  * as a regular user mailbox. Idempotent — safe to call repeatedly.
  *
- * Erstellt:
- *   - `Mailbox`-Record (verknüpft via sharedBoxId), falls fehlend
+ * Creates:
+ *   - `Mailbox` record (linked via sharedBoxId), if missing
  *   - DEFAULT_FOLDERS (Inbox / Drafts / Sent / Trash / Junk / Archive / Notes / Tasks)
- *     — Backfill von fehlenden Standard-Ordnern bei bestehenden Mailboxen
+ *     — backfill of missing default folders for existing mailboxes
  *
- * Kein Kalender für Shared Mailboxes (Resource Mailboxes haben den separat).
+ * No calendar for shared mailboxes (resource mailboxes have that separately).
  */
 export async function ensureSharedMailboxProvisioned(sharedMailboxId: string): Promise<ProvisionResult> {
   const sm = await prisma.sharedMailbox.findUnique({
@@ -171,7 +171,7 @@ export async function ensureSharedMailboxProvisioned(sharedMailboxId: string): P
   return {
     mailboxCreated,
     foldersCreated,
-    calendarCreated: false, // keine Kalender für Shared Mailboxes
+    calendarCreated: false, // no calendars for shared mailboxes
     alreadyExisted: !mailboxCreated && foldersCreated === 0,
   };
 }

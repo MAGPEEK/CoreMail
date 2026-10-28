@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-// ECP-Akzentfarbe ist immer Microsoft-Blau — nicht vom OWA-Theme beeinflussbar
+// ECP accent color is always Microsoft blue — cannot be influenced by the OWA theme
 export const ECP_ACCENT_RGB = '0 120 212';
 
 interface ThemeState {
@@ -11,7 +11,7 @@ interface ThemeState {
   setTheme: (theme: ThemeMode) => void;
 }
 
-// Eigener localStorage-Key — unabhängig von OWA (coremail-theme)
+// Own localStorage key — independent of OWA (coremail-theme)
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({

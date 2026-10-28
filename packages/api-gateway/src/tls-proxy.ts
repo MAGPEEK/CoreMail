@@ -1,25 +1,25 @@
 /**
- * Integrierter HTTPS-Reverse-Proxy (TLS-Termination) mit SNI-Multi-Cert-Support
+ * Integrated HTTPS reverse proxy (TLS termination) with SNI multi-cert support
  *
- * Startet einen Node.js-HTTPS-Server auf Port 443 (oder HTTPS_PORT), sobald
- * mindestens ein ACTIVE-Zertifikat in der Datenbank existiert. Pro eingehender
- * TLS-Verbindung wählt ein SNI-Callback anhand des vom Client gesendeten
- * Servernames das passende Zertifikat aus.
+ * Starts a Node.js HTTPS server on port 443 (or HTTPS_PORT) as soon as at
+ * least one ACTIVE certificate exists in the database. For each incoming TLS
+ * connection an SNI callback selects the matching certificate based on the
+ * server name sent by the client.
  *
- * v3.18.32: SNI-Multi-Cert-Refactor — vorher wurde nur das eine Cert mit
- * `isActiveHttps=true` geladen. Outlook-Autodiscover (`autodiscover.<domain>`)
- * bekam dadurch immer das `mail.<domain>`-Cert → Hostname-Mismatch →
- * Zertifikatsfehler. Jetzt: ALLE ACTIVE-Certs werden geladen, pro Hostname
- * (CN + alle SANs + `domains[]`) ein eigener TLS-Context. SNICallback matcht
- * exact + wildcard (`*.example.com`). Default-Cert (für unbekannte SNI) ist
- * das Cert mit `isActiveHttps=true`, fallback: neuestes ACTIVE-Cert.
+ * v3.18.32: SNI multi-cert refactor — previously only the one cert with
+ * `isActiveHttps=true` was loaded. Outlook Autodiscover (`autodiscover.<domain>`)
+ * therefore always got the `mail.<domain>` cert → hostname mismatch →
+ * certificate error. Now: ALL ACTIVE certs are loaded, one TLS context per
+ * hostname (CN + all SANs + `domains[]`). SNICallback matches exact +
+ * wildcard (`*.example.com`). The default cert (for unknown SNI) is the cert
+ * with `isActiveHttps=true`, fallback: newest ACTIVE cert.
  *
- * Hot-Reload: Redis-Channel "coremail:tls:reload" löst Neuaufbau der
- * SNI-Map aus. → Kein Container-Neustart nötig beim Ausstellen / Erneuern.
+ * Hot reload: the Redis channel "coremail:tls:reload" triggers a rebuild of
+ * the SNI map. → No container restart needed when issuing / renewing.
  *
- * Verwendung:
+ * Usage:
  *   import { startTlsProxy } from './tls-proxy.js';
- *   await startTlsProxy(app);  // nach app.listen(HTTP_PORT)
+ *   await startTlsProxy(app);  // after app.listen(HTTP_PORT)
  */
 import https from 'node:https';
 import tls from 'node:tls';
@@ -36,23 +36,23 @@ let activeServer: https.Server | null = null;
 
 /** Map: hostname (lowercase) → SecureContext */
 let sniContexts: Map<string, tls.SecureContext> = new Map();
-/** Wildcard-Patterns: '*.example.com' → SecureContext */
+/** Wildcard patterns: '*.example.com' → SecureContext */
 let wildcardContexts: Array<{ suffix: string; ctx: tls.SecureContext }> = [];
-/** Fallback für unbekannte SNI-Namen (oder Verbindungen ohne SNI) */
+/** Fallback for unknown SNI names (or connections without SNI) */
 let defaultContext: tls.SecureContext | null = null;
 
-// ── Öffentlicher Einstiegspunkt ──────────────────────────────────────────────
+// ── Public entry point ───────────────────────────────────────────────────────
 
-/** v5.7.1: Upgrade-Handler (JMAP over WebSocket) — wird vom api-gateway gesetzt. */
+/** v5.7.1: upgrade handler (JMAP over WebSocket) — set by the api-gateway. */
 type UpgradeHandler = (req: import('node:http').IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => void;
 let upgradeHandler: UpgradeHandler | null = null;
 export function setTlsUpgradeHandler(h: UpgradeHandler): void { upgradeHandler = h; }
 
 export async function startTlsProxy(app: Application): Promise<void> {
-  // Initial laden
+  // Initial load
   await reloadServer(app);
 
-  // Redis-Subscription für Hot-Reload (eigene Verbindung, kein Subscriber-Konflikt)
+  // Redis subscription for hot reload (own connection, no subscriber conflict)
   const sub = getRedisClient().duplicate();
   void sub.subscribe(REDIS_CHANNEL);
   sub.on('message', (_channel, _msg) => {
@@ -63,18 +63,18 @@ export async function startTlsProxy(app: Application): Promise<void> {
   });
 }
 
-// ── Cert-Loading & SNI-Map-Aufbau ────────────────────────────────────────────
+// ── Cert loading & SNI map construction ──────────────────────────────────────
 
 /**
- * Extrahiert alle DNS-Namen (CN + SANs) aus einem PEM-Zertifikat.
- * Gibt lowercase-Hostnames zurück, Duplikate entfernt.
+ * Extracts all DNS names (CN + SANs) from a PEM certificate.
+ * Returns lowercase hostnames with duplicates removed.
  */
 function extractHostnames(certPem: string): string[] {
   try {
     const x509 = new X509Certificate(certPem);
     const hostnames = new Set<string>();
 
-    // CN aus Subject (best-effort — Format "CN=foo.example.com")
+    // CN from subject (best-effort — format "CN=foo.example.com")
     const cnMatch = /CN=([^,/]+)/i.exec(x509.subject);
     if (cnMatch?.[1]) hostnames.add(cnMatch[1].trim().toLowerCase());
 
@@ -113,7 +113,7 @@ async function loadCerts(): Promise<LoadedCert[]> {
       id: true, name: true, certPem: true, keyPem: true, chainPem: true,
       domains: true, isActiveHttps: true,
     },
-    orderBy: { createdAt: 'desc' }, // neueste zuerst → gewinnt bei Hostname-Konflikt
+    orderBy: { createdAt: 'desc' }, // newest first → wins on hostname conflict
   });
 
   return rows
@@ -142,7 +142,7 @@ function buildSniMaps(certs: LoadedCert[]): void {
       continue;
     }
 
-    // Hostnames: CN + SANs aus dem PEM + zusätzlich `domains[]`-Feld der DB
+    // Hostnames: CN + SANs from the PEM + additionally the DB `domains[]` field
     const fromPem = extractHostnames(cert.certPem);
     const allHostnames = new Set<string>([
       ...fromPem,
@@ -151,20 +151,20 @@ function buildSniMaps(certs: LoadedCert[]): void {
 
     for (const hostname of allHostnames) {
       if (hostname.startsWith('*.')) {
-        // Wildcard: matcht genau eine Sub-Label-Ebene
+        // Wildcard: matches exactly one sub-label level
         const suffix = hostname.slice(1); // '.example.com'
         wildcardContexts.push({ suffix, ctx });
       } else {
-        // Exact match (neueste Belegung gewinnt — Map.set überschreibt; wir
-        // iterieren aber von neuesten zu ältesten, daher: nur setzen wenn frei)
+        // Exact match (newest assignment wins — Map.set overwrites; but we
+        // iterate from newest to oldest, hence: only set when free)
         if (!sniContexts.has(hostname)) {
           sniContexts.set(hostname, ctx);
         }
       }
     }
 
-    // Default-Cert: das mit isActiveHttps=true. Falls keines markiert, nehmen
-    // wir das neueste (erste in der createdAt-DESC-Liste).
+    // Default cert: the one with isActiveHttps=true. If none is marked, we
+    // take the newest (first in the createdAt-DESC list).
     if (cert.isActiveHttps && !defaultContext) {
       defaultContext = ctx;
     }
@@ -183,13 +183,13 @@ function buildSniMaps(certs: LoadedCert[]): void {
 }
 
 /**
- * SNI-Callback: wählt anhand des vom Client gesendeten Servernames den
- * passenden TLS-Context aus.
+ * SNI callback: selects the matching TLS context based on the server name
+ * sent by the client.
  *
- * Match-Reihenfolge:
+ * Match order:
  *   1. Exact match (`hostname` in sniContexts)
- *   2. Wildcard match (`*.parent` matcht eine Sub-Label-Ebene)
- *   3. defaultContext (sonst Verbindung verworfen)
+ *   2. Wildcard match (`*.parent` matches one sub-label level)
+ *   3. defaultContext (otherwise the connection is dropped)
  */
 function sniCallback(
   servername: string,
@@ -204,7 +204,7 @@ function sniCallback(
     return;
   }
 
-  // 2. Wildcard (genau eine Sub-Label-Ebene — RFC 6125)
+  // 2. Wildcard (exactly one sub-label level — RFC 6125)
   for (const w of wildcardContexts) {
     if (lower.endsWith(w.suffix)) {
       const prefix = lower.slice(0, -w.suffix.length);
@@ -224,12 +224,12 @@ function sniCallback(
   cb(new Error('No matching certificate'));
 }
 
-// ── Server-Lifecycle ──────────────────────────────────────────────────────────
+// ── Server lifecycle ──────────────────────────────────────────────────────────
 
 async function reloadServer(app: Application): Promise<void> {
   const certs = await loadCerts();
 
-  // Laufenden HTTPS-Server stoppen (Graceful — max 5 s)
+  // Stop the running HTTPS server (graceful — max 5 s)
   if (activeServer) {
     await stopServer(activeServer);
     activeServer = null;
@@ -253,9 +253,9 @@ async function reloadServer(app: Application): Promise<void> {
     'TLS SNI map built',
   );
 
-  // HTTPS-Server: kein primäres cert/key, statt dessen SNICallback. Wir setzen
-  // dennoch ein cert/key-Paar als Fallback (Node erfordert es im Tls-Server
-  // bei manchen Versionen).
+  // HTTPS server: no primary cert/key, SNICallback instead. We still set a
+  // cert/key pair as fallback (Node requires it in the TLS server in some
+  // versions).
   const fallbackCert = certs.find((c) => c.isActiveHttps) ?? certs[0]!;
   const server = https.createServer(
     {
@@ -267,7 +267,7 @@ async function reloadServer(app: Application): Promise<void> {
     app,
   );
 
-  // v5.7.1: WebSocket-Upgrades (JMAP /jmap/ws) an den Gateway-Handler weiterreichen
+  // v5.7.1: forward WebSocket upgrades (JMAP /jmap/ws) to the gateway handler
   server.on('upgrade', (req, socket, head) => {
     if (upgradeHandler) upgradeHandler(req, socket, head);
     else socket.destroy();

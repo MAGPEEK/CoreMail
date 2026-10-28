@@ -8,10 +8,10 @@ export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
 
 // GET /api/v1/user/client-config
-// v3.18.40: Liefert ALLE Setup-Daten für externe E-Mail-/Kalender-/Kontakte-
-// Clients (Outlook + CalDAV-Plugin, Apple Kalender, Thunderbird, eM Client).
-// Outlook-Desktop unterstützt nativ kein CalDAV/CardDAV → Kalender + Kontakte
-// erfordern das (kostenlose, OSS) „Outlook CalDav Synchronizer"-Plugin.
+// v3.18.40: returns ALL setup data for external mail/calendar/contacts
+// clients (Outlook + CalDAV plugin, Apple Calendar, Thunderbird, eM Client).
+// Outlook desktop has no native CalDAV/CardDAV support → calendar + contacts
+// require the (free, OSS) „Outlook CalDav Synchronizer" plugin.
 userRouter.get('/client-config', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const [settings, user, calendars, mfa] = await Promise.all([
@@ -46,9 +46,9 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
   const portSuffix = isStandardPort ? '' : `:${port}`;
   const baseUrl = `${proto}://${hostname}${portSuffix}`;
 
-  // MFA-aktiv → CalDAV/CardDAV/IMAP/SMTP-Clients brauchen App-Passwort
-  // (Bearer-Token funktioniert in den Clients nicht, normales Passwort wird
-  // durch MFA blockiert).
+  // MFA active → CalDAV/CardDAV/IMAP/SMTP clients need an app password
+  // (bearer token does not work in the clients, the normal password is
+  // blocked by MFA).
   const mfaEnabled = !!(mfa?.totpEnabled || (mfa?.webAuthnCredentials &&
     typeof mfa.webAuthnCredentials === 'string' &&
     mfa.webAuthnCredentials.length > 2));
@@ -86,9 +86,9 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
       })),
     },
     carddav: {
-      // Account-URL für Client-Auto-Discovery (Apple Kontakte, Thunderbird,
-      // Outlook CalDav Synchronizer). CoreMail hat aktuell EIN Default-
-      // Adressbuch pro User unter dem Pfad „/default/".
+      // Account URL for client auto-discovery (Apple Contacts, Thunderbird,
+      // Outlook CalDav Synchronizer). CoreMail currently has ONE default
+      // address book per user under the path „/default/".
       accountUrl: `${baseUrl}/dav/addressbooks/${userId}/`,
       defaultUrl: `${baseUrl}/dav/addressbooks/${userId}/default/`,
     },
@@ -219,7 +219,7 @@ userRouter.put('/oof', async (req: Request, res: Response) => {
     },
   });
 
-  // Kalender-Event für Abwesenheit anlegen/aktualisieren wenn Zeitraum gesetzt
+  // Create/update the out-of-office calendar event when a period is set
   if (d.enabled && d.useTimeRange && oofStart && oofEnd) {
     const mailbox = await prisma.mailbox.findUnique({ where: { userId: req.apiUser!.userId } });
     if (mailbox) {
@@ -258,7 +258,7 @@ userRouter.put('/oof', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// GET /api/v1/user/storage — Speichernutzung pro Ordner
+// GET /api/v1/user/storage — storage usage per folder
 userRouter.get('/storage', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { quotaBytes: true } });
@@ -266,7 +266,7 @@ userRouter.get('/storage', async (req: Request, res: Response) => {
 
   if (!mailbox) { res.json({ quotaBytes: user?.quotaBytes ?? 0, usedBytes: 0, folders: [] }); return; }
 
-  // Größe pro Ordner aggregieren
+  // Aggregate size per folder
   const sizes = await prisma.message.groupBy({
     by: ['folderId'],
     where: { folder: { mailboxId: mailbox.id }, deletedAt: null },
@@ -288,7 +288,7 @@ userRouter.get('/storage', async (req: Request, res: Response) => {
   res.json({ quotaBytes: user?.quotaBytes ?? 0, usedBytes: totalUsed, folders });
 });
 
-// DELETE /api/v1/user/folders/:id/empty — Ordner leeren (Soft-Delete aller Nachrichten)
+// DELETE /api/v1/user/folders/:id/empty — empty folder (soft-delete all messages)
 userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const userId  = req.apiUser!.userId;
@@ -307,7 +307,7 @@ userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mail Rules (Outlook-Style Inbox Rules, v3.18.0)
+// Mail Rules (Outlook-style inbox rules, v3.18.0)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RuleConditionSchema = z.object({
@@ -365,7 +365,7 @@ userRouter.post('/rules', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
   }
-  // Auto-Priority: an Ende einfügen wenn nicht explizit gesetzt
+  // Auto priority: append at the end if not set explicitly
   let priority = parsed.data.priority;
   if (priority === 0) {
     const maxRule = await prisma.mailRule.findFirst({
@@ -409,7 +409,7 @@ userRouter.put('/rules/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// PATCH /api/v1/user/rules/:id/toggle — schneller Enable/Disable
+// PATCH /api/v1/user/rules/:id/toggle — quick enable/disable
 userRouter.patch('/rules/:id/toggle', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
@@ -421,13 +421,13 @@ userRouter.patch('/rules/:id/toggle', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// POST /api/v1/user/rules/reorder — body { ids: string[] } — neue Reihenfolge
+// POST /api/v1/user/rules/reorder — body { ids: string[] } — new order
 userRouter.post('/rules/reorder', async (req: Request, res: Response) => {
   const schema = z.object({ ids: z.array(z.string()).min(1) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  // Verifizieren dass alle IDs dem User gehören
+  // Verify that all IDs belong to the user
   const userRules = await prisma.mailRule.findMany({
     where: { userId: req.apiUser!.userId },
     select: { id: true },
@@ -504,7 +504,7 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
   });
   if (!user || !user.passwordHash) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-  // verifyPassword/hashPassword nutzen sha256(password + PEPPER) → bcrypt
+  // verifyPassword/hashPassword use sha256(password + PEPPER) → bcrypt
   const valid = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
   if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
 
@@ -517,14 +517,14 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/user/shared-mailboxes
-// Listet alle freigegebenen Postfächer, auf die der User Zugriff hat.
-// Aggregiert mehrere Berechtigungen pro Mailbox in ein `permissions[]`-Array.
+// Lists all shared mailboxes the user has access to.
+// Aggregates multiple permissions per mailbox into a `permissions[]` array.
 userRouter.get('/shared-mailboxes', async (req: Request, res: Response) => {
   const perms = await prisma.sharedMailboxPerm.findMany({
     where: { userId: req.apiUser!.userId },
     include: { sharedMailbox: { select: { id: true, email: true, displayName: true, active: true } } },
   });
-  // Aggregieren: ein Eintrag pro shared mailbox mit allen perms
+  // Aggregate: one entry per shared mailbox with all perms
   const map = new Map<string, { id: string; email: string; displayName: string; active: boolean; permissions: string[] }>();
   for (const p of perms) {
     if (!p.sharedMailbox.active) continue;
@@ -544,7 +544,7 @@ userRouter.get('/shared-mailboxes', async (req: Request, res: Response) => {
   res.json([...map.values()].sort((a, b) => a.email.localeCompare(b.email)));
 });
 
-// ── Helper: prüft Lese-Zugriff auf eine Shared-Mailbox + holt Mailbox-Record ──
+// ── Helper: checks read access to a shared mailbox + fetches mailbox record ──
 async function getReadableSharedMailbox(userId: string, sharedMailboxId: string) {
   const perm = await prisma.sharedMailboxPerm.findFirst({
     where: {
@@ -559,7 +559,7 @@ async function getReadableSharedMailbox(userId: string, sharedMailboxId: string)
     },
   });
   if (!perm || !perm.sharedMailbox.active) return null;
-  // Die Mailbox-Tabelle ist 1:1 mit SharedMailbox via sharedBoxId
+  // The mailbox table is 1:1 with SharedMailbox via sharedBoxId
   const mailbox = await prisma.mailbox.findFirst({
     where: { sharedBoxId: sharedMailboxId },
     select: { id: true },
@@ -568,7 +568,7 @@ async function getReadableSharedMailbox(userId: string, sharedMailboxId: string)
   return { mailboxId: mailbox.id, shared: perm.sharedMailbox, permission: perm.permission };
 }
 
-// GET /api/v1/user/shared-mailboxes/:id — Detail (inkl. permissions[])
+// GET /api/v1/user/shared-mailboxes/:id — detail (incl. permissions[])
 userRouter.get('/shared-mailboxes/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const perms = await prisma.sharedMailboxPerm.findMany({
@@ -613,7 +613,7 @@ userRouter.get('/shared-mailboxes/:id/folders/:folderId/messages', async (req: R
   const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
   if (!access) { res.status(403).json({ error: 'Kein Lese-Zugriff auf diese Mailbox' }); return; }
 
-  // Folder muss zur Shared-Mailbox gehören
+  // Folder must belong to the shared mailbox
   const folder = await prisma.folder.findFirst({
     where: { id: folderId, mailboxId: access.mailboxId },
     select: { id: true },
@@ -636,7 +636,7 @@ userRouter.get('/shared-mailboxes/:id/folders/:folderId/messages', async (req: R
   res.json({ total, messages });
 });
 
-// GET /api/v1/user/shared-mailboxes/:id/messages/:messageId — komplette Nachricht
+// GET /api/v1/user/shared-mailboxes/:id/messages/:messageId — full message
 userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request, res: Response) => {
   const { id, messageId } = req.params as { id: string; messageId: string };
   const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
@@ -653,9 +653,9 @@ userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request,
   res.json(message);
 });
 
-// ── Folder-CRUD für Shared Mailboxes (nur mit FULL_ACCESS) ───────────────────
+// ── Folder CRUD for shared mailboxes (FULL_ACCESS only) ──────────────────────
 
-/** Wie getReadableSharedMailbox, aber erfordert FULL_ACCESS für Schreiboperationen. */
+/** Like getReadableSharedMailbox, but requires FULL_ACCESS for write operations. */
 async function getWritableSharedMailbox(userId: string, sharedMailboxId: string) {
   const perm = await prisma.sharedMailboxPerm.findFirst({
     where: { userId, sharedMailboxId, permission: 'FULL_ACCESS' },
@@ -669,10 +669,10 @@ async function getWritableSharedMailbox(userId: string, sharedMailboxId: string)
   return { mailboxId: mailbox.id };
 }
 
-// Geschützte System-Ordner, die nicht umbenannt/gelöscht werden dürfen
+// Protected system folders that must not be renamed/deleted
 const PROTECTED_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Outbox']);
 
-// POST /api/v1/user/shared-mailboxes/:id/folders — Ordner anlegen
+// POST /api/v1/user/shared-mailboxes/:id/folders — create folder
 userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
@@ -682,10 +682,10 @@ userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Respo
   if (!displayName || displayName.trim().length === 0) {
     res.status(400).json({ error: 'displayName erforderlich' }); return;
   }
-  // `name` ist der interne IMAP-Name — wir nutzen den displayName und ersetzen problematische Zeichen
+  // `name` is the internal IMAP name — we use the displayName and replace problematic characters
   const safeName = displayName.trim().replace(/[/\\\0]/g, '_').slice(0, 100);
 
-  // Parent muss zur gleichen Mailbox gehören
+  // Parent must belong to the same mailbox
   if (parentId) {
     const parent = await prisma.folder.findFirst({
       where: { id: parentId, mailboxId: access.mailboxId },
@@ -718,7 +718,7 @@ userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Respo
   }
 });
 
-// PATCH /api/v1/user/shared-mailboxes/:id/folders/:folderId — Umbenennen/Verschieben/Farbe
+// PATCH /api/v1/user/shared-mailboxes/:id/folders/:folderId — rename/move/color
 userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request, res: Response) => {
   const { id, folderId } = req.params as { id: string; folderId: string };
   const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
@@ -734,7 +734,7 @@ userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request,
     isFavorite?: boolean; sortOrder?: number;
   };
 
-  // System-Ordner darf nicht umbenannt oder reparented werden
+  // System folders must not be renamed or reparented
   if (PROTECTED_FOLDER_NAMES.has(folder.name)) {
     if (displayName !== undefined || parentId !== undefined) {
       res.status(403).json({ error: `Standard-Ordner „${folder.name}" kann nicht umbenannt oder verschoben werden` });
@@ -742,7 +742,7 @@ userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request,
     }
   }
 
-  // Cycle-Check: parentId darf nicht in eigener Unterbaum sein
+  // Cycle check: parentId must not be within its own subtree
   if (parentId) {
     if (parentId === folderId) { res.status(400).json({ error: 'Ordner kann sich nicht selbst sein' }); return; }
     let cursor: string | null = parentId;
@@ -803,7 +803,7 @@ userRouter.delete('/shared-mailboxes/:id/folders/:folderId', async (req: Request
   res.status(204).end();
 });
 
-// POST /api/v1/user/shared-mailboxes/:id/folders/:folderId/empty — alle Nachrichten löschen
+// POST /api/v1/user/shared-mailboxes/:id/folders/:folderId/empty — delete all messages
 userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Request, res: Response) => {
   const { id, folderId } = req.params as { id: string; folderId: string };
   const access = await getWritableSharedMailbox(req.apiUser!.userId, id);
@@ -819,13 +819,13 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
 });
 
 // ── GET /api/v1/user/preferences ─────────────────────────────────────────────
-// Persönliche Benutzereinstellungen (inkl. inactivityTimeoutMinutes)
+// Personal user preferences (incl. inactivityTimeoutMinutes)
 userRouter.get('/preferences', async (req: Request, res: Response) => {
   const settings = await prisma.userSettings.findUnique({
     where: { userId: req.apiUser!.userId },
     select: { inactivityTimeoutMinutes: true },
   });
-  // Global-Fallback aus ServerSettings
+  // Global fallback from ServerSettings
   const global = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
     select: { inactivityTimeoutMinutes: true },
@@ -839,7 +839,7 @@ userRouter.get('/preferences', async (req: Request, res: Response) => {
 // ── PUT /api/v1/user/preferences ─────────────────────────────────────────────
 userRouter.put('/preferences', async (req: Request, res: Response) => {
   const PreferencesSchema = z.object({
-    // null = globale Einstellung verwenden; 0 = deaktiviert; 1-1440 = eigene Vorgabe
+    // null = use global setting; 0 = disabled; 1-1440 = own value
     inactivityTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
   });
   const parsed = PreferencesSchema.safeParse(req.body);

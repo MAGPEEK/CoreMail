@@ -22,7 +22,7 @@ function getAuthenticatedUserId(req: Request): string | null {
   return payload?.sub ?? null;
 }
 
-// Status — welche MFA-Methoden sind für den aktuellen User aktiv?
+// Status — which MFA methods are active for the current user?
 mfaRouter.get('/status', async (req: Request, res: Response) => {
   const userId = getAuthenticatedUserId(req);
   if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }

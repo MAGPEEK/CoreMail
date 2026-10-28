@@ -55,12 +55,12 @@ export interface MessageSummary {
   rawSize: number;
   pinnedAt?: string | null;
   snoozeUntil?: string | null;
-  // v3.18.6: rspamd-Score zum Zeitpunkt der Zustellung. null = nicht gescannt.
-  // 0 = explizit als Ham markiert (vom User via „Kein Spam")
+  // v3.18.6: rspamd score at delivery time. null = not scanned.
+  // 0 = explicitly marked as ham (by the user via "Not spam")
   spamScore?: number | null;
-  // v3.18.7: Senden planen — wenn gesetzt, ist die Mail im Sent-Folder aber noch
-  // nicht versendet. scheduledStatus zeigt den Zustand: PENDING = wartet auf Versand,
-  // SENT = bereits versendet, CANCELLED = Versand abgebrochen
+  // v3.18.7: Scheduled send — when set, the mail is in the Sent folder but not
+  // yet sent. scheduledStatus shows the state: PENDING = waiting to be sent,
+  // SENT = already sent, CANCELLED = sending cancelled
   scheduledAt?: string | null;
   scheduledStatus?: 'PENDING' | 'SENT' | 'CANCELLED' | null;
   attachments: { id: string; filename: string; mimeType: string; size: number; contentId?: string | null; inline?: boolean }[];
@@ -103,7 +103,7 @@ export interface Calendar {
   ownerDisplayName?: string | null;
   ownerEmail?: string | null;
   permission?: 'OWNER' | 'READ' | 'WRITE';
-  // v3.18.16: shareId nur bei shared=true — Frontend für PATCH/Reorder/Self-Remove
+  // v3.18.16: shareId only when shared=true — frontend for PATCH/reorder/self-remove
   shareId?: string;
 }
 
@@ -137,7 +137,7 @@ export interface CalendarEvent {
   uid?: string;
   sequence?: number;
   attendees?: EventAttendee[];
-  // Permission-Info (von GET /events/:id)
+  // Permission info (from GET /events/:id)
   canWrite?: boolean;
   readOnly?: boolean;
 }

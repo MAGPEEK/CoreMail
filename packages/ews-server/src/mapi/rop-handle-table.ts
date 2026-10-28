@@ -1,13 +1,13 @@
 /**
- * ROP Object-Handle-Table (v4.1.0)
+ * ROP object handle table (v4.1.0)
  *
- * Outlook hält pro MAPI-Session ein "ServerObjectHandleTable" — eine Liste
- * von uint32-Handles, die Server-seitige Objekte (Mailbox, Folder, Message,
- * Stream, Attachment, Table) repräsentieren. Jeder ROP referenziert
- * Input/Output über einen INDEX in diese Tabelle.
+ * Outlook keeps a "ServerObjectHandleTable" per MAPI session — a list
+ * of uint32 handles representing server-side objects (mailbox, folder, message,
+ * stream, attachment, table). Every ROP references
+ * input/output via an INDEX into this table.
  *
- * Wir persistieren die Tabelle in Redis (über `session-store.ts`). Hier
- * definieren wir die typed Object-Descriptors und Helper.
+ * We persist the table in Redis (via `session-store.ts`). Here we
+ * define the typed object descriptors and helpers.
  */
 
 import {
@@ -15,27 +15,27 @@ import {
   type MapiSessionState,
 } from './session-store.js';
 
-/** Typed Object-Descriptor — was hinter einem ROP-Handle steckt. */
+/** Typed object descriptor — what is behind a ROP handle. */
 export type RopObject =
   | { kind: 'mailbox'; userId: string }
   | { kind: 'folder';  userId: string; folderId: string; folderName: string }
   | { kind: 'message'; userId: string; folderId: string;
       /**
-       * `messageId === null` markiert eine NEUE Draft, die noch nicht in der DB persistiert
-       * ist (v4.3.0 — RopCreateMessage erzeugt das Handle ohne sofortigen DB-Schreibvorgang;
-       * `pendingProperties` + `pendingRecipients` werden bei RopSaveChangesMessage in die DB
-       * geflusht).
+       * `messageId === null` marks a NEW draft that is not yet persisted in the DB
+       * (v4.3.0 — RopCreateMessage creates the handle without an immediate DB write;
+       * `pendingProperties` + `pendingRecipients` are flushed to the DB on
+       * RopSaveChangesMessage).
        */
       messageId: string | null;
       isDraft?: boolean;
       /**
-       * v5.1.0: PIM-Typ für virtuelle Folder. Steuert welcher Property-Mapper
-       * in handleRopGetPropertiesAll verwendet wird.
-       *   - 'mail' (default) → Message-Tabelle
-       *   - 'appointment'     → CalendarEvent-Tabelle (IPM.Appointment)
-       *   - 'contact'         → Contact-Tabelle (IPM.Contact)
-       *   - 'task'            → Task-Tabelle (IPM.Task)
-       *   - 'note'            → Note-Tabelle (IPM.StickyNote)
+       * v5.1.0: PIM type for virtual folders. Controls which property mapper
+       * is used in handleRopGetPropertiesAll.
+       *   - 'mail' (default) → Message table
+       *   - 'appointment'     → CalendarEvent table (IPM.Appointment)
+       *   - 'contact'         → Contact table (IPM.Contact)
+       *   - 'task'            → Task table (IPM.Task)
+       *   - 'note'            → Note table (IPM.StickyNote)
        */
       pimKind?: 'mail' | 'appointment' | 'contact' | 'task' | 'note';
       pendingProperties?: Record<string, unknown>;   // PropertyTag (dec) → value
@@ -46,26 +46,26 @@ export type RopObject =
       }>;
     }
   | { kind: 'table';   userId: string; tableType: 'hierarchy' | 'contents' | 'attachments';
-                       /** Bei 'attachments': MessageId statt FolderId. */
+                       /** For 'attachments': MessageId instead of FolderId. */
                        parentFolderId: string; columns?: number[] /* property-tags */ }
   | { kind: 'stream';  userId: string; messageId: string | null;
-                       /** Optional: für Stream auf einer Draft-Message (v4.3.0 OpenStream → WriteStream → CommitStream) */
+                       /** Optional: for a stream on a draft message (v4.3.0 OpenStream → WriteStream → CommitStream) */
                        parentMessageHandle?: number;
                        propertyTag: number;
                        buffer: Buffer; offset: number;
                        writable?: boolean }
   | { kind: 'attachment'; userId: string; messageId: string;
-      /** Bei bestehender Attachment: ID des DB-Records. Null für neue Attachment (v4.4.0 RopCreateAttachment). */
+      /** For an existing attachment: ID of the DB record. Null for a new attachment (v4.4.0 RopCreateAttachment). */
       attachmentId: string | null;
-      /** Attachment-Index innerhalb der Message (Outlook-AttachmentNum). */
+      /** Attachment index within the message (Outlook AttachmentNum). */
       attachNum: number;
-      /** Pending-Properties + Buffer für Compose-Workflow (v4.4.0). */
+      /** Pending properties + buffer for the compose workflow (v4.4.0). */
       pendingProperties?: Record<string, unknown>;
       pendingBuffer?: Buffer;
     };
 
 /**
- * Liest das Object aus der Session-State HandleTable.
+ * Reads the object from the session-state handle table.
  */
 export async function getRopObject(
   sessionToken: string,
@@ -78,8 +78,8 @@ export async function getRopObject(
 }
 
 /**
- * Alloziert ein neues Handle für ein Object und persistiert.
- * Liefert das uint32 Handle (oder null wenn Session nicht existiert).
+ * Allocates a new handle for an object and persists it.
+ * Returns the uint32 handle (or null if the session does not exist).
  */
 export async function putRopObject(
   sessionToken: string,
@@ -89,7 +89,7 @@ export async function putRopObject(
 }
 
 /**
- * Löscht ein Handle (RopRelease).
+ * Deletes a handle (RopRelease).
  */
 export async function releaseRopObject(
   sessionToken: string,
@@ -99,20 +99,20 @@ export async function releaseRopObject(
   if (!session) return false;
   if (!(handle in session.handleTable)) return false;
   delete session.handleTable[handle];
-  // session-store schreibt bei nächstem allocate; für Release brauchen wir
-  // einen expliziten Persist. Wir laden + speichern manuell:
+  // session-store writes on the next allocate; for Release we need
+  // an explicit persist. We load + save manually:
   return persistSessionState(sessionToken, session);
 }
 
-/** Hilfsfunktion: persistiert State zurück nach Redis. */
+/** Helper: persists state back to Redis. */
 async function persistSessionState(
   sessionToken: string,
   state: MapiSessionState,
 ): Promise<boolean> {
-  // Wir reuse den allocateRopHandle-Mechanismus mit einem "leeren" Put,
-  // der den State neu schreibt. Da das Counter erhöht aber sonst nichts macht,
-  // ist es ein bisschen hack — bessere Variante: ein neuer Helper in
-  // session-store.ts. Für v4.1.0 reicht das.
+  // We reuse the allocateRopHandle mechanism with an "empty" put
+  // that rewrites the state. Since it increments the counter but does nothing else,
+  // it is a bit of a hack — better variant: a new helper in
+  // session-store.ts. Good enough for v4.1.0.
   // (TODO v4.2.0: dedicated `updateSession(token, state)` helper)
   const { getRedisClient } = await import('@coremail/core');
   const KEY = `mapi:session:${sessionToken}`;
@@ -122,7 +122,7 @@ async function persistSessionState(
 }
 
 /**
- * Aktualisiert ein bestehendes Handle-Object (für Draft-Akkumulation in v4.3.0).
+ * Updates an existing handle object (for draft accumulation in v4.3.0).
  */
 export async function updateRopObject(
   sessionToken: string,
@@ -138,8 +138,8 @@ export async function updateRopObject(
 }
 
 /**
- * Hilfsfunktion zum Auflösen eines HandleIndex (aus dem ROP-Stream-
- * ServerObjectHandleTable) zu einem konkreten Object.
+ * Helper to resolve a HandleIndex (from the ROP stream
+ * ServerObjectHandleTable) to a concrete object.
  */
 export async function resolveHandleIndex(
   sessionToken: string,

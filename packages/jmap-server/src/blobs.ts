@@ -1,12 +1,12 @@
 /**
- * Blob-Ids (RFC 8620 §6) — URL-safe, eindeutig pro Account:
- *   m-<messageId>        komplette RFC-5322-Nachricht
- *   a-<attachmentId>     Anhang (MinIO)
- *   p-<messageId>-text   text/plain-Body-Part
- *   p-<messageId>-html   text/html-Body-Part
- *   u-<hex>              Upload (POST /jmap/upload bzw. Blob/upload), 7 Tage
- * Upload-Metadaten liegen in Redis (`jmap:blob:<accountId>:<blobId>`), die
- * Bytes in MinIO unter jmap-upload/<accountId>/<blobId> (Lifecycle 7 Tage).
+ * Blob ids (RFC 8620 §6) — URL-safe, unique per account:
+ *   m-<messageId>        complete RFC 5322 message
+ *   a-<attachmentId>     attachment (MinIO)
+ *   p-<messageId>-text   text/plain body part
+ *   p-<messageId>-html   text/html body part
+ *   u-<hex>              upload (POST /jmap/upload or Blob/upload), 7 days
+ * Upload metadata lives in Redis (`jmap:blob:<accountId>:<blobId>`), the
+ * bytes in MinIO under jmap-upload/<accountId>/<blobId> (lifecycle 7 days).
  */
 import { randomBytes } from 'node:crypto';
 import { prisma, downloadBuffer, uploadBuffer, jmapUploadKey, parseRawMessage } from '@coremail/storage';
@@ -74,7 +74,7 @@ export async function resolveBlob(account: AccountContext, blobId: string): Prom
     }
   }
 
-  // Parts eines per Email/parse geparsten Blobs: pp<hex(srcBlobId)>-(text|html|att<n>)
+  // Parts of a blob parsed via Email/parse: pp<hex(srcBlobId)>-(text|html|att<n>)
   const pp = /^pp([0-9a-f]+)-(text|html|att(\d+))$/.exec(blobId);
   if (pp) {
     const src = await resolveBlob(account, Buffer.from(pp[1]!, 'hex').toString('utf8'));
@@ -100,7 +100,7 @@ export async function resolveBlob(account: AccountContext, blobId: string): Prom
   return null;
 }
 
-/** Blob/lookup (RFC 9404 §4): in welchen Objekten kommt der Blob vor? */
+/** Blob/lookup (RFC 9404 §4): which objects does the blob occur in? */
 export async function lookupBlobReferences(
   account: AccountContext,
   blobId: string,

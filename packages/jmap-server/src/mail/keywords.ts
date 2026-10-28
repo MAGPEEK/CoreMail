@@ -1,5 +1,5 @@
 /**
- * IMAP-Flags ↔ JMAP-Keywords (RFC 8621 §4.1.1) und Ordner-Rollen (RFC 8621 §2, RFC 8457).
+ * IMAP flags ↔ JMAP keywords (RFC 8621 §4.1.1) and folder roles (RFC 8621 §2, RFC 8457).
  */
 
 const FLAG_TO_KEYWORD: Record<string, string> = {
@@ -46,7 +46,7 @@ export function keywordsToFlags(keywords: Record<string, unknown>): string[] {
   return [...flags];
 }
 
-/** RFC 8621 §4.1.1: Keyword-Syntax (IMAP atom ohne bestimmte Zeichen, 1–255). */
+/** RFC 8621 §4.1.1: keyword syntax (IMAP atom without certain characters, 1–255). */
 export function isValidKeyword(k: string): boolean {
   return /^[^\s()\]{%*"\\]{1,255}$/.test(k);
 }

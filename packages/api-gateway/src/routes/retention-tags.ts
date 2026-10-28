@@ -1,12 +1,12 @@
 /**
- * User-facing Retention-Tag API (Phase 9, Exchange-2019-konform)
+ * User-facing retention tag API (Phase 9, Exchange 2019 compliant)
  *
- * Listet die PERSONAL-Aufbewahrungs-Tags, die End-User selbst Ordnern/Items
- * zuweisen können. DPT/RPT-Tags werden zentral vom Admin verwaltet und sind
- * für User schreibgeschützt.
+ * Lists the PERSONAL retention tags that end users can assign to folders/items
+ * themselves. DPT/RPT tags are managed centrally by the admin and are
+ * read-only for users.
  *
  * Route:
- *   GET /api/v1/retention-tags  — Liste der zuweisbaren PERSONAL-Tags
+ *   GET /api/v1/retention-tags  — list of assignable PERSONAL tags
  */
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';

@@ -1,9 +1,9 @@
 /**
- * Identity/* (RFC 8621 §6). Identitäten sind abgeleitet (nicht editierbar):
- *   u-<userId>     Primäradresse des Account-Besitzers
- *   al-<aliasId>   E-Mail-Alias (EmailAlias) des Users / der Shared Mailbox
- *   sm-<sharedId>  Shared Mailbox mit SEND_AS/FULL_ACCESS
- * Signatur aus UserSettings.signature (HTML) — Text-Variante per Tag-Strip.
+ * Identity/* (RFC 8621 §6). Identities are derived (not editable):
+ *   u-<userId>     primary address of the account owner
+ *   al-<aliasId>   e-mail alias (EmailAlias) of the user / shared mailbox
+ *   sm-<sharedId>  shared mailbox with SEND_AS/FULL_ACCESS
+ * Signature from UserSettings.signature (HTML) — text variant via tag strip.
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';

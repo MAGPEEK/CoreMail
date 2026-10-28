@@ -23,7 +23,7 @@ function ThemeApplier() {
   const { theme, accentRgb } = useThemeStore();
 
   useEffect(() => {
-    // Accent-Farbe als CSS-Variable setzen
+    // Set accent color as CSS variable
     document.documentElement.style.setProperty('--color-accent', accentRgb);
   }, [accentRgb]);
 
@@ -34,7 +34,7 @@ function ThemeApplier() {
     };
     apply();
 
-    // System-Präferenz überwachen
+    // Watch system preference
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = () => { if (theme === 'system') apply(); };
     mq.addEventListener('change', handler);
@@ -82,10 +82,10 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Prüft beim Start ob Setup erforderlich ist.
-// Wirkt als TOP-LEVEL-Guard und blockt ALLE Routen (auch /login, /forgot-password),
-// solange Setup nicht abgeschlossen ist.  Nach Setup-Abschluss leitet ein direkter
-// Aufruf von /setup zurück auf /login.
+// Checks on startup whether setup is required.
+// Acts as a TOP-LEVEL guard and blocks ALL routes (including /login, /forgot-password)
+// as long as setup is not complete.  After setup completion, a direct
+// call to /setup redirects back to /login.
 function SetupGuard({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -95,7 +95,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
     fetch('/api/v1/setup/status')
       .then((r) => r.json() as Promise<{ setupRequired: boolean }>)
       .then((data) => setSetupRequired(!!data.setupRequired))
-      .catch(() => setSetupRequired(false)); // Bei Netzwerkfehler durchlassen
+      .catch(() => setSetupRequired(false)); // Let through on network errors
   }, []);
 
   useEffect(() => {
@@ -114,7 +114,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  // Während Navigate-Redirect noch läuft, falsche Routes nicht rendern
+  // Do not render wrong routes while the Navigate redirect is still in progress
   if (setupRequired && location.pathname !== '/setup') return null;
   if (!setupRequired && location.pathname === '/setup') return null;
   return <>{children}</>;
@@ -130,7 +130,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        {/* OAuth2-Consent-Route entfernt in v5.6.0 (OAuth2 komplett raus) */}
+        {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}
         <Route path="/*" element={
           <AuthGuard>
             <Layout>

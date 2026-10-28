@@ -11,18 +11,18 @@ const PORT = parseInt(process.env['AUTODISCOVER_PORT'] ?? '8081', 10);
 async function main() {
   await connectDatabase();
 
-  // v3.18.35: Bei Settings-Änderungen (z.B. publicHostname-Update via BCP)
-  // den Settings-Cache invalidieren — sonst liefert Autodiscover für bis zu
-  // 60s veraltete URLs. Outlook-Clients könnten sich dann nicht verbinden.
+  // v3.18.35: on settings changes (e.g. publicHostname update via BCP)
+  // invalidate the settings cache — otherwise Autodiscover returns stale URLs
+  // for up to 60s. Outlook clients might then fail to connect.
   try {
     const sub = getRedisClient().duplicate();
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
       invalidateSettingsCache();
-      log.info('Settings-Cache invalidiert (Redis-Signal)');
+      log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — Cache läuft nach 60s automatisch ab');
+    log.warn({ err }, 'Redis subscription failed — cache expires automatically after 60s');
   }
 
   const app = express();

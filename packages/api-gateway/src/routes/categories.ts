@@ -96,7 +96,7 @@ categoriesRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// ── POST /api/v1/categories/messages/:messageId — Set Kategorien einer Mail ──
+// ── POST /api/v1/categories/messages/:messageId — set categories of a mail ──
 categoriesRouter.post('/messages/:messageId', async (req: Request, res: Response) => {
   const { messageId } = req.params as { messageId: string };
   const parsed = AssignSchema.safeParse(req.body);
@@ -108,7 +108,7 @@ categoriesRouter.post('/messages/:messageId', async (req: Request, res: Response
   });
   if (!msg) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
 
-  // Nur Kategorien des Users zulassen
+  // Allow only the user's own categories
   const owned = await prisma.category.findMany({
     where: { id: { in: parsed.data.categoryIds }, userId },
     select: { id: true },
@@ -128,10 +128,10 @@ categoriesRouter.post('/messages/:messageId', async (req: Request, res: Response
   res.json({ ok: true, count: validIds.length });
 });
 
-// ── POST /api/v1/categories/messages/bulk — Bulk-Set ─────────────────────────
+// ── POST /api/v1/categories/messages/bulk — bulk set ─────────────────────────
 const BulkAssignSchema = z.object({
   messageIds: z.array(z.string()).min(1).max(500),
-  /** Aktion: 'add' fügt hinzu, 'remove' entfernt, 'set' überschreibt */
+  /** Action: 'add' adds, 'remove' removes, 'set' overwrites */
   action: z.enum(['add', 'remove', 'set']),
   categoryIds: z.array(z.string()).min(1).max(50),
 });

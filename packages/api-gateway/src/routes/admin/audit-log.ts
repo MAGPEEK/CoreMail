@@ -22,7 +22,7 @@ import { createHash } from 'crypto';
 import { prisma } from '@coremail/storage/prisma';
 import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 
-// SHA-256 Helper: liefert Hex-Digest eines Strings oder Buffers
+// SHA-256 helper: returns the hex digest of a string or buffer
 function sha256(input: string | Buffer): string {
   return createHash('sha256').update(input).digest('hex');
 }
@@ -212,10 +212,10 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 
   const csv = [csvHeader, ...csvRows].join('\n');
   const dateStr = new Date().toISOString().slice(0, 10);
-  // Integritäts-Signatur: SHA-256 über den exakten Payload (inkl. UTF-8 BOM).
-  // Auditoren können die Datei nach Download verifizieren mit
+  // Integrity signature: SHA-256 over the exact payload (incl. UTF-8 BOM).
+  // Auditors can verify the file after download with
   //   shasum -a 256 audit-log-YYYY-MM-DD.csv
-  // → muss mit dem im X-CoreMail-Signature-Header gelieferten Hash übereinstimmen.
+  // → must match the hash delivered in the X-CoreMail-Signature header.
   const payload = '﻿' + csv;
   const signature = sha256(payload);
 
@@ -229,7 +229,7 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 });
 
 // ─── GET /api/v1/admin/audit-log/export.json ────────────────────────────────
-// Für SIEM-Integration (Splunk, Azure Sentinel, ELK). Strukturiert + signiert.
+// For SIEM integration (Splunk, Azure Sentinel, ELK). Structured + signed.
 
 adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
   const filters = parseFilters(req.query as Record<string, string | undefined>);
@@ -292,8 +292,8 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
 
   const dateStr = new Date().toISOString().slice(0, 10);
 
-  // PDF in einen Buffer schreiben, dann signieren und senden — ermöglicht
-  // X-CoreMail-Signature-Header (geht nicht bei direktem doc.pipe(res)).
+  // Write the PDF into a buffer, then sign and send — enables the
+  // X-CoreMail-Signature header (not possible with direct doc.pipe(res)).
   const chunks: Buffer[] = [];
   const doc = new PDFDocument({
     size: 'A4',
@@ -432,8 +432,8 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
 });
 
 // ─── GET /api/v1/admin/audit-log/anomalies ───────────────────────────────────
-// Verdachtsmomente: Bursts, Fehler-Bursts, kritische Aktionen, Off-Hours.
-// Auswertung der letzten 24h (read-only — keine Persistenz, jede Anfrage rechnet neu).
+// Suspicious patterns: bursts, failure bursts, critical actions, off-hours.
+// Evaluates the last 24h (read-only — no persistence, every request recomputes).
 
 const CRITICAL_ACTIONS_PATTERN = /^(user\.delete|mailbox\.delete|domain\.delete|transport-rules\.|oauth\.|settings\.|certificate\.|gateway\.|connector\.|smime\.|setup\.)/i;
 
@@ -466,7 +466,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
 
   const anomalies: Anomaly[] = [];
 
-  // 1) Burst (Aktionen): >50 Aktionen vom selben Akteur in den letzten 5 Min
+  // 1) Burst (actions): >50 actions by the same actor in the last 5 min
   const byActor = new Map<string, { count: number; first: Date; last: Date }>();
   for (const e of recent5min) {
     const k = e.actorEmail ?? '(anonym)';
@@ -492,7 +492,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
     }
   }
 
-  // 2) Burst (Failures): >10 Failed Actions vom selben Akteur in 5 Min
+  // 2) Burst (failures): >10 failed actions by the same actor in 5 min
   const byActorFail = new Map<string, { count: number; first: Date; last: Date }>();
   for (const e of recent5min) {
     if (e.success) continue;
@@ -519,7 +519,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
     }
   }
 
-  // 3) Kritische Aktionen — IMMER eskalieren
+  // 3) Critical actions — ALWAYS escalate
   for (const e of last24h) {
     if (CRITICAL_ACTIONS_PATTERN.test(e.action)) {
       anomalies.push({
@@ -534,7 +534,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
     }
   }
 
-  // 4) Off-Hours: Aktionen zwischen 00:00 und 06:00 Server-Zeit
+  // 4) Off-hours: actions between 00:00 and 06:00 server time
   for (const e of last24h) {
     const h = e.timestamp.getHours();
     if (h >= 0 && h < 6 && e.actorEmail) {
@@ -550,7 +550,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
     }
   }
 
-  // Doppelte CRITICAL_ACTION-Einträge (gleicher Actor + Action) zusammenfassen
+  // Merge duplicate CRITICAL_ACTION entries (same actor + action)
   const dedupKey = (a: Anomaly) => `${a.type}|${a.actor ?? ''}|${a.message}`;
   const dedupMap = new Map<string, Anomaly>();
   for (const a of anomalies) {

@@ -1,10 +1,10 @@
 /**
- * Wiederverwendbare Aliases-Section für die Mailbox- + SharedMailbox-Modals.
+ * Reusable aliases section for the mailbox + shared mailbox modals.
  *
- * - mailboxType bestimmt den API-Pfad (`/mailboxes` vs. `/shared-mailboxes`)
- * - mailboxId ist die ID der jeweiligen Ziel-Mailbox
- * - defaultDomain ist die Domain der Mailbox (für localPart-only Eingabe)
- * - allDomains: alle System-Domains, damit der User die Alias-Domain ändern kann
+ * - mailboxType determines the API path (`/mailboxes` vs. `/shared-mailboxes`)
+ * - mailboxId is the ID of the respective target mailbox
+ * - defaultDomain is the mailbox's domain (for local-part-only input)
+ * - allDomains: all system domains, so the user can change the alias domain
  */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';

@@ -10,7 +10,7 @@ const PORT = parseInt(process.env['CALDAV_PORT'] ?? '8082', 10);
 
 async function main() {
   await connectDatabase();
-  // v5.6.0: initJwtKeys() entfernt (HS256 zurück)
+  // v5.6.0: initJwtKeys() removed (back to HS256)
 
   const app = express();
 

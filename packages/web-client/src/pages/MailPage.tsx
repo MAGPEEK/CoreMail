@@ -16,7 +16,7 @@ import type { Folder } from '../api/types.js';
 import { showUndoToast } from '../components/UndoToast.js';
 import { EmptyReader } from '../components/Skeleton.js';
 
-// ── Persistente Panel-Breiten ─────────────────────────────────────────────────
+// ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
 const DEFAULT_FOLDER_W  = 208; // w-52
 const DEFAULT_LIST_W    = 320; // w-80
@@ -89,7 +89,7 @@ export function MailPage() {
   const { readingPane } = useUiPrefs();
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
-  // ── Panel-Breiten (resizable) ────────────────────────────────────────────────
+  // ── Panel widths (resizable) ─────────────────────────────────────────────────
   const [folderW, setFolderW] = useState(() => loadPanelWidths().folderW);
   const [listW,   setListW]   = useState(() => loadPanelWidths().listW);
 
@@ -139,10 +139,10 @@ export function MailPage() {
     onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht verschoben werden'),
   });
 
-  // 5px Bewegung nötig bevor Drag startet — sonst Klicks/Selektion kaputt
+  // 5px movement required before drag starts — otherwise clicks/selection break
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  // Hilfsfunktion: prüft ob targetId Descendant von rootId ist (Cycle-Check beim Reparent)
+  // Helper: checks whether targetId is a descendant of rootId (cycle check on reparent)
   const isDescendant = (rootId: string, targetId: string, all: Folder[]): boolean => {
     const stack = [rootId];
     while (stack.length) {
@@ -173,13 +173,13 @@ export function MailPage() {
     if (!overData || overData.kind !== 'folder' || !overData.folderId) return;
     if (!activeData) return;
 
-    // Folder auf Folder = Reparent
+    // Folder onto folder = reparent
     if (activeData.kind === 'folder-source' && activeData.folderId) {
       const sourceId = activeData.folderId;
       const targetId = overData.folderId;
       if (sourceId === targetId) return;
       const allFolders = folders ?? [];
-      // Aktueller Parent unverändert?
+      // Current parent unchanged?
       const src = allFolders.find((f) => f.id === sourceId);
       if (src?.parentId === targetId) return;
       if (isDescendant(sourceId, targetId, allFolders)) {
@@ -190,7 +190,7 @@ export function MailPage() {
       return;
     }
 
-    // Mail auf Folder = Move
+    // Mail onto folder = move
     if (activeData.kind === 'message' && activeData.messageId) {
       const draggedId = activeData.messageId;
       const ids = selectedIds.has(draggedId) ? Array.from(selectedIds) : [draggedId];
@@ -224,17 +224,17 @@ export function MailPage() {
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       <div className="flex flex-1 overflow-hidden relative">
 
-        {/* ── Ordnerstruktur ──────────────────────────────────────────────── */}
+        {/* ── Folder tree ─────────────────────────────────────────────────── */}
         <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
           <FolderTree onNewMail={() => openCompose()} />
         </div>
 
         <ResizeHandle onResize={resizeFolder} />
 
-        {/* ── Nachrichtenliste + Reader ────────────────────────────────────── */}
+        {/* ── Message list + reader ────────────────────────────────────────── */}
         {selectedFolderId ? (
           readingPane === 'bottom' ? (
-            /* Lesebereich unten: Liste oben, Reader unten */
+            /* Reading pane at the bottom: list on top, reader below */
             <div className="flex flex-col flex-1 overflow-hidden min-w-0">
               <div style={{ width: '100%', height: '50%', flexShrink: 0 }} className="overflow-hidden relative">
                 <MessageList folderId={selectedFolderId} />
@@ -244,7 +244,7 @@ export function MailPage() {
               {readerPanel}
             </div>
           ) : (
-            /* Lesebereich rechts (Standard) oder aus */
+            /* Reading pane on the right (default) or off */
             <>
               <div style={{ width: listW, flexShrink: 0 }} className="h-full overflow-hidden relative">
                 <MessageList folderId={selectedFolderId} />

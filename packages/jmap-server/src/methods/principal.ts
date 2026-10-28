@@ -1,7 +1,7 @@
 /**
- * Principal/* + ShareNotification/* (RFC 9670). Principals = aktive User
- * (type individual) und Shared Mailboxes (type group) aller Domains des
- * Servers; ShareNotifications werden (noch) nicht erzeugt → leere Listen.
+ * Principal/* + ShareNotification/* (RFC 9670). Principals = active users
+ * (type individual) and shared mailboxes (type group) of all domains of the
+ * server; ShareNotifications are not generated (yet) → empty lists.
  */
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
@@ -95,7 +95,7 @@ registerMethod('Principal/query', CAP_PRINCIPALS, async (args, ctx) => {
 
 registerMethod('Principal/queryChanges', CAP_PRINCIPALS, async () => { throw cannotCalculateChanges(); });
 
-// ── ShareNotification — derzeit keine Einträge ──────────────────────────────
+// ── ShareNotification — currently no entries ──────────────────────────────
 
 registerMethod('ShareNotification/get', CAP_PRINCIPALS, async (args, ctx) => {
   const { account, ids } = parseGetArgs(args, ctx);

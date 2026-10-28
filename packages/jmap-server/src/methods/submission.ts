@@ -1,7 +1,7 @@
 /**
- * EmailSubmission/* (RFC 8621 §7). Versand über die BullMQ-Queue `smtp-outbound`
- * (gleicher Pfad wie SMTP-Submission: rawMessage base64). Submission-Objekte
- * liegen in Redis (7 Tage), da CoreMail keine Submission-Tabelle hat.
+ * EmailSubmission/* (RFC 8621 §7). Sending via the BullMQ queue `smtp-outbound`
+ * (same path as SMTP submission: rawMessage base64). Submission objects
+ * live in Redis (7 days) since CoreMail has no submission table.
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
@@ -86,7 +86,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   });
   if (!msg) throw setError('invalidProperties', 'emailId not found', ['emailId']);
 
-  // From-Header muss zur Identität passen (forbiddenFrom)
+  // From header must match the identity (forbiddenFrom)
   if (msg.fromAddr && msg.fromAddr.toLowerCase() !== identityEmail) {
     throw setError('forbiddenFrom', `From ${msg.fromAddr} does not match identity ${identityEmail}`);
   }
@@ -142,7 +142,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
       userId: ctx.user.userId,
       metadata: { sender: c.envelope.mailFrom.email, recipient: c.envelope.rcptTo.map((r) => r.email).join(', '), status: 'ACCEPTED', messageId: jobId, direction: 'OUTBOUND', protocol: 'JMAP' },
     },
-  }).catch((e: unknown) => log.warn({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
+  }).catch((e: unknown) => log.warn({ err: e }, 'MAIL_FLOW log write failed'));
 }
 
 registerMethod('EmailSubmission/get', CAP_SUBMISSION, async (args, ctx) => {
@@ -262,7 +262,7 @@ registerMethod('EmailSubmission/set', CAP_SUBMISSION, async (args, ctx) => {
     },
   }];
 
-  // onSuccessUpdateEmail / onSuccessDestroyEmail → implizites Email/set (RFC 8621 §7.5)
+  // onSuccessUpdateEmail / onSuccessDestroyEmail → implicit Email/set (RFC 8621 §7.5)
   const upd = (args['onSuccessUpdateEmail'] ?? {}) as Record<string, JsonObject>;
   const des = Array.isArray(args['onSuccessDestroyEmail']) ? (args['onSuccessDestroyEmail'] as string[]) : [];
   const resolveSubRef = async (ref: string): Promise<string | null> => {

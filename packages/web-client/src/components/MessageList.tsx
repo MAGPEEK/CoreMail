@@ -69,11 +69,11 @@ function MessageRow({
   const hasAttachments = msg.attachments.length > 0;
   const isPinned = !!msg.pinnedAt;
   const isSnoozed = msg.snoozeUntil && new Date(msg.snoozeUntil) > new Date();
-  // v3.18.6: Spam-Indikator — rspamd-Score ≥ 3.0 (Junk-Schwelle)
+  // v3.18.6: Spam indicator — rspamd score ≥ 3.0 (junk threshold)
   const spamScore = (msg.spamScore ?? null);
   const isSpam = spamScore !== null && spamScore >= 3.0;
   const isHighRiskSpam = spamScore !== null && spamScore >= 6.0;
-  // v3.18.7: Geplanter Versand (Outlook-Style „Wird gesendet am…")
+  // v3.18.7: Scheduled send (Outlook-style "Will be sent on…")
   const isScheduledPending = msg.scheduledStatus === 'PENDING' && !!msg.scheduledAt;
 
   const py = density === 'compact' ? 'py-1.5' : density === 'comfortable' ? 'py-3.5' : 'py-2.5';
@@ -109,7 +109,7 @@ function MessageRow({
           {checked && <span className="text-[10px] leading-none">✓</span>}
         </button>
 
-        {/* Flag-Icon (immer sichtbar; klickbar) */}
+        {/* Flag icon (always visible; clickable) */}
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
           className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95"
@@ -120,7 +120,7 @@ function MessageRow({
             : <Flag size={14} className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors" />}
         </button>
 
-        {/* Avatar mit hash-basierter Farbe */}
+        {/* Avatar with hash-based color */}
         <div
           ref={avatarRef}
           onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setShowCard(true), 350); }}
@@ -181,7 +181,7 @@ function MessageRow({
           )}
         </div>
 
-        {/* Hover-Quick-Actions (Gmail-Style) — fade-in mit slight slide */}
+        {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
@@ -252,7 +252,7 @@ export function MessageList({ folderId }: Props) {
   const isJunkFolder = currentFolder?.name === 'Junk';
   const isTrashFolder = currentFolder?.name === 'Trash';
 
-  // Filter anwenden
+  // Apply filter
   const filtered = useMemo(() => {
     const list = data?.messages ?? [];
     if (filter === 'unread')       return list.filter((m) => !m.flags.includes('\\Seen'));
@@ -379,7 +379,7 @@ export function MessageList({ folderId }: Props) {
       { label: isPinned ? 'Lösen' : 'Anheften',
         icon: <Pin size={14} />,
         onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
-      // Kategorien-Submenu
+      // Categories submenu
       categories.length > 0
         ? {
             label: 'Kategorisieren',
@@ -454,7 +454,7 @@ export function MessageList({ folderId }: Props) {
   };
 
   const handleRowClick = (msg: MessageSummary) => (e: React.MouseEvent) => {
-    // Shift = Bereichsauswahl, Ctrl/Cmd = einzeln toggle, sonst öffnen
+    // Shift = range selection, Ctrl/Cmd = toggle single, otherwise open
     if (e.shiftKey) {
       toggleSelection(msg.id, { range: true, orderedIds });
       return;
@@ -581,7 +581,7 @@ export function MessageList({ folderId }: Props) {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
 
-      {/* Rule-Editor (per Kontextmenü „Regel erstellen") */}
+      {/* Rule editor (via context menu "Create rule") */}
       {ruleEditor.open && (
         <RuleEditorModal
           rule={null}
@@ -591,7 +591,7 @@ export function MessageList({ folderId }: Props) {
         />
       )}
 
-      {/* RFC 822 Quelltext-Modal */}
+      {/* RFC 822 source modal */}
       {rawModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRawModal(null)}>
           <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>

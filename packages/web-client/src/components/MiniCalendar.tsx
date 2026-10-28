@@ -8,9 +8,9 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useUiPrefs } from '../store/ui.js';
 
 interface Props {
-  /** aktuell im Hauptkalender markierter Tag */
+  /** day currently highlighted in the main calendar */
   selectedDate: Date;
-  /** Klick auf Tag — navigiert Hauptkalender zum Datum */
+  /** Click on a day — navigates the main calendar to the date */
   onSelectDate: (d: Date) => void;
 }
 
@@ -24,7 +24,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
     return eachDayOfInterval({ start, end });
   }, [cursor]);
 
-  // 6 Zeilen × 7 Tage = 42 Felder; days kann manchmal 35 sein
+  // 6 rows × 7 days = 42 cells; days may sometimes be 35
   const weeks = useMemo(() => {
     const out: Date[][] = [];
     for (let i = 0; i < days.length; i += 7) out.push(days.slice(i, i + 7));
@@ -35,7 +35,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
 
   return (
     <div className="px-2 pb-3">
-      {/* Header: Monat + Navigation */}
+      {/* Header: month + navigation */}
       <div className="flex items-center justify-between px-1 mb-2">
         <button
           onClick={() => setCursor(new Date())}
@@ -62,7 +62,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
         </div>
       </div>
 
-      {/* Tage-Header */}
+      {/* Day header */}
       <div
         className="grid gap-0 text-[10px] font-medium text-gray-400 dark:text-gray-500 px-0.5"
         style={{ gridTemplateColumns: calendarShowWeekNumbers ? '0.7fr repeat(7, 1fr)' : 'repeat(7, 1fr)' }}
@@ -73,20 +73,20 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
         ))}
       </div>
 
-      {/* Wochen */}
+      {/* Weeks */}
       <div
         className="grid gap-0 text-xs"
         style={{ gridTemplateColumns: calendarShowWeekNumbers ? '0.7fr repeat(7, 1fr)' : 'repeat(7, 1fr)' }}
       >
         {weeks.map((week, wi) => (
           <div key={wi} className="contents">
-            {/* KW-Spalte */}
+            {/* Week number column */}
             {calendarShowWeekNumbers && (
               <div className="flex items-center justify-center text-[10px] text-gray-400 dark:text-gray-500 py-1">
                 {getISOWeek(week[0]!)}
               </div>
             )}
-            {/* 7 Tage */}
+            {/* 7 days */}
             {week.map((d) => {
               const inMonth = isSameMonth(d, cursor);
               const isToday = isSameDay(d, today);

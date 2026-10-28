@@ -1,7 +1,7 @@
 /**
- * Server-Einstellungen aus der Datenbank lesen.
- * Wird von Autodiscover v1 + v2 verwendet, damit URLs im ECP konfigurierbar sind.
- * Fällt auf Umgebungsvariablen zurück, wenn noch kein DB-Eintrag existiert.
+ * Read server settings from the database.
+ * Used by Autodiscover v1 + v2 so URLs are configurable in the ECP.
+ * Falls back to environment variables if no DB entry exists yet.
  */
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -23,11 +23,11 @@ export interface ServerConfig {
   smtpPort: number;
   smtpTls: boolean;
   orgName: string;
-  // v5.7.0: MAPI over HTTP annoncieren (ServerSettings.mapiHttpEnabled)
+  // v5.7.0: announce MAPI over HTTP (ServerSettings.mapiHttpEnabled)
   mapiHttpEnabled: boolean;
 }
 
-// In-Memory-Cache (60 Sekunden TTL) — vermeidet DB-Abfrage pro Autodiscover-Request
+// In-memory cache (60 second TTL) — avoids a DB query per Autodiscover request
 let cache: ServerConfig | null = null;
 let cacheExpiry = 0;
 const CACHE_TTL_MS = 60_000;
@@ -87,14 +87,14 @@ export async function getServerConfig(): Promise<ServerConfig> {
     log.warn({ err }, 'Could not read ServerSettings from DB — using env defaults');
   }
 
-  // Fallback: Umgebungsvariablen
+  // Fallback: environment variables
   const defaults = envDefaults();
   cache = defaults;
   cacheExpiry = now + CACHE_TTL_MS;
   return defaults;
 }
 
-/** Cache invalidieren (nach ECP-Änderungen) */
+/** Invalidate the cache (after ECP changes) */
 export function invalidateSettingsCache(): void {
   cache = null;
   cacheExpiry = 0;

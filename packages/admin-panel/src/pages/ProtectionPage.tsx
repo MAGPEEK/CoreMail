@@ -335,7 +335,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
   const [extendedHeaders,  setExtendedHeaders]  = useState(settings.rspamdExtendedHeaders);
   const [rewriteSubject,   setRewriteSubject]   = useState(settings.rspamdRewriteSubject);
   const [subjectTag,       setSubjectTag]       = useState(settings.rspamdSubjectTag);
-  // Module
+  // Modules
   const [phishing, setPhishing] = useState(settings.rspamdPhishingEnabled);
   const [fuzzy,    setFuzzy]    = useState(settings.rspamdFuzzyEnabled);
   const [url,      setUrl]      = useState(settings.rspamdUrlEnabled);
@@ -401,7 +401,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
         </div>
       )}
 
-      {/* ── Aktions-Schwellwerte ───────────────────────────────────────── */}
+      {/* ── Action thresholds ──────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           Aktions-Schwellwerte
@@ -434,7 +434,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
         <NumInput label="Autolearn Ham-Schwellwert"  value={autolearnHam}  onChange={setAutolearnHam}  min={-10}  max={0}   step={0.5} />
       </div>
 
-      {/* ── E-Mail-Header ─────────────────────────────────────────────── */}
+      {/* ── Email headers ─────────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           E-Mail-Header Modifikation
@@ -471,7 +471,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
         )}
       </div>
 
-      {/* ── Module ────────────────────────────────────────────────────── */}
+      {/* ── Modules ───────────────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           Rspamd-Module
@@ -503,7 +503,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
           value={mxCheck}
           onChange={setMxCheck}
         />
-        {/* Immer aktive Module */}
+        {/* Always-active modules */}
         <div className="pt-2 mt-1 border-t border-gray-100">
           <p className="text-xs text-gray-400 mb-2">Immer aktiv (nicht deaktivierbar):</p>
           <div className="grid grid-cols-2 gap-1.5">
@@ -525,7 +525,7 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
         </div>
       </div>
 
-      {/* ── Bayes manuell trainieren ───────────────────────────────────── */}
+      {/* ── Train Bayes manually ───────────────────────────────────────── */}
       <div className="card p-4">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100 mb-3">
           Bayes manuell trainieren
@@ -596,7 +596,7 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         <SaveBtn onClick={save} pending={false} />
       </div>
 
-      {/* Status-Karte */}
+      {/* Status card */}
       <div className="grid grid-cols-2 gap-4">
         <div className="card p-4 space-y-3">
           <div className="flex items-center gap-2">
@@ -645,7 +645,7 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         </div>
       </div>
 
-      {/* ── Grundeinstellungen ────────────────────────────────────────── */}
+      {/* ── Basic settings ────────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           Grundeinstellungen
@@ -664,7 +664,7 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         />
       </div>
 
-      {/* ── Aktion bei Fund ───────────────────────────────────────────── */}
+      {/* ── Action on detection ───────────────────────────────────────── */}
       <div className="card p-4 space-y-3">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           Aktion bei Virenfund
@@ -693,7 +693,7 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
         )}
       </div>
 
-      {/* ── Scan-Optionen ─────────────────────────────────────────────── */}
+      {/* ── Scan options ──────────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
           Scan-Optionen
@@ -743,7 +743,7 @@ function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; on
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// DnsblSection — DB-basierte Zone-Verwaltung mit Aktionen, Score, Test, Stats
+// DnsblSection — DB-based zone management with actions, score, test, stats
 // ═════════════════════════════════════════════════════════════════════════════
 
 interface DnsblZone {
@@ -798,7 +798,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
   // ── Master-Toggle ──────────────────────────────────────────────────────────
   const masterSave = () => onSave({ dnsblEnabled: enabled });
 
-  // ── Zonen ──────────────────────────────────────────────────────────────────
+  // ── Zones ──────────────────────────────────────────────────────────────────
   const { data: zones = [], isLoading: zonesLoading } = useQuery({
     queryKey: ['admin', 'dnsbl-zones'],
     queryFn: () => api.get<DnsblZone[]>('/admin/security/dnsbl'),
@@ -889,7 +889,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
         ))}
       </div>
 
-      {/* TAB: Zonen */}
+      {/* TAB: Zones */}
       {tab === 'zones' && (
         <>
           <div className="flex items-center justify-between">
@@ -937,7 +937,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
             </div>
           )}
 
-          {/* Zonen-Karten */}
+          {/* Zone cards */}
           <div className="space-y-2">
             {zonesLoading && <p className="text-sm text-gray-400">Lade …</p>}
             {zones.map((z) => (
@@ -1043,7 +1043,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
         </div>
       )}
 
-      {/* TAB: Statistik */}
+      {/* TAB: Statistics */}
       {tab === 'stats' && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">

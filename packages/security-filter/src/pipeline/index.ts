@@ -14,7 +14,7 @@ const log = createLogger('security-filter:pipeline');
 export type PipelineAction = 'accept' | 'defer' | 'reject' | 'quarantine';
 
 export interface PipelineConfig {
-  /** @deprecated DNSBL-Zonen werden jetzt aus der DB geladen (DnsblZone-Tabelle) */
+  /** @deprecated DNSBL zones are now loaded from the DB (DnsblZone table) */
   dnsblZones?: string[];
   greylistingEnabled?: boolean;
   countryFilter?: CountryConfig | null;
@@ -62,7 +62,7 @@ export async function runConnectionChecks(
   // ── Stage 1b: DNSBL ──────────────────────────────────────────────────────
   const dnsbl = await checkDnsbl(senderIp);
   if (dnsbl.whitelisted) {
-    // DNSWL-Treffer → folgende Stage-1-Filter überspringen
+    // DNSWL hit → skip the following stage-1 filters
     log.info({ senderIp, hits: dnsbl.hits.map((h) => h.zone.host) }, 'DNSWL hit — bypassing remaining checks');
     return { action: 'accept', reason: 'DNSWL whitelisted' };
   }
@@ -72,7 +72,7 @@ export async function runConnectionChecks(
       reason: `Sender IP listed in DNSBL: ${dnsbl.hits.map((h) => h.zone.host).join(', ')}`,
     };
   }
-  // TAG- und SCORE_ONLY-Hits fließen weiter unten in den rspamd-Score
+  // TAG and SCORE_ONLY hits feed into the rspamd score further below
 
   // ── Stage 1c: Country filtering ──────────────────────────────────────────
   const geo = await checkCountry(senderIp, config.countryFilter ?? null);

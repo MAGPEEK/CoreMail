@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, MoreHorizontal, ChevronDown, ChevronRight, Eye,
-  // Icons für Kalender-Auswahl
+  // Icons for calendar selection
   Calendar as CalendarIcon, Home, Briefcase, Plane, Heart, Star, Trophy, Gift,
   Cake, Music, Camera, Car, Bike, Bus, Train,
   Coffee, Utensils, Wine, ShoppingBag, ShoppingCart,
@@ -40,7 +40,7 @@ export const ICON_MAP: Record<string, React.ElementType> = {
   CreditCard, DollarSign, Wallet,
 };
 
-// Reihenfolge im Icon-Grid (kuratiert, gleiche Aussage wie Outlook)
+// Order in the icon grid (curated, same meaning as Outlook)
 const ICON_PALETTE: string[] = [
   'Plane', 'Calendar', 'Briefcase', 'Trophy', 'Home',
   'Badge', 'ShoppingBag', 'Users', 'AlertCircle', 'Music', 'Car',
@@ -50,7 +50,7 @@ const ICON_PALETTE: string[] = [
   'Building', 'Wrench', 'Footprints', 'CheckSquare', 'ClipboardCheck', 'Flag',
 ];
 
-// 16 Outlook-inspirierte Kalenderfarben
+// 16 Outlook-inspired calendar colors
 const COLOR_PALETTE = [
   '#A2433D', '#E64A19', '#F37E2F', '#FBC02D', '#8B5E3C', '#7CB342', '#388E3C', '#0EA5A4',
   '#06B6D4', '#3B82F6', '#1E40AF', '#5E35B1', '#9333EA', '#D81B60', '#EC4899', '#64748B',
@@ -114,7 +114,7 @@ export function CalendarSidebar({
     onSuccess: () => invalidate(),
   });
 
-  // v3.18.16: Grantee-Operationen via shareId direkt
+  // v3.18.16: Grantee operations directly via shareId
   const removeSharedAccess = useMutation({
     mutationFn: async (cal: Calendar) => {
       if (!cal.shared || !cal.shareId) throw new Error('Keine Freigabe-ID');
@@ -124,7 +124,7 @@ export function CalendarSidebar({
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // Per-Grantee Farbe ändern (PATCH /mine-shares/:shareId)
+  // Change per-grantee color (PATCH /mine-shares/:shareId)
   const patchMineShare = useMutation({
     mutationFn: (vars: { shareId: string; body: Record<string, unknown> }) =>
       api.patch(`/calendar/mine-shares/${vars.shareId}`, vars.body),
@@ -132,13 +132,13 @@ export function CalendarSidebar({
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // Reorder geteilter Kalender
+  // Reorder shared calendars
   const reorderShared = useMutation({
     mutationFn: (ids: string[]) => api.post('/calendar/mine-shares/reorder', { ids }),
     onSuccess: () => invalidate(),
   });
 
-  // v3.18.18: CalDAV-Info für Copy-URL-Action
+  // v3.18.18: CalDAV info for copy-URL action
   interface CalDavInfoLite {
     accountUrl: string;
     calendars: Array<{ id: string; url: string }>;
@@ -160,7 +160,7 @@ export function CalendarSidebar({
     }
   };
 
-  // Eigene vs. geteilte Kalender aufsplitten
+  // Split own vs. shared calendars
   const ownedCalendars = useMemo(
     () => calendars.filter((c) => !c.shared).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
     [calendars],
@@ -190,12 +190,12 @@ export function CalendarSidebar({
     if (idx < 0 || swap < 0 || swap >= sharedCalendars.length) return;
     const next = [...sharedCalendars];
     [next[idx]!, next[swap]!] = [next[swap]!, next[idx]!];
-    // shareId statt calendarId für Backend-Reorder (Backend filtert auf granteeId)
+    // shareId instead of calendarId for backend reorder (backend filters on granteeId)
     const ids = next.map((c) => c.shareId).filter((id): id is string => !!id);
     reorderShared.mutate(ids);
   };
 
-  // Kontextmenü für eigene Kalender
+  // Context menu for own calendars
   const buildOwnedMenu = (cal: Calendar): ContextMenuItem[] => {
     const allIds = calendars.map((c) => c.id);
     const idx = ownedCalendars.findIndex((c) => c.id === cal.id);
@@ -289,8 +289,8 @@ export function CalendarSidebar({
     ];
   };
 
-  // Kontextmenü für geteilte Kalender (Grantee-Sicht)
-  // v3.18.16: erweitert um Farbe + Reorder via shareId
+  // Context menu for shared calendars (grantee view)
+  // v3.18.16: extended with color + reorder via shareId
   const buildSharedMenu = (cal: Calendar): ContextMenuItem[] => {
     const allIds = calendars.map((c) => c.id);
     const isHidden = hiddenCalendarIds.includes(cal.id);
@@ -357,7 +357,7 @@ export function CalendarSidebar({
         key={cal.id}
         className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
       >
-        {/* Checkbox / Farbkreis */}
+        {/* Checkbox / color circle */}
         <button
           onClick={() => toggleCalendar(cal.id)}
           className="shrink-0 w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all duration-150 active:scale-90"
@@ -384,7 +384,7 @@ export function CalendarSidebar({
           )}
         </div>
 
-        {/* 3-Punkte-Menü */}
+        {/* Three-dot menu */}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -405,7 +405,7 @@ export function CalendarSidebar({
 
   return (
     <aside className="w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-      {/* Mini-Kalender oben */}
+      {/* Mini calendar at the top */}
       <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 
       <div className="border-t border-gray-200 dark:border-gray-700 mx-2" />
@@ -421,7 +421,7 @@ export function CalendarSidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto px-1 pb-3">
-        {/* Eigene Kalender */}
+        {/* Own calendars */}
         <button
           onClick={() => setExpandedOwned(!expandedOwned)}
           className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
@@ -432,7 +432,7 @@ export function CalendarSidebar({
 
         {expandedOwned && ownedCalendars.map((cal) => renderCalendarRow(cal, false))}
 
-        {/* Geteilt mit mir */}
+        {/* Shared with me */}
         {sharedCalendars.length > 0 && (
           <>
             <button

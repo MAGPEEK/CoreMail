@@ -19,7 +19,7 @@ async function getOrCreate() {
 // GET /admin/smtp-config/settings
 adminSmtpConfigRouter.get('/settings', async (_req: Request, res: Response) => {
   const s = await getOrCreate();
-  // Passwort für die Antwort maskieren (Sicherheit)
+  // Mask the password for the response (security)
   res.json({ ...s, smarthostPassword: s.smarthostPassword ? '••••••••' : '' });
 });
 
@@ -34,8 +34,8 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     extSize:              z.boolean().optional(),
     ext8bitmime:          z.boolean().optional(),
     extEnhancedStatus:    z.boolean().optional(),
-    // Folgende Felder bleiben für Backwards-Compat akzeptiert, werden aber im
-    // SMTP-Server hardcoded ignoriert (nicht implementiert):
+    // The following fields remain accepted for backwards compat but are
+    // ignored (hardcoded) in the SMTP server (not implemented):
     // extAuthCramMd5, extSmtputf8, extDsn, extChunking
     // Local delivery
     localDeliveryEnabled: z.boolean().optional(),
@@ -68,7 +68,7 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     smarthostImplicitTls: z.boolean().optional(),
     smarthostUsername:        z.string().max(255).optional(),
     smarthostPassword:        z.string().max(255).optional(),
-    // Spam-/Virenfilter vor Weiterleitung
+    // Spam/virus filter before relaying
     outboundFilterEnabled:    z.boolean().optional(),
   });
 
@@ -80,7 +80,7 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
 
   const data = { ...parsed.data } as Record<string, unknown>;
 
-  // Maskiertes Passwort nicht in die DB schreiben
+  // Do not write the masked password to the DB
   if (data['smarthostPassword'] === '••••••••') {
     delete data['smarthostPassword'];
   }
@@ -92,15 +92,15 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...data } as any,
   });
 
-  // SMTP-Server-Cache (Banner, ESMTP-Flags, maxSize, Outbound-Smarthost) sofort
-  // invalidieren — wirkt ohne Wartezeit bis zur TTL.
+  // Invalidate the SMTP server cache (banner, ESMTP flags, maxSize, outbound
+  // smarthost) immediately — takes effect without waiting for the TTL.
   await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'smtp' })).catch(() => undefined);
 
   res.json({ ...settings, smarthostPassword: settings.smarthostPassword ? '••••••••' : '' });
 });
 
 // POST /admin/smtp-config/test-smarthost
-// Testet die Verbindung zu einem Smarthost ohne zu speichern
+// Tests the connection to a smarthost without saving
 adminSmtpConfigRouter.post('/test-smarthost', async (req: Request, res: Response) => {
   const schema = z.object({
     host:        z.string().min(1),

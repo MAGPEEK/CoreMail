@@ -27,7 +27,7 @@ export const powershellRouter: RouterType = Router();
 /** Cmdlets that the EMS REST bridge understands. */
 const SUPPORTED_CMDLETS = new Set([
   'Get-Mailbox', 'New-Mailbox', 'Set-Mailbox', 'Remove-Mailbox',
-  // v5.6.1: DistributionGroup-Cmdlets entfernt
+  // v5.6.1: DistributionGroup cmdlets removed
   'Get-AcceptedDomain', 'New-AcceptedDomain', 'Remove-AcceptedDomain',
   'Get-TransportRule', 'New-TransportRule', 'Set-TransportRule', 'Remove-TransportRule', 'Enable-TransportRule', 'Disable-TransportRule',
   'Get-MailboxStatistics',
