@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.6.1-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-5.7.1-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -17,11 +17,11 @@
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
-**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **SMTP-Submission** + **POP3** + **EWS** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
+**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **EWS** + **CalDAV/CardDAV** + **ActiveSync** — alle Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) funktionieren nativ. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v5.6.1** — Verteilergruppen entfernt · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · MAPI-Cleanup (v5.4.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v5.7.1** — **JMAP-Server** (RFC 8620/8621/8887/9404/9425/9670/9749, [Doku](docs/jmap.md)) · MAPI over HTTP optional (Default aus, v5.7.0) · Verteilergruppen entfernt (v5.6.1) · OAuth2-Server entfernt (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
-> **Wichtiger Hinweis (seit v5.4.0)**: MAPI/HTTP wurde aus dem Stack entfernt — Outlook 2024 LTSC erzwingt Microsoft-Entra-only-Modern-Auth, was für non-Microsoft-Server fundamental nicht funktioniert. Verwende **Outlook → „Andere E-Mail-Konten" → IMAP**. Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning).
+> **Hinweis zu Outlook (v5.7.0)**: MAPI over HTTP ist wieder enthalten, aber **standardmäßig aus** (BCP → Server → „MAPI over HTTP“). Aktiviert verbinden sich Outlook 2013–2021 als natives Exchange-Konto (Basic-Auth). Outlook 2024 LTSC und Microsoft 365 Classic erzwingen Modern Auth gegen Microsoft Entra/ADFS — dort bleibt **Outlook → „Andere E-Mail-Konten" → IMAP** der Weg, Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning). Das neue Outlook und Outlook für Mac unterstützen kein MAPI.
 >
 > **Hinweis (seit v5.6.0)**: Der OAuth2-Authorization-Server unter `/oauth2/*` wurde komplett entfernt — XOAUTH2 hat in der Praxis keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server. JWT läuft jetzt wieder mit HS256 (`JWT_SECRET`). REST-API + MWA/BCP nutzen Session-JWTs über `/auth/login`, Mail-Clients App-Passwörter.
 >
@@ -197,6 +197,21 @@ CoreMail funktioniert mit allen Standard-Mail-Clients. Die empfohlene Konfigurat
 | Username | `max@firma.de` (vollständige E-Mail-Adresse) |
 | Passwort | Account-Passwort ODER **App-Passwort** (Pflicht bei aktivem MFA) |
 
+### JMAP (seit v5.7.1)
+
+Für JMAP-fähige Clients (z. B. Thunderbird mit JMAP-Support, Ltt.rs, eigene Web-Apps):
+
+| Einstellung | Wert |
+|-------------|------|
+| Discovery | `https://mail.example.de/.well-known/jmap` |
+| Session-URL | `https://mail.example.de/jmap/session` |
+| Benutzername | vollständige E-Mail-Adresse |
+| Passwort | Konto-Passwort oder **App-Passwort** (Pflicht bei aktivem MFA) |
+| DNS (optional) | `_jmap._tcp.example.de. SRV 0 1 443 mail.example.de.` |
+
+Push: EventSource (`/jmap/eventsource`) oder WebSocket (`wss://…/jmap/ws`, Subprotokoll `jmap`).
+Schalter: BCP → Server → „JMAP" (Standard: an). Details: [docs/jmap.md](docs/jmap.md).
+
 ### App-Passwörter (für MFA-Accounts)
 
 Bei aktiviertem 2FA können Mail-Clients das normale Passwort nicht mehr verwenden — der MFA-Code lässt sich nicht via IMAP/SMTP übertragen. Lösung: **App-Passwort** pro Client erstellen.
@@ -209,7 +224,7 @@ Bei aktiviertem 2FA können Mail-Clients das normale Passwort nicht mehr verwend
 
 ### Hinweis zu Outlook 2024 LTSC
 
-Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist die einzige praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"). MAPI/HTTP wurde aus diesem Grund in v5.4.0 aus CoreMail entfernt.
+Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist dort die praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"). MAPI/HTTP ist seit v5.7.0 optional wieder enthalten (BCP → Server), hilft aber nur Outlook 2013–2021, die noch Basic-Auth gegen Exchange-Endpoints sprechen.
 
 ---
 
@@ -594,6 +609,8 @@ docker pull magpeek/coremail-app:3.17.8
 
 | Version | Highlights |
 |---------|-----------|
+| **v5.7.1** | **JMAP-Server** — neues Paket `jmap-server` (Port 3006): RFC 8620 Core, 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals/Sharing, 9749 VAPID. Discovery `/.well-known/jmap`, Push via EventSource + WebSocket, Schalter im BCP (Default an). Siehe [docs/jmap.md](docs/jmap.md). |
+| **v5.7.0** | **MAPI over HTTP optional zurück** (Default aus, Schalter im BCP, Hot-Reload, 404 wenn aus). pnpm auf 11 gepinnt, 70 veraltete `src/*.js`-Artefakte entfernt, `noEmit` in Frontend-tsconfigs. |
 | **v5.6.1** | **Verteilergruppen (DistributionGroups) komplett entfernt** — selten genutzt, Use-Case besser mit Shared Mailboxes (Team-Postfächer) oder externem Listserv-Tool gelöst. Schema-Drop von 2 Tabellen + Enum, BCP-Page entfernt, EMS-Cmdlets entfernt. |
 | **v5.6.0** | **OAuth2 / Modern Auth komplett aus dem Stack entfernt** (~970 LOC + 4 Prisma-Tabellen). XOAUTH2 hat keine Mainstream-Client-UI für non-Microsoft-Server. JWT zurück auf HS256 (`JWT_SECRET`). Mail-Clients nutzen App-Passwörter, MWA/BCP Session-JWTs. |
 | **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Doku-Update für MAPI-Removal. Entscheidung gegen XOAUTH2 dokumentiert. |

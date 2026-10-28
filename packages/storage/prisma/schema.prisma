@@ -322,6 +322,9 @@ model Message {
   retentionExpiresAt DateTime?
   // Wann das Item via MFA in „Recoverable Items\Deletions" verschoben wurde (Soft Delete)
   softDeletedAt    DateTime?
+  // v5.7.1: JMAP Thread-Zuordnung (RFC 8621 §3). Lazy vom jmap-server gesetzt:
+  // Antwort (inReplyTo) auf bekannte Nachricht → deren threadId, sonst eigene id.
+  threadId         String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -335,6 +338,7 @@ model Message {
   @@index([retentionTagId])
   @@index([retentionExpiresAt])
   @@index([softDeletedAt])
+  @@index([threadId])
   @@map("messages")
 }
 
@@ -1147,6 +1151,27 @@ model AttackEvent {
 // Phase 10 — VAPID Push Subscriptions
 // ─────────────────────────────────────────────
 
+// v5.7.1: JMAP PushSubscription (RFC 8620 §7.2) — getrennt von der
+// MWA-VAPID-Tabelle, weil JMAP deviceClientId/verificationCode/expires/types
+// braucht. Nicht account-gebunden, gehört dem authentifizierten User.
+model JmapPushSubscription {
+  id               String    @id @default(cuid())
+  userId           String
+  deviceClientId   String
+  url              String
+  keysP256dh       String?
+  keysAuth         String?
+  verificationCode String?
+  verified         Boolean   @default(false)
+  expires          DateTime?
+  types            String[]  // leer = alle Typen
+  createdAt        DateTime  @default(now())
+
+  @@unique([userId, deviceClientId])
+  @@index([userId])
+  @@map("jmap_push_subscriptions")
+}
+
 model PushSubscription {
   id        String   @id @default(cuid())
   userId    String
@@ -1412,6 +1437,16 @@ model ServerSettings {
   // Erlaubt Benutzern, ihr Passwort selbst per E-Mail-Link zurückzusetzen
   selfServicePasswordReset   Boolean @default(true)
 
+  // ── Protokolle ────────────────────────────────────────────────────────────
+  // v5.7.0: MAPI over HTTP (Outlook „Exchange-Konto") optional zuschaltbar.
+  // Default AUS: /mapi/* liefert 404 und Autodiscover annonciert kein
+  // <Protocol Type="mapiHttp"> → Outlook richtet sich als IMAP-Konto ein.
+  // Hot-Reload via Redis CHANNEL_SETTINGS_RELOAD (kein Container-Neustart).
+  mapiHttpEnabled    Boolean @default(false)
+  // v5.7.1: JMAP (RFC 8620/8621 + Erweiterungen) auf /jmap/* und
+  // /.well-known/jmap. Default AN; aus → 404. Hot-Reload wie MAPI.
+  jmapEnabled        Boolean @default(true)
+
   // ── Wartung ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)
   maintenanceMessage String  @default("Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.")
@@ -1573,5 +1608,4 @@ model Certificate {
 }
 
 // (ExternalMailContact — komplett entfernt in v3.18.33. Externe Empfänger
-// werden bei Bedarf direkt als E-Mail-Adresse in DistributionGroup-Membern
-// (Type=EXTERNAL) oder als Empfänger im Compose-Fenster eingetragen.)
+// werden direkt als Adresse im Compose-Fenster eingetragen.)

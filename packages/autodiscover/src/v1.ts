@@ -49,13 +49,13 @@ function normalizeBasicAuthUser(rawUser: string): string {
   return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
 }
 
-// v5.4.0: MAPI/HTTP komplett aus dem Stack entfernt (User-Entscheidung).
-// Outlook 2024 LTSC erzwingt Modern Auth auf Exchange-Endpoints und
-// akzeptiert keine non-Microsoft-OAuth-Provider — Custom-Implementation
-// hätte ADFS-Protokoll-Emulation gebraucht (3-4 Wochen Aufwand + nicht
-// garantiert). Autodiscover annonciert jetzt nur IMAP+SMTP+ActiveSync.
-// Mail-Clients konfigurieren CoreMail als IMAP-Konto, Kalender + Kontakte
-// via CalDAV/CardDAV.
+// v5.7.0: MAPI/HTTP ist optional (BCP → Server → „MAPI over HTTP",
+// ServerSettings.mapiHttpEnabled, Default AUS). Nur wenn aktiv wird
+// <Protocol Type="mapiHttp"> annonciert und Outlook richtet ein
+// „Exchange"-Konto ein. Sonst nur IMAP+SMTP+ActiveSync → IMAP-Konto.
+// Einschränkung: Outlook 2024 LTSC / M365 Classic erzwingen bei Exchange-
+// Konten Modern Auth gegen Entra/ADFS — dort bleibt IMAP der sichere Weg
+// (siehe v5.3.x/v5.4.0 im CHANGELOG). Outlook 2013–2021 verbinden per Basic.
 
 function buildAutodiscoverResponse(
   email: string,
@@ -69,11 +69,12 @@ function buildAutodiscoverResponse(
   //   - <User><LegacyDN> ist Pflicht (Outlook verwendet es als interne User-Identity)
   //   - <GroupingInformation> im EXPR-Block ab Exchange 2013 SP1
   //   - <PublicFolderInformation> Dummy auch wenn keine Public Folders existieren
-  //   - MAPI/HTTP-Block (Type=mapiHttp) NICHT ausliefern bis wirklich implementiert
+  //   - MAPI/HTTP-Block (Type=mapiHttp) nur wenn cfg.mapiHttpEnabled (v5.7.0)
   const ewsHost = (() => {
     try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
   })();
-  const oabUrl = `${cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, '')}/OAB/`;
+  const mapiBase = cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, '');
+  const oabUrl = `${mapiBase}/OAB/`;
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
   <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
@@ -86,14 +87,25 @@ function buildAutodiscoverResponse(
       <AccountType>email</AccountType>
       <Action>settings</Action>
       <MicrosoftOnline>False</MicrosoftOnline>
+      ${cfg.mapiHttpEnabled ? `
+      <Protocol Type="mapiHttp" Version="1">
+        <MailStore>
+          <InternalUrl>${escapeXml(mapiBase)}/mapi/emsmdb/</InternalUrl>
+          <ExternalUrl>${escapeXml(mapiBase)}/mapi/emsmdb/</ExternalUrl>
+        </MailStore>
+        <AddressBook>
+          <InternalUrl>${escapeXml(mapiBase)}/mapi/nspi/</InternalUrl>
+          <ExternalUrl>${escapeXml(mapiBase)}/mapi/nspi/</ExternalUrl>
+        </AddressBook>
+      </Protocol>` : ''}
       <!--
         v3.18.39: EXCH + EXPR Blöcke ENTFERNT.
 
         Hintergrund: Outlook 2016+/LTSC benötigt für „Exchange-Profile"
         entweder MAPI-over-HTTP (Type=mapiHttp) oder RPC-over-HTTPS (EXPR)
         oder intra-Exchange RPC/TCP (EXCH). Alle drei Pfade nutzen das
-        binäre MAPI/ROP-Protokoll, das wir aktuell NICHT vollständig
-        implementiert haben (nur Stubs auf /mapi/emsmdb/ + /mapi/nspi/).
+        binäre MAPI/ROP-Protokoll. MAPI/HTTP liefern wir nur über den
+        optionalen mapiHttp-Block oben aus (v5.7.0), EXCH/EXPR nie.
 
         Wenn wir die Blöcke trotzdem ausliefern, versucht Outlook eine
         RPC-Verbindung an den Server-Hostname (Port 135/RPC-Endpoint-Mapper
@@ -102,7 +114,7 @@ function buildAutodiscoverResponse(
         hergestellt" und Protokoll RPC/TCP. Plus Fehler „Diese Ordnergruppe
         kann nicht geöffnet werden — Fehler bei der Anmeldung bei Exchange".
 
-        Lösung bis MAPI/HTTP voll implementiert ist: nur IMAP/SMTP/ActiveSync
+        Ohne aktiviertes MAPI/HTTP: nur IMAP/SMTP/ActiveSync
         in der Autodiscover-Response. Outlook konfiguriert sich dann als
         „IMAP-Konto" — Mail funktioniert sofort. Kalender + Kontakte gehen
         per CalDAV/CardDAV (z.B. Apple Kalender, Thunderbird Lightning,

@@ -13,6 +13,7 @@
     { "path": "./packages/ews-server" },
     { "path": "./packages/autodiscover" },
     { "path": "./packages/caldav-server" },
+    { "path": "./packages/jmap-server" },
     { "path": "./packages/api-gateway" },
     { "path": "./packages/backup-service" }
   ]
