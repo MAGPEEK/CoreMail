@@ -7,14 +7,14 @@ import { deriveServerUrls } from '../lib/server-urls.js';
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
 
-// ── Hilfsfunktion: Ist Setup erforderlich? ────────────────────────────────────
+// ── Helper: is setup required? ────────────────────────────────────────────────
 async function isSetupRequired(): Promise<boolean> {
   const count = await prisma.user.count();
   return count === 0;
 }
 
 // GET /api/v1/setup/status
-// Öffentlich — prüft ob noch kein User existiert
+// Public — checks whether no user exists yet
 setupRouter.get('/status', async (_req: Request, res: Response) => {
   try {
     const setupRequired = await isSetupRequired();
@@ -26,7 +26,7 @@ setupRouter.get('/status', async (_req: Request, res: Response) => {
 });
 
 // POST /api/v1/setup/complete
-// Öffentlich — nur wenn noch kein User existiert
+// Public — only when no user exists yet
 const SetupSchema = z.object({
   domain:    z.string().min(3).regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Ungültige Domain (z.B. firma.de)'),
   email:     z.string().email(),
@@ -35,7 +35,7 @@ const SetupSchema = z.object({
 
 setupRouter.post('/complete', async (req: Request, res: Response) => {
   try {
-    // Nur erlaubt wenn noch kein User existiert
+    // Only allowed when no user exists yet
     if (!(await isSetupRequired())) {
       res.status(409).json({ error: 'Setup already completed' });
       return;
@@ -49,33 +49,33 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
 
     const { domain, email, password } = parsed.data;
 
-    // E-Mail muss zur Domain passen
+    // Email must match the domain
     const emailDomain = email.split('@')[1];
     if (emailDomain !== domain) {
       res.status(400).json({ error: `E-Mail muss zur Domain @${domain} gehören` });
       return;
     }
 
-    // hashPassword nutzt sha256(password + PEPPER) → bcrypt
+    // hashPassword uses sha256(password + PEPPER) → bcrypt
     const passwordHash = await hashPassword(password);
 
-    // Domain + Admin-User in einer Transaktion anlegen
+    // Create domain + admin user in one transaction
     await prisma.$transaction(async (tx) => {
-      // Domain anlegen
+      // Create domain
       const newDomain = await tx.domain.create({
         data: {
           name: domain,
           dkimPrivateKey: '',
           dkimSelector:   'default',
           active:          true,
-          primary:         true, // v3.18.36: Setup-Domain ist immer primary
+          primary:         true, // v3.18.36: the setup domain is always primary
         },
       });
 
-      // v3.18.36: publicHostname + alle abgeleiteten Server-URLs sofort
-      // aus der Setup-Domain ableiten — sonst bleibt das System auf den
-      // unbrauchbaren Schema-Defaults `mail.local:8080` hängen und
-      // Outlook-Autodiscover liefert Outlook-Clients Falsche URLs.
+      // v3.18.36: derive publicHostname + all derived server URLs from the
+      // setup domain immediately — otherwise the system stays stuck on the
+      // unusable schema defaults `mail.local:8080` and Outlook Autodiscover
+      // hands Outlook clients wrong URLs.
       const newHostname = `mail.${domain}`;
       const derivedUrls = deriveServerUrls(newHostname, true, 443);
       await tx.serverSettings.upsert({
@@ -95,7 +95,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
         },
       });
 
-      // Admin-User anlegen
+      // Create admin user
       const user = await tx.user.create({
         data: {
           email,
@@ -106,7 +106,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
         },
       });
 
-      // Mailbox + Standard-Ordner provisionieren
+      // Provision mailbox + default folders
       const mailbox = await tx.mailbox.create({
         data: { userId: user.id },
       });

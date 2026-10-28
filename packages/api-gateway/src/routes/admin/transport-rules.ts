@@ -1,13 +1,13 @@
 /**
- * Admin-API: Transportregeln
+ * Admin API: transport rules
  *
- * GET    /api/v1/admin/transport-rules            — Liste
- * POST   /api/v1/admin/transport-rules            — Neue Regel
+ * GET    /api/v1/admin/transport-rules            — list
+ * POST   /api/v1/admin/transport-rules            — new rule
  * GET    /api/v1/admin/transport-rules/:id        — Detail
- * PUT    /api/v1/admin/transport-rules/:id        — Bearbeiten
- * PATCH  /api/v1/admin/transport-rules/:id/toggle — Aktivieren/Deaktivieren
- * DELETE /api/v1/admin/transport-rules/:id        — Löschen
- * POST   /api/v1/admin/transport-rules/reorder    — Prioritäten neu setzen
+ * PUT    /api/v1/admin/transport-rules/:id        — edit
+ * PATCH  /api/v1/admin/transport-rules/:id/toggle — enable/disable
+ * DELETE /api/v1/admin/transport-rules/:id        — delete
+ * POST   /api/v1/admin/transport-rules/reorder    — reassign priorities
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';

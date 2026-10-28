@@ -2,12 +2,12 @@
  * Security Middleware — OWASP-aligned HTTP hardening for the API Gateway.
  *
  * Applied layers (in order of registration in server.ts):
- *   1. requestId          — Correlation-ID für jeden Request (Logging, Tracing)
- *   2. helmetMiddleware   — Vollständiger HTTP-Security-Header-Stack
- *   3. suspiciousInput    — Null-Byte, CRLF-Injection, Path-Traversal, Header-Overflow
- *   4. generalRateLimit   — Globales IP-basiertes Throttling (500 req / 15 min)
- *   5. authRateLimit      — Strenges Throttling auf /auth (20 req / 15 min, Brute-Force)
- *   6. setupRateLimit     — Einmaliger Setup-Endpunkt (5 req / h)
+ *   1. requestId          — correlation ID for every request (logging, tracing)
+ *   2. helmetMiddleware   — complete HTTP security header stack
+ *   3. suspiciousInput    — null bytes, CRLF injection, path traversal, header overflow
+ *   4. generalRateLimit   — global IP-based throttling (500 req / 15 min)
+ *   5. authRateLimit      — strict throttling on /auth (20 req / 15 min, brute force)
+ *   6. setupRateLimit     — one-time setup endpoint (5 req / h)
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -18,21 +18,21 @@ import { randomUUID } from 'node:crypto';
 
 const log = createLogger('api:security');
 
-// ── Hilfsfunktionen ──────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Gibt true zurück, wenn der Request vom Loopback kommt (interne Services). */
+/** Returns true when the request comes from loopback (internal services). */
 const isLoopback = (req: Request): boolean =>
   req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
 
 // ── 1. Request-ID ────────────────────────────────────────────────────────────
 /**
- * Fügt jedem Request eine eindeutige ID hinzu.
- * Bereits vorhandene X-Request-Id werden validiert — ungültige werden ersetzt.
- * Die ID erscheint im Response-Header und kann für Logging/Tracing genutzt werden.
+ * Adds a unique ID to every request.
+ * Existing X-Request-Id values are validated — invalid ones are replaced.
+ * The ID appears in the response header and can be used for logging/tracing.
  */
 export function requestId(req: Request, res: Response, next: NextFunction): void {
   const incoming = req.headers['x-request-id'];
-  // Nur bekannte, sichere Zeichen akzeptieren (UUID-Format oder alphanumerisch)
+  // Accept only known, safe characters (UUID format or alphanumeric)
   const id =
     typeof incoming === 'string' && /^[\w\-]{8,64}$/.test(incoming)
       ? incoming
@@ -44,15 +44,15 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
 
 // ── 2. Helmet (HTTP Security Headers) ────────────────────────────────────────
 /**
- * Setzt alle relevanten HTTP-Security-Header:
+ * Sets all relevant HTTP security headers:
  *
- * Content-Security-Policy  — Verhindert XSS und Clickjacking
- * Strict-Transport-Security — HSTS: erzwingt HTTPS für 1 Jahr
- * X-Content-Type-Options   — Verhindert MIME-Type-Sniffing
- * X-Frame-Options          — Verhindert Einbettung in iframes (Clickjacking)
- * Referrer-Policy          — Begrenzt Referrer-Informationsweitergabe
- * Permissions-Policy       — Deaktiviert nicht benötigte Browser-APIs
- * X-DNS-Prefetch-Control   — Kein DNS-Prefetch (Privacy)
+ * Content-Security-Policy  — prevents XSS and clickjacking
+ * Strict-Transport-Security — HSTS: enforces HTTPS for 1 year
+ * X-Content-Type-Options   — prevents MIME-type sniffing
+ * X-Frame-Options          — prevents embedding in iframes (clickjacking)
+ * Referrer-Policy          — limits referrer information disclosure
+ * Permissions-Policy       — disables browser APIs that are not needed
+ * X-DNS-Prefetch-Control   — no DNS prefetch (privacy)
  */
 export const helmetMiddleware = helmet({
   contentSecurityPolicy: {
@@ -60,69 +60,69 @@ export const helmetMiddleware = helmet({
     directives: {
       defaultSrc:   ["'self'"],
       scriptSrc:    ["'self'"],
-      // TailwindCSS und shadcn/ui benötigen inline styles
+      // TailwindCSS and shadcn/ui require inline styles
       styleSrc:     ["'self'", "'unsafe-inline'"],
       imgSrc:       ["'self'", 'data:', 'blob:'],
       fontSrc:      ["'self'", 'data:'],
-      // EventSource (SSE) und fetch() gegen dieselbe Origin
+      // EventSource (SSE) and fetch() against the same origin
       connectSrc:   ["'self'"],
-      // Web Workers für potenzielle zukünftige Nutzung
+      // Web Workers for potential future use
       workerSrc:    ["'self'", 'blob:'],
       mediaSrc:     ["'none'"],
       objectSrc:    ["'none'"],
       frameSrc:     ["'none'"],
       baseUri:      ["'self'"],
       formAction:   ["'self'"],
-      // Verhindert Einbettung dieser Seite als iframe (doppelt mit X-Frame-Options)
+      // Prevents embedding this page as an iframe (redundant with X-Frame-Options)
       frameAncestors: ["'none'"],
     },
   },
 
-  // HSTS — Browser merken sich HTTPS-Anforderung für 1 Jahr
+  // HSTS — browsers remember the HTTPS requirement for 1 year
   hsts: {
-    maxAge: 31_536_000,      // 1 Jahr in Sekunden
+    maxAge: 31_536_000,      // 1 year in seconds
     includeSubDomains: true,
     preload: true,
   },
 
-  // Deaktiviert X-Powered-By (kein Fingerprinting des Frameworks)
+  // Disables X-Powered-By (no framework fingerprinting)
   hidePoweredBy: true,
 
-  // Verhindert MIME-Type-Sniffing
+  // Prevents MIME-type sniffing
   noSniff: true,
 
-  // Legacy XSS-Filter (moderner Browser ignorieren ihn, schadet aber nicht)
+  // Legacy XSS filter (modern browsers ignore it, but it does no harm)
   xssFilter: true,
 
-  // Keine iFrame-Einbettung erlaubt
+  // No iframe embedding allowed
   frameguard: { action: 'deny' },
 
-  // Kein DNS-Prefetch (Privacy)
+  // No DNS prefetch (privacy)
   dnsPrefetchControl: { allow: false },
 
-  // Referrer-Header nur bei gleicher Origin vollständig senden
+  // Send the full Referrer header only for the same origin
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 
-  // Ressourcen dürfen nur von gleicher Origin geladen werden
+  // Resources may only be loaded from the same origin
   crossOriginResourcePolicy: { policy: 'same-origin' },
 
-  // COEP deaktiviert — würde SharedArrayBuffer erfordern, bricht Mail-Clients
+  // COEP disabled — would require SharedArrayBuffer, breaks mail clients
   crossOriginEmbedderPolicy: false,
 
-  // Keine Flash/PDF Cross-Domain-Policies
+  // No Flash/PDF cross-domain policies
   permittedCrossDomainPolicies: { permittedPolicies: 'none' },
 });
 
-// ── 3. Verdächtige-Eingaben-Filter ───────────────────────────────────────────
+// ── 3. Suspicious-input filter ───────────────────────────────────────────────
 /**
- * Erkennt und blockt Angriffsmuster auf HTTP-Ebene:
+ * Detects and blocks attack patterns at the HTTP level:
  *
- * - CRLF-Injection in Headers (Header-Splitting / Response-Splitting)
- * - Null-Bytes in Headers (können Parser umgehen)
- * - Oversized Header (> 16 KB) — verhindert Header-Flooding
- * - Path-Traversal (../ oder ..\) in der Request-URL
+ * - CRLF injection in headers (header splitting / response splitting)
+ * - Null bytes in headers (can bypass parsers)
+ * - Oversized headers (> 16 KB) — prevents header flooding
+ * - Path traversal (../ or ..\) in the request URL
  *
- * Muss VOR dem Body-Parser registriert werden.
+ * Must be registered BEFORE the body parser.
  */
 export function suspiciousInputGuard(req: Request, res: Response, next: NextFunction): void {
   let headerSize = 0;
@@ -131,7 +131,7 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
     const val = Array.isArray(rawVal) ? rawVal.join(',') : (rawVal ?? '');
     headerSize += key.length + val.length;
 
-    // Null-Bytes und CRLF-Injection-Versuche abfangen
+    // Catch null bytes and CRLF injection attempts
     if (/[\x00\r\n]/.test(key) || /[\x00\r\n]/.test(val)) {
       log.warn({ ip: req.ip, path: req.path, header: key }, 'Header injection attempt blocked');
       res.status(400).json({ error: 'Bad request' });
@@ -139,14 +139,14 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
     }
   }
 
-  // 16 KB Hard-Limit für alle Header zusammen
+  // 16 KB hard limit for all headers combined
   if (headerSize > 16_384) {
     log.warn({ ip: req.ip, size: headerSize }, 'Oversized request headers rejected');
     res.status(431).json({ error: 'Request header fields too large' });
     return;
   }
 
-  // Path-Traversal in der URL
+  // Path traversal in the URL
   if (/(?:\.\.\/|\.\.\\)/.test(req.path)) {
     log.warn({ ip: req.ip, path: req.path }, 'Path traversal attempt blocked');
     res.status(400).json({ error: 'Bad request' });
@@ -159,8 +159,8 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
 // ── 4. Rate Limiter ───────────────────────────────────────────────────────────
 
 /**
- * Globales Throttling — 500 Requests pro 15 Minuten pro IP.
- * Loopback-Adressen (interne Services) sind ausgenommen.
+ * Global throttling — 500 requests per 15 minutes per IP.
+ * Loopback addresses (internal services) are exempt.
  */
 export const generalRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,
@@ -176,8 +176,8 @@ export const generalRateLimit = rateLimit({
 });
 
 /**
- * Auth-Endpunkte — max. 20 Versuche pro 15 Minuten pro IP.
- * Schützt gegen Brute-Force-Angriffe auf Login und Token-Refresh.
+ * Auth endpoints — max. 20 attempts per 15 minutes per IP.
+ * Protects against brute-force attacks on login and token refresh.
  */
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,
@@ -192,9 +192,9 @@ export const authRateLimit = rateLimit({
 });
 
 /**
- * Setup-Endpunkt — max. 5 Versuche pro Stunde.
- * Der Setup-Endpoint existiert nur einmal und sollte nach der Initialkonfiguration
- * ohnehin keine Requests mehr erhalten.
+ * Setup endpoint — max. 5 attempts per hour.
+ * The setup endpoint exists only once and should not receive any requests
+ * after the initial configuration anyway.
  */
 export const setupRateLimit = rateLimit({
   windowMs: 60 * 60 * 1_000,
@@ -205,8 +205,8 @@ export const setupRateLimit = rateLimit({
 });
 
 /**
- * Admin-Mutations (POST/PUT/PATCH/DELETE auf /api/v1/admin) —
- * 200 mutierende Requests pro 15 Minuten pro IP.
+ * Admin mutations (POST/PUT/PATCH/DELETE on /api/v1/admin) —
+ * 200 mutating requests per 15 minutes per IP.
  */
 export const adminMutationRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,

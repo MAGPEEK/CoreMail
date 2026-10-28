@@ -1,20 +1,20 @@
 /**
- * v3.18.23 D3: Backup-Admin-Router
+ * v3.18.23 D3: backup admin router
  *
- * Dünner Wrapper über die backup-service-REST-API. Stellt
- * /api/v1/admin/backups/* bereit, leitet an http://backup-service:3004/backup/admin/*
- * weiter. Authorization-Header wird durchgereicht (backup-service hat eigenen
- * requireAdmin-Check).
+ * Thin wrapper over the backup-service REST API. Exposes
+ * /api/v1/admin/backups/* and forwards to http://backup-service:3004/backup/admin/*.
+ * The Authorization header is passed through (backup-service has its own
+ * requireAdmin check).
  *
- * Die Endpoints im backup-service:
- *   POST /backup/admin/full            — vollständigen Backup-Job triggern
- *   GET  /backup/admin/list?limit=     — S3-Backup-Objekte listen
- *   GET  /backup/admin/jobs?limit=     — BackupJob-Records aus DB listen
- *   POST /backup/admin/import/:userId  — MBOX für User importieren (multipart text)
+ * The endpoints in the backup-service:
+ *   POST /backup/admin/full            — trigger a full backup job
+ *   GET  /backup/admin/list?limit=     — list S3 backup objects
+ *   GET  /backup/admin/jobs?limit=     — list BackupJob records from the DB
+ *   POST /backup/admin/import/:userId  — import MBOX for a user (multipart text)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { requireAdmin } from '../../middleware/auth.js';
-// Side-effect import: lädt die Express-Request-Augmentation für `apiUser`
+// Side-effect import: loads the Express request augmentation for `apiUser`
 import '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 
@@ -35,7 +35,7 @@ async function forward(
     const url = `${BACKUP_URL}${upstreamPath}`;
     const headers: Record<string, string> = {
       'Content-Type': contentType ?? 'application/json',
-      // Authorization durchreichen — backup-service prüft selbst
+      // Pass Authorization through — backup-service checks it itself
       ...(req.get('Authorization') ? { Authorization: req.get('Authorization')! } : {}),
     };
     const init: RequestInit = { method, headers };
@@ -55,19 +55,19 @@ async function forward(
   }
 }
 
-// GET /api/v1/admin/backups/jobs — Liste aller Backup-Jobs aus DB
+// GET /api/v1/admin/backups/jobs — list of all backup jobs from the DB
 adminBackupsRouter.get('/jobs', async (req, res) => {
   const limit = String(req.query['limit'] ?? '100');
   await forward(req, res, 'GET', `/backup/admin/jobs?limit=${encodeURIComponent(limit)}`);
 });
 
-// GET /api/v1/admin/backups/list — S3-Backup-Objekte
+// GET /api/v1/admin/backups/list — S3 backup objects
 adminBackupsRouter.get('/list', async (req, res) => {
   const limit = String(req.query['limit'] ?? '100');
   await forward(req, res, 'GET', `/backup/admin/list?limit=${encodeURIComponent(limit)}`);
 });
 
-// POST /api/v1/admin/backups/full — vollständigen Backup-Job triggern
+// POST /api/v1/admin/backups/full — trigger a full backup job
 adminBackupsRouter.post('/full', async (req: Request, res: Response) => {
   audit({
     actorId: req.apiUser!.userId,
@@ -79,7 +79,7 @@ adminBackupsRouter.post('/full', async (req: Request, res: Response) => {
   await forward(req, res, 'POST', '/backup/admin/full');
 });
 
-// v3.18.26 — Per-Mailbox-Backup
+// v3.18.26 — per-mailbox backup
 adminBackupsRouter.post('/mailbox/:userId', async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string };
   audit({
@@ -94,12 +94,12 @@ adminBackupsRouter.post('/mailbox/:userId', async (req: Request, res: Response) 
   await forward(req, res, 'POST', `/backup/admin/mailbox/${encodeURIComponent(userId)}`, body);
 });
 
-// v3.18.26 — User-Liste für Mailbox-Picker
+// v3.18.26 — user list for the mailbox picker
 adminBackupsRouter.get('/users', async (req: Request, res: Response) => {
   await forward(req, res, 'GET', '/backup/admin/users');
 });
 
-// v3.18.26 — Backup-Schedules CRUD
+// v3.18.26 — backup schedules CRUD
 adminBackupsRouter.get('/schedules', async (req: Request, res: Response) => {
   await forward(req, res, 'GET', '/backup/admin/schedules');
 });
@@ -143,7 +143,7 @@ adminBackupsRouter.delete('/schedules/:id', async (req: Request, res: Response) 
   await forward(req, res, 'DELETE', `/backup/admin/schedules/${encodeURIComponent(id)}`);
 });
 
-// v3.18.28: Download (Stream-Proxy zum backup-service)
+// v3.18.28: download (stream proxy to the backup-service)
 adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) => {
   const { jobId } = req.params as { jobId: string };
   try {
@@ -163,7 +163,7 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
     if (cd) res.setHeader('Content-Disposition', cd);
     if (cl) res.setHeader('Content-Length', cl);
     if (!upstream.body) { res.status(502).end(); return; }
-    // Web-Stream → Node-Stream
+    // Web stream → Node stream
     const reader = upstream.body.getReader();
     const pump = async (): Promise<void> => {
       const { done, value } = await reader.read();
@@ -177,7 +177,7 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
   }
 });
 
-// v3.18.29: Backup-Archiv Download (per S3-Key) — Stream-Proxy
+// v3.18.29: backup archive download (by S3 key) — stream proxy
 adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
@@ -211,7 +211,7 @@ adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) 
   }
 });
 
-// v3.18.29: Backup-Archiv Object löschen
+// v3.18.29: delete backup archive object
 adminBackupsRouter.delete('/archive', async (req: Request, res: Response) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
@@ -226,7 +226,7 @@ adminBackupsRouter.delete('/archive', async (req: Request, res: Response) => {
   await forward(req, res, 'DELETE', `/backup/admin/archive?key=${encodeURIComponent(key)}`);
 });
 
-// v3.18.28: Backup-Job löschen
+// v3.18.28: delete backup job
 adminBackupsRouter.delete('/jobs/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   audit({
@@ -253,13 +253,13 @@ adminBackupsRouter.post('/schedules/:id/run-now', async (req: Request, res: Resp
   await forward(req, res, 'POST', `/backup/admin/schedules/${encodeURIComponent(id)}/run-now`);
 });
 
-// POST /api/v1/admin/backups/import/:userId — MBOX für User importieren
-// Body wird als text/mbox erwartet (bis 500MB).
+// POST /api/v1/admin/backups/import/:userId — import MBOX for a user
+// Body is expected as text/mbox (up to 500MB).
 adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string };
-  // Body wurde von express.json() noch nicht konsumiert weil Mount-Reihenfolge
-  // Backup-Router NACH express.json() liegt? — siehe server.ts. Wir lesen den
-  // raw body via req on('data') auf, da MBOX text/plain ist und potenziell groß.
+  // Body not yet consumed by express.json() because of mount order — backup
+  // router comes AFTER express.json()? — see server.ts. We read the raw body
+  // via req on('data') since MBOX is text/plain and potentially large.
   const chunks: Buffer[] = [];
   req.on('data', (c: Buffer) => chunks.push(c));
   req.on('end', () => {

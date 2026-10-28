@@ -1,12 +1,12 @@
 /**
  * Calendar Access Control (v3.18.14)
  *
- * Zentraler Helper für alle Permission-Checks auf Kalendern. Berücksichtigt
- * Owner-Recht UND CalendarShare-Einträge mit READ/WRITE-Permission.
+ * Central helper for all permission checks on calendars. Takes into account
+ * ownership AND CalendarShare entries with READ/WRITE permission.
  *
- * WICHTIG: ALLE Calendar-Routen (REST + CalDAV) müssen diesen Helper benutzen
- * statt direkter `findFirst({ where: { id, userId } })`-Checks — sonst gibt es
- * Permission-Bypasses.
+ * IMPORTANT: ALL calendar routes (REST + CalDAV) must use this helper instead
+ * of direct `findFirst({ where: { id, userId } })` checks — otherwise there
+ * will be permission bypasses.
  */
 import { prisma } from '@coremail/storage';
 
@@ -32,19 +32,19 @@ export interface AccessibleCalendar {
   ownerDisplayName: string | null;
   ownerEmail: string | null;
   permission: EffectivePerm;
-  // v3.18.16: Share-ID nur bei `shared: true` — Frontend nutzt sie für
-  // PATCH/POST /calendar/mine-shares* (Farbe ändern, Reorder, Self-Remove)
+  // v3.18.16: share ID only with `shared: true` — the frontend uses it for
+  // PATCH/POST /calendar/mine-shares* (change color, reorder, self-remove)
   shareId?: string;
 }
 
 /**
- * Prüft ob `userId` mindestens `required`-Recht auf `calendarId` hat.
- * Liefert `null` wenn kein Zugriff besteht; sonst Access-Info.
+ * Checks whether `userId` has at least the `required` permission on `calendarId`.
+ * Returns `null` when there is no access; otherwise the access info.
  *
- * Logik:
- * - Owner → immer OWNER (alle Operationen erlaubt)
- * - Share mit WRITE → erfüllt READ + WRITE
- * - Share mit READ → erfüllt nur READ (WRITE → null)
+ * Logic:
+ * - Owner → always OWNER (all operations allowed)
+ * - Share with WRITE → satisfies READ + WRITE
+ * - Share with READ → satisfies READ only (WRITE → null)
  */
 export async function canAccessCalendar(
   userId: string,
@@ -78,9 +78,9 @@ export async function canAccessCalendar(
 }
 
 /**
- * Liefert alle Kalender, auf die `userId` Zugriff hat: eigene + per Share
- * freigegebene. Lazy-Provisioning für leere User wird hier NICHT gemacht —
- * der Aufrufer kümmert sich darum, falls nötig.
+ * Returns all calendars `userId` has access to: own + shared via share.
+ * Lazy provisioning for empty users is NOT done here — the caller takes
+ * care of that if needed.
  */
 export async function listAccessibleCalendars(userId: string): Promise<AccessibleCalendar[]> {
   const [owned, shares] = await Promise.all([
@@ -128,10 +128,10 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
   const sharedList: AccessibleCalendar[] = shares.map((s) => ({
     id: s.calendar.id,
     name: s.calendar.name,
-    // v3.18.16 A3: Grantee-lokale Farbe überschreibt Owner-Farbe (falls gesetzt)
+    // v3.18.16 A3: grantee-local color overrides the owner color (if set)
     color: s.localColor ?? s.calendar.color,
     icon: s.calendar.icon,
-    // v3.18.16 A8: Grantee-lokale Sortierung (sortOrder im CalendarShare-Record)
+    // v3.18.16 A8: grantee-local sorting (sortOrder in the CalendarShare record)
     sortOrder: s.sortOrder,
     isDefault: false,
     shared: true,
@@ -146,24 +146,24 @@ export async function listAccessibleCalendars(userId: string): Promise<Accessibl
 }
 
 /**
- * Akzeptiert IDs mit `gal-`-Prefix (Frontend-Autocomplete liefert so) und
- * strippt diesen. Auch andere bekannte Prefixe werden entfernt.
+ * Accepts IDs with a `gal-` prefix (as delivered by the frontend autocomplete)
+ * and strips it. Other known prefixes are removed as well.
  */
 export function stripGalPrefix(id: string): string {
   return id.replace(/^(gal|ext|grp|user)-/, '');
 }
 
 /**
- * v3.18.15 Private/Confidential Events.
+ * v3.18.15 private/confidential events.
  *
- * Maskiert ein Event basierend auf Permission + Classification:
- *   - Owner: unverändert
- *   - PUBLIC: unverändert
- *   - PRIVATE: Subject="Beschäftigt", Description="", Location="", attendees gehen weg
- *   - CONFIDENTIAL: Event soll vom Aufrufer komplett ausgeblendet werden → Helper
- *     gibt `null` zurück. Der Aufrufer filtert das raus.
+ * Masks an event based on permission + classification:
+ *   - Owner: unchanged
+ *   - PUBLIC: unchanged
+ *   - PRIVATE: Subject="Beschäftigt", Description="", Location="", attendees removed
+ *   - CONFIDENTIAL: the event must be hidden completely from the caller → helper
+ *     returns `null`. The caller filters it out.
  *
- * Owner sieht IMMER alle Details. Nur Grantees (READ/WRITE) sehen Maskierung.
+ * The owner ALWAYS sees all details. Only grantees (READ/WRITE) see the masking.
  */
 export interface MaskableEvent {
   id: string;
@@ -177,7 +177,7 @@ export interface MaskableEvent {
   allDay: boolean;
   recurring: boolean;
   classification: string;
-  // Restliche Felder bleiben durchgereicht
+  // Remaining fields are passed through
   [key: string]: unknown;
 }
 
@@ -194,7 +194,7 @@ export function maskEventForViewer<T extends MaskableEvent>(
       summary: 'Beschäftigt',
       description: '',
       location: '',
-      // attendees/organizer-Felder auch leeren falls vorhanden
+      // Also clear attendees/organizer fields if present
       organizer: null,
       attendees: [],
     };

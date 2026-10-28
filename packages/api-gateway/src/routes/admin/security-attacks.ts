@@ -1,9 +1,9 @@
 /**
- * Admin — Sicherheitsangriffs-Events
+ * Admin — security attack events
  *
- * GET  /api/v1/admin/security/attacks     — Angriffsereignisse (paginiert, filterbar)
- * GET  /api/v1/admin/security/attacks/summary — Zusammenfassung (letzte 24 h)
- * DELETE /api/v1/admin/security/attacks   — Alle Events vor gegebenem Datum löschen
+ * GET  /api/v1/admin/security/attacks     — attack events (paginated, filterable)
+ * GET  /api/v1/admin/security/attacks/summary — summary (last 24 h)
+ * DELETE /api/v1/admin/security/attacks   — delete all events before a given date
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -91,7 +91,7 @@ adminSecurityAttacksRouter.get('/summary', async (_req: Request, res: Response) 
     byType: byType.map((b) => ({ type: b.type, count: b._count.id })),
     topIps: topIps.map((b) => ({ ip: b.ip, count: b._count.id })),
     latestEvents,
-    isUnderAttack: total1h >= 10, // Heuristik: >= 10 Events in 1h
+    isUnderAttack: total1h >= 10, // heuristic: >= 10 events in 1h
   });
 });
 

@@ -147,7 +147,7 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
 
 // ── GET /admin/security/status ────────────────────────────────────────────────
 adminSecurityRouter.get('/status', async (_req: Request, res: Response) => {
-  // /ping benötigt keine Auth und liefert immer "pong" zurück
+  // /ping needs no auth and always returns "pong"
   async function pingRspamd(): Promise<void> {
     const r = await fetch(`${RSPAMD_URL}/ping`, { signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`rspamd HTTP ${r.status}`);
@@ -274,7 +274,7 @@ adminSecurityRouter.patch('/dnsbl/:id', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
   const zone = await prisma.dnsblZone.findUnique({ where: { id } });
   if (!zone) { res.status(404).json({ error: 'Zone nicht gefunden' }); return; }
-  // Built-in: nur enabled/action/weight/sortOrder darf geändert werden
+  // Built-in: only enabled/action/weight/sortOrder may be changed
   if (zone.isBuiltin) {
     const allowed = ['enabled', 'action', 'weight', 'sortOrder'] as const;
     for (const k of Object.keys(parsed.data)) {
@@ -299,14 +299,14 @@ adminSecurityRouter.delete('/dnsbl/:id', async (req: Request, res: Response) => 
 });
 
 // ── POST /admin/security/dnsbl/test ───────────────────────────────────────────
-// Body: { ip: "1.2.3.4" } → testet die IP gegen ALLE Zonen (auch deaktivierte)
+// Body: { ip: "1.2.3.4" } → tests the IP against ALL zones (including disabled ones)
 const TestSchema = z.object({ ip: z.string().min(7).max(45) });
 adminSecurityRouter.post('/dnsbl/test', async (req: Request, res: Response) => {
   const parsed = TestSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'IP erforderlich' }); return; }
   const ip = parsed.data.ip.trim();
 
-  // IPv4-Reverse für DNSBL-Lookup
+  // IPv4 reverse for DNSBL lookup
   const isIpv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
   const isIpv6 = ip.includes(':');
   if (!isIpv4 && !isIpv6) { res.status(400).json({ error: 'Keine gültige IPv4/IPv6' }); return; }
@@ -315,7 +315,7 @@ adminSecurityRouter.post('/dnsbl/test', async (req: Request, res: Response) => {
   if (isIpv4) {
     reversed = ip.split('.').reverse().join('.');
   } else {
-    // Vereinfachte IPv6-Expansion
+    // Simplified IPv6 expansion
     const expand = (s: string): string => {
       if (!s.includes('::')) return s.split(':').map((p) => p.padStart(4, '0')).join('');
       const [l, r] = s.split('::');
@@ -346,7 +346,7 @@ adminSecurityRouter.post('/dnsbl/test', async (req: Request, res: Response) => {
 });
 
 // ── GET /admin/security/dnsbl/stats?days=7 ────────────────────────────────────
-// Aggregiert Hits pro Zone in den letzten N Tagen
+// Aggregates hits per zone over the last N days
 adminSecurityRouter.get('/dnsbl/stats', async (req: Request, res: Response) => {
   const days = Math.min(Math.max(parseInt(String(req.query['days'] ?? '7'), 10), 1), 90);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -393,8 +393,8 @@ adminSecurityRouter.get('/dnsbl/stats', async (req: Request, res: Response) => {
 });
 
 // ── GET /admin/security/dns-check ─────────────────────────────────────────────
-// Führt einen DNS-Poisoning-Integritätscheck durch und gibt die Ergebnisse zurück.
-// Proxied zum security-filter-Dienst (localhost:3002/dns-integrity).
+// Runs a DNS-poisoning integrity check and returns the results.
+// Proxied to the security-filter service (localhost:3002/dns-integrity).
 adminSecurityRouter.get('/dns-check', async (_req: Request, res: Response) => {
   const SECURITY_FILTER_URL = process.env['SECURITY_FILTER_URL'] ?? 'http://localhost:3002';
   try {

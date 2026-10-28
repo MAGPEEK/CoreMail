@@ -8,8 +8,8 @@ import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 export const adminMailboxesRouter: RouterType = Router();
 adminMailboxesRouter.use(requireAdmin);
 
-// ── Hilfsfunktion: Echten Speicher aus Nachrichten berechnen ─────────────────
-// Aggregiert rawSize aller nicht-gelöschten Nachrichten eines Users.
+// ── Helper: compute real storage from messages ───────────────────────────────
+// Aggregates rawSize of all non-deleted messages of a user.
 async function calcUsedBytes(userId: string): Promise<number> {
   const result = await prisma.message.aggregate({
     where: {
@@ -22,27 +22,27 @@ async function calcUsedBytes(userId: string): Promise<number> {
 }
 
 // GET /api/v1/admin/mailboxes
-// Gibt alle User zurück. usedBytes wird live aus den Nachrichten berechnet
-// und dabei auch im User-Datensatz aktualisiert (lazy sync).
+// Returns all users. usedBytes is computed live from the messages and
+// updated in the user record at the same time (lazy sync).
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
     select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
     orderBy: { email: 'asc' },
   });
 
-  // Echten Speicherverbrauch parallel für alle User berechnen
+  // Compute real storage usage for all users in parallel
   const usageMap = await Promise.all(
     users.map(async (u) => ({ id: u.id, usedBytes: await calcUsedBytes(u.id) }))
   );
 
-  // usedBytes im DB aktualisieren (fire-and-forget, nicht auf Ergebnis warten)
+  // Update usedBytes in the DB (fire-and-forget, do not wait for the result)
   void Promise.all(
     usageMap.map(({ id, usedBytes }) =>
       prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null)
     )
   );
 
-  // Antwort mit berechneten Werten
+  // Response with computed values
   const usageById = Object.fromEntries(usageMap.map(({ id, usedBytes }) => [id, usedBytes]));
   res.json(users.map((u) => ({ ...u, usedBytes: usageById[u.id] ?? 0 })));
 });
@@ -59,13 +59,13 @@ adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
     calcUsedBytes(id),
   ]);
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
-  // DB aktualisieren (fire-and-forget)
+  // Update DB (fire-and-forget)
   void prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null);
   res.json({ ...user, usedBytes });
 });
 
 // POST /api/v1/admin/mailboxes/:id/recalculate-quota
-// Berechnet usedBytes aus tatsächlichen Nachrichten-Größen neu und speichert den Wert.
+// Recomputes usedBytes from actual message sizes and stores the value.
 adminMailboxesRouter.post('/:id/recalculate-quota', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true } });
@@ -77,7 +77,7 @@ adminMailboxesRouter.post('/:id/recalculate-quota', async (req: Request, res: Re
 });
 
 // POST /api/v1/admin/mailboxes/recalculate-all-quotas
-// Berechnet usedBytes für ALLE User neu (Admin-Wartungsfunktion).
+// Recomputes usedBytes for ALL users (admin maintenance function).
 adminMailboxesRouter.post('/recalculate-all-quotas', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({ select: { id: true, email: true } });
   const results = await Promise.all(
@@ -227,7 +227,7 @@ adminMailboxesRouter.post('/shared/:id/permissions', async (req: Request, res: R
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  // Replace-Strategie: alle bestehenden Permissions für (mailbox, user) löschen, dann diese eine setzen
+  // Replace strategy: delete all existing permissions for (mailbox, user), then set this one
   await prisma.$transaction([
     prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId: id, userId: parsed.data.userId } }),
     prisma.sharedMailboxPerm.create({
@@ -253,7 +253,7 @@ adminMailboxesRouter.delete('/shared/:id/permissions/:userId', async (req: Reque
   res.json({ ok: true });
 });
 
-// ── Mailbox-Delegierung (User-Postfach-Zugriffsrechte) ──────────────────────
+// ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 
 // GET /api/v1/admin/mailboxes/:id/delegates
 adminMailboxesRouter.get('/:id/delegates', async (req: Request, res: Response) => {
@@ -273,7 +273,7 @@ adminMailboxesRouter.get('/:id/delegates', async (req: Request, res: Response) =
   res.json(mailbox?.delegates ?? []);
 });
 
-// POST /api/v1/admin/mailboxes/:id/delegates — Zugriff gewähren / aktualisieren
+// POST /api/v1/admin/mailboxes/:id/delegates — grant / update access
 adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const schema = z.object({
@@ -304,7 +304,7 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   res.status(201).json(delegate);
 });
 
-// DELETE /api/v1/admin/mailboxes/:id/delegates/:granteeId — Zugriff entziehen
+// DELETE /api/v1/admin/mailboxes/:id/delegates/:granteeId — revoke access
 adminMailboxesRouter.delete('/:id/delegates/:granteeId', async (req: Request, res: Response) => {
   const { id, granteeId } = req.params as { id: string; granteeId: string };
 

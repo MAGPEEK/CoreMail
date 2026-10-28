@@ -1,12 +1,12 @@
 /**
- * Admin API — Retention Policies & Tags (Phase 9, Exchange-2019-konform)
+ * Admin API — Retention Policies & Tags (Phase 9, Exchange 2019 compliant)
  *
- * Tag-Konzept (analog Exchange 2019):
- *   • DPT (Default Policy Tag) — gilt fürs ganze Postfach
- *   • RPT (Retention Policy Tag) — bindet an einen Standardordner (Inbox, Sent, …)
- *   • PERSONAL — User-zuweisbar an einzelne Items/Ordner
+ * Tag concept (analogous to Exchange 2019):
+ *   • DPT (Default Policy Tag) — applies to the whole mailbox
+ *   • RPT (Retention Policy Tag) — binds to a default folder (Inbox, Sent, …)
+ *   • PERSONAL — user-assignable to individual items/folders
  *
- * Hierarchie pro Item: Personal > RPT > DPT
+ * Hierarchy per item: Personal > RPT > DPT
  *
  * Routes — Tags:
  *   GET    /api/v1/admin/compliance/retention/tags
@@ -21,15 +21,15 @@
  *   PUT    /api/v1/admin/compliance/retention/:id
  *   DELETE /api/v1/admin/compliance/retention/:id
  *   POST   /api/v1/admin/compliance/retention/:id/toggle
- *   POST   /api/v1/admin/compliance/retention/:id/tags/:tagId    — Tag anhängen
- *   DELETE /api/v1/admin/compliance/retention/:id/tags/:tagId    — Tag lösen
+ *   POST   /api/v1/admin/compliance/retention/:id/tags/:tagId    — attach tag
+ *   DELETE /api/v1/admin/compliance/retention/:id/tags/:tagId    — detach tag
  *
- * Routes — Zuweisungen + Run:
+ * Routes — assignments + run:
  *   GET    /api/v1/admin/compliance/retention/:id/assignments
  *   POST   /api/v1/admin/compliance/retention/:id/assignments
  *   DELETE /api/v1/admin/compliance/retention/:id/assignments/:aid
- *   POST   /api/v1/admin/compliance/retention/run                — MFA jetzt ausführen
- *   GET    /api/v1/admin/compliance/retention/runs               — MFA-Run-Historie
+ *   POST   /api/v1/admin/compliance/retention/run                — run MFA now
+ *   GET    /api/v1/admin/compliance/retention/runs               — MFA run history
  */
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
@@ -40,7 +40,7 @@ import { requireAuth, requireAdmin } from '../../middleware/auth.js';
 export const adminRetentionRouter: RouterType = Router();
 adminRetentionRouter.use(requireAuth, requireAdmin);
 
-// ── Tag-CRUD ─────────────────────────────────────────────────────────────────
+// ── Tag CRUD ─────────────────────────────────────────────────────────────────
 
 const TAG_TYPES   = ['DPT', 'RPT', 'PERSONAL'] as const;
 const TAG_ACTIONS = ['MOVE_TO_ARCHIVE', 'DELETE_AND_ALLOW_RECOVERY', 'PERMANENTLY_DELETE', 'MARK_AS_PAST_RETENTION_LIMIT'] as const;
@@ -68,12 +68,12 @@ adminRetentionRouter.post('/tags', async (req: Request, res: Response) => {
   const p = TagSchema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid request', details: p.error.issues }); return; }
 
-  // RPT muss einen folderTarget haben
+  // RPT must have a folderTarget
   if (p.data.type === 'RPT' && !p.data.folderTarget) {
     res.status(400).json({ error: 'RPT-Tags benötigen einen folderTarget (Inbox, Sent, …)' });
     return;
   }
-  // DPT darf keinen folderTarget haben (bzw. nur ALL_OTHER)
+  // DPT must not have a folderTarget (or only ALL_OTHER)
   if (p.data.type === 'DPT' && p.data.folderTarget && p.data.folderTarget !== 'ALL_OTHER') {
     res.status(400).json({ error: 'DPT-Tags dürfen nur folderTarget=ALL_OTHER haben' });
     return;
@@ -139,7 +139,7 @@ adminRetentionRouter.post('/:id/tags/:tagId', async (req: Request, res: Response
   ]);
   if (!policy || !tag) { res.status(404).json({ error: 'Policy oder Tag nicht gefunden' }); return; }
 
-  // Eine Policy darf maximal 1 DPT haben
+  // A policy may have at most 1 DPT
   if (tag.type === 'DPT') {
     const existingDpt = await prisma.retentionPolicyTag.findFirst({
       where: { policyId: id, tag: { type: 'DPT' } },
@@ -166,7 +166,7 @@ adminRetentionRouter.delete('/:id/tags/:tagId', async (req: Request, res: Respon
   res.status(204).end();
 });
 
-// ── MFA-Run-Historie ──────────────────────────────────────────────────────────
+// ── MFA run history ───────────────────────────────────────────────────────────
 
 adminRetentionRouter.get('/runs', async (_req: Request, res: Response) => {
   const runs = await prisma.managedFolderRun.findMany({
@@ -221,7 +221,7 @@ adminRetentionRouter.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  // 0 ist erlaubt — bei Tag-basierten Policies steuern die Tags die Frist, nicht die Policy selbst
+  // 0 is allowed — for tag-based policies the tags control the period, not the policy itself
   if (retentionDays < 0) {
     res.status(400).json({ error: 'retentionDays muss 0 oder größer sein (0 = Frist wird durch Tags gesteuert)' });
     return;

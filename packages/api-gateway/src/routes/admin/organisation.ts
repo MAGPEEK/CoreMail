@@ -1,9 +1,9 @@
 /**
- * Admin-API: Organisation (Sharing-Richtlinien + Adresslisten)
+ * Admin API: organisation (sharing policies + address lists)
  *
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/sharing-policies
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/address-lists
- * GET                 /api/v1/admin/organisation/gal            — Globale Adressliste (Live-Abfrage)
+ * GET                 /api/v1/admin/organisation/gal            — global address list (live query)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -122,7 +122,7 @@ adminOrganisationRouter.delete('/address-lists/:id', async (req: Request, res: R
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
 
-// ─── GAL (Live-Abfrage aller Postfächer) ─────────────────────────────────────
+// ─── GAL (live query of all mailboxes) ──────────────────────────────────────
 adminOrganisationRouter.get('/gal', async (req: Request, res: Response) => {
   const { search = '', limit = '200' } = req.query as Record<string, string>;
   const where = search
@@ -143,7 +143,7 @@ adminOrganisationRouter.get('/gal', async (req: Request, res: Response) => {
       take: parseInt(limit), orderBy: { displayName: 'asc' },
       select: { id: true, email: true, displayName: true },
     }),
-    // v5.6.1: distributionGroup-Suche entfernt
+    // v5.6.1: distributionGroup search removed
     Promise.resolve([] as Array<{ id: string; email: string; displayName: string }>),
     prisma.resourceMailbox.findMany({
       where: { active: true, ...where },

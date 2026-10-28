@@ -11,10 +11,10 @@ import { requireAuth } from '../middleware/auth.js';
 const log = createLogger('api:mail');
 export const mailRouter: RouterType = Router();
 
-// ── rspamd Bayes-Lernen ───────────────────────────────────────────────────────
+// ── rspamd Bayes learning ─────────────────────────────────────────────────────
 const RSPAMD_URL = process.env['RSPAMD_URL'] ?? 'http://rspamd:11334';
 
-/** Sendet eine Mail an rspamd /learnspam oder /learnham (fire and forget). */
+/** Sends a mail to rspamd /learnspam or /learnham (fire and forget). */
 async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promise<void> {
   await fetch(`${RSPAMD_URL}/${action}`, {
     method: 'POST',
@@ -25,8 +25,8 @@ async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promi
 }
 
 /**
- * Für alle übergebenen Message-IDs: Rohinhalt aus MinIO laden (oder rekonstruieren)
- * und an rspamd learnspam/learnham senden. Fehler werden geloggt, nicht propagiert.
+ * For all given message IDs: load the raw content from MinIO (or reconstruct it)
+ * and send it to rspamd learnspam/learnham. Errors are logged, not propagated.
  */
 async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham', userId: string): Promise<void> {
   for (const id of ids) {
@@ -41,7 +41,7 @@ async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham',
       if (msg.storagePath) {
         raw = await downloadBuffer(msg.storagePath);
       } else {
-        // Minimalrekonstruktion für Bayes-Training
+        // Minimal reconstruction for Bayes training
         const from = msg.fromName
           ? `"${msg.fromName.replace(/"/g, '\\"')}" <${msg.fromAddr}>`
           : `<${msg.fromAddr}>`;
@@ -61,20 +61,20 @@ async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham',
 }
 mailRouter.use(requireAuth);
 
-// ── Multer (Anhänge, max 25 MB/Datei, max 20 Dateien) ────────────────────────
+// ── Multer (attachments, max 25 MB/file, max 20 files) ───────────────────────
 const uploadMiddleware = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 20 },
 }).array('attachments', 20);
 
-// ── BullMQ Outbound-Queue (gleiche wie smtp-server) ───────────────────────────
+// ── BullMQ outbound queue (same as smtp-server) ───────────────────────────────
 let _outboundQueue: Queue | null = null;
 function getOutboundQueue(): Queue {
   if (!_outboundQueue) {
-    // BullMQ v5 erfordert maxRetriesPerRequest: null — createBullMqConnection() liefert das.
-    // getRedisClient() (shared, maxRetriesPerRequest: 3) crasht den Prozess wenn BullMQ
-    // interne Blocking-Commands ausführt → unhandled rejection → NetworkError im Browser.
-    // BullMQ v5: Kein ':' im Queue-Namen erlaubt — smtp-server nutzt 'smtp-outbound'
+    // BullMQ v5 requires maxRetriesPerRequest: null — createBullMqConnection() provides that.
+    // getRedisClient() (shared, maxRetriesPerRequest: 3) crashes the process when BullMQ
+    // runs internal blocking commands → unhandled rejection → NetworkError in the browser.
+    // BullMQ v5: no ':' allowed in the queue name — smtp-server uses 'smtp-outbound'
     _outboundQueue = new Queue('smtp-outbound', {
       connection: createBullMqConnection(),
       defaultJobOptions: {
@@ -88,11 +88,11 @@ function getOutboundQueue(): Queue {
   return _outboundQueue;
 }
 
-// ── Nodemailer: MIME-Rohmessage aufbauen ──────────────────────────────────────
-// WICHTIG: newline: 'crlf' — SMTP-Protokoll (RFC 5321) erfordert CRLF (\r\n).
-// nodemailer's smtp-connection normalisiert Buffer-Inhalte NICHT automatisch
-// (nur String-Inhalte). Mit 'unix' (LF-only) kann der empfangende MTA den
-// Header/Body-Separator (\r\n\r\n) nicht erkennen → roher MIME-Text im Body.
+// ── Nodemailer: build raw MIME message ────────────────────────────────────────
+// IMPORTANT: newline: 'crlf' — the SMTP protocol (RFC 5321) requires CRLF (\r\n).
+// nodemailer's smtp-connection does NOT normalize Buffer content automatically
+// (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
+// the header/body separator (\r\n\r\n) → raw MIME text in the body.
 async function buildRawMime(options: nodemailer.SendMailOptions): Promise<Buffer> {
   const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
   const info = await transport.sendMail(options);
@@ -104,7 +104,7 @@ async function buildRawMime(options: nodemailer.SendMailOptions): Promise<Buffer
   return Buffer.concat(chunks);
 }
 
-// Hilfsfunktion: kommagetrennte Adressen parsen
+// Helper: parse comma-separated addresses
 function parseAddrs(val: unknown): string[] {
   if (!val) return [];
   return String(val).split(',').map((s) => s.trim()).filter(Boolean);
@@ -321,7 +321,7 @@ mailRouter.post('/folders/:id/empty', async (req: Request, res: Response) => {
     return;
   }
 
-  // Soft: in Papierkorb verschieben
+  // Soft: move to Trash
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   const trash = await prisma.folder.findFirst({ where: { mailboxId: mailbox!.id, name: 'Trash' } });
   if (!trash) { res.status(500).json({ error: 'Papierkorb nicht gefunden' }); return; }
@@ -351,7 +351,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
   const { ids, action } = parsed.data;
   const userId = req.apiUser!.userId;
 
-  // Authorize: nur eigene Nachrichten
+  // Authorize: own messages only
   const messages = await prisma.message.findMany({
     where: { id: { in: ids }, folder: { mailbox: { userId } } },
     select: { id: true, folderId: true, flags: true },
@@ -425,7 +425,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
     }
     case 'delete': {
       const trash = await resolveSysFolder('Trash');
-      // Schon im Papierkorb? → hard delete
+      // Already in Trash? → hard delete
       const inTrash = messages.filter((m) => m.folderId === trash?.id).map((m) => m.id);
       const notInTrash = messages.filter((m) => m.folderId !== trash?.id).map((m) => m.id);
       if (inTrash.length) {
@@ -446,10 +446,10 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
         where: { id: { in: ownedIds } },
         data: { folderId: junk.id, modSeq: BigInt(Date.now()) },
       });
-      // Absender in USER-JUNK-Sperrliste aufnehmen → storeInboundMessage leitet
-      // künftige Mails dieses Absenders automatisch in den Junk-Ordner.
-      // Scope 'USER-JUNK' wird vom security-filter NICHT als SMTP-Reject behandelt,
-      // sondern ausschließlich beim Speichern geprüft (kein Bounce für den Absender).
+      // Add sender to the USER-JUNK blocklist → storeInboundMessage routes
+      // future mails from this sender to the Junk folder automatically.
+      // Scope 'USER-JUNK' is NOT treated as an SMTP reject by the security-filter,
+      // it is only checked when storing (no bounce for the sender).
       void (async () => {
         try {
           const msgs = await prisma.message.findMany({
@@ -477,21 +477,21 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
           log.warn({ err }, 'USER-JUNK Blacklist-Eintrag fehlgeschlagen — ignoriert');
         }
       })();
-      // rspamd Bayes-Lernen (fire and forget) — verbessert Spam-Erkennung über Zeit
+      // rspamd Bayes learning (fire and forget) — improves spam detection over time
       void rspamdLearnBatch(ownedIds, 'learnspam', req.apiUser!.userId);
       break;
     }
     case 'notSpam': {
       const inbox = await resolveSysFolder('INBOX');
       if (!inbox) { res.status(404).json({ error: 'Posteingang nicht gefunden' }); return; }
-      // Zurück in INBOX UND spamScore auf 0 setzen (sonst zeigt Reader-Banner
-      // weiterhin "Diese Nachricht wurde als Spam erkannt", obwohl sie als
-      // Ham markiert wurde)
+      // Back to INBOX AND set spamScore to 0 (otherwise the reader banner
+      // keeps showing "Diese Nachricht wurde als Spam erkannt" although it
+      // was marked as ham)
       await prisma.message.updateMany({
         where: { id: { in: ownedIds } },
         data: { folderId: inbox.id, modSeq: BigInt(Date.now()), spamScore: 0 },
       });
-      // Absender aus USER-JUNK-Sperrliste entfernen (False Positive)
+      // Remove sender from the USER-JUNK blocklist (false positive)
       void (async () => {
         try {
           const msgs = await prisma.message.findMany({
@@ -506,7 +506,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
           log.warn({ err }, 'USER-JUNK Blacklist-Entfernung fehlgeschlagen — ignoriert');
         }
       })();
-      // rspamd Bayes-Lernen: Als Ham markieren
+      // rspamd Bayes learning: mark as ham
       void rspamdLearnBatch(ownedIds, 'learnham', req.apiUser!.userId);
       break;
     }
@@ -557,7 +557,7 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  // Originales RFC 822 MIME aus MinIO (für große Nachrichten, die dort abgelegt sind)
+  // Original RFC 822 MIME from MinIO (for large messages stored there)
   if (msg.storagePath) {
     try {
       const raw = await downloadBuffer(msg.storagePath);
@@ -566,13 +566,13 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
       res.send(raw);
       return;
     } catch {
-      // MinIO-Fehler → Fallback auf Rekonstruktion
+      // MinIO error → fall back to reconstruction
     }
   }
 
-  // ── RFC 822 Rekonstruktion aus DB-Feldern ─────────────────────────────────
-  // Gemäß RFC 822 §3: Header-Zeilen + Leerzeile + Body
-  // Gemäß RFC 2045: MIME-Version + Content-Type
+  // ── RFC 822 reconstruction from DB fields ─────────────────────────────────
+  // Per RFC 822 §3: header lines + blank line + body
+  // Per RFC 2045: MIME-Version + Content-Type
   const boundary = `=_CoreMail_${crypto.randomUUID().replace(/-/g, '')}`;
   const hasHtml  = !!msg.bodyHtml;
   const hasText  = !!msg.bodyText;
@@ -636,7 +636,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
 
   const now = new Date();
-  // Snooze: nur im Posteingang Mails verbergen, die noch in der Zukunft "schlummern"
+  // Snooze: only in the inbox, hide mails that are still "snoozing" into the future
   const snoozeFilter = folder.name === 'INBOX'
     ? { OR: [{ snoozeUntil: null }, { snoozeUntil: { lte: now } }] }
     : {};
@@ -658,7 +658,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
     prisma.message.count({ where: { folderId, deletedAt: null, ...snoozeFilter } }),
   ]);
 
-  // Kategorien-Beziehung flach mappen
+  // Flatten the categories relation
   const flat = messages.map((m) => ({
     ...m,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -776,7 +776,7 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
 // POST /api/v1/mail/send — compose and send (multipart/form-data with optional attachments)
 mailRouter.post(
   '/send',
-  // Multer-Middleware: verarbeitet multipart/form-data; bei application/json kein Eingriff
+  // Multer middleware: processes multipart/form-data; no intervention for application/json
   (req: Request, res: Response, next: NextFunction) => {
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) { next(); return; }
@@ -789,7 +789,7 @@ mailRouter.post(
     });
   },
   async (req: Request, res: Response) => {
-    // Felder aus JSON-Body ODER multipart-Formular lesen
+    // Read fields from JSON body OR multipart form
     let to: string[];
     let cc: string[];
     let bcc: string[];
@@ -798,8 +798,8 @@ mailRouter.post(
     let bodyText: string;
     let inReplyTo: string | undefined;
     let scheduledAt: Date | null = null;
-    let sendAsAddress: string | null = null;     // Shared-Mailbox-Adresse als Absender (SEND_AS)
-    let sendOnBehalfOf: string | null = null;    // Shared-Mailbox-Adresse als „im Auftrag" (SEND_ON_BEHALF)
+    let sendAsAddress: string | null = null;     // shared mailbox address as sender (SEND_AS)
+    let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -828,7 +828,7 @@ mailRouter.post(
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
     } else {
-      // multipart — Felder kommen als Strings (Arrays als Komma-getrennte Liste)
+      // multipart — fields arrive as strings (arrays as comma-separated list)
       to       = parseAddrs(req.body['to'] as unknown);
       cc       = parseAddrs(req.body['cc'] as unknown);
       bcc      = parseAddrs(req.body['bcc'] as unknown);
@@ -846,8 +846,8 @@ mailRouter.post(
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
 
-    // Schedule-Send Validierung: Zeitpunkt muss in der Zukunft liegen (>30s),
-    // nicht weiter als 1 Jahr (sonst wahrscheinlich Fehler)
+    // Schedule-send validation: time must be in the future (>30s),
+    // not more than 1 year ahead (otherwise probably an error)
     const now = Date.now();
     if (scheduledAt) {
       const delayMs = scheduledAt.getTime() - now;
@@ -861,16 +861,16 @@ mailRouter.post(
       }
     }
 
-    // Absender laden (inkl. DKIM-Schlüssel der Domain)
+    // Load sender (incl. the domain's DKIM key)
     const user = await prisma.user.findUnique({
       where: { id: req.apiUser!.userId },
       include: { domain: true },
     });
     if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
 
-    // ── Shared-Mailbox Permission-Check (v3.18.9) ──────────────────────────
-    // Wenn sendAs oder sendOnBehalfOf gesetzt ist, muss der User die passende
-    // Permission auf die Shared Mailbox haben.
+    // ── Shared-mailbox permission check (v3.18.9) ──────────────────────────
+    // If sendAs or sendOnBehalfOf is set, the user must have the matching
+    // permission on the shared mailbox.
     let effectiveFromEmail        = user.email;
     let effectiveFromDisplayName  = (user.displayName ?? '').trim();
     let onBehalfHeader: string | null = null;
@@ -902,7 +902,7 @@ mailRouter.post(
         res.status(403).json({ error: `Keine SEND_ON_BEHALF-Berechtigung für ${sendOnBehalfOf}` });
         return;
       }
-      // Für „im Auftrag": From=Shared, Sender=User → RFC 5322 §3.6.2
+      // For „on behalf of": From=Shared, Sender=User → RFC 5322 §3.6.2
       effectiveFromEmail       = sharedPerm.sharedMailbox.email;
       effectiveFromDisplayName = sharedPerm.sharedMailbox.displayName;
       onBehalfHeader           = `${(user.displayName ?? '').trim() ? `"${(user.displayName ?? '').trim()}" ` : ''}<${user.email}>`;
@@ -914,9 +914,9 @@ mailRouter.post(
     const sendDate    = new Date();
     const displayName = effectiveFromDisplayName;
 
-    // ── Anhänge in MinIO hochladen (kein base64-Blob im Redis-Job) ───────────
-    // Dadurch bleibt der BullMQ-Job klein; der Worker lädt die Anhänge beim
-    // Aufbau der RFC-5322-Nachricht aus MinIO herunter.
+    // ── Upload attachments to MinIO (no base64 blob in the Redis job) ────────
+    // This keeps the BullMQ job small; the worker downloads the attachments
+    // from MinIO when building the RFC 5322 message.
     const queueAttachments = await Promise.all(
       files.map(async (f) => {
         const minioPath = outboundAttachKey(jobId, f.originalname);
@@ -930,13 +930,13 @@ mailRouter.post(
       })
     );
 
-    // ── BullMQ-Job: strukturierte Nachricht (v3.17.30+) ──────────────────────
-    // Kein rawMessage (base64-Blob) mehr — der Worker baut den RFC-5322-Buffer
-    // selbst auf. DKIM-Signierung erfolgt über nodemailer-Transport-Option.
+    // ── BullMQ job: structured message (v3.17.30+) ───────────────────────────
+    // No more rawMessage (base64 blob) — the worker builds the RFC 5322 buffer
+    // itself. DKIM signing happens via the nodemailer transport option.
     const smtpRecipients = [...to, ...cc, ...bcc];
 
-    // BullMQ-Job: bei scheduledAt mit `delay` einreihen — der Worker startet
-    // den Versand erst zum geplanten Zeitpunkt. delay wird intern in ms gemessen.
+    // BullMQ job: with scheduledAt enqueue with `delay` — the worker starts
+    // sending only at the scheduled time. delay is measured internally in ms.
     const queueJobId = `api-${jobId}`;
     const jobOptions: { jobId: string; delay?: number } = { jobId: queueJobId };
     if (scheduledAt) {
@@ -955,17 +955,17 @@ mailRouter.post(
         } : {}),
         message: {
           from:      effectiveFromEmail,
-          fromName:  displayName,          // leer → nodemailer lässt Quoted-String weg
-          ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" Header
+          fromName:  displayName,          // empty → nodemailer omits the quoted string
+          ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" header
           to,
           cc,
-          bcc,                             // nur im SMTP-Envelope, nicht im Header
+          bcc,                             // only in the SMTP envelope, not in the header
           subject,
           html:      bodyHtml,
           text:      bodyText,
           messageId: msgId,
-          // Bei Schedule-Send: Date-Header auf scheduledAt setzen damit der
-          // Empfänger den geplanten Versandzeitpunkt sieht (nicht den Erstell-Zeitpunkt)
+          // For schedule-send: set the Date header to scheduledAt so that the
+          // recipient sees the scheduled send time (not the creation time)
           date:      (scheduledAt ?? sendDate).toISOString(),
           ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
           attachments: queueAttachments,
@@ -977,7 +977,7 @@ mailRouter.post(
       return;
     }
 
-    // ── MAIL_FLOW — ACCEPTED-Log ──────────────────────────────────────────────
+    // ── MAIL_FLOW — ACCEPTED log ──────────────────────────────────────────────
     void prisma.systemLog.create({
       data: {
         level:    'INFO',
@@ -996,9 +996,9 @@ mailRouter.post(
       },
     }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
 
-    // ── Kopie in Gesendete Elemente speichern ────────────────────────────────
-    // RFC-5322-Buffer wird hier separat aufgebaut (mit In-Memory-Anhängen, nicht MinIO)
-    // damit die Sent-Kopie sofort verfügbar ist, ohne auf den Worker zu warten.
+    // ── Save copy to Sent Items ──────────────────────────────────────────────
+    // The RFC 5322 buffer is built separately here (with in-memory attachments, not MinIO)
+    // so the Sent copy is available immediately without waiting for the worker.
     void (async () => {
       try {
         const mailbox = await prisma.mailbox.findFirst({
@@ -1008,7 +1008,7 @@ mailRouter.post(
         const sentFolder = mailbox?.folders.find((f: { name: string }) => f.name === 'Sent');
         if (!sentFolder || !mailbox) return;
 
-        // Raw-Buffer für Sent-Kopie mit In-Memory-Anhängen
+        // Raw buffer for the Sent copy with in-memory attachments
         const sentAttachments: nodemailer.SendMailOptions['attachments'] = files.map((f) => ({
           filename:    f.originalname,
           content:     f.buffer,
@@ -1068,7 +1068,7 @@ mailRouter.post(
             rawSize:   rawBuffer.length,
             storagePath,
             changeKey: modSeq.toString(),
-            // Schedule-Send-Metadaten: ermöglicht Banner + Cancel-Button im Reader
+            // Schedule-send metadata: enables banner + cancel button in the reader
             ...(scheduledAt ? {
               scheduledAt,
               scheduledStatus: 'PENDING',
@@ -1097,7 +1097,7 @@ mailRouter.post(
   },
 );
 
-// POST /api/v1/mail/messages/:id/cancel-scheduled — geplanten Versand abbrechen
+// POST /api/v1/mail/messages/:id/cancel-scheduled — cancel scheduled send
 mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const msg = await prisma.message.findFirst({
@@ -1110,7 +1110,7 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
     return;
   }
 
-  // BullMQ-Job entfernen (delay-Job kann via remove() gestoppt werden)
+  // Remove the BullMQ job (a delayed job can be stopped via remove())
   let jobRemoved = false;
   if (msg.scheduledJobId) {
     try {
@@ -1128,7 +1128,7 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
     where: { id },
     data: {
       scheduledStatus: 'CANCELLED',
-      // scheduledAt/scheduledJobId für Audit-Trail behalten
+      // Keep scheduledAt/scheduledJobId for the audit trail
       modSeq: BigInt(Date.now()),
     },
   });
@@ -1187,7 +1187,7 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/mail/delegated-mailboxes
-// Gibt alle Postfächer zurück auf die der aktuelle User Zugriff hat
+// Returns all mailboxes the current user has access to
 mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const delegates = await prisma.mailboxDelegate.findMany({

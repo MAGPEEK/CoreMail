@@ -1,12 +1,12 @@
 /**
- * Admin-API: SSO / OIDC-Provider-Verwaltung
+ * Admin API: SSO / OIDC provider management
  *
- * GET    /api/v1/admin/sso/providers            — Alle OIDC-Provider
- * POST   /api/v1/admin/sso/providers            — Neuen Provider anlegen
- * PUT    /api/v1/admin/sso/providers/:id        — Aktualisieren
- * DELETE /api/v1/admin/sso/providers/:id        — Löschen
- * POST   /api/v1/admin/sso/providers/:id/test   — Discovery-URL testen
- * GET    /api/v1/admin/sso/domains              — Domains ohne SSO-Konfiguration
+ * GET    /api/v1/admin/sso/providers            — all OIDC providers
+ * POST   /api/v1/admin/sso/providers            — create new provider
+ * PUT    /api/v1/admin/sso/providers/:id        — update
+ * DELETE /api/v1/admin/sso/providers/:id        — delete
+ * POST   /api/v1/admin/sso/providers/:id/test   — test discovery URL
+ * GET    /api/v1/admin/sso/domains              — domains without SSO configuration
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -31,7 +31,7 @@ adminSsoRouter.get('/providers', async (_req: Request, res: Response) => {
     name:          p.name,
     discoveryUrl:  p.discoveryUrl,
     clientId:      p.clientId,
-    // clientSecret wird nie zurückgegeben
+    // clientSecret is never returned
     claimMap:      p.claimMap,
     autoProvision: p.autoProvision,
     forcedDomains: p.forcedDomains,

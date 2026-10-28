@@ -1,11 +1,11 @@
 /**
- * Admin-API: Mobile Geräte (ActiveSync)
+ * Admin API: mobile devices (ActiveSync)
  *
- * GET    /api/v1/admin/mobile/devices             — Alle Geräte (mit User-Info)
+ * GET    /api/v1/admin/mobile/devices             — all devices (with user info)
  * GET    /api/v1/admin/mobile/devices/:id         — Detail
- * PATCH  /api/v1/admin/mobile/devices/:id/status  — Status setzen (OK|PENDING|BLOCKED)
- * POST   /api/v1/admin/mobile/devices/:id/wipe    — Remote Wipe anfordern
- * DELETE /api/v1/admin/mobile/devices/:id         — Gerät deregistrieren
+ * PATCH  /api/v1/admin/mobile/devices/:id/status  — set status (OK|PENDING|BLOCKED)
+ * POST   /api/v1/admin/mobile/devices/:id/wipe    — request remote wipe
+ * DELETE /api/v1/admin/mobile/devices/:id         — deregister device
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';

@@ -1,13 +1,13 @@
 /**
  * v3.18.25 A5 — iMIP/iTIP Calendar Invitations (RFC 6047 / 5546).
  *
- * Erzeugt iMIP-konforme Einladungs-Mails für Calendar-Events. Outlook +
- * Gmail kompatibel: ICS-Body sowohl als `text/calendar; method=REQUEST` in
- * `multipart/alternative` (für Gmail) ALS AUCH als separater `.ics`-Anhang
- * in `multipart/mixed` (für Outlook-Win32).
+ * Generates iMIP-compliant invitation mails for calendar events. Outlook +
+ * Gmail compatible: ICS body both as `text/calendar; method=REQUEST` in
+ * `multipart/alternative` (for Gmail) AND as a separate `.ics` attachment
+ * in `multipart/mixed` (for Outlook Win32).
  *
- * Recherche: research_imip Report v3.18.24 — Quellen RFC 6047, RFC 5546,
- * MS-OXCICAL, Apple Calendar Server CalDAV-Scheduling-Examples.
+ * Research: research_imip report v3.18.24 — sources RFC 6047, RFC 5546,
+ * MS-OXCICAL, Apple Calendar Server CalDAV scheduling examples.
  */
 import ical, {
   ICalCalendarMethod,
@@ -33,7 +33,7 @@ export interface AttendeeData {
 
 export interface EventData {
   uid: string;
-  sequence: number;     // 0 für REQUEST, +1 bei jedem UPDATE
+  sequence: number;     // 0 for REQUEST, +1 on every UPDATE
   summary: string;
   description?: string;
   location?: string;
@@ -41,26 +41,26 @@ export interface EventData {
   dtEnd: Date;
   organizer: { email: string; cn?: string };
   attendees: AttendeeData[];
-  publicHostname: string;  // für UID-Domain fallback
+  publicHostname: string;  // for UID domain fallback
 }
 
 /**
- * Baut ein REQUEST-VCALENDAR. Gibt den ICS-String zurück.
+ * Builds a REQUEST VCALENDAR. Returns the ICS string.
  */
 export function buildRequestIcs(ev: EventData): string {
   return buildIcs(ev, ICalCalendarMethod.REQUEST, ICalEventStatus.CONFIRMED);
 }
 
 /**
- * Baut ein CANCEL-VCALENDAR (Organizer löscht Event).
+ * Builds a CANCEL VCALENDAR (organizer deletes the event).
  */
 export function buildCancelIcs(ev: EventData): string {
   return buildIcs(ev, ICalCalendarMethod.CANCEL, ICalEventStatus.CANCELLED);
 }
 
 /**
- * Baut ein REPLY-VCALENDAR (Gast antwortet — wir senden das aus wenn ein
- * User in CoreMail auf einen externen Termin Accept/Decline klickt).
+ * Builds a REPLY VCALENDAR (guest responds — we send this when a CoreMail
+ * user clicks Accept/Decline on an external appointment).
  */
 export function buildReplyIcs(ev: EventData & { responder: AttendeeData }): string {
   const cal = ical({
@@ -76,7 +76,7 @@ export function buildReplyIcs(ev: EventData & { responder: AttendeeData }): stri
     stamp: new Date(),
     organizer: { name: ev.organizer.cn ?? ev.organizer.email, email: ev.organizer.email },
   });
-  // REPLY hat GENAU EINEN attendee: den antwortenden Gast
+  // REPLY has EXACTLY ONE attendee: the responding guest
   e.createAttendee({
     email: ev.responder.email,
     name: ev.responder.cn ?? ev.responder.email,
@@ -108,8 +108,8 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     organizer: { name: ev.organizer.cn ?? ev.organizer.email, email: ev.organizer.email },
   });
 
-  // Outlook-Quirks — verbessert Frei/Gebucht-Status + Force-Inspector
-  // (siehe Research v3.18.24, MS-OXCICAL)
+  // Outlook quirks — improves free/busy status + force-inspector
+  // (see research v3.18.24, MS-OXCICAL)
   e.x([
     { key: 'X-MICROSOFT-CDO-BUSYSTATUS', value: 'BUSY' },
     { key: 'X-MICROSOFT-CDO-INTENDEDSTATUS', value: 'BUSY' },
@@ -143,8 +143,8 @@ function mapPartstatToStatus(p: AttendeeStatus): ICalAttendeeStatus {
 }
 
 /**
- * Baut eine stabile UID für ein Event. Format: `<eventId>@<hostname>`
- * (RFC 5545 §3.8.4.7 — empfiehlt domain-suffix).
+ * Builds a stable UID for an event. Format: `<eventId>@<hostname>`
+ * (RFC 5545 §3.8.4.7 — recommends a domain suffix).
  */
 export function buildEventUid(eventId: string, publicHostname: string): string {
   const host = publicHostname.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
@@ -152,16 +152,16 @@ export function buildEventUid(eventId: string, publicHostname: string): string {
 }
 
 /**
- * Baut die volle MIME-Einladung als Raw-Buffer (RFC 5322).
+ * Builds the full MIME invitation as a raw buffer (RFC 5322).
  *
- * Struktur:
+ * Structure:
  *   multipart/mixed
- *   ├── multipart/alternative   ← Gmail liest hieraus den text/calendar Part
- *   │   ├── text/plain          ← Fallback für Plain-Text-Reader
- *   │   ├── text/html           ← Human-Readable HTML
- *   │   └── text/calendar; method=REQUEST   ← Inline-iMIP
- *   └── application/ics; name="invite.ics"  ← Outlook-Win32 braucht den
- *                                              Anhang für RSVP-Buttons
+ *   ├── multipart/alternative   ← Gmail reads the text/calendar part from here
+ *   │   ├── text/plain          ← fallback for plain-text readers
+ *   │   ├── text/html           ← human-readable HTML
+ *   │   └── text/calendar; method=REQUEST   ← inline iMIP
+ *   └── application/ics; name="invite.ics"  ← Outlook Win32 needs the
+ *                                              attachment for RSVP buttons
  */
 export async function buildInvitationMime(args: {
   ics: string;
@@ -182,14 +182,14 @@ export async function buildInvitationMime(args: {
     subject: args.subject,
     text: args.textBody,
     ...(args.htmlBody ? { html: args.htmlBody } : {}),
-    // Inline-Alternative für Gmail
+    // Inline alternative for Gmail
     alternatives: [
       {
         contentType: `text/calendar; charset=UTF-8; method=${args.method}`,
         content: args.ics,
       },
     ],
-    // Zusätzlich .ics-Attachment für Outlook-Win32 RSVP-Buttons
+    // Additional .ics attachment for Outlook Win32 RSVP buttons
     attachments: [
       {
         filename: `invite.ics`,
@@ -198,7 +198,7 @@ export async function buildInvitationMime(args: {
       },
     ],
     headers: {
-      // Damit Mail-Clients erkennen dass die Mail eine Einladung ist
+      // So mail clients recognize the mail as an invitation
       'X-Coremail-Calendar-Method': args.method,
     },
   });
@@ -211,17 +211,17 @@ export async function buildInvitationMime(args: {
 }
 
 /**
- * High-level Helper: erstellt REQUEST/CANCEL-Mail und queued sie via BullMQ
- * `smtp-outbound`. Übernimmt rawMessage-Pfad (base64) — funktioniert ohne
- * StructuredMessage-Erweiterung im Worker.
+ * High-level helper: creates a REQUEST/CANCEL mail and queues it via BullMQ
+ * `smtp-outbound`. Uses the rawMessage path (base64) — works without a
+ * StructuredMessage extension in the worker.
  */
 export interface QueueInvitationOpts {
   ev: EventData;
   method: 'REQUEST' | 'CANCEL';
-  /** BullMQ-Queue-Instanz (gleiche wie /mail/send) */
+  /** BullMQ queue instance (same as /mail/send) */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   queue: any;
-  /** Tracking-ID — wird in den BullMQ-Job als messageId mitgegeben */
+  /** Tracking ID — passed into the BullMQ job as messageId */
   trackingId: string;
 }
 
