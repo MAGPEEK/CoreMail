@@ -15,6 +15,10 @@ jobs:
   build:
     name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
+    # Ein Build dauert normal 5–12 min. Ohne Timeout hängt ein QEMU/arm64-Build
+    # gelegentlich bis zum GitHub-Default (6 h) — so schlägt er nach 45 min fehl
+    # und kann per „Re-run failed jobs" wiederholt werden.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
