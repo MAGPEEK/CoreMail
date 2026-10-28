@@ -21,7 +21,7 @@ import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
 
-// ── Farbpaletten ──────────────────────────────────────────────────────────────
+// ── Color palettes ────────────────────────────────────────────────────────────
 const TEXT_COLORS = [
   '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#ffffff',
   '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#0000ff',
@@ -34,7 +34,7 @@ const HIGHLIGHT_COLORS = [
   '#fce5cd', '#fff2cc', '#d9ead3', '#cfe2f3', '#ead1dc', '#f4cccc',
 ];
 
-// ── Farbpaletten-Popover ──────────────────────────────────────────────────────
+// ── Color palette popover ─────────────────────────────────────────────────────
 function ColorPicker({
   colors,
   onSelect,
@@ -85,7 +85,7 @@ function ColorPicker({
   );
 }
 
-// ── Block-Typ-Dropdown (Normal / Überschrift / Code) ──────────────────────────
+// ── Block type dropdown (Normal / Heading / Code) ─────────────────────────────
 const BLOCK_TYPES = [
   { label: 'Normal',        cmd: 'paragraph',  size: 'text-sm' },
   { label: 'Überschrift 1', cmd: 'h1',         size: 'text-2xl font-bold' },
@@ -157,7 +157,7 @@ function BlockTypeDropdown({ editor }: { editor: ReturnType<typeof useEditor> })
   );
 }
 
-// ── Schriftarten-Dropdown ─────────────────────────────────────────────────────
+// ── Font family dropdown ──────────────────────────────────────────────────────
 const FONT_FAMILIES = [
   { label: 'Standard',        value: '' },
   { label: 'Arial',           value: 'Arial, sans-serif' },
@@ -223,7 +223,7 @@ function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }
   );
 }
 
-// ── Trennlinie ────────────────────────────────────────────────────────────────
+// ── Divider ───────────────────────────────────────────────────────────────────
 function Sep() {
   return <div className="w-px h-5 bg-gray-200 mx-0.5 shrink-0" />;
 }
@@ -258,7 +258,7 @@ function ToolBtn({
   );
 }
 
-// ── Empfänger-Autocomplete ────────────────────────────────────────────────────
+// ── Recipient autocomplete ────────────────────────────────────────────────────
 interface ContactSuggest {
   id: string;
   displayName: string;
@@ -433,7 +433,7 @@ export function ComposeWindow() {
   const qc = useQueryClient();
   const { closeCompose, composeCtx } = useUiStore();
 
-  // Betreff-Präfix je nach Modus
+  // Subject prefix depending on mode
   const subjectPrefix =
     composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? 'Re: ' :
     composeCtx?.mode === 'forward' ? 'Fwd: ' : '';
@@ -484,7 +484,7 @@ export function ComposeWindow() {
     },
   });
 
-  // Auto-Signatur + zitierter Vortext einfügen sobald Editor + Signaturdaten bereit sind
+  // Insert auto signature + quoted original text once editor + signature data are ready
   useEffect(() => {
     if (!editor || !sigData || signatureInserted.current) return;
     signatureInserted.current = true;
@@ -509,7 +509,7 @@ export function ComposeWindow() {
     editor.commands.focus('start');
   }, [editor, sigData, composeCtx]);
 
-  // Link einfügen / bearbeiten
+  // Insert / edit link
   const handleLink = useCallback(() => {
     if (!editor) return;
     const prev = editor.getAttributes('link').href as string | undefined;
@@ -556,7 +556,7 @@ export function ComposeWindow() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // Schedule-Presets (Outlook-Style): morgen früh, morgen nachmittags, nächster Montag
+  // Schedule presets (Outlook style): tomorrow morning, tomorrow afternoon, next Monday
   const schedulePresets = (() => {
     const now = new Date();
     const tomorrow8 = new Date(now); tomorrow8.setDate(now.getDate() + 1); tomorrow8.setHours(8, 0, 0, 0);
@@ -577,7 +577,7 @@ export function ComposeWindow() {
     sendMutation.mutate(date);
   };
 
-  // ── Minimierter Zustand ────────────────────────────────────────────────────
+  // ── Minimized state ────────────────────────────────────────────────────────
   if (minimized) {
     return (
       <div className="fixed bottom-0 right-4 w-72 bg-gray-800 text-white rounded-t-lg shadow-xl z-50">
@@ -596,7 +596,7 @@ export function ComposeWindow() {
     );
   }
 
-  // Aktive Farben für Swatch-Vorschau
+  // Active colors for swatch preview
   const currentTextColor  = editor?.getAttributes('textStyle').color as string | undefined;
   const currentHighlight  = editor?.getAttributes('highlight').color as string | undefined;
 
@@ -605,7 +605,7 @@ export function ComposeWindow() {
       className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col animate-fly-in"
       style={{ maxHeight: '92vh', height: '78vh' }}
     >
-      {/* ── Titelleiste ─────────────────────────────────────────────────────── */}
+      {/* ── Title bar ───────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0">
         <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
         <div className="flex items-center gap-1">
@@ -618,9 +618,9 @@ export function ComposeWindow() {
         </div>
       </div>
 
-      {/* ── Kopffelder (An / CC / BCC / Betreff) ────────────────────────────── */}
+      {/* ── Header fields (To / CC / BCC / Subject) ─────────────────────────── */}
       <div className="border-b border-gray-100 shrink-0">
-        {/* An */}
+        {/* To */}
         <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
           <span className="text-xs text-gray-400 w-10 shrink-0">An:</span>
           <RecipientInput value={to} onChange={setTo} placeholder="Empfänger..." />
@@ -646,7 +646,7 @@ export function ComposeWindow() {
           </div>
         )}
 
-        {/* Betreff */}
+        {/* Subject */}
         <div className="flex items-center px-3 py-1.5 gap-2">
           <span className="text-xs text-gray-400 w-10 shrink-0">Betreff:</span>
           <input
@@ -658,10 +658,10 @@ export function ComposeWindow() {
         </div>
       </div>
 
-      {/* ── Formatierungsleiste ──────────────────────────────────────────────── */}
+      {/* ── Formatting toolbar ───────────────────────────────────────────────── */}
       <div className="flex items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-gray-100 shrink-0 bg-gray-50/60">
 
-        {/* Rückgängig / Wiederholen */}
+        {/* Undo / Redo */}
         <ToolBtn
           title="Rückgängig (Ctrl+Z)"
           disabled={!editor?.can().undo()}
@@ -679,17 +679,17 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Block-Typ */}
+        {/* Block type */}
         {editor && <BlockTypeDropdown editor={editor} />}
 
         <Sep />
 
-        {/* Schriftart */}
+        {/* Font family */}
         {editor && <FontFamilyDropdown editor={editor} />}
 
         <Sep />
 
-        {/* Fett / Kursiv / Unterstrichen / Durchgestrichen */}
+        {/* Bold / Italic / Underline / Strikethrough */}
         <ToolBtn
           title="Fett (Ctrl+B)"
           active={!!editor?.isActive('bold')}
@@ -721,7 +721,7 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Schriftfarbe */}
+        {/* Font color */}
         <div className="relative">
           <button
             onMouseDown={(e) => {
@@ -751,7 +751,7 @@ export function ComposeWindow() {
           )}
         </div>
 
-        {/* Markierungsfarbe (Highlight) */}
+        {/* Highlight color */}
         <div className="relative">
           <button
             onMouseDown={(e) => {
@@ -794,7 +794,7 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Textausrichtung */}
+        {/* Text alignment */}
         <ToolBtn
           title="Linksbündig"
           active={!!editor?.isActive({ textAlign: 'left' })}
@@ -826,7 +826,7 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Listen */}
+        {/* Lists */}
         <ToolBtn
           title="Aufzählungsliste"
           active={!!editor?.isActive('bulletList')}
@@ -842,7 +842,7 @@ export function ComposeWindow() {
           <ListOrdered size={13} />
         </ToolBtn>
 
-        {/* Einzug */}
+        {/* Indent */}
         <ToolBtn
           title="Einzug verringern"
           onClick={() => editor?.chain().focus().liftListItem('listItem').run()}
@@ -864,7 +864,7 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Zitat */}
+        {/* Quote */}
         <ToolBtn
           title="Zitat (Blockquote)"
           active={!!editor?.isActive('blockquote')}
@@ -882,7 +882,7 @@ export function ComposeWindow() {
           <Code2 size={13} />
         </ToolBtn>
 
-        {/* Trennlinie einfügen */}
+        {/* Insert divider */}
         <ToolBtn
           title="Horizontale Trennlinie einfügen"
           onClick={() => editor?.chain().focus().setHorizontalRule().run()}
@@ -895,7 +895,7 @@ export function ComposeWindow() {
 
         <Sep />
 
-        {/* Formatierung entfernen */}
+        {/* Clear formatting */}
         <ToolBtn
           title="Formatierung entfernen"
           onClick={() => editor?.chain().focus().clearNodes().unsetAllMarks().run()}
@@ -904,7 +904,7 @@ export function ComposeWindow() {
         </ToolBtn>
       </div>
 
-      {/* ── Editor-Bereich ────────────────────────────────────────────────────── */}
+      {/* ── Editor area ───────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         <EditorContent
           editor={editor}
@@ -916,7 +916,7 @@ export function ComposeWindow() {
             '[&_.ProseMirror_h3]:text-base [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h3]:mb-1 [&_.ProseMirror_h3]:mt-2',
             // Blockquote
             '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-gray-300 [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:text-gray-500 [&_.ProseMirror_blockquote]:italic [&_.ProseMirror_blockquote]:my-2',
-            // Listen
+            // Lists
             '[&_.ProseMirror_ul]:list-disc   [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ul]:my-1',
             '[&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_ol]:my-1',
             '[&_.ProseMirror_li]:my-0.5',
@@ -928,13 +928,13 @@ export function ComposeWindow() {
             '[&_.ProseMirror_a]:text-blue-600 [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
             // HR
             '[&_.ProseMirror_hr]:border-gray-200 [&_.ProseMirror_hr]:my-4',
-            // Paragraph-Abstand
+            // Paragraph spacing
             '[&_.ProseMirror_p]:mb-1',
           ].join(' ')}
         />
       </div>
 
-      {/* ── Anhangsliste ──────────────────────────────────────────────────────── */}
+      {/* ── Attachment list ───────────────────────────────────────────────────── */}
       {attachments.length > 0 && (
         <div className="border-t border-gray-100 px-3 py-2 flex flex-wrap gap-2 shrink-0 bg-gray-50/40">
           {attachments.map((file, i) => (
@@ -962,10 +962,10 @@ export function ComposeWindow() {
         </div>
       )}
 
-      {/* ── Aktionsleiste ─────────────────────────────────────────────────────── */}
+      {/* ── Action bar ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 border-t border-gray-100 bg-gray-50/60 shrink-0">
         <div className="flex items-center gap-1">
-          {/* Verstecktes File-Input */}
+          {/* Hidden file input */}
           <input
             ref={fileInputRef}
             type="file"
@@ -976,7 +976,7 @@ export function ComposeWindow() {
               if (newFiles.length) {
                 setAttachments((prev) => [...prev, ...newFiles]);
               }
-              // Reset so dieselbe Datei erneut gewählt werden kann
+              // Reset so the same file can be selected again
               e.target.value = '';
             }}
           />
@@ -999,7 +999,7 @@ export function ComposeWindow() {
             Entwurf
           </button>
         </div>
-        {/* Send-Button-Group: Senden + Pfeil-Dropdown für „Senden planen" */}
+        {/* Send button group: Send + arrow dropdown for "Schedule send" */}
         <div className="relative flex">
           <button
             type="button"

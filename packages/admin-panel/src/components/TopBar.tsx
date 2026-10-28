@@ -5,7 +5,7 @@ import { useLanguageStore, type Lang } from '../store/language.js';
 import { clearToken, getToken } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
-// ── JWT-Payload ohne jsonwebtoken (nur base64-Decode, kein Verify) ────────────
+// ── JWT payload without jsonwebtoken (base64 decode only, no verify) ──────────
 function decodeJwtPayload(token: string): { email?: string; role?: string } {
   try {
     const payload = token.split('.')[1] ?? '';
@@ -45,7 +45,7 @@ export function TopBar() {
     dark:   { icon: Moon,    label: t('topbar_theme_dark')   },
   };
 
-  // Nächstes Theme im Zyklus: system → light → dark → system …
+  // Next theme in the cycle: system → light → dark → system …
   const cycleTheme = () => {
     const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length];
     setTheme(next);
@@ -80,7 +80,7 @@ export function TopBar() {
         <ThemeIcon size={16} />
       </button>
 
-      {/* User-Profil */}
+      {/* User profile */}
       <div className="relative">
         <button
           onClick={() => setProfileOpen((o) => !o)}
@@ -95,7 +95,7 @@ export function TopBar() {
 
         {profileOpen && (
           <>
-            {/* Klick außerhalb schließt Dropdown */}
+            {/* Click outside closes the dropdown */}
             <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
 
             <div className="absolute right-0 top-full mt-1 w-64 bg-white dark:bg-gray-800 shadow-xl border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden z-50">
@@ -113,7 +113,7 @@ export function TopBar() {
                 )}
               </div>
 
-              {/* Sprache */}
+              {/* Language */}
               <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
                 <p className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
                   <Languages size={12} />
@@ -143,7 +143,7 @@ export function TopBar() {
                 </button>
               </div>
 
-              {/* Abmelden */}
+              {/* Logout */}
               <button
                 onClick={() => { clearToken(); window.location.href = '/bcp/login'; }}
                 className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"

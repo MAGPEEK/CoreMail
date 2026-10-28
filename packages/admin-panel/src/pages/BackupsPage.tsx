@@ -9,18 +9,18 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 
 /**
- * v3.18.28 BackupsPage v3 — Tab-basierte UI mit:
- * - Tab „Backup-Jobs" (Status-Log mit Delete + Download per Stream-Proxy)
- * - Tab „Schnellaktionen" (Vollbackup + Mailbox-Backup)
- * - Tab „Zeitpläne" (Cron CRUD mit Dropdown-Editor)
- * - Tab „Archiv" (alias S3-Snapshots, umbenannt)
- * - Tab „Restore" (MBOX-Import)
+ * v3.18.28 BackupsPage v3 — tab-based UI with:
+ * - Tab "Backup Jobs" (status log with delete + download via stream proxy)
+ * - Tab "Quick Actions" (full backup + mailbox backup)
+ * - Tab "Schedules" (cron CRUD with dropdown editor)
+ * - Tab "Archive" (formerly S3 snapshots, renamed)
+ * - Tab "Restore" (MBOX import)
  *
  * Fixes:
- * - „S3-Snapshots" → „Backup-Archiv" (AWS-Begriff vermeiden)
- * - Backup-Jobs können gelöscht werden
- * - Download funktioniert (Stream-Proxy via api-gateway)
- * - Cron-Editor mit Wochentag/Stunde/Minute-Dropdowns (statt freitext)
+ * - "S3 snapshots" → "Backup archive" (avoid AWS term)
+ * - Backup jobs can be deleted
+ * - Download works (stream proxy via api-gateway)
+ * - Cron editor with weekday/hour/minute dropdowns (instead of free text)
  */
 
 type JobStatus =
@@ -166,7 +166,7 @@ export function BackupsPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // v3.18.29: Archive-Object löschen (DELETE per S3-Key)
+  // v3.18.29: Delete archive object (DELETE by S3 key)
   const deleteArchive = useMutation({
     mutationFn: (key: string) => api.delete(`/admin/backups/archive?key=${encodeURIComponent(key)}`),
     onSuccess: () => {
@@ -177,7 +177,7 @@ export function BackupsPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // v3.18.29: Archive-Object download (Stream-Proxy per S3-Key)
+  // v3.18.29: Archive object download (stream proxy by S3 key)
   const downloadArchive = async (key: string) => {
     const token = localStorage.getItem('bcp-token') ?? '';
     try {
@@ -229,7 +229,7 @@ export function BackupsPage() {
     return u?.email ?? id.slice(0, 8);
   };
 
-  // Download via Auth-Token (kein direct href — backend braucht Bearer)
+  // Download via auth token (no direct href — backend needs Bearer)
   const downloadJob = async (jobId: string, filenameHint?: string) => {
     const token = localStorage.getItem('bcp-token') ?? '';
     try {
@@ -375,7 +375,7 @@ export function BackupsPage() {
         </div>
       )}
 
-      {/* TAB: Schnellaktionen */}
+      {/* TAB: Quick actions */}
       {tab === 'actions' && (
         <ActionsTab
           users={users}
@@ -386,7 +386,7 @@ export function BackupsPage() {
         />
       )}
 
-      {/* TAB: Zeitpläne */}
+      {/* TAB: Schedules */}
       {tab === 'schedules' && (
         <div className="space-y-3">
           <div className="flex justify-end">
@@ -454,7 +454,7 @@ export function BackupsPage() {
         </div>
       )}
 
-      {/* TAB: Backup-Archiv (vorher „S3-Snapshots") */}
+      {/* TAB: Backup archive (formerly "S3 snapshots") */}
       {tab === 'archive' && (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
           <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400">
@@ -556,7 +556,7 @@ function TabBtn(props: { active: boolean; onClick: () => void; icon: React.React
   );
 }
 
-// ─── Tab: Schnellaktionen ───────────────────────────────────────────────────
+// ─── Tab: Quick actions ─────────────────────────────────────────────────────
 function ActionsTab(props: {
   users: UserItem[];
   onFullBackup: () => void;
@@ -569,7 +569,7 @@ function ActionsTab(props: {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* Vollbackup */}
+      {/* Full backup */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
         <div className="flex items-start gap-3 mb-3">
           <Database size={20} className="text-accent mt-0.5" />
@@ -590,7 +590,7 @@ function ActionsTab(props: {
         </button>
       </div>
 
-      {/* Mailbox-Backup */}
+      {/* Mailbox backup */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
         <div className="flex items-start gap-3 mb-3">
           <UserIcon size={20} className="text-accent mt-0.5" />
@@ -642,7 +642,7 @@ function ActionsTab(props: {
   );
 }
 
-// ─── Tab: Restore (MBOX-Import) ─────────────────────────────────────────────
+// ─── Tab: Restore (MBOX import) ─────────────────────────────────────────────
 function RestoreTab(props: { users: UserItem[] }) {
   const [importUserId, setImportUserId] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -717,12 +717,12 @@ function RestoreTab(props: { users: UserItem[] }) {
   );
 }
 
-// ─── Schedule-Editor mit Cron-Dropdowns ─────────────────────────────────────
+// ─── Schedule editor with cron dropdowns ────────────────────────────────────
 type ScheduleFreq = 'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
 const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
-/** Parse Cron-String zu ScheduleFreq + Komponenten, oder 'custom' wenn unbekannt. */
+/** Parse cron string into ScheduleFreq + components, or 'custom' if unknown. */
 function parseCron(cron: string): { freq: ScheduleFreq; minute: number; hour: number; weekday: number; day: number } {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return { freq: 'custom', minute: 0, hour: 2, weekday: 1, day: 1 };
@@ -732,7 +732,7 @@ function parseCron(cron: string): { freq: ScheduleFreq; minute: number; hour: nu
   const weekday = dow && /^\d+$/.test(dow) ? parseInt(dow, 10) : 1;
   const day = dom && /^\d+$/.test(dom) ? parseInt(dom, 10) : 1;
 
-  // Heuristik: hourly = "M * * * *", daily = "M H * * *", weekly = "M H * * D", monthly = "M H D * *"
+  // Heuristic: hourly = "M * * * *", daily = "M H * * *", weekly = "M H * * D", monthly = "M H D * *"
   if (h === '*' && dom === '*' && dow === '*') return { freq: 'hourly', minute, hour, weekday, day };
   if (dom === '*' && dow === '*') return { freq: 'daily', minute, hour, weekday, day };
   if (dom === '*' && dow && dow !== '*') return { freq: 'weekly', minute, hour, weekday, day };
@@ -797,7 +797,7 @@ function ScheduleEditorModal(props: {
             />
           </div>
 
-          {/* Frequenz */}
+          {/* Frequency */}
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Wie oft?</label>
             <select
@@ -813,7 +813,7 @@ function ScheduleEditorModal(props: {
             </select>
           </div>
 
-          {/* Zeit-Dropdowns je nach Frequenz */}
+          {/* Time dropdowns depending on frequency */}
           {freq !== 'custom' && (
             <div className="grid grid-cols-2 gap-3">
               {freq === 'weekly' && (
@@ -847,7 +847,7 @@ function ScheduleEditorModal(props: {
                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Minute</label>
                 <select value={minute} onChange={(e) => setMinute(parseInt(e.target.value, 10))}
                   className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
-                  {/* v3.18.34: minutengenau (0..59) statt 5-min-Raster */}
+                  {/* v3.18.34: minute precision (0..59) instead of a 5-minute grid */}
                   {Array.from({ length: 60 }, (_, m) => (
                     <option key={m} value={m}>{String(m).padStart(2, '0')}</option>
                   ))}
@@ -904,7 +904,7 @@ function ScheduleEditorModal(props: {
             </div>
           )}
 
-          {/* Retention + Aktiv */}
+          {/* Retention + Active */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Aufbewahrung (Tage)</label>

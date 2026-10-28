@@ -1,8 +1,8 @@
-// ── CoreMail BCP — Übersetzungen DE / EN ─────────────────────────────────────
-// Alle deutschen Texte der Admin-Oberfläche mit englischer Entsprechung.
+// ── CoreMail BCP — Translations DE / EN ──────────────────────────────────────
+// All German texts of the admin UI with their English equivalents.
 
 const de = {
-  // ── Navigation — Einzel-Einträge ─────────────────────────────────────────
+  // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Übersicht',
   nav_global_settings:    'Global Einstellungen',
   nav_organisation:       'Organisation',
@@ -12,7 +12,7 @@ const de = {
   nav_backups:            'Backup & Restore',
   nav_info:               'Info',
 
-  // ── Navigation — Gruppen ─────────────────────────────────────────────────
+  // ── Navigation — Groups ──────────────────────────────────────────────────
   nav_group_recipients:   'Empfänger',
   nav_group_mailflow:     'Nachrichtenfluss',
   nav_group_protection:   'Schutz',
@@ -20,21 +20,21 @@ const de = {
   nav_group_monitoring:   'Status & Monitoring',
   nav_group_compliance:   'Compliance',
 
-  // ── Navigation — Empfänger ───────────────────────────────────────────────
+  // ── Navigation — Recipients ──────────────────────────────────────────────
   nav_mailboxes:          'Postfächer',
   nav_shared_mailboxes:   'Freigegeben',
   nav_resources:          'Ressourcen',
   nav_domains:            'Domains',
 
-  // ── Navigation — Nachrichtenfluss ────────────────────────────────────────
+  // ── Navigation — Mail flow ───────────────────────────────────────────────
   nav_transport_rules:    'Transportregeln',
   nav_message_trace:      'Nachrichtenfluss',
 
-  // ── Navigation — Schutz ─────────────────────────────────────────────────
+  // ── Navigation — Protection ─────────────────────────────────────────────
   nav_protection:         'Schutzfilter',
   nav_quarantine:         'Quarantäne',
 
-  // ── Navigation — Infrastruktur ───────────────────────────────────────────
+  // ── Navigation — Infrastructure ──────────────────────────────────────────
   nav_services:           'Services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Zertifikate',
@@ -59,7 +59,7 @@ const de = {
   topbar_language:        'Sprache',
   topbar_lang_save:       'Speichern',
 
-  // ── Gemeinsame Aktionen ──────────────────────────────────────────────────
+  // ── Common actions ───────────────────────────────────────────────────────
   action_save:            'Speichern',
   action_saving:          'Speichern…',
   action_cancel:          'Abbrechen',
@@ -74,7 +74,7 @@ const de = {
   action_yes:             'Ja',
   action_no:              'Nein',
 
-  // ── Zustandsmeldungen ────────────────────────────────────────────────────
+  // ── Status messages ──────────────────────────────────────────────────────
   status_online:          'Online',
   status_offline:         'Offline',
   status_active:          'Aktiv',
@@ -84,7 +84,7 @@ const de = {
   status_error:           'Fehler',
   status_success:         'Erfolg',
 
-  // ── Global Einstellungen (SettingsPage) ──────────────────────────────────
+  // ── Global Settings (SettingsPage) ───────────────────────────────────────
   settings_page_title:        'Globale Einstellungen',
   settings_page_saved:        'Zuletzt gespeichert:',
   settings_loading:           'Einstellungen werden geladen…',
@@ -157,7 +157,7 @@ const de = {
 
   settings_urls_info: 'Server-URLs und Protokoll-Einstellungen (IMAP, SMTP, EWS, Autodiscover) werden unter Server & Health → Virtuelle Verzeichnisse konfiguriert.',
 
-  // ── Einheiten ─────────────────────────────────────────────────────────────
+  // ── Units ─────────────────────────────────────────────────────────────────
   unit_mb:            'MB',
   unit_days:          'Tage',
   unit_chars:         'Zeichen',
@@ -168,7 +168,7 @@ const de = {
   unit_weeks:         'Wochen',
   unit_months:        'Monate',
 
-  // ── Postfächer (MailboxesPage) ────────────────────────────────────────────
+  // ── Mailboxes (MailboxesPage) ─────────────────────────────────────────────
   mbox_page_title:          'Benutzerverwaltung',
   mbox_total:               'Postfächer gesamt',
   mbox_recalc_storage:      'Speicher aktualisieren',
@@ -491,7 +491,7 @@ const de = {
   dash_strip_mails_today:   'Mails heute eingegangen',
   dash_drag_move:           'Per Drag verschieben',
 
-  // ── Quarantäne (QuarantinePage) ───────────────────────────────────────────
+  // ── Quarantine (QuarantinePage) ───────────────────────────────────────────
   quar_page_title:          'Quarantäne',
   quar_pending:             'ausstehend',
   quar_total:               'gesamt',
@@ -562,7 +562,7 @@ const de = {
   quar_cleanup_btn:         'Bereinigen',
   quar_cleanup_success:     'Einträge bereinigt',
 
-  // ── Schutzfilter (ProtectionPage) ─────────────────────────────────────────
+  // ── Protection filters (ProtectionPage) ───────────────────────────────────
   prot_nav_section:         'Schutzfilter',
   prot_section_overview:    'Übersicht',
   prot_section_rspamd:      'Rspamd 4.0',
@@ -716,7 +716,7 @@ const de = {
   prot_attach_placeholder:   'z.B. exe',
   prot_attach_add:           'Hinzufügen',
 
-  // ── Mailbox-Delegierung ───────────────────────────────────────────────────
+  // ── Mailbox delegation ────────────────────────────────────────────────────
   delegate_section:          'Zugriffsrechte / Delegate Access',
   delegate_granted_to:       'Zugriff gewährt an',
   delegate_no_delegates:     'Kein Benutzer hat Zugriff auf dieses Postfach',
@@ -749,7 +749,7 @@ const de = {
 type DE = typeof de;
 
 const en: { [K in keyof DE]: string } = {
-  // ── Navigation — Einzel-Einträge ─────────────────────────────────────────
+  // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Overview',
   nav_global_settings:    'Global Settings',
   nav_organisation:       'Organisation',
@@ -759,7 +759,7 @@ const en: { [K in keyof DE]: string } = {
   nav_backups:            'Backup & Restore',
   nav_info:               'Info',
 
-  // ── Navigation — Gruppen ─────────────────────────────────────────────────
+  // ── Navigation — Groups ──────────────────────────────────────────────────
   nav_group_recipients:   'Recipients',
   nav_group_mailflow:     'Mail Flow',
   nav_group_protection:   'Protection',
@@ -767,21 +767,21 @@ const en: { [K in keyof DE]: string } = {
   nav_group_monitoring:   'Status & Monitoring',
   nav_group_compliance:   'Compliance',
 
-  // ── Navigation — Empfänger ───────────────────────────────────────────────
+  // ── Navigation — Recipients ──────────────────────────────────────────────
   nav_mailboxes:          'Mailboxes',
   nav_shared_mailboxes:   'Shared',
   nav_resources:          'Resources',
   nav_domains:            'Domains',
 
-  // ── Navigation — Nachrichtenfluss ────────────────────────────────────────
+  // ── Navigation — Mail flow ───────────────────────────────────────────────
   nav_transport_rules:    'Transport Rules',
   nav_message_trace:      'Mail Flow',
 
-  // ── Navigation — Schutz ─────────────────────────────────────────────────
+  // ── Navigation — Protection ─────────────────────────────────────────────
   nav_protection:         'Protection',
   nav_quarantine:         'Quarantine',
 
-  // ── Navigation — Infrastruktur ───────────────────────────────────────────
+  // ── Navigation — Infrastructure ──────────────────────────────────────────
   nav_services:           'Services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Certificates',
@@ -806,7 +806,7 @@ const en: { [K in keyof DE]: string } = {
   topbar_language:        'Language',
   topbar_lang_save:       'Save',
 
-  // ── Gemeinsame Aktionen ──────────────────────────────────────────────────
+  // ── Common actions ───────────────────────────────────────────────────────
   action_save:            'Save',
   action_saving:          'Saving…',
   action_cancel:          'Cancel',
@@ -821,7 +821,7 @@ const en: { [K in keyof DE]: string } = {
   action_yes:             'Yes',
   action_no:              'No',
 
-  // ── Zustandsmeldungen ────────────────────────────────────────────────────
+  // ── Status messages ──────────────────────────────────────────────────────
   status_online:          'Online',
   status_offline:         'Offline',
   status_active:          'Active',
@@ -904,7 +904,7 @@ const en: { [K in keyof DE]: string } = {
 
   settings_urls_info: 'Server URLs and protocol settings (IMAP, SMTP, EWS, Autodiscover) are configured under Server & Health → Virtual Directories.',
 
-  // ── Einheiten ─────────────────────────────────────────────────────────────
+  // ── Units ─────────────────────────────────────────────────────────────────
   unit_mb:            'MB',
   unit_days:          'days',
   unit_chars:         'characters',
@@ -1463,7 +1463,7 @@ const en: { [K in keyof DE]: string } = {
   prot_attach_placeholder:   'e.g. exe',
   prot_attach_add:           'Add',
 
-  // ── Mailbox-Delegierung ───────────────────────────────────────────────────
+  // ── Mailbox delegation ────────────────────────────────────────────────────
   delegate_section:          'Delegate Access',
   delegate_granted_to:       'Access granted to',
   delegate_no_delegates:     'No users have access to this mailbox',

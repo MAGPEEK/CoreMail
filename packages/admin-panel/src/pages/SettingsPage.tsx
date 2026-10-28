@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
-// ── Typen ─────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface GlobalSettings {
   id: string;
   // Organisation
@@ -25,7 +25,7 @@ interface GlobalSettings {
   maxMessageSizeMb:    number;
   maxAttachmentSizeMb: number;
   trashRetentionDays:  number;
-  // Sicherheit
+  // Security
   minPasswordLength:           number;
   maxLoginAttempts:            number;
   sessionTimeoutMinutes:       number;
@@ -34,7 +34,7 @@ interface GlobalSettings {
   allowSelfRegistration:       boolean;
   selfServicePasswordReset:    boolean;
   auditLogEnabled:             boolean;
-  // Wartung
+  // Maintenance
   maintenanceMode:    boolean;
   maintenanceMessage: string;
   // Server-URLs (read-only)
@@ -42,7 +42,7 @@ interface GlobalSettings {
   updatedAt: string;
 }
 
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleString('de-DE', {
     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -50,14 +50,14 @@ function fmtDate(iso: string) {
   });
 }
 
-// ── IANA-Zeitzonen ────────────────────────────────────────────────────────────
-// Alle vom Runtime unterstützten IANA-Zonen (~400). Label enthält aktuellen
-// UTC-Offset zur Orientierung. Sortiert: UTC oben, dann alphabetisch.
+// ── IANA time zones ───────────────────────────────────────────────────────────
+// All IANA zones supported by the runtime (~400). Label contains the current
+// UTC offset for orientation. Sorted: UTC first, then alphabetically.
 function buildTimezoneOptions(): { value: string; label: string }[] {
   type IntlEx = typeof Intl & { supportedValuesOf?: (k: string) => string[] };
   const intlAny = Intl as IntlEx;
   const raw = (intlAny.supportedValuesOf?.('timeZone') ?? [
-    // Fallback für ältere Runtimes — kleine kuratierte Liste
+    // Fallback for older runtimes — small curated list
     'UTC', 'Europe/Berlin', 'Europe/Vienna', 'Europe/Zurich', 'Europe/London',
     'Europe/Madrid', 'Europe/Paris', 'Europe/Rome', 'Europe/Amsterdam', 'Europe/Warsaw',
     'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
@@ -85,7 +85,7 @@ function buildTimezoneOptions(): { value: string; label: string }[] {
 }
 const TIMEZONE_OPTIONS = buildTimezoneOptions();
 
-// ── Feldkomponenten ───────────────────────────────────────────────────────────
+// ── Field components ──────────────────────────────────────────────────────────
 function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[220px_1fr] gap-4 py-4 border-b border-gray-100 last:border-0">
@@ -150,7 +150,7 @@ function Select({ value, onChange, options }: {
   );
 }
 
-// ── Sektion-Wrapper ───────────────────────────────────────────────────────────
+// ── Section wrapper ───────────────────────────────────────────────────────────
 function Section({ icon: Icon, title, description, children, saving, onSave, dirty }: {
   icon: React.ElementType; title: string; description: string;
   children: React.ReactNode; saving?: boolean; onSave?: () => void; dirty?: boolean;
@@ -181,7 +181,7 @@ function Section({ icon: Icon, title, description, children, saving, onSave, dir
   );
 }
 
-// ── Hauptseite ────────────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 export function SettingsPage() {
   const t = useT();
   const qc = useQueryClient();
@@ -271,7 +271,7 @@ export function SettingsPage() {
     );
   }
 
-  // ── Zeiten formatieren ──────────────────────────────────────────────────────
+  // ── Format times ────────────────────────────────────────────────────────────
   function fmtTrash(days: number) {
     if (days === 1) return `1 ${t('unit_day')}`;
     if (days <= 7)  return `${days} ${t('unit_days')}`;
@@ -287,7 +287,7 @@ export function SettingsPage() {
   return (
     <div className="p-6 space-y-5 max-w-[860px]">
 
-      {/* ── Kopfzeile ──────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">{t('settings_page_title')}</h1>
@@ -303,7 +303,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* ── Wartungsmodus-Banner ───────────────────────────────────────────── */}
+      {/* ── Maintenance mode banner ────────────────────────────────────────── */}
       {maint.maintenanceMode && (
         <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-amber-800">
           <AlertTriangle size={16} className="shrink-0 text-amber-500" />
@@ -314,7 +314,7 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* ══ SEKTION 1: ORGANISATION ══════════════════════════════════════════ */}
+      {/* ══ SECTION 1: ORGANIZATION ══════════════════════════════════════════ */}
       <Section icon={Building2} title={t('settings_org_title')} description={t('settings_org_desc')}
         saving={orgMut.isPending} dirty={orgDirty} onSave={() => orgMut.mutate()}>
 
@@ -353,7 +353,7 @@ export function SettingsPage() {
         </FieldGroup>
       </Section>
 
-      {/* ══ SEKTION 2: MAIL-EINSTELLUNGEN ════════════════════════════════════ */}
+      {/* ══ SECTION 2: MAIL SETTINGS ═════════════════════════════════════════ */}
       <Section icon={Mail} title={t('settings_mail_title')} description={t('settings_mail_desc')}
         saving={mailMut.isPending} dirty={mailDirty} onSave={() => mailMut.mutate()}>
 
@@ -371,7 +371,7 @@ export function SettingsPage() {
         </FieldGroup>
       </Section>
 
-      {/* ══ SEKTION 3: SICHERHEITSRICHTLINIEN ════════════════════════════════ */}
+      {/* ══ SECTION 3: SECURITY POLICIES ═════════════════════════════════════ */}
       <Section icon={Shield} title={t('settings_sec_title')} description={t('settings_sec_desc')}
         saving={secMut.isPending} dirty={secDirty} onSave={() => secMut.mutate()}>
 
@@ -480,7 +480,7 @@ export function SettingsPage() {
         </FieldGroup>
       </Section>
 
-      {/* ══ SEKTION 4: WARTUNGSMODUS ══════════════════════════════════════════ */}
+      {/* ══ SECTION 4: MAINTENANCE MODE ═══════════════════════════════════════ */}
       <Section icon={Wrench} title={t('settings_maint_title')} description={t('settings_maint_desc')}
         saving={maintMut.isPending} dirty={maintDirty} onSave={() => maintMut.mutate()}>
 

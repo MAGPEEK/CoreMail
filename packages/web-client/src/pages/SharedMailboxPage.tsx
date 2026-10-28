@@ -1,13 +1,13 @@
 /**
  * SharedMailboxPage — Read-only view of a shared mailbox the user has access to.
  *
- * Verwendet eigene Backend-Routen unter /api/v1/user/shared-mailboxes/:id/...
- * statt der Standard-/mail/-Routen. Damit ist klar getrennt zwischen „mein
- * Postfach" und „freigegebenes Postfach", und Backend kann die Berechtigung
- * pro Aufruf prüfen.
+ * Uses dedicated backend routes under /api/v1/user/shared-mailboxes/:id/...
+ * instead of the standard /mail/ routes. This clearly separates "my
+ * mailbox" and "shared mailbox", and the backend can check the permission
+ * on every call.
  *
- * Folder-Sidebar: gleiche Anordnung (INBOX → Drafts → Sent → Trash → Junk → Archive)
- * und gleiche Sprache wie in der normalen MailPage (via useT()).
+ * Folder sidebar: same arrangement (INBOX → Drafts → Sent → Trash → Junk → Archive)
+ * and same language as in the normal MailPage (via useT()).
  */
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
@@ -64,11 +64,11 @@ interface MessageListResponse {
   messages: MessageListEntry[];
 }
 
-// ── System-Ordner Sortierung (identisch zur normalen Mailbox / FolderTree) ────
+// ── System folder sorting (identical to the normal mailbox / FolderTree) ────
 const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 const SYSTEM_ORDER_IDX = Object.fromEntries(SYSTEM_ORDER.map((n, i) => [n, i]));
 
-// i18n-Key pro System-Folder-Name (identisch zu FolderTree.tsx)
+// i18n key per system folder name (identical to FolderTree.tsx)
 const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'trash' | 'junk' | 'archive'> = {
   INBOX:   'inbox',
   Drafts:  'drafts',
@@ -78,7 +78,7 @@ const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'trash' | '
   Archive: 'archive',
 };
 
-// Icon-Map (identisch zu FolderTree.tsx)
+// Icon map (identical to FolderTree.tsx)
 const ICON_MAP: Record<string, React.ElementType> = {
   INBOX:   Inbox,
   Drafts:  FileText,
@@ -88,7 +88,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Archive: Archive,
 };
 
-// Standard-Folder, die nicht umbenannt/gelöscht werden dürfen
+// Standard folders that must not be renamed/deleted
 const PROTECTED_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Outbox', 'Archive']);
 
 function fmtBytes(b: number) {
@@ -104,7 +104,7 @@ export function SharedMailboxPage() {
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
 
-  // Datums-Formatierung in der Sprache des Benutzers
+  // Date formatting in the user's language
   const dateLocale = lang === 'en' ? 'en-GB' : lang === 'es' ? 'es-ES' : lang === 'it' ? 'it-IT' : 'de-DE';
   const fmtDate = (iso: string) =>
     new Date(iso).toLocaleString(dateLocale, {
@@ -112,14 +112,14 @@ export function SharedMailboxPage() {
       hour: '2-digit', minute: '2-digit',
     });
 
-  // ── Mailbox-Metadaten ──────────────────────────────────────────────────────
+  // ── Mailbox metadata ───────────────────────────────────────────────────────
   const { data: mailbox, isLoading: loadingMailbox, error: mailboxError } = useQuery<SharedMailbox>({
     queryKey: ['shared-mailbox', id],
     queryFn:  () => api.get(`/user/shared-mailboxes/${id}`),
     enabled:  !!id,
   });
 
-  // ── Folder-Liste ──────────────────────────────────────────────────────────
+  // ── Folder list ───────────────────────────────────────────────────────────
   const { data: folders = [], isLoading: loadingFolders } = useQuery<Folder[]>({
     queryKey: ['shared-mailbox-folders', id],
     queryFn:  () => api.get(`/user/shared-mailboxes/${id}/folders`),
@@ -129,7 +129,7 @@ export function SharedMailboxPage() {
   const [selectedFolderId, setSelectedFolderId]   = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
-  // ── Folder-Aktionen (nur für FULL_ACCESS sichtbar/erlaubt) ────────────────
+  // ── Folder actions (visible/allowed only for FULL_ACCESS) ─────────────────
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [renamingId,    setRenamingId]    = useState<string | null>(null);
@@ -180,29 +180,29 @@ export function SharedMailboxPage() {
     }
   }, [folders, selectedFolderId]);
 
-  // ── Messages der gewählten Folder ─────────────────────────────────────────
+  // ── Messages of the selected folder ───────────────────────────────────────
   const { data: messageList, isLoading: loadingMessages } = useQuery<MessageListResponse>({
     queryKey: ['shared-mailbox-messages', id, selectedFolderId],
     queryFn:  () => api.get(`/user/shared-mailboxes/${id}/folders/${selectedFolderId}/messages?limit=100`),
     enabled:  !!id && !!selectedFolderId,
   });
 
-  // ── Ausgewählte Nachricht (Detail) ────────────────────────────────────────
+  // ── Selected message (detail) ─────────────────────────────────────────────
   const { data: messageDetail, isLoading: loadingMessage } = useQuery<MessageDetail>({
     queryKey: ['shared-mailbox-message', id, selectedMessageId],
     queryFn:  () => api.get(`/user/shared-mailboxes/${id}/messages/${selectedMessageId}`),
     enabled:  !!id && !!selectedMessageId,
   });
 
-  // ── Ordner-Label in der Sprache des Benutzers ─────────────────────────────
+  // ── Folder label in the user's language ───────────────────────────────────
   const folderLabel = (folder: Folder): string => {
     const key = SYSTEM_LABEL_KEY[folder.name];
     if (key) return t(key);
     return folder.displayName || folder.name;
   };
 
-  // ── Folder-Sortierung: identisch zur normalen MailPage ────────────────────
-  // System-Ordner in SYSTEM_ORDER-Reihenfolge, dann benutzerdefinierte alphabetisch
+  // ── Folder sorting: identical to the normal MailPage ──────────────────────
+  // System folders in SYSTEM_ORDER order, then custom ones alphabetically
   const sortedFolders = useMemo(() => {
     const systemFolders = SYSTEM_ORDER
       .map((name) => folders.find((f) => f.name === name))
@@ -218,10 +218,10 @@ export function SharedMailboxPage() {
     return [...systemFolders, ...customFolders];
   }, [folders]);
 
-  // Zwinge Re-Render bei Sprachwechsel
+  // Force re-render on language change
   void lang;
 
-  // ── Fehler-/Lade-States ───────────────────────────────────────────────────
+  // ── Error/loading states ──────────────────────────────────────────────────
   if (mailboxError) {
     return (
       <div className="h-full flex items-center justify-center p-8">
@@ -266,12 +266,12 @@ export function SharedMailboxPage() {
         </button>
       </div>
 
-      {/* ── 3-Spalten-Layout (Folder / Messages / Reader) ─────────────────── */}
+      {/* ── 3-column layout (folder / messages / reader) ──────────────────── */}
       <div className="flex-1 flex min-h-0">
 
         {/* ── Folder-Sidebar ────────────────────────────────────────────────── */}
         <aside className="w-52 bg-white border-r border-gray-200 overflow-y-auto shrink-0 flex flex-col">
-          {/* "Neuer Ordner"-Button (nur bei Vollzugriff) */}
+          {/* "New folder" button (full access only) */}
           {!isReadOnly && (
             <div className="px-3 py-2 border-b border-gray-100 shrink-0">
               {showNewFolder ? (
@@ -346,7 +346,7 @@ export function SharedMailboxPage() {
                         </div>
                       ) : (
                         <div className={`relative flex items-center pr-1 rounded-sm transition-all duration-150 ${active ? '' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
-                          {/* aktiver Akzentbalken links */}
+                          {/* active accent bar on the left */}
                           {active && (
                             <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-accent rounded-r" />
                           )}
@@ -368,7 +368,7 @@ export function SharedMailboxPage() {
                               </span>
                             )}
                           </button>
-                          {/* Rename/Delete-Buttons (nur Custom-Ordner + Vollzugriff) */}
+                          {/* Rename/delete buttons (custom folders + full access only) */}
                           {!isReadOnly && !protectedFolder && (
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                               <button type="button"
@@ -396,7 +396,7 @@ export function SharedMailboxPage() {
           </nav>
         </aside>
 
-        {/* ── Messages-Liste ──────────────────────────────────────────────────── */}
+        {/* ── Message list ────────────────────────────────────────────────────── */}
         <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto shrink-0">
           {loadingMessages ? (
             <p className="text-xs text-gray-400 p-3">Lade Nachrichten…</p>

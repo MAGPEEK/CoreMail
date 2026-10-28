@@ -8,9 +8,9 @@ import {
 import { api, exportUrl } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
-// v3.18.34: AnomaliesResponse-Interface + Banner entfernt — rote Banner waren
-// in der Praxis verwirrend (zeigten u.a. eigene Settings-Änderungen als
-// „kritische Aktion"). Audit-Log selbst zeigt alle relevanten Aktionen.
+// v3.18.34: AnomaliesResponse interface + banner removed — the red banners were
+// confusing in practice (showed e.g. one's own settings changes as
+// "critical action"). The audit log itself shows all relevant actions.
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,14 +66,14 @@ function dateToIso(d: string): string {
   return new Date(d + 'T23:59:59.999Z').toISOString();
 }
 
-// v3.18.30: Human-readable Action-Labels. Audit-Middleware schreibt das Pattern
-// `<resource>.<verb>` (z.B. `settings.put`, `mailboxes.delete`) — für Admins ist
-// das aber wenig aussagekräftig. Diese Map übersetzt häufige Aktionen in
-// menschenlesbare Beschreibungen + ordnet sie Farben zu.
+// v3.18.30: Human-readable action labels. The audit middleware writes the pattern
+// `<resource>.<verb>` (e.g. `settings.put`, `mailboxes.delete`) — for admins this is
+// not very meaningful, though. This map translates common actions into
+// human-readable descriptions + assigns colors to them.
 type ActionMeta = { label: string; tone: 'create' | 'update' | 'delete' | 'auth' | 'critical' | 'read' };
 
 const ACTION_MAP: Record<string, ActionMeta> = {
-  // Settings (v3.18.34: jetzt mit Sub-Resource im Action-String)
+  // Settings (v3.18.34: now with sub-resource in the action string)
   'settings.put':                 { label: 'Einstellungen geändert',         tone: 'update' },
   'settings.post':                { label: 'Einstellungen geändert',         tone: 'update' },
   'settings.org.put':             { label: 'Organisations-Einstellungen geändert', tone: 'update' },
@@ -109,7 +109,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'oauth.client.post':            { label: 'OAuth-Client angelegt',          tone: 'create' },
   'oauth.client.put':             { label: 'OAuth-Client geändert',          tone: 'update' },
   'oauth.client.delete':          { label: 'OAuth-Client gelöscht',          tone: 'delete' },
-  // Backups (v3.18.34: erweiterte Action-Pfade)
+  // Backups (v3.18.34: extended action paths)
   'backups.post':                 { label: 'Backup gestartet',               tone: 'create' },
   'backups.delete':               { label: 'Backup gelöscht',                tone: 'delete' },
   'backups.full.post':            { label: 'Vollbackup gestartet',           tone: 'create' },
@@ -145,7 +145,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   // v3.18.34: Audit-Log (sensitive GETs)
   'audit-log.export.get':         { label: 'Audit-Log exportiert',           tone: 'read' },
   'audit-log.anomalies.get':      { label: 'Anomalien-Report abgerufen',     tone: 'read' },
-  // v3.18.37: Legacy-Action-Strings (vor v3.18.34 Path-Fix — Sub-Router-Mutation)
+  // v3.18.37: Legacy action strings (before the v3.18.34 path fix — sub-router mutation)
   'anomalies.get':                { label: 'Anomalien-Report abgerufen',     tone: 'read' },
   'full.post':                    { label: 'Vollbackup gestartet',           tone: 'create' },
   'jobs.delete':                  { label: 'Backup-Job gelöscht',            tone: 'delete' },
@@ -187,7 +187,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'logs.get':                     { label: 'System-Logs abgerufen',          tone: 'read' },
   'services.put':                 { label: 'Service-Einstellung geändert',   tone: 'update' },
   'services.restart.post':        { label: 'Service neugestartet',           tone: 'update' },
-  // v3.18.34: Zertifikate
+  // v3.18.34: Certificates
   'certificates.post':            { label: 'Zertifikat angelegt',            tone: 'create' },
   'certificates.put':             { label: 'Zertifikat geändert',            tone: 'update' },
   'certificates.delete':          { label: 'Zertifikat gelöscht',            tone: 'delete' },
@@ -204,7 +204,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'smtp-config.settings.get':            { label: 'SMTP-Outbound-Konfiguration abgerufen',  tone: 'read' },
   'smtp-config.settings.put':            { label: 'SMTP-Outbound-Konfiguration geändert',   tone: 'update' },
   'smtp-config.test-smarthost.post':     { label: 'Smarthost-Verbindung getestet',          tone: 'read' },
-  // v3.18.34: Gruppen, Aliase, Postfächer (Untermenüs)
+  // v3.18.34: Groups, aliases, mailboxes (submenus)
   'groups.post':                  { label: 'Verteilergruppe angelegt',       tone: 'create' },
   'groups.put':                   { label: 'Verteilergruppe geändert',       tone: 'update' },
   'groups.delete':                { label: 'Verteilergruppe gelöscht',       tone: 'delete' },
@@ -231,7 +231,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
 
 function actionMeta(action: string): ActionMeta {
   if (ACTION_MAP[action]) return ACTION_MAP[action];
-  // Heuristik: Fallback nach Verb
+  // Heuristic: fallback by verb
   const verb = action.split('.').pop()?.toLowerCase() ?? '';
   if (verb === 'post' || verb === 'create')      return { label: action, tone: 'create' };
   if (verb === 'delete')                          return { label: action, tone: 'delete' };
@@ -359,7 +359,7 @@ export function AuditLogPage() {
     refetchInterval: 30_000,
   });
 
-  // v3.18.34: Anomalies-Query entfernt — Banner war zu noisy
+  // v3.18.34: Anomalies query removed — banner was too noisy
 
   const handleExport = (format: 'csv' | 'pdf' | 'json') => {
     const params = buildParams();
@@ -418,11 +418,11 @@ export function AuditLogPage() {
         </div>
       </div>
 
-      {/* v3.18.34: Anomalies-Banner komplett entfernt — Audit-Log selbst zeigt
-          alle relevanten Aktionen, der Banner war in der Praxis verwirrend
-          (eigene Settings-Änderungen wurden als „kritische Aktion" angezeigt). */}
+      {/* v3.18.34: Anomalies banner completely removed — the audit log itself shows
+          all relevant actions; the banner was confusing in practice
+          (one's own settings changes were shown as "critical action"). */}
 
-      {/* Immutability notice + Signatur-Hinweis */}
+      {/* Immutability notice + signature hint */}
       {!noticeDismissed && (
         <div className="mb-4 flex items-start gap-2 bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2 text-xs">
           <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
@@ -538,7 +538,7 @@ export function AuditLogPage() {
                   onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}>
                   <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{fmtDt(e.timestamp)}</td>
                   <td className="px-4 py-2.5">
-                    {/* v3.18.37: Fallback wenn actorEmail leer ist (z.B. Cron-Jobs, System-Aktionen) */}
+                    {/* v3.18.37: Fallback when actorEmail is empty (e.g. cron jobs, system actions) */}
                     <p className="text-gray-900 text-xs font-medium">
                       {e.actorEmail || (e.actorId ? <span className="text-gray-400 italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-gray-400 italic">System</span>)}
                     </p>

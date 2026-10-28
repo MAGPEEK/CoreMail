@@ -11,7 +11,7 @@ export function ForgotPasswordPage() {
   const [orgName, setOrgName]   = useState('CoreMail');
   const [allowed, setAllowed]   = useState(true);
 
-  // Öffentliche Einstellungen laden (Feature-Flag + Org-Name)
+  // Load public settings (feature flag + org name)
   useEffect(() => {
     fetch('/api/v1/admin/settings/public')
       .then((r) => r.json())
@@ -19,7 +19,7 @@ export function ForgotPasswordPage() {
         if (d.orgName) setOrgName(d.orgName);
         if (d.selfServicePasswordReset === false) setAllowed(false);
       })
-      .catch(() => { /* Fallback-Werte bleiben */ });
+      .catch(() => { /* Fallback values remain */ });
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,7 +30,7 @@ export function ForgotPasswordPage() {
       await api.post('/auth/forgot-password', { email });
       setSent(true);
     } catch (err: unknown) {
-      // Auch bei Fehler: generische Meldung (kein User-Enumeration)
+      // Even on error: generic message (no user enumeration)
       setError(err instanceof Error ? err.message : 'Fehler. Bitte versuchen Sie es erneut.');
     } finally {
       setLoading(false);
@@ -62,7 +62,7 @@ export function ForgotPasswordPage() {
             </Link>
           </div>
         ) : sent ? (
-          /* Erfolgs-Ansicht */
+          /* Success view */
           <div className="text-center space-y-4">
             <CheckCircle size={48} className="mx-auto text-green-500" />
             <h2 className="font-semibold text-gray-900">E-Mail gesendet</h2>
@@ -78,7 +78,7 @@ export function ForgotPasswordPage() {
             </Link>
           </div>
         ) : (
-          /* Formular */
+          /* Form */
           <form onSubmit={handleSubmit} className="space-y-4">
             <p className="text-sm text-gray-600">
               Geben Sie Ihre E-Mail-Adresse ein. Falls ein Konto existiert, erhalten Sie einen Link zum Zurücksetzen Ihres Passworts.

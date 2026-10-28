@@ -39,7 +39,7 @@ export function ContactsPage() {
   const [editMode, setEditMode] = useState(false);
   const [formData, setFormData] = useState<FormFields>(emptyForm());
 
-  // Persönliche Kontakte
+  // Personal contacts
   const { data: contacts } = useQuery({
     queryKey: ['contacts', search],
     queryFn: () =>
@@ -116,9 +116,9 @@ export function ContactsPage() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* ── Sidebar (nur persönliche Kontakte) ────────────────────────── */}
+      {/* ── Sidebar (personal contacts only) ──────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-        {/* Such-Bar + Add-Button */}
+        {/* Search bar + add button */}
         <div className="p-3 border-b border-gray-100 flex gap-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -134,7 +134,7 @@ export function ContactsPage() {
           </button>
         </div>
 
-        {/* Liste */}
+        {/* List */}
         <div className="flex-1 overflow-y-auto">
           {(contacts ?? []).map((c) => (
             <button
@@ -174,7 +174,7 @@ export function ContactsPage() {
               </button>
             </div>
 
-            {/* Section: Allgemein */}
+            {/* Section: General */}
             <div className="mb-6">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                 Allgemein
@@ -225,7 +225,7 @@ export function ContactsPage() {
               </div>
             </div>
 
-            {/* Section: E-Mail & Telefon */}
+            {/* Section: Email & phone */}
             <div className="mb-6">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                 E-Mail &amp; Telefon
@@ -274,7 +274,7 @@ export function ContactsPage() {
               </div>
             </div>
 
-            {/* Section: Notizen */}
+            {/* Section: Notes */}
             <div className="mb-6">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                 Notizen

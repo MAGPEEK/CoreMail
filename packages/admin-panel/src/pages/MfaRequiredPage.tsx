@@ -2,13 +2,13 @@ import { ShieldAlert, ExternalLink, LogOut, RefreshCw } from 'lucide-react';
 import { clearToken } from '../api/client.js';
 
 /**
- * v3.18.19 D5: Pflicht-2FA-Setup-Seite.
- * Wird aufgerufen wenn API ein 403 mit code=MFA_REQUIRED zurückgibt — also
- * wenn requireMfaForAdmins=true und der Admin keine MFA aktiviert hat.
+ * v3.18.19 D5: Mandatory 2FA setup page.
+ * Shown when the API returns a 403 with code=MFA_REQUIRED — i.e.
+ * when requireMfaForAdmins=true and the admin has no MFA enabled.
  *
- * Diese Seite leitet auf das MWA (/owa/) weiter, damit der User dort
- * Einstellungen → Sicherheit → 2FA aktivieren kann (BCP hat selbst kein
- * eigenes MFA-Setup-UI). Nach Aktivierung kann der User zurück zu /bcp/.
+ * This page redirects to the MWA (/owa/) so the user can enable 2FA there
+ * under Settings → Security (BCP has no
+ * MFA setup UI of its own). After activation the user can return to /bcp/.
  */
 export function MfaRequiredPage() {
   return (

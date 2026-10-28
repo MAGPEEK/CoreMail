@@ -8,7 +8,7 @@ import {
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
 
-// ── Typen — Connectors ────────────────────────────────────────────────────────
+// ── Types — Connectors ────────────────────────────────────────────────────────
 type ConnType = 'SEND' | 'RECEIVE';
 
 interface Connector {
@@ -18,7 +18,7 @@ interface Connector {
   username: string | null; createdAt: string;
 }
 
-// ── Typen — Services ──────────────────────────────────────────────────────────
+// ── Types — Services ──────────────────────────────────────────────────────────
 type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
 
 interface ServiceListener {
@@ -524,7 +524,7 @@ function ServicesOverview({ onSelect }: { onSelect: (key: ServiceKey) => void })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HAUPT-KOMPONENTE
+// MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function ConnectorsPage() {
@@ -591,7 +591,7 @@ export function ConnectorsPage() {
         </nav>
       </aside>
 
-      {/* Inhalt */}
+      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {renderContent()}
       </div>
@@ -599,7 +599,7 @@ export function ConnectorsPage() {
   );
 }
 
-// Gefilterte Connector-Ansicht (nur SEND oder nur RECEIVE)
+// Filtered connector view (SEND only or RECEIVE only)
 function ConnectorsFilteredView({ filter }: { filter: ConnType }) {
   const [editItem, setEditItem]     = useState<Connector | null>(null);
   const [createType, setCreateType] = useState<ConnType | null>(null);

@@ -9,8 +9,8 @@ import type {
 import type { Folder, Category } from '../api/types.js';
 
 interface Props {
-  rule: MailRule | null;            // null = neue Regel
-  preset?: RulePreset;              // Vorbelegung beim Erstellen aus Mail
+  rule: MailRule | null;            // null = new rule
+  preset?: RulePreset;              // Prefill when creating from a mail
   onClose: () => void;
   onSaved: () => void;
 }
@@ -58,7 +58,7 @@ const ACTION_LABEL: Record<RuleAction['type'], string> = {
   setImportance: 'Wichtigkeit setzen',
 };
 
-// Felder nach Wert-Typ gruppiert (für Operator-/Input-Auswahl)
+// Fields grouped by value type (for operator/input selection)
 const NUM_FIELDS:  RuleField[] = ['size'];
 const BOOL_FIELDS: RuleField[] = ['hasAttachment', 'sentOnlyToMe'];
 const ENUM_FIELDS: RuleField[] = ['importance'];
@@ -244,7 +244,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
   const [actions, setActions] = useState<RuleAction[]>(rule?.actions ?? []);
   const [showExceptions, setShowExceptions] = useState((rule?.exceptions?.length ?? 0) > 0);
 
-  // Preset bei „aus Mail erstellen": From-Adresse als Condition
+  // Preset for "create from mail": From address as condition
   useEffect(() => {
     if (isNew && preset && conditions.length === 0) {
       const init: RuleCondition[] = [];
@@ -311,7 +311,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             />
           </div>
 
-          {/* Bedingungen */}
+          {/* Conditions */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
@@ -349,7 +349,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             </button>
           </div>
 
-          {/* Aktionen */}
+          {/* Actions */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
               <span className="inline-block w-6 h-6 rounded-full bg-accent text-white text-xs font-bold leading-6 text-center mr-2">2</span>
@@ -378,7 +378,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             </button>
           </div>
 
-          {/* Ausnahmen (collapsible) */}
+          {/* Exceptions (collapsible) */}
           <div>
             <button
               onClick={() => setShowExceptions((s) => !s)}
@@ -411,7 +411,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             )}
           </div>
 
-          {/* Footer-Optionen */}
+          {/* Footer options */}
           <div className="space-y-2 pt-3 border-t border-gray-200 dark:border-gray-700">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input

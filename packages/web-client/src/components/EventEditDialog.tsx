@@ -10,16 +10,16 @@ import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, EventAttendee } from '../api/types.js';
 
 /**
- * v3.18.27 — Outlook-Style Event-Dialog für Calendar (Create & Edit).
+ * v3.18.27 — Outlook-style event dialog for the calendar (create & edit).
  *
  * Features:
- *  - Title, Attendees (mit live PARTSTAT-Badge), Date+Time-Pickers (Dropdown),
+ *  - Title, attendees (with live PARTSTAT badge), date+time pickers (dropdown),
  *    Location, Classification (Public/Private/Confidential), Notes, Calendar-Select
- *  - Edit-Mode lädt Daten von GET /calendar/events/:id (mit canWrite-Flag)
- *  - Create-Mode mit Defaults aus übergebenem DateSelect-Info
- *  - Attendee-Status refresht automatisch (refetchInterval 30s)
- *  - Speichern triggert POST oder PUT, iMIP-Mails werden Backend-seitig versendet
- *  - Löschen-Button (mit Bestätigung) löscht Event + sendet CANCEL-Mails
+ *  - Edit mode loads data from GET /calendar/events/:id (with canWrite flag)
+ *  - Create mode with defaults from the passed DateSelect info
+ *  - Attendee status refreshes automatically (refetchInterval 30s)
+ *  - Save triggers POST or PUT, iMIP mails are sent on the backend side
+ *  - Delete button (with confirmation) deletes the event + sends CANCEL mails
  */
 
 interface AttendeeSuggest {
@@ -30,23 +30,23 @@ interface AttendeeSuggest {
 }
 
 interface Props {
-  /** null = neues Event, sonst Event-ID für Edit-Mode */
+  /** null = new event, otherwise event ID for edit mode */
   eventId: string | null;
-  /** Default-Werte für Create-Mode */
+  /** Default values for create mode */
   defaults?: {
     calendarId?: string;
     dtStart?: string; // ISO
     dtEnd?: string;   // ISO
     allDay?: boolean;
   };
-  /** Liste der verfügbaren Kalender (für Picker) */
+  /** List of available calendars (for picker) */
   calendars: Calendar[];
-  /** Default-Cal für Create wenn defaults.calendarId fehlt */
+  /** Default calendar for create when defaults.calendarId is missing */
   defaultWritableCalendarId: string;
   onClose: () => void;
 }
 
-// ─── Time-Picker Optionen (alle 15 min) ──────────────────────────────────────
+// ─── Time picker options (every 15 min) ──────────────────────────────────────
 const TIME_OPTIONS: string[] = (() => {
   const out: string[] = [];
   for (let h = 0; h < 24; h++) {
@@ -79,7 +79,7 @@ function isoToParts(iso: string): { date: string; time: string } {
 function partsToIso(date: string, time: string): string {
   if (!date) return '';
   const t = time || '00:00';
-  // Local-Time-String — Browser konvertiert beim Date-Construct in lokale TZ
+  // Local time string — the browser converts to local TZ when constructing the Date
   return new Date(`${date}T${t}:00`).toISOString();
 }
 
@@ -96,12 +96,12 @@ export function EventEditDialog({
   const qc = useQueryClient();
   const isEdit = eventId !== null;
 
-  // Edit-Mode: Event-Detail laden
+  // Edit mode: load event detail
   const { data: existing, isLoading: existingLoading, refetch: refetchEvent } = useQuery<CalendarEvent>({
     queryKey: ['event', eventId],
     queryFn: () => api.get<CalendarEvent>(`/calendar/events/${eventId}`),
     enabled: isEdit,
-    refetchInterval: 30_000, // Attendee-Status live
+    refetchInterval: 30_000, // Attendee status live
     staleTime: 0,
   });
 
@@ -119,7 +119,7 @@ export function EventEditDialog({
   const [attendees, setAttendees]     = useState<EventAttendee[]>([]);
   const [attendeeInput, setAttendeeInput] = useState('');
 
-  // Form mit existing oder defaults initialisieren — nur einmal pro Open
+  // Initialize form with existing or defaults — only once per open
   const initialized = useRef(false);
   useEffect(() => {
     if (initialized.current) return;
@@ -267,13 +267,13 @@ export function EventEditDialog({
     else createMut.mutate(body);
   };
 
-  // v3.18.28 FIX: useMemo MUSS vor jedem `return` aufgerufen werden — sonst
-  // ändert sich die Hook-Reihenfolge zwischen Renders → React-Crash → weiße
-  // Seite. Daher alle Hooks NACH oben und das Loading-`return` NACH den Hooks.
+  // v3.18.28 FIX: useMemo MUST be called before every `return` — otherwise
+  // the hook order changes between renders → React crash → white
+  // page. Hence all hooks moved to the top and the loading `return` AFTER the hooks.
   const readOnly = isEdit && existing?.canWrite === false;
   const currentCal = useMemo(() => calendars.find((c) => c.id === calendarId), [calendars, calendarId]);
 
-  // Lade-Spinner für Edit-Mode während GET
+  // Loading spinner for edit mode during GET
   if (isEdit && existingLoading) {
     return (
       <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -289,7 +289,7 @@ export function EventEditDialog({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col">
 
-        {/* Header — Titel + Refresh + Close */}
+        {/* Header — title + refresh + close */}
         <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
             {isEdit ? 'Termin bearbeiten' : 'Neuer Termin'}
@@ -313,10 +313,10 @@ export function EventEditDialog({
           </div>
         </div>
 
-        {/* Body — scrollbar */}
+        {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
-          {/* Calendar-Picker (nur eigener oder writable) */}
+          {/* Calendar picker (own or writable only) */}
           <div className="flex items-center gap-2">
             <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: currentCal?.color ?? '#0078D4' }} />
             <select
@@ -333,7 +333,7 @@ export function EventEditDialog({
             </select>
           </div>
 
-          {/* Titel */}
+          {/* Title */}
           <div>
             <input
               type="text"
@@ -413,8 +413,8 @@ export function EventEditDialog({
             </div>
           </div>
 
-          {/* v3.18.28: Datum + Zeit — type=time mit datalist erlaubt Dropdown
-              UND manuelles Tippen ("HH:MM"). Bessere UX als pures <select>. */}
+          {/* v3.18.28: Date + time — type=time with datalist allows dropdown
+              AND manual typing ("HH:MM"). Better UX than a plain <select>. */}
           <div className="flex items-start gap-3">
             <Clock size={18} className="text-gray-400 mt-2 shrink-0" />
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
@@ -458,8 +458,8 @@ export function EventEditDialog({
                   className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60 w-[110px]"
                 />
               )}
-              {/* Datalist mit 15-min-Vorschlägen — Browser zeigt sie als Dropdown
-                  beim Fokus, User kann aber auch frei „13:42" eintippen */}
+              {/* Datalist with 15-min suggestions — the browser shows them as a dropdown
+                  on focus, but the user can also freely type "13:42" */}
               <datalist id="cal-time-options">
                 {TIME_OPTIONS.map((t) => <option key={t} value={t} />)}
               </datalist>
@@ -511,7 +511,7 @@ export function EventEditDialog({
             />
           </div>
 
-          {/* Edit-Mode-Info-Box */}
+          {/* Edit mode info box */}
           {isEdit && existing && (
             <div className="text-[11px] text-gray-400 border-t border-gray-100 dark:border-gray-700 pt-3 flex items-center gap-3">
               <CalendarIcon size={12} />
@@ -524,7 +524,7 @@ export function EventEditDialog({
           )}
         </div>
 
-        {/* v3.18.28: Footer mit Speichern bottom-right + Löschen links + Abbrechen */}
+        {/* v3.18.28: Footer with Save bottom-right + Delete left + Cancel */}
         <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between gap-2 flex-wrap">
           <div>
             {isEdit && !readOnly && (

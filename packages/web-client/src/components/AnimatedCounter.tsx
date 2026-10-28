@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * Zeigt eine Zahl an und triggert eine kurze CSS-Pop-Animation,
- * wenn sich der Wert ändert. tabular-nums verhindert Layout-Shift.
+ * Displays a number and triggers a short CSS pop animation
+ * when the value changes. tabular-nums prevents layout shift.
  */
 export function AnimatedCounter({
   value,

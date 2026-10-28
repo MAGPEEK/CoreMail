@@ -239,7 +239,7 @@ function ResourceModal({
         </div>
 
         <div className="px-6 py-4 space-y-4">
-          {/* Typ (nur bei Neu) */}
+          {/* Type (only for new) */}
           {!isEdit && (
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Typ</label>
@@ -256,7 +256,7 @@ function ResourceModal({
             </div>
           )}
 
-          {/* E-Mail + Domain (nur bei Neu) */}
+          {/* Email + domain (only for new) */}
           {!isEdit && (
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -275,7 +275,7 @@ function ResourceModal({
             </div>
           )}
 
-          {/* Anzeigename */}
+          {/* Display name */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">Anzeigename</label>
             <input value={form.displayName} onChange={e => set('displayName', e.target.value)}
@@ -299,7 +299,7 @@ function ResourceModal({
             </div>
           </div>
 
-          {/* Kapazität (nur ROOM) + Buchungsfenster */}
+          {/* Capacity (ROOM only) + booking window */}
           <div className="grid grid-cols-3 gap-3">
             {form.resourceType === 'ROOM' && (
               <div>
@@ -322,7 +322,7 @@ function ResourceModal({
             </div>
           </div>
 
-          {/* Optionen */}
+          {/* Options */}
           <div className="space-y-2">
             <label className="block text-xs font-medium text-gray-700">Buchungsverhalten</label>
             {([

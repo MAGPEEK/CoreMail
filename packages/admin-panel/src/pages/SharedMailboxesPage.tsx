@@ -178,7 +178,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
     queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
   });
 
-  // Default-Domain setzen, sobald die Liste da ist
+  // Set default domain once the list is available
   useEffect(() => {
     if (!item && !domainId && domains.length > 0) {
       setDomainId(domains[0]!.id);
@@ -186,7 +186,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   }, [domains, item, domainId]);
 
   const selectedDomain = domains.find(d => d.id === domainId);
-  // RFC-5321 vereinfacht: a-z, 0-9, Punkt, Dash, Underscore, Plus
+  // RFC 5321 simplified: a-z, 0-9, dot, dash, underscore, plus
   const localPartTrimmed = localPart.trim().toLowerCase();
   const localPartValid   = /^[a-z0-9._+-]+$/.test(localPartTrimmed) && !localPartTrimmed.startsWith('.') && !localPartTrimmed.endsWith('.');
   const fullEmail        = localPartTrimmed && selectedDomain ? `${localPartTrimmed}@${selectedDomain.name}` : '';
@@ -267,7 +267,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
             </button>
           </div>
 
-          {/* Aliases — nur im Edit-Mode (Postfach muss schon angelegt sein) */}
+          {/* Aliases — edit mode only (mailbox must already exist) */}
           {item && (
             <div className="border-t border-gray-200 pt-4 mt-2">
               <MailboxAliasesSection
@@ -284,7 +284,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   );
 }
 
-// ── Permissions Modal — Exchange-Style mit mehreren Permissions pro User ─────
+// ── Permissions modal — Exchange-style with multiple permissions per user ────
 function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () => void }) {
   const qc = useQueryClient();
   const [userId, setUserId]     = useState('');
@@ -292,8 +292,8 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   const [userSearch, setUserSearch] = useState('');
   const [editingUser, setEditingUser] = useState<string | null>(null);
 
-  // Komplette User-Liste einmalig laden (kleines KMU-Setup, <500 User).
-  // Filterung passiert client-seitig case-insensitive.
+  // Load the complete user list once (small SMB setup, <500 users).
+  // Filtering happens client-side, case-insensitive.
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<User[]>({
     queryKey: ['admin-users-list-all'],
     queryFn: () => api.get<User[]>('/admin/mailboxes').then(r => Array.isArray(r) ? r : []),
@@ -308,12 +308,12 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
       ).slice(0, 30)
     : [];
 
-  // Bereits berechtigte UserIDs ausblenden, damit man dieselbe Person nicht
-  // doppelt zur „neuen" Berechtigung hinzufügen kann (für Edit gibt's „Bearbeiten").
+  // Hide user IDs that already have permissions so the same person cannot be
+  // added twice as a "new" permission (there is "Edit" for editing).
   const alreadyGrantedIds = new Set(item.permissions.map((p) => p.userId));
   const visibleUsers = editingUser ? filteredUsers : filteredUsers.filter(u => !alreadyGrantedIds.has(u.id));
 
-  // Gruppiere bestehende Berechtigungen pro User
+  // Group existing permissions per user
   const grouped = item.permissions.reduce<Record<string, { user: { email: string; displayName: string }; perms: { id: string; permission: PermType }[] }>>((acc, p) => {
     const key = p.userId;
     if (!acc[key]) acc[key] = { user: p.user, perms: [] };
@@ -341,7 +341,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   const togglePerm = (p: PermType) =>
     setPerms((cur) => cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]);
 
-  // Validierung: SEND_AS und SEND_ON_BEHALF schließen sich gegenseitig aus (Exchange-Verhalten)
+  // Validation: SEND_AS and SEND_ON_BEHALF are mutually exclusive (Exchange behavior)
   const sendConflict = perms.includes('SEND_AS') && perms.includes('SEND_ON_BEHALF');
 
   return (
@@ -355,7 +355,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
-          {/* Bestehende Berechtigungen — gruppiert pro User */}
+          {/* Existing permissions — grouped per user */}
           <div className="space-y-2">
             {Object.keys(grouped).length === 0 && !editingUser && (
               <p className="text-sm text-gray-400 text-center py-2">Noch keine Berechtigungen</p>
@@ -395,7 +395,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
             ))}
           </div>
 
-          {/* Neue / Bearbeiten Berechtigung */}
+          {/* New / edit permission */}
           <div className="border-t border-gray-200 pt-4 space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase">
               {editingUser ? 'Berechtigungen bearbeiten' : 'Berechtigung hinzufügen'}
@@ -443,7 +443,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
               </>
             )}
 
-            {/* Multi-Permission-Checkboxen */}
+            {/* Multi-permission checkboxes */}
             <div className="space-y-1.5">
               {(Object.entries(PERM_LABELS) as [PermType, string][]).map(([k, v]) => {
                 const description = {

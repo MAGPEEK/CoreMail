@@ -55,10 +55,10 @@ export function SetupPage() {
           </p>
           <button
             onClick={() => {
-              // Hard-Reload (kein react-router navigate!) damit SetupGuard
-              // frisch den Setup-Status fetcht und nicht mehr auf /setup
-              // zurück-redirected.  Ohne Reload steht setupRequired in
-              // SetupGuard noch auf true (vom ersten Mount) → Loop.
+              // Hard reload (no react-router navigate!) so SetupGuard
+              // fetches the setup status fresh and no longer redirects
+              // back to /setup.  Without a reload, setupRequired in
+              // SetupGuard is still true (from the first mount) → loop.
               window.location.href = '/login';
             }}
             className="w-full bg-[#0078D4] hover:bg-[#106EBE] text-white font-medium py-2 px-4 rounded transition-colors"
@@ -138,7 +138,7 @@ export function SetupPage() {
             />
           </div>
 
-          {/* Passwort */}
+          {/* Password */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Passwort
@@ -153,7 +153,7 @@ export function SetupPage() {
             />
           </div>
 
-          {/* Passwort bestätigen */}
+          {/* Confirm password */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Passwort bestätigen

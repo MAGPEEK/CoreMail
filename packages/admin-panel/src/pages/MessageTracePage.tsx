@@ -9,7 +9,7 @@ interface TraceItem {
   metadata: Record<string, string> | null;
 }
 
-// Status-Labels mit Übersetzung
+// Status labels with translation
 const STATUS_LABELS: Record<string, { de: string; en: string; color: string }> = {
   ACCEPTED:   { de: 'Angenommen',   en: 'Accepted',    color: 'blue'   },
   DELIVERED:  { de: 'Zugestellt',   en: 'Delivered',   color: 'green'  },
@@ -39,7 +39,7 @@ function StatusBadge({ status, lang }: { status: string; lang: string }) {
 
 export function MessageTracePage() {
   const t = useT();
-  // useLanguageStore nicht direkt verfügbar → lang aus t() ableiten
+  // useLanguageStore not directly available → derive lang from t()
   const lang = t('nav_overview') === 'Overview' ? 'en' : 'de';
 
   const [sender, setSender]       = useState('');
@@ -52,14 +52,14 @@ export function MessageTracePage() {
   const [limit]                   = useState(100);
   const [triggered, setTriggered] = useState(false);
 
-  // Beim ersten Laden automatisch die letzten Einträge anzeigen (ohne Filter)
+  // On first load automatically show the latest entries (without filter)
   useEffect(() => {
     setTriggered(true);
   }, []);
 
   const { data, isLoading, isFetching, refetch } = useQuery<{ items: TraceItem[]; total: number }>({
     queryKey: ['message-trace', sender, recipient, subject, status, fromDate, toDate, page],
-    // WICHTIG: API-Client fügt /api/v1 automatisch hinzu → Pfad ohne /api/v1
+    // IMPORTANT: API client adds /api/v1 automatically → path without /api/v1
     queryFn: () => api.get(
       `/admin/message-trace?sender=${encodeURIComponent(sender)}&recipient=${encodeURIComponent(recipient)}&subject=${encodeURIComponent(subject)}&status=${status}&from=${fromDate}&to=${toDate}&page=${page}&limit=${limit}`
     ),
@@ -143,7 +143,7 @@ export function MessageTracePage() {
         </button>
       </div>
 
-      {/* Suchmaske */}
+      {/* Search form */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
@@ -204,7 +204,7 @@ export function MessageTracePage() {
         </div>
       </div>
 
-      {/* Ergebnistabelle */}
+      {/* Results table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-12 text-gray-400">

@@ -1,6 +1,6 @@
-// Avatar mit hash-basierter Farbe + Initialen — wie Gmail/Outlook.com
+// Avatar with hash-based color + initials — like Gmail/Outlook.com
 
-// 14 Material-inspirierte Farbpaare (Hintergrund, Text) — kontrastreich
+// 14 Material-inspired color pairs (background, text) — high contrast
 const COLORS = [
   { bg: 'bg-blue-500',    text: 'text-white' },
   { bg: 'bg-emerald-500', text: 'text-white' },
@@ -26,12 +26,12 @@ function hashString(s: string): number {
   return Math.abs(h);
 }
 
-/** Extrahiert 1–2 Initialen aus einem Namen oder einer E-Mail-Adresse */
+/** Extracts 1–2 initials from a name or an email address */
 export function getInitials(input: string): string {
   if (!input) return '?';
-  // E-Mail-Adresse — nimm den Teil vor @
+  // Email address — take the part before @
   const local = input.includes('@') ? input.split('@')[0]! : input;
-  // Trenner: Punkt, Leerzeichen, Bindestrich, Unterstrich
+  // Separators: dot, space, hyphen, underscore
   const parts = local.split(/[\s._-]+/).filter(Boolean);
   if (parts.length >= 2) {
     return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
@@ -39,16 +39,16 @@ export function getInitials(input: string): string {
   return (parts[0] ?? input).slice(0, 2).toUpperCase();
 }
 
-/** Deterministische Farbe für eine Adresse */
+/** Deterministic color for an address */
 export function avatarColors(input: string): { bg: string; text: string } {
   const idx = hashString(input.toLowerCase()) % COLORS.length;
   return COLORS[idx]!;
 }
 
 export interface AvatarProps {
-  /** E-Mail-Adresse oder Anzeigename (für Hash + Initialen) */
+  /** Email address or display name (for hash + initials) */
   seed: string;
-  /** Override für angezeigte Initialen */
+  /** Override for displayed initials */
   initials?: string;
   size?: 'xs' | 'sm' | 'md' | 'lg';
   className?: string;

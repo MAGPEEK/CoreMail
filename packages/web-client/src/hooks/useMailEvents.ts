@@ -4,26 +4,26 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/auth.js';
 
 /**
- * Hört auf SSE-Events `mail:new` und `mail:update` und invalidiert
- * automatisch die Folder-/Messages-Caches damit neue Mails sofort
- * im Posteingang erscheinen.
+ * Listens for SSE events `mail:new` and `mail:update` and automatically
+ * invalidates the folder/messages caches so new mails appear
+ * in the inbox immediately.
  *
- * EventSource kann keine Authorization-Header senden — das JWT wird
- * deshalb via `?token=` Query-Parameter mitgegeben. Der api-gateway
- * `requireAuth`-Middleware liest beides (Header + Query).
+ * EventSource cannot send Authorization headers — the JWT is therefore
+ * passed via the `?token=` query parameter. The api-gateway
+ * `requireAuth` middleware reads both (header + query).
  *
- * Bei neuer Mail wird ein dezenter Toast angezeigt.
+ * A subtle toast is shown on new mail.
  */
 export function useMailEvents() {
   const token = useAuthStore((s) => s.accessToken);
   const qc = useQueryClient();
-  // Verbindungs-Counter — beendet alte EventSources sauber wenn Token wechselt
+  // Connection counter — cleanly closes old EventSources when the token changes
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (!token) return;
 
-    // Alte Verbindung schließen (z.B. nach Token-Refresh)
+    // Close old connection (e.g. after token refresh)
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -34,10 +34,10 @@ export function useMailEvents() {
     esRef.current = es;
 
     es.addEventListener('mail:new', (ev) => {
-      // Caches sofort neu laden — invalidate triggert Background-Refetch
+      // Reload caches immediately — invalidate triggers a background refetch
       void qc.invalidateQueries({ queryKey: ['folders'] });
       void qc.invalidateQueries({ queryKey: ['messages'] });
-      // Dezenter Toast mit Absender + Betreff (falls vorhanden)
+      // Subtle toast with sender + subject (if present)
       try {
         const data = JSON.parse((ev as MessageEvent).data) as {
           fromName?: string;
@@ -57,7 +57,7 @@ export function useMailEvents() {
       void qc.invalidateQueries({ queryKey: ['folders'] });
     });
 
-    // v3.18.17 A2: Calendar-Share-Lifecycle → Live-Sync ohne Polling
+    // v3.18.17 A2: Calendar share lifecycle → live sync without polling
     es.addEventListener('calendar:shares', (ev) => {
       void qc.invalidateQueries({ queryKey: ['calendars'] });
       void qc.invalidateQueries({ queryKey: ['calendar-shares'] });
@@ -74,8 +74,8 @@ export function useMailEvents() {
     });
 
     es.onerror = () => {
-      // EventSource versucht automatisch alle 3s neu zu verbinden
-      // — kein manuelles Reconnect nötig
+      // EventSource automatically tries to reconnect every 3s
+      // — no manual reconnect needed
     };
 
     return () => {
