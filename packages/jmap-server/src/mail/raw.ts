@@ -39,7 +39,7 @@ export async function loadRawMessage(msg: DbMessageLike): Promise<Buffer> {
     try {
       return await downloadBuffer(msg.storagePath);
     } catch (err) {
-      log.warn({ err, id: msg.id }, 'Rohnachricht nicht in MinIO — rekonstruiere aus DB');
+      log.warn({ err, id: msg.id }, 'Raw message not in MinIO — reconstructing from DB');
     }
   }
   const attachments = await Promise.all(msg.attachments.map(async (a) => ({

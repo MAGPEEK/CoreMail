@@ -151,7 +151,7 @@ export async function notify(account: AccountContext, folderId: string, messageI
       source: 'jmap',
     }));
   } catch (err) {
-    log.warn({ err }, 'Redis-Publish fehlgeschlagen');
+    log.warn({ err }, 'Redis publish failed');
   }
 }
 
@@ -164,6 +164,6 @@ export async function notifyMailboxChange(account: AccountContext): Promise<void
       source: 'jmap',
     }));
   } catch (err) {
-    log.warn({ err }, 'Redis-Publish fehlgeschlagen');
+    log.warn({ err }, 'Redis publish failed');
   }
 }

@@ -94,7 +94,7 @@ adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
     const cfg = await getOrCreate();
     res.json(cfg);
   } catch (err) {
-    log.error({ err }, 'Fehler beim Lesen der globalen Einstellungen');
+    log.error({ err }, 'Failed to read global settings');
     res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
   }
 });
@@ -111,7 +111,7 @@ adminGlobalSettingsRouter.put('/org', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...parsed.data },
     update: parsed.data,
   });
-  log.info({ orgName: parsed.data.orgName }, 'Organisations-Einstellungen aktualisiert');
+  log.info({ orgName: parsed.data.orgName }, 'Organisation settings updated');
   res.json(cfg);
 });
 
@@ -127,7 +127,7 @@ adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...parsed.data },
     update: parsed.data,
   });
-  log.info(parsed.data, 'Mail-Einstellungen aktualisiert');
+  log.info(parsed.data, 'Mail settings updated');
   res.json(cfg);
 });
 
@@ -175,7 +175,7 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   // Invalidate the audit middleware cache so the toggle takes effect immediately.
   invalidateAuditCache();
 
-  log.info(parsed.data, 'Sicherheitsrichtlinien aktualisiert');
+  log.info(parsed.data, 'Security policies updated');
   res.json(cfg);
 });
 
@@ -191,6 +191,6 @@ adminGlobalSettingsRouter.put('/maintenance', async (req: Request, res: Response
     create: { id: 'singleton', ...parsed.data },
     update: parsed.data,
   });
-  log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Wartungsmodus geändert');
+  log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Maintenance mode changed');
   res.json(cfg);
 });

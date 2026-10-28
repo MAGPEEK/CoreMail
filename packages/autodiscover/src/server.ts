@@ -19,10 +19,10 @@ async function main() {
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
       invalidateSettingsCache();
-      log.info('Settings-Cache invalidiert (Redis-Signal)');
+      log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — Cache läuft nach 60s automatisch ab');
+    log.warn({ err }, 'Redis subscription failed — cache expires automatically after 60s');
   }
 
   const app = express();

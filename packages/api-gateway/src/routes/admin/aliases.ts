@@ -143,7 +143,7 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
     },
     select: ALIAS_SELECT,
   });
-  log.info({ aliasId: alias.id, address: alias.address, target: 'user:' + user.id }, 'User-Alias angelegt');
+  log.info({ aliasId: alias.id, address: alias.address, target: 'user:' + user.id }, 'User alias created');
   res.status(201).json(alias);
 });
 
@@ -185,7 +185,7 @@ adminAliasesRouter.post('/shared-mailboxes/:id/aliases', async (req: Request, re
     },
     select: ALIAS_SELECT,
   });
-  log.info({ aliasId: alias.id, address: alias.address, target: 'shared:' + sm.id }, 'SharedMailbox-Alias angelegt');
+  log.info({ aliasId: alias.id, address: alias.address, target: 'shared:' + sm.id }, 'SharedMailbox alias created');
   res.status(201).json(alias);
 });
 
@@ -222,6 +222,6 @@ adminAliasesRouter.delete('/aliases/:aliasId', async (req: Request, res: Respons
   const existing = await prisma.emailAlias.findUnique({ where: { id: aliasId } });
   if (!existing) { res.status(404).json({ error: 'Alias not found' }); return; }
   await prisma.emailAlias.delete({ where: { id: aliasId } });
-  log.info({ aliasId, address: existing.address }, 'Alias gelöscht');
+  log.info({ aliasId, address: existing.address }, 'Alias deleted');
   res.status(204).end();
 });

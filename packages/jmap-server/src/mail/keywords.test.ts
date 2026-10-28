@@ -15,7 +15,7 @@ test('Keyword-Syntax (RFC 8621 §4.1.1)', () => {
   assert.ok(!isValidKeyword(''));
 });
 
-test('Ordner-Rollen nur auf Top-Level', () => {
+test('Folder roles only on top level', () => {
   assert.equal(roleForFolder('INBOX', null), 'inbox');
   assert.equal(roleForFolder('Junk', null), 'junk');
   assert.equal(roleForFolder('Sent', 'parent'), null);

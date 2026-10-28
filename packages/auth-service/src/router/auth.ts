@@ -85,7 +85,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       select: { maintenanceMode: true, maintenanceMessage: true },
     });
     if (settings?.maintenanceMode) {
-      log.info({ userId: user.id, email: user.email }, 'Login blocked — Wartungsmodus aktiv');
+      log.info({ userId: user.id, email: user.email }, 'Login blocked — maintenance mode active');
       res.status(503).json({
         error:   'maintenance',
         message: settings.maintenanceMessage ||

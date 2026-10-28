@@ -49,10 +49,10 @@ async function main(): Promise<void> {
     sub.on('message', () => {
       invalidateJmapFlagCache();
       invalidateSettingsCache();
-      log.info('Settings-Cache invalidiert (Redis-Signal)');
+      log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis-Subscription fehlgeschlagen — Caches laufen nach 60s ab');
+    log.warn({ err }, 'Redis subscription failed — caches expire after 60s');
   }
 
   const app = express();
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
       if ((err as { type?: string }).type === 'entity.too.large') {
         problem(res, new RequestError('limit', 400, 'Request too large', { limit: 'maxSizeRequest' })); return;
       }
-      log.error({ err }, 'Unbehandelter Fehler in /jmap/api');
+      log.error({ err }, 'Unhandled error in /jmap/api');
       problem(res, new RequestError('serverFail', 500));
     }
   });

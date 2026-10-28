@@ -92,7 +92,7 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   // users because the URLs were not visible anywhere.
   if (isPrimary) {
     await syncFromPrimaryDomain(parsed.data.name).catch((err: unknown) =>
-      log.warn({ err, domain: parsed.data.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+      log.warn({ err, domain: parsed.data.name }, 'Auto-derive of server URLs failed'),
     );
   }
 
@@ -158,7 +158,7 @@ adminDomainsRouter.post('/:id/make-primary', async (req: Request, res: Response)
   // kept — but we sync the URLs (in case only publicHostname was changed
   // without deriving the URLs).
   await syncFromPrimaryDomain(domain.name).catch((err: unknown) =>
-    log.warn({ err, domain: domain.name }, 'Auto-derive der Server-URLs fehlgeschlagen'),
+    log.warn({ err, domain: domain.name }, 'Auto-derive of server URLs failed'),
   );
 
   const domains = await prisma.domain.findMany({

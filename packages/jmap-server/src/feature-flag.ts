@@ -23,7 +23,7 @@ export async function isJmapEnabled(): Promise<boolean> {
     });
     cached = s?.jmapEnabled ?? true;
   } catch (err) {
-    log.warn({ err }, 'ServerSettings nicht lesbar — JMAP bleibt an (Schema-Default)');
+    log.warn({ err }, 'ServerSettings not readable — JMAP stays enabled (schema default)');
     cached = true;
   }
   cacheExpiry = now + CACHE_TTL_MS;

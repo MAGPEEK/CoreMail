@@ -142,7 +142,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
       userId: ctx.user.userId,
       metadata: { sender: c.envelope.mailFrom.email, recipient: c.envelope.rcptTo.map((r) => r.email).join(', '), status: 'ACCEPTED', messageId: jobId, direction: 'OUTBOUND', protocol: 'JMAP' },
     },
-  }).catch((e: unknown) => log.warn({ err: e }, 'MAIL_FLOW-Log fehlgeschlagen'));
+  }).catch((e: unknown) => log.warn({ err: e }, 'MAIL_FLOW log write failed'));
 }
 
 registerMethod('EmailSubmission/get', CAP_SUBMISSION, async (args, ctx) => {
