@@ -2,6 +2,7 @@ import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { ClientRequest, IncomingMessage } from 'node:http';
 import { connectDatabase, prisma, migrateMailboxCounters } from '@coremail/storage';
 import {
   getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD,
@@ -119,6 +120,32 @@ const AUTODISCOVER_URL = process.env['AUTODISCOVER_SERVICE_URL'] ?? 'http://loca
 // v5.7.1: JMAP server (RFC 8620/8621 + extensions) on port 3006
 const JMAP_URL = process.env['JMAP_SERVICE_URL'] ?? 'http://localhost:3006';
 
+/**
+ * v6: real client IP for internal services. Express requests use req.ip
+ * (TRUST_PROXY-aware); raw upgrade requests are resolved with the same
+ * trust function. Internal services (jmap, caldav, activesync, autodiscover)
+ * take the right-most X-Forwarded-For hop from a loopback/private peer —
+ * the gateway therefore always OVERWRITES the header (never appends), so a
+ * client-supplied value cannot spoof the IP used for lockouts and logs.
+ */
+function upstreamClientIp(req: IncomingMessage): string {
+  const ip = (req as Partial<express.Request>).ip;
+  if (typeof ip === 'string' && ip) return ip;
+  const trust = app.get('trust proxy fn') as (addr: string, i: number) => boolean;
+  const raw = req.headers['x-forwarded-for'];
+  const hops = (Array.isArray(raw) ? raw.join(',') : (raw ?? ''))
+    .split(',').map((h) => h.trim()).filter(Boolean).reverse();
+  const addrs = [req.socket?.remoteAddress ?? '', ...hops];
+  for (let i = 0; i < addrs.length - 1; i++) {
+    if (!trust(addrs[i]!, i)) return addrs[i]!;
+  }
+  return addrs[addrs.length - 1]!;
+}
+
+function setUpstreamForwardedFor(proxyReq: ClientRequest, req: IncomingMessage): void {
+  proxyReq.setHeader('X-Forwarded-For', upstreamClientIp(req));
+}
+
 function internalProxy(targetBase: string): express.RequestHandler {
   const proxy = createProxyMiddleware({
     target: targetBase,
@@ -127,6 +154,7 @@ function internalProxy(targetBase: string): express.RequestHandler {
       proxyReq: (proxyReq, req) => {
         // Express strips the mount prefix from req.url — restore originalUrl
         proxyReq.path = (req as express.Request).originalUrl;
+        setUpstreamForwardedFor(proxyReq, req);
       },
       error: (err, _req, res) => {
         log.warn({ err, target: targetBase }, 'Proxy error');
@@ -148,7 +176,12 @@ const jmapProxy = createProxyMiddleware({
   changeOrigin: true,
   ws: true,
   on: {
-    proxyReq: (proxyReq, req) => { proxyReq.path = (req as express.Request).originalUrl; },
+    proxyReq: (proxyReq, req) => {
+      proxyReq.path = (req as express.Request).originalUrl;
+      setUpstreamForwardedFor(proxyReq, req);
+    },
+    // WebSocket upgrades (/jmap/ws) are raw IncomingMessages — same overwrite
+    proxyReqWs: (proxyReq, req) => { setUpstreamForwardedFor(proxyReq, req); },
     error: (err, _req, res) => {
       log.warn({ err, target: JMAP_URL }, 'JMAP proxy error');
       if ('writeHead' in res && !('headersSent' in res && res.headersSent)) {
@@ -178,7 +211,7 @@ const authServiceProxy = createProxyMiddleware({
   on: {
     proxyReq: (proxyReq, req) => {
       proxyReq.path = (req as express.Request).originalUrl;
-      proxyReq.setHeader('X-Forwarded-For', (req as express.Request).ip ?? '');
+      setUpstreamForwardedFor(proxyReq, req);
     },
     error: (err, _req, res) => {
       log.warn({ err, target: AUTH_SERVICE_URL }, 'Proxy error');
