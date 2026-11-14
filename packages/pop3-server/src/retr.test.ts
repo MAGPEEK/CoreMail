@@ -6,6 +6,7 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import tls from 'node:tls';
 import { Readable } from 'node:stream';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_test';
@@ -32,8 +33,16 @@ let passwordHash = '';
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
-  user: { findUnique: async () => { await tick(); return { id: 'u1', email: 'bob@x.test', active: true, passwordHash }; } },
-  appPassword: { findMany: async () => [] },
+  user: {
+    findUnique: async () => { await tick(); return { id: 'u1', email: 'bob@x.test', active: true, passwordHash }; },
+    // v7 shared mail credential check (verifyMailCredentials) looks the user up with findFirst.
+    findFirst: async () => {
+      await tick();
+      return { id: 'u1', email: 'bob@x.test', displayName: 'Bob', domainId: 'd1', role: 'USER', active: true,
+        passwordHash, authSource: 'LOCAL', mfa: null, mailbox: { id: 'mb1' } };
+    },
+  },
+  appPassword: { findMany: async () => [], update: async () => ({}) },
   domain: { findFirst: async () => ({ name: 'x.test' }) },
   mailbox: {
     findFirst: async () => {
@@ -50,8 +59,12 @@ const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 const { hashPassword } = await import('@coremail/core');
 passwordHash = await hashPassword('secret');
-const { storeRawMessage } = await import('@coremail/storage');
+const { storeRawMessage, createMemoryAuthRedis } = await import('@coremail/storage');
+// In-memory lockout store for the shared mail credential check (no Redis in tests).
+(globalThis as Record<string, unknown>)['__mailAuthRedis'] = createMemoryAuthRedis();
 const { POP3Session, dotStuff } = await import('./session.js');
+const { selfSignedTestCert } = await import('./test-cert.js');
+const CERT = selfSignedTestCert();
 const SIMPLE_MESSAGE = Buffer.from(
   'From: alice@example.test\r\nTo: bob@example.test\r\nSubject: Hi\r\nDate: Tue, 03 Feb 2026 10:20:30 +0000\r\n\r\n'
   + 'line one\r\n.dot line\r\nline three',
@@ -85,9 +98,12 @@ class Client {
 }
 
 async function login(t: TestContext): Promise<Client> {
-  const server = net.createServer((s) => new POP3Session(s, false).start());
+  // v7: USER/PASS are refused before TLS — log in over implicit TLS (port-995 style).
+  const server = tls.createServer({ ...CERT }, (s) => new POP3Session(s, true).start());
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  const socket = net.connect((server.address() as net.AddressInfo).port, '127.0.0.1');
+  const socket = tls.connect({
+    port: (server.address() as net.AddressInfo).port, host: '127.0.0.1', rejectUnauthorized: false,
+  });
   t.after(() => { socket.destroy(); server.close(); });
   const c = new Client(socket);
   await c.until(/POP3 ready\r\n$/);
@@ -110,7 +126,9 @@ test('RETR sends the stored raw message byte-exactly; size = LIST = STAT', async
   messages = [await stored('m1', 1, NESTED_MESSAGE), await stored('m2', 2, SIMPLE_MESSAGE)];
   const c = await login(t);
   c.write('STAT\r\nLIST\r\nLIST 2\r\n');
-  const listing = await c.until(/\+OK 2 \d+\r\n$/);
+  // Wait for the LIST terminator followed by the LIST 2 answer (over TLS the
+  // three responses can arrive in separate records).
+  const listing = await c.until(/\r\n\.\r\n\+OK 2 \d+\r\n$/);
   assert.match(listing, new RegExp(`^\\+OK 2 ${NESTED_MESSAGE.length + SIMPLE_MESSAGE.length}\\r\\n`));
   assert.match(listing, new RegExp(`\\r\\n1 ${NESTED_MESSAGE.length}\\r\\n2 ${SIMPLE_MESSAGE.length}\\r\\n\\.\\r\\n`));
   c.write('RETR 1\r\n');
