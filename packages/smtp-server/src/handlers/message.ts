@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -6,8 +6,6 @@ import { handleTransportOutcome } from './transport-actions.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
-
-const LARGE_MESSAGE_THRESHOLD = 256 * 1024; // 256 KB — store raw in MinIO above this
 
 export interface StoreOptions {
   fromAddr: string;
@@ -227,14 +225,11 @@ export async function storeInboundMessage(
     return;
   }
 
-  // Store raw message in MinIO if large, otherwise inline (before the
-  // transaction — the object key does not depend on the UID).
-  let storagePath: string | null = null;
-  if (effectiveBuffer.length > LARGE_MESSAGE_THRESHOLD) {
-    const msgId = crypto.randomUUID();
-    storagePath = rawMessageKey(msgId);
-    await uploadBuffer(storagePath, effectiveBuffer, 'message/rfc822');
-  }
+  // Raw-always storage: the original RFC 5322 octets go to object storage for every
+  // message (content-addressed, shared by all recipients and rule copies). IMAP,
+  // POP3, JMAP and backups serve these octets; the body columns only feed search
+  // and the web preview (truncated, never emptied).
+  const { storagePath } = await storeRawMessage(effectiveBuffer);
 
   // Build S/MIME header JSON for OWA display
   const smimeHeader = Object.keys(smimeVerifyResult).length > 0 || smimeDecrypted
@@ -253,8 +248,8 @@ export async function storeInboundMessage(
     messageId: parsed.messageId,
     inReplyTo: parsed.inReplyTo,
     date: parsed.date,
-    bodyText: storagePath ? '' : parsed.bodyText,
-    bodyHtml: storagePath ? '' : parsed.bodyHtml,
+    bodyText: truncateBodyColumn(parsed.bodyText),
+    bodyHtml: truncateBodyColumn(parsed.bodyHtml),
     rawSize: effectiveBuffer.length,
     storagePath,
   };
@@ -284,10 +279,12 @@ export async function storeInboundMessage(
   }
 
   // Rule copy targets: create additional message records in further folders
+  const copyMessageIds: string[] = [];
   for (const copyFolderId of ruleCopyTargets) {
     if (copyFolderId === ruleFolderId) continue; // already the main copy
     try {
-      await prisma.$transaction((tx) => createMessage(tx, mailboxId, copyFolderId, baseData));
+      const copy = await prisma.$transaction((tx) => createMessage(tx, mailboxId, copyFolderId, baseData));
+      copyMessageIds.push(copy.id);
       await prisma.folder.update({
         where: { id: copyFolderId },
         data: { totalCount: { increment: 1 }, unreadCount: { increment: 1 } },
@@ -297,23 +294,27 @@ export async function storeInboundMessage(
     }
   }
 
-  // Store attachments (deduplicated by SHA256)
-  for (const att of parsed.attachments) {
-    const key = attachmentKey(message.id, att.filename);
+  // Store attachments. One object per attachment index: two parts with the same
+  // filename (e.g. inline "image.png") must not overwrite each other.
+  for (const [index, att] of parsed.attachments.entries()) {
+    const key = attachmentKey(message.id, `${index}-${att.sha256.slice(0, 16)}`);
     await uploadBuffer(key, att.buffer, att.mimeType);
 
-    await prisma.attachment.create({
-      data: {
-        messageId: message.id,
-        contentId: att.contentId,
-        filename: att.filename,
-        mimeType: att.mimeType,
-        size: att.size,
-        sha256: att.sha256,
-        storagePath: key,
-        inline: att.inline,
-      },
-    });
+    // Rule copies share the object (like message-store copyMessages).
+    for (const messageId of [message.id, ...copyMessageIds]) {
+      await prisma.attachment.create({
+        data: {
+          messageId,
+          contentId: att.contentId,
+          filename: att.filename,
+          mimeType: att.mimeType,
+          size: att.size,
+          sha256: att.sha256,
+          storagePath: key,
+          inline: att.inline,
+        },
+      });
+    }
   }
 
   // Update folder counters — counter applies to the ACTUAL target folder

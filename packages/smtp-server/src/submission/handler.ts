@@ -8,7 +8,9 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import {
+  prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses,
+} from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
@@ -105,6 +107,17 @@ async function onMessage(
   authUser: AuthUser | null,
   ip: string,
 ): Promise<void> {
+  // Anti-spoofing on the header level: MAIL FROM was checked in onMailFrom, but
+  // recipients display From:/Sender:. Both must name the user's own address, an
+  // alias, or a Shared Mailbox with SEND_AS/FULL_ACCESS (SEND_ON_BEHALF only with
+  // the user's own address in Sender:). Checked before anything is delivered.
+  if (!authUser) throw new Error('530 5.7.0 Authentication required');
+  const verdict = await checkHeaderSenderIdentity(raw, authUser.id);
+  if (!verdict.ok) {
+    log.warn({ authed: authUser.email, from, reason: verdict.reason }, 'SMTP submission: header sender not allowed');
+    throw new Error('550 5.7.1 From/Sender header not allowed for authenticated user');
+  }
+
   // RFC 6409 §6.1 — prepend Received: header for submission tracing
   if (authUser && to.length > 0) {
     try {
@@ -204,28 +217,10 @@ export const submissionHandlers: SmtpHandlers = {
 // ── Helper: checkSenderPermission ─────────────────────────────────────────────
 
 /**
- * Returns true if userId is allowed to send as fromAddr:
- *  1. It's their own email address
- *  2. They have SEND_AS or FULL_ACCESS on a shared mailbox with that address
+ * Returns true if userId may use fromAddr as envelope sender: own address, an
+ * active alias of the own mailbox, or a Shared Mailbox (address or alias) with
+ * SEND_AS/FULL_ACCESS — the shared sender identity policy (@coremail/storage).
  */
 async function checkSenderPermission(userId: string, fromAddr: string): Promise<boolean> {
-  const normalised = fromAddr.toLowerCase();
-
-  // 1. Own email address
-  const user = await prisma.user.findFirst({
-    where: { id: userId, email: normalised, active: true },
-    select: { id: true },
-  });
-  if (user) return true;
-
-  // 2. Shared mailbox permission (SEND_AS or FULL_ACCESS)
-  const perm = await prisma.sharedMailboxPerm.findFirst({
-    where: {
-      userId,
-      permission: { in: ['FULL_ACCESS', 'SEND_AS'] },
-      sharedMailbox: { email: normalised, active: true },
-    },
-    select: { id: true },
-  });
-  return !!perm;
+  return isSenderAddressAllowed(fromAddr, await listAllowedSenderAddresses(userId));
 }

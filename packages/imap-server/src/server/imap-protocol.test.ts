@@ -1235,9 +1235,11 @@ describe('FETCH and UID FETCH (RFC 9051 §6.4.5, §6.4.9)', () => {
   test('a large message stored in object storage is not returned with an empty body', async (t) => {
     // smtp-server/src/handlers/message.ts stores messages > 256 KB in MinIO (storagePath) and saves
     // bodyText/bodyHtml as ''. A FETCH that ignores storagePath returns the headers only.
-    // (When this is fixed the test needs an object-storage fake returning the raw message.)
+    // The object-storage fake (test-hooks.mjs, __coremailTest.objects) returns the raw message.
     const { client, db } = await select(t);
-    Object.assign(db.byUid(5), { bodyText: '', bodyHtml: '', storagePath: 'raw/large-message', rawSize: 300_000 });
+    const raw = Buffer.from(`From: alice@example.test\r\nSubject: Large\r\n\r\n${'x'.repeat(300_000 - 44)}`);
+    (globalThis as unknown as { __coremailTest: { objects: Map<string, Buffer> } }).__coremailTest.objects.set('raw/large-message', raw);
+    Object.assign(db.byUid(5), { bodyText: '', bodyHtml: '', storagePath: 'raw/large-message', rawSize: raw.length });
 
     const response = await client.cmd('FETCH 1 (BODY.PEEK[TEXT])');
 

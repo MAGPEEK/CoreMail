@@ -9,7 +9,7 @@
     "dev": "node --watch dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/outbound/dkim.test.ts src/inbound/connection-filter.test.ts src/handlers/quarantine.test.ts"
+    "test": "node --import tsx --test src/outbound/dkim.test.ts src/inbound/connection-filter.test.ts src/handlers/quarantine.test.ts src/submission/handler.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",

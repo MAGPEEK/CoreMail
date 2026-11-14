@@ -21,9 +21,39 @@ const STUB_URL = 'coremail-test-stub:all';
 // talks to the transaction client it is given, so the stub re-exports it unchanged.
 const MESSAGE_STORE_URL = new URL('../../storage/src/message-store.ts', import.meta.url).href;
 
+// Pure storage modules (MIME tree, addresses, legacy builder, raw message store)
+// are re-exported unchanged as well; the raw store is wired to an in-memory object
+// store (globalThis.__coremailTest.objects: Map<key, Buffer>).
+const storageUrl = (p) => new URL(`../../storage/src/${p}`, import.meta.url).href;
+
 const STUB_SOURCE = `
 export * from '${MESSAGE_STORE_URL}';
+export * from '${storageUrl('mime/tree.ts')}';
+export * from '${storageUrl('mime/address.ts')}';
+export * from '${storageUrl('mime/build.ts')}';
+export * from '${storageUrl('raw-message.ts')}';
+import { createRawMessageStore } from '${storageUrl('raw-message.ts')}';
 const g = (globalThis.__coremailTest ??= {});
+const objects = (g.objects ??= new Map());
+export const downloadBuffer = async (key) => {
+  const b = objects.get(key);
+  if (!b) throw Object.assign(new Error('NoSuchKey: ' + key), { code: 'NoSuchKey' });
+  return b;
+};
+export const uploadBuffer = async (key, data) => { objects.set(key, Buffer.from(data)); };
+const rawStore = createRawMessageStore({
+  download: downloadBuffer,
+  upload: uploadBuffer,
+  exists: async (key) => objects.has(key),
+  markStored: async (id, storagePath, rawSize) => {
+    if (g.prisma && g.prisma.message && g.prisma.message.updateMany) {
+      await g.prisma.message.updateMany({ where: { id, storagePath: null }, data: { storagePath, rawSize } });
+    }
+  },
+});
+export const loadRawMessage = rawStore.loadRawMessage;
+export const storeRawMessage = rawStore.storeRawMessage;
+export const reconstructRawMessage = rawStore.reconstructRawMessage;
 const noop = () => {};
 const logger = { debug: noop, info: noop, warn: noop, error: noop, trace: noop, fatal: noop, child: () => logger };
 export const createLogger = () => logger;

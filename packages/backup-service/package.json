@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/retention/expiry.test.ts",
+    "test": "node --import tsx --test src/retention/expiry.test.ts src/export/mbox.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

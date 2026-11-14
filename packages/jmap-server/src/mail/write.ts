@@ -4,7 +4,7 @@
  * mailbox UID/ModSeq and Redis notification (MWA SSE + JMAP push).
  */
 import {
-  prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey,
+  prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey,
   createMessage, moveMessages, setFlags, nextModSeq,
 } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
@@ -29,6 +29,9 @@ export async function storeEmailFromRaw(
 ): Promise<StoredMessage> {
   const parsed = await parseRawMessage(raw);
   const seen = flags.includes('\\Seen');
+  // Raw-always storage, written before the row exists so no reader ever sees the
+  // message without its raw object (content-addressed, shared with copies).
+  const { storagePath } = await storeRawMessage(raw);
 
   // UID + modSeq are allocated atomically by the message store.
   const msg = await prisma.$transaction((tx) => createMessage(tx, account.mailboxId, folderId, {
@@ -43,18 +46,15 @@ export async function storeEmailFromRaw(
       messageId: parsed.messageId,
       inReplyTo: parsed.inReplyTo,
       date: parsed.date,
-      bodyText: parsed.bodyText,
-      bodyHtml: parsed.bodyHtml,
+      bodyText: truncateBodyColumn(parsed.bodyText),
+      bodyHtml: truncateBodyColumn(parsed.bodyHtml),
       rawSize: raw.length,
+      storagePath,
       ...(receivedAt ? { createdAt: receivedAt } : {}),
   }));
 
-  const storagePath = rawMessageKey(msg.id);
-  await uploadBuffer(storagePath, raw, 'message/rfc822');
-  await prisma.message.update({ where: { id: msg.id }, data: { storagePath } });
-
-  for (const att of parsed.attachments) {
-    const key = attachmentKey(msg.id, att.filename);
+  for (const [index, att] of parsed.attachments.entries()) {
+    const key = attachmentKey(msg.id, `${index}-${att.sha256.slice(0, 16)}`);
     await uploadBuffer(key, att.buffer, att.mimeType);
     await prisma.attachment.create({
       data: {

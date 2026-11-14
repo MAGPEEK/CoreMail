@@ -3,7 +3,7 @@ import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
 import { verifyPassword } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
-import { expunge } from '@coremail/storage';
+import { expunge, loadRawMessage, parseMimeTree, headerBytes, type RawSourceMessage } from '@coremail/storage';
 
 const log = createLogger('pop3-session');
 
@@ -16,6 +16,11 @@ export function setPop3Hostname(hostname: string): void {
 }
 
 type State = 'AUTHORIZATION' | 'TRANSACTION' | 'UPDATE';
+
+/** RFC 1939 §3: the autologout timer must be at least 10 minutes. */
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+/** Max characters buffered without a line break (commands are ≤ 512 octets). */
+const MAX_PENDING_CHARS = 8 * 1024;
 
 interface MailDrop {
   id: string;
@@ -31,6 +36,10 @@ export class POP3Session {
   private maildrop: MailDrop[] = [];
   private mailboxId: string | null = null;
   private buf = '';
+  /** Serializes pipelined commands (RFC 2449 §6.6). */
+  private queue: Promise<void> = Promise.resolve();
+  /** Set after QUIT / autologout: further input is ignored. */
+  private closed = false;
 
   constructor(
     private readonly socket: net.Socket | tls.TLSSocket,
@@ -40,28 +49,53 @@ export class POP3Session {
   start() {
     this.socket.setEncoding('utf8');
     this.socket.on('data', (chunk: string) => this.onData(chunk));
+    // RFC 1939 §3: inactivity autologout timer (≥ 10 minutes). No UPDATE state:
+    // messages marked as deleted stay in the maildrop.
+    this.socket.setTimeout(IDLE_TIMEOUT_MS, () => {
+      this.closed = true;
+      this.socket.end('-ERR autologout: idle for too long\r\n');
+    });
     // RFC 1939 §3 — greeting with hostname
     this.send(`+OK ${_hostname} POP3 ready`);
   }
 
   private send(line: string) {
+    if (this.closed) return;
     this.socket.write(line + '\r\n');
   }
 
   private onData(chunk: string) {
+    if (this.closed) return;
     this.buf += chunk;
     const lines = this.buf.split('\r\n');
     this.buf = lines.pop() ?? '';
+    // A client that never sends CRLF must not grow the buffer without limit.
+    if (this.buf.length > MAX_PENDING_CHARS) {
+      this.closed = true;
+      this.socket.end('-ERR line too long\r\n');
+      return;
+    }
     for (const line of lines) {
       if (line.length > 512) {
-        this.send('-ERR line too long');
+        this.enqueue(async () => this.send('-ERR line too long'));
         continue;
       }
-      this.handleCommand(line.trim()).catch((err) => {
+      // RFC 2449 §6.6 PIPELINING: commands run strictly one after another, so
+      // responses arrive in command order even when a command awaits the database.
+      this.enqueue(() => this.handleCommand(line.trim()));
+    }
+  }
+
+  private enqueue(fn: () => Promise<void>) {
+    this.queue = this.queue.then(async () => {
+      if (this.closed) return;
+      try {
+        await fn();
+      } catch (err) {
         log.error({ err }, 'command error');
         this.send('-ERR internal error');
-      });
-    }
+      }
+    });
   }
 
   private async handleCommand(line: string) {
@@ -71,6 +105,7 @@ export class POP3Session {
     if (command === 'QUIT') {
       if (this.state === 'TRANSACTION') await this.updateAndDelete();
       this.send('+OK CoreMail POP3 server signing off');
+      this.closed = true;
       this.socket.end();
       return;
     }
@@ -194,7 +229,7 @@ export class POP3Session {
       this.send(`+OK ${active.length} ${total}`);
     } else if (command === 'LIST') {
       if (args[0]) {
-        const i = parseInt(args[0], 10) - 1;
+        const i = msgIndex(args[0]);
         const msg = this.maildrop[i];
         if (!msg || msg.deleted) return this.send('-ERR no such message');
         this.send(`+OK ${i + 1} ${msg.rawSize}`);
@@ -208,7 +243,7 @@ export class POP3Session {
       }
     } else if (command === 'UIDL') {
       if (args[0]) {
-        const i = parseInt(args[0], 10) - 1;
+        const i = msgIndex(args[0]);
         const msg = this.maildrop[i];
         if (!msg || msg.deleted) return this.send('-ERR no such message');
         this.send(`+OK ${i + 1} ${msg.id}`);
@@ -220,18 +255,20 @@ export class POP3Session {
         this.send('.');
       }
     } else if (command === 'RETR') {
-      const i = parseInt(args[0] ?? '', 10) - 1;
+      const i = msgIndex(args[0]);
       const msg = this.maildrop[i];
       if (!msg || msg.deleted) return this.send('-ERR no such message');
-      await this.sendMessage(msg.id, null);
+      await this.sendMessage(msg, null);
     } else if (command === 'TOP') {
-      const i = parseInt(args[0] ?? '', 10) - 1;
-      const lines = parseInt(args[1] ?? '0', 10);
+      // RFC 1939 §7: TOP msg n — n is a required non-negative number of lines.
+      const i = msgIndex(args[0]);
+      if (!/^\d{1,9}$/.test(args[1] ?? '')) return this.send('-ERR TOP requires a message number and a non-negative line count');
+      const lines = Number(args[1]);
       const msg = this.maildrop[i];
       if (!msg || msg.deleted) return this.send('-ERR no such message');
-      await this.sendMessage(msg.id, lines);
+      await this.sendMessage(msg, lines);
     } else if (command === 'DELE') {
-      const i = parseInt(args[0] ?? '', 10) - 1;
+      const i = msgIndex(args[0]);
       const msg = this.maildrop[i];
       if (!msg || msg.deleted) return this.send('-ERR no such message');
       msg.deleted = true;
@@ -246,35 +283,45 @@ export class POP3Session {
     }
   }
 
-  private async sendMessage(id: string, topLines: number | null) {
-    const msg = await prisma.message.findUnique({ where: { id } });
+  /**
+   * RETR / TOP (RFC 1939 §7). The original raw message is sent byte-exactly (all
+   * headers, every MIME part and attachment); the octet count is that of the
+   * message before byte-stuffing, as LIST reports it.
+   */
+  private async sendMessage(drop: MailDrop, topLines: number | null) {
+    const msg = await prisma.message.findUnique({
+      where: { id: drop.id },
+      include: { attachments: { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } } },
+    });
     if (!msg) return this.send('-ERR message not found');
 
-    const eml = buildEml(msg as Record<string, unknown>);
-    this.send(`+OK ${eml.length} octets`);
-
-    // v5.3.1 FIX: byte-stuffing per RFC 1939 §3 — EVERY line starting with "."
-    // must be escaped as "..". Otherwise the mail gets truncated by
-    // clients, because "." at the start of a line signals end-of-message.
-    // Previously: only the first character via `replace(/^\./, '..')`
-    // → multi-line mails with "." at the start of a line were received corrupted.
-    const stuffLines = (text: string): string =>
-      text.split(/\r?\n/).map((line) => line.startsWith('.') ? '.' + line : line).join('\r\n');
-
-    if (topLines !== null) {
-      const parts = eml.split('\r\n\r\n');
-      const headers = parts[0] ?? '';
-      const body = (parts.slice(1).join('\r\n\r\n')).split('\r\n').slice(0, topLines).join('\r\n');
-      const output = body ? `${headers}\r\n\r\n${body}` : headers;
-      this.send(stuffLines(output));
-    } else {
-      this.send(stuffLines(eml));
+    let raw: Buffer;
+    try {
+      raw = await loadRawMessage(msg as unknown as RawSourceMessage);
+    } catch (err) {
+      log.error({ err, messageId: drop.id }, 'POP3: raw message unavailable');
+      return this.send('-ERR [SYS/TEMP] message temporarily unavailable');
     }
-    this.send('.');
+    // A legacy row was just materialized: report its real size from now on.
+    drop.rawSize = raw.length;
+
+    if (topLines === null) {
+      this.send(`+OK ${raw.length} octets`);
+      this.socket.write(dotStuff(raw));
+      return;
+    }
+    const tree = parseMimeTree(raw);
+    let end = tree.bodyStart;
+    for (let n = 0; n < topLines && end < raw.length; n++) {
+      const lf = raw.indexOf(0x0a, end);
+      end = lf === -1 ? raw.length : lf + 1;
+    }
+    this.send('+OK top of message follows');
+    this.socket.write(dotStuff(Buffer.concat([headerBytes(raw, tree), raw.subarray(tree.bodyStart, end)])));
   }
 
   private async updateAndDelete() {
-    
+
     const toDelete = this.maildrop.filter((m) => m.deleted).map((m) => m.id);
     if (toDelete.length > 0) {
       // Expunge with a modSeq bump so IMAP/JMAP/ActiveSync clients notice.
@@ -284,21 +331,30 @@ export class POP3Session {
   }
 }
 
-function buildEml(msg: Record<string, unknown>): string {
-  const from = msg['fromAddr'] as string;
-  const to = (msg['toAddrs'] as string[]).join(', ');
-  const date = new Date(msg['date'] as string).toUTCString();
-  const subject = msg['subject'] as string;
-  const body = (msg['bodyText'] as string) || (msg['bodyHtml'] as string) || '';
-
-  return [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `Date: ${date}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: text/plain; charset=utf-8`,
-    '',
-    body,
-  ].join('\r\n');
+/** 0-based maildrop index of a message-number argument (-1 when not a positive number). */
+function msgIndex(arg: string | undefined): number {
+  return /^[1-9]\d{0,8}$/.test(arg ?? '') ? Number(arg) - 1 : -1;
 }
+
+/**
+ * Multi-line response body (RFC 1939 §3): byte-stuffs every line that starts with
+ * ".", makes sure the data ends with CRLF and appends the terminating ".\r\n".
+ */
+export function dotStuff(data: Buffer): Buffer {
+  const out: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === 0x2e && (i === 0 || data[i - 1] === 0x0a)) {
+      out.push(data.subarray(start, i), DOT);
+      start = i;
+    }
+  }
+  out.push(data.subarray(start));
+  if (data.length > 0 && data[data.length - 1] !== 0x0a) out.push(CRLF);
+  out.push(TERMINATOR);
+  return Buffer.concat(out);
+}
+
+const DOT = Buffer.from('.');
+const CRLF = Buffer.from('\r\n');
+const TERMINATOR = Buffer.from('.\r\n');
