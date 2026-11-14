@@ -1,6 +1,9 @@
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { prisma, createMessage, touchMessages } from '@coremail/storage';
+import {
+  prisma, createMessage, touchMessages, parseRawMessage, storeRawMessage, truncateBodyColumn,
+  attachmentKey, uploadBuffer,
+} from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:restore');
@@ -21,7 +24,7 @@ export async function importMbox(
   });
   if (!folder) throw new Error('Folder not found or access denied');
 
-  const rl = createInterface({ input: createReadStream(mboxPath), crlfDelay: Infinity });
+  const rl = createInterface({ input: createReadStream(mboxPath, { encoding: 'latin1' }), crlfDelay: Infinity });
 
   let currentLines: string[] = [];
   let imported = 0;
@@ -30,35 +33,46 @@ export async function importMbox(
   const flush = async () => {
     if (!currentLines.length) return;
     try {
-      const raw = currentLines.join('\r\n');
-      const fromLine = currentLines[0] ?? '';
-      const fromMatch = fromLine.match(/^From\s+(\S+)\s+(.+)$/);
-      const fromAddr = fromMatch?.[1] ?? 'unknown@localhost';
-      const dateStr = fromMatch?.[2] ?? new Date().toUTCString();
-
-      let subject = '';
-      let bodyStart = 0;
-      for (let i = 1; i < currentLines.length; i++) {
-        const line = currentLines[i] ?? '';
-        if (line === '') { bodyStart = i + 1; break; }
-        const subjectMatch = line.match(/^Subject:\s*(.+)/i);
-        if (subjectMatch) subject = subjectMatch[1] ?? '';
-      }
-      const bodyText = currentLines.slice(bodyStart).join('\r\n').replace(/^>From /gm, 'From ');
+      // mboxrd: drop the "From " separator line, un-quote ">From " lines and the
+      // empty line that terminates the entry; the rest is the original message.
+      const lines = currentLines.slice(1);
+      while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      const raw = Buffer.from(
+        `${lines.map((l) => l.replace(/^>(>*From )/, '$1')).join('\r\n')}\r\n`,
+        'latin1',
+      );
+      const parsed = await parseRawMessage(raw);
+      const { storagePath } = await storeRawMessage(raw);
 
       // UID + modSeq are allocated atomically by the message store (the old code
       // reused the uidNext read once before the loop for every message).
-      await prisma.$transaction((tx) => createMessage(tx, folder.mailboxId, folderId, {
+      const created = await prisma.$transaction((tx) => createMessage(tx, folder.mailboxId, folderId, {
           flags: ['\\Seen'],
-          subject,
-          fromAddr,
-          toAddrs: [],
-          date: new Date(dateStr),
-          bodyText,
-          bodyHtml: '',
-          rawSize: raw.length,
-          storagePath: '',
+          subject:   parsed.subject,
+          fromAddr:  parsed.fromAddr,
+          fromName:  parsed.fromName,
+          toAddrs:   parsed.toAddrs,
+          ccAddrs:   parsed.ccAddrs,
+          bccAddrs:  parsed.bccAddrs,
+          replyTo:   parsed.replyTo,
+          messageId: parsed.messageId,
+          inReplyTo: parsed.inReplyTo,
+          date:      parsed.date,
+          bodyText:  truncateBodyColumn(parsed.bodyText),
+          bodyHtml:  truncateBodyColumn(parsed.bodyHtml),
+          rawSize:   raw.length,
+          storagePath,
       }));
+      for (const [index, att] of parsed.attachments.entries()) {
+        const key = attachmentKey(created.id, `${index}-${att.sha256.slice(0, 16)}`);
+        await uploadBuffer(key, att.buffer, att.mimeType);
+        await prisma.attachment.create({
+          data: {
+            messageId: created.id, contentId: att.contentId, filename: att.filename, mimeType: att.mimeType,
+            size: att.size, sha256: att.sha256, storagePath: key, inline: att.inline,
+          },
+        });
+      }
 
       await prisma.folder.update({
         where: { id: folderId },

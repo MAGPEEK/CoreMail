@@ -5,7 +5,14 @@ const log = createLogger('minio');
 
 let _client: MinioClient | null = null;
 
+declare global {
+  // Test seam (like globalThis.__prisma): an object-store fake used instead of MinIO.
+  // eslint-disable-next-line no-var
+  var __minioClient: MinioClient | undefined;
+}
+
 export function getMinioClient(): MinioClient {
+  if (globalThis.__minioClient) return globalThis.__minioClient;
   if (!_client) {
     _client = new MinioClient({
       endPoint: config.MINIO_ENDPOINT,
@@ -119,6 +126,23 @@ export async function downloadBuffer(objectKey: string): Promise<Buffer> {
   });
 }
 
+/** Readable stream of an object (attachment downloads without buffering). */
+export async function getObjectStream(objectKey: string): Promise<NodeJS.ReadableStream> {
+  return getMinioClient().getObject(config.MINIO_BUCKET_ATTACHMENTS, objectKey);
+}
+
+/** True when the object exists (false on NotFound, rethrows other errors). */
+export async function objectExists(objectKey: string): Promise<boolean> {
+  try {
+    await getMinioClient().statObject(config.MINIO_BUCKET_ATTACHMENTS, objectKey);
+    return true;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'NotFound' || code === 'NoSuchKey') return false;
+    throw err;
+  }
+}
+
 export async function deleteObject(objectKey: string): Promise<void> {
   const client = getMinioClient();
   await client.removeObject(config.MINIO_BUCKET_ATTACHMENTS, objectKey);
@@ -133,6 +157,10 @@ export function jmapUploadKey(accountId: string, blobId: string): string {
   return `jmap-upload/${accountId}/${blobId}`;
 }
 
+/**
+ * @deprecated Per-message raw keys (`raw/<id>.eml`) are still read for existing rows;
+ * new raw messages are stored content-addressed via `storeRawMessage()`.
+ */
 export function rawMessageKey(messageId: string): string {
   return `raw/${messageId}.eml`;
 }

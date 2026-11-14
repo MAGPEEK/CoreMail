@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useRef, useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { sanitizeMailHtml } from '../lib/mailHtml.js';
 import { api } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
@@ -31,20 +32,10 @@ const sanitize = sanitizeMailHtml;
  */
 function processExternalImages(
   html: string,
-  inlineAttachments: { id: string; contentId: string | null }[],
-  tokenParam: string,
+  // cid (lower-case, without "<>") → data: URL of the inline image (see useCidImages)
+  cidMap: Map<string, string>,
 ): { html: string; externalImageCount: number } {
   if (!html) return { html: '', externalImageCount: 0 };
-
-  // Build inline CID mapping: cid:foo@bar → /api/v1/mail/attachments/{id}
-  const cidMap = new Map<string, string>();
-  for (const att of inlineAttachments) {
-    if (att.contentId) {
-      // contentId may be wrapped in "<...>" — map both variants
-      const clean = att.contentId.replace(/^<|>$/g, '').toLowerCase();
-      cidMap.set(clean, `/api/v1/mail/attachments/${att.id}${tokenParam}`);
-    }
-  }
 
   let externalCount = 0;
   // 1x1 transparent PNG as placeholder for blocked external images
@@ -95,6 +86,71 @@ function processExternalImages(
   return { html: processed, externalImageCount: externalCount };
 }
 
+/** Raster image types embedded via cid: (never SVG/HTML). */
+const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp']);
+
+const cleanCid = (cid: string): string => cid.replace(/^<|>$/g, '').toLowerCase();
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Loads the inline images a message references via cid: with the Authorization
+ * header (no access token in image URLs) and returns cid → data: URL.
+ */
+function useCidImages(msg: Message | undefined): Map<string, string> {
+  const [cidUrls, setCidUrls] = useState<Map<string, string>>(() => new Map());
+  const html = msg?.bodyHtml ?? '';
+  const attachments = msg?.attachments;
+  useEffect(() => {
+    setCidUrls(new Map());
+    if (!html) return undefined;
+    const lowerHtml = html.toLowerCase();
+    const wanted = (attachments ?? []).filter((a) =>
+      a.contentId
+      && INLINE_IMAGE_TYPES.has(a.mimeType.toLowerCase())
+      && lowerHtml.includes(`cid:${cleanCid(a.contentId)}`));
+    if (wanted.length === 0) return undefined;
+    let cancelled = false;
+    void Promise.all(wanted.map(async (a): Promise<[string, string] | null> => {
+      try {
+        const blob = await api.getBlob(`/mail/attachments/${a.id}`);
+        const url = await blobToDataUrl(new Blob([blob], { type: a.mimeType.toLowerCase() }));
+        return [cleanCid(a.contentId!), url];
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (!cancelled) setCidUrls(new Map(entries.filter((e): e is [string, string] => e !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [html, attachments]);
+  return cidUrls;
+}
+
+/** Downloads an attachment through the API client (Authorization header) as a file. */
+async function downloadAttachment(att: { id: string; filename: string }): Promise<void> {
+  try {
+    const blob = await api.getBlob(`/mail/attachments/${att.id}`);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = att.filename || 'attachment';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    toast.error(`Anhang konnte nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 interface Props {
   messageId: string;
 }
@@ -126,6 +182,8 @@ export function MessageReader({ messageId }: Props) {
     queryKey: ['folders'],
     queryFn: () => api.get<Folder[]>('/mail/folders'),
   });
+
+  const cidUrls = useCidImages(msg);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['messages'] });
@@ -413,13 +471,14 @@ export function MessageReader({ messageId }: Props) {
       {msg.attachments?.length > 0 && (
         <div className="px-6 py-2 border-b border-gray-100 dark:border-gray-700 flex flex-wrap gap-2 shrink-0">
           {msg.attachments.map((att) => (
-            <a key={att.id} href={`/api/v1/mail/attachments/${att.id}`} download={att.filename}
+            <button key={att.id} type="button" onClick={() => { void downloadAttachment(att); }}
+              title={att.filename}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
               <Paperclip size={12} />
               {att.filename}
               <span className="text-gray-400">({Math.round(att.size / 1024)} KB)</span>
               <Download size={11} className="text-gray-400" />
-            </a>
+            </button>
           ))}
         </div>
       )}
@@ -434,14 +493,9 @@ export function MessageReader({ messageId }: Props) {
             </div>
           );
         }
-        const inlineAtts = (msg.attachments ?? []).map((a) => ({
-          id: a.id,
-          contentId: a.contentId ?? null,
-        }));
         const { html: processedHtml, externalImageCount } = processExternalImages(
           msg.bodyHtml,
-          inlineAtts,
-          tokenParam,
+          cidUrls,
         );
         // v3.18.36: If the user clicked "Show images" → restore original URLs.
         // Handles BOTH markers: data-coremail-ext-src

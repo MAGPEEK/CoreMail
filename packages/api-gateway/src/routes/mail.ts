@@ -5,10 +5,14 @@ import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
 import {
-  prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey, outboundAttachKey,
+  prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
+  loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
+import {
+  createAttachmentDownloadHandler, readableMailboxWhere, contentDisposition,
+} from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -41,21 +45,8 @@ async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham',
       });
       if (!msg) continue;
 
-      let raw: Buffer;
-      if (msg.storagePath) {
-        raw = await downloadBuffer(msg.storagePath);
-      } else {
-        // Minimal reconstruction for Bayes training
-        const from = msg.fromName
-          ? `"${msg.fromName.replace(/"/g, '\\"')}" <${msg.fromAddr}>`
-          : `<${msg.fromAddr}>`;
-        raw = Buffer.from(
-          `From: ${from}\r\nTo: ${msg.toAddrs.join(', ')}\r\n` +
-          `Subject: ${msg.subject ?? ''}\r\nDate: ${msg.date.toUTCString()}\r\n\r\n` +
-          (msg.bodyText || msg.bodyHtml || ''),
-        );
-      }
-
+      // Original message (legacy rows: sanitized reconstruction, not persisted here).
+      const raw = await loadRawMessage(msg, { persist: false });
       await rspamdLearn(action, raw);
       log.debug({ id, action }, 'rspamd learning successful');
     } catch (err) {
@@ -533,6 +524,17 @@ mailRouter.delete('/messages/:id/snooze', async (req: Request, res: Response) =>
   res.json({ ok: true });
 });
 
+// GET /api/v1/mail/attachments/:id — attachment download (own, shared, delegated
+// mailboxes; streamed from object storage; see lib/attachment-download.ts)
+mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
+  findAttachment: (id, userId) => prisma.attachment.findFirst({
+    where: { id, message: { deletedAt: null, folder: { mailbox: readableMailboxWhere(userId) } } },
+    select: { id: true, filename: true, mimeType: true, size: true, storagePath: true },
+  }),
+  openStream: getObjectStream,
+  warn: (msg, err) => log.warn({ err }, msg),
+}));
+
 // GET /api/v1/mail/messages/:id/raw — RFC 822 raw EML / source view
 mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -542,70 +544,19 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  // Original RFC 822 MIME from MinIO (for large messages stored there)
-  if (msg.storagePath) {
-    try {
-      const raw = await downloadBuffer(msg.storagePath);
-      res.setHeader('Content-Type', 'message/rfc822');
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(msg.subject || 'message')}.eml"`);
-      res.send(raw);
-      return;
-    } catch {
-      // MinIO error → fall back to reconstruction
-    }
+  // The original RFC 5322 octets (legacy rows: deterministic, sanitized reconstruction).
+  try {
+    const raw = await loadRawMessage(msg);
+    res.setHeader('Content-Type', 'message/rfc822');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', contentDisposition('attachment', `${msg.subject || 'message'}.eml`));
+    res.send(raw);
+    return;
+  } catch (err) {
+    log.warn({ err, id }, 'Raw message not readable');
+    res.status(503).json({ error: 'Message source temporarily unavailable' });
+    return;
   }
-
-  // ── RFC 822 reconstruction from DB fields ─────────────────────────────────
-  // Per RFC 822 §3: header lines + blank line + body
-  // Per RFC 2045: MIME-Version + Content-Type
-  const boundary = `=_CoreMail_${crypto.randomUUID().replace(/-/g, '')}`;
-  const hasHtml  = !!msg.bodyHtml;
-  const hasText  = !!msg.bodyText;
-  const multipart = hasHtml && hasText;
-
-  const headerLines = [
-    `From: ${msg.fromName ? `"${msg.fromName.replace(/"/g, '\\"')}" ` : ''}<${msg.fromAddr}>`,
-    `To: ${msg.toAddrs.join(', ')}`,
-    msg.ccAddrs.length  ? `Cc: ${msg.ccAddrs.join(', ')}`   : '',
-    msg.bccAddrs?.length ? `Bcc: ${msg.bccAddrs.join(', ')}` : '',
-    `Subject: ${msg.subject ?? ''}`,
-    `Date: ${msg.date.toUTCString().replace('GMT', '+0000')}`,
-    msg.messageId ? `Message-ID: ${msg.messageId}` : '',
-    msg.inReplyTo ? `In-Reply-To: ${msg.inReplyTo}` : '',
-    msg.replyTo   ? `Reply-To: ${msg.replyTo}`      : '',
-    'MIME-Version: 1.0',
-    'X-Mailer: CoreMail (reconstructed)',
-    multipart
-      ? `Content-Type: multipart/alternative; boundary="${boundary}"`
-      : hasHtml
-        ? 'Content-Type: text/html; charset=utf-8'
-        : 'Content-Type: text/plain; charset=utf-8',
-    `Content-Transfer-Encoding: 8bit`,
-  ].filter(Boolean).join('\r\n');
-
-  let body: string;
-  if (multipart) {
-    body = [
-      `--${boundary}`,
-      'Content-Type: text/plain; charset=utf-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      msg.bodyText,
-      `--${boundary}`,
-      'Content-Type: text/html; charset=utf-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      msg.bodyHtml,
-      `--${boundary}--`,
-    ].join('\r\n');
-  } else {
-    body = hasHtml ? msg.bodyHtml : msg.bodyText;
-  }
-
-  const rawEml = `${headerLines}\r\n\r\n${body}`;
-  res.setHeader('Content-Type', 'message/rfc822; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(msg.subject || 'message')}.eml"`);
-  res.send(rawEml);
 });
 
 // GET /api/v1/mail/folders/:folderId/messages
@@ -1025,13 +976,8 @@ mailRouter.post(
 
         const parsed = await parseRawMessage(rawBuffer);
 
-        const LARGE = 256 * 1024;
-        let storagePath: string | null = null;
-        if (rawBuffer.length > LARGE) {
-          const storageId = crypto.randomUUID();
-          storagePath = rawMessageKey(storageId);
-          await uploadBuffer(storagePath, rawBuffer, 'message/rfc822');
-        }
+        // Raw-always storage (IMAP/POP3/JMAP serve these octets).
+        const { storagePath } = await storeRawMessage(rawBuffer);
 
         // UID + modSeq are allocated atomically by the message store.
         const sentCopy = await prisma.$transaction((tx) => createMessage(tx, mailbox.id, sentFolder.id, {
@@ -1046,8 +992,8 @@ mailRouter.post(
             messageId: parsed.messageId,
             inReplyTo: parsed.inReplyTo,
             date:      parsed.date,
-            bodyText:  storagePath ? '' : parsed.bodyText,
-            bodyHtml:  storagePath ? '' : parsed.bodyHtml,
+            bodyText:  truncateBodyColumn(parsed.bodyText),
+            bodyHtml:  truncateBodyColumn(parsed.bodyHtml),
             rawSize:   rawBuffer.length,
             storagePath,
             // Schedule-send metadata: enables banner + cancel button in the reader

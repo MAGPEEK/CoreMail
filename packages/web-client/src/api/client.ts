@@ -37,7 +37,14 @@ async function tryRefresh(): Promise<string | null> {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}, skipContentType = false): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  skipContentType = false,
+  responseType: 'json' | 'blob' = 'json',
+): Promise<T> {
+  const parse = (r: Response): Promise<T> =>
+    (responseType === 'blob' ? r.blob() : r.json()) as Promise<T>;
   let token = useAuthStore.getState().accessToken;
 
   // Proactive refresh: if token expires within 120 seconds, refresh first
@@ -82,7 +89,7 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
       const retryRes = await fetch(`${BASE}${path}`, { ...init, headers: retryHeaders });
       if (retryRes.ok) {
         if (retryRes.status === 204) return undefined as T;
-        return retryRes.json() as Promise<T>;
+        return parse(retryRes);
       }
     }
     useAuthStore.getState().logout();
@@ -96,7 +103,7 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
   }
 
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return parse(res);
 }
 
 export const api = {
@@ -106,6 +113,8 @@ export const api = {
   put:      <T>(path: string, body: unknown)    => request<T>(path, { method: 'PUT',   body: JSON.stringify(body) }),
   patch:    <T>(path: string, body: unknown)    => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   delete:   <T>(path: string)                   => request<T>(path, { method: 'DELETE' }),
+  /** Binary download with the Authorization header (no access token in the URL). */
+  getBlob:  (path: string)                      => request<Blob>(path, {}, true, 'blob'),
 };
 
 export type LoginResult =

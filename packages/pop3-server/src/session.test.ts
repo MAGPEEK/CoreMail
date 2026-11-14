@@ -580,8 +580,10 @@ describe('RETR and TOP (RFC 1939 §5, §7)', () => {
   test('a large message stored in object storage is not delivered with an empty body', async (t) => {
     // smtp-server/src/handlers/message.ts stores messages > 256 KB in MinIO (storagePath) and saves
     // bodyText/bodyHtml as ''. A RETR that ignores storagePath sends headers only.
-    // (When this is fixed the test needs an object-storage fake returning the raw message.)
-    const large = message(1, { bodyText: '', bodyHtml: '', storagePath: 'raw/large-message', rawSize: 300_000 });
+    // The object-storage fake (test-hooks.mjs, __coremailTest.objects) returns the raw message.
+    const raw = Buffer.from(`From: alice@example.test\r\nSubject: Large\r\n\r\n${'x'.repeat(300_000 - 44)}`);
+    (globalThis as unknown as { __coremailTest: { objects: Map<string, Buffer> } }).__coremailTest.objects.set('raw/large-message', raw);
+    const large = message(1, { bodyText: '', bodyHtml: '', storagePath: 'raw/large-message', rawSize: raw.length });
     const { client } = await login(t, [large]);
 
     const { lines } = await client.multi('RETR 1');
