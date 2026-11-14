@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
-import { listAllowedSenderAddresses } from '@coremail/storage';
+import { listAllowedSenderAddresses, createMessage } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
 import { enqueueRawOutbound } from '../outbound.js';
@@ -94,15 +94,8 @@ async function saveSentCopy(userId: string, plan: EasSubmissionPlan, rawSize: nu
     where: { mailboxId: mailbox.id, name: 'Sent' },
   });
   if (!sentFolder) return;
-  const updatedMailbox = await prisma.mailbox.update({
-    where: { id: mailbox.id },
-    data: { uidNext: { increment: 1 } },
-  });
-  await prisma.message.create({
-    data: {
-      folderId: sentFolder.id,
-      uid: updatedMailbox.uidNext - 1,
-      modSeq: BigInt(Date.now()),
+  // UID + modSeq are allocated atomically by the message store.
+  await prisma.$transaction((tx) => createMessage(tx, mailbox.id, sentFolder.id, {
       flags: ['\\Seen'],
       subject: plan.subject,
       fromAddr: plan.envelopeFrom,
@@ -114,8 +107,7 @@ async function saveSentCopy(userId: string, plan: EasSubmissionPlan, rawSize: nu
       bodyHtml: plan.html,
       rawSize,
       storagePath: '',
-    },
-  });
+  }));
   await prisma.folder.update({
     where: { id: sentFolder.id },
     data: { totalCount: { increment: 1 } },

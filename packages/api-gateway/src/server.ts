@@ -2,7 +2,7 @@ import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { connectDatabase, prisma } from '@coremail/storage';
+import { connectDatabase, prisma, migrateMailboxCounters } from '@coremail/storage';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
@@ -393,6 +393,12 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   await connectDatabase();
+  // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
+  // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
+  // allocation per mailbox repeats this check lazily in every service).
+  void migrateMailboxCounters(prisma)
+    .then((n) => { if (n > 0) log.info({ mailboxes: n }, 'Mailbox UID/modSeq counters migrated'); })
+    .catch((err) => log.warn({ err }, 'Mailbox counter migration failed — lazy per-mailbox check still applies'));
   // v5.6.0: initJwtKeys() removed (RS256 keys were for OAuth2 — completely gone)
   getRedisClient();
   log.info({ port: PORT }, 'API Gateway listening');

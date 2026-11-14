@@ -91,10 +91,15 @@ function installFakeDb(messages: FakeMessage[]): FakeDb {
         await tick();
         if (where.userId !== 'u1') return null;
         const live = db.messages.filter((m) => m.deletedAt === null).sort((a, b) => a.uid - b.uid);
-        return { folders: [{ messages: live.map(({ id, uid, rawSize }) => ({ id, uid, rawSize })) }] };
+        return { id: 'mb1', folders: [{ messages: live.map(({ id, uid, rawSize }) => ({ id, uid, rawSize })) }] };
       },
+      // message-store allocation (modSeq bump on expunge)
+      update: async () => ({ uidNext: 1, highestModSeq: 1n }),
+      updateMany: async () => ({ count: 0 }),
     },
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(prisma),
     message: {
+      aggregate: async () => ({ _max: { modSeq: null, uid: null } }),
       findUnique: async ({ where }: { where: { id: string } }) => {
         await tick();
         return db.messages.find((m) => m.id === where.id) ?? null;

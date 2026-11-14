@@ -1,4 +1,4 @@
-import { prisma } from '@coremail/storage';
+import { prisma, createMessage } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
@@ -62,18 +62,8 @@ export async function createItem(
   });
   if (!folder) return errorResponse('CreateItem', 'ErrorFolderNotFound', 'Folder not found');
 
-  // Allocate UID
-  const updatedMailbox = await prisma.mailbox.update({
-    where: { id: mailbox.id },
-    data: { uidNext: { increment: 1 } },
-  });
-  const uid = updatedMailbox.uidNext - 1;
-
-  const msg = await prisma.message.create({
-    data: {
-      folderId: folder.id,
-      uid,
-      modSeq: BigInt(Date.now()),
+  // UID + modSeq are allocated atomically by the message store.
+  const msg = await prisma.$transaction((tx) => createMessage(tx, mailbox.id, folder.id, {
       flags: messageDisposition !== 'SaveOnly' ? ['\\Seen'] : ['\\Draft'],
       subject,
       fromAddr: user.email,
@@ -85,8 +75,7 @@ export async function createItem(
       bodyHtml,
       rawSize: bodyText.length + bodyHtml.length,
       storagePath: '',
-    },
-  });
+  }));
 
   await prisma.folder.update({
     where: { id: folder.id },

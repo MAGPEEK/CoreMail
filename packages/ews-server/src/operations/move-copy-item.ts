@@ -1,4 +1,4 @@
-import { prisma } from '@coremail/storage';
+import { prisma, moveMessages, copyMessages } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -29,7 +29,11 @@ async function resolveFolderId(
   const folderId = folderIdRaw['FolderId'] as
     | Record<string, Record<string, string>>
     | undefined;
-  return folderId?.['$']?.['Id'] ?? null;
+  const id = folderId?.['$']?.['Id'];
+  if (!id) return null;
+  // The target must belong to the caller's mailbox (UIDs are allocated from it).
+  const owned = await prisma.folder.findFirst({ where: { id, mailboxId }, select: { id: true } });
+  return owned?.id ?? null;
 }
 
 export async function moveItem(
@@ -49,7 +53,7 @@ export async function moveItem(
   const itemIdRaw = itemIds?.['ItemId'];
   const ids = Array.isArray(itemIdRaw) ? itemIdRaw : itemIdRaw ? [itemIdRaw] : [];
 
-  const results: { id: string }[] = [];
+  const results: { id: string; changeKey: string }[] = [];
   for (const item of ids) {
     const id = (item as Record<string, Record<string, string>>)['$']?.['Id'];
     if (!id) continue;
@@ -59,8 +63,11 @@ export async function moveItem(
     });
     if (!msg) continue;
 
-    await prisma.message.update({ where: { id }, data: { folderId: targetFolderId } });
-    results.push({ id });
+    // Move = new UID in the target folder + new modSeq (message store)
+    const { modSeq } = await prisma.$transaction((tx) => moveMessages(
+      tx, [id], targetFolderId, { targetMailboxId: mailbox.id, sourceMailboxId: mailbox.id },
+    ));
+    results.push({ id, changeKey: String(modSeq ?? msg.modSeq) });
   }
 
   return soapEnvelope((body) => {
@@ -71,7 +78,7 @@ export async function moveItem(
         .ele('m:ResponseCode').txt('NoError').up()
         .ele('m:Items')
         .ele('t:Message')
-        .ele('t:ItemId', { Id: r.id, ChangeKey: String(Date.now()) });
+        .ele('t:ItemId', { Id: r.id, ChangeKey: r.changeKey });
     }
   });
 }
@@ -93,41 +100,23 @@ export async function copyItem(
   const itemIdRaw = itemIds?.['ItemId'];
   const ids = Array.isArray(itemIdRaw) ? itemIdRaw : itemIdRaw ? [itemIdRaw] : [];
 
-  const results: { id: string }[] = [];
+  const results: { id: string; changeKey: string }[] = [];
   for (const item of ids) {
     const id = (item as Record<string, Record<string, string>>)['$']?.['Id'];
     if (!id) continue;
 
     const msg = await prisma.message.findFirst({
       where: { id, folder: { mailboxId: mailbox.id } },
-      include: { attachments: true },
+      select: { id: true },
     });
     if (!msg) continue;
 
-    const updatedMailbox = await prisma.mailbox.update({
-      where: { id: mailbox.id },
-      data: { uidNext: { increment: 1 } },
-    });
-
-    const newMsg = await prisma.message.create({
-      data: {
-        folderId: targetFolderId,
-        uid: updatedMailbox.uidNext - 1,
-        modSeq: BigInt(Date.now()),
-        flags: msg.flags,
-        subject: msg.subject,
-        fromAddr: msg.fromAddr,
-        toAddrs: msg.toAddrs,
-        ccAddrs: msg.ccAddrs,
-        date: msg.date,
-        bodyText: msg.bodyText,
-        bodyHtml: msg.bodyHtml,
-        rawSize: msg.rawSize,
-        storagePath: msg.storagePath,
-      },
-    });
-
-    results.push({ id: newMsg.id });
+    // Copy with a fresh UID + modSeq (message store); attachment rows are duplicated too.
+    const { mapping, modSeq } = await prisma.$transaction((tx) => copyMessages(
+      tx, [id], targetFolderId, { targetMailboxId: mailbox.id },
+    ));
+    const copy = mapping[0];
+    if (copy) results.push({ id: copy.newId, changeKey: String(modSeq) });
   }
 
   return soapEnvelope((body) => {
@@ -138,7 +127,7 @@ export async function copyItem(
         .ele('m:ResponseCode').txt('NoError').up()
         .ele('m:Items')
         .ele('t:Message')
-        .ele('t:ItemId', { Id: r.id, ChangeKey: String(Date.now()) });
+        .ele('t:ItemId', { Id: r.id, ChangeKey: r.changeKey });
     }
   });
 }

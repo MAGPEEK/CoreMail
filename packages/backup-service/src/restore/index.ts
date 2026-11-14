@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { prisma } from '@coremail/storage';
+import { prisma, createMessage, touchMessages } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:restore');
@@ -20,9 +20,6 @@ export async function importMbox(
     where: { id: folderId, mailbox: { userId } },
   });
   if (!folder) throw new Error('Folder not found or access denied');
-
-  const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
-  if (!mailbox) throw new Error('Mailbox not found');
 
   const rl = createInterface({ input: createReadStream(mboxPath), crlfDelay: Infinity });
 
@@ -49,14 +46,9 @@ export async function importMbox(
       }
       const bodyText = currentLines.slice(bodyStart).join('\r\n').replace(/^>From /gm, 'From ');
 
-      const uid = mailbox.uidNext;
-      await prisma.mailbox.update({ where: { id: mailbox.id }, data: { uidNext: { increment: 1 } } });
-
-      await prisma.message.create({
-        data: {
-          folderId,
-          uid,
-          modSeq: BigInt(Date.now()),
+      // UID + modSeq are allocated atomically by the message store (the old code
+      // reused the uidNext read once before the loop for every message).
+      await prisma.$transaction((tx) => createMessage(tx, folder.mailboxId, folderId, {
           flags: ['\\Seen'],
           subject,
           fromAddr,
@@ -66,8 +58,7 @@ export async function importMbox(
           bodyHtml: '',
           rawSize: raw.length,
           storagePath: '',
-        },
-      });
+      }));
 
       await prisma.folder.update({
         where: { id: folderId },
@@ -104,10 +95,8 @@ export async function restoreMessage(userId: string, messageId: string): Promise
   });
   if (!msg) throw new Error('Message not found or already active');
 
-  await prisma.message.update({
-    where: { id: messageId },
-    data: { deletedAt: null },
-  });
+  // Un-expunge = the message reappears → new modSeq (visible to CONDSTORE/JMAP/EAS).
+  await prisma.$transaction((tx) => touchMessages(tx, [messageId], { deletedAt: null }));
 
   await prisma.folder.update({
     where: { id: msg.folderId },

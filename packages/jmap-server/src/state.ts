@@ -2,9 +2,10 @@
  * State strings (RFC 8620 §1.6.2) per account and data type.
  *
  * Email/Thread: `<maxMsgModSeq>.<mailboxHighestModSeq>.<maxCreatedMs>.<count>`
- *   - REST/JMAP set modSeq = Date.now() on changes (ms, > 1e12)
- *   - SMTP inbound/IMAP increment the mailbox counter highestModSeq (small)
- *   Both semantics are tracked separately so /changes misses nothing.
+ *   - Since the message store (@coremail/storage message-store) every writer sets
+ *     message.modSeq = ++mailbox.highestModSeq; rows from older versions may still
+ *     carry Date.now()-sized modSeqs (the counter is lifted above them on first use).
+ *   Both parts are kept so /changes also works across that migration.
  * Mailbox: `<count>.<maxCreatedMs>.<hash>` — hash over all visible fields.
  * Others (Identity, Quota, Principal, …): hash of the content.
  */

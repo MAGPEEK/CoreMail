@@ -8,8 +8,8 @@
  * only methods without Redis side effects are exercised.
  *
  * Writes by other CoreMail components are simulated exactly as their code performs them:
- *   IMAP STORE  → message.modSeq += 1, nothing else      (imap-server/src/commands/index.ts:1207-1210)
- *   IMAP MOVE   → message.folderId = target, nothing else (imap-server/src/commands/index.ts:603-606)
+ *   IMAP STORE  → message-store setFlags(): modSeq = ++mailbox.highestModSeq (real primitive)
+ *   IMAP MOVE   → message-store moveMessages(): new UID + modSeq in the target (real primitive)
  *   SMTP/JMAP create → mailbox.highestModSeq += 1, message.modSeq = that, createdAt = now|receivedAt
  *                 (jmap-server/src/mail/write.ts:28-58)
  *   JMAP update → message.modSeq = Date.now()            (jmap-server/src/mail/write.ts:111)
@@ -87,7 +87,10 @@ function order(rows: Row[], orderBy: unknown): Row[] {
 }
 function applyData(row: Row, data: Row): void {
   for (const [k, v] of Object.entries(data)) {
-    if (v && typeof v === 'object' && 'increment' in (v as Row)) row[k] = (row[k] as bigint) + BigInt((v as Row)['increment'] as number);
+    if (v && typeof v === 'object' && 'increment' in (v as Row)) {
+      const inc = (v as Row)['increment'] as number | bigint;
+      row[k] = typeof row[k] === 'bigint' ? (row[k] as bigint) + BigInt(inc) : (row[k] as number) + Number(inc);
+    }
     else row[k] = v;
   }
 }
@@ -108,6 +111,11 @@ function model(table: () => Row[], extra: (r: Row) => Row = (r) => r) {
       applyData(r, a['data'] as Row);
       return extra({ ...r });
     },
+    updateMany: async (a: Row) => {
+      const rows = table().filter((x) => match(x, a['where'] as Row));
+      for (const r of rows) applyData(r, a['data'] as Row);
+      return { count: rows.length };
+    },
     aggregate: async (a: Row) => {
       const rows = table().filter((r) => match(r, a['where'] as Row));
       const max: Row = {};
@@ -118,8 +126,10 @@ function model(table: () => Row[], extra: (r: Row) => Row = (r) => r) {
     },
   };
 }
-const fakePrisma = {
+const fakePrisma: Record<string, unknown> = {
   $on: () => undefined,
+  // interactive transaction: the message-store primitives run against this fake
+  $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakePrisma),
   mailbox: model(() => db.mailboxes),
   folder: model(() => db.folders),
   message: model(() => db.messages, (r) => ({ attachments: [], ...r })),
@@ -166,6 +176,7 @@ function reset(): void {
     { id: 'archive', mailboxId: 'mbx1', name: 'Archive', parentId: null },
   ];
   db.messages = [];
+  resetMessageStoreCache();
   db.users = [];
   db.sharedMailboxes = [];
 }
@@ -182,8 +193,13 @@ function smtpDeliver(id: string, extra: Row = {}, receivedAt?: Date): Row {
   db.messages.push(row);
   return row;
 }
-const imapStore = (id: string, flags: string[]): void => { const m = db.messages.find((r) => r['id'] === id)!; m['flags'] = flags; m['modSeq'] = (m['modSeq'] as bigint) + 1n; };
-const imapMove = (id: string, folderId: string): void => { db.messages.find((r) => r['id'] === id)!['folderId'] = folderId; };
+// IMAP STORE / MOVE go through the real message-store primitives (as imap-server does).
+const { setFlags, moveMessages, resetMessageStoreCache } = await import('@coremail/storage');
+type Tx = Parameters<typeof setFlags>[0];
+const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => (fakePrisma['$transaction'] as (f: (tx: Tx) => Promise<T>) => Promise<T>)(fn);
+const imapStore = (id: string, flags: string[]): Promise<unknown> => inTx((tx) => setFlags(tx, [{ id, flags }], { mailboxId: 'mbx1' }));
+const imapMove = (id: string, folderId: string): Promise<unknown> =>
+  inTx((tx) => moveMessages(tx, [id], folderId, { targetMailboxId: 'mbx1', sourceMailboxId: 'mbx1' }));
 const jmapUpdate = (id: string, flags: string[]): void => { const m = db.messages.find((r) => r['id'] === id)!; m['flags'] = flags; m['modSeq'] = BigInt(tick().getTime()); };
 const hardDelete = (id: string): void => { db.messages = db.messages.filter((r) => r['id'] !== id); };
 
@@ -235,20 +251,20 @@ describe('Email state + Email/changes', () => {
     assert.equal(r['type'], 'cannotCalculateChanges');
   });
 
-  test('BUG: IMAP STORE (\\Seen) does not change the Email state — JMAP clients never see it', async () => {
+  test('IMAP STORE (\\Seen) changes the Email state and shows up in Email/changes (message store)', async () => {
     smtpDeliver('m1'); smtpDeliver('m2');               // modSeq 1, 2; highestModSeq 2
     const s0 = await emailState('mbx1');
-    imapStore('m1', ['\\Seen']);                         // modSeq 1 → 2; mailbox counter untouched
+    await imapStore('m1', ['\\Seen']);                   // message store: modSeq = ++highestModSeq (3)
     const s1 = await emailState('mbx1');
     assert.notEqual(s1, s0, 'state string identical after a flag change');
     const [, r] = await call('Email/changes', { sinceState: s0 });
     assert.deepEqual(r['updated'], ['m1']);
   });
 
-  test('BUG: IMAP MOVE does not change the Email state — mailboxIds change is invisible', async () => {
+  test('IMAP MOVE changes the Email state (message store: new UID + modSeq)', async () => {
     smtpDeliver('m1');
     const s0 = await emailState('mbx1');
-    imapMove('m1', 'archive');
+    await imapMove('m1', 'archive');
     assert.notEqual(await emailState('mbx1'), s0, 'state string identical after a move');
   });
 

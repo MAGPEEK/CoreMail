@@ -9,7 +9,7 @@
  * The sender is always `system@<publicHostname>` so it is clearly recognizable
  * as an automated mail.
  */
-import { prisma } from '@coremail/storage';
+import { prisma, createMessage } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('internal-notify');
@@ -54,25 +54,12 @@ export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
       return;
     }
 
-    // Increment UID / modSeq — standard IMAP pattern. We read the current
-    // values and add +1. The race-condition risk is acceptable for system-
-    // generated mails (one per share, low frequency).
-    const lastMessage = await prisma.message.findFirst({
-      where: { folderId: inbox.id },
-      orderBy: { uid: 'desc' },
-      select: { uid: true, modSeq: true },
-    });
-    const nextUid = (lastMessage?.uid ?? 0) + 1;
-    const nextModSeq = (lastMessage?.modSeq ?? 0n) + 1n;
-
     const bodyHtml = opts.bodyHtml ?? `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap">${escapeHtml(opts.bodyText)}</pre>`;
     const messageId = opts.messageId ?? `<${Date.now()}.${Math.random().toString(36).slice(2)}@coremail.system>`;
 
-    await prisma.message.create({
-      data: {
-        folderId: inbox.id,
-        uid: nextUid,
-        modSeq: nextModSeq,
+    // UID + modSeq from the mailbox counters (atomic; the old max(uid)+1 left
+    // uidNext behind and broke the next SMTP delivery with a unique violation).
+    await prisma.$transaction((tx) => createMessage(tx, mailbox.id, inbox.id, {
         flags: [],  // unread
         subject: opts.subject,
         fromAddr: opts.fromAddr,
@@ -86,8 +73,11 @@ export async function notifyUserInbox(opts: InternalNotifyOpts): Promise<void> {
         rawSize: Buffer.byteLength(bodyText(opts), 'utf8'),
         messageId,
         ...(opts.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
-      },
-    });
+    }));
+    await prisma.folder.update({
+      where: { id: inbox.id },
+      data: { totalCount: { increment: 1 }, unreadCount: { increment: 1 } },
+    }).catch(() => undefined);
 
     log.info({ recipientUserId: opts.recipientUserId, subject: opts.subject }, 'internal notification delivered');
   } catch (err) {

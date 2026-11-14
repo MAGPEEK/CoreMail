@@ -1,4 +1,4 @@
-import { prisma } from '@coremail/storage';
+import { prisma, setFlags } from '@coremail/storage';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -47,7 +47,6 @@ export async function updateItem(
           newFlags = newFlags.filter((f) => f !== '\\Seen');
         }
         dataToUpdate['flags'] = newFlags;
-        dataToUpdate['modSeq'] = BigInt(Date.now());
       }
 
       if (msgUpdate?.['Flag'] !== undefined) {
@@ -59,18 +58,18 @@ export async function updateItem(
           newFlags = newFlags.filter((f) => f !== '\\Flagged');
         }
         dataToUpdate['flags'] = newFlags;
-        dataToUpdate['modSeq'] = BigInt(Date.now());
       }
     }
 
-    if (Object.keys(dataToUpdate).length > 0) {
-      await prisma.message.update({
-        where: { id: messageId },
-        data: dataToUpdate as any,
-      });
+    // Flag change → new mailbox modSeq (also the EWS ChangeKey).
+    let changeKey = String(msg.modSeq);
+    if (dataToUpdate['flags']) {
+      const mailboxId = msg.folder.mailboxId;
+      const [stored] = await prisma.$transaction((tx) => setFlags(tx, [{ id: messageId, flags: newFlags }], { mailboxId }));
+      if (stored) changeKey = String(stored.modSeq);
     }
 
-    results.push({ id: messageId, changeKey: String(Date.now()) });
+    results.push({ id: messageId, changeKey });
   }
 
   return soapEnvelope((body) => {

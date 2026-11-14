@@ -1,4 +1,4 @@
-import { prisma } from '@coremail/storage';
+import { prisma, createMessage, copyMessages, moveMessages, setFlags, expunge } from '@coremail/storage';
 import { verifyPassword, createLogger } from '@coremail/core';
 import {
   type ImapSession,
@@ -454,19 +454,8 @@ export async function handleAppend(
   const bodyStart = body.indexOf('\r\n\r\n') >= 0 ? body.indexOf('\r\n\r\n') + 4 : body.indexOf('\n\n') + 2;
   const bodyText = bodyStart > 0 ? body.slice(bodyStart) : '';
 
-  // Increment mailbox UID (atomically via increment)
-  const updated = await prisma.mailbox.update({
-    where: { id: folder.mailboxId },
-    data:  { uidNext: { increment: 1 } },
-    select: { uidNext: true, highestModSeq: true },
-  });
-  const newUid = updated.uidNext - 1;
-
-  await prisma.message.create({
-    data: {
-      uid:       newUid,
-      modSeq:    updated.highestModSeq + 1n,
-      folderId:  folder.id,
+  // UID + modSeq are allocated atomically by the message store.
+  const created = await prisma.$transaction((tx) => createMessage(tx, folder.mailboxId, folder.id, {
       subject,
       fromAddr,
       fromName:  '',
@@ -479,13 +468,8 @@ export async function handleAppend(
       bodyHtml:  '',
       flags,
       messageId: msgId,
-    },
-  });
-  // Increment the mailbox modseq
-  await prisma.mailbox.update({
-    where: { id: folder.mailboxId },
-    data:  { highestModSeq: { increment: 1n } },
-  });
+  }));
+  const newUid = created.uid;
 
   log.info({ folderId: folder.id, uid: newUid, subject }, 'IMAP APPEND stored message');
   sendOk(session, tag, `[APPENDUID ${folder.mailbox.uidValidity} ${newUid}] APPEND completed`);
@@ -526,44 +510,12 @@ export async function handleCopy(
   }
 
   const sourceMsgs = messages.filter((m) => matchedUids.includes(m.uid));
-  // Reserve UIDs
-  await prisma.mailbox.update({
-    where: { id: target.mailboxId },
-    data:  { uidNext: { increment: sourceMsgs.length } },
-  });
-  const targetStartUid = target.mailbox.uidNext;
-  const newUids: number[] = [];
-  for (let i = 0; i < sourceMsgs.length; i++) {
-    const src = sourceMsgs[i];
-    if (!src) continue;
-    const newUid = targetStartUid + i;
-    newUids.push(newUid);
-    await prisma.message.create({
-      data: {
-        uid:        newUid,
-        modSeq:     target.mailbox.highestModSeq + 1n,
-        folderId:   target.id,
-        subject:    src.subject,
-        fromAddr:   src.fromAddr,
-        fromName:   src.fromName,
-        toAddrs:    src.toAddrs,
-        ccAddrs:    src.ccAddrs,
-        bccAddrs:   src.bccAddrs,
-        date:       src.date,
-        rawSize:    src.rawSize,
-        bodyText:   src.bodyText,
-        bodyHtml:   src.bodyHtml,
-        flags:      src.flags,
-        messageId:  src.messageId,
-      },
-    });
-  }
-  await prisma.mailbox.update({
-    where: { id: target.mailboxId },
-    data:  { highestModSeq: { increment: 1n } },
-  });
+  // Fresh UIDs + one modSeq in the target, reserved atomically (never a stale uidNext).
+  const { mapping } = await prisma.$transaction((tx) => copyMessages(
+    tx, sourceMsgs.map((m) => m.id), target.id, { targetMailboxId: target.mailboxId },
+  ));
 
-  const copyUid = `[COPYUID ${target.mailbox.uidValidity} ${matchedUids.join(',')} ${newUids.join(',')}]`;
+  const copyUid = `[COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}]`;
   sendOk(session, tag, `${copyUid} COPY completed`);
 }
 
@@ -583,7 +535,7 @@ export async function handleMove(
 
   const target = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId!, name: targetName },
-    select: { id: true },
+    include: { mailbox: true },
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
 
@@ -599,11 +551,26 @@ export async function handleMove(
     return;
   }
   const matched = messages.filter((m) => matchedUids.includes(m.uid));
-  // Atomic move: only update folderId
-  await prisma.message.updateMany({
-    where: { id: { in: matched.map((m) => m.id) } },
-    data:  { folderId: target.id },
-  });
+  // RFC 6851 §4.3: the moved messages get new UIDs in the target mailbox and a new
+  // modSeq; the rows keep their id.
+  const { mapping } = await prisma.$transaction((tx) => moveMessages(
+    tx, matched.map((m) => m.id), target.id,
+    { targetMailboxId: target.mailboxId, sourceMailboxId: session.mailboxId! },
+  ));
+  if (mapping.length > 0) {
+    sendUntagged(session, `OK [COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}] Moved`);
+  }
+  // RFC 6851 §3.3: EXPUNGE responses for the moved messages (sequence numbers shift
+  // down after every response). Nothing to expunge when moving into the same folder.
+  const moved = new Set(mapping.map((m) => m.oldUid));
+  let removed = 0;
+  for (const [i, msg] of messages.entries()) {
+    if (moved.has(msg.uid)) {
+      sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
+      removed++;
+    }
+  }
+  session.selected.exists = Math.max(0, session.selected.exists - removed);
   sendOk(session, tag, 'MOVE completed');
 }
 
@@ -675,15 +642,22 @@ export async function handleClose(
   tag: string,
 ): Promise<void> {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
-  // Implicitly remove messages with the \Deleted flag
-  await prisma.message.updateMany({
-    where: {
-      folderId:  session.selected.folderId,
-      deletedAt: null,
-      flags:     { has: '\\Deleted' },
-    },
-    data: { deletedAt: new Date() },
-  });
+  // Implicitly remove messages with the \Deleted flag (RFC 9051 §6.4.1: not
+  // for a mailbox opened with EXAMINE). The expunge bumps the modSeq.
+  if (!session.selected.readOnly) {
+    const doomed = await prisma.message.findMany({
+      where: {
+        folderId:  session.selected.folderId,
+        deletedAt: null,
+        flags:     { has: '\\Deleted' },
+      },
+      select: { id: true },
+    });
+    if (doomed.length > 0) {
+      const mailboxId = session.mailboxId!;
+      await prisma.$transaction((tx) => expunge(tx, doomed.map((m) => m.id), { mailboxId }));
+    }
+  }
   session.selected = null;
   session.state = 'AUTHENTICATED';
   sendOk(session, tag, 'CLOSE completed');
@@ -1033,11 +1007,12 @@ export async function handleFetch(
       }
       const bodyKey = bp.peek ? `BODY${bp.part}` : `BODY${bp.part}`;
       // For non-PEEK we set \Seen
-      if (!bp.peek && !msg.flags.includes('\\Seen')) {
-        void prisma.message.update({
-          where: { id: msg.id },
-          data:  { flags: [...msg.flags, '\\Seen'] },
-        }).catch(() => { /* ignore */ });
+      // (implicit flag change → new modSeq; never in an EXAMINEd mailbox)
+      if (!bp.peek && !msg.flags.includes('\\Seen') && !session.selected?.readOnly && session.mailboxId) {
+        const mailboxId = session.mailboxId;
+        const seenFlags = [...msg.flags, '\\Seen'];
+        void prisma.$transaction((tx) => setFlags(tx, [{ id: msg.id, flags: seenFlags }], { mailboxId }))
+          .catch(() => { /* ignore */ });
       }
       items.push(`${bodyKey} {${Buffer.byteLength(content, 'utf8')}}\r\n${content}`);
     }
@@ -1214,6 +1189,7 @@ export async function handleStore(
   // UID STORE uses UIDs (RFC 9051 §6.4.6, §6.4.9).
   const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid), byUid);
 
+  const changes: Array<{ seqNum: number; id: string; flags: string[] }> = [];
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
 
@@ -1225,15 +1201,19 @@ export async function handleStore(
     } else {
       updatedFlags = msg.flags.filter((f: string) => !newFlags.includes(f));
     }
+    changes.push({ seqNum, id: msg.id, flags: updatedFlags });
+  }
 
-    const updatedMsg = await prisma.message.update({
-      where: { id: msg.id },
-      data: { flags: updatedFlags, modSeq: { increment: 1 } },
-    });
+  // One new mailbox modSeq for the whole STORE (RFC 7162 §3.1: HIGHESTMODSEQ ≥ every MODSEQ).
+  const mailboxId = session.mailboxId!;
+  const stored = changes.length === 0 ? [] : await prisma.$transaction((tx) => setFlags(
+    tx, changes.map((c) => ({ id: c.id, flags: c.flags })), { mailboxId },
+  ));
+  const modSeqById = new Map(stored.map((s) => [s.id, s.modSeq]));
 
-    if (!command.includes('SILENT')) {
-      const num = seqNum + 1;
-      sendUntagged(session, `${num} FETCH (FLAGS (${updatedFlags.join(' ')}) MODSEQ (${updatedMsg.modSeq}))`);
+  if (!command.includes('SILENT')) {
+    for (const c of changes) {
+      sendUntagged(session, `${c.seqNum + 1} FETCH (FLAGS (${c.flags.join(' ')}) MODSEQ (${modSeqById.get(c.id) ?? 0n}))`);
     }
   }
 
@@ -1277,11 +1257,9 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
       m.flags.includes('\\Deleted') && (inSet === null || inSet.has(m.uid)),
   );
 
-  for (const msg of toDelete) {
-    await prisma.message.update({
-      where: { id: msg.id },
-      data: { deletedAt: new Date() },
-    });
+  if (toDelete.length > 0) {
+    const mailboxId = session.mailboxId!;
+    await prisma.$transaction((tx) => expunge(tx, toDelete.map((m: { id: string }) => m.id), { mailboxId }));
   }
 
   // RFC 9051 §7.5.1: each EXPUNGE response immediately decrements the sequence
