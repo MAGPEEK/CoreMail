@@ -1,5 +1,9 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
+import { X509Certificate } from 'node:crypto';
+import {
+  createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
+  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals,
+} from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import type { SmtpServerHandle } from './core/factory.js';
@@ -121,8 +125,8 @@ async function refreshHostname(): Promise<void> {
  */
 function isCertSelfSigned(certPem: string): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
+    // v6: static import — `require()` does not exist in ESM, so this check
+    // (and certMatchesHostname) always fell into the catch branch before.
     const cert = new X509Certificate(certPem);
     // X509Certificate.issuer and subject are RFC2253 strings — compare exactly
     return cert.issuer === cert.subject;
@@ -139,8 +143,6 @@ function isCertSelfSigned(certPem: string): boolean {
  */
 function certMatchesHostname(certPem: string, expectedHostname: string): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { X509Certificate } = require('node:crypto') as typeof import('node:crypto');
     const cert = new X509Certificate(certPem);
     const lower = expectedHostname.toLowerCase();
     // Extract subject CN (e.g. "CN=mail.example.com, O=...")
@@ -207,6 +209,33 @@ const SUBMISSION_PORTS = new Set([SMTP_PORT_465, SMTP_PORT_587]);
 interface TrackedSmtpServer {
   handle:  SmtpServerHandle;
   sockets: Set<net.Socket>;
+  ssl:     boolean;
+}
+
+/** TLS material the running listeners were last given (for change detection). */
+let _appliedTls: { cert: Buffer; key: Buffer } | null = null;
+
+/**
+ * v6: certificate rotation without restarting listeners. Implicit-TLS
+ * listeners (465) get the new cert via setSecureContext(); STARTTLS (25/587)
+ * reads `_tlsConfig` per session through the config getter. An ssl listener
+ * without a TLS server is closed so the next reload recreates it.
+ */
+function applyTlsToRunningListeners(): void {
+  if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
+  const res = applyTlsToListeners(
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.handle.server })),
+    _tlsConfig,
+  );
+  for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'SMTP TLS context update failed — keeping old cert');
+  for (const port of res.restart) {
+    const tracked = servers.get(port);
+    if (tracked) { servers.delete(port); closeSmtpServer(tracked, port); }
+  }
+  _appliedTls = _tlsConfig;
+  if (res.updated.length || res.restart.length) {
+    log.info({ updated: res.updated, restarted: res.restart }, 'SMTP TLS certificate rotated on running listeners');
+  }
 }
 
 const servers = new Map<number, TrackedSmtpServer>();
@@ -244,11 +273,11 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
-      // TLS from the DB-backed _tlsConfig — fixed at listener creation time.
-      // For certificate rotation the affected listeners are restarted.
-      tls: _tlsConfig ?? undefined,
     } as Parameters<typeof createSmtpServer>[0],
     {
+      // v6: TLS as a getter — STARTTLS sessions always use the current cert;
+      // implicit TLS (465) is rotated via setSecureContext().
+      tls:        { get: () => _tlsConfig ?? undefined, enumerable: true, configurable: true },
       hostname:   { get: () => _hostname,   enumerable: true, configurable: true },
       bannerText: { get: () => _bannerText, enumerable: true, configurable: true },
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
@@ -271,7 +300,7 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
     socket.once('close', () => sockets.delete(socket));
   });
 
-  return { handle, sockets };
+  return { handle, sockets, ssl };
 }
 
 /**
@@ -359,6 +388,7 @@ async function main(): Promise<void> {
   }
 
   await reloadListeners();
+  _appliedTls = _tlsConfig;
 
   const worker = startOutboundWorker();
   log.info('Outbound queue worker started');
@@ -373,9 +403,9 @@ async function main(): Promise<void> {
       // Invalidate outbound smarthost/relay cache — new provider credentials
       // thus take effect on the next send attempt (instead of after the 60s TTL).
       invalidateOutboundConfigCache();
-      // Reload TLS certificate — on cert rotation, running listeners must be
-      // restarted (scheduleReload removes servers from the servers map and creates new ones).
-      void refreshTlsConfig().then(() => scheduleReload());
+      // Reload TLS certificate and swap it into running listeners
+      // (setSecureContext), then start any listener that is missing.
+      void refreshTlsConfig().then(() => { applyTlsToRunningListeners(); scheduleReload(); });
       return;
     }
     try {

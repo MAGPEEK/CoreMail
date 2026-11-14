@@ -46,6 +46,17 @@ function daysUntil(dateStr: string | null): number | null {
   return Math.floor((new Date(dateStr).getTime() - Date.now()) / 86_400_000);
 }
 
+/**
+ * Usable for HTTPS / protocol activation: the server checks the PEM validity
+ * (v6), so an EXPIRING cert or one whose renewal failed (ERROR/RENEWING) but
+ * whose PEM is still valid can be activated.
+ */
+function isCertUsable(status: CertStatus, expiresAt: string | null): boolean {
+  if (status === 'ACTIVE' || status === 'EXPIRING') return true;
+  if (status === 'ERROR' || status === 'RENEWING') return (daysUntil(expiresAt) ?? -1) >= 0;
+  return false;
+}
+
 function StatusBadge({ status, expiresAt }: { status: CertStatus; expiresAt: string | null }) {
   const days = daysUntil(expiresAt);
   const base = 'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold';
@@ -179,7 +190,7 @@ export function CertificatesPage() {
   const renewMutation = useMutation({
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/renew`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Erneuerung gestartet'); },
-    onError: () => toast.error('Erneuerung fehlgeschlagen'),
+    onError: (err: unknown) => toast.error((err as { message?: string })?.message ?? 'Erneuerung fehlgeschlagen'),
   });
 
   const deleteMutation = useMutation({
@@ -367,7 +378,7 @@ export function CertificatesPage() {
                             className="p-1.5 text-green-600 hover:text-gray-500 hover:bg-gray-50 rounded transition-colors disabled:opacity-40">
                             <Lock size={14} />
                           </button>
-                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
+                        ) : isCertUsable(cert.status, cert.expiresAt) ? (
                           <button
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
@@ -381,7 +392,7 @@ export function CertificatesPage() {
                           <span title="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-blue-500 cursor-default">
                             <Server size={14} />
                           </span>
-                        ) : (cert.status === 'ACTIVE' || cert.status === 'EXPIRING') ? (
+                        ) : isCertUsable(cert.status, cert.expiresAt) ? (
                           <button
                             onClick={() => activateProtocolMutation.mutate(cert.id)}
                             disabled={activateProtocolMutation.isPending}
@@ -397,9 +408,15 @@ export function CertificatesPage() {
                             title={
                               cert.status === 'PENDING'   ? 'ACME-Prozess läuft noch — bitte warten' :
                               cert.status === 'RENEWING'  ? 'Erneuerung läuft…' :
+                              cert.status === 'EXPIRED'   ? 'Abgelaufen — jetzt erneuern' :
+                              cert.status === 'EXPIRING'  ? `Läuft in ${daysUntil(cert.expiresAt) ?? '?'} Tagen ab — jetzt erneuern${cert.autoRenew ? ' (Auto-Renew aktiv)' : ''}` :
+                              cert.status === 'ERROR'     ? 'Letzte Erneuerung fehlgeschlagen — erneut versuchen' :
                               'Jetzt erneuern'
                             }
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40">
+                            className={`p-1.5 rounded transition-colors disabled:opacity-40 hover:text-blue-600 hover:bg-blue-50 ${
+                              cert.status === 'EXPIRED' || cert.status === 'ERROR' ? 'text-red-500'
+                              : cert.status === 'EXPIRING' ? 'text-amber-500'
+                              : 'text-gray-400'}`}>
                             <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
                           </button>
                         )}

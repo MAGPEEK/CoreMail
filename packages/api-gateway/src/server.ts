@@ -42,6 +42,7 @@ import { adminServersRouter } from './routes/admin/servers.js';
 import { adminServicesRouter } from './routes/admin/services.js';
 import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
 import { startTlsProxy, setTlsUpgradeHandler } from './tls-proxy.js';
+import { startCertRenewalScheduler } from './lib/cert-renewal.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
 import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
 import { adminQuarantineRouter } from './routes/admin/quarantine.js';
@@ -463,7 +464,11 @@ async function start() {
     }
   })();
 
-  // No auto-LE — admin requests Let's Encrypt manually via BCP → SSL/TLS.
+  // No auto-LE issuance — admin requests Let's Encrypt manually via BCP → SSL/TLS.
+  // v6: certificate lifecycle — hourly status recomputation (ACTIVE/EXPIRING/
+  // EXPIRED) + automatic renewal of Let's Encrypt certs with autoRenew=true
+  // (Redis-locked: only one instance renews, never twice per cert).
+  startCertRenewalScheduler();
 }
 
 async function syncProtocolCertState(): Promise<void> {

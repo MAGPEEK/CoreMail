@@ -1,6 +1,6 @@
 import net from 'node:net';
 import tls from 'node:tls';
-import { createLogger, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
+import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { prisma, loadProtocolCert } from '@coremail/storage';
 import { POP3Session, setPop3Hostname } from './session.js';
@@ -66,9 +66,35 @@ async function refreshTlsConfig(): Promise<void> {
 interface TrackedPop3Server {
   server:  net.Server | tls.Server;
   sockets: Set<net.Socket>;
+  ssl:     boolean;
 }
 
 const servers = new Map<number, TrackedPop3Server>();
+
+/** TLS material the running listeners were last given (for change detection). */
+let _appliedTls: { cert: Buffer; key: Buffer } | null = null;
+
+/**
+ * v6: certificate rotation without restarting listeners — port 995 gets the
+ * new cert via setSecureContext(). An ssl listener that fell back to
+ * plaintext (no cert at start) is closed so the next reload recreates it.
+ */
+function applyTlsToRunningListeners(): void {
+  if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
+  const res = applyTlsToListeners(
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server })),
+    _tlsConfig,
+  );
+  for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'POP3 TLS context update failed — keeping old cert');
+  for (const port of res.restart) {
+    const tracked = servers.get(port);
+    if (tracked) { servers.delete(port); closePop3Server(tracked, port); }
+  }
+  _appliedTls = _tlsConfig;
+  if (res.updated.length || res.restart.length) {
+    log.info({ updated: res.updated, restarted: res.restart }, 'POP3 TLS certificate rotated on running listeners');
+  }
+}
 
 // ── Reload mutex ──────────────────────────────────────────────────────────────
 let _reloading = false;
@@ -112,7 +138,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     server = net.createServer(onSocket);
   }
 
-  return { server, sockets };
+  return { server, sockets, ssl: cfg.ssl };
 }
 
 /**
@@ -200,6 +226,7 @@ async function main() {
   }
 
   await reloadListeners();
+  _appliedTls = _tlsConfig;
 
   const subscriber = getRedisClient().duplicate();
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
@@ -207,7 +234,7 @@ async function main() {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
-      void refreshTlsConfig().then(() => scheduleReload());
+      void refreshTlsConfig().then(() => { applyTlsToRunningListeners(); scheduleReload(); });
       return;
     }
     try {

@@ -102,9 +102,11 @@ export function registerCert(program: Command, api: () => CoreMailClient, json: 
   cert.command('renew <id|name|domain>').description("Renew a Let's Encrypt certificate now")
     .action(async (ref: string) => {
       const c = await resolveCert(api(), ref);
-      const r = await api().post<Cert>(`/api/v1/admin/certificates/${c.id}/renew`);
+      // The API answers 202 with the certificate (status RENEWING) plus `message`;
+      // older servers return only `{ message }` — both shapes are handled.
+      const r = await api().post<Partial<Cert> & { message?: string }>(`/api/v1/admin/certificates/${c.id}/renew`);
       if (json()) { printJson(r); return; }
-      process.stdout.write(`Renewal started: ${c.name} (status ${r.status ?? 'RENEWING'})\n`);
+      process.stdout.write(`Renewal started: ${c.name} (status ${r.status ?? 'RENEWING'}). Progress: coremail cert show ${c.id}\n`);
     });
 
   cert.command('delete <id|name|domain>').alias('rm').description('Delete a certificate (an active protocol binding falls back to self-signed)')

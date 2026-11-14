@@ -6,8 +6,5 @@ export * from './transport-rules.js';
 export * from './itip-inbound.js';
 export * from './protocol-cert.js';
 export * from './sender-identity.js';
-<<<<<<< HEAD
 export * from './message-store.js';
-=======
 export * from './quarantine.js';
->>>>>>> worktree-agent-a396e57b4498842a1
