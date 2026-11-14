@@ -16,113 +16,27 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
 
-// String-literal type — mirrors the Prisma enum CertStatus without importing @prisma/client
-type CertStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'ERROR' | 'RENEWING';
+import { deriveCertStatus, isPemCurrentlyValid, parseCertValidity, recomputeStatus } from '../../lib/cert-lifecycle.js';
+import {
+  applyProtocolCert, clearProtocolCert, publishTlsReload, runAcmeIssuance,
+  storeAcmeChallenge, getAcmeChallenge,
+} from '../../lib/cert-acme.js';
+import { startRenewal } from '../../lib/cert-renewal.js';
+
+// Re-exported for server.ts (ACME HTTP-01 challenge endpoint) and older imports.
+export { storeAcmeChallenge, getAcmeChallenge, runAcmeIssuance };
 
 const log = createLogger('admin:certificates');
 export const adminCertificatesRouter: RouterType = Router();
 adminCertificatesRouter.use(requireAdmin);
 
-// ── ACME challenge token store (Redis, TTL 10 min) ────────────────────────────
-const CHALLENGE_PREFIX = 'acme:challenge:';
-
-export async function storeAcmeChallenge(token: string, keyAuth: string) {
-  const redis = getRedisClient();
-  await redis.set(`${CHALLENGE_PREFIX}${token}`, keyAuth, 'EX', 600);
-}
-
-export async function getAcmeChallenge(token: string): Promise<string | null> {
-  const redis = getRedisClient();
-  return redis.get(`${CHALLENGE_PREFIX}${token}`);
-}
-
-// ── Derive certificate status from expiresAt ──────────────────────────────────
-function deriveStatus(expiresAt: Date | null): CertStatus {
-  if (!expiresAt) return 'PENDING';
-  const now   = Date.now();
-  const expMs = expiresAt.getTime();
-  if (expMs < now)                         return 'EXPIRED';
-  if (expMs < now + 30 * 24 * 3600 * 1000) return 'EXPIRING';
-  return 'ACTIVE';
-}
-
 // ── Helper: hide private key ──────────────────────────────────────────────────
 function safe(cert: Record<string, unknown>) {
   const { keyPem: _, acmeAccount: __, ...rest } = cert;
   return rest;
-}
-
-// ── Protocol TLS binding ───────────────────────────────────────────────────────
-//
-// DESIGN PRINCIPLE (v3.17.35):
-//   • Default state: SMTP/IMAP/POP3 use a self-signed cert (auto-generated
-//     from publicHostname). server_settings.tlsCert/tlsKey = NULL.
-//   • Explicit activation: only when the admin presses a button (activate-protocol
-//     or activate-https) is a CA-signed cert stored in ServerSettings.
-//   • Deletion: when an active cert is deleted → server_settings.tlsCert/tlsKey
-//     are set to NULL → protocol servers revert to self-signed immediately.
-//   • Decoupling: HTTPS proxy and protocol TLS are fully independent.
-//     A cert can be active for HTTPS only, for protocols only, or for both.
-
-/**
- * Writes certPem/keyPem to ServerSettings.tlsCert/tlsKey and triggers an
- * SMTP/IMAP/POP3 server reload via CHANNEL_SETTINGS_RELOAD.
- * Sets isActiveProtocol: true on this cert (and false on all others).
- * Also updates publicHostname to the certificate's primary domain so that
- * SMTP/IMAP/POP3 immediately use the correct banner hostname.
- * Called ONLY by activate-protocol (explicitly by the admin).
- */
-async function applyProtocolCert(
-  certId:  string,
-  certPem: string,
-  keyPem:  string,
-  domains: string[],
-): Promise<void> {
-  // Primary domain: the first non-wildcard entry of the domains list
-  // becomes the new publicHostname — SMTP/IMAP/POP3 banner + self-signed fallback
-  const primaryDomain = domains.find(d => !d.startsWith('*') && d !== 'localhost') ?? null;
-
-  await prisma.serverSettings.upsert({
-    where:  { id: 'singleton' },
-    create: {
-      id: 'singleton',
-      tlsCert: certPem,
-      tlsKey: keyPem,
-      ...(primaryDomain ? { publicHostname: primaryDomain } : {}),
-    },
-    update: {
-      tlsCert: certPem,
-      tlsKey: keyPem,
-      ...(primaryDomain ? { publicHostname: primaryDomain } : {}),
-    },
-  });
-  await prisma.$transaction([
-    prisma.certificate.updateMany({ data: { isActiveProtocol: false } }),
-    prisma.certificate.update({ where: { id: certId }, data: { isActiveProtocol: true } }),
-  ]);
-  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, certId);
-  log.info({ certId, primaryDomain }, 'Protocol TLS cert applied (SMTP/IMAP/POP3) — servers reloading');
-}
-
-/**
- * Removes the protocol cert from ServerSettings and sets isActiveProtocol: false
- * on all certificates. SMTP/IMAP/POP3 fall back to self-signed immediately.
- * Called when an active protocol cert is deleted.
- */
-async function clearProtocolCert(): Promise<void> {
-  // Set tlsCert/tlsKey to NULL — protocol servers detect this and generate self-signed
-  await prisma.serverSettings.update({
-    where: { id: 'singleton' },
-    data: { tlsCert: null, tlsKey: null },
-  }).catch(() => {
-    // If the singleton does not exist yet — no problem, NULL is the default
-  });
-  await prisma.certificate.updateMany({ data: { isActiveProtocol: false } });
-  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '');
-  log.info('Protocol TLS cert cleared — SMTP/IMAP/POP3 reverting to self-signed');
 }
 
 /**
@@ -175,7 +89,9 @@ adminCertificatesRouter.get('/', async (_req: Request, res: Response) => {
       certPem: false, keyPem: false, chainPem: false, acmeAccount: false,
     },
   });
-  res.json(certs);
+  // Live status between scheduler runs: ACTIVE/EXPIRING/EXPIRED follow expiresAt.
+  const now = new Date();
+  res.json(certs.map(c => ({ ...c, status: recomputeStatus(c.status, c.expiresAt, now) })));
 });
 
 // ── GET /:id ──────────────────────────────────────────────────────────────────
@@ -233,178 +149,6 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
   });
 });
 
-// ── ACME HTTP-01 Issuance ─────────────────────────────────────────────────────
-
-/** Hard timeout for the whole ACME process (5 minutes). */
-const ACME_TIMEOUT_MS = 5 * 60_000;
-
-export async function runAcmeIssuance(
-  certId: string,
-  domains: string[],
-  email: string,
-  autoRenew: boolean,
-  staging: boolean,
-) {
-  // ── Timeout protection ────────────────────────────────────────────────────
-  // acme-client.auto() has no built-in hard timeout — hangs forever when
-  // port 80 is unreachable or Let's Encrypt does not respond.
-  // Promise.race() aborts the process after ACME_TIMEOUT_MS.
-  let _timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const _timeout = new Promise<never>((_, reject) => {
-    _timeoutId = setTimeout(() => {
-      reject(new Error(
-        `ACME Timeout: Zertifikatsausstellung nach ${ACME_TIMEOUT_MS / 60_000} Minuten abgebrochen. ` +
-        'Port 80 muss öffentlich erreichbar sein (/.well-known/acme-challenge/).',
-      ));
-    }, ACME_TIMEOUT_MS);
-  });
-
-  const _issuance = _runAcmeIssuanceCore(certId, domains, email, autoRenew, staging);
-
-  try {
-    await Promise.race([_issuance, _timeout]);
-  } catch (err) {
-    // Timeout case: the inner catch did not run → DB not yet set to ERROR
-    if (err instanceof Error && err.message.startsWith('ACME Timeout')) {
-      log.warn({ certId, domains }, 'ACME issuance timed out — marking certificate as ERROR');
-      await prisma.certificate.update({
-        where: { id: certId },
-        data:  { status: 'ERROR', lastError: err.message.slice(0, 1000) },
-      }).catch(() => {});
-    }
-    throw err;
-  } finally {
-    clearTimeout(_timeoutId);
-  }
-}
-
-/** Internal implementation — wrapped with a timeout by runAcmeIssuance. */
-async function _runAcmeIssuanceCore(
-  certId: string,
-  domains: string[],
-  email: string,
-  autoRenew: boolean,
-  staging: boolean,
-) {
-  try {
-    // Dynamic import of acme-client (ESM-compatible)
-    const acme = await import('acme-client');
-
-    // Load or generate the account key
-    const existing = await prisma.certificate.findUnique({
-      where: { id: certId }, select: { acmeAccount: true },
-    });
-
-    let accountKeyPem: string;
-    if (existing?.acmeAccount) {
-      accountKeyPem = existing.acmeAccount;
-    } else {
-      // Generate a new RSA-2048 account key via acme-client
-      const newKey = await acme.crypto.createPrivateKey(2048);
-      // acme-client v5 returns a KeyObject — export as PEM
-      if (Buffer.isBuffer(newKey)) {
-        accountKeyPem = (newKey as Buffer).toString('utf8');
-      } else {
-        // Node.js crypto.KeyObject
-        const ck = newKey as import('crypto').KeyObject;
-        const exported = ck.export({ type: 'pkcs8', format: 'pem' });
-        accountKeyPem = typeof exported === 'string' ? exported : exported.toString('utf8');
-      }
-    }
-
-    // acme-client v5 expects a Buffer or KeyObject, not a string
-    const client = new acme.Client({
-      directoryUrl: staging
-        ? acme.directory.letsencrypt.staging
-        : acme.directory.letsencrypt.production,
-      accountKey: Buffer.from(accountKeyPem),
-    });
-
-    // Register the ACME account
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      contact: [`mailto:${email}`],
-    });
-
-    // Generate CSR + private key
-    const [certKey, csr] = await acme.crypto.createCsr({
-      altNames: domains,
-    });
-    const certKeyPem = certKey.toString();
-
-    // Issue the certificate with the HTTP-01 challenge
-    // Timeout 90s so a hang becomes visible quickly (default would be ~120s+)
-    const certPem = await client.auto({
-      csr,
-      email,
-      termsOfServiceAgreed: true,
-      challengePriority: ['http-01'],
-      skipChallengeVerification: false,
-      challengeCreateFn: async (_authz, _challenge, keyAuthorization) => {
-        const token = (_challenge as { token: string }).token;
-        await storeAcmeChallenge(token, keyAuthorization);
-        log.info({ token }, 'ACME HTTP-01 challenge token stored — Port 80 must be reachable');
-      },
-      challengeRemoveFn: async (_authz, _challenge) => {
-        // Token stays in Redis until TTL — no active deletion needed
-      },
-    });
-
-    // Parse X.509 for expiresAt
-    let expiresAt: Date | null = null;
-    try {
-      const { X509Certificate } = await import('crypto');
-      const x509 = new X509Certificate(certPem);
-      expiresAt = new Date(x509.validTo);
-    } catch {
-      // Fallback: +90 days (Let's Encrypt default)
-      expiresAt = new Date(Date.now() + 90 * 24 * 3600 * 1000);
-    }
-
-    // Save to DB (read back services + domains for optional auto-activation)
-    const issued = await prisma.certificate.update({
-      where: { id: certId },
-      data: {
-        status:      deriveStatus(expiresAt),
-        certPem:     certPem.toString(),
-        keyPem:      certKeyPem,
-        acmeAccount: accountKeyPem,
-        issuedAt:    new Date(),
-        expiresAt,
-        lastError:   null,
-      },
-      select: { services: true, domains: true },
-    });
-
-    log.info({ id: certId, expiresAt }, 'Let\'s Encrypt certificate issued successfully');
-
-    // v3.18.32: notify the TLS proxy — the SNI map must include the new domain.
-    // Previously the reload was only triggered by the manual „HTTPS aktivieren" click;
-    // with multi-cert SNI, however, all ACTIVE certs should be available immediately.
-    await getRedisClient().publish('coremail:tls:reload', certId).catch(() => {});
-
-    // Auto-activate for SMTP/IMAP/POP3 if services list includes mail protocols
-    const mailProtocols = ['SMTP', 'IMAP', 'POP3'];
-    const hasMailProtocol = (issued.services as string[]).some(s => mailProtocols.includes(s));
-    if (hasMailProtocol) {
-      await applyProtocolCert(certId, certPem.toString(), certKeyPem, issued.domains as string[]);
-      log.info({ id: certId }, 'Protocol TLS auto-activated after ACME issuance');
-    }
-  } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err);
-    // Helpful hint on HTTP-01 challenge errors (port 80 reachable?)
-    const hint = /challenge|http-01|connection|ECONNREFUSED|timeout/i.test(raw)
-      ? ' — Hinweis: HTTP-01 ACME Challenge erfordert Port 80 von außen erreichbar (/.well-known/acme-challenge/). Stelle sicher dass Port 80 auf den Server weitergeleitet wird.'
-      : '';
-    const msg = (raw + hint).slice(0, 1000);
-    await prisma.certificate.update({
-      where: { id: certId },
-      data: { status: 'ERROR', lastError: msg },
-    }).catch(() => {});
-    throw err;
-  }
-}
-
 // ── POST /upload ──────────────────────────────────────────────────────────────
 adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
   const schema = z.object({
@@ -423,15 +167,12 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
   }
 
   // Read expiresAt from the certificate
-  let expiresAt: Date | null = null;
-  try {
-    const { X509Certificate } = await import('crypto');
-    const x509 = new X509Certificate(parsed.data.certPem);
-    expiresAt = new Date(x509.validTo);
-  } catch {
+  const validity = parseCertValidity(parsed.data.certPem);
+  if (!validity) {
     res.status(400).json({ error: 'Invalid certificate PEM — could not parse expiry date' });
     return;
   }
+  const expiresAt = validity.validTo;
 
   const cert = await prisma.certificate.create({
     data: {
@@ -439,7 +180,7 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
       domains:   parsed.data.domains,
       services:  parsed.data.services,
       type:      'CUSTOM',
-      status:    deriveStatus(expiresAt),
+      status:    deriveCertStatus(expiresAt),
       certPem:   parsed.data.certPem,
       keyPem:    parsed.data.keyPem,
       chainPem:  parsed.data.chainPem ?? null,
@@ -453,7 +194,7 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
   if (parsed.data.services.length > 0) await claimServices(cert.id, parsed.data.services);
 
   // v3.18.32: update the SNI map in the TLS proxy — new hostname available.
-  await getRedisClient().publish('coremail:tls:reload', cert.id).catch(() => {});
+  await publishTlsReload(cert.id);
 
   log.info({ id: cert.id, name: cert.name, expiresAt }, 'Custom certificate uploaded');
   res.status(201).json(safe(cert as unknown as Record<string, unknown>));
@@ -536,7 +277,7 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
         domains,
         services,
         type:      'SELF_SIGNED',
-        status:    'ACTIVE',
+        status:    deriveCertStatus(expiresAt),
         certPem,
         keyPem,
         issuedAt:  new Date(),
@@ -549,7 +290,7 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
     if (services.length > 0) await claimServices(cert.id, services);
 
     // v3.18.32: update the SNI map in the TLS proxy — new hostname available.
-    await getRedisClient().publish('coremail:tls:reload', cert.id).catch(() => {});
+    await publishTlsReload(cert.id);
 
     log.info({ id: cert.id, domains, days }, 'Self-signed certificate generated');
     res.status(201).json(safe(cert as unknown as Record<string, unknown>));
@@ -613,21 +354,34 @@ adminCertificatesRouter.post('/:id/renew', async (req: Request, res: Response) =
     res.status(400).json({ error: 'No ACME email stored — cannot renew' });
     return;
   }
-  // No double start — guard against parallel ACME processes
-  if (cert.status === 'PENDING' || cert.status === 'RENEWING') {
+  // Shared code path with the renewal scheduler: per-cert Redis lock (held
+  // until the ACME work really ends) + conditional RENEWING transition —
+  // never two concurrent renewals for one certificate.
+  let started: Awaited<ReturnType<typeof startRenewal>>;
+  try {
+    started = await startRenewal(id, 'manual');
+  } catch (err) {
+    log.error({ err, id }, 'Failed to start certificate renewal');
+    res.status(500).json({ error: 'Failed to start renewal' });
+    return;
+  }
+  if (!started.started) {
+    if (started.reason === 'not-found') { res.status(404).json({ error: 'Certificate not found' }); return; }
     res.status(409).json({
-      error: `Certificate is already ${cert.status.toLowerCase()} — wait for the current process to complete or fail`,
+      error: started.reason === 'in-progress'
+        ? `Certificate is already ${(started.status ?? 'renewing').toLowerCase()} — wait for the current process to complete or fail`
+        : 'A renewal for this certificate is already running',
     });
     return;
   }
 
-  await prisma.certificate.update({ where: { id }, data: { status: 'RENEWING' } });
-
-  void runAcmeIssuance(
-    id, cert.domains, cert.acmeEmail, cert.autoRenew, false,
-  ).catch(err => log.error({ err, id }, 'Renewal failed'));
-
-  res.status(202).json({ message: 'Certificate renewal started' });
+  // v6: respond with the certificate (status RENEWING) like the other
+  // endpoints; `message` is kept for older clients.
+  const updated = await prisma.certificate.findUnique({ where: { id } });
+  res.status(202).json({
+    ...(updated ? safe(updated as unknown as Record<string, unknown>) : { id, status: 'RENEWING' }),
+    message: 'Certificate renewal started',
+  });
 });
 
 // ── POST /:id/activate-https ──────────────────────────────────────────────────
@@ -645,9 +399,11 @@ adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Re
     res.status(400).json({ error: 'Certificate has no PEM data yet — wait for issuance to complete' });
     return;
   }
-  if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
+  // v6: usability is decided by the PEM validity, not by the DB status — an
+  // EXPIRING / ERROR (failed renewal) cert with a still-valid PEM can be used.
+  if (!isPemCurrentlyValid(cert.certPem)) {
     res.status(400).json({
-      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used`,
+      error: `Certificate is not currently valid (status "${cert.status}") — expired or not yet valid`,
     });
     return;
   }
@@ -659,7 +415,7 @@ adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Re
   ]);
 
   // Reload tls-proxy.ts (listens on coremail:tls:reload)
-  await getRedisClient().publish('coremail:tls:reload', id);
+  await publishTlsReload(id);
 
   log.info({ id, name: cert.name }, 'Certificate activated for HTTPS proxy — protocol TLS unchanged');
   res.json({
@@ -683,9 +439,11 @@ adminCertificatesRouter.post('/:id/activate-protocol', async (req: Request, res:
     res.status(400).json({ error: 'Certificate has no PEM data yet' });
     return;
   }
-  if (cert.status !== 'ACTIVE' && cert.status !== 'EXPIRING') {
+  // v6: usability is decided by the PEM validity, not by the DB status — an
+  // EXPIRING / ERROR (failed renewal) cert with a still-valid PEM can be used.
+  if (!isPemCurrentlyValid(cert.certPem)) {
     res.status(400).json({
-      error: `Certificate status is "${cert.status}" — only ACTIVE or EXPIRING certificates can be used`,
+      error: `Certificate is not currently valid (status "${cert.status}") — expired or not yet valid`,
     });
     return;
   }
@@ -710,8 +468,7 @@ adminCertificatesRouter.delete('/:id/activate-https', async (req: Request, res: 
     // isActiveProtocol is NOT reset — protocol TLS keeps running.
   }).catch(() => {});
 
-  const redis = getRedisClient();
-  await redis.publish('coremail:tls:reload', '');
+  await publishTlsReload('');
 
   log.info({ id }, 'HTTPS proxy deactivated — protocol TLS (SMTP/IMAP/POP3) unchanged');
   res.json({ message: 'HTTPS proxy deactivated. Mail protocols (SMTP/IMAP/POP3) continue using the certificate.' });
@@ -736,13 +493,16 @@ adminCertificatesRouter.delete('/:id', async (req: Request, res: Response) => {
       await clearProtocolCert();
     }
     if (cert.isActiveHttps) {
-      // Stop HTTPS proxy (empty string = no active cert anymore)
       await prisma.certificate.updateMany({ data: { isActiveHttps: false } });
-      await getRedisClient().publish('coremail:tls:reload', '');
-      log.info({ id }, 'HTTPS proxy deactivated (active cert deleted)');
+      log.info({ id }, 'HTTPS default certificate deleted — proxy falls back to the newest valid cert');
     }
 
     await prisma.certificate.delete({ where: { id } });
+    // v6: ALWAYS rebuild the HTTPS proxy SNI map after the row is gone — every
+    // cert with a valid PEM is served, so deleting a non-default cert must drop
+    // it as well (previously only the default cert triggered a reload, and the
+    // reload ran before the delete).
+    await publishTlsReload('');
     log.info({ id, name: cert.name }, 'Certificate deleted — active bindings cleaned up');
     res.status(204).end();
   } catch {

@@ -12,6 +12,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir }                          from 'node:os';
 import { join }                            from 'node:path';
 
+export * from './listener-reload.js';
+
 export interface TlsCertPair {
   /** PEM-encoded certificate */
   certPem: string;

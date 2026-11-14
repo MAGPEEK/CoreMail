@@ -2,7 +2,8 @@
  * Integrated HTTPS reverse proxy (TLS termination) with SNI multi-cert support
  *
  * Starts a Node.js HTTPS server on port 443 (or HTTPS_PORT) as soon as at
- * least one ACTIVE certificate exists in the database. For each incoming TLS
+ * least one certificate with a currently valid PEM exists in the database
+ * (v6: selection by PEM validity, not by DB status). For each incoming TLS
  * connection an SNI callback selects the matching certificate based on the
  * server name sent by the client.
  *
@@ -23,10 +24,10 @@
  */
 import https from 'node:https';
 import tls from 'node:tls';
-import { X509Certificate } from 'node:crypto';
 import type { Application } from 'express';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma } from '@coremail/storage';
+import { selectProxyCerts, planSni, type SelectedProxyCert } from './lib/cert-lifecycle.js';
 
 const log  = createLogger('tls-proxy');
 const PORT = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
@@ -65,121 +66,61 @@ export async function startTlsProxy(app: Application): Promise<void> {
 
 // ── Cert loading & SNI map construction ──────────────────────────────────────
 
+type LoadedCert = SelectedProxyCert;
+
 /**
- * Extracts all DNS names (CN + SANs) from a PEM certificate.
- * Returns lowercase hostnames with duplicates removed.
+ * Loads every certificate whose PEM is currently valid (notBefore <= now <=
+ * notAfter), independent of its DB status — an EXPIRING, RENEWING or ERROR
+ * (failed renewal) cert with a still-valid PEM keeps serving HTTPS.
+ * Ordered newest first (notBefore, then createdAt) so the newest cert wins
+ * per hostname (see selectProxyCerts / planSni in lib/cert-lifecycle.ts).
  */
-function extractHostnames(certPem: string): string[] {
-  try {
-    const x509 = new X509Certificate(certPem);
-    const hostnames = new Set<string>();
-
-    // CN from subject (best-effort — format "CN=foo.example.com")
-    const cnMatch = /CN=([^,/]+)/i.exec(x509.subject);
-    if (cnMatch?.[1]) hostnames.add(cnMatch[1].trim().toLowerCase());
-
-    // SubjectAltName: "DNS:foo.example.com, DNS:*.example.com, IP:..."
-    const san = x509.subjectAltName;
-    if (san) {
-      for (const part of san.split(',')) {
-        const [type, value] = part.trim().split(':');
-        if (type?.trim().toUpperCase() === 'DNS' && value) {
-          hostnames.add(value.trim().toLowerCase());
-        }
-      }
-    }
-
-    return Array.from(hostnames);
-  } catch (err) {
-    log.warn({ err }, 'Failed to extract hostnames from cert PEM');
-    return [];
-  }
-}
-
-interface LoadedCert {
-  id: string;
-  name: string;
-  certPem: string;
-  keyPem: string;
-  chainPem: string | null;
-  domains: string[];
-  isActiveHttps: boolean;
-}
-
 async function loadCerts(): Promise<LoadedCert[]> {
   const rows = await prisma.certificate.findMany({
-    where: { status: 'ACTIVE' },
+    where: { certPem: { not: null }, keyPem: { not: null } },
     select: {
       id: true, name: true, certPem: true, keyPem: true, chainPem: true,
-      domains: true, isActiveHttps: true,
+      domains: true, isActiveHttps: true, createdAt: true,
     },
-    orderBy: { createdAt: 'desc' }, // newest first → wins on hostname conflict
+    orderBy: { createdAt: 'desc' },
   });
-
-  return rows
-    .filter((c): c is LoadedCert =>
-      typeof c.certPem === 'string' && c.certPem.length > 0 &&
-      typeof c.keyPem  === 'string' && c.keyPem.length  > 0,
-    );
+  return selectProxyCerts(rows);
 }
 
-function buildSniMaps(certs: LoadedCert[]): void {
+function buildSniMaps(certs: LoadedCert[]): LoadedCert[] {
   sniContexts = new Map();
   wildcardContexts = [];
   defaultContext = null;
 
+  const contexts = new Map<string, tls.SecureContext>();
+  const usable: LoadedCert[] = [];
   for (const cert of certs) {
-    let ctx: tls.SecureContext;
     try {
-      ctx = tls.createSecureContext({
+      contexts.set(cert.id, tls.createSecureContext({
         cert: cert.certPem,
         key:  cert.keyPem,
         ...(cert.chainPem ? { ca: cert.chainPem } : {}),
-      });
+      }));
+      usable.push(cert);
     } catch (err) {
       log.error({ err, certId: cert.id, name: cert.name },
         'Failed to create SecureContext for cert — skipping');
-      continue;
-    }
-
-    // Hostnames: CN + SANs from the PEM + additionally the DB `domains[]` field
-    const fromPem = extractHostnames(cert.certPem);
-    const allHostnames = new Set<string>([
-      ...fromPem,
-      ...cert.domains.map((d) => d.toLowerCase()),
-    ]);
-
-    for (const hostname of allHostnames) {
-      if (hostname.startsWith('*.')) {
-        // Wildcard: matches exactly one sub-label level
-        const suffix = hostname.slice(1); // '.example.com'
-        wildcardContexts.push({ suffix, ctx });
-      } else {
-        // Exact match (newest assignment wins — Map.set overwrites; but we
-        // iterate from newest to oldest, hence: only set when free)
-        if (!sniContexts.has(hostname)) {
-          sniContexts.set(hostname, ctx);
-        }
-      }
-    }
-
-    // Default cert: the one with isActiveHttps=true. If none is marked, we
-    // take the newest (first in the createdAt-DESC list).
-    if (cert.isActiveHttps && !defaultContext) {
-      defaultContext = ctx;
     }
   }
 
-  if (!defaultContext && certs.length > 0) {
-    const fallback = certs[0];
-    if (fallback) {
-      defaultContext = tls.createSecureContext({
-        cert: fallback.certPem,
-        key:  fallback.keyPem,
-        ...(fallback.chainPem ? { ca: fallback.chainPem } : {}),
-      });
-    }
+  // Hostnames: CN + SANs from the PEM + the DB `domains[]` field; first
+  // (= newest) cert claiming a hostname wins. Default: isActiveHttps, else newest.
+  const plan = planSni(usable);
+  for (const [hostname, certId] of plan.exact) {
+    const ctx = contexts.get(certId);
+    if (ctx) sniContexts.set(hostname, ctx);
   }
+  for (const w of plan.wildcards) {
+    const ctx = contexts.get(w.certId);
+    if (ctx) wildcardContexts.push({ suffix: w.suffix, ctx });
+  }
+  defaultContext = plan.defaultId ? contexts.get(plan.defaultId) ?? null : null;
+  return usable;
 }
 
 /**
@@ -227,7 +168,7 @@ function sniCallback(
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 
 async function reloadServer(app: Application): Promise<void> {
-  const certs = await loadCerts();
+  const loaded = await loadCerts();
 
   // Stop the running HTTPS server (graceful — max 5 s)
   if (activeServer) {
@@ -235,12 +176,11 @@ async function reloadServer(app: Application): Promise<void> {
     activeServer = null;
   }
 
+  const certs = buildSniMaps(loaded);
   if (certs.length === 0) {
-    log.info('No active certificates — HTTPS server not started');
+    log.info('No certificate with a currently valid PEM — HTTPS server not started');
     return;
   }
-
-  buildSniMaps(certs);
 
   const hostnameCount = sniContexts.size + wildcardContexts.length;
   log.info(

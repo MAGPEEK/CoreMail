@@ -5,7 +5,7 @@
  * **directly from the `certificates` table** based on the `services` list.
  *
  * Lookup order:
- *   1. ACTIVE cert with `isActiveProtocol = true` AND `services` containing the
+ *   1. Issued (non-PENDING) cert with `isActiveProtocol = true` AND `services` containing the
  *      requested service name (e.g. 'SMTP', 'IMAP', 'POP3').
  *   2. Fallback: legacy `ServerSettings.tlsCert` + `tlsKey` (for older
  *      setups before v5.2.8 — pre-services model).
@@ -33,10 +33,12 @@ export interface ProtocolCert {
 export async function loadProtocolCert(service: string): Promise<ProtocolCert | null> {
   const svc = service.toUpperCase();
 
-  // 1. Cert with services[svc] + isActiveProtocol
+  // 1. Cert with services[svc] + isActiveProtocol.
+  // v6: any issued status — an EXPIRING / RENEWING / ERROR (failed renewal)
+  // cert keeps its still-valid PEM in service; only PENDING has no PEM yet.
   const cert = await prisma.certificate.findFirst({
     where: {
-      status:           'ACTIVE',
+      status:           { not: 'PENDING' },
       isActiveProtocol: true,
       services:         { has: svc },
       certPem:          { not: null },

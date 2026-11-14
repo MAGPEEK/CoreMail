@@ -1,5 +1,8 @@
 import net from 'node:net';
-import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD, generateSelfSignedCert, tlsPemToBuffers } from '@coremail/core';
+import {
+  createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
+  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals,
+} from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, type ImapTlsConfig } from './server/index.js';
 
@@ -66,9 +69,35 @@ async function refreshTlsConfig(): Promise<void> {
 interface TrackedImapServer {
   server:  ReturnType<typeof createImapServer>;
   sockets: Set<net.Socket>;
+  ssl:     boolean;
 }
 
 const servers = new Map<number, TrackedImapServer>();
+
+/** TLS material the running listeners were last given (for change detection). */
+let _appliedTls: ImapTlsConfig | null = null;
+
+/**
+ * v6: certificate rotation without restarting listeners — port 993 gets the
+ * new cert via setSecureContext(). An ssl listener that fell back to
+ * plaintext (no cert at start) is closed so the next reload recreates it.
+ */
+function applyTlsToRunningListeners(): void {
+  if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
+  const res = applyTlsToListeners(
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server })),
+    _tlsConfig,
+  );
+  for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'IMAP TLS context update failed — keeping old cert');
+  for (const port of res.restart) {
+    const tracked = servers.get(port);
+    if (tracked) { servers.delete(port); closeImapServer(tracked, port); }
+  }
+  _appliedTls = _tlsConfig;
+  if (res.updated.length || res.restart.length) {
+    log.info({ updated: res.updated, restarted: res.restart }, 'IMAP TLS certificate rotated on running listeners');
+  }
+}
 
 // ── Reload mutex ──────────────────────────────────────────────────────────────
 let _reloading = false;
@@ -94,7 +123,7 @@ function createTrackedImapServer(ssl: boolean): TrackedImapServer {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
   });
-  return { server, sockets };
+  return { server, sockets, ssl };
 }
 
 /**
@@ -185,6 +214,7 @@ async function main() {
   }
 
   await reloadListeners();
+  _appliedTls = _tlsConfig;
 
   const subscriber = getRedisClient().duplicate();
   subscriber.on('error', (err) => log.error({ err }, 'Subscriber Redis error'));
@@ -192,7 +222,7 @@ async function main() {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
-      void refreshTlsConfig().then(() => scheduleReload());
+      void refreshTlsConfig().then(() => { applyTlsToRunningListeners(); scheduleReload(); });
       return;
     }
     try {
