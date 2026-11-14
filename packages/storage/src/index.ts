@@ -15,3 +15,4 @@ export * from './message-store.js';
 export * from './quarantine.js';
 export * from './mail-auth.js';
 export * from './queue-options.js';
+export * from './provision-mailbox.js';

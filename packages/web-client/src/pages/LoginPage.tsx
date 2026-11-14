@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/auth.js';
 import { api } from '../api/client.js';
 import type { UserProfile } from '../api/types.js';
 import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
+import { SsoButtons } from '../components/SsoButtons.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -176,6 +177,9 @@ export function LoginPage() {
             )}
           </form>
         )}
+
+        {/* ── SSO (OIDC) providers — v6.1 ── */}
+        {step === 'credentials' && <SsoButtons target="mwa" />}
 
         {/* ── STEP 2: MFA (TOTP, backup code or security key) ── */}
         {step === 'mfa' && (

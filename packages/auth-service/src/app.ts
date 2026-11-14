@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import { createLogger, installAsyncErrorHandling, errorMiddleware } from '@coremail/core';
-import { registerAuthenticator, legacyLdapAuthenticator } from '@coremail/storage/auth';
+import { registerAuthenticator } from '@coremail/storage/auth';
+import { ldapAuthenticator } from '@coremail/auth-ldap';
 import { authRouter } from './router/auth.js';
 import { mfaRouter } from './router/mfa.js';
 import { appPasswordRouter } from './router/app-passwords.js';
@@ -17,9 +18,8 @@ export function createApp(): Express {
   app.set('trust proxy', 'loopback');
   app.use(express.json());
 
-  // v6.0.0: the pre-v6 LDAP fallback of this service, now as a step of the
-  // shared login service (extension point in @coremail/storage/auth).
-  registerAuthenticator(legacyLdapAuthenticator());
+  // v6.1: the LDAP / AD step of the shared login service (@coremail/auth-ldap).
+  registerAuthenticator(ldapAuthenticator());
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'auth-service' }));
 

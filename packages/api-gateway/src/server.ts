@@ -19,6 +19,7 @@ import {
   authRateLimit,
   setupRateLimit,
   adminMutationRateLimit,
+  ssoRateLimit,
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
@@ -41,6 +42,8 @@ import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
 import { authRouter } from './routes/auth.js';
+import { ssoRouter } from './routes/sso.js';
+import { startLdapSyncScheduler } from '@coremail/auth-ldap';
 import { retentionTagsRouter } from './routes/retention-tags.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
@@ -238,6 +241,9 @@ app.use('/auth/sessions',      authServiceProxy);
 app.use(express.json({ limit: '10mb' }));
 // URL-encoded (forms) — 1 MB limit
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+
+// ── SSO (OIDC) — v6.1: own limiter (one login = 3 requests), before /auth ────
+app.use('/auth/sso', ssoRateLimit, ssoRouter);
 
 // ── Auth — strict rate limiting on login/token/refresh ───────────────────────
 app.use('/auth', authRateLimit, authRouter);
@@ -483,6 +489,10 @@ async function start() {
   // EXPIRED) + automatic renewal of Let's Encrypt certs with autoRenew=true
   // (Redis-locked: only one instance renews, never twice per cert).
   startCertRenewalScheduler();
+
+  // v6.1: scheduled LDAP directory sync (per-domain syncIntervalMinutes,
+  // default daily; Redis-locked so only one instance syncs a domain).
+  startLdapSyncScheduler();
 }
 
 async function syncProtocolCertState(): Promise<void> {

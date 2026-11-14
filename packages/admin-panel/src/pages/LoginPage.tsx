@@ -9,6 +9,7 @@ const REASON_TEXT: Record<string, string> = {
   revoked: 'Ihre Sitzung wurde beendet. Bitte melden Sie sich erneut an.',
   mfa:     'Für diesen Bereich ist eine Anmeldung mit zweitem Faktor erforderlich.',
 };
+import { SsoButtons } from '../components/SsoButtons.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -97,6 +98,9 @@ export function LoginPage() {
             </button>
           </form>
         )}
+
+        {/* ── SSO (OIDC) providers — v6.1 ── */}
+        {step === 'credentials' && <SsoButtons target="bcp" />}
 
         {/* ── STEP 2: MFA (TOTP, backup code or security key) ── */}
         {step === 'mfa' && (

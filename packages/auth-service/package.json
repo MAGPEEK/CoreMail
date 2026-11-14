@@ -12,6 +12,7 @@
     "test": "node --import tsx --test src/router/mfa.test.ts"
   },
   "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
     "@simplewebauthn/server": "^10.0.0",

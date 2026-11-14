@@ -127,6 +127,12 @@ importers:
 
   packages/api-gateway:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
+      '@coremail/auth-sso':
+        specifier: workspace:*
+        version: link:../auth-sso
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -240,6 +246,9 @@ importers:
 
   packages/auth-service:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
