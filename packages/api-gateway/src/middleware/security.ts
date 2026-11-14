@@ -192,6 +192,21 @@ export const authRateLimit = rateLimit({
 });
 
 /**
+ * SSO flow (v6.1) — start/callback/exchange: 60 per 15 minutes per IP (one
+ * login = 3 requests). The public provider list (GET /auth/sso/providers) is
+ * exempt so the login page cannot lock users out.
+ */
+const ssoFlowLimit = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many SSO attempts. Please try again in 15 minutes.' },
+});
+export const ssoRateLimit = (req: Request, res: Response, next: NextFunction): unknown =>
+  req.method === 'GET' && req.path === '/providers' ? next() : ssoFlowLimit(req, res, next);
+
+/**
  * Setup endpoint — max. 5 attempts per hour.
  * The setup endpoint exists only once and should not receive any requests
  * after the initial configuration anyway.

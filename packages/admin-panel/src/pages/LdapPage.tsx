@@ -21,6 +21,19 @@ interface LdapSummary {
   bindDN:      string;
   syncEnabled: boolean;
   lastSyncAt:  string | null;
+  enabled?:    boolean;
+  startTls?:   boolean;
+  tlsVerify?:  boolean;
+  syncIntervalMinutes?: number;
+  lastSyncResult?: SyncResult | null;
+}
+
+interface SyncResult {
+  ok: boolean;
+  error?: string;
+  found?: number; created?: number; updated?: number; deactivated?: number; reactivated?: number; skipped?: number;
+  conflicts?: string[];
+  finishedAt?: string;
 }
 
 interface LdapConfig extends LdapSummary {
@@ -28,6 +41,25 @@ interface LdapConfig extends LdapSummary {
   userFilter:  string;
   groupFilter: string | null;
   attributeMap: Record<string, string>;
+  tlsCaCert?:  string | null;
+  allowLocalTakeover?: boolean;
+  hasBindPassword?: boolean;
+}
+
+interface LdapTestResult {
+  success: boolean;
+  message: string;
+  steps?: { step: string; ok: boolean; detail?: string }[];
+  usersFound?: number | string;
+  lookup?: { email: string; found: boolean; dn?: string; mailMatches?: boolean; ambiguous?: boolean };
+}
+
+function syncSummary(r: SyncResult | null | undefined): string {
+  if (!r) return '—';
+  if (!r.ok) return `Fehler: ${r.error ?? 'unbekannt'}`;
+  return `${r.found ?? 0} gefunden · ${r.created ?? 0} neu · ${r.updated ?? 0} aktualisiert · ${r.deactivated ?? 0} deaktiviert`
+    + (r.reactivated ? ` · ${r.reactivated} reaktiviert` : '')
+    + (r.conflicts?.length ? ` · ${r.conflicts.length} Konflikt(e)` : '');
 }
 
 interface Domain { id: string; name: string }
@@ -41,12 +73,11 @@ const SECTIONS: { key: Section; label: string; icon: React.ReactNode }[] = [
   { key: 'detail',     label: 'Einstellungen',     icon: <Settings size={14} /> },
 ];
 
+// Keys = what @coremail/auth-ldap reads (email, displayName, uid = stable directory id).
 const DEFAULT_ATTR_MAP: Record<string, string> = {
-  mail:        'mail',
+  email:       'mail',
   displayName: 'displayName',
-  givenName:   'givenName',
-  sn:          'sn',
-  uid:         'sAMAccountName',
+  uid:         'objectGUID',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -155,18 +186,28 @@ function ConfigForm({ domainId, domains, onSaved }: {
     userFilter:  '(sAMAccountName={{username}})',
     groupFilter: '',
     syncEnabled: true,
+    enabled:     true,
+    startTls:    false,
+    tlsVerify:   true,
+    tlsCaCert:   '',
+    allowLocalTakeover: false,
+    syncIntervalMinutes: 1440,
   });
 
   const loaded = useRef(false);
   useEffect(() => {
     if (existing && !loaded.current) {
       loaded.current = true;
-      setForm(f => ({ ...f, ...existing, groupFilter: existing.groupFilter ?? '', bindPassword: '••••••••' }));
+      // bindPassword is never returned — empty = keep the stored one
+      setForm(f => ({
+        ...f, ...existing, groupFilter: existing.groupFilter ?? '', tlsCaCert: existing.tlsCaCert ?? '', bindPassword: '',
+      }));
     }
   }, [existing]);
 
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<LdapTestResult | null>(null);
   const [testing, setTesting] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
 
   const save = useMutation({
     mutationFn: (data: typeof form) => api.put<LdapConfig>(`/admin/ldap/${data.domainId}`, data),
@@ -182,7 +223,7 @@ function ConfigForm({ domainId, domains, onSaved }: {
     if (!form.domainId) return;
     setTesting(true); setTestResult(null);
     try {
-      const r = await api.post<{ success: boolean; message: string }>(`/admin/ldap/${form.domainId}/test`, {});
+      const r = await api.post<LdapTestResult>(`/admin/ldap/${form.domainId}/test`, testEmail ? { email: testEmail } : {});
       setTestResult(r);
     } catch (e) {
       setTestResult({ success: false, message: (e as Error).message });
@@ -231,6 +272,31 @@ function ConfigForm({ domainId, domains, onSaved }: {
           <Toggle value={form.ssl} onChange={v => { set('ssl', v); set('port', v ? 636 : 389); }} />
         </div>
 
+        {!form.ssl && (
+          <div className="flex items-center justify-between py-2 border-t border-gray-100">
+            <div>
+              <p className="text-sm font-medium text-gray-800">StartTLS</p>
+              <p className="text-xs text-gray-500">Verschlüsselung auf Port 389. Ohne LDAPS/StartTLS wird die Verbindung abgelehnt (Ausnahme: localhost oder LDAP_ALLOW_INSECURE=true).</p>
+            </div>
+            <Toggle value={form.startTls} onChange={v => set('startTls', v)} />
+          </div>
+        )}
+
+        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Zertifikat prüfen</p>
+            <p className="text-xs text-gray-500">Serverzertifikat gegen vertrauenswürdige CAs prüfen (empfohlen)</p>
+          </div>
+          <Toggle value={form.tlsVerify} onChange={v => set('tlsVerify', v)} />
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">Eigene CA (PEM, optional)</label>
+          <textarea value={form.tlsCaCert} onChange={e => set('tlsCaCert', e.target.value)} rows={3}
+            placeholder="-----BEGIN CERTIFICATE-----"
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+        </div>
+
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">Base DN *</label>
           <input value={form.baseDN} onChange={e => set('baseDN', e.target.value)}
@@ -246,9 +312,11 @@ function ConfigForm({ domainId, domains, onSaved }: {
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Bind-Passwort *</label>
+          <label className="text-xs font-medium text-gray-600 block mb-1">
+            Bind-Passwort {existing ? <span className="text-gray-400">(leer = unverändert)</span> : '*'}
+          </label>
           <input type="password" value={form.bindPassword} onChange={e => set('bindPassword', e.target.value)}
-            placeholder="••••••••"
+            placeholder={existing?.hasBindPassword ? '••••••••' : ''} autoComplete="new-password"
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
         </div>
       </div>
@@ -268,24 +336,54 @@ function ConfigForm({ domainId, domains, onSaved }: {
           <input value={form.userFilter} onChange={e => set('userFilter', e.target.value)}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
           <p className="text-xs text-gray-400 mt-1">
-            <code className="bg-gray-100 px-1 rounded">{'{{username}}'}</code> wird durch den eingegebenen Benutzernamen ersetzt.
-            Für Active Directory: <code className="bg-gray-100 px-1 rounded">(sAMAccountName={'{{username}}'})</code>
+            <code className="bg-gray-100 px-1 rounded">{'{{username}}'}</code> = Teil vor dem @ der Login-Adresse,
+            <code className="bg-gray-100 px-1 rounded mx-1">{'{{email}}'}</code> = vollständige Adresse (Sonderzeichen werden nach RFC 4515 maskiert).
+            Active Directory: <code className="bg-gray-100 px-1 rounded">(sAMAccountName={'{{username}}'})</code>.
+            Das Attribut <code className="bg-gray-100 px-1 rounded">mail</code> des Eintrags muss der Login-Adresse entsprechen.
           </p>
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Gruppen-Filter (optional)</label>
+          <label className="text-xs font-medium text-gray-600 block mb-1">Sync-Filter (optional)</label>
           <input value={form.groupFilter ?? ''} onChange={e => set('groupFilter', e.target.value)}
-            placeholder="(objectClass=group)"
+            placeholder="(memberOf=CN=Mail-Users,OU=Groups,DC=meinefirma,DC=de)"
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+          <p className="text-xs text-gray-400 mt-1">Schränkt die Synchronisation zusätzlich ein (UND-verknüpft mit Personen mit mail-Attribut).</p>
         </div>
 
         <div className="flex items-center justify-between py-2 border-t border-gray-100">
           <div>
-            <p className="text-sm font-medium text-gray-800">Synchronisation aktiviert</p>
-            <p className="text-xs text-gray-500">Benutzer und Gruppen automatisch aus LDAP/AD synchronisieren</p>
+            <p className="text-sm font-medium text-gray-800">LDAP-Anmeldung aktiv</p>
+            <p className="text-xs text-gray-500">Benutzer dieser Domain melden sich mit ihrem Verzeichnis-Passwort an</p>
           </div>
-          <Toggle value={form.syncEnabled} onChange={v => set('syncEnabled', v)} />
+          <Toggle value={form.enabled} onChange={v => set('enabled', v)} />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Lokale Konten übernehmen</p>
+            <p className="text-xs text-gray-500">Ein lokales CoreMail-Konto mit derselben Adresse wird beim LDAP-Login/Sync zum LDAP-Konto (lokales Passwort entfällt). Standard: aus.</p>
+          </div>
+          <Toggle value={form.allowLocalTakeover} onChange={v => set('allowLocalTakeover', v)} />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-t border-gray-100 gap-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Geplante Synchronisation</p>
+            <p className="text-xs text-gray-500">Benutzer anlegen, aktualisieren und deaktivieren (nie löschen)</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={form.syncIntervalMinutes} onChange={e => set('syncIntervalMinutes', parseInt(e.target.value))}
+              disabled={!form.syncEnabled}
+              className="border border-gray-300 rounded px-2 py-1 text-xs disabled:opacity-50">
+              <option value={60}>stündlich</option>
+              <option value={360}>alle 6 h</option>
+              <option value={720}>alle 12 h</option>
+              <option value={1440}>täglich</option>
+              <option value={10080}>wöchentlich</option>
+            </select>
+            <Toggle value={form.syncEnabled} onChange={v => set('syncEnabled', v)} />
+          </div>
         </div>
       </div>
 
@@ -297,14 +395,29 @@ function ConfigForm({ domainId, domains, onSaved }: {
             : 'bg-red-50 border-red-200 text-red-800'
         }`}>
           {testResult.success ? <CheckCircle2 size={15} className="shrink-0 mt-0.5" /> : <XCircle size={15} className="shrink-0 mt-0.5" />}
-          {testResult.message}
+          <div className="space-y-0.5 min-w-0">
+            <p>{testResult.message}</p>
+            {testResult.steps?.map(s => (
+              <p key={s.step} className="text-xs font-mono opacity-80 break-all">{s.ok ? '✓' : '✗'} {s.step}: {s.detail}</p>
+            ))}
+            {testResult.lookup && (
+              <p className="text-xs">
+                {testResult.lookup.email}: {testResult.lookup.found
+                  ? `${testResult.lookup.ambiguous ? 'mehrdeutig' : testResult.lookup.dn}${testResult.lookup.mailMatches === false ? ' — mail-Attribut passt NICHT' : ''}`
+                  : 'nicht gefunden'}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
       <div className="flex gap-3">
+        <input value={testEmail} onChange={e => setTestEmail(e.target.value)} placeholder="Test-Adresse (optional)"
+          className="border border-gray-300 rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-1 focus:ring-accent" />
         <button
           onClick={handleTest}
-          disabled={testing || !form.host}
+          disabled={testing || !form.host || !existing}
+          title={existing ? '' : 'Zuerst speichern'}
           className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
         >
           <TestTube2 size={14} />
@@ -329,10 +442,10 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
   const qc = useQueryClient();
 
   const syncMut = useMutation({
-    mutationFn: (domainId: string) => api.post<{ ok: boolean; syncedAt: string }>(`/admin/ldap/${domainId}/sync`, {}),
-    onSuccess: (_r, domainId) => {
+    mutationFn: (domainId: string) => api.post<{ ok: boolean; syncedAt: string; result: SyncResult }>(`/admin/ldap/${domainId}/sync`, {}),
+    onSuccess: (r, domainId) => {
       void qc.invalidateQueries({ queryKey: ['admin-ldap'] });
-      toast.success(`Sync für ${configs.find(c => c.domainId === domainId)?.domainName} gestartet`);
+      toast.success(`${configs.find(c => c.domainId === domainId)?.domainName}: ${syncSummary({ ...r.result, ok: true })}`);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -341,8 +454,10 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
     <div className="space-y-4">
       <div className="flex gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700">
         <AlertCircle size={13} className="shrink-0 mt-0.5" />
-        <p>Der Sync-Prozess läuft im Hintergrund im <code className="bg-blue-100 px-1 rounded">auth-ldap</code>-Service.
-          Der Zeitstempel wird nach dem Triggern sofort aktualisiert; die eigentliche Synchronisation erfolgt asynchron.</p>
+        <p>Die Synchronisation legt Benutzer aus dem Verzeichnis an (inkl. Postfach), aktualisiert Anzeigenamen und
+          deaktiviert Konten, die im Verzeichnis fehlen oder dort deaktiviert sind — gelöscht wird nichts.
+          Lokale Konten mit derselben Adresse werden nur mit „Lokale Konten übernehmen" angefasst (sonst: Konflikt).
+          Geplante Läufe nach dem eingestellten Intervall (Standard: täglich).</p>
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -368,11 +483,14 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
                     ? <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full">aktiv</span>
                     : <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full">deaktiviert</span>}
                 </td>
-                <td className="px-4 py-3 text-xs text-gray-500">{fmtDt(c.lastSyncAt)}</td>
+                <td className="px-4 py-3 text-xs text-gray-500">
+                  {fmtDt(c.lastSyncAt)}
+                  <div className="text-[11px] text-gray-400">{syncSummary(c.lastSyncResult)}</div>
+                </td>
                 <td className="px-4 py-3">
                   <button
                     onClick={() => syncMut.mutate(c.domainId)}
-                    disabled={!c.syncEnabled || syncMut.isPending}
+                    disabled={c.enabled === false || syncMut.isPending}
                     className="flex items-center gap-1 text-xs px-2.5 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40"
                   >
                     <RotateCcw size={11} /> Jetzt synchronisieren
@@ -412,17 +530,16 @@ function AttributeMapSection({ configs }: { configs: LdapSummary[] }) {
   useEffect(() => { loaded.current = false; setAttrMap(DEFAULT_ATTR_MAP); }, [selectedDomainId]);
 
   const save = useMutation({
-    mutationFn: () => cfg ? api.put<LdapConfig>(`/admin/ldap/${selectedDomainId}`, { ...cfg, attributeMap: attrMap, bindPassword: '••••••••' }) : Promise.reject(new Error('Keine Konfiguration')),
+    // bindPassword '' = keep the stored password
+    mutationFn: () => cfg ? api.put<LdapConfig>(`/admin/ldap/${selectedDomainId}`, { ...cfg, attributeMap: attrMap, bindPassword: '' }) : Promise.reject(new Error('Keine Konfiguration')),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-ldap'] }); toast.success('Attributzuordnung gespeichert'); },
     onError:   (e: Error) => toast.error(e.message),
   });
 
   const COREMAIL_ATTRS = [
-    { key: 'mail',        label: 'E-Mail-Adresse',  hint: 'mail' },
+    { key: 'email',       label: 'E-Mail-Adresse',  hint: 'mail — muss der Login-Adresse entsprechen' },
     { key: 'displayName', label: 'Anzeigename',      hint: 'displayName' },
-    { key: 'givenName',   label: 'Vorname',          hint: 'givenName' },
-    { key: 'sn',          label: 'Nachname',          hint: 'sn' },
-    { key: 'uid',         label: 'Benutzername',     hint: 'sAMAccountName (AD) / uid (OpenLDAP)' },
+    { key: 'uid',         label: 'Eindeutige ID',    hint: 'objectGUID (AD) / entryUUID (OpenLDAP) — bindet das Konto an den Verzeichniseintrag' },
   ];
 
   return (
@@ -517,8 +634,9 @@ export function LdapPage() {
     mutationFn: (domainId: string) => api.post(`/admin/ldap/${domainId}/sync`, {}),
     onSuccess: (_d, domainId) => {
       void qc.invalidateQueries({ queryKey: ['admin-ldap'] });
-      toast.success(`Sync gestartet für ${configs.find(c => c.domainId === domainId)?.domainName}`);
+      toast.success(`Sync abgeschlossen für ${configs.find(c => c.domainId === domainId)?.domainName}`);
     },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   return (

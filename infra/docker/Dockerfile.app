@@ -77,7 +77,10 @@ COPY packages/cli               ./packages/cli
 RUN pnpm --filter @coremail/storage exec prisma generate
 RUN pnpm --filter @coremail/core build
 RUN pnpm --filter @coremail/storage build
-RUN pnpm --filter @coremail/smtp-server    build \
+# v6.1: auth-ldap + auth-sso first — api-gateway and auth-service import them
+RUN pnpm --filter @coremail/auth-ldap      build \
+ && pnpm --filter @coremail/auth-sso       build \
+ && pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/imap-server    build \
  && pnpm --filter @coremail/pop3-server    build \
  && pnpm --filter @coremail/ews-server     build \
@@ -85,8 +88,6 @@ RUN pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/caldav-server  build \
  && pnpm --filter @coremail/api-gateway    build \
  && pnpm --filter @coremail/auth-service   build \
- && pnpm --filter @coremail/auth-ldap      build \
- && pnpm --filter @coremail/auth-sso       build \
  && pnpm --filter @coremail/backup-service build \
  && pnpm --filter @coremail/security-filter build \
  && pnpm --filter @coremail/activesync     build \

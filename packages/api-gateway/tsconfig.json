@@ -6,8 +6,20 @@
     "rootDir": "src"
   },
   "references": [
-    { "path": "../core" },
-    { "path": "../storage" }
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../storage"
+    },
+    {
+      "path": "../auth-ldap"
+    },
+    {
+      "path": "../auth-sso"
+    }
   ],
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

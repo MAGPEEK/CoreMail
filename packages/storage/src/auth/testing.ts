@@ -111,9 +111,9 @@ export class FakeTable {
     const r = this.rows.find((x) => matches(x, args.where));
     return r ? this.project(r, args) : null;
   };
-  findMany = async (args: { where?: Row } = {}) => {
+  findMany = async (args: { where?: Row; include?: Row } = {}) => {
     await tick();
-    return this.rows.filter((x) => matches(x, args.where)).map((r) => clone(r));
+    return this.rows.filter((x) => matches(x, args.where)).map((r) => this.project(r, args));
   };
   count = async (args: { where?: Row } = {}) => {
     await tick();
@@ -136,6 +136,18 @@ export class FakeTable {
     this.checkUnique(next, r);
     Object.assign(r, next);
     return clone(r);
+  };
+  createMany = async (args: { data: Row[]; skipDuplicates?: boolean }) => {
+    await tick();
+    let count = 0;
+    for (const d of args.data) {
+      const row: Row = { id: randomUUID(), ...this.defaults() };
+      applyData(row, d);
+      try { this.checkUnique(row); } catch (err) { if (args.skipDuplicates) continue; throw err; }
+      this.rows.push(row);
+      count++;
+    }
+    return { count };
   };
   updateMany = async (args: { where?: Row; data: Row }) => {
     await tick();
@@ -174,6 +186,12 @@ export interface FakePrisma {
   appPassword: FakeTable;
   passwordResetToken: FakeTable;
   serverSettings: FakeTable;
+  domain: FakeTable;
+  ldapConfig: FakeTable;
+  oidcProvider: FakeTable;
+  mailbox: FakeTable;
+  folder: FakeTable;
+  calendar: FakeTable;
   [k: string]: unknown;
 }
 
@@ -197,6 +215,20 @@ export function createFakePrisma(): FakePrisma {
     maintenanceMode: false, maintenanceMessage: '', minPasswordLength: 8, requireMfaForAdmins: false,
     publicHostname: 'mail.example.com', useHttps: true, httpPort: 443, selfServicePasswordReset: true,
   }));
+  // v6.1: LDAP / OIDC / mailbox provisioning
+  p.domain = new FakeTable(() => ({ active: true, primary: false, dkimPrivateKey: '', dkimSelector: 'coremail' }), ['id', 'name']);
+  p.ldapConfig = new FakeTable(() => ({
+    port: 636, ssl: true, userFilter: '(sAMAccountName={{username}})', groupFilter: null, attributeMap: {},
+    syncEnabled: true, lastSyncAt: null, enabled: true, startTls: false, tlsVerify: true, tlsCaCert: null,
+    allowLocalTakeover: false, syncIntervalMinutes: 1440, lastSyncResult: null, createdAt: new Date(),
+  }), ['id', 'domainId'], { domain: () => p.domain });
+  p.oidcProvider = new FakeTable(() => ({
+    claimMap: {}, autoProvision: true, forcedDomains: [], active: true, scopes: 'openid email profile',
+    requireEmailVerified: true, allowLinking: false, requireMfa: false, createdAt: new Date(),
+  }), ['id'], { domain: () => p.domain });
+  p.mailbox = new FakeTable(() => ({ uidValidity: 1, uidNext: 1, createdAt: new Date() }), ['id', 'userId', 'sharedBoxId']);
+  p.folder = new FakeTable(() => ({ totalCount: 0, unreadCount: 0 }), ['id']);
+  p.calendar = new FakeTable(() => ({ color: '#0078D4', isDefault: false, sortOrder: 0, syncToken: '' }));
   return p;
 }
 

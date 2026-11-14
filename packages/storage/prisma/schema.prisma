@@ -99,6 +99,9 @@ model User {
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)
   active          Boolean        @default(true)
+  // v6.1: set when the LDAP sync deactivated the account (missing in / disabled
+  // in the directory) — only such accounts are re-activated by the sync.
+  deactivatedBySync Boolean      @default(false)
   domain          Domain         @relation(fields: [domainId], references: [id])
   domainId        String
   mailbox         Mailbox?
@@ -215,6 +218,14 @@ model LdapConfig {
   attributeMap Json     @default("{}")
   syncEnabled  Boolean  @default(true)
   lastSyncAt   DateTime?
+  // v6.1 — LDAP login + sync (packages/auth-ldap)
+  enabled             Boolean  @default(true)  // LDAP login for this domain
+  startTls            Boolean  @default(false) // StartTLS on ldap:// (ignored with ssl=true)
+  tlsVerify           Boolean  @default(true)  // verify the server certificate (ldaps / StartTLS)
+  tlsCaCert           String?                  // optional PEM CA bundle for private CAs
+  allowLocalTakeover  Boolean  @default(false) // explicit opt-in: a LOCAL account with the same mail becomes LDAP
+  syncIntervalMinutes Int      @default(1440)  // scheduled sync interval (syncEnabled=true)
+  lastSyncResult      Json?                    // stats or error of the last sync
   createdAt    DateTime @default(now())
 
   @@map("ldap_configs")
@@ -230,8 +241,13 @@ model OidcProvider {
   clientSecret   String
   claimMap       Json     @default("{}")
   autoProvision  Boolean  @default(true)
-  forcedDomains  String[]
+  forcedDomains  String[] // v6.1: allowed e-mail domains for SSO (empty = the provider's own domain only)
   active         Boolean  @default(true)
+  // v6.1 — OIDC login (packages/auth-sso)
+  scopes               String  @default("openid email profile")
+  requireEmailVerified Boolean @default(true)  // email_verified must be true (off only for IdPs that never send it)
+  allowLinking         Boolean @default(false) // an existing non-SSO account with the same verified mail may log in
+  requireMfa           Boolean @default(false) // CoreMail MFA after the IdP (default: the IdP is trusted as second factor)
   createdAt      DateTime @default(now())
 
   @@map("oidc_providers")

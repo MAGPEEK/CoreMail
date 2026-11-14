@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
 import { SetupPage } from './pages/SetupPage.js';
@@ -128,6 +129,7 @@ export function App() {
       <Routes>
         <Route path="/setup" element={<SetupPage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/sso/callback" element={<SsoCallbackPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}

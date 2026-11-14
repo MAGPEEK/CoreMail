@@ -8,6 +8,7 @@ import { TopBar } from './components/TopBar.js';
 import { useThemeStore, resolveIsDark, ECP_ACCENT_RGB } from './store/theme.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { MfaRequiredPage } from './pages/MfaRequiredPage.js';
+import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { MailboxesPage } from './pages/MailboxesPage.js';
 import { DomainsPage } from './pages/DomainsPage.js';
@@ -160,6 +161,7 @@ createRoot(document.getElementById('root')!).render(
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/mfa-required" element={<MfaRequiredPage />} />
+          <Route path="/sso/callback" element={<SsoCallbackPage />} />
           <Route path="/*" element={
             <AuthGuard>
               <AdminLayout>

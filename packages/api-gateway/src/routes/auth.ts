@@ -24,17 +24,18 @@ import {
   isResetTokenValid,
   RESET_TOKEN_TTL,
   registerAuthenticator,
-  legacyLdapAuthenticator,
 } from '@coremail/storage/auth';
+import { ldapAuthenticator } from '@coremail/auth-ldap';
 import { createLogger, getRedisClient } from '@coremail/core';
 
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
 
-// First-factor extension point: the LDAP fallback that used to exist only in
-// the auth-service now applies to web logins too (same login service).
-// LDAP/OIDC integration registers its steps the same way.
-registerAuthenticator(legacyLdapAuthenticator());
+// First-factor extension point (v6.1): real LDAP / AD step — only for accounts
+// with authSource LDAP, unknown users of an LDAP domain (first-login
+// provisioning) or LOCAL accounts with the admin opt-in `allowLocalTakeover`.
+// OIDC SSO has its own redirect flow (routes/sso.ts).
+registerAuthenticator(ldapAuthenticator());
 
 // Password reset: rate limit in Redis (3 requests per IP/email per hour)
 const RESET_RATE_PREFIX  = 'pwreset:rate:';

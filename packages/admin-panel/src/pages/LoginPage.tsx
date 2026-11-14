@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, Shield, ShieldCheck, ArrowLeft } from 'lucide-react';
 import { loginAdmin, verifyMfaAdmin, setToken } from '../api/client.js';
+import { SsoButtons } from '../components/SsoButtons.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -133,6 +134,9 @@ export function LoginPage() {
             </button>
           </form>
         )}
+
+        {/* ── SSO (OIDC) providers — v6.1 ── */}
+        {step === 'credentials' && <SsoButtons target="bcp" />}
 
         {/* ── STEP 2: MFA code ── */}
         {step === 'mfa' && (
