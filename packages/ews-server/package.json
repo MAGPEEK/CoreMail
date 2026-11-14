@@ -9,7 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/operations/resolve-names.test.ts src/operations/outbound-submit.test.ts"
+    "test": "node --import tsx --test src/operations/resolve-names.test.ts src/operations/outbound-submit.test.ts src/operations/create-calendar-item.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",

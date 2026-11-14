@@ -18,6 +18,34 @@ import {
   type EventData,
   type AttendeeData,
 } from '../lib/imip.js';
+import { buildVCalendar, patchVEvent, normalizeAllDayRange } from '@coremail/core/calendar';
+import { expandStoredEvent } from '../lib/recurrence.js';
+
+/**
+ * Resolve the REST date input into stored instants.
+ *  - all-day: `YYYY-MM-DD` (only the date part of any ISO string is used — no UTC
+ *    round-trip), stored as UTC midnight with an EXCLUSIVE end (start + 1 day minimum)
+ *  - timed: ISO instants, end must not be before start
+ * Returns null for invalid input.
+ */
+function resolveEventRange(
+  dtStart: string,
+  dtEnd: string,
+  allDay: boolean,
+): { start: Date; end: Date } | null {
+  try {
+    if (allDay) return normalizeAllDayRange(dtStart, dtEnd);
+    const start = new Date(dtStart);
+    const end = new Date(dtEnd);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end.getTime() < start.getTime()) return null;
+    return { start, end };
+  } catch {
+    return null;
+  }
+}
+
+/** Max. list window — protects the recurrence expansion (per event capped separately). */
+const MAX_LIST_WINDOW_MS = 4 * 366 * 24 * 60 * 60 * 1000;
 
 /**
  * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE handler
@@ -75,7 +103,7 @@ function getOutboundQueue(): Queue {
 async function sendInvitations(opts: {
   ev: { id: string; uid: string; summary: string; description: string;
         location: string; dtStart: Date; dtEnd: Date; sequence: number;
-        attendees: unknown };
+        attendees: unknown; allDay?: boolean; rrule?: string | null };
   organizerEmail: string;
   organizerName: string;
   method: 'REQUEST' | 'CANCEL';
@@ -108,6 +136,8 @@ async function sendInvitations(opts: {
     location: opts.ev.location,
     dtStart: opts.ev.dtStart,
     dtEnd: opts.ev.dtEnd,
+    ...(opts.ev.allDay ? { allDay: true } : {}),
+    ...(opts.ev.rrule ? { rrule: opts.ev.rrule } : {}),
     organizer: { email: opts.organizerEmail, cn: opts.organizerName },
     attendees,
     publicHostname,
@@ -702,11 +732,14 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
     const events = await prisma.calendarEvent.findMany({
       where: {
         calendarId: { in: targetCalendars.map((c) => c.id) },
-        // Overlap: event.dtStart < end AND event.dtEnd > start
         dtStart: { lt: end },
-        dtEnd:   { gt: start },
+        // Overlap (event.dtEnd > start) — recurring series are expanded below
+        OR: [{ dtEnd: { gt: start } }, { recurring: true }, { rrule: { not: null } }],
       },
-      select: { dtStart: true, dtEnd: true, summary: true, classification: true },
+      select: {
+        dtStart: true, dtEnd: true, allDay: true, recurring: true, rrule: true, icalData: true,
+        summary: true, classification: true, status: true,
+      },
     });
 
     const busy = events
@@ -714,19 +747,20 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
         const cls = (e.classification ?? 'PUBLIC').toUpperCase();
         // CONFIDENTIAL → hide from caller (unless caller is owner = self-query)
         if (cls === 'CONFIDENTIAL' && targetUser.id !== callerId) return false;
-        return true;
+        return (e.status ?? '').toUpperCase() !== 'CANCELLED';
       })
-      .map((e) => {
+      .flatMap((e) => {
         const cls = (e.classification ?? 'PUBLIC').toUpperCase();
         const isPrivateForCaller = cls === 'PRIVATE' && targetUser.id !== callerId;
-        return {
-          start: e.dtStart.toISOString(),
-          end: e.dtEnd.toISOString(),
-          type: 'busy' as const,
+        return expandStoredEvent(e, start, end).map((inst) => ({
+          start: inst.dtStart.toISOString(),
+          end: inst.dtEnd.toISOString(),
+          type: ((e.status ?? '').toUpperCase() === 'TENTATIVE' ? 'tentative' : 'busy') as 'busy' | 'tentative',
           // PRIVATE for foreign caller → no subject
-          ...(isPrivateForCaller ? {} : { subject: e.summary }),
-        };
-      });
+          ...(isPrivateForCaller ? {} : { subject: inst.override?.summary ?? e.summary }),
+        }));
+      })
+      .sort((a, b) => a.start.localeCompare(b.start));
 
     result.push({
       email: requestedEmail,
@@ -750,6 +784,14 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
   const end = req.query['end']
     ? new Date(String(req.query['end']))
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+    res.status(400).json({ error: 'Invalid date range' });
+    return;
+  }
+  if (end.getTime() - start.getTime() > MAX_LIST_WINDOW_MS) {
+    res.status(400).json({ error: 'Range too large (max 4 years)' });
+    return;
+  }
   const calendarIdParam = req.query['calendarId'] as string | undefined;
 
   // Remember per calendar whether the viewer is owner (for the masking decision)
@@ -768,14 +810,41 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
 
   if (calIds.length === 0) { res.json([]); return; }
 
+  // Overlap semantics (dtStart < end AND dtEnd > start); recurring series are
+  // loaded whenever they started before the window end and expanded server-side.
   const events = await prisma.calendarEvent.findMany({
-    where: { calendarId: { in: calIds }, dtStart: { gte: start }, dtEnd: { lte: end } },
+    where: {
+      calendarId: { in: calIds },
+      dtStart: { lt: end },
+      OR: [{ dtEnd: { gt: start } }, { recurring: true }, { rrule: { not: null } }],
+    },
     orderBy: { dtStart: 'asc' },
   });
 
+  // One entry per occurrence. Non-recurring events keep their shape; instances of a
+  // series carry `recurrenceId` (original start) and `instanceId` = "<id>:<recurrenceId>".
+  // `id` stays the series id so the edit dialog opens the master.
+  const instances = events.flatMap((ev) =>
+    expandStoredEvent(ev, start, end).map((inst) => ({
+      ...ev,
+      ...(inst.override ?? {}),
+      dtStart: inst.dtStart,
+      dtEnd: inst.dtEnd,
+      allDay: inst.allDay,
+      recurrenceId: inst.recurrenceId,
+      instanceId: inst.recurrenceId ? `${ev.id}:${inst.recurrenceId}` : ev.id,
+    })),
+  );
+  instances.sort((a, b) => a.dtStart.getTime() - b.dtStart.getTime());
+
   // Masking: PRIVATE → details replaced by "Beschäftigt"; CONFIDENTIAL → hidden
-  const masked = events
-    .map((ev) => maskEventForViewer(ev, ownerByCalendar.get(ev.calendarId) === true))
+  // The raw iCal is only returned to the owner (it would leak masked PRIVATE details).
+  const masked = instances
+    .map((ev) => {
+      const isOwner = ownerByCalendar.get(ev.calendarId) === true;
+      const { icalData, ...rest } = ev;
+      return maskEventForViewer(isOwner ? { ...rest, icalData } : rest, isOwner);
+    })
     .filter((ev): ev is NonNullable<typeof ev> => ev !== null);
 
   res.json(masked);
@@ -840,7 +909,9 @@ const EventSchema = z.object({
   location: z.string().optional(),
   allDay: z.boolean().default(false),
   recurring: z.boolean().default(false),
-  rrule: z.string().optional(),
+  // RFC 5545 RECUR value (optionally prefixed with "RRULE:"); null/"" on PUT removes it
+  rrule: z.string().max(500)
+    .regex(/^(RRULE:)?FREQ=[A-Za-z0-9=;,:+-]+$/i, 'Invalid RRULE').or(z.literal('')).nullable().optional(),
   // v3.18.15: privacy level (PUBLIC=default, PRIVATE=busy only, CONFIDENTIAL=invisible)
   classification: z.enum(['PUBLIC', 'PRIVATE', 'CONFIDENTIAL']).optional(),
   // v3.18.25 A5: attendees (guest mail addresses) — if non-empty an iMIP REQUEST is sent
@@ -864,10 +935,9 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   });
   if (!organizer) { res.status(500).json({ error: 'Organizer-User nicht gefunden' }); return; }
 
-  const icalData = buildIcal({
-    summary, dtStart, dtEnd, description, location, allDay, classification,
-    ...(rrule !== undefined ? { rrule } : {}),
-  });
+  const range = resolveEventRange(dtStart, dtEnd, allDay);
+  if (!range) { res.status(400).json({ error: 'Invalid date range' }); return; }
+  const rruleValue = rrule ? rrule.replace(/^RRULE:/i, '').toUpperCase() : null;
 
   // v3.18.25: UID with hostname suffix for global uniqueness (RFC 5545 §3.8.4.7)
   const settings = await prisma.serverSettings.findUnique({
@@ -887,6 +957,15 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
     rsvp: true,
   }));
 
+  const icalData = buildVCalendar({
+    uid, summary, description, location, allDay, classification,
+    start: range.start, end: range.end,
+    sequence: 0,
+    ...(rruleValue ? { rrule: rruleValue } : {}),
+    organizer: { email: organizer.email, ...(organizer.displayName ? { cn: organizer.displayName } : {}) },
+    attendees: attendeesJson,
+  });
+
   const event = await prisma.calendarEvent.create({
     data: {
       calendarId,
@@ -894,9 +973,11 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
       summary,
       description,
       location,
-      dtStart: new Date(dtStart),
-      dtEnd: new Date(dtEnd),
-      recurring,
+      dtStart: range.start,
+      dtEnd: range.end,
+      allDay,
+      recurring: recurring || rruleValue !== null,
+      rrule: rruleValue,
       icalData,
       classification,
       organizer: organizer.email,
@@ -928,8 +1009,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
     select: { id: true, calendarId: true, summary: true, description: true, location: true,
-              uid: true, dtStart: true, dtEnd: true, recurring: true, classification: true,
-              sequence: true, organizer: true, attendees: true },
+              uid: true, dtStart: true, dtEnd: true, allDay: true, recurring: true, rrule: true,
+              classification: true, sequence: true, organizer: true, attendees: true, icalData: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
@@ -938,26 +1019,25 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
 
   const { summary, dtStart, dtEnd, description, location, allDay, rrule, classification, attendees } = parsed.data;
   const effectiveClass = classification ?? event.classification ?? 'PUBLIC';
-  const icalData = buildIcal({
-    summary: summary ?? event.summary,
-    dtStart: dtStart ?? event.dtStart.toISOString(),
-    dtEnd: dtEnd ?? event.dtEnd.toISOString(),
-    description: description ?? '',
-    location: location ?? '',
-    allDay: allDay ?? false,
-    classification: effectiveClass,
-    ...(rrule !== undefined ? { rrule } : {}),
-  });
 
-  // v3.18.25 A5: if relevant fields changed → sequence++ and send new
-  // REQUEST mails to all attendees. „Relevant" fields are all those that
-  // appear in the iMIP mail (summary, dtStart, dtEnd, location, attendees).
-  const willSendUpdate =
-    (summary !== undefined && summary !== event.summary) ||
-    (dtStart !== undefined && new Date(dtStart).getTime() !== event.dtStart.getTime()) ||
-    (dtEnd !== undefined && new Date(dtEnd).getTime() !== event.dtEnd.getTime()) ||
-    (location !== undefined && location !== event.location) ||
-    attendees !== undefined;
+  // Dates: only re-resolved when the client sent date or all-day fields; the
+  // missing half comes from the stored row (all-day stays date-only, no UTC drift).
+  const effectiveAllDay = allDay ?? event.allDay;
+  const datesTouched = dtStart !== undefined || dtEnd !== undefined || allDay !== undefined;
+  let range = { start: event.dtStart, end: event.dtEnd };
+  if (datesTouched) {
+    const r = resolveEventRange(
+      dtStart ?? event.dtStart.toISOString(),
+      dtEnd ?? event.dtEnd.toISOString(),
+      effectiveAllDay,
+    );
+    if (!r) { res.status(400).json({ error: 'Invalid date range' }); return; }
+    range = r;
+  }
+  // rrule: undefined = keep, null/"" = remove, string = set
+  const effectiveRrule = rrule === undefined
+    ? event.rrule
+    : (rrule ? rrule.replace(/^RRULE:/i, '').toUpperCase() : null);
 
   const newAttendeesJson = attendees
     ? attendees.map((a) => ({
@@ -969,19 +1049,67 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
       }))
     : event.attendees;
 
+  const attendeeKey = (list: unknown): string => JSON.stringify(
+    (Array.isArray(list) ? list : [])
+      .map((a) => String((a as Record<string, unknown>)['email'] ?? '').toLowerCase())
+      .sort(),
+  );
+
+  // v3.18.25 A5: if relevant fields changed → sequence++ and send new
+  // REQUEST mails to all attendees. „Relevant" fields are all those that
+  // appear in the iMIP mail (summary, dates, location, recurrence, attendees).
+  const willSendUpdate =
+    (summary !== undefined && summary !== event.summary) ||
+    range.start.getTime() !== event.dtStart.getTime() ||
+    range.end.getTime() !== event.dtEnd.getTime() ||
+    effectiveAllDay !== event.allDay ||
+    effectiveRrule !== event.rrule ||
+    (location !== undefined && location !== event.location) ||
+    (attendees !== undefined && attendeeKey(newAttendeesJson) !== attendeeKey(event.attendees));
+  const newSequence = event.sequence + (willSendUpdate ? 1 : 0);
+
+  // Patch the stored iCal instead of regenerating it: RRULE/EXDATE/VALARM/TZID/
+  // X-properties written by CalDAV clients survive a REST edit.
+  const patch = {
+    ...(summary !== undefined ? { summary } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(location !== undefined ? { location } : {}),
+    ...(datesTouched ? { start: range.start, end: range.end, allDay: effectiveAllDay } : {}),
+    ...(rrule !== undefined ? { rrule: effectiveRrule } : {}),
+    ...(classification !== undefined ? { classification: effectiveClass } : {}),
+    ...(attendees !== undefined ? { attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }> } : {}),
+    sequence: newSequence,
+  };
+  const icalData = patchVEvent(event.icalData, patch) ?? buildVCalendar({
+    uid: event.uid,
+    summary: summary ?? event.summary,
+    description: description ?? event.description,
+    location: location ?? event.location,
+    start: range.start,
+    end: range.end,
+    allDay: effectiveAllDay,
+    classification: effectiveClass,
+    sequence: newSequence,
+    ...(effectiveRrule ? { rrule: effectiveRrule } : {}),
+    ...(event.organizer ? { organizer: { email: event.organizer } } : {}),
+    attendees: (Array.isArray(newAttendeesJson) ? newAttendeesJson : []) as Array<{ email: string; cn?: string; partstat?: string }>,
+  });
+
   const updated = await prisma.calendarEvent.update({
     where: { id },
     data: {
       summary: summary ?? event.summary,
       description: description ?? event.description,
       location: location ?? event.location,
-      dtStart: dtStart ? new Date(dtStart) : event.dtStart,
-      dtEnd: dtEnd ? new Date(dtEnd) : event.dtEnd,
-      recurring: !!rrule || event.recurring,
+      dtStart: range.start,
+      dtEnd: range.end,
+      allDay: effectiveAllDay,
+      rrule: effectiveRrule,
+      recurring: effectiveRrule !== null || (rrule === undefined && event.recurring),
       icalData,
       classification: effectiveClass,
       ...(attendees !== undefined ? { attendees: newAttendeesJson as object } : {}),
-      ...(willSendUpdate ? { sequence: { increment: 1 } } : {}),
+      sequence: newSequence,
     },
   });
 
@@ -1013,7 +1141,7 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     where: { id },
     select: { id: true, calendarId: true, uid: true, summary: true, description: true,
               location: true, dtStart: true, dtEnd: true, sequence: true,
-              organizer: true, attendees: true },
+              allDay: true, rrule: true, organizer: true, attendees: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
@@ -1040,37 +1168,3 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-function buildIcal(opts: {
-  summary: string; dtStart: string; dtEnd: string;
-  description: string; location: string; allDay: boolean;
-  rrule?: string;
-  classification?: string;
-}): string {
-  const formatDt = (iso: string, allDay: boolean): string => {
-    if (allDay) return iso.slice(0, 10).replace(/-/g, '');
-    return iso.replace(/[-:]/g, '').replace('.000', '').slice(0, 15) + 'Z';
-  };
-
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//CoreMail//EN',
-    'BEGIN:VEVENT',
-    `SUMMARY:${opts.summary}`,
-    opts.allDay
-      ? `DTSTART;VALUE=DATE:${formatDt(opts.dtStart, true)}`
-      : `DTSTART:${formatDt(opts.dtStart, false)}`,
-    opts.allDay
-      ? `DTEND;VALUE=DATE:${formatDt(opts.dtEnd, true)}`
-      : `DTEND:${formatDt(opts.dtEnd, false)}`,
-  ];
-  if (opts.description) lines.push(`DESCRIPTION:${opts.description}`);
-  if (opts.location) lines.push(`LOCATION:${opts.location}`);
-  if (opts.rrule) lines.push(`RRULE:${opts.rrule}`);
-  // RFC 5545 §3.8.1.3 — CLASS:PUBLIC|PRIVATE|CONFIDENTIAL
-  if (opts.classification && opts.classification !== 'PUBLIC') {
-    lines.push(`CLASS:${opts.classification}`);
-  }
-  lines.push('END:VEVENT', 'END:VCALENDAR');
-  return lines.join('\r\n');
-}

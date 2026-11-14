@@ -166,7 +166,7 @@ async function findCalendarItems(
       item.ele('t:Subject').txt(event.summary ?? '');
       item.ele('t:Start').txt(formatEwsDate(event.dtStart));
       item.ele('t:End').txt(formatEwsDate(event.dtEnd));
-      item.ele('t:IsAllDayEvent').txt('false');
+      item.ele('t:IsAllDayEvent').txt(event.allDay ? 'true' : 'false');
       item.ele('t:LegacyFreeBusyStatus').txt('Busy');
       item.ele('t:CalendarItemType').txt(event.recurring ? 'RecurringMaster' : 'Single');
     }

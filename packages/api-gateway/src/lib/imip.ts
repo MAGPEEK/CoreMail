@@ -39,6 +39,10 @@ export interface EventData {
   location?: string;
   dtStart: Date;
   dtEnd: Date;
+  /** All-day: dtStart/dtEnd are UTC midnights, dtEnd exclusive → VALUE=DATE. */
+  allDay?: boolean;
+  /** RECUR value (without "RRULE:") for recurring invitations. */
+  rrule?: string | null;
   organizer: { email: string; cn?: string };
   attendees: AttendeeData[];
   publicHostname: string;  // for UID domain fallback
@@ -98,6 +102,8 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     sequence: ev.sequence,
     start: ev.dtStart,
     end: ev.dtEnd,
+    ...(ev.allDay ? { allDay: true } : {}),
+    ...(ev.rrule ? { repeating: `RRULE:${ev.rrule.replace(/^RRULE:/i, '')}` } : {}),
     summary: ev.summary,
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),

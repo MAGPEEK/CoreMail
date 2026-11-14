@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -8,7 +8,7 @@ import deLocale from '@fullcalendar/core/locales/de';
 import enLocale from '@fullcalendar/core/locales/en-gb';
 import esLocale from '@fullcalendar/core/locales/es';
 import itLocale from '@fullcalendar/core/locales/it';
-import type { DateSelectArg, EventClickArg } from '@fullcalendar/core';
+import type { DateSelectArg, DatesSetArg, EventClickArg } from '@fullcalendar/core';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, Task } from '../api/types.js';
 import { useUiPrefs } from '../store/ui.js';
@@ -47,6 +47,12 @@ export function CalendarPage() {
   // v3.18.21: Filter state lifted to the page so fcEvents are actually filtered
   const [filters, setFilters] = useState<Record<FilterKey, boolean>>(() => ({ ...FILTER_DEFAULT }));
   const calendarRef = useRef<FullCalendar | null>(null);
+  // Visible FullCalendar range — the server expands recurring events only inside it
+  const [visibleRange, setVisibleRange] = useState<{ start: string; end: string } | null>(null);
+  const handleDatesSet = (arg: DatesSetArg) => {
+    const next = { start: arg.start.toISOString(), end: arg.end.toISOString() };
+    setVisibleRange((prev) => (prev && prev.start === next.start && prev.end === next.end ? prev : next));
+  };
 
   const changeView = (v: CalendarView) => {
     setView(v);
@@ -77,8 +83,12 @@ export function CalendarPage() {
   });
 
   const { data: events } = useQuery({
-    queryKey: ['calendar-events'],
-    queryFn: () => api.get<CalendarEvent[]>('/calendar/events?start=2020-01-01&end=2030-12-31'),
+    queryKey: ['calendar-events', visibleRange?.start, visibleRange?.end],
+    queryFn: () => api.get<CalendarEvent[]>(
+      `/calendar/events?start=${encodeURIComponent(visibleRange!.start)}&end=${encodeURIComponent(visibleRange!.end)}`,
+    ),
+    enabled: visibleRange !== null,
+    placeholderData: keepPreviousData,
   });
 
   const { data: tasks } = useQuery({
@@ -145,12 +155,17 @@ export function CalendarPage() {
       .map((ev) => {
         const cal = calendars?.find((c) => c.id === ev.calendarId);
         const isReadOnly = cal?.permission === 'READ';
+        // All-day values are dates with an exclusive end — pass YYYY-MM-DD, never a
+        // UTC instant, otherwise FullCalendar shifts them by the browser offset.
+        const allDay = ev.allDay === true;
         return {
           id: ev.id,
+          // Instances of a series share the series id (a click opens the master)
+          ...(ev.recurrenceId ? { groupId: ev.id } : {}),
           title: ev.summary,
-          start: ev.dtStart,
-          end: ev.dtEnd,
-          allDay: false,
+          start: allDay ? ev.dtStart.slice(0, 10) : ev.dtStart,
+          end: allDay ? ev.dtEnd.slice(0, 10) : ev.dtEnd,
+          allDay,
           backgroundColor: cal?.color ?? '#0078D4',
           borderColor: 'transparent',
           // READ shares: per-event editable=false (prevents drag/resize)
@@ -218,6 +233,7 @@ export function CalendarPage() {
             events={fcEvents}
             selectable
             select={handleDateSelect}
+            datesSet={handleDatesSet}
             eventClick={handleEventClick}
             height="100%"
           />

@@ -64,8 +64,28 @@ const PARTSTAT_BADGE: Record<string, { icon: React.ReactNode; color: string; lab
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Calendar arithmetic on `YYYY-MM-DD` strings — no timezone involved. */
+function addDays(date: string, days: number): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + days)).toISOString().slice(0, 10);
+}
+
+/**
+ * All-day range from the API / FullCalendar (`YYYY-MM-DD…`, exclusive end) →
+ * dialog values (inclusive last day, as shown to the user).
+ */
+function allDayToParts(start: string, endExclusive: string): { startDate: string; endDate: string } {
+  const startDate = start.slice(0, 10);
+  const last = addDays(endExclusive.slice(0, 10), -1);
+  return { startDate, endDate: last < startDate ? startDate : last };
+}
+
 function isoToParts(iso: string): { date: string; time: string } {
   if (!iso) return { date: '', time: '' };
+  // Date-only values must not go through Date (would be parsed as UTC midnight)
+  if (DATE_ONLY_RE.test(iso)) return { date: iso, time: '' };
   const d = new Date(iso);
   if (isNaN(d.getTime())) return { date: '', time: '' };
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -127,10 +147,16 @@ export function EventEditDialog({
       initialized.current = true;
       setSummary(existing.summary ?? '');
       setCalendarId(existing.calendarId);
-      const s = isoToParts(existing.dtStart);
-      const e = isoToParts(existing.dtEnd);
-      setStartDate(s.date); setStartTime(s.time);
-      setEndDate(e.date); setEndTime(e.time);
+      if (existing.allDay) {
+        const r = allDayToParts(existing.dtStart, existing.dtEnd);
+        setStartDate(r.startDate);
+        setEndDate(r.endDate);
+      } else {
+        const s = isoToParts(existing.dtStart);
+        const e = isoToParts(existing.dtEnd);
+        setStartDate(s.date); setStartTime(s.time);
+        setEndDate(e.date); setEndTime(e.time);
+      }
       setAllDay(existing.allDay ?? false);
       setLocation(existing.location ?? '');
       setDescription(existing.description ?? '');
@@ -139,12 +165,19 @@ export function EventEditDialog({
     } else {
       initialized.current = true;
       setCalendarId(defaults?.calendarId ?? defaultWritableCalendarId);
-      const start = defaults?.dtStart ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
-      const end = defaults?.dtEnd ?? addMinutes(start, 30);
-      const s = isoToParts(start);
-      const e = isoToParts(end);
-      setStartDate(s.date); setStartTime(s.time);
-      setEndDate(e.date); setEndTime(e.time);
+      if (defaults?.allDay && defaults.dtStart && defaults.dtEnd) {
+        // FullCalendar all-day selection: date strings with an exclusive end
+        const r = allDayToParts(defaults.dtStart, defaults.dtEnd);
+        setStartDate(r.startDate);
+        setEndDate(r.endDate);
+      } else {
+        const start = defaults?.dtStart ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        const end = defaults?.dtEnd ?? addMinutes(start, 30);
+        const s = isoToParts(start);
+        const e = isoToParts(end);
+        setStartDate(s.date); if (s.time) setStartTime(s.time);
+        setEndDate(e.date); if (e.time) setEndTime(e.time);
+      }
       setAllDay(defaults?.allDay ?? false);
     }
   }, [isEdit, existing, defaults, defaultWritableCalendarId]);
@@ -250,8 +283,9 @@ export function EventEditDialog({
                    calendarId && (existing?.canWrite !== false || !isEdit);
 
   const handleSave = () => {
-    const dtStart = allDay ? `${startDate}T00:00:00.000Z` : partsToIso(startDate, startTime);
-    const dtEnd   = allDay ? `${endDate}T23:59:59.999Z`   : partsToIso(endDate, endTime);
+    // All-day: plain dates, end EXCLUSIVE (last shown day + 1) — no UTC round-trip.
+    const dtStart = allDay ? startDate : partsToIso(startDate, startTime);
+    const dtEnd   = allDay ? addDays(endDate < startDate ? startDate : endDate, 1) : partsToIso(endDate, endTime);
     const body = {
       calendarId, summary: summary.trim(),
       dtStart, dtEnd, allDay,
