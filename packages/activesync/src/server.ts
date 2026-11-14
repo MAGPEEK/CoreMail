@@ -11,6 +11,8 @@ import { handleFolderSync } from './commands/folder-sync.js';
 import { handleSync } from './commands/sync.js';
 import { handleSendMail, handleSmartReply } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
+import { handleGetAttachment } from './commands/get-attachment.js';
+import { getObjectStream } from '@coremail/storage/minio';
 
 const log = createLogger('activesync');
 installProcessGuards(log);
@@ -121,13 +123,15 @@ app.post(
           // Simple attachment fetch by AttachmentName query param
           const attachmentName = req.query['AttachmentName'] as string | undefined;
           if (!attachmentName) { res.status(400).send('Missing AttachmentName'); return; }
-          const attachment = await prisma.attachment.findFirst({
-            where: { id: attachmentName, message: { folder: { mailbox: { userId: user.userId } } } },
+          res.removeHeader('Content-Type'); // set by the handler (attachment MIME type)
+          await handleGetAttachment(res, user.userId, attachmentName, {
+            findAttachment: (id, userId) => prisma.attachment.findFirst({
+              where: { id, message: { deletedAt: null, folder: { mailbox: { userId } } } },
+              select: { mimeType: true, size: true, storagePath: true },
+            }),
+            openStream: getObjectStream,
+            warn: (msg, err) => log.warn({ err }, msg),
           });
-          if (!attachment) { res.status(404).send('Not found'); return; }
-          res.setHeader('Content-Type', attachment.mimeType);
-          res.setHeader('Content-Length', String(attachment.size));
-          res.status(200).end(); // In production, stream from MinIO
           break;
         }
         case 'Settings':
