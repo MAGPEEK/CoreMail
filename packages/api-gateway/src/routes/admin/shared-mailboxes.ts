@@ -165,7 +165,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   const perms = p.data.permissions ?? (p.data.permission ? [p.data.permission] : []);
   if (perms.length === 0) { res.status(400).json({ error: 'Keine Berechtigung angegeben' }); return; }
 
-  const actorId = (req as Request & { userId?: string }).userId ?? 'system';
+  const actorId = req.apiUser?.userId ?? 'system';
   try {
     // Replace strategy: delete all existing for (mailbox, user), then set anew
     await prisma.$transaction([

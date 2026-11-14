@@ -10,10 +10,55 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, downloadBuffer } from '@coremail/storage';
-import { createLogger } from '@coremail/core';
+import { createLogger, createBullMqConnection } from '@coremail/core';
+import { Queue } from 'bullmq';
 import { requireAdmin } from '../../middleware/auth.js';
+import { audit, auditContext } from '../../lib/audit.js';
+import { releaseQuarantine, ReleaseError, type ReleaseDeps, type ReleaseJob } from '../../lib/quarantine-release.js';
 
 const log = createLogger('admin:quarantine');
+
+// BullMQ v5: no ':' in queue names — must match smtp-server ('smtp-outbound')
+let _outboundQueue: Queue | null = null;
+function getOutboundQueue(): Queue {
+  if (!_outboundQueue) {
+    _outboundQueue = new Queue('smtp-outbound', { connection: createBullMqConnection() });
+  }
+  return _outboundQueue;
+}
+
+const releaseDeps: ReleaseDeps = {
+  findById: (id) => prisma.quarantine.findUnique({ where: { id } }),
+  claim: async (id, releasedBy, at) => {
+    const { count } = await prisma.quarantine.updateMany({
+      where: { id, released: false },
+      data:  { released: true, releasedAt: at, releasedBy },
+    });
+    return count;
+  },
+  unclaim: async (id) => {
+    await prisma.quarantine.update({
+      where: { id },
+      data:  { released: false, releasedAt: null, releasedBy: null },
+    });
+  },
+  download: (path) => downloadBuffer(path),
+  enqueue: async (job: ReleaseJob) => {
+    const added = await getOutboundQueue().add('send', job, {
+      jobId: job.messageId,
+      attempts: 10,
+      backoff: { type: 'exponential', delay: 60_000 },
+      removeOnComplete: { count: 100 },
+      removeOnFail: { count: 500 },
+    });
+    return added.id ?? '';
+  },
+  isLocalAddress: async (addr) => {
+    const domain = addr.split('@')[1]?.toLowerCase();
+    if (!domain) return false;
+    return !!(await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } }));
+  },
+};
 export const adminQuarantineRouter: RouterType = Router();
 adminQuarantineRouter.use(requireAdmin);
 
@@ -103,21 +148,32 @@ adminQuarantineRouter.get('/:id', async (req: Request, res: Response) => {
 // ── POST /:id/release ─────────────────────────────────────────────────────────
 adminQuarantineRouter.post('/:id/release', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const item = await prisma.quarantine.findUnique({ where: { id } });
-  if (!item) { res.status(404).json({ error: 'Not found' }); return; }
-  if (item.released) { res.status(409).json({ error: 'Bereits freigegeben' }); return; }
+  const actorId = req.apiUser?.userId ?? 'system';
+  const actorEmail = req.apiUser?.email;
 
-  const actorId = (req as Request & { userId?: string }).userId ?? 'system';
-
-  await prisma.quarantine.update({
-    where: { id },
-    data: { released: true, releasedAt: new Date(), releasedBy: actorId },
-  });
-
-  // TODO: actual SMTP delivery of the raw message from MinIO
-  // (requires smtp-server integration — DB update only as placeholder here)
-  log.info({ id, toAddr: item.toAddr, releasedBy: actorId }, 'Quarantine item released');
-  res.json({ message: 'Nachricht freigegeben' });
+  try {
+    const result = await releaseQuarantine(id, actorId, releaseDeps);
+    audit({
+      actorId,
+      ...(actorEmail ? { actorEmail } : {}),
+      action: 'quarantine.release',
+      targetType: 'quarantine',
+      targetId: id,
+      targetName: result.recipients.join(', '),
+      changes: { from: result.from, local: result.local, external: result.external, jobId: result.jobId },
+      ...auditContext(req),
+    });
+    log.info({ id, recipients: result.recipients, releasedBy: actorId, jobId: result.jobId }, 'Quarantine item released');
+    res.json({ message: 'Message released', recipients: result.recipients, jobId: result.jobId });
+  } catch (err) {
+    if (err instanceof ReleaseError) {
+      if (err.status >= 500) log.error({ id, err: err.message }, 'Quarantine release failed');
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    log.error({ err, id }, 'Quarantine release failed');
+    res.status(500).json({ error: 'Release failed' });
+  }
 });
 
 // ── DELETE /:id ───────────────────────────────────────────────────────────────

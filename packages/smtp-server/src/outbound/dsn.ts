@@ -50,6 +50,12 @@ export async function sendDsnBounce(opts: {
   failureReason:    string;
   smtpCode:         number | null;
   serverHostname:   string;
+  /**
+   * Also deliver the DSN to an EXTERNAL sender (via the outbound queue with a
+   * null envelope sender). Used for post-acceptance rejects (transport rule
+   * `reject` after SMTP already answered 250) where no MX-side bounce exists.
+   */
+  deliverExternal?: boolean;
 }): Promise<void> {
   // RFC 5321 §6.1: no bounce for empty MAIL FROM (= "<>" bounce mail itself)
   if (!opts.originalFrom || opts.originalFrom === '<>') {
@@ -64,7 +70,7 @@ export async function sendDsnBounce(opts: {
     where: { name: domain, active: true },
     select: { id: true },
   });
-  if (!localDomain) {
+  if (!localDomain && !opts.deliverExternal) {
     log.info({ to: opts.originalFrom }, 'DSN suppressed: external sender (MX server delivers its own bounce)');
     return;
   }
@@ -126,6 +132,23 @@ Content-Type: message/delivery-status
 ${reportPart}
 --${boundary}--
 `;
+
+  if (!localDomain) {
+    try {
+      // Lazy import: queue.ts imports this module (failed-job DSN).
+      const { enqueueOutbound } = await import('./queue.js');
+      await enqueueOutbound({
+        messageId:  `dsn-${Date.now()}`,
+        from:       '',                       // null sender (RFC 5321 §4.5.5)
+        to:         [opts.originalFrom],
+        rawMessage: Buffer.from(raw, 'utf8').toString('base64'),
+      });
+      log.info({ to: opts.originalFrom, code: opts.smtpCode }, 'DSN bounce enqueued to external sender');
+    } catch (err) {
+      log.error({ err, to: opts.originalFrom }, 'DSN bounce enqueue failed');
+    }
+    return;
+  }
 
   try {
     await storeInboundMessage(Buffer.from(raw, 'utf8'), {

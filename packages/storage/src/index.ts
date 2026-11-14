@@ -6,3 +6,4 @@ export * from './transport-rules.js';
 export * from './itip-inbound.js';
 export * from './protocol-cert.js';
 export * from './sender-identity.js';
+export * from './quarantine.js';
