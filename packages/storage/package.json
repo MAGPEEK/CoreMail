@@ -7,7 +7,9 @@
     ".": "./dist/index.js",
     "./prisma": "./dist/prisma/index.js",
     "./minio": "./dist/minio/index.js",
-    "./mime": "./dist/mime/index.js"
+    "./mime": "./dist/mime/index.js",
+    "./auth": "./dist/auth/index.js",
+    "./auth/testing": "./dist/auth/testing.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

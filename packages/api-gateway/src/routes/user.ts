@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import { prisma, expunge, nextModSeq } from '@coremail/storage';
+import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 
 export const userRouter: RouterType = Router();
@@ -492,7 +493,7 @@ userRouter.delete('/rules/:id', async (req: Request, res: Response) => {
 userRouter.post('/change-password', async (req: Request, res: Response) => {
   const schema = z.object({
     currentPassword: z.string().min(1),
-    newPassword:     z.string().min(8, 'Mindestens 8 Zeichen'),
+    newPassword:     z.string().min(1).max(128),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -511,10 +512,19 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
   const valid = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
   if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
 
+  // v6.0.0: minimum length from ServerSettings.minPasswordLength
+  const policyError = await checkPasswordPolicy(parsed.data.newPassword);
+  if (policyError) { res.status(400).json({ error: policyError }); return; }
+
   const newHash = await hashPassword(parsed.data.newPassword);
   await prisma.user.update({
     where: { id: req.apiUser!.userId },
     data:  { passwordHash: newHash },
+  });
+  // v6.0.0: all OTHER sessions are revoked; this session and app passwords stay.
+  await revokeAllSessions(req.apiUser!.userId, {
+    ...(req.apiUser!.sessionId ? { exceptSessionId: req.apiUser!.sessionId } : {}),
+    reason: 'password-change',
   });
   res.json({ ok: true });
 });

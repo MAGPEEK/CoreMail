@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
+import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAdmin } from '../../middleware/auth.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 
@@ -93,7 +94,7 @@ adminMailboxesRouter.post('/recalculate-all-quotas', async (_req: Request, res: 
 const CreateMailboxSchema = z.object({
   email: z.string().email(),
   displayName: z.string().min(1),
-  password: z.string().min(8),
+  password: z.string().min(1).max(128),
   domainId: z.string(),
   role: z.enum(['USER', 'ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'HELP_DESK', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG']).default('USER'),
   quotaBytes: z.number().int().default(5368709120),
@@ -105,6 +106,9 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { email, displayName, password, domainId, role, quotaBytes } = parsed.data;
+  // v6.0.0: minimum length from ServerSettings.minPasswordLength
+  const policyError = await checkPasswordPolicy(password);
+  if (policyError) { res.status(400).json({ error: policyError }); return; }
 
   try {
     const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
@@ -151,7 +155,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     role: z.string().optional(),
     active: z.boolean().optional(),
     quotaBytes: z.number().int().optional(),
-    password: z.string().min(8).optional(),
+    password: z.string().min(1).max(128).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -166,11 +170,18 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   if (parsed.data.active !== undefined) data['active'] = parsed.data.active;
   if (parsed.data.quotaBytes) data['quotaBytes'] = BigInt(parsed.data.quotaBytes);
   if (parsed.data.password) {
+    const policyError = await checkPasswordPolicy(parsed.data.password);
+    if (policyError) { res.status(400).json({ error: policyError }); return; }
     data['passwordHash'] = await hashPassword(parsed.data.password);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updated = await prisma.user.update({ where: { id }, data: data as any });
+  // v6.0.0: an admin password reset or a deactivation ends all web/API sessions
+  // (app passwords are kept; inactive users cannot use them anyway).
+  if (parsed.data.password || (parsed.data.active === false && user.active)) {
+    await revokeAllSessions(id, { reason: parsed.data.password ? 'admin-password-reset' : 'deactivated' });
+  }
   res.json({ id: updated.id, email: updated.email, displayName: updated.displayName });
 });
 

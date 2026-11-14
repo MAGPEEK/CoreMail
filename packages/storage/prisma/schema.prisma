@@ -154,6 +154,9 @@ model Session {
   id          String   @id @default(cuid())
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId      String
+  /// v6.0.0: sha256(refreshToken) hex — rotated on every /auth/refresh.
+  /// Rows written before v6.0.0 hold the raw refresh JWT; they are accepted
+  /// once by raw match and migrated to the hash on that refresh.
   tokenHash   String   @unique
   ipAddress   String
   userAgent   String   @default("")
@@ -173,6 +176,8 @@ model UserMfa {
   userId              String  @unique
   totpSecret          String?
   totpEnabled         Boolean @default(false)
+  /// v6.0.0: last accepted TOTP time step (unix/30) — replay protection
+  totpLastUsedStep    Int?
   webAuthnCredentials Json    @default("[]")
   backupCodes         String[]
   backupCodesUsed     Int     @default(0)

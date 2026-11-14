@@ -1,20 +1,16 @@
 import * as OTPAuth from 'otpauth';
 import QRCode from 'qrcode';
 import { prisma } from '@coremail/storage';
+import { encryptMfaSecret, verifyUserTotp } from '@coremail/storage/auth';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('auth:totp');
 
-function decryptSecret(encrypted: string): string {
-  // In production: decrypt with AES-256 from Vault
-  // Here: base64 decode as placeholder for the actual AES-256-GCM decryption
-  return Buffer.from(encrypted, 'base64').toString('utf8');
-}
-
-function encryptSecret(secret: string): string {
-  return Buffer.from(secret).toString('base64');
-}
-
+/**
+ * Generates a new (pending, not yet enabled) TOTP secret. v6.0.0: the secret
+ * is stored AES-256-GCM encrypted (see @coremail/storage/auth mfa-crypto).
+ * Callers must refuse this while TOTP is enabled (no silent overwrite).
+ */
 export async function setupTotp(
   userId: string,
   issuer: string,
@@ -33,50 +29,32 @@ export async function setupTotp(
   const otpauthUrl = totp.toString();
   const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl);
 
-  
+  const stored = encryptMfaSecret(secret);
   await prisma.userMfa.upsert({
     where: { userId },
-    create: { userId, totpSecret: encryptSecret(secret), totpEnabled: false },
-    update: { totpSecret: encryptSecret(secret), totpEnabled: false },
+    create: { userId, totpSecret: stored, totpEnabled: false, totpLastUsedStep: null },
+    update: { totpSecret: stored, totpEnabled: false, totpLastUsedStep: null },
   });
 
   log.info({ userId }, 'TOTP secret generated (not yet confirmed)');
   return { secret, otpauthUrl, qrCodeDataUrl };
 }
 
+/** Confirms the pending secret with a code from the authenticator app and enables TOTP. */
 export async function confirmTotp(userId: string, code: string): Promise<boolean> {
-  
-  const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  if (!mfa?.totpSecret) return false;
-
-  const secret = decryptSecret(mfa.totpSecret);
-  const totp = new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret) });
-  const delta = totp.validate({ token: code, window: 1 });
-  if (delta === null) return false;
-
-  await prisma.userMfa.update({
-    where: { userId },
-    data: { totpEnabled: true },
-  });
-  log.info({ userId }, 'TOTP confirmed and enabled');
-  return true;
+  const ok = await verifyUserTotp(userId, code, { requireEnabled: false });
+  if (ok) log.info({ userId }, 'TOTP confirmed and enabled');
+  return ok;
 }
 
+/** Verifies a code of the enabled TOTP (with replay protection). */
 export async function verifyTotp(userId: string, code: string): Promise<boolean> {
-  
-  const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  if (!mfa?.totpSecret || !mfa.totpEnabled) return false;
-
-  const secret = decryptSecret(mfa.totpSecret);
-  const totp = new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret) });
-  const delta = totp.validate({ token: code, window: 1 });
-  return delta !== null;
+  return verifyUserTotp(userId, code);
 }
 
 export async function disableTotp(userId: string): Promise<void> {
-  
-  await prisma.userMfa.update({
+  await prisma.userMfa.updateMany({
     where: { userId },
-    data: { totpSecret: null, totpEnabled: false },
+    data: { totpSecret: null, totpEnabled: false, totpLastUsedStep: null },
   });
 }
