@@ -1,6 +1,6 @@
 /**
  * Shared credential check for every mail protocol (SMTP AUTH, IMAP, POP3,
- * ActiveSync, EWS, Autodiscover, JMAP Basic, CalDAV/CardDAV Basic).
+ * ActiveSync, Autodiscover, JMAP Basic, CalDAV/CardDAV Basic).
  *
  * This file has NO runtime imports besides node built-ins: every dependency
  * (Prisma, Redis, password hashing) is injected. `mail-auth.ts` wires the real
@@ -31,7 +31,7 @@ import { BlockList, isIP } from 'node:net';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type MailProtocol =
-  | 'smtp' | 'imap' | 'pop3' | 'activesync' | 'ews' | 'autodiscover' | 'jmap' | 'caldav';
+  | 'smtp' | 'imap' | 'pop3' | 'activesync' | 'autodiscover' | 'jmap' | 'caldav';
 
 export interface MailAuthContext {
   /** Client IP address (IPv4-mapped IPv6 is normalised). */

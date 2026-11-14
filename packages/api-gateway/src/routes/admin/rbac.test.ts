@@ -21,9 +21,9 @@ const users: Record<string, Row> = {
 const updates: Row[] = [];
 let ldapStored: Row | null = { domainId: 'd1', host: 'ldap', port: 636, ssl: true, baseDN: 'dc=x', bindDN: 'cn=a', bindPassword: 'LDAP-SECRET', userDN: 'ou=u', userFilter: 'f', groupFilter: null, attributeMap: {}, syncEnabled: true, lastSyncAt: null, createdAt: new Date() };
 const settingsRow = { id: 'singleton', publicHostname: 'mail.ex.com', tlsCert: 'CERT', tlsKey: '-----BEGIN PRIVATE KEY-----', setupTokenHash: 'abc', orgName: 'X',
-  useHttps: true, httpPort: 443, ewsUrl: 'https://mail.ex.com/EWS/Exchange.asmx', owaUrl: 'https://mail.ex.com/owa/', easUrl: 'https://mail.ex.com/Microsoft-Server-ActiveSync',
+  useHttps: true, httpPort: 443, owaUrl: 'https://mail.ex.com/owa/', easUrl: 'https://mail.ex.com/Microsoft-Server-ActiveSync',
   autodiscoverBase: 'https://autodiscover.ex.com', imapHost: 'mail.ex.com', imapPort: 993, imapSsl: true, pop3Host: 'mail.ex.com', pop3Port: 995, pop3Ssl: true,
-  smtpHost: 'mail.ex.com', smtpPort: 587, smtpTls: true, mapiHttpEnabled: false, jmapEnabled: true, requireMfaForAdmins: false };
+  smtpHost: 'mail.ex.com', smtpPort: 587, smtpTls: true, jmapEnabled: true, requireMfaForAdmins: false };
 const settingsPuts: Row[] = [];
 
 installFakePrisma({

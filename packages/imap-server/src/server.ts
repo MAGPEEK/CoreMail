@@ -1,12 +1,14 @@
 import net from 'node:net';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
-  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals,
+  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
 } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 
 const log = createLogger('imap:main');
+// v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
+installProcessGuards(log);
 
 const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);

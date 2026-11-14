@@ -2,7 +2,7 @@ import net from 'node:net';
 import { X509Certificate } from 'node:crypto';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
-  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals,
+  generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
 } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
@@ -15,6 +15,8 @@ import { invalidateOutboundConfigCache } from './outbound/relay.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:server');
+// v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
+installProcessGuards(log);
 
 // ── Port-Defaults ─────────────────────────────────────────────────────────────
 const SMTP_PORT_25  = parseInt(process.env['SMTP_PORT_25']  ?? '25',  10);
