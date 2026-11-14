@@ -12,7 +12,12 @@
 import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import tls from 'node:tls';
 import { POP3Session } from './session.js';
+import { selfSignedTestCert } from './test-cert.js';
+
+let cachedCert: { cert: Buffer; key: Buffer } | null = null;
+const testCert = (): { cert: Buffer; key: Buffer } => (cachedCert ??= selfSignedTestCert());
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
 
@@ -79,6 +84,11 @@ function installFakeDb(messages: FakeMessage[]): FakeDb {
       findUnique: async ({ where }: { where: { email: string } }) => {
         await tick();
         return db.users.find((u) => u.email === where.email) ?? null;
+      },
+      // v7: the shared credential check queries { email, active: true }
+      findFirst: async ({ where }: { where: { email: string; active?: boolean } }) => {
+        await tick();
+        return db.users.find((u) => u.email === where.email && (where.active === undefined || u.active === where.active)) ?? null;
       },
     },
     appPassword: {
@@ -203,14 +213,15 @@ const THREE_MESSAGES = (): FakeMessage[] => [message(1), message(2), message(3)]
 /** Starts a POP3 server on loopback, connects and consumes the greeting. */
 async function connect(t: TestContext, messages: FakeMessage[] = THREE_MESSAGES()): Promise<Harness & { greeting: string }> {
   const db = installFakeDb(messages);
-  const server = net.createServer((socket) => new POP3Session(socket, false).start());
+  // v7: USER/PASS require TLS — the harness uses the implicit-TLS (port 995) configuration.
+  const server = tls.createServer({ ...testCert() }, (socket) => new POP3Session(socket, true).start());
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as net.AddressInfo;
   const clients: Pop3Client[] = [];
 
   const open = async (): Promise<Pop3Client> => {
-    const socket = net.connect(port, '127.0.0.1');
-    await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+    const socket = tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
+    await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
     const client = new Pop3Client(socket);
     clients.push(client);
     return client;

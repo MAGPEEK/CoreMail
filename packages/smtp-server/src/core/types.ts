@@ -84,6 +84,21 @@ export interface SmtpSessionConfig {
    */
   advertiseStarttls?: boolean;
   handlers: SmtpHandlers;
-  /** clientIp is passed on for brute-force tracking (ip-limiter). */
-  verifyCredentials?: (username: string, password: string, clientIp?: string) => Promise<AuthUser | null>;
+  /**
+   * clientIp is passed on for brute-force tracking (shared mail-auth lockout).
+   * Returns the user, null (invalid credentials) or an SmtpAuthFailure for
+   * lockouts / temporary errors.
+   */
+  verifyCredentials?: (username: string, password: string, clientIp?: string) => Promise<AuthUser | null | SmtpAuthFailure>;
+  /**
+   * Failed AUTH attempts per session before the server answers 421 and
+   * closes the connection (default 3).
+   */
+  maxAuthFailures?: number;
+}
+
+/** Non-credential AUTH outcome: lockout (454) or temporary failure (454). */
+export interface SmtpAuthFailure {
+  failure: 'locked' | 'temporary';
+  retryAfterSec?: number;
 }

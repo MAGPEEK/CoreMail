@@ -1,80 +1,39 @@
 /**
- * SMTP Credential Verifier
+ * SMTP credential verifier (AUTH PLAIN / LOGIN on the submission ports).
  *
- * Checks regular user passwords and app passwords.
- * Returns an AuthUser on success, null on failure.
- *
- * Brute-force protection (OWASP A07 / MITRE T1110):
- * - After SMTP_AUTH_FAIL_THRESHOLD failed attempts per IP, the IP is
- *   banned via Redis for SMTP_AUTH_BAN_S seconds.
- * - Successful auth clears the failure counter.
+ * v7: delegates to the shared mail-protocol check verifyMailCredentials()
+ * from @coremail/storage — same rules for every protocol:
+ *  - primary password or app password, MFA accounts: app passwords only
+ *  - shared Redis lockout per client IP and per account (checked per attempt)
+ *  - database errors are temporary failures (454 4.7.0), never "invalid"
  */
 
-import { verifyPassword, createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
-import type { AuthUser } from '../core/types.js';
-import { recordAuthFailure, clearAuthFailures } from '../core/ip-limiter.js';
+import { createLogger } from '@coremail/core';
+import { verifyMailCredentials } from '@coremail/storage';
+import type { AuthUser, SmtpAuthFailure } from '../core/types.js';
+import { reportAuthFailure } from '../core/ip-limiter.js';
 
 const log = createLogger('smtp:auth');
 
 export async function verifySmtpCredentials(
   username: string,
   password: string,
-  /** Client IP — for brute-force tracking; optional for backwards compatibility */
+  /** Client IP — for the shared brute-force lockout. */
   clientIp?: string,
-): Promise<AuthUser | null> {
-  if (!username || !password) return null;
-
-  const email = username.toLowerCase().trim();
-
-  try {
-    const user = await prisma.user.findFirst({
-      where: { email, active: true },
-      select: { id: true, email: true, passwordHash: true },
-    });
-
-    if (!user) {
-      log.warn({ username }, 'Auth failed: user not found');
-      if (clientIp) await recordAuthFailure(clientIp);
+): Promise<AuthUser | null | SmtpAuthFailure> {
+  const result = await verifyMailCredentials(username, password, { ip: clientIp, protocol: 'smtp' });
+  switch (result.status) {
+    case 'ok':
+      log.info({ email: result.user.email, method: result.method }, 'SMTP auth success');
+      return { id: result.user.id, email: result.user.email };
+    case 'locked':
+      return { failure: 'locked', retryAfterSec: result.retryAfterSec };
+    case 'error':
+      return { failure: 'temporary' };
+    case 'mfa_app_password_required':
+    case 'invalid':
+    default:
+      if (clientIp) reportAuthFailure(clientIp, { reason: result.status });
       return null;
-    }
-
-    // 1. Regular password (bcrypt + pepper)
-    if (user.passwordHash) {
-      const ok = await verifyPassword(password, user.passwordHash);
-      if (ok) {
-        log.info({ email: user.email }, 'Auth success (regular password)');
-        if (clientIp) await clearAuthFailures(clientIp);
-        return { id: user.id, email: user.email };
-      }
-    }
-
-    // 2. App passwords
-    const appPasswords = await prisma.appPassword.findMany({
-      where: { userId: user.id },
-      select: { id: true, hash: true },
-    });
-
-    for (const ap of appPasswords) {
-      const ok = await verifyPassword(password, ap.hash);
-      if (ok) {
-        await prisma.appPassword.update({
-          where: { id: ap.id },
-          data: { lastUsedAt: new Date() },
-        }).catch((err) => {
-          log.warn({ apId: ap.id, err }, 'Failed to update app password lastUsedAt');
-        });
-        log.info({ email: user.email }, 'Auth success (app password)');
-        if (clientIp) await clearAuthFailures(clientIp);
-        return { id: user.id, email: user.email };
-      }
-    }
-
-    log.warn({ email }, 'Auth failed: wrong password');
-    if (clientIp) await recordAuthFailure(clientIp);
-    return null;
-  } catch (err) {
-    log.error({ err, username }, 'verifySmtpCredentials error');
-    return null;
   }
 }

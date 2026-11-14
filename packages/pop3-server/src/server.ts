@@ -120,7 +120,11 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   const onSocket = (socket: net.Socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
-    const session = new POP3Session(socket as net.Socket | tls.TLSSocket, cfg.ssl);
+    // v7: plaintext listeners offer STLS with the current protocol cert
+    // (read per upgrade → hot rotation); USER/PASS only after TLS.
+    const session = new POP3Session(socket as net.Socket | tls.TLSSocket, cfg.ssl, {
+      starttls: () => (cfg.ssl ? null : _tlsConfig),
+    });
     session.start();
     socket.on('error', (err) => log.warn({ err }, 'POP3 socket error'));
   };

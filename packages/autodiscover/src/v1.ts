@@ -1,53 +1,15 @@
 import type { Request, Response } from 'express';
-import { createLogger, verifyPassword } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { prisma, verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
 import { getServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v1');
 
-/**
- * v5.2.14: verifies Basic-Auth credentials against User.passwordHash AND
- * AppPassword.hash (same logic as the EWS middleware).  Returns true/false.
- *
- * CRITICAL: previously V1 accepted any password as valid — Outlook
- * then got an OK from Autodiscover but failed at EWS/MAPI (401),
- * polled Autodiscover again, got OK again → endless loop with no chance
- * that the user would ever hit the right password.
- */
-async function validateBasicAuth(email: string, password: string): Promise<boolean> {
-  if (!email || !password) return false;
-  const user = await prisma.user.findUnique({
-    where:  { email: email.toLowerCase() },
-    select: { id: true, active: true, passwordHash: true },
-  }).catch(() => null);
-
-  if (!user || !user.active) return false;
-
-  // 1) Regular password hash
-  if (user.passwordHash) {
-    if (await verifyPassword(password, user.passwordHash).catch(() => false)) return true;
-  }
-  // 2) Fallback: app password (mandatory for MFA accounts)
-  const appPasswords = await prisma.appPassword.findMany({
-    where: { userId: user.id },
-    select: { id: true, hash: true },
-  }).catch(() => []);
-  for (const ap of appPasswords) {
-    if (await verifyPassword(password, ap.hash).catch(() => false)) {
-      void prisma.appPassword.update({
-        where: { id: ap.id }, data: { lastUsedAt: new Date() },
-      }).catch(() => { /* ignore */ });
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Normalizes an Outlook username (DOMAIN\user or user@domain) to e-mail form. */
-function normalizeBasicAuthUser(rawUser: string): string {
-  const bsIdx = rawUser.lastIndexOf('\\');
-  return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
-}
+// v7: Basic-Auth credentials are verified by the shared mail-protocol check
+// verifyMailCredentials() (@coremail/storage) — login normalisation
+// (DOMAIN\user, bare user name → primary domain), MFA → app passwords only,
+// shared lockout, database errors → 503 instead of 401.
+// (v5.2.14 background: Autodiscover must validate, otherwise Outlook loops.)
 
 // MAPI over HTTP is not supported (removed). The v1 response only announces
 // IMAP + SMTP + ActiveSync, so Outlook sets itself up as an IMAP account.
@@ -248,7 +210,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       const decoded = Buffer.from(b64, 'base64').toString('utf8');
       const colonIdx = decoded.indexOf(':');
       if (colonIdx !== -1) {
-        basicAuthUser     = normalizeBasicAuthUser(decoded.slice(0, colonIdx));
+        basicAuthUser     = decoded.slice(0, colonIdx).trim();
         basicAuthPassword = decoded.slice(colonIdx + 1);
       }
     } catch { /* malformed header — handled as 401 below */ }
@@ -266,50 +228,34 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  // v5.2.15: bare-username fallback. With NTLM-style `DOMAIN\user` Outlook
-  // sometimes sends only `user` (without @domain). If no @ is present, we
-  // look up the user in the primary domain.
-  let basicAuthEmail = basicAuthUser;
-  if (!basicAuthUser.includes('@')) {
-    const primaryDomain = await prisma.domain.findFirst({
-      where:  { primary: true, active: true },
-      select: { name: true },
-    }).catch(() => null);
-    if (primaryDomain) {
-      basicAuthEmail = `${basicAuthUser}@${primaryDomain.name}`;
-      log.debug({ raw: basicAuthUser, email: basicAuthEmail }, 'Autodiscover v1: bare username → expanded with primary domain');
-    }
+  const clientIp = clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']);
+  const auth = await verifyMailCredentials(basicAuthUser, basicAuthPassword, { ip: clientIp, protocol: 'autodiscover' });
+  if (auth.status === 'locked') {
+    res.set('Retry-After', String(auth.retryAfterSec));
+    res.status(429).send('Too Many Requests');
+    return;
   }
-
-  const authOk = await validateBasicAuth(basicAuthEmail, basicAuthPassword);
-  if (!authOk) {
-    // v5.2.16: forensic logging to see WHAT Outlook sends without
-    // leaking the password itself: length + code points of the first/last
-    // 2 characters (trailing whitespace / newline / encoding issue detectable).
-    const pwLen   = basicAuthPassword.length;
-    const pwCodes = pwLen >= 4
-      ? [basicAuthPassword.charCodeAt(0), basicAuthPassword.charCodeAt(1),
-         basicAuthPassword.charCodeAt(pwLen - 2), basicAuthPassword.charCodeAt(pwLen - 1)]
-      : Array.from(basicAuthPassword).map((c) => c.charCodeAt(0));
-    log.warn({
-      email: basicAuthEmail, ip: req.ip,
-      pwLen, pwCodes,
-      userAgent: req.get('User-Agent') ?? '',
-    }, 'Autodiscover v1: password + app password failed');
-    // SystemLog for audit (analogous to the EWS middleware in writeAuthFailureLog)
+  if (auth.status === 'error') {
+    res.set('Retry-After', '30');
+    res.status(503).send('Service Unavailable');
+    return;
+  }
+  if (auth.status !== 'ok') {
+    // v7: the forensic password length/char-code logging was removed — no
+    // derivative of a submitted password is ever logged.
+    log.warn({ login: basicAuthUser, ip: clientIp, status: auth.status, userAgent: req.get('User-Agent') ?? '' },
+      'Autodiscover v1: authentication failed');
     void prisma.systemLog.create({
       data: {
         level:    'WARN',
         service:  'autodiscover',
         category: 'MAPI_AUTH',
-        message:  `Autodiscover Basic-Auth fehlgeschlagen: ${basicAuthEmail} (pwLen=${pwLen}, codes=[${pwCodes.join(',')}])`,
+        message:  `Autodiscover Basic-Auth failed: ${basicAuthUser} (${auth.status})`,
         metadata: {
           protocol:  'AUTODISCOVER',
-          email:     basicAuthEmail,
-          reason:    'WRONG_PASSWORD_OR_USER',
-          pwLen,
-          pwCodes,
-          ip:        req.ip ?? 'unknown',
+          email:     basicAuthUser,
+          reason:    auth.status === 'mfa_app_password_required' ? 'MFA_APP_PASSWORD_REQUIRED' : 'WRONG_PASSWORD_OR_USER',
+          ip:        clientIp || 'unknown',
           userAgent: req.get('User-Agent') ?? '',
           path:      req.originalUrl,
         },
@@ -319,6 +265,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     res.status(401).send('Unauthorized');
     return;
   }
+  const basicAuthEmail = auth.user.email;
 
   // Auth OK — extract e-mail from the body (or fall back to the Basic-Auth e-mail)
   let email: string | null = null;

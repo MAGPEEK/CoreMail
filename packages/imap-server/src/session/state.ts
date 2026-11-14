@@ -37,13 +37,19 @@ export interface ImapSession {
   // v5.5.0: tracks whether socket already TLS-upgraded (via STARTTLS) or
   // is implicit TLS from port 993
   isTls: boolean;
+  // v7: a certificate is available for STARTTLS on this (plaintext) listener
+  starttlsAvailable: boolean;
+  // v7: set by the server — performs the STARTTLS upgrade after the tagged OK
+  beginTls?: (tag: string) => void;
 }
 
-function buildCapabilities(isTls: boolean, _isAuthenticated: boolean): string[] {
+function buildCapabilities(isTls: boolean, _isAuthenticated: boolean, starttlsAvailable = false): string[] {
   // Only capabilities that are actually implemented are advertised. Removed
   // (not implemented): LOGIN-REFERRALS, UTF8=ACCEPT, QUOTA, LIST-EXTENDED,
-  // LIST-STATUS, and on the plaintext listener STARTTLS (the command answers
-  // NO) and LOGINDISABLED (LOGIN is accepted).
+  // LIST-STATUS.
+  // v7: credentials only over TLS — on a plaintext connection the server
+  // advertises LOGINDISABLED (+ STARTTLS when a certificate is available) and
+  // no AUTH= mechanisms (RFC 9051 §6.2.3, §11.1).
   const caps: string[] = [
     'IMAP4rev1',
     'IMAP4rev2',
@@ -66,11 +72,14 @@ function buildCapabilities(isTls: boolean, _isAuthenticated: boolean): string[] 
   ];
   if (isTls) {
     caps.push('AUTH=PLAIN', 'AUTH=LOGIN');
+  } else {
+    if (starttlsAvailable) caps.push('STARTTLS');
+    caps.push('LOGINDISABLED');
   }
   return caps;
 }
 
-export function createSession(socket: Socket | TLSSocket, isTls: boolean): ImapSession {
+export function createSession(socket: Socket | TLSSocket, isTls: boolean, starttlsAvailable = false): ImapSession {
   return {
     id: crypto.randomUUID(),
     socket,
@@ -87,7 +96,8 @@ export function createSession(socket: Socket | TLSSocket, isTls: boolean): ImapS
     saslUser: '',
     saslPendingTag: null,
     isTls,
-    capabilities: buildCapabilities(isTls, false),
+    starttlsAvailable: !isTls && starttlsAvailable,
+    capabilities: buildCapabilities(isTls, false, !isTls && starttlsAvailable),
   };
 }
 
@@ -99,6 +109,7 @@ export function refreshCapabilities(session: ImapSession): void {
   session.capabilities = buildCapabilities(
     session.isTls,
     session.state !== 'NOT_AUTHENTICATED',
+    !session.isTls && session.starttlsAvailable,
   );
 }
 

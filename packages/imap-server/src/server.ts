@@ -117,8 +117,13 @@ function scheduleReload(): void {
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 
 function createTrackedImapServer(ssl: boolean): TrackedImapServer {
-  // Pass TLS for implicit TLS (port 993); plaintext (port 143) without TLS
-  const server = createImapServer(ssl && _tlsConfig ? _tlsConfig : undefined);
+  // Pass TLS for implicit TLS (port 993); plaintext (port 143) offers STARTTLS
+  // with the current protocol cert (read per upgrade → hot rotation). v7:
+  // without a cert the plaintext port refuses authentication.
+  const server = createImapServer(
+    ssl && _tlsConfig ? _tlsConfig : undefined,
+    { starttls: () => _tlsConfig },
+  );
   const sockets = new Set<net.Socket>();
   server.on('connection', (socket: net.Socket) => {
     sockets.add(socket);

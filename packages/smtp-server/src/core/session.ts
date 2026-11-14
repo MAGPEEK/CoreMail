@@ -111,6 +111,16 @@ export class SmtpSession {
    */
   private cmdQueue: Promise<void> = Promise.resolve();
 
+  /**
+   * Bumped by STARTTLS. Commands that were received (and queued) before the
+   * TLS handshake carry an older epoch and are discarded — pipelined plaintext
+   * after STARTTLS must never run inside the TLS session (CVE-2011-0411 class).
+   */
+  private epoch = 0;
+
+  /** Failed AUTH attempts in this session (421 + disconnect at the limit). */
+  private authFailures = 0;
+
   constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig) {
     this.socket = socket;
     this.config = config;
@@ -121,6 +131,8 @@ export class SmtpSession {
 
   start(): void {
     this.ip = this.socket.remoteAddress ?? '0.0.0.0';
+    // Implicit TLS (port 465): the connection is encrypted from the start.
+    this.tlsUpgraded = (this.socket as tls.TLSSocket).encrypted === true;
     log.debug({ id: this.id, ip: this.ip }, 'SMTP session start');
 
     this.socket.setEncoding('binary'); // handle raw bytes via string; we buffer lines ourselves
@@ -167,9 +179,12 @@ export class SmtpSession {
    * pipelined command sees stale state.
    */
   private enqueueCommand(fn: () => Promise<void> | void): void {
+    const epoch = this.epoch;
     this.cmdQueue = this.cmdQueue.then(async () => {
       // Skip if session already terminated
       if (this.state === 'QUIT') return;
+      // Received before a STARTTLS that has since been executed → discard.
+      if (epoch !== this.epoch) return;
       await (fn() ?? Promise.resolve());
     }).catch(() => {
       // Errors are handled inside each handler — they send their own error
@@ -391,9 +406,11 @@ export class SmtpSession {
     }
 
     // AUTH only if verifyCredentials is configured AND at least one mech enabled
+    // AND the connection is encrypted (implicit TLS or after STARTTLS) — v7:
+    // credentials are never accepted in plaintext (RFC 4954 §4, RFC 8314).
     // CRAM-MD5 is not advertised — handleAuth only recognizes PLAIN + LOGIN, CRAM-MD5
     // would be rejected with 504 Unrecognized.
-    if (this.config.verifyCredentials) {
+    if (this.config.verifyCredentials && this.tlsUpgraded) {
       const mechs: string[] = [];
       if (esmtp.authPlain)   mechs.push('PLAIN');
       if (esmtp.authLogin)   mechs.push('LOGIN');
@@ -436,6 +453,12 @@ export class SmtpSession {
       return Promise.resolve();
     }
 
+    // v7: no credentials over an unencrypted connection (RFC 4954 §6 — 538).
+    if (!this.tlsUpgraded) {
+      this.send('538 5.7.11 Encryption required for requested authentication mechanism (use STARTTLS)');
+      return Promise.resolve();
+    }
+
     const parts = args.split(' ');
     const mechanism = (parts[0] ?? '').toUpperCase() as AuthMechanism;
     const initialResponse = parts[1] ?? '';
@@ -443,7 +466,7 @@ export class SmtpSession {
     if (mechanism === 'PLAIN') {
       return this.handleAuthPlain(initialResponse);
     } else if (mechanism === 'LOGIN') {
-      return this.handleAuthLoginStart();
+      return this.handleAuthLoginStart(initialResponse);
     } else {
       this.send('504 5.5.4 Unrecognized authentication type');
       return Promise.resolve();
@@ -463,7 +486,19 @@ export class SmtpSession {
     await this.verifyPlainCredentials(initialResponse);
   }
 
-  private async handleAuthLoginStart(): Promise<void> {
+  private async handleAuthLoginStart(initialResponse = ''): Promise<void> {
+    if (initialResponse && initialResponse !== '=') {
+      // "AUTH LOGIN <base64 username>" — widespread client behaviour: continue
+      // directly with the password prompt.
+      this.authCtx = {
+        mechanism: 'LOGIN',
+        step: 2,
+        username: Buffer.from(initialResponse, 'base64').toString('utf8'),
+      };
+      this.state = 'AUTH_WAIT';
+      this.send('334 UGFzc3dvcmQ6');
+      return;
+    }
     this.authCtx = { mechanism: 'LOGIN', step: 1 };
     this.state = 'AUTH_WAIT';
     // "Username:"
@@ -547,19 +582,40 @@ export class SmtpSession {
     }
 
     try {
-      const user = await this.config.verifyCredentials(username.toLowerCase().trim(), password, this.ip);
-      if (user) {
-        this.authUser = user;
+      const result = await this.config.verifyCredentials(username.toLowerCase().trim(), password, this.ip);
+      if (result && 'failure' in result) {
+        // Lockout or temporary failure (database down …) — RFC 4954 §6: 454 4.7.0.
+        this.send(result.failure === 'locked'
+          ? '454 4.7.0 Too many failed authentication attempts, try again later'
+          : '454 4.7.0 Temporary authentication failure');
+        log.warn({ id: this.id, username, failure: result.failure }, 'SMTP auth not possible');
+        if (result.failure === 'locked') this.countAuthFailure();
+      } else if (result) {
+        this.authUser = result;
         this.send('235 2.7.0 Authentication successful');
-        log.info({ id: this.id, email: user.email }, 'SMTP auth success');
+        log.info({ id: this.id, email: result.email }, 'SMTP auth success');
+        return;
       } else {
         this.send('535 5.7.8 Authentication credentials invalid');
         log.warn({ id: this.id, username }, 'SMTP auth failed');
+        this.countAuthFailure();
       }
     } catch (err) {
       log.error({ id: this.id, err }, 'verifyCredentials error');
-      this.send('451 4.3.0 Temporary authentication failure');
+      this.send('454 4.7.0 Temporary authentication failure');
     }
+  }
+
+  /** Closes the AUTH loop: after N failed attempts → 421 and disconnect. */
+  private countAuthFailure(): void {
+    this.authFailures += 1;
+    const max = this.config.maxAuthFailures ?? 3;
+    if (this.authFailures < max) return;
+    this.state = 'QUIT';
+    this.clearTimer();
+    this.send(`421 4.7.0 ${this.config.hostname} Too many authentication failures — closing connection`);
+    this.socket.end();
+    log.warn({ id: this.id, ip: this.ip, failures: this.authFailures }, 'SMTP: AUTH failure limit reached — connection closed');
   }
 
   // ─── STARTTLS ────────────────────────────────────────────────────────────────
@@ -579,6 +635,12 @@ export class SmtpSession {
       this.send('503 5.5.1 Bad sequence of commands');
       return;
     }
+
+    // Discard everything the client pipelined after STARTTLS (CVE-2011-0411
+    // class): queued commands of the old epoch are skipped, the unparsed
+    // remainder of the plaintext buffer is dropped.
+    this.epoch += 1;
+    this.lineBuffer = '';
 
     this.send('220 2.0.0 Ready to start TLS');
     this.clearTimer();

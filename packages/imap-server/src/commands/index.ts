@@ -1,8 +1,8 @@
-import { prisma, createMessage, copyMessages, moveMessages, setFlags, expunge } from '@coremail/storage';
-import { verifyPassword, createLogger } from '@coremail/core';
+import { prisma, createMessage, copyMessages, moveMessages, setFlags, expunge, verifyMailCredentials } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
 import {
   type ImapSession,
-  sendOk, sendNo, sendBad, sendUntagged, send,
+  sendOk, sendNo, sendBad, sendUntagged, send, refreshCapabilities,
 } from '../session/state.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
 import {
@@ -45,49 +45,16 @@ export async function handleLogin(
   const username = args[0] ?? '';
   const password = args[1] ?? '';
 
-  const user = await prisma.user.findFirst({
-    where: { email: username.toLowerCase(), active: true },
-    include: { mailbox: true },
-  });
-
-  if (!user) {
-    sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials');
+  // v7: LOGINDISABLED on plaintext — no cleartext passwords (RFC 9051 §6.2.3).
+  if (!session.isTls) {
+    sendNo(session, tag, PRIVACY_REQUIRED);
     return;
   }
 
-  // Check local password
-  let authenticated = false;
-  if (user.passwordHash) {
-    authenticated = await verifyPassword(password, user.passwordHash);
-  }
-
-  // Check app password
-  if (!authenticated) {
-    const appPasswords = await prisma.appPassword.findMany({ where: { userId: user.id } });
-    for (const ap of appPasswords) {
-      if (await verifyPassword(password, ap.hash)) {
-        authenticated = true;
-        await prisma.appPassword.update({
-          where: { id: ap.id },
-          data: { lastUsedAt: new Date() },
-        });
-        break;
-      }
-    }
-  }
-
-  if (!authenticated) {
-    log.warn({ email: username }, 'IMAP login failed');
-    sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials');
-    return;
-  }
-
-  session.state = 'AUTHENTICATED';
-  session.userId = user.id;
-  session.mailboxId = user.mailbox?.id ?? null;
-  log.info({ email: username }, 'IMAP login success');
-  sendOk(session, tag, '[CAPABILITY IMAP4rev1 IMAP4rev2 IDLE CONDSTORE MOVE UNSELECT UIDPLUS] LOGIN completed');
+  await loginUser(session, tag, username, password, 'LOGIN');
 }
+
+const PRIVACY_REQUIRED = '[PRIVACYREQUIRED] Authentication requires TLS — use STARTTLS or port 993';
 
 // ─────────────────────────────────────────────
 // LOGOUT
@@ -760,6 +727,13 @@ export async function handleAuthenticate(
   const mech = (args[0] ?? '').toUpperCase();
   const initialResponse = args[1] ?? '';
 
+  // v7: no AUTH= mechanisms are advertised before TLS — refuse before any
+  // continuation so the client never sends credentials in cleartext.
+  if (!session.isTls) {
+    sendNo(session, tag, PRIVACY_REQUIRED);
+    return;
+  }
+
   if (mech === 'PLAIN') {
     // RFC 4616 PLAIN: base64("\x00user\x00password")
     if (initialResponse) {
@@ -852,50 +826,43 @@ async function processPlainAuth(session: ImapSession, tag: string, b64Data: stri
 }
 
 /**
- * Internal login verification for AUTHENTICATE PLAIN/LOGIN.
- * Reuses handleLogin-style verification but doesn't go through args parsing.
+ * Login verification for LOGIN and AUTHENTICATE PLAIN/LOGIN.
+ * v7: shared mail-protocol check (verifyMailCredentials) — login normalisation
+ * (bare user name, DOMAIN\user), MFA → app passwords only, shared lockout,
+ * database errors → NO [UNAVAILABLE] instead of "invalid credentials".
  */
-async function loginUser(session: ImapSession, tag: string, username: string, password: string): Promise<void> {
-  let email = username.trim().toLowerCase();
-  // Bare username → @primary-domain
-  if (!email.includes('@')) {
-    const primaryDomain = await prisma.domain.findFirst({
-      where: { primary: true, active: true }, select: { name: true },
-    }).catch(() => null);
-    if (primaryDomain) email = `${email}@${primaryDomain.name}`;
-  }
-  const user = await prisma.user.findFirst({
-    where: { email, active: true },
-    include: { mailbox: true },
+async function loginUser(
+  session: ImapSession,
+  tag: string,
+  username: string,
+  password: string,
+  command: 'LOGIN' | 'AUTHENTICATE' = 'AUTHENTICATE',
+): Promise<void> {
+  if (!session.isTls) { sendNo(session, tag, PRIVACY_REQUIRED); return; }
+  const result = await verifyMailCredentials(username, password, {
+    ip: session.socket.remoteAddress,
+    protocol: 'imap',
   });
-  if (!user) { sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials'); return; }
-
-  let authenticated = false;
-  if (user.passwordHash) {
-    authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
+  switch (result.status) {
+    case 'ok':
+      session.state = 'AUTHENTICATED';
+      session.userId = result.user.id;
+      session.mailboxId = result.user.mailboxId;
+      refreshCapabilities(session);
+      log.info({ email: result.user.email, method: result.method, command }, 'IMAP login success');
+      sendOk(session, tag, `[CAPABILITY ${session.capabilities.join(' ')}] ${command} completed`);
+      return;
+    case 'locked':
+      sendNo(session, tag, '[UNAVAILABLE] Too many failed login attempts — try again later');
+      return;
+    case 'error':
+      sendNo(session, tag, '[UNAVAILABLE] Temporary authentication failure — try again later');
+      return;
+    default:
+      // invalid and mfa_app_password_required get the same text (no oracle).
+      log.warn({ login: username, status: result.status, command }, 'IMAP login failed');
+      sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials (accounts with two-factor authentication need an app password)');
   }
-  if (!authenticated) {
-    const apps = await prisma.appPassword.findMany({ where: { userId: user.id } });
-    for (const ap of apps) {
-      if (await verifyPassword(password, ap.hash).catch(() => false)) {
-        authenticated = true;
-        void prisma.appPassword.update({
-          where: { id: ap.id }, data: { lastUsedAt: new Date() },
-        }).catch(() => { /* ignore */ });
-        break;
-      }
-    }
-  }
-  if (!authenticated) {
-    log.warn({ email }, 'IMAP AUTHENTICATE failed');
-    sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials');
-    return;
-  }
-  session.state = 'AUTHENTICATED';
-  session.userId = user.id;
-  session.mailboxId = user.mailbox?.id ?? null;
-  log.info({ email }, 'IMAP AUTHENTICATE success');
-  sendOk(session, tag, '[CAPABILITY IMAP4rev1 IMAP4rev2 IDLE CONDSTORE MOVE UNSELECT] AUTHENTICATE completed');
 }
 
 // ─────────────────────────────────────────────

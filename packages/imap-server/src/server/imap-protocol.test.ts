@@ -3,8 +3,9 @@
  * extensions it advertises: IDLE, CONDSTORE, MOVE, UNSELECT, UIDPLUS, ID, STATUS=SIZE,
  * ENABLE, NAMESPACE, QUOTA, ESEARCH, LIST-STATUS, LITERAL+, SASL-IR).
  *
- * The real createImapServer() is started on a loopback ephemeral port (plaintext listener,
- * i.e. the "port 143" configuration). Prisma, verifyPassword and Redis are replaced by
+ * The real createImapServer() is started on a loopback ephemeral port. v7: authentication
+ * requires TLS, so the harness uses the implicit-TLS ("port 993") configuration; tests that
+ * look at the plaintext ("port 143") listener use connect(t, { plain: true }). Prisma, verifyPassword and Redis are replaced by
  * in-memory fakes through test-hooks.mjs — no database, Redis or MinIO.
  * A password P matches the hash "hash:P".
  *
@@ -20,7 +21,9 @@
 import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import tls from 'node:tls';
 import { createImapServer } from './index.js';
+import { selfSignedTestCert } from '../test-cert.js';
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
 
@@ -374,13 +377,28 @@ interface Harness {
   greeting: string;
 }
 
-async function connect(t: TestContext): Promise<Harness> {
+let cachedCert: { cert: Buffer; key: Buffer } | null = null;
+const testCert = (): { cert: Buffer; key: Buffer } => (cachedCert ??= selfSignedTestCert());
+
+/**
+ * v7: credentials are only accepted over TLS, so the default harness runs the
+ * implicit-TLS configuration (port 993). `plain: true` starts the plaintext
+ * listener (port 143) with a STARTTLS certificate.
+ */
+async function connect(t: TestContext, options: { plain?: boolean } = {}): Promise<Harness> {
   const { db, redis } = installFakes();
-  const server = createImapServer();
+  const server = options.plain
+    ? createImapServer(undefined, { starttls: testCert })
+    : createImapServer(testCert());
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as net.AddressInfo;
-  const socket = net.connect(port, '127.0.0.1');
-  await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  const socket = options.plain
+    ? net.connect(port, '127.0.0.1')
+    : tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
+  await new Promise<void>((resolve, reject) => {
+    socket.once(options.plain ? 'connect' : 'secureConnect', resolve);
+    socket.once('error', reject);
+  });
   const client = new ImapClient(socket);
   t.after(() => { client.destroy(); server.close(); });
   const greeting = await client.readLine();
@@ -453,7 +471,7 @@ describe('greeting and CAPABILITY (RFC 9051 §7.1, §6.1.1)', () => {
 
   test('STARTTLS, which is advertised on the plaintext listener, is actually available', async (t) => {
     // RFC 9051 §6.2.1 / §11.1: a server that advertises STARTTLS must perform the TLS negotiation.
-    const { client, greeting } = await connect(t);
+    const { client, greeting } = await connect(t, { plain: true });
     assert.ok(capabilitiesOf(greeting).includes('STARTTLS'), 'precondition: STARTTLS is advertised');
 
     const response = await client.cmd('STARTTLS');
@@ -464,7 +482,7 @@ describe('greeting and CAPABILITY (RFC 9051 §7.1, §6.1.1)', () => {
   test('LOGIN is refused while LOGINDISABLED is advertised', async (t) => {
     // RFC 3501 §11.1 / RFC 9051 §11.1: the server "advertises the LOGINDISABLED capability and does NOT permit the LOGIN command" —
     // a server that announces LOGINDISABLED must reject LOGIN instead of accepting the cleartext password.
-    const { client, greeting } = await connect(t);
+    const { client, greeting } = await connect(t, { plain: true });
     assert.ok(capabilitiesOf(greeting).includes('LOGINDISABLED'), 'precondition: LOGINDISABLED is advertised');
 
     const response = await client.cmd('LOGIN bob@example.test secret');

@@ -1,11 +1,18 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
-import { verifyPassword } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
-import { expunge } from '@coremail/storage';
+import { expunge, verifyMailCredentials } from '@coremail/storage';
 
 const log = createLogger('pop3-session');
+
+export interface Pop3SessionOptions {
+  /**
+   * v7: certificate provider for STLS on a plaintext listener (port 110).
+   * Without a certificate the port stays plaintext and refuses USER/PASS.
+   */
+  starttls?: () => { cert: Buffer; key: Buffer } | null | undefined;
+}
 
 // Module-level hostname — updated via setPop3Hostname() when settings change
 let _hostname = 'mail.localhost';
@@ -31,15 +38,27 @@ export class POP3Session {
   private maildrop: MailDrop[] = [];
   private mailboxId: string | null = null;
   private buf = '';
+  /** v7: the connection is encrypted (implicit TLS on 995 or after STLS). */
+  private secure: boolean;
+  /** Commands run strictly one after another (RFC 2449 PIPELINING). */
+  private queue: Promise<void> = Promise.resolve();
+  /** Bumped by STLS — commands received before the upgrade are discarded. */
+  private epoch = 0;
+  private readonly onDataBound = (chunk: string) => this.onData(chunk);
 
   constructor(
-    private readonly socket: net.Socket | tls.TLSSocket,
-    private readonly secure: boolean,
-  ) {}
+    private socket: net.Socket | tls.TLSSocket,
+    _secure: boolean,
+    private readonly options: Pop3SessionOptions = {},
+  ) {
+    // Derived from the socket: a listener configured for TLS but running
+    // without a certificate (plaintext fallback) is NOT secure.
+    this.secure = (socket as tls.TLSSocket).encrypted === true;
+  }
 
   start() {
     this.socket.setEncoding('utf8');
-    this.socket.on('data', (chunk: string) => this.onData(chunk));
+    this.socket.on('data', this.onDataBound);
     // RFC 1939 §3 — greeting with hostname
     this.send(`+OK ${_hostname} POP3 ready`);
   }
@@ -53,18 +72,27 @@ export class POP3Session {
     const lines = this.buf.split('\r\n');
     this.buf = lines.pop() ?? '';
     for (const line of lines) {
-      if (line.length > 512) {
-        this.send('-ERR line too long');
-        continue;
-      }
-      this.handleCommand(line.trim()).catch((err) => {
-        log.error({ err }, 'command error');
-        this.send('-ERR internal error');
+      const epoch = this.epoch;
+      this.queue = this.queue.then(async () => {
+        if (epoch !== this.epoch) return; // pipelined before STLS → discarded
+        if (line.length > 512) {
+          this.send('-ERR line too long');
+          return;
+        }
+        await this.handleCommand(line).catch((err) => {
+          log.error({ err }, 'command error');
+          this.send('-ERR internal error');
+        });
       });
     }
   }
 
-  private async handleCommand(line: string) {
+  private stlsAvailable(): boolean {
+    return !this.secure && !!this.options.starttls?.();
+  }
+
+  private async handleCommand(rawLine: string) {
+    const line = rawLine.trim();
     const [cmd, ...args] = line.split(' ');
     const command = (cmd ?? '').toUpperCase();
 
@@ -79,14 +107,28 @@ export class POP3Session {
       this.send('+OK Capability list follows');
       this.send('TOP');
       this.send('UIDL');
-      this.send('USER');
+      // v7: USER/PASS only over TLS; before TLS only STLS is offered (RFC 2595 §4).
+      if (this.secure) this.send('USER');
+      if (this.stlsAvailable() && this.state === 'AUTHORIZATION') this.send('STLS');
       this.send('PIPELINING');
       this.send('RESP-CODES');
+      this.send('AUTH-RESP-CODE');
       this.send('.');
       return;
     }
 
+    if (command === 'STLS') {
+      this.handleStls();
+      return;
+    }
+
     if (this.state === 'AUTHORIZATION') {
+      if (command === 'PASS') {
+        // The password is everything after "PASS " — it may contain spaces.
+        const sp = rawLine.indexOf(' ');
+        await this.handleAuth(command, sp === -1 ? [] : [rawLine.slice(sp + 1)]);
+        return;
+      }
       await this.handleAuth(command, args);
     } else if (this.state === 'TRANSACTION') {
       await this.handleTransaction(command, args);
@@ -95,7 +137,45 @@ export class POP3Session {
     }
   }
 
+  /**
+   * STLS — RFC 2595 §4. Discards everything pipelined after the command
+   * (CVE-2011-0411 class) and resets the AUTHORIZATION state.
+   */
+  private handleStls() {
+    if (this.secure) return this.send('-ERR TLS already active');
+    if (this.state !== 'AUTHORIZATION') return this.send('-ERR STLS only in AUTHORIZATION state');
+    const material = this.options.starttls?.();
+    if (!material) return this.send('-ERR STLS not available');
+
+    this.epoch += 1;          // queued commands of the plaintext phase are skipped
+    this.buf = '';            // unparsed plaintext remainder is dropped
+    const raw = this.socket;
+    raw.removeListener('data', this.onDataBound);
+    this.send('+OK Begin TLS negotiation');
+    const secure = new tls.TLSSocket(raw, {
+      isServer: true,
+      secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
+    });
+    secure.once('secure', () => {
+      this.socket = secure;
+      this.secure = true;
+      this.user = null;
+      this.buf = '';
+      secure.setEncoding('utf8');
+      secure.on('data', this.onDataBound);
+      log.debug('POP3 STLS upgrade complete');
+    });
+    secure.on('error', (err) => {
+      log.warn({ err }, 'POP3 STLS handshake/socket error');
+      secure.destroy();
+    });
+  }
+
   private async handleAuth(command: string, args: string[]) {
+    // v7: no credentials over plaintext (RFC 2595 §4) — use STLS or port 995.
+    if (!this.secure && (command === 'USER' || command === 'PASS' || command === 'APOP' || command === 'AUTH')) {
+      return this.send('-ERR [AUTH] Authentication requires TLS — use STLS or port 995');
+    }
     if (command === 'USER') {
       if (!args[0]) return this.send('-ERR missing username');
       this.user = args[0];
@@ -104,57 +184,25 @@ export class POP3Session {
       if (!this.user) return this.send('-ERR send USER first');
       if (!args[0]) return this.send('-ERR missing password');
 
-      const password = args[0];
-      // v5.3.1: normalization as in IMAP — DOMAIN\user or bare username
-      // → email form. Plus app-password fallback for MFA users.
-      let email = this.user;
-      const bsIdx = email.lastIndexOf('\\');
-      if (bsIdx !== -1) email = email.slice(bsIdx + 1);
-      email = email.trim().toLowerCase();
-      if (!email.includes('@')) {
-        // bare username → append primary domain
-        const primaryDomain = await prisma.domain.findFirst({
-          where:  { primary: true, active: true },
-          select: { name: true },
-        }).catch(() => null);
-        if (primaryDomain) email = `${email}@${primaryDomain.name}`;
+      // v7: shared mail-protocol check — DOMAIN\user / bare user name
+      // normalisation, MFA → app passwords only, shared lockout.
+      const result = await verifyMailCredentials(this.user, args[0], {
+        ip: this.socket.remoteAddress,
+        protocol: 'pop3',
+      });
+      if (result.status === 'locked') {
+        return this.send('-ERR [SYS/TEMP] Too many failed login attempts, try again later');
+      }
+      if (result.status === 'error') {
+        return this.send('-ERR [SYS/TEMP] Temporary authentication failure, try again later');
+      }
+      if (result.status !== 'ok') {
+        // invalid and mfa_app_password_required: identical text (no oracle)
+        log.warn({ user: this.user, status: result.status }, 'POP3 auth failure');
+        return this.send('-ERR [AUTH] invalid credentials (accounts with two-factor authentication need an app password)');
       }
 
-      const user = await prisma.user.findUnique({ where: { email } });
-      if (!user || !user.active) {
-        log.warn({ user: this.user }, 'POP3 auth failure: user not found/inactive');
-        return this.send('-ERR invalid credentials');
-      }
-
-      // 1) Regular password hash
-      let authenticated = false;
-      if (user.passwordHash) {
-        authenticated = await verifyPassword(password, user.passwordHash).catch(() => false);
-      }
-      // 2) Fallback: app password (mandatory for MFA accounts)
-      if (!authenticated) {
-        const appPasswords = await prisma.appPassword.findMany({
-          where: { userId: user.id },
-          select: { id: true, hash: true },
-        }).catch(() => []);
-        for (const ap of appPasswords) {
-          if (await verifyPassword(password, ap.hash).catch(() => false)) {
-            authenticated = true;
-            void prisma.appPassword.update({
-              where: { id: ap.id },
-              data:  { lastUsedAt: new Date() },
-            }).catch(() => { /* ignore */ });
-            break;
-          }
-        }
-      }
-
-      if (!authenticated) {
-        log.warn({ user: this.user }, 'POP3 auth failure: bad password');
-        return this.send('-ERR invalid credentials');
-      }
-
-      this.userId = user.id;
+      this.userId = result.user.id;
       await this.loadMaildrop();
       this.state = 'TRANSACTION';
       this.send(`+OK mailbox has ${this.maildrop.length} messages`);
