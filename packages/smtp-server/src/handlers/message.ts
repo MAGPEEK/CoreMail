@@ -2,6 +2,7 @@ import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, ap
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
+import { handleTransportOutcome } from './transport-actions.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -13,6 +14,14 @@ export interface StoreOptions {
   rcptTo: string;
   toJunk: boolean;
   spamScore?: number;
+  /** Extra delivery created by a transport rule (redirect/addRecipient) — do not re-evaluate rules (loop guard). */
+  skipTransportRules?: boolean;
+  /**
+   * Re-injected by a BCP quarantine release: the transport-rule `quarantine`
+   * action is skipped. Internal flag only (BullMQ job field) — never derived
+   * from a message header.
+   */
+  quarantineRelease?: boolean;
 }
 
 export async function storeInboundMessage(
@@ -126,26 +135,23 @@ export async function storeInboundMessage(
   // ── Transport rules (server-wide, admin-configured, v3.18.9) ─────────────────
   // Evaluated BEFORE user mail rules — modifies header/subject/body and
   // can reject the mail entirely or move it to quarantine.
-  try {
+  if (!opts.skipTransportRules) try {
     const transportOutcome = await applyTransportRules(parsed, {
       envelopeRcpt: opts.rcptTo,
       ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
     });
-    if (transportOutcome.rejected) {
-      log.warn(
-        { rcptTo: opts.rcptTo, from: opts.fromAddr, reason: transportOutcome.rejectReason },
-        'Mail rejected by TransportRule — no delivery',
-      );
-      return;
-    }
-    if (transportOutcome.quarantined) {
-      log.info(
-        { rcptTo: opts.rcptTo, from: opts.fromAddr, ruleIds: transportOutcome.appliedRuleIds },
-        'Mail moved to quarantine by TransportRule',
-      );
-      // TODO: enqueue into quarantine table (v3.18.10+)
-      return;
-    }
+    // reject → DSN, quarantine → quarantine store, redirect/add/removeRecipient
+    // → recipient set changes (handlers/transport-actions.ts).
+    const decision = await handleTransportOutcome(transportOutcome, {
+      raw:       rawBuffer,
+      fromAddr:  opts.fromAddr,
+      rcptTo:    opts.rcptTo,
+      subject:   parsed.subject ?? '',
+      messageId: parsed.messageId ?? null,
+      ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
+      ...(opts.quarantineRelease ? { quarantineRelease: true } : {}),
+    });
+    if (decision === 'stop') return;
     // If buffer modifications are needed: adjust buffer + re-parse
     if (
       transportOutcome.headerAdds.length > 0 ||

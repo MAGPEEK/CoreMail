@@ -7,10 +7,11 @@
  * - onMessage: content scan → quarantine or store for each expanded recipient
  */
 
-import { createLogger, getRedisClient } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS } from '@coremail/storage';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
+import { quarantineMessage } from '../handlers/quarantine.js';
 import { expandRecipients } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
@@ -116,12 +117,16 @@ async function onRcptTo(
 // ── onMessage ─────────────────────────────────────────────────────────────────
 
 async function onMessage(
-  raw: Buffer,
+  receivedRaw: Buffer,
   from: string,
   to: string[],
   authUser: AuthUser | null,
   ip: string,
 ): Promise<void> {
+  // Internal CoreMail headers (quarantine-release trace) are never accepted
+  // from outside — strip them before filtering, quarantine or delivery.
+  const raw = stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS);
+
   // 0. Greylisting fallback: if the SMTP session does not hand the client IP
   //    to onRcptTo, the triple is checked here (after DATA) instead.
   if (!rcptStageHasIp && !authUser) {
@@ -184,7 +189,18 @@ async function onMessage(
   }
 
   if (filterResult.action === 'quarantine') {
-    await quarantineMessage(raw, from, to, filterResult.virusName ?? 'unknown', filterResult.spamScore);
+    await quarantineMessage({
+      raw,
+      from,
+      recipients: to,
+      reason:     filterResult.virusName ? 'VIRUS' : 'SPAM',
+      details:    {
+        source: 'content-filter',
+        ...(filterResult.virusName ? { virusName: filterResult.virusName } : {}),
+        ...(filterResult.reason ? { filterReason: filterResult.reason } : {}),
+      },
+      ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
+    });
     return;
   }
 
@@ -426,70 +442,4 @@ async function processResourceMailboxes(
 
     log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
   }
-}
-
-// ── Helper: quarantineMessage ─────────────────────────────────────────────────
-
-async function quarantineMessage(
-  rawMessage: Buffer,
-  mailFrom: string,
-  rcptTo: string[],
-  virusName: string,
-  spamScore?: number,
-): Promise<void> {
-  const { uploadBuffer, quarantineKey } = await import('@coremail/storage');
-  const headers = extractRawHeaders(rawMessage);
-
-  const qId = crypto.randomUUID();
-  const storagePath = quarantineKey(qId);
-  await uploadBuffer(storagePath, rawMessage, 'message/rfc822');
-
-  await prisma.quarantine.create({
-    data: {
-      fromAddr: mailFrom,
-      toAddr: rcptTo[0] ?? '',
-      subject: headers.subject,
-      reason: 'VIRUS',
-      details: { virusName },
-      rawPath: storagePath,
-    },
-  });
-
-  // MAIL_FLOW — message flow tracing
-  void prisma.systemLog.create({
-    data: {
-      level: 'WARN',
-      service: 'smtp-server',
-      category: 'MAIL_FLOW',
-      message: `Quarantined: ${mailFrom} → ${rcptTo[0] ?? ''}`,
-      ...(headers.messageId ? { messageId: headers.messageId } : {}),
-      metadata: {
-        sender: mailFrom,
-        recipient: rcptTo.join(', '),
-        subject: headers.subject,
-        status: 'QUARANTINE',
-        messageId: headers.messageId,
-        size: String(rawMessage.length),
-        spamScore: spamScore !== undefined ? String(spamScore) : '',
-        reason: virusName,
-        direction: 'INBOUND',
-      },
-    },
-  }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
-
-  log.warn({ virusName, from: mailFrom }, 'Message quarantined');
-
-  // Notify admins via Redis pub/sub
-  const redis = getRedisClient();
-  await redis.publish(
-    'admin:event',
-    JSON.stringify({
-      type: 'QUARANTINE',
-      virusName,
-      from: mailFrom,
-      to: rcptTo,
-      quarantineId: qId,
-      timestamp: new Date().toISOString(),
-    }),
-  );
 }

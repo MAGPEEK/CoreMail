@@ -56,6 +56,12 @@ export interface OutboundJob {
   // Exactly one of the following fields must be set:
   message?:    StructuredMessage;  // web client path (v3.17.30+)
   rawMessage?: string;             // base64, SMTP submission path (clients)
+  /**
+   * Set by the BCP quarantine release (api-gateway). Local recipients are then
+   * stored with `quarantineRelease` so the transport-rule quarantine action does
+   * not re-quarantine the message. Only internal producers can set job fields.
+   */
+  quarantineReleaseId?: string;
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -258,6 +264,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           fromAddr: from,
           rcptTo:   rcpt,
           toJunk:   false,
+          ...(job.data.quarantineReleaseId ? { quarantineRelease: true } : {}),
         });
         log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
       }
