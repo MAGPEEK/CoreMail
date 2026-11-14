@@ -210,7 +210,9 @@ RUN chmod +x /app/packages/cli/dist/index.js \
 # supervisord configuration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Strip CR in case the build context comes from a Windows checkout with CRLF line
+# endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf && chmod +x /entrypoint.sh
 
 # ── Directories + permissions ─────────────────────────────────────────────────
 # All runtime directories belong to the node user (uid 1000, gid 1000).
