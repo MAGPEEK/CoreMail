@@ -1,11 +1,15 @@
 import express from 'express';
-import { createLogger } from '@coremail/core';
+import {
+  createLogger, installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
+} from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { davAuthMiddleware } from './auth.js';
 import { caldavRouter } from './caldav/index.js';
 import { carddavRouter } from './carddav/index.js';
 
 const log = createLogger('caldav-server');
+installProcessGuards(log);
+installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['CALDAV_PORT'] ?? '8082', 10);
 
 async function main() {
@@ -34,8 +38,13 @@ async function main() {
   app.use('/dav', davAuthMiddleware, caldavRouter);
   app.use('/dav', davAuthMiddleware, carddavRouter);
 
-  app.listen(PORT, () => {
-    log.info({ port: PORT }, 'CalDAV/CardDAV server started');
+  // v6: shared error middleware (registered last)
+  app.use(errorMiddleware(log));
+
+  // v6: internal service behind the api-gateway — loopback by default
+  const host = resolveBindHost();
+  app.listen(PORT, host, () => {
+    log.info({ port: PORT, host }, 'CalDAV/CardDAV server started');
   });
 
   process.on('SIGTERM', () => process.exit(0));

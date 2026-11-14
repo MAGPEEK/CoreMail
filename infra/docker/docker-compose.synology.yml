@@ -44,6 +44,13 @@ services:
       JWT_SECRET: ${JWT_SECRET:-CHANGE-ME-openssl-rand-hex-32}
       PEPPER: ${PEPPER:-CHANGE-ME-openssl-rand-hex-32}
 
+      # v6: behind the DSM Application Portal every client arrives from the Docker
+      # bridge gateway — set TRUST_PROXY (e.g. "uniquelocal") so rate limits and the
+      # audit log see the real client IP. Only do this if port 8080 is not reachable
+      # by untrusted clients directly. Setup wizard token: docker logs coremail | grep -i "setup token"
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+
       # Internal service URLs
       AUTH_SERVICE_URL: http://localhost:3003
       SECURITY_FILTER_URL: http://localhost:3002

@@ -2,11 +2,11 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { createConnection } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAuth } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 export const adminSecurityRouter: RouterType = Router();
-adminSecurityRouter.use(requireAuth);
+adminSecurityRouter.use(requireArea('hygiene'));
 
 const RSPAMD_URL  = process.env['RSPAMD_URL']  ?? 'http://rspamd:11334';
 const CLAMAV_HOST = process.env['CLAMAV_HOST'] ?? 'clamav';

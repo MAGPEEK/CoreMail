@@ -1458,6 +1458,14 @@ model ServerSettings {
   tlsCert  String?  // PEM-encoded certificate
   tlsKey   String?  // PEM-encoded private key
 
+  // ── v6: one-time setup wizard ────────────────────────────────────────────────
+  // setupCompletedAt is set exactly once (atomic claim in POST /setup/complete)
+  // and never cleared — deleting all users does NOT reopen the setup.
+  // setupTokenHash: sha256 (hex) of the one-time setup token printed to the
+  // api-gateway log at first start (or SETUP_TOKEN env); cleared on completion.
+  setupCompletedAt DateTime?
+  setupTokenHash   String?
+
   // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated removed
   // (RS256 keys were for OAuth2/OIDC — completely out of the stack).
   // JWT back to HS256 + JWT_SECRET env variable.

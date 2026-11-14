@@ -13,7 +13,7 @@
  *   POST /backup/admin/import/:userId  — import MBOX for a user (multipart text)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 // Side-effect import: loads the Express request augmentation for `apiUser`
 import '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
@@ -21,7 +21,7 @@ import { audit, auditContext } from '../../lib/audit.js';
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
 
 export const adminBackupsRouter: RouterType = Router();
-adminBackupsRouter.use(requireAdmin);
+adminBackupsRouter.use(requireArea('servers'));
 
 async function forward(
   req: Request,

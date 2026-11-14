@@ -13,14 +13,14 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
 import { syncFromPrimaryDomain } from '../../lib/server-urls.js';
 import { dkimDnsRecord, generateDkimPrivateKey, needsDkimKey } from '../../lib/dkim.js';
 
 const log = createLogger('admin:domains');
 export const adminDomainsRouter: RouterType = Router();
-adminDomainsRouter.use(requireAdmin);
+adminDomainsRouter.use(requireArea('domains'));
 
 const SELECT = {
   id: true, name: true, active: true, primary: true,
@@ -109,6 +109,12 @@ adminDomainsRouter.put('/:id', async (req: Request, res: Response) => {
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
 
+  // v6: duplicate rename → 409 (was an unhandled P2002 crash)
+  if (parsed.data.name !== undefined && parsed.data.name !== domain.name) {
+    const clash = await prisma.domain.findUnique({ where: { name: parsed.data.name }, select: { id: true } });
+    if (clash) { res.status(409).json({ error: 'Domain already exists' }); return; }
+  }
+
   const updated = await prisma.domain.update({
     where: { id },
     data: {
@@ -170,8 +176,21 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
   if (domain.primary) { res.status(409).json({ error: 'Primary domain cannot be deleted' }); return; }
-  const userCount = await prisma.user.count({ where: { domainId: id } });
+  // v6: every FK with onDelete Restrict is checked up front (shared/resource
+  // mailboxes used to crash the service with an unhandled Prisma P2003).
+  const [userCount, sharedCount, resourceCount, ldapCount, oidcCount] = await Promise.all([
+    prisma.user.count({ where: { domainId: id } }),
+    prisma.sharedMailbox.count({ where: { domainId: id } }),
+    prisma.resourceMailbox.count({ where: { domainId: id } }),
+    prisma.ldapConfig.count({ where: { domainId: id } }),
+    prisma.oidcProvider.count({ where: { domainId: id } }),
+  ]);
   if (userCount > 0) { res.status(409).json({ error: 'Domain has active mailboxes' }); return; }
+  if (sharedCount > 0) { res.status(409).json({ error: 'Domain has shared mailboxes' }); return; }
+  if (resourceCount > 0) { res.status(409).json({ error: 'Domain has resource mailboxes' }); return; }
+  if (ldapCount > 0 || oidcCount > 0) {
+    res.status(409).json({ error: 'Domain has an LDAP or SSO configuration — remove it first' }); return;
+  }
   await prisma.domain.delete({ where: { id } });
   log.info({ id, name: domain.name }, 'Domain deleted');
   res.json({ ok: true });

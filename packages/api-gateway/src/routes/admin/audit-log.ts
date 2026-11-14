@@ -20,7 +20,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import PDFDocument from 'pdfkit';
 import { createHash } from 'crypto';
 import { prisma } from '@coremail/storage/prisma';
-import { requireAuth, requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 // SHA-256 helper: returns the hex digest of a string or buffer
 function sha256(input: string | Buffer): string {
@@ -28,7 +28,7 @@ function sha256(input: string | Buffer): string {
 }
 
 export const adminAuditLogRouter: RouterType = Router();
-adminAuditLogRouter.use(requireAuth, requireAdmin);
+adminAuditLogRouter.use(requireArea('compliance'));
 
 // ─── Filter parsing (shared by list + exports) ───────────────────────────────
 

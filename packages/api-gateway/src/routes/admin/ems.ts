@@ -15,11 +15,24 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea, requireRole } from '../../middleware/auth.js';
+import { canManageAccount, type AdminArea } from '../../lib/rbac.js';
 import { generateDkimPrivateKey } from '../../lib/dkim.js';
 
 export const adminEmsRouter: RouterType = Router();
-adminEmsRouter.use(requireAdmin);
+// v6 RBAC: the EMS bridge spans several areas — guard per cmdlet family.
+// Anything not listed: ORGANIZATION_MANAGEMENT only (fail closed).
+const EMS_AREAS: Array<[RegExp, AdminArea]> = [
+  [/^\/(mailboxes|mailbox-statistics|resource-mailboxes)(\/|$)/, 'recipients'],
+  [/^\/accepted-domains(\/|$)/, 'domains'],
+  [/^\/transport-rules(\/|$)/, 'hygiene'],
+];
+const emsAreaGuards = new Map(EMS_AREAS.map(([, area]) => [area, requireArea(area)] as const));
+const emsOrgOnly = requireRole();
+adminEmsRouter.use((req, res, next) => {
+  const hit = EMS_AREAS.find(([re]) => re.test(req.path));
+  (hit ? emsAreaGuards.get(hit[1])! : emsOrgOnly)(req, res, next);
+});
 
 // ──────────────────────────────────────────────────────────────────
 // Get-Mailbox / New-Mailbox / Set-Mailbox / Remove-Mailbox
@@ -139,6 +152,9 @@ adminEmsRouter.put('/mailboxes/:identity', async (req: Request, res: Response) =
 
   const user = await prisma.user.findFirst({ where: { OR: [{ email: identity }, { id: identity }] } });
   if (!user) { res.status(404).json({ error: `Mailbox '${identity}' not found.` }); return; }
+  if (!canManageAccount(req.apiUser?.role, user.role)) {
+    res.status(403).json({ error: 'Only Organization Management may modify admin accounts', code: 'FORBIDDEN_ROLE' }); return;
+  }
 
   const { DisplayName, ProhibitSendQuota, IsEnabled } = parsed.data;
   await prisma.user.update({
@@ -157,6 +173,9 @@ adminEmsRouter.delete('/mailboxes/:identity', async (req: Request, res: Response
   const { identity } = req.params as { identity: string };
   const user = await prisma.user.findFirst({ where: { OR: [{ email: identity }, { id: identity }] } });
   if (!user) { res.status(404).json({ error: `Mailbox '${identity}' not found.` }); return; }
+  if (!canManageAccount(req.apiUser?.role, user.role)) {
+    res.status(403).json({ error: 'Only Organization Management may delete admin accounts', code: 'FORBIDDEN_ROLE' }); return;
+  }
   await prisma.user.delete({ where: { id: user.id } });
   res.status(204).end();
 });

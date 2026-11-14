@@ -13,7 +13,10 @@
  * Switch: BCP → Server → "JMAP" (ServerSettings.jmapEnabled, default on).
  */
 import express from 'express';
-import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import {
+  createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
+  installProcessGuards, installAsyncErrorHandling, resolveBindHost,
+} from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { jmapAuthMiddleware } from './auth.js';
 import { resolveAccounts } from './accounts.js';
@@ -33,6 +36,9 @@ import type { JmapUser } from './types.js';
 type AuthedRequest = express.Request & { jmapUser?: JmapUser };
 
 const log = createLogger('jmap-server');
+installProcessGuards(log);
+// v6: async handler rejections reach the problem+json error handler below
+installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['JMAP_PORT'] ?? '3006', 10);
 
 function problem(res: express.Response, err: RequestError): void {
@@ -155,7 +161,10 @@ async function main(): Promise<void> {
     if (!res.headersSent) problem(res, new RequestError('serverFail', 500));
   });
 
-  const server = app.listen(PORT, () => log.info({ port: PORT }, 'JMAP server started'));
+  // v6: reached only through the api-gateway — loopback by default (INTERNAL_BIND_HOST overrides).
+  // 'trust proxy' above therefore only ever trusts the gateway.
+  const host = resolveBindHost();
+  const server = app.listen(PORT, host, () => log.info({ port: PORT, host }, 'JMAP server started'));
   attachWebSocket(server);
 
   process.on('SIGTERM', () => process.exit(0));

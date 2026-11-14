@@ -32,8 +32,9 @@ async function listeners(api: CoreMailClient, slug: string): Promise<Listener[]>
 }
 
 async function setFlag(api: CoreMailClient, field: 'jmapEnabled' | 'mapiHttpEnabled', value: boolean): Promise<void> {
-  const settings = await api.get<ServerSettings>('/api/v1/admin/servers/settings');
-  await api.put('/api/v1/admin/servers/settings', { ...settings, [field]: value });
+  // v6: the settings PUT accepts partial updates — send only the changed field
+  // (never echo back the whole settings object).
+  await api.put('/api/v1/admin/servers/settings', { [field]: value });
 }
 
 function parseBool(s: string): boolean {

@@ -13,16 +13,19 @@
 import type { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { createLogger } from '@coremail/core';
+import { createLogger, isLoopbackAddress } from '@coremail/core';
 import { randomUUID } from 'node:crypto';
 
 const log = createLogger('api:security');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Returns true when the request comes from loopback (internal services). */
-const isLoopback = (req: Request): boolean =>
-  req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+/**
+ * Returns true when the request comes from loopback (internal services).
+ * v6: uses the RAW socket peer — never req.ip, which honours X-Forwarded-For
+ * when TRUST_PROXY is set and could be spoofed to "127.0.0.1".
+ */
+export const isLoopback = (req: Request): boolean => isLoopbackAddress(req.socket?.remoteAddress);
 
 // ── 1. Request-ID ────────────────────────────────────────────────────────────
 /**

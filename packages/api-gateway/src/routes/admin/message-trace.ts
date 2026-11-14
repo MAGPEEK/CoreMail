@@ -9,10 +9,10 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 export const adminMessageTraceRouter: RouterType = Router();
-adminMessageTraceRouter.use(requireAdmin);
+adminMessageTraceRouter.use(requireArea('compliance'));
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {

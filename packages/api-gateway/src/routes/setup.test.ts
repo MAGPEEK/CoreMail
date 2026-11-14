@@ -1,0 +1,137 @@
+/**
+ * v6 setup wizard hardening: one-time token, atomic one-shot claim under
+ * concurrency, persistent "completed" flag (deleting users never reopens
+ * setup), lowercase admin email, legacy backfill.
+ * Run: node --import tsx --test --test-force-exit src/routes/setup.test.ts
+ */
+import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
+import type { Server } from 'node:http';
+import { installFakePrisma, setTestEnv } from '../test-support/fake-prisma.js';
+
+setTestEnv();
+delete process.env['SETUP_TOKEN'];
+
+type Row = Record<string, unknown>;
+let settings: Row = {};
+let users: Row[] = [];
+
+function matchWhere(row: Row, where: Row): boolean {
+  return Object.entries(where).every(([k, v]) => row[k] === v || (v === null && (row[k] === null || row[k] === undefined)));
+}
+
+installFakePrisma({
+  serverSettings: {
+    upsert: (a) => { const q = a as { update: Row; create: Row }; settings = { ...settings, ...(settings['id'] ? q.update : q.create) }; return settings; },
+    findUnique: () => (settings['id'] ? { ...settings } : null),
+    update: (a) => { settings = { ...settings, ...(a as { data: Row }).data }; return settings; },
+    updateMany: async (a) => {
+      const q = a as { where: Row; data: Row };
+      await new Promise((r) => setTimeout(r, 5)); // widen the race window
+      if (!settings['id'] || !matchWhere(settings, q.where)) return { count: 0 };
+      settings = { ...settings, ...q.data };
+      return { count: 1 };
+    },
+  },
+  user: {
+    count: () => users.length,
+    create: (a) => { const u = { id: `u${users.length + 1}`, ...(a as { data: Row }).data }; users.push(u); return u; },
+  },
+  domain: { create: (a) => ({ id: 'd1', ...(a as { data: Row }).data }) },
+  mailbox: { create: () => ({ id: 'mb1' }) },
+  folder: { create: () => ({}) },
+  certificate: { create: () => ({}) },
+});
+
+const express = (await import('express')).default;
+const core = await import('@coremail/core');
+const { setupRouter } = await import('./setup.js');
+const { initSetupToken, hashSetupToken, verifySetupToken } = await import('../lib/setup-token.js');
+
+const quietLog = { info: () => undefined, warn: () => undefined };
+let server: Server;
+let base = '';
+before(async () => {
+  core.installAsyncErrorHandling(express);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/v1/setup', setupRouter);
+  app.use(core.errorMiddleware({ error: () => undefined, warn: () => undefined }));
+  server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+after(() => server?.close());
+beforeEach(() => { settings = {}; users = []; });
+
+const body = (token?: string) => ({ domain: 'Example.COM', email: 'Admin@Example.com', password: 'supersecret1', ...(token !== undefined ? { setupToken: token } : {}) });
+async function complete(b: unknown, headers: Record<string, string> = {}) {
+  const r = await fetch(`${base}/api/v1/setup/complete`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(b) });
+  return { status: r.status, json: await r.json() as Row };
+}
+
+test('a token is generated at start and stored only as a hash', async () => {
+  const token = await initSetupToken(quietLog);
+  assert.ok(token && token.length >= 30);
+  assert.equal(settings['setupTokenHash'], hashSetupToken(token!));
+  assert.ok(!JSON.stringify(settings).includes(token!));
+  const status = await (await fetch(`${base}/api/v1/setup/status`)).json() as Row;
+  assert.deepEqual(status, { setupRequired: true, setupTokenRequired: true });
+});
+
+test('setup without / with a wrong token is rejected', async () => {
+  await initSetupToken(quietLog);
+  assert.equal((await complete(body())).status, 403);
+  assert.equal((await complete(body('wrong-token-wrong-token'))).status, 403);
+  assert.equal(users.length, 0);
+});
+
+test('correct token → admin created (lowercased), token cleared, one-shot', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  const ok = await complete(body(token));
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  assert.equal(users.length, 1);
+  assert.equal(users[0]!['email'], 'admin@example.com');
+  assert.equal(users[0]!['role'], 'ORGANIZATION_MANAGEMENT');
+  assert.ok(settings['setupCompletedAt'] instanceof Date);
+  assert.equal(settings['setupTokenHash'], null);
+  assert.equal((await complete(body(token))).status, 409);
+});
+
+test('header X-Setup-Token is accepted', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  assert.equal((await complete(body(), { 'X-Setup-Token': token })).status, 200);
+});
+
+test('two concurrent setups → exactly one succeeds', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  const results = await Promise.all([complete(body(token)), complete(body(token)), complete(body(token))]);
+  const statuses = results.map((r) => r.status).sort();
+  assert.deepEqual(statuses, [200, 409, 409]);
+  assert.equal(users.length, 1);
+});
+
+test('deleting all users never reopens setup', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  assert.equal((await complete(body(token))).status, 200);
+  users = [];
+  const status = await (await fetch(`${base}/api/v1/setup/status`)).json() as Row;
+  assert.equal(status['setupRequired'], false);
+  assert.equal(await initSetupToken(quietLog), null, 'no new token once completed');
+  assert.equal((await complete(body(token))).status, 409);
+});
+
+test('legacy installation (users, no flag) is backfilled as completed', async () => {
+  users = [{ id: 'old', email: 'x@y.z' }];
+  assert.equal(await initSetupToken(quietLog), null);
+  assert.ok(settings['setupCompletedAt'] instanceof Date);
+});
+
+test('SETUP_TOKEN env replaces the generated token', async () => {
+  const env = { SETUP_TOKEN: 'env-token-env-token-1234' };
+  assert.equal(await initSetupToken(quietLog, env), null);
+  assert.equal(await verifySetupToken('env-token-env-token-1234', env), true);
+  assert.equal(await verifySetupToken('nope', env), false);
+  assert.equal(await verifySetupToken(undefined, env), false);
+});

@@ -35,10 +35,11 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
 import { z } from 'zod';
-import { requireAuth, requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
+import { internalAuthHeaders } from '@coremail/core';
 
 export const adminRetentionRouter: RouterType = Router();
-adminRetentionRouter.use(requireAuth, requireAdmin);
+adminRetentionRouter.use(requireArea('compliance'));
 
 // ── Tag CRUD ─────────────────────────────────────────────────────────────────
 
@@ -467,12 +468,12 @@ adminRetentionRouter.post('/run', async (_req: Request, res: Response) => {
   try {
     const response = await fetch(`${backupServiceUrl}/internal/retention/run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // v6: /internal/* on the backup-service requires loopback or INTERNAL_API_TOKEN
+      headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      res.status(502).json({ error: 'Retention run failed', detail: body });
+      res.status(502).json({ error: 'Retention run failed', detail: `backup-service HTTP ${response.status}` });
       return;
     }
 

@@ -12,6 +12,11 @@ data:
   MINIO_ROOT_USER: {{ .Values.minio.rootUser | quote }}
   MINIO_BUCKET: "mail-attachments"
   NODE_ENV: "production"
+  # v6: services run in separate pods → internal HTTP services must listen on all
+  # interfaces (default would be 127.0.0.1). Set INTERNAL_API_TOKEN in the secret
+  # so /internal/* routes stay protected; TRUST_PROXY for the ingress hop.
+  INTERNAL_BIND_HOST: "0.0.0.0"
+  TRUST_PROXY: "uniquelocal"
   LOG_LEVEL: "info"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://{{ include "coremail.fullname" . }}-otel-collector:4318"
   METRICS_PORT: "9464"

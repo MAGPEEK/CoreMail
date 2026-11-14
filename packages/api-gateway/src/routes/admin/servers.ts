@@ -8,13 +8,14 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { deriveServerUrls } from '../../lib/server-urls.js';
+import { publicServerSettings } from '../../lib/secrets.js';
 
 const log = createLogger('admin:servers');
 export const adminServersRouter: RouterType = Router();
-adminServersRouter.use(requireAdmin);
+adminServersRouter.use(requireArea('servers'));
 
 const SettingsSchema = z.object({
   publicHostname:   z.string().min(1),
@@ -50,16 +51,30 @@ adminServersRouter.get('/settings', async (_req: Request, res: Response) => {
       create: { id: 'singleton' },
       update: {},
     });
-    res.json(settings);
+    res.json(publicServerSettings(settings));
   } catch (err) {
     log.error({ err }, 'Failed to read server settings');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
+function stripUndefined<T extends object>(o: T): Partial<T> {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 // PUT /api/v1/admin/servers/settings
 adminServersRouter.put('/settings', async (req: Request, res: Response) => {
-  const parsed = SettingsSchema.safeParse(req.body);
+  // v6: partial updates — fields that are omitted keep their stored value
+  // (the CLI sends only the changed field; secrets are never part of this API).
+  const partial = SettingsSchema.partial().safeParse(req.body);
+  if (!partial.success) {
+    res.status(400).json({ error: 'Invalid request', details: partial.error.issues });
+    return;
+  }
+  const current = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' }, create: { id: 'singleton' }, update: {},
+  });
+  const parsed = SettingsSchema.safeParse({ ...current, ...stripUndefined(partial.data) });
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
@@ -104,7 +119,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
       log.warn({ pubErr }, 'Failed to publish settings reload signal');
     }
 
-    res.json(settings);
+    res.json(publicServerSettings(settings));
   } catch (err) {
     log.error({ err }, 'Failed to update server settings');
     res.status(500).json({ error: 'Internal server error' });

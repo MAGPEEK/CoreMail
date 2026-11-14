@@ -12,11 +12,11 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:sso');
 export const adminSsoRouter: RouterType = Router();
-adminSsoRouter.use(requireAdmin);
+adminSsoRouter.use(requireArea('identity'));
 
 // ── GET /providers ────────────────────────────────────────────────────────────
 adminSsoRouter.get('/providers', async (_req: Request, res: Response) => {

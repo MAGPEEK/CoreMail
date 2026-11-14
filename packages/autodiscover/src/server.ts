@@ -1,11 +1,16 @@
 import express from 'express';
-import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import {
+  createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
+  installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
+} from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { handleAutodiscoverV1 } from './v1.js';
 import { handleAutodiscoverV2 } from './v2.js';
 import { invalidateSettingsCache } from './settings.js';
 
 const log = createLogger('autodiscover');
+installProcessGuards(log);
+installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['AUTODISCOVER_PORT'] ?? '8081', 10);
 
 async function main() {
@@ -48,8 +53,13 @@ async function main() {
     res.redirect('/Autodiscover/Autodiscover.xml');
   });
 
-  app.listen(PORT, () => {
-    log.info({ port: PORT }, 'Autodiscover service started');
+  // v6: shared error middleware (registered last)
+  app.use(errorMiddleware(log));
+
+  // v6: internal service behind the api-gateway — loopback by default
+  const host = resolveBindHost();
+  app.listen(PORT, host, () => {
+    log.info({ port: PORT, host }, 'Autodiscover service started');
   });
 
   process.on('SIGTERM', () => process.exit(0));

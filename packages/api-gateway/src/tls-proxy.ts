@@ -25,7 +25,7 @@
 import https from 'node:https';
 import tls from 'node:tls';
 import type { Application } from 'express';
-import { createLogger, getRedisClient } from '@coremail/core';
+import { createLogger, getRedisClient, stripForwardedHeaders } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { selectProxyCerts, planSni, type SelectedProxyCert } from './lib/cert-lifecycle.js';
 
@@ -204,11 +204,17 @@ async function reloadServer(app: Application): Promise<void> {
       ...(fallbackCert.chainPem ? { ca: fallbackCert.chainPem } : {}),
       SNICallback: sniCallback,
     },
-    app,
+    // v6: TLS clients connect directly — any X-Forwarded-*/Forwarded header
+    // is client-forged here, whatever TRUST_PROXY says for port 3000.
+    (req, res) => {
+      stripForwardedHeaders(req);
+      app(req, res);
+    },
   );
 
   // v5.7.1: forward WebSocket upgrades (JMAP /jmap/ws) to the gateway handler
   server.on('upgrade', (req, socket, head) => {
+    stripForwardedHeaders(req);
     if (upgradeHandler) upgradeHandler(req, socket, head);
     else socket.destroy();
   });
