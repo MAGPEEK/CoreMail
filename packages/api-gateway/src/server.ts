@@ -182,9 +182,31 @@ app.use('/dav',          internalProxy(DAV_URL));
 // Auth-service routes (MFA, app passwords, sessions) — BEFORE express.json()!
 // Login/Refresh/Logout are implemented directly in authRouter (no proxy needed).
 const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
-app.use('/auth/mfa',           internalProxy(AUTH_SERVICE_URL));
-app.use('/auth/app-passwords', internalProxy(AUTH_SERVICE_URL));
-app.use('/auth/sessions',      internalProxy(AUTH_SERVICE_URL));
+// v6.0.0: the auth-service gets the real client IP (per-IP MFA failure limit,
+// session IP). The header is overwritten, never appended, so clients cannot spoof it.
+const authServiceProxy = createProxyMiddleware({
+  target: AUTH_SERVICE_URL,
+  changeOrigin: true,
+  on: {
+    proxyReq: (proxyReq, req) => {
+      proxyReq.path = (req as express.Request).originalUrl;
+      proxyReq.setHeader('X-Forwarded-For', (req as express.Request).ip ?? '');
+    },
+    error: (err, _req, res) => {
+      log.warn({ err, target: AUTH_SERVICE_URL }, 'Proxy error');
+      if (!('headersSent' in res && res.headersSent)) {
+        (res as express.Response).status(502).json({ error: 'Service temporarily unavailable' });
+      }
+    },
+  },
+}) as express.RequestHandler;
+// v6.0.0: /auth/mfa/* (verify, WebAuthn auth start, MFA changes) behind the strict
+// auth limiter; read-only GETs (status) are exempt so the settings page cannot lock users out.
+const mfaRateLimit: express.RequestHandler = (req, res, next) =>
+  req.method === 'GET' ? next() : authRateLimit(req, res, next);
+app.use('/auth/mfa',           mfaRateLimit, authServiceProxy);
+app.use('/auth/app-passwords', authServiceProxy);
+app.use('/auth/sessions',      authServiceProxy);
 // v5.6.0: /oauth2/* proxy removed (OAuth2 server gone).
 // v5.4.0: ADFS emulation removed (was for Outlook 2024 LTSC Modern Auth).
 

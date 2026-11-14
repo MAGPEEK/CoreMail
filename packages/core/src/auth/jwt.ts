@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'node:crypto';
 import { config } from '../config/index.js';
 import type { JwtPayload } from '../types/index.js';
 
@@ -15,7 +16,9 @@ export function signAccessToken(payload: Omit<JwtPayload, 'iat' | 'exp'>): strin
 }
 
 export function signRefreshToken(userId: string, sessionId: string): string {
-  return jwt.sign({ sub: userId, sessionId, type: 'refresh' }, config.JWT_SECRET, {
+  // A random jti makes every refresh token unique, even two issued for the same
+  // session within one second — required for refresh-token rotation (v6.0.0).
+  return jwt.sign({ sub: userId, sessionId, type: 'refresh', jti: randomUUID() }, config.JWT_SECRET, {
     expiresIn: config.JWT_REFRESH_TTL,
   });
 }

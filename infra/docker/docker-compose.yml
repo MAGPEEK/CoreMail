@@ -77,6 +77,11 @@ services:
       NODE_ENV:  production
       LOG_LEVEL: ${LOG_LEVEL:-info}            # error | warn | info | debug
       TZ:        ${TZ:-Europe/Berlin}
+      # TOTP secret encryption key (empty = derived from JWT_SECRET + PEPPER)
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
+      # WebAuthn relying party override (empty = publicHostname, https)
+      WEBAUTHN_RP_ID:  ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       # Internal service in the same container — do not change
       SECURITY_FILTER_URL: http://localhost:3002
 

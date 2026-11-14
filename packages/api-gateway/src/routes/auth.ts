@@ -1,30 +1,48 @@
 /**
- * Auth routes directly in the api-gateway — no HTTP proxy needed.
- * Login / refresh / logout / password reset without a detour via auth-service.
+ * Auth routes in the api-gateway (used by MWA, BCP and the admin CLI).
+ *
+ * v6.0.0: login / refresh / logout / password reset all go through the single
+ * login service in `@coremail/storage/auth` (shared with the auth-service):
+ *   POST /auth/login          → { accessToken, refreshToken, expiresIn }
+ *                               | { mfaRequired: true, challengeToken, method, methods }
+ *                               | 401 invalid credentials | 503 { error: 'maintenance', message }
+ *   POST /auth/refresh        → rotates: { accessToken, refreshToken, expiresIn } (old token invalid)
+ *   POST /auth/logout         → { ok: true } — revokes the session of { refreshToken }
+ *   POST /auth/mfa/verify     → proxied to the auth-service (same login service)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { createTransport } from 'nodemailer';
 import { prisma } from '@coremail/storage';
-import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger, getRedisClient, verifyPassword } from '@coremail/core';
-import type { UserRole } from '@coremail/core/types';
+import {
+  login,
+  loginOutcomeToHttp,
+  rotateSession,
+  revokeSessionByRefreshToken,
+  createPasswordResetToken,
+  redeemPasswordReset,
+  isResetTokenValid,
+  RESET_TOKEN_TTL,
+  registerAuthenticator,
+  legacyLdapAuthenticator,
+} from '@coremail/storage/auth';
+import { createLogger, getRedisClient } from '@coremail/core';
 
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
 
-const MFA_CHALLENGE_TTL    = 10 * 60; // 10 minutes
-const MFA_CHALLENGE_PREFIX = 'auth:mfa:challenge:';
+// First-factor extension point: the LDAP fallback that used to exist only in
+// the auth-service now applies to web logins too (same login service).
+// LDAP/OIDC integration registers its steps the same way.
+registerAuthenticator(legacyLdapAuthenticator());
 
 // Password reset: rate limit in Redis (3 requests per IP/email per hour)
 const RESET_RATE_PREFIX  = 'pwreset:rate:';
 const RESET_RATE_LIMIT   = 3;
 const RESET_RATE_WINDOW  = 3600; // 1 hour in seconds
-const RESET_TOKEN_TTL    = 15 * 60; // 15 minutes
 
-/** SHA-256 hash of a token string. */
-function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
+function clientInfo(req: Request): { ip: string; userAgent: string } {
+  return { ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' };
 }
 
 /** Sends an email via internal SMTP submission (localhost:587). */
@@ -32,6 +50,7 @@ async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
   const fromAddr = settings?.adminEmail?.trim() || `noreply@${settings?.publicHostname || 'mail.local'}`;
   const orgName  = settings?.orgName || 'CoreMail';
+  const minutes  = Math.round(RESET_TOKEN_TTL / 60);
 
   const transport = createTransport({
     host: '127.0.0.1',
@@ -45,18 +64,18 @@ async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
     from: `"${orgName}" <${fromAddr}>`,
     to,
     subject: `${orgName} — Passwort zurücksetzen`,
-    text: `Guten Tag,\n\njemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.\n\nKlicken Sie auf den folgenden Link, um ein neues Passwort zu setzen (gültig für 15 Minuten):\n\n${resetUrl}\n\nFalls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.\nIhr Konto ist weiterhin sicher.\n\n– ${orgName}`,
-    html: `<p>Guten Tag,</p><p>jemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 20px;background:#4f46e5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">Passwort zurücksetzen</a></p><p style="font-size:12px;color:#6b7280;">Dieser Link ist 15 Minuten gültig. Falls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.</p><p>– ${orgName}</p>`,
+    text: `Guten Tag,\n\njemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.\n\nKlicken Sie auf den folgenden Link, um ein neues Passwort zu setzen (gültig für ${minutes} Minuten):\n\n${resetUrl}\n\nFalls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.\nIhr Konto ist weiterhin sicher.\n\n– ${orgName}`,
+    html: `<p>Guten Tag,</p><p>jemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 20px;background:#4f46e5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">Passwort zurücksetzen</a></p><p style="font-size:12px;color:#6b7280;">Dieser Link ist ${minutes} Minuten gültig. Falls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.</p><p>– ${orgName}</p>`,
   });
 }
 
 const LoginSchema = z.object({
   email:    z.string().email(),
-  password: z.string().min(1),
+  password: z.string().min(1).max(1024),
 });
 
 const RefreshSchema = z.object({
-  refreshToken: z.string(),
+  refreshToken: z.string().min(1).max(4096),
 });
 
 // ── POST /auth/login ──────────────────────────────────────────────────────────
@@ -66,73 +85,10 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
-
-  const { email, password } = parsed.data;
-
   try {
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-      include: { domain: true },
-    });
-
-    if (!user || !user.active || !user.passwordHash) {
-      log.warn({ email }, 'Login failed: user not found or inactive');
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    // verifyPassword uses sha256(password + PEPPER) → bcrypt — same logic as hashPassword
-    const valid = await verifyPassword(password, user.passwordHash);
-    if (!valid) {
-      log.warn({ email }, 'Login failed: wrong password');
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    // ── MFA check ──────────────────────────────────────────────────────────────
-    const mfa = await prisma.userMfa.findUnique({ where: { userId: user.id } });
-    const mfaEnabled = mfa?.totpEnabled === true ||
-      (Array.isArray(mfa?.webAuthnCredentials) && (mfa?.webAuthnCredentials as unknown[]).length > 0);
-
-    if (mfaEnabled) {
-      const method = (Array.isArray(mfa?.webAuthnCredentials) && (mfa?.webAuthnCredentials as unknown[]).length > 0)
-        ? 'webauthn' : 'totp';
-      const challengeToken = randomBytes(32).toString('hex');
-      const redis = getRedisClient();
-      await redis.setex(
-        `${MFA_CHALLENGE_PREFIX}${challengeToken}`,
-        MFA_CHALLENGE_TTL,
-        JSON.stringify({ userId: user.id, method }),
-      );
-      log.info({ userId: user.id, method }, 'MFA challenge issued');
-      res.status(200).json({ mfaRequired: true, challengeToken, method });
-      return;
-    }
-
-    // ── No MFA — issue tokens directly ─────────────────────────────────────────
-    const sessionId = randomUUID();
-    const accessToken = signAccessToken({
-      sub:        user.id,
-      email:      user.email,
-      role:       user.role as UserRole,
-      domainId:   user.domainId,
-      sessionId,
-      mfaVerified: false,
-    });
-    const refreshToken = signRefreshToken(user.id, sessionId);
-
-    await prisma.session.create({
-      data: {
-        userId:    user.id,
-        tokenHash: refreshToken,
-        ipAddress: req.ip ?? 'unknown',
-        userAgent: req.get('user-agent') ?? '',
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    log.info({ userId: user.id }, 'Login successful');
-    res.json({ accessToken, refreshToken, expiresIn: 900 });
+    const outcome = await login(parsed.data.email, parsed.data.password, clientInfo(req));
+    const { status, body } = loginOutcomeToHttp(outcome);
+    res.status(status).json(body);
   } catch (err) {
     log.error({ err }, 'Login error');
     res.status(500).json({ error: 'Internal server error' });
@@ -140,52 +96,38 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 });
 
 // ── POST /auth/refresh ────────────────────────────────────────────────────────
+// Rotates the refresh token. A rotated (old) token presented again revokes the
+// whole session (token theft detection) — clients must store the new token and
+// must not refresh concurrently with the same token.
 authRouter.post('/refresh', async (req: Request, res: Response) => {
   const parsed = RefreshSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
-
   try {
-    const payload = verifyRefreshToken(parsed.data.refreshToken);
-    const session = await prisma.session.findUnique({
-      where: { tokenHash: parsed.data.refreshToken },
-    });
-
-    if (!session || session.expiresAt < new Date()) {
-      res.status(401).json({ error: 'Session expired' });
-      return;
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: session.userId },
-      select: { id: true, email: true, role: true, domainId: true },
-    });
-    if (!user) {
-      res.status(401).json({ error: 'User not found' });
-      return;
-    }
-
-    const accessToken = signAccessToken({
-      sub:        user.id,
-      email:      user.email,
-      role:       user.role as UserRole,
-      domainId:   user.domainId,
-      sessionId:  payload.sessionId,
-      mfaVerified: false,
-    });
-    res.json({ accessToken, expiresIn: 900 });
-  } catch {
-    res.status(401).json({ error: 'Invalid refresh token' });
+    const r = await rotateSession(parsed.data.refreshToken, clientInfo(req));
+    if (r.ok) { res.json(r.tokens); return; }
+    if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
+    const error = r.reason === 'expired' ? 'Session expired' : 'Invalid refresh token';
+    res.status(401).json({ error, code: `REFRESH_${r.reason.toUpperCase()}` });
+  } catch (err) {
+    log.error({ err }, 'Refresh error');
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // ── POST /auth/logout ─────────────────────────────────────────────────────────
 authRouter.post('/logout', async (req: Request, res: Response) => {
-  const token = (req.body as { refreshToken?: string })?.refreshToken;
-  if (token) {
-    await prisma.session.deleteMany({ where: { tokenHash: token } }).catch(() => null);
+  const token = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+  if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+    try {
+      await revokeSessionByRefreshToken(token);
+    } catch (err) {
+      log.error({ err }, 'Logout error');
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
   }
   res.json({ ok: true });
 });
@@ -194,9 +136,10 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
 // Security principles:
 //   1. No user enumeration: the response is always identical (200 OK)
 //   2. Rate limit: max 3 requests per IP + email per hour (Redis)
-//   3. Token: crypto.randomBytes(32) = 256 bit entropy
-//   4. Token in DB: SHA-256 hash (never plaintext)
-//   5. Only active when GlobalSettings.selfServicePasswordReset = true
+//   3. Token: crypto.randomBytes(32) = 256 bit entropy, stored as SHA-256 hash
+//   4. Earlier links stay valid until they expire (v6.0.0) — a reset request by
+//      an attacker cannot invalidate the victim's link
+//   5. Only active when ServerSettings.selfServicePasswordReset = true
 authRouter.post('/forgot-password', async (req: Request, res: Response) => {
   const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
   if (!parsed.success) {
@@ -247,27 +190,16 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
       ALWAYS_OK(); return;
     }
 
-    // 4. Delete old tokens (max 1 active token per user)
-    await prisma.passwordResetToken.deleteMany({
-      where: { userId: user.id, usedAt: null },
-    });
+    // 4. New token (earlier unexpired tokens remain valid)
+    const rawToken = await createPasswordResetToken(user.id, ip);
 
-    // 5. Generate and hash a new token
-    const rawToken = randomBytes(32).toString('hex'); // 64-char hex, 256 bit
-    const tokenHash = hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL * 1000);
-
-    await prisma.passwordResetToken.create({
-      data: { userId: user.id, tokenHash, expiresAt, ipAddress: ip },
-    });
-
-    // 6. Build the reset URL
+    // 5. Build the reset URL
     const base = settings?.useHttps
       ? `https://${settings.publicHostname}`
       : `http://${settings?.publicHostname ?? 'localhost'}:${settings?.httpPort ?? 3000}`;
     const resetUrl = `${base}/reset-password?token=${rawToken}`;
 
-    // 7. Send email (fire-and-forget — log errors, but do not expose to the user)
+    // 6. Send email (fire-and-forget — log errors, but do not expose to the user)
     sendResetEmail(user.email, resetUrl).catch((err) => {
       log.error({ err, email: user.email }, 'Failed to send password reset email');
     });
@@ -282,11 +214,10 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
 
 // ── POST /auth/reset-password ─────────────────────────────────────────────────
 // Takes the plaintext token + new password and sets the password.
-// Security principles:
-//   1. Token is SHA-256 hashed and checked against the DB
-//   2. Token must not be expired and not already used
-//   3. Password is hashed with bcrypt + pepper
-//   4. All sessions of the user become invalid after the reset
+//   1. Token is SHA-256 hashed and checked against the DB; single use
+//      (conditional update on usedAt IS NULL)
+//   2. Minimum length from ServerSettings.minPasswordLength
+//   3. All sessions AND app passwords of the user are revoked after the reset
 const ResetPasswordSchema = z.object({
   token:       z.string().min(32).max(128),
   newPassword: z.string().min(1).max(128),
@@ -298,57 +229,14 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Ungültige Anfrage' });
     return;
   }
-  const { token, newPassword } = parsed.data;
   const ip = req.ip ?? 'unknown';
-
   try {
-    // 1. Hash token + look it up in the DB
-    const tokenHash = hashToken(token);
-    const resetToken = await prisma.passwordResetToken.findUnique({
-      where: { tokenHash },
-      include: { user: { select: { id: true, email: true, active: true } } },
-    });
-
-    if (!resetToken || resetToken.usedAt !== null || resetToken.expiresAt < new Date()) {
-      log.warn({ ip }, 'Password reset: invalid or expired token');
-      res.status(400).json({ error: 'Der Link ist ungültig oder abgelaufen. Bitte fordern Sie einen neuen an.' });
-      return;
-    }
-
-    if (!resetToken.user.active) {
-      res.status(400).json({ error: 'Dieses Konto ist deaktiviert.' });
-      return;
-    }
-
-    // 2. Check password policy
-    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
-    const minLen = settings?.minPasswordLength ?? 8;
-    if (newPassword.length < minLen) {
-      res.status(400).json({ error: `Das Passwort muss mindestens ${minLen} Zeichen lang sein.` });
-      return;
-    }
-
-    // 3. Hash new password — hashPassword uses sha256(password + PEPPER) → bcrypt
-    const { hashPassword } = await import('@coremail/core');
-    const passwordHash = await hashPassword(newPassword);
-
-    // 4. Mark token as used + set password + delete all sessions (atomic via transaction)
-    await prisma.$transaction([
-      prisma.passwordResetToken.update({
-        where: { id: resetToken.id },
-        data: { usedAt: new Date() },
-      }),
-      prisma.user.update({
-        where: { id: resetToken.user.id },
-        data: { passwordHash },
-      }),
-      prisma.session.deleteMany({
-        where: { userId: resetToken.user.id },
-      }),
-    ]);
-
-    log.info({ userId: resetToken.user.id, email: resetToken.user.email, ip }, 'Password reset successful');
-    res.json({ ok: true });
+    const r = await redeemPasswordReset(parsed.data.token, parsed.data.newPassword, ip);
+    if (r.ok) { res.json({ ok: true }); return; }
+    if (r.reason === 'policy') { res.status(400).json({ error: r.message }); return; }
+    if (r.reason === 'inactive') { res.status(400).json({ error: 'Dieses Konto ist deaktiviert.' }); return; }
+    log.warn({ ip }, 'Password reset: invalid or expired token');
+    res.status(400).json({ error: 'Der Link ist ungültig oder abgelaufen. Bitte fordern Sie einen neuen an.' });
   } catch (err) {
     log.error({ err, ip }, 'reset-password error');
     res.status(500).json({ error: 'Interner Fehler. Bitte versuchen Sie es später erneut.' });
@@ -364,13 +252,7 @@ authRouter.get('/reset-password/verify', async (req: Request, res: Response) => 
     return;
   }
   try {
-    const tokenHash = hashToken(token);
-    const resetToken = await prisma.passwordResetToken.findUnique({
-      where: { tokenHash },
-      select: { usedAt: true, expiresAt: true },
-    });
-    const valid = !!resetToken && resetToken.usedAt === null && resetToken.expiresAt > new Date();
-    res.json({ valid });
+    res.json({ valid: await isResetTokenValid(token) });
   } catch {
     res.status(500).json({ valid: false });
   }

@@ -23,3 +23,16 @@ function applyPepper(password: string): string {
     .update(password + config.PEPPER)
     .digest('hex');
 }
+
+/**
+ * Plain bcrypt (no pepper) for high-entropy one-time secrets such as MFA
+ * backup codes. Never use these for user passwords — use hashPassword /
+ * verifyPassword (sha256 + PEPPER + bcrypt) instead.
+ */
+export async function hashOneTimeSecret(secret: string, cost = 10): Promise<string> {
+  return bcrypt.hash(secret, cost);
+}
+
+export async function verifyOneTimeSecret(secret: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(secret, hash);
+}

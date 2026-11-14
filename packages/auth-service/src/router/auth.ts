@@ -1,123 +1,63 @@
+/**
+ * auth-service login endpoints — v6.0.0: thin delegates to the single login
+ * service in @coremail/storage/auth (same code as the api-gateway's /auth/*).
+ *
+ * The api-gateway serves /auth/login, /auth/refresh and /auth/logout itself and
+ * proxies /auth/mfa/* here, so /auth/mfa/verify (which needs WebAuthn) lives in
+ * this service. /auth/login stays available for internal callers (CalDAV and
+ * JMAP Basic-auth fallbacks).
+ */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
-import { signAccessToken, signRefreshToken, verifyRefreshToken, createLogger } from '@coremail/core';
-import type { UserRole } from '@coremail/core/types';
-import { authenticateLocal } from '../local/index.js';
-import { isMfaEnabled, createMfaChallenge, verifyMfaChallenge } from '../mfa/index.js';
-import { randomUUID } from 'node:crypto';
+import { createLogger } from '@coremail/core';
+import {
+  login,
+  completeMfaLogin,
+  loginOutcomeToHttp,
+  rotateSession,
+  revokeSessionByRefreshToken,
+} from '@coremail/storage/auth';
+import { finishWebAuthnAuthentication } from '../mfa/webauthn.js';
 
 const log = createLogger('auth:router');
 
 const LoginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z.string().min(1).max(1024),
 });
 
 const MfaVerifySchema = z.object({
-  challengeToken: z.string(),
-  code: z.string().optional(),
-  backupCode: z.string().optional(),
+  challengeToken: z.string().min(1).max(128),
+  /** 6-digit TOTP code or a backup code (XXXX-XXXX). */
+  code: z.string().max(64).optional(),
+  /** Deprecated alias for backup codes — use `code`. */
+  backupCode: z.string().max(64).optional(),
   webauthnResponse: z.unknown().optional(),
 });
 
 const RefreshSchema = z.object({
-  refreshToken: z.string(),
+  refreshToken: z.string().min(1).max(4096),
 });
 
 export const authRouter: RouterType = Router();
 
+function clientInfo(req: Request): { ip: string; userAgent: string } {
+  return { ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' };
+}
+
 authRouter.post('/login', async (req: Request, res: Response) => {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    res.status(400).json({ error: 'Invalid request' });
     return;
   }
-
-  const { email, password } = parsed.data;
-  const ip = req.ip ?? 'unknown';
-
-  let result = await authenticateLocal(email, password);
-
-  if (!result) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore — optional module
-      const { authenticateLdap } = await import('@coremail/auth-ldap');
-      result = await authenticateLdap(email, password);
-    } catch {
-      // auth-ldap not available or LDAP not configured
-    }
+  try {
+    const { status, body } = loginOutcomeToHttp(await login(parsed.data.email, parsed.data.password, clientInfo(req)));
+    res.status(status).json(body);
+  } catch (err) {
+    log.error({ err }, 'Login error');
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  if (!result) {
-    log.warn({ email, ip }, 'Login failed');
-    res.status(401).json({ error: 'Invalid credentials' });
-    return;
-  }
-
-  const mfaEnabled = await isMfaEnabled(result.userId);
-  if (mfaEnabled) {
-    const challenge = await createMfaChallenge(result.userId);
-    log.info({ userId: result.userId, method: challenge.method }, 'MFA challenge issued');
-    res.status(200).json({
-      mfaRequired: true,
-      challengeToken: challenge.challengeToken,
-      method: challenge.method,
-    });
-    return;
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: result.userId },
-    select: { id: true, email: true, role: true, domainId: true },
-  });
-  if (!user) {
-    res.status(401).json({ error: 'User not found' });
-    return;
-  }
-
-  // Maintenance mode: only ORGANIZATION_MANAGEMENT and SERVER_MANAGEMENT may log in
-  const ADMIN_ROLES: UserRole[] = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'];
-  if (!ADMIN_ROLES.includes(user.role as UserRole)) {
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { maintenanceMode: true, maintenanceMessage: true },
-    });
-    if (settings?.maintenanceMode) {
-      log.info({ userId: user.id, email: user.email }, 'Login blocked — maintenance mode active');
-      res.status(503).json({
-        error:   'maintenance',
-        message: settings.maintenanceMessage ||
-          'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.',
-      });
-      return;
-    }
-  }
-
-  const sessionId = randomUUID();
-  const accessToken = signAccessToken({
-    sub: user.id,
-    email: user.email,
-    role: user.role as UserRole,
-    domainId: user.domainId,
-    sessionId,
-    mfaVerified: false,
-  });
-  const refreshToken = signRefreshToken(user.id, sessionId);
-
-  await prisma.session.create({
-    data: {
-      userId: user.id,
-      tokenHash: refreshToken,
-      ipAddress: ip,
-      userAgent: req.get('user-agent') ?? '',
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    },
-  });
-
-  log.info({ userId: user.id, source: result.source }, 'Login successful');
-  res.json({ accessToken, refreshToken, expiresIn: 900 });
 });
 
 authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
@@ -126,52 +66,27 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
-
-  const { code, backupCode, webauthnResponse } = parsed.data;
-  const userId = await verifyMfaChallenge(parsed.data.challengeToken, {
-    ...(code !== undefined ? { code } : {}),
-    ...(backupCode !== undefined ? { backupCode } : {}),
-    ...(webauthnResponse !== undefined ? { webauthnResponse } : {}),
-  });
-
-  if (!userId) {
-    log.warn({ challengeToken: parsed.data.challengeToken }, 'MFA verification failed');
-    res.status(401).json({ error: 'MFA verification failed' });
-    return;
+  const { challengeToken, code, backupCode, webauthnResponse } = parsed.data;
+  try {
+    const outcome = await completeMfaLogin(
+      {
+        challengeToken,
+        ...(code !== undefined ? { code } : {}),
+        ...(backupCode !== undefined ? { backupCode } : {}),
+        ...(webauthnResponse !== undefined ? { webauthnResponse } : {}),
+      },
+      clientInfo(req),
+      {
+        verifyWebAuthn: (userId, response, token) =>
+          finishWebAuthnAuthentication(userId, response as Parameters<typeof finishWebAuthnAuthentication>[1], token),
+      },
+    );
+    const { status, body } = loginOutcomeToHttp(outcome);
+    res.status(status).json(body);
+  } catch (err) {
+    log.error({ err }, 'MFA verify error');
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, email: true, role: true, domainId: true },
-  });
-  if (!user) {
-    res.status(401).json({ error: 'User not found' });
-    return;
-  }
-
-  const sessionId = randomUUID();
-  const accessToken = signAccessToken({
-    sub: user.id,
-    email: user.email,
-    role: user.role as UserRole,
-    domainId: user.domainId,
-    sessionId,
-    mfaVerified: true,
-  });
-  const refreshToken = signRefreshToken(user.id, sessionId);
-
-  await prisma.session.create({
-    data: {
-      userId: user.id,
-      tokenHash: refreshToken,
-      ipAddress: req.ip ?? 'unknown',
-      userAgent: req.get('user-agent') ?? '',
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    },
-  });
-
-  log.info({ userId }, 'MFA verified — login complete');
-  res.json({ accessToken, refreshToken, expiresIn: 900 });
 });
 
 authRouter.post('/refresh', async (req: Request, res: Response) => {
@@ -180,48 +95,21 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
-
-  let payload: { sub: string; sessionId: string };
   try {
-    payload = verifyRefreshToken(parsed.data.refreshToken);
-  } catch {
-    res.status(401).json({ error: 'Invalid refresh token' });
-    return;
+    const r = await rotateSession(parsed.data.refreshToken, clientInfo(req));
+    if (r.ok) { res.json(r.tokens); return; }
+    if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
+    res.status(401).json({ error: r.reason === 'expired' ? 'Session expired' : 'Invalid refresh token', code: `REFRESH_${r.reason.toUpperCase()}` });
+  } catch (err) {
+    log.error({ err }, 'Refresh error');
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  const session = await prisma.session.findUnique({
-    where: { tokenHash: parsed.data.refreshToken },
-  });
-
-  if (!session || session.expiresAt < new Date()) {
-    res.status(401).json({ error: 'Session expired' });
-    return;
-  }
-
-  const sessionUser = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { id: true, email: true, role: true, domainId: true },
-  });
-  if (!sessionUser) {
-    res.status(401).json({ error: 'User not found' });
-    return;
-  }
-
-  const accessToken = signAccessToken({
-    sub: sessionUser.id,
-    email: sessionUser.email,
-    role: sessionUser.role as UserRole,
-    domainId: sessionUser.domainId,
-    sessionId: payload.sessionId,
-    mfaVerified: false,
-  });
-  res.json({ accessToken, expiresIn: 900 });
 });
 
 authRouter.post('/logout', async (req: Request, res: Response) => {
-  const token = req.body?.refreshToken as string | undefined;
-  if (token) {
-    await prisma.session.deleteMany({ where: { tokenHash: token } });
+  const token = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+  if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+    await revokeSessionByRefreshToken(token).catch((err) => log.error({ err }, 'Logout error'));
   }
   res.json({ ok: true });
 });

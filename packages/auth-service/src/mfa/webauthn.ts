@@ -9,39 +9,61 @@ import type {
   AuthenticationResponseJSON,
 } from '@simplewebauthn/types';
 import { prisma } from '@coremail/storage';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { createLogger } from '@coremail/core';
+import { authRedis } from '@coremail/storage/auth';
 
 const log = createLogger('auth:webauthn');
 
 const RP_NAME = process.env['WEBAUTHN_RP_NAME'] ?? 'CoreMail';
-const RP_ID = process.env['WEBAUTHN_RP_ID'] ?? 'localhost';
-const ORIGIN = process.env['WEBAUTHN_ORIGIN'] ?? 'http://localhost:4000';
 const CHALLENGE_TTL = 5 * 60; // 5 minutes
 
-function challengeKey(userId: string): string {
-  return `coremail:webauthn:challenge:${userId}`;
+// v6.0.0: separate Redis keys for registration (per user) and authentication
+// (per MFA login challenge) so one flow cannot overwrite/consume the other.
+export function registrationChallengeKey(userId: string): string {
+  return `coremail:webauthn:reg:${userId}`;
+}
+export function authenticationChallengeKey(mfaChallengeToken: string): string {
+  return `coremail:webauthn:auth:${mfaChallengeToken}`;
+}
+
+export interface RpConfig { rpID: string; origin: string }
+let rpCache: { value: RpConfig; expires: number } | null = null;
+
+/**
+ * v6.0.0: Relying party from ServerSettings.publicHostname (https://<host>);
+ * WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN override. Cached for 60 s.
+ */
+export async function getRpConfig(): Promise<RpConfig> {
+  const envId = process.env['WEBAUTHN_RP_ID']?.trim();
+  const envOrigin = process.env['WEBAUTHN_ORIGIN']?.trim();
+  if (envId && envOrigin) return { rpID: envId, origin: envOrigin };
+  if (rpCache && rpCache.expires > Date.now()) return rpCache.value;
+  const s = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { publicHostname: true },
+  });
+  const host = (s?.publicHostname || 'localhost').trim().toLowerCase();
+  const value = { rpID: envId || host, origin: envOrigin || `https://${host}` };
+  rpCache = { value, expires: Date.now() + 60_000 };
+  return value;
 }
 
 export async function startWebAuthnRegistration(userId: string, email: string): Promise<unknown> {
-  
-  const redis = getRedisClient();
+  const redis = authRedis();
+  const { rpID } = await getRpConfig();
 
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  const existingCredentials: { id: string }[] = [];
-  if (mfa?.webAuthnCredentials) {
-    const creds = mfa.webAuthnCredentials as { id: string }[];
-    existingCredentials.push(...creds);
-  }
+  const existingCredentials = (Array.isArray(mfa?.webAuthnCredentials) ? mfa.webAuthnCredentials : []) as { id: string }[];
 
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
-    rpID: RP_ID,
+    rpID,
     userName: email,
     excludeCredentials: existingCredentials.map((c) => ({ id: c.id })),
     authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
   });
 
-  await redis.setex(challengeKey(userId), CHALLENGE_TTL, options.challenge);
+  await redis.setex(registrationChallengeKey(userId), CHALLENGE_TTL, options.challenge);
   return options;
 }
 
@@ -50,18 +72,19 @@ export async function finishWebAuthnRegistration(
   response: RegistrationResponseJSON,
   keyName: string,
 ): Promise<boolean> {
-  
-  const redis = getRedisClient();
-
-  const expectedChallenge = await redis.get(challengeKey(userId));
+  const redis = authRedis();
+  const key = registrationChallengeKey(userId);
+  const expectedChallenge = await redis.get(key);
   if (!expectedChallenge) return false;
+  await redis.del(key); // single use, also on failure
+  const { rpID, origin } = await getRpConfig();
 
   try {
     const verification = await verifyRegistrationResponse({
       response,
       expectedChallenge,
-      expectedOrigin: ORIGIN,
-      expectedRPID: RP_ID,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
     });
 
     if (!verification.verified || !verification.registrationInfo) return false;
@@ -70,7 +93,7 @@ export async function finishWebAuthnRegistration(
     const { credential } = verification.registrationInfo as any;
 
     const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-    const existing = ((mfa?.webAuthnCredentials as object[]) ?? []) as object[];
+    const existing = (Array.isArray(mfa?.webAuthnCredentials) ? mfa.webAuthnCredentials : []) as object[];
     const newCred = {
       id: credential.id as string,
       publicKey: Buffer.from(credential.publicKey as Uint8Array).toString('base64'),
@@ -81,16 +104,10 @@ export async function finishWebAuthnRegistration(
 
     await prisma.userMfa.upsert({
       where: { userId },
-      create: {
-        userId,
-        webAuthnCredentials: [...existing, newCred],
-      },
-      update: {
-        webAuthnCredentials: [...existing, newCred],
-      },
+      create: { userId, webAuthnCredentials: [...existing, newCred] },
+      update: { webAuthnCredentials: [...existing, newCred] },
     });
 
-    await redis.del(challengeKey(userId));
     log.info({ userId, keyName }, 'WebAuthn key registered');
     return true;
   } catch (err) {
@@ -99,51 +116,52 @@ export async function finishWebAuthnRegistration(
   }
 }
 
-export async function startWebAuthnAuthentication(userId: string): Promise<unknown> {
-  
-  const redis = getRedisClient();
-
+/** Options for the second factor of a pending MFA login challenge. */
+export async function startWebAuthnAuthentication(userId: string, mfaChallengeToken: string): Promise<unknown> {
+  const redis = authRedis();
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  const creds = (mfa?.webAuthnCredentials as { id: string }[]) ?? [];
+  const creds = (Array.isArray(mfa?.webAuthnCredentials) ? mfa.webAuthnCredentials : []) as { id: string }[];
   if (creds.length === 0) return null;
+  const { rpID } = await getRpConfig();
 
   const options = await generateAuthenticationOptions({
-    rpID: RP_ID,
+    rpID,
     allowCredentials: creds.map((c) => ({ id: c.id })),
     userVerification: 'preferred',
   });
 
-  await redis.setex(challengeKey(userId), CHALLENGE_TTL, options.challenge);
+  await redis.setex(authenticationChallengeKey(mfaChallengeToken), CHALLENGE_TTL, options.challenge);
   return options;
 }
 
 export async function finishWebAuthnAuthentication(
   userId: string,
   response: AuthenticationResponseJSON,
+  mfaChallengeToken: string,
 ): Promise<boolean> {
-  
-  const redis = getRedisClient();
-
-  const expectedChallenge = await redis.get(challengeKey(userId));
+  const redis = authRedis();
+  const key = authenticationChallengeKey(mfaChallengeToken);
+  const expectedChallenge = await redis.get(key);
   if (!expectedChallenge) return false;
 
   const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  const creds = (mfa?.webAuthnCredentials as {
+  const creds = (Array.isArray(mfa?.webAuthnCredentials) ? mfa.webAuthnCredentials : []) as {
     id: string;
     publicKey: string;
     counter: number;
-  }[]) ?? [];
+  }[];
 
-  const credential = creds.find((c) => c.id === response.id);
+  const credential = creds.find((c) => c.id === response?.id);
   if (!credential) return false;
+  const { rpID, origin } = await getRpConfig();
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const verification = await (verifyAuthenticationResponse as any)({
       response,
       expectedChallenge,
-      expectedOrigin: ORIGIN,
-      expectedRPID: RP_ID,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
       credential: {
         id: credential.id,
         publicKey: Buffer.from(credential.publicKey, 'base64'),
@@ -164,7 +182,7 @@ export async function finishWebAuthnAuthentication(
       data: { webAuthnCredentials: updatedCreds },
     });
 
-    await redis.del(challengeKey(userId));
+    await redis.del(key);
     return true;
   } catch (err) {
     log.error({ err, userId }, 'WebAuthn authentication verification failed');
