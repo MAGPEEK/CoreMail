@@ -12,7 +12,7 @@
  */
 import { Queue } from 'bullmq';
 import { createBullMqConnection } from '@coremail/core';
-import { prisma } from '@coremail/storage/prisma';
+import { buildOutboundJobOptions, loadQueueSettings, type QueueSettingsLike } from '@coremail/storage/queue-options';
 
 export const OUTBOUND_QUEUE_NAME = 'smtp-outbound';
 
@@ -24,44 +24,27 @@ export interface RawOutboundJob {
   rawMessage:   string;   // RFC 5322, base64
 }
 
-export interface OutboundJobOptions {
-  jobId:    string;
-  attempts: number;
-  backoff:  { type: 'exponential'; delay: number };
-}
+export type OutboundJobOptions = ReturnType<typeof buildOutboundJobOptions> & { jobId: string };
 
-/** Pure: retry options, mirroring smtp-server `enqueueOutbound` (QueueSettings or 10 × 60 s). */
+/** Pure: retry + retention options from QueueSettings (same policy as every other producer). */
 export function outboundJobOptions(
   jobId: string,
-  settings: { maxRetryAttempts: number; retryBackoffDelaySec: number } | null,
+  settings: Partial<QueueSettingsLike> | null,
 ): OutboundJobOptions {
-  return {
-    jobId,
-    attempts: settings?.maxRetryAttempts ?? 10,
-    backoff:  { type: 'exponential', delay: (settings?.retryBackoffDelaySec ?? 60) * 1000 },
-  };
+  return { ...buildOutboundJobOptions(settings), jobId };
 }
 
 let queue: Queue | null = null;
 function outboundQueue(): Queue {
   if (!queue) {
-    queue = new Queue(OUTBOUND_QUEUE_NAME, {
-      connection: createBullMqConnection(),
-      defaultJobOptions: { removeOnComplete: { count: 100 }, removeOnFail: { count: 500 } },
-    });
+    queue = new Queue(OUTBOUND_QUEUE_NAME, { connection: createBullMqConnection() });
   }
   return queue;
 }
 
 /** Enqueue a raw message; throws when Redis is unreachable (caller reports an EAS error). */
 export async function enqueueRawOutbound(job: RawOutboundJob): Promise<string> {
-  let settings: { maxRetryAttempts: number; retryBackoffDelaySec: number } | null = null;
-  try {
-    settings = await prisma.queueSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { maxRetryAttempts: true, retryBackoffDelaySec: true },
-    });
-  } catch { /* DB unreachable — defaults */ }
+  const settings = await loadQueueSettings(); // schema defaults when the DB is unreachable
   const added = await outboundQueue().add('send', job, outboundJobOptions(job.messageId, settings));
   return added.id ?? job.messageId;
 }

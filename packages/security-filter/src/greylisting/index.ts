@@ -1,9 +1,14 @@
 import { getRedisClient, greylistKey, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
+import { BlockList, isIP } from 'node:net';
+import { normalizeSenderIp } from '../dnsbl/answer.js';
 
 const log = createLogger('security-filter:greylisting');
 
-// Defaults — overridden by SmtpSettings (TTL 60s in `getOpts()`)
+// Single source of truth for greylisting: SmtpSettings (BCP → SMTP → Greylisting,
+// the only page that edits all four fields incl. the whitelist). The BCP
+// Protection page writes through to the same row (api-gateway admin/security.ts).
+// Defaults — overridden by SmtpSettings (TTL 60s in `getOpts()`, invalidated on settings:reload)
 const DEFAULT_WAIT_SECONDS     = 300;     // 5 min
 const DEFAULT_TTL_HOURS        = 4;
 const WHITELIST_TTL_SECONDS    = 2592000; // 30 days
@@ -49,20 +54,41 @@ export function invalidateGreylistOptsCache(): void {
   _opts = null;
 }
 
-function isExempt(opts: GreylistOpts, ip: string, sender: string): boolean {
-  if (opts.whitelist.length === 0) return false;
+/**
+ * Pure: is the (ip, sender) pair exempt by the SmtpSettings.greylistWhitelist?
+ * Entries: exact IP, CIDR (IPv4 or IPv6, real prefix matching via
+ * net.BlockList), full sender address, or sender domain. Case-insensitive;
+ * IPv4-mapped IPv6 client addresses are unwrapped first.
+ */
+export function isGreylistExempt(whitelist: readonly string[], rawIp: string, sender: string): boolean {
+  if (whitelist.length === 0) return false;
+  const ip = normalizeSenderIp(rawIp);
+  const fam = isIP(ip);
   const senderLc = sender.toLowerCase();
-  const senderDomain = senderLc.includes('@') ? senderLc.split('@')[1] : '';
-  for (const entry of opts.whitelist) {
-    if (entry === ip.toLowerCase()) return true;            // IP match
-    if (entry === senderLc) return true;                    // sender address
-    if (senderDomain && entry === senderDomain) return true; // Domain
-    if (entry.includes('/') && ip.startsWith(entry.split('/')[0]!.split('.').slice(0, 3).join('.'))) {
-      // /24 approximation for CIDR notation — more robust CIDR logic would be better, but this is "good enough" for SMBs.
-      return true;
+  const senderDomain = senderLc.includes('@') ? senderLc.slice(senderLc.lastIndexOf('@') + 1) : '';
+  for (const raw of whitelist) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry.includes('/')) {
+      const [net = '', prefixStr = ''] = entry.split('/');
+      const netNorm = normalizeSenderIp(net);
+      const netFam = isIP(netNorm);
+      const prefix = Number(prefixStr);
+      if (!fam || !netFam || netFam !== fam || !/^\d{1,3}$/.test(prefixStr) || prefix > (netFam === 4 ? 32 : 128)) continue;
+      const bl = new BlockList();
+      try { bl.addSubnet(netNorm, prefix, netFam === 4 ? 'ipv4' : 'ipv6'); } catch { continue; }
+      if (bl.check(ip, fam === 4 ? 'ipv4' : 'ipv6')) return true;
+      continue;
     }
+    if (fam && isIP(normalizeSenderIp(entry)) && normalizeSenderIp(entry) === ip) return true; // IP match
+    if (entry === senderLc) return true;                      // sender address
+    if (senderDomain && entry === senderDomain) return true;   // sender domain
   }
   return false;
+}
+
+function isExempt(opts: GreylistOpts, ip: string, sender: string): boolean {
+  return isGreylistExempt(opts.whitelist, ip, sender);
 }
 
 export interface GreylistResult {

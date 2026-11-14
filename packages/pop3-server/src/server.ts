@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards } from '@coremail/core';
@@ -217,6 +218,7 @@ async function reloadListeners(): Promise<void> {
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  void initRuntimeLogLevel('pop3-server', { aliases: ['pop3'] }); // BCP per-service log level
   await refreshHostname();
   await refreshTlsConfig();
 

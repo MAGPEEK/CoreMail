@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
+import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_SUBMISSION } from '../capabilities.js';
@@ -135,7 +136,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
     senderUserId: account.ownerUserId ?? ctx.user.userId,
     ...(domain?.dkimPrivateKey ? { dkimDomain: domain.name, dkimSelector: domain.dkimSelector, dkimPrivateKey: domain.dkimPrivateKey } : {}),
     rawMessage: stripBccHeader(c.raw).toString('base64'),
-  }, { jobId, ...(delay > 0 ? { delay } : {}) });
+  }, { ...(await getOutboundJobOptions()), jobId, ...(delay > 0 ? { delay } : {}) });
   void prisma.systemLog.create({
     data: {
       level: 'INFO', service: 'jmap-server', category: 'MAIL_FLOW',

@@ -1,6 +1,7 @@
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { resolveHardened } from '../dns-hardened.js';
+import { interpretDnsblAnswer, isNonRoutableSender, isNxdomainError, normalizeSenderIp, reverseIpForDnsbl } from './answer.js';
 
 const log = createLogger('security-filter:dnsbl');
 
@@ -37,21 +38,25 @@ export interface DnsblResult {
   action: DnsblAction | null;
 }
 
-// ── DNS cache (1h TTL) ────────────────────────────────────────────────────────
-interface CacheEntry { result: { listed: boolean; response?: string }; expiresAt: number }
+// ── DNS cache ────────────────────────────────────────────────────────────────
+// Only definite answers are cached, and only briefly: positive listings and
+// NXDOMAIN for 5 minutes. Timeouts, SERVFAIL and "query refused" codes are
+// never cached — a transient resolver problem must not whitelist an IP for an
+// hour (the previous behaviour).
+interface QueryResult { listed: boolean; refused?: boolean; response?: string }
+interface CacheEntry { result: QueryResult; expiresAt: number }
 const dnsCache = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1h
+export const DNSBL_CACHE_TTL_MS = 5 * 60 * 1000;
 
-function getCache(key: string): CacheEntry['result'] | undefined {
+function getCache(key: string): QueryResult | undefined {
   const e = dnsCache.get(key);
   if (!e) return undefined;
   if (Date.now() > e.expiresAt) { dnsCache.delete(key); return undefined; }
   return e.result;
 }
-function setCache(key: string, result: CacheEntry['result']): void {
-  dnsCache.set(key, { result, expiresAt: Date.now() + CACHE_TTL_MS });
-  // Soft cleanup: every 200 entries, remove stale entries
-  if (dnsCache.size > 1000) {
+function setCache(key: string, result: QueryResult): void {
+  dnsCache.set(key, { result, expiresAt: Date.now() + DNSBL_CACHE_TTL_MS });
+  if (dnsCache.size > 5000) {
     const now = Date.now();
     for (const [k, v] of dnsCache) {
       if (v.expiresAt < now) dnsCache.delete(k);
@@ -60,77 +65,45 @@ function setCache(key: string, result: CacheEntry['result']): void {
 }
 export function clearDnsblCache(): void { dnsCache.clear(); }
 
-// ── IP helpers ────────────────────────────────────────────────────────────────
-function isIpv4(ip: string): boolean { return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip); }
-function isIpv6(ip: string): boolean { return ip.includes(':'); }
+export type DnsResolve = (fqdn: string) => Promise<string[]>;
 
-function expandIpv6(ip: string): string {
-  // "2001:db8::1" → "2001:0db8:0000:0000:0000:0000:0000:0001"
-  if (!ip.includes('::')) {
-    return ip.split(':').map((p) => p.padStart(4, '0')).join('');
-  }
-  const [left, right] = ip.split('::');
-  const leftParts = left ? left.split(':') : [];
-  const rightParts = right ? right.split(':') : [];
-  const missing = 8 - leftParts.length - rightParts.length;
-  const allParts = [
-    ...leftParts,
-    ...Array.from({ length: missing }, () => '0'),
-    ...rightParts,
-  ];
-  return allParts.map((p) => p.padStart(4, '0')).join('');
-}
-
-function reverseIp(ip: string): string {
-  if (isIpv4(ip)) {
-    // 1.2.3.4 → 4.3.2.1
-    return ip.split('.').reverse().join('.');
-  }
-  if (isIpv6(ip)) {
-    // 2001:db8::1 → 32 nibbles, reversed, separated by dots
-    return expandIpv6(ip).split('').reverse().join('.');
-  }
-  return '';
-}
-
-function isPrivateIp(ip: string): boolean {
-  if (isIpv4(ip)) {
-    const parts = ip.split('.').map(Number);
-    const [a, b] = parts as [number, number, number, number];
-    return (
-      a === 10 ||
-      a === 127 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168)
-    );
-  }
-  if (isIpv6(ip)) {
-    // ::1 (loopback), fc00::/7 (ULA), fe80::/10 (link-local)
-    const lower = ip.toLowerCase();
-    return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb');
-  }
-  return true;
-}
-
-// ── DNS query (with 2s timeout) ───────────────────────────────────────────────
-async function queryZone(reversed: string, zone: string, ip: string): Promise<{ listed: boolean; response?: string }> {
+// ── DNS query (timeout handled by resolveHardened) ───────────────────────────
+export async function queryZone(
+  reversed: string,
+  zone: string,
+  ip: string,
+  isWhitelist = false,
+  resolve: DnsResolve = resolveHardened,
+): Promise<QueryResult> {
   const cacheKey = `${zone}|${ip}`;
   const cached = getCache(cacheKey);
   if (cached !== undefined) return cached;
 
   const fqdn = `${reversed}.${zone}`;
+  let addresses: string[];
   try {
-    const addresses = await resolveHardened(fqdn);
-    const result = addresses[0]
-      ? { listed: true as const, response: addresses[0] }
-      : { listed: true as const };
-    setCache(cacheKey, result);
-    return result;
-  } catch {
-    const result = { listed: false as const };
-    setCache(cacheKey, result);
-    return result;
+    addresses = await resolve(fqdn);
+  } catch (err) {
+    if (isNxdomainError(err)) {
+      const result = { listed: false };
+      setCache(cacheKey, result);
+      return result;
+    }
+    // timeout / SERVFAIL / network error — not listed for this check, not cached
+    log.debug({ err, zone, ip }, 'DNSBL query failed (not cached)');
+    return { listed: false };
   }
+
+  const answer = interpretDnsblAnswer(addresses, isWhitelist);
+  if (answer.state === 'refused') {
+    log.warn({ zone, ip, addresses }, 'DNSBL query refused by the list operator (error code) — check resolver / quota');
+    return { listed: false, refused: true };
+  }
+  const result: QueryResult = answer.state === 'listed'
+    ? { listed: true, response: answer.codes[0]! }
+    : { listed: false };
+  setCache(cacheKey, result);
+  return result;
 }
 
 // ── Main function ─────────────────────────────────────────────────────────────
@@ -140,9 +113,10 @@ async function queryZone(reversed: string, zone: string, ip: string): Promise<{ 
  * Falls back to DEFAULT_DNSBL_ZONES if the DB is still empty.
  * Writes hits asynchronously to the `dnsbl_hits` table.
  */
-export async function checkDnsbl(ip: string): Promise<DnsblResult> {
+export async function checkDnsbl(rawIp: string): Promise<DnsblResult> {
   const empty: DnsblResult = { listed: false, whitelisted: false, hits: [], totalScore: 0, action: null };
-  if (!ip || isPrivateIp(ip)) return empty;
+  const ip = rawIp ? normalizeSenderIp(rawIp) : '';
+  if (!ip || isNonRoutableSender(ip)) return empty;
 
   // Load active zones from DB (or fallback)
   let zones: DnsblZoneConfig[];
@@ -176,7 +150,7 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
     }));
   }
 
-  const reversed = reverseIp(ip);
+  const reversed = reverseIpForDnsbl(ip);
   if (!reversed) return empty;
 
   // Whitelist first — on a whitelist hit, we stop
@@ -184,7 +158,7 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
   const blacklistZones = zones.filter((z) => !z.isWhitelist);
 
   for (const z of whitelistZones) {
-    const r = await queryZone(reversed, z.host, ip);
+    const r = await queryZone(reversed, z.host, ip, true);
     if (r.listed) {
       log.info({ ip, zone: z.host }, 'DNSWL hit — bypassing further checks');
       return { ...empty, whitelisted: true, hits: [{ zone: z, response: r.response ?? '' }] };
@@ -220,16 +194,17 @@ export async function checkDnsbl(ip: string): Promise<DnsblResult> {
  * Live test: checks an IP against all zones (including disabled ones).
  * Used by the admin panel.
  */
-export async function testDnsbl(ip: string): Promise<{ zone: DnsblZoneConfig; listed: boolean; response?: string }[]> {
+export async function testDnsbl(rawIp: string): Promise<{ zone: DnsblZoneConfig; listed: boolean; response?: string }[]> {
   const rows = await prisma.dnsblZone.findMany({
     orderBy: { sortOrder: 'asc' },
     select: { id: true, host: true, name: true, action: true, weight: true, isWhitelist: true },
   });
   const zones: DnsblZoneConfig[] = rows.map((r) => ({ ...r, action: r.action as DnsblAction }));
-  const reversed = reverseIp(ip);
+  const ip = normalizeSenderIp(rawIp);
+  const reversed = reverseIpForDnsbl(ip);
   if (!reversed) return [];
   return Promise.all(
-    zones.map(async (z) => ({ zone: z, ...(await queryZone(reversed, z.host, ip)) })),
+    zones.map(async (z) => ({ zone: z, ...(await queryZone(reversed, z.host, ip, z.isWhitelist)) })),
   );
 }
 

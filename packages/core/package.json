@@ -11,7 +11,8 @@
     "./config": "./dist/config/index.js",
     "./logger": "./dist/logger/index.js",
     "./calendar": "./dist/calendar/ical.js",
-    "./http": "./dist/http/index.js"
+    "./http": "./dist/http/index.js",
+    "./ssrf": "./dist/net/ssrf.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

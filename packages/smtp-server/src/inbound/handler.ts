@@ -188,6 +188,11 @@ async function onMessage(
     throw new Error(`550 5.7.1 ${filterResult.reason ?? 'Message rejected'}`);
   }
 
+  if (filterResult.action === 'defer') {
+    // e.g. ClamAV unavailable with clamavBlockOnFailure — sender retries later
+    throw new Error(`451 4.7.1 ${filterResult.reason ?? 'Temporary content filter failure'}`);
+  }
+
   if (filterResult.action === 'quarantine') {
     await quarantineMessage({
       raw,

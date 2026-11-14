@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
@@ -155,6 +156,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // v6: shared error middleware (registered last)
 app.use(errorMiddleware(log));
 
+void initRuntimeLogLevel('activesync', { aliases: ['eas'] }); // BCP per-service log level
 // v6: internal service behind the api-gateway — loopback by default
 const HOST = resolveBindHost();
 app.listen(PORT, HOST, () => {

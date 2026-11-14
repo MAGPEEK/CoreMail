@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
@@ -43,6 +44,7 @@ import { authRouter } from './routes/auth.js';
 import { retentionTagsRouter } from './routes/retention-tags.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
+import { startSseHub } from './lib/sse-hub.js';
 import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
@@ -404,6 +406,8 @@ async function start() {
   // v6: one-time setup token (logged while the setup wizard is pending) +
   // backfill of the persistent setup flag for existing installations.
   await initSetupToken(log).catch((err) => log.error({ err }, 'Setup token initialisation failed — setup wizard stays locked'));
+  void initRuntimeLogLevel('api-gateway', { aliases: ['api'] }); // BCP per-service log level
+  void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
   // allocation per mailbox repeats this check lazily in every service).

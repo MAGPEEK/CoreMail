@@ -37,11 +37,26 @@ function checkClamAV(): Promise<{ version: string }> {
 }
 
 async function getOrCreateSettings() {
-  return prisma.securitySettings.upsert({
+  const sec = await prisma.securitySettings.upsert({
     where:  { id: 'singleton' },
     update: {},
     create: { id: 'singleton' },
   });
+  return withSmtpGreylist(sec);
+}
+
+/**
+ * Greylisting has a single source of truth: SmtpSettings (BCP → SMTP →
+ * Greylisting, which also holds the whitelist). The Protection page edits
+ * the same values — GET shows the SmtpSettings values, PUT writes through.
+ */
+async function withSmtpGreylist<T extends object>(sec: T): Promise<T> {
+  const smtp = await prisma.smtpSettings.findUnique({
+    where:  { id: 'singleton' },
+    select: { greylistingEnabled: true, greylistWaitSec: true, greylistTtlHours: true },
+  }).catch(() => null);
+  if (!smtp) return sec;
+  return { ...sec, greylistEnabled: smtp.greylistingEnabled, greylistWaitSec: smtp.greylistWaitSec, greylistTtlHours: smtp.greylistTtlHours };
 }
 
 // ── GET /admin/security/settings ─────────────────────────────────────────────
@@ -97,6 +112,20 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...parsed.data } as any,
   });
 
+  // Write greylisting through to SmtpSettings (single source of truth, see withSmtpGreylist)
+  const grey = {
+    ...(parsed.data.greylistEnabled  !== undefined ? { greylistingEnabled: parsed.data.greylistEnabled } : {}),
+    ...(parsed.data.greylistWaitSec  !== undefined ? { greylistWaitSec:    parsed.data.greylistWaitSec } : {}),
+    ...(parsed.data.greylistTtlHours !== undefined ? { greylistTtlHours:   parsed.data.greylistTtlHours } : {}),
+  };
+  if (Object.keys(grey).length > 0) {
+    await prisma.smtpSettings.upsert({
+      where:  { id: 'singleton' },
+      update: grey,
+      create: { id: 'singleton', ...grey },
+    });
+  }
+
   // Sync action thresholds to rspamd controller if score values changed
   if (
     parsed.data.rspamdGreylistScore !== undefined ||
@@ -142,7 +171,7 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
   // Notify security-filter to reload settings from DB (hot-reload)
   void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '').catch(() => {});
 
-  res.json(settings);
+  res.json(await withSmtpGreylist(settings));
 });
 
 // ── GET /admin/security/status ────────────────────────────────────────────────

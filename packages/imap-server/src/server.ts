@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import net from 'node:net';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
@@ -206,6 +207,7 @@ async function reloadListeners(): Promise<void> {
 
 async function main() {
   await connectDatabase();
+  void initRuntimeLogLevel('imap-server', { aliases: ['imap'] }); // BCP per-service log level
   await ensureBuckets();
   await refreshHostname();
   await refreshTlsConfig();

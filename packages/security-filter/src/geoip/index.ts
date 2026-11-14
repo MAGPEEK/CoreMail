@@ -1,6 +1,7 @@
 import * as maxmind from '@maxmind/geoip2-node';
 import { createLogger } from '@coremail/core';
 import { existsSync } from 'fs';
+import { normalizeSenderIp } from '../dnsbl/answer.js';
 
 const log = createLogger('security-filter:geoip');
 
@@ -45,7 +46,7 @@ export async function checkCountry(
 
   let countryCode: string | undefined;
   try {
-    const response = reader.country(ip);
+    const response = reader.country(normalizeSenderIp(ip));
     countryCode = response.country?.isoCode ?? undefined;
   } catch {
     // IP not in database (private/loopback) — allow

@@ -12,6 +12,8 @@
  *   WS   /jmap/ws                     → JMAP over WebSocket (subprotocol "jmap")
  * Switch: BCP → Server → "JMAP" (ServerSettings.jmapEnabled, default on).
  */
+import { corsHeadersFor, parseOriginList } from './cors.js';
+import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
@@ -23,7 +25,7 @@ import { resolveAccounts } from './accounts.js';
 import { parseRequest, processRequest } from './dispatcher.js';
 import { RequestError } from './errors.js';
 import { buildSession, sessionStateFor } from './session.js';
-import { LIMITS, invalidateSettingsCache, publicBaseUrl } from './settings.js';
+import { LIMITS, invalidateSettingsCache, publicBaseUrl, configuredPublicOrigin } from './settings.js';
 import { invalidateJmapFlagCache, requireJmapEnabled } from './feature-flag.js';
 import { resolveBlob, storeUpload } from './blobs.js';
 import { eventSourceHandler } from './push/eventsource.js';
@@ -47,6 +49,7 @@ function problem(res: express.Response, err: RequestError): void {
 
 async function main(): Promise<void> {
   await connectDatabase();
+  void initRuntimeLogLevel('jmap-server', { aliases: ['jmap'] }); // BCP per-service log level
   startChangeBus();
 
   try {
@@ -68,13 +71,12 @@ async function main(): Promise<void> {
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'jmap-server' }));
 
   // CORS — JMAP web clients (RFC 8620 §8.5 recommends CORS support)
-  app.use(['/jmap', '/.well-known/jmap'], (req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', req.get('Origin') ?? '*');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Max-Age', '600');
-    res.setHeader('Vary', 'Origin');
+  // Credentials only for the allow-list (cors.ts); other origins get '*' without credentials.
+  const extraOrigins = parseOriginList(process.env['JMAP_CORS_ORIGINS']);
+  app.use(['/jmap', '/.well-known/jmap'], async (req, res, next) => {
+    const own = await configuredPublicOrigin().catch(() => null);
+    const headers = corsHeadersFor(req.get('Origin'), own ? [own, ...extraOrigins] : extraOrigins);
+    for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     if (req.method === 'OPTIONS') { res.status(204).end(); return; }
     next();
   });

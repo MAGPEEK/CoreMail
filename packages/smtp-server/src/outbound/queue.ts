@@ -1,14 +1,15 @@
-import { Queue, Worker, type Job } from 'bullmq';
+import { Queue, Worker, UnrecoverableError, type Job } from 'bullmq';
 import { Readable } from 'stream';
 import nodemailer from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
-import { prisma, downloadBuffer, deleteObject } from '@coremail/storage';
+import { prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue } from '@coremail/storage';
 import { relayMessage } from './relay.js';
 import { extractSmtpCode, sendDsnBounce } from './dsn.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
 import { resolveJobDkim } from './dkim.js';
+import { notifyDeadLetter, startQueueMaintenance } from './dead-letter.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
@@ -127,15 +128,8 @@ export function getOutboundQueue(): Queue<OutboundJob> {
   if (!_queue) {
     _queue = new Queue<OutboundJob>(QUEUE_NAME, {
       connection: createBullMqConnection(),
-      defaultJobOptions: {
-        attempts: 10,
-        backoff: {
-          type: 'exponential',
-          delay: 60_000, // 1 min initial delay, doubles on every retry
-        },
-        removeOnComplete: { count: 100 },
-        removeOnFail:     { count: 500 },
-      },
+      // fallback only — every job gets its options from QueueSettings (getOutboundJobOptions)
+      defaultJobOptions: buildOutboundJobOptions(null),
     });
   }
   return _queue;
@@ -143,24 +137,13 @@ export function getOutboundQueue(): Queue<OutboundJob> {
 
 export async function enqueueOutbound(job: OutboundJob): Promise<string> {
   const queue = getOutboundQueue();
-  // Dynamic settings from DB (admin can adjust maxRetryAttempts + backoff
-  // without a container restart) — fall back to defaults if not configured.
-  let attempts = 10;
-  let backoffDelay = 60_000;
-  try {
-    const settings = await prisma.queueSettings.findUnique({ where: { id: 'singleton' } });
-    if (settings) {
-      attempts = settings.maxRetryAttempts;
-      backoffDelay = settings.retryBackoffDelaySec * 1000;
-    }
-  } catch { /* DB may be unreachable — use defaults */ }
-
+  // QueueSettings (retry + retention) — admin changes apply without restart (60 s cache)
+  const opts = await getOutboundJobOptions();
   const result = await queue.add('send', job, {
+    ...opts,
     jobId: `${job.messageId}-${Date.now()}`,
-    attempts,
-    backoff: { type: 'exponential', delay: backoffDelay },
   });
-  log.info({ jobId: result.id, to: job.to, attempts, backoffDelay }, 'Message enqueued to outbound queue');
+  log.info({ jobId: result.id, to: job.to, attempts: opts.attempts, backoffDelay: opts.backoff.delay }, 'Message enqueued to outbound queue');
   return result.id ?? '';
 }
 
@@ -173,6 +156,13 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       const { from, to, senderUserId, dkimDomain, dkimSelector, dkimPrivateKey } = job.data;
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivery started');
+
+      // QueueSettings.outboundRetentionHours: give up on messages that stayed
+      // too long in the queue (→ dead letter + DSN, no further retries).
+      const queueSettings = await loadQueueSettings();
+      if (isExpiredInQueue(job, queueSettings)) {
+        throw new UnrecoverableError(`Message expired in queue after ${queueSettings.outboundRetentionHours} hours`);
+      }
 
       // ── Schedule-send: cancellation check ────────────────────────────────
       // If the user cancelled the scheduled mail in the MWA via "cancel schedule",
@@ -347,7 +337,8 @@ export function startOutboundWorker(): Worker<OutboundJob> {
     // 550 User unknown 10× → IP reputation suffers, recipient MX gets annoyed).
     const { code: smtpCode, isPermanent: isPermanent5xx } = extractSmtpCode(err);
     const attemptsExhausted = job.attemptsMade >= attemptsMax;
-    const isPermanent = isPermanent5xx || attemptsExhausted;
+    const unrecoverable = err instanceof UnrecoverableError || (err as Error | undefined)?.name === 'UnrecoverableError';
+    const isPermanent = isPermanent5xx || attemptsExhausted || unrecoverable;
 
     log.error(
       { jobId: job.id, err, smtpCode, isPermanent, isPermanent5xx, attemptsExhausted, attempt: job.attemptsMade },
@@ -368,6 +359,16 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
     // DSN bounce to MAIL FROM on permanent failure
     if (isPermanent) {
+      // QueueSettings.notifyOnDeadLetter → notice to the admins (throttled)
+      void notifyDeadLetter({
+        jobId:    String(job.id ?? ''),
+        from:     job.data.from,
+        to:       job.data.to,
+        subject:  job.data.message?.subject ?? '',
+        reason:   (err as Error).message,
+        smtpCode,
+        attempts: job.attemptsMade,
+      }).catch((e: unknown) => log.warn({ err: e, jobId: job.id }, 'Dead-letter notification failed'));
       void (async () => {
         try {
           const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
@@ -408,6 +409,10 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       },
     }).catch(() => {});
   });
+
+  // QueueSettings retention: periodic cleaner (completed + auto-flushed dead letters)
+  const stopMaintenance = startQueueMaintenance(getOutboundQueue());
+  worker.on('closed', stopMaintenance);
 
   return worker;
 }
