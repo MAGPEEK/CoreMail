@@ -2,7 +2,8 @@
  * Applies the routing part of a TransportOutcome (packages/storage/src/transport-rules.ts)
  * for ONE envelope recipient inside storeInboundMessage():
  *
- *   reject     → DSN to the envelope sender (none for the null sender <>), no delivery
+ *   reject     → DSN to the envelope sender if it is a LOCAL address (none for the
+ *                null sender <> or forgeable external senders — no backscatter), no delivery
  *   quarantine → raw message + envelope into the quarantine store, no delivery
  *                (skipped for messages re-injected by a BCP quarantine release)
  *   redirect   → deliver ONLY to the redirect target(s), not to the original recipient
@@ -120,6 +121,11 @@ export async function handleTransportOutcome(
     log.warn({ rcptTo: ctx.rcptTo, from: ctx.fromAddr, reason }, 'Mail rejected by TransportRule — no delivery');
     if (isNullSender(ctx.fromAddr)) {
       log.info({ rcptTo: ctx.rcptTo }, 'No DSN for rejected mail: null sender (backscatter protection)');
+    } else if (!(await deps.isLocalAddress(ctx.fromAddr))) {
+      // The envelope sender of an inbound message can be forged; bouncing to it
+      // would send backscatter to innocent third parties. Only local senders
+      // (whose address we own) are notified.
+      log.info({ rcptTo: ctx.rcptTo, from: ctx.fromAddr }, 'No DSN for rejected mail: external sender (backscatter protection)');
     } else if (await deps.claimOnce(`dsn:${msgKey}`)) {
       await deps.sendDsn({
         originalFrom:      ctx.fromAddr,
@@ -129,7 +135,6 @@ export async function handleTransportOutcome(
         failureReason:     reason,
         smtpCode:          550,
         serverHostname:    await deps.serverHostname(),
-        deliverExternal:   true,
       }).catch((err: unknown) => log.error({ err }, 'DSN for transport-rule reject failed'));
     }
     return 'stop';

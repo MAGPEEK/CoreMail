@@ -115,16 +115,23 @@ test('released message (internal flag) is not re-quarantined', async () => {
 
 // ── reject → DSN ─────────────────────────────────────────────────────────────
 
-test('rule reject → DSN to the envelope sender (external allowed), no delivery', async () => {
-  const d = await handleTransportOutcome(outcome({ rejected: true, rejectReason: 'No invoices' }), ctx(), deps());
+test('rule reject from a local sender → DSN to the envelope sender, no delivery', async () => {
+  const d = await handleTransportOutcome(
+    outcome({ rejected: true, rejectReason: 'No invoices' }), ctx({ fromAddr: 'alice@corp.test' }), deps());
   assert.equal(d, 'stop');
   assert.equal(calls.dsn.length, 1);
   const dsn = calls.dsn[0]!;
-  assert.equal(dsn.originalFrom, 'mallory@evil.test');
+  assert.equal(dsn.originalFrom, 'alice@corp.test');
   assert.deepEqual(dsn.originalTo, ['bob@corp.test']);
   assert.equal(dsn.failureReason, 'No invoices');
   assert.equal(dsn.smtpCode, 550);
-  assert.equal(dsn.deliverExternal, true);
+  assert.equal(calls.local.length + calls.external.length + calls.quarantine.length, 0);
+});
+
+test('rule reject from an external (forgeable) sender → no DSN (backscatter protection), no delivery', async () => {
+  const d = await handleTransportOutcome(outcome({ rejected: true }), ctx(), deps());
+  assert.equal(d, 'stop');
+  assert.equal(calls.dsn.length, 0);
   assert.equal(calls.local.length + calls.external.length + calls.quarantine.length, 0);
 });
 
@@ -138,8 +145,8 @@ test('rule reject with null sender → no DSN (backscatter protection)', async (
 
 test('rule reject on a multi-recipient message → only one DSN', async () => {
   const dp = deps();
-  await handleTransportOutcome(outcome({ rejected: true }), ctx({ rcptTo: 'bob@corp.test' }), dp);
-  await handleTransportOutcome(outcome({ rejected: true }), ctx({ rcptTo: 'carol@corp.test' }), dp);
+  await handleTransportOutcome(outcome({ rejected: true }), ctx({ fromAddr: 'alice@corp.test', rcptTo: 'bob@corp.test' }), dp);
+  await handleTransportOutcome(outcome({ rejected: true }), ctx({ fromAddr: 'alice@corp.test', rcptTo: 'carol@corp.test' }), dp);
   assert.equal(calls.dsn.length, 1);
 });
 
