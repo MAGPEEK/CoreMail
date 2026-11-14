@@ -20,7 +20,7 @@
 
 **CoreMail** is a complete, self-hosted mail server for small and medium-sized businesses with **10–500 users** — no licence fees, no vendor lock-in, full data sovereignty.
 
-**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — every client (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) works natively. Optionally enabled: **EWS** (Exchange Web Services) for EWS-capable clients. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
+**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — standard clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) connect via IMAP/SMTP. Optionally enabled: **EWS** (Exchange Web Services) for EWS-capable clients. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
 
 > **Current version: v6.0.0** — security and cleanup release: fixes from a full code review (authentication, JMAP, XSS, cross-mailbox access, SMTP/IMAP protocol bugs, lost mobile mail, DKIM for client submission, retention), dead code removed, automated tests for every fix · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
@@ -52,21 +52,23 @@
 
 ## Features
 
+✅ works · ⚠️ partial · ❌ not available · ⚙️ optional
+
 ### Email Protocols
 
 | Feature | Status | RFC |
 |---------|--------|-----|
 | **SMTP** inbound (port 25) + submission (465 implicit TLS, 587 STARTTLS) | ✅ | 5321 + 6409 |
 | SMTP outbound with MX lookup & DKIM signing | ✅ | 6376 |
-| **IMAP4rev2** (port 143 STARTTLS, 993 implicit TLS) | ✅ | **9051** |
-| IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ✅ | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
-| **POP3** (port 110 STLS, 995 implicit TLS) + SASL PLAIN/LOGIN + app-password support | ✅ | 1939 + 5034 |
+| **IMAP4rev2** (port 993 implicit TLS; port 143 without working STARTTLS) | ⚠️ STARTTLS on 143 is advertised but refused (use 993); messages are rebuilt from the stored text/HTML body, so attachments and original headers are not served | **9051** |
+| IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ⚠️ ESEARCH, LIST-EXTENDED, LIST-STATUS and QUOTA are advertised but not implemented; SEARCH supports flag criteria only; STATUS SIZE always returns 0 | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
+| **POP3** (port 995 implicit TLS, port 110 plaintext) + USER/PASS + app-password support | ⚠️ no STLS and no SASL; messages are delivered as plain text only (no HTML, no attachments) | 1939 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | EWS — Exchange Web Services (optional, default off) | ⚙️ | MS-OXWSCORE |
 | Admin CLI `coremail` inside the container (users, mailboxes, connectors, banner, certificates) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
-| ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
-| MWA — Mail Web Access (React, Exchange-like layout) | ✅ |
+| ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ⚠️ after the initial sync, new mail is not delivered to the device (the sync key is not compared against the mailbox change counter) |
+| MWA — Mail Web Access (React, Exchange-like layout) | ⚠️ attachment download and inline images fail (no `/api/v1/mail/attachments/:id` route); the message list shows only the newest 100 messages per folder |
 | RFC 822 source view (modal in MWA) | ✅ |
 | Recipient autocomplete in compose (To/CC/BCC, keyboard navigation) | ✅ |
 | Resizable panels in MWA (folder tree / list / reading pane) | ✅ |
@@ -74,11 +76,11 @@
 | Shared Mailbox reader in MWA — "Open another mailbox" via account dropdown | ✅ |
 | Folder CRUD in Shared Mailboxes (new folder, rename, delete, default folders protected) | ✅ |
 | Email aliases per user mailbox and Shared Mailbox | ✅ |
-| Room and equipment mailboxes with auto-accept | ✅ |
-| Out-of-office assistant | ✅ |
-| Inbox rules & transport rules + 9 Exchange templates (disclaimer, CEO phishing, PCI-DSS, …) | ✅ |
-| Full-text search (< 200 ms, PostgreSQL GIN index) | ✅ |
-| S/MIME — signing, encryption, verification | ✅ |
+| Room and equipment mailboxes with auto-accept | ⚠️ managed via the REST/EMS API only (no BCP page); see room booking below |
+| Out-of-office assistant | ❌ settings are saved, but no automatic replies are sent |
+| Inbox rules & transport rules + 9 Exchange templates (disclaimer, CEO phishing, PCI-DSS, …) | ⚠️ transport rules run only on local delivery; reject and quarantine silently discard the mail; redirect/add/remove recipient have no effect |
+| Mailbox search in MWA (subject, sender, body) | ⚠️ substring match without a full-text index; at most 100 results |
+| S/MIME — signing, encryption, verification | ⚠️ signing and encryption work; incoming signatures are always reported as invalid |
 | SMTP gateway mode (relay to upstream MTA) | ✅ |
 | Retention policies, Exchange 2019 compliant (DPT/RPT/personal tags · 8 templates · Recoverable Items) | ✅ |
 | Managed Folder Assistant (tag hierarchy, soft/hard delete) | ✅ |
@@ -88,13 +90,13 @@
 
 | Feature | Status |
 |---------|--------|
-| Personal calendar | ✅ |
+| Personal calendar | ⚠️ the all-day flag and recurrence rule of events created in MWA are not stored in the event fields |
 | Shared team calendars | ✅ |
 | Meeting requests (iCal standard) | ✅ |
-| Free/busy lookup | ✅ |
-| Room and resource booking with auto-accept | ✅ |
-| CalDAV (iOS, Android, Thunderbird) | ✅ |
-| Contacts & CardDAV | ✅ |
+| Free/busy lookup | ⚠️ only your own calendars and calendars shared with you; recurring events are not expanded; EWS GetUserAvailability returns no events |
+| Room and resource booking with auto-accept | ⚠️ only for invitations arriving via inbound SMTP; the organizer gets no reply; pending bookings cannot be approved; time zones are not handled reliably |
+| CalDAV (iOS, Android, Thunderbird) | ⚠️ REPORT and MKCALENDAR are answered with 405, so most sync clients cannot sync; ETags never change |
+| Contacts & CardDAV | ⚠️ contacts work in MWA; CardDAV REPORT is answered with 405 |
 | Tasks & notes | ✅ |
 | Global Address List (GAL) | ✅ |
 
@@ -106,16 +108,15 @@
 | DKIM signing of outgoing email | ✅ |
 | DNSBL (Spamhaus ZEN, SpamCop, configurable) | ✅ |
 | Greylisting with automatic whitelist | ✅ |
-| Country filtering (MaxMind GeoIP) | ✅ |
+| Country filtering (MaxMind GeoIP) | ❌ the BCP country settings are not passed to the filter |
 | ClamAV antivirus (separate container) | ✅ |
 | Rspamd 4.0 anti-spam (Bayes, self-learning, separate container) | ✅ |
 | Address blacklist (global / domain / user) | ✅ |
-| Attachment filter (MIME types, double extensions) | ✅ |
-| Quarantine management with detail view and MIME preview | ✅ |
-| TLS (STARTTLS + implicit TLS) on all ports | ✅ |
+| Attachment filter (MIME types, double extensions) | ⚠️ fixed built-in list; the BCP extension and size settings are not applied |
+| Quarantine management with detail view and MIME preview | ⚠️ "release" only marks the item; the message is not delivered |
+| TLS (STARTTLS + implicit TLS) | ⚠️ no working STARTTLS on IMAP 143 and POP3 110 (use 993/995) |
 | Integrated HTTPS proxy (port 443, hot reload, managed in BCP) | ✅ |
 | DNS hardening (trusted resolvers, cross-validation, integrity check) | ✅ |
-| eDiscovery & Legal Hold (cross-mailbox search, MBOX export) | ✅ |
 | Message trace with CSV export | ✅ |
 | SMTP brute-force protection & rate limiting | ✅ |
 
@@ -124,12 +125,12 @@
 | Feature | Status |
 |---------|--------|
 | Local login (bcrypt + pepper) | ✅ |
-| LDAP / Active Directory (managed in BCP, attribute mapping, sync) | ✅ |
-| SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google, Authentik, Okta) | ✅ |
-| SAML 2.0 | ✅ |
+| LDAP / Active Directory (managed in BCP, attribute mapping, sync) | ⚠️ LDAP passwords are checked only by CalDAV and JMAP Basic auth (not by web login, IMAP, SMTP, POP3, ActiveSync); no user sync |
+| SSO via OIDC / OAuth2 (Azure AD, Keycloak, Google, Authentik, Okta) | ❌ providers can be configured, but no login flow is wired |
+| SAML 2.0 | ❌ not implemented |
 | MFA: TOTP (authenticator app) | ✅ |
-| MFA: WebAuthn / FIDO2 (YubiKey, Touch ID) | ✅ |
-| MFA: backup codes | ✅ |
+| MFA: WebAuthn / FIDO2 (YubiKey, Touch ID) | ❌ server endpoints only; no registration or sign-in in MWA/BCP |
+| MFA: backup codes | ❌ codes can be generated, but the login forms accept only 6-digit TOTP codes |
 | App passwords for mail clients (IMAP/SMTP/POP3/EAS — MFA-compatible) | ✅ |
 | Password change in the web client (MWA) | ✅ |
 
@@ -137,26 +138,26 @@
 
 | Feature | Status |
 |---------|--------|
-| RBAC with 7 roles | ✅ |
-| SMTP queue management (BullMQ-native, retry, dead letter, retention) | ✅ |
+| RBAC with 7 admin roles | ⚠️ only Organization Management and Server Management can use the BCP, both with full rights; the other roles have no admin access |
+| SMTP queue management (BullMQ-native, retry, dead letter, retention) | ⚠️ retention, auto-flush and dead-letter notification settings are stored but not applied |
 | DNS check in BCP SMTP configuration (MX, SPF, DKIM, DMARC, Autodiscover, PTR — live) | ✅ |
 | DNS records table UI with status indicators (green/yellow) | ✅ |
 | Message trace with filters & CSV export | ✅ |
-| Quarantine management with detail slide-over and MIME preview | ✅ |
+| Quarantine management with detail slide-over and MIME preview | ⚠️ "release" does not deliver the message |
 | SMTP infrastructure configuration (ESMTP, banner, relay, greylisting) | ✅ |
-| SSL/TLS management (integrated HTTPS proxy, certificate upload) | ✅ |
-| SSO provider management (OIDC/OAuth2, SAML, quick-select presets) | ✅ |
-| LDAP/AD connection management (attribute mapping, connection test, sync) | ✅ |
+| SSL/TLS management (integrated HTTPS proxy, certificate upload, Let's Encrypt with manual renewal) | ✅ |
+| SSO provider management (OIDC/OAuth2, SAML, quick-select presets) | ⚠️ providers can be saved, but SSO login does not work (see Authentication) |
+| LDAP/AD connection management (attribute mapping, connection test, sync) | ⚠️ the connection test checks TCP reachability only; "sync" only updates a timestamp |
 | Rspamd integration (thresholds, Bayes training, module overview) | ✅ |
 | Audit log (every admin action traceable) | ✅ |
 | Service configuration (live, no restart required) | ✅ |
-| Log viewer with per-service log level | ✅ |
-| Backup: MBOX/EML export (self-service per user) | ✅ |
-| Backup: admin full backup to S3 (point-in-time recovery) | ✅ |
-| Kubernetes Helm chart (HPA, HA) | ✅ |
-| Structured JSON logs (pino) + per-service log level | ✅ |
-| Web Push / VAPID notifications | ✅ |
-| Automatic mailbox provisioning on first login | ✅ |
+| Log viewer with per-service log level | ⚠️ shows mail-flow and selected auth events; the per-service log level is saved but not applied |
+| Backup: MBOX/EML export (self-service per user) | ❌ no MWA UI, and the endpoints are not reachable through the API gateway |
+| Backup: admin full backup to S3 | ⚠️ messages are rebuilt from stored text/HTML (attachments and original headers not included); no point-in-time recovery; MBOX import does not work |
+| Kubernetes Helm chart (HPA, HA) | ⚠️ outdated: references per-service images (0.6.0) instead of the single `coremail-app` image |
+| Structured JSON logs (pino) + per-service log level | ⚠️ the log level is set globally via `LOG_LEVEL`; the BCP per-service setting is not applied |
+| Web Push / VAPID notifications | ⚠️ new-mail push is sent only while the user has MWA open |
+| Automatic mailbox provisioning on first login | ❌ mailboxes are created together with the user (BCP/CLI); users created at first LDAP sign-in get no mailbox |
 
 ### MWA User Settings
 
@@ -165,7 +166,7 @@
 | Edit display name | ✅ |
 | Change password (strength meter, visibility toggle) | ✅ |
 | Signatures (rich-text editor, auto-insert) | ✅ |
-| Out-of-office assistant with date-range calendar integration | ✅ |
+| Out-of-office assistant with date-range calendar integration | ❌ settings are saved, but no automatic replies are sent |
 | Storage overview per folder with donut chart | ✅ |
 | Reading pane layout (right / bottom / off) | ✅ |
 | Message density (compact / normal / comfortable) | ✅ |
@@ -196,12 +197,12 @@ CoreMail works with every standard mail client. The recommended configuration de
 | Setting | Value |
 |---------|-------|
 | IMAP server | `mail.<your-domain>` |
-| IMAP port | **993** (implicit TLS, recommended) or **143** (STARTTLS) |
+| IMAP port | **993** (implicit TLS) — STARTTLS on 143 does not work |
 | SMTP server | `mail.<your-domain>` |
 | SMTP port | **465** (implicit TLS) or **587** (STARTTLS, recommended) |
 | Authentication | **PLAIN** or **LOGIN** (SASL) |
 | Username | `max@firma.de` (full email address) |
-| Password | account password OR **app password** (required when MFA is enabled) |
+| Password | account password OR **app password** (recommended when MFA is enabled) |
 
 ### JMAP (since v5.7.1)
 
@@ -220,11 +221,11 @@ Toggle: BCP → Server → "JMAP" (default: on). Details: [docs/jmap.md](docs/jm
 
 ### App Passwords (for MFA Accounts)
 
-With 2FA enabled, mail clients can no longer use the regular password — the MFA code cannot be transmitted via IMAP/SMTP. Solution: create an **app password** per client.
+The MFA code cannot be transmitted via IMAP/SMTP/POP3/ActiveSync, so these protocols accept the account password even when 2FA is enabled. Recommended: create an **app password** per client. JMAP requires an app password once MFA is enabled.
 
 1. Sign in to MWA → Settings → **Security** → "App passwords"
 2. "New app password" → enter a name (e.g. "Apple Mail Mac")
-3. Copy the generated 32-character password
+3. Copy the generated password (format `XXXX-XXXX-XXXX-XXXX`)
 4. Enter it as the password in the client
 5. If lost/stolen: revoke that single app password — the others remain valid
 
@@ -413,9 +414,9 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 | 25 | SMTP (inbound) | STARTTLS |
 | 465 | SMTPS (submission) | Implicit TLS |
 | 587 | SMTP submission | STARTTLS |
-| 143 | IMAP | STARTTLS |
+| 143 | IMAP | none (STARTTLS advertised but refused — use 993) |
 | 993 | IMAPS | Implicit TLS |
-| 110 | POP3 | STARTTLS |
+| 110 | POP3 | none (plaintext) |
 | 995 | POP3S | Implicit TLS |
 
 ---
