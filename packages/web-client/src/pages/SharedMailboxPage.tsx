@@ -165,9 +165,13 @@ export function SharedMailboxPage() {
   const deleteFolder = useMutation({
     mutationFn: (folderId: string) =>
       api.delete(`/user/shared-mailboxes/${id}/folders/${folderId}`),
-    onSuccess: () => {
+    onSuccess: (_data, deletedFolderId) => {
       void invalidateFolders();
-      if (selectedFolderId === renamingId) setSelectedFolderId(null);
+      // Deselect the deleted folder (Inbox is auto-selected again by the effect below)
+      if (selectedFolderId === deletedFolderId) {
+        setSelectedFolderId(null);
+        setSelectedMessageId(null);
+      }
       toast.success('Ordner gelöscht');
     },
     onError: (e: Error) => toast.error(e.message || 'Konnte nicht löschen'),

@@ -5,6 +5,7 @@ import {
   CheckCircle2, XCircle, HelpCircle, UserPlus, Calendar as CalendarIcon,
   Loader2, RefreshCw,
 } from 'lucide-react';
+import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, EventAttendee } from '../api/types.js';
@@ -239,6 +240,7 @@ export function EventEditDialog({
       e.preventDefault();
       setActiveIdx((i) => (i - 1 + suggestions.length) % suggestions.length);
     } else if (e.key === 'Escape') {
+      e.stopPropagation(); // close only the suggestions, not the dialog
       setShowSug(false);
     }
   };
@@ -319,8 +321,13 @@ export function EventEditDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+    <Modal
+      onClose={onClose}
+      label={isEdit ? 'Termin bearbeiten' : 'Neuer Termin'}
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col"
+    >
 
         {/* Header — title + refresh + close */}
         <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
@@ -592,8 +599,7 @@ export function EventEditDialog({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

@@ -1,8 +1,9 @@
 import { StrictMode, Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
+import { QueryCache, MutationCache, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import toast, { Toaster } from 'react-hot-toast';
+import { Lock, EyeOff } from 'lucide-react';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
 import { useThemeStore, resolveIsDark, ECP_ACCENT_RGB } from './store/theme.js';
@@ -35,11 +36,35 @@ import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
-import { getToken } from './api/client.js';
+import { api, getToken } from './api/client.js';
+import { useAccessStore } from './store/access.js';
+import { accessForPath, firstAllowedPath, type AdminAreas } from './lib/adminAreas.js';
+import { ApiError } from './lib/errors.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import './index.css';
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
+function toastError(err: unknown) {
+  const msg = err instanceof Error && err.message ? err.message : 'Unbekannter Fehler';
+  // Redirect cases are handled by the API client
+  if (msg === 'Session expired' || msg === 'MFA_REQUIRED') return;
+  toast.error(msg, { id: `err:${msg}` });
+}
+
+// Global error reporting: failed queries/mutations show a toast unless the query
+// opts out (meta.silentError) or the mutation has its own onError handler.
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (err, query) => {
+      // 403 on background reads = area not granted (e.g. dashboard widgets of other areas) — no toast spam
+      if (query.meta?.['silentError'] || (err instanceof ApiError && err.status === 403)) return;
+      toastError(err);
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (err, _v, _c, mutation) => { if (!mutation.options.onError && !mutation.meta?.['silentError']) toastError(err); },
+  }),
+  defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
+});
 
 // ── ThemeApplier — reacts to store changes (no OWA sync!) ───────────────────
 function ThemeApplier() {
@@ -134,21 +159,67 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+interface MeResponse { adminAreas?: AdminAreas }
+
+/** Loads the admin areas (GET /user/me). Without dminAreas everything stays visible. */
+function useAdminAreasLoader() {
+  const setAreas = useAccessStore((s) => s.setAreas);
+  const { data } = useQuery({
+    queryKey: ['user-me'],
+    queryFn: () => api.get<MeResponse>('/user/me'),
+    staleTime: 5 * 60_000,
+    meta: { silentError: true },
+  });
+  useEffect(() => {
+    if (data) setAreas(data.adminAreas && typeof data.adminAreas === 'object' ? data.adminAreas : null);
+  }, [data, setAreas]);
+}
+
+function NoAccessPage() {
+  return (
+    <div className="p-8 max-w-xl mx-auto mt-16 text-center space-y-2">
+      <EyeOff size={28} className="mx-auto text-gray-400" />
+      <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Kein Zugriff</h2>
+      <p className="text-sm text-gray-500 dark:text-gray-400">Ihre Administratorrolle hat keinen Zugriff auf diesen Bereich.</p>
+    </div>
+  );
+}
+
 function AdminLayout({ children }: { children: React.ReactNode }) {
   // Automatic logout on inactivity — configurable in Global Settings
   useInactivityLogout();
+  useAdminAreasLoader();
+  const location = useLocation();
+  const areas = useAccessStore((s) => s.areas);
+  const access = accessForPath(areas, location.pathname);
 
   return (
     <div className="h-full flex flex-col">
       <TopBar />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950">
-          <ErrorBoundary>{children}</ErrorBoundary>
+        <main
+          className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950"
+          {...(access === 'read' ? { 'data-area-readonly': '' } : {})}
+        >
+          {access === 'read' && (
+            <div role="status" className="m-4 mb-0 flex items-center gap-2 px-3 py-2 rounded border border-amber-200 bg-amber-50 text-amber-800 text-xs dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-200">
+              <Lock size={13} /> Nur Lesezugriff — Änderungen sind in diesem Bereich für Ihre Rolle deaktiviert.
+            </div>
+          )}
+          <ErrorBoundary key={location.pathname}>
+            {access === 'none' ? <NoAccessPage /> : children}
+          </ErrorBoundary>
         </main>
       </div>
     </div>
   );
+}
+
+/** "/" → first page the admin may see */
+function HomeRedirect() {
+  const areas = useAccessStore((s) => s.areas);
+  return <Navigate to={firstAllowedPath(areas)} replace />;
 }
 
 createRoot(document.getElementById('root')!).render(
@@ -192,7 +263,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/smtp-config" element={<SmtpConfigPage />} />
                   <Route path="/ldap"        element={<LdapPage />} />
                   <Route path="/sso"         element={<SsoPage />} />
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/" element={<HomeRedirect />} />
                 </Routes>
               </AdminLayout>
             </AuthGuard>

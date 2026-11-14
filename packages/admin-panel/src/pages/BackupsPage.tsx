@@ -6,7 +6,7 @@ import {
   Pencil, PauseCircle, Archive, ListChecks,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { api } from '../api/client.js';
+import { api, downloadFile } from '../api/client.js';
 
 /**
  * v3.18.28 BackupsPage v3 — tab-based UI with:
@@ -177,25 +177,10 @@ export function BackupsPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // v3.18.29: Archive object download (stream proxy by S3 key)
+  // v3.18.29: Archive object download (stream proxy by S3 key) — Bearer header + token refresh
   const downloadArchive = async (key: string) => {
-    const token = localStorage.getItem('bcp-token') ?? '';
     try {
-      const res = await fetch(`/api/v1/admin/backups/archive/download?key=${encodeURIComponent(key)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = key.split('/').pop() ?? 'backup.bin';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
+      await downloadFile(`/admin/backups/archive/download?key=${encodeURIComponent(key)}`, key.split('/').pop() ?? 'backup.bin');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -229,25 +214,10 @@ export function BackupsPage() {
     return u?.email ?? id.slice(0, 8);
   };
 
-  // Download via auth token (no direct href — backend needs Bearer)
+  // Download via Authorization header (no direct href — backend needs Bearer)
   const downloadJob = async (jobId: string, filenameHint?: string) => {
-    const token = localStorage.getItem('bcp-token') ?? '';
     try {
-      const res = await fetch(`/api/v1/admin/backups/download/${encodeURIComponent(jobId)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filenameHint ?? `backup-${jobId.slice(0, 8)}.bin`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
+      await downloadFile(`/admin/backups/download/${encodeURIComponent(jobId)}`, filenameHint ?? `backup-${jobId.slice(0, 8)}.bin`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -655,18 +625,13 @@ function RestoreTab(props: { users: UserItem[] }) {
     if (file.size > 500 * 1024 * 1024) { toast.error('Datei zu groß (max 500 MB)'); return; }
     setImporting(true);
     try {
-      const text = await file.text();
-      const token = localStorage.getItem('bcp-token') ?? '';
-      const res = await fetch(`/api/v1/admin/backups/import/${encodeURIComponent(importUserId.trim())}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/mbox', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: text,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      const result = await res.json() as { imported?: number; failed?: number };
+      // Send the File itself as body — the browser streams it; file.text() would
+      // load up to 500 MB into a JS string (and break non-UTF-8 mailboxes).
+      const result = await api.postFile<{ imported?: number; failed?: number }>(
+        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}`,
+        file,
+        'application/mbox',
+      );
       toast.success(`Import: ${result.imported ?? '?'} importiert${result.failed ? `, ${result.failed} fehlgeschlagen` : ''}`);
       setImportUserId('');
       if (fileRef.current) fileRef.current.value = '';

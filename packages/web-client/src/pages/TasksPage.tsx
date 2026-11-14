@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, CheckCircle2, Circle, Flag, Calendar, Trash2,
@@ -8,6 +8,8 @@ import { format } from 'date-fns';
 import { api } from '../api/client.js';
 import type { Task } from '../api/types.js';
 import toast from 'react-hot-toast';
+import { Modal } from '../components/Modal.js';
+import { localInputToIso, isoToLocalInput } from '../lib/datetime.js';
 
 const PRIORITY_COLOR: Record<string, string> = {
   LOW:    'text-gray-400',
@@ -21,36 +23,13 @@ const PRIORITY_LABEL: Record<string, string> = {
   HIGH:   'Hoch',
 };
 
-// ── localStorage — persist reminders ───────────────────────────────────────────
-// Key format: "taskId:reminderISO" → popup fires exactly once per (task, timestamp).
-// If the user changes the timestamp, a new key is created → popup fires again. ✓
+// Reminder popups/mails are handled app-wide by hooks/useTaskReminders.ts (Layout).
 
-const REMINDER_STORAGE_KEY = 'coremail:notified-reminders';
-
-function loadNotifiedReminders(): Set<string> {
-  try {
-    const raw = localStorage.getItem(REMINDER_STORAGE_KEY);
-    return raw ? new Set<string>(JSON.parse(raw) as string[]) : new Set();
-  } catch { return new Set(); }
-}
-
-function saveNotifiedReminders(set: Set<string>): void {
-  try { localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify([...set])); }
-  catch { /* localStorage quota — ignore */ }
-}
-
-function mkReminderKey(taskId: string, reminderIso: string): string {
-  return `${taskId}:${reminderIso}`;
-}
-
-// ───────────────────────────────────────────────────────────────────────────────
-
-/** Adds `minutes` minutes to a datetime-local string (YYYY-MM-DDTHH:mm). */
-function addMinutes(dtLocal: string, minutes: number): string {
+/** Adds `minutes` minutes to a datetime-local string and returns an ISO timestamp (UTC). */
+function addMinutesIso(dtLocal: string, minutes: number): string {
   const d = new Date(dtLocal);
   d.setMinutes(d.getMinutes() + minutes);
-  // ISO without seconds/timezone so it fits as calendar dtEnd
-  return d.toISOString().slice(0, 16);
+  return d.toISOString();
 }
 
 // ── Form types ─────────────────────────────────────────────────────────────────
@@ -91,16 +70,6 @@ export function TasksPage() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editForm, setEditForm]       = useState<EditTaskForm>(EMPTY_EDIT_FORM);
 
-  // Feature 3 – due date notifications: already notified IDs
-  const notifiedIds         = useRef<Set<string>>(new Set());
-  // Reminder popups: load from localStorage → survive page refresh
-  const notifiedReminderIds = useRef<Set<string>>(loadNotifiedReminders());
-
-  // Ref so checkDueDates always sees current tasks in the interval (no stale closure)
-  const allTasksRef = useRef<Task[] | undefined>(undefined);
-  // Ref for user email (for "reminder by mail")
-  const userMeRef   = useRef<{ email: string } | undefined>(undefined);
-
   const statusFilter = filter === 'pending'
     ? ['NOT_STARTED', 'IN_PROGRESS', 'DEFERRED']
     : filter === 'completed' ? ['COMPLETED'] : undefined;
@@ -111,25 +80,11 @@ export function TasksPage() {
     select:   (all) => statusFilter ? all.filter((t) => statusFilter.includes(t.status)) : all,
   });
 
-  // All tasks (unfiltered) for due date check
-  const { data: allTasks } = useQuery({
-    queryKey: ['tasks', 'all'],
-    queryFn:  () => api.get<Task[]>('/tasks'),
-  });
-
   // Feature 2 – calendar sync: determine default calendar
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn:  () => api.get<{ id: string; name: string }[]>('/calendar'),
   });
-
-  // User profile for "reminder by mail" — correct endpoint: /user/profile
-  const { data: userMe } = useQuery({
-    queryKey: ['user', 'profile'],
-    queryFn:  () => api.get<{ email: string }>('/user/profile'),
-    staleTime: Infinity,
-  });
-  useEffect(() => { if (userMe) userMeRef.current = userMe; }, [userMe]);
 
   // ── Create task ───────────────────────────────────────────────────────────────
   const createMutation = useMutation({
@@ -141,7 +96,8 @@ export function TasksPage() {
         status:         'NOT_STARTED',
         reminderByMail: data.reminderByMail,
         ...(data.dueDate  ? { dueDate:  data.dueDate  } : {}),
-        ...(data.reminder ? { reminder: data.reminder } : {}),
+        // datetime-local is local wall time → send an unambiguous UTC ISO timestamp
+        ...(data.reminder ? { reminder: localInputToIso(data.reminder) } : {}),
       }),
     onSuccess: (_result, variables) => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -179,8 +135,8 @@ export function TasksPage() {
           syncs.push(
             api.post('/calendar/events', {
               summary:    `🔔 Erinnerung: ${variables.subject}`,
-              dtStart:    variables.reminder,
-              dtEnd:      addMinutes(variables.reminder, 30),
+              dtStart:    localInputToIso(variables.reminder),
+              dtEnd:      addMinutesIso(variables.reminder, 30),
               calendarId,
               allDay:     false,
             }),
@@ -207,14 +163,14 @@ export function TasksPage() {
 
   // Feature 1 – fully edit task
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<EditTaskForm> }) =>
+    mutationFn: ({ id, data }: { id: string; data: Partial<EditTaskForm>; reminderChanged: boolean }) =>
       api.put(`/tasks/${id}`, {
         ...(data.subject        !== undefined                    ? { subject:        data.subject        } : {}),
         ...(data.body           !== undefined                    ? { body:           data.body           } : {}),
         ...(data.priority       !== undefined                    ? { priority:       data.priority       } : {}),
         ...(data.reminderByMail !== undefined                    ? { reminderByMail: data.reminderByMail } : {}),
         ...(data.dueDate  !== undefined && data.dueDate  !== '' ? { dueDate:  data.dueDate  } : {}),
-        ...(data.reminder !== undefined && data.reminder !== '' ? { reminder: data.reminder } : {}),
+        ...(data.reminder !== undefined && data.reminder !== '' ? { reminder: localInputToIso(data.reminder) } : {}),
       }),
     onSuccess: (_result, variables) => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -222,22 +178,21 @@ export function TasksPage() {
       setEditForm(EMPTY_EDIT_FORM);
       toast.success('Aufgabe gespeichert');
 
-      // Immediate feedback when a reminder was set/changed.
-      // No manual removal from the tracking set needed — the compound key
-      // (taskId:reminderISO) is automatically new for the new timestamp. ✓
-      if (variables.data.reminder) {
+      // Only a CHANGED reminder gets feedback + a calendar entry — re-saving a task
+      // with the same reminder used to create duplicate "🔔 Erinnerung" events.
+      if (variables.data.reminder && variables.reminderChanged) {
         const label = variables.data.reminderByMail ? 'Erinnerung + E-Mail' : 'Erinnerung';
         toast(`🔔 ${label}: ${format(new Date(variables.data.reminder), 'dd.MM. HH:mm')} Uhr`, { duration: 4000 });
       }
 
       // Calendar sync for reminder after edit
-      if (variables.data.reminder) {
+      if (variables.data.reminder && variables.reminderChanged) {
         const calendarId = calendars?.[0]?.id;
         if (calendarId) {
           api.post('/calendar/events', {
             summary:    `🔔 Erinnerung: ${variables.data.subject ?? ''}`,
-            dtStart:    variables.data.reminder,
-            dtEnd:      addMinutes(variables.data.reminder, 30),
+            dtStart:    localInputToIso(variables.data.reminder),
+            dtEnd:      addMinutesIso(variables.data.reminder, 30),
             calendarId,
             allDay:     false,
           }).then(() => {
@@ -270,7 +225,8 @@ export function TasksPage() {
       body:           task.body     ?? '',
       priority:       (task.priority as 'LOW' | 'NORMAL' | 'HIGH') ?? 'NORMAL',
       dueDate:        task.dueDate  ? task.dueDate.slice(0, 10)  : '',
-      reminder:       task.reminder ? task.reminder.slice(0, 16) : '',
+      // Server ISO (UTC) → local wall time for datetime-local
+      reminder:       task.reminder ? isoToLocalInput(task.reminder) : '',
       reminderByMail: task.reminderByMail ?? false,
     });
   };
@@ -279,8 +235,10 @@ export function TasksPage() {
     e.preventDefault();
     if (!editingTask) return;
     if (!editForm.subject.trim()) return;
+    const previousReminder = editingTask.reminder ? isoToLocalInput(editingTask.reminder) : '';
     updateMutation.mutate({
       id:   editingTask.id,
+      reminderChanged: editForm.reminder !== previousReminder,
       data: {
         subject:        editForm.subject.trim(),
         body:           editForm.body,
@@ -304,69 +262,6 @@ export function TasksPage() {
       return next;
     });
   };
-
-  // Keep ref in sync with current tasks — so the interval callback
-  // never sees a stale snapshot (no stale-closure bug)
-  useEffect(() => { allTasksRef.current = allTasks; }, [allTasks]);
-
-  // Feature 3 – due date and reminder check
-  // useCallback + empty deps → stable reference; always reads data via refs
-  const checkDueDates = useCallback(() => {
-    const tasks = allTasksRef.current;
-    if (!tasks) return;
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const now   = new Date();
-
-    for (const task of tasks) {
-      if (task.status === 'COMPLETED') continue;
-
-      // ① Due date reached (once per day)
-      if (task.dueDate && !notifiedIds.current.has(task.id)) {
-        if (task.dueDate.slice(0, 10) === today) {
-          notifiedIds.current.add(task.id);
-          toast(`⏰ Aufgabe fällig: ${task.subject}`, { icon: '📋', duration: 8000 });
-        }
-      }
-
-      // ② Reminder — compound key: each (task, timestamp) fires exactly once,
-      //    even after page reload (persisted in localStorage).
-      //    If the user changes the time → new key → fires again. ✓
-      if (task.reminder) {
-        const rKey = mkReminderKey(task.id, task.reminder);
-        if (!notifiedReminderIds.current.has(rKey) && new Date(task.reminder) <= now) {
-          notifiedReminderIds.current.add(rKey);
-          saveNotifiedReminders(notifiedReminderIds.current);
-          toast(`🔔 Erinnerung: ${task.subject}`, { icon: '⏰', duration: 12_000 });
-
-          // If "by email" is requested → send mail to own address (best-effort)
-          // If userMeRef is not yet populated (timing on the first mount check),
-          // the profile is loaded on demand.
-          if (task.reminderByMail) {
-            const sendReminderMail = async () => {
-              const profile = userMeRef.current
-                ?? await api.get<{ email: string }>('/user/profile').catch(() => null);
-              if (profile && !userMeRef.current) userMeRef.current = profile; // cache
-              if (!profile?.email) return;
-              await api.post('/mail/send', {
-                to:       [profile.email],
-                subject:  `🔔 Erinnerung: ${task.subject}`,
-                bodyText: `Deine Aufgabe „${task.subject}" hat die gesetzte Erinnerungszeit erreicht.`,
-                bodyHtml: `<p>Deine Aufgabe <strong>${task.subject}</strong> hat die gesetzte Erinnerungszeit erreicht.</p>`,
-              });
-            };
-            void sendReminderMail().catch(() => { /* best-effort */ });
-          }
-        }
-      }
-    }
-  }, []); // stable — not recreated on every render
-
-  // Check immediately when new data arrives + every 30 seconds
-  useEffect(() => {
-    checkDueDates();
-    const id = setInterval(checkDueDates, 30_000);
-    return () => clearInterval(id);
-  }, [checkDueDates, allTasks]); // allTasks as dep: trigger immediately when tasks change
 
   return (
     <div className="flex flex-1 overflow-hidden bg-gray-50">
@@ -581,19 +476,21 @@ export function TasksPage() {
 
       {/* ── Feature 1: Edit-Modal ─────────────────────────────────────────────── */}
       {editingTask && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={(e) => { if (e.target === e.currentTarget) handleEditClose(); }}
+        <Modal
+          onClose={handleEditClose}
+          labelledBy="task-edit-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
         >
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
 
             {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-              <h2 className="text-base font-semibold text-gray-900">Aufgabe bearbeiten</h2>
+              <h2 id="task-edit-title" className="text-base font-semibold text-gray-900">Aufgabe bearbeiten</h2>
               <button
                 onClick={handleEditClose}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
                 title="Schließen"
+                aria-label="Schließen"
               >
                 <X size={18} />
               </button>
@@ -698,8 +595,7 @@ export function TasksPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

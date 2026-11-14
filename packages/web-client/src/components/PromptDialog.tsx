@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { Modal } from './Modal.js';
 
 export interface PromptDialogProps {
   title: string;
@@ -32,18 +33,13 @@ export function PromptDialog({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Auto-Focus + Auto-Select
-    setTimeout(() => {
+    // Auto-Focus + Auto-Select (Escape + focus handling: Modal)
+    const t = setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 0);
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+    return () => clearTimeout(t);
+  }, []);
 
   const handleConfirm = async () => {
     const v = value.trim();
@@ -62,14 +58,15 @@ export function PromptDialog({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40" onClick={onCancel}>
-      <div
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-[420px] max-w-[90vw]"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={onCancel}
+      labelledBy="prompt-dialog-title"
+      overlayClassName="fixed inset-0 z-[200] flex items-center justify-center bg-black/40"
+      className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-[420px] max-w-[90vw]"
+    >
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
-          <button onClick={onCancel} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+          <h3 id="prompt-dialog-title" className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
+          <button onClick={onCancel} aria-label="Schließen" className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
             <X size={18} />
           </button>
         </div>
@@ -104,8 +101,7 @@ export function PromptDialog({
             {busy ? '…' : confirmText}
           </button>
         </div>
-      </div>
-    </div>,
+    </Modal>,
     document.body,
   );
 }

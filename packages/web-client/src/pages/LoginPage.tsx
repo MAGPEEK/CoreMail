@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Mail, Lock, ShieldCheck, ArrowLeft, AlertTriangle } from 'lucide-react';
-import { login, verifyMfa } from '../api/client.js';
+import { Mail, Lock, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { login, type MfaMethod } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
 import { api } from '../api/client.js';
 import type { UserProfile } from '../api/types.js';
+import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -18,8 +19,7 @@ export function LoginPage() {
   const [step, setStep] = useState<'credentials' | 'mfa'>('credentials');
   const [challengeToken, setChallengeToken] = useState('');
   const [mfaMethod, setMfaMethod] = useState('totp');
-  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
-  const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [mfaMethods, setMfaMethods] = useState<MfaMethod[] | undefined>(undefined);
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,13 +48,6 @@ export function LoginPage() {
       .catch(() => undefined);
   }, []);
 
-  // Auto-focus first digit when entering MFA step
-  useEffect(() => {
-    if (step === 'mfa') {
-      setTimeout(() => digitRefs.current[0]?.focus(), 50);
-    }
-  }, [step]);
-
   // ── Step 1: Email + password ─────────────────────────────────────────────────
   const handleSubmitCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,6 +58,7 @@ export function LoginPage() {
       if ('mfaRequired' in result) {
         setChallengeToken(result.challengeToken);
         setMfaMethod(result.method);
+        setMfaMethods(result.methods);
         setStep('mfa');
       } else {
         const { accessToken, refreshToken } = result as { accessToken: string; refreshToken: string };
@@ -83,24 +77,6 @@ export function LoginPage() {
     }
   };
 
-  // ── Step 2: MFA code ─────────────────────────────────────────────────────────
-  const handleSubmitMfa = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = otpDigits.join('');
-    if (code.length < 6) { setError('Bitte alle 6 Ziffern eingeben'); return; }
-    setError('');
-    setLoading(true);
-    try {
-      const tokens = await verifyMfa(challengeToken, code);
-      await finalizeLogin(tokens.accessToken, tokens.refreshToken);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Ungültiger Code');
-      setOtpDigits(['', '', '', '', '', '']);
-      setTimeout(() => digitRefs.current[0]?.focus(), 50);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const finalizeLogin = async (accessToken: string, refreshToken: string) => {
     setTokens(accessToken, refreshToken);
@@ -111,29 +87,6 @@ export function LoginPage() {
     navigate('/mail');
   };
 
-  // ── OTP digit input helpers ──────────────────────────────────────────────────
-  const handleDigitChange = (i: number, val: string) => {
-    const digit = val.replace(/\D/g, '').slice(-1);
-    const next = [...otpDigits];
-    next[i] = digit;
-    setOtpDigits(next);
-    if (digit && i < 5) digitRefs.current[i + 1]?.focus();
-  };
-
-  const handleDigitKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !otpDigits[i] && i > 0) {
-      digitRefs.current[i - 1]?.focus();
-    }
-  };
-
-  const handleDigitPaste = (e: React.ClipboardEvent) => {
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    if (pasted.length === 6) {
-      e.preventDefault();
-      setOtpDigits(pasted.split(''));
-      digitRefs.current[5]?.focus();
-    }
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
@@ -224,58 +177,16 @@ export function LoginPage() {
           </form>
         )}
 
-        {/* ── STEP 2: MFA code ── */}
+        {/* ── STEP 2: MFA (TOTP, backup code or security key) ── */}
         {step === 'mfa' && (
-          <form onSubmit={handleSubmitMfa} className="space-y-5">
-            <div className="text-center">
-              <p className="text-sm text-gray-600">
-                {mfaMethod === 'totp'
-                  ? 'Geben Sie den 6-stelligen Code aus Ihrer Authenticator-App ein.'
-                  : 'Verwenden Sie Ihren Hardware-Key oder Backup-Code.'}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">{email}</p>
-            </div>
-
-            {/* 6-Digit OTP input */}
-            <div className="flex justify-center gap-2" onPaste={handleDigitPaste}>
-              {otpDigits.map((d, i) => (
-                <input
-                  key={i}
-                  ref={(el) => { digitRefs.current[i] = el; }}
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={d}
-                  onChange={(e) => handleDigitChange(i, e.target.value)}
-                  onKeyDown={(e) => handleDigitKeyDown(i, e)}
-                  className="w-10 h-12 text-center text-xl font-bold border-2 rounded-lg focus:outline-none focus:border-accent transition-colors"
-                  style={{ borderColor: d ? 'var(--color-accent)' : undefined }}
-                />
-              ))}
-            </div>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700 text-center">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading || otpDigits.join('').length < 6}
-              className="btn-primary w-full justify-center py-2 disabled:opacity-60"
-            >
-              {loading ? 'Prüfen...' : 'Bestätigen'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => { setStep('credentials'); setError(''); setOtpDigits(['', '', '', '', '', '']); }}
-              className="w-full flex items-center justify-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 py-1"
-            >
-              <ArrowLeft size={13} /> Zurück zur Anmeldung
-            </button>
-          </form>
+          <MfaChallengeForm
+            challengeToken={challengeToken}
+            method={mfaMethod}
+            methods={mfaMethods}
+            email={email}
+            onSuccess={(tokens) => finalizeLogin(tokens.accessToken, tokens.refreshToken)}
+            onBack={(reason) => { setStep('credentials'); setError(reason ?? ''); }}
+          />
         )}
       </div>
     </div>

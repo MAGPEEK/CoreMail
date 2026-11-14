@@ -5,151 +5,19 @@ import {
   ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, Image as ImageIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { useRef, useState, useEffect } from 'react';
-import toast from 'react-hot-toast';
-import { sanitizeMailHtml } from '../lib/mailHtml.js';
-import { api } from '../api/client.js';
+import { useRef, useState, useEffect, useMemo } from 'react';
+import { renderMailHtml } from '../lib/mailHtml.js';
+import { api, downloadFile, fetchText } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
-import { useAuthStore } from '../store/auth.js';
+import { useInlineImages } from '../hooks/useInlineImages.js';
+import { toastError } from '../lib/errors.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
-
-const sanitize = sanitizeMailHtml;
-
-/**
- * Pre-process HTML for privacy protection (Outlook/Gmail style):
- * - cid: references are replaced with MinIO attachment URLs (inline images OK)
- * - http(s):// images get their src replaced by a transparent pixel,
- *   the real src moves to data-coremail-src for later re-activation.
- * - Tracking pixels (1×1) are effectively blocked as long as the user does not
- *   click "Show images".
- *
- * Returns: { html, externalImageCount }
- */
-function processExternalImages(
-  html: string,
-  // cid (lower-case, without "<>") → data: URL of the inline image (see useCidImages)
-  cidMap: Map<string, string>,
-): { html: string; externalImageCount: number } {
-  if (!html) return { html: '', externalImageCount: 0 };
-
-  let externalCount = 0;
-  // 1x1 transparent PNG as placeholder for blocked external images
-  const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-
-  // (1) Handle <img src="...">
-  let processed = html.replace(/<img\b([^>]*?)src=(["'])([^"']+)\2([^>]*)>/gi, (_match, before: string, quote: string, src: string, after: string) => {
-    const trimmed = src.trim();
-    // cid:foo@bar → attachment URL
-    if (/^cid:/i.test(trimmed)) {
-      const cid = trimmed.slice(4).replace(/^<|>$/g, '').toLowerCase();
-      const mapped = cidMap.get(cid);
-      if (mapped) return `<img${before}src=${quote}${mapped}${quote}${after}>`;
-      // Unresolvable cid → placeholder (no tracking risk)
-      return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-unresolved-cid=${quote}${cid}${quote}${after}>`;
-    }
-    // data: URLs are inline (self-embedded) → pass through unchanged
-    if (/^data:/i.test(trimmed)) {
-      return `<img${before}src=${quote}${trimmed}${quote}${after}>`;
-    }
-    // http(s):// → external image, replace with placeholder + data attribute
-    if (/^https?:/i.test(trimmed)) {
-      externalCount++;
-      return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote} style="opacity:0.5;border:1px dashed #ccc;min-width:16px;min-height:16px"${after}>`;
-    }
-    // Block everything else too (relative URLs, protocol-relative //...)
-    externalCount++;
-    return `<img${before}src=${quote}${PLACEHOLDER}${quote} data-coremail-ext-src=${quote}${trimmed}${quote}${after}>`;
-  });
-
-  // v3.18.36: (2) CSS `background-image: url(...)` in inline `style` attributes
-  // is a common tracker vector — we neutralize external URLs and
-  // save the original in `data-coremail-ext-bg` for later re-activation.
-  processed = processed.replace(
-    /(style=)(["'])([^"']*?)background-image\s*:\s*url\(\s*(['"]?)([^"')]+)\4\s*\)([^"']*?)\2/gi,
-    (_m, attrName: string, attrQuote: string, stylePrefix: string, _urlQuote: string, url: string, styleSuffix: string) => {
-      const trimmed = url.trim();
-      if (/^data:/i.test(trimmed) || /^cid:/i.test(trimmed)) {
-        // Inline / CID — let through
-        return _m;
-      }
-      // External → remove background, store original
-      externalCount++;
-      return `${attrName}${attrQuote}${stylePrefix}${styleSuffix}${attrQuote} data-coremail-ext-bg=${attrQuote}${trimmed}${attrQuote}`;
-    },
-  );
-
-  return { html: processed, externalImageCount: externalCount };
-}
-
-/** Raster image types embedded via cid: (never SVG/HTML). */
-const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp']);
-
-const cleanCid = (cid: string): string => cid.replace(/^<|>$/g, '').toLowerCase();
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-/**
- * Loads the inline images a message references via cid: with the Authorization
- * header (no access token in image URLs) and returns cid → data: URL.
- */
-function useCidImages(msg: Message | undefined): Map<string, string> {
-  const [cidUrls, setCidUrls] = useState<Map<string, string>>(() => new Map());
-  const html = msg?.bodyHtml ?? '';
-  const attachments = msg?.attachments;
-  useEffect(() => {
-    setCidUrls(new Map());
-    if (!html) return undefined;
-    const lowerHtml = html.toLowerCase();
-    const wanted = (attachments ?? []).filter((a) =>
-      a.contentId
-      && INLINE_IMAGE_TYPES.has(a.mimeType.toLowerCase())
-      && lowerHtml.includes(`cid:${cleanCid(a.contentId)}`));
-    if (wanted.length === 0) return undefined;
-    let cancelled = false;
-    void Promise.all(wanted.map(async (a): Promise<[string, string] | null> => {
-      try {
-        const blob = await api.getBlob(`/mail/attachments/${a.id}`);
-        const url = await blobToDataUrl(new Blob([blob], { type: a.mimeType.toLowerCase() }));
-        return [cleanCid(a.contentId!), url];
-      } catch {
-        return null;
-      }
-    })).then((entries) => {
-      if (!cancelled) setCidUrls(new Map(entries.filter((e): e is [string, string] => e !== null)));
-    });
-    return () => { cancelled = true; };
-  }, [html, attachments]);
-  return cidUrls;
-}
-
-/** Downloads an attachment through the API client (Authorization header) as a file. */
-async function downloadAttachment(att: { id: string; filename: string }): Promise<void> {
-  try {
-    const blob = await api.getBlob(`/mail/attachments/${att.id}`);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = att.filename || 'attachment';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  } catch (err) {
-    toast.error(`Anhang konnte nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
+import { Modal } from './Modal.js';
 
 interface Props {
   messageId: string;
@@ -158,7 +26,6 @@ interface Props {
 export function MessageReader({ messageId }: Props) {
   const qc = useQueryClient();
   const { openCompose, setSelectedMessage, selectedFolderId } = useUiStore();
-  const { accessToken } = useAuthStore();
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
@@ -169,21 +36,25 @@ export function MessageReader({ messageId }: Props) {
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Token as URL query parameter for browser navigations (EML download, source),
-  // since <a href> and window.open() do not support custom headers.
-  const tokenParam = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
 
   const { data: msg, isLoading } = useQuery({
     queryKey: ['message', messageId],
     queryFn: () => api.get<Message>(`/mail/messages/${messageId}`),
   });
 
+  // Inline (cid:) images are fetched with the Authorization header → blob: URLs
+  const cidMap = useInlineImages(msg?.bodyHtml, msg?.attachments);
+  // Sanitize + privacy filter (DOMPurify hooks). Re-run when "show images" toggles.
+  const rendered = useMemo(
+    () => (msg?.bodyHtml ? renderMailHtml(msg.bodyHtml, { allowExternalImages: showExternalImages, cidMap }) : null),
+    [msg?.bodyHtml, showExternalImages, cidMap],
+  );
+  const blockedCount = showExternalImages ? 0 : rendered?.blockedCount ?? 0;
+
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
     queryFn: () => api.get<Folder[]>('/mail/folders'),
   });
-
-  const cidUrls = useCidImages(msg);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['messages'] });
@@ -191,20 +62,21 @@ export function MessageReader({ messageId }: Props) {
     qc.invalidateQueries({ queryKey: ['message', messageId] });
   };
 
+  // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
       api.post('/mail/messages/bulk', body),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 
   const patchMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.patch(`/mail/messages/${messageId}`, body),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 
   const cancelScheduledMutation = useMutation({
     mutationFn: () => api.post(`/mail/messages/${messageId}/cancel-scheduled`, {}),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 
   if (isLoading) return <MessageReaderSkeleton />;
@@ -224,27 +96,26 @@ export function MessageReader({ messageId }: Props) {
     }
   };
 
-  const handleDelete = () => {
-    bulkMutation.mutate({ ids: [msg.id], action: 'delete' });
-    if (selectedFolderId) {
-      showUndoToast({
-        message: 'In den Papierkorb verschoben',
-        onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: selectedFolderId }),
-      });
-    }
+  // Undo toast only after the server confirmed the action
+  const withUndo = (action: 'delete' | 'archive', message: string) => {
+    const src = msg.folderId ?? selectedFolderId;
+    bulkMutation.mutate({ ids: [msg.id], action }, {
+      onSuccess: () => {
+        if (!src) return;
+        showUndoToast({
+          message,
+          onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: src }),
+        });
+      },
+    });
     setSelectedMessage(null);
   };
 
-  const handleArchive = () => {
-    const src = selectedFolderId;
-    bulkMutation.mutate({ ids: [msg.id], action: 'archive' });
-    if (src) {
-      showUndoToast({
-        message: 'Archiviert',
-        onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: src }),
-      });
-    }
-    setSelectedMessage(null);
+  const handleDelete = () => withUndo('delete', 'In den Papierkorb verschoben');
+  const handleArchive = () => withUndo('archive', 'Archiviert');
+
+  const snoozeUntil = (d: Date) => {
+    api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
   };
 
   const moreItems: ContextMenuItem[] = [
@@ -257,10 +128,10 @@ export function MessageReader({ messageId }: Props) {
     {
       label: 'Schlummern bis …', icon: <Clock size={14} />,
       children: [
-        { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); void api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate); } },
-        { label: 'In 3 Stunden',    onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); void api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate); } },
-        { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); void api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate); } },
-        { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); void api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate); } },
+        { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
+        { label: 'In 3 Stunden',    onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); snoozeUntil(d); } },
+        { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
+        { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
       ],
     },
     { type: 'divider' },
@@ -281,13 +152,8 @@ export function MessageReader({ messageId }: Props) {
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
-        // Pass bearer token as query param — raw fetch() without API client
-        void fetch(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, {
-          headers: { 'Accept': 'text/plain, message/rfc822, */*' },
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.text();
-        }).then(text => {
+        // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
+        void fetchText(`/mail/messages/${msg.id}/raw`).then(text => {
           setRawSource(text);
           setShowRawSource(true);
         }).catch((err: unknown) => {
@@ -297,11 +163,7 @@ export function MessageReader({ messageId }: Props) {
       } },
     { label: 'Als EML herunterladen', icon: <Download size={14} />,
       onClick: () => {
-        // Token as URL param — browser download does not support custom headers
-        const a = document.createElement('a');
-        a.href = `/api/v1/mail/messages/${msg.id}/raw${tokenParam}`;
-        a.download = `${msg.subject || 'message'}.eml`;
-        a.click();
+        downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
       } },
     { label: 'Drucken', icon: <Download size={14} />, onClick: () => window.print() },
   ];
@@ -471,8 +333,10 @@ export function MessageReader({ messageId }: Props) {
       {msg.attachments?.length > 0 && (
         <div className="px-6 py-2 border-b border-gray-100 dark:border-gray-700 flex flex-wrap gap-2 shrink-0">
           {msg.attachments.map((att) => (
-            <button key={att.id} type="button" onClick={() => { void downloadAttachment(att); }}
-              title={att.filename}
+            // Fetch-to-blob with the Authorization header (a plain <a href> would
+            // reach GET /api/v1/mail/attachments/:id without a token → 401).
+            <button key={att.id} type="button" title={att.filename}
+              onClick={() => { downloadFile(`/mail/attachments/${att.id}`, att.filename || 'attachment').catch(toastError); }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
               <Paperclip size={12} />
               {att.filename}
@@ -493,36 +357,7 @@ export function MessageReader({ messageId }: Props) {
             </div>
           );
         }
-        const { html: processedHtml, externalImageCount } = processExternalImages(
-          msg.bodyHtml,
-          cidUrls,
-        );
-        // v3.18.36: If the user clicked "Show images" → restore original URLs.
-        // Handles BOTH markers: data-coremail-ext-src
-        // (for <img>) AND data-coremail-ext-bg (for CSS background-image).
-        // Additionally the placeholder style (opacity, border) is removed.
-        let finalHtml = processedHtml;
-        if (showExternalImages) {
-          // (a) <img> tags: reset placeholder src + style
-          finalHtml = finalHtml.replace(
-            /<img\b([^>]*?)src=(["'])data:image\/png;base64,iVBORw0KGgo[^"']+\2([^>]*?)data-coremail-ext-src=(["'])([^"']+)\4([^>]*?)>/gi,
-            (_m, before: string, q: string, middle: string, _q2: string, original: string, after: string) => {
-              // Remove placeholder style (style="opacity:0.5;border:1px dashed #ccc;...")
-              const cleanMiddle = middle.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
-              const cleanAfter  = after.replace(/\s*style=(["'])opacity:0\.5;border:1px dashed #ccc[^"']*\1/i, '');
-              return `<img${before}src=${q}${original}${q}${cleanMiddle}${cleanAfter}>`;
-            },
-          );
-          // (b) data-coremail-ext-bg → re-insert background-image: url(...)
-          finalHtml = finalHtml.replace(
-            /(style=(["']))([^"']*?)\2([^>]*?)data-coremail-ext-bg=(["'])([^"']+)\5/gi,
-            (_m, _styleAttr: string, q: string, stylePart: string, middle: string, _q2: string, url: string) => {
-              const sep = stylePart.trim().length > 0 && !stylePart.trim().endsWith(';') ? ';' : '';
-              return `style=${q}${stylePart}${sep}background-image:url("${url}")${q}${middle}`;
-            },
-          );
-        }
-
+        const externalImageCount = blockedCount;
         return (
           <>
             {externalImageCount > 0 && !showExternalImages && (
@@ -550,7 +385,7 @@ export function MessageReader({ messageId }: Props) {
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <div
                 className="prose prose-sm dark:prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: sanitize(finalHtml) }}
+                dangerouslySetInnerHTML={{ __html: rendered?.html ?? '' }}
               />
             </div>
           </>
@@ -561,21 +396,23 @@ export function MessageReader({ messageId }: Props) {
 
       {/* RFC 822 source modal */}
       {showRawSource && rawSource !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowRawSource(false)}>
-          <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <Modal
+          onClose={() => setShowRawSource(false)}
+          label="RFC 822 Quelltext"
+          className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+        >
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
               <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
                 <Code size={14} /> RFC 822 Quelltext
               </span>
               <div className="flex items-center gap-2">
-                <a
-                  href={`/api/v1/mail/messages/${msg.id}/raw`}
-                  download={`${msg.subject || 'message'}.eml`}
+                <button
+                  onClick={() => downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError)}
                   className="btn-secondary text-xs"
                 >
                   <Download size={12} /> .eml herunterladen
-                </a>
-                <button className="btn-ghost p-1" onClick={() => setShowRawSource(false)}>
+                </button>
+                <button className="btn-ghost p-1" onClick={() => setShowRawSource(false)} aria-label="Schließen">
                   <X size={16} />
                 </button>
               </div>
@@ -583,8 +420,7 @@ export function MessageReader({ messageId }: Props) {
             <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-all">
               {rawSource}
             </pre>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

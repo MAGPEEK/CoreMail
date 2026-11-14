@@ -8,14 +8,19 @@ import {
   Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
+import { useAccessStore } from '../store/access.js';
+import { accessForPath } from '../lib/adminAreas.js';
 
 type NavItem  = { path: string; labelKey: string; icon: React.ElementType };
 type NavGroup = { groupKey: string; items: NavItem[] };
 
 export function Sidebar() {
   const t = useT();
+  const areas = useAccessStore((s) => s.areas);
+  // Hide pages whose admin area the role does not have (no adminAreas → show all)
+  const visible = (path: string) => accessForPath(areas, path) !== 'none';
 
-  const NAV: (NavItem | NavGroup)[] = [
+  const ALL_NAV: (NavItem | NavGroup)[] = [
     { path: '/dashboard',        labelKey: 'nav_overview',         icon: LayoutDashboard },
     { path: '/settings',         labelKey: 'nav_global_settings',  icon: Settings2 },
     {
@@ -69,6 +74,10 @@ export function Sidebar() {
     { path: '/backups',          labelKey: 'nav_backups',          icon: HardDriveDownload },
     { path: '/compliance-info',  labelKey: 'nav_info',             icon: Info },
   ];
+
+  const NAV = ALL_NAV
+    .map((entry) => ('groupKey' in entry ? { ...entry, items: entry.items.filter((i) => visible(i.path)) } : entry))
+    .filter((entry) => ('groupKey' in entry ? entry.items.length > 0 : visible(entry.path)));
 
   return (
     <aside className="w-52 shrink-0 bg-gray-900 text-gray-300 flex flex-col h-full">

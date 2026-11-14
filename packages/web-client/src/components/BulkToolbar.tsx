@@ -10,6 +10,19 @@ import { showUndoToast } from './UndoToast.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import type { Folder } from '../api/types.js';
 
+// Module-level (never define components inside components — remounts on every render)
+function IconBtn({ icon, onClick, title }: { icon: React.ReactNode; onClick: () => void; title: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="p-1.5 rounded-sm text-gray-600 dark:text-gray-300 hover:bg-accent/10 hover:text-accent transition-all duration-150 active:scale-90"
+    >
+      {icon}
+    </button>
+  );
+}
 export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   const qc = useQueryClient();
   const { selectedIds, clearSelection, setSelectedMessage } = useUiStore();
@@ -28,10 +41,11 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
     qc.invalidateQueries({ queryKey: ['folders'] });
   };
 
+  // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
       api.post('/mail/messages/bulk', body),
-    onSuccess: () => { invalidate(); },
+    onSettled: () => { invalidate(); },
   });
 
   if (count === 0) return null;
@@ -40,13 +54,18 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
     const body = opts?.folderId
       ? { ids, action, folderId: opts.folderId }
       : { ids, action };
-    bulkMutation.mutate(body);
-    if (opts?.undoMsg && opts.undoFolderId) {
-      showUndoToast({
-        message: opts.undoMsg,
-        onUndo: () => bulkMutation.mutateAsync({ ids, action: 'move', folderId: opts.undoFolderId! }),
-      });
-    }
+    // Undo is only offered after the server confirmed the action — a failed
+    // request must not look like a success.
+    bulkMutation.mutate(body, {
+      onSuccess: () => {
+        if (!opts?.undoMsg || !opts.undoFolderId) return;
+        const undoFolderId = opts.undoFolderId;
+        showUndoToast({
+          message: opts.undoMsg,
+          onUndo: () => bulkMutation.mutateAsync({ ids: body.ids, action: 'move', folderId: undoFolderId }),
+        });
+      },
+    });
     setSelectedMessage(null);
     clearSelection();
   };
@@ -62,20 +81,6 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   // BulkToolbar is positioned absolutely over the MessageList (FolderTree width 208 px = left-52)
   // and ends at the MessageList width (320 px + 208 = 528 px = w-[20rem] + left-52).
   // This way the bar only covers the filter tab row of the MessageList, not the reader.
-
-  const IconBtn = ({
-    icon, onClick, title,
-  }: {
-    icon: React.ReactNode; onClick: () => void; title: string;
-  }) => (
-    <button
-      onClick={onClick}
-      title={title}
-      className="p-1.5 rounded-sm text-gray-600 dark:text-gray-300 hover:bg-accent/10 hover:text-accent transition-all duration-150 active:scale-90"
-    >
-      {icon}
-    </button>
-  );
 
   return (
     <div

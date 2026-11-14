@@ -191,3 +191,12 @@
   }
 }
 
+
+/* Placeholder for external images blocked by the mail privacy filter (lib/mailHtml.ts) */
+[data-coremail-blocked] {
+  opacity: 0.5;
+  outline: 1px dashed #ccc;
+  min-width: 16px;
+  min-height: 16px;
+}
+

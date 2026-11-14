@@ -39,7 +39,8 @@ export function ResetPasswordPage() {
   const [loading, setLoading]         = useState(false);
   const [success, setSuccess]         = useState(false);
   const [error, setError]             = useState('');
-  const [minLen, setMinLen]           = useState(8);
+  // Strength-bar reference only — the server enforces the real policy minimum
+  const minLen = 8;
   const [orgName, setOrgName]         = useState('CoreMail');
 
   useEffect(() => {
@@ -49,15 +50,13 @@ export function ResetPasswordPage() {
       .then((d: { orgName?: string }) => { if (d.orgName) setOrgName(d.orgName); })
       .catch(() => undefined);
 
-    // Minimum password length from admin settings
-    fetch('/api/v1/admin/settings')
-      .then((r) => r.json())
-      .then((d: { minPasswordLength?: number }) => { if (d.minPasswordLength) setMinLen(d.minPasswordLength); })
-      .catch(() => undefined);
+    // The minimum password length is enforced by the server (POST /auth/reset-password
+    // answers with a readable message). /api/v1/admin/settings is admin-only and
+    // always failed here for anonymous users, so it is no longer requested.
 
     // Check token validity
     if (!token) { setTokenValid(false); return; }
-    fetch(`/api/v1/auth/reset-password/verify?token=${encodeURIComponent(token)}`)
+    fetch(`/auth/reset-password/verify?token=${encodeURIComponent(token)}`)
       .then((r) => r.json())
       .then((d: { valid?: boolean }) => setTokenValid(d.valid ?? false))
       .catch(() => setTokenValid(false));
@@ -65,8 +64,8 @@ export function ResetPasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password.length < minLen) {
-      setError(`Das Passwort muss mindestens ${minLen} Zeichen lang sein.`);
+    if (!password) {
+      setError('Bitte ein neues Passwort eingeben.');
       return;
     }
     if (password !== confirm) {
@@ -140,7 +139,7 @@ export function ResetPasswordPage() {
         {tokenValid === true && !success && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <p className="text-sm text-gray-600">
-              Geben Sie Ihr neues Passwort ein. Mindestlänge: <strong>{minLen} Zeichen</strong>.
+              Geben Sie Ihr neues Passwort ein. Die Mindestlänge legt Ihr Administrator fest.
             </p>
 
             <div>
@@ -152,7 +151,7 @@ export function ResetPasswordPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="input pl-9 pr-9"
-                  placeholder={`Mindestens ${minLen} Zeichen`}
+                  placeholder="Neues Passwort"
                   required
                   autoFocus
                   autoComplete="new-password"
@@ -195,7 +194,7 @@ export function ResetPasswordPage() {
 
             <button
               type="submit"
-              disabled={loading || password.length < minLen || password !== confirm}
+              disabled={loading || !password || password !== confirm}
               className="btn-primary w-full justify-center py-2 disabled:opacity-60"
             >
               {loading ? 'Wird gespeichert…' : 'Passwort setzen'}

@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
@@ -9,10 +10,12 @@ import {
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
 import { format, isToday, isYesterday } from 'date-fns';
-import { api } from '../api/client.js';
-import type { MessagesResponse, MessageSummary, Folder, Category } from '../api/types.js';
+import { api, downloadFile, fetchText } from '../api/client.js';
+import type { MessagesResponse, MessageSummary, MessageFilter, Folder, Category } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
-import { useAuthStore } from '../store/auth.js';
+import { nextPageOffset, flattenPages, pageQuery } from '../lib/paging.js';
+import { toastError } from '../lib/errors.js';
+import { Modal } from './Modal.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
@@ -212,24 +215,94 @@ function MessageRow({
   );
 }
 
+function FilterTab({ value, label, active, onSelect }: {
+  value: MessageFilter;
+  label: string;
+  active: boolean;
+  onSelect: (v: MessageFilter) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(value)}
+      aria-pressed={active}
+      className={`px-3 py-1 text-xs rounded-full transition-colors ${
+        active
+          ? 'bg-accent text-white'
+          : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Debounces a value (search input → server query). */
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
 export function MessageList({ folderId }: Props) {
   const qc = useQueryClient();
   const { selectedMessageId, setSelectedMessage, selectedIds, toggleSelection, selectAll, clearSelection, filter, setFilter, openCompose } = useUiStore();
   const { density } = useUiPrefs();
-  const { accessToken } = useAuthStore();
-  const tokenParam = accessToken ? `?token=${encodeURIComponent(accessToken)}` : '';
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [searchText, setSearchText] = useState('');
   const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [rawModal, setRawModal] = useState<{ text: string; subject: string; msgId: string } | null>(null);
   const [ruleEditor, setRuleEditor] = useState<{ open: boolean; preset?: RulePreset }>({ open: false });
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const { data, isLoading } = useQuery({
+  // Global search from the TopBar navigates to /mail?q=… → run it as a mailbox-wide search
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlQuery = searchParams.get('q');
+  useEffect(() => {
+    if (urlQuery === null) return;
+    setSearchText(urlQuery);
+    setSearchScope('all');
+    const next = new URLSearchParams(searchParams);
+    next.delete('q');
+    setSearchParams(next, { replace: true });
+  }, [urlQuery, searchParams, setSearchParams]);
+
+  const debouncedSearch = useDebounced(searchText.trim(), 300);
+  const searching = debouncedSearch.length >= 2;
+
+  // Folder listing — paged via ?limit=&offset= (infinite scroll)
+  const listQuery = useInfiniteQuery({
     queryKey: ['messages', folderId],
-    queryFn: () => api.get<MessagesResponse>(`/mail/folders/${folderId}/messages?limit=100`),
+    queryFn: ({ pageParam }) =>
+      api.get<MessagesResponse>(`/mail/folders/${folderId}/messages?${pageQuery(pageParam)}`),
+    initialPageParam: 0,
+    getNextPageParam: nextPageOffset,
     enabled: !!folderId,
   });
+
+  // Server search — scope "folder" passes folderId, scope "all" searches the whole mailbox.
+  // Results are shown as returned by the server (no client-side re-filtering).
+  const searchQuery = useInfiniteQuery({
+    queryKey: ['messages', 'search', searchScope, searchScope === 'folder' ? folderId : null, debouncedSearch],
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ q: debouncedSearch });
+      if (searchScope === 'folder') params.set('folderId', folderId);
+      return api.get<MessagesResponse>(`/mail/search?${params.toString()}&${pageQuery(pageParam)}`);
+    },
+    initialPageParam: 0,
+    getNextPageParam: nextPageOffset,
+    enabled: searching && (searchScope === 'all' || !!folderId),
+    staleTime: 10_000,
+  });
+
+  const activeQuery = searching ? searchQuery : listQuery;
+  const isLoading = activeQuery.isLoading;
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = activeQuery;
+  const totalCount = activeQuery.data?.pages[0]?.total ?? 0;
 
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
@@ -241,86 +314,92 @@ export function MessageList({ folderId }: Props) {
     queryFn: () => api.get<Category[]>('/categories'),
   });
 
-  const { data: allMessages } = useQuery({
-    queryKey: ['messages-search', searchText],
-    queryFn: () => api.get<MessagesResponse>(`/mail/folders/search?q=${encodeURIComponent(searchText)}&limit=50`),
-    enabled: searchScope === 'all' && searchText.length >= 2,
-    staleTime: 10_000,
-  });
-
   const currentFolder = folders.find((f) => f.id === folderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
   const isTrashFolder = currentFolder?.name === 'Trash';
 
-  // Apply filter
-  const filtered = useMemo(() => {
-    const list = data?.messages ?? [];
+  const listMessages = useMemo(() => flattenPages(listQuery.data?.pages), [listQuery.data]);
+  const searchMessages = useMemo(() => flattenPages(searchQuery.data?.pages), [searchQuery.data]);
+
+  // Quick filter tabs (unread/flagged/attachments) apply to the loaded rows
+  const displayMessages = useMemo(() => {
+    const list = searching ? searchMessages : listMessages;
     if (filter === 'unread')       return list.filter((m) => !m.flags.includes('\\Seen'));
     if (filter === 'flagged')      return list.filter((m) => m.flags.includes('\\Flagged'));
     if (filter === 'attachments')  return list.filter((m) => m.attachments.length > 0);
     return list;
-  }, [data, filter]);
+  }, [searching, searchMessages, listMessages, filter]);
 
-  const displayMessages = useMemo(() => {
-    if (searchText.length < 2) return filtered;
-    const q = searchText.toLowerCase();
-    const source = searchScope === 'all' ? (allMessages?.messages ?? []) : filtered;
-    return source.filter((m) =>
-      m.subject.toLowerCase().includes(q) ||
-      m.fromAddr.toLowerCase().includes(q) ||
-      (m.fromName ?? '').toLowerCase().includes(q)
-    );
-  }, [searchText, searchScope, filtered, allMessages]);
-
+  // Typeahead: quick local hints from the already loaded folder page
   const suggestions = useMemo(() => {
     if (searchText.length < 2) return [];
     const q = searchText.toLowerCase();
-    return (data?.messages ?? [])
+    return listMessages
       .filter((m) => m.subject.toLowerCase().includes(q) || m.fromAddr.toLowerCase().includes(q))
       .slice(0, 5);
-  }, [searchText, data]);
+  }, [searchText, listMessages]);
+
+  // Infinite scroll: load the next page when the sentinel at the end becomes visible
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || !hasNextPage) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
+    }, { root, rootMargin: '200px' });
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, displayMessages.length]);
 
   const orderedIds = useMemo(() => displayMessages.map((m) => m.id), [displayMessages]);
   const allChecked = orderedIds.length > 0 && orderedIds.every((id) => selectedIds.has(id));
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['messages'] });
-    qc.invalidateQueries({ queryKey: ['folders'] });
+    void qc.invalidateQueries({ queryKey: ['messages'] });
+    void qc.invalidateQueries({ queryKey: ['folders'] });
   };
 
+  // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
       api.post('/mail/messages/bulk', body),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 
   const patchMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
       api.patch(`/mail/messages/${id}`, body),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
+
+  /** Runs a bulk action and shows the undo toast only after the server confirmed it. */
+  const bulkWithUndo = (body: { ids: string[]; action: string }, message: string | null, undoFolderId: string) => {
+    bulkMutation.mutate(body, {
+      onSuccess: () => {
+        if (!message) return;
+        showUndoToast({
+          message,
+          onUndo: () => bulkMutation.mutateAsync({ ids: body.ids, action: 'move', folderId: undoFolderId }),
+        });
+      },
+    });
+  };
 
   const quickAction = (msg: MessageSummary, action: 'archive' | 'delete' | 'read' | 'flag') => {
     const isUnread = !msg.flags.includes('\\Seen');
     const isFlagged = msg.flags.includes('\\Flagged');
-    const prevFolderId = folderId;
+    const prevFolderId = msg.folderId ?? folderId;
 
     if (action === 'archive') {
-      bulkMutation.mutate({ ids: [msg.id], action: 'archive' });
-      showUndoToast({
-        message: 'Nachricht archiviert',
-        onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: prevFolderId }),
-      });
+      bulkWithUndo({ ids: [msg.id], action: 'archive' }, 'Nachricht archiviert', prevFolderId);
       if (msg.id === selectedMessageId) setSelectedMessage(null);
     } else if (action === 'delete') {
-      bulkMutation.mutate({ ids: [msg.id], action: 'delete' });
       const trash = folders.find((f) => f.name === 'Trash');
-      if (!isTrashFolder && trash) {
-        showUndoToast({
-          message: 'Nachricht in den Papierkorb verschoben',
-          onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: prevFolderId }),
-        });
-      }
+      bulkWithUndo(
+        { ids: [msg.id], action: 'delete' },
+        !isTrashFolder && trash ? 'Nachricht in den Papierkorb verschoben' : null,
+        prevFolderId,
+      );
       if (msg.id === selectedMessageId) setSelectedMessage(null);
     } else if (action === 'read') {
       patchMutation.mutate({ id: msg.id, body: { read: isUnread } });
@@ -354,7 +433,7 @@ export function MessageList({ folderId }: Props) {
         const d = new Date(now); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8, 0, 0, 0); return d;
       };
       const snooze = (until: Date) =>
-        api.post(`/mail/messages/${msg.id}/snooze`, { until: until.toISOString() }).then(invalidate);
+        api.post(`/mail/messages/${msg.id}/snooze`, { until: until.toISOString() }).then(invalidate).catch(toastError);
       return [
         { label: 'In 1 Stunde',     onClick: () => void snooze(inHours(1)) },
         { label: 'In 3 Stunden',    onClick: () => void snooze(inHours(3)) },
@@ -389,12 +468,11 @@ export function MessageList({ folderId }: Props) {
               return {
                 label: c.name,
                 icon: <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: c.color }} />,
-                onClick: async () => {
+                onClick: () => {
                   const next = assigned
                     ? (msg.categories ?? []).filter((mc) => mc.id !== c.id).map((mc) => mc.id)
                     : [...(msg.categories ?? []).map((mc) => mc.id), c.id];
-                  await api.post(`/categories/messages/${msg.id}`, { categoryIds: next });
-                  invalidate();
+                  api.post(`/categories/messages/${msg.id}`, { categoryIds: next }).then(invalidate).catch(toastError);
                 },
                 ...(assigned ? { separator: 'after' as const } : {}),
               };
@@ -408,7 +486,7 @@ export function MessageList({ folderId }: Props) {
       { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
         ...(isSnoozed
-          ? { onClick: () => api.delete(`/mail/messages/${msg.id}/snooze`).then(invalidate).catch(() => undefined) }
+          ? { onClick: () => api.delete(`/mail/messages/${msg.id}/snooze`).then(invalidate).catch(toastError) }
           : { children: snoozeOptions() }),
       },
       { type: 'divider' },
@@ -428,12 +506,8 @@ export function MessageList({ folderId }: Props) {
       { type: 'divider' },
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
         onClick: () => {
-          void fetch(`/api/v1/mail/messages/${msg.id}/raw${tokenParam}`, {
-            headers: { 'Accept': 'text/plain, message/rfc822, */*' },
-          }).then(async (r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.text();
-          }).then((text) => {
+          // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
+          void fetchText(`/mail/messages/${msg.id}/raw`).then((text) => {
             setRawModal({ text, subject: msg.subject || 'message', msgId: msg.id });
           }).catch((err: unknown) => {
             setRawModal({
@@ -445,10 +519,7 @@ export function MessageList({ folderId }: Props) {
         } },
       { label: 'Als EML herunterladen', icon: <Download size={14} />,
         onClick: () => {
-          const a = document.createElement('a');
-          a.href = `/api/v1/mail/messages/${msg.id}/raw${tokenParam}`;
-          a.download = `${msg.subject || 'message'}.eml`;
-          a.click();
+          downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
         } },
     ];
   };
@@ -480,19 +551,6 @@ export function MessageList({ folderId }: Props) {
       </div>
     );
   }
-
-  const FilterTab = ({ value, label }: { value: typeof filter; label: string }) => (
-    <button
-      onClick={() => setFilter(value)}
-      className={`px-3 py-1 text-xs rounded-full transition-colors ${
-        filter === value
-          ? 'bg-accent text-white'
-          : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-      }`}
-    >
-      {label}
-    </button>
-  );
 
   return (
     <div className="w-full h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col overflow-hidden">
@@ -549,18 +607,20 @@ export function MessageList({ folderId }: Props) {
           className="rounded border-gray-300 dark:border-gray-600 text-accent focus:ring-accent"
           title="Alle auswählen"
         />
-        <FilterTab value="all" label="Alle" />
-        <FilterTab value="unread" label="Ungelesen" />
-        <FilterTab value="flagged" label="Markiert" />
-        <FilterTab value="attachments" label="Anhang" />
-        <span className="ml-auto text-xs text-gray-500">
-          <AnimatedCounter value={displayMessages.length} />
+        <FilterTab value="all" label="Alle" active={filter === 'all'} onSelect={setFilter} />
+        <FilterTab value="unread" label="Ungelesen" active={filter === 'unread'} onSelect={setFilter} />
+        <FilterTab value="flagged" label="Markiert" active={filter === 'flagged'} onSelect={setFilter} />
+        <FilterTab value="attachments" label="Anhang" active={filter === 'attachments'} onSelect={setFilter} />
+        <span className="ml-auto text-xs text-gray-500" title={`${displayMessages.length} geladen von ${totalCount}`}>
+          <AnimatedCounter value={filter === 'all' ? totalCount : displayMessages.length} />
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {displayMessages.length === 0 ? (
-          filter === 'all' && !searchText ? <EmptyInbox /> : <EmptySearch />
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        {displayMessages.length === 0 && !hasNextPage ? (
+          activeQuery.isError
+            ? <p className="p-4 text-xs text-red-600">Nachrichten konnten nicht geladen werden.</p>
+            : filter === 'all' && !searching ? <EmptyInbox /> : <EmptySearch />
         ) : (
           displayMessages.map((msg) => (
             <MessageRow
@@ -576,6 +636,17 @@ export function MessageList({ folderId }: Props) {
               folders={folders}
             />
           ))
+        )}
+        {hasNextPage && (
+          <div ref={sentinelRef} className="p-3 flex justify-center">
+            <button
+              onClick={() => void fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="text-xs text-accent hover:underline disabled:opacity-50"
+            >
+              {isFetchingNextPage ? 'Lädt …' : 'Weitere Nachrichten laden'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -593,20 +664,22 @@ export function MessageList({ folderId }: Props) {
 
       {/* RFC 822 source modal */}
       {rawModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRawModal(null)}>
-          <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <Modal
+          onClose={() => setRawModal(null)}
+          label="RFC 822 Quelltext"
+          className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+        >
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
               <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
                 <Code size={14} /> RFC 822 Quelltext
               </span>
               <div className="flex items-center gap-2">
-                <a
-                  href={`/api/v1/mail/messages/${rawModal.msgId}/raw${tokenParam}`}
-                  download={`${rawModal.subject}.eml`}
+                <button
+                  onClick={() => downloadFile(`/mail/messages/${rawModal.msgId}/raw`, `${rawModal.subject}.eml`).catch(toastError)}
                   className="btn-secondary text-xs"
                 >
                   <Download size={12} /> .eml herunterladen
-                </a>
+                </button>
                 <button className="btn-ghost p-1" onClick={() => setRawModal(null)}>
                   <X size={16} />
                 </button>
@@ -615,8 +688,7 @@ export function MessageList({ folderId }: Props) {
             <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-all">
               {rawModal.text}
             </pre>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

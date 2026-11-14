@@ -1,4 +1,5 @@
 import toast from 'react-hot-toast';
+import { toastError } from '../lib/errors.js';
 
 interface UndoOptions {
   message: string;
@@ -21,8 +22,12 @@ export function showUndoToast({ message, onUndo, duration = 5000 }: UndoOptions)
       <span className="flex-1">{message}</span>
       <button
         onClick={() => {
-          void onUndo();
           toast.dismiss(t.id);
+          // A failed undo must be visible (toastError is deduplicated per message)
+          Promise.resolve()
+            .then(onUndo)
+            .then(() => { toast.success('Rückgängig gemacht', { duration: 2000 }); })
+            .catch(toastError);
         }}
         className="font-semibold text-blue-300 hover:text-blue-200 transition-colors"
       >

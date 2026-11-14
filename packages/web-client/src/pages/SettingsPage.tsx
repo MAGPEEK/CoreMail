@@ -11,7 +11,10 @@ import {
 import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
 import { format as fmtDate } from 'date-fns';
-import { api } from '../api/client.js';
+import { api, apiFetch } from '../api/client.js';
+import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+import { apiErrorFromBody } from '../lib/errors.js';
+import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
 import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
@@ -758,33 +761,45 @@ interface TotpSetupData {
   qrCodeDataUrl: string;
 }
 
-// Auth fetch helper for /auth/* routes (outside /api/v1/)
+// Auth fetch helper for /auth/* routes (outside /api/v1/) — Bearer header + token refresh
 async function authFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = useAuthStore.getState().accessToken ?? '';
   const isGet = !init.method || init.method === 'GET';
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(isGet ? {} : { 'Content-Type': 'application/json' }),
-      Authorization: `Bearer ${token}`,
-      ...(init.headers as Record<string, string> ?? {}),
-    },
-  });
+  const res = await apiFetch(path, init, isGet ? null : 'application/json');
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText })) as { error: string };
-    throw new Error(body.error ?? `HTTP ${res.status}`);
+    // REAUTH_REQUIRED / REAUTH_FAILED / REAUTH_LOCKED / TOTP_ALREADY_ENABLED → readable text
+    const body = await res.json().catch(() => ({ error: res.statusText })) as unknown;
+    throw apiErrorFromBody(body, res.status);
   }
   return res.json() as Promise<T>;
 }
 
+/** JSON body helper for re-authenticated MFA changes (`currentPassword`). */
+function withPassword(currentPassword: string, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ ...extra, currentPassword });
+}
+
+interface ReauthRequest {
+  title: string;
+  confirmLabel: string;
+  run: (currentPassword: string) => Promise<void>;
+}
+
 function SecuritySection() {
   const qc = useQueryClient();
+  const email = useAuthStore((s) => s.email);
   const [totpStep, setTotpStep] = useState<TotpStep>('idle');
   const [setupData, setSetupData] = useState<TotpSetupData | null>(null);
   const [confirmDigits, setConfirmDigits] = useState(['', '', '', '', '', '']);
   const [confirmError, setConfirmError] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+  const [regenCodes, setRegenCodes] = useState<string[] | null>(null);
+  const [reauth, setReauth] = useState<ReauthRequest | null>(null);
+  const [keyName, setKeyName] = useState('Sicherheitsschlüssel');
+  const [keyBusy, setKeyBusy] = useState(false);
   const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // Password entered when starting the TOTP wizard — reused for the backup codes
+  // generated right after the confirmation (no second prompt).
+  const setupPasswordRef = useRef<string>('');
 
   const { data: mfaStatus, isLoading: statusLoading } = useQuery<MfaStatus>({
     queryKey: ['mfa-status'],
@@ -792,26 +807,47 @@ function SecuritySection() {
     staleTime: 0,
   });
 
-  const setupMutation = useMutation({
-    mutationFn: () => authFetch<TotpSetupData>('/auth/mfa/totp/setup', { method: 'POST' }),
-    onSuccess: (data) => {
+  const { data: profile } = useQuery({
+    queryKey: ['user', 'profile'],
+    queryFn: () => api.get<{ email: string }>('/user/profile'),
+    enabled: !email,
+  });
+
+  const invalidateStatus = () => void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+
+  const startTotpSetup = () => setReauth({
+    title: '2FA einrichten',
+    confirmLabel: 'Weiter',
+    run: async (currentPassword) => {
+      const data = await authFetch<TotpSetupData>('/auth/mfa/totp/setup', {
+        method: 'POST', body: withPassword(currentPassword, { accountName: email ?? profile?.email }),
+      });
+      setupPasswordRef.current = currentPassword;
       setSetupData(data);
       setTotpStep('setup');
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const confirmMutation = useMutation({
     mutationFn: (code: string) =>
       authFetch<{ ok: boolean }>('/auth/mfa/totp/confirm', {
         method: 'POST',
-        body: JSON.stringify({ code }),
+        body: withPassword(setupPasswordRef.current, { code }),
       }),
     onSuccess: async () => {
-      const data = await authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', { method: 'POST' });
-      setBackupCodes(data.codes);
+      try {
+        const data = await authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', {
+          method: 'POST', body: withPassword(setupPasswordRef.current),
+        });
+        setBackupCodes(data.codes);
+      } catch (err) {
+        toast.error(`2FA aktiv, Backup-Codes konnten nicht erzeugt werden: ${(err as Error).message}`);
+        setBackupCodes([]);
+      } finally {
+        setupPasswordRef.current = '';
+      }
       setTotpStep('done');
-      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+      invalidateStatus();
     },
     onError: (e: Error) => {
       setConfirmError(e.message);
@@ -820,26 +856,59 @@ function SecuritySection() {
     },
   });
 
-  const disableMutation = useMutation({
-    mutationFn: () => authFetch<{ ok: boolean }>('/auth/mfa/totp', { method: 'DELETE' }),
-    onSuccess: () => {
+  const disableTotp = () => setReauth({
+    title: '2FA deaktivieren',
+    confirmLabel: '2FA deaktivieren',
+    run: async (currentPassword) => {
+      await authFetch<{ ok: boolean }>('/auth/mfa/totp', { method: 'DELETE', body: withPassword(currentPassword) });
       toast.success('2FA wurde deaktiviert');
       setTotpStep('idle');
       setSetupData(null);
       setBackupCodes(null);
-      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+      setRegenCodes(null);
+      invalidateStatus();
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
-  const regenBackupMutation = useMutation({
-    mutationFn: () => authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', { method: 'POST' }),
-    onSuccess: (data) => {
-      setBackupCodes(data.codes);
+  const regenerateBackupCodes = () => setReauth({
+    title: 'Backup-Codes neu generieren',
+    confirmLabel: 'Neu generieren',
+    run: async (currentPassword) => {
+      const data = await authFetch<{ codes: string[] }>('/auth/mfa/backup-codes/generate', {
+        method: 'POST', body: withPassword(currentPassword),
+      });
+      setRegenCodes(data.codes);
       toast.success('Neue Backup-Codes generiert');
-      void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+      invalidateStatus();
     },
-    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // WebAuthn: register a security key / passkey
+  const registerSecurityKey = () => setReauth({
+    title: 'Sicherheitsschlüssel hinzufügen',
+    confirmLabel: 'Weiter',
+    run: async (currentPassword) => {
+      setKeyBusy(true);
+      try {
+        const accountEmail = email ?? profile?.email ?? '';
+        const options = await authFetch<unknown>('/auth/mfa/webauthn/register/start', {
+          method: 'POST', body: withPassword(currentPassword, { email: accountEmail }),
+        });
+        let response: Record<string, unknown>;
+        try {
+          response = await webauthnRegister(options);
+        } catch (err) {
+          throw new Error(webauthnErrorMessage(err));
+        }
+        await authFetch<{ ok: boolean }>('/auth/mfa/webauthn/register/finish', {
+          method: 'POST', body: withPassword(currentPassword, { response, name: keyName.trim() || 'Sicherheitsschlüssel' }),
+        });
+        toast.success('Sicherheitsschlüssel registriert');
+        invalidateStatus();
+      } finally {
+        setKeyBusy(false);
+      }
+    },
   });
 
   // OTP digit helpers
@@ -919,11 +988,10 @@ function SecuritySection() {
               Schützen Sie Ihr Konto mit einer Authenticator-App (z.B. Google Authenticator, Authy, Microsoft Authenticator).
             </p>
             <button
-              onClick={() => setupMutation.mutate()}
-              disabled={setupMutation.isPending}
+              onClick={startTotpSetup}
               className="btn-primary text-xs flex items-center gap-1.5"
             >
-              {setupMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
+              <ShieldCheck size={13} />
               2FA einrichten
             </button>
           </>
@@ -1031,30 +1099,32 @@ function SecuritySection() {
             </div>
             <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => regenBackupMutation.mutate()}
-                disabled={regenBackupMutation.isPending}
+                onClick={regenerateBackupCodes}
                 className="btn-secondary text-xs flex items-center gap-1.5"
               >
-                {regenBackupMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                <RefreshCw size={12} />
                 Backup-Codes neu generieren
               </button>
               <button
-                onClick={() => { if (confirm('2FA wirklich deaktivieren?')) disableMutation.mutate(); }}
-                disabled={disableMutation.isPending}
+                onClick={disableTotp}
                 className="text-xs flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50"
               >
-                {disableMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <ShieldOff size={12} />}
+                <ShieldOff size={12} />
                 2FA deaktivieren
               </button>
             </div>
-            {regenBackupMutation.data?.codes && (
+            {regenCodes && (
               <div>
                 <p className="text-xs text-gray-600 font-medium mb-1">Neue Backup-Codes:</p>
                 <div className="grid grid-cols-2 gap-1 bg-white border border-gray-200 rounded p-3 font-mono text-xs">
-                  {regenBackupMutation.data.codes.map((c, i) => <span key={i} className="text-gray-700">{c}</span>)}
+                  {regenCodes.map((c, i) => <span key={i} className="text-gray-700">{c}</span>)}
                 </div>
                 <button
-                  onClick={() => { void navigator.clipboard.writeText((regenBackupMutation.data?.codes ?? []).join('\n')); toast.success('Kopiert'); }}
+                  onClick={() => {
+                    copyToClipboard(regenCodes.join('\n'))
+                      .then(() => toast.success('Kopiert'))
+                      .catch(() => toast.error('Kopieren fehlgeschlagen'));
+                  }}
                   className="mt-1 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
                 >
                   <Copy size={11} /> Alle kopieren
@@ -1064,6 +1134,55 @@ function SecuritySection() {
           </div>
         )}
       </div>
+
+      {/* ── Security keys (WebAuthn / passkeys) ── */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Key size={15} className="text-gray-400" />
+            <span className="text-sm font-medium">Sicherheitsschlüssel (WebAuthn)</span>
+          </div>
+          {!statusLoading && (
+            <span className="text-xs font-medium text-gray-600 bg-gray-200 px-2 py-0.5 rounded-full">
+              {mfaStatus?.webauthnCount ?? 0} registriert
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-500">
+          Melden Sie sich mit einem Hardware-Schlüssel (z. B. YubiKey) oder einem Passkey Ihres Geräts an.
+          Ein registrierter Schlüssel wird beim Login als zweiter Faktor abgefragt.
+        </p>
+        {webauthnSupported() ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              value={keyName}
+              onChange={(e) => setKeyName(e.target.value.slice(0, 60))}
+              aria-label="Name des Sicherheitsschlüssels"
+              className="input text-xs flex-1 min-w-[160px]"
+              placeholder="Name, z. B. YubiKey Büro"
+            />
+            <button
+              onClick={registerSecurityKey}
+              disabled={keyBusy}
+              className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {keyBusy ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />}
+              Schlüssel hinzufügen
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-amber-700">Dieser Browser unterstützt kein WebAuthn (oder die Seite läuft nicht über HTTPS).</p>
+        )}
+      </div>
+
+      {reauth && (
+        <PasswordPromptDialog
+          title={reauth.title}
+          confirmLabel={reauth.confirmLabel}
+          onConfirm={reauth.run}
+          onClose={() => setReauth(null)}
+        />
+      )}
     </div>
   );
 }

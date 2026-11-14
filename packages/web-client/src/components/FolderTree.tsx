@@ -164,6 +164,21 @@ function FolderItem({
   );
 }
 
+// Module-level (never define components inside components — remounts on every render)
+function SectionHeader({ label, collapsed, onToggle, action }: {
+  label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
+      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 flex-1">
+        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        {label}
+      </button>
+      {action}
+    </div>
+  );
+}
+
 export function FolderTree({ onNewMail }: Props) {
   const qc = useQueryClient();
   const t = useT();
@@ -467,18 +482,6 @@ export function FolderTree({ onNewMail }: Props) {
       </div>
     );
   };
-
-  const SectionHeader = ({ label, collapsed, onToggle, action }: {
-    label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
-  }) => (
-    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-      <button onClick={onToggle} className="flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 flex-1">
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        {label}
-      </button>
-      {action}
-    </div>
-  );
 
   // Make sure useT re-renders on language change
   void lang;

@@ -65,6 +65,8 @@ export interface MessageSummary {
   scheduledStatus?: 'PENDING' | 'SENT' | 'CANCELLED' | null;
   attachments: { id: string; filename: string; mimeType: string; size: number; contentId?: string | null; inline?: boolean }[];
   categories?: Category[];
+  /** Folder of the message (always set by list + search endpoints since v6.0) */
+  folderId?: string;
 }
 
 export type BulkAction =

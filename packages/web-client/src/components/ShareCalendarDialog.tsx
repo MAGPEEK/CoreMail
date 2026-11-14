@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Share2, Eye, UserPlus, Copy, Link as LinkIcon, ChevronDown } from 'lucide-react';
+import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarShare } from '../api/types.js';
@@ -166,6 +167,8 @@ export function ShareCalendarDialog({
       const pick = suggestions[activeIdx];
       if (pick) { e.preventDefault(); pickSuggestion(pick); }
     } else if (e.key === 'Escape') {
+      // Close only the suggestion list, not the whole dialog
+      e.stopPropagation();
       setShowSug(false);
     }
   };
@@ -184,8 +187,12 @@ export function ShareCalendarDialog({
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <Modal
+      onClose={onClose}
+      label="Kalender teilen"
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+    >
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -415,7 +422,6 @@ export function ShareCalendarDialog({
             {t('cal_share_done')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
