@@ -133,9 +133,9 @@ test('BCP target redirects into /bcp; errors land on the login page', async () =
 });
 
 test('admin SSO + LDAP responses never contain secrets', async () => {
-  const admin = await db.user.create({ data: { email: 'root@example.com', role: 'SERVER_MANAGEMENT', domainId } });
+  const admin = await db.user.create({ data: { email: 'root@example.com', role: 'ORGANIZATION_MANAGEMENT', domainId } });
   const { accessToken } = await sauth.issueSession(
-    { id: admin['id'] as string, email: 'root@example.com', role: 'SERVER_MANAGEMENT', domainId },
+    { id: admin['id'] as string, email: 'root@example.com', role: 'ORGANIZATION_MANAGEMENT', domainId },
     { ip: '127.0.0.1', userAgent: 't', mfaVerified: true },
   );
   const auth = { Authorization: `Bearer ${accessToken}` };

@@ -31,8 +31,9 @@ export async function publicBaseUrl(): Promise<string> {
   const env = process.env['COREMAIL_PUBLIC_URL']?.trim();
   if (env) return env.replace(/\/+$/, '');
   const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
-  const ews = deriveServerUrls(s?.publicHostname || 'localhost', s?.useHttps ?? true, s?.httpPort ?? 443).ewsUrl;
-  return ews.replace(/\/EWS\/Exchange\.asmx$/, '');
+  // v7: ewsUrl is gone with EWS — derive the base from the MWA URL (`<base>/owa/`)
+  const owa = deriveServerUrls(s?.publicHostname || 'localhost', s?.useHttps ?? true, s?.httpPort ?? 443).owaUrl;
+  return owa.replace(/\/owa\/$/, '');
 }
 
 function readCookie(req: Request, name: string): string | undefined {

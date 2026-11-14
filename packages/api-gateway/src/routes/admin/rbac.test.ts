@@ -40,6 +40,9 @@ installFakePrisma({
   ldapConfig: {
     findUnique: (a) => { const q = a as { include?: Row }; return ldapStored ? { ...ldapStored, ...(q.include ? { domain: { id: 'd1', name: 'ex.com' } } : {}) } : null; },
     upsert: (a) => { const q = a as { update: Row }; ldapStored = { ...ldapStored, ...q.update }; return ldapStored; },
+    // v6.1 LDAP route: findUnique + update/create instead of upsert
+    update: (a) => { const q = a as { data: Row }; ldapStored = { ...ldapStored, ...q.data }; return ldapStored; },
+    create: (a) => { const q = a as { data: Row }; ldapStored = { ...q.data }; return ldapStored; },
   },
   domain: {
     findUnique: (a) => { const q = a as { where: Row }; if (q.where['id'] === 'd1') return { id: 'd1', name: 'ex.com', primary: true }; if (q.where['id'] === 'd2') return { id: 'd2', name: 'other.com', primary: false }; if (q.where['name'] === 'taken.com') return { id: 'd9' }; return null; },
