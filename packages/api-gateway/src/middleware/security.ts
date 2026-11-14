@@ -213,12 +213,17 @@ export const ssoRateLimit = (req: Request, res: Response, next: NextFunction): u
  * Setup endpoint — max. 5 attempts per hour.
  * The setup endpoint exists only once and should not receive any requests
  * after the initial configuration anyway.
+ *
+ * Only POST attempts count: MWA and BCP call GET /api/v1/setup/status on every
+ * page load, so counting reads exhausted the budget after a few reloads and the
+ * wizard's POST /complete then failed with 429 for an hour.
  */
 export const setupRateLimit = rateLimit({
   windowMs: 60 * 60 * 1_000,
   max: 5,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET' || req.method === 'HEAD',
   message: { error: 'Too many setup attempts.' },
 });
 
