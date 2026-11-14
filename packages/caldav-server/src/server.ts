@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express from 'express';
 import {
   createLogger, installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
@@ -10,6 +11,8 @@ import { carddavRouter } from './carddav/index.js';
 
 const log = createLogger('caldav-server');
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['CALDAV_PORT'] ?? '8082', 10);
 

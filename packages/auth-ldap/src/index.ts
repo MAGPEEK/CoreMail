@@ -2,12 +2,13 @@
  * @coremail/auth-ldap — LDAP / Active Directory login and directory sync (v6.1).
  *
  * Web/API login:   registerAuthenticator(ldapAuthenticator())        (@coremail/storage/auth)
- * Mail protocols:  registerExternalPasswordVerifier(verifyLdapMailPassword)  (@coremail/storage)
+ * Mail protocols:  registerLdapMailVerifier()  (= registerExternalPasswordVerifier('ldap', ldapMailPasswordVerifier))
  *                  → resolves `{ userId }` on success, `false` otherwise
  * Sync:            runLdapSyncLocked(domainId) / startLdapSyncScheduler()
  */
 export {
   authenticateLdap, ldapAuthDecision, ldapAuthenticator, verifyLdapMailPassword, LDAP_EXTERNAL_ID_PREFIX,
+  ldapMailPasswordVerifier, registerLdapMailVerifier,
   type LdapAuthDecision, type LdapAuthReason,
 } from './authenticate.js';
 export {

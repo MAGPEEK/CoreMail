@@ -12,6 +12,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
     "bullmq": "^5.76.6",

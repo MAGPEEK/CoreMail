@@ -1,6 +1,7 @@
 /**
  * JMAP Basic auth on the shared mail credential check (v7): behaviour kept
- * (MFA → app passwords only, auth-service fallback for LDAP/OIDC users,
+ * (MFA → app passwords only, directory (LDAP) users via the registered
+ * external verifier,
  * 60 s cache), plus shared lockout (429) and DB errors (503).
  * Run: node --import tsx --import ./src/test-env.ts --test src/auth-basic.test.ts
  */
@@ -29,19 +30,19 @@ const users = [
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
-const fetchCalls: string[] = [];
-globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-  fetchCalls.push(String(url));
-  const body = JSON.parse(String(init?.body ?? '{}')) as { password?: string };
-  return { ok: body.password === 'dir-pw' } as Response;
-}) as typeof fetch;
-
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
 storage.configureMailAuth({
   verifyPassword: async (p: string, h: string) => h === `hash:${p}`,
   dummyHash: async () => 'hash:\0dummy',
   limits: { accountMaxFailures: 3 },
+});
+// v7: directory users are verified by the registered external verifier (in
+// production registerLdapMailVerifier() from @coremail/auth-ldap; here a fake).
+const directoryCalls: string[] = [];
+storage.registerExternalPasswordVerifier('ldap', async (user, password) => {
+  directoryCalls.push(user.email);
+  return user.authSource === 'LDAP' && password === 'dir-pw';
 });
 const { authenticateBasic, AuthUnavailableError } = await import('./auth.js');
 
@@ -54,9 +55,9 @@ test('MFA: primary password rejected, app password accepted', async () => {
   assert.equal((await authenticateBasic('mfa@example.com', 'APP-PW', '203.0.113.1'))?.userId, 'u2');
 });
 
-test('LDAP/OIDC users are still verified via the auth-service', async () => {
+test('LDAP users are verified via the registered directory verifier', async () => {
   assert.equal((await authenticateBasic('ldap@example.com', 'dir-pw', '203.0.113.1'))?.userId, 'u3');
-  assert.ok(fetchCalls.some((u) => u.endsWith('/auth/login')));
+  assert.ok(directoryCalls.includes('ldap@example.com'));
   assert.equal(await authenticateBasic('ldap@example.com', 'nope', '203.0.113.1'), null);
 });
 

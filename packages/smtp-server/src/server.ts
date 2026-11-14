@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import net from 'node:net';
 import { X509Certificate } from 'node:crypto';
 import {
@@ -18,6 +19,8 @@ import { invalidateOutboundConfigCache } from './outbound/relay.js';
 const log = createLogger('smtp:server');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 
 // ── Port-Defaults ─────────────────────────────────────────────────────────────
 const SMTP_PORT_25  = parseInt(process.env['SMTP_PORT_25']  ?? '25',  10);

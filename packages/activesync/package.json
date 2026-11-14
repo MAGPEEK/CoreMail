@@ -12,6 +12,7 @@
     "test": "node --import tsx --test src/commands/send-mail-plan.test.ts src/commands/sync-window.test.ts src/outbound.test.ts src/auth.test.ts"
   },
   "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
     "bullmq": "^5.12.0",

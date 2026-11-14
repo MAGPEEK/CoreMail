@@ -12,6 +12,7 @@
     "test": "node --import tsx --test src/server/tokenizer.test.ts src/server/command-reader.test.ts src/commands/search-parser.test.ts src/server/starttls.test.ts src/fetch/fetch.test.ts"
   },
   "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*"
   },

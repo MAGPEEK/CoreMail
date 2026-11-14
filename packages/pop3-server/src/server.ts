@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards } from '@coremail/core';
@@ -9,6 +10,8 @@ import { POP3Session, setPop3Hostname } from './session.js';
 const log = createLogger('pop3-server');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 
 const PORT_PLAIN = parseInt(process.env['POP3_PORT']  ?? '110', 10);
 const PORT_TLS   = parseInt(process.env['POP3S_PORT'] ?? '995', 10);

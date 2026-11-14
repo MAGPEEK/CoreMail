@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import net from 'node:net';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
@@ -10,6 +11,8 @@ import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsC
 const log = createLogger('imap:main');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 
 const IMAP_PORT     = parseInt(process.env['IMAP_PORT']     ?? '143', 10);
 const IMAP_PORT_TLS = parseInt(process.env['IMAP_PORT_TLS'] ?? '993', 10);

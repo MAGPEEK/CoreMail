@@ -16,7 +16,9 @@
  *   8. first login: create the user AND provision the mailbox
  */
 import { createLogger } from '@coremail/core';
-import { prisma, ensureMailboxProvisioned } from '@coremail/storage';
+import {
+  prisma, ensureMailboxProvisioned, registerExternalPasswordVerifier, type ExternalPasswordVerifier,
+} from '@coremail/storage';
 import { revokeAllSessions, type ExternalAuthenticator } from '@coremail/storage/auth';
 import { buildUserFilter } from './filter.js';
 import {
@@ -189,6 +191,26 @@ export async function authenticateLdap(email: string, password: string): Promise
  */
 export async function verifyLdapMailPassword(email: string, password: string): Promise<false | { userId: string }> {
   return (await authenticateLdap(email, password)) ?? false;
+}
+
+/**
+ * Adapter to the ExternalPasswordVerifier signature of the shared mail
+ * credential check (verifyMailCredentials). It is only consulted for existing
+ * non-LOCAL users without MFA; only LDAP accounts are checked, and the bind
+ * must resolve to the same CoreMail user.
+ */
+export const ldapMailPasswordVerifier: ExternalPasswordVerifier = async (user, password) => {
+  if (user.authSource !== 'LDAP') return false;
+  const result = await verifyLdapMailPassword(user.email, password);
+  return result !== false && result.userId === user.id;
+};
+
+/**
+ * Registers LDAP as directory backend for the mail protocols (SMTP AUTH, IMAP,
+ * POP3, ActiveSync, JMAP/CalDAV Basic, Autodiscover). Call once at service start.
+ */
+export function registerLdapMailVerifier(): void {
+  registerExternalPasswordVerifier('ldap', ldapMailPasswordVerifier);
 }
 
 /** First-factor step for the shared web/API login service (`registerAuthenticator`). */

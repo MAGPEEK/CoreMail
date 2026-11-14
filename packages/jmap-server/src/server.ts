@@ -14,6 +14,7 @@
  */
 import { corsHeadersFor, parseOriginList } from './cors.js';
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express from 'express';
 import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
@@ -39,6 +40,8 @@ type AuthedRequest = express.Request & { jmapUser?: JmapUser };
 
 const log = createLogger('jmap-server');
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 // v6: async handler rejections reach the problem+json error handler below
 installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['JMAP_PORT'] ?? '3006', 10);

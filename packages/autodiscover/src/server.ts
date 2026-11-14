@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express from 'express';
 import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
@@ -11,6 +12,8 @@ import { invalidateSettingsCache } from './settings.js';
 
 const log = createLogger('autodiscover');
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 installAsyncErrorHandling(express);
 const PORT = parseInt(process.env['AUTODISCOVER_PORT'] ?? '8081', 10);
 

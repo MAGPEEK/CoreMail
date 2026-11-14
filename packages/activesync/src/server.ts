@@ -1,4 +1,5 @@
 import { initRuntimeLogLevel } from '@coremail/core';
+import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
@@ -13,6 +14,8 @@ import { handlePing } from './commands/ping.js';
 
 const log = createLogger('activesync');
 installProcessGuards(log);
+// v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
+registerLdapMailVerifier();
 // v6: e.g. the async requireAuth (Prisma) used to crash the process on DB errors
 installAsyncErrorHandling(express);
 const app = express();

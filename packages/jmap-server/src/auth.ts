@@ -13,12 +13,11 @@ import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'node:crypto';
 import { verifyAccessToken, createLogger } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, registerExternalPasswordVerifier, clientIpFromRequest,
+  prisma, verifyMailCredentials, clientIpFromRequest,
 } from '@coremail/storage';
 import type { JmapUser } from './types.js';
 
 const log = createLogger('jmap:auth');
-const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
 
 declare module 'express' {
   interface Request {
@@ -57,25 +56,8 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
   }
 }
 
-/**
- * LDAP/OIDC users without a local hash: the JMAP server keeps its previous
- * behaviour of asking the auth-service — registered on the shared check's
- * extension point (only consulted for non-LOCAL users without MFA).
- */
-registerExternalPasswordVerifier('jmap-auth-service', async (user, password) => {
-  try {
-    const resp = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: user.email, password }),
-      signal: AbortSignal.timeout(5000),
-    });
-    return resp.ok;
-  } catch (err) {
-    log.warn({ err }, 'auth-service unreachable');
-    return false;
-  }
-});
+// Directory users (LDAP): the verifier is registered at service start
+// (registerLdapMailVerifier() from @coremail/auth-ldap in server.ts).
 
 /**
  * Basic auth (e-mail + password or app password) — v7: shared mail-protocol

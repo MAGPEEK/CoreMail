@@ -29,6 +29,9 @@ importers:
 
   packages/activesync:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -320,6 +323,9 @@ importers:
 
   packages/autodiscover:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -388,6 +394,9 @@ importers:
 
   packages/caldav-server:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -484,6 +493,9 @@ importers:
 
   packages/imap-server:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -509,6 +521,9 @@ importers:
 
   packages/jmap-server:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -561,6 +576,9 @@ importers:
 
   packages/pop3-server:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core
@@ -620,6 +638,9 @@ importers:
 
   packages/smtp-server:
     dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
       '@coremail/core':
         specifier: workspace:*
         version: link:../core

@@ -12,6 +12,7 @@
     "test": "node --import tsx --test src/auth.test.ts src/dav-utils.test.ts src/caldav/routing.test.ts"
   },
   "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
     "express": "^4.19.2",
