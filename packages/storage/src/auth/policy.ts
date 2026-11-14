@@ -4,8 +4,8 @@
  */
 import { prisma } from '../prisma/index.js';
 
-/** Roles that may log in while maintenance mode is on. */
-export const MAINTENANCE_EXEMPT_ROLES: readonly string[] = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'ADMIN'];
+/** Roles that may log in while maintenance mode is on (UserRole has no 'ADMIN'). */
+export const MAINTENANCE_EXEMPT_ROLES: readonly string[] = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'];
 
 export const DEFAULT_MAINTENANCE_MESSAGE =
   'The server is currently under maintenance. Please try again later.';
