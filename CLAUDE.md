@@ -19,16 +19,17 @@ It contains all the important context information about the CoreMail project.
 
 ## Architecture Decisions (v5.4.0+)
 
+- **v7.0.0 — EWS removed (MAJOR)**: package `packages/ews-server` deleted together with `ServerSettings.mapiHttpEnabled` (the EWS switch) and `ServerSettings.ewsUrl` (columns dropped by `prisma db push --accept-data-loss`). api-gateway answers `/EWS`, `/OAB`, `/mapi` with 404 (`GONE_PREFIXES` in `server.ts`, never the SPA), Autodiscover v2 `Protocol=EWS` → 404 `NoSuchProtocol`, BCP card + CLI `connector ews`/`mapi` gone. Outlook/eM Client use IMAP+SMTP (+CalDAV/CardDAV) or JMAP; mobile uses ActiveSync (unchanged).
 - **v6.0.0 security & cleanup**:
   - `verifyAccessToken()` (core) returns `JwtPayload | null` and never throws; it rejects refresh tokens (`type: 'refresh'`) and pins `HS256`. Callers must check for `null`.
-  - **MAPI over HTTP removed for good** (again). EWS has its own switch, stored in the existing field `ServerSettings.mapiHttpEnabled` (name kept to avoid a schema change); gate `requireEwsEnabled` in `packages/ews-server/src/feature-flag.ts`. BCP card "Exchange Web Services (EWS)", CLI `connector ews` (`mapi` = deprecated alias).
-  - **Every outbound producer** (REST, JMAP, SMTP submission, rule forwards, ActiveSync, EWS) goes through BullMQ `smtp-outbound`; the worker resolves the DKIM key of the envelope-from domain when a job has none (`smtp-server/src/outbound/dkim.ts`). Domains get a DKIM key at creation (`api-gateway/src/lib/dkim.ts`). Never write to ad-hoc Redis lists for sending.
+  - **MAPI over HTTP removed for good** (again). EWS got its own switch in v6.0.0 — EWS itself was removed in v7.0.0 (see above).
+  - **Every outbound producer** (REST, JMAP, SMTP submission, rule forwards, ActiveSync) goes through BullMQ `smtp-outbound`; the worker resolves the DKIM key of the envelope-from domain when a job has none (`smtp-server/src/outbound/dkim.ts`). Domains get a DKIM key at creation (`api-gateway/src/lib/dkim.ts`). Never write to ad-hoc Redis lists for sending.
   - Sender identity check for ActiveSync lives in `packages/storage/src/sender-identity.ts` (own address, aliases, Shared Mailbox with SEND_AS/FULL_ACCESS).
   - security-filter `/check/connection` has stages: `connect` (IP only: DNSBL/DNSWL, GeoIP), `rcpt` (greylisting with IP+sender+recipient), `full` (legacy). SMTP `onRcptTo(to, from, authUser, ip)`.
   - Mail HTML is rendered only through `sanitizeMailHtml()` (`web-client/src/lib/mailHtml.ts`).
   - Removed: `storage-api` (port 3001), `/PowerShell/`, `/admin/ems/cmdlet`, `/admin/mailboxes/shared*`, OpenTelemetry modules.
 - **Testing (v6.0.0)**: `pnpm -r test` runs every package `test` script (node:test via `node --import tsx --test`). Prisma is faked through the `globalThis.__prisma` seam of `packages/storage/src/prisma/index.ts` — set it (with `$on: () => undefined`) BEFORE dynamically importing modules that import `@coremail/storage`; set `DATABASE_URL`/`JWT_SECRET`/`PEPPER` (≥32 chars) before importing `@coremail/core`. Reviewer acceptance suites (`*.review.test.ts`, SMTP/IMAP/POP3 `test-hooks.mjs` suites) document open findings and are intentionally not in `pnpm -r test`. On this Windows machine use `corepack pnpm` (global shim broken).
-- **Admin CLI (v5.8.0)**: package `packages/cli/` (commander 12), binary `coremail` in the app image (`/usr/local/bin/coremail` → `packages/cli/dist/index.js`). Talks exclusively to the REST admin API (`/api/v1/admin/*`, `/auth/login`, `/auth/mfa/verify`, `/auth/refresh`) — no direct Prisma access, so that roles + audit log apply. Session in `~/.config/coremail/credentials.json` (0600) or `COREMAIL_TOKEN`/`COREMAIL_ADMIN_EMAIL`+`_PASSWORD`(+`_TOTP`). Command groups: `user`, `mailbox`, `shared`, `domain`, `connector` (listeners via `/admin/services/listeners/<slug>`, JMAP/EWS via `/admin/servers/settings`), `smtp banner` (`/admin/smtp-config/settings`), `cert` (`/admin/certificates`). The shared-mailbox list returns `{items,total}`; the mailbox list returns an array. Docs `docs/cli.md`. Tests: `node --import tsx --test src/output.test.ts`.
+- **Admin CLI (v5.8.0)**: package `packages/cli/` (commander 12), binary `coremail` in the app image (`/usr/local/bin/coremail` → `packages/cli/dist/index.js`). Talks exclusively to the REST admin API (`/api/v1/admin/*`, `/auth/login`, `/auth/mfa/verify`, `/auth/refresh`) — no direct Prisma access, so that roles + audit log apply. Session in `~/.config/coremail/credentials.json` (0600) or `COREMAIL_TOKEN`/`COREMAIL_ADMIN_EMAIL`+`_PASSWORD`(+`_TOTP`). Command groups: `user`, `mailbox`, `shared`, `domain`, `connector` (listeners via `/admin/services/listeners/<slug>`, JMAP via `/admin/servers/settings`), `smtp banner` (`/admin/smtp-config/settings`), `cert` (`/admin/certificates`). The shared-mailbox list returns `{items,total}`; the mailbox list returns an array. Docs `docs/cli.md`. Tests: `node --import tsx --test src/output.test.ts`.
 - **docker-compose (v5.8.0)**: `infra/docker/docker-compose.yml` reduced to mandatory parameters with `${VAR:?message}` checks; internal service URLs/ports are no longer set (code defaults, exception `SECURITY_FILTER_URL=http://localhost:3002`, because one default points to `security-filter:3002`). `scripts/setup.sh` generates `.env` + symlink `infra/docker/.env`.
 
 - **JMAP server (v5.7.1)**: new package `packages/jmap-server/` (port 3006), api-gateway proxies `/jmap/*` + `/.well-known/jmap` (incl. WebSocket upgrade `/jmap/ws` on the HTTP server and the TLS proxy). RFC 8620 Core (Session, dispatcher with result references, Blobs, EventSource, PushSubscription), 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals, 9749 VAPID. Switch `ServerSettings.jmapEnabled` (default **true**), BCP → Server → "JMAP". Auth: Bearer JWT or Basic (app password with MFA). Accounts: `userId` (own), `shared-<id>` (Shared Mailbox), delegated mailboxes. `Message.threadId` lazily derived from `inReplyTo`. States: Email `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>`, Mailbox `<count>.<maxCreatedMs>.<hash>` — deletes without tombstones → `cannotCalculateChanges`. EmailSubmission in Redis (`jmap:sub:*`, 7d), sending via BullMQ `smtp-outbound` with `rawMessage`. Blob IDs: `m-<msgId>`, `a-<attId>`, `p-<msgId>-text|html`, `u-<hex>` (upload, MinIO `jmap-upload/`, 7d). Docs: `docs/jmap.md`.
@@ -65,7 +66,6 @@ coremail/
 │   ├── smtp-server/       # SMTP inbound/outbound (ports 25, 465, 587)
 │   ├── imap-server/       # IMAP4rev1 + IDLE + CONDSTORE (ports 143, 993)
 │   ├── pop3-server/       # POP3 (ports 110, 995)
-│   ├── ews-server/        # Web Services EWS SOAP/XML (port 8080)
 │   ├── autodiscover/      # Autodiscover v1 + v2 (port 8081)
 │   ├── caldav-server/     # CalDAV + CardDAV (port 8082)
 │   ├── jmap-server/       # JMAP RFC 8620/8621 + 8887/9404/9425/9670/9749 (port 3006)
@@ -109,7 +109,7 @@ Since v0.9.1 CoreMail uses a consolidated **2-container architecture**:
 **HTTP routing without nginx**: The `api-gateway` on port 3000 handles all HTTP routes:
 - `/owa/` `/bcp/` — Express.static (frontend bundles from `/app/www/`)
 - `/auth/` → proxy to auth-service (localhost:3003)
-- `/EWS/` `/OAB/` → proxy to ews-server (localhost:8080) — 404 while the BCP switch "Exchange Web Services (EWS)" is off (v6.0.0)
+- `/EWS` `/OAB` `/mapi` → 404 (EWS removed in v7.0.0, MAPI over HTTP in v6.0.0)
 - `/Microsoft-Server-ActiveSync` → proxy to activesync (localhost:3005)
 - `/dav/` → proxy to caldav-server (localhost:8082)
 - `/jmap/` `/.well-known/jmap` → proxy to jmap-server (localhost:3006), WebSocket `/jmap/ws` — since v5.7.1
@@ -128,7 +128,6 @@ Since v0.9.1 CoreMail uses a consolidated **2-container architecture**:
 | backup-service | 3004 |
 | activesync | 3005 |
 | jmap-server | 3006 |
-| ews-server | 8080 |
 | autodiscover | 8081 |
 | caldav-server | 8082 |
 | smtp-server | 25 / 465 / 587 |
@@ -247,7 +246,7 @@ Three stages: `builder` (all Node.js packages), `frontend-builder` (React bundle
 
 ### Single-service Dockerfile (standard for development)
 
-All Dockerfiles follow the same multi-stage pattern. Example from `ews-server`:
+All Dockerfiles follow the same multi-stage pattern. Example from `smtp-server`:
 
 ```dockerfile
 FROM node:22-alpine AS builder
@@ -312,7 +311,6 @@ All endpoints behind nginx on port 443:
 |------|---------|-------------|
 | `/owa/` | web-client | Outlook Web Access |
 | `/bcp/` | admin-panel | Coremail admin panel (ECP) |
-| `/EWS/Exchange.asmx` | ews-server | EWS Web Services (SOAP) |
 | `/Autodiscover/` | autodiscover | Autodiscover v1 |
 | `/autodiscover/` | autodiscover | Autodiscover v2 |
 | `/Microsoft-Server-ActiveSync` | activesync | EAS 14.1 |
@@ -356,7 +354,7 @@ POST /PowerShell/  → WSMan-Identify (answers) + cmdlet routing to the EMS REST
                      (unknown cmdlets → SOAP fault with the list of supported cmdlets)
 ```
 
-**MAPI over HTTP**: removed in v6.0.0 (see Architecture Decisions above). EWS is optional, default off.
+**MAPI over HTTP**: removed in v6.0.0. **EWS**: removed in v7.0.0 (see Architecture Decisions above).
 
 ---
 

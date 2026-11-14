@@ -1,5 +1,5 @@
 /**
- * Sender identity policy for client submission paths (ActiveSync, EWS, …).
+ * Sender identity policy for client submission paths (ActiveSync, JMAP, …).
  *
  * Mirrors the rule of SMTP submission (smtp-server/src/submission/handler.ts
  * `checkSenderPermission`): an authenticated user may send as

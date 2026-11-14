@@ -120,13 +120,10 @@ app.get('/.well-known/acme-challenge/:token', async (req, res) => {
 // ── Internal proxies — register BEFORE express.json()! ───────────────────────
 // express.json() consumes the body stream. Proxy routes must therefore come
 // first so they can forward the body directly.
-const EWS_URL = process.env['EWS_SERVICE_URL']  ?? 'http://localhost:8080';
 const EAS_URL = process.env['EAS_SERVICE_URL']  ?? 'http://localhost:3005';
 const DAV_URL = process.env['CALDAV_SERVICE_URL'] ?? 'http://localhost:8082';
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
-// v3.18.35: Autodiscover has its OWN service on port 8081 — do not route
-// to EWS, otherwise Express answers with "Cannot POST /Autodiscover/
-// Autodiscover.xml" and Outlook LTSC does not connect.
+// v3.18.35: Autodiscover has its OWN service on port 8081.
 const AUTODISCOVER_URL = process.env['AUTODISCOVER_SERVICE_URL'] ?? 'http://localhost:8081';
 // v5.7.1: JMAP server (RFC 8620/8621 + extensions) on port 3006
 const JMAP_URL = process.env['JMAP_SERVICE_URL'] ?? 'http://localhost:3006';
@@ -151,7 +148,12 @@ function internalProxy(targetBase: string): express.RequestHandler {
   return proxy as express.RequestHandler;
 }
 
-app.use('/EWS',          internalProxy(EWS_URL));
+// v7.0.0: Exchange Web Services removed (EWS service package gone; MAPI over
+// HTTP already in v6.0.0). Answer 404 for every method instead of letting GET
+// fall through to the SPA index.html. Express paths are case-insensitive, so
+// /EWS also covers /ews.
+const GONE_PREFIXES = ['/EWS', '/OAB', '/mapi'];
+app.use(GONE_PREFIXES, (_req, res) => { res.status(404).json({ error: 'Not found' }); });
 // v5.7.1: JMAP — toggle in BCP → Server → „JMAP" (jmap-server returns 404 when off).
 // WebSocket upgrades (/jmap/ws, RFC 8887) are forwarded to jmapProxy.upgrade in
 // start() on the HTTP server and in the TLS proxy.
@@ -172,8 +174,6 @@ const jmapProxy = createProxyMiddleware({
 export const jmapUpgrade = jmapProxy.upgrade;
 app.use('/jmap',             jmapProxy as express.RequestHandler);
 app.use('/.well-known/jmap', jmapProxy as express.RequestHandler);
-app.use('/OAB',          internalProxy(EWS_URL));
-// v3.18.35: Autodiscover has its own service (port 8081), not EWS.
 app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
@@ -352,7 +352,7 @@ if (existsSync(bcpDir)) {
 }
 
 // OWA frontend under root — must come AFTER all API routes so that
-// /auth/* /api/* /EWS/* etc. take precedence. Catch-all `app.get('*')` sends
+// /auth/* /api/* /jmap/* etc. take precedence. Catch-all `app.get('*')` sends
 // all unknown routes back to index.html (SPA routing).
 if (existsSync(owaDir)) {
   app.use(express.static(owaDir, {
@@ -367,7 +367,7 @@ if (existsSync(owaDir)) {
   // SPA catch-all: everything not matched so far that is NOT a known
   // API/proxy route is an OWA route → return index.html.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/.well-known/', '/EWS', '/jmap', '/OAB', '/Autodiscover', '/autodiscover',
+    '/api/', '/auth/', '/.well-known/', '/jmap', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/bcp',
   ];
   app.get('*', (req, res, next) => {

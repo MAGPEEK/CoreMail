@@ -9,7 +9,6 @@ import { createLogger } from '@coremail/core';
 const log = createLogger('autodiscover:settings');
 
 export interface ServerConfig {
-  ewsUrl: string;
   owaUrl: string;
   easUrl: string;
   autodiscoverBase: string;
@@ -23,8 +22,6 @@ export interface ServerConfig {
   smtpPort: number;
   smtpTls: boolean;
   orgName: string;
-  // EWS on/off — stored in the historical DB field ServerSettings.mapiHttpEnabled
-  ewsEnabled: boolean;
 }
 
 // In-memory cache (60 second TTL) — avoids a DB query per Autodiscover request
@@ -38,7 +35,6 @@ function envDefaults(): ServerConfig {
   const proto = process.env['MAIL_USE_HTTPS'] === 'true' ? 'https' : 'http';
   const base = `${proto}://${hostname}:${port}`;
   return {
-    ewsUrl:          process.env['EWS_URL']          ?? `${base}/EWS/Exchange.asmx`,
     owaUrl:          process.env['OWA_URL']          ?? `${base}/owa/`,
     easUrl:          process.env['EAS_URL']          ?? `${base}/Microsoft-Server-ActiveSync`,
     autodiscoverBase: process.env['AUTODISCOVER_BASE'] ?? base,
@@ -52,7 +48,6 @@ function envDefaults(): ServerConfig {
     smtpPort:        587,
     smtpTls:         true,
     orgName:         'CoreMail',
-    ewsEnabled:      false,
   };
 }
 
@@ -64,7 +59,6 @@ export async function getServerConfig(): Promise<ServerConfig> {
     const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
     if (settings) {
       cache = {
-        ewsUrl:           settings.ewsUrl,
         owaUrl:           settings.owaUrl,
         easUrl:           settings.easUrl,
         autodiscoverBase: settings.autodiscoverBase,
@@ -78,7 +72,6 @@ export async function getServerConfig(): Promise<ServerConfig> {
         smtpPort:         settings.smtpPort,
         smtpTls:          settings.smtpTls,
         orgName:          settings.orgName,
-        ewsEnabled:       settings.mapiHttpEnabled,
       };
       cacheExpiry = now + CACHE_TTL_MS;
       return cache;

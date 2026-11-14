@@ -129,22 +129,6 @@ services:
       minReplicas: 2
       maxReplicas: 6
 
-  ewsServer:
-    enabled: true
-    image: ews-server
-    port: 8080
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 10
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "256Mi"
-      limits:
-        cpu: "1000m"
-        memory: "1Gi"
-
   apiGateway:
     enabled: true
     image: api-gateway

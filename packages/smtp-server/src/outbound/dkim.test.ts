@@ -1,6 +1,6 @@
 /**
  * DKIM key resolution for outbound jobs without DKIM fields
- * (SMTP submission 465/587, rule forwards, EAS, EWS).
+ * (SMTP submission 465/587, rule forwards, EAS).
  * Run: node --import tsx --test src/outbound/dkim.test.ts  (in packages/smtp-server)
  */
 import { test, beforeEach } from 'node:test';

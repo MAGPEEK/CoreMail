@@ -2,7 +2,7 @@
  * Central DKIM key resolution for the outbound worker.
  *
  * Producers of `smtp-outbound` jobs (api-gateway, JMAP, SMTP submission on
- * 465/587, rule forwards, ActiveSync, EWS) do not all attach DKIM fields.
+ * 465/587, rule forwards, ActiveSync) do not all attach DKIM fields.
  * The worker therefore resolves the key from the envelope-from domain when a
  * job carries none, so every outgoing mail from a local domain is signed.
  */

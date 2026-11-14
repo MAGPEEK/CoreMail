@@ -34,22 +34,6 @@ spec:
                 name: {{ include "coremail.fullname" . }}-admin-panel
                 port:
                   name: http
-          # EWS
-          - path: /EWS
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-ews-server
-                port:
-                  name: http
-          # OAB
-          - path: /OAB
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-ews-server
-                port:
-                  name: http
           # Autodiscover v1
           - path: /Autodiscover
             pathType: Prefix

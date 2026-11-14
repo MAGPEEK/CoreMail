@@ -7,10 +7,10 @@ const log = createLogger('autodiscover:v1');
 
 /**
  * v5.2.14: verifies Basic-Auth credentials against User.passwordHash AND
- * AppPassword.hash (same logic as the EWS middleware).  Returns true/false.
+ * AppPassword.hash (same logic as the other protocol logins).  Returns true/false.
  *
  * CRITICAL: previously V1 accepted any password as valid — Outlook
- * then got an OK from Autodiscover but failed at EWS/MAPI (401),
+ * then got an OK from Autodiscover but failed at the mail protocol (401),
  * polled Autodiscover again, got OK again → endless loop with no chance
  * that the user would ever hit the right password.
  */
@@ -49,12 +49,10 @@ function normalizeBasicAuthUser(rawUser: string): string {
   return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
 }
 
-// MAPI over HTTP is not supported (removed). The v1 response only announces
-// IMAP + SMTP + ActiveSync, so Outlook sets itself up as an IMAP account.
-// EWS is deliberately NOT announced here even when enabled: in the v1 schema
-// the EWS URL only travels inside EXCH/EXPR/EXHTTP blocks, and those make
-// Outlook attempt a binary MAPI/RPC connection (see v3.18.39). EWS clients
-// discover the URL via Autodiscover v2 (Protocol=EWS) instead.
+// MAPI over HTTP (v6.0.0) and EWS (v7.0.0) are not supported (removed). The
+// v1 response only announces IMAP + SMTP + ActiveSync, so Outlook sets itself
+// up as an IMAP account. No EXCH/EXPR/EXHTTP blocks: those make Outlook
+// attempt a binary MAPI/RPC connection (see v3.18.39).
 
 function buildAutodiscoverResponse(
   email: string,
@@ -67,8 +65,8 @@ function buildAutodiscoverResponse(
   //   - AuthPackage MUST be "Basic" (capital B), some Outlook builds are case-sensitive
   //   - <User><LegacyDN> is mandatory (Outlook uses it as the internal user identity)
   //   - <PublicFolderInformation> dummy even if no public folders exist
-  const ewsHost = (() => {
-    try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
+  const webHost = (() => {
+    try { return new URL(cfg.owaUrl).hostname; } catch { return cfg.smtpHost; }
   })();
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
@@ -105,7 +103,7 @@ function buildAutodiscoverResponse(
         <SMTPLast>off</SMTPLast>
       </Protocol>
       <PublicFolderInformation>
-        <SmtpAddress>publicfolder@${escapeXml(ewsHost.replace(/^mail\./, ''))}</SmtpAddress>
+        <SmtpAddress>publicfolder@${escapeXml(webHost.replace(/^mail\./, ''))}</SmtpAddress>
       </PublicFolderInformation>
     </Account>
     <Account>
@@ -235,7 +233,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   // v5.2.14: CRITICAL — Basic auth must be VALIDATED!
   // Previously V1 accepted any password. Outlook then got valid XML
-  // with a WRONG password, but failed at EWS/MAPI (which check correctly),
+  // with a WRONG password, but failed at IMAP/SMTP (which check correctly),
   // prompted the user again, sent to Autodiscover again (which said OK
   // again), → ENDLESS LOOP.
   let basicAuthUser: string | null = null;  // raw username (can be admin or admin@domain)
@@ -296,7 +294,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
       pwLen, pwCodes,
       userAgent: req.get('User-Agent') ?? '',
     }, 'Autodiscover v1: password + app password failed');
-    // SystemLog for audit (analogous to the EWS middleware in writeAuthFailureLog)
+    // SystemLog for audit (analogous to the other protocol auth-failure logs)
     void prisma.systemLog.create({
       data: {
         level:    'WARN',

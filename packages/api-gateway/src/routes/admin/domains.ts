@@ -82,7 +82,7 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   log.info({ name: parsed.data.name, primary: isPrimary }, 'Domain created');
 
   // v3.18.36: if this is the FIRST domain (= automatically primary), derive
-  // publicHostname + all derived URLs (EWS/OWA/EAS/Autodiscover base)
+  // publicHostname + all derived URLs (OWA/EAS/Autodiscover base)
   // automatically. Guards against the old bug: the schema default was
   // `mail.local:8080`, which made Outlook Autodiscover unusable for 1000+
   // users because the URLs were not visible anywhere.

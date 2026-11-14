@@ -153,7 +153,7 @@ const de = {
   settings_maint_banner_body: 'Normale Benutzer sehen die Wartungsmeldung und können sich nicht anmelden.',
   settings_maint_saved:       'Wartungsmodus aktualisiert',
 
-  settings_urls_info: 'Server-URLs und Protokoll-Einstellungen (IMAP, SMTP, EWS, Autodiscover) werden unter Server & Health → Virtuelle Verzeichnisse konfiguriert.',
+  settings_urls_info: 'Server-URLs und Protokoll-Einstellungen (IMAP, SMTP, Autodiscover) werden unter Server & Health → Virtuelle Verzeichnisse konfiguriert.',
 
   // ── Units ─────────────────────────────────────────────────────────────────
   unit_mb:            'MB',
@@ -743,12 +743,6 @@ const de = {
   audit_filter_ip:           'IP-Adresse…',
   audit_filter_search:       'Volltextsuche…',
 
-  // ── Server → EWS ──────────────────────────────────────────────────────────
-  servers_ews_title:         'Exchange Web Services (EWS)',
-  servers_ews_toggle:        'EWS aktivieren',
-  servers_ews_default_off:   '(Standard: aus)',
-  servers_ews_desc:          'Aktiv: /EWS/Exchange.asmx (SOAP, Basic-Auth mit Passwort oder App-Passwort) ist erreichbar und Autodiscover v2 liefert die EWS-URL. Für EWS-fähige Clients wie eM Client oder Thunderbird mit Owl/TbSync. Outlook richtet sich unabhängig davon als IMAP-Konto ein (MAPI over HTTP wird nicht unterstützt). Aus: /EWS/* und /OAB/* liefern 404. Die Umschaltung greift ohne Neustart.',
-  servers_ews_url_label:     'EWS-URL (nur wenn EWS aktiviert ist)',
 } as const;
 
 type DE = typeof de;
@@ -905,7 +899,7 @@ const en: { [K in keyof DE]: string } = {
   settings_maint_banner_body: 'Regular users see the maintenance message and cannot sign in.',
   settings_maint_saved:       'Maintenance mode updated',
 
-  settings_urls_info: 'Server URLs and protocol settings (IMAP, SMTP, EWS, Autodiscover) are configured under Server & Health → Virtual Directories.',
+  settings_urls_info: 'Server URLs and protocol settings (IMAP, SMTP, Autodiscover) are configured under Server & Health → Virtual Directories.',
 
   // ── Units ─────────────────────────────────────────────────────────────────
   unit_mb:            'MB',
@@ -1495,12 +1489,6 @@ const en: { [K in keyof DE]: string } = {
   audit_filter_ip:           'IP address…',
   audit_filter_search:       'Full-text search…',
 
-  // ── Server → EWS ──────────────────────────────────────────────────────────
-  servers_ews_title:         'Exchange Web Services (EWS)',
-  servers_ews_toggle:        'Enable EWS',
-  servers_ews_default_off:   '(default: off)',
-  servers_ews_desc:          'On: /EWS/Exchange.asmx (SOAP, Basic auth with password or app password) is reachable and Autodiscover v2 returns the EWS URL. For EWS-capable clients such as eM Client or Thunderbird with Owl/TbSync. Outlook still sets itself up as an IMAP account (MAPI over HTTP is not supported). Off: /EWS/* and /OAB/* return 404. The switch takes effect without a restart.',
-  servers_ews_url_label:     'EWS URL (only when EWS is enabled)',
 };
 
 export type TranslationKey = keyof DE;

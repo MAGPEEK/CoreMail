@@ -58,7 +58,6 @@ auth-service                     RUNNING   pid 43, uptime 0:12:33
 autodiscover                     RUNNING   pid 44, uptime 0:12:33
 backup-service                   RUNNING   pid 45, uptime 0:12:33
 caldav-server                    RUNNING   pid 46, uptime 0:12:33
-ews-server                       RUNNING   pid 47, uptime 0:12:33
 imap-server                      RUNNING   pid 48, uptime 0:12:33
 pop3-server                      RUNNING   pid 49, uptime 0:12:33
 security-filter                  RUNNING   pid 50, uptime 0:12:33
@@ -71,7 +70,6 @@ smtp-server                      RUNNING   pid 51, uptime 0:12:33
 docker exec coremail supervisorctl restart smtp-server
 docker exec coremail supervisorctl restart imap-server
 docker exec coremail supervisorctl restart api-gateway
-docker exec coremail supervisorctl restart ews-server
 ```
 
 ### Restart all services (container keeps running)

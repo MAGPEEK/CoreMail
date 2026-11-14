@@ -44,7 +44,6 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 | smtp-server | 25 / 465 / 587 | SMTP inbound + outbound |
 | imap-server | 143 / 993 | IMAP4rev1 + IDLE + CONDSTORE |
 | pop3-server | 110 / 995 | POP3 |
-| ews-server | 8080 | Exchange Web Services (optional, off by default — BCP → Server) |
 | autodiscover | 8081 | Autodiscover v1 + v2 |
 | caldav-server | 8082 | CalDAV + CardDAV |
 | backup-service | 3004 | MBOX/EML export + S3 backup |
@@ -53,7 +52,7 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 The `api-gateway` handles all HTTP routing without nginx:
 - `/` and `/bcp/` → static frontend bundles (MWA/BCP from `/app/www/`)
 - `/auth/` → auth-service (localhost:3003)
-- `/EWS/`, `/OAB/` → ews-server (localhost:8080) — 404 while "Exchange Web Services (EWS)" is off
+- `/EWS`, `/OAB`, `/mapi` → 404 (EWS removed in v7.0.0, MAPI over HTTP in v6.0.0)
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
 - `/dav/` → caldav-server (localhost:8082)
 - `/api/v1/` → direct handlers
@@ -168,7 +167,6 @@ curl -k -X POST https://<hostname>/api/v1/admin/setup \
 | BCP admin panel | `https://<hostname>/bcp/` |
 | MinIO web console | `http://localhost:9001` (local only!) |
 | JMAP | `https://<hostname>/.well-known/jmap` |
-| EWS (only when enabled in BCP → Server) | `https://<hostname>/EWS/Exchange.asmx` |
 | ActiveSync (mobile) | `https://<hostname>/Microsoft-Server-ActiveSync` |
 | Autodiscover | `https://<hostname>/Autodiscover/Autodiscover.xml` |
 

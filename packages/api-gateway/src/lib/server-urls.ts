@@ -17,7 +17,6 @@ import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail
 const log = createLogger('server-urls');
 
 export interface DerivedUrls {
-  ewsUrl:           string;
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
@@ -55,7 +54,6 @@ export function deriveServerUrls(
   })();
 
   return {
-    ewsUrl:           `${base}/EWS/Exchange.asmx`,
     owaUrl:           `${base}/owa/`,
     easUrl:           `${base}/Microsoft-Server-ActiveSync`,
     autodiscoverBase: `${proto}://${adHost}${portSuffix}`,
@@ -79,7 +77,6 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
       publicHostname: true,
       useHttps: true,
       httpPort: true,
-      ewsUrl: true,
       owaUrl: true,
       easUrl: true,
       autodiscoverBase: true,
@@ -97,7 +94,6 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
   const derived = deriveServerUrls(s.publicHostname, s.useHttps, s.httpPort);
 
   const needsUpdate =
-    s.ewsUrl           !== derived.ewsUrl ||
     s.owaUrl           !== derived.owaUrl ||
     s.easUrl           !== derived.easUrl ||
     s.autodiscoverBase !== derived.autodiscoverBase ||

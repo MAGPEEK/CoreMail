@@ -49,3 +49,10 @@ test('an address without @ is rejected with 400', async () => {
   const res = await fetch(`${base}not-an-address?Protocol=IMAP`);
   assert.equal(res.status, 400);
 });
+
+test('Protocol=EWS is always 404 NoSuchProtocol (EWS removed in v7.0.0)', async () => {
+  const res = await fetch(`${base}user%40example.com?Protocol=EWS`);
+  assert.equal(res.status, 404);
+  const body = await res.json() as { ErrorCode: string };
+  assert.equal(body.ErrorCode, 'NoSuchProtocol');
+});

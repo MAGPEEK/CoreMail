@@ -10,7 +10,6 @@
     { "path": "./packages/smtp-server" },
     { "path": "./packages/imap-server" },
     { "path": "./packages/pop3-server" },
-    { "path": "./packages/ews-server" },
     { "path": "./packages/autodiscover" },
     { "path": "./packages/caldav-server" },
     { "path": "./packages/jmap-server" },

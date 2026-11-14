@@ -4,7 +4,7 @@ import { prisma } from '@coremail/storage';
 
 const log = createLogger('caldav:auth');
 
-// Single-container setup: auth-service listens on localhost (same default as EWS).
+// Single-container setup: auth-service listens on localhost (same default as the other services).
 // AUTH_SERVICE_URL is a base URL, as in api-gateway and jmap-server.
 const AUTH_LOGIN_URL = `${process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003'}/auth/login`;
 
