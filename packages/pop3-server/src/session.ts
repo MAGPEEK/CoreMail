@@ -208,7 +208,7 @@ export class POP3Session {
   private async handleAuth(command: string, args: string[]) {
     // v7: no credentials over plaintext (RFC 2595 §4) — use STLS or port 995.
     if (!this.secure && (command === 'USER' || command === 'PASS' || command === 'APOP' || command === 'AUTH')) {
-      return this.send('-ERR [AUTH] Authentication requires TLS — use STLS or port 995');
+      return this.send('-ERR [AUTH] Authentication requires TLS - use STLS or port 995');
     }
     if (command === 'USER') {
       if (!args[0]) return this.send('-ERR missing username');

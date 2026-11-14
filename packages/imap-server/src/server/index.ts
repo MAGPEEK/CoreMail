@@ -220,7 +220,7 @@ async function checkLiteral(
   const command = tokens[1]?.type === 'atom' ? tokens[1].value.toUpperCase() : '';
   // v7: never read credentials sent as a literal over a plaintext connection.
   if (!session.isTls && (command === 'LOGIN' || command === 'AUTHENTICATE')) {
-    session.socket.write(`${tag} NO [PRIVACYREQUIRED] Authentication requires TLS — use STARTTLS or port 993\r\n`);
+    session.socket.write(`${tag} NO [PRIVACYREQUIRED] Authentication requires TLS - use STARTTLS or port 993\r\n`);
     if (sync) return 'drop';
     session.socket.end('* BYE Credentials over plaintext\r\n');
     return 'close';

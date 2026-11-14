@@ -20,6 +20,20 @@ test('.gitattributes keeps shell scripts and infra/docker files LF', () => {
   assert.match(ga, /^infra\/docker\/\*\*\s+text eol=lf$/m);
 });
 
+test('IMAP/POP3/SMTP protocol replies are 7-bit ASCII (RFC 9051 TEXT-CHAR, RFC 5321 textstring)', () => {
+  const files = [
+    'packages/imap-server/src/commands/index.ts', 'packages/imap-server/src/server/index.ts',
+    'packages/pop3-server/src/session.ts', 'packages/smtp-server/src/core/session.ts',
+  ];
+  const offenders = [];
+  for (const f of files) {
+    read(f).split('\n').forEach((line, i) => {
+      if (/(sendNo|sendBad|sendOk|socket\.write|\.send)\(/.test(line) && /[^\x00-\x7f]/.test(line)) offenders.push(`${f}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(offenders, []);
+});
+
 test('rspamd local.d/actions.conf has no nested actions { } block (rspamd 4 refuses it)', () => {
   const conf = read('infra/docker/rspamd/local.d/actions.conf')
     .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');

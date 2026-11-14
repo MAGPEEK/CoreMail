@@ -157,7 +157,7 @@ export class SmtpSession {
   private resetTimer(ms: number): void {
     this.clearTimer();
     this.timer = setTimeout(() => {
-      this.send(`421 4.4.2 ${this.config.hostname} Timeout — closing connection`);
+      this.send(`421 4.4.2 ${this.config.hostname} Timeout - closing connection`);
       this.socket.destroy();
       log.info({ id: this.id, ip: this.ip }, 'SMTP session timed out');
     }, ms);
@@ -239,7 +239,7 @@ export class SmtpSession {
     this.dataOverflow = false;
     this.state = 'QUIT';
     this.clearTimer();
-    this.send(`500 5.5.6 Line too long — closing connection`);
+    this.send(`500 5.5.6 Line too long - closing connection`);
     this.socket.end();
     log.warn({ id: this.id, ip: this.ip }, 'SMTP line exceeds hard limit — connection closed');
   }
@@ -613,7 +613,7 @@ export class SmtpSession {
     if (this.authFailures < max) return;
     this.state = 'QUIT';
     this.clearTimer();
-    this.send(`421 4.7.0 ${this.config.hostname} Too many authentication failures — closing connection`);
+    this.send(`421 4.7.0 ${this.config.hostname} Too many authentication failures - closing connection`);
     this.socket.end();
     log.warn({ id: this.id, ip: this.ip, failures: this.authFailures }, 'SMTP: AUTH failure limit reached — connection closed');
   }
@@ -808,7 +808,7 @@ export class SmtpSession {
   private handleQuit(): void {
     this.state = 'QUIT';
     this.clearTimer();
-    this.send(`221 2.0.0 ${this.config.hostname} closing connection — goodbye`);
+    this.send(`221 2.0.0 ${this.config.hostname} closing connection - goodbye`);
     this.socket.end();
     log.debug({ id: this.id, ip: this.ip }, 'SMTP session quit');
   }

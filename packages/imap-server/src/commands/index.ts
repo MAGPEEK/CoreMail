@@ -877,10 +877,10 @@ async function loginUser(
       sendOk(session, tag, `[CAPABILITY ${session.capabilities.join(' ')}] ${command} completed`);
       return;
     case 'locked':
-      sendNo(session, tag, '[UNAVAILABLE] Too many failed login attempts — try again later');
+      sendNo(session, tag, '[UNAVAILABLE] Too many failed login attempts - try again later');
       return;
     case 'error':
-      sendNo(session, tag, '[UNAVAILABLE] Temporary authentication failure — try again later');
+      sendNo(session, tag, '[UNAVAILABLE] Temporary authentication failure - try again later');
       return;
     default:
       // invalid and mfa_app_password_required get the same text (no oracle).
