@@ -1,12 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
 
 const log = createLogger('caldav:auth');
-
-// Single-container setup: auth-service listens on localhost (same default as EWS).
-// AUTH_SERVICE_URL is a base URL, as in api-gateway and jmap-server.
-const AUTH_LOGIN_URL = `${process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003'}/auth/login`;
 
 export interface DavUser {
   userId: string;
@@ -42,39 +38,35 @@ export async function davAuthMiddleware(
     }
   }
 
-  if (authHeader.startsWith('Basic ')) {
-    const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+  // v7: Basic auth uses the shared mail-protocol check (previously a call to
+  // the auth-service /auth/login, which rejected app passwords and answered
+  // MFA accounts with an MFA challenge). App passwords now work; MFA accounts
+  // need an app password; shared lockout; database errors → 503.
+  if (/^basic /i.test(authHeader)) {
+    const decoded = Buffer.from(authHeader.slice(6).trim(), 'base64').toString('utf8');
     const colonIdx = decoded.indexOf(':');
     if (colonIdx !== -1) {
-      const email = decoded.slice(0, colonIdx);
+      const login = decoded.slice(0, colonIdx);
       const password = decoded.slice(colonIdx + 1);
-      try {
-        const resp = await fetch(AUTH_LOGIN_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
-          signal: AbortSignal.timeout(5000),
-        });
-        if (resp.ok) {
-          const data = await resp.json() as { accessToken?: string };
-          if (data.accessToken) {
-            const payload = verifyAccessToken(data.accessToken);
-            if (payload) {
-              
-              const user = await prisma.user.findUnique({
-                where: { id: payload.sub },
-                select: { id: true, email: true, active: true },
-              });
-              if (user?.active) {
-                req.davUser = { userId: user.id, email: user.email };
-                next();
-                return;
-              }
-            }
-          }
-        }
-      } catch (err) {
-        log.error({ err }, 'Auth service call failed');
+      const result = await verifyMailCredentials(login, password, {
+        ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers?.['x-forwarded-for']),
+        protocol: 'caldav',
+      });
+      if (result.status === 'ok') {
+        req.davUser = { userId: result.user.id, email: result.user.email };
+        next();
+        return;
+      }
+      if (result.status === 'locked') {
+        res.set('Retry-After', String(result.retryAfterSec));
+        res.status(429).send('Too Many Requests');
+        return;
+      }
+      if (result.status === 'error') {
+        log.error({ err: result.error }, 'CalDAV Basic auth: temporary failure');
+        res.set('Retry-After', '30');
+        res.status(503).send('Service Unavailable');
+        return;
       }
     }
   }

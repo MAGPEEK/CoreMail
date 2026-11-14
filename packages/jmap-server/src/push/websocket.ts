@@ -6,6 +6,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createLogger } from '@coremail/core';
+import { clientIpFromRequest } from '@coremail/storage';
 import { authenticateCredentials } from '../auth.js';
 import { resolveAccounts } from '../accounts.js';
 import { parseRequest, processRequest } from '../dispatcher.js';
@@ -31,7 +32,10 @@ export function attachWebSocket(server: Server, path = '/jmap/ws'): void {
     void (async () => {
       if (!(await isJmapEnabled())) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
       const token = url.searchParams.get('access_token') ?? url.searchParams.get('token') ?? undefined;
-      const user = await authenticateCredentials(req.headers.authorization ?? '', token);
+      const user = await authenticateCredentials(
+        req.headers.authorization ?? '', token,
+        clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),
+      );
       if (!user) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="CoreMail JMAP", Bearer realm="CoreMail JMAP"\r\n\r\n');
         socket.destroy();

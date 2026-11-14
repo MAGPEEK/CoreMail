@@ -11,7 +11,9 @@
 import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import tls from 'node:tls';
 import { SmtpSession } from './session.js';
+import { selfSignedTestCert } from '../test-cert.js';
 import type { AuthUser, EsmtpExtensions, SmtpSessionConfig } from './types.js';
 
 // ─── Test harness ────────────────────────────────────────────────────────────
@@ -133,6 +135,8 @@ interface HarnessOptions {
 const VALID_USER: AuthUser = { id: 'u1', email: 'user@example.test' };
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
+let cachedCert: { cert: Buffer; key: Buffer } | null = null;
+const testCert = (): { cert: Buffer; key: Buffer } => (cachedCert ??= selfSignedTestCert());
 
 /** Starts a one-connection SMTP server on loopback and returns a connected client (greeting NOT yet read). */
 async function connect(t: TestContext, options: HarnessOptions = {}): Promise<Harness> {
@@ -172,13 +176,19 @@ async function connect(t: TestContext, options: HarnessOptions = {}): Promise<Ha
     ...options.config,
   };
 
-  const server = net.createServer((socket) => new SmtpSession(socket, config).start());
+  // v7: AUTH is only offered on encrypted connections, so the AUTH harness
+  // runs over implicit TLS (the port 465 configuration).
+  const server = options.auth
+    ? tls.createServer({ ...testCert() }, (socket) => new SmtpSession(socket, config).start())
+    : net.createServer((socket) => new SmtpSession(socket, config).start());
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as net.AddressInfo;
 
-  const socket = net.connect(port, '127.0.0.1');
+  const socket = options.auth
+    ? tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false })
+    : net.connect(port, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
-    socket.once('connect', resolve);
+    socket.once(options.auth ? 'secureConnect' : 'connect', resolve);
     socket.once('error', reject);
   });
   const client = new SmtpClient(socket);

@@ -2,15 +2,19 @@
  * JMAP authentication.
  *  - Bearer: session JWT (HS256, @coremail/core) — MWA/BCP and web clients.
  *    For EventSource/WebSocket (no header possible) also `?access_token=`.
- *  - Basic:  e-mail + password or app password (mandatory when MFA is active).
- *    LDAP/OIDC users without a local hash → login via auth-service.
+ *  - Basic:  e-mail + password or app password (mandatory when MFA is active),
+ *    v7: via the shared mail-protocol check verifyMailCredentials() (shared
+ *    lockout; LDAP/OIDC users without a local hash → auth-service via the
+ *    external-verifier extension point).
  * Basic results are cached in memory for 60s (JMAP clients send many
  * small requests; bcrypt per request would be too expensive).
  */
 import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'node:crypto';
-import { verifyAccessToken, verifyPassword, createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { verifyAccessToken, createLogger } from '@coremail/core';
+import {
+  prisma, verifyMailCredentials, registerExternalPasswordVerifier, clientIpFromRequest,
+} from '@coremail/storage';
 import type { JmapUser } from './types.js';
 
 const log = createLogger('jmap:auth');
@@ -19,6 +23,13 @@ const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:30
 declare module 'express' {
   interface Request {
     jmapUser?: JmapUser;
+  }
+}
+
+/** Basic auth could not be decided: lockout (429) or temporary failure (503). */
+export class AuthUnavailableError extends Error {
+  constructor(readonly reason: 'locked' | 'temporary', readonly retryAfterSec = 30) {
+    super(reason === 'locked' ? 'Too many failed login attempts' : 'Temporary authentication failure');
   }
 }
 
@@ -46,56 +57,45 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
   }
 }
 
-export async function authenticateBasic(email: string, password: string): Promise<JmapUser | null> {
-  const key = cacheKey(email.toLowerCase(), password);
+/**
+ * LDAP/OIDC users without a local hash: the JMAP server keeps its previous
+ * behaviour of asking the auth-service — registered on the shared check's
+ * extension point (only consulted for non-LOCAL users without MFA).
+ */
+registerExternalPasswordVerifier('jmap-auth-service', async (user, password) => {
+  try {
+    const resp = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email, password }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return resp.ok;
+  } catch (err) {
+    log.warn({ err }, 'auth-service unreachable');
+    return false;
+  }
+});
+
+/**
+ * Basic auth (e-mail + password or app password) — v7: shared mail-protocol
+ * check (MFA → app passwords only, shared lockout). Failures and lockouts are
+ * not cached; `error` (database down) is reported as AuthUnavailableError.
+ */
+export async function authenticateBasic(email: string, password: string, ip?: string): Promise<JmapUser | null> {
+  const key = cacheKey(email.trim().toLowerCase(), password);
   const hit = basicCache.get(key);
   if (hit && hit.expires > Date.now()) return hit.user;
 
-  const user = await prisma.user.findFirst({
-    where: { email: email.toLowerCase(), active: true },
-    select: {
-      id: true, email: true, displayName: true, domainId: true, role: true,
-      passwordHash: true, authSource: true,
-      mfa: { select: { totpEnabled: true, webAuthnCredentials: true } },
-      appPasswords: { select: { id: true, hash: true } },
-    },
-  });
-  if (!user) return null;
-
-  const hasMfa = !!(user.mfa?.totpEnabled
-    || (Array.isArray(user.mfa?.webAuthnCredentials) && (user.mfa.webAuthnCredentials as unknown[]).length > 0));
-
-  let ok = false;
-  // 1) App passwords (always allowed — the only way with MFA)
-  for (const ap of user.appPasswords) {
-    if (await verifyPassword(password, ap.hash).catch(() => false)) {
-      ok = true;
-      void prisma.appPassword.update({ where: { id: ap.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
-      break;
-    }
-  }
-  // 2) Primary password only without MFA
-  if (!ok && !hasMfa && user.passwordHash) {
-    ok = await verifyPassword(password, user.passwordHash).catch(() => false);
-  }
-  // 3) LDAP/OIDC: ask the auth-service
-  if (!ok && !hasMfa && user.authSource !== 'LOCAL') {
-    try {
-      const resp = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, password }),
-        signal: AbortSignal.timeout(5000),
-      });
-      ok = resp.ok;
-    } catch (err) {
-      log.warn({ err }, 'auth-service unreachable');
-    }
-  }
-  if (!ok) return null;
+  const result = await verifyMailCredentials(email, password, { ip, protocol: 'jmap' });
+  if (result.status === 'error') throw new AuthUnavailableError('temporary');
+  if (result.status === 'locked') throw new AuthUnavailableError('locked', result.retryAfterSec);
+  if (result.status !== 'ok') return null;
+  const user = result.user;
 
   const jmapUser: JmapUser = {
-    userId: user.id, email: user.email, displayName: user.displayName, domainId: user.domainId, role: user.role,
+    userId: user.id, email: user.email, displayName: user.displayName, domainId: user.domainId,
+    role: user.role,
   };
   basicCache.set(key, { user: jmapUser, expires: Date.now() + 60_000 });
   if (basicCache.size > 5000) {
@@ -106,13 +106,13 @@ export async function authenticateBasic(email: string, password: string): Promis
 }
 
 /** Resolve credentials from the Authorization header or token query. */
-export async function authenticateCredentials(header: string, tokenQuery: string | undefined): Promise<JmapUser | null> {
+export async function authenticateCredentials(header: string, tokenQuery: string | undefined, ip?: string): Promise<JmapUser | null> {
   if (header.startsWith('Bearer ')) return authenticateBearer(header.slice(7).trim());
   if (header.startsWith('Basic ')) {
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
     const idx = decoded.indexOf(':');
     if (idx === -1) return null;
-    return authenticateBasic(decoded.slice(0, idx), decoded.slice(idx + 1));
+    return authenticateBasic(decoded.slice(0, idx), decoded.slice(idx + 1), ip);
   }
   if (tokenQuery) return authenticateBearer(tokenQuery);
   return null;
@@ -121,7 +121,11 @@ export async function authenticateCredentials(header: string, tokenQuery: string
 /** Reads credentials from header or query and returns the user (or null). */
 export async function authenticateRequest(req: Request): Promise<JmapUser | null> {
   const q = req.query['access_token'] ?? req.query['token'];
-  return authenticateCredentials(req.get('Authorization') ?? '', typeof q === 'string' && q ? q : undefined);
+  return authenticateCredentials(
+    req.get('Authorization') ?? '',
+    typeof q === 'string' && q ? q : undefined,
+    clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
+  );
 }
 
 export async function jmapAuthMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -133,6 +137,14 @@ export async function jmapAuthMiddleware(req: Request, res: Response, next: Next
       return;
     }
   } catch (err) {
+    if (err instanceof AuthUnavailableError) {
+      const status = err.reason === 'locked' ? 429 : 503;
+      res.set('Retry-After', String(err.retryAfterSec));
+      res.status(status).type('application/problem+json').send(JSON.stringify({
+        type: 'about:blank', status, detail: err.message,
+      }));
+      return;
+    }
     log.error({ err }, 'Auth error');
   }
   res.set('WWW-Authenticate', 'Basic realm="CoreMail JMAP", Bearer realm="CoreMail JMAP"');

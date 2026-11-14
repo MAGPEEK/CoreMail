@@ -2,7 +2,7 @@ import net from 'net';
 import tls from 'node:tls';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import {
-  createSession, sendUntagged,
+  createSession, sendUntagged, refreshCapabilities,
   type ImapSession,
 } from '../session/state.js';
 import {
@@ -55,54 +55,110 @@ export interface ImapTlsConfig {
   key: Buffer;
 }
 
-export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Server {
+export interface ImapServerOptions {
+  /**
+   * v7: certificate provider for STARTTLS on a plaintext listener (port 143).
+   * Read per STARTTLS so a rotated certificate is used immediately. Without a
+   * certificate the listener stays plaintext and refuses authentication.
+   */
+  starttls?: () => ImapTlsConfig | null | undefined;
+}
+
+export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerOptions = {}): net.Server | tls.Server {
   // v5.5.0: isTls flag — on port 993 (implicit TLS) the connection is secure
   // immediately; on port 143 the client must send STARTTLS to upgrade.
   const isImplicitTls = !!tlsConfig;
   const onSocket = (socket: net.Socket): void => {
-    const session = createSession(socket, isImplicitTls);
+    const starttlsCert = (): ImapTlsConfig | null => (isImplicitTls ? null : options.starttls?.() ?? null);
+    const session = createSession(socket, isImplicitTls, !!starttlsCert());
     sessions.set(session.id, session);
+    const ip = socket.remoteAddress;
 
-    log.debug({ id: session.id, ip: socket.remoteAddress }, 'IMAP connect');
+    log.debug({ id: session.id, ip }, 'IMAP connect');
     // RFC 3501 §7.1 — greeting with hostname and capability list
     socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] ${_hostname} IMAP4rev1 ready\r\n`);
 
     // Byte-oriented reader: literals ({n} / {n+}) are read as raw octets and
     // commands are executed strictly in order (one at a time).
-    const reader = new CommandReader({
-      maxLineLength: MAX_UNTERMINATED_LINE,
-      maxLiteralSize: () => _maxLiteralSize,
-      // During IDLE and SASL exchanges the client sends raw lines, not commands.
-      literalsAllowed: () => !session.idleActive && !session.saslMech,
-      sendContinuation: () => { socket.write('+ Ready for literal data\r\n'); },
-      onLineTooLong: () => {
-        socket.end('* BYE Line too long\r\n');
-        log.warn({ id: session.id, ip: socket.remoteAddress }, 'IMAP line exceeds hard limit — connection closed');
-      },
-      onLiteral: (segments, size, sync, tooLarge) => checkLiteral(session, segments, size, sync, tooLarge),
-      onCommand: async (segments) => {
-        const first = segments[0];
-        if (segments.length === 1 && typeof first === 'string') {
-          // IDLE is terminated by a bare "DONE" line (RFC 2177).
-          if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
-            handleIdleDone(session);
-            return;
+    const createReader = (): CommandReader => {
+      const reader: CommandReader = new CommandReader({
+        maxLineLength: MAX_UNTERMINATED_LINE,
+        maxLiteralSize: () => _maxLiteralSize,
+        // During IDLE and SASL exchanges the client sends raw lines, not commands.
+        literalsAllowed: () => !session.idleActive && !session.saslMech,
+        sendContinuation: () => { session.socket.write('+ Ready for literal data\r\n'); },
+        onLineTooLong: () => {
+          session.socket.end('* BYE Line too long\r\n');
+          log.warn({ id: session.id, ip }, 'IMAP line exceeds hard limit — connection closed');
+        },
+        onLiteral: (segments, size, sync, tooLarge) => checkLiteral(session, segments, size, sync, tooLarge),
+        onCommand: async (segments) => {
+          const first = segments[0];
+          if (segments.length === 1 && typeof first === 'string') {
+            // IDLE is terminated by a bare "DONE" line (RFC 2177).
+            if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
+              handleIdleDone(session);
+              return;
+            }
+            // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
+            // a base64-encoded data line (or "*" to abort), not a tagged command.
+            if (session.saslMech) {
+              await handleSaslContinuation(session, session.saslPendingTag ?? '*', first);
+              return;
+            }
           }
-          // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
-          // a base64-encoded data line (or "*" to abort), not a tagged command.
-          if (session.saslMech) {
-            await handleSaslContinuation(session, session.saslPendingTag ?? '*', first);
-            return;
-          }
-        }
-        await dispatchCommand(session, segments);
-        if (session.state === 'LOGOUT') reader.close();
-      },
-      pause: () => socket.pause(),
-      resume: () => socket.resume(),
-    });
+          await dispatchCommand(session, segments);
+          if (session.state === 'LOGOUT') reader.close();
+        },
+        pause: () => session.socket.pause(),
+        resume: () => session.socket.resume(),
+      });
+      return reader;
+    };
+    let reader = createReader();
+    const onData = (chunk: Buffer): void => reader.push(chunk);
+    socket.on('data', onData);
 
-    socket.on('data', (chunk: Buffer) => reader.push(chunk));
+    // v7: STARTTLS (RFC 9051 §6.2.1). Called by the dispatcher after the
+    // checks; sends the tagged OK and upgrades the socket.
+    session.beginTls = (tag: string): void => {
+      const material = starttlsCert();
+      if (!material) {
+        session.socket.write(`${tag} NO [UNAVAILABLE] STARTTLS is not available\r\n`);
+        return;
+      }
+      // Discard everything the client pipelined after STARTTLS (CVE-2011-0411
+      // class): the old reader and its buffer are dropped, nothing more is
+      // read from the plaintext stream.
+      reader.close();
+      socket.removeListener('data', onData);
+      socket.write(`${tag} OK Begin TLS negotiation now\r\n`);
+      const secure = new tls.TLSSocket(socket, {
+        isServer: true,
+        secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
+      });
+      socket.resume();
+      secure.once('secure', () => {
+        session.socket = secure;
+        session.isTls = true;
+        session.starttlsAvailable = false;
+        refreshCapabilities(session); // re-advertised on the next CAPABILITY
+        reader = createReader();
+        secure.on('data', (chunk: Buffer) => reader.push(chunk));
+        secure.setTimeout(1800_000);
+        secure.on('timeout', () => {
+          sendUntagged(session, 'BYE Autologout; idle for too long');
+          secure.destroy();
+        });
+        log.debug({ id: session.id }, 'IMAP STARTTLS upgrade complete');
+      });
+      secure.on('error', (err) => {
+        log.warn({ err, id: session.id, ip }, 'IMAP STARTTLS handshake/socket error');
+        secure.destroy();
+      });
+      secure.on('close', () => { reader.close(); sessions.delete(session.id); });
+      socket.setTimeout(0);
+    };
 
     socket.on('close', () => {
       reader.close();
@@ -162,6 +218,13 @@ async function checkLiteral(
     return 'close';
   }
   const command = tokens[1]?.type === 'atom' ? tokens[1].value.toUpperCase() : '';
+  // v7: never read credentials sent as a literal over a plaintext connection.
+  if (!session.isTls && (command === 'LOGIN' || command === 'AUTHENTICATE')) {
+    session.socket.write(`${tag} NO [PRIVACYREQUIRED] Authentication requires TLS — use STARTTLS or port 993\r\n`);
+    if (sync) return 'drop';
+    session.socket.end('* BYE Credentials over plaintext\r\n');
+    return 'close';
+  }
   if (sync && command === 'APPEND' && tokens.length >= 3) {
     if (session.state === 'NOT_AUTHENTICATED') {
       session.socket.write(`${tag} NO Not authenticated\r\n`);
@@ -228,14 +291,18 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
       // v5.5.0: STARTTLS — RFC 3501 §6.2.1
       // On port 143 (plaintext) the client upgrades the connection to TLS.
       // On port 993 (implicit TLS) we return BAD because TLS is already active.
+      // v7: real upgrade on port 143 (see createImapServer → session.beginTls).
       case 'STARTTLS':
         if (session.isTls) {
           session.socket.write(`${tag} BAD STARTTLS not available on TLS connection\r\n`);
+        } else if (session.state !== 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} BAD STARTTLS is only valid in the not authenticated state\r\n`);
+        } else if (args.length > 0) {
+          session.socket.write(`${tag} BAD STARTTLS takes no arguments\r\n`);
+        } else if (!session.beginTls) {
+          session.socket.write(`${tag} NO [UNAVAILABLE] STARTTLS is not available\r\n`);
         } else {
-          // A tls.TLSSocket upgrade would actually be needed here. We cannot do
-          // that trivially without a significant refactor of the socket lifecycle.
-          // Workaround: point the client to port 993.
-          session.socket.write(`${tag} NO [UNAVAILABLE] STARTTLS not yet supported on port 143 — use implicit TLS on port 993\r\n`);
+          session.beginTls(tag);
         }
         break;
 

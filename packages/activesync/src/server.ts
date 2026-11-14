@@ -1,8 +1,8 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
-import { verifyPassword } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
+import { requireAuth } from './auth.js';
 import { decodeWbxml } from './wbxml.js';
 import { handleProvision } from './commands/provision.js';
 import { handleFolderSync } from './commands/folder-sync.js';
@@ -19,57 +19,6 @@ const PORT = parseInt(process.env['EAS_PORT'] ?? '3005', 10);
 
 // ─── Raw body parser for WBXML ────────────────────────────────────────────────
 app.use('/Microsoft-Server-ActiveSync', express.raw({ type: '*/*', limit: '25mb' }));
-
-// ─── Basic Auth middleware ────────────────────────────────────────────────────
-async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers['authorization'] ?? '';
-  if (!authHeader.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="CoreMail ActiveSync"');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-
-  const credentials = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-  const colonIdx = credentials.indexOf(':');
-  if (colonIdx === -1) {
-    res.status(401).send('Unauthorized');
-    return;
-  }
-  const email = credentials.slice(0, colonIdx);
-  const password = credentials.slice(colonIdx + 1);
-
-  const user = await prisma.user.findUnique({ where: { email, active: true } });
-  if (!user || !user.passwordHash) {
-    log.warn({ email }, 'EAS auth: user not found');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-
-  // Check main password first, then app passwords
-  let authenticated = await verifyPassword(password, user.passwordHash);
-  if (!authenticated) {
-    const appPasswords = await prisma.appPassword.findMany({ where: { userId: user.id } });
-    for (const ap of appPasswords) {
-      if (await verifyPassword(password, ap.hash)) {
-        authenticated = true;
-        await prisma.appPassword.update({ where: { id: ap.id }, data: { lastUsedAt: new Date() } });
-        break;
-      }
-    }
-  }
-
-  if (!authenticated) {
-    log.warn({ email }, 'EAS auth: invalid password');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-
-  (req as Request & { easUser: { userId: string; email: string } }).easUser = {
-    userId: user.id,
-    email: user.email,
-  };
-  next();
-}
 
 // ─── OPTIONS — Autodiscover capability negotiation ────────────────────────────
 app.options('/Microsoft-Server-ActiveSync', (_req: Request, res: Response) => {

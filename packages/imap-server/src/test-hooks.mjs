@@ -20,9 +20,14 @@ const STUB_URL = 'coremail-test-stub:all';
 // The real message-store (UID/modSeq allocation) has no runtime imports and only
 // talks to the transaction client it is given, so the stub re-exports it unchanged.
 const MESSAGE_STORE_URL = new URL('../../storage/src/message-store.ts', import.meta.url).href;
+// The shared mail credential check (pure, dependencies injected) — wired to the
+// fake prisma / verifyPassword below and an in-memory lockout store.
+const MAIL_AUTH_CORE_URL = new URL('../../storage/src/mail-auth-core.ts', import.meta.url).href;
 
 const STUB_SOURCE = `
 export * from '${MESSAGE_STORE_URL}';
+import { createMailCredentialVerifier, createMemoryAuthRedis } from '${MAIL_AUTH_CORE_URL}';
+export { createMemoryAuthRedis, normalizeIp, isPrivateOrLoopbackIp } from '${MAIL_AUTH_CORE_URL}';
 const g = (globalThis.__coremailTest ??= {});
 const noop = () => {};
 const logger = { debug: noop, info: noop, warn: noop, error: noop, trace: noop, fatal: noop, child: () => logger };
@@ -42,6 +47,16 @@ export const prisma = new Proxy({}, {
     return db[model];
   },
 });
+let mailAuth = null;
+export const verifyMailCredentials = (login, password, ctx) => {
+  mailAuth ??= createMailCredentialVerifier({
+    prisma,
+    redis: g.authRedis ?? createMemoryAuthRedis(),
+    verifyPassword: (p, h) => verifyPassword(p, h),
+    dummyHash: async () => 'hash:\\u0000dummy',
+  });
+  return mailAuth.verify(login, password, ctx);
+};
 `;
 
 registerHooks({
