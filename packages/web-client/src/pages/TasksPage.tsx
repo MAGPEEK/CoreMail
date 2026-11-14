@@ -165,10 +165,11 @@ export function TasksPage() {
           syncs.push(
             api.post('/calendar/events', {
               summary:    variables.subject,
-              dtStart:    `${variables.dueDate}T00:00`,
-              dtEnd:      `${variables.dueDate}T01:00`,
+              // All-day: date-only start, exclusive end (the server normalises end ≤ start to +1 day)
+              dtStart:    variables.dueDate.slice(0, 10),
+              dtEnd:      variables.dueDate.slice(0, 10),
               calendarId,
-              allDay:     false,
+              allDay:     true,
             }),
           );
         }

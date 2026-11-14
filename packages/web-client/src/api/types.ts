@@ -132,8 +132,13 @@ export interface CalendarEvent {
   description?: string;
   location?: string;
   organizer?: string | null;
+  /** All-day events: dtStart/dtEnd are UTC midnights, dtEnd exclusive — use the date part only. */
   allDay?: boolean;
   rrule?: string | null;
+  /** Set on expanded instances of a recurring series (original start, ISO). */
+  recurrenceId?: string | null;
+  /** Unique per instance: "<id>:<recurrenceId>" (series) or the event id. */
+  instanceId?: string;
   uid?: string;
   sequence?: number;
   attendees?: EventAttendee[];

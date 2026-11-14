@@ -1,5 +1,6 @@
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
+import { buildVCalendar, normalizeAllDayRange } from '@coremail/core/calendar';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 import { buildEwsOutboundJob, enqueueEwsOutbound, splitEwsBody } from './outbound-submit.js';
@@ -111,11 +112,11 @@ async function createCalendarItem(
 ): Promise<string> {
   
 
-  const summary = String((item['Subject'] as string | undefined) ?? '');
-  const startStr = String((item['Start'] as string | undefined) ?? new Date().toISOString());
-  const endStr = String(
-    (item['End'] as string | undefined) ?? new Date(Date.now() + 3600000).toISOString(),
-  );
+  const calendarRange = resolveEwsCalendarRange(item);
+  if (!calendarRange) {
+    return errorResponse('CreateItem', 'ErrorCalendarInvalidDate', 'Invalid Start/End');
+  }
+  const { summary, location, description, start, end, allDay } = calendarRange;
 
   const calendar = await prisma.calendar.findFirst({ where: { userId: user.userId } });
   if (!calendar) {
@@ -129,9 +130,13 @@ async function createCalendarItem(
       calendarId: calendar.id,
       uid: eventUid,
       summary,
-      dtStart: new Date(startStr),
-      dtEnd: new Date(endStr),
-      icalData: `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:${eventUid}\r\nSUMMARY:${summary}\r\nDTSTART:${startStr}\r\nDTEND:${endStr}\r\nEND:VEVENT\r\nEND:VCALENDAR`,
+      description,
+      location,
+      dtStart: start,
+      dtEnd: end,
+      allDay,
+      // Valid RFC 5545: UID/DTSTAMP, UTC or VALUE=DATE (exclusive end), escaped + folded text
+      icalData: buildVCalendar({ uid: eventUid, summary, description, location, start, end, allDay }),
     },
   });
 
@@ -145,6 +150,36 @@ async function createCalendarItem(
       .ele('t:CalendarItem')
       .ele('t:ItemId', { Id: event.id, ChangeKey: '1' });
   });
+}
+
+/**
+ * Map an EWS CalendarItem to stored values. EWS sends xs:dateTime instants; for
+ * IsAllDayEvent=true the date part is used (exclusive end, at least one day).
+ */
+export function resolveEwsCalendarRange(item: Record<string, unknown>): {
+  summary: string; location: string; description: string;
+  start: Date; end: Date; allDay: boolean;
+} | null {
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const summary = str(item['Subject']);
+  const location = str(item['Location']);
+  const { bodyText, bodyHtml } = splitEwsBody(item['Body']);
+  const description = bodyText || bodyHtml.replace(/<[^>]*>/g, '').trim();
+  const allDay = str(item['IsAllDayEvent']).toLowerCase() === 'true';
+  const startStr = str(item['Start']) || new Date().toISOString();
+  const endStr = str(item['End']) || new Date(new Date(startStr).getTime() + 3600000).toISOString();
+  if (allDay) {
+    try {
+      const r = normalizeAllDayRange(startStr, endStr);
+      return { summary, location, description, start: r.start, end: r.end, allDay };
+    } catch {
+      return null;
+    }
+  }
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return null;
+  return { summary, location, description, start, end, allDay };
 }
 
 function extractAddresses(raw: Record<string, unknown> | undefined): string[] {
