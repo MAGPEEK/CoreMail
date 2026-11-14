@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { sanitizeMailHtml } from '../lib/mailHtml.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 
@@ -476,8 +477,8 @@ export function SharedMailboxPage() {
               {messageDetail.bodyHtml ? (
                 <div
                   className="prose prose-sm max-w-none text-gray-800"
-                  // eslint-disable-next-line react/no-danger
-                  dangerouslySetInnerHTML={{ __html: messageDetail.bodyHtml }}
+                  // eslint-disable-next-line react/no-danger -- sanitized with DOMPurify
+                  dangerouslySetInnerHTML={{ __html: sanitizeMailHtml(messageDetail.bodyHtml) }}
                 />
               ) : (
                 <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">{messageDetail.bodyText}</pre>

@@ -77,13 +77,23 @@ export function assertState(ifInState: string | null, current: string): void {
  * PatchObject (RFC 8620 §5.3): keys are JSON pointers without a leading '/'.
  * Returns a new object; throws invalidPatch on an invalid path.
  */
+const FORBIDDEN_PATCH_TOKENS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function applyPatch(base: JsonObject, patch: JsonObject): JsonObject {
   const out: JsonObject = structuredClone(base);
   for (const [path, value] of Object.entries(patch)) {
     const tokens = path.split('/').map((t) => t.replace(/~1/g, '/').replace(/~0/g, '~'));
+    // Prototype pollution guard: a path like "keywords/__proto__/x" would
+    // otherwise walk into Object.prototype and modify it process-wide.
+    if (tokens.some((t) => FORBIDDEN_PATCH_TOKENS.has(t))) {
+      throw new MethodError('invalidPatch', `Path "${path}" is not allowed`);
+    }
     let cur: JsonObject = out;
     for (let i = 0; i < tokens.length - 1; i++) {
       const t = tokens[i]!;
+      if (!Object.hasOwn(cur, t)) {
+        throw new MethodError('invalidPatch', `Path "${path}" does not exist`);
+      }
       const next = cur[t];
       if (next === undefined || next === null) {
         throw new MethodError('invalidPatch', `Path "${path}" does not exist`);

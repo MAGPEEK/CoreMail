@@ -1,15 +1,15 @@
 import { prisma } from '@coremail/storage';
-import { getRedisClient, CHANNEL_MAIL_NEW } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import { soapEnvelope, errorResponse } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
+import { buildEwsOutboundJob, enqueueEwsOutbound, splitEwsBody } from './outbound-submit.js';
+
+const log = createLogger('ews:create-item');
 
 export async function createItem(
   request: Record<string, unknown>,
   user: EwsUser,
 ): Promise<string> {
-  
-  const redis = getRedisClient();
-
   const messageDisposition = (request['$'] as Record<string, string> | undefined)?.[
     'MessageDisposition'
   ] ?? 'SaveOnly';
@@ -27,16 +27,30 @@ export async function createItem(
   }
 
   const subject = String((message['Subject'] as string | undefined) ?? '');
-  const bodyRaw = message['Body'] as any;
-  const bodyText = bodyRaw?.['_'] ?? bodyRaw?.['$']?.['BodyType'] === 'Text'
-    ? String(bodyRaw?.['_'] ?? '')
-    : '';
-  const bodyHtml = (bodyRaw?.['$']?.['BodyType'] ?? 'HTML') === 'HTML'
-    ? String(bodyRaw?.['_'] ?? '')
-    : '';
+  const { bodyText, bodyHtml } = splitEwsBody(message['Body']);
 
-  const toRecipientsRaw = message['ToRecipients'] as Record<string, unknown> | undefined;
-  const toAddrs = extractAddresses(toRecipientsRaw);
+  const toAddrs  = extractAddresses(message['ToRecipients']  as Record<string, unknown> | undefined);
+  const ccAddrs  = extractAddresses(message['CcRecipients']  as Record<string, unknown> | undefined);
+  const bccAddrs = extractAddresses(message['BccRecipients'] as Record<string, unknown> | undefined);
+
+  // Send first (before the Sent copy exists): enqueue on the BullMQ
+  // `smtp-outbound` queue. From is always the authenticated user.
+  if (messageDisposition === 'SendOnly' || messageDisposition === 'SendAndSaveCopy') {
+    const job = buildEwsOutboundJob({
+      userId: user.userId, email: user.email, subject, bodyText, bodyHtml,
+      to: toAddrs, cc: ccAddrs, bcc: bccAddrs,
+    });
+    if (!job) {
+      return errorResponse('CreateItem', 'ErrorInvalidRecipients', 'At least one recipient is required');
+    }
+    try {
+      await enqueueEwsOutbound(job);
+      log.info({ userId: user.userId, jobId: job.messageId, rcpt: job.to.length }, 'EWS mail enqueued');
+    } catch (err) {
+      log.error({ err, userId: user.userId }, 'EWS outbound enqueue failed');
+      return errorResponse('CreateItem', 'ErrorInternalServerError', 'Message could not be submitted');
+    }
+  }
 
   // Find or create Drafts/Sent folder
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: user.userId } });
@@ -64,7 +78,8 @@ export async function createItem(
       subject,
       fromAddr: user.email,
       toAddrs,
-      ccAddrs: [],
+      ccAddrs,
+      bccAddrs,
       date: new Date(),
       bodyText,
       bodyHtml,
@@ -77,21 +92,6 @@ export async function createItem(
     where: { id: folder.id },
     data: { totalCount: { increment: 1 } },
   });
-
-  if (messageDisposition === 'SendOnly' || messageDisposition === 'SendAndSaveCopy') {
-    // Enqueue for outbound delivery via smtp-server
-    await redis.lpush(
-      'smtp:outbound:ews',
-      JSON.stringify({
-        from: user.email,
-        to: toAddrs,
-        subject,
-        bodyHtml,
-        bodyText,
-        messageId: msg.id,
-      }),
-    );
-  }
 
   return soapEnvelope((body) => {
     body

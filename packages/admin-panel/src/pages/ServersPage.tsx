@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
 
 interface ServiceStatus { name: string; port: string; description: string }
 
@@ -24,7 +25,7 @@ interface ServerSettings {
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
-  // v5.7.0: MAPI over HTTP can be enabled optionally
+  // EWS on/off — historical field name (MAPI over HTTP was removed)
   mapiHttpEnabled:  boolean;
   // v5.7.1: JMAP (RFC 8620/8621) — default on
   jmapEnabled:      boolean;
@@ -37,6 +38,7 @@ export function ServersPage() {
   const [form, setForm] = useState<ServerSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const qc = useQueryClient();
+  const t = useT();
 
   const { data: settings, isLoading, isError, refetch } = useQuery<ServerSettings>({
     queryKey: ['server-settings'],
@@ -192,7 +194,7 @@ export function ServersPage() {
               <div className="card space-y-4">
                 <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Exchange-URLs (Outlook Autodiscover)</h2>
                 {([
-                  ['ewsUrl',           'EWS-URL (nur mit MAPI over HTTP + EWS; Outlook 2013–2021)'],
+                  ['ewsUrl',           t('servers_ews_url_label')],
                   ['owaUrl',           'MWA-URL (Mail Web Access)'],
                   ['easUrl',           'EAS-URL (ActiveSync — Mobil)'],
                   ['autodiscoverBase', 'Autodiscover-Basis-URL'],
@@ -208,9 +210,9 @@ export function ServersPage() {
                 ))}
               </div>
 
-              {/* MAPI over HTTP + EWS — v5.7.0 optional, v5.8.0 incl. EWS */}
+              {/* Exchange Web Services — stored in the historical field mapiHttpEnabled */}
               <div className="card space-y-3">
-                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">MAPI over HTTP + EWS (Outlook „Exchange-Konto")</h2>
+                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">{t('servers_ews_title')}</h2>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -218,30 +220,10 @@ export function ServersPage() {
                     checked={current.mapiHttpEnabled ?? false}
                     onChange={(e) => set('mapiHttpEnabled', e.target.checked)}
                   />
-                  <span className="text-sm text-gray-700">MAPI over HTTP + EWS aktivieren</span>
-                  <span className="text-xs text-gray-400">(Standard: aus)</span>
+                  <span className="text-sm text-gray-700">{t('servers_ews_toggle')}</span>
+                  <span className="text-xs text-gray-400">{t('servers_ews_default_off')}</span>
                 </label>
-                <p className="text-xs text-gray-500">
-                  Aktiv: Autodiscover annonciert <code className="bg-gray-100 px-1 rounded">mapiHttp</code>, Outlook richtet
-                  ein natives Exchange-Konto ein (Mail, Kalender, Kontakte, Aufgaben, Notizen, GAL) über{' '}
-                  <code className="bg-gray-100 px-1 rounded">/mapi/emsmdb/</code> und{' '}
-                  <code className="bg-gray-100 px-1 rounded">/mapi/nspi/</code> mit Basic-Auth (Passwort oder App-Passwort);
-                  EWS (<code className="bg-gray-100 px-1 rounded">/EWS/Exchange.asmx</code>) dient dabei als Begleitprotokoll
-                  (Frei/Gebucht, Abwesenheit, OAB). Aus: <code className="bg-gray-100 px-1 rounded">/mapi/*</code> und{' '}
-                  <code className="bg-gray-100 px-1 rounded">/EWS/*</code> liefern 404 und Outlook richtet sich als IMAP-Konto ein.
-                  EWS ist seit v5.8.0 kein eigenständiger Client-Weg mehr. Die Umschaltung greift ohne Neustart.
-                </p>
-                {current.mapiHttpEnabled && (
-                  <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
-                    <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                    <span>
-                      <strong>Einschränkung:</strong> Outlook 2024 LTSC und Microsoft 365 (Classic) erzwingen bei Exchange-Konten
-                      Modern Auth gegen Microsoft Entra/ADFS und senden keine Basic-Credentials — dort scheitert die Einrichtung
-                      und IMAP bleibt der Weg. Getestet funktioniert MAPI/HTTP mit Outlook 2013–2021. Das neue Outlook und
-                      Outlook für Mac unterstützen kein MAPI.
-                    </span>
-                  </div>
-                )}
+                <p className="text-xs text-gray-500">{t('servers_ews_desc')}</p>
               </div>
 
               {/* JMAP — v5.7.1 */}

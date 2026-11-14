@@ -13,6 +13,107 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [6.0.0] — 2026-11-14 — Security & cleanup release
+
+Major release after a full code review (clean code, security, business logic and protocol
+tests). It closes the most severe findings, removes dead and non-working code and adds
+automated tests for every fix. **Breaking**: MAPI over HTTP is gone, the EWS switch is
+renamed, several unused endpoints and the internal `storage-api` service are removed.
+
+### Security
+
+- **Bad tokens no longer crash services.** `verifyAccessToken()` returns `null` instead of
+  throwing. A request with `Authorization: Bearer x` used to terminate auth-service (MFA,
+  sessions, app passwords), caldav-server and backup-service through an unhandled rejection.
+- **Refresh tokens are no longer accepted as access tokens** (30-day bearer access that
+  survived logout and deactivation). Tokens are verified with `algorithms: ['HS256']` only.
+- **JMAP: prototype pollution fixed.** PatchObject paths containing `__proto__`,
+  `constructor` or `prototype`, or walking through inherited members, are rejected with
+  `invalidPatch` (previously any user could modify `Object.prototype` process-wide).
+- **JMAP: Bcc is no longer delivered to recipients.** Bcc header fields are stripped before
+  an `EmailSubmission` is queued (RFC 8621 §7.5).
+- **JMAP: delegates with only SEND_AS / SEND_ON_BEHALF no longer get read/write access**
+  to the owner's mailbox (same rule as Shared Mailboxes).
+- **MWA: stored XSS in Shared Mailboxes fixed.** HTML mail bodies in the Shared Mailbox view
+  are now sanitized with the same DOMPurify configuration as the normal reader
+  (`web-client/src/lib/mailHtml.ts`).
+- **Cross-mailbox access fixed:** "Run rule now" can no longer process folders of other
+  mailboxes via `folderIds`; EWS ResolveNames no longer returns other users' personal
+  contacts.
+- **SMTP: command injection after oversized DATA fixed.** The rest of an oversized message
+  is consumed up to the end-of-data line and answered with a single `552` instead of being
+  executed as SMTP commands (RFC 5321 §4.1.1.4).
+- **SMTP and IMAP: unterminated input lines are capped at 64 KiB** (SMTP DATA: maximum
+  message size); the connection is closed instead of the buffer growing without limit.
+- **ActiveSync no longer trusts the client's From header.** Only the user's own address,
+  their aliases or a Shared Mailbox with SEND_AS/FULL_ACCESS are accepted (status 130
+  otherwise). EWS always sends as the logged-in user. Bcc headers are stripped before sending.
+- **DKIM for all outbound mail:** mail from SMTP submission (465/587), inbox-rule forwards,
+  ActiveSync and EWS is now DKIM-signed — the outbound worker resolves the key of the sender
+  domain. New domains (setup wizard, EMS New-AcceptedDomain) get a DKIM key at creation.
+
+### Fixed
+
+- **Lost mobile mail:** ActiveSync SendMail/SmartReply/SmartForward and EWS CreateItem
+  (SendOnly/SendAndSaveCopy) reported success but wrote to Redis lists that nothing read.
+  They now use the `smtp-outbound` queue with local delivery, retries and a clear error status.
+- **Spam filter connection stage never ran:** security-filter answered 400 at connect time
+  and the SMTP server let the connection through. The connect stage now runs DNSBL/DNSWL and
+  GeoIP with the client IP only, greylisting runs at RCPT TO with the real
+  (IP, sender, recipient) triple, and an unavailable filter is logged as an error.
+- **SMTP reply codes:** transient handler rejections (`4.x.x`) are sent with a 4yz code, and
+  handler errors carrying their own code (e.g. `452 4.2.2`) pass through unchanged instead of
+  becoming permanent `550` bounces.
+- **IMAP UID commands:** `UID FETCH` and `UID STORE` address messages by UID, plain `STORE` by
+  sequence number (previously `UID FETCH` used sequence numbers, `UID STORE` returned BAD and
+  `STORE` could flag the wrong message). `UID EXPUNGE` (RFC 4315) is implemented, EXPUNGE
+  responses carry correct sequence numbers, STORE is refused in EXAMINE'd mailboxes.
+- **Retention:** message age is measured from delivery time instead of the sender-controlled
+  `Date:` header — freshly delivered mail with an old date is no longer purged on the next run.
+- **Autodiscover v2** no longer crashes on a malformed double-encoded address.
+- **CalDAV Basic auth** uses `AUTH_SERVICE_URL` (default `http://localhost:3003`) instead of
+  the non-existent host `auth-service:3003`, and rejects deactivated users.
+- **MAPI identity** (until its removal in this release) no longer taken from the
+  client-controlled `X-User-Identity` header.
+
+### Changed
+
+- **EWS no longer depends on MAPI.** BCP → Server → "Exchange Web Services (EWS)" (default
+  off) controls `/EWS/*`, `/OAB/*` and Autodiscover v2 `Protocol=EWS`. Stored in the existing
+  field `ServerSettings.mapiHttpEnabled` — no schema migration.
+- **CLI:** `coremail connector enable|disable ews` replaces `mapi` (still accepted as a
+  deprecated alias with a warning).
+- **Outlook** is set up via "Other email accounts" → IMAP (calendar/contacts via
+  CalDAV/CardDAV); Autodiscover v1 announces IMAP, SMTP and ActiveSync.
+- **Tests:** every package with logic touched by this release has a `test` script
+  (`pnpm -r test`, 113 tests). Reviewer protocol suites for SMTP/IMAP/POP3/JMAP are kept as
+  acceptance tests for the remaining findings (not part of `pnpm -r test`).
+
+### Removed
+
+- **MAPI over HTTP** completely (`/mapi/emsmdb`, `/mapi/nspi`, all ROP/NSPI code under
+  `packages/ews-server/src/mapi/`, Autodiscover `mapiHttp` block, `ENABLE_MAPI_HTTP`,
+  `/mapi` routes in api-gateway, nginx and the k8s ingress). The review showed it could not
+  work with a real Outlook client.
+- **Internal `storage-api` service** (port 3001): no callers, served user records including
+  `passwordHash` without authentication.
+- **PowerShell Remoting stub** (`/PowerShell/`) and `POST /api/v1/admin/ems/cmdlet` — they
+  never executed cmdlets. The EMS REST endpoints under `/api/v1/admin/ems/` remain.
+- **Legacy routes** `/api/v1/admin/mailboxes/shared*` — use `/api/v1/admin/shared-mailboxes`.
+- **Unreferenced BCP pages** (Connectors, Resources, Organisation, Mobile Devices) and unused
+  i18n keys; MWA compose no longer queries the removed `/admin/groups/gal` endpoint.
+- **OpenTelemetry** `metrics`/`tracing` modules and dependencies plus unused exports from
+  `@coremail/core`; legal-hold leftovers in the Managed Folder Assistant.
+
+### Known open issues
+
+Tracked by the failing reviewer suites: IMAP literals/SEARCH/STATUS, POP3 message rendering
+from the raw source, JMAP `/changes` after IMAP flag changes, calendar `allDay`/RRULE
+persistence and CalDAV ETags, atomic UID/modSeq allocation, certificate auto-renewal,
+quarantine release. MFA is not yet enforced for IMAP/SMTP/POP3/ActiveSync logins.
+
+---
+
 ## [5.9.0] — 2026-10-28 — English-only repository
 
 ### Changed

@@ -14,6 +14,13 @@ import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import type { SmtpHandlers, AuthUser } from '../core/types.js';
+import {
+  callConnectionFilter,
+  connectionAllowed,
+  dataStageGreylistReply,
+  rcptReplyForDecision,
+  type ConnectionFilterDecision,
+} from './connection-filter.js';
 
 const log = createLogger('smtp:inbound');
 
@@ -34,26 +41,32 @@ function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } 
 
 // ── onConnect ─────────────────────────────────────────────────────────────────
 
+// At connect time only the client IP is known → IP-based checks only
+// (DNSBL/DNSWL, GeoIP). Greylisting needs the full triple and runs at RCPT TO.
 async function onConnect(ip: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${SECURITY_FILTER_URL}/check/connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ senderIp: ip, mailFrom: '', rcptTo: '' }),
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    const result = await response.json() as { action: string; reason?: string };
-
-    if (result.action === 'reject' || result.action === 'defer') {
-      log.info({ ip, action: result.action, reason: result.reason }, 'Inbound connection blocked');
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.error({ err, ip }, 'Security filter unreachable — failing open');
-    return true;
+  const decision = await callConnectionFilter(SECURITY_FILTER_URL, { stage: 'connect', senderIp: ip });
+  if (decision.kind === 'unavailable') {
+    log.error({ ip, detail: decision.detail }, 'Security filter unavailable (connect stage) — failing open');
+  } else if (decision.kind === 'block') {
+    log.info({ ip, action: decision.action, reason: decision.reason }, 'Inbound connection blocked');
   }
+  return connectionAllowed(decision);
+}
+
+// True once the session passes the client IP to onRcptTo — then greylisting
+// runs at RCPT TO and the DATA-stage fallback in onMessage is skipped.
+let rcptStageHasIp = false;
+
+async function greylistDecision(ip: string, from: string, rcpt: string): Promise<ConnectionFilterDecision> {
+  const decision = await callConnectionFilter(SECURITY_FILTER_URL, {
+    stage: 'rcpt', senderIp: ip, mailFrom: from, rcptTo: rcpt,
+  });
+  if (decision.kind === 'unavailable') {
+    log.error({ ip, from, rcpt, detail: decision.detail }, 'Security filter unavailable (greylisting) — failing open');
+  } else if (decision.kind === 'block') {
+    log.info({ ip, from, rcpt, action: decision.action, reason: decision.reason }, 'Recipient deferred/rejected by connection filter');
+  }
+  return decision;
 }
 
 // ── onMailFrom ────────────────────────────────────────────────────────────────
@@ -71,8 +84,9 @@ async function onMailFrom(
 
 async function onRcptTo(
   to: string,
-  _from: string,
-  _authUser: AuthUser | null,
+  from: string,
+  authUser: AuthUser | null,
+  ip?: string,
 ): Promise<string | null> {
   try {
     // Local delivery can be disabled globally via SmtpSettings.localDeliveryEnabled.
@@ -85,11 +99,18 @@ async function onRcptTo(
     }
     const exists = await verifyRecipient(to);
     if (!exists) return '5.1.1 User unknown';
-    return null;
   } catch (err) {
     log.error({ err, to }, 'verifyRecipient error');
     return '4.3.0 Temporary failure';
   }
+
+  // Greylisting with the real (IP, MAIL FROM, RCPT TO) triple — only for
+  // existing recipients, never for authenticated sessions.
+  if (ip && !authUser) {
+    rcptStageHasIp = true;
+    return rcptReplyForDecision(await greylistDecision(ip, from, to));
+  }
+  return null;
 }
 
 // ── onMessage ─────────────────────────────────────────────────────────────────
@@ -98,9 +119,17 @@ async function onMessage(
   raw: Buffer,
   from: string,
   to: string[],
-  _authUser: AuthUser | null,
+  authUser: AuthUser | null,
   ip: string,
 ): Promise<void> {
+  // 0. Greylisting fallback: if the SMTP session does not hand the client IP
+  //    to onRcptTo, the triple is checked here (after DATA) instead.
+  if (!rcptStageHasIp && !authUser) {
+    const decisions = await Promise.all(to.map((rcpt) => greylistDecision(ip, from, rcpt)));
+    const reply = dataStageGreylistReply(decisions);
+    if (reply) throw new Error(reply);
+  }
+
   // 1. Full content scan (SPF/DKIM/DMARC, blacklist, ClamAV, rspamd)
   const response = await fetch(`${SECURITY_FILTER_URL}/check/content`, {
     method: 'POST',

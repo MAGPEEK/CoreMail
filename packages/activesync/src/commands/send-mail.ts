@@ -1,100 +1,125 @@
+import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
-import { getRedisClient, CHANNEL_MAIL_NEW } from '@coremail/core';
-import { encodeWbxml, el, getText, getChild, type WbxmlElement } from '../wbxml.js';
+import { listAllowedSenderAddresses } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
+import { enqueueRawOutbound } from '../outbound.js';
+import { EAS_SEND_STATUS, planEasSubmission, type EasSubmissionPlan } from './send-mail-plan.js';
+
+const log = createLogger('activesync:send-mail');
+
+function statusResponse(command: string, status: string): Buffer {
+  return encodeWbxml(el(command, undefined, [el('Status', status)]));
+}
 
 /**
- * SendMail command — send outgoing email
+ * SendMail command — send outgoing email.
+ *
+ * The MIME is handed to the smtp-server outbound worker via the BullMQ queue
+ * `smtp-outbound` (local recipients are delivered into their mailbox, external
+ * ones relayed and DKIM-signed). The From header must be an address the
+ * authenticated user may send as; the envelope sender is that verified address.
  */
 export async function handleSendMail(
   body: WbxmlElement,
   userId: string,
+  command: 'SendMail' | 'SmartReply' | 'SmartForward' = 'SendMail',
 ): Promise<Buffer> {
   const mimeData = getText(body, 'Mime');
   const saveInSent = getText(body, 'SaveInSentItems') !== '0';
 
   if (!mimeData) {
-    return encodeWbxml(el('SendMail', undefined, [el('Status', '120')]));
+    return statusResponse(command, EAS_SEND_STATUS.SUBMISSION_FAILED);
   }
 
   try {
-    // Parse basic headers from MIME
-    const lines = mimeData.split('\r\n');
-    let subject = '';
-    let from = '';
-    const to: string[] = [];
-    let i = 0;
-    for (; i < lines.length; i++) {
-      const line = lines[i] ?? '';
-      if (line === '') break;
-      if (line.toLowerCase().startsWith('subject:')) {
-        subject = line.slice(8).trim();
-      } else if (line.toLowerCase().startsWith('from:')) {
-        from = line.slice(5).trim();
-      } else if (line.toLowerCase().startsWith('to:')) {
-        to.push(...line.slice(3).trim().split(',').map((a: string) => a.trim()).filter(Boolean));
-      }
+    const user = await prisma.user.findFirst({
+      where:  { id: userId, active: true },
+      select: { email: true },
+    });
+    if (!user) return statusResponse(command, EAS_SEND_STATUS.ACCESS_DENIED);
+
+    const result = await planEasSubmission(Buffer.from(mimeData, 'utf8'), {
+      userEmail:      user.email,
+      allowedSenders: await listAllowedSenderAddresses(userId),
+    });
+    if (!result.ok) {
+      log.warn({ userId, command, status: result.status, reason: result.reason }, 'EAS send rejected');
+      return statusResponse(command, result.status);
     }
-    const bodyText = lines.slice(i + 1).join('\n');
+    const plan = result.plan;
 
-    // Get user info
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-    const fromAddr = from || user?.email || userId;
+    // Enqueue first: only a queued mail is reported as sent.
+    const jobId = `eas-${randomUUID()}`;
+    await enqueueRawOutbound({
+      messageId:    jobId,
+      from:         plan.envelopeFrom,
+      to:           plan.recipients,
+      senderUserId: userId,
+      rawMessage:   plan.raw.toString('base64'),
+    });
+    log.info({ userId, command, jobId, from: plan.envelopeFrom, rcpt: plan.recipients.length }, 'EAS mail enqueued');
 
-    // Save to Sent folder if requested
+    void prisma.systemLog.create({
+      data: {
+        level: 'INFO', service: 'activesync', category: 'MAIL_FLOW',
+        message: `Sent (EAS): ${plan.envelopeFrom} → ${plan.recipients.join(', ')}`,
+        userId,
+        metadata: {
+          sender: plan.envelopeFrom, recipient: plan.recipients.join(', '), subject: plan.subject,
+          status: 'ACCEPTED', messageId: jobId, direction: 'OUTBOUND', protocol: 'EAS',
+        },
+      },
+    }).catch((err: unknown) => log.warn({ err }, 'MAIL_FLOW log write failed'));
+
+    // Sent copy — the mail is already queued, so a failure here must not make
+    // the client resend (duplicate delivery); log it instead.
     if (saveInSent) {
-      const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
-      if (mailbox) {
-        const sentFolder = await prisma.folder.findFirst({
-          where: { mailboxId: mailbox.id, name: 'Sent' },
-        });
-        if (sentFolder) {
-          const updatedMailbox = await prisma.mailbox.update({
-            where: { id: mailbox.id },
-            data: { uidNext: { increment: 1 } },
-          });
-          await prisma.message.create({
-            data: {
-              folderId: sentFolder.id,
-              uid: updatedMailbox.uidNext - 1,
-              modSeq: BigInt(Date.now()),
-              flags: ['\\Seen'],
-              subject,
-              fromAddr,
-              toAddrs: to,
-              ccAddrs: [],
-              date: new Date(),
-              bodyText,
-              bodyHtml: '',
-              rawSize: mimeData.length,
-              storagePath: '',
-            },
-          });
-          await prisma.folder.update({
-            where: { id: sentFolder.id },
-            data: { totalCount: { increment: 1 } },
-          });
-        }
-      }
+      await saveSentCopy(userId, plan, mimeData.length).catch((err: unknown) =>
+        log.error({ err, userId, jobId }, 'Saving EAS Sent copy failed (mail was sent)'),
+      );
     }
 
-    // Enqueue for outbound delivery
-    const redis = getRedisClient();
-    await redis.lpush(
-      'smtp:outbound:eas',
-      JSON.stringify({
-        from: fromAddr,
-        to,
-        subject,
-        bodyText,
-        bodyHtml: '',
-        mime: mimeData,
-      }),
-    );
-
-    return encodeWbxml(el('SendMail', undefined, [el('Status', '1')]));
-  } catch {
-    return encodeWbxml(el('SendMail', undefined, [el('Status', '120')]));
+    return statusResponse(command, EAS_SEND_STATUS.SUCCESS);
+  } catch (err) {
+    log.error({ err, userId, command }, 'EAS send failed');
+    return statusResponse(command, EAS_SEND_STATUS.SERVER_ERROR);
   }
+}
+
+async function saveSentCopy(userId: string, plan: EasSubmissionPlan, rawSize: number): Promise<void> {
+  const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
+  if (!mailbox) return;
+  const sentFolder = await prisma.folder.findFirst({
+    where: { mailboxId: mailbox.id, name: 'Sent' },
+  });
+  if (!sentFolder) return;
+  const updatedMailbox = await prisma.mailbox.update({
+    where: { id: mailbox.id },
+    data: { uidNext: { increment: 1 } },
+  });
+  await prisma.message.create({
+    data: {
+      folderId: sentFolder.id,
+      uid: updatedMailbox.uidNext - 1,
+      modSeq: BigInt(Date.now()),
+      flags: ['\\Seen'],
+      subject: plan.subject,
+      fromAddr: plan.envelopeFrom,
+      toAddrs: plan.to,
+      ccAddrs: plan.cc,
+      bccAddrs: plan.bcc,
+      date: new Date(),
+      bodyText: plan.text,
+      bodyHtml: plan.html,
+      rawSize,
+      storagePath: '',
+    },
+  });
+  await prisma.folder.update({
+    where: { id: sentFolder.id },
+    data: { totalCount: { increment: 1 } },
+  });
 }
 
 /**
@@ -105,6 +130,6 @@ export async function handleSmartReply(
   userId: string,
   command: 'SmartReply' | 'SmartForward',
 ): Promise<Buffer> {
-  // Delegate to SendMail logic (MIME includes original message inline)
-  return handleSendMail(body, userId);
+  // The client MIME carries the reply/forward content; same submission path.
+  return handleSendMail(body, userId, command);
 }

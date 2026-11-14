@@ -14,7 +14,7 @@
 #   25/465/587  SMTP
 #   143/993     IMAP
 #   110/995     POP3
-#   3000  api-gateway     3001  storage-api
+#   3000  api-gateway
 #   3002  security-filter 3003  auth-service
 #   3004  backup-service  3005  activesync
 #   8080  ews-server      8081  autodiscover
@@ -228,7 +228,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail \
 # Ports:
 #   3000 — HTTP (OWA, ECP, API, Auth, EWS proxy, ActiveSync proxy)
 #         → TLS termination external (Traefik, Caddy, DSM Application Portal …)
-#   8080 — EWS/MAPI/Autodiscover (direct access optional)
+#   8080 — EWS/Autodiscover (direct access optional)
 #   25/465/587 — SMTP
 #   143/993    — IMAP
 #   110/995    — POP3

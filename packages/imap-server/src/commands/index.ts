@@ -948,13 +948,18 @@ export async function handleFetch(
   session: ImapSession,
   tag: string,
   args: string[],
+  byUid = false,
 ): Promise<void> {
   if (!session.selected) {
     sendBad(session, tag, 'No mailbox selected');
     return;
   }
 
-  const sequenceSet = args[0] ?? '1:*';
+  const sequenceSet = args[0] ?? '';
+  if (!isValidSequenceSet(sequenceSet)) {
+    sendBad(session, tag, 'Invalid sequence set');
+    return;
+  }
   const dataItemsRaw = args.slice(1).join(' ');
   // Tokenize data items: split on whitespace, strip parens, uppercase
   const dataItems = new Set(
@@ -970,9 +975,9 @@ export async function handleFetch(
     include: { attachments: { select: { filename: true, mimeType: true, size: true } } },
   });
 
-  // v5.3.5: parseSequenceSet now takes a byUid parameter
-  const isUidFetch = /UID FETCH/i.test(args.join(' ')) || false;
-  const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid), isUidFetch);
+  // UID mode is passed explicitly by the dispatcher (UID FETCH); the dispatcher
+  // strips the "UID" token, so it cannot be detected from args.
+  const uids = parseSequenceSet(sequenceSet, messages.map((m) => m.uid), byUid);
 
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
@@ -1173,6 +1178,7 @@ export async function handleStore(
   session: ImapSession,
   tag: string,
   args: string[],
+  byUid = false,
 ): Promise<void> {
   if (!session.selected) {
     sendBad(session, tag, 'No mailbox selected');
@@ -1184,13 +1190,29 @@ export async function handleStore(
   const flagsStr    = args.slice(2).join(' ').replace(/[()]/g, '');
   const newFlags    = flagsStr.split(/\s+/).filter(Boolean);
 
+  if (!isValidSequenceSet(sequenceSet)) {
+    sendBad(session, tag, 'Invalid sequence set');
+    return;
+  }
+  if (!/^[+-]?FLAGS(?:\.SILENT)?$/.test(command)) {
+    sendBad(session, tag, 'Unknown STORE data item');
+    return;
+  }
+  // RFC 9051 §6.3.3: no permanent state changes in a mailbox opened with EXAMINE.
+  if (session.selected.readOnly) {
+    sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
+    return;
+  }
+
   const messages = await prisma.message.findMany({
     where: { folderId: session.selected.folderId, deletedAt: null },
     select: { id: true, uid: true, flags: true, modSeq: true },
     orderBy: { uid: 'asc' },
   });
 
-  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid));
+  // byUid comes from the dispatcher: plain STORE uses sequence numbers,
+  // UID STORE uses UIDs (RFC 9051 §6.4.6, §6.4.9).
+  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid), byUid);
 
   for (const [seqNum, msg] of messages.entries()) {
     if (!uids.includes(msg.uid)) continue;
@@ -1221,21 +1243,39 @@ export async function handleStore(
 // ─────────────────────────────────────────────
 // EXPUNGE
 // ─────────────────────────────────────────────
-export async function handleExpunge(session: ImapSession, tag: string): Promise<void> {
+/**
+ * EXPUNGE (RFC 9051 §6.4.3) and UID EXPUNGE (RFC 4315 §2.1).
+ *
+ * @param uidSet  undefined → plain EXPUNGE (all \Deleted messages);
+ *                a UID set → UID EXPUNGE: only \Deleted messages whose UID
+ *                is in the set are removed.
+ */
+export async function handleExpunge(session: ImapSession, tag: string, uidSet?: string): Promise<void> {
   if (!session.selected) {
     sendBad(session, tag, 'No mailbox selected');
     return;
   }
+  if (uidSet !== undefined && !isValidSequenceSet(uidSet)) {
+    sendBad(session, tag, 'Invalid UID set');
+    return;
+  }
 
-  const toDelete = await prisma.message.findMany({
-    where: {
-      folderId: session.selected.folderId,
-      flags: { has: '\\Deleted' },
-      deletedAt: null,
-    },
-    orderBy: { uid: 'desc' },
-    select: { id: true, uid: true },
+  // Snapshot of the current view (ascending UID = sequence-number order),
+  // taken BEFORE deleting so the EXPUNGE sequence numbers can be computed.
+  const allMessages = await prisma.message.findMany({
+    where: { folderId: session.selected.folderId, deletedAt: null },
+    orderBy: { uid: 'asc' },
+    select: { id: true, uid: true, flags: true },
   });
+
+  const inSet = uidSet !== undefined
+    ? new Set(parseSequenceSet(uidSet, allMessages.map((m: { uid: number }) => m.uid), true))
+    : null;
+
+  const toDelete = allMessages.filter(
+    (m: { uid: number; flags: string[] }) =>
+      m.flags.includes('\\Deleted') && (inSet === null || inSet.has(m.uid)),
+  );
 
   for (const msg of toDelete) {
     await prisma.message.update({
@@ -1244,19 +1284,19 @@ export async function handleExpunge(session: ImapSession, tag: string): Promise<
     });
   }
 
-  const allMessages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    orderBy: { uid: 'asc' },
-    select: { uid: true },
-  });
-
+  // RFC 9051 §7.5.1: each EXPUNGE response immediately decrements the sequence
+  // numbers of all later messages, so subtract the ones already reported.
+  const deletedUids = new Set(toDelete.map((m: { uid: number }) => m.uid));
+  let removed = 0;
   for (const [i, msg] of allMessages.entries()) {
-    if (toDelete.some((d: { uid: number }) => d.uid === msg.uid)) {
-      sendUntagged(session, `${i + 1} EXPUNGE`);
+    if (deletedUids.has(msg.uid)) {
+      sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
+      removed++;
     }
   }
+  session.selected.exists = Math.max(0, session.selected.exists - removed);
 
-  sendOk(session, tag, 'EXPUNGE completed');
+  sendOk(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed');
 }
 
 // ─────────────────────────────────────────────
@@ -1302,7 +1342,12 @@ function unquote(s: string): string {
  * @param byUid   true: input is a UID set (UID FETCH/STORE/COPY/MOVE),
  *                false: input is a seq-num set (1-based positions in uids[])
  */
-function parseSequenceSet(set: string, uids: number[], byUid = true): number[] {
+/** RFC 9051 §9 sequence-set syntax: seq-number / seq-range, comma-separated; "*" allowed. */
+function isValidSequenceSet(set: string): boolean {
+  return /^(?:[1-9]\d*|\*)(?::(?:[1-9]\d*|\*))?(?:,(?:[1-9]\d*|\*)(?::(?:[1-9]\d*|\*))?)*$/.test(set);
+}
+
+function parseSequenceSet(set: string, uids: number[], byUid: boolean): number[] {
   if (!uids.length) return [];
 
   if (byUid) {

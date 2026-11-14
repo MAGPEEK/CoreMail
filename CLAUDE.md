@@ -13,17 +13,24 @@ It contains all the important context information about the CoreMail project.
 ```
 
 **Goal**: Coremail mail server for 10–500 users (SMB)
-**Current version**: `5.9.0` (admin CLI `coremail` + new docker-compose + EWS coupled to the MAPI switch; v5.7.1 JMAP server RFC 8620/8621 + extensions; v5.7.0 MAPI over HTTP optionally back, default off + build hardening; distribution groups removed v5.6.1 + OAuth2 server removed v5.6.0 + IMAP4rev2 v5.5.0)
+**Current version**: `6.0.0` (security & cleanup release after a full code review: token handling, JMAP pollution/Bcc/delegation, XSS, cross-mailbox access, SMTP/IMAP fixes, ActiveSync/EWS sending via BullMQ, DKIM for every outbound path, spam-filter connection stage, retention by delivery time; MAPI over HTTP + storage-api + PowerShell stub removed; EWS has its own switch; v5.8.0 admin CLI; v5.7.1 JMAP server)
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 
 ## Architecture Decisions (v5.4.0+)
 
-- **Admin CLI (v5.8.0)**: package `packages/cli/` (commander 12), binary `coremail` in the app image (`/usr/local/bin/coremail` → `packages/cli/dist/index.js`). Talks exclusively to the REST admin API (`/api/v1/admin/*`, `/auth/login`, `/auth/mfa/verify`, `/auth/refresh`) — no direct Prisma access, so that roles + audit log apply. Session in `~/.config/coremail/credentials.json` (0600) or `COREMAIL_TOKEN`/`COREMAIL_ADMIN_EMAIL`+`_PASSWORD`(+`_TOTP`). Command groups: `user`, `mailbox`, `shared`, `domain`, `connector` (listeners via `/admin/services/listeners/<slug>`, JMAP/MAPI via `/admin/servers/settings`), `smtp banner` (`/admin/smtp-config/settings`), `cert` (`/admin/certificates`). The shared-mailbox list returns `{items,total}`; the mailbox list returns an array. Docs `docs/cli.md`. Tests: `node --import tsx --test src/output.test.ts`.
-- **EWS coupled to the MAPI switch (v5.8.0)**: `/EWS/*` + `/OAB/*` in the ews-server sit behind `requireMapiEnabled` (same flag `ServerSettings.mapiHttpEnabled`), Autodiscover v2 `Protocol=EWS` → 404 when off. EWS is no longer a standalone client path, only the companion protocol of MAPI/HTTP. BCP card "MAPI over HTTP + EWS".
+- **v6.0.0 security & cleanup**:
+  - `verifyAccessToken()` (core) returns `JwtPayload | null` and never throws; it rejects refresh tokens (`type: 'refresh'`) and pins `HS256`. Callers must check for `null`.
+  - **MAPI over HTTP removed for good** (again). EWS has its own switch, stored in the existing field `ServerSettings.mapiHttpEnabled` (name kept to avoid a schema change); gate `requireEwsEnabled` in `packages/ews-server/src/feature-flag.ts`. BCP card "Exchange Web Services (EWS)", CLI `connector ews` (`mapi` = deprecated alias).
+  - **Every outbound producer** (REST, JMAP, SMTP submission, rule forwards, ActiveSync, EWS) goes through BullMQ `smtp-outbound`; the worker resolves the DKIM key of the envelope-from domain when a job has none (`smtp-server/src/outbound/dkim.ts`). Domains get a DKIM key at creation (`api-gateway/src/lib/dkim.ts`). Never write to ad-hoc Redis lists for sending.
+  - Sender identity check for ActiveSync lives in `packages/storage/src/sender-identity.ts` (own address, aliases, Shared Mailbox with SEND_AS/FULL_ACCESS).
+  - security-filter `/check/connection` has stages: `connect` (IP only: DNSBL/DNSWL, GeoIP), `rcpt` (greylisting with IP+sender+recipient), `full` (legacy). SMTP `onRcptTo(to, from, authUser, ip)`.
+  - Mail HTML is rendered only through `sanitizeMailHtml()` (`web-client/src/lib/mailHtml.ts`).
+  - Removed: `storage-api` (port 3001), `/PowerShell/`, `/admin/ems/cmdlet`, `/admin/mailboxes/shared*`, OpenTelemetry modules.
+- **Testing (v6.0.0)**: `pnpm -r test` runs every package `test` script (node:test via `node --import tsx --test`). Prisma is faked through the `globalThis.__prisma` seam of `packages/storage/src/prisma/index.ts` — set it (with `$on: () => undefined`) BEFORE dynamically importing modules that import `@coremail/storage`; set `DATABASE_URL`/`JWT_SECRET`/`PEPPER` (≥32 chars) before importing `@coremail/core`. Reviewer acceptance suites (`*.review.test.ts`, SMTP/IMAP/POP3 `test-hooks.mjs` suites) document open findings and are intentionally not in `pnpm -r test`. On this Windows machine use `corepack pnpm` (global shim broken).
+- **Admin CLI (v5.8.0)**: package `packages/cli/` (commander 12), binary `coremail` in the app image (`/usr/local/bin/coremail` → `packages/cli/dist/index.js`). Talks exclusively to the REST admin API (`/api/v1/admin/*`, `/auth/login`, `/auth/mfa/verify`, `/auth/refresh`) — no direct Prisma access, so that roles + audit log apply. Session in `~/.config/coremail/credentials.json` (0600) or `COREMAIL_TOKEN`/`COREMAIL_ADMIN_EMAIL`+`_PASSWORD`(+`_TOTP`). Command groups: `user`, `mailbox`, `shared`, `domain`, `connector` (listeners via `/admin/services/listeners/<slug>`, JMAP/EWS via `/admin/servers/settings`), `smtp banner` (`/admin/smtp-config/settings`), `cert` (`/admin/certificates`). The shared-mailbox list returns `{items,total}`; the mailbox list returns an array. Docs `docs/cli.md`. Tests: `node --import tsx --test src/output.test.ts`.
 - **docker-compose (v5.8.0)**: `infra/docker/docker-compose.yml` reduced to mandatory parameters with `${VAR:?message}` checks; internal service URLs/ports are no longer set (code defaults, exception `SECURITY_FILTER_URL=http://localhost:3002`, because one default points to `security-filter:3002`). `scripts/setup.sh` generates `.env` + symlink `infra/docker/.env`.
 
-- **MAPI/HTTP optional (v5.7.0, had been removed in v5.4.0)**: code from v5.2 restored in `packages/ews-server/src/mapi/`, behind `ServerSettings.mapiHttpEnabled` (default **false**). Switch: BCP → Server → "MAPI over HTTP". Gate `requireMapiEnabled` (`mapi/feature-flag.ts`, 60s cache + Redis `CHANNEL_SETTINGS_RELOAD`) → `/mapi/*` 404 when off; Autodiscover returns the `mapiHttp` block only when on. **Limitation**: Outlook 2024 LTSC / M365 Classic enforce Modern Auth against Entra/ADFS → use IMAP there ("Other email accounts"); MAPI works for Outlook 2013–2021 (Basic Auth). ADFS emulation (v5.3.0) stays removed. New Outlook + Outlook for Mac: no MAPI.
 - **JMAP server (v5.7.1)**: new package `packages/jmap-server/` (port 3006), api-gateway proxies `/jmap/*` + `/.well-known/jmap` (incl. WebSocket upgrade `/jmap/ws` on the HTTP server and the TLS proxy). RFC 8620 Core (Session, dispatcher with result references, Blobs, EventSource, PushSubscription), 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals, 9749 VAPID. Switch `ServerSettings.jmapEnabled` (default **true**), BCP → Server → "JMAP". Auth: Bearer JWT or Basic (app password with MFA). Accounts: `userId` (own), `shared-<id>` (Shared Mailbox), delegated mailboxes. `Message.threadId` lazily derived from `inReplyTo`. States: Email `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>`, Mailbox `<count>.<maxCreatedMs>.<hash>` — deletes without tombstones → `cannotCalculateChanges`. EmailSubmission in Redis (`jmap:sub:*`, 7d), sending via BullMQ `smtp-outbound` with `rawMessage`. Blob IDs: `m-<msgId>`, `a-<attId>`, `p-<msgId>-text|html`, `u-<hex>` (upload, MinIO `jmap-upload/`, 7d). Docs: `docs/jmap.md`.
 - **Build hardening (v5.7.0)**: pnpm pinned (`packageManager: pnpm@11.28.9`, Dockerfile `pnpm@11`) — corepack `pnpm@latest` pulled pnpm 12 and broke the build. Frontend tsconfigs `noEmit: true`; no more `.js` files checked in next to `.tsx`.
 - **OAuth2 server completely removed (v5.6.0)**: lived under `/oauth2/*` (authorization server for external apps). Since XOAUTH2 SASL has no mainstream client UI support (Apple Mail / Outlook LTSC / eM Client offer no UI for custom OAuth servers), the server had no real use case in practice. JWT back to **HS256** (`JWT_SECRET`). MWA + BCP use session JWTs via `/auth/login`, mail clients use app passwords.
@@ -102,7 +109,7 @@ Since v0.9.1 CoreMail uses a consolidated **2-container architecture**:
 **HTTP routing without nginx**: The `api-gateway` on port 3000 handles all HTTP routes:
 - `/owa/` `/bcp/` — Express.static (frontend bundles from `/app/www/`)
 - `/auth/` → proxy to auth-service (localhost:3003)
-- `/EWS/` `/mapi/` `/OAB/` → proxy to ews-server (localhost:8080) — optional since v5.7.0/v5.8.0 (404 when "MAPI over HTTP + EWS" is off)
+- `/EWS/` `/OAB/` → proxy to ews-server (localhost:8080) — 404 while the BCP switch "Exchange Web Services (EWS)" is off (v6.0.0)
 - `/Microsoft-Server-ActiveSync` → proxy to activesync (localhost:3005)
 - `/dav/` → proxy to caldav-server (localhost:8082)
 - `/jmap/` `/.well-known/jmap` → proxy to jmap-server (localhost:3006), WebSocket `/jmap/ws` — since v5.7.1
@@ -116,7 +123,6 @@ Since v0.9.1 CoreMail uses a consolidated **2-container architecture**:
 |---------|------|
 | nginx | 80 / 443 |
 | api-gateway | 3000 |
-| storage-api | 3001 |
 | security-filter | 3002 |
 | auth-service | 3003 |
 | backup-service | 3004 |
@@ -350,7 +356,7 @@ POST /PowerShell/  → WSMan-Identify (answers) + cmdlet routing to the EMS REST
                      (unknown cmdlets → SOAP fault with the list of supported cmdlets)
 ```
 
-**MAPI over HTTP**: optional since v5.7.0, default off (see Architecture Decisions above).
+**MAPI over HTTP**: removed in v6.0.0 (see Architecture Decisions above). EWS is optional, default off.
 
 ---
 
@@ -811,4 +817,4 @@ Also: **`@coremail/core` is the source of truth** — never import `bcrypt` dire
 routes when user passwords are involved (except for OAuth client secrets
 and MFA backup codes — those need no pepper).
 
-*Last updated: 2026-10-28 (v5.8.0 — admin CLI, new compose, EWS↔MAPI; v5.7.1 — JMAP server; v5.7.0 — MAPI over HTTP optionally back + build hardening; v5.6.1 — distribution groups removed; v5.6.0 — OAuth2 / Modern Auth removed; v5.5.0 — IMAP4rev2 compliance; v5.4.0 — MAPI completely removed)*
+*Last updated: 2026-11-14 (v6.0.0 — security & cleanup release, MAPI removed, EWS switch, tests; v5.8.0 — admin CLI, new compose; v5.7.1 — JMAP server; v5.7.0 — MAPI over HTTP optionally back + build hardening; v5.6.1 — distribution groups removed; v5.6.0 — OAuth2 / Modern Auth removed; v5.5.0 — IMAP4rev2 compliance; v5.4.0 — MAPI completely removed)*

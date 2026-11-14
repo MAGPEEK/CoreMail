@@ -20,12 +20,25 @@ export function signRefreshToken(userId: string, sessionId: string): string {
   });
 }
 
-export function verifyAccessToken(token: string): JwtPayload {
-  return jwt.verify(token, config.JWT_SECRET) as JwtPayload;
+/**
+ * Returns the payload of a valid access token, or null for anything else
+ * (bad signature, expired, malformed, or a refresh token). Never throws, so
+ * callers in async Express handlers cannot crash the process with a bad token.
+ */
+export function verifyAccessToken(token: string): JwtPayload | null {
+  try {
+    const payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] });
+    if (typeof payload !== 'object' || payload === null) return null;
+    if ((payload as { type?: unknown }).type === 'refresh') return null;
+    if (typeof payload.sub !== 'string' || payload.sub === '') return null;
+    return payload as JwtPayload;
+  } catch {
+    return null;
+  }
 }
 
 export function verifyRefreshToken(token: string): { sub: string; sessionId: string } {
-  const payload = jwt.verify(token, config.JWT_SECRET) as {
+  const payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] }) as {
     sub:       string;
     sessionId: string;
     type:      string;
@@ -34,20 +47,4 @@ export function verifyRefreshToken(token: string): { sub: string; sessionId: str
     throw new Error('Invalid token type');
   }
   return payload;
-}
-
-export function extractTokenFromHeader(authHeader: string | undefined): string {
-  // RFC 7235 §2.1 case-insensitive
-  if (!authHeader) {
-    throw new Error('Missing or invalid Authorization header');
-  }
-  const schemeEnd = authHeader.indexOf(' ');
-  if (schemeEnd === -1) {
-    throw new Error('Missing or invalid Authorization header');
-  }
-  const scheme = authHeader.slice(0, schemeEnd).toLowerCase();
-  if (scheme !== 'bearer') {
-    throw new Error('Missing or invalid Authorization header');
-  }
-  return authHeader.slice(schemeEnd + 1).trim();
 }

@@ -29,6 +29,26 @@ const T_DATA     = 10 * 60_000;
 // RFC 5321 §4.5.3.1 — max command line length (octets)
 const MAX_LINE = 1000;
 
+// Hard cap for an unterminated line in the input buffer. Lines above MAX_LINE
+// are answered with 500 once their CRLF arrives; a peer that never sends CRLF
+// would otherwise grow the buffer without limit (memory exhaustion / RangeError).
+const MAX_UNTERMINATED_COMMAND = 64 * 1024;
+
+/**
+ * Builds the reply line for a rejection string returned by a handler.
+ *  - "452 4.2.2 …" / "550 5.7.1 …"  → passed through unchanged (own reply code)
+ *  - "4.3.0 …"                       → transient: "<transientCode> 4.3.0 …"
+ *  - "5.1.1 …" or free text          → permanent: "<permanentCode> …"
+ * The reply-code class follows the enhanced status code class
+ * (RFC 3463 §2, RFC 2034 §4); 4yz must stay transient (RFC 5321 §4.2.1).
+ */
+export function formatRejectReply(reject: string, permanentCode = 550, transientCode = 451): string {
+  const text = reject.trim();
+  if (/^[45]\d\d(?: |-|$)/.test(text)) return text;
+  if (/^4\.\d{1,3}\.\d{1,3}\b/.test(text)) return `${transientCode} ${text}`;
+  return `${permanentCode} ${text}`;
+}
+
 /**
  * Parse MAIL FROM:<addr> or RCPT TO:<addr> argument.
  * Returns:
@@ -72,6 +92,14 @@ export class SmtpSession {
 
   // DATA mode: are we inside the message body accumulation?
   private inData: boolean = false;
+
+  // DATA mode: the size limit was exceeded — keep consuming (and discarding)
+  // body lines until the terminator, then answer with a single 552
+  // (RFC 5321 §4.1.1.4, §4.5.3.1.10). Never switch back to command mode early.
+  private dataOverflow: boolean = false;
+
+  // Set once the connection is being torn down (oversized line).
+  private closing: boolean = false;
 
   /**
    * Command queue — serializes async command processing to prevent PIPELINING
@@ -160,6 +188,7 @@ export class SmtpSession {
   // ─── Data handler ────────────────────────────────────────────────────────────
 
   private onData(chunk: string): void {
+    if (this.closing) return;
     this.lineBuffer += chunk;
 
     while (true) {
@@ -175,6 +204,29 @@ export class SmtpSession {
         this.handleCommandLine(line);
       }
     }
+
+    // Hard cap on the unterminated remainder: 64 KiB in command mode, the
+    // maximum message size in data mode (a single body line can never be
+    // larger than the whole message).
+    const limit = this.inData
+      ? Math.max(this.config.maxSize, MAX_UNTERMINATED_COMMAND)
+      : MAX_UNTERMINATED_COMMAND;
+    if (this.lineBuffer.length > limit) {
+      this.closeForOversizedLine();
+    }
+  }
+
+  private closeForOversizedLine(): void {
+    this.closing = true;
+    this.lineBuffer = '';
+    this.transaction = null;
+    this.inData = false;
+    this.dataOverflow = false;
+    this.state = 'QUIT';
+    this.clearTimer();
+    this.send(`500 5.5.6 Line too long — closing connection`);
+    this.socket.end();
+    log.warn({ id: this.id, ip: this.ip }, 'SMTP line exceeds hard limit — connection closed');
   }
 
   // ─── DATA accumulation ───────────────────────────────────────────────────────
@@ -183,9 +235,27 @@ export class SmtpSession {
     // Dot-stuffing terminator: single dot on its own line
     if (line === '.') {
       this.inData = false;
+      if (this.dataOverflow) {
+        // Oversized message fully consumed — exactly one reply, then back to
+        // command mode with the transaction discarded.
+        this.dataOverflow = false;
+        this.enqueueCommand(() => {
+          this.transaction = null;
+          this.state = 'READY';
+          this.resetTimer(T_COMMAND);
+          this.send('552 5.3.4 Message exceeds size limit');
+        });
+        return;
+      }
       // Enqueue finishData so that any pipelined commands after the "."
       // (e.g. QUIT or a new MAIL FROM) wait for delivery to complete first.
       this.enqueueCommand(() => this.finishData());
+      return;
+    }
+
+    // Discard mode: keep the timer alive but do not buffer anything.
+    if (this.dataOverflow) {
+      this.resetTimer(T_DATA);
       return;
     }
 
@@ -197,11 +267,12 @@ export class SmtpSession {
       this.transaction.size += raw.length;
 
       if (this.transaction.size > this.config.maxSize) {
-        this.inData = false;
-        this.transaction = null;
-        this.state = 'READY';
-        this.send('552 5.3.4 Message exceeds size limit');
-        this.resetTimer(T_COMMAND);
+        // Do NOT leave DATA mode here: the rest of the body would otherwise
+        // be parsed as SMTP commands (command injection). Drop what was
+        // buffered and discard further lines until "." arrives.
+        this.dataOverflow = true;
+        this.transaction.data = [];
+        this.resetTimer(T_DATA);
         return;
       }
 
@@ -234,9 +305,11 @@ export class SmtpSession {
       log.info({ id: this.id, from, rcpt: to, size: raw.length }, 'Message accepted');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Temporary failure';
-      // If the error message starts with a valid SMTP code, use it as-is
-      if (/^\d{3}/.test(msg)) {
-        this.send(msg.startsWith('5') ? msg : `451 4.3.0 ${msg}`);
+      // If the error message starts with its own 4yz/5yz reply code, pass it
+      // through unchanged (a reply line carries exactly one code, RFC 5321 §4.2);
+      // a bare enhanced code keeps its class; anything else is a temporary 451.
+      if (/^[45]\d\d(?: |-|$)/.test(msg) || /^[45]\.\d{1,3}\.\d{1,3}\b/.test(msg)) {
+        this.send(formatRejectReply(msg, 554, 451));
       } else {
         this.send(`451 4.3.0 ${msg}`);
       }
@@ -583,7 +656,7 @@ export class SmtpSession {
     try {
       const reject = await this.config.handlers.onMailFrom(addr, this.ip, this.authUser);
       if (reject !== null) {
-        this.send(`550 ${reject}`);
+        this.send(formatRejectReply(reject, 550, 451));
         return;
       }
     } catch (err) {
@@ -625,9 +698,9 @@ export class SmtpSession {
     }
 
     try {
-      const reject = await this.config.handlers.onRcptTo(addr, tx.from, this.authUser);
+      const reject = await this.config.handlers.onRcptTo(addr, tx.from, this.authUser, this.ip);
       if (reject !== null) {
-        this.send(`550 ${reject}`);
+        this.send(formatRejectReply(reject, 550, 451));
         return;
       }
     } catch (err) {
@@ -660,6 +733,7 @@ export class SmtpSession {
   private handleRset(): void {
     this.transaction = null;
     this.inData = false;
+    this.dataOverflow = false;
     // Do not reset authUser per RFC 5321
     if (this.state !== 'INIT') {
       this.state = 'READY';

@@ -23,31 +23,9 @@ export interface JwtPayload {
   exp?: number;
 }
 
-export interface AppPasswordPayload {
-  userId: string;
-  name: string;
-  hash: string;
-}
-
 export type MailFlag = '\\Seen' | '\\Flagged' | '\\Answered' | '\\Deleted' | '\\Draft';
 
 export interface MailAddress {
   name?: string;
   address: string;
-}
-
-export interface PaginatedResult<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
-}
-
-export interface ServiceHealth {
-  service: string;
-  status: 'healthy' | 'degraded' | 'unhealthy';
-  version: string;
-  uptime: number;
-  details?: Record<string, unknown>;
 }

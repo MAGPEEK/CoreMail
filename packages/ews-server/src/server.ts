@@ -3,10 +3,10 @@ import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail
 import { connectDatabase } from '@coremail/storage';
 import { ewsAuthMiddleware } from './auth/middleware.js';
 import { handleEwsRequest } from './handler.js';
-import { mapiRouter } from './mapi/handler.js';
-import { requireMapiEnabled, invalidateMapiFlagCache } from './mapi/feature-flag.js';
+import { requireEwsEnabled, invalidateEwsFlagCache } from './feature-flag.js';
 // v5.6.0: OAuth2/JWT Bearer removed (see core/auth/jwt.ts and
-// ews-server/auth/middleware.ts). v5.7.0: MAPI/HTTP back as optional.
+// ews-server/auth/middleware.ts). MAPI over HTTP removed again (it never
+// worked with a real Outlook); EWS stays as an optional protocol.
 
 const log = createLogger('ews-server');
 const PORT = parseInt(process.env['EWS_PORT'] ?? '8080', 10);
@@ -36,12 +36,9 @@ async function main() {
   // 401 + WWW-Authenticate: Basic realm="..." when the auth header is missing,
   // so Outlook shows the credential prompt.
   //
-  // v5.8.0: EWS is no longer a standalone client path (Outlook 2024 LTSC /
-  // M365 do not speak Basic-auth EWS against third-party servers). EWS remains
-  // only as a companion protocol to MAPI over HTTP (free/busy, OOF, OAB,
-  // Autodiscover follow-up calls) and hangs off the same switch
-  // (ServerSettings.mapiHttpEnabled). Off → 404, like /mapi.
-  app.use('/EWS', requireMapiEnabled);
+  // EWS is optional: BCP → Server → "Exchange Web Services (EWS)", stored in
+  // the historical field ServerSettings.mapiHttpEnabled. Off → 404.
+  app.use('/EWS', requireEwsEnabled);
   app.post('/EWS/Exchange.asmx', ewsAuthMiddleware, handleEwsRequest);
   app.get('/EWS/Exchange.asmx', ewsAuthMiddleware, (_req, res) => {
     // WSDL stub for Outlook service discovery (authenticated clients only)
@@ -57,30 +54,20 @@ async function main() {
 
   // OAB (Offline Address Book) — v3.18.38: 401 instead of 404 so Outlook does
   // not mark the profile as incomplete.
-  app.use('/OAB', requireMapiEnabled, ewsAuthMiddleware, (_req, res) => {
+  app.use('/OAB', requireEwsEnabled, ewsAuthMiddleware, (_req, res) => {
     res.status(404).set('Content-Type', 'text/plain').send('OAB not implemented');
   });
-
-  // MAPI over HTTP — v5.7.0 optional (BCP → Server → "MAPI over HTTP").
-  // Gate first: 404 when disabled (including /healthcheck.htm, so Outlook
-  // does not even detect the endpoint as Exchange). Then the v3.18.38 rule:
-  // ewsAuthMiddleware before the router so Outlook sends credentials on
-  // connect — exception /healthcheck.htm (anonymous connectivity probe).
-  app.use('/mapi', requireMapiEnabled, (req, res, next) => {
-    if (req.path === '/healthcheck.htm') return next();
-    return ewsAuthMiddleware(req, res, next);
-  }, mapiRouter);
 
   // Pick up settings changes from the BCP immediately (otherwise up to 60s cache).
   try {
     const sub = getRedisClient().duplicate();
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
-      invalidateMapiFlagCache();
-      log.info('MAPI flag cache invalidated (Redis signal)');
+      invalidateEwsFlagCache();
+      log.info('EWS flag cache invalidated (Redis signal)');
     });
   } catch (err) {
-    log.warn({ err }, 'Redis subscription failed — MAPI flag expires after 60s');
+    log.warn({ err }, 'Redis subscription failed — EWS flag expires after 60s');
   }
 
   app.listen(PORT, () => {

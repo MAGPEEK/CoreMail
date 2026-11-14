@@ -16,6 +16,7 @@ import { prisma } from '@coremail/storage';
 import { requireAdmin } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
 import { syncFromPrimaryDomain } from '../../lib/server-urls.js';
+import { dkimDnsRecord, generateDkimPrivateKey, needsDkimKey } from '../../lib/dkim.js';
 
 const log = createLogger('admin:domains');
 export const adminDomainsRouter: RouterType = Router();
@@ -64,12 +65,7 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   if (existing) { res.status(409).json({ error: 'Domain already exists' }); return; }
 
   // Generate DKIM key pair automatically
-  const { generateKeyPairSync } = await import('crypto');
-  const { privateKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding:  { type: 'spki',  format: 'pem' },
-  });
+  const privateKey = generateDkimPrivateKey();
 
   // The first domain automatically becomes primary
   const isPrimary = (await prisma.domain.count()) === 0;
@@ -186,17 +182,11 @@ async function ensureDkimKey(id: string): Promise<typeof import('@coremail/stora
   let domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) return null as never;
 
-  if (!domain.dkimPrivateKey || domain.dkimPrivateKey.trim() === '') {
-    // No key present — generate and store an RSA-2048 pair
-    const { generateKeyPairSync } = await import('crypto');
-    const { privateKey } = generateKeyPairSync('rsa', {
-      modulusLength: 2048,
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-      publicKeyEncoding:  { type: 'spki',  format: 'pem' },
-    });
+  if (needsDkimKey(domain.dkimPrivateKey)) {
+    // No key present (domains created before v5.9.x) — generate and store an RSA-2048 pair
     domain = await prisma.domain.update({
       where: { id },
-      data:  { dkimPrivateKey: privateKey },
+      data:  { dkimPrivateKey: generateDkimPrivateKey() },
     });
     log.info({ id, name: domain.name }, 'DKIM private key auto-generated (was empty)');
   }
@@ -233,25 +223,11 @@ adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Respon
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
 
-  const { generateKeyPairSync, createPublicKey } = await import('crypto');
-  const { privateKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding:  { type: 'spki',  format: 'pem' },
-  });
-
+  const privateKey = generateDkimPrivateKey();
   await prisma.domain.update({ where: { id }, data: { dkimPrivateKey: privateKey } });
 
-  const pubKey    = createPublicKey(privateKey);
-  const pubKeyDer = pubKey.export({ type: 'pkcs1', format: 'der' });
-  const pubKeyB64 = (pubKeyDer as Buffer).toString('base64');
-
   log.info({ id, name: domain.name }, 'DKIM key pair regenerated');
-  res.json({
-    selector: domain.dkimSelector,
-    dnsName:  `${domain.dkimSelector}._domainkey.${domain.name}`,
-    dnsValue: `v=DKIM1; k=rsa; p=${pubKeyB64}`,
-  });
+  res.json(dkimDnsRecord(privateKey, domain.dkimSelector, domain.name));
 });
 
 // ── GET /:id/dns-check ────────────────────────────────────────────────────────

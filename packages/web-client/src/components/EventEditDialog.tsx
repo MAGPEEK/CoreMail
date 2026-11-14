@@ -26,7 +26,6 @@ interface AttendeeSuggest {
   id: string;
   displayName: string;
   email: string;
-  isGroup?: boolean;
 }
 
 interface Props {

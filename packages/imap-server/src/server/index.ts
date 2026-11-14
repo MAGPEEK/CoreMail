@@ -22,6 +22,11 @@ const log = createLogger('imap:server');
 
 const sessions = new Map<string, ImapSession>();
 
+// Maximum length of an input line that has not (yet) been terminated by CRLF.
+// 64 KiB matches common server defaults (e.g. Dovecot imap_max_line_length)
+// and is well above the 8192 octets RFC 7162 §4 asks servers to accept.
+const MAX_UNTERMINATED_LINE = 64 * 1024;
+
 // Module-level hostname — updated via setImapHostname() when settings change
 let _hostname = 'mail.localhost';
 
@@ -48,8 +53,10 @@ export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Se
     socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] ${_hostname} IMAP4rev1 ready\r\n`);
 
     let buffer = '';
+    let closing = false;
 
     socket.on('data', (chunk: Buffer) => {
+      if (closing) return;
       buffer += chunk.toString('utf8');
 
       // Process complete lines
@@ -80,6 +87,15 @@ export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Se
         }
 
         void dispatchCommand(session, line);
+      }
+
+      // Hard cap on the unterminated remainder: a peer that never sends CRLF
+      // would otherwise grow the buffer without limit (memory exhaustion).
+      if (buffer.length > MAX_UNTERMINATED_LINE) {
+        closing = true;
+        buffer = '';
+        socket.end('* BYE Line too long\r\n');
+        log.warn({ id: session.id, ip: socket.remoteAddress }, 'IMAP line exceeds hard limit — connection closed');
       }
     });
 
@@ -259,20 +275,23 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
         }
         break;
 
+      // The UID flag is passed explicitly: the "UID" token has already been
+      // stripped from args above, so handlers cannot detect it themselves.
       case 'FETCH':
       case 'UID FETCH':
         if (session.state !== 'SELECTED') {
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
-          await handleFetch(session, tag, args);
+          await handleFetch(session, tag, args, cmd === 'UID FETCH');
         }
         break;
 
       case 'STORE':
+      case 'UID STORE':
         if (session.state !== 'SELECTED') {
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
-          await handleStore(session, tag, args);
+          await handleStore(session, tag, args, cmd === 'UID STORE');
         }
         break;
 
@@ -281,6 +300,17 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
           await handleExpunge(session, tag);
+        }
+        break;
+
+      // RFC 4315 §2.1 — UID EXPUNGE <uid-set>: only \Deleted messages in the set.
+      case 'UID EXPUNGE':
+        if (session.state !== 'SELECTED') {
+          session.socket.write(`${tag} NO No mailbox selected\r\n`);
+        } else if (args.length !== 1 || !args[0]) {
+          session.socket.write(`${tag} BAD UID EXPUNGE requires a UID set\r\n`);
+        } else {
+          await handleExpunge(session, tag, args[0]);
         }
         break;
 

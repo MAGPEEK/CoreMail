@@ -42,14 +42,6 @@ spec:
                 name: {{ include "coremail.fullname" . }}-ews-server
                 port:
                   name: http
-          # MAPI over HTTP
-          - path: /mapi
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-ews-server
-                port:
-                  name: http
           # OAB
           - path: /OAB
             pathType: Prefix

@@ -72,6 +72,9 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
   for (const d of delegations) {
     const owner = d.mailbox.user;
     if (!owner?.active || accounts.has(owner.id)) continue;
+    // Same rule as shared mailboxes above: SEND_AS / SEND_ON_BEHALF grant no
+    // mailbox access, so they must not create a readable/writable account.
+    if (d.permission !== 'FULL_ACCESS' && d.permission !== 'READ_ONLY') continue;
     accounts.set(owner.id, {
       accountId: owner.id,
       mailboxId: d.mailbox.id,
@@ -81,7 +84,7 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
       email: owner.email,
       readOnly: d.permission === 'READ_ONLY',
       isPersonal: false,
-      maySend: d.permission === 'FULL_ACCESS' || d.permission === 'SEND_AS',
+      maySend: d.permission === 'FULL_ACCESS',
     });
   }
 

@@ -337,12 +337,14 @@ export async function runRuleOnExisting(
   };
 
   const limit = Math.min(opts.limit ?? 1000, 5000);
-  const folderFilter = opts.folderIds && opts.folderIds.length > 0
-    ? { folderId: { in: opts.folderIds } }
-    : { folder: { mailbox: { userId } } };
-
+  // Always scoped to the rule owner's mailbox: caller-supplied folderIds only
+  // narrow the selection, they can never reach another user's folders.
   const messages = await prisma.message.findMany({
-    where: folderFilter,
+    where: {
+      folder: { mailbox: { userId } },
+      deletedAt: null,
+      ...(opts.folderIds && opts.folderIds.length > 0 ? { folderId: { in: opts.folderIds } } : {}),
+    },
     select: {
       id: true, folderId: true, flags: true,
       subject: true, fromAddr: true, fromName: true,

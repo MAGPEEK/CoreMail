@@ -8,6 +8,7 @@ import { extractSmtpCode, sendDsnBounce } from './dsn.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
+import { resolveJobDkim } from './dkim.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
@@ -263,11 +264,18 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
       // ── External delivery via MX / smarthost ──────────────────────────────
       if (dedupedExternal.length > 0) {
-        await relayMessage(buffer, from, dedupedExternal, {
-          ...(dkimDomain    ? { dkimDomain }    : {}),
-          ...(dkimSelector  ? { dkimSelector }  : {}),
+        // Jobs without DKIM fields (SMTP submission, rule forwards, EAS, EWS)
+        // get the key of the envelope-from domain — every local-domain mail is signed.
+        const dkim = await resolveJobDkim({
+          from,
+          ...(dkimDomain     ? { dkimDomain }     : {}),
+          ...(dkimSelector   ? { dkimSelector }   : {}),
           ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
         });
+        if (!dkim.dkimPrivateKey) {
+          log.warn({ jobId: job.id, from }, 'No DKIM key for sender domain — sending unsigned');
+        }
+        await relayMessage(buffer, from, dedupedExternal, dkim);
         log.info({ to: dedupedExternal, jobId: job.id }, 'External delivery (group/alias expansion)');
       }
 

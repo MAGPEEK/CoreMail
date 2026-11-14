@@ -3,7 +3,6 @@ import { connectDatabase } from '@coremail/storage';
 import { createApp } from './app.js';
 
 const log = createLogger('auth-service');
-// Port 3001 is reserved for storage-api — auth-service runs on 3003
 const PORT = parseInt(process.env['AUTH_PORT'] ?? '3003', 10);
 
 async function main() {

@@ -2,7 +2,6 @@
  * Exchange Management Shell (EMS) REST Bridge — Phase 8
  *
  * Implements Exchange Management Shell cmdlets as REST endpoints.
- * The PowerShell stub (/PowerShell/) routes supported cmdlets to this bridge.
  *
  * All endpoints mirror EMS cmdlet semantics:
  *   GET    → Get-*       (list / get single)
@@ -17,6 +16,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { requireAdmin } from '../../middleware/auth.js';
+import { generateDkimPrivateKey } from '../../lib/dkim.js';
 
 export const adminEmsRouter: RouterType = Router();
 adminEmsRouter.use(requireAdmin);
@@ -162,7 +162,7 @@ adminEmsRouter.delete('/mailboxes/:identity', async (req: Request, res: Response
 });
 
 // v5.6.1: Get-/New-/Set-/Remove-DistributionGroup endpoints removed
-// (DistributionGroup feature completely gone). PowerShell cmdlets return 404.
+// (DistributionGroup feature completely gone).
 
 // ──────────────────────────────────────────────────────────────────
 // Get-AcceptedDomain / New-AcceptedDomain / Remove-AcceptedDomain
@@ -193,7 +193,7 @@ adminEmsRouter.post('/accepted-domains', async (req: Request, res: Response) => 
   if (existing) { res.status(409).json({ error: `Domain '${parsed.data.DomainName}' already exists.` }); return; }
 
   const domain = await prisma.domain.create({
-    data: { name: parsed.data.DomainName, dkimPrivateKey: '', dkimSelector: 'coremail' },
+    data: { name: parsed.data.DomainName, dkimPrivateKey: generateDkimPrivateKey(), dkimSelector: 'coremail' },
   });
   res.status(201).json({ Identity: domain.id, Name: parsed.data.Name, DomainName: domain.name, DomainType: parsed.data.DomainType });
 });
@@ -333,51 +333,3 @@ function formatResource(r: { id: string; email: string; displayName: string; res
     RecipientTypeDetails: r.resourceType === 'ROOM' ? 'RoomMailbox' : 'EquipmentMailbox',
   };
 }
-
-// ──────────────────────────────────────────────────────────────────
-// Generic cmdlet dispatcher (for PowerShell Stub routing)
-// POST /api/v1/admin/ems/cmdlet
-// Body: { Cmdlet: "Get-Mailbox", Parameters: { Identity: "user@domain.de" } }
-// ──────────────────────────────────────────────────────────────────
-
-const CMDLET_MAP: Record<string, string> = {
-  'Get-Mailbox': 'GET /mailboxes',
-  'New-Mailbox': 'POST /mailboxes',
-  'Set-Mailbox': 'PUT /mailboxes/{identity}',
-  'Remove-Mailbox': 'DELETE /mailboxes/{identity}',
-  // v5.6.1: DistributionGroup cmdlets removed
-  'Get-AcceptedDomain': 'GET /accepted-domains',
-  'New-AcceptedDomain': 'POST /accepted-domains',
-  'Get-TransportRule': 'GET /transport-rules',
-  'New-TransportRule': 'POST /transport-rules',
-  'Set-TransportRule': 'PUT /transport-rules/{identity}',
-  'Remove-TransportRule': 'DELETE /transport-rules/{identity}',
-  'Get-MailboxStatistics': 'GET /mailbox-statistics',
-  'Get-ResourceMailbox': 'GET /resource-mailboxes',
-};
-
-adminEmsRouter.post('/cmdlet', async (req: Request, res: Response) => {
-  const schema = z.object({
-    Cmdlet: z.string(),
-    Parameters: z.record(z.unknown()).default({}),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid cmdlet request' }); return; }
-
-  const route = CMDLET_MAP[parsed.data.Cmdlet];
-  if (!route) {
-    res.status(501).json({
-      error: `The term '${parsed.data.Cmdlet}' is not recognized as a valid EMS cmdlet.`,
-      supportedCmdlets: Object.keys(CMDLET_MAP),
-    });
-    return;
-  }
-
-  res.json({
-    Cmdlet: parsed.data.Cmdlet,
-    Route: route,
-    Parameters: parsed.data.Parameters,
-    Note: 'Use the mapped REST endpoint for direct access.',
-    SupportedCmdlets: Object.keys(CMDLET_MAP),
-  });
-});

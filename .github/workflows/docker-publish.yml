@@ -27,8 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - service: storage-api
-            dockerfile: packages/storage/Dockerfile
           - service: auth-service
             dockerfile: packages/auth-service/Dockerfile
           - service: security-filter

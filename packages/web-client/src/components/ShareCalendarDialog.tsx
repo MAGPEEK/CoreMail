@@ -26,7 +26,6 @@ interface ContactSuggest {
   displayName: string;
   email: string;
   company?: string;
-  isGroup?: boolean;
 }
 
 interface CalDavInfo {
@@ -101,7 +100,7 @@ export function ShareCalendarDialog({
   });
 
   const suggestions: ContactSuggest[] = contacts
-    .filter((c) => c.id.startsWith('gal-') && !c.isGroup)
+    .filter((c) => c.id.startsWith('gal-'))
     .map((c) => ({ ...c, id: c.id.replace(/^gal-/, '') }))
     .filter((c) => !assignedIds.has(c.id));
 

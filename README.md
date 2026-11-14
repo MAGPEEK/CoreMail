@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-5.9.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-6.0.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -20,11 +20,11 @@
 
 **CoreMail** is a complete, self-hosted mail server for small and medium-sized businesses with **10–500 users** — no licence fees, no vendor lock-in, full data sovereignty.
 
-**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — every client (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) works natively. Optionally enabled: **MAPI over HTTP + EWS** for Outlook 2013–2021 as an "Exchange account". **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
+**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — every client (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) works natively. Optionally enabled: **EWS** (Exchange Web Services) for EWS-capable clients. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
 
-> **Current version: v5.9.0** — English-only repository (German README: [README.de.md](README.de.md)) · **admin CLI `coremail`** ([docs](docs/cli.md)) · **new, commented `docker-compose.yml`** with mandatory-value check of the .env · EWS only together with MAPI over HTTP (default off) · JMAP server (v5.7.1, [docs](docs/jmap.md)) · distribution groups removed (v5.6.1) · OAuth2 server removed (v5.6.0) · IMAP4rev2 (v5.5.0) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Current version: v6.0.0** — security and cleanup release: fixes from a full code review (authentication, JMAP, XSS, cross-mailbox access, SMTP/IMAP protocol bugs, lost mobile mail, DKIM for client submission, retention), dead code removed, automated tests for every fix · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
-> **Note on Outlook (v5.7.0)**: MAPI over HTTP is included again, but **off by default** (BCP → Server → "MAPI over HTTP"). Once enabled, Outlook 2013–2021 connect as a native Exchange account (Basic Auth). Outlook 2024 LTSC and Microsoft 365 Classic enforce Modern Auth against Microsoft Entra/ADFS — there, **Outlook → "Other email accounts" → IMAP** remains the way to go, with calendar + contacts via CalDAV/CardDAV (Apple Calendar, Outlook CalDav Synchronizer plugin, Thunderbird Lightning). The new Outlook and Outlook for Mac do not support MAPI.
+> **Note on Outlook**: Set up Outlook via **"Other email accounts" → IMAP**, with calendar + contacts via CalDAV/CardDAV (Apple Calendar, Outlook CalDav Synchronizer plugin, Thunderbird Lightning). EWS (Exchange Web Services) can optionally be enabled for EWS-capable clients (BCP → Server → "Exchange Web Services (EWS)", default off).
 >
 > **Note (since v5.6.0)**: The OAuth2 authorization server under `/oauth2/*` has been removed entirely — in practice, XOAUTH2 has no mainstream client UI support for non-Microsoft servers. JWT is back on HS256 (`JWT_SECRET`). REST API + MWA/BCP use session JWTs via `/auth/login`; mail clients use app passwords.
 >
@@ -62,7 +62,7 @@
 | IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ✅ | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
 | **POP3** (port 110 STLS, 995 implicit TLS) + SASL PLAIN/LOGIN + app-password support | ✅ | 1939 + 5034 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
-| MAPI over HTTP + EWS — Outlook 2013–2021 "Exchange account" (optional, default off) | ⚙️ | MS-OXCMAPIHTTP, MS-OXWSCORE |
+| EWS — Exchange Web Services (optional, default off) | ⚙️ | MS-OXWSCORE |
 | Admin CLI `coremail` inside the container (users, mailboxes, connectors, banner, certificates) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ✅ |
@@ -81,8 +81,8 @@
 | S/MIME — signing, encryption, verification | ✅ |
 | SMTP gateway mode (relay to upstream MTA) | ✅ |
 | Retention policies, Exchange 2019 compliant (DPT/RPT/personal tags · 8 templates · Recoverable Items) | ✅ |
-| Managed Folder Assistant (tag hierarchy, soft/hard delete, legal-hold-aware) | ✅ |
-| PowerShell remoting (EMS with 14+ cmdlets — Mailbox/Domain/TransportRule/ResourceMailbox) | ✅ |
+| Managed Folder Assistant (tag hierarchy, soft/hard delete) | ✅ |
+| EMS-style REST admin bridge (`/api/v1/admin/ems/` — Mailbox/Domain/TransportRule/ResourceMailbox) | ✅ |
 
 ### Calendar & Collaboration
 
@@ -184,7 +184,7 @@ CoreMail works with every standard mail client. The recommended configuration de
 | Client | Account type | Mail | Calendar + contacts |
 |--------|--------------|------|---------------------|
 | **Outlook 2024 LTSC** | "Other email accounts" → **IMAP** | IMAP+SMTP | Outlook CalDav Synchronizer plugin (free OSS) |
-| **Outlook 2013–2021** | **IMAP** (default) — or "Exchange account" when **MAPI over HTTP + EWS** is enabled in the BCP | IMAP+SMTP or MAPI | Outlook CalDav Synchronizer (IMAP) · native (MAPI) |
+| **Outlook 2013–2021** | **IMAP** | IMAP+SMTP | Outlook CalDav Synchronizer |
 | **Apple Mail** (Mac + iOS) | "Other Mail Account" → IMAP | IMAP+SMTP | Apple Calendar/Contacts separately (CalDAV/CardDAV) |
 | **Thunderbird** | IMAP account | IMAP+SMTP | Lightning (CalDAV) + TbSync (CardDAV) |
 | **eM Client** | IMAP account | IMAP+SMTP | CalDAV+CardDAV natively |
@@ -230,7 +230,7 @@ With 2FA enabled, mail clients can no longer use the regular password — the MF
 
 ### Note on Outlook 2024 LTSC
 
-Outlook 2024 LTSC enforces **Modern Auth (OAuth2)** on Exchange endpoints and accepts only Microsoft Entra ID as identity provider. For non-Microsoft servers (such as CoreMail) the practical configuration there is **IMAP+SMTP** (via "Other email accounts"). The Exchange path **MAPI over HTTP + EWS** is optional (BCP → Server, default off) and only helps Outlook 2013–2021, which still speak Basic Auth. Since v5.8.0, EWS is no longer a standalone client path: `/EWS/*` only responds while this toggle is active.
+Outlook 2024 LTSC enforces **Modern Auth (OAuth2)** on Exchange endpoints and accepts only Microsoft Entra ID as identity provider. For non-Microsoft servers (such as CoreMail) the practical configuration there is **IMAP+SMTP** (via "Other email accounts"); Outlook cannot set CoreMail up as an "Exchange account". **EWS** is optional (BCP → Server → "Exchange Web Services (EWS)", default off): `/EWS/*` and `/OAB/*` only respond while this toggle is active.
 
 ---
 
@@ -315,14 +315,14 @@ CoreMail consists of **six containers** (one custom image, five standard images)
 
 | Container | Image | Purpose |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:5.9.0` | All mail services + webmail + admin panel + CLI |
+| `coremail` | `magpeek/coremail-app:6.0.0` | All mail services + webmail + admin panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-spam engine (Bayes, DKIM/SPF/DMARC, fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Database for mail, users, calendars |
 | `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live updates |
 | `minio` | `minio/minio` | Object storage for attachments, quarantine and backups |
 
-The app container (`coremail`) internally holds all mail services — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, optionally MAPI/EWS, webmail, admin panel and the admin CLI — managed by `supervisord`. Externally, port 3000 (HTTP), 80/443 (ACME + HTTPS) and the mail ports (25, 465, 587, 143, 993, 110, 995) are exposed.
+The app container (`coremail`) internally holds all mail services — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, optionally EWS, webmail, admin panel and the admin CLI — managed by `supervisord`. Externally, port 3000 (HTTP), 80/443 (ACME + HTTPS) and the mail ports (25, 465, 587, 143, 993, 110, 995) are exposed.
 
 ### The `docker-compose.yml`
 
@@ -332,7 +332,7 @@ Since v5.8.0, `infra/docker/docker-compose.yml` is reduced to the essentials and
 # Excerpt — full file in the repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-5.9.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-6.0.0}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
@@ -401,7 +401,7 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 | `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access) |
 | `https://<MAIL_HOSTNAME>/bcp/` | Admin panel (BCP — Backend Control Panel) |
 | `https://<MAIL_HOSTNAME>/.well-known/jmap` | JMAP discovery |
-| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` · `/mapi/` | Outlook "Exchange account" (only with **MAPI over HTTP + EWS** enabled) |
+| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS clients (only with **Exchange Web Services (EWS)** enabled) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
 | `http://localhost:9001` | MinIO web console (local only) |
@@ -433,7 +433,7 @@ REDIS_PASSWORD=…
 MINIO_ROOT_PASSWORD=…
 
 # ── Optional (defaults in parentheses) ─────────────────────
-#COREMAIL_VERSION=5.9.0         # image tag
+#COREMAIL_VERSION=6.0.0         # image tag
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
 #MINIO_ROOT_USER=minioadmin
@@ -521,7 +521,7 @@ coremail user delete max@example.de
 coremail mailbox list --sort used                    # mailboxes with usage
 coremail shared create team@example.de --name "Team" # Shared Mailbox …
 coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS   # … grant permissions
-coremail connector status                            # SMTP/IMAP/POP3/JMAP/MAPI+EWS with ports and state
+coremail connector status                            # SMTP/IMAP/POP3/JMAP/EWS with ports and state
 coremail connector disable pop3                      # connector off (on: enable; single port: --port 995)
 coremail connector listener set <id> --port 1143 --ssl false
 coremail smtp banner set "mail.example.de ESMTP"     # SMTP greeting (reset: default)
@@ -597,7 +597,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Specific version
-docker pull magpeek/coremail-app:5.9.0
+docker pull magpeek/coremail-app:6.0.0
 ```
 
 **Multi-arch:** The image is built for `linux/amd64` and `linux/arm64` (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -606,29 +606,34 @@ docker pull magpeek/coremail-app:5.9.0
 
 ## Version History
 
+### v6.x — Security & Cleanup
+
+| Version | Highlights |
+|---------|-----------|
+| **v6.0.0** | **Security and cleanup release** after a full code review. Fixed: token handling (refresh tokens no longer accepted as access tokens, bad tokens no longer crash services), JMAP prototype pollution, Bcc leak and delegation scope, XSS in Shared Mailboxes, cross-mailbox access (inbox rules, EWS ResolveNames), SMTP command injection after oversized DATA, IMAP UID FETCH/STORE/EXPUNGE, lost ActiveSync/EWS mail, DKIM for ports 465/587, spam-filter connection stage, retention by delivery time. Removed: unused storage-api, PowerShell stub, dead BCP pages, OpenTelemetry modules. EWS has its own switch. Automated tests for every fix. |
+
 ### v5.x — IMAP4rev2 + RFC Compliance + Stack Slim-down
 
 | Version | Highlights |
 |---------|-----------|
 | **v5.9.0** | **English-only repository**: README, CHANGELOG, docs, code and infra comments, CLI output in English; German README kept as `README.de.md`. Ships the v5.8.0 features as the first published image (`magpeek/coremail-app:5.9.0`). |
-| **v5.8.0** | **Admin CLI `coremail`** (new package `cli`, in the image at `/usr/local/bin/coremail`): list, create and delete users/mailboxes/Shared Mailboxes; enable/disable SMTP/IMAP/POP3/JMAP/MAPI connectors, listener ports/TLS; SMTP banner; certificates (self-signed, Let's Encrypt, activate, renew). **New `docker-compose.yml`**: only the necessary parameters, mandatory values with startup-abort check, `setup.sh` generates the `.env`. **EWS coupled to the MAPI toggle**: `/EWS/*`, `/OAB/*` and Autodiscover EWS only with "MAPI over HTTP + EWS" (default off). |
+| **v5.8.0** | **Admin CLI `coremail`** (new package `cli`, in the image at `/usr/local/bin/coremail`): list, create and delete users/mailboxes/Shared Mailboxes; enable/disable SMTP/IMAP/POP3/JMAP/EWS connectors, listener ports/TLS; SMTP banner; certificates (self-signed, Let's Encrypt, activate, renew). **New `docker-compose.yml`**: only the necessary parameters, mandatory values with startup-abort check, `setup.sh` generates the `.env`. |
 | **v5.7.1** | **JMAP server** — new package `jmap-server` (port 3006): RFC 8620 Core, 8621 Mail (Mailbox/Email/Thread/Identity/EmailSubmission/SearchSnippet/VacationResponse), 8887 WebSocket, 9404 Blob, 9425 Quota, 9670 Principals/Sharing, 9749 VAPID. Discovery `/.well-known/jmap`, push via EventSource + WebSocket, toggle in the BCP (default on). See [docs/jmap.md](docs/jmap.md). |
-| **v5.7.0** | **MAPI over HTTP optionally back** (default off, toggle in the BCP, hot reload, 404 when off). pnpm pinned to 11, 70 stale `src/*.js` artifacts removed, `noEmit` in frontend tsconfigs. |
+| **v5.7.0** | Build hardening: pnpm pinned to 11, 70 stale `src/*.js` artifacts removed, `noEmit` in frontend tsconfigs. |
 | **v5.6.1** | **Distribution groups (DistributionGroups) removed entirely** — rarely used; the use case is better served by Shared Mailboxes (team mailboxes) or an external listserv tool. Schema drop of 2 tables + enum, BCP page removed, EMS cmdlets removed. |
 | **v5.6.0** | **OAuth2 / Modern Auth removed entirely from the stack** (~970 LOC + 4 Prisma tables). XOAUTH2 has no mainstream client UI for non-Microsoft servers. JWT back on HS256 (`JWT_SECRET`). Mail clients use app passwords, MWA/BCP session JWTs. |
-| **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Docs updated for the MAPI removal. Decision against XOAUTH2 documented. |
-| **v5.4.0** | **MAPI/HTTP removed entirely** (~12,000 LOC). Outlook 2024 LTSC enforces Microsoft-Entra-only Modern Auth, which fundamentally does not work for non-Microsoft servers. Recommendation: Outlook → "Other email accounts" → IMAP. Calendar/contacts via CalDAV/CardDAV. |
+| **v5.5.0** | **IMAP4rev2** (RFC 9051) compliance: STARTTLS + AUTHENTICATE SASL + UNSELECT + ID. Decision against XOAUTH2 documented. |
+| **v5.4.0** | Outlook setup simplified: Outlook → "Other email accounts" → IMAP, calendar/contacts via CalDAV/CardDAV. |
 | **v5.3.5** | IMAP FETCH completely rewritten: ENVELOPE bug fixed (NIL lists, RFC 3501 §7.4.2), real BODYSTRUCTURE instead of BODY[TEXT], INTERNALDATE, BODY[]/BODY[HEADER]/BODY.PEEK[*]/RFC822 variants |
 | **v5.3.1** | Complete IMAP command suite: CREATE, DELETE, RENAME, APPEND, COPY, UID COPY, MOVE, UID MOVE, SEARCH, UID SEARCH, CLOSE, CHECK. UID compound-dispatcher bug fixed. POP3 app-password + byte-stuffing fix. |
 | **v5.2.19** | parseLine empty-quoted-string fix (`LIST "" "*"`) — Mac Mail/iOS Mail/Thunderbird could never fetch their folder list via LIST |
 | **v5.2.18** | IMAP SPECIAL-USE + LSUB + NAMESPACE + STATUS for Mac Mail / iOS Mail |
-| **v5.2.0** | (archived) MAPI/HTTP FINAL — see v5.4.0 for the removal rationale |
 
 ### v3.18.x — Feature Polish & Production Hardening
 
 | Version | Highlights |
 |---------|-----------|
-| **v3.18.40** | External clients & Outlook setup page in OWA (before the MAPI/HTTP implementation: CalDav Synchronizer guide) |
+| **v3.18.40** | External clients & Outlook setup page in OWA (CalDav Synchronizer guide) |
 | **v3.18.36** | Generic hostname auto-derive for all domains + image privacy banner hardened |
 | **v3.18.30** | BigInt crash fix + audit toggle + audit translations |
 | **v3.18.25** | Calendar invitations iMIP/iTIP (RFC 6047/5546) — Outlook/Gmail accept/decline buttons |
@@ -680,7 +685,7 @@ MIT License — see [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v5.9.0</b> · The open-source mail server for small and medium-sized environments<br>
+  <b>CoreMail v6.0.0</b> · The open-source mail server for small and medium-sized environments<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Built with ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

@@ -1,6 +1,6 @@
 {
   "name": "@coremail/smtp-server",
-  "version": "5.9.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "node --watch dist/server.js",
     "start": "node dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/outbound/dkim.test.ts src/inbound/connection-filter.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",
@@ -24,6 +25,7 @@
     "@types/node-forge": "^1.3.11",
     "@types/nodemailer": "^6.4.16",
     "@types/smtp-server": "^3.5.10",
+    "tsx": "^4.16.0",
     "typescript": "^5.5.0"
   }
 }

@@ -5,7 +5,6 @@ const de = {
   // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Übersicht',
   nav_global_settings:    'Global Einstellungen',
-  nav_organisation:       'Organisation',
   nav_rbac:               'Berechtigungen',
   nav_audit_log:          'Audit-Log',
   nav_logs:               'Protokolle',
@@ -23,7 +22,6 @@ const de = {
   // ── Navigation — Recipients ──────────────────────────────────────────────
   nav_mailboxes:          'Postfächer',
   nav_shared_mailboxes:   'Freigegeben',
-  nav_resources:          'Ressourcen',
   nav_domains:            'Domains',
 
   // ── Navigation — Mail flow ───────────────────────────────────────────────
@@ -744,6 +742,13 @@ const de = {
   audit_filter_actor_email:  'Akteur (E-Mail)…',
   audit_filter_ip:           'IP-Adresse…',
   audit_filter_search:       'Volltextsuche…',
+
+  // ── Server → EWS ──────────────────────────────────────────────────────────
+  servers_ews_title:         'Exchange Web Services (EWS)',
+  servers_ews_toggle:        'EWS aktivieren',
+  servers_ews_default_off:   '(Standard: aus)',
+  servers_ews_desc:          'Aktiv: /EWS/Exchange.asmx (SOAP, Basic-Auth mit Passwort oder App-Passwort) ist erreichbar und Autodiscover v2 liefert die EWS-URL. Für EWS-fähige Clients wie eM Client oder Thunderbird mit Owl/TbSync. Outlook richtet sich unabhängig davon als IMAP-Konto ein (MAPI over HTTP wird nicht unterstützt). Aus: /EWS/* und /OAB/* liefern 404. Die Umschaltung greift ohne Neustart.',
+  servers_ews_url_label:     'EWS-URL (nur wenn EWS aktiviert ist)',
 } as const;
 
 type DE = typeof de;
@@ -752,7 +757,6 @@ const en: { [K in keyof DE]: string } = {
   // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Overview',
   nav_global_settings:    'Global Settings',
-  nav_organisation:       'Organisation',
   nav_rbac:               'Permissions',
   nav_audit_log:          'Audit Log',
   nav_logs:               'Logs',
@@ -770,7 +774,6 @@ const en: { [K in keyof DE]: string } = {
   // ── Navigation — Recipients ──────────────────────────────────────────────
   nav_mailboxes:          'Mailboxes',
   nav_shared_mailboxes:   'Shared',
-  nav_resources:          'Resources',
   nav_domains:            'Domains',
 
   // ── Navigation — Mail flow ───────────────────────────────────────────────
@@ -1491,6 +1494,13 @@ const en: { [K in keyof DE]: string } = {
   audit_filter_actor_email:  'Actor (email)…',
   audit_filter_ip:           'IP address…',
   audit_filter_search:       'Full-text search…',
+
+  // ── Server → EWS ──────────────────────────────────────────────────────────
+  servers_ews_title:         'Exchange Web Services (EWS)',
+  servers_ews_toggle:        'Enable EWS',
+  servers_ews_default_off:   '(default: off)',
+  servers_ews_desc:          'On: /EWS/Exchange.asmx (SOAP, Basic auth with password or app password) is reachable and Autodiscover v2 returns the EWS URL. For EWS-capable clients such as eM Client or Thunderbird with Owl/TbSync. Outlook still sets itself up as an IMAP account (MAPI over HTTP is not supported). Off: /EWS/* and /OAB/* return 404. The switch takes effect without a restart.',
+  servers_ews_url_label:     'EWS URL (only when EWS is enabled)',
 };
 
 export type TranslationKey = keyof DE;

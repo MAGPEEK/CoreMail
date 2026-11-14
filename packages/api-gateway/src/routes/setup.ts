@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { deriveServerUrls } from '../lib/server-urls.js';
+import { generateDkimPrivateKey } from '../lib/dkim.js';
 
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
@@ -65,7 +66,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       const newDomain = await tx.domain.create({
         data: {
           name: domain,
-          dkimPrivateKey: '',
+          dkimPrivateKey: generateDkimPrivateKey(), // sign from the first mail on
           dkimSelector:   'default',
           active:          true,
           primary:         true, // v3.18.36: the setup domain is always primary

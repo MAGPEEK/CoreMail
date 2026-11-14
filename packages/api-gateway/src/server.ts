@@ -61,7 +61,6 @@ import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
 import { authRouter } from './routes/auth.js';
 import { retentionTagsRouter } from './routes/retention-tags.js';
-import { powershellRouter } from './routes/powershell.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
 import { auditMiddleware } from './lib/audit.js';
@@ -152,9 +151,6 @@ function internalProxy(targetBase: string): express.RequestHandler {
 }
 
 app.use('/EWS',          internalProxy(EWS_URL));
-// v5.7.0: MAPI over HTTP back in the stack — optional, toggle in BCP → Server
-// (ServerSettings.mapiHttpEnabled). The ews-server returns 404 when off.
-app.use('/mapi',         internalProxy(EWS_URL));
 // v5.7.1: JMAP — toggle in BCP → Server → „JMAP" (jmap-server returns 404 when off).
 // WebSocket upgrades (/jmap/ws, RFC 8887) are forwarded to jmapProxy.upgrade in
 // start() on the HTTP server and in the TLS proxy.
@@ -284,10 +280,6 @@ app.use('/api/v1/smime',          smimeRouter);
 app.use('/api/v1/retention-tags', retentionTagsRouter);
 app.use('/api/v1/push',           pushRouter);
 
-// PowerShell Remoting
-app.use(express.text({ type: 'application/soap+xml', limit: '5mb' }));
-app.use('/PowerShell', powershellRouter);
-
 // ── Admin Routes ──────────────────────────────────────────────────────────────
 // Audit middleware for all mutating admin calls (fire-and-forget)
 app.use('/api/v1/admin', auditMiddleware);
@@ -374,8 +366,8 @@ if (existsSync(owaDir)) {
   // SPA catch-all: everything not matched so far that is NOT a known
   // API/proxy route is an OWA route → return index.html.
   const API_PREFIXES = [
-    '/api/', '/auth/', '/.well-known/', '/EWS', '/mapi', '/jmap', '/OAB', '/Autodiscover', '/autodiscover',
-    '/Microsoft-Server-ActiveSync', '/dav', '/PowerShell', '/bcp',
+    '/api/', '/auth/', '/.well-known/', '/EWS', '/jmap', '/OAB', '/Autodiscover', '/autodiscover',
+    '/Microsoft-Server-ActiveSync', '/dav', '/bcp',
   ];
   app.get('*', (req, res, next) => {
     if (API_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) {

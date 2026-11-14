@@ -7,14 +7,15 @@
  *      (Recoverable Items, Recoverable Items/Deletions, /Purges) exist.
  *   3. For each mail in the mailbox: compute the effective tag by hierarchy
  *        Personal (on item) → Personal (on folder) → RPT (for folder) → DPT (policy)
- *   4. If `date + tag.retentionDays < now` → execute the tag action:
+ *   4. If `createdAt (delivery) + tag.retentionDays <= now` → execute the tag action
+ *      (never the sender-controlled Date header, see ./expiry.ts):
  *        • MOVE_TO_ARCHIVE             — move to "Archive"
  *        • DELETE_AND_ALLOW_RECOVERY   — move to Recoverable Items/Deletions (soft delete, 14 days)
  *        • PERMANENTLY_DELETE          — move to Recoverable Items/Purges
  *        • MARK_AS_PAST_RETENTION_LIMIT — marking only
  *   5. Recovery sweep:
  *        • items in /Deletions older than 14 days → /Purges
- *        • items in /Purges + no legal hold → DB delete (frees storage)
+ *        • items in /Purges → DB delete (frees storage)
  *   6. Throttling: WORK_CYCLE_SECONDS (default 24h, configurable via env).
  *      When exceeded, the run limit is set and the run ends.
  *
@@ -25,6 +26,7 @@
 
 import { prisma } from '@coremail/storage/prisma';
 import { createLogger } from '@coremail/core';
+import { retentionDecision } from './expiry.js';
 
 const log = createLogger('retention:mfa');
 
@@ -45,7 +47,6 @@ export interface RetentionRunResult {
   itemsArchived:      number;
   itemsSoftDeleted:   number;
   itemsHardDeleted:   number;
-  itemsSkippedHold:   number;
   throttled:          boolean;
   errors:             string[];
 }
@@ -61,7 +62,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
     runId: run.id,
     policiesProcessed: 0, mailboxesScanned: 0, itemsScanned: 0,
     itemsArchived: 0, itemsSoftDeleted: 0, itemsHardDeleted: 0,
-    itemsSkippedHold: 0, throttled: false, errors: [],
+    throttled: false, errors: [],
   };
 
   const deadlineMs = startMs + WORK_CYCLE_SEC * 1000;
@@ -74,10 +75,6 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       include: { assignments: true, policyTags: { include: { tag: true } } },
     });
 
-    // Legal Hold completely removed in v3.18.5 — empty set for compatibility
-    // with the existing function signatures
-    const heldUserIds = new Set<string>();
-
     // ── Step 2: mailbox → policies mapping from the assignments ────────────
     // Here we reduce policies-per-user to what is actually applied.
     const userPolicies = await resolvePoliciesPerUser(policies);
@@ -86,7 +83,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       if (Date.now() > deadlineMs) { result.throttled = true; break; }
 
       try {
-        await applyForMailbox(userId, applicablePolicies, heldUserIds, result, deadlineMs);
+        await applyForMailbox(userId, applicablePolicies, result, deadlineMs);
         result.mailboxesScanned += 1;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -98,7 +95,7 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
 
     // ── Step 3: recovery sweep (Deletions → Purges → Delete) ──────────────
     if (Date.now() <= deadlineMs) {
-      const sweep = await sweepRecoverableItems(heldUserIds);
+      const sweep = await sweepRecoverableItems();
       result.itemsHardDeleted += sweep.purged;
     } else {
       result.throttled = true;
@@ -117,7 +114,6 @@ export async function runRetentionPolicies(): Promise<RetentionRunResult> {
       itemsArchived:    result.itemsArchived,
       itemsSoftDeleted: result.itemsSoftDeleted,
       itemsHardDeleted: result.itemsHardDeleted,
-      itemsSkippedHold: result.itemsSkippedHold,
       throttled:        result.throttled,
       ...(result.errors.length > 0 ? { errorMessage: result.errors.join('; ').slice(0, 4000) } : {}),
     },
@@ -163,7 +159,6 @@ async function resolvePoliciesPerUser(policies: PolicyWithTags[]): Promise<Map<s
 async function applyForMailbox(
   userId: string,
   policies: PolicyWithTags[],
-  heldUserIds: Set<string>,
   result: RetentionRunResult,
   deadlineMs: number,
 ): Promise<void> {
@@ -227,7 +222,7 @@ async function applyForMailbox(
     // Fetch all non-soft-deleted items in this folder
     const messages = await prisma.message.findMany({
       where: { folderId: folder.id, deletedAt: null, softDeletedAt: null },
-      select: { id: true, date: true, retentionTagId: true, rawSize: true },
+      select: { id: true, createdAt: true, retentionTagId: true, rawSize: true },
     });
     result.itemsScanned += messages.length;
 
@@ -239,17 +234,15 @@ async function applyForMailbox(
       const effective = personalTag ?? folderPersonalTag ?? rpt ?? dpts[0] ?? null;
       if (!effective || !effective.enabled) continue;
 
-      const expiresAt = new Date(m.date.getTime() + effective.retentionDays * 86400_000);
-      if (expiresAt > new Date()) continue; // not expired yet
-
-      const isHeld = heldUserIds.has(userId);
+      // Age is measured from delivery (createdAt), not from the sender-controlled
+      // Date header — see retentionDecision().
+      const { expired, expiresAt } = retentionDecision(m.createdAt, effective);
+      if (!expired || !expiresAt) continue; // not expired yet
 
       if (effective.action === 'PERMANENTLY_DELETE') {
-        if (isHeld) { result.itemsSkippedHold += 1; continue; }
         if (!DRY_RUN) await moveMessage(m.id, recovery.purgesId);
         result.itemsHardDeleted += 1;
       } else if (effective.action === 'DELETE_AND_ALLOW_RECOVERY') {
-        if (isHeld) { result.itemsSkippedHold += 1; continue; }
         if (!DRY_RUN) {
           await prisma.message.update({
             where: { id: m.id },
@@ -284,7 +277,7 @@ async function moveMessage(messageId: string, targetFolderId: string): Promise<v
 
 // ── Recovery sweep ───────────────────────────────────────────────────────────
 
-async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged: number }> {
+async function sweepRecoverableItems(): Promise<{ purged: number }> {
   const cutoff = new Date(Date.now() - DELETIONS_TTL_D * 86400_000);
 
   // 1. Deletions older than TTL → Purges
@@ -301,7 +294,7 @@ async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged
     });
   }
 
-  // 2. Purges + no hold → DB delete + quota release
+  // 2. Purges → DB delete + quota release
   let purged = 0;
   const purgeFolders = await prisma.folder.findMany({
     where: { name: RECOVERABLE_PURGES },
@@ -310,7 +303,6 @@ async function sweepRecoverableItems(heldUserIds: Set<string>): Promise<{ purged
   for (const pf of purgeFolders) {
     const ownerId = pf.mailbox.userId;
     if (!ownerId) continue; // Shared or resource mailbox — quota is not accounted per user there
-    if (heldUserIds.has(ownerId)) continue;
 
     const toDelete = await prisma.message.findMany({
       where: { folderId: pf.id },

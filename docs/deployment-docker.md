@@ -40,12 +40,11 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 |--------|--------------|-------------|
 | api-gateway | 3000 | REST API + SSE + HTTP routing (main entry point) |
 | auth-service | 3003 | Authentication (local / LDAP / OIDC / MFA) |
-| storage-api | 3001 | Database abstraction (PostgreSQL + MinIO) |
 | security-filter | 3002 | SPF/DKIM/DMARC/ARC + anti-spam pipeline |
 | smtp-server | 25 / 465 / 587 | SMTP inbound + outbound |
 | imap-server | 143 / 993 | IMAP4rev1 + IDLE + CONDSTORE |
 | pop3-server | 110 / 995 | POP3 |
-| ews-server | 8080 | MAPI over HTTP + EWS (optional, off by default — BCP → Server) |
+| ews-server | 8080 | Exchange Web Services (optional, off by default — BCP → Server) |
 | autodiscover | 8081 | Autodiscover v1 + v2 |
 | caldav-server | 8082 | CalDAV + CardDAV |
 | backup-service | 3004 | MBOX/EML export + S3 backup |
@@ -54,10 +53,10 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 The `api-gateway` handles all HTTP routing without nginx:
 - `/` and `/bcp/` → static frontend bundles (MWA/BCP from `/app/www/`)
 - `/auth/` → auth-service (localhost:3003)
-- `/EWS/`, `/mapi/`, `/OAB/` → ews-server (localhost:8080) — 404 while "MAPI over HTTP + EWS" is off
+- `/EWS/`, `/OAB/` → ews-server (localhost:8080) — 404 while "Exchange Web Services (EWS)" is off
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
 - `/dav/` → caldav-server (localhost:8082)
-- `/api/v1/`, `/PowerShell/` → direct handlers
+- `/api/v1/` → direct handlers
 
 **TLS** is handled either by the integrated HTTPS proxy (port 443, default) or by an external reverse proxy.
 
@@ -169,7 +168,7 @@ curl -k -X POST https://<hostname>/api/v1/admin/setup \
 | BCP admin panel | `https://<hostname>/bcp/` |
 | MinIO web console | `http://localhost:9001` (local only!) |
 | JMAP | `https://<hostname>/.well-known/jmap` |
-| EWS (only with MAPI over HTTP enabled, Outlook 2013–2021) | `https://<hostname>/EWS/Exchange.asmx` |
+| EWS (only when enabled in BCP → Server) | `https://<hostname>/EWS/Exchange.asmx` |
 | ActiveSync (mobile) | `https://<hostname>/Microsoft-Server-ActiveSync` |
 | Autodiscover | `https://<hostname>/Autodiscover/Autodiscover.xml` |
 

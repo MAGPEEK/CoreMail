@@ -63,7 +63,6 @@ imap-server                      RUNNING   pid 48, uptime 0:12:33
 pop3-server                      RUNNING   pid 49, uptime 0:12:33
 security-filter                  RUNNING   pid 50, uptime 0:12:33
 smtp-server                      RUNNING   pid 51, uptime 0:12:33
-storage-api                      RUNNING   pid 52, uptime 0:12:33
 ```
 
 ### Restart a single service

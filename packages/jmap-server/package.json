@@ -1,6 +1,6 @@
 {
   "name": "@coremail/jmap-server",
-  "version": "5.9.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",
@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --import ./src/test-env.ts --test src/dispatcher.test.ts src/state.test.ts src/mail/keywords.test.ts",
+    "test": "node --import tsx --import ./src/test-env.ts --test src/dispatcher.test.ts src/state.test.ts src/mail/keywords.test.ts src/mail/strip-bcc.test.ts src/methods/common.test.ts src/accounts.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

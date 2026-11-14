@@ -49,13 +49,12 @@ function normalizeBasicAuthUser(rawUser: string): string {
   return (bsIdx !== -1 ? rawUser.slice(bsIdx + 1) : rawUser).trim();
 }
 
-// v5.7.0: MAPI/HTTP is optional (BCP → Server → "MAPI over HTTP",
-// ServerSettings.mapiHttpEnabled, default OFF). Only when active is
-// <Protocol Type="mapiHttp"> announced and Outlook sets up an
-// "Exchange" account. Otherwise only IMAP+SMTP+ActiveSync → IMAP account.
-// Limitation: Outlook 2024 LTSC / M365 Classic enforce Modern Auth against
-// Entra/ADFS for Exchange accounts — there IMAP remains the safe route
-// (see v5.3.x/v5.4.0 in the CHANGELOG). Outlook 2013–2021 connect via Basic.
+// MAPI over HTTP is not supported (removed). The v1 response only announces
+// IMAP + SMTP + ActiveSync, so Outlook sets itself up as an IMAP account.
+// EWS is deliberately NOT announced here even when enabled: in the v1 schema
+// the EWS URL only travels inside EXCH/EXPR/EXHTTP blocks, and those make
+// Outlook attempt a binary MAPI/RPC connection (see v3.18.39). EWS clients
+// discover the URL via Autodiscover v2 (Protocol=EWS) instead.
 
 function buildAutodiscoverResponse(
   email: string,
@@ -67,14 +66,10 @@ function buildAutodiscoverResponse(
   // CRITICAL (per research of Microsoft Docs + the Grommunio implementation):
   //   - AuthPackage MUST be "Basic" (capital B), some Outlook builds are case-sensitive
   //   - <User><LegacyDN> is mandatory (Outlook uses it as the internal user identity)
-  //   - <GroupingInformation> in the EXPR block since Exchange 2013 SP1
   //   - <PublicFolderInformation> dummy even if no public folders exist
-  //   - MAPI/HTTP block (Type=mapiHttp) only if cfg.mapiHttpEnabled (v5.7.0)
   const ewsHost = (() => {
     try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
   })();
-  const mapiBase = cfg.ewsUrl.replace(/\/EWS\/Exchange\.asmx$/i, '');
-  const oabUrl = `${mapiBase}/OAB/`;
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
   <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
@@ -87,39 +82,6 @@ function buildAutodiscoverResponse(
       <AccountType>email</AccountType>
       <Action>settings</Action>
       <MicrosoftOnline>False</MicrosoftOnline>
-      ${cfg.mapiHttpEnabled ? `
-      <Protocol Type="mapiHttp" Version="1">
-        <MailStore>
-          <InternalUrl>${escapeXml(mapiBase)}/mapi/emsmdb/</InternalUrl>
-          <ExternalUrl>${escapeXml(mapiBase)}/mapi/emsmdb/</ExternalUrl>
-        </MailStore>
-        <AddressBook>
-          <InternalUrl>${escapeXml(mapiBase)}/mapi/nspi/</InternalUrl>
-          <ExternalUrl>${escapeXml(mapiBase)}/mapi/nspi/</ExternalUrl>
-        </AddressBook>
-      </Protocol>` : ''}
-      <!--
-        v3.18.39: EXCH + EXPR Blöcke ENTFERNT.
-
-        Hintergrund: Outlook 2016+/LTSC benötigt für „Exchange-Profile"
-        entweder MAPI-over-HTTP (Type=mapiHttp) oder RPC-over-HTTPS (EXPR)
-        oder intra-Exchange RPC/TCP (EXCH). Alle drei Pfade nutzen das
-        binäre MAPI/ROP-Protokoll. MAPI/HTTP liefern wir nur über den
-        optionalen mapiHttp-Block oben aus (v5.7.0), EXCH/EXPR nie.
-
-        Wenn wir die Blöcke trotzdem ausliefern, versucht Outlook eine
-        RPC-Verbindung an den Server-Hostname (Port 135/RPC-Endpoint-Mapper
-        oder Port 443/rpcproxy.dll) — und hängt minutenlang im Connect-Loop.
-        User-Symptom: „Outlook reagiert nicht", VIDs mit Status „wird
-        hergestellt" und Protokoll RPC/TCP. Plus Fehler „Diese Ordnergruppe
-        kann nicht geöffnet werden — Fehler bei der Anmeldung bei Exchange".
-
-        Ohne aktiviertes MAPI/HTTP: nur IMAP/SMTP/ActiveSync
-        in der Autodiscover-Response. Outlook konfiguriert sich dann als
-        „IMAP-Konto" — Mail funktioniert sofort. Kalender + Kontakte gehen
-        per CalDAV/CardDAV (z.B. Apple Kalender, Thunderbird Lightning,
-        eM Client) oder direkt über OWA im Browser.
-      -->
       <Protocol>
         <Type>IMAP</Type>
         <Server>${escapeXml(cfg.imapHost)}</Server>

@@ -4,6 +4,10 @@ import { prisma } from '@coremail/storage';
 
 const log = createLogger('caldav:auth');
 
+// Single-container setup: auth-service listens on localhost (same default as EWS).
+// AUTH_SERVICE_URL is a base URL, as in api-gateway and jmap-server.
+const AUTH_LOGIN_URL = `${process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003'}/auth/login`;
+
 export interface DavUser {
   userId: string;
   email: string;
@@ -45,7 +49,7 @@ export async function davAuthMiddleware(
       const email = decoded.slice(0, colonIdx);
       const password = decoded.slice(colonIdx + 1);
       try {
-        const resp = await fetch('http://auth-service:3003/auth/login', {
+        const resp = await fetch(AUTH_LOGIN_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
@@ -59,9 +63,9 @@ export async function davAuthMiddleware(
               
               const user = await prisma.user.findUnique({
                 where: { id: payload.sub },
-                select: { id: true, email: true },
+                select: { id: true, email: true, active: true },
               });
-              if (user) {
+              if (user?.active) {
                 req.davUser = { userId: user.id, email: user.email };
                 next();
                 return;

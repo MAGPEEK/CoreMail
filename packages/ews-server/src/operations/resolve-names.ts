@@ -4,9 +4,9 @@ import type { EwsUser } from '../auth/middleware.js';
 
 export async function resolveNames(
   request: Record<string, unknown>,
-  _user: EwsUser,
+  user: EwsUser,
 ): Promise<string> {
-  
+
 
   const unresolvedEntry = String(request['UnresolvedEntry'] ?? '');
   if (!unresolvedEntry || unresolvedEntry.length < 2) {
@@ -33,8 +33,10 @@ export async function resolveNames(
     select: { email: true, displayName: true },
   });
 
+  // Personal contacts: only the caller's own address book.
   const contacts = await prisma.contact.findMany({
     where: {
+      userId: user.userId,
       OR: [
         { email: { contains: query, mode: 'insensitive' } },
         { displayName: { contains: query, mode: 'insensitive' } },

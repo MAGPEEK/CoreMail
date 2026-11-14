@@ -5,8 +5,8 @@ import {
   ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, Image as ImageIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import DOMPurify from 'dompurify';
 import { useRef, useState, useEffect } from 'react';
+import { sanitizeMailHtml } from '../lib/mailHtml.js';
 import { api } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
@@ -17,31 +17,7 @@ import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 
-/**
- * v3.18.36: Hardened sanitize. DOMPurify without configuration removes our
- * privacy markers (`data-coremail-ext-src`, transparent PNG placeholder)
- * → images were loaded despite the blocking logic or the banner did not appear.
- * Plus: explicitly block tracking vectors `<style>`, `<link>`, JS event handlers.
- */
-function sanitize(html: string): string {
-  if (typeof window === 'undefined') {
-    return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-  }
-  return DOMPurify.sanitize(html, {
-    // Whitelist our privacy markers + data: URI for the placeholder
-    ADD_ATTR: ['data-coremail-ext-src', 'data-coremail-unresolved-cid', 'data-coremail-ext-bg'],
-    ALLOW_DATA_ATTR: true,
-    // Completely block tracking-relevant tags + event handlers
-    FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'object', 'embed', 'meta', 'base'],
-    FORBID_ATTR: [
-      'onload', 'onerror', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
-      'onfocus', 'onblur', 'onkeydown', 'onkeyup', 'onsubmit', 'onchange',
-      'ping', 'srcset', // srcset could contain a tracking URL
-    ],
-    // Explicitly allow data:image for our placeholder, http(s) for CID-resolved URLs
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|data:image\/[a-z]+;base64,):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
-  });
-}
+const sanitize = sanitizeMailHtml;
 
 /**
  * Pre-process HTML for privacy protection (Outlook/Gmail style):

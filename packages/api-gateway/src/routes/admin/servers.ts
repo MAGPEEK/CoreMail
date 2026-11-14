@@ -34,8 +34,9 @@ const SettingsSchema = z.object({
   smtpPort:         z.number().int().min(1).max(65535),
   smtpTls:          z.boolean(),
   orgName:          z.string().min(1),
-  // v5.7.0: MAPI over HTTP optional (default off). Optional in the request so
-  // that older BCP builds without the field can still save.
+  // EWS on/off (default off) — historical field name from the removed MAPI
+  // over HTTP feature. Optional in the request so that older BCP builds
+  // without the field can still save.
   mapiHttpEnabled:  z.boolean().optional(),
   // v5.7.1: JMAP (RFC 8620/8621) on/off — default on
   jmapEnabled:      z.boolean().optional(),

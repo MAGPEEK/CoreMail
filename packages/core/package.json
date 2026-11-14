@@ -1,6 +1,6 @@
 {
   "name": "@coremail/core",
-  "version": "5.9.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,24 +9,15 @@
     "./redis": "./dist/redis/index.js",
     "./types": "./dist/types/index.js",
     "./config": "./dist/config/index.js",
-    "./logger": "./dist/logger/index.js",
-    "./metrics": "./dist/metrics/index.js",
-    "./tracing": "./dist/tracing/index.js"
+    "./logger": "./dist/logger/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/exporter-prometheus": "^0.53.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.53.0",
-    "@opentelemetry/resources": "^1.26.0",
-    "@opentelemetry/sdk-metrics": "^1.26.0",
-    "@opentelemetry/sdk-node": "^0.53.0",
-    "@opentelemetry/sdk-trace-base": "^1.26.0",
-    "@opentelemetry/semantic-conventions": "^1.27.0",
     "bcryptjs": "^2.4.3",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
@@ -38,6 +29,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.5.0"
   }
 }

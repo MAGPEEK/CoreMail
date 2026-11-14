@@ -6,11 +6,13 @@ import express from 'express';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase, prisma } from '@coremail/storage';
 import {
-  runConnectionChecks,
   runContentChecks,
+  runGreylistCheck,
+  runIpChecks,
   type PipelineConfig,
   type ConnectionContext,
 } from './pipeline/index.js';
+import { parseConnectionRequest, runConnectionStage } from './connection-request.js';
 
 const log = createLogger('security-filter:server');
 const app = express();
@@ -53,17 +55,23 @@ async function loadSecuritySettings(): Promise<void> {
 
 /**
  * POST /check/connection
- * Called before MAIL FROM is accepted. Checks DNSBL, Greylisting, GeoIP.
+ * Body: { senderIp, stage?: 'connect'|'rcpt'|'full', mailFrom?, rcptTo? }
+ *  - connect (TCP connect, only the IP is known): DNSBL/DNSWL + GeoIP
+ *  - rcpt    (RCPT TO, full triple known):        greylisting
+ *  - full    (legacy, all fields):                greylisting + IP checks
  */
 app.post('/check/connection', async (req, res) => {
-  const ctx = req.body as ConnectionContext;
-  if (!ctx?.senderIp || !ctx?.mailFrom || !ctx?.rcptTo) {
-    res.status(400).json({ error: 'Missing senderIp, mailFrom, or rcptTo' });
+  const parsed = parseConnectionRequest(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
     return;
   }
 
   try {
-    const result = await runConnectionChecks(ctx, pipelineConfig);
+    const result = await runConnectionStage(parsed.stage, parsed.ctx, pipelineConfig, {
+      ipChecks: runIpChecks,
+      greylist: runGreylistCheck,
+    });
     res.json(result);
   } catch (err) {
     log.error({ err }, 'Connection check error');

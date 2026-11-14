@@ -2,7 +2,8 @@
  * `coremail connector …` — protocol connectors:
  *   smtp (receive 25/465/587), smtp-send (submission 587), imap (143/993), pop3 (110/995)
  *   → listeners from BCP → Services (port, address, TLS, active)
- *   jmap, mapi → switches in ServerSettings (jmapEnabled, mapiHttpEnabled — MAPI/HTTP + EWS)
+ *   jmap, ews → switches in ServerSettings (jmapEnabled; ews uses the historical field
+ *   mapiHttpEnabled). `mapi` is a deprecated alias for `ews` (MAPI over HTTP was removed).
  */
 import { Command } from 'commander';
 import type { CoreMailClient } from '../client.js';
@@ -18,8 +19,10 @@ const LISTENER_SERVICES: Record<string, { slug: string; label: string }> = {
 };
 const FLAG_SERVICES: Record<string, { field: 'jmapEnabled' | 'mapiHttpEnabled'; label: string }> = {
   jmap: { field: 'jmapEnabled', label: 'JMAP (/jmap, /.well-known/jmap)' },
-  mapi: { field: 'mapiHttpEnabled', label: 'MAPI over HTTP + EWS (/mapi, /EWS — Outlook "Exchange account")' },
+  ews: { field: 'mapiHttpEnabled', label: 'Exchange Web Services (/EWS, /OAB)' },
 };
+/** Deprecated connector names → current name. */
+const FLAG_ALIASES: Record<string, string> = { mapi: 'ews' };
 
 interface Listener { id: string; service: string; address: string; port: number; ssl: boolean; active: boolean }
 type ServerSettings = Record<string, unknown> & { jmapEnabled?: boolean; mapiHttpEnabled?: boolean };
@@ -40,7 +43,7 @@ function parseBool(s: string): boolean {
 }
 
 export function registerConnector(program: Command, api: () => CoreMailClient, json: () => boolean): void {
-  const c = program.command('connector').alias('conn').description('Connectors SMTP/IMAP/POP3/JMAP/MAPI: status, on/off, ports, TLS');
+  const c = program.command('connector').alias('conn').description('Connectors SMTP/IMAP/POP3/JMAP/EWS: status, on/off, ports, TLS');
 
   c.command('status').description('All connectors with ports, TLS and state')
     .action(async () => {
@@ -53,7 +56,7 @@ export function registerConnector(program: Command, api: () => CoreMailClient, j
         rows.push({ service: l.service, id: l.id, endpoint: `${l.address}:${l.port}`, tls: l.ssl ? 'implicit' : 'STARTTLS/plain', active: l.active });
       }
       rows.push({ service: 'JMAP', id: 'jmapEnabled', endpoint: '/jmap · /.well-known/jmap · ws /jmap/ws', tls: 'HTTPS (proxy)', active: settings.jmapEnabled ?? true });
-      rows.push({ service: 'MAPI_EWS', id: 'mapiHttpEnabled', endpoint: '/mapi/emsmdb · /mapi/nspi · /EWS/Exchange.asmx', tls: 'HTTPS (proxy)', active: settings.mapiHttpEnabled ?? false });
+      rows.push({ service: 'EWS', id: 'mapiHttpEnabled', endpoint: '/EWS/Exchange.asmx · /OAB', tls: 'HTTPS (proxy)', active: settings.mapiHttpEnabled ?? false });
       if (json()) { printJson(rows); return; }
       printTable(rows, [
         { key: 'service', label: 'Service' }, { key: 'endpoint', label: 'Endpoint' }, { key: 'tls', label: 'TLS' }, { key: 'active', label: 'Active' }, { key: 'id', label: 'Listener ID' },
@@ -61,14 +64,19 @@ export function registerConnector(program: Command, api: () => CoreMailClient, j
     });
 
   const toggle = (desired: boolean) => async (service: string, opts: { port?: string }) => {
-    const key = service.toLowerCase();
+    let key = service.toLowerCase();
+    const alias = FLAG_ALIASES[key];
+    if (alias) {
+      process.stderr.write(`Warning: connector "${key}" is deprecated, use "${alias}"\n`);
+      key = alias;
+    }
     if (FLAG_SERVICES[key]) {
       await setFlag(api(), FLAG_SERVICES[key]!.field, desired);
       process.stdout.write(`${FLAG_SERVICES[key]!.label}: ${desired ? 'enabled' : 'disabled'} (takes effect without restart)\n`);
       return;
     }
     const svc = LISTENER_SERVICES[key];
-    if (!svc) fail(`Unknown connector: ${service} (smtp, smtp-send, imap, pop3, jmap, mapi)`);
+    if (!svc) fail(`Unknown connector: ${service} (smtp, smtp-send, imap, pop3, jmap, ews)`);
     let ls = await listeners(api(), svc.slug);
     if (opts.port) ls = ls.filter((l) => l.port === parseInt(opts.port!, 10));
     if (!ls.length) fail(`No listener for ${svc.label}${opts.port ? ` on port ${opts.port}` : ''}`);

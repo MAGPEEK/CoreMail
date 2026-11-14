@@ -1438,13 +1438,14 @@ model ServerSettings {
   selfServicePasswordReset   Boolean @default(true)
 
   // ── Protocols ────────────────────────────────────────────────────────────
-  // v5.7.0: MAPI over HTTP (Outlook "Exchange account") can optionally be enabled.
-  // Default OFF: /mapi/* returns 404 and Autodiscover does not announce a
-  // <Protocol Type="mapiHttp"> → Outlook sets itself up as an IMAP account.
+  // EWS on/off (BCP → Server → "Exchange Web Services (EWS)"). The field name
+  // is historical: MAPI over HTTP was removed, and this flag now gates EWS only
+  // (/EWS/*, /OAB/* and Autodiscover v2 Protocol=EWS). Kept to avoid a
+  // destructive schema change. Default OFF: those endpoints return 404.
   // Hot reload via Redis CHANNEL_SETTINGS_RELOAD (no container restart).
   mapiHttpEnabled    Boolean @default(false)
   // v5.7.1: JMAP (RFC 8620/8621 + extensions) on /jmap/* and
-  // /.well-known/jmap. Default ON; off → 404. Hot reload like MAPI.
+  // /.well-known/jmap. Default ON; off → 404. Hot reload like EWS.
   jmapEnabled        Boolean @default(true)
 
   // ── Maintenance ───────────────────────────────────────────────────────────────

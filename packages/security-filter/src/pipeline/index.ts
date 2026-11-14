@@ -45,20 +45,34 @@ export interface ConnectionContext {
   userId?: string;
 }
 
-export async function runConnectionChecks(
+// Connection-level checks are split by SMTP stage (`connect` → IP checks,
+// `rcpt` → greylisting); the dispatch lives in ../connection-request.ts.
+
+/**
+ * Stage 1a: greylisting — needs the full (IP, MAIL FROM, RCPT TO) triple, so
+ * it can only run at RCPT TO time. `mailFrom` may be '' (null sender `<>`).
+ */
+export async function runGreylistCheck(
   ctx: ConnectionContext,
   config: PipelineConfig = {},
 ): Promise<PipelineResult> {
-  const { senderIp, mailFrom, rcptTo } = ctx;
-
-  // ── Stage 1a: Greylisting ────────────────────────────────────────────────
   if (config.greylistingEnabled !== false) {
-    const grey = await checkGreylist(senderIp, mailFrom, rcptTo);
+    const grey = await checkGreylist(ctx.senderIp, ctx.mailFrom, ctx.rcptTo);
     if (grey.action === 'defer') {
       return { action: 'defer', reason: grey.reason ?? 'Greylisted' };
     }
   }
+  return { action: 'accept', reason: 'Greylisting passed' };
+}
 
+/**
+ * Stages 1b/1c: checks that only need the client IP (DNSBL/DNSWL, GeoIP
+ * country filter) — these run at connect time.
+ */
+export async function runIpChecks(
+  senderIp: string,
+  config: PipelineConfig = {},
+): Promise<PipelineResult> {
   // ── Stage 1b: DNSBL ──────────────────────────────────────────────────────
   const dnsbl = await checkDnsbl(senderIp);
   if (dnsbl.whitelisted) {

@@ -49,7 +49,7 @@ export async function ewsAuthMiddleware(
     return;
   }
 
-  // Basic Auth (Outlook MAPI/HTTP + EWS legacy)
+  // Basic Auth (EWS)
   //
   // v5.2.1 BUGFIX: We bypass the auth-service /auth/login endpoint
   // (which returns mfaRequired instead of accessToken when MFA is active — Outlook
@@ -161,9 +161,7 @@ export async function ewsAuthMiddleware(
   // User symptom: "a Microsoft sign-in web page appears" —
   // that is exactly login.microsoftonline.com, NOT our ADFS login page.
   //
-  // Fix: Only Basic in WWW-Authenticate. Outlook 2024 LTSC still supports
-  // Basic-auth MAPI as "regular sign-in" — that is the working standard
-  // path for non-Entra servers.
+  // Fix: Only Basic in WWW-Authenticate.
   //
   // v5.4.0/v5.6.0: ADFS emulation and the OAuth2 server were removed — only
   // Basic auth remains (password or app password).
@@ -185,7 +183,8 @@ function normalizeUserName(raw: string): string {
 }
 
 /**
- * Writes a MAPI/EWS auth-failure entry to SystemLog (visible in the BCP).
+ * Writes an EWS auth-failure entry to SystemLog (visible in the BCP).
+ * The category stays 'MAPI_AUTH' for compatibility with existing log filters.
  * Non-blocking via .catch() — if the DB is unreachable only the pino log
  * is written.
  *
@@ -198,7 +197,7 @@ async function writeAuthFailureLog(
   userId?: string,
 ): Promise<void> {
   const url = req.originalUrl || req.url || '';
-  const path = url.startsWith('/mapi') ? 'MAPI' : 'EWS';
+  const path = 'EWS';
   const ip = req.ip ?? 'unknown';
   const userAgent = req.get('User-Agent') ?? '';
 
@@ -218,7 +217,7 @@ async function writeAuthFailureLog(
         path: url,
       },
     },
-  }).catch((err: unknown) => log.error({ err }, 'SystemLog write for MAPI auth failure failed'));
+  }).catch((err: unknown) => log.error({ err }, 'SystemLog write for EWS auth failure failed'));
 }
 
 /**
@@ -229,7 +228,7 @@ const noAuthLogCache = new Map<string, number>();
 function rateLimitedNoAuthLog(req: Request): void {
   const ip = req.ip ?? 'unknown';
   const url = req.originalUrl || req.url || '';
-  const path = url.startsWith('/mapi') ? 'MAPI' : 'EWS';
+  const path = 'EWS';
   const cacheKey = `${ip}::${path}`;
   const now = Date.now();
   const last = noAuthLogCache.get(cacheKey) ?? 0;

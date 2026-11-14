@@ -12,6 +12,7 @@ import { CAP_SUBMISSION } from '../capabilities.js';
 import { MethodError, cannotCalculateChanges, setError, type SetError } from '../errors.js';
 import { emailState } from '../state.js';
 import { loadRawMessage, parseAddress, parseHeaders } from '../mail/raw.js';
+import { stripBccHeader } from '../mail/strip-bcc.js';
 import { listIdentities } from './identity.js';
 import { runEmailSet, setResponse } from './email.js';
 import { paginate, parseGetArgs, parseSetArgs, pick, parseDate, utc } from './common.js';
@@ -133,7 +134,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
     to: c.envelope.rcptTo.map((r) => r.email),
     senderUserId: account.ownerUserId ?? ctx.user.userId,
     ...(domain?.dkimPrivateKey ? { dkimDomain: domain.name, dkimSelector: domain.dkimSelector, dkimPrivateKey: domain.dkimPrivateKey } : {}),
-    rawMessage: c.raw.toString('base64'),
+    rawMessage: stripBccHeader(c.raw).toString('base64'),
   }, { jobId, ...(delay > 0 ? { delay } : {}) });
   void prisma.systemLog.create({
     data: {

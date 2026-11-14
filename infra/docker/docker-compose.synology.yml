@@ -24,7 +24,7 @@ services:
   # ── CoreMail main application ───────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:5.9.0
+    image: magpeek/coremail-app:6.0.0
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -45,7 +45,6 @@ services:
       PEPPER: ${PEPPER:-CHANGE-ME-openssl-rand-hex-32}
 
       # Internal service URLs
-      STORAGE_API_URL: http://localhost:3001
       AUTH_SERVICE_URL: http://localhost:3003
       SECURITY_FILTER_URL: http://localhost:3002
       EWS_SERVICE_URL: http://localhost:8080
@@ -60,7 +59,6 @@ services:
 
       # Service ports
       API_PORT: "3000"
-      STORAGE_PORT: "3001"
       SECURITY_FILTER_PORT: "3002"
       AUTH_PORT: "3003"
       BACKUP_PORT: "3004"

@@ -1,6 +1,6 @@
 {
   "name": "@coremail/api-gateway",
-  "version": "5.9.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",
@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test src/lib/dkim.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",
