@@ -2,6 +2,7 @@
  * Security Filter HTTP Service
  * Exposes the pipeline as a REST API consumed by smtp-server and other modules.
  */
+import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase, prisma } from '@coremail/storage';
@@ -13,43 +14,41 @@ import {
   type ConnectionContext,
 } from './pipeline/index.js';
 import { parseConnectionRequest, runConnectionStage } from './connection-request.js';
+import { buildPipelineConfig } from './settings.js';
+import { invalidateGreylistOptsCache } from './greylisting/index.js';
 
 const log = createLogger('security-filter:server');
 const app = express();
 app.use(express.json({ limit: '52mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '52mb' }));
 
-// Shared pipeline config (loaded from DB on startup, reloaded via Redis)
-let pipelineConfig: PipelineConfig = {
-  greylistingEnabled: true,
-  rspamdEnabled:      true,
-  clamavEnabled:      true,
-  spamScoreJunk:      3.0,
-  spamScoreReject:    6.0,
-};
+// Shared pipeline config (loaded from DB on startup, reloaded via Redis).
+// Mapping + defaults: settings.ts (defaults = schema defaults).
+let pipelineConfig: PipelineConfig = buildPipelineConfig(null, null);
 
 /**
- * Loads SecuritySettings from DB and merges them into pipelineConfig.
- * Called on startup and on Redis settings:reload event.
+ * Loads SecuritySettings + the greylisting switch from SmtpSettings and
+ * rebuilds pipelineConfig. Called on startup and on every settings:reload.
+ * On a DB error the previous config stays in effect.
  */
 async function loadSecuritySettings(): Promise<void> {
   try {
-    const s = await prisma.securitySettings.findUnique({ where: { id: 'singleton' } });
-    if (!s) return;
-    pipelineConfig = {
-      ...pipelineConfig,
-      greylistingEnabled: s.greylistEnabled,
-      rspamdEnabled:      s.rspamdEnabled,
-      clamavEnabled:      s.clamavEnabled,
-      spamScoreJunk:      s.rspamdSpamScore,
-      spamScoreReject:    s.rspamdRejectScore,
-    };
+    const [sec, smtp] = await Promise.all([
+      prisma.securitySettings.findUnique({ where: { id: 'singleton' } }),
+      prisma.smtpSettings.findUnique({ where: { id: 'singleton' }, select: { greylistingEnabled: true } }),
+    ]);
+    pipelineConfig = buildPipelineConfig(sec, smtp);
+    invalidateGreylistOptsCache();
     log.info(
-      { rspamdEnabled: s.rspamdEnabled, clamavEnabled: s.clamavEnabled },
+      {
+        greylisting: pipelineConfig.greylistingEnabled, dnsbl: pipelineConfig.dnsblEnabled,
+        geoip: pipelineConfig.countryFilter?.mode ?? 'disabled', attachments: pipelineConfig.attachmentEnabled,
+        clamav: pipelineConfig.clamavEnabled, clamavAction: pipelineConfig.clamavAction, rspamd: pipelineConfig.rspamdEnabled,
+      },
       'Security settings loaded from DB',
     );
   } catch (err) {
-    log.warn({ err }, 'Failed to load security settings from DB — using defaults');
+    log.warn({ err }, 'Failed to load security settings from DB — keeping previous config');
   }
 }
 
@@ -155,6 +154,7 @@ const PORT = parseInt(process.env['PORT'] ?? '3002', 10);
 
 async function main() {
   await connectDatabase();
+  void initRuntimeLogLevel('security-filter', { aliases: [] }); // BCP per-service log level
 
   // Load security settings from DB
   await loadSecuritySettings();

@@ -5,7 +5,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
-import { createLogger } from '@coremail/core';
+import { createLogger, assertPublicHttpsUrl } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_CORE } from '../capabilities.js';
 import { MethodError, requestTooLarge, setError } from '../errors.js';
@@ -64,7 +64,8 @@ registerMethod('PushSubscription/set', CAP_CORE, async (args, ctx) => {
     const deviceClientId = typeof obj['deviceClientId'] === 'string' ? obj['deviceClientId'] : '';
     const bad: string[] = [];
     if (!deviceClientId || deviceClientId.length > 255) bad.push('deviceClientId');
-    if (!/^https:\/\//.test(url) && !(process.env['NODE_ENV'] !== 'production' && /^http:\/\//.test(url))) bad.push('url');
+    // SSRF guard: https only, every resolved address public (core/net/ssrf.ts)
+    if (url.length > 2048 || !(await assertPublicHttpsUrl(url).then(() => true, () => false))) bad.push('url');
     const keys = obj['keys'] as JsonObject | null | undefined;
     if (keys && (typeof keys['p256dh'] !== 'string' || typeof keys['auth'] !== 'string')) bad.push('keys');
     const types = Array.isArray(obj['types']) ? (obj['types'] as string[]) : [];

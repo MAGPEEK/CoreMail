@@ -252,12 +252,13 @@ export async function enqueueInvitation(opts: QueueInvitationOpts): Promise<void
     htmlBody,
   });
 
+  const { getOutboundJobOptions } = await import('@coremail/storage/queue-options');
   await opts.queue.add('send', {
     messageId: opts.trackingId,
     from: opts.ev.organizer.email,
     to: opts.ev.attendees.map((a) => a.email),
     rawMessage: raw.toString('base64'),
-  });
+  }, await getOutboundJobOptions());
 }
 
 function fmtDateTime(d: Date): string {

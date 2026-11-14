@@ -3,6 +3,7 @@
  * totalThreads/unreadThreads are approximated with totalEmails/unreadEmails
  * (CoreMail keeps no thread counters).
  */
+import { createsParentCycle } from './mailbox-tree.js';
 import { prisma } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_MAIL } from '../capabilities.js';
@@ -199,7 +200,8 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
   }
 
   for (const [id, patch] of Object.entries(update)) {
-    const f = (await existing()).find((x) => x.id === id);
+    const all = await existing();
+    const f = all.find((x) => x.id === id);
     if (!f) { notUpdated[id] = setError('notFound'); continue; }
     let next: JsonObject;
     try { next = applyPatch(toMailbox(f, account), patch); } catch (e) { notUpdated[id] = setError('invalidPatch', e instanceof Error ? e.message : undefined); continue; }
@@ -215,10 +217,10 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
     if (!name || name.length > 100 || /[/\\]/.test(name)) { notUpdated[id] = setError('invalidProperties', 'name invalid', ['name']); continue; }
     let parentId: string | null = null;
     if (typeof next['parentId'] === 'string') {
-      parentId = ctx.resolveId(next['parentId']);
+      try { parentId = ctx.resolveId(next['parentId']); } catch { notUpdated[id] = setError('invalidProperties', 'parentId unknown', ['parentId']); continue; }
       if (parentId === id) { notUpdated[id] = setError('invalidProperties', 'mailbox cannot be its own parent', ['parentId']); continue; }
-      const parent = await prisma.folder.findFirst({ where: { id: parentId, mailboxId: account.mailboxId }, select: { id: true } });
-      if (!parent) { notUpdated[id] = setError('invalidProperties', 'parentId not found', ['parentId']); continue; }
+      if (!all.some((x) => x.id === parentId)) { notUpdated[id] = setError('invalidProperties', 'parentId not found', ['parentId']); continue; }
+      if (createsParentCycle(all, id, parentId)) { notUpdated[id] = setError('invalidProperties', 'parentId would create a cycle', ['parentId']); continue; }
     }
     if (name !== (f.displayName || f.name)) {
       const dup = await prisma.folder.findFirst({ where: { mailboxId: account.mailboxId, name, id: { not: id } }, select: { id: true } });

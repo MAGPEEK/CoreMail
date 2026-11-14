@@ -84,12 +84,7 @@ function getOutboundQueue(): Queue {
   if (!_outboundQueue) {
     _outboundQueue = new Queue('smtp-outbound', {
       connection: createBullMqConnection(),
-      defaultJobOptions: {
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 60_000 },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 500 },
-      },
+      // retry/retention per job from QueueSettings (lib/imip.ts → getOutboundJobOptions)
     });
   }
   return _outboundQueue;

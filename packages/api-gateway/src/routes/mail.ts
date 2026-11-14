@@ -8,6 +8,7 @@ import {
   prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
 } from '@coremail/storage';
+import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -80,12 +81,7 @@ function getOutboundQueue(): Queue {
     // BullMQ v5: no ':' allowed in the queue name — smtp-server uses 'smtp-outbound'
     _outboundQueue = new Queue('smtp-outbound', {
       connection: createBullMqConnection(),
-      defaultJobOptions: {
-        attempts: 10,
-        backoff: { type: 'exponential', delay: 60_000 },
-        removeOnComplete: { count: 100 },
-        removeOnFail: { count: 500 },
-      },
+      // retry/retention per job from QueueSettings (getOutboundJobOptions)
     });
   }
   return _outboundQueue;
@@ -933,7 +929,7 @@ mailRouter.post(
     // BullMQ job: with scheduledAt enqueue with `delay` — the worker starts
     // sending only at the scheduled time. delay is measured internally in ms.
     const queueJobId = `api-${jobId}`;
-    const jobOptions: { jobId: string; delay?: number } = { jobId: queueJobId };
+    const jobOptions: Awaited<ReturnType<typeof getOutboundJobOptions>> & { jobId: string; delay?: number } = { ...(await getOutboundJobOptions()), jobId: queueJobId };
     if (scheduledAt) {
       jobOptions.delay = scheduledAt.getTime() - now;
     }

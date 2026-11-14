@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import { createLogger } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { createApp } from './app.js';
@@ -7,6 +8,7 @@ const PORT = parseInt(process.env['AUTH_PORT'] ?? '3003', 10);
 
 async function main() {
   await connectDatabase();
+  void initRuntimeLogLevel('auth-service', { aliases: ['auth'] }); // BCP per-service log level
   // v5.6.0: initJwtKeys() removed — JWT back to HS256 (see core/auth/jwt.ts)
   const app = createApp();
   app.listen(PORT, () => {

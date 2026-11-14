@@ -3,6 +3,7 @@ import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
+import { sendAutoReplyIfNeeded } from './auto-reply.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -124,7 +125,7 @@ export async function storeInboundMessage(
   // attendee status in the corresponding CalendarEvent. The mail is STILL
   // delivered normally to the inbox (user awareness, like Outlook).
   try {
-    const handled = await processITipInbound(effectiveBuffer);
+    const handled = await processITipInbound(effectiveBuffer, { envelopeFrom: opts.fromAddr, recipientUserId: ownerType === 'user' && user ? user.id : null });
     if (handled) {
       log.info({ rcptTo: opts.rcptTo, from: opts.fromAddr }, 'iTIP REPLY processed — CalendarEvent attendee updated');
     }
@@ -402,4 +403,7 @@ export async function storeInboundMessage(
     { rcptTo: opts.rcptTo, folder: folder.name, uid, size: effectiveBuffer.length },
     'Message stored',
   );
+
+  // Out-of-office reply (RFC 3834) — decision + sending in ./auto-reply.ts
+  if (ownerType === 'user' && user) void sendAutoReplyIfNeeded({ userId: user.id, userEmail: user.email, envelopeFrom: opts.fromAddr, raw: effectiveBuffer, deliveredToJunk: opts.toJunk || mailbox.folders.find((f: { name: string }) => f.name === 'Junk')?.id === ruleFolderId });
 }

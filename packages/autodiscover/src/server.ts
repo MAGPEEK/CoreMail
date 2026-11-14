@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
@@ -10,6 +11,7 @@ const PORT = parseInt(process.env['AUTODISCOVER_PORT'] ?? '8081', 10);
 
 async function main() {
   await connectDatabase();
+  void initRuntimeLogLevel('autodiscover', { aliases: [] }); // BCP per-service log level
 
   // v3.18.35: on settings changes (e.g. publicHostname update via BCP)
   // invalidate the settings cache — otherwise Autodiscover returns stale URLs

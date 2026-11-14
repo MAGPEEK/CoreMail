@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { verifyPassword } from '@coremail/core/auth';
@@ -199,6 +200,7 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'activesync', version: '0.7.0' });
 });
 
+void initRuntimeLogLevel('activesync', { aliases: ['eas'] }); // BCP per-service log level
 app.listen(PORT, () => {
   log.info({ port: PORT }, 'ActiveSync (EAS) server started');
 });

@@ -7,7 +7,8 @@
     ".": "./dist/index.js",
     "./prisma": "./dist/prisma/index.js",
     "./minio": "./dist/minio/index.js",
-    "./mime": "./dist/mime/index.js"
+    "./mime": "./dist/mime/index.js",
+    "./queue-options": "./dist/queue-options.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

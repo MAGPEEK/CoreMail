@@ -3,6 +3,7 @@
  * sequentially, resolve result references (`#arg` → {resultOf,name,path}),
  * pass creation ids (`#creationId`) through, wrap errors.
  */
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import { MethodError, RequestError } from './errors.js';
 import { ALL_CAPABILITIES, CAP_CORE } from './capabilities.js';
@@ -151,8 +152,10 @@ export async function processRequest(
       if (err instanceof MethodError) {
         responses.push(['error', err.toJson(), callId]);
       } else {
-        log.error({ err, method: name }, 'Unexpected error in JMAP method');
-        responses.push(['error', { type: 'serverFail', description: err instanceof Error ? err.message : String(err) }, callId]);
+        // Internal details (SQL, paths, stack) stay in the log — clients get a reference id only.
+        const ref = randomUUID();
+        log.error({ err, method: name, ref }, 'Unexpected error in JMAP method');
+        responses.push(['error', { type: 'serverFail', description: `Internal server error (ref ${ref})` }, callId]);
       }
     }
   }

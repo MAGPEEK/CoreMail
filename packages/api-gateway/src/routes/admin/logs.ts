@@ -48,20 +48,29 @@ adminLogsRouter.get('/', async (req: Request, res: Response) => {
   res.json({ logs, total, limit, offset });
 });
 
+// GET /api/v1/admin/logs/levels — stored per-service overrides
+adminLogsRouter.get('/levels', async (_req: Request, res: Response) => {
+  const { getRedisClient, LOG_LEVELS_HASH } = await import('@coremail/core');
+  res.json(await getRedisClient().hgetall(LOG_LEVELS_HASH));
+});
+
 // PUT /api/v1/admin/logs/levels
+// Body: { "<service>": "ERROR"|"WARN"|"INFO"|"DEBUG" } — service = package name
+// (e.g. "smtp-server"), a short alias ("smtp") or "*" for all services.
+// Every service applies it at runtime via initRuntimeLogLevel() (@coremail/core).
 adminLogsRouter.put('/levels', async (req: Request, res: Response) => {
-  const schema = z.record(z.enum(['ERROR', 'WARN', 'INFO', 'DEBUG']));
+  const schema = z.record(z.string().min(1).max(64).regex(/^[a-z0-9*:-]+$/i), z.enum(['ERROR', 'WARN', 'INFO', 'DEBUG']));
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   // Store log level overrides in Redis for services to pick up dynamically
-  const { getRedisClient } = await import('@coremail/core');
+  const { getRedisClient, LOG_LEVELS_HASH, CHANNEL_LOG_LEVELS } = await import('@coremail/core');
   const redis = getRedisClient();
   for (const [svc, lvl] of Object.entries(parsed.data)) {
-    await redis.hset('config:log-levels', svc, lvl);
+    await redis.hset(LOG_LEVELS_HASH, svc.toLowerCase(), lvl);
   }
   // Publish so services can apply immediately
-  await redis.publish('config:log-levels:updated', JSON.stringify(parsed.data));
+  await redis.publish(CHANNEL_LOG_LEVELS, JSON.stringify(parsed.data));
   res.json({ ok: true });
 });
 

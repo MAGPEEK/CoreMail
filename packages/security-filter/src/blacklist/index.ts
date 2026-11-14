@@ -9,6 +9,46 @@ export interface BlacklistCheckResult {
   matchedPattern?: string;
 }
 
+export interface BlacklistEntryLike {
+  pattern: string;
+  patternType: string; // EXACT | WILDCARD | REGEX
+}
+
+/** Longer user regexes are refused (cheap guard against pathological patterns). */
+const MAX_REGEX_LENGTH = 512;
+
+/**
+ * Pure: does one blacklist entry match the sender address?
+ * EXACT/WILDCARD compare case-insensitively. REGEX patterns are compiled
+ * as written with the `i` flag — they must NOT be lower-cased first
+ * (that turned `\D` into `\d`, `\S` into `\s`, `\W` into `\w`).
+ * Returns null for an invalid regex.
+ */
+export function matchBlacklistEntry(entry: BlacklistEntryLike, fromAddr: string): { matched: boolean; reason: string } | null {
+  const lowerFrom = fromAddr.toLowerCase();
+  const fromDomain = lowerFrom.includes('@') ? lowerFrom.slice(lowerFrom.lastIndexOf('@') + 1) : '';
+
+  if (entry.patternType === 'EXACT') {
+    return { matched: lowerFrom === entry.pattern.toLowerCase(), reason: 'Sender blocked' };
+  }
+  if (entry.patternType === 'WILDCARD') {
+    const pattern = entry.pattern.toLowerCase();
+    if (pattern.startsWith('*@')) {
+      return { matched: fromDomain === pattern.slice(2), reason: 'Sender domain blocked' };
+    }
+    return { matched: matchWildcard(lowerFrom, pattern), reason: 'Sender blocked' };
+  }
+  if (entry.patternType === 'REGEX') {
+    if (entry.pattern.length > MAX_REGEX_LENGTH) return null;
+    try {
+      return { matched: new RegExp(entry.pattern, 'i').test(fromAddr), reason: 'Sender blocked by policy' };
+    } catch {
+      return null;
+    }
+  }
+  return { matched: false, reason: '' };
+}
+
 export async function checkBlacklist(
   fromAddr: string,
   domainId?: string,
@@ -26,38 +66,15 @@ export async function checkBlacklist(
     },
   });
 
-  const lowerFrom = fromAddr.toLowerCase();
-  const [, fromDomain] = lowerFrom.split('@');
-
   for (const entry of entries) {
-    const pattern = entry.pattern.toLowerCase();
-
-    if (entry.patternType === 'EXACT') {
-      if (lowerFrom === pattern) {
-        log.info({ fromAddr, pattern }, 'Blacklist: exact match');
-        return { blocked: true, reason: 'Sender blocked', matchedPattern: pattern };
-      }
-    } else if (entry.patternType === 'WILDCARD') {
-      // Support *@domain.com and user@* patterns
-      if (pattern.startsWith('*@')) {
-        const blockedDomain = pattern.slice(2);
-        if (fromDomain === blockedDomain) {
-          log.info({ fromAddr, pattern }, 'Blacklist: domain wildcard match');
-          return { blocked: true, reason: 'Sender domain blocked', matchedPattern: pattern };
-        }
-      } else if (matchWildcard(lowerFrom, pattern)) {
-        log.info({ fromAddr, pattern }, 'Blacklist: wildcard match');
-        return { blocked: true, reason: 'Sender blocked', matchedPattern: pattern };
-      }
-    } else if (entry.patternType === 'REGEX') {
-      try {
-        if (new RegExp(pattern).test(lowerFrom)) {
-          log.info({ fromAddr, pattern }, 'Blacklist: regex match');
-          return { blocked: true, reason: 'Sender blocked by policy', matchedPattern: pattern };
-        }
-      } catch {
-        log.warn({ pattern }, 'Invalid blacklist regex — skipping');
-      }
+    const m = matchBlacklistEntry(entry, fromAddr);
+    if (m === null) {
+      log.warn({ pattern: entry.pattern }, 'Invalid blacklist regex — skipping');
+      continue;
+    }
+    if (m.matched) {
+      log.info({ fromAddr, pattern: entry.pattern, type: entry.patternType }, 'Blacklist match');
+      return { blocked: true, reason: m.reason, matchedPattern: entry.pattern };
     }
   }
 
@@ -65,6 +82,6 @@ export async function checkBlacklist(
 }
 
 function matchWildcard(str: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
   return new RegExp(`^${escaped}$`).test(str);
 }

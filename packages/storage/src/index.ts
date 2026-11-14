@@ -8,3 +8,4 @@ export * from './protocol-cert.js';
 export * from './sender-identity.js';
 export * from './message-store.js';
 export * from './quarantine.js';
+export * from './queue-options.js';

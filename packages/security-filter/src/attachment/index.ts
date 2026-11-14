@@ -20,42 +20,68 @@ const BLOCKED_MIME_TYPES = new Set([
 // Double extensions that are dangerous (e.g. invoice.pdf.exe)
 const DANGEROUS_DOUBLE_EXT_RE = /\.(pdf|doc|docx|xls|xlsx|zip|rar|img|iso)\.(exe|bat|vbs|js|scr|cmd|com|pif)$/i;
 
+/** Schema defaults of SecuritySettings.attachmentBlockedExt / attachmentMaxSizeMb. */
+export const DEFAULT_BLOCKED_EXTENSIONS: readonly string[] = ['exe', 'vbs', 'js', 'bat', 'cmd', 'scr', 'pif', 'msi', 'hta', 'com'];
+export const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+export interface AttachmentFilterOptions {
+  /** SecuritySettings.attachmentEnabled — false skips the whole filter. */
+  enabled?: boolean;
+  /** Per-attachment size limit in bytes (SecuritySettings.attachmentMaxSizeMb). */
+  maxSizeBytes?: number;
+  /** Blocked file extensions without dot, case-insensitive (SecuritySettings.attachmentBlockedExt). */
+  blockedExtensions?: readonly string[];
+}
+
 export interface AttachmentFilterResult {
   blocked: boolean;
   reason?: string;
   filename?: string;
 }
 
+/** 'EXE' / '.exe' / ' exe ' → 'exe'; '' for garbage. */
+export function normalizeExtension(ext: string): string {
+  return ext.trim().toLowerCase().replace(/^\.+/, '');
+}
+
+/** Extension of a filename after stripping trailing dots/spaces (Windows ignores them: "a.exe. " runs as .exe). */
+export function fileExtension(filename: string): string {
+  const name = filename.replace(/[\s.]+$/, '');
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
 export function checkAttachments(
   attachments: ParsedAttachment[],
-  maxSizeBytes = 50 * 1024 * 1024, // 50 MB default
+  opts: AttachmentFilterOptions | number = {},
 ): AttachmentFilterResult {
+  // Backwards compatible signature: checkAttachments(atts, maxSizeBytes)
+  const o: AttachmentFilterOptions = typeof opts === 'number' ? { maxSizeBytes: opts } : opts;
+  if (o.enabled === false) return { blocked: false };
+  const maxSizeBytes = o.maxSizeBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+  const blockedExt = new Set((o.blockedExtensions ?? DEFAULT_BLOCKED_EXTENSIONS).map(normalizeExtension).filter(Boolean));
+
   for (const att of attachments) {
-    if (BLOCKED_MIME_TYPES.has(att.mimeType.toLowerCase())) {
-      log.warn({ filename: att.filename, mimeType: att.mimeType }, 'Attachment: blocked MIME type');
-      return {
-        blocked: true,
-        reason: `Attachment type not allowed: ${att.mimeType}`,
-        filename: att.filename,
-      };
+    const filename = att.filename ?? '';
+    if (BLOCKED_MIME_TYPES.has((att.mimeType ?? '').toLowerCase())) {
+      log.warn({ filename, mimeType: att.mimeType }, 'Attachment: blocked MIME type');
+      return { blocked: true, reason: `Attachment type not allowed: ${att.mimeType}`, filename };
     }
 
-    if (DANGEROUS_DOUBLE_EXT_RE.test(att.filename)) {
-      log.warn({ filename: att.filename }, 'Attachment: dangerous double extension');
-      return {
-        blocked: true,
-        reason: `Dangerous file extension: ${att.filename}`,
-        filename: att.filename,
-      };
+    if (DANGEROUS_DOUBLE_EXT_RE.test(filename.replace(/[\s.]+$/, ''))) {
+      log.warn({ filename }, 'Attachment: dangerous double extension');
+      return { blocked: true, reason: `Dangerous file extension: ${filename}`, filename };
+    }
+
+    const ext = fileExtension(filename);
+    if (ext && blockedExt.has(ext)) {
+      log.warn({ filename, ext }, 'Attachment: blocked extension');
+      return { blocked: true, reason: `Attachment extension not allowed: .${ext}`, filename };
     }
 
     if (att.size > maxSizeBytes) {
-      log.warn({ filename: att.filename, size: att.size }, 'Attachment: too large');
-      return {
-        blocked: true,
-        reason: `Attachment too large: ${att.filename} (${att.size} bytes)`,
-        filename: att.filename,
-      };
+      log.warn({ filename, size: att.size }, 'Attachment: too large');
+      return { blocked: true, reason: `Attachment too large: ${filename} (${att.size} bytes)`, filename };
     }
   }
 

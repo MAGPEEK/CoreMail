@@ -15,11 +15,35 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { prisma } from '@coremail/storage/prisma';
 import { requireAuth } from '../middleware/auth.js';
 import { sendPushToUser, getVapidPublicKey } from '../lib/push.js';
+import { assertPublicHttpsUrl, type HostResolver } from '@coremail/core';
 
 export const pushRouter: RouterType = Router();
 pushRouter.use(requireAuth);
 
 const VALID_TOPICS = ['mail.new', 'calendar.reminder', 'system.alert'];
+
+const B64URL_RE = /^[A-Za-z0-9_-]+={0,2}$/;
+
+/**
+ * Pure-ish validation of a Web Push subscription: endpoint must be a public
+ * https URL (SSRF guard, all resolved addresses public), keys base64url with
+ * plausible sizes (p256dh = 65-byte EC point, auth = 16 bytes).
+ */
+export async function validatePushSubscription(
+  sub: { endpoint: string; keys: { p256dh: string; auth: string } },
+  resolve?: HostResolver,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (sub.endpoint.length > 2048) return { ok: false, error: 'endpoint too long' };
+  try {
+    await assertPublicHttpsUrl(sub.endpoint, resolve);
+  } catch (e) {
+    return { ok: false, error: `endpoint not allowed: ${(e as Error).message}` };
+  }
+  const { p256dh, auth } = sub.keys;
+  if (!B64URL_RE.test(p256dh) || Buffer.from(p256dh, 'base64url').length !== 65) return { ok: false, error: 'invalid p256dh key' };
+  if (!B64URL_RE.test(auth) || Buffer.from(auth, 'base64url').length !== 16) return { ok: false, error: 'invalid auth key' };
+  return { ok: true };
+}
 
 /**
  * GET /api/v1/push/vapid-public-key
@@ -52,25 +76,34 @@ pushRouter.post('/subscribe', async (req: Request, res: Response) => {
     return;
   }
 
-  const normalizedTopics = (topics ?? ['mail.new']).filter((t) => VALID_TOPICS.includes(t));
+  const check = await validatePushSubscription({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
+  if (!check.ok) { res.status(400).json({ error: check.error }); return; }
 
-  const subscription = await prisma.pushSubscription.upsert({
-    where: { endpoint },
-    create: {
-      userId: req.apiUser!.userId,
-      endpoint,
-      p256dhKey: keys.p256dh,
-      authKey: keys.auth,
-      topics: normalizedTopics,
-      userAgent: userAgent ?? req.get('user-agent') ?? '',
-    },
-    update: {
-      p256dhKey: keys.p256dh,
-      authKey: keys.auth,
-      topics: normalizedTopics,
-    },
-    select: { id: true, endpoint: true, topics: true, createdAt: true },
-  });
+  const normalizedTopics = (Array.isArray(topics) ? topics : ['mail.new']).filter((t) => VALID_TOPICS.includes(t));
+  const userId = req.apiUser!.userId;
+
+  // Scoped to the caller: an endpoint registered by another account (same
+  // browser, different login) is taken over — the old owner's row is removed,
+  // never updated in place under its userId.
+  const existing = await prisma.pushSubscription.findUnique({ where: { endpoint }, select: { id: true, userId: true } });
+  if (existing && existing.userId !== userId) {
+    await prisma.pushSubscription.delete({ where: { id: existing.id } });
+  }
+  const data = {
+    p256dhKey: keys.p256dh,
+    authKey: keys.auth,
+    topics: normalizedTopics,
+  };
+  const subscription = existing && existing.userId === userId
+    ? await prisma.pushSubscription.update({
+        where: { id: existing.id },
+        data,
+        select: { id: true, endpoint: true, topics: true, createdAt: true },
+      })
+    : await prisma.pushSubscription.create({
+        data: { userId, endpoint, ...data, userAgent: String(userAgent ?? req.get('user-agent') ?? '').slice(0, 512) },
+        select: { id: true, endpoint: true, topics: true, createdAt: true },
+      });
 
   res.status(201).json(subscription);
 });

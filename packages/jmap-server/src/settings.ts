@@ -59,6 +59,15 @@ export async function publicBaseUrl(req: Request): Promise<string> {
   return `${proto}://${host}`;
 }
 
+/** Configured public origin (null while publicHostname is the placeholder). */
+export async function configuredPublicOrigin(): Promise<string | null> {
+  const s = await loadSettings();
+  if (!s.publicHostname || s.publicHostname === 'mail.local') return null;
+  const proto = s.useHttps ? 'https' : 'http';
+  const portSuffix = (s.useHttps && s.httpPort === 443) || (!s.useHttps && s.httpPort === 80) ? '' : `:${s.httpPort}`;
+  return `${proto}://${s.publicHostname}${portSuffix}`.toLowerCase();
+}
+
 export async function maxMessageSizeBytes(): Promise<number> {
   const s = await loadSettings();
   return s.maxMessageSizeMb * 1024 * 1024;

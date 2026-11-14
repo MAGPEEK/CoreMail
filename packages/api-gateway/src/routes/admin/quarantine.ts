@@ -10,6 +10,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, downloadBuffer } from '@coremail/storage';
+import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
 import { requireAdmin } from '../../middleware/auth.js';
@@ -45,11 +46,8 @@ const releaseDeps: ReleaseDeps = {
   download: (path) => downloadBuffer(path),
   enqueue: async (job: ReleaseJob) => {
     const added = await getOutboundQueue().add('send', job, {
+      ...(await getOutboundJobOptions()),
       jobId: job.messageId,
-      attempts: 10,
-      backoff: { type: 'exponential', delay: 60_000 },
-      removeOnComplete: { count: 100 },
-      removeOnFail: { count: 500 },
     });
     return added.id ?? '';
   },

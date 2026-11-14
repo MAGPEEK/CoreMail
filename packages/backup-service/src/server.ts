@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import { z } from 'zod';
 import { connectDatabase } from '@coremail/storage';
@@ -388,6 +389,7 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
 
 async function start() {
   await connectDatabase();
+  void initRuntimeLogLevel('backup-service', { aliases: ['backup'] }); // BCP per-service log level
   // v5.6.0: initJwtKeys() removed (back to HS256)
   getRedisClient();
 

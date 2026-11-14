@@ -17,7 +17,8 @@
 
 import webPush from 'web-push';
 import { prisma } from '@coremail/storage/prisma';
-import { createLogger } from '@coremail/core';
+import https from 'node:https';
+import { createLogger, assertPublicHttpsUrl, safeLookup } from '@coremail/core';
 
 const log = createLogger('push');
 
@@ -27,6 +28,14 @@ const VAPID_PRIVATE_KEY = process.env['VAPID_PRIVATE_KEY'] ?? '';
 const VAPID_SUBJECT     = process.env['VAPID_SUBJECT']     ?? 'mailto:admin@coremail.local';
 
 let vapidConfigured = false;
+
+/**
+ * SSRF guard: push endpoints are user-supplied URLs. https only, every
+ * resolved address must be public, and the agent re-checks the address at
+ * connect time (DNS rebinding). web-push does not follow redirects.
+ */
+const pushAgent = new https.Agent({ lookup: safeLookup as never, keepAlive: true });
+
 
 function ensureVapidConfigured(): void {
   if (vapidConfigured) return;
@@ -71,13 +80,20 @@ export async function sendPushToUser(
   await Promise.allSettled(
     subscriptions.map(async (sub) => {
       try {
+        try {
+          await assertPublicHttpsUrl(sub.endpoint);
+        } catch (e) {
+          log.warn({ userId, endpoint: sub.endpoint.slice(0, 40), err: (e as Error).message }, 'Push endpoint refused (SSRF guard) — removing subscription');
+          staleIds.push(sub.id);
+          return;
+        }
         await webPush.sendNotification(
           {
             endpoint: sub.endpoint,
             keys: { p256dh: sub.p256dhKey, auth: sub.authKey },
           },
           payloadStr,
-          { TTL: 86400 }, // 24h TTL
+          { TTL: 86400, agent: pushAgent }, // 24h TTL
         );
         log.debug({ userId, topic, endpoint: sub.endpoint.slice(0, 40) }, 'Push sent');
       } catch (err: unknown) {

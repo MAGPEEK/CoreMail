@@ -18,8 +18,12 @@ test('uses the BullMQ queue consumed by the smtp-server worker (hyphen, not colo
 });
 
 test('retry options: defaults 10 × 60 s exponential, overridable by QueueSettings', () => {
-  assert.deepEqual(outboundJobOptions('eas-1', null),
-    { jobId: 'eas-1', attempts: 10, backoff: { type: 'exponential', delay: 60_000 } });
-  assert.deepEqual(outboundJobOptions('eas-2', { maxRetryAttempts: 3, retryBackoffDelaySec: 30 }),
-    { jobId: 'eas-2', attempts: 3, backoff: { type: 'exponential', delay: 30_000 } });
+  const d = outboundJobOptions('eas-1', null);
+  assert.equal(d.jobId, 'eas-1');
+  assert.equal(d.attempts, 10);
+  assert.deepEqual(d.backoff, { type: 'exponential', delay: 60_000 });
+  const o = outboundJobOptions('eas-2', { maxRetryAttempts: 3, retryBackoffDelaySec: 30, completedRetentionHours: 2 });
+  assert.equal(o.attempts, 3);
+  assert.deepEqual(o.backoff, { type: 'exponential', delay: 30_000 });
+  assert.deepEqual(o.removeOnComplete, { age: 7200, count: 100 });
 });

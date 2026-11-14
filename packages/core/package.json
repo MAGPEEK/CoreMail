@@ -10,7 +10,8 @@
     "./types": "./dist/types/index.js",
     "./config": "./dist/config/index.js",
     "./logger": "./dist/logger/index.js",
-    "./calendar": "./dist/calendar/ical.js"
+    "./calendar": "./dist/calendar/ical.js",
+    "./ssrf": "./dist/net/ssrf.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

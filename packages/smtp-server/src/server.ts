@@ -1,3 +1,4 @@
+import { initRuntimeLogLevel } from '@coremail/core';
 import net from 'node:net';
 import { X509Certificate } from 'node:crypto';
 import {
@@ -370,6 +371,7 @@ async function reloadListeners(): Promise<void> {
 
 async function main(): Promise<void> {
   await connectDatabase();
+  void initRuntimeLogLevel('smtp-server', { aliases: ['smtp'] }); // BCP per-service log level
   await ensureBuckets();
   await refreshHostname();
   await refreshTlsConfig(); // load certificate or generate self-signed
