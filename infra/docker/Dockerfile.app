@@ -17,7 +17,7 @@
 #   3000  api-gateway
 #   3002  security-filter 3003  auth-service
 #   3004  backup-service  3005  activesync
-#   8080  ews-server      8081  autodiscover
+#   8081  autodiscover
 #   8082  caldav-server   3006  jmap-server
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,6 @@ COPY packages/storage/package.json        ./packages/storage/
 COPY packages/smtp-server/package.json    ./packages/smtp-server/
 COPY packages/imap-server/package.json    ./packages/imap-server/
 COPY packages/pop3-server/package.json    ./packages/pop3-server/
-COPY packages/ews-server/package.json     ./packages/ews-server/
 COPY packages/autodiscover/package.json   ./packages/autodiscover/
 COPY packages/caldav-server/package.json  ./packages/caldav-server/
 COPY packages/api-gateway/package.json    ./packages/api-gateway/
@@ -60,7 +59,6 @@ COPY packages/storage       ./packages/storage
 COPY packages/smtp-server   ./packages/smtp-server
 COPY packages/imap-server   ./packages/imap-server
 COPY packages/pop3-server   ./packages/pop3-server
-COPY packages/ews-server    ./packages/ews-server
 COPY packages/autodiscover  ./packages/autodiscover
 COPY packages/caldav-server ./packages/caldav-server
 COPY packages/api-gateway   ./packages/api-gateway
@@ -80,7 +78,6 @@ RUN pnpm --filter @coremail/storage build
 RUN pnpm --filter @coremail/smtp-server    build \
  && pnpm --filter @coremail/imap-server    build \
  && pnpm --filter @coremail/pop3-server    build \
- && pnpm --filter @coremail/ews-server     build \
  && pnpm --filter @coremail/autodiscover   build \
  && pnpm --filter @coremail/caldav-server  build \
  && pnpm --filter @coremail/api-gateway    build \
@@ -109,10 +106,8 @@ COPY packages/admin-panel ./packages/admin-panel
 
 # Build-time arguments (can be overridden during the image build)
 ARG VITE_API_BASE_URL=/api/v1
-ARG VITE_EWS_URL=/EWS/Exchange.asmx
 
 RUN VITE_API_BASE_URL=${VITE_API_BASE_URL} \
-    VITE_EWS_URL=${VITE_EWS_URL} \
     pnpm --filter @coremail/web-client build
 
 RUN VITE_API_BASE_URL=${VITE_API_BASE_URL} \
@@ -162,8 +157,6 @@ COPY --from=builder /app/packages/imap-server/package.json    ./packages/imap-se
 COPY --from=builder /app/packages/imap-server/dist            ./packages/imap-server/dist
 COPY --from=builder /app/packages/pop3-server/package.json    ./packages/pop3-server/
 COPY --from=builder /app/packages/pop3-server/dist            ./packages/pop3-server/dist
-COPY --from=builder /app/packages/ews-server/package.json     ./packages/ews-server/
-COPY --from=builder /app/packages/ews-server/dist             ./packages/ews-server/dist
 COPY --from=builder /app/packages/autodiscover/package.json   ./packages/autodiscover/
 COPY --from=builder /app/packages/autodiscover/dist           ./packages/autodiscover/dist
 COPY --from=builder /app/packages/caldav-server/package.json  ./packages/caldav-server/
@@ -226,13 +219,12 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail \
  && chmod 750 /var/log/supervisor /var/run/supervisor
 
 # Ports:
-#   3000 — HTTP (OWA, ECP, API, Auth, EWS proxy, ActiveSync proxy)
+#   3000 — HTTP (OWA, ECP, API, Auth, JMAP, ActiveSync, CalDAV, Autodiscover proxy)
 #         → TLS termination external (Traefik, Caddy, DSM Application Portal …)
-#   8080 — EWS/Autodiscover (direct access optional)
 #   25/465/587 — SMTP
 #   143/993    — IMAP
 #   110/995    — POP3
-EXPOSE 3000 8080 25 465 587 143 993 110 995
+EXPOSE 3000 25 465 587 143 993 110 995
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
   CMD curl -sf http://localhost:3000/healthz || exit 1

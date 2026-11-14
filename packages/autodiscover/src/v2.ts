@@ -5,12 +5,13 @@ import { getServerConfig } from './settings.js';
 const log = createLogger('autodiscover:v2');
 
 // Autodiscover v2 — JSON response (Outlook 2019/2022/365)
-// GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol={EWS|AutodiscoverV1|IMAP|SMTP}
+// GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol={AutodiscoverV1|IMAP|SMTP|ActiveSync}
+// EWS was removed in v7.0.0: Protocol=EWS answers 404 NoSuchProtocol.
 export async function handleAutodiscoverV2(req: Request, res: Response): Promise<void> {
   // Express has already percent-decoded the route param. A second decode used
   // to throw URIError on input like "%25E0%25A4%25A" and crash the process.
   const email = req.params['email'] ?? '';
-  const protocol = (req.query['Protocol'] as string | undefined)?.toLowerCase() ?? 'ews';
+  const protocol = (req.query['Protocol'] as string | undefined)?.toLowerCase() ?? '';
 
   log.info({ email, protocol }, 'Autodiscover v2 request');
 
@@ -30,16 +31,9 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
     return;
   }
 
-  // EWS is optional (BCP → Server → "Exchange Web Services (EWS)").
+  // v7.0.0: Exchange Web Services removed — never announce an EWS URL.
   if (protocol === 'ews') {
-    if (!cfg.ewsEnabled) {
-      res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: 'EWS is disabled (enable "Exchange Web Services (EWS)" in BCP → Server)' });
-      return;
-    }
-    res.json({
-      Protocol: 'EWS',
-      Url: cfg.ewsUrl,
-    });
+    res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: 'EWS is not supported (use IMAP/SMTP, JMAP or ActiveSync)' });
     return;
   }
 

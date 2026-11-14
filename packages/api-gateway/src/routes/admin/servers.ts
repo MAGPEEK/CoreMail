@@ -21,7 +21,6 @@ const SettingsSchema = z.object({
   publicHostname:   z.string().min(1),
   useHttps:         z.boolean(),
   httpPort:         z.number().int().min(1).max(65535),
-  ewsUrl:           z.string().url(),
   owaUrl:           z.string().url(),
   easUrl:           z.string().url(),
   autodiscoverBase: z.string().url(),
@@ -35,10 +34,8 @@ const SettingsSchema = z.object({
   smtpPort:         z.number().int().min(1).max(65535),
   smtpTls:          z.boolean(),
   orgName:          z.string().min(1),
-  // EWS on/off (default off) — historical field name from the removed MAPI
-  // over HTTP feature. Optional in the request so that older BCP builds
-  // without the field can still save.
-  mapiHttpEnabled:  z.boolean().optional(),
+  // v7.0.0: ewsUrl + the EWS on/off switch were removed with EWS. zod strips
+  // unknown keys, so older BCP builds that still send them can save.
   // v5.7.1: JMAP (RFC 8620/8621) on/off — default on
   jmapEnabled:      z.boolean().optional(),
 });
@@ -86,12 +83,11 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
     // Autodiscover would return wrong addresses. We check: does the request
     // contain old mail.local URLs OR do URLs still point to port 8080 although
     // httpPort != 8080? Then auto-derive from publicHostname.
-    const requestUrls = [parsed.data.ewsUrl, parsed.data.owaUrl, parsed.data.easUrl, parsed.data.autodiscoverBase];
+    const requestUrls = [parsed.data.owaUrl, parsed.data.easUrl, parsed.data.autodiscoverBase];
     const hasStaleUrls = requestUrls.some((u) => /mail\.local/i.test(u)) ||
                          (parsed.data.httpPort !== 8080 && requestUrls.some((u) => /:8080/.test(u)));
     if (hasStaleUrls) {
       const derived = deriveServerUrls(parsed.data.publicHostname, parsed.data.useHttps, parsed.data.httpPort);
-      parsed.data.ewsUrl           = derived.ewsUrl;
       parsed.data.owaUrl           = derived.owaUrl;
       parsed.data.easUrl           = derived.easUrl;
       parsed.data.autodiscoverBase = derived.autodiscoverBase;
@@ -99,10 +95,9 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
     }
 
     // exactOptionalPropertyTypes: undefined must not be passed through to Prisma
-    const { mapiHttpEnabled, jmapEnabled, ...rest } = parsed.data;
+    const { jmapEnabled, ...rest } = parsed.data;
     const data = {
       ...rest,
-      ...(mapiHttpEnabled !== undefined ? { mapiHttpEnabled } : {}),
       ...(jmapEnabled !== undefined ? { jmapEnabled } : {}),
     };
     const settings = await prisma.serverSettings.upsert({
@@ -110,7 +105,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
       create: { id: 'singleton', ...data },
       update: data,
     });
-    log.info({ hostname: parsed.data.publicHostname, mapiHttpEnabled: settings.mapiHttpEnabled, jmapEnabled: settings.jmapEnabled }, 'Server settings updated');
+    log.info({ hostname: parsed.data.publicHostname, jmapEnabled: settings.jmapEnabled }, 'Server settings updated');
 
     // Notify SMTP / IMAP / POP3 + autodiscover services to pick up new hostname
     try {
@@ -167,7 +162,6 @@ adminServersRouter.post('/settings/derive', async (req: Request, res: Response) 
     publicHostname,
     useHttps,
     httpPort,
-    ewsUrl:           `${base}/EWS/Exchange.asmx`,
     owaUrl:           `${base}/owa/`,
     easUrl:           `${base}/Microsoft-Server-ActiveSync`,
     autodiscoverBase,

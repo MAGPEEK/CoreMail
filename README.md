@@ -20,11 +20,11 @@
 
 **CoreMail** is a complete, self-hosted mail server for small and medium-sized businesses with **10–500 users** — no licence fees, no vendor lock-in, full data sovereignty.
 
-**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — standard clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) connect via IMAP/SMTP. Optionally enabled: **EWS** (Exchange Web Services) for EWS-capable clients. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
+**🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — standard clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) connect via IMAP/SMTP. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
 
 > **Current version: v6.0.0** — security and cleanup release: fixes from a full code review (authentication, JMAP, XSS, cross-mailbox access, SMTP/IMAP protocol bugs, lost mobile mail, DKIM for client submission, retention), dead code removed, automated tests for every fix · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
-> **Note on Outlook**: Set up Outlook via **"Other email accounts" → IMAP**, with calendar + contacts via CalDAV/CardDAV (Apple Calendar, Outlook CalDav Synchronizer plugin, Thunderbird Lightning). EWS (Exchange Web Services) can optionally be enabled for EWS-capable clients (BCP → Server → "Exchange Web Services (EWS)", default off).
+> **Note on Outlook**: Set up Outlook via **"Other email accounts" → IMAP**, with calendar + contacts via CalDAV/CardDAV (Apple Calendar, Outlook CalDav Synchronizer plugin, Thunderbird Lightning). Exchange Web Services (EWS) is not supported (removed in v7.0.0).
 >
 > **Note (since v5.6.0)**: The OAuth2 authorization server under `/oauth2/*` has been removed entirely — in practice, XOAUTH2 has no mainstream client UI support for non-Microsoft servers. JWT is back on HS256 (`JWT_SECRET`). REST API + MWA/BCP use session JWTs via `/auth/login`; mail clients use app passwords.
 >
@@ -64,7 +64,6 @@
 | IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ⚠️ ESEARCH, LIST-EXTENDED, LIST-STATUS and QUOTA are advertised but not implemented; SEARCH supports flag criteria only; STATUS SIZE always returns 0 | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
 | **POP3** (port 995 implicit TLS, port 110 plaintext) + USER/PASS + app-password support | ⚠️ no STLS and no SASL; messages are delivered as plain text only (no HTML, no attachments) | 1939 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
-| EWS — Exchange Web Services (optional, default off) | ⚙️ | MS-OXWSCORE |
 | Admin CLI `coremail` inside the container (users, mailboxes, connectors, banner, certificates) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ⚠️ after the initial sync, new mail is not delivered to the device (the sync key is not compared against the mailbox change counter) |
@@ -93,7 +92,7 @@
 | Personal calendar | ⚠️ the all-day flag and recurrence rule of events created in MWA are not stored in the event fields |
 | Shared team calendars | ✅ |
 | Meeting requests (iCal standard) | ✅ |
-| Free/busy lookup | ⚠️ only your own calendars and calendars shared with you; recurring events are not expanded; EWS GetUserAvailability returns no events |
+| Free/busy lookup | ⚠️ only your own calendars and calendars shared with you; recurring events are not expanded |
 | Room and resource booking with auto-accept | ⚠️ only for invitations arriving via inbound SMTP; the organizer gets no reply; pending bookings cannot be approved; time zones are not handled reliably |
 | CalDAV (iOS, Android, Thunderbird) | ⚠️ REPORT and MKCALENDAR are answered with 405, so most sync clients cannot sync; ETags never change |
 | Contacts & CardDAV | ⚠️ contacts work in MWA; CardDAV REPORT is answered with 405 |
@@ -231,7 +230,7 @@ The MFA code cannot be transmitted via IMAP/SMTP/POP3/ActiveSync, so these proto
 
 ### Note on Outlook 2024 LTSC
 
-Outlook 2024 LTSC enforces **Modern Auth (OAuth2)** on Exchange endpoints and accepts only Microsoft Entra ID as identity provider. For non-Microsoft servers (such as CoreMail) the practical configuration there is **IMAP+SMTP** (via "Other email accounts"); Outlook cannot set CoreMail up as an "Exchange account". **EWS** is optional (BCP → Server → "Exchange Web Services (EWS)", default off): `/EWS/*` and `/OAB/*` only respond while this toggle is active.
+Outlook 2024 LTSC enforces **Modern Auth (OAuth2)** on Exchange endpoints and accepts only Microsoft Entra ID as identity provider. For non-Microsoft servers (such as CoreMail) the practical configuration there is **IMAP+SMTP** (via "Other email accounts"); Outlook cannot set CoreMail up as an "Exchange account". **EWS** was removed in v7.0.0: `/EWS/*` and `/OAB/*` return 404.
 
 ---
 
@@ -323,7 +322,7 @@ CoreMail consists of **six containers** (one custom image, five standard images)
 | `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live updates |
 | `minio` | `minio/minio` | Object storage for attachments, quarantine and backups |
 
-The app container (`coremail`) internally holds all mail services — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, optionally EWS, webmail, admin panel and the admin CLI — managed by `supervisord`. Externally, port 3000 (HTTP), 80/443 (ACME + HTTPS) and the mail ports (25, 465, 587, 143, 993, 110, 995) are exposed.
+The app container (`coremail`) internally holds all mail services — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, webmail, admin panel and the admin CLI — managed by `supervisord`. Externally, port 3000 (HTTP), 80/443 (ACME + HTTPS) and the mail ports (25, 465, 587, 143, 993, 110, 995) are exposed.
 
 ### The `docker-compose.yml`
 
@@ -402,7 +401,6 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 | `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access) |
 | `https://<MAIL_HOSTNAME>/bcp/` | Admin panel (BCP — Backend Control Panel) |
 | `https://<MAIL_HOSTNAME>/.well-known/jmap` | JMAP discovery |
-| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS clients (only with **Exchange Web Services (EWS)** enabled) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
 | `http://localhost:9001` | MinIO web console (local only) |
@@ -522,7 +520,7 @@ coremail user delete max@example.de
 coremail mailbox list --sort used                    # mailboxes with usage
 coremail shared create team@example.de --name "Team" # Shared Mailbox …
 coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS   # … grant permissions
-coremail connector status                            # SMTP/IMAP/POP3/JMAP/EWS with ports and state
+coremail connector status                            # SMTP/IMAP/POP3/JMAP with ports and state
 coremail connector disable pop3                      # connector off (on: enable; single port: --port 995)
 coremail connector listener set <id> --port 1143 --ssl false
 coremail smtp banner set "mail.example.de ESMTP"     # SMTP greeting (reset: default)

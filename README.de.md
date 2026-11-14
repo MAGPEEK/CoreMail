@@ -20,11 +20,11 @@
 
 **CoreMail** ist ein vollständiger, selbst gehosteter Mailserver für Klein- und Mittelunternehmen mit **10–500 Benutzern** — ohne Lizenzkosten, ohne Vendor Lock-in, mit voller Datensouveränität.
 
-**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — Standard-Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) verbinden sich über IMAP/SMTP. Optional zuschaltbar: **EWS** (Exchange Web Services) für EWS-fähige Clients. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
+**🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — Standard-Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) verbinden sich über IMAP/SMTP. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
 > **Aktuelle Version: v6.0.0** — Sicherheits- und Aufräum-Release: Fixes aus einem vollständigen Code-Review (Authentifizierung, JMAP, XSS, Zugriff auf fremde Postfächer, SMTP-/IMAP-Protokollfehler, verlorene Handy-Mails, DKIM beim Client-Versand, Aufbewahrung), toter Code entfernt, automatisierte Tests für jeden Fix · Admin-CLI `coremail` ([Doku](docs/cli.md)) · JMAP-Server ([Doku](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
-> **Hinweis zu Outlook**: Outlook wird über **„Andere E-Mail-Konten" → IMAP** eingerichtet, Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning). EWS (Exchange Web Services) lässt sich für EWS-fähige Clients optional aktivieren (BCP → Server → „Exchange Web Services (EWS)“, Default aus).
+> **Hinweis zu Outlook**: Outlook wird über **„Andere E-Mail-Konten" → IMAP** eingerichtet, Kalender + Kontakte via CalDAV/CardDAV (Apple Kalender, Outlook-CalDav-Synchronizer-Plugin, Thunderbird Lightning). Exchange Web Services (EWS) wird nicht unterstützt (in v7.0.0 entfernt).
 >
 > **Hinweis (seit v5.6.0)**: Der OAuth2-Authorization-Server unter `/oauth2/*` wurde komplett entfernt — XOAUTH2 hat in der Praxis keine Mainstream-Client-UI-Unterstützung für non-Microsoft-Server. JWT läuft jetzt wieder mit HS256 (`JWT_SECRET`). REST-API + MWA/BCP nutzen Session-JWTs über `/auth/login`, Mail-Clients App-Passwörter.
 >
@@ -64,7 +64,6 @@
 | IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, LIST-EXTENDED, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID | ⚠️ ESEARCH, LIST-EXTENDED, LIST-STATUS und QUOTA werden angekündigt, sind aber nicht implementiert; SEARCH kennt nur Flag-Kriterien; STATUS SIZE liefert immer 0 | 2087, 2971, 3502, 3691, 4314, 4978, 5161, 5256, 5267, 5258, 6154, 6851 |
 | **POP3** (Port 995 implicit-TLS, Port 110 Klartext) + USER/PASS + App-Password-Support | ⚠️ kein STLS und kein SASL; Nachrichten werden nur als Klartext ausgeliefert (ohne HTML, ohne Anhänge) | 1939 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
-| EWS — Exchange Web Services (optional, Default aus) | ⚙️ | MS-OXWSCORE |
 | Admin-CLI `coremail` im Container (Benutzer, Postfächer, Konnektoren, Banner, Zertifikate) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile | ⚠️ nach der Erstsynchronisation kommen neue Mails nicht mehr auf dem Gerät an (Sync-Key wird nicht mit dem Änderungszähler des Postfachs verglichen) |
@@ -93,7 +92,7 @@
 | Persönlicher Kalender | ⚠️ Ganztags-Flag und Wiederholungsregel von im MWA angelegten Terminen werden nicht in den Terminfeldern gespeichert |
 | Geteilte Teamkalender | ✅ |
 | Besprechungsanfragen (iCal-Standard) | ✅ |
-| Frei/Gebucht-Abfrage | ⚠️ nur eigene und mit dir geteilte Kalender; Serientermine werden nicht aufgelöst; EWS GetUserAvailability liefert keine Termine |
+| Frei/Gebucht-Abfrage | ⚠️ nur eigene und mit dir geteilte Kalender; Serientermine werden nicht aufgelöst |
 | Raum- und Ressourcenbuchung mit Auto-Accept | ⚠️ nur für Einladungen, die per eingehendem SMTP ankommen; der Organisator erhält keine Antwort; ausstehende Buchungen können nicht genehmigt werden; Zeitzonen werden nicht zuverlässig behandelt |
 | CalDAV (iOS, Android, Thunderbird) | ⚠️ REPORT und MKCALENDAR werden mit 405 beantwortet, daher können die meisten Sync-Clients nicht synchronisieren; ETags ändern sich nie |
 | Kontakte & CardDAV | ⚠️ Kontakte funktionieren im MWA; CardDAV-REPORT wird mit 405 beantwortet |
@@ -231,7 +230,7 @@ Der MFA-Code lässt sich über IMAP/SMTP/POP3/ActiveSync nicht übertragen, dahe
 
 ### Hinweis zu Outlook 2024 LTSC
 
-Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist dort die praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"); als „Exchange-Konto“ lässt sich CoreMail in Outlook nicht einrichten. **EWS** ist optional (BCP → Server → „Exchange Web Services (EWS)“, Default aus): `/EWS/*` und `/OAB/*` antworten nur, wenn dieser Schalter aktiv ist.
+Outlook 2024 LTSC erzwingt **Modern Auth (OAuth2)** auf Exchange-Endpoints und akzeptiert nur Microsoft-Entra-ID als Identity-Provider. Für non-Microsoft-Server (wie CoreMail) ist dort die praktikable Konfiguration **IMAP+SMTP** (über „Andere E-Mail-Konten"); als „Exchange-Konto“ lässt sich CoreMail in Outlook nicht einrichten. **EWS** wurde in v7.0.0 entfernt: `/EWS/*` und `/OAB/*` liefern 404.
 
 ---
 
@@ -323,7 +322,7 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 | `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Updates |
 | `minio` | `minio/minio` | Objektspeicher für Anhänge, Quarantäne und Backups |
 
-Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, optional EWS, Webmail, Admin-Panel und die Admin-CLI — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP), 80/443 (ACME + HTTPS) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
+Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, Webmail, Admin-Panel und die Admin-CLI — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP), 80/443 (ACME + HTTPS) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
 
 ### Die `docker-compose.yml`
 
@@ -402,7 +401,6 @@ docker compose -f infra/docker/docker-compose.yml logs -f coremail
 | `https://<MAIL_HOSTNAME>/` | Webmail (MWA — Mail Web Access) |
 | `https://<MAIL_HOSTNAME>/bcp/` | Admin-Panel (BCP — Backend Control Panel) |
 | `https://<MAIL_HOSTNAME>/.well-known/jmap` | JMAP-Discovery |
-| `https://<MAIL_HOSTNAME>/EWS/Exchange.asmx` | EWS-Clients (nur bei aktivem **Exchange Web Services (EWS)**) |
 | `https://<MAIL_HOSTNAME>/Microsoft-Server-ActiveSync` | ActiveSync (iOS / Android / Outlook Mobile) |
 | `https://<MAIL_HOSTNAME>/Autodiscover/Autodiscover.xml` | Autodiscover |
 | `http://localhost:9001` | MinIO Web-Konsole (nur lokal) |
@@ -522,7 +520,7 @@ coremail user delete max@example.de
 coremail mailbox list --sort used                    # Postfächer mit Belegung
 coremail shared create team@example.de --name "Team" # Shared Mailbox …
 coremail shared grant team@example.de max@example.de FULL_ACCESS SEND_AS   # … berechtigen
-coremail connector status                            # SMTP/IMAP/POP3/JMAP/EWS mit Ports und Zustand
+coremail connector status                            # SMTP/IMAP/POP3/JMAP mit Ports und Zustand
 coremail connector disable pop3                      # Konnektor aus (an: enable; einzelner Port: --port 995)
 coremail connector listener set <id> --port 1143 --ssl false
 coremail smtp banner set "mail.example.de ESMTP"     # SMTP-Begrüßung (reset: Standard)

@@ -105,13 +105,14 @@ coremail domain list
 | `imap` | IMAP 143 / IMAPS 993 |
 | `pop3` | POP3 110 / POP3S 995 |
 | `jmap` | JMAP (`/jmap`, `/.well-known/jmap`) — switch in the server settings |
-| `ews` | Exchange Web Services (`/EWS`, `/OAB`) — switch in the server settings (`mapi` is still accepted as a deprecated alias) |
+
+The `ews` connector (and its deprecated `mapi` alias) was removed in v7.0.0 together with Exchange Web Services.
 
 ```bash
 coremail connector status                    # all services, ports, TLS, state
 coremail connector disable pop3              # all POP3 listeners off
 coremail connector enable pop3 --port 995    # a single port only
-coremail connector enable jmap | disable ews
+coremail connector disable jmap              # JMAP off (enable jmap: back on)
 
 coremail connector listener list [imap]
 coremail connector listener add imap --port 1143 [--address 0.0.0.0] [--ssl false] [--inactive]

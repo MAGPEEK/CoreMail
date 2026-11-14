@@ -1,6 +1,6 @@
 /**
  * Minimal, dependency-free iCalendar (RFC 5545) toolkit shared by the
- * api-gateway (REST), the caldav-server (CalDAV PUT/GET) and the ews-server.
+ * api-gateway (REST) and the caldav-server (CalDAV PUT/GET).
  *
  * Scope:
  *  - line unfolding/folding (75 octets, UTF-8 safe) and TEXT escaping

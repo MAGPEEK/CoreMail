@@ -1,5 +1,5 @@
 /**
- * JMAP feature flag (v5.7.1) — analogous to ews-server/src/feature-flag.ts.
+ * JMAP feature flag (v5.7.1).
  * `ServerSettings.jmapEnabled` (default true). Off → /jmap/* and
  * /.well-known/jmap return 404. 60s cache, invalidation via Redis
  * CHANNEL_SETTINGS_RELOAD. Fail-open (the schema default is "on").

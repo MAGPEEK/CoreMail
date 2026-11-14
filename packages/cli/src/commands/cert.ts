@@ -9,7 +9,7 @@ interface Cert {
   acmeEmail: string | null; lastError: string | null; createdAt: string;
 }
 
-const SERVICES = ['SMTP', 'IMAP', 'POP3', 'OWA', 'ECP', 'EWS', 'DAV'];
+const SERVICES = ['SMTP', 'IMAP', 'POP3', 'OWA', 'ECP', 'DAV'];
 
 function splitList(s?: string): string[] {
   return (s ?? '').split(',').map((x) => x.trim()).filter(Boolean);

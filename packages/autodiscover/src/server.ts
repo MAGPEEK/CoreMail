@@ -42,7 +42,7 @@ async function main() {
   app.get('/Autodiscover/Autodiscover.xml', handleAutodiscoverV1);
 
   // Autodiscover v2 — Outlook 2019/365 Modern Auth
-  // GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=EWS
+  // GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=IMAP|SMTP|ActiveSync|AutodiscoverV1
   app.get(
     '/autodiscover/autodiscover.json/v1.0/:email',
     handleAutodiscoverV2,

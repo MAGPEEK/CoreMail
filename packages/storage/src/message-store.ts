@@ -1,7 +1,7 @@
 /**
  * message-store — the single place where message UIDs and modSeqs are allocated.
  *
- * Every writer (SMTP delivery, IMAP, JMAP, EWS, ActiveSync, REST, restore,
+ * Every writer (SMTP delivery, IMAP, JMAP, ActiveSync, REST, restore,
  * retention, mail rules) must go through these primitives inside a Prisma
  * transaction, so that:
  *
@@ -219,7 +219,7 @@ async function mailboxOfFolder(tx: MessageStoreTx, folderId: string): Promise<st
 }
 
 /**
- * Move messages into `targetFolderId`. The rows keep their id (JMAP/EWS ids stay
+ * Move messages into `targetFolderId`. The rows keep their id (JMAP ids stay
  * stable) but receive new UIDs from the target mailbox and a new modSeq
  * (RFC 6851 §4.3: the moved message is a new message in the target). Messages
  * already in the target folder are left alone. The source mailbox gets a modSeq

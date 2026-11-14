@@ -37,8 +37,6 @@ jobs:
             dockerfile: packages/imap-server/Dockerfile
           - service: pop3-server
             dockerfile: packages/pop3-server/Dockerfile
-          - service: ews-server
-            dockerfile: packages/ews-server/Dockerfile
           - service: autodiscover
             dockerfile: packages/autodiscover/Dockerfile
           - service: caldav-server

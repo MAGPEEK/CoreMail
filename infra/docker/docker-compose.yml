@@ -31,7 +31,7 @@ name: coremail
 #    25  SMTP inbound (required for incoming mail)   143/993  IMAP / IMAPS
 #    587 SMTP submission (mail clients, STARTTLS)    110/995  POP3 / POP3S (optional)
 #    465 SMTPS (implicit TLS)                        80       HTTP → Let's Encrypt challenge + redirect
-#    443 HTTPS (webmail, admin panel, JMAP, EWS, ActiveSync, CalDAV, Autodiscover)
+#    443 HTTPS (webmail, admin panel, JMAP, ActiveSync, CalDAV, Autodiscover)
 #    3000 HTTP without TLS — for initial setup and behind your own reverse proxy
 #
 #  Containers: coremail (all services) · postgres · redis · minio · rspamd · clamav
@@ -41,7 +41,7 @@ name: coremail
 services:
 
   # ───────────────────────────────────────────────────────────────────────────
-  #  coremail — the application (SMTP/IMAP/POP3/JMAP/EWS/ActiveSync/CalDAV,
+  #  coremail — the application (SMTP/IMAP/POP3/JMAP/ActiveSync/CalDAV,
   #  REST API, webmail "MWA", admin panel "BCP", admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:

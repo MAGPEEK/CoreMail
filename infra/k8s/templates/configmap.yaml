@@ -25,5 +25,4 @@ data:
   BACKUP_S3_REGION: "us-east-1"
   BACKUP_RETENTION_DAYS: "30"
   SMTP_HOSTNAME: {{ .Values.global.domain | quote }}
-  EWS_URL: {{ printf "https://%s/EWS/Exchange.asmx" .Values.global.domain | quote }}
   AUTODISCOVER_URL: {{ printf "https://%s/Autodiscover/Autodiscover.xml" .Values.global.domain | quote }}

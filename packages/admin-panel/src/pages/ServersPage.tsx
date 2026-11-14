@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { CheckCircle, Server, Settings, Loader2, Save, Wand2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
-import { useT } from '../i18n/useT.js';
 
 interface ServiceStatus { name: string; port: string; description: string }
 
@@ -10,7 +9,6 @@ const SERVICES: ServiceStatus[] = [
   { name: 'smtp-server',   port: '25/465/587', description: 'SMTP Inbound + Outbound' },
   { name: 'imap-server',   port: '143/993',    description: 'IMAP4rev1 + IDLE' },
   { name: 'pop3-server',   port: '110/995',    description: 'POP3' },
-  { name: 'ews-server',    port: '8080',       description: 'Exchange Web Services (SOAP)' },
   { name: 'autodiscover',  port: '8081',       description: 'Autodiscover v1 + v2' },
   { name: 'caldav-server', port: '8082',       description: 'CalDAV + CardDAV' },
   { name: 'api-gateway',   port: '3000',       description: 'REST API + SSE' },
@@ -21,12 +19,9 @@ interface ServerSettings {
   publicHostname:   string;
   useHttps:         boolean;
   httpPort:         number;
-  ewsUrl:           string;
   owaUrl:           string;
   easUrl:           string;
   autodiscoverBase: string;
-  // EWS on/off — historical field name (MAPI over HTTP was removed)
-  mapiHttpEnabled:  boolean;
   // v5.7.1: JMAP (RFC 8620/8621) — default on
   jmapEnabled:      boolean;
 }
@@ -38,7 +33,6 @@ export function ServersPage() {
   const [form, setForm] = useState<ServerSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const qc = useQueryClient();
-  const t = useT();
 
   const { data: settings, isLoading, isError, refetch } = useQuery<ServerSettings>({
     queryKey: ['server-settings'],
@@ -190,11 +184,10 @@ export function ServersPage() {
                 </div>
               </div>
 
-              {/* Exchange-URLs */}
+              {/* Client URLs (Autodiscover) */}
               <div className="card space-y-4">
-                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Exchange-URLs (Outlook Autodiscover)</h2>
+                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">Client-URLs (Autodiscover)</h2>
                 {([
-                  ['ewsUrl',           t('servers_ews_url_label')],
                   ['owaUrl',           'MWA-URL (Mail Web Access)'],
                   ['easUrl',           'EAS-URL (ActiveSync — Mobil)'],
                   ['autodiscoverBase', 'Autodiscover-Basis-URL'],
@@ -208,22 +201,6 @@ export function ServersPage() {
                     />
                   </div>
                 ))}
-              </div>
-
-              {/* Exchange Web Services — stored in the historical field mapiHttpEnabled */}
-              <div className="card space-y-3">
-                <h2 className="font-medium text-gray-800 border-b border-gray-100 pb-3">{t('servers_ews_title')}</h2>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="w-4 h-4 rounded border-gray-300"
-                    checked={current.mapiHttpEnabled ?? false}
-                    onChange={(e) => set('mapiHttpEnabled', e.target.checked)}
-                  />
-                  <span className="text-sm text-gray-700">{t('servers_ews_toggle')}</span>
-                  <span className="text-xs text-gray-400">{t('servers_ews_default_off')}</span>
-                </label>
-                <p className="text-xs text-gray-500">{t('servers_ews_desc')}</p>
               </div>
 
               {/* JMAP — v5.7.1 */}

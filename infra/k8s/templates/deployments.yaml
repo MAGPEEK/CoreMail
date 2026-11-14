@@ -317,9 +317,8 @@ spec:
 {{- end }}
 {{- end }}
 
-{{/* ── HTTP services (ews, api-gateway, autodiscover, caldav, auth, backup, security) */}}
+{{/* ── HTTP services (api-gateway, autodiscover, caldav, auth, backup, security) */}}
 {{- $httpServices := list
-  (dict "key" "ewsServer"       "name" "ews-server"       "port" 8080 "health" "/health")
   (dict "key" "apiGateway"      "name" "api-gateway"      "port" 3000 "health" "/health")
   (dict "key" "autodiscover"    "name" "autodiscover"      "port" 8081 "health" "/health")
   (dict "key" "caldavServer"    "name" "caldav-server"     "port" 8082 "health" "/health")

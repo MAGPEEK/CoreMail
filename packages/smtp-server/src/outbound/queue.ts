@@ -271,7 +271,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
 
       // ── External delivery via MX / smarthost ──────────────────────────────
       if (dedupedExternal.length > 0) {
-        // Jobs without DKIM fields (SMTP submission, rule forwards, EAS, EWS)
+        // Jobs without DKIM fields (SMTP submission, rule forwards, EAS)
         // get the key of the envelope-from domain — every local-domain mail is signed.
         const dkim = await resolveJobDkim({
           from,

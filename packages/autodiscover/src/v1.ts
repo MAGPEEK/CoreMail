@@ -11,12 +11,10 @@ const log = createLogger('autodiscover:v1');
 // shared lockout, database errors → 503 instead of 401.
 // (v5.2.14 background: Autodiscover must validate, otherwise Outlook loops.)
 
-// MAPI over HTTP is not supported (removed). The v1 response only announces
-// IMAP + SMTP + ActiveSync, so Outlook sets itself up as an IMAP account.
-// EWS is deliberately NOT announced here even when enabled: in the v1 schema
-// the EWS URL only travels inside EXCH/EXPR/EXHTTP blocks, and those make
-// Outlook attempt a binary MAPI/RPC connection (see v3.18.39). EWS clients
-// discover the URL via Autodiscover v2 (Protocol=EWS) instead.
+// MAPI over HTTP (v6.0.0) and EWS (v7.0.0) are not supported (removed). The
+// v1 response only announces IMAP + SMTP + ActiveSync, so Outlook sets itself
+// up as an IMAP account. No EXCH/EXPR/EXHTTP blocks: those make Outlook
+// attempt a binary MAPI/RPC connection (see v3.18.39).
 
 function buildAutodiscoverResponse(
   email: string,
@@ -29,8 +27,8 @@ function buildAutodiscoverResponse(
   //   - AuthPackage MUST be "Basic" (capital B), some Outlook builds are case-sensitive
   //   - <User><LegacyDN> is mandatory (Outlook uses it as the internal user identity)
   //   - <PublicFolderInformation> dummy even if no public folders exist
-  const ewsHost = (() => {
-    try { return new URL(cfg.ewsUrl).hostname; } catch { return cfg.smtpHost; }
+  const webHost = (() => {
+    try { return new URL(cfg.owaUrl).hostname; } catch { return cfg.smtpHost; }
   })();
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
@@ -67,7 +65,7 @@ function buildAutodiscoverResponse(
         <SMTPLast>off</SMTPLast>
       </Protocol>
       <PublicFolderInformation>
-        <SmtpAddress>publicfolder@${escapeXml(ewsHost.replace(/^mail\./, ''))}</SmtpAddress>
+        <SmtpAddress>publicfolder@${escapeXml(webHost.replace(/^mail\./, ''))}</SmtpAddress>
       </PublicFolderInformation>
     </Account>
     <Account>
@@ -197,7 +195,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   // v5.2.14: CRITICAL — Basic auth must be VALIDATED!
   // Previously V1 accepted any password. Outlook then got valid XML
-  // with a WRONG password, but failed at EWS/MAPI (which check correctly),
+  // with a WRONG password, but failed at IMAP/SMTP (which check correctly),
   // prompted the user again, sent to Autodiscover again (which said OK
   // again), → ENDLESS LOOP.
   let basicAuthUser: string | null = null;  // raw username (can be admin or admin@domain)
