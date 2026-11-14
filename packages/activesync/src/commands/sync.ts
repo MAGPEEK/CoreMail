@@ -1,7 +1,8 @@
 import { prisma } from '@coremail/storage/prisma';
+import { setFlags, expunge, ensureCounterFloor } from '@coremail/storage';
 import { encodeWbxml, el, getText, getChild, type WbxmlElement } from '../wbxml.js';
+import { loadSyncWindow, type SyncWindowDb } from './sync-window.js';
 
-const WINDOW_SIZE = 25;
 const MAX_BODY_LENGTH = 4096;
 
 function truncate(s: string, max: number): string {
@@ -77,7 +78,10 @@ export async function handleSync(
       continue;
     }
 
-    // Process client commands (Read, Delete)
+    // Process client commands (Read, Delete) — every change bumps the mailbox
+    // modSeq through the message store, so other clients (IMAP CONDSTORE, JMAP)
+    // see it as well.
+    const mailboxId = folder.mailboxId;
     if (commands) {
       for (const cmd of commands.children ?? []) {
         if (typeof cmd === 'string') continue;
@@ -93,7 +97,7 @@ export async function handleSync(
                 const flags = readFlag === '1'
                   ? [...msg.flags.filter((f: string) => f !== '\\Seen'), '\\Seen']
                   : msg.flags.filter((f: string) => f !== '\\Seen');
-                await prisma.message.update({ where: { id: serverId }, data: { flags, modSeq: BigInt(Date.now()) } });
+                await prisma.$transaction((tx) => setFlags(tx, [{ id: serverId, flags }], { mailboxId }));
               }
             }
           }
@@ -101,14 +105,31 @@ export async function handleSync(
           const serverId = getText(cmd, 'ServerId');
           const msg = await prisma.message.findFirst({ where: { id: serverId, folderId: collectionId } });
           if (msg) {
-            await prisma.message.update({ where: { id: serverId }, data: { deletedAt: new Date() } });
+            await prisma.$transaction((tx) => expunge(tx, [serverId], { mailboxId }));
           }
         }
       }
     }
 
-    // Generate new sync key
-    const newSyncKey = String(Date.now());
+    // Legacy rows may carry Date.now()-sized modSeqs: lift the counter first so the
+    // window bound below covers them (one-time per mailbox and process).
+    await ensureCounterFloor(prisma, mailboxId);
+
+    // Delta selection on the mailbox modSeq counter (the sync key is a modSeq bound).
+    const window = await loadSyncWindow(prisma as unknown as SyncWindowDb, {
+      mailboxId, folderId: collectionId, clientSyncKey,
+    });
+    if (window.status === 'invalid') {
+      // Status 3: invalid synchronization key → client restarts with SyncKey 0
+      responseCollections.push(el('Collection', undefined, [
+        el('Class', 'Email'),
+        el('SyncKey', '0'),
+        el('CollectionId', collectionId),
+        el('Status', '3'),
+      ]));
+      continue;
+    }
+    const { messages, newSyncKey, moreAvailable } = window;
 
     // Save sync keys
     if (device) {
@@ -120,31 +141,12 @@ export async function handleSync(
       });
     }
 
-    const isInitialSync = clientSyncKey === '0' || !clientSyncKey;
-
-    // Fetch messages to send to client
-    const messages = await prisma.message.findMany({
-      where: {
-        folderId: collectionId,
-        deletedAt: null,
-        ...(isInitialSync ? {} : { modSeq: { gt: BigInt(clientSyncKey || '0') } }),
-      },
-      orderBy: { date: 'desc' },
-      take: WINDOW_SIZE,
-      select: {
-        id: true, modSeq: true, flags: true, subject: true,
-        fromAddr: true, toAddrs: true, date: true, bodyText: true, bodyHtml: true,
-      },
-    });
-
     const serverCommands: WbxmlElement[] = messages.map((msg) =>
       el('Add', undefined, [
         el('ServerId', msg.id),
         buildMessageElement(msg),
       ])
     );
-
-    const moreAvailable = messages.length >= WINDOW_SIZE;
 
     responseCollections.push(el('Collection', undefined, [
       el('Class', 'Email'),

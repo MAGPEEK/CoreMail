@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -221,19 +221,8 @@ export async function storeInboundMessage(
     return;
   }
 
-  // Allocate UID and modseq atomically
-  const updatedMailbox = await prisma.mailbox.update({
-    where: { id: mailbox.id },
-    data: {
-      uidNext: { increment: 1 },
-      highestModSeq: { increment: 1 },
-    },
-  });
-
-  const uid    = updatedMailbox.uidNext - 1;
-  const modSeq = updatedMailbox.highestModSeq;
-
-  // Store raw message in MinIO if large, otherwise inline
+  // Store raw message in MinIO if large, otherwise inline (before the
+  // transaction — the object key does not depend on the UID).
   let storagePath: string | null = null;
   if (effectiveBuffer.length > LARGE_MESSAGE_THRESHOLD) {
     const msgId = crypto.randomUUID();
@@ -246,34 +235,36 @@ export async function storeInboundMessage(
     ? JSON.stringify({ ...smimeVerifyResult, decrypted: smimeDecrypted })
     : null;
 
-  // Create message record (folderId + flags possibly overridden by mail rules)
-  const message = await prisma.message.create({
-    data: {
-      folderId: ruleFolderId,
-      uid,
-      modSeq,
-      flags: ruleFlags,
-      subject: parsed.subject,
-      fromAddr: parsed.fromAddr,
-      fromName: parsed.fromName,
-      toAddrs: parsed.toAddrs,
-      ccAddrs: parsed.ccAddrs,
-      bccAddrs: parsed.bccAddrs,
-      replyTo: parsed.replyTo,
-      messageId: parsed.messageId,
-      inReplyTo: parsed.inReplyTo,
-      date: parsed.date,
-      bodyText: storagePath ? '' : parsed.bodyText,
-      bodyHtml: storagePath ? '' : parsed.bodyHtml,
-      rawSize: effectiveBuffer.length,
-      storagePath,
-      changeKey: modSeq.toString(),
-      ...(rulePinned ? { pinnedAt: new Date() } : {}),
-      ...(smimeHeader ? { smimeMeta: smimeHeader } : {}),
-      // v3.18.6: persist rspamd score — for frontend spam banner and score badge
-      ...(typeof opts.spamScore === 'number' ? { spamScore: opts.spamScore } : {}),
-    },
-  });
+  const baseData = {
+    flags: ruleFlags,
+    subject: parsed.subject,
+    fromAddr: parsed.fromAddr,
+    fromName: parsed.fromName,
+    toAddrs: parsed.toAddrs,
+    ccAddrs: parsed.ccAddrs,
+    bccAddrs: parsed.bccAddrs,
+    replyTo: parsed.replyTo,
+    messageId: parsed.messageId,
+    inReplyTo: parsed.inReplyTo,
+    date: parsed.date,
+    bodyText: storagePath ? '' : parsed.bodyText,
+    bodyHtml: storagePath ? '' : parsed.bodyHtml,
+    rawSize: effectiveBuffer.length,
+    storagePath,
+  };
+
+  // Create message record (folderId + flags possibly overridden by mail rules).
+  // UID + modSeq are allocated atomically by the message store.
+  const mailboxId = mailbox.id;
+  const message = await prisma.$transaction((tx) => createMessage(tx, mailboxId, ruleFolderId, {
+    ...baseData,
+    ...(rulePinned ? { pinnedAt: new Date() } : {}),
+    ...(smimeHeader ? { smimeMeta: smimeHeader } : {}),
+    // v3.18.6: persist rspamd score — for frontend spam banner and score badge
+    ...(typeof opts.spamScore === 'number' ? { spamScore: opts.spamScore } : {}),
+  }));
+  const uid    = message.uid;
+  const modSeq = message.modSeq;
 
   // Assign rule categories (best-effort, no hard fail)
   if (ruleCategories.length > 0) {
@@ -290,33 +281,7 @@ export async function storeInboundMessage(
   for (const copyFolderId of ruleCopyTargets) {
     if (copyFolderId === ruleFolderId) continue; // already the main copy
     try {
-      const copyMailbox = await prisma.mailbox.update({
-        where: { id: mailbox.id },
-        data: { uidNext: { increment: 1 }, highestModSeq: { increment: 1 } },
-      });
-      await prisma.message.create({
-        data: {
-          folderId: copyFolderId,
-          uid:    copyMailbox.uidNext - 1,
-          modSeq: copyMailbox.highestModSeq,
-          flags: ruleFlags,
-          subject: parsed.subject,
-          fromAddr: parsed.fromAddr,
-          fromName: parsed.fromName,
-          toAddrs: parsed.toAddrs,
-          ccAddrs: parsed.ccAddrs,
-          bccAddrs: parsed.bccAddrs,
-          replyTo: parsed.replyTo,
-          messageId: parsed.messageId,
-          inReplyTo: parsed.inReplyTo,
-          date: parsed.date,
-          bodyText: storagePath ? '' : parsed.bodyText,
-          bodyHtml: storagePath ? '' : parsed.bodyHtml,
-          rawSize: effectiveBuffer.length,
-          storagePath,
-          changeKey: copyMailbox.highestModSeq.toString(),
-        },
-      });
+      await prisma.$transaction((tx) => createMessage(tx, mailboxId, copyFolderId, baseData));
       await prisma.folder.update({
         where: { id: copyFolderId },
         data: { totalCount: { increment: 1 }, unreadCount: { increment: 1 } },

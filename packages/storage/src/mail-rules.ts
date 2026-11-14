@@ -1,4 +1,5 @@
 import { prisma } from './prisma/index.js';
+import { moveMessages, touchMessages } from './message-store.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
 
@@ -389,13 +390,13 @@ export async function runRuleOnExisting(
       };
       await executeActions(rule, outcome, userId);
 
-      const updates: { folderId?: string; flags?: string[]; pinnedAt?: Date | null } = {};
+      const updates: { flags?: string[]; pinnedAt?: Date | null } = {};
       let changed = false;
+      let moveTo: string | null = null;
 
       if (outcome.targetFolderId && outcome.targetFolderId !== m.folderId) {
-        updates.folderId = outcome.targetFolderId;
+        moveTo = outcome.targetFolderId;
         result.moved++;
-        changed = true;
       }
       const newFlags = [...new Set([...m.flags, ...outcome.flagsToAdd])];
       if (newFlags.length !== m.flags.length) {
@@ -404,8 +405,12 @@ export async function runRuleOnExisting(
         changed = true;
       }
       if (outcome.pinned) { updates.pinnedAt = new Date(); changed = true; }
-      if (changed) {
-        await prisma.message.update({ where: { id: m.id }, data: updates });
+      // Move → new UID in the target folder + new modSeq; other changes → new modSeq.
+      if (moveTo) {
+        const target = moveTo;
+        await prisma.$transaction((tx) => moveMessages(tx, [m.id], target, { data: updates }));
+      } else if (changed) {
+        await prisma.$transaction((tx) => touchMessages(tx, [m.id], updates));
       }
       // Categories
       for (const catId of outcome.categoriesToAdd) {

@@ -3,7 +3,10 @@
  * Email/copy), change flags/folder, delete — incl. folder counters,
  * mailbox UID/ModSeq and Redis notification (MWA SSE + JMAP push).
  */
-import { prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey } from '@coremail/storage';
+import {
+  prisma, parseRawMessage, uploadBuffer, rawMessageKey, attachmentKey,
+  createMessage, moveMessages, setFlags, nextModSeq,
+} from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
 import type { AccountContext } from '../types.js';
 import { ensureThreadId } from './thread.js';
@@ -25,20 +28,10 @@ export async function storeEmailFromRaw(
   receivedAt?: Date,
 ): Promise<StoredMessage> {
   const parsed = await parseRawMessage(raw);
-  const mbx = await prisma.mailbox.update({
-    where: { id: account.mailboxId },
-    data: { uidNext: { increment: 1 }, highestModSeq: { increment: 1 } },
-    select: { uidNext: true, highestModSeq: true },
-  });
-  const uid = mbx.uidNext - 1;
-  const modSeq = mbx.highestModSeq;
   const seen = flags.includes('\\Seen');
 
-  const msg = await prisma.message.create({
-    data: {
-      folderId,
-      uid,
-      modSeq,
+  // UID + modSeq are allocated atomically by the message store.
+  const msg = await prisma.$transaction((tx) => createMessage(tx, account.mailboxId, folderId, {
       flags,
       subject: parsed.subject,
       fromAddr: parsed.fromAddr,
@@ -53,11 +46,8 @@ export async function storeEmailFromRaw(
       bodyText: parsed.bodyText,
       bodyHtml: parsed.bodyHtml,
       rawSize: raw.length,
-      changeKey: modSeq.toString(),
       ...(receivedAt ? { createdAt: receivedAt } : {}),
-    },
-    select: { id: true },
-  });
+  }));
 
   const storagePath = rawMessageKey(msg.id);
   await uploadBuffer(storagePath, raw, 'message/rfc822');
@@ -105,38 +95,45 @@ export async function applyEmailChange(
   const wasSeen = msg.flags.includes('\\Seen');
   const isSeen = newFlags.includes('\\Seen');
 
-  const ops: Array<ReturnType<typeof prisma.folder.update> | ReturnType<typeof prisma.message.update>> = [];
-  ops.push(prisma.message.update({
-    where: { id: msg.id },
-    data: { flags: newFlags, folderId: newFolder, modSeq: BigInt(Date.now()), changeKey: Date.now().toString() },
-  }));
-  if (newFolder !== msg.folderId) {
-    ops.push(prisma.folder.update({
-      where: { id: msg.folderId },
-      data: { totalCount: { decrement: 1 }, ...(wasSeen ? {} : { unreadCount: { decrement: 1 } }) },
-    }));
-    ops.push(prisma.folder.update({
-      where: { id: newFolder },
-      data: { totalCount: { increment: 1 }, ...(isSeen ? {} : { unreadCount: { increment: 1 } }) },
-    }));
-  } else if (wasSeen !== isSeen) {
-    ops.push(prisma.folder.update({
-      where: { id: msg.folderId },
-      data: { unreadCount: isSeen ? { decrement: 1 } : { increment: 1 } },
-    }));
-  }
-  await prisma.$transaction(ops);
+  const mailboxId = account.mailboxId;
+  await prisma.$transaction(async (tx) => {
+    if (newFolder !== msg.folderId) {
+      // Move: new UID in the target folder + new modSeq (RFC 6851 semantics for IMAP clients).
+      await moveMessages(tx, [msg.id], newFolder, {
+        targetMailboxId: mailboxId, sourceMailboxId: mailboxId, data: { flags: newFlags },
+      });
+      await tx.folder.update({
+        where: { id: msg.folderId },
+        data: { totalCount: { decrement: 1 }, ...(wasSeen ? {} : { unreadCount: { decrement: 1 } }) },
+      });
+      await tx.folder.update({
+        where: { id: newFolder },
+        data: { totalCount: { increment: 1 }, ...(isSeen ? {} : { unreadCount: { increment: 1 } }) },
+      });
+    } else {
+      await setFlags(tx, [{ id: msg.id, flags: newFlags }], { mailboxId });
+      if (wasSeen !== isSeen) {
+        await tx.folder.update({
+          where: { id: msg.folderId },
+          data: { unreadCount: isSeen ? { decrement: 1 } : { increment: 1 } },
+        });
+      }
+    }
+  });
   await notify(account, newFolder, msg.id, 'update');
 }
 
 export async function destroyEmail(account: AccountContext, msg: { id: string; folderId: string; flags: string[] }): Promise<void> {
-  await prisma.$transaction([
-    prisma.message.delete({ where: { id: msg.id } }),
-    prisma.folder.update({
+  const mailboxId = account.mailboxId;
+  await prisma.$transaction(async (tx) => {
+    await tx.message.delete({ where: { id: msg.id } });
+    await tx.folder.update({
       where: { id: msg.folderId },
       data: { totalCount: { decrement: 1 }, ...(msg.flags.includes('\\Seen') ? {} : { unreadCount: { decrement: 1 } }) },
-    }),
-  ]);
+    });
+    // Hard delete leaves no row behind — at least advance HIGHESTMODSEQ.
+    await nextModSeq(tx, mailboxId);
+  });
   await notify(account, msg.folderId, msg.id, 'update');
 }
 

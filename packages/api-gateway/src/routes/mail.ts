@@ -4,7 +4,10 @@ import { Readable } from 'stream';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { Queue } from 'bullmq';
-import { prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey, outboundAttachKey } from '@coremail/storage';
+import {
+  prisma, downloadBuffer, parseRawMessage, uploadBuffer, rawMessageKey, outboundAttachKey,
+  createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
+} from '@coremail/storage';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -291,9 +294,9 @@ mailRouter.patch('/messages/:id/retention-tag', async (req: Request, res: Respon
     if (!tag) { res.status(404).json({ error: 'Retention tag not found or not assignable' }); return; }
   }
 
-  const updated = await prisma.message.update({
+  await prisma.$transaction((tx) => touchMessages(tx, [id], { retentionTagId: parsed.data.tagId }));
+  const updated = await prisma.message.findUniqueOrThrow({
     where: { id },
-    data: { retentionTagId: parsed.data.tagId, modSeq: BigInt(Date.now()) },
     include: { retentionTag: { select: { id: true, name: true, retentionDays: true, action: true } } },
   });
   res.json({
@@ -315,8 +318,12 @@ mailRouter.post('/folders/:id/empty', async (req: Request, res: Response) => {
   const hardDelete = folder.name === 'Trash' || folder.name === 'Junk';
 
   if (hardDelete) {
-    const result = await prisma.message.deleteMany({ where: { folderId: id } });
-    await prisma.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
+    const result = await prisma.$transaction(async (tx) => {
+      const r = await tx.message.deleteMany({ where: { folderId: id } });
+      await tx.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
+      if (r.count > 0) await nextModSeq(tx, folder.mailboxId);
+      return r;
+    });
     res.json({ ok: true, deleted: result.count });
     return;
   }
@@ -330,11 +337,12 @@ mailRouter.post('/folders/:id/empty', async (req: Request, res: Response) => {
     where: { folderId: id, deletedAt: null },
     select: { id: true },
   });
-  await prisma.message.updateMany({
-    where: { folderId: id, deletedAt: null },
-    data: { folderId: trash.id },
+  await prisma.$transaction(async (tx) => {
+    await moveMessages(tx, messages.map((m) => m.id), trash.id, {
+      targetMailboxId: trash.mailboxId, sourceMailboxId: folder.mailboxId,
+    });
+    await tx.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
   });
-  await prisma.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
   res.json({ ok: true, moved: messages.length });
 });
 
@@ -360,46 +368,45 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
   const ownedIds = messages.map((m) => m.id);
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
+  const mailboxId = mailbox!.id;
   const resolveSysFolder = async (name: string) =>
-    prisma.folder.findFirst({ where: { mailboxId: mailbox!.id, name } });
+    prisma.folder.findFirst({ where: { mailboxId, name } });
+  // Moves get new UIDs in the target folder + a new modSeq (message store).
+  const moveTo = (targetId: string, ids: string[], data?: { spamScore?: number }) =>
+    prisma.$transaction((tx) => moveMessages(tx, ids, targetId, {
+      targetMailboxId: mailboxId, sourceMailboxId: mailboxId, ...(data ? { data } : {}),
+    }));
 
   switch (action) {
     case 'read':
     case 'unread': {
       const shouldRead = action === 'read';
-      const tasks = messages.map((m) => {
-        const flags = shouldRead
+      const updates = messages.map((m) => ({
+        id: m.id,
+        flags: shouldRead
           ? [...new Set([...m.flags, '\\Seen'])]
-          : m.flags.filter((f) => f !== '\\Seen');
-        return prisma.message.update({
-          where: { id: m.id },
-          data: { flags, modSeq: BigInt(Date.now()) },
-        });
-      });
-      await prisma.$transaction(tasks);
+          : m.flags.filter((f) => f !== '\\Seen'),
+      }));
+      await prisma.$transaction((tx) => setFlags(tx, updates, { mailboxId }));
       break;
     }
     case 'flag':
     case 'unflag': {
       const shouldFlag = action === 'flag';
-      const tasks = messages.map((m) => {
-        const flags = shouldFlag
+      const updates = messages.map((m) => ({
+        id: m.id,
+        flags: shouldFlag
           ? [...new Set([...m.flags, '\\Flagged'])]
-          : m.flags.filter((f) => f !== '\\Flagged');
-        return prisma.message.update({
-          where: { id: m.id },
-          data: { flags, modSeq: BigInt(Date.now()) },
-        });
-      });
-      await prisma.$transaction(tasks);
+          : m.flags.filter((f) => f !== '\\Flagged'),
+      }));
+      await prisma.$transaction((tx) => setFlags(tx, updates, { mailboxId }));
       break;
     }
     case 'pin':
     case 'unpin': {
-      await prisma.message.updateMany({
-        where: { id: { in: ownedIds } },
-        data: { pinnedAt: action === 'pin' ? new Date() : null, modSeq: BigInt(Date.now()) },
-      });
+      await prisma.$transaction((tx) => touchMessages(
+        tx, ownedIds, { pinnedAt: action === 'pin' ? new Date() : null }, { mailboxId },
+      ));
       break;
     }
     case 'move': {
@@ -408,19 +415,13 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
         where: { id: parsed.data.folderId, mailbox: { userId } },
       });
       if (!target) { res.status(404).json({ error: 'Zielordner nicht gefunden' }); return; }
-      await prisma.message.updateMany({
-        where: { id: { in: ownedIds } },
-        data: { folderId: target.id, modSeq: BigInt(Date.now()) },
-      });
+      await moveTo(target.id, ownedIds);
       break;
     }
     case 'archive': {
       const archive = await resolveSysFolder('Archive');
       if (!archive) { res.status(404).json({ error: 'Archiv-Ordner nicht gefunden' }); return; }
-      await prisma.message.updateMany({
-        where: { id: { in: ownedIds } },
-        data: { folderId: archive.id, modSeq: BigInt(Date.now()) },
-      });
+      await moveTo(archive.id, ownedIds);
       break;
     }
     case 'delete': {
@@ -429,23 +430,20 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
       const inTrash = messages.filter((m) => m.folderId === trash?.id).map((m) => m.id);
       const notInTrash = messages.filter((m) => m.folderId !== trash?.id).map((m) => m.id);
       if (inTrash.length) {
-        await prisma.message.deleteMany({ where: { id: { in: inTrash } } });
+        await prisma.$transaction(async (tx) => {
+          await tx.message.deleteMany({ where: { id: { in: inTrash } } });
+          await nextModSeq(tx, mailboxId);
+        });
       }
       if (notInTrash.length && trash) {
-        await prisma.message.updateMany({
-          where: { id: { in: notInTrash } },
-          data: { folderId: trash.id, modSeq: BigInt(Date.now()) },
-        });
+        await moveTo(trash.id, notInTrash);
       }
       break;
     }
     case 'spam': {
       const junk = await resolveSysFolder('Junk');
       if (!junk) { res.status(404).json({ error: 'Junk-Ordner nicht gefunden' }); return; }
-      await prisma.message.updateMany({
-        where: { id: { in: ownedIds } },
-        data: { folderId: junk.id, modSeq: BigInt(Date.now()) },
-      });
+      await moveTo(junk.id, ownedIds);
       // Add sender to the USER-JUNK blocklist → storeInboundMessage routes
       // future mails from this sender to the Junk folder automatically.
       // Scope 'USER-JUNK' is NOT treated as an SMTP reject by the security-filter,
@@ -487,10 +485,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
       // Back to INBOX AND set spamScore to 0 (otherwise the reader banner
       // keeps showing "Diese Nachricht wurde als Spam erkannt" although it
       // was marked as ham)
-      await prisma.message.updateMany({
-        where: { id: { in: ownedIds } },
-        data: { folderId: inbox.id, modSeq: BigInt(Date.now()), spamScore: 0 },
-      });
+      await moveTo(inbox.id, ownedIds, { spamScore: 0 });
       // Remove sender from the USER-JUNK blocklist (false positive)
       void (async () => {
         try {
@@ -527,10 +522,7 @@ mailRouter.post('/messages/:id/snooze', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  await prisma.message.update({
-    where: { id },
-    data: { snoozeUntil: new Date(parsed.data.until), modSeq: BigInt(Date.now()) },
-  });
+  await prisma.$transaction((tx) => touchMessages(tx, [id], { snoozeUntil: new Date(parsed.data.until) }));
   res.json({ ok: true });
 });
 
@@ -541,10 +533,7 @@ mailRouter.delete('/messages/:id/snooze', async (req: Request, res: Response) =>
     where: { id, folder: { mailbox: { userId: req.apiUser!.userId } } },
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
-  await prisma.message.update({
-    where: { id },
-    data: { snoozeUntil: null, modSeq: BigInt(Date.now()) },
-  });
+  await prisma.$transaction((tx) => touchMessages(tx, [id], { snoozeUntil: null }));
   res.json({ ok: true });
 });
 
@@ -680,10 +669,7 @@ mailRouter.get('/messages/:id', async (req: Request, res: Response) => {
 
   // Mark as read
   if (!msg.flags.includes('\\Seen')) {
-    await prisma.message.update({
-      where: { id },
-      data: { flags: { push: '\\Seen' }, modSeq: BigInt(Date.now()) },
-    });
+    await prisma.$transaction((tx) => setFlags(tx, [{ id, flags: [...msg.flags, '\\Seen'] }]));
     await prisma.folder.update({
       where: { id: msg.folderId },
       data: { unreadCount: { decrement: 1 } },
@@ -712,7 +698,6 @@ mailRouter.patch('/messages/:id', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  const updates: Record<string, unknown> = { modSeq: BigInt(Date.now()) };
   let newFlags = [...msg.flags];
 
   if (parsed.data.read !== undefined) {
@@ -726,18 +711,24 @@ mailRouter.patch('/messages/:id', async (req: Request, res: Response) => {
       : newFlags.filter((f) => f !== '\\Flagged');
   }
   if (parsed.data.flags) newFlags = parsed.data.flags;
-  updates['flags'] = newFlags;
 
+  let targetFolder: { id: string; mailboxId: string } | null = null;
   if (parsed.data.folderId) {
-    const targetFolder = await prisma.folder.findFirst({
+    targetFolder = await prisma.folder.findFirst({
       where: { id: parsed.data.folderId, mailbox: { userId: req.apiUser!.userId } },
+      select: { id: true, mailboxId: true },
     });
     if (!targetFolder) { res.status(404).json({ error: 'Target folder not found' }); return; }
-    updates['folderId'] = parsed.data.folderId;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await prisma.message.update({ where: { id }, data: updates as any });
+  // Flag change → new modSeq; move → new UID in the target folder + new modSeq.
+  await prisma.$transaction(async (tx) => {
+    if (targetFolder && targetFolder.id !== msg.folderId) {
+      await moveMessages(tx, [id], targetFolder.id, { targetMailboxId: targetFolder.mailboxId, data: { flags: newFlags } });
+    } else {
+      await setFlags(tx, [{ id, flags: newFlags }]);
+    }
+  });
   res.json({ ok: true });
 });
 
@@ -752,16 +743,20 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
+  const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
+  const mailboxId = mailbox!.id;
   if (hard) {
-    await prisma.message.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.message.delete({ where: { id } });
+      await nextModSeq(tx, mailboxId);
+    });
   } else {
-    // Move to Trash
-    const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
-    const trash = await prisma.folder.findFirst({ where: { mailboxId: mailbox!.id, name: 'Trash' } });
+    // Move to Trash (new UID + modSeq), or soft-delete when there is no Trash
+    const trash = await prisma.folder.findFirst({ where: { mailboxId, name: 'Trash' } });
     if (trash) {
-      await prisma.message.update({ where: { id }, data: { folderId: trash.id } });
+      await prisma.$transaction((tx) => moveMessages(tx, [id], trash.id, { targetMailboxId: mailboxId, sourceMailboxId: mailboxId }));
     } else {
-      await prisma.message.update({ where: { id }, data: { deletedAt: new Date() } });
+      await prisma.$transaction((tx) => expunge(tx, [id], { mailboxId }));
     }
   }
 
@@ -1033,12 +1028,6 @@ mailRouter.post(
         });
 
         const parsed = await parseRawMessage(rawBuffer);
-        const updatedMbx = await prisma.mailbox.update({
-          where: { id: mailbox.id },
-          data: { uidNext: { increment: 1 }, highestModSeq: { increment: 1 } },
-        });
-        const uid    = updatedMbx.uidNext - 1;
-        const modSeq = updatedMbx.highestModSeq;
 
         const LARGE = 256 * 1024;
         let storagePath: string | null = null;
@@ -1048,10 +1037,8 @@ mailRouter.post(
           await uploadBuffer(storagePath, rawBuffer, 'message/rfc822');
         }
 
-        await prisma.message.create({
-          data: {
-            folderId:  sentFolder.id,
-            uid, modSeq,
+        // UID + modSeq are allocated atomically by the message store.
+        const sentCopy = await prisma.$transaction((tx) => createMessage(tx, mailbox.id, sentFolder.id, {
             flags:     ['\\Seen'],
             subject:   parsed.subject,
             fromAddr:  parsed.fromAddr,
@@ -1067,18 +1054,16 @@ mailRouter.post(
             bodyHtml:  storagePath ? '' : parsed.bodyHtml,
             rawSize:   rawBuffer.length,
             storagePath,
-            changeKey: modSeq.toString(),
             // Schedule-send metadata: enables banner + cancel button in the reader
             ...(scheduledAt ? {
               scheduledAt,
               scheduledStatus: 'PENDING',
               scheduledJobId:  queueJobId,
             } : {}),
-          },
-        });
+        }));
         await prisma.folder.update({
           where: { id: sentFolder.id },
-          data: { totalCount: { increment: 1 }, changeKey: modSeq.toString() },
+          data: { totalCount: { increment: 1 }, changeKey: sentCopy.modSeq.toString() },
         });
       } catch (e) {
         log.warn({ err: e }, 'Could not store Sent copy');
@@ -1124,14 +1109,8 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
     }
   }
 
-  await prisma.message.update({
-    where: { id },
-    data: {
-      scheduledStatus: 'CANCELLED',
-      // Keep scheduledAt/scheduledJobId for the audit trail
-      modSeq: BigInt(Date.now()),
-    },
-  });
+  // Keep scheduledAt/scheduledJobId for the audit trail
+  await prisma.$transaction((tx) => touchMessages(tx, [id], { scheduledStatus: 'CANCELLED' }));
 
   res.json({ ok: true, jobRemoved });
 });

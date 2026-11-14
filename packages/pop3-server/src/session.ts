@@ -3,6 +3,7 @@ import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
 import { verifyPassword } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
+import { expunge } from '@coremail/storage';
 
 const log = createLogger('pop3-session');
 
@@ -28,6 +29,7 @@ export class POP3Session {
   private user: string | null = null;
   private userId: string | null = null;
   private maildrop: MailDrop[] = [];
+  private mailboxId: string | null = null;
   private buf = '';
 
   constructor(
@@ -178,6 +180,7 @@ export class POP3Session {
         },
       },
     });
+    this.mailboxId = mailbox?.id ?? null;
     this.maildrop = (mailbox?.folders[0]?.messages ?? []).map((m: { id: string; uid: number; rawSize: number }) => ({
       ...m,
       deleted: false,
@@ -274,10 +277,9 @@ export class POP3Session {
     
     const toDelete = this.maildrop.filter((m) => m.deleted).map((m) => m.id);
     if (toDelete.length > 0) {
-      await prisma.message.updateMany({
-        where: { id: { in: toDelete } },
-        data: { deletedAt: new Date() },
-      });
+      // Expunge with a modSeq bump so IMAP/JMAP/ActiveSync clients notice.
+      const mailboxId = this.mailboxId;
+      await prisma.$transaction((tx) => expunge(tx, toDelete, mailboxId ? { mailboxId } : {}));
     }
   }
 }

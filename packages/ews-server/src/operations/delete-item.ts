@@ -1,4 +1,4 @@
-import { prisma } from '@coremail/storage';
+import { prisma, moveMessages, expunge, nextModSeq } from '@coremail/storage';
 import { soapEnvelope } from '../soap/response.js';
 import type { EwsUser } from '../auth/middleware.js';
 
@@ -36,32 +36,28 @@ export async function deleteItem(
       continue;
     }
 
+    const mailboxId = msg.folder.mailboxId;
     if (deleteType === 'HardDelete') {
-      await prisma.message.delete({ where: { id } });
-    } else if (deleteType === 'SoftDelete') {
-      await prisma.message.update({
-        where: { id },
-        data: { deletedAt: new Date() },
+      await prisma.$transaction(async (tx) => {
+        await tx.message.delete({ where: { id } });
+        await nextModSeq(tx, mailboxId);
       });
+    } else if (deleteType === 'SoftDelete') {
+      await prisma.$transaction((tx) => expunge(tx, [id], { mailboxId }));
     } else {
       // MoveToDeletedItems: find Trash folder and move
       const trashFolder = await prisma.folder.findFirst({
         where: { mailboxId: msg.folder.mailboxId, name: 'Trash' },
       });
       if (trashFolder) {
-        await prisma.message.update({
-          where: { id },
-          data: { folderId: trashFolder.id },
-        });
+        // Move = new UID in Trash + new modSeq (message store)
+        await prisma.$transaction((tx) => moveMessages(tx, [id], trashFolder.id, { targetMailboxId: mailboxId, sourceMailboxId: mailboxId }));
         await prisma.folder.update({
           where: { id: trashFolder.id },
           data: { totalCount: { increment: 1 } },
         });
       } else {
-        await prisma.message.update({
-          where: { id },
-          data: { deletedAt: new Date() },
-        });
+        await prisma.$transaction((tx) => expunge(tx, [id], { mailboxId }));
       }
     }
 

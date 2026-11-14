@@ -17,7 +17,12 @@ import { registerHooks } from 'node:module';
 
 const STUB_URL = 'coremail-test-stub:all';
 
+// The real message-store (UID/modSeq allocation) has no runtime imports and only
+// talks to the transaction client it is given, so the stub re-exports it unchanged.
+const MESSAGE_STORE_URL = new URL('../../storage/src/message-store.ts', import.meta.url).href;
+
 const STUB_SOURCE = `
+export * from '${MESSAGE_STORE_URL}';
 const g = (globalThis.__coremailTest ??= {});
 const noop = () => {};
 const logger = { debug: noop, info: noop, warn: noop, error: noop, trace: noop, fatal: noop, child: () => logger };

@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, expunge, nextModSeq } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
 export const userRouter: RouterType = Router();
@@ -299,8 +299,11 @@ userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
   const folder = await prisma.folder.findFirst({ where: { id, mailboxId: mailbox.id } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
 
-  const now = new Date();
-  await prisma.message.updateMany({ where: { folderId: id, deletedAt: null }, data: { deletedAt: now } });
+  const live = await prisma.message.findMany({ where: { folderId: id, deletedAt: null }, select: { id: true } });
+  if (live.length > 0) {
+    const mailboxId = mailbox.id;
+    await prisma.$transaction((tx) => expunge(tx, live.map((m) => m.id), { mailboxId }));
+  }
   await prisma.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
 
   res.json({ ok: true });
@@ -814,7 +817,11 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
   });
   if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
 
-  const result = await prisma.message.deleteMany({ where: { folderId } });
+  const result = await prisma.$transaction(async (tx) => {
+    const r = await tx.message.deleteMany({ where: { folderId } });
+    if (r.count > 0) await nextModSeq(tx, access.mailboxId);
+    return r;
+  });
   res.json({ deleted: result.count });
 });
 

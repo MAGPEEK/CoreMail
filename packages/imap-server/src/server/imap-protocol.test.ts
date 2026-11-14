@@ -176,8 +176,19 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
         where.userId === 'u1' ? [{ id: 'ap1', userId: 'u1', hash: 'hash:app-password' }] : [],
       update: async () => ({}),
     },
+    // Interactive transaction: the message-store primitives run against this same fake.
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(prisma),
     mailbox: {
       update: async ({ data }: { data: Row }) => { await tick(); applyData(asRow(mailbox), data); return { ...mailbox }; },
+      updateMany: async ({ where, data }: { where: Row; data: Row }) => {
+        const cond = { ...where } as Row;
+        delete cond['highestModSeq']; delete cond['uidNext'];
+        if (!matches(asRow(mailbox), cond)) return { count: 0 };
+        const next = data as { highestModSeq?: bigint; uidNext?: number };
+        if (next.highestModSeq !== undefined && mailbox.highestModSeq < next.highestModSeq) mailbox.highestModSeq = next.highestModSeq;
+        if (next.uidNext !== undefined && mailbox.uidNext < next.uidNext) mailbox.uidNext = next.uidNext;
+        return { count: 1 };
+      },
     },
     folder: {
       findMany: async ({ where }: { where: Row }) => {
@@ -206,6 +217,17 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
         return sortByUid(db.messages.filter((m) => matches(asRow(m), where)), orderBy).map((m) => ({ ...m, flags: [...m.flags] }));
       },
       count: async ({ where }: { where: Row }) => { await tick(); return db.messages.filter((m) => matches(asRow(m), where)).length; },
+      // message-store counter floor check: { where: { folder: { mailboxId } }, _max: { modSeq, uid } }
+      aggregate: async () => {
+        await tick();
+        const rows = db.messages;
+        return {
+          _max: {
+            modSeq: rows.length ? rows.reduce((a, m) => (m.modSeq > a ? m.modSeq : a), 0n) : null,
+            uid: rows.length ? Math.max(...rows.map((m) => m.uid)) : null,
+          },
+        };
+      },
       update: async ({ where, data }: { where: { id: string }; data: Row }) => {
         await tick();
         const target = db.messages.find((m) => m.id === where.id);
@@ -1391,10 +1413,14 @@ describe('COPY and MOVE (RFC 9051 §6.4.7–8, RFC 4315)', () => {
   test('MOVE puts the message into the target mailbox', async (t) => {
     const { client, db } = await select(t);
 
+    const moving = db.byUid(9);
     const response = await client.cmd('MOVE 2 Archive');
 
     assert.equal(response.status, 'OK');
-    assert.equal(db.byUid(9).folderId, 'f-archive');
+    assert.equal(moving.folderId, 'f-archive');
+    // RFC 6851 §4.3: a new UID in the target mailbox (UIDNEXT was 13), reported via COPYUID.
+    assert.equal(moving.uid, 13);
+    assert.ok(response.lines.some((l) => /^\* OK \[COPYUID 777 9 13\]/.test(l)), response.lines.join('\n'));
   });
 
   test('MOVE announces the removal from the source mailbox with an untagged EXPUNGE', async (t) => {

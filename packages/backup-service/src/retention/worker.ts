@@ -25,6 +25,7 @@
  */
 
 import { prisma } from '@coremail/storage/prisma';
+import { moveMessages, touchMessages, nextModSeq } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { retentionDecision } from './expiry.js';
 
@@ -244,10 +245,7 @@ async function applyForMailbox(
         result.itemsHardDeleted += 1;
       } else if (effective.action === 'DELETE_AND_ALLOW_RECOVERY') {
         if (!DRY_RUN) {
-          await prisma.message.update({
-            where: { id: m.id },
-            data: { folderId: recovery.deletionsId, softDeletedAt: new Date() },
-          });
+          await moveMessage(m.id, recovery.deletionsId, { softDeletedAt: new Date() });
         }
         result.itemsSoftDeleted += 1;
       } else if (effective.action === 'MOVE_TO_ARCHIVE') {
@@ -258,21 +256,17 @@ async function applyForMailbox(
         }
       } else if (effective.action === 'MARK_AS_PAST_RETENTION_LIMIT') {
         if (!DRY_RUN) {
-          await prisma.message.update({
-            where: { id: m.id },
-            data: { retentionTagId: effective.id.startsWith('legacy:') ? null : effective.id, retentionExpiresAt: expiresAt },
-          });
+          const retentionTagId = effective.id.startsWith('legacy:') ? null : effective.id;
+          await prisma.$transaction((tx) => touchMessages(tx, [m.id], { retentionTagId, retentionExpiresAt: expiresAt }));
         }
       }
     }
   }
 }
 
-async function moveMessage(messageId: string, targetFolderId: string): Promise<void> {
-  await prisma.message.update({
-    where: { id: messageId },
-    data: { folderId: targetFolderId },
-  });
+/** Move = new UID in the target folder + new modSeq (message store, RFC 6851 semantics). */
+async function moveMessage(messageId: string, targetFolderId: string, data?: { softDeletedAt: Date }): Promise<void> {
+  await prisma.$transaction((tx) => moveMessages(tx, [messageId], targetFolderId, data ? { data } : {}));
 }
 
 // ── Recovery sweep ───────────────────────────────────────────────────────────
@@ -288,10 +282,15 @@ async function sweepRecoverableItems(): Promise<{ purged: number }> {
   for (const df of deletionFolders) {
     const purgeFolder = await prisma.folder.findFirst({ where: { mailboxId: df.mailboxId, name: RECOVERABLE_PURGES } });
     if (!purgeFolder) continue;
-    await prisma.message.updateMany({
+    const expiredIds = (await prisma.message.findMany({
       where: { folderId: df.id, softDeletedAt: { lt: cutoff } },
-      data:  { folderId: purgeFolder.id },
-    });
+      select: { id: true },
+    })).map((m) => m.id);
+    if (expiredIds.length > 0 && !DRY_RUN) {
+      await prisma.$transaction((tx) => moveMessages(tx, expiredIds, purgeFolder.id, {
+        targetMailboxId: df.mailboxId, sourceMailboxId: df.mailboxId,
+      }));
+    }
   }
 
   // 2. Purges → DB delete + quota release
@@ -313,10 +312,11 @@ async function sweepRecoverableItems(): Promise<{ purged: number }> {
     const ids = toDelete.map((m) => m.id);
 
     if (!DRY_RUN) {
-      await prisma.$transaction([
-        prisma.message.deleteMany({ where: { id: { in: ids } } }),
-        prisma.user.update({ where: { id: ownerId }, data: { usedBytes: { decrement: totalSize } } }),
-      ]);
+      await prisma.$transaction(async (tx) => {
+        await tx.message.deleteMany({ where: { id: { in: ids } } });
+        await tx.user.update({ where: { id: ownerId }, data: { usedBytes: { decrement: totalSize } } });
+        await nextModSeq(tx, pf.mailboxId);
+      });
     }
     purged += ids.length;
   }
