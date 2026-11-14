@@ -16,7 +16,13 @@ import {
   handleCopy, handleMove, handleSearch, handleClose, handleCheck,
   // v5.5.0: RFC 9051 IMAP4rev2 + RFC 2971 + RFC 3501 §6.2.2 SASL
   handleUnselect, handleId, handleAuthenticate, handleSaslContinuation,
+  appendTargetExists,
 } from '../commands/index.js';
+import { CommandReader, type LiteralDecision } from './command-reader.js';
+import {
+  tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
+  type Token, type CommandSegment,
+} from './tokenizer.js';
 
 const log = createLogger('imap:server');
 
@@ -33,6 +39,15 @@ let _hostname = 'mail.localhost';
 /** Update the IMAP greeting hostname (called by server.ts on DB reload). */
 export function setImapHostname(hostname: string): void {
   _hostname = hostname;
+}
+
+// Maximum size of a client literal (APPEND message, LOGIN argument …).
+// Follows ServerSettings.maxMessageSizeMb (default 25 MB) via setImapMaxMessageSize().
+let _maxLiteralSize = 25 * 1024 * 1024;
+
+/** Update the literal size cap (called by server.ts on DB reload). */
+export function setImapMaxMessageSize(bytes: number): void {
+  if (Number.isFinite(bytes) && bytes > 0) _maxLiteralSize = bytes;
 }
 
 export interface ImapTlsConfig {
@@ -52,54 +67,45 @@ export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Se
     // RFC 3501 §7.1 — greeting with hostname and capability list
     socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] ${_hostname} IMAP4rev1 ready\r\n`);
 
-    let buffer = '';
-    let closing = false;
-
-    socket.on('data', (chunk: Buffer) => {
-      if (closing) return;
-      buffer += chunk.toString('utf8');
-
-      // Process complete lines
-      let lineEnd: number;
-      while ((lineEnd = buffer.indexOf('\r\n')) !== -1) {
-        const line = buffer.slice(0, lineEnd);
-        buffer = buffer.slice(lineEnd + 2);
-
-        // Handle IDLE DONE
-        if (session.idleActive && line.trim().toUpperCase() === 'DONE') {
-          handleIdleDone(session);
-          continue;
-        }
-
-        // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step).
-        // When saslMech is set, the server waits for a continuation response
-        // from the client — this is NOT a normal tagged command, but a
-        // pure base64-encoded data line (or "*" to abort).
-        if (session.saslMech) {
-          // We know the last tag — simplest is to remember it separately.
-          // Since we currently do not track it, we parse the last tag
-          // from the pending state. For now we use a hardcoded "*" as
-          // pseudo-tag, since the AUTHENTICATE response always refers
-          // to the original tag — which is stored in saslPendingTag
-          // (we track it below).
-          void handleSaslContinuation(session, session.saslPendingTag ?? '*', line);
-          continue;
-        }
-
-        void dispatchCommand(session, line);
-      }
-
-      // Hard cap on the unterminated remainder: a peer that never sends CRLF
-      // would otherwise grow the buffer without limit (memory exhaustion).
-      if (buffer.length > MAX_UNTERMINATED_LINE) {
-        closing = true;
-        buffer = '';
+    // Byte-oriented reader: literals ({n} / {n+}) are read as raw octets and
+    // commands are executed strictly in order (one at a time).
+    const reader = new CommandReader({
+      maxLineLength: MAX_UNTERMINATED_LINE,
+      maxLiteralSize: () => _maxLiteralSize,
+      // During IDLE and SASL exchanges the client sends raw lines, not commands.
+      literalsAllowed: () => !session.idleActive && !session.saslMech,
+      sendContinuation: () => { socket.write('+ Ready for literal data\r\n'); },
+      onLineTooLong: () => {
         socket.end('* BYE Line too long\r\n');
         log.warn({ id: session.id, ip: socket.remoteAddress }, 'IMAP line exceeds hard limit — connection closed');
-      }
+      },
+      onLiteral: (segments, size, sync, tooLarge) => checkLiteral(session, segments, size, sync, tooLarge),
+      onCommand: async (segments) => {
+        const first = segments[0];
+        if (segments.length === 1 && typeof first === 'string') {
+          // IDLE is terminated by a bare "DONE" line (RFC 2177).
+          if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
+            handleIdleDone(session);
+            return;
+          }
+          // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
+          // a base64-encoded data line (or "*" to abort), not a tagged command.
+          if (session.saslMech) {
+            await handleSaslContinuation(session, session.saslPendingTag ?? '*', first);
+            return;
+          }
+        }
+        await dispatchCommand(session, segments);
+        if (session.state === 'LOGOUT') reader.close();
+      },
+      pause: () => socket.pause(),
+      resume: () => socket.resume(),
     });
 
+    socket.on('data', (chunk: Buffer) => reader.push(chunk));
+
     socket.on('close', () => {
+      reader.close();
       sessions.delete(session.id);
       log.debug({ id: session.id }, 'IMAP disconnect');
     });
@@ -132,25 +138,84 @@ export function createImapServer(tlsConfig?: ImapTlsConfig): net.Server | tls.Se
   return server;
 }
 
-async function dispatchCommand(session: ImapSession, line: string): Promise<void> {
-  const parts = parseLine(line);
-  if (parts.length < 2) return;
+/**
+ * Decides whether an announced literal is read (RFC 9051 §4.3, RFC 7888).
+ * Before the continuation request of a synchronizing APPEND literal the target
+ * mailbox is checked, so the client does not upload a message that is then
+ * rejected with [TRYCREATE].
+ */
+async function checkLiteral(
+  session: ImapSession,
+  segments: CommandSegment[],
+  size: number,
+  sync: boolean,
+  tooLarge: boolean,
+): Promise<LiteralDecision> {
+  const tokens = tokenizePrefix(segments);
+  const tag = tokens[0]?.type === 'atom' ? tokens[0].value : '*';
+  if (tooLarge) {
+    log.warn({ id: session.id, size, limit: _maxLiteralSize }, 'IMAP literal exceeds maximum size');
+    session.socket.write(`${tag} NO [TOOBIG] Literal exceeds the maximum message size\r\n`);
+    if (sync) return 'drop';
+    // A non-synchronizing literal is already on its way — close the connection.
+    session.socket.end('* BYE Literal too large\r\n');
+    return 'close';
+  }
+  const command = tokens[1]?.type === 'atom' ? tokens[1].value.toUpperCase() : '';
+  if (sync && command === 'APPEND' && tokens.length >= 3) {
+    if (session.state === 'NOT_AUTHENTICATED') {
+      session.socket.write(`${tag} NO Not authenticated\r\n`);
+      return 'drop';
+    }
+    const mailbox = tokenString(tokens[2]);
+    if (mailbox !== null && !(await appendTargetExists(session, mailbox))) {
+      session.socket.write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+      return 'drop';
+    }
+  }
+  return 'continue';
+}
 
-  const [tag, command, ...rawArgs] = parts as [string, string, ...string[]];
-  let cmd = command.toUpperCase();
-  let args = rawArgs;
+async function dispatchCommand(session: ImapSession, segments: CommandSegment[]): Promise<void> {
+  const firstLine = typeof segments[0] === 'string' ? segments[0] : '';
+  let tokens: Token[];
+  try {
+    tokens = tokenize(segments);
+  } catch (err) {
+    const tag = /^[^\s(){%*"\\\]]+/.exec(firstLine)?.[0] ?? '*';
+    session.socket.write(`${tag} BAD ${err instanceof ImapParseError ? err.message : 'Syntax error'}\r\n`);
+    return;
+  }
+  if (tokens.length === 0) return; // empty line — ignore
+
+  const tagToken = tokens[0];
+  if (tagToken?.type !== 'atom' || /[*+]/.test(tagToken.value)) {
+    session.socket.write('* BAD Invalid tag\r\n');
+    return;
+  }
+  const tag = tagToken.value;
+  const commandToken = tokens[1];
+  if (commandToken?.type !== 'atom') {
+    // RFC 9051 §7.1.3: a protocol-level error in the client's command → BAD.
+    session.socket.write(`${tag} BAD Missing or invalid command name\r\n`);
+    return;
+  }
+
+  let cmd = commandToken.value.toUpperCase();
+  let argTokens = tokens.slice(2);
 
   // v5.3.1: IMAP UID variants — RFC 3501 §6.4.8. If the first token is "UID",
   // the next word belongs to the command name (UID FETCH, UID STORE,
   // UID COPY, UID MOVE, UID SEARCH, UID EXPUNGE). Previously this was not
   // recognized → Mac Mail's UID SEARCH/COPY/MOVE failed with "BAD".
-  if (cmd === 'UID' && rawArgs.length > 0) {
-    const sub = rawArgs[0]?.toUpperCase() ?? '';
+  if (cmd === 'UID' && argTokens[0]?.type === 'atom') {
+    const sub = argTokens[0].value.toUpperCase();
     if (['FETCH', 'STORE', 'COPY', 'MOVE', 'SEARCH', 'EXPUNGE'].includes(sub)) {
       cmd = `UID ${sub}`;
-      args = rawArgs.slice(1);
+      argTokens = argTokens.slice(1);
     }
   }
+  const args = argTokens.map(tokenToArg);
 
   log.debug({ id: session.id, cmd, tag }, 'IMAP command');
 
@@ -322,13 +387,23 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
         }
         break;
 
-      case 'ENABLE':
-        if (args[0]?.toUpperCase() === 'CONDSTORE') {
-          session.condstoreEnabled = true;
-          sendUntagged(session, 'ENABLED CONDSTORE');
+      // RFC 5161: the ENABLED response lists the extensions that were enabled.
+      case 'ENABLE': {
+        const enabled: string[] = [];
+        for (const ext of args) {
+          const name = ext.toUpperCase();
+          if (name === 'CONDSTORE' && !enabled.includes('CONDSTORE')) {
+            session.condstoreEnabled = true;
+            enabled.push('CONDSTORE');
+          } else if (name === 'IMAP4REV2' && !enabled.includes('IMAP4rev2')) {
+            session.imap4rev2Enabled = true;
+            enabled.push('IMAP4rev2');
+          }
         }
+        sendUntagged(session, `ENABLED${enabled.length ? ' ' + enabled.join(' ') : ''}`);
         session.socket.write(`${tag} OK ENABLE completed\r\n`);
         break;
+      }
 
       // v5.3.1: complete IMAP command suite (RFC 3501 + RFC 6851)
       case 'CREATE':
@@ -359,7 +434,8 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
         if (session.state === 'NOT_AUTHENTICATED') {
           session.socket.write(`${tag} NO Not authenticated\r\n`);
         } else {
-          await handleAppend(session, tag, args);
+          const last = argTokens[argTokens.length - 1];
+          await handleAppend(session, tag, args, last?.type === 'literal' ? last.value : undefined);
         }
         break;
 
@@ -399,7 +475,7 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
         if (session.state !== 'SELECTED') {
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
-          await handleSearch(session, tag, args, false);
+          await handleSearch(session, tag, argTokens, false);
         }
         break;
 
@@ -407,7 +483,7 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
         if (session.state !== 'SELECTED') {
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
-          await handleSearch(session, tag, args, true);
+          await handleSearch(session, tag, argTokens, true);
         }
         break;
 
@@ -434,36 +510,6 @@ async function dispatchCommand(session: ImapSession, line: string): Promise<void
     log.error({ err, cmd, tag }, 'Command handler error');
     session.socket.write(`${tag} NO Internal error\r\n`);
   }
-}
-
-function parseLine(line: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let inQuote = false;
-  // v5.2.19: track whether quotes were opened in this token. Empty quoted
-  // strings ("") must be pushed as an empty token — Mac Mail sends
-  // LIST "" "*" where args[0] = '' and args[1] = '*'. Previously: '""' was
-  // dropped because current was empty → reference became '*' → regex invalid.
-  let quotedToken = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      inQuote = !inQuote;
-      quotedToken = true;
-    } else if (ch === ' ' && !inQuote) {
-      if (current || quotedToken) {
-        tokens.push(current);
-        current = '';
-        quotedToken = false;
-      }
-    } else {
-      current += ch;
-    }
-  }
-
-  if (current || quotedToken) tokens.push(current);
-  return tokens;
 }
 
 function setupIdlePush(): void {
