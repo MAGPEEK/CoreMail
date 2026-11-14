@@ -1,7 +1,17 @@
 import { prisma } from '@coremail/storage/prisma';
 import { setFlags, expunge, ensureCounterFloor } from '@coremail/storage';
 import { encodeWbxml, el, getText, getChild, type WbxmlElement } from '../wbxml.js';
-import { loadSyncWindow, type SyncWindowDb } from './sync-window.js';
+import { loadSyncWindow, isPrimingSyncKey, PRIMING_SYNC_KEY, type SyncWindowDb } from './sync-window.js';
+
+/** Response collection for a SyncKey-0 request: new key, Status 1, no Commands. */
+export function primingCollection(collectionId: string): WbxmlElement {
+  return el('Collection', undefined, [
+    el('Class', 'Email'),
+    el('SyncKey', PRIMING_SYNC_KEY),
+    el('CollectionId', collectionId),
+    el('Status', '1'),
+  ]);
+}
 
 const MAX_BODY_LENGTH = 4096;
 
@@ -75,6 +85,17 @@ export async function handleSync(
         el('CollectionId', collectionId),
         el('Status', '8'), // object not found
       ]));
+      continue;
+    }
+
+    // SyncKey 0: prime the state only (no Commands) — see PRIMING_SYNC_KEY.
+    if (isPrimingSyncKey(clientSyncKey)) {
+      if (device) {
+        const syncKeys = (device.syncKeys as Record<string, string>) ?? {};
+        syncKeys[collectionId] = PRIMING_SYNC_KEY;
+        await prisma.activeSyncDevice.update({ where: { id: device.id }, data: { syncKeys, lastSyncAt: new Date() } });
+      }
+      responseCollections.push(primingCollection(collectionId));
       continue;
     }
 

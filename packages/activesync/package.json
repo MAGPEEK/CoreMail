@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/wbxml.test.ts src/commands/get-attachment.test.ts src/commands/send-mail-plan.test.ts src/commands/sync-window.test.ts src/outbound.test.ts src/auth.test.ts"
+    "test": "node --import tsx --test src/wbxml.test.ts src/commands/get-attachment.test.ts src/commands/sync-priming.test.ts src/commands/send-mail-plan.test.ts src/commands/sync-window.test.ts src/outbound.test.ts src/auth.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

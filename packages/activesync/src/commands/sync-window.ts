@@ -43,6 +43,18 @@ export interface SyncWindowDb {
   };
 }
 
+/**
+ * [MS-ASCMD] 2.2.3.166.4: a Sync with SyncKey 0 only primes the sync state — the
+ * response carries a new SyncKey and NO Commands; clients fetch the items with the
+ * next Sync (and drop items sent in the priming response). The priming key is the
+ * lowest modSeq bound (message modSeqs start at 1), so that next Sync returns the
+ * whole folder.
+ */
+export const PRIMING_SYNC_KEY = '1';
+export function isPrimingSyncKey(key: string | undefined): boolean {
+  return key === undefined || key === '' || key === '0';
+}
+
 export type ParsedSyncKey = { kind: 'delta'; since: bigint } | { kind: 'invalid' };
 
 /** `'0'`/empty = initial sync (everything); otherwise the lower modSeq bound. */

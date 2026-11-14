@@ -5,7 +5,7 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadSyncWindow, parseSyncKey, type SyncMessageRow, type SyncWindowDb } from './sync-window.js';
+import { loadSyncWindow, parseSyncKey, isPrimingSyncKey, PRIMING_SYNC_KEY, type SyncMessageRow, type SyncWindowDb } from './sync-window.js';
 
 interface Msg extends SyncMessageRow { folderId: string; deletedAt: Date | null }
 let mailbox = { id: 'mb1', highestModSeq: 0n };
@@ -117,4 +117,15 @@ test('legacy Date.now() sync keys and garbage are rejected as invalid (Status 3)
   assert.equal((await sync('abc')).status, 'invalid');
   assert.deepEqual(parseSyncKey(undefined, 5n), { kind: 'delta', since: 0n });
   assert.deepEqual(parseSyncKey('5', 5n), { kind: 'delta', since: 5n });
+});
+
+// Regression (e2e 7.0.0): the SyncKey-0 response must not carry items ([MS-ASCMD]
+// 2.2.3.166.4) — handleSync answers with PRIMING_SYNC_KEY, and the client's next
+// Sync with that key must return the WHOLE folder (nothing lost by priming).
+test('priming key: SyncKey 0 is a priming request; the priming key returns every message', async () => {
+  assert.ok(isPrimingSyncKey('0') && isPrimingSyncKey('') && isPrimingSyncKey(undefined));
+  assert.ok(!isPrimingSyncKey(PRIMING_SYNC_KEY));
+  deliver('m1'); deliver('m2'); markSeen('m1'); deliver('m3');
+  const w = await sync(PRIMING_SYNC_KEY);
+  assert.deepEqual(ids(w).sort(), ['m1', 'm2', 'm3']);
 });
