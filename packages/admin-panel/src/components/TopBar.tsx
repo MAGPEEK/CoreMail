@@ -2,7 +2,7 @@ import { Sun, Moon, Monitor, Mail, ChevronDown, LogOut, Languages } from 'lucide
 import { useState } from 'react';
 import { useThemeStore, resolveIsDark, type ThemeMode } from '../store/theme.js';
 import { useLanguageStore, type Lang } from '../store/language.js';
-import { clearToken, getToken } from '../api/client.js';
+import { getToken, logoutSession } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
 // ── JWT payload without jsonwebtoken (base64 decode only, no verify) ──────────
@@ -145,7 +145,7 @@ export function TopBar() {
 
               {/* Logout */}
               <button
-                onClick={() => { clearToken(); window.location.href = '/bcp/login'; }}
+                onClick={() => { setProfileOpen(false); void logoutSession().finally(() => { window.location.href = '/bcp/login'; }); }}
                 className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 <LogOut size={14} />

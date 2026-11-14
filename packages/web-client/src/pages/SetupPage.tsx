@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
 export function SetupPage() {
   const [step, setStep] = useState<'form' | 'done'>('form');
@@ -10,6 +10,16 @@ export function SetupPage() {
   const [emailEdited, setEmailEdited] = useState(false);
   const [password, setPassword]       = useState('');
   const [confirm, setConfirm]         = useState('');
+  // One-time setup token (printed in the container log / SETUP_TOKEN env)
+  const [setupToken, setSetupToken]   = useState('');
+  const [tokenRequired, setTokenRequired] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/v1/setup/status')
+      .then((r) => r.json() as Promise<{ setupTokenRequired?: boolean }>)
+      .then((d) => { if (d.setupTokenRequired === false) setTokenRequired(false); })
+      .catch(() => undefined);
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -17,6 +27,10 @@ export function SetupPage() {
 
     if (password !== confirm) {
       setError('Passwörter stimmen nicht überein.');
+      return;
+    }
+    if (tokenRequired && !setupToken.trim()) {
+      setError('Bitte das Setup-Token eingeben.');
       return;
     }
     if (password.length < 8) {
@@ -28,8 +42,11 @@ export function SetupPage() {
     try {
       const res = await fetch('/api/v1/setup/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain, email, password }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(setupToken.trim() ? { 'X-Setup-Token': setupToken.trim() } : {}),
+        },
+        body: JSON.stringify({ domain, email, password, ...(setupToken.trim() ? { setupToken: setupToken.trim() } : {}) }),
       });
       const data = await res.json() as { error?: string; success?: boolean };
       if (!res.ok) {
@@ -96,6 +113,30 @@ export function SetupPage() {
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded">
               {error}
+            </div>
+          )}
+
+          {/* Setup token */}
+          {tokenRequired && (
+            <div>
+              <label htmlFor="setup-token" className="block text-sm font-medium text-gray-700 mb-1">
+                Setup-Token
+              </label>
+              <input
+                id="setup-token"
+                type="text"
+                required
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Einmal-Token aus dem Container-Log"
+                value={setupToken}
+                onChange={(e) => setSetupToken(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#0078D4] focus:border-transparent"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Steht im Container-Log: <code className="bg-gray-100 px-1 rounded">docker logs coremail | grep -i "setup token"</code> —
+                oder vorab per Umgebungsvariable <code className="bg-gray-100 px-1 rounded">SETUP_TOKEN</code> setzen.
+              </p>
             </div>
           )}
 

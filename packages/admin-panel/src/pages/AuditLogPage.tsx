@@ -5,7 +5,8 @@ import {
   CheckCircle2, XCircle, Info, X, AlertTriangle,
   Activity, Users, BarChart3, Code2,
 } from 'lucide-react';
-import { api, exportUrl } from '../api/client.js';
+import { api, downloadFile } from '../api/client.js';
+import toast from 'react-hot-toast';
 import { useT } from '../i18n/useT.js';
 
 // v3.18.34: AnomaliesResponse interface + banner removed — the red banners were
@@ -361,10 +362,12 @@ export function AuditLogPage() {
 
   // v3.18.34: Anomalies query removed — banner was too noisy
 
+  // Fetch-to-blob with the Authorization header — no ?token= in URLs (logs/history)
   const handleExport = (format: 'csv' | 'pdf' | 'json') => {
     const params = buildParams();
-    const url = exportUrl(`/admin/audit-log/export.${format}`, params);
-    window.open(url, '_blank');
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadFile(`/admin/audit-log/export.${format}?${params.toString()}`, `audit-log-${stamp}.${format}`)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Export fehlgeschlagen'));
   };
 
   const dismissNotice = () => {

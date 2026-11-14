@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown, Inbox } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
+import { logoutSession } from '../api/client.js';
 import { Avatar } from './Avatar.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 
@@ -12,7 +13,7 @@ interface Props {
 
 export function TopBar({ onSearch, currentApp }: Props) {
   const navigate = useNavigate();
-  const { displayName, email, logout } = useAuthStore();
+  const { displayName, email } = useAuthStore();
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [sharedOpen, setSharedOpen]   = useState(false);
@@ -107,7 +108,7 @@ export function TopBar({ onSearch, currentApp }: Props) {
               </button>
               <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
               <button
-                onClick={() => { logout(); navigate('/login'); }}
+                onClick={() => { setProfileOpen(false); void logoutSession().finally(() => navigate('/login')); }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 <LogOut size={14} />

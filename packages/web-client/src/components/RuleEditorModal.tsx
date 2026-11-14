@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { X, Plus, Trash2, Save, ChevronDown, ChevronUp, Info } from 'lucide-react';
+import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type {
@@ -279,13 +280,11 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
   const canSave = name.trim().length > 0 && actions.length > 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+    <Modal
+      onClose={onClose}
+      label="Regel bearbeiten"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
@@ -446,7 +445,6 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             <Save size={14} /> {save.isPending ? 'Speichern…' : 'Speichern'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

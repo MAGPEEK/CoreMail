@@ -12,12 +12,12 @@
 import { useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/auth.js';
+import { logoutSession } from '../api/client.js';
 
 const WARN_BEFORE_MS = 60_000; // 1 minute advance warning
 
 export function useInactivityLogout() {
-  const logout         = useAuthStore((s) => s.logout);
-  const timeoutRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timeoutRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warnToastId    = useRef<string | null>(null);
   const limitMsRef     = useRef<number>(0); // 0 = disabled
@@ -96,8 +96,10 @@ export function useInactivityLogout() {
     timeoutRef.current = setTimeout(() => {
       if (warnToastId.current) toast.dismiss(warnToastId.current);
       toast('Sitzung abgelaufen — du wurdest automatisch abgemeldet.', { icon: '🔒', duration: 5000 });
-      logout();
-      setTimeout(() => { window.location.href = '/login'; }, 800);
+      // Revoke the refresh token server-side, then clear local state
+      void logoutSession().finally(() => {
+        setTimeout(() => { window.location.href = '/login'; }, 800);
+      });
     }, limit);
   }
 }

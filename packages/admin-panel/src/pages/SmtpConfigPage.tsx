@@ -702,17 +702,15 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     setTestStatus('testing');
     setTestMsg('');
     try {
-      const res = await fetch('/api/v1/admin/smtp-config/test-smarthost', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('accessToken') ?? ''}` },
-        body: JSON.stringify({ host, port, tls, implicitTls, username, password: password || undefined }),
+      // API client: correct token (bcp-token), refresh + error handling
+      const data = await api.post<{ ok: boolean; message: string }>('/admin/smtp-config/test-smarthost', {
+        host, port, tls, implicitTls, username, password: password || undefined,
       });
-      const data = await res.json() as { ok: boolean; message: string };
       setTestStatus(data.ok ? 'ok' : 'err');
       setTestMsg(data.message);
-    } catch {
+    } catch (err) {
       setTestStatus('err');
-      setTestMsg('Verbindungstest fehlgeschlagen');
+      setTestMsg(err instanceof Error && err.message ? err.message : 'Verbindungstest fehlgeschlagen');
     }
   }
 

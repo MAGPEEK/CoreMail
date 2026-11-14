@@ -39,37 +39,33 @@ interface Props {
 
 interface MenuState { x: number; y: number; items: ContextMenuItem[] }
 
-export function CalendarToolbar({
-  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange,
-}: Props) {
-  const [menu, setMenu] = useState<MenuState | null>(null);
-  const [filterOpen, setFilterOpen] = useState<{ x: number; y: number } | null>(null);
-
-  const filterCount = (Object.keys(FILTER_DEFAULT) as FilterKey[])
-    .filter((k) => filters[k] !== FILTER_DEFAULT[k]).length;
-
-  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div className="flex flex-col items-center px-3 py-1">
+// Module-level components (never define components inside components — remounts on every render)
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div role="group" aria-label={title} className="flex flex-col items-center px-3 py-1">
       <div className="flex items-stretch gap-1 mb-1">{children}</div>
       <div className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">{title}</div>
     </div>
   );
+}
 
-  /** Large toolbar button (icon on top, label below) — Office ribbon style
-   *  Fixed size so all buttons look the same. */
-  const RibbonBtn = ({
-    icon, label, active, onClick, disabled, hasArrow,
-  }: {
-    icon: React.ReactNode;
-    label: string;
-    active?: boolean;
-    onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
-    disabled?: boolean;
-    hasArrow?: boolean;
-  }) => (
+/** Large toolbar button (icon on top, label below) — Office ribbon style
+ *  Fixed size so all buttons look the same. */
+function RibbonBtn({
+  icon, label, active, onClick, disabled, hasArrow,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  disabled?: boolean;
+  hasArrow?: boolean;
+}) {
+  return (
     <button
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={active}
       className={`flex flex-col items-center justify-between w-[80px] h-[62px] px-1 py-1.5 rounded transition-all duration-150 active:scale-95 ${
         active
           ? 'bg-accent/10 text-accent ring-1 ring-accent/30'
@@ -83,6 +79,16 @@ export function CalendarToolbar({
       </span>
     </button>
   );
+}
+
+export function CalendarToolbar({
+  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange,
+}: Props) {
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [filterOpen, setFilterOpen] = useState<{ x: number; y: number } | null>(null);
+
+  const filterCount = (Object.keys(FILTER_DEFAULT) as FilterKey[])
+    .filter((k) => filters[k] !== FILTER_DEFAULT[k]).length;
 
   const handleNewEventMenu = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();

@@ -612,11 +612,29 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   res.send(rawEml);
 });
 
-// GET /api/v1/mail/folders/:folderId/messages
+/** Parses `?limit=&offset=` for list endpoints: limit 1..200 (default 50), offset ≥ 0. */
+function parsePaging(query: Request['query']): { limit: number; offset: number } {
+  const rawLimit = parseInt(String(query['limit'] ?? '50'), 10);
+  const rawOffset = parseInt(String(query['offset'] ?? '0'), 10);
+  return {
+    limit: Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50,
+    offset: Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0,
+  };
+}
+
+// Columns returned by the message list and the search endpoint (MessageSummary)
+const MESSAGE_SUMMARY_SELECT = {
+  id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
+  date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
+  spamScore: true, scheduledAt: true, scheduledStatus: true, folderId: true,
+  attachments: { select: { id: true, filename: true, mimeType: true, size: true, contentId: true, inline: true } },
+  categories: { select: { category: { select: { id: true, name: true, color: true } } } },
+} as const;
+
+// GET /api/v1/mail/folders/:folderId/messages?limit=&offset=
 mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response) => {
   const { folderId } = req.params as { folderId: string };
-  const limit = Math.min(parseInt(String(req.query['limit'] ?? '50'), 10), 200);
-  const offset = parseInt(String(req.query['offset'] ?? '0'), 10);
+  const { limit, offset } = parsePaging(req.query);
 
   
   const folder = await prisma.folder.findFirst({
@@ -636,13 +654,7 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
       orderBy: [{ pinnedAt: { sort: 'desc', nulls: 'last' } }, { date: 'desc' }],
       take: limit,
       skip: offset,
-      select: {
-        id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
-        date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
-        spamScore: true, scheduledAt: true, scheduledStatus: true,
-        attachments: { select: { id: true, filename: true, mimeType: true, size: true, contentId: true, inline: true } },
-        categories: { select: { category: { select: { id: true, name: true, color: true } } } },
-      },
+      select: MESSAGE_SUMMARY_SELECT,
     }),
     prisma.message.count({ where: { folderId, deletedAt: null, ...snoozeFilter } }),
   ]);
@@ -1115,19 +1127,24 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
   res.json({ ok: true, jobRemoved });
 });
 
-// GET /api/v1/mail/search?q=foo&categoryId=...
+// GET /api/v1/mail/search?q=foo&categoryId=...&folderId=...&limit=&offset=
+// folderId (optional) restricts the search to one of the user's own folders.
 mailRouter.get('/search', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const categoryId = req.query['categoryId'] ? String(req.query['categoryId']) : null;
-  if (q.length < 2 && !categoryId) { res.json({ messages: [], total: 0 }); return; }
+  const folderId = req.query['folderId'] ? String(req.query['folderId']) : null;
+  const { limit, offset } = parsePaging(req.query);
+  const empty = { messages: [], total: 0, limit, offset };
+  if (q.length < 2 && !categoryId) { res.json(empty); return; }
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
-  if (!mailbox) { res.json({ messages: [], total: 0 }); return; }
+  if (!mailbox) { res.json(empty); return; }
 
   const folderIds = (await prisma.folder.findMany({
-    where: { mailboxId: mailbox.id },
+    where: { mailboxId: mailbox.id, ...(folderId ? { id: folderId } : {}) },
     select: { id: true },
   })).map((f: { id: string }) => f.id);
+  if (folderId && folderIds.length === 0) { res.status(404).json({ error: 'Folder not found' }); return; }
 
   const where: Record<string, unknown> = {
     folderId: { in: folderIds },
@@ -1145,16 +1162,18 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
     where['categories'] = { some: { categoryId, category: { userId: req.apiUser!.userId } } };
   }
 
-  const messages = await prisma.message.findMany({
+  const [messages, total] = await Promise.all([
+    prisma.message.findMany({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      where: where as any,
+      orderBy: { date: 'desc' },
+      take: limit,
+      skip: offset,
+      select: MESSAGE_SUMMARY_SELECT,
+    }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    where: where as any,
-    orderBy: { date: 'desc' },
-    take: 100,
-    select: {
-      id: true, subject: true, fromAddr: true, fromName: true, date: true, flags: true, folderId: true,
-      categories: { select: { category: { select: { id: true, name: true, color: true } } } },
-    },
-  });
+    prisma.message.count({ where: where as any }),
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const flat = messages.map((m: any) => ({
@@ -1162,7 +1181,7 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
     categories: m.categories?.map((c: any) => c.category) ?? [],
   }));
 
-  res.json({ messages: flat, total: flat.length });
+  res.json({ messages: flat, total, limit, offset });
 });
 
 // GET /api/v1/mail/delegated-mailboxes

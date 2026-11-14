@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Fingerprint, Plus, Trash2, RefreshCw, CheckCircle2, XCircle,
-  TestTube2, Save, Settings, List, Info, AlertCircle, ExternalLink,
-  ShieldCheck, Edit2,
+  TestTube2, Save, Settings, List, AlertCircle, ExternalLink,
+  Edit2,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -27,11 +27,11 @@ interface OidcProvider {
 
 interface Domain { id: string; name: string }
 
-type Section = 'providers' | 'saml' | 'settings';
+// SAML removed: there is no SAML implementation in auth-sso (OIDC only)
+type Section = 'providers' | 'settings';
 
 const SECTIONS: { key: Section; label: string; icon: React.ReactNode }[] = [
   { key: 'providers', label: 'OIDC-Anbieter',  icon: <List size={14} /> },
-  { key: 'saml',      label: 'SAML 2.0',       icon: <ShieldCheck size={14} /> },
   { key: 'settings',  label: 'Einstellungen',  icon: <Settings size={14} /> },
 ];
 
@@ -320,67 +320,6 @@ function ProvidersSection() {
   );
 }
 
-// ─── SAML Section ─────────────────────────────────────────────────────────────
-
-function SamlSection() {
-  return (
-    <div className="space-y-4 max-w-2xl">
-      <div className="card p-5 space-y-3">
-        <div className="flex items-center gap-2">
-          <ShieldCheck size={18} className="text-accent" />
-          <p className="text-sm font-semibold text-gray-700">SAML 2.0</p>
-        </div>
-        <p className="text-sm text-gray-600 leading-relaxed">
-          SAML 2.0 wird über das <strong>auth-sso</strong>-Paket unterstützt. Die Konfiguration erfolgt
-          über Umgebungsvariablen im Container oder direkt im <code className="bg-gray-100 px-1 rounded text-xs">auth-sso</code>-Service.
-        </p>
-        <div className="space-y-2">
-          {[
-            { label: 'Service Provider Entity ID', value: 'https://mail.domain.de/auth/saml/metadata' },
-            { label: 'Assertion Consumer Service URL', value: 'https://mail.domain.de/auth/saml/callback' },
-            { label: 'Single Logout URL', value: 'https://mail.domain.de/auth/saml/logout' },
-            { label: 'Metadata', value: 'https://mail.domain.de/auth/saml/metadata.xml' },
-          ].map(row => (
-            <div key={row.label} className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-0">
-              <span className="text-xs text-gray-500 w-48 shrink-0">{row.label}</span>
-              <code className="text-xs font-mono text-gray-700 break-all">{row.value}</code>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="card p-5 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">Unterstützte Identity Provider</p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { name: 'Azure Active Directory / Entra ID', status: '✅' },
-            { name: 'Okta',                              status: '✅' },
-            { name: 'OneLogin',                          status: '✅' },
-            { name: 'ADFS (Active Directory Federation Services)', status: '✅' },
-            { name: 'Shibboleth',                        status: '✅' },
-            { name: 'G Suite / Google Workspace',        status: '✅' },
-          ].map(idp => (
-            <div key={idp.name} className="flex items-center gap-2 text-sm text-gray-700 py-1">
-              <span>{idp.status}</span>{idp.name}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700">
-        <Info size={13} className="shrink-0 mt-0.5" />
-        <p>
-          Die SAML-Konfiguration für einen spezifischen Identity Provider erfolgt über die Umgebungsvariablen
-          <code className="bg-blue-100 px-1 rounded mx-1">SAML_IDP_METADATA_URL</code> oder
-          <code className="bg-blue-100 px-1 rounded mx-1">SAML_IDP_ENTRY_POINT</code>
-          in der <code className="bg-blue-100 px-1 rounded">.env</code>-Datei.
-          Ein GUI-Editor wird in einer zukünftigen Version ergänzt.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ─── Settings Section ─────────────────────────────────────────────────────────
 
 function SettingsSection() {
@@ -416,7 +355,6 @@ function SettingsSection() {
         <div className="space-y-2">
           {[
             { label: 'OIDC Callback',       uri: '/auth/oidc/callback' },
-            { label: 'SAML ACS',            uri: '/auth/saml/callback' },
             { label: 'Logout Redirect',     uri: '/auth/logout' },
           ].map(r => (
             <div key={r.label} className="flex items-center gap-3 py-1.5 border-b border-gray-100 last:border-0">
@@ -465,12 +403,11 @@ export function SsoPage() {
             <Fingerprint size={20} className="text-accent" />
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Single Sign-On (SSO)</h1>
-              <p className="text-xs text-gray-500">{SECTIONS.find(s => s.key === section)?.label} · OIDC / OAuth2 / SAML 2.0</p>
+              <p className="text-xs text-gray-500">{SECTIONS.find(s => s.key === section)?.label} · OpenID Connect (OIDC)</p>
             </div>
           </div>
 
           {section === 'providers' && <ProvidersSection />}
-          {section === 'saml'      && <SamlSection />}
           {section === 'settings'  && <SettingsSection />}
         </div>
       </div>

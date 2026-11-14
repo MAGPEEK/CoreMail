@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  X, Minus, Maximize2, Send, Paperclip, Save, Loader2,
+  X, Minus, Maximize2, Send, Paperclip, Loader2,
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   List, ListOrdered, Link2, Undo2, Redo2, Eraser,
@@ -18,6 +18,7 @@ import TextStyle from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import FontFamilyExt from '@tiptap/extension-font-family';
 import { api } from '../api/client.js';
+import { toLocalInput } from '../lib/datetime.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
 
@@ -498,7 +499,8 @@ export function ComposeWindow() {
   const [showCustomSchedule, setShowCustomSchedule] = useState(false);
   const [customScheduleValue, setCustomScheduleValue] = useState(() => {
     const d = new Date(); d.setHours(d.getHours() + 1); d.setMinutes(0, 0, 0);
-    return d.toISOString().slice(0, 16);
+    // datetime-local expects LOCAL wall time (toISOString() would be UTC)
+    return toLocalInput(d);
   });
 
   const sendMutation = useMutation({
@@ -548,6 +550,14 @@ export function ComposeWindow() {
     sendMutation.mutate(date);
   };
 
+  // ⌘+Enter / Ctrl+Enter sends (as advertised in the Send button tooltip)
+  const handleComposeKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (!sendMutation.isPending && to.trim()) sendMutation.mutate(undefined);
+    }
+  };
+
   // ── Minimized state ────────────────────────────────────────────────────────
   if (minimized) {
     return (
@@ -573,6 +583,9 @@ export function ComposeWindow() {
 
   return (
     <div
+      role="dialog"
+      aria-label={subject || 'Neue Nachricht'}
+      onKeyDown={handleComposeKeyDown}
       className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col animate-fly-in"
       style={{ maxHeight: '92vh', height: '78vh' }}
     >
@@ -965,10 +978,8 @@ export function ComposeWindow() {
               </span>
             )}
           </button>
-          <button type="button" className="btn-ghost text-xs" title="Als Entwurf speichern">
-            <Save size={14} />
-            Entwurf
-          </button>
+          {/* "Save draft" button removed: there is no draft API in the backend yet,
+              the button did nothing. */}
         </div>
         {/* Send button group: Send + arrow dropdown for "Schedule send" */}
         <div className="relative flex">

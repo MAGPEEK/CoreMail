@@ -17,6 +17,8 @@ import { useAuthStore } from './store/auth.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
+import { useTaskReminders } from './hooks/useTaskReminders.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -64,18 +66,22 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { composeOpen } = useUiStore();
   useMailEvents();
   useInactivityLogout();
+  // Task reminders fire on every page, not only while /tasks is open
+  useTaskReminders();
 
   const currentApp = APP_MAP[location.pathname] ?? 'mail';
 
+  // MessageList picks up ?q= and runs a mailbox-wide server search
   const handleSearch = (q: string) => {
-    if (q) navigate(`/mail?q=${encodeURIComponent(q)}`);
+    const trimmed = q.trim();
+    if (trimmed) navigate(`/mail?q=${encodeURIComponent(trimmed)}`);
   };
 
   return (
     <div className="h-full flex flex-col">
       <TopBar onSearch={handleSearch} currentApp={currentApp} />
       <main key={location.pathname} className="flex-1 flex overflow-hidden animate-page-in">
-        {children}
+        <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
       </main>
       {composeOpen && <ComposeWindow />}
     </div>

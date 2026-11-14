@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useState, useMemo } from 'react';
 import { Inbox, Search, X, ExternalLink, Lock } from 'lucide-react';
+import { Modal } from './Modal.js';
 import { api } from '../api/client.js';
 
 interface SharedMailboxEntry {
@@ -55,8 +56,12 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+    <Modal
+      onClose={onClose}
+      label="Weiteres Postfach öffnen"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
           <div>
             <h2 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
@@ -161,7 +166,6 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
             Schließen
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

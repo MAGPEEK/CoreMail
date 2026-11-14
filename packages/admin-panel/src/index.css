@@ -136,3 +136,11 @@ html.dark ::-webkit-scrollbar        { width: 6px; height: 6px; }
 html.dark ::-webkit-scrollbar-track  { background: #1f2937; }
 html.dark ::-webkit-scrollbar-thumb  { background: #4b5563; border-radius: 3px; }
 html.dark ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+/* Read-only admin area (adminAreas = 'read'): primary/danger actions are disabled */
+[data-area-readonly] .btn-primary,
+[data-area-readonly] .btn-danger {
+  opacity: 0.45;
+  pointer-events: none;
+}
+

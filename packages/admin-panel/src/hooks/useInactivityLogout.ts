@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { clearToken } from '../api/client.js';
+import { logoutSession } from '../api/client.js';
 
 const WARN_BEFORE_MS = 60_000; // 1 minute advance warning
 
@@ -82,9 +82,10 @@ export function useInactivityLogout() {
     timeoutRef.current = setTimeout(() => {
       if (warnToastId.current) toast.dismiss(warnToastId.current);
       toast('Sitzung abgelaufen — du wurdest automatisch abgemeldet.', { icon: '🔒', duration: 5000 });
-      clearToken();
-      // BCP lives under /bcp
-      setTimeout(() => { window.location.href = '/bcp/login'; }, 800);
+      // Revoke the refresh token server-side, then clear local tokens (BCP lives under /bcp)
+      void logoutSession().finally(() => {
+        setTimeout(() => { window.location.href = '/bcp/login'; }, 800);
+      });
     }, limit);
   }
 }
