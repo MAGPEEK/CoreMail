@@ -27,6 +27,8 @@ export interface ImapSession {
   capabilities: string[];
   // CONDSTORE: track per-session modseq
   condstoreEnabled: boolean;
+  // RFC 9051 §6.3.1: set by "ENABLE IMAP4rev2"
+  imap4rev2Enabled: boolean;
   // v5.5.0: SASL state for AUTHENTICATE multi-step mechanisms (LOGIN, PLAIN)
   saslMech: 'PLAIN' | 'LOGIN' | null;
   saslStep: number;
@@ -37,41 +39,31 @@ export interface ImapSession {
   isTls: boolean;
 }
 
-function buildCapabilities(isTls: boolean, isAuthenticated: boolean): string[] {
+function buildCapabilities(isTls: boolean, _isAuthenticated: boolean): string[] {
+  // Only capabilities that are actually implemented are advertised. Removed
+  // (not implemented): LOGIN-REFERRALS, UTF8=ACCEPT, QUOTA, LIST-EXTENDED,
+  // LIST-STATUS, and on the plaintext listener STARTTLS (the command answers
+  // NO) and LOGINDISABLED (LOGIN is accepted).
   const caps: string[] = [
     'IMAP4rev1',
-    // v5.5.0: IMAP4rev2 (RFC 9051) mandatory features are already implemented
-    // (ENABLE, UTF8=ACCEPT, LITERAL+, IDLE, SASL-IR, ESEARCH, LIST-EXTENDED,
-    //  LIST-STATUS, MOVE, NAMESPACE, SPECIAL-USE, UNSELECT, CONDSTORE)
     'IMAP4rev2',
-    'LITERAL+',
-    'SASL-IR',
-    'LOGIN-REFERRALS',
-    'ID',
-    'ENABLE',
-    'IDLE',
-    'CONDSTORE',
-    'ESEARCH',
-    'UTF8=ACCEPT',
-    'QUOTA',
-    'NAMESPACE',
-    // v5.2.18: SPECIAL-USE (RFC 6154) + LIST-EXTENDED (RFC 5258) — Mac Mail
-    // needs SPECIAL-USE flags to recognize Drafts/Sent/Trash/Junk/Archive.
+    'LITERAL+',       // RFC 7888 — non-synchronizing literals (server/command-reader.ts)
+    'SASL-IR',        // RFC 4959
+    'ID',             // RFC 2971
+    'ENABLE',         // RFC 5161
+    'IDLE',           // RFC 2177
+    'CONDSTORE',      // RFC 7162
+    'ESEARCH',        // RFC 4731 — SEARCH RETURN (MIN MAX COUNT ALL)
+    'NAMESPACE',      // RFC 2342
+    // v5.2.18: SPECIAL-USE (RFC 6154) — Mac Mail needs SPECIAL-USE flags to
+    // recognize Drafts/Sent/Trash/Junk/Archive.
     'SPECIAL-USE',
-    'LIST-EXTENDED',
-    'LIST-STATUS',
-    'CHILDREN',
-    // v5.5.0: RFC 9051 features
+    'CHILDREN',       // RFC 3348 — \HasChildren / \HasNoChildren in LIST
     'MOVE',           // RFC 6851
     'UNSELECT',       // RFC 3691
     'UIDPLUS',        // RFC 4315 (APPENDUID/COPYUID)
     'STATUS=SIZE',    // RFC 8438
   ];
-  if (isTls || !isAuthenticated) {
-    // Only announce STARTTLS on non-TLS connections (port 143).
-    // Implicit TLS (port 993) does not need it.
-    if (!isTls) caps.push('STARTTLS', 'LOGINDISABLED');
-  }
   if (isTls) {
     caps.push('AUTH=PLAIN', 'AUTH=LOGIN');
   }
@@ -89,6 +81,7 @@ export function createSession(socket: Socket | TLSSocket, isTls: boolean): ImapS
     idleActive: false,
     idleTag: null,
     condstoreEnabled: false,
+    imap4rev2Enabled: false,
     saslMech: null,
     saslStep: 0,
     saslUser: '',

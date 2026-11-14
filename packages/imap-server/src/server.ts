@@ -4,7 +4,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals,
 } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
-import { createImapServer, setImapHostname, type ImapTlsConfig } from './server/index.js';
+import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 
 const log = createLogger('imap:main');
 
@@ -18,6 +18,7 @@ let _tlsConfig: ImapTlsConfig | null = null;
 async function refreshHostname(): Promise<void> {
   try {
     const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    if (settings?.maxMessageSizeMb) setImapMaxMessageSize(settings.maxMessageSizeMb * 1024 * 1024);
     if (settings?.publicHostname) {
       setImapHostname(settings.publicHostname);
       log.debug({ hostname: settings.publicHostname }, 'IMAP hostname refreshed from DB');

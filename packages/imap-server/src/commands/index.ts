@@ -4,6 +4,11 @@ import {
   type ImapSession,
   sendOk, sendNo, sendBad, sendUntagged, send,
 } from '../session/state.js';
+import { ImapParseError, type Token } from '../server/tokenizer.js';
+import {
+  parseSearch, needsBody, evaluateSearch, formatEsearch,
+  type SearchProgram, type SearchableMessage,
+} from './search-parser.js';
 
 const log = createLogger('imap:commands');
 
@@ -31,8 +36,14 @@ export async function handleLogin(
     return;
   }
 
-  const username = unquote(args[0] ?? '');
-  const password = unquote(args[1] ?? '');
+  // Arguments arrive already decoded by the tokenizer (atom, quoted string
+  // with \" and \\ escapes resolved, or literal) — no further unquoting.
+  if (args.length !== 2) {
+    sendBad(session, tag, 'LOGIN requires username and password');
+    return;
+  }
+  const username = args[0] ?? '';
+  const password = args[1] ?? '';
 
   const user = await prisma.user.findFirst({
     where: { email: username.toLowerCase(), active: true },
@@ -152,7 +163,9 @@ export async function handleList(
 
   for (const folder of folders) {
     if (pattern === '*' || pattern === '%' || regex.test(folder.name)) {
-      const flags: string[] = ['\\HasNoChildren'];
+      // RFC 3348 (CHILDREN) / RFC 9051 §7.3.1: \HasChildren when an inferior mailbox exists.
+      const hasChildren = folders.some((f) => f.name.startsWith(`${folder.name}.`));
+      const flags: string[] = [hasChildren ? '\\HasChildren' : '\\HasNoChildren'];
       const special = specialUseFlag(folder.name);
       if (special) flags.push(special);
       sendUntagged(session, `LIST (${flags.join(' ')}) "." "${folder.name}"`);
@@ -269,9 +282,21 @@ export async function handleStatus(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
 
-  const folderName = unquote(args[0] ?? '');
-  const itemsRaw = (args[1] ?? '').replace(/[()]/g, '').toUpperCase();
-  const items = itemsRaw.split(/\s+/).filter(Boolean);
+  // RFC 9051 §6.3.11: STATUS <mailbox> "(" status-att *(SP status-att) ")".
+  // The tokenizer groups the parenthesised list into one argument.
+  const folderName = args[0] ?? '';
+  const list = /^\((.*)\)$/.exec(args[1] ?? '');
+  if (!folderName || !list || args.length !== 2) {
+    sendBad(session, tag, 'STATUS requires a mailbox and a parenthesised item list');
+    return;
+  }
+  const items = (list[1] ?? '').toUpperCase().split(/\s+/).filter(Boolean);
+  const KNOWN = ['MESSAGES', 'UIDNEXT', 'UIDVALIDITY', 'UNSEEN', 'DELETED', 'RECENT', 'HIGHESTMODSEQ', 'SIZE'];
+  const unknown = items.find((i) => !KNOWN.includes(i));
+  if (items.length === 0 || unknown) {
+    sendBad(session, tag, unknown ? `Unknown STATUS item ${unknown}` : 'Empty STATUS item list');
+    return;
+  }
 
   const folder = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name: folderName },
@@ -279,10 +304,22 @@ export async function handleStatus(
   });
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
 
-  const [messages, unseen] = await Promise.all([
-    prisma.message.count({ where: { folderId: folder.id, deletedAt: null } }),
-    prisma.message.count({ where: { folderId: folder.id, deletedAt: null, NOT: { flags: { has: '\\Seen' } } } }),
+  const base = { folderId: folder.id, deletedAt: null };
+  const want = (item: string): boolean => items.includes(item);
+  const [messages, unseen, deleted, sizeRows] = await Promise.all([
+    want('MESSAGES') ? prisma.message.count({ where: base }) : Promise.resolve(0),
+    want('UNSEEN')
+      ? prisma.message.count({ where: { ...base, NOT: { flags: { has: '\\Seen' } } } })
+      : Promise.resolve(0),
+    want('DELETED')
+      ? prisma.message.count({ where: { ...base, flags: { has: '\\Deleted' } } })
+      : Promise.resolve(0),
+    // RFC 8438: SIZE is the total size of the mailbox in octets (sum of RFC822.SIZE).
+    want('SIZE')
+      ? prisma.message.findMany({ where: base, select: { rawSize: true } })
+      : Promise.resolve([] as Array<{ rawSize: number }>),
   ]);
+  const size = sizeRows.reduce((sum, m) => sum + m.rawSize, 0);
 
   const parts: string[] = [];
   for (const item of items) {
@@ -291,9 +328,10 @@ export async function handleStatus(
       case 'UIDNEXT':        parts.push(`UIDNEXT ${folder.mailbox.uidNext}`); break;
       case 'UIDVALIDITY':    parts.push(`UIDVALIDITY ${folder.mailbox.uidValidity}`); break;
       case 'UNSEEN':         parts.push(`UNSEEN ${unseen}`); break;
+      case 'DELETED':        parts.push(`DELETED ${deleted}`); break;
       case 'RECENT':         parts.push('RECENT 0'); break;
       case 'HIGHESTMODSEQ':  parts.push(`HIGHESTMODSEQ ${folder.mailbox.highestModSeq}`); break;
-      case 'SIZE':           parts.push('SIZE 0'); break;
+      case 'SIZE':           parts.push(`SIZE ${size}`); break;
     }
   }
   sendUntagged(session, `STATUS "${folder.name}" (${parts.join(' ')})`);
@@ -408,21 +446,31 @@ export async function handleRename(
 // ─────────────────────────────────────────────
 // APPEND — RFC 3501 §6.3.11 (Mac Mail uploads Drafts/Sent to the server)
 // ─────────────────────────────────────────────
-// Note: APPEND uses IMAP literals ({size}+) for the RFC 822 body.
-// The complete body is already buffered by the server loop on the first
-// call (parseLine collects it). Args[0] = folder, args[1] = (flags),
-// args[2] = datetime?, last token = literal body.
+/** True when the APPEND target mailbox exists (checked before reading the literal). */
+export async function appendTargetExists(session: ImapSession, name: string): Promise<boolean> {
+  if (!session.mailboxId) return false;
+  const folder = await prisma.folder.findFirst({
+    where: { mailboxId: session.mailboxId, name },
+    select: { id: true },
+  });
+  return !!folder;
+}
+
+// RFC 9051 §6.3.12: APPEND <mailbox> [<flag-list>] [<date-time>] <literal>.
+// The command reader delivers the literal as raw octets (`message`); the
+// existence of the mailbox is already checked before the continuation request
+// is sent (see server/index.ts), and again here.
 export async function handleAppend(
   session: ImapSession,
   tag: string,
   args: string[],
+  message?: Buffer,
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  if (args.length < 2) { sendBad(session, tag, 'APPEND requires folder + body'); return; }
-  const folderName = unquote(args[0] ?? '');
-  // Body is always the last arg (literal content)
-  const body = args[args.length - 1] ?? '';
-  // Parse flags: between ( and )
+  if (args.length < 2 || args.length > 4) { sendBad(session, tag, 'APPEND requires mailbox and message literal'); return; }
+  const folderName = args[0] ?? '';
+  const body = message ? message.toString('utf8') : (args[args.length - 1] ?? '');
+  // Optional flag list between mailbox and message
   let flags: string[] = [];
   for (const a of args.slice(1, -1)) {
     const m = /^\((.*)\)$/.exec(a);
@@ -463,7 +511,7 @@ export async function handleAppend(
       ccAddrs:   [],
       bccAddrs:  [],
       date:      new Date(),
-      rawSize:   Buffer.byteLength(body, 'utf8'),
+      rawSize:   message ? message.length : Buffer.byteLength(body, 'utf8'),
       bodyText,
       bodyHtml:  '',
       flags,
@@ -577,61 +625,61 @@ export async function handleMove(
 // ─────────────────────────────────────────────
 // SEARCH — RFC 3501 §6.4.4 — Mac Mail uses this on every folder open!
 // ─────────────────────────────────────────────
-// Minimal implementation: SEARCH ALL, SEARCH UNSEEN, SEARCH SEEN,
-// SEARCH FLAGGED, SEARCH UNFLAGGED, SEARCH DELETED, SEARCH UNDELETED,
-// SEARCH NEW (UNSEEN+RECENT), SEARCH OLD (NOT RECENT), SEARCH RECENT.
+// The search program is parsed into an AST (search-parser.ts) and evaluated
+// against the non-deleted messages of the selected folder, ordered by UID —
+// the same ordering that defines message sequence numbers. Evaluation happens
+// in memory because sequence-set keys, OR/NOT nesting and HEADER cannot be
+// expressed as a single Prisma filter; only the columns the program needs are
+// loaded (bodies only for BODY/TEXT).
 // Without SEARCH, Mac Mail shows folders as empty because it first runs SEARCH ALL
 // to fetch the UID list.
 export async function handleSearch(
   session: ImapSession,
   tag: string,
-  args: string[],
+  tokens: Token[],
   byUid = false,
 ): Promise<void> {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
 
-  // Very simple filter parser
-  const criteria = args.map((a) => a.toUpperCase());
-  const where: Record<string, unknown> = {
-    folderId:  session.selected.folderId,
-    deletedAt: null,
-  };
-  if (criteria.includes('UNSEEN'))    Object.assign(where, { NOT: { flags: { has: '\\Seen' } } });
-  if (criteria.includes('SEEN'))      Object.assign(where, { flags: { has: '\\Seen' } });
-  if (criteria.includes('FLAGGED'))   Object.assign(where, { flags: { has: '\\Flagged' } });
-  if (criteria.includes('UNFLAGGED')) Object.assign(where, { NOT: { flags: { has: '\\Flagged' } } });
-  if (criteria.includes('DELETED'))   Object.assign(where, { flags: { has: '\\Deleted' } });
-  if (criteria.includes('UNDELETED')) Object.assign(where, { NOT: { flags: { has: '\\Deleted' } } });
-  // NEW/RECENT: we do not track RECENT — interpret as UNSEEN (same effect for Mac Mail)
-  if (criteria.includes('NEW') || criteria.includes('RECENT')) {
-    Object.assign(where, { NOT: { flags: { has: '\\Seen' } } });
+  let program: SearchProgram;
+  try {
+    program = parseSearch(tokens);
+  } catch (err) {
+    sendBad(session, tag, err instanceof ImapParseError ? err.message : 'Invalid search program');
+    return;
+  }
+  if (program.charset && program.charset !== 'UTF-8' && program.charset !== 'US-ASCII') {
+    sendNo(session, tag, '[BADCHARSET (UTF-8 US-ASCII)] Unsupported charset');
+    return;
   }
 
+  const withBody = needsBody(program.key);
   const messages = await prisma.message.findMany({
-    where,
-    select: { uid: true },
+    where: { folderId: session.selected.folderId, deletedAt: null },
+    select: {
+      uid: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
+      toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true, messageId: true, inReplyTo: true,
+      date: true, createdAt: true, rawSize: true,
+      ...(withBody ? { bodyText: true, bodyHtml: true } : {}),
+    },
     orderBy: { uid: 'asc' },
   });
 
-  if (byUid) {
-    const uids = messages.map((m) => m.uid);
-    sendUntagged(session, `SEARCH${uids.length ? ' ' + uids.join(' ') : ''}`);
-    sendOk(session, tag, 'UID SEARCH completed');
+  const maxSeq = messages.length;
+  const maxUid = messages.length ? (messages[messages.length - 1]?.uid ?? 0) : 0;
+  const results: number[] = [];
+  messages.forEach((msg, idx) => {
+    if (evaluateSearch(program.key, msg as SearchableMessage, { seq: idx + 1, maxSeq, maxUid })) {
+      results.push(byUid ? msg.uid : idx + 1);
+    }
+  });
+
+  if (program.returnOptions) {
+    sendUntagged(session, `ESEARCH ${formatEsearch(tag, byUid, results, program.returnOptions)}`);
   } else {
-    // SEARCH without UID returns sequence numbers (1-based in sorted folder order)
-    const allMessages = await prisma.message.findMany({
-      where: { folderId: session.selected.folderId, deletedAt: null },
-      select: { uid: true },
-      orderBy: { uid: 'asc' },
-    });
-    const matchedUids = new Set(messages.map((m) => m.uid));
-    const seqNums: number[] = [];
-    allMessages.forEach((m, idx) => {
-      if (matchedUids.has(m.uid)) seqNums.push(idx + 1);
-    });
-    sendUntagged(session, `SEARCH${seqNums.length ? ' ' + seqNums.join(' ') : ''}`);
-    sendOk(session, tag, 'SEARCH completed');
+    sendUntagged(session, `SEARCH${results.length ? ' ' + results.join(' ') : ''}`);
   }
+  sendOk(session, tag, `${byUid ? 'UID SEARCH' : 'SEARCH'} completed`);
 }
 
 // ─────────────────────────────────────────────
