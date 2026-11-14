@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
 import { createBullMqConnection, createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
@@ -25,7 +25,7 @@ async function getAppVersion(): Promise<string> {
 }
 
 export const adminDashboardRouter: RouterType = Router();
-adminDashboardRouter.use(requireAdmin);
+adminDashboardRouter.use(requireArea('dashboard'));
 
 const log = createLogger('api:admin:dashboard');
 

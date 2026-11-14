@@ -1,7 +1,11 @@
 import express from 'express';
 import { z } from 'zod';
 import { connectDatabase } from '@coremail/storage';
-import { getRedisClient, createLogger, verifyAccessToken } from '@coremail/core';
+import {
+  getRedisClient, createLogger, verifyAccessToken,
+  installProcessGuards, installAsyncErrorHandling, errorMiddleware, requireInternal, resolveBindHost,
+} from '@coremail/core';
+import { parseLimit, isBackupAdmin } from './http-utils.js';
 import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler } from './scheduler/index.js';
 import { runRetentionPolicies } from './retention/worker.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
@@ -9,6 +13,8 @@ import { listBackups, ensureBackupBucket, streamObject, deleteObject } from './u
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
+installProcessGuards(log);
+installAsyncErrorHandling(express);
 const app = express();
 const PORT = parseInt(process.env['BACKUP_PORT'] ?? '3004', 10);
 
@@ -40,11 +46,13 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   next();
 }
 
+// v6 RBAC: backups belong to the "servers" area of the api-gateway matrix
+// (ORGANIZATION_MANAGEMENT + SERVER_MANAGEMENT write, VIEW_ONLY_ORG read).
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
   requireAuth(req, res, () => {
-    const r = (req as express.Request & { role: string }).role;
-    const adminRoles = ['ADMIN', 'ORGANIZATION_MANAGEMENT'];
-    if (!adminRoles.includes(r)) { res.status(403).json({ error: 'Admin role required' }); return; }
+    if (!isBackupAdmin((req as express.Request & { role: string }).role, req.method)) {
+      res.status(403).json({ error: 'Admin role required' }); return;
+    }
     next();
   });
 }
@@ -338,7 +346,8 @@ app.get('/backup/admin/list', requireAdmin, async (req, res) => {
 // GET /backup/admin/jobs — list all backup jobs
 app.get('/backup/admin/jobs', requireAdmin, async (req, res) => {
   
-  const limit = Math.min(parseInt(String(req.query['limit'] ?? '50'), 10), 200);
+  // v6: `?limit=abc` produced NaN → Prisma validation error → process crash
+  const limit = parseLimit(req.query['limit'], 50, 200);
   const jobs = await prisma.backupJob.findMany({
     orderBy: { createdAt: 'desc' },
     take: limit,
@@ -349,13 +358,14 @@ app.get('/backup/admin/jobs', requireAdmin, async (req, res) => {
 // ─── Internal retention endpoint (called by api-gateway) ─────────────────────
 
 // POST /internal/retention/run — trigger retention policy run
-app.post('/internal/retention/run', async (_req, res) => {
+// v6: loopback-only, or X-Internal-Token when INTERNAL_API_TOKEN is set
+app.post('/internal/retention/run', requireInternal(), async (_req, res) => {
   try {
     const result = await runRetentionPolicies();
     res.json(result);
   } catch (err) {
     log.error({ err }, 'Manual retention run failed');
-    res.status(500).json({ error: 'Retention run failed', detail: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: 'Retention run failed' });
   }
 });
 
@@ -385,6 +395,9 @@ app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'app
     await unlink(mboxPath).catch(() => undefined);
   }
 });
+
+// v6: shared error middleware (registered last) — no stack/message leaks
+app.use(errorMiddleware(log));
 
 async function start() {
   await connectDatabase();
@@ -451,7 +464,9 @@ async function start() {
 
   startBackupScheduler();
 
-  app.listen(PORT, () => log.info({ port: PORT }, 'Backup service listening'));
+  // v6: internal service — loopback by default (INTERNAL_BIND_HOST overrides)
+  const host = resolveBindHost();
+  app.listen(PORT, host, () => log.info({ port: PORT, host }, 'Backup service listening'));
 }
 
 start().catch((err) => { log.error({ err }, 'Startup failed'); process.exit(1); });

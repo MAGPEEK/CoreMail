@@ -8,12 +8,12 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('admin:security-attacks');
 export const adminSecurityAttacksRouter: RouterType = Router();
-adminSecurityAttacksRouter.use(requireAdmin);
+adminSecurityAttacksRouter.use(requireArea('hygiene'));
 
 // ── GET /api/v1/admin/security/attacks ───────────────────────────────────────
 adminSecurityAttacksRouter.get('/', async (req: Request, res: Response) => {

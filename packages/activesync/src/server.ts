@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
+import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
 import { verifyPassword } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
 import { decodeWbxml } from './wbxml.js';
@@ -10,6 +11,9 @@ import { handleSendMail, handleSmartReply } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
 
 const log = createLogger('activesync');
+installProcessGuards(log);
+// v6: e.g. the async requireAuth (Prisma) used to crash the process on DB errors
+installAsyncErrorHandling(express);
 const app = express();
 const PORT = parseInt(process.env['EAS_PORT'] ?? '3005', 10);
 
@@ -199,6 +203,11 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'activesync', version: '0.7.0' });
 });
 
-app.listen(PORT, () => {
-  log.info({ port: PORT }, 'ActiveSync (EAS) server started');
+// v6: shared error middleware (registered last)
+app.use(errorMiddleware(log));
+
+// v6: internal service behind the api-gateway — loopback by default
+const HOST = resolveBindHost();
+app.listen(PORT, HOST, () => {
+  log.info({ port: PORT, host: HOST }, 'ActiveSync (EAS) server started');
 });

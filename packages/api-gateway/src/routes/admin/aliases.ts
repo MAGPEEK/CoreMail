@@ -18,11 +18,15 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:aliases');
 export const adminAliasesRouter: RouterType = Router();
-adminAliasesRouter.use(requireAdmin);
+// v6: this router is mounted on /api/v1/admin itself — guard ONLY its own
+// paths. A router-wide guard here would run for every later admin router
+// (e.g. /security) and apply the wrong area to them.
+export const ALIAS_PATHS = ['/aliases', '/mailboxes/:id/aliases', '/shared-mailboxes/:id/aliases'];
+adminAliasesRouter.use(ALIAS_PATHS, requireArea('recipients'));
 
 const LOCAL_PART_RE = /^[a-z0-9._+-]+$/;
 

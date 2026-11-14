@@ -11,9 +11,10 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
+import { publicServerSettings } from '../../lib/secrets.js';
 
 const log = createLogger('admin:global-settings');
 export const adminGlobalSettingsRouter: RouterType = Router();
@@ -38,7 +39,7 @@ adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) =>
   }
 });
 
-adminGlobalSettingsRouter.use(requireAdmin);
+adminGlobalSettingsRouter.use(requireArea('organisation'));
 
 // ── Load / create singleton ───────────────────────────────────────────────────
 async function getOrCreate() {
@@ -92,7 +93,7 @@ const MaintenanceSchema = z.object({
 adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const cfg = await getOrCreate();
-    res.json(cfg);
+    res.json(publicServerSettings(cfg));
   } catch (err) {
     log.error({ err }, 'Failed to read global settings');
     res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
@@ -112,7 +113,7 @@ adminGlobalSettingsRouter.put('/org', async (req: Request, res: Response) => {
     update: parsed.data,
   });
   log.info({ orgName: parsed.data.orgName }, 'Organisation settings updated');
-  res.json(cfg);
+  res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/mail ───────────────────────────────────────────
@@ -128,7 +129,7 @@ adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
     update: parsed.data,
   });
   log.info(parsed.data, 'Mail settings updated');
-  res.json(cfg);
+  res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/security ───────────────────────────────────────
@@ -176,7 +177,7 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   invalidateAuditCache();
 
   log.info(parsed.data, 'Security policies updated');
-  res.json(cfg);
+  res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────
@@ -192,5 +193,5 @@ adminGlobalSettingsRouter.put('/maintenance', async (req: Request, res: Response
     update: parsed.data,
   });
   log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Maintenance mode changed');
-  res.json(cfg);
+  res.json(publicServerSettings(cfg));
 });

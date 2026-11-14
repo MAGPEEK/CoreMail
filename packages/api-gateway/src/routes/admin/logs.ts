@@ -1,10 +1,10 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 export const adminLogsRouter: RouterType = Router();
-adminLogsRouter.use(requireAdmin);
+adminLogsRouter.use(requireArea('servers'));
 
 // GET /api/v1/admin/logs
 adminLogsRouter.get('/', async (req: Request, res: Response) => {

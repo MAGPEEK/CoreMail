@@ -12,12 +12,12 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
 
 const log = createLogger('admin:services');
 export const adminServicesRouter: RouterType = Router();
-adminServicesRouter.use(requireAdmin);
+adminServicesRouter.use(requireArea('servers'));
 
 // ── Valid service types ───────────────────────────────────────────────────────
 const SERVICE_TYPES = ['SMTP_RECEIVE', 'SMTP_SEND', 'IMAP', 'POP3'] as const;

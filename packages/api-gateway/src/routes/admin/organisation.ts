@@ -9,11 +9,11 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:organisation');
 export const adminOrganisationRouter: RouterType = Router();
-adminOrganisationRouter.use(requireAdmin);
+adminOrganisationRouter.use(requireArea('organisation'));
 
 // ─── Sharing Policies ─────────────────────────────────────────────────────────
 

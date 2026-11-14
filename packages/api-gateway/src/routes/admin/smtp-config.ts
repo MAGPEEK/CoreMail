@@ -3,10 +3,10 @@ import { z } from 'zod';
 import nodemailer from 'nodemailer';
 import { prisma } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
-import { requireAuth } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 export const adminSmtpConfigRouter: RouterType = Router();
-adminSmtpConfigRouter.use(requireAuth);
+adminSmtpConfigRouter.use(requireArea('servers'));
 
 async function getOrCreate() {
   return prisma.smtpSettings.upsert({
@@ -81,7 +81,8 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
   const data = { ...parsed.data } as Record<string, unknown>;
 
   // Do not write the masked password to the DB
-  if (data['smarthostPassword'] === '••••••••') {
+  // v6 write-only semantics: masked or empty = keep the stored password
+  if (data['smarthostPassword'] === '••••••••' || data['smarthostPassword'] === '') {
     delete data['smarthostPassword'];
   }
 

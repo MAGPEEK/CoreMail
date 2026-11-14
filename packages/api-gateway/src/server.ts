@@ -3,7 +3,10 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { connectDatabase, prisma, migrateMailboxCounters } from '@coremail/storage';
-import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import {
+  getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD,
+  installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy,
+} from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
 import {
@@ -23,40 +26,15 @@ import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
 import { categoriesRouter } from './routes/categories.js';
-import { adminDashboardRouter } from './routes/admin/dashboard.js';
-import { adminGlobalSettingsRouter } from './routes/admin/global-settings.js';
-import { adminMailboxesRouter } from './routes/admin/mailboxes.js';
-import { adminAliasesRouter } from './routes/admin/aliases.js';
-import { adminDomainsRouter } from './routes/admin/domains.js';
-import { adminQueuesRouter } from './routes/admin/queues.js';
-import { adminLogsRouter } from './routes/admin/logs.js';
-import { adminBackupsRouter } from './routes/admin/backups.js';
-import { adminResourcesRouter } from './routes/admin/resources.js';
 // Public Folders completely removed in v3.18.31
 // eDiscovery & Legal Hold completely removed in v3.18.5
-import { adminEmsRouter } from './routes/admin/ems.js';
 // Journaling feature completely removed in v3.13.6
-import { adminRetentionRouter } from './routes/admin/retention.js';
-import { adminAuditLogRouter } from './routes/admin/audit-log.js';
-import { adminServersRouter } from './routes/admin/servers.js';
-import { adminServicesRouter } from './routes/admin/services.js';
-import { adminCertificatesRouter, getAcmeChallenge } from './routes/admin/certificates.js';
+import { getAcmeChallenge } from './routes/admin/certificates.js';
+import { mountAdminRoutes } from './routes/admin/index.js';
 import { startTlsProxy, setTlsUpgradeHandler } from './tls-proxy.js';
 import { startCertRenewalScheduler } from './lib/cert-renewal.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
-import { adminSharedMailboxesRouter } from './routes/admin/shared-mailboxes.js';
-import { adminQuarantineRouter } from './routes/admin/quarantine.js';
-import { adminTransportRulesRouter } from './routes/admin/transport-rules.js';
-import { adminMobileRouter } from './routes/admin/mobile.js';
-import { adminMessageTraceRouter } from './routes/admin/message-trace.js';
-import { adminConnectorsRouter } from './routes/admin/connectors.js';
-import { adminOrganisationRouter } from './routes/admin/organisation.js';
 // adminExternalContactsRouter completely removed in v3.18.33
-import { adminSecurityRouter } from './routes/admin/security.js';
-import { adminSecurityAttacksRouter } from './routes/admin/security-attacks.js';
-import { adminSmtpConfigRouter } from './routes/admin/smtp-config.js';
-import { adminLdapRouter } from './routes/admin/ldap.js';
-import { adminSsoRouter } from './routes/admin/sso.js';
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
@@ -66,8 +44,10 @@ import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
 import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
+import { initSetupToken } from './lib/setup-token.js';
 
 const log = createLogger('api-gateway');
+installProcessGuards(log);
 const app = express();
 const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 
@@ -77,10 +57,18 @@ const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 };
 
 // ── Trust Proxy ───────────────────────────────────────────────────────────────
-// When a reverse proxy (Traefik, Caddy, nginx) sits in front, enable proper
-// client-IP handling so that rate limiting works on the real IP.
-// Value: 1 = exactly 1 proxy in front of the app server (typical for Docker deployments).
-app.set('trust proxy', 1);
+// v6: configurable via TRUST_PROXY (default: false). Port 3000 and the
+// integrated TLS proxy serve clients DIRECTLY — trusting X-Forwarded-For there
+// lets any client spoof its IP (rate-limit bypass, forged audit IPs). Set
+// TRUST_PROXY only when a reverse proxy that overwrites X-Forwarded-For sits in
+// front of port 3000: a hop count ("1") or the proxy's address/CIDR
+// ("172.18.0.0/16", "loopback"). Requests through the integrated TLS proxy
+// never honour forwarded headers (stripped in tls-proxy.ts).
+app.set('trust proxy', parseTrustProxy(process.env['TRUST_PROXY']));
+
+// ── Crash safety ──────────────────────────────────────────────────────────────
+// v6: async handler rejections → error middleware (not process death).
+installAsyncErrorHandling(express);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY MIDDLEWARE STACK
@@ -309,42 +297,8 @@ app.use('/api/v1/admin', auditMiddleware);
 // Additional rate limit on mutating admin operations (POST/PUT/PATCH/DELETE)
 app.use('/api/v1/admin', adminMutationRateLimit);
 
-app.use('/api/v1/admin/dashboard',       adminDashboardRouter);
-app.use('/api/v1/admin/settings',        adminGlobalSettingsRouter);
-app.use('/api/v1/admin/mailboxes',       adminMailboxesRouter);
-// Alias router mounts on /admin — the internal routes are /mailboxes/:id/aliases,
-// /shared-mailboxes/:id/aliases, /aliases, /aliases/:id. Appended after the more
-// specific routers — Express falls through when the others have no match.
-app.use('/api/v1/admin',                 adminAliasesRouter);
-app.use('/api/v1/admin/domains',         adminDomainsRouter);
-app.use('/api/v1/admin/queues',          adminQueuesRouter);
-app.use('/api/v1/admin/backups',         adminBackupsRouter);
-app.use('/api/v1/admin/logs',            adminLogsRouter);
-// v5.6.1: /api/v1/admin/groups removed (DistributionGroups gone)
-app.use('/api/v1/admin/resources',       adminResourcesRouter);
-// Public-Folders route removed in v3.18.31
-// eDiscovery route removed in v3.18.5
-app.use('/api/v1/admin/ems',             adminEmsRouter);
-// Journaling route removed in v3.13.6
-app.use('/api/v1/admin/compliance/retention',  adminRetentionRouter);
-app.use('/api/v1/admin/audit-log',        adminAuditLogRouter);
-// v5.6.0: /api/v1/admin/oauth removed (OAuth2 clients admin gone)
-app.use('/api/v1/admin/servers',          adminServersRouter);
-app.use('/api/v1/admin/services',         adminServicesRouter);
-app.use('/api/v1/admin/certificates',     adminCertificatesRouter);
-app.use('/api/v1/admin/shared-mailboxes', adminSharedMailboxesRouter);
-app.use('/api/v1/admin/quarantine',       adminQuarantineRouter);
-app.use('/api/v1/admin/transport-rules',  adminTransportRulesRouter);
-app.use('/api/v1/admin/mobile',           adminMobileRouter);
-app.use('/api/v1/admin/message-trace',    adminMessageTraceRouter);
-app.use('/api/v1/admin/connectors',       adminConnectorsRouter);
-app.use('/api/v1/admin/organisation',     adminOrganisationRouter);
-// /api/v1/admin/contacts (external contacts) completely removed in v3.18.33
-app.use('/api/v1/admin/security',         adminSecurityRouter);
-app.use('/api/v1/admin/security/attacks', adminSecurityAttacksRouter);
-app.use('/api/v1/admin/smtp-config',      adminSmtpConfigRouter);
-app.use('/api/v1/admin/ldap',             adminLdapRouter);
-app.use('/api/v1/admin/sso',              adminSsoRouter);
+// v6: router table + per-router RBAC guards live in routes/admin/index.ts
+mountAdminRoutes(app);
 
 // ── Static frontend files (OWA under root + BCP under /bcp) ──────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
@@ -407,15 +361,16 @@ if (existsSync(owaDir)) {
 // ── 404 + error handler ───────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  log.error({ err }, 'Unhandled error');
-  // Never send the stack trace to the client (OWASP A05: Security Misconfiguration)
-  res.status(500).json({ error: 'Internal server error' });
-});
+// v6: shared error middleware — Prisma P2002→409, P2025→404, Zod→400, else
+// a generic 500. Never sends stack/err.message (OWASP A05).
+app.use(errorMiddleware(log));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   await connectDatabase();
+  // v6: one-time setup token (logged while the setup wizard is pending) +
+  // backfill of the persistent setup flag for existing installations.
+  await initSetupToken(log).catch((err) => log.error({ err }, 'Setup token initialisation failed — setup wizard stays locked'));
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
   // allocation per mailbox repeats this check lazily in every service).

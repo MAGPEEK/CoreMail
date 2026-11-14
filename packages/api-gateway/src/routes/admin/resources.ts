@@ -7,10 +7,10 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 export const adminResourcesRouter: RouterType = Router();
-adminResourcesRouter.use(requireAdmin);
+adminResourcesRouter.use(requireArea('recipients'));
 
 // ──────────────────────────────────────────────────────────
 // Resource Mailboxes CRUD

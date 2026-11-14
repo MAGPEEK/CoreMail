@@ -13,11 +13,12 @@ import { createConnection } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
+import { publicLdapConfig, mergeWriteOnlySecret } from '../../lib/secrets.js';
 
 const log = createLogger('admin:ldap');
 export const adminLdapRouter: RouterType = Router();
-adminLdapRouter.use(requireAdmin);
+adminLdapRouter.use(requireArea('identity'));
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminLdapRouter.get('/', async (_req: Request, res: Response) => {
@@ -46,7 +47,7 @@ adminLdapRouter.get('/:domainId', async (req: Request, res: Response) => {
     include: { domain: { select: { id: true, name: true } } },
   });
   if (!cfg) { res.status(404).json({ error: 'Konfiguration nicht gefunden' }); return; }
-  res.json({ ...cfg, domainName: cfg.domain.name });
+  res.json({ ...publicLdapConfig(cfg), domainName: cfg.domain.name });
 });
 
 // ── PUT /:domainId ────────────────────────────────────────────────────────────
@@ -62,7 +63,8 @@ adminLdapRouter.put('/:domainId', async (req: Request, res: Response) => {
     ssl:         z.boolean().default(true),
     baseDN:      z.string().min(1),
     bindDN:      z.string().min(1),
-    bindPassword: z.string().min(1),
+    // v6: write-only — omit or send '' to keep the stored password
+    bindPassword: z.string().optional(),
     userDN:      z.string().min(1),
     userFilter:  z.string().default('(sAMAccountName={{username}})'),
     groupFilter: z.string().optional(),
@@ -72,13 +74,20 @@ adminLdapRouter.put('/:domainId', async (req: Request, res: Response) => {
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Ungültige Eingabe', issues: p.error.issues }); return; }
 
+  const existing = await prisma.ldapConfig.findUnique({ where: { domainId }, select: { bindPassword: true } });
+  const bindPassword = mergeWriteOnlySecret(p.data.bindPassword, existing?.bindPassword);
+  if (bindPassword === undefined) {
+    res.status(400).json({ error: 'bindPassword is required for a new LDAP configuration' }); return;
+  }
+  const { groupFilter, bindPassword: _ignored, ...rest } = p.data;
+  const data = { ...rest, bindPassword, ...(groupFilter !== undefined ? { groupFilter } : {}) };
   const cfg = await prisma.ldapConfig.upsert({
     where:  { domainId },
-    update: p.data as any,
-    create: { domainId, ...(p.data as any) },
+    update: data,
+    create: { domainId, ...data },
   });
   log.info({ domainId, host: p.data.host }, 'LDAP config saved');
-  res.json(cfg);
+  res.json(publicLdapConfig(cfg));
 });
 
 // ── DELETE /:domainId ─────────────────────────────────────────────────────────

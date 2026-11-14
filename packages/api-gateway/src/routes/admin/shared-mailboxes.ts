@@ -14,12 +14,12 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
-adminSharedMailboxesRouter.use(requireAdmin);
+adminSharedMailboxesRouter.use(requireArea('recipients'));
 
 const SELECT = {
   id: true, email: true, displayName: true, domainId: true,

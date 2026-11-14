@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { prisma, downloadBuffer } from '@coremail/storage';
 import { createLogger, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { releaseQuarantine, ReleaseError, type ReleaseDeps, type ReleaseJob } from '../../lib/quarantine-release.js';
 
@@ -60,7 +60,7 @@ const releaseDeps: ReleaseDeps = {
   },
 };
 export const adminQuarantineRouter: RouterType = Router();
-adminQuarantineRouter.use(requireAdmin);
+adminQuarantineRouter.use(requireArea('hygiene'));
 
 // ── GET /stats ────────────────────────────────────────────────────────────────
 adminQuarantineRouter.get('/stats', async (_req: Request, res: Response) => {

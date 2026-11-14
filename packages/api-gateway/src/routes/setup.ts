@@ -1,25 +1,24 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import {
+  createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD, HttpError,
+} from '@coremail/core';
+import { isSetupRequired, verifySetupToken } from '../lib/setup-token.js';
 import { deriveServerUrls } from '../lib/server-urls.js';
 import { generateDkimPrivateKey } from '../lib/dkim.js';
 
 const log = createLogger('api:setup');
 export const setupRouter: RouterType = Router();
 
-// ── Helper: is setup required? ────────────────────────────────────────────────
-async function isSetupRequired(): Promise<boolean> {
-  const count = await prisma.user.count();
-  return count === 0;
-}
-
 // GET /api/v1/setup/status
-// Public — checks whether no user exists yet
+// Public — setup is required only until it was completed once (persistent
+// flag, v6) — deleting all users does not reopen it.
 setupRouter.get('/status', async (_req: Request, res: Response) => {
   try {
     const setupRequired = await isSetupRequired();
-    res.json({ setupRequired });
+    // v6: the wizard must ask for the one-time setup token (api-gateway log / SETUP_TOKEN)
+    res.json({ setupRequired, setupTokenRequired: setupRequired });
   } catch (err) {
     log.error({ err }, 'setup status check failed');
     res.status(500).json({ error: 'Internal server error' });
@@ -27,41 +26,62 @@ setupRouter.get('/status', async (_req: Request, res: Response) => {
 });
 
 // POST /api/v1/setup/complete
-// Public — only when no user exists yet
+// Public, but requires the one-time setup token (body `setupToken` or header
+// `X-Setup-Token`) and succeeds at most once (atomic claim).
 const SetupSchema = z.object({
-  domain:    z.string().min(3).regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Ungültige Domain (z.B. firma.de)'),
-  email:     z.string().email(),
+  domain:    z.string().trim().toLowerCase().pipe(
+    z.string().min(3).regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Ungültige Domain (z.B. firma.de)')),
+  email:     z.string().trim().toLowerCase().pipe(z.string().email()),
   password:  z.string().min(8, 'Passwort muss mindestens 8 Zeichen haben'),
+  setupToken: z.string().optional(),
 });
 
 setupRouter.post('/complete', async (req: Request, res: Response) => {
-  try {
-    // Only allowed when no user exists yet
-    if (!(await isSetupRequired())) {
-      res.status(409).json({ error: 'Setup already completed' });
-      return;
-    }
+  // Only allowed while setup was never completed and no user exists
+  if (!(await isSetupRequired())) {
+    res.status(409).json({ error: 'Setup already completed' });
+    return;
+  }
 
-    const parsed = SetupSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.errors[0]?.message ?? 'Invalid input' });
-      return;
-    }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const presented = typeof body['setupToken'] === 'string' ? body['setupToken'] : req.get('X-Setup-Token');
+  if (!(await verifySetupToken(presented))) {
+    log.warn({ ip: req.ip }, 'Setup attempt with missing/invalid setup token');
+    res.status(403).json({ error: 'Invalid or missing setup token', code: 'SETUP_TOKEN_INVALID' });
+    return;
+  }
 
-    const { domain, email, password } = parsed.data;
+  const parsed = SetupSchema.safeParse(body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.errors[0]?.message ?? 'Invalid input' });
+    return;
+  }
 
-    // Email must match the domain
-    const emailDomain = email.split('@')[1];
-    if (emailDomain !== domain) {
-      res.status(400).json({ error: `E-Mail muss zur Domain @${domain} gehören` });
-      return;
-    }
+  const { domain, email, password } = parsed.data;
 
-    // hashPassword uses sha256(password + PEPPER) → bcrypt
-    const passwordHash = await hashPassword(password);
+  // Email must match the domain
+  const emailDomain = email.split('@')[1];
+  if (emailDomain !== domain) {
+    res.status(400).json({ error: `E-Mail muss zur Domain @${domain} gehören` });
+    return;
+  }
 
-    // Create domain + admin user in one transaction
+  // hashPassword uses sha256(password + PEPPER) → bcrypt
+  const passwordHash = await hashPassword(password);
+
+  {
+    // Create domain + admin user in one SERIALIZABLE transaction. The first
+    // statement claims the persistent setup flag: of two concurrent requests
+    // only one sees setupCompletedAt = null (the other blocks on the row lock
+    // and then matches 0 rows, or fails serialization → P2034 → 409).
     await prisma.$transaction(async (tx) => {
+      const claimed = await tx.serverSettings.updateMany({
+        where: { id: 'singleton', setupCompletedAt: null },
+        data:  { setupCompletedAt: new Date(), setupTokenHash: null },
+      });
+      if (claimed.count !== 1) throw new HttpError(409, 'Setup already completed');
+      if ((await tx.user.count()) > 0) throw new HttpError(409, 'Setup already completed');
+
       // Create domain
       const newDomain = await tx.domain.create({
         data: {
@@ -132,7 +152,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
           },
         });
       }
-    });
+    }, { isolationLevel: 'Serializable' });
 
     // ── Auto self-signed cert ────────────────────────────────────────────────
     // Generates a baseline self-signed cert with CN=mail.localhost.  Admin
@@ -184,8 +204,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
 
     log.info({ email, domain }, 'Initial setup completed — admin user created');
     res.json({ success: true, email, message: 'Setup abgeschlossen. Du kannst dich jetzt anmelden.' });
-  } catch (err) {
-    log.error({ err }, 'setup failed');
-    res.status(500).json({ error: 'Setup fehlgeschlagen' });
   }
+  // Errors (409 claim conflict, Prisma P2034 serialization failure → 409,
+  // anything else → 500) are handled by the shared error middleware.
 });

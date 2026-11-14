@@ -15,11 +15,11 @@ import { Queue, type Job } from 'bullmq';
 import { z } from 'zod';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:queues');
 export const adminQueuesRouter: RouterType = Router();
-adminQueuesRouter.use(requireAdmin);
+adminQueuesRouter.use(requireArea('servers'));
 
 const OUTBOUND_QUEUE_NAME = 'smtp-outbound';
 

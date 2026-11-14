@@ -3,7 +3,10 @@
  * Exposes the pipeline as a REST API consumed by smtp-server and other modules.
  */
 import express from 'express';
-import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import {
+  createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
+  installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
+} from '@coremail/core';
 import { connectDatabase, prisma } from '@coremail/storage';
 import {
   runContentChecks,
@@ -15,6 +18,8 @@ import {
 import { parseConnectionRequest, runConnectionStage } from './connection-request.js';
 
 const log = createLogger('security-filter:server');
+installProcessGuards(log);
+installAsyncErrorHandling(express);
 const app = express();
 app.use(express.json({ limit: '52mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '52mb' }));
@@ -186,8 +191,13 @@ async function main() {
   } catch (err) {
     log.warn({ err }, 'DNSBL zone seeding failed (non-fatal)');
   }
-  app.listen(PORT, () => {
-    log.info({ port: PORT }, 'Security filter service started');
+  // v6: shared error middleware (registered last)
+  app.use(errorMiddleware(log));
+
+  // v6: internal service (smtp-server / api-gateway) — loopback by default
+  const host = resolveBindHost();
+  app.listen(PORT, host, () => {
+    log.info({ port: PORT, host }, 'Security filter service started');
   });
 }
 

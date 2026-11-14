@@ -4,6 +4,7 @@ import { hashPassword, verifyPassword } from '@coremail/core';
 import { prisma, expunge, nextModSeq } from '@coremail/storage';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
+import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
@@ -104,7 +105,23 @@ userRouter.get('/profile', async (req: Request, res: Response) => {
     select: { id: true, email: true, displayName: true, role: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
   });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-  res.json(user);
+  res.json({ ...user, isAdmin: isAdminRole(user.role), adminAreas: allowedAreas(user.role) });
+});
+
+// GET /api/v1/user/me — v6: caller identity + admin RBAC areas (no DB hit).
+// `adminAreas` maps each reachable admin area to 'write' | 'read'
+// (see lib/rbac.ts AREA_MATRIX); the BCP hides pages for missing areas.
+// Note: based on the role in the access token — a role change applies after
+// the next token refresh.
+userRouter.get('/me', (req: Request, res: Response) => {
+  const u = req.apiUser!;
+  res.json({
+    userId: u.userId,
+    email: u.email,
+    role: u.role,
+    isAdmin: isAdminRole(u.role),
+    adminAreas: allowedAreas(u.role),
+  });
 });
 
 // PUT /api/v1/user/profile

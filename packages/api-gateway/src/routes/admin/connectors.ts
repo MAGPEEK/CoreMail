@@ -12,11 +12,11 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:connectors');
 export const adminConnectorsRouter: RouterType = Router();
-adminConnectorsRouter.use(requireAdmin);
+adminConnectorsRouter.use(requireArea('servers'));
 
 const Schema = z.object({
   name:          z.string().min(1).max(200),
@@ -73,7 +73,7 @@ adminConnectorsRouter.post('/', async (req: Request, res: Response) => {
   const p = Schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
 
-  const actorId = (req as Request & { userId?: string }).userId ?? 'system';
+  const actorId = req.apiUser?.userId ?? 'system';
   const { username, password, ...rest } = p.data;
   const c = await prisma.mailConnector.create({
     data: {

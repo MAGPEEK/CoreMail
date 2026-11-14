@@ -3,11 +3,29 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
+import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 
 export const adminMailboxesRouter: RouterType = Router();
-adminMailboxesRouter.use(requireAdmin);
+// v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
+// reset / enable-disable of USER accounts only — enforced in the handler).
+export const isHelpDeskReset = (role: string, req: Request): boolean =>
+  role === 'HELP_DESK' && req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path);
+adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
+
+// Fields of a user that may be returned to admins (never passwordHash).
+const PUBLIC_USER_SELECT = {
+  id: true, email: true, displayName: true, role: true, active: true,
+  quotaBytes: true, usedBytes: true, domainId: true, authSource: true, externalId: true,
+  createdAt: true, updatedAt: true,
+} as const;
+
+const ROLE_ENUM = z.enum(USER_ROLES);
+
+function forbidden(res: Response, error: string): void {
+  res.status(403).json({ error, code: 'FORBIDDEN_ROLE' });
+}
 
 // ── Helper: compute real storage from messages ───────────────────────────────
 // Aggregates rawSize of all non-deleted messages of a user.
@@ -55,7 +73,11 @@ adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   const [user, usedBytes] = await Promise.all([
     prisma.user.findUnique({
       where: { id },
-      include: { mailbox: { include: { folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } } } } },
+      // v6: explicit select — never return passwordHash
+      select: {
+        ...PUBLIC_USER_SELECT,
+        mailbox: { include: { folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } } } },
+      },
     }),
     calcUsedBytes(id),
   ]);
@@ -96,7 +118,7 @@ const CreateMailboxSchema = z.object({
   displayName: z.string().min(1),
   password: z.string().min(1).max(128),
   domainId: z.string(),
-  role: z.enum(['USER', 'ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'HELP_DESK', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG']).default('USER'),
+  role: ROLE_ENUM.default('USER'),
   quotaBytes: z.number().int().default(5368709120),
 });
 
@@ -106,11 +128,15 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { email, displayName, password, domainId, role, quotaBytes } = parsed.data;
+  // v6 escalation guard: only ORGANIZATION_MANAGEMENT may create admin accounts
+  if (!canAssignRole(req.apiUser?.role, role)) {
+    forbidden(res, 'Only Organization Management may assign admin roles'); return;
+  }
   // v6.0.0: minimum length from ServerSettings.minPasswordLength
   const policyError = await checkPasswordPolicy(password);
   if (policyError) { res.status(400).json({ error: policyError }); return; }
 
-  try {
+  {
     const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     if (existing) { res.status(409).json({ error: 'E-Mail-Adresse wird bereits verwendet' }); return; }
 
@@ -141,56 +167,78 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
       select: { id: true, email: true, displayName: true, role: true, createdAt: true },
     });
     res.status(201).json(user);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unbekannter Fehler';
-    res.status(500).json({ error: `Postfach konnte nicht erstellt werden: ${msg}` });
   }
+  // v6: no local catch that echoed err.message (Prisma messages contain query
+  // details) — the shared error middleware maps P2002 → 409 etc. and logs the rest.
 });
+
+const UpdateMailboxSchema = z.object({
+  displayName: z.string().min(1).optional(),
+  role: ROLE_ENUM.optional(), // v6: was z.string() → invalid enum value crashed Prisma
+  active: z.boolean().optional(),
+  quotaBytes: z.number().int().min(0).optional(),
+  password: z.string().min(1).max(128).optional(), // length policy: checkPasswordPolicy()
+}).strict();
+
+// Fields HELP_DESK may change (password reset + enable/disable).
+const HELP_DESK_FIELDS = new Set(['password', 'active']);
 
 // PUT /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const schema = z.object({
-    displayName: z.string().min(1).optional(),
-    role: z.string().optional(),
-    active: z.boolean().optional(),
-    quotaBytes: z.number().int().optional(),
-    password: z.string().min(1).max(128).optional(),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+  const parsed = UpdateMailboxSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  
-  const user = await prisma.user.findUnique({ where: { id } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
-  const data: Record<string, unknown> = {};
-  if (parsed.data.displayName) data['displayName'] = parsed.data.displayName;
-  if (parsed.data.role) data['role'] = parsed.data.role;
-  if (parsed.data.active !== undefined) data['active'] = parsed.data.active;
-  if (parsed.data.quotaBytes) data['quotaBytes'] = BigInt(parsed.data.quotaBytes);
-  if (parsed.data.password) {
-    const policyError = await checkPasswordPolicy(parsed.data.password);
-    if (policyError) { res.status(400).json({ error: policyError }); return; }
-    data['passwordHash'] = await hashPassword(parsed.data.password);
+  // v6 escalation guards
+  const actor = req.apiUser!;
+  const isSelf = actor.userId === id;
+  if (actor.role === 'HELP_DESK' && Object.keys(parsed.data).some((k) => !HELP_DESK_FIELDS.has(k))) {
+    forbidden(res, 'Help Desk may only reset passwords or enable/disable accounts'); return;
+  }
+  if (!canAssignRole(actor.role, parsed.data.role, user.role)) {
+    forbidden(res, 'Only Organization Management may change roles'); return;
+  }
+  if (!isSelf && !canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may modify admin accounts'); return;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updated = await prisma.user.update({ where: { id }, data: data as any });
+  const { displayName, role, active, quotaBytes, password } = parsed.data;
+  if (password) {
+    // v6.0.0: minimum length from ServerSettings.minPasswordLength
+    const policyError = await checkPasswordPolicy(password);
+    if (policyError) { res.status(400).json({ error: policyError }); return; }
+  }
+  const updated = await prisma.user.update({
+    where: { id },
+    data: {
+      ...(displayName ? { displayName } : {}),
+      ...(role ? { role } : {}),
+      ...(active !== undefined ? { active } : {}),
+      ...(quotaBytes !== undefined ? { quotaBytes: BigInt(quotaBytes) } : {}),
+      ...(password ? { passwordHash: await hashPassword(password) } : {}),
+    },
+    select: { id: true, email: true, displayName: true, role: true, active: true },
+  });
   // v6.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept; inactive users cannot use them anyway).
-  if (parsed.data.password || (parsed.data.active === false && user.active)) {
-    await revokeAllSessions(id, { reason: parsed.data.password ? 'admin-password-reset' : 'deactivated' });
+  if (password || (active === false && user.active)) {
+    await revokeAllSessions(id, { reason: password ? 'admin-password-reset' : 'deactivated' });
   }
-  res.json({ id: updated.id, email: updated.email, displayName: updated.displayName });
+  res.json(updated);
 });
 
 // DELETE /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  
-  const user = await prisma.user.findUnique({ where: { id } });
+
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+  if (!canManageAccount(req.apiUser?.role, user.role)) {
+    forbidden(res, 'Only Organization Management may delete admin accounts'); return;
+  }
   await prisma.user.delete({ where: { id } });
   res.json({ ok: true });
 });
@@ -231,6 +279,10 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
 
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+
+  // v6: unknown grantee used to crash with a Prisma FK error
+  const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true } });
+  if (!grantee) { res.status(404).json({ error: 'Grantee not found' }); return; }
 
   // Upsert: update if exists, create if not
   const delegate = await prisma.mailboxDelegate.upsert({

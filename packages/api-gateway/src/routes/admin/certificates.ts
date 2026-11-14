@@ -17,7 +17,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 import { deriveCertStatus, isPemCurrentlyValid, parseCertValidity, recomputeStatus } from '../../lib/cert-lifecycle.js';
 import {
@@ -31,7 +31,7 @@ export { storeAcmeChallenge, getAcmeChallenge, runAcmeIssuance };
 
 const log = createLogger('admin:certificates');
 export const adminCertificatesRouter: RouterType = Router();
-adminCertificatesRouter.use(requireAdmin);
+adminCertificatesRouter.use(requireArea('servers'));
 
 // ── Helper: hide private key ──────────────────────────────────────────────────
 function safe(cert: Record<string, unknown>) {

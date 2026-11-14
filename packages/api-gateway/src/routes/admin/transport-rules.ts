@@ -13,11 +13,11 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:transport-rules');
 export const adminTransportRulesRouter: RouterType = Router();
-adminTransportRulesRouter.use(requireAdmin);
+adminTransportRulesRouter.use(requireArea('hygiene'));
 
 const ConditionSchema = z.object({
   field: z.enum(['from', 'to', 'cc', 'subject', 'body', 'hasAttachment', 'size', 'spamScore']),
@@ -58,7 +58,7 @@ adminTransportRulesRouter.post('/', async (req: Request, res: Response) => {
   const p = RuleSchema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
 
-  const actorId = (req as Request & { userId?: string }).userId ?? 'system';
+  const actorId = req.apiUser?.userId ?? 'system';
   const rule = await prisma.transportRule.create({
     data: {
       ...p.data,

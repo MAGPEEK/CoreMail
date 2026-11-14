@@ -16,6 +16,8 @@ name: coremail
 #
 #    3. Set up in the browser:
 #         http://<server-ip>:3000/bcp/     → setup wizard: admin account + domain
+#       The wizard asks for the one-time setup token printed to the log:
+#         docker logs coremail 2>&1 | grep -i "setup token"
 #       Then obtain a certificate (Let's Encrypt) in the BCP under SSL/TLS — from
 #       then on https://mail.<domain>/ is reachable. Alternatively via CLI:
 #         docker exec -it coremail coremail cert letsencrypt \
@@ -94,6 +96,14 @@ services:
       VAPID_PUBLIC_KEY:  ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
+
+      # ── Security (v6) ────────────────────────────────────────────────────────
+      # Initial setup needs a one-time token: docker logs coremail | grep -i "setup token"
+      # (or set SETUP_TOKEN in .env). TRUST_PROXY: only when port 3000 is reachable
+      # exclusively through your own reverse proxy (e.g. "1" or its CIDR) — default
+      # off, otherwise clients could spoof their IP via X-Forwarded-For.
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
 
       # ── Optional: different HTTPS port if 443 is already in use on the host ──
       # HTTPS_PORT: "8443"     # then also map "8443:8443" below

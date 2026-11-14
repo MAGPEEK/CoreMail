@@ -108,7 +108,9 @@ export function audit(entry: AuditEntry): void {
  */
 export function auditContext(req: Request): Pick<AuditEntry, 'ipAddress' | 'userAgent'> {
   return {
-    ipAddress: (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip ?? '',
+    // v6: req.ip honours TRUST_PROXY; the raw X-Forwarded-For header is
+    // client-controlled and must never be recorded as the actor IP.
+    ipAddress: req.ip ?? req.socket?.remoteAddress ?? '',
     userAgent: req.get('user-agent') ?? '',
   };
 }
