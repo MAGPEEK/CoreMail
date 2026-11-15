@@ -132,7 +132,7 @@ the REST API and the jmap-server itself feed — this keeps MWA and JMAP clients
 5. **Environment variables** (set in `docker-compose.yml`): `JMAP_PORT=3006`,
    `JMAP_SERVICE_URL=http://localhost:3006`; optionally `VAPID_*`.
 
-## Limits (v8.1)
+## Limits (v9.0)
 
 The limits advertised in the session object are enforced:
 

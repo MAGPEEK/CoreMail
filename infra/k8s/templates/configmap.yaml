@@ -99,6 +99,29 @@ data:
   MAIL_CONN_EXEMPT_CIDRS: {{ . | quote }}
   {{- end }}
 
+  # Tuning and escape hatches (CoreMail >= 9.0; unset = app default)
+  {{- with $a.deletedItemRetentionDays | toString }}
+  DELETED_ITEM_RETENTION_DAYS: {{ . | quote }}
+  {{- end }}
+  {{- with $a.quotaFullPermanent | toString }}
+  QUOTA_FULL_PERMANENT: {{ . | quote }}
+  {{- end }}
+  {{- with $a.httpRedirectHttps | toString }}
+  HTTP_REDIRECT_HTTPS: {{ . | quote }}
+  {{- end }}
+  {{- if $a.securityFilter.failOpen }}
+  SECURITY_FILTER_FAIL_OPEN: "true"
+  {{- end }}
+  {{- with $a.localSpoof.action }}
+  LOCAL_SPOOF_ACTION: {{ . | quote }}
+  {{- end }}
+  {{- with $a.localSpoof.allow }}
+  LOCAL_SPOOF_ALLOW: {{ . | quote }}
+  {{- end }}
+  {{- with $a.arcTrustedSealers }}
+  ARC_TRUSTED_SEALERS: {{ . | quote }}
+  {{- end }}
+
   # Prisma CLI (schema sync): no update checks / telemetry
   CHECKPOINT_DISABLE: "1"
   PRISMA_HIDE_UPDATE_MESSAGE: "1"
