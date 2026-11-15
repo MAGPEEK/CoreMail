@@ -30,6 +30,8 @@ export interface BodyOptions {
   mimeSupport: 0 | 1 | 2;
   /** airsync:MIMETruncation in bytes (EAS 2.5 compat, used when a Type 4 pref has no TruncationSize). */
   mimeTruncation?: number;
+  /** airsync:FilterType 1..7 (age window of the collection); absent/0 = all items. */
+  filterType?: number;
 }
 
 export interface EasAttachment {
@@ -100,7 +102,19 @@ export function parseBodyOptions(parent: WbxmlElement | undefined): BodyOptions 
   const out: BodyOptions = { prefs, mimeSupport: ms === '2' ? 2 : ms === '1' ? 1 : 0 };
   const mt = intOrUndefined(getText(options, 'MIMETruncation'));
   if (mt !== undefined && mt < MIME_TRUNCATION.length) out.mimeTruncation = MIME_TRUNCATION[mt]!;
+  const ft = intOrUndefined(getText(options, 'FilterType'));
+  if (ft !== undefined && ft >= 1 && ft <= 7) out.filterType = ft;
   return out;
+}
+
+// [MS-ASCMD] FilterType for email: 1 = 1 day, 2 = 3 days, 3 = 1 week, 4 = 2 weeks,
+// 5 = 1 month, 6 = 3 months, 7 = 6 months.
+const FILTER_DAYS = [0, 1, 3, 7, 14, 30, 90, 180];
+
+/** Oldest message date the collection's FilterType admits (undefined = no limit). */
+export function filterCutoff(filterType: number | undefined, now: Date = new Date()): Date | undefined {
+  const days = filterType === undefined ? 0 : FILTER_DAYS[filterType] ?? 0;
+  return days > 0 ? new Date(now.getTime() - days * 86_400_000) : undefined;
 }
 
 export function isSmime(msg: Pick<EasMessage, 'smimeMeta' | 'attachments'>): boolean {

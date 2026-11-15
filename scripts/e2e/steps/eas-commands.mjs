@@ -162,7 +162,7 @@ export async function run(state) {
     return `DstMsgId ${dst} / ${back}`;
   });
 
-  await check('eas-cmd: MeetingResponse accepts an invitation (calendar + REPLY to the organizer)', async () => {
+  await check('eas-cmd: MeetingResponse accepts an invitation (calendar); at 14.1 the device sends the REPLY — exactly one reaches the organizer', async () => {
     const tokA = await session(state, 'a', A, c.userA);
     const tokB = await session(state, 'b', B, c.userB);
     const cals = await http('GET', '/api/v1/calendar', { token: tokA });
@@ -182,11 +182,30 @@ export async function run(state) {
     const res = await post('MeetingResponse', MR(0x07, [MR(0x09, [MR(0x0c, '1'), MR(0x06, inboxId), MR(0x08, invite.id)])]));
     const result = kid(res, 'Result');
     assert(kid(result, 'Status')?.text === '1' && kid(result, 'CalendarId')?.text, `MeetingResponse ${JSON.stringify(result)}`);
+    // [MS-ASCMD] before EAS 16.0 the device sends the iTIP REPLY itself (SendMail) after the
+    // MeetingResponse — the server must not send a second one.
+    const ics = [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CoreMail E2E//EAS device//EN', 'METHOD:REPLY', 'BEGIN:VEVENT',
+      `UID:${ev.json.uid}`, `SEQUENCE:${ev.json.sequence ?? 0}`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')}`,
+      `ORGANIZER:mailto:${A}`, `ATTENDEE;PARTSTAT=ACCEPTED:mailto:${B}`, 'END:VEVENT', 'END:VCALENDAR', '',
+    ].join('\r\n');
+    const mime = [
+      `From: ${B}`, `To: ${A}`, `Subject: Accepted: ${subject}`, `Date: ${new Date().toUTCString()}`,
+      `Message-ID: <e2e-reply-${Date.now()}@e2e.test>`, 'MIME-Version: 1.0', 'Content-Type: text/calendar; method=REPLY; charset=UTF-8', '', ics,
+    ].join('\r\n');
+    const CM = (t, k) => [21, t, k];
+    const sent = await post('SendMail', CM(0x05, [CM(0x11, `e2e-mr-${Date.now()}`), CM(0x08), CM(0x10, mime)]));
+    assert(kid(sent, 'Status')?.text === '1', `SendMail REPLY ${JSON.stringify(sent)}`);
     // the REPLY reaches the organizer and updates the attendee status
     await waitFor(async () => {
       const e = await http('GET', `/api/v1/calendar/events/${ev.json.id}`, { token: tokA });
       return (e.json?.attendees ?? []).some((a) => a.email?.toLowerCase() === B.toLowerCase() && a.partstat === 'ACCEPTED');
     }, { what: 'organizer sees ACCEPTED', timeout: 30000 });
-    return `CalendarId ${kid(result, 'CalendarId').text}; organizer sees ACCEPTED`;
+    // give a (wrong) server-side duplicate time to arrive, then count the replies
+    await new Promise((r) => setTimeout(r, 5000));
+    const q = await http('GET', `/api/v1/mail/search?q=${encodeURIComponent(subject)}`, { token: tokA });
+    const replies = (q.json?.messages ?? q.json ?? []).filter((m) => /^Accepted:/i.test(m.subject ?? '') && (m.subject ?? '').includes(subject));
+    assert(replies.length === 1, `organizer received ${replies.length} replies (expected exactly the device's one)`);
+    return `CalendarId ${kid(result, 'CalendarId').text}; organizer sees ACCEPTED; 1 reply`;
   });
 }

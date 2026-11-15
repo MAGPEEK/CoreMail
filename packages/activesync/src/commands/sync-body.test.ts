@@ -23,6 +23,8 @@ let transactions = 0;
     update: async ({ data }: { data: { syncKeys: Record<string, string> } }) => { device.syncKeys = data.syncKeys; return {}; },
   },
   mailbox: { findUnique: async () => ({ highestModSeq: 5n }), updateMany: async () => ({ count: 0 }) },
+  // per-device item state: the device holds nothing (every message is an Add)
+  activeSyncItem: { findMany: async () => [], deleteMany: async () => ({ count: 0 }), createMany: async () => ({ count: 0 }) },
   message: {
     aggregate: async () => ({ _max: { modSeq: 5n, uid: 1 } }),
     findMany: async () => [messageRow()],

@@ -1,7 +1,8 @@
 /**
  * MeetingResponse: accept/tentative/decline of an iMIP REQUEST in the Inbox —
- * calendar event created/updated/removed with the own PARTSTAT, iTIP REPLY
- * queued to the organizer, request mail moved to Deleted Items.
+ * calendar event created/updated/removed with the own PARTSTAT, request mail moved to
+ * Deleted Items; the iTIP REPLY is queued by the server only for EAS 16.0 + SendResponse
+ * (review 7.1.0: at 14.1 the device sends it itself — a server REPLY was a duplicate).
  * Run: node --import tsx --test src/commands/meeting-response.test.ts
  */
 import { test } from 'node:test';
@@ -59,11 +60,12 @@ const deps = {
   enqueue: async (job: { from: string; to: string[]; rawMessage: string }) => { queued.push(job); return 'job'; },
 };
 const MR = (t: number, k?: WNode[] | string): WNode => [8, t, k];
-const request = (response: string, requestId = 'req1', collectionId = 'inbox'): WNode =>
-  MR(0x07, [MR(0x09, [MR(0x0c, response), MR(0x06, collectionId), MR(0x08, requestId)])]);
+/** EAS 16.0 request with SendResponse (the server sends the REPLY); `sendResponse: false` = 14.1 shape. */
+const request = (response: string, requestId = 'req1', collectionId = 'inbox', sendResponse = true): WNode =>
+  MR(0x07, [MR(0x09, [MR(0x0c, response), MR(0x06, collectionId), MR(0x08, requestId), ...(sendResponse ? [MR(0x12, [])] : [])])]);
 const kid = (e: E | undefined, name: string): E | undefined => e?.children?.find((c): c is E => typeof c !== 'string' && c.name === name);
-async function run(req: WNode) {
-  const buf = await handleMeetingResponse(decodeWbxml(clientWbxml(req)), 'u1', deps);
+async function run(req: WNode, protocolVersion = '16.0') {
+  const buf = await handleMeetingResponse(decodeWbxml(clientWbxml(req)), 'u1', deps, protocolVersion);
   assert.ok(wbxmlTags(buf).every(([p]) => p === 8), JSON.stringify(wbxmlTags(buf)));
   return kid(decodeWbxml(buf), 'Result')!;
 }
@@ -73,7 +75,23 @@ const replyIcs = (job: { rawMessage: string }) => {
   return { raw, ics: Buffer.from(part.replace(/Content-Transfer-Encoding: base64/, '').replace(/\s+/g, ''), 'base64').toString('utf8') };
 };
 
-test('accept: event in the default calendar with own PARTSTAT, REPLY to the organizer, request moved to Trash', async () => {
+test('EAS 14.1: calendar updated and request moved, but NO server REPLY (the device sends it — no duplicate)', async () => {
+  for (const [version, withSendResponse] of [['14.1', false], ['14.1', true], ['16.0', false]] as const) {
+    reset(); queued.length = 0;
+    const result = await run(request('1', 'req1', 'inbox', withSendResponse), version);
+    assert.equal(kid(result, 'Status')?.text, '1', `${version} SendResponse=${withSendResponse}`);
+    assert.ok(kid(result, 'CalendarId')?.text);
+    assert.equal(db.tables['calendarEvent']!.length, 1);
+    assert.equal(queued.length, 0, `${version} SendResponse=${withSendResponse}: no REPLY from the server`);
+    assert.equal(db.tables['message']!.find((m) => m['id'] === 'req1')!['folderId'], 'trash');
+  }
+  // the default (14.1) path of the dispatcher
+  reset(); queued.length = 0;
+  await handleMeetingResponse(decodeWbxml(clientWbxml(request('1', 'req1', 'inbox', false))), 'u1', deps);
+  assert.equal(queued.length, 0);
+});
+
+test('EAS 16.0 + SendResponse — accept: event in the default calendar with own PARTSTAT, REPLY to the organizer, request moved to Trash', async () => {
   reset(); queued.length = 0;
   const result = await run(request('1'));
   assert.equal(kid(result, 'Status')?.text, '1');

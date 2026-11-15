@@ -281,9 +281,11 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
   function readMBUInt32(): number {
     let result = 0;
     let byte: number;
+    let count = 0;
     do {
       byte = readByte();
-      result = (result << 7) | (byte & 0x7f);
+      if (++count > 5) throw new Error('Invalid WBXML multi-byte integer');
+      result = result * 128 + (byte & 0x7f);
     } while (byte & 0x80);
     return result;
   }
@@ -291,6 +293,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
   function readStrI(): Buffer {
     const start = pos;
     while (pos < buf.length && buf[pos] !== 0x00) pos++;
+    if (pos >= buf.length) throw new Error('Unterminated WBXML inline string');
     const s = buf.subarray(start, pos);
     pos++; // skip null terminator
     return s;
@@ -302,6 +305,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
 
   function readOpaque(): Buffer {
     const length = readMBUInt32();
+    if (length > buf.length - pos) throw new Error('WBXML OPAQUE data exceeds the buffer');
     const data = buf.slice(pos, pos + length);
     pos += length;
     return data;
@@ -336,6 +340,9 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     const hasContent = !!(byte & 0x40);
     const hasAttributes = !!(byte & 0x80);
     const token = byte & 0x3f;
+    // Tokens 0x00–0x04 of each 0x40 block are WBXML global tokens (ENTITY, LITERAL, EXT_*,
+    // PI, STR_T, …) that EAS does not use — never parse them as elements.
+    if (token < 0x05) throw new Error(`Unsupported WBXML global token 0x${byte.toString(16)}`);
 
     const pageName = CODE_PAGES[currentPage]?.[token];
     const name = pageName ?? `unknown_${currentPage}_${token}`;

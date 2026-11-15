@@ -824,17 +824,42 @@ model ActiveSyncDevice {
   deviceId        String   // EAS DeviceId header
   deviceType      String   @default("")  // EAS DeviceType (iPhone, Android, etc.)
   deviceFriendlyName String @default("")
-  policyKey       String   @default("0")
-  status          String   @default("OK") // OK | PENDING | BLOCKED | WIPED
+  policyKey       String   @default("0")   // final key ([MS-ASPROV] phase 2); "0" = not provisioned
+  pendingPolicyKey String?                 // temporary key of a phase-1 Provision, until acknowledged
+  // OK | PENDING (awaiting approval — refused) | BLOCKED (refused, Status 129)
+  // | WIPED (remote wipe requested: Provision answers RemoteWipe, everything else Status 140)
+  status          String   @default("OK")
   lastSyncAt      DateTime?
-  remoteWipeAt    DateTime?
+  remoteWipeAt    DateTime?                // wipe requested by an admin
+  remoteWipeAckAt DateTime?                // device acknowledged the wipe (Provision RemoteWipe Status)
   createdAt       DateTime @default(now())
   folderSyncKey   String   @default("0")
-  syncKeys        Json     @default("{}") // folderId → syncKey map
+  // folderId → issued SyncKey; `ack:<folderId>` → acknowledged SyncKey; `opts:<folderId>` →
+  // sticky Sync options; `ping` → last Ping parameters; `folders` → FolderSync snapshot
+  syncKeys        Json     @default("{}")
+  items           ActiveSyncItem[]
 
   @@unique([userId, deviceId])
   @@index([userId])
   @@map("active_sync_devices")
+}
+
+// v7.1: which ServerIds a device holds per collection and the message modSeq it holds them at.
+// Drives Sync Add vs Change, Delete for items removed/moved away, and suppresses echoes of the
+// device's own changes (Sync Change, MoveItems). Rows with pendingKey != "" were sent in the
+// response that issued that SyncKey and become the committed state ("") when the device
+// presents that key; a retry with the previous key discards them.
+model ActiveSyncItem {
+  deviceRowId  String
+  device       ActiveSyncDevice @relation(fields: [deviceRowId], references: [id], onDelete: Cascade)
+  collectionId String
+  serverId     String
+  pendingKey   String   @default("")
+  modSeq       BigInt?  // null only on a pending Delete
+
+  @@id([deviceRowId, collectionId, serverId, pendingKey])
+  @@index([deviceRowId, collectionId, pendingKey])
+  @@map("active_sync_items")
 }
 
 // ─────────────────────────────────────────────

@@ -6,7 +6,8 @@
  *  1. the event is created/updated in the caller's default calendar with the
  *     caller's PARTSTAT (decline: an existing copy is removed),
  *  2. an iTIP REPLY (RFC 5546) is sent to the organizer through the outbound
- *     queue (`smtp-outbound`, same path as SendMail),
+ *     queue (`smtp-outbound`, same path as SendMail) — only for protocol ≥ 16.0
+ *     with SendResponse; at 14.1 the device sends the reply itself,
  *  3. the request mail is moved to Deleted Items (Exchange behaviour — devices
  *     drop it from the Inbox).
  * Result: Status 1 + CalendarId (= CalendarEvent id) for accept/tentative.
@@ -19,7 +20,7 @@ import {
   type ITipPartstat, type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
+import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
 import { enqueueRawOutbound, type RawOutboundJob } from '../outbound.js';
 
 const log = createLogger('activesync:meeting-response');
@@ -47,7 +48,8 @@ const defaultDeps: MeetingResponseDeps = {
 const kids = (e: WbxmlElement | undefined): WbxmlElement[] =>
   (e?.children ?? []).filter((c): c is WbxmlElement => typeof c !== 'string');
 
-async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseDeps): Promise<WbxmlElement> {
+async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseDeps, protocolVersion: string): Promise<WbxmlElement> {
+  const opts = { sendReply: serverSendsReply(req, protocolVersion) };
   const requestId = getText(req, 'RequestId');
   const collectionId = getText(req, 'CollectionId');
   const partstat = USER_RESPONSE[getText(req, 'UserResponse')];
@@ -117,8 +119,10 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
     calendarId = saved.id;
   }
 
-  // 2. iTIP REPLY to the organizer (not to ourselves)
-  if (ev.organizer && ev.organizer.includes('@') && !own.includes(ev.organizer.toLowerCase())) {
+  // 2. iTIP REPLY to the organizer (not to ourselves) — only when the server is asked to
+  // send it: before EAS 16.0 the client sends the reply itself (SendMail/SmartReply), so
+  // a server reply would reach the organizer twice.
+  if (opts.sendReply && ev.organizer && ev.organizer.includes('@') && !own.includes(ev.organizer.toLowerCase())) {
     const name = user.displayName || undefined;
     const ics = buildITipReplyIcs(request, { email: responder, ...(name ? { cn: name } : {}) }, partstat);
     const mime = buildITipReplyMime({
@@ -145,15 +149,26 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
   return result(MEETING_STATUS.SUCCESS, calendarId);
 }
 
+/**
+ * [MS-ASCMD] MeetingResponse: the SendResponse element exists from protocol 16.0 on and asks
+ * the server to send the response to the organizer. Up to 14.1 the client always sends it
+ * itself (as a SendMail / SmartReply after the MeetingResponse).
+ */
+export function serverSendsReply(req: WbxmlElement, protocolVersion: string): boolean {
+  const version = Number.parseFloat(protocolVersion);
+  return Number.isFinite(version) && version >= 16 && !!getChild(req, 'SendResponse');
+}
+
 export async function handleMeetingResponse(
   body: WbxmlElement,
   userId: string,
   deps: MeetingResponseDeps = defaultDeps,
+  protocolVersion = '14.1',
 ): Promise<Buffer> {
   const results: WbxmlElement[] = [];
   for (const req of kids(body).filter((c) => c.name === 'Request')) {
     try {
-      results.push(await respond(req, userId, deps));
+      results.push(await respond(req, userId, deps, protocolVersion));
     } catch (err) {
       log.error({ err, userId }, 'MeetingResponse failed');
       results.push(el('Result', undefined, [el('RequestId', getText(req, 'RequestId')), el('Status', MEETING_STATUS.SERVER_ERROR)]));

@@ -11,9 +11,11 @@ export const EAS_SEND_STATUS = {
   SUCCESS:           '1',
   INVALID_MIME:      '107',
   SERVER_ERROR:      '110',
+  MESSAGE_PREVIOUSLY_SENT: '118',
   NO_RECIPIENTS:     '119',
   SUBMISSION_FAILED: '120',
   ACCESS_DENIED:     '130',
+  ITEM_NOT_FOUND:    '150',
 } as const;
 
 export interface EasSubmissionPlan {
@@ -78,6 +80,47 @@ export function stripHeader(raw: Buffer, name: string): Buffer {
 export function prependHeaders(raw: Buffer, lines: string[]): Buffer {
   if (lines.length === 0) return raw;
   return Buffer.concat([Buffer.from(lines.map((l) => `${l}\r\n`).join(''), 'utf8'), raw]);
+}
+
+/** Header fields (each with its folded continuation lines) and the body octets. */
+function splitMessage(raw: Buffer): { headers: string[]; body: Buffer } {
+  const { end, sepLen } = headerBlockEnd(raw);
+  const block = raw.subarray(0, end >= 0 ? end : raw.length).toString('latin1');
+  const headers: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line === '') continue;
+    if (/^[ \t]/.test(line) && headers.length > 0) headers[headers.length - 1] += `\r\n${line}`;
+    else headers.push(line);
+  }
+  return { headers, body: end >= 0 ? raw.subarray(end + sepLen) : Buffer.alloc(0) };
+}
+
+/**
+ * SmartReply / SmartForward ([MS-ASCMD]: the server adds the original message unless
+ * ReplaceMime is set): the client's message becomes the first part of a multipart/mixed,
+ * the original octets follow unchanged as an embedded `message/rfc822` part — inline for a
+ * reply, as an attachment for a forward — so its body and attachments travel with it.
+ * The client's header fields stay on the outer message (content fields move to part 1).
+ */
+export function appendOriginalMessage(clientMime: Buffer, original: Buffer, kind: 'reply' | 'forward', subject: string): Buffer {
+  const { headers, body } = splitMessage(clientMime);
+  const isContentField = (h: string) => /^content-[a-z0-9-]*[ \t]*:/i.test(h);
+  const outer = headers.filter((h) => !isContentField(h) && !/^mime-version[ \t]*:/i.test(h));
+  const content = headers.filter(isContentField);
+  const boundary = `=_eas_${randomUUID()}`;
+  const fileName = encodeURIComponent(`${(subject || 'message').replace(/[\r\n]/g, ' ').slice(0, 100)}.eml`)
+    .replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const eightBit = original.some((b) => b >= 0x80);
+  return Buffer.concat([
+    Buffer.from([...outer, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`].join('\r\n') + '\r\n\r\n', 'latin1'),
+    Buffer.from(`--${boundary}\r\n${(content.length > 0 ? content : ['Content-Type: text/plain; charset=utf-8']).join('\r\n')}\r\n\r\n`, 'latin1'),
+    body,
+    Buffer.from(`\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n`
+      + `Content-Disposition: ${kind === 'forward' ? 'attachment' : 'inline'}; filename*=UTF-8''${fileName}\r\n`
+      + (eightBit ? 'Content-Transfer-Encoding: 8bit\r\n' : '') + '\r\n', 'latin1'),
+    original,
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'latin1'),
+  ]);
 }
 
 // ── Address helpers ───────────────────────────────────────────────────────────
