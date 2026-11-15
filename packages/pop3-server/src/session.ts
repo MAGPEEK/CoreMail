@@ -21,7 +21,12 @@ export interface Pop3SessionOptions {
    * (in-process + Redis). Injectable for tests.
    */
   lock?: (userId: string) => Promise<AcquireResult>;
+  /** v8.1: an STLS handshake must complete within this time (default 30 s). */
+  tlsHandshakeMs?: number;
 }
+
+/** v8.1: default STLS handshake timeout. */
+export const TLS_HANDSHAKE_MS = 30_000;
 
 // Module-level hostname — updated via setPop3Hostname() when settings change
 let _hostname = 'mail.localhost';
@@ -102,14 +107,21 @@ export class POP3Session {
       this.unregisterLive?.(); this.unregisterLive = null;
       void this.unlock();
     });
-    // RFC 1939 §3: inactivity autologout timer (≥ 10 minutes). No UPDATE state:
-    // messages marked as deleted stay in the maildrop.
-    this.socket.setTimeout(IDLE_TIMEOUT_MS, () => {
-      this.closed = true;
-      this.socket.end('-ERR autologout: idle for too long\r\n');
-    });
+    this.armIdleTimer(this.socket);
     // RFC 1939 §3 — greeting with hostname
     this.send(`+OK ${_hostname} POP3 ready`);
+  }
+
+  /**
+   * RFC 1939 §3: inactivity autologout timer (≥ 10 minutes). No UPDATE state:
+   * messages marked as deleted stay in the maildrop.
+   */
+  private armIdleTimer(socket: net.Socket | tls.TLSSocket): void {
+    socket.setTimeout(IDLE_TIMEOUT_MS, () => {
+      if (this.socket !== socket) return;
+      this.closed = true;
+      socket.end('-ERR autologout: idle for too long\r\n');
+    });
   }
 
   private send(line: string) {
@@ -267,19 +279,34 @@ export class POP3Session {
       isServer: true,
       secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
     });
+    // v8.1: the plaintext idle timer no longer sees the traffic once the TLS
+    // layer owns the socket — a client that never completes the handshake is
+    // cut off here, and the TLS socket gets its own autologout timer.
+    raw.setTimeout(0);
+    const handshakeTimer = setTimeout(() => {
+      log.info('POP3 STLS handshake timed out');
+      this.closed = true;
+      secure.destroy();
+      raw.destroy();
+    }, this.options.tlsHandshakeMs ?? TLS_HANDSHAKE_MS);
+    handshakeTimer.unref();
     secure.once('secure', () => {
+      clearTimeout(handshakeTimer);
       this.socket = secure;
       this.secure = true;
       this.user = null;
       this.buf = '';
       secure.setEncoding('latin1');
       secure.on('data', this.onDataBound);
+      this.armIdleTimer(secure);
       log.debug('POP3 STLS upgrade complete');
     });
     secure.on('error', (err) => {
+      clearTimeout(handshakeTimer);
       log.warn({ err }, 'POP3 STLS handshake/socket error');
       secure.destroy();
     });
+    secure.once('close', () => clearTimeout(handshakeTimer));
   }
 
   private async handleAuth(command: string, args: string[]) {

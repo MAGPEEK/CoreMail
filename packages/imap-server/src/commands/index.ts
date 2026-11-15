@@ -21,7 +21,8 @@ import {
   syncView, completeWithUpdates, withUpdateLock,
 } from '../session/view.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
-import { registerLiveSession } from '../session/live.js';
+import { registerLiveSession, imapLiveSessions } from '../session/live.js';
+import { maxConnsPerUser } from '../server/limits.js';
 import {
   parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
   type SearchProgram, type SearchableMessage, type ReturnOption,
@@ -807,7 +808,14 @@ async function loginUser(
   });
   switch (result.status) {
     case 'ok':
+      // v8.1: concurrent sessions per user (Exchange-style per-protocol cap).
+      if (maxConnsPerUser() > 0 && imapLiveSessions.count(result.user.id) >= maxConnsPerUser()) {
+        log.warn({ email: result.user.email, limit: maxConnsPerUser(), command }, 'IMAP login refused — too many sessions for this user');
+        sendNo(session, tag, '[LIMIT] Too many concurrent IMAP sessions for this account');
+        return;
+      }
       session.state = 'AUTHENTICATED';
+      session.onAuthenticated?.();
       session.userId = result.user.id;
       session.mailboxId = result.user.mailboxId;
       // v7.1.0: the connection ends when these credentials become invalid.

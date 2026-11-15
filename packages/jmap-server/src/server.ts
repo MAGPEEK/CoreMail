@@ -29,6 +29,8 @@ import { buildSession, sessionStateFor } from './session.js';
 import { LIMITS, invalidateSettingsCache, publicBaseUrl, configuredPublicOrigin } from './settings.js';
 import { invalidateJmapFlagCache, requireJmapEnabled } from './feature-flag.js';
 import { resolveBlob, storeUpload } from './blobs.js';
+import { createUploadRouter } from './upload-route.js';
+import { apiRequestGate, concurrencyLimit } from './request-limits.js';
 import { eventSourceHandler } from './push/eventsource.js';
 import { attachWebSocket } from './push/websocket.js';
 import { jmapLiveConnections } from './push/live.js';
@@ -104,7 +106,8 @@ async function main(): Promise<void> {
     res.json(buildSession(user, accounts, await publicBaseUrl(req)));
   });
 
-  app.post('/jmap/api', jmapAuthMiddleware, express.json({ limit: LIMITS.maxSizeRequest, type: ['application/json', 'application/*+json'] }), async (req, res) => {
+  // v8.1: maxConcurrentRequests per user, enforced before the body is read.
+  app.post('/jmap/api', jmapAuthMiddleware, concurrencyLimit(apiRequestGate, () => LIMITS.maxConcurrentRequests, 'maxConcurrentRequests'), express.json({ limit: LIMITS.maxSizeRequest, type: ['application/json', 'application/*+json'] }), async (req, res) => {
     try {
       const request = parseRequest(req.body);
       const user = (req as AuthedRequest).jmapUser!;
@@ -131,21 +134,8 @@ async function main(): Promise<void> {
     problem(res, new RequestError('notJSON', 400, 'Request body is not valid JSON'));
   });
 
-  // Blob upload (RFC 8620 §6.1)
-  app.post('/jmap/upload/:accountId', jmapAuthMiddleware, express.raw({ type: () => true, limit: LIMITS.maxSizeUpload }), async (req, res) => {
-    const accounts = await resolveAccounts((req as AuthedRequest).jmapUser!);
-    const account = accounts.get(String(req.params['accountId']));
-    if (!account) { problem(res, new RequestError('accountNotFound', 404)); return; }
-    const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const type = (req.get('Content-Type') ?? 'application/octet-stream').split(';')[0]!.trim();
-    const stored = await storeUpload(account, data, type);
-    res.status(201).json({ accountId: account.accountId, blobId: stored.blobId, type: stored.type, size: stored.size });
-  });
-  app.use('/jmap/upload', (err: Error & { type?: string }, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (res.headersSent) { next(err); return; }
-    if (err.type === 'entity.too.large') { problem(res, new RequestError('limit', 413, 'Upload too large', { limit: 'maxSizeUpload' })); return; }
-    next(err);
-  });
+  // Blob upload (RFC 8620 §6.1) — v8.1: maxConcurrentUpload, read-only accounts, quota
+  app.use(createUploadRouter({ auth: jmapAuthMiddleware, resolveAccounts, store: storeUpload }));
 
   // Blob download (RFC 8620 §6.2)
   app.get('/jmap/download/:accountId/:blobId/:name?', jmapAuthMiddleware, async (req, res) => {
