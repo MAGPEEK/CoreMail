@@ -58,6 +58,19 @@ export function setTestEnv(): void {
   process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
   process.env['REDIS_URL'] ??= 'redis://127.0.0.1:1';
   process.env['LOG_LEVEL'] ??= 'error';
+  // requireAuth consults the shared revocation markers (8.0.0): default to an
+  // empty in-memory auth Redis (tests that need markers install their own).
+  const g = globalThis as Record<string, unknown>;
+  if (!g['__authRedis']) {
+    const kv = new Map<string, string>();
+    g['__authRedis'] = {
+      async get(k: string) { return kv.get(k) ?? null; },
+      async setex(k: string, _s: number, v: string) { kv.set(k, v); return 'OK'; },
+      async del(k: string) { return kv.delete(k) ? 1 : 0; },
+      async incr(k: string) { const n = Number(kv.get(k) ?? 0) + 1; kv.set(k, String(n)); return n; },
+      async expire() { return 1; },
+    };
+  }
   // server.ts installs the same BigInt serializer (Prisma quota fields)
   (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function (this: bigint) { return Number(this); };
 }

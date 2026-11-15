@@ -26,7 +26,7 @@ export async function davAuthMiddleware(
   if (authHeader.startsWith('Bearer ')) {
     const payload = verifyAccessToken(authHeader.slice(7));
     // v7.1.0: tokens of revoked sessions (logout, password change, admin revoke) are refused
-    if (payload && !(await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId))) {
+    if (payload && !(await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs))) {
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
         select: { id: true, email: true, active: true },

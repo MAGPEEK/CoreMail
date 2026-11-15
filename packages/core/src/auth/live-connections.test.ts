@@ -82,6 +82,19 @@ test('token connections follow their web session', () => {
   assert.equal(connectionAffected(ev('app-password-revoked', { appPasswordId: 'a1' }), tok), false);
 });
 
+test('token connections: revoke-all marks compare milliseconds (8.0.0)', () => {
+  const mark = (extra: Partial<AuthInvalidationEvent> = {}) =>
+    ev('role-change', { revokeBefore: { before: 2000, beforeMs: 2_000_500, except: null, expires: Date.now() + 60_000 }, ...extra });
+  // same whole second as the mark: only iatMs decides
+  assert.equal(connectionAffected(mark(), conn('token', { sessionId: 's', issuedAt: 2000, issuedAtMs: 2_000_100 })), true);
+  assert.equal(connectionAffected(mark(), conn('token', { sessionId: 's', issuedAt: 2000, issuedAtMs: 2_000_900 })), false);
+  // token without iatMs from the same second: treated as issued before (fail closed)
+  assert.equal(connectionAffected(mark(), conn('token', { sessionId: 's', issuedAt: 2000 })), true);
+  // the wire format keeps beforeMs
+  const e = parseAuthInvalidationEvent(JSON.stringify({ userId: 'u', reason: 'x', revokeBefore: { before: 2, beforeMs: 2500, except: null, expires: 9 } }));
+  assert.equal(e?.revokeBefore?.beforeMs, 2500);
+});
+
 test('other users are never affected', () => {
   assert.equal(connectionAffected(revokeAll('deleted'), { ...conn('password'), userId: 'u2' }), false);
 });

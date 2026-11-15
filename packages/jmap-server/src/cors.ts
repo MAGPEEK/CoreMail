@@ -31,14 +31,28 @@ export function parseOriginList(v: string | undefined): string[] {
 /**
  * WebSocket upgrade (RFC 8887 §8, RFC 6455 §10.2): browsers attach cached HTTP
  * credentials to cross-site WebSocket handshakes and CORS does not apply. A
- * handshake with an Origin outside the allow-list is only accepted when it carries
- * an explicit access token (query parameter), which a foreign page cannot borrow.
- * Non-browser clients send no Origin and are unaffected.
+ * handshake with an Origin outside the allow-list is only accepted when it
+ * authenticates with an explicit, non-empty access token in the query AND carries
+ * no Authorization header. The login prefers the header, so a foreign page must not
+ * be able to add a dummy (or empty) `?access_token=` and ride on the Basic
+ * credentials the browser has cached. Browser WebSocket APIs cannot set an
+ * Authorization header, so a header on a cross-origin handshake is always an
+ * ambient credential. Non-browser clients send no Origin and are unaffected.
  */
-export function isWsOriginAllowed(origin: string | undefined, allowed: readonly string[], explicitToken: boolean): boolean {
-  if (origin === undefined || explicitToken) return true;
+export interface WsCredentials {
+  /** Raw Authorization header (undefined or empty when absent). */
+  authorization?: string | undefined;
+  /** `access_token` / `token` query parameter (undefined when absent). */
+  queryToken?: string | undefined;
+}
+
+export function isWsOriginAllowed(origin: string | undefined, allowed: readonly string[], creds: WsCredentials): boolean {
+  if (origin === undefined) return true;
   const norm = normalizeOrigin(origin);
-  return !!norm && allowed.includes(norm);
+  if (norm && allowed.includes(norm)) return true;
+  const hasHeader = (creds.authorization ?? '').trim() !== '';
+  const hasToken = (creds.queryToken ?? '').trim() !== '';
+  return hasToken && !hasHeader;
 }
 
 /** Pure: response headers for a request with `origin`. */

@@ -36,7 +36,11 @@ export async function setupTotp(
     update: { totpSecret: stored, totpEnabled: false, totpLastUsedStep: null },
   });
 
-  await publishUserAuthChange(userId, 'mfa-change');
+  // No 'mfa-change' event here (8.0.0): a pending secret changes no credential —
+  // the account password stays valid on the mail protocols until TOTP is
+  // confirmed, and verifyUserTotp() publishes the event when it enables TOTP.
+  // Publishing here ended every live mail connection of a user who merely
+  // opened (and possibly cancelled) the setup dialog.
   log.info({ userId }, 'TOTP secret generated (not yet confirmed)');
   return { secret, otpauthUrl, qrCodeDataUrl };
 }

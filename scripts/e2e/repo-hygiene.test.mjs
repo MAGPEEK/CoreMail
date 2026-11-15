@@ -71,3 +71,28 @@ test('rspamd local.d/actions.conf has no nested actions { } block (rspamd 4 refu
   assert.doesNotMatch(conf, /\bactions\s*\{/);
   assert.match(conf, /^\s*reject\s*=\s*\d+;/m);
 });
+
+test('no source file imports a module both by name and again as a bare side-effect import', async () => {
+  // 8.0.0 review: routes/admin/storage.ts had `import '../../middleware/auth.js'`
+  // right after the named import from the same module.
+  const { readdirSync } = await import('node:fs');
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === 'dist') continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx)$/.test(e.name) && !e.name.endsWith('.d.ts')) {
+        const src = readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/^import\s+['"]([^'"]+)['"];?\s*$/gm)) {
+          if (new RegExp(`^import\\s[^'"]*\\sfrom\\s+['"]${escape(m[1])}['"]`, 'm').test(src)) offenders.push(`${p}: ${m[1]}`);
+        }
+      }
+    }
+  };
+  for (const pkg of readdirSync(join(root, 'packages'))) {
+    try { walk(join(root, 'packages', pkg, 'src')); } catch { /* package without src */ }
+  }
+  assert.deepEqual(offenders, []);
+});

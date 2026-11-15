@@ -10,7 +10,7 @@
  * (or, on behalf, in Sender).
  */
 import {
-  addressesOf, evaluateHeaderSenders, findBodyStart, listAllowedSenderAddresses,
+  addressesOf, evaluateHeaderSenders, findBodyStart, isSenderAddressAllowed, listAllowedSenderAddresses,
   listOnBehalfSenderAddresses, normalizeSenderAddress, parseHeaderFields,
 } from '@coremail/storage';
 
@@ -53,6 +53,40 @@ export function checkSubmissionSenders(
     return { ok: false, type: 'forbiddenFrom', description: `identity ${identityEmail} is neither in From nor in Sender` };
   }
   return { ok: true };
+}
+
+export type EnvelopeVerdict =
+  | { ok: true; mailFrom: string; domain: string }
+  | { ok: false; type: 'forbiddenMailFrom'; description: string };
+
+/**
+ * Envelope sender (MAIL FROM) check — the SMTP submission rule
+ * (smtp-server checkSenderPermission → storage isSenderAddressAllowed):
+ *  - the null reverse-path `<>` is refused (it is reserved for bounces/DSNs;
+ *    SMTP submission refuses it as well),
+ *  - the address must be a syntactically valid mailbox,
+ *  - it must equal the chosen identity's address, and
+ *  - it must be one of the addresses the user may send as.
+ * The returned `domain` comes from the verified address only and is the one
+ * that may be used for the DKIM key lookup.
+ */
+export function checkEnvelopeMailFrom(
+  mailFrom: string,
+  identityEmail: string,
+  allowed: Iterable<string>,
+): EnvelopeVerdict {
+  const addr = normalizeSenderAddress(mailFrom);
+  if (!addr) return { ok: false, type: 'forbiddenMailFrom', description: 'null reverse-path is not allowed for submission' };
+  if (!ADDR.test(addr) || addr.indexOf('@') !== addr.lastIndexOf('@')) {
+    return { ok: false, type: 'forbiddenMailFrom', description: 'envelope mailFrom is not a valid address' };
+  }
+  if (addr !== normalizeSenderAddress(identityEmail)) {
+    return { ok: false, type: 'forbiddenMailFrom', description: 'envelope mailFrom must equal identity email' };
+  }
+  if (!isSenderAddressAllowed(addr, allowed)) {
+    return { ok: false, type: 'forbiddenMailFrom', description: `not allowed to send as ${addr}` };
+  }
+  return { ok: true, mailFrom: addr, domain: addr.slice(addr.indexOf('@') + 1) };
 }
 
 /** {@link checkSubmissionSenders} with the user's addresses from the database. */

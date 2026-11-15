@@ -18,6 +18,7 @@ export function registerSseConnection(user: ApiUser, terminate: (event: AuthInva
     credential: 'token',
     ...(user.sessionId ? { sessionId: user.sessionId } : {}),
     ...(user.issuedAt !== undefined ? { issuedAt: user.issuedAt } : {}),
+    ...(user.issuedAtMs !== undefined ? { issuedAtMs: user.issuedAtMs } : {}),
     terminate,
   }, user.authStartedAt);
 }

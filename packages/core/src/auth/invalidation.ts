@@ -33,6 +33,38 @@ export type AuthInvalidationReason =
   | 'deactivated' | 'deleted' | 'role-change' | 'sessions-revoked'
   | (string & {});
 
+/**
+ * "Revoke all" mark: tokens issued before it are revoked, except those of
+ * session `except`. `before` is in seconds (JWT `iat`); `beforeMs` (8.0.0) is
+ * the exact time of the revocation in milliseconds.
+ */
+export interface RevokeBeforeMark {
+  before: number;
+  beforeMs?: number;
+  except: string | null;
+  expires: number;
+}
+
+/**
+ * Was a token issued before the mark? (session exemption is checked by the caller)
+ *  - token with `iatMs` and mark with `beforeMs` → exact comparison;
+ *  - mark with `beforeMs`, token without `iatMs` (minted by an older release) →
+ *    `iat <= before`: a token from the same second as the revocation is treated
+ *    as issued before it (whole-second `iat` cannot tell; fail closed);
+ *  - mark without `beforeMs` (older publisher) → `iat < before` as before.
+ * `iat`/`issuedAt` undefined counts as issued before.
+ */
+export function issuedBeforeMark(
+  mark: Pick<RevokeBeforeMark, 'before' | 'beforeMs'>,
+  iat: number | undefined,
+  iatMs?: number | undefined,
+): boolean {
+  if (mark.beforeMs !== undefined && iatMs !== undefined) return iatMs < mark.beforeMs;
+  if (iat === undefined) return true;
+  if (mark.beforeMs !== undefined) return iat <= mark.before;
+  return iat < mark.before;
+}
+
 export interface AuthInvalidationEvent {
   userId: string;
   reason: AuthInvalidationReason;
@@ -42,7 +74,7 @@ export interface AuthInvalidationEvent {
    * "Access tokens issued before `before` (s) are revoked, except those of
    * session `except`" — mirrors revokeAllSessions() in other processes.
    */
-  revokeBefore?: { before: number; except: string | null; expires: number };
+  revokeBefore?: RevokeBeforeMark;
   /** app-password-revoked: the revoked app password (live connections using it end). */
   appPasswordId?: string;
   /** All app passwords of the user were deleted together with the sessions. */
@@ -106,6 +138,7 @@ export function parseAuthInvalidationEvent(message: string): AuthInvalidationEve
   if (rb && typeof rb === 'object' && typeof rb['before'] === 'number' && typeof rb['expires'] === 'number') {
     event.revokeBefore = {
       before: rb['before'],
+      ...(typeof rb['beforeMs'] === 'number' ? { beforeMs: rb['beforeMs'] } : {}),
       except: typeof rb['except'] === 'string' ? rb['except'] : null,
       expires: rb['expires'],
     };

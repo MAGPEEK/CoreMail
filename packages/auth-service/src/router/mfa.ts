@@ -34,7 +34,7 @@ async function getAuthenticatedUserId(req: Request): Promise<string | null> {
   const header = req.get('Authorization');
   if (!header?.startsWith('Bearer ')) return null;
   const payload = verifyAccessToken(header.slice(7));
-  if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId)) return null;
+  if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
   return payload.sub;
 }
 

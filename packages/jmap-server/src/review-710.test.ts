@@ -19,7 +19,7 @@ let transactions = 0;
   },
 };
 
-const { checkSubmissionSenders } = await import('./mail/sender-check.js');
+const { checkSubmissionSenders, checkEnvelopeMailFrom } = await import('./mail/sender-check.js');
 const { parseParams, releaseTime } = await import('./methods/submission.js');
 const { computeChanges, parseMaxChanges, existedAt } = await import('./methods/email-changes.js');
 const { classifyThreads } = await import('./methods/thread.js');
@@ -190,12 +190,44 @@ test('keywords: case-insensitive, unchanged custom flags keep their IMAP spellin
   assert.ok(hasKeywordFlag(['Projekt-X'], 'projekt-x'));
 });
 
+describe('EmailSubmission envelope.mailFrom (8.0.0 review: SMTP MAIL FROM policy)', () => {
+  const check = (mf: string, identity = 'me@corp.de') => checkEnvelopeMailFrom(mf, identity, allowed);
+  test('own identity address → ok, DKIM domain from the verified address', () => {
+    assert.deepEqual(check(' <Me@Corp.DE> '), { ok: true, mailFrom: 'me@corp.de', domain: 'corp.de' });
+  });
+  test('foreign domain → forbiddenMailFrom', () => {
+    const v = check('anyone@other.example');
+    assert.equal(v.ok, false);
+    assert.equal(!v.ok && v.type, 'forbiddenMailFrom');
+  });
+  test('null reverse-path <> / empty → forbiddenMailFrom', () => {
+    for (const mf of ['', '<>', '  ']) {
+      const v = check(mf);
+      assert.equal(v.ok, false, mf);
+      assert.match(!v.ok ? v.description : '', /null reverse-path/);
+    }
+  });
+  test('identity that is not an allowed sender → forbiddenMailFrom (identity alone is not enough)', () => {
+    assert.equal(check('ghost@corp.de', 'ghost@corp.de').ok, false);
+  });
+  test('allowed address that is not the identity → forbiddenMailFrom', () => {
+    assert.equal(check('team@corp.de', 'me@corp.de').ok, false);
+  });
+  test('garbage addresses → forbiddenMailFrom', () => {
+    for (const mf of ['me', 'me@', 'a@b@corp.de', 'me @corp.de']) assert.equal(check(mf, mf).ok, false, mf);
+  });
+});
+
 test('WebSocket upgrade: foreign Origin needs an explicit token', () => {
   const allowedOrigins = ['https://mail.corp.de'];
-  assert.equal(isWsOriginAllowed(undefined, allowedOrigins, false), true);          // non-browser client
-  assert.equal(isWsOriginAllowed('https://mail.corp.de', allowedOrigins, false), true);
-  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, false), false);
-  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, true), true);
+  assert.equal(isWsOriginAllowed(undefined, allowedOrigins, {}), true);          // non-browser client
+  assert.equal(isWsOriginAllowed('https://mail.corp.de', allowedOrigins, { authorization: 'Basic x' }), true);
+  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, {}), false);
+  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, { queryToken: 'jwt' }), true);
+  // 8.0.0 review: an (empty) query token must not lift the check for ambient Basic credentials
+  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, { queryToken: '', authorization: 'Basic x' }), false);
+  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, { queryToken: 'x', authorization: 'Basic x' }), false);
+  assert.equal(isWsOriginAllowed('https://evil.example', allowedOrigins, { queryToken: '  ' }), false);
 });
 
 test('Session: principals account capability + FUTURERELEASE advertised', () => {

@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { prisma } from '@coremail/storage';
+import { listAllowedSenderAddresses, prisma } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
@@ -14,7 +14,7 @@ import { MethodError, cannotCalculateChanges, setError, type SetError } from '..
 import { emailState } from '../state.js';
 import { loadRawMessage, parseAddress, parseHeaders } from '../mail/raw.js';
 import { stripBccHeader } from '../mail/strip-bcc.js';
-import { checkSubmissionSendersFor } from '../mail/sender-check.js';
+import { checkEnvelopeMailFrom, checkSubmissionSendersFor } from '../mail/sender-check.js';
 import { MAX_DELAYED_SEND_SEC } from '../limits.js';
 import { listIdentities } from './identity.js';
 import { runEmailSet, setResponse } from './email.js';
@@ -74,7 +74,8 @@ function toJson(s: Submission): JsonObject {
   return rest as unknown as JsonObject;
 }
 
-interface CreateInput { identityId: string; emailId: string; envelope: Submission['envelope']; sendAt: Date }
+/** dkimDomain: domain of the VERIFIED envelope sender — never taken from unchecked input. */
+interface CreateInput { identityId: string; emailId: string; envelope: Submission['envelope']; sendAt: Date; dkimDomain: string }
 
 async function parseCreate(obj: JsonObject, account: AccountContext, ctx: MethodContext): Promise<CreateInput & { raw: Buffer; threadId: string }> {
   const identityId = typeof obj['identityId'] === 'string' ? ctx.resolveId(obj['identityId']) : '';
@@ -109,7 +110,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   if (env) {
     const mf = env['mailFrom'] as JsonObject | undefined;
     if (!mf || typeof mf['email'] !== 'string') throw setError('invalidProperties', 'envelope.mailFrom.email required', ['envelope']);
-    mailFrom = mf['email'].toLowerCase();
+    mailFrom = mf['email'];
     mailFromParams = parseParams(mf['parameters'], MAIL_FROM_PARAMS);
     if (!Array.isArray(env['rcptTo'])) throw setError('invalidProperties', 'envelope.rcptTo required', ['envelope']);
     const rt = env['rcptTo'] as JsonObject[];
@@ -124,7 +125,11 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
     });
     rcpt = all.length ? all : [...msg.toAddrs, ...msg.ccAddrs, ...msg.bccAddrs].map((a) => parseAddress(a).email);
   }
-  if (mailFrom !== identityEmail) throw setError('forbiddenMailFrom', 'envelope mailFrom must equal identity email');
+  // envelope.mailFrom follows the SMTP submission policy: an address the user may send
+  // as (storage sender-identity), equal to the identity; the null reverse-path is refused.
+  const envCheck = checkEnvelopeMailFrom(mailFrom, identityEmail, await listAllowedSenderAddresses(ctx.user.userId));
+  if (!envCheck.ok) throw setError(envCheck.type, envCheck.description);
+  mailFrom = envCheck.mailFrom;
   rcpt = [...new Set(rcpt.map((r) => r.toLowerCase()))];
   if (!rcpt.length) throw setError('noRecipients');
   const bad = rcpt.filter((r) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r));
@@ -133,7 +138,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   const sendAt = releaseTime(mailFromParams, new Date());
   const threadId = msg.threadId ?? msg.id;
   return {
-    identityId, emailId, sendAt, raw, threadId,
+    identityId, emailId, sendAt, raw, threadId, dkimDomain: envCheck.domain,
     envelope: { mailFrom: { email: mailFrom, parameters: mailFromParams }, rcptTo: rcpt.map((e) => ({ email: e, parameters: null })) },
   };
 }
@@ -179,8 +184,7 @@ export function releaseTime(params: Record<string, string | null> | null, now: D
 }
 
 async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInput & { raw: Buffer }, jobId: string): Promise<void> {
-  const domainName = c.envelope.mailFrom.email.split('@')[1] ?? '';
-  const domain = await prisma.domain.findFirst({ where: { name: domainName }, select: { name: true, dkimSelector: true, dkimPrivateKey: true } });
+  const domain = await prisma.domain.findFirst({ where: { name: c.dkimDomain }, select: { name: true, dkimSelector: true, dkimPrivateKey: true } });
   const delay = Math.max(0, c.sendAt.getTime() - Date.now());
   await outboundQueue().add('send', {
     messageId: jobId,

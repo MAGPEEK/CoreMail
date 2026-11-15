@@ -101,14 +101,14 @@ test('an event between the token check and the stream registration still ends it
   assert.equal(sseLiveConnections.count('u6'), 0);
 });
 
-test('requireAuth exposes iat and the check start for live-connection registration', () => {
+test('requireAuth exposes iat and the check start for live-connection registration', async () => {
   const token = signAccessToken({ sub: 'u7', email: 'u7@ex.test', role: 'USER', sessionId: 'sess-7' } as Parameters<typeof signAccessToken>[0]);
   const req = { get: (h: string) => (h === 'Authorization' ? `Bearer ${token}` : undefined), query: {} } as unknown as Request;
-  let nextCalled = false;
   const before = Date.now();
-  requireAuth(req, {} as Response, () => { nextCalled = true; });
-  assert.ok(nextCalled);
+  await new Promise<void>((resolve) => requireAuth(req, {} as Response, () => resolve()));
   assert.equal(req.apiUser?.sessionId, 'sess-7');
   assert.equal(typeof req.apiUser?.issuedAt, 'number');
+  assert.equal(typeof req.apiUser?.issuedAtMs, 'number');
+  assert.ok((req.apiUser?.issuedAtMs ?? Infinity) <= before);
   assert.ok((req.apiUser?.authStartedAt ?? 0) >= before);
 });
