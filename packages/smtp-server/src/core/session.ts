@@ -45,6 +45,17 @@ const MAX_LINE = 1000;
 const MAX_UNTERMINATED_COMMAND = 64 * 1024;
 
 /**
+ * Flow control: at most this many commands wait in the command queue; beyond
+ * that the socket is paused and the input buffer is not parsed further until
+ * the queue drains (a pipelining client cannot pile up handlers and replies
+ * behind a tarpit delay).
+ */
+export const MAX_QUEUED_COMMANDS = 100;
+
+/** While flow-paused the socket is not read; the unparsed buffer is still capped. */
+const MAX_PAUSED_BUFFER = 16 * MAX_UNTERMINATED_COMMAND;
+
+/**
  * Builds the reply line for a rejection string returned by a handler.
  *  - "452 4.2.2 …" / "550 5.7.1 …"  → passed through unchanged (own reply code)
  *  - "4.3.0 …"                       → transient: "<transientCode> 4.3.0 …"
@@ -135,8 +146,13 @@ interface BdatChunk {
   remaining: number;
   /** Chunk octets (latin1 string slices) — empty when the chunk is discarded. */
   parts: string[];
-  /** Over the size limit: read and dropped without buffering. */
-  discard: boolean;
+  /**
+   * Read and dropped without buffering: `size` = over the size limit,
+   * `sequence` = no transaction with an accepted (or still queued) recipient.
+   */
+  discard: false | 'size' | 'sequence';
+  /** Read-side transaction generation (MAIL/RSET/EHLO/HELO/STARTTLS bump it). */
+  gen: number;
 }
 
 /**
@@ -190,6 +206,26 @@ export class SmtpSession {
    * instead of being buffered (memory bound before the queue sees them).
    */
   private bdatAnnounced = 0;
+
+  /**
+   * Read-side view of the transaction (what the queue WILL see once it has
+   * run the commands read so far): bumped by MAIL/RSET/EHLO/HELO/STARTTLS.
+   */
+  private readGen = 0;
+  /** An RCPT was read after the last MAIL (it may still be queued). */
+  private readRcptInTx = false;
+  /** RCPT commands read but not yet processed by the queue. */
+  private queuedRcpt = 0;
+  /** Commands waiting in (or running in) the command queue. */
+  private queuedCommands = 0;
+  /** BDAT chunks waiting in (or running in) the command queue. */
+  private queuedBdat = 0;
+  /** The socket was paused by flow control. */
+  private flowPaused = false;
+  /** BDAT octets held in memory (being read or queued) — and the session peak. */
+  private bdatBuffered = 0;
+  private peakBdatBuffered = 0;
+  private peakQueued = 0;
 
   /**
    * Command queue — serializes async command processing to prevent PIPELINING
@@ -279,8 +315,18 @@ export class SmtpSession {
    * async handlers (onMailFrom, onRcptTo) suspend mid-execution and the next
    * pipelined command sees stale state.
    */
-  private enqueueCommand(fn: () => Promise<void> | void, opts: { noTarpit?: boolean } = {}): void {
+  private enqueueCommand(fn: () => Promise<void> | void, opts: { noTarpit?: boolean; kind?: 'bdat' | 'rcpt' } = {}): void {
     const epoch = this.epoch;
+    this.queuedCommands++;
+    this.peakQueued = Math.max(this.peakQueued, this.queuedCommands);
+    if (opts.kind === 'bdat') this.queuedBdat++;
+    if (opts.kind === 'rcpt') this.queuedRcpt++;
+    const done = (): void => {
+      this.queuedCommands--;
+      if (opts.kind === 'bdat') this.queuedBdat--;
+      if (opts.kind === 'rcpt') this.queuedRcpt--;
+      this.updateFlow();
+    };
     this.cmdQueue = this.cmdQueue.then(async () => {
       // Skip if session already terminated
       if (this.state === 'QUIT' || this.terminating) return;
@@ -298,7 +344,37 @@ export class SmtpSession {
     }).catch(() => {
       // Errors are handled inside each handler — they send their own error
       // responses and never propagate to the queue chain.
-    });
+    }).finally(done);
+  }
+
+  /** Flow-control counters (tests / diagnostics). */
+  flowStats(): { queued: number; peakQueued: number; bdatBuffered: number; peakBdatBuffered: number } {
+    return {
+      queued: this.queuedCommands, peakQueued: this.peakQueued,
+      bdatBuffered: this.bdatBuffered, peakBdatBuffered: this.peakBdatBuffered,
+    };
+  }
+
+  /** Too much queued work: stop reading until the queue drains. */
+  private flowBlocked(): boolean {
+    return this.queuedCommands >= MAX_QUEUED_COMMANDS || this.queuedBdat > 1;
+  }
+
+  /** Pauses / resumes the socket after the queue changed. */
+  private updateFlow(): void {
+    if (this.closing || this.state === 'QUIT') return;
+    if (this.flowBlocked()) {
+      if (!this.flowPaused) {
+        this.flowPaused = true;
+        this.socket.pause();
+      }
+      return;
+    }
+    if (!this.flowPaused) return;
+    this.flowPaused = false;
+    // Parse what is already buffered first, then read from the socket again.
+    this.processInput();
+    if (!this.flowPaused && !this.socket.destroyed) this.socket.resume();
   }
 
   // ─── Send ────────────────────────────────────────────────────────────────────
@@ -318,12 +394,27 @@ export class SmtpSession {
     // for the whole message — a slow but progressing upload must not time out.
     if (this.inData || this.bdat) this.resetTimer(T_DATA);
     this.lineBuffer += chunk;
+    this.processInput();
+  }
 
+  /** Parses the input buffer (also called when flow control releases it). */
+  private processInput(): void {
+    let blocked = false;
     while (!this.closing) {
       if (this.bdat) {
         // Exact octet count — no line parsing, no dot-stuffing (RFC 3030 §2).
         if (!this.consumeBdatChunk()) break;
         continue;
+      }
+      // Command boundary: with too much queued work, stop parsing and stop
+      // reading (the rest stays buffered until the queue drains).
+      if (!this.inData && this.flowBlocked()) {
+        blocked = true;
+        if (!this.flowPaused) {
+          this.flowPaused = true;
+          this.socket.pause();
+        }
+        break;
       }
       const crlf = this.lineBuffer.indexOf('\r\n');
       if (crlf === -1) break;
@@ -341,10 +432,12 @@ export class SmtpSession {
     // Hard cap on the unterminated remainder: 64 KiB in command mode, the
     // maximum message size in data mode (a single body line can never be
     // larger than the whole message).
+    // While flow-paused the buffer holds complete, not yet parsed commands;
+    // the socket is not read, so only a generous safety cap applies.
     const limit = this.inData
       ? Math.max(this.config.maxSize, MAX_UNTERMINATED_COMMAND)
-      : MAX_UNTERMINATED_COMMAND;
-    if (this.lineBuffer.length > limit) {
+      : blocked ? MAX_PAUSED_BUFFER : MAX_UNTERMINATED_COMMAND;
+    if (!this.closing && this.lineBuffer.length > limit) {
       this.closeForOversizedLine();
     }
   }
@@ -358,7 +451,11 @@ export class SmtpSession {
     const chunk = this.bdat!;
     const take = Math.min(chunk.remaining, this.lineBuffer.length);
     if (take > 0) {
-      if (!chunk.discard) chunk.parts.push(this.lineBuffer.slice(0, take));
+      if (!chunk.discard) {
+        chunk.parts.push(this.lineBuffer.slice(0, take));
+        this.bdatBuffered += take;
+        this.peakBdatBuffered = Math.max(this.peakBdatBuffered, this.bdatBuffered);
+      }
       this.lineBuffer = this.lineBuffer.slice(take);
       chunk.remaining -= take;
     }
@@ -370,7 +467,11 @@ export class SmtpSession {
       return false;
     }
     const data = chunk.discard ? null : Buffer.from(chunk.parts.join(''), 'latin1');
-    this.enqueueCommand(() => this.handleBdatChunk(chunk, data));
+    this.enqueueCommand(async () => {
+      try { await this.handleBdatChunk(chunk, data); } finally {
+        if (!chunk.discard) this.bdatBuffered -= chunk.size;
+      }
+    }, { kind: 'bdat' });
     this.resetTimer(T_COMMAND);
     return true;
   }
@@ -389,10 +490,19 @@ export class SmtpSession {
       this.enqueueCommand(() => { this.send('501 5.5.4 Syntax: BDAT <chunk-size> [LAST]'); });
       return;
     }
-    this.bdatAnnounced += parsed.size;
-    const discard = this.bdatAnnounced > this.config.maxSize;
-    this.bdat = { size: parsed.size, last: parsed.last, remaining: parsed.size, parts: [], discard };
-    if (parsed.last) this.bdatAnnounced = 0;
+    // Octets are only buffered for a transaction that has (or, pipelined, is
+    // about to get) an accepted recipient. Anything else — no MAIL, a rejected
+    // RCPT, chunks after LAST — is read and dropped: no memory before MAIL/RCPT.
+    let discard: BdatChunk['discard'] = false;
+    if (!this.readRcptInTx || (this.queuedRcpt === 0 && (this.transaction?.rcptTo.length ?? 0) === 0)) {
+      discard = 'sequence';
+    } else {
+      this.bdatAnnounced += parsed.size;
+      if (this.bdatAnnounced > this.config.maxSize) discard = 'size';
+    }
+    this.bdat = { size: parsed.size, last: parsed.last, remaining: parsed.size, parts: [], discard, gen: this.readGen };
+    // After LAST the transaction is over: further chunks are a bad sequence.
+    if (parsed.last) this.readRcptInTx = false;
     this.resetTimer(T_DATA);
   }
 
@@ -402,7 +512,7 @@ export class SmtpSession {
     this.resetTimer(T_COMMAND);
     // RFC 3030 §2: BDAT needs an open transaction with a recipient; after
     // BDAT LAST (or a failed chunk) it is a bad sequence until RSET/MAIL.
-    if (!tx || (this.state !== 'RCPT' && this.state !== 'BDAT')) {
+    if (!tx || (this.state !== 'RCPT' && this.state !== 'BDAT') || chunk.discard === 'sequence') {
       this.send('503 5.5.1 Bad sequence of commands');
       return;
     }
@@ -420,6 +530,9 @@ export class SmtpSession {
       this.send(`250 2.0.0 ${chunk.size} octets received`);
       return;
     }
+    // LAST accepted: the read-time size count starts over — unless a newer
+    // transaction was already read meanwhile (it reset the count itself).
+    if (chunk.gen === this.readGen) this.bdatAnnounced = 0;
     await this.finishData(true);
   }
 
@@ -586,7 +699,12 @@ export class SmtpSession {
     this.resetTimer(T_COMMAND);
 
     // A new transaction (or its reset) restarts the BDAT read-time size count.
-    if (cmd === 'MAIL' || cmd === 'RSET' || cmd === 'EHLO' || cmd === 'HELO') this.bdatAnnounced = 0;
+    if (cmd === 'MAIL' || cmd === 'RSET' || cmd === 'EHLO' || cmd === 'HELO') {
+      this.bdatAnnounced = 0;
+      this.readGen++;
+      this.readRcptInTx = false;
+    }
+    if (cmd === 'RCPT') this.readRcptInTx = true;
 
     // ALL commands go through the queue — this serializes async handlers
     // (onMailFrom, onRcptTo) so that pipelined commands always see the correct
@@ -600,7 +718,7 @@ export class SmtpSession {
       case 'AUTH':    this.enqueueCommand(() => this.handleAuth(args)); break;
       case 'STARTTLS':this.enqueueCommand(() => this.handleStarttls(args)); break;
       case 'MAIL':    this.enqueueCommand(() => this.handleMailFrom(args)); break;
-      case 'RCPT':    this.enqueueCommand(() => this.handleRcptTo(args)); break;
+      case 'RCPT':    this.enqueueCommand(() => this.handleRcptTo(args), { kind: 'rcpt' }); break;
       case 'DATA':    this.enqueueCommand(() => this.handleDataCommand()); break;
       case 'BDAT':    this.startBdat(args); break;
       case 'HELP':    this.enqueueCommand(() => { for (const l of HELP_LINES) this.send(l); }); break;
@@ -952,11 +1070,18 @@ export class SmtpSession {
     // A BDAT chunk pipelined after STARTTLS must not swallow TLS records.
     this.bdat = null;
     this.bdatAnnounced = 0;
+    this.readGen++;
+    this.readRcptInTx = false;
 
     this.send('220 2.0.0 Ready to start TLS');
 
     // Remove existing data listener before upgrading
     this.socket.removeAllListeners('data');
+    // The TLS layer must be able to read the handshake.
+    if (this.flowPaused) {
+      this.flowPaused = false;
+      this.socket.resume();
+    }
 
     const plainSocket = this.socket;
     const tlsSocket = new tls.TLSSocket(plainSocket, {
