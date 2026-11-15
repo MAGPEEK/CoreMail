@@ -42,8 +42,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `/healthz` probes), Ingress for HTTP and a LoadBalancer/NodePort Service for the mail ports,
   optional bundled PostgreSQL, Redis (password mandatory), MinIO, rspamd and ClamAV or external
   endpoints, NetworkPolicies, secrets via values or an existing Secret (rendering fails without
-  them). `scripts/helm-check.sh` runs helm lint/template and kubeconform via pinned Docker
-  images. The old per-service chart (EWS, storage-api, 0.6.x images) is gone.
+  them), `objectStorage.*` for the storage drivers; the app gets the same environment as with
+  docker-compose (`OBJECT_STORAGE`, `MINIO_BUCKET_ATTACHMENTS`, `RSPAMD_URL` — rspamd via
+  `rspamd.external.url` or `host` + `controllerPort`). `scripts/helm-check.sh` runs helm
+  lint/template and kubeconform via pinned Docker images and checks the rendered environment
+  names. The old per-service chart (EWS, storage-api, 0.6.x images) is gone.
 - **Object storage drivers** (`OBJECT_STORAGE=filesystem | minio | s3`, default `minio` =
   unchanged behaviour). The filesystem driver (`STORAGE_PATH`, default `/data/objects`) writes
   atomically (temp file + fsync + rename) with modes 0640/0750; the S3/MinIO driver supports
@@ -83,11 +86,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   docs) and scanned on the hard-coded `RSPAMD_HOST`/`RSPAMD_PORT` defaults; Bayes learning
   always went to `<host>:11334`. `RSPAMD_URL` (the rspamd controller) is now used for scanning
   and learning, `RSPAMD_HOST`/`RSPAMD_PORT` remain as fallback when it is unset; an invalid URL
-  is logged and falls back. The Helm chart renders only `RSPAMD_URL` (`rspamd.external.url`
-  or `host` + `controllerPort`; `rspamd.external.port` was removed).
-- Helm chart: the attachment bucket was rendered as `MINIO_BUCKET`, which the app does not
-  read, so `minio.bucket` had no effect; it is now `MINIO_BUCKET_ATTACHMENTS` (default
-  `coremail-attachments`, the app's default).
+  is logged and falls back.
 
 ### Security
 

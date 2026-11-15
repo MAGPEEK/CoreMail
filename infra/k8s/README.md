@@ -244,10 +244,12 @@ everybody at once). CoreMail does not speak PROXY protocol on the mail ports.
 `app.replicaCount: 1` is the supported default. What is coordinated across pods:
 the outbound queue (BullMQ), per-IP/per-account lockouts, sessions, SSE fan-out,
 the certificate renewal scheduler (Redis scheduler lock + per-certificate lock),
-LDAP sync, auto-reply and dead-letter throttles (Redis `SET NX`). What is **not**:
-the backup scheduler and the retention worker (Managed Folder Assistant) run in
-every pod (duplicate backups/retention runs), the JMAP Basic-auth cache is per
-pod, and without a fixed `SETUP_TOKEN` every pod prints its own token (the chart
+LDAP sync, auto-reply and dead-letter throttles (Redis `SET NX`), and since
+CoreMail 7.1.0 the backup scheduler and the retention worker (one run per cron
+fire, Redis run lock) and credential invalidation (JMAP Basic-auth cache, live
+connections, via the Redis auth bus). What is **not**: a starting pod marks
+backup jobs that are still `RUNNING` elsewhere as failed (startup orphan cleanup),
+and without a fixed `SETUP_TOKEN` every pod prints its own token (the chart
 refuses `replicaCount > 1` without `secrets.setupToken` unless `existingSecret`
 is used — then set `SETUP_TOKEN` there). `filesystem` object storage is limited
 to one replica.

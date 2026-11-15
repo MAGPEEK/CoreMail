@@ -152,7 +152,7 @@
 | Log viewer with per-service log level | ⚠️ shows mail-flow and selected auth events, not the full service logs |
 | Backup: MBOX/EML export (self-service per user) | ❌ no MWA UI, and the endpoints are not reachable through the API gateway |
 | Backup: admin full / per-mailbox backup to S3 + MBOX restore (original messages incl. attachments) | ⚠️ no point-in-time recovery; not tested end to end |
-| Kubernetes Helm chart (HPA, HA) | ⚠️ outdated: references per-service images (0.6.0) instead of the single `coremail-app` image |
+| Kubernetes Helm chart 1.0.0 (single `coremail-app` image, bundled or external datastores) | ⚠️ one replica by default, no HPA; validated with helm lint/kubeconform, not tested on a live cluster |
 | Structured JSON logs (pino) + per-service log level (changeable at runtime) | ✅ |
 | Web Push / VAPID notifications (new mail, also without an open MWA tab) | ✅ |
 | Automatic mailbox provisioning on first login (LDAP, OIDC with auto-provisioning) | ✅ |

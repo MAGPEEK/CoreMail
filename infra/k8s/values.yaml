@@ -57,10 +57,10 @@ app:
     digest: ""
     pullPolicy: IfNotPresent
 
-  # Keep 1. SMTP/IMAP/POP3 state (lockouts, queues) and the certificate renewal
-  # scheduler are coordinated through Redis, but the backup scheduler and the
-  # retention worker have no cross-pod lock (duplicate runs with > 1 replica),
-  # and the setup token must then be fixed (secrets.setupToken). See README.
+  # Keep 1. SMTP/IMAP/POP3 state (lockouts, queues), the certificate renewal
+  # scheduler and (CoreMail >= 7.1.0) the backup scheduler / retention worker are
+  # coordinated through Redis; with > 1 replica the setup token must be fixed
+  # (secrets.setupToken) and filesystem object storage is not possible. See README.
   replicaCount: 1
   # Recreate: never two pods with schedulers at the same time during upgrades.
   strategy:

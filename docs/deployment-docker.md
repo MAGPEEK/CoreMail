@@ -535,6 +535,12 @@ docker exec coremail ss -tlnp
 
 ## Further documentation
 
-- [Kubernetes deployment](../infra/k8s/) — Helm chart for cluster operation (HPA, PDB, Redis Cluster, CloudNativePG)
+- [Kubernetes deployment](../infra/k8s/README.md) — Helm chart 1.0.0 for the same `coremail-app`
+  image: one app pod (single replica, `Recreate`), Ingress for HTTP, a LoadBalancer/NodePort
+  Service for the mail ports, optional bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV or external
+  services, NetworkPolicies and the same environment variables as this compose file (incl.
+  `OBJECT_STORAGE`, `RSPAMD_URL`). One replica is the supported default (no HPA); see the
+  chart README for what is coordinated across replicas. Check the chart with
+  `bash scripts/helm-check.sh`.
 - [COMMANDS.md](../COMMANDS.md) — CLI command reference (queues, users, backup, diagnostics)
 - [CHANGELOG.md](../CHANGELOG.md) — Complete version history
