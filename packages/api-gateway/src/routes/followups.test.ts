@@ -18,6 +18,7 @@ setTestEnv();
 type Row = Record<string, unknown>;
 const ruleWrites: Row[] = [];
 const transportWrites: Row[] = [];
+let existingRules: Array<{ id: string; conditions: unknown; exceptions: unknown }> = [];
 let lastAttachmentSelect: unknown = null;
 const traceRows = [
   { timestamp: new Date('2026-11-01T10:00:00Z'), message: 'm1', metadata: { sender: 'a@x', recipient: 'b@y', subject: 'Invoice 42', status: 'DELIVERED', messageId: 'id1' } },
@@ -28,6 +29,7 @@ const traceRows = [
 installFakePrisma({
   user: { findUnique: (a) => ((a as { where: { id: string } }).where.id === 'admin' ? { role: 'ORGANIZATION_MANAGEMENT', active: true } : { role: 'USER', active: true }) },
   mailRule: {
+    findMany: () => existingRules,
     findFirst: () => null,
     create: (a) => { const d = (a as { data: Row }).data; ruleWrites.push(d); return { id: 'r1', ...d }; },
   },
@@ -100,6 +102,32 @@ test('inbox rules: an unsupported regex is refused with a readable 400', async (
   assert.equal(ok.status, 201, JSON.stringify(ok.json));
   // other operators are not regex-validated
   assert.equal((await call('POST', '/api/v1/user/rules', t, { name: 'c', actions: [{ type: 'markRead' }], conditions: [{ field: 'subject', operator: 'contains', value: '(a)\\1' }] })).status, 201);
+});
+
+test('inbox rules: at most 20 regex conditions per user over all rules', async () => {
+  const t = tok('u1');
+  const regex = (n: number) => Array.from({ length: n }, (_, i) => ({ field: 'subject', operator: 'regex', value: `x${i}` }));
+  existingRules = [
+    { id: 'a', conditions: regex(12), exceptions: [] },
+    { id: 'b', conditions: [{ field: 'subject', operator: 'contains', value: 'y' }], exceptions: regex(6) },
+  ];
+  try {
+    const writes = ruleWrites.length;
+    // 18 existing + 3 new = 21 → refused
+    const over = await call('POST', '/api/v1/user/rules', t, { name: 'r', actions: [{ type: 'markRead' }], conditions: regex(3) });
+    assert.equal(over.status, 400);
+    assert.equal(over.json['code'], 'TOO_MANY_REGEX_CONDITIONS');
+    // 18 + 2 = 20 → allowed
+    assert.equal((await call('POST', '/api/v1/user/rules', t, { name: 'r', actions: [{ type: 'markRead' }], conditions: regex(2) })).status, 201);
+    assert.equal(ruleWrites.length, writes + 1);
+  } finally {
+    existingRules = [];
+  }
+  const { regexConditionLimitMessage } = await import('./user.js');
+  // replacing rule "a" (12 regex) with 14 → 6 + 14 = 20 → fine; with 15 → refused
+  const rules = [{ id: 'a', conditions: regex(12), exceptions: [] }, { id: 'b', conditions: [], exceptions: regex(6) }];
+  assert.equal(regexConditionLimitMessage(rules, [regex(14)], 'a'), null);
+  assert.match(regexConditionLimitMessage(rules, [regex(15)], 'a') ?? '', /at most 20/);
 });
 
 test('transport rules: an unsupported regex is refused on save', async () => {

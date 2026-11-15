@@ -2,9 +2,13 @@ import { prisma } from './prisma/index.js';
 import { moveMessages, touchMessages } from './message-store.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
-import { matchRulePattern } from './rule-pattern.js';
+import { matchRulePattern, createRulePatternBudget, type RulePatternBudget } from './rule-pattern.js';
 
-export { validateRulePattern, matchRulePattern, tryMatchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT } from './rule-pattern.js';
+export {
+  validateRulePattern, matchRulePattern, tryMatchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT,
+  createRulePatternBudget, rulePatternStepBudget, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER,
+  DEFAULT_RULE_PATTERN_STEP_BUDGET, canonicalizeCodeUnit, type RulePatternBudget,
+} from './rule-pattern.js';
 
 const log = createLogger('storage:mail-rules');
 
@@ -111,6 +115,7 @@ function evaluateOperator(
   fieldValue: string | number | boolean,
   operator: RuleOperator,
   expected: string | number | boolean,
+  budget?: RulePatternBudget,
 ): boolean {
   // Boolean fields: only is/equals make sense
   if (typeof fieldValue === 'boolean') {
@@ -143,27 +148,27 @@ function evaluateOperator(
     case 'regex':
       // Never the backtracking engine on mail content (ReDoS on the SMTP
       // delivery path): linear-time matcher, input capped at 64 KB.
-      return matchRulePattern(String(expected), fv);
+      return matchRulePattern(String(expected), fv, budget);
     case 'is': return fv === ev;
     default: return false;
   }
 }
 
-function matchCondition(cond: RuleCondition, parsed: ParsedMessage, userEmail: string): boolean {
+function matchCondition(cond: RuleCondition, parsed: ParsedMessage, userEmail: string, budget?: RulePatternBudget): boolean {
   const fv = getFieldValue(cond.field, parsed, userEmail);
-  return evaluateOperator(fv, cond.operator, cond.value);
+  return evaluateOperator(fv, cond.operator, cond.value, budget);
 }
 
-function matchRule(rule: MailRuleData, parsed: ParsedMessage, userEmail: string): boolean {
+function matchRule(rule: MailRuleData, parsed: ParsedMessage, userEmail: string, budget?: RulePatternBudget): boolean {
   // Exceptions are ALWAYS OR: if any exception matches → skip the rule
   for (const exc of rule.exceptions) {
-    if (matchCondition(exc, parsed, userEmail)) return false;
+    if (matchCondition(exc, parsed, userEmail, budget)) return false;
   }
   if (rule.conditions.length === 0) return true;
   if (rule.matchAll) {
-    return rule.conditions.every((c) => matchCondition(c, parsed, userEmail));
+    return rule.conditions.every((c) => matchCondition(c, parsed, userEmail, budget));
   }
-  return rule.conditions.some((c) => matchCondition(c, parsed, userEmail));
+  return rule.conditions.some((c) => matchCondition(c, parsed, userEmail, budget));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,6 +243,11 @@ export async function applyMailRules(
   userId: string,
   userEmail: string,
   defaultFolderId: string,
+  /**
+   * Regex step budget for this message (RULE_PATTERN_STEP_BUDGET), shared with
+   * the transport rules by the delivery path; default: a fresh one.
+   */
+  patternBudget: RulePatternBudget = createRulePatternBudget({ onExhausted: () => logBudgetExhausted(userId) }),
 ): Promise<RuleOutcome> {
   const outcome: RuleOutcome = {
     targetFolderId: defaultFolderId,
@@ -281,7 +291,7 @@ export async function applyMailRules(
       matchAll: raw.matchAll,
     };
 
-    if (!matchRule(rule, parsed, userEmail)) continue;
+    if (!matchRule(rule, parsed, userEmail, patternBudget)) continue;
 
     try {
       await executeActions(rule, outcome, userId);
@@ -295,6 +305,10 @@ export async function applyMailRules(
   }
 
   return outcome;
+}
+
+function logBudgetExhausted(userId: string): void {
+  log.warn({ userId }, 'Regex step budget exhausted (RULE_PATTERN_STEP_BUDGET) — remaining regex conditions do not match');
 }
 
 // Convenience export for tests

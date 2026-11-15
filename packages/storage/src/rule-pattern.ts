@@ -28,8 +28,82 @@ const MAX_REPEAT_BOUND = 100;
 
 type Pred = (c: number) => boolean;
 
+// ── Case folding (ECMAScript Canonicalize, non-unicode ignoreCase) ───────────
+//
+// Two code units match case-insensitively when Canonicalize(a) ===
+// Canonicalize(b) (ES2024 §22.2.2.7.3): toUpperCase, unless that yields more
+// than one unit or maps a non-ASCII unit into ASCII. A character set matches a
+// unit when ANY of its members has the same canonical value — for a negated
+// class the negation is applied AFTER that (`[^a-z]` must not match "H").
+// The input is folded once per character; every set is evaluated on the
+// canonical value via the (tiny) equivalence class of that value.
+
+let canonTable: Uint16Array | null = null;
+let groupStart: Int32Array | null = null;
+let groupMembers: Uint16Array | null = null;
+
+function buildFoldTables(): void {
+  const table = new Uint16Array(0x10000);
+  const counts = new Int32Array(0x10001);
+  for (let c = 0; c < 0x10000; c++) {
+    const up = String.fromCharCode(c).toUpperCase();
+    let k = up.length === 1 ? up.charCodeAt(0) : c;
+    if (c >= 128 && k < 128) k = c;
+    table[c] = k;
+    counts[k + 1]!++;
+  }
+  for (let k = 1; k <= 0x10000; k++) counts[k]! += counts[k - 1]!;
+  const start = Int32Array.from(counts);
+  const members = new Uint16Array(0x10000);
+  const fill = Int32Array.from(counts);
+  for (let c = 0; c < 0x10000; c++) members[fill[table[c]!]!++] = c;
+  canonTable = table;
+  groupStart = start;
+  groupMembers = members;
+}
+
+/** Canonical (case-folded) value of a UTF-16 code unit. */
+export function canonicalizeCodeUnit(c: number): number {
+  if (!canonTable) buildFoldTables();
+  return canonTable![c]!;
+}
+
+/**
+ * A character set evaluated on canonical values: `positive` is the set as
+ * written (union of its members), `negated` the `[^...]` flag. Results for
+ * canonical values < 256 are cached.
+ */
+class CharSet {
+  private readonly cache = new Int8Array(256);
+  constructor(private readonly positive: Pred, private readonly negated: boolean, private readonly fold: boolean) {}
+
+  /** `k` is a canonical value (fold=true) or the raw code unit (fold=false). */
+  matches(k: number, raw: number): boolean {
+    if (!this.fold) return this.negated !== this.positive(raw);
+    if (k < 256) {
+      const v = this.cache[k]!;
+      if (v !== 0) return v === 1;
+      const r = this.compute(k);
+      this.cache[k] = r ? 1 : 2;
+      return r;
+    }
+    return this.compute(k);
+  }
+
+  private compute(k: number): boolean {
+    let any = false;
+    const start = groupStart!, members = groupMembers!;
+    for (let j = start[k]!; j < start[k + 1]!; j++) {
+      if (this.positive(members[j]!)) { any = true; break; }
+    }
+    return this.negated ? !any : any;
+  }
+}
+
+const folded = (pred: Pred, negated = false): CharSet => new CharSet(pred, negated, true);
+
 type Node =
-  | { t: 'char'; pred: Pred }
+  | { t: 'char'; set: CharSet }
   | { t: 'assert'; k: '^' | '$' | 'b' | 'B' }
   | { t: 'cat'; items: Node[] }
   | { t: 'alt'; items: Node[] }
@@ -45,17 +119,6 @@ const isSpaceCode = (c: number): boolean =>
   (c >= 9 && c <= 13) || c === 32 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) ||
   c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
 const isLineTerminator = (c: number): boolean => c === 10 || c === 13 || c === 0x2028 || c === 0x2029;
-
-/** Case-insensitive wrapper: the predicate is tried on the char, its lower and upper case. */
-function caseless(pred: Pred): Pred {
-  return (c) => {
-    if (pred(c)) return true;
-    const s = String.fromCharCode(c);
-    const lo = s.toLowerCase();
-    const up = s.toUpperCase();
-    return (lo.length === 1 && pred(lo.charCodeAt(0))) || (up.length === 1 && pred(up.charCodeAt(0)));
-  };
-}
 
 class Parser {
   private i = 0;
@@ -143,15 +206,15 @@ class Parser {
         this.i--;
         if (this.readBraces()) throw new PatternError('nothing to repeat');
         this.i++;
-        return { t: 'char', pred: caseless((x) => x === 123) };
-      case '.': return { t: 'char', pred: (x) => !isLineTerminator(x) };
+        return { t: 'char', set: folded((x) => x === 123) };
+      case '.': return { t: 'char', set: new CharSet((x) => !isLineTerminator(x), false, false) };
       case '^': return { t: 'assert', k: '^' };
       case '$': return { t: 'assert', k: '$' };
-      case '[': return { t: 'char', pred: caseless(this.parseClass()) };
+      case '[': return { t: 'char', set: this.parseClass() };
       case '\\': return this.parseEscape();
       default: {
         const code = c.charCodeAt(0);
-        return { t: 'char', pred: caseless((x) => x === code) };
+        return { t: 'char', set: folded((x) => x === code) };
       }
     }
   }
@@ -162,7 +225,7 @@ class Parser {
     if (c === undefined) throw new PatternError('\\ at end of pattern');
     if (c === 'b' || c === 'B') { this.i++; return { t: 'assert', k: c }; }
     const pred = this.escapePred(false);
-    return { t: 'char', pred: caseless(pred) };
+    return { t: 'char', set: folded(pred) };
   }
 
   /** Shared escape decoding (inside and outside classes); `this.i` points after the backslash. */
@@ -205,7 +268,7 @@ class Parser {
   }
 
   /** `[...]` — `this.i` points after `[`. */
-  private parseClass(): Pred {
+  private parseClass(): CharSet {
     let negated = false;
     if (this.peek() === '^') { negated = true; this.i++; }
     const parts: Pred[] = [];
@@ -230,7 +293,8 @@ class Parser {
       parts.push(lo.pred);
     }
     const any: Pred = (x) => parts.some((p) => p(x));
-    return negated ? (x) => !any(x) : any;
+    // fold the POSITIVE set, then negate (ES Canonicalize semantics)
+    return folded(any, negated);
   }
 
   /** One class member: a single code (usable in ranges) or a class escape. */
@@ -268,7 +332,7 @@ function singleEscapeCode(raw: string): number {
 // ── Compilation (Thompson construction) ──────────────────────────────────────
 
 type Inst =
-  | { op: 'char'; pred: Pred }
+  | { op: 'char'; set: CharSet }
   | { op: 'split'; x: number; y: number }
   | { op: 'jmp'; x: number }
   | { op: 'assert'; k: '^' | '$' | 'b' | 'B' }
@@ -286,7 +350,7 @@ class Compiler {
   compile(node: Node): void {
     switch (node.t) {
       case 'empty': return;
-      case 'char': this.emit({ op: 'char', pred: node.pred }); return;
+      case 'char': this.emit({ op: 'char', set: node.set }); return;
       case 'assert': this.emit({ op: 'assert', k: node.k }); return;
       case 'cat': for (const n of node.items) this.compile(n); return;
       case 'alt': {
@@ -360,19 +424,67 @@ export function validateRulePattern(pattern: unknown): { ok: true } | { ok: fals
   }
 }
 
-/** Pike VM: unanchored search, O(input × program). */
-export function runRulePattern(compiled: CompiledRulePattern, input: string): boolean {
+// ── Step budget (all patterns of one message) ────────────────────────────────
+
+/** Default VM steps for all regex conditions evaluated for one message. */
+export const DEFAULT_RULE_PATTERN_STEP_BUDGET = 5_000_000;
+
+/**
+ * Shared step budget: every VM step (thread scheduled or tested) of every
+ * pattern run against one message counts. Once it is used up the remaining
+ * patterns do not match (`onExhausted` runs once, e.g. to log).
+ */
+export interface RulePatternBudget {
+  remaining: number;
+  exhausted: boolean;
+  onExhausted?: () => void;
+}
+
+/** RULE_PATTERN_STEP_BUDGET (default 5e6; <= 0 or invalid → default). */
+export function rulePatternStepBudget(env: Record<string, string | undefined> = process.env): number {
+  const n = Number((env['RULE_PATTERN_STEP_BUDGET'] ?? '').trim());
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_RULE_PATTERN_STEP_BUDGET;
+}
+
+export function createRulePatternBudget(opts: { steps?: number; onExhausted?: () => void } = {}): RulePatternBudget {
+  return {
+    remaining: opts.steps ?? rulePatternStepBudget(),
+    exhausted: false,
+    ...(opts.onExhausted ? { onExhausted: opts.onExhausted } : {}),
+  };
+}
+
+function exhaust(budget: RulePatternBudget): false {
+  if (!budget.exhausted) {
+    budget.exhausted = true;
+    budget.remaining = 0;
+    budget.onExhausted?.();
+  }
+  return false;
+}
+
+/**
+ * Pike VM: unanchored search, O(input × program). The input is case-folded
+ * once per character. With a budget, the run stops (no match) when the steps
+ * are used up.
+ */
+export function runRulePattern(compiled: CompiledRulePattern, input: string, budget?: RulePatternBudget): boolean {
+  if (budget?.exhausted) return false;
   const prog = compiled.prog;
   const s = input.length > MAX_RULE_MATCH_INPUT ? input.slice(0, MAX_RULE_MATCH_INPUT) : input;
   const n = s.length;
   const mark = new Int32Array(prog.length).fill(-1);
   let matched = false;
   const stack: number[] = [];
+  let steps = 0;
+  if (!canonTable) buildFoldTables();
+  const canon = canonTable!;
 
   const add = (list: number[], start: number, pos: number): void => {
     stack.push(start);
     while (stack.length > 0) {
       const pc = stack.pop()!;
+      steps++;
       if (mark[pc] === pos) continue;
       mark[pc] = pos;
       const inst = prog[pc]!;
@@ -397,20 +509,49 @@ export function runRulePattern(compiled: CompiledRulePattern, input: string): bo
     }
   };
 
+  const limit = budget ? budget.remaining : Infinity;
+  const finish = (result: boolean): boolean => {
+    if (budget) budget.remaining = Math.max(0, budget.remaining - steps);
+    return result;
+  };
+
   let clist: number[] = [];
   for (let pos = 0; ; pos++) {
     add(clist, 0, pos); // a new match attempt starts at every position
-    if (matched) return true;
-    if (pos >= n) return false;
+    if (matched) return finish(true);
+    if (pos >= n) return finish(false);
+    if (steps > limit) { finish(false); return exhaust(budget!); }
     const code = s.charCodeAt(pos);
+    const k = canon[code]!; // folded once per input character
     const nlist: number[] = [];
+    steps += clist.length;
     for (const pc of clist) {
-      const inst = prog[pc] as { op: 'char'; pred: Pred };
-      if (inst.pred(code)) add(nlist, pc + 1, pos + 1);
+      const inst = prog[pc] as { op: 'char'; set: CharSet };
+      if (inst.set.matches(k, code)) add(nlist, pc + 1, pos + 1);
     }
-    if (matched) return true;
+    if (matched) return finish(true);
     clist = nlist;
   }
+}
+
+// ── Per-user limit ────────────────────────────────────────────────────────────
+
+/** Most `regex` conditions (conditions + exceptions over all rules) one user may have. */
+export const MAX_REGEX_CONDITIONS_PER_USER = 20;
+
+/** Pure: number of `regex` conditions in condition lists (shapes `{ operator }` / `{ op }`). */
+export function countRegexConditions(lists: ReadonlyArray<ReadonlyArray<unknown> | null | undefined>): number {
+  let n = 0;
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const c of list) {
+      if (!c || typeof c !== 'object') continue;
+      const o = c as Record<string, unknown>;
+      const op = o['operator'] ?? o['op'] ?? o['Operator'] ?? o['Op'];
+      if (typeof op === 'string' && op.toLowerCase() === 'regex') n++;
+    }
+  }
+  return n;
 }
 
 const cache = new Map<string, CompiledRulePattern | null>();
@@ -420,8 +561,8 @@ const CACHE_MAX = 256;
  * Case-insensitive linear-time regex test for mail rules. Invalid or unsupported
  * patterns never match (and are refused at rule creation by validateRulePattern()).
  */
-export function matchRulePattern(pattern: string, input: string): boolean {
-  return tryMatchRulePattern(pattern, input) ?? false;
+export function matchRulePattern(pattern: string, input: string, budget?: RulePatternBudget): boolean {
+  return tryMatchRulePattern(pattern, input, budget) ?? false;
 }
 
 /**
@@ -429,7 +570,12 @@ export function matchRulePattern(pattern: string, input: string): boolean {
  * (callers that log or skip such entries, e.g. admin blacklist patterns stored
  * before validation existed).
  */
-export function tryMatchRulePattern(pattern: string, input: string): boolean | null {
+export function tryMatchRulePattern(
+  pattern: string,
+  input: string,
+  /** Shared budget of the message; without one, a fresh RULE_PATTERN_STEP_BUDGET per call. */
+  budget: RulePatternBudget = createRulePatternBudget(),
+): boolean | null {
   let compiled = cache.get(pattern);
   if (compiled === undefined) {
     try {
@@ -440,5 +586,5 @@ export function tryMatchRulePattern(pattern: string, input: string): boolean | n
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value as string);
     cache.set(pattern, compiled);
   }
-  return compiled ? runRulePattern(compiled, input) : null;
+  return compiled ? runRulePattern(compiled, input, budget) : null;
 }
