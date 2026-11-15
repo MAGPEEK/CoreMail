@@ -143,3 +143,13 @@ test('warning text names the limits', () => {
   assert.match(t.bodyText, /90\.0 MB/);
   assert.match(t.bodyText, /no longer send/);
 });
+
+test('write quota (IMAP/JMAP/EAS): fresh usage, blocked only at prohibit-send-receive, fail-open', async () => {
+  addMsg('in1', 50 * MB);
+  assert.equal(await q.isMailboxWriteBlocked('mb1'), false);
+  // the cached usage is stale (50 MB) — a burst of writes must not slip through
+  await q.mailboxUsageBytes({ kind: 'user', id: 'u1' });
+  addMsg('in1', 60 * MB);
+  assert.equal(await q.isMailboxWriteBlocked('mb1'), true, 'fresh aggregate sees 110 MB ≥ 100 MB');
+  assert.equal(await q.isMailboxWriteBlocked('nope'), false, 'unknown mailbox: allowed');
+});

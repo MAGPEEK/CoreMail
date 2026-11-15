@@ -5,7 +5,8 @@
  * JMAP Email/set destroy, EAS Delete, POP3 DELE, MWA "delete" in the Trash,
  * emptying the Trash/Junk) leaves a soft-delete tombstone (message-store
  * expunge(): deletedAt set, row + raw object + attachments kept). Tombstones
- * stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 14) and are then
+ * stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 30, the 8.0
+ * documented window and Exchange's maximum) and are then
  * removed by the background purge. Items the Managed Folder Assistant moved to
  * "Recoverable Items/Deletions" (retention action DELETE_AND_ALLOW_RECOVERY)
  * are listed and restorable as well; their expiry stays with the MFA.
@@ -16,19 +17,26 @@
  * Raw message and attachment objects are content-addressed and never removed
  * by the object-storage cleaner (it only expires temporary prefixes), so the
  * content of a tombstone stays available for the whole retention window.
- * Purging a tombstone removes the database row only (like every other hard
- * delete today); unreferenced objects are not garbage-collected yet.
+ * Purging removes the database rows, the ActiveSync item state of the purged
+ * ids, and then the raw/attachment objects no other row references any more
+ * (purge-objects.ts; DELETED_ITEM_PURGE_OBJECTS=delete|dry-run|off).
  */
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import { restoreMessages, nextModSeq } from './message-store.js';
 import { invalidateUsage, type QuotaOwner } from './mailbox-quota.js';
+import { purgeCandidateKeys, deleteUnreferencedObjects, type ObjectPurgeDeps, type ObjectPurgeMode } from './purge-objects.js';
 
 const log = createLogger('storage:recoverable');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const DEFAULT_DELETED_ITEM_RETENTION_DAYS = 14;
+/**
+ * 30 days: 8.0 documented a 30-day window for deleted items, so a shorter
+ * default would purge items deleted 15–30 days ago on the first start after
+ * the upgrade. 30 is also Exchange's maximum deleted item retention.
+ */
+export const DEFAULT_DELETED_ITEM_RETENTION_DAYS = 30;
 export const RECOVERABLE_ROOT = 'Recoverable Items';
 export const RECOVERABLE_DELETIONS = 'Recoverable Items/Deletions';
 /** Folders a restore never targets by default (restored items go to INBOX instead). */
@@ -37,7 +45,7 @@ const NO_RESTORE_TARGET = new Set(['Trash']);
 /**
  * DELETED_ITEM_RETENTION_DAYS: whole days a deleted item stays recoverable.
  * 0 = keep tombstones forever (no automatic purge — the pre-8.1 behaviour).
- * Invalid values fall back to 14.
+ * Invalid values fall back to 30.
  */
 export function deletedItemRetentionDays(env: Record<string, string | undefined> = process.env): number {
   const raw = env['DELETED_ITEM_RETENTION_DAYS'];
@@ -200,8 +208,19 @@ export async function restoreRecoverableItems(
 
   const restored: RestoreResult['restored'] = [];
   await prisma.$transaction(async (tx) => {
+    // Lock the mailbox counters first (row lock until commit): a concurrent
+    // restore or purge of the same items waits, and the re-check below sees
+    // its result — no 500 for a purged row, no second UID for a restored one.
+    await nextModSeq(tx, mailboxId);
+    const still = new Set((await tx.message.findMany({
+      where: { AND: [{ id: { in: rows.map((r) => r.id) } }, recoverableWhere(mailboxId, now, days)] },
+      select: { id: true },
+    })).map((r) => r.id));
     for (const [target, list] of byTarget) {
-      const { mapping } = await restoreMessages(tx, list, target, { targetMailboxId: mailboxId });
+      const live = list.filter((id) => still.has(id));
+      for (const id of list) if (!still.has(id)) notFound.push(id);
+      if (live.length === 0) continue;
+      const { mapping } = await restoreMessages(tx, live, target, { targetMailboxId: mailboxId });
       for (const m of mapping) restored.push({ id: m.id, folderId: target, uid: m.newUid });
     }
   });
@@ -216,23 +235,64 @@ export async function restoreRecoverableItems(
  * Permanently removes recoverable items of a mailbox (user "Purge" or an admin).
  * `ids` undefined = every recoverable item of the mailbox. Returns the number removed.
  */
-export async function purgeRecoverableItems(mailboxId: string, ids?: string[]): Promise<number> {
+export async function purgeRecoverableItems(
+  mailboxId: string,
+  ids?: string[],
+  opts: { objects?: { mode?: ObjectPurgeMode; deps?: ObjectPurgeDeps } } = {},
+): Promise<number> {
   // Purge also reaches tombstones past the retention that the job did not remove yet.
-  const where = {
+  const recoverable = {
     folder: { mailboxId },
     OR: [{ deletedAt: { not: null } }, { deletedAt: null, folder: { name: RECOVERABLE_DELETIONS } }],
-    ...(ids ? { id: { in: [...new Set(ids)] } } : {}),
   };
-  const rows = await prisma.message.findMany({ where, select: { id: true, folderId: true, deletedAt: true } });
+  const where = { ...recoverable, ...(ids ? { id: { in: [...new Set(ids)] } } : {}) };
+  const rows = await prisma.message.findMany({ where, select: PURGE_SELECT });
   if (rows.length === 0) return 0;
+  let removed = 0;
   await prisma.$transaction(async (tx) => {
-    await tx.message.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
-    await nextModSeq(tx, mailboxId);
+    await nextModSeq(tx, mailboxId); // serialises with a concurrent restore
+    // Re-checked in the delete: an item restored meanwhile is live again and stays.
+    removed = (await tx.message.deleteMany({ where: { AND: [{ id: { in: rows.map((r) => r.id) } }, recoverable] } })).count;
   });
   const liveFolders = rows.filter((r) => r.deletedAt === null).map((r) => r.folderId);
   if (liveFolders.length > 0) await refreshFolderCounters(liveFolders);
-  log.info({ mailboxId, purged: rows.length }, 'Recoverable items purged');
-  return rows.length;
+  await afterPurge(rows, opts.objects);
+  log.info({ mailboxId, purged: removed }, 'Recoverable items purged');
+  return removed;
+}
+
+const PURGE_SELECT = {
+  id: true, folderId: true, deletedAt: true, storagePath: true,
+  attachments: { select: { storagePath: true } },
+} as const;
+
+/**
+ * After rows are hard-deleted: forget their ActiveSync item state (devices
+ * still get a Delete — Sync reports vanished ServerIds) and remove the objects
+ * no other row references. Never throws.
+ */
+async function afterPurge(
+  rows: ReadonlyArray<{ id: string; storagePath: string | null; attachments: ReadonlyArray<{ storagePath: string | null }> }>,
+  objects: { mode?: ObjectPurgeMode; deps?: ObjectPurgeDeps } = {},
+): Promise<void> {
+  // Only ids whose row is really gone (a restored row keeps its state).
+  const ids = rows.map((r) => r.id);
+  let gone = ids;
+  try {
+    const present = new Set((await prisma.message.findMany({ where: { id: { in: ids } }, select: { id: true } })).map((r) => r.id));
+    gone = ids.filter((id) => !present.has(id));
+  } catch (err) {
+    log.warn({ err }, 'Purge follow-up: row check failed — item state and objects kept');
+    return;
+  }
+  if (gone.length === 0) return;
+  try {
+    await prisma.activeSyncItem.deleteMany({ where: { serverId: { in: gone } } });
+  } catch (err) {
+    log.warn({ err }, 'Purge follow-up: ActiveSync item state not cleaned');
+  }
+  const goneSet = new Set(gone);
+  await deleteUnreferencedObjects(purgeCandidateKeys(rows.filter((r) => goneSet.has(r.id))), objects);
 }
 
 /**
@@ -241,7 +301,10 @@ export async function purgeRecoverableItems(mailboxId: string, ids?: string[]): 
  * allocated (QRESYNC reports unknown UIDs as vanished anyway; JMAP counts only
  * live rows). Returns the number of rows removed.
  */
-export async function purgeExpiredDeletedItems(opts: { now?: Date; days?: number; batchSize?: number; maxBatches?: number } = {}): Promise<number> {
+export async function purgeExpiredDeletedItems(opts: {
+  now?: Date; days?: number; batchSize?: number; maxBatches?: number;
+  objects?: { mode?: ObjectPurgeMode; deps?: ObjectPurgeDeps };
+} = {}): Promise<number> {
   const days = opts.days ?? deletedItemRetentionDays();
   const cutoff = retentionCutoff(opts.now ?? new Date(), days);
   if (!cutoff) return 0;
@@ -251,12 +314,14 @@ export async function purgeExpiredDeletedItems(opts: { now?: Date; days?: number
   for (let i = 0; i < maxBatches; i++) {
     const batch = await prisma.message.findMany({
       where: { deletedAt: { lt: cutoff } },
-      select: { id: true },
+      select: PURGE_SELECT,
       take: batchSize,
     });
     if (batch.length === 0) break;
     const r = await prisma.message.deleteMany({ where: { id: { in: batch.map((b) => b.id) }, deletedAt: { lt: cutoff } } });
     total += r.count;
+    // Per batch: orphaned ActiveSync item state + unreferenced objects.
+    await afterPurge(batch, opts.objects);
     if (batch.length < batchSize) break;
   }
   if (total > 0) log.info({ purged: total, retentionDays: days }, 'Expired deleted items purged');

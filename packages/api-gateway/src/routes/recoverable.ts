@@ -7,7 +7,7 @@
  *          with new UIDs through the message store
  *   POST /api/v1/mail/recoverable/purge {ids}   permanently remove
  *
- * Items stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 14); see
+ * Items stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 30); see
  * @coremail/storage recoverable-items.ts and docs/mailbox-quotas-recovery.md.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';

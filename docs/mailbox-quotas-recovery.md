@@ -34,6 +34,13 @@ Enforcement:
   - unset / `true` (default, like Exchange): `552 5.2.2`
   - `false`: `452 4.2.2` (the sending MTA retries)
   - a number ≥ 100: `452 4.2.2` while usage is below that percentage of the quota, `552 5.2.2` above
+- **Client writes** (usage ≥ prohibit-send-receive, checked against a fresh
+  usage aggregate, not the cache): IMAP `APPEND` and `COPY` answer
+  `NO [OVERQUOTA]` (RFC 9208 §4.3 / RFC 5530); JMAP `Email/set` create,
+  `Email/import` and `Email/copy` return the SetError `overQuota`. A `MOVE`
+  inside the mailbox does not change the usage and is never refused (only a
+  move out of "Recoverable Items" is checked). ActiveSync has no client
+  command that adds mail content (sending is covered by the send quota).
 - A database error never blocks mail flow (fail-open, logged).
 
 Admin: `PUT /api/v1/admin/mailboxes/:id` and `PUT /api/v1/admin/shared-mailboxes/:id`
@@ -52,8 +59,9 @@ Every user deletion keeps a soft-delete tombstone (message-store `expunge()`:
 row, raw message object and attachments stay): IMAP EXPUNGE, JMAP Email/set
 destroy, ActiveSync Delete, POP3 DELE, and — since v8.1 — deleting in the Trash,
 emptying Trash/Junk and `DELETE /mail/messages/:id?hard=true` in the web client.
-Tombstones are recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 14;
-`0` keeps them until purged by hand). Items the Managed Folder Assistant moved
+Tombstones are recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30 — the
+window 8.0 documented, and Exchange's maximum; `0` keeps them until purged by
+hand). Items the Managed Folder Assistant moved
 to "Recoverable Items/Deletions" are listed and restorable too.
 
 - `GET /api/v1/mail/recoverable[?q=&limit=]`
@@ -72,6 +80,22 @@ counts only live rows. Raw message and attachment objects are content-addressed
 and never removed by the object-storage cleaner (it only expires temporary
 prefixes), so the content is available for the whole retention window. There is
 no legal-hold feature (removed in v3.18.5) that could extend the retention.
+
+After a purge (the hourly job and the user/admin purge):
+
+- The ActiveSync item state of the purged ids is removed, and a device that
+  still holds such an item gets a `Delete` on its next Sync (the purge leaves no
+  modSeq, so Sync also reports ServerIds whose row no longer exists).
+- Raw message (`raw/…`) and attachment (`attachments/…`) objects of the purged
+  rows are deleted when no other row references the key any more — messages
+  (live, tombstones, drafts), attachments of copies, quarantine and S/MIME
+  rows. Other prefixes are never touched. A failed delete is logged and the
+  object stays. `DELETED_ITEM_PURGE_OBJECTS=dry-run` logs (info) what would be
+  deleted, `off` keeps all objects (pre-8.1 behaviour).
+- Restore and purge of the same items are serialised on the mailbox counter
+  row and re-check the rows inside the transaction: an item purged meanwhile is
+  reported as not found, an item restored meanwhile is not purged and never
+  gets a second UID.
 
 Web client: Settings → "Gelöschte Elemente wiederherstellen" and the Trash
 folder context menu.
@@ -101,5 +125,6 @@ that does not name the user in To/Cc/Bcc/Resent-*.
 |---|---|---|
 | `QUOTA_FULL_PERMANENT` | `true` | RCPT TO reply when the mailbox is full (see above) |
 | `QUOTA_USAGE_CACHE_SEC` | `60` | usage cache per process |
-| `DELETED_ITEM_RETENTION_DAYS` | `14` | recovery window; `0` = never purge automatically |
+| `DELETED_ITEM_RETENTION_DAYS` | `30` | recovery window; `0` = never purge automatically |
+| `DELETED_ITEM_PURGE_OBJECTS` | `delete` | objects of purged messages: `delete` (unreferenced only), `dry-run` (log only), `off` |
 | `OOF_REPLY_MEMORY_DAYS` | `366` | reply memory for an open-ended OOF period |

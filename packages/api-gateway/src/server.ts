@@ -568,7 +568,7 @@ async function start() {
   startLdapSyncScheduler();
 
   // v8.1: Recover deleted items — hourly purge of expunge tombstones older than
-  // DELETED_ITEM_RETENTION_DAYS (default 14; 0 = never). Redis-locked.
+  // DELETED_ITEM_RETENTION_DAYS (default 30; 0 = never). Redis-locked.
   startDeletedItemsPurger(getRedisClient() as unknown as PurgeRedis);
 }
 

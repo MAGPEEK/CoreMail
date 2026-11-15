@@ -46,10 +46,11 @@ function seed(): void {
 beforeEach(() => { seed(); resetMessageStoreCache(); });
 
 test('DELETED_ITEM_RETENTION_DAYS parsing', () => {
-  assert.equal(r.deletedItemRetentionDays({}), 14);
-  assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: '30' }), 30);
+  assert.equal(r.deletedItemRetentionDays({}), 30, 'default 30 days (8.0 documented window, Exchange maximum)');
+  assert.equal(r.DEFAULT_DELETED_ITEM_RETENTION_DAYS, 30);
+  assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: '14' }), 14, 'env override');
   assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: '0' }), 0);
-  assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: 'x' }), 14);
+  assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: 'x' }), 30);
   assert.equal(r.retentionCutoff(NOW, 0), null);
 });
 
@@ -127,4 +128,89 @@ test('retention purge job: removes tombstones past the cutoff only; 0 days disab
   // cutoff = exactly 1 day ago: fromTrash (2 d) and old (20 d) go, fromWork/foreign (1 d) stay
   assert.equal(await r.runLockedDeletedItemsPurge(redis, { now: NOW, days: 1 }), 2);
   assert.equal(await r.runLockedDeletedItemsPurge(redis, { now: NOW, days: 1 }), null, 'second run in the interval is skipped');
+});
+
+// ── Review fixes: restore/purge race, purge follow-up (EAS item state, objects) ──
+
+const fake = (globalThis as unknown as { __prisma: Record<string, unknown> }).__prisma;
+
+test('restore re-checks inside the transaction: a row purged or restored meanwhile is notFound, no 500, no second UID', async () => {
+  const realTx = fake['$transaction'] as (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
+  fake['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => {
+    // a concurrent purge removed fromWork, a concurrent restore brought fromTrash back
+    db.messages.splice(db.messages.findIndex((m) => m['id'] === 'fromWork'), 1);
+    db.messages.find((m) => m['id'] === 'fromTrash')!['deletedAt'] = null;
+    return realTx(fn);
+  };
+  try {
+    const res = await r.restoreRecoverableItems('mb1', ['fromWork', 'fromTrash', 'mfa'], { now: NOW, days: 14 });
+    assert.deepEqual(res.restored.map((x) => x.id), ['mfa']);
+    assert.deepEqual(res.notFound.sort(), ['fromTrash', 'fromWork']);
+    assert.equal(db.mailboxes.find((m) => m['id'] === 'mb1')!['uidNext'], 21, 'one UID for the one restored item');
+  } finally {
+    fake['$transaction'] = realTx;
+  }
+});
+
+test('user purge never deletes an item that was restored meanwhile', async () => {
+  const realFind = (fake['message'] as Record<string, (...a: never[]) => Promise<unknown>>)['findMany']!;
+  (fake['message'] as Record<string, unknown>)['findMany'] = async (...args: never[]) => {
+    const out = await realFind(...args);
+    (fake['message'] as Record<string, unknown>)['findMany'] = realFind;
+    db.messages.find((m) => m['id'] === 'fromWork')!['deletedAt'] = null; // restored between list and delete
+    return out;
+  };
+  assert.equal(await r.purgeRecoverableItems('mb1', ['fromWork', 'fromTrash']), 1);
+  assert.ok(db.messages.some((m) => m['id'] === 'fromWork'));
+});
+
+test('purge job: removes orphaned ActiveSync item state and only unreferenced objects', async () => {
+  let easRows = [{ serverId: 'old' }, { serverId: 'live' }];
+  fake['activeSyncItem'] = {
+    deleteMany: async ({ where }: { where: { serverId: { in: string[] } } }) => {
+      const before = easRows.length;
+      easRows = easRows.filter((x) => !where.serverId.in.includes(x.serverId));
+      return { count: before - easRows.length };
+    },
+  };
+  const attachments = [{ messageId: 'live', storagePath: 'attachments/live/shared.pdf' }];
+  fake['attachment'] = { count: async ({ where }: { where: { storagePath: string } }) => attachments.filter((a) => a.storagePath === where.storagePath).length };
+  fake['quarantine'] = { count: async () => 0 };
+  fake['userCertificate'] = { count: async () => 0 };
+  const old = db.messages.find((m) => m['id'] === 'old')!;
+  old['storagePath'] = 'raw/aa/unique.eml';
+  old['attachments'] = [{ storagePath: 'attachments/live/shared.pdf' }, { storagePath: 'attachments/old/own.png' }];
+  db.messages.find((m) => m['id'] === 'live')!['storagePath'] = 'raw/bb/copied.eml';
+  db.messages.find((m) => m['id'] === 'fromWork')!['storagePath'] = 'raw/bb/copied.eml';
+  const deleted: string[] = [];
+  const { isObjectKeyReferenced } = await import('./purge-objects.js');
+  const deps = { isReferenced: isObjectKeyReferenced, deleteObject: async (k: string) => { deleted.push(k); } };
+
+  assert.equal(await r.purgeExpiredDeletedItems({ now: NOW, days: 14, objects: { mode: 'delete', deps } }), 1);
+  assert.deepEqual(easRows, [{ serverId: 'live' }], 'item state of the purged id removed');
+  assert.deepEqual(deleted.sort(), ['attachments/old/own.png', 'raw/aa/unique.eml'], 'shared attachment kept');
+
+  // a copy shares the raw key: purging one copy keeps the object
+  deleted.length = 0;
+  db.messages.find((m) => m['id'] === 'fromWork')!['deletedAt'] = ago(30);
+  await r.purgeExpiredDeletedItems({ now: NOW, days: 14, objects: { mode: 'delete', deps } });
+  assert.deepEqual(deleted, [], 'raw/bb/copied.eml is still referenced by "live"');
+  // idempotent: a second run finds nothing
+  assert.equal(await r.purgeExpiredDeletedItems({ now: NOW, days: 14, objects: { mode: 'delete', deps } }), 0);
+});
+
+test('object purge: dry-run deletes nothing, off skips, only raw/ and attachments/ keys', async () => {
+  const { deleteUnreferencedObjects, purgeCandidateKeys, objectPurgeMode } = await import('./purge-objects.js');
+  const deleted: string[] = [];
+  const deps = { isReferenced: async () => false, deleteObject: async (k: string) => { deleted.push(k); } };
+  const dry = await deleteUnreferencedObjects(['raw/x.eml'], { mode: 'dry-run', deps });
+  assert.deepEqual([dry.deleted, deleted], [['raw/x.eml'], []]);
+  assert.deepEqual((await deleteUnreferencedObjects(['raw/x.eml'], { mode: 'off', deps })).deleted, []);
+  assert.deepEqual(purgeCandidateKeys([
+    { storagePath: 'quarantine/q.eml', attachments: [{ storagePath: 'outbound-queue/j/0' }, { storagePath: 'attachments/m/a' }] },
+    { storagePath: null }, { storagePath: 'raw/../etc' },
+  ]), ['attachments/m/a']);
+  assert.equal(objectPurgeMode({}), 'delete');
+  assert.equal(objectPurgeMode({ DELETED_ITEM_PURGE_OBJECTS: 'dry-run' }), 'dry-run');
+  assert.equal(objectPurgeMode({ DELETED_ITEM_PURGE_OBJECTS: 'off' }), 'off');
 });

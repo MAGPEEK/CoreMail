@@ -250,3 +250,25 @@ test('8.0.0: GetItemEstimate counts what the next Sync sends (held items and Fil
   const s = await sync('inbox', held, [A(0x17, [A(0x18, '3')])]);
   assert.equal(s.adds.length + s.changes.length + s.deletes.length, 2, 'Sync sends exactly the estimate');
 });
+
+test('review fix: an item hard-deleted by the deleted-items purge reaches the device as Delete once', async () => {
+  const dev = db.tables['activeSyncDevice']![0]!;
+  db.tables['activeSyncItem'] = [];
+  dev['syncKeys'] = {};
+  deliver('p1', 'inbox');
+  await sync('inbox', '0');
+  const first = await sync('inbox', '1');
+  assert.ok(first.adds.includes('p1'));
+  let key = (await sync('inbox', first.key)).key;
+  // the purge job removes the tombstone row — no modSeq records it
+  await tx((t) => storage.expunge(t, ['p1'], { mailboxId: 'mb1' }));
+  key = (await sync('inbox', (await sync('inbox', key)).key)).key; // soft delete reaches the device …
+  // … a device that missed it (state from before the expunge) still gets the purge
+  db.tables['activeSyncItem']!.push({ deviceRowId: dev['id'], collectionId: 'inbox', serverId: 'ghost', pendingKey: '', modSeq: 1n });
+  db.tables['message'] = db.tables['message']!.filter((m) => m['id'] !== 'p1');
+  const s = await sync('inbox', key);
+  assert.deepEqual(s.deletes, ['ghost']);
+  const after = await sync('inbox', s.key);
+  assert.deepEqual(after.deletes, [], 'sent once; the item-state row is removed');
+  assert.equal(db.tables['activeSyncItem']!.filter((r) => r['serverId'] === 'ghost').length, 0);
+});

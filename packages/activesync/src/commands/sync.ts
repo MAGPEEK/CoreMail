@@ -165,20 +165,46 @@ async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandCon
   }
 }
 
-/** Known ServerIds that left the collection (expunged or moved) in the modSeq range [since, upper). */
-export async function departedItems(deviceRowId: string, mailboxId: string, collectionId: string, since: bigint, upper: bigint): Promise<string[]> {
-  if (since >= upper) return [];
-  const candidates = await prisma.message.findMany({
-    where: {
-      folder: { mailboxId },
-      modSeq: { gte: since, lt: upper },
-      OR: [{ deletedAt: { not: null } }, { folderId: { not: collectionId } }],
-    },
-    select: { id: true },
-  });
-  if (candidates.length === 0) return [];
-  const known = await knownItems(deviceRowId, collectionId, candidates.map((c) => c.id));
-  return [...known.keys()];
+/**
+ * Known ServerIds that left the collection: expunged or moved in the modSeq range
+ * [since, upper), plus items whose row no longer exists at all (tombstones removed by the
+ * deleted-items purge, other hard deletes — no modSeq marks those). The returned ids get a
+ * `Delete`; its commit removes their item-state rows.
+ */
+export async function departedItems(
+  deviceRowId: string, mailboxId: string, collectionId: string, since: bigint, upper: bigint,
+  opts: { includeVanished?: boolean } = {},
+): Promise<string[]> {
+  const out = new Set<string>();
+  if (since < upper) {
+    const candidates = await prisma.message.findMany({
+      where: {
+        folder: { mailboxId },
+        modSeq: { gte: since, lt: upper },
+        OR: [{ deletedAt: { not: null } }, { folderId: { not: collectionId } }],
+      },
+      select: { id: true },
+    });
+    if (candidates.length > 0) {
+      for (const id of (await knownItems(deviceRowId, collectionId, candidates.map((c) => c.id))).keys()) out.add(id);
+    }
+  }
+  if (opts.includeVanished !== false) for (const id of await vanishedItems(deviceRowId, collectionId)) out.add(id);
+  return [...out];
+}
+
+const VANISHED_CHUNK = 1000;
+
+/** Committed ServerIds of the collection whose message row no longer exists (purged). */
+export async function vanishedItems(deviceRowId: string, collectionId: string): Promise<string[]> {
+  const ids = [...(await knownItems(deviceRowId, collectionId)).keys()];
+  const gone: string[] = [];
+  for (let i = 0; i < ids.length; i += VANISHED_CHUNK) {
+    const chunk = ids.slice(i, i + VANISHED_CHUNK);
+    const present = new Set((await prisma.message.findMany({ where: { id: { in: chunk } }, select: { id: true } })).map((r) => r.id));
+    for (const id of chunk) if (!present.has(id)) gone.push(id);
+  }
+  return gone;
 }
 
 /**
@@ -297,9 +323,13 @@ export async function handleSync(
     const cutoff = filterCutoff(bodyOptions?.filterType, now());
     const adds = messages.filter((m) => !known.has(m.id) && !(cutoff && m.date < cutoff));
     const changes = messages.filter((m) => { const k = known.get(m.id); return k !== undefined && k < m.modSeq; });
-    const deletes = deviceRowId
-      ? await departedItems(deviceRowId, mailboxId, collectionId, BigInt(clientSyncKey), BigInt(newSyncKey))
+    const departed = deviceRowId
+      ? await departedItems(deviceRowId, mailboxId, collectionId, BigInt(clientSyncKey), BigInt(newSyncKey), { includeVanished: false })
       : [];
+    // Purged rows: no modSeq marks them, so the SyncKey may not change — the Delete is
+    // sent and the item-state rows are removed right away (not via the pending state).
+    const vanished = deviceRowId ? (await vanishedItems(deviceRowId, collectionId)).filter((id) => !departed.includes(id)) : [];
+    const deletes = [...departed, ...vanished];
 
     const attachments = await attachmentsByMessage(adds.map((m) => m.id));
     const serverCommands: WbxmlElement[] = [];
@@ -326,8 +356,9 @@ export async function handleSync(
     if (deviceRowId) {
       await recordPending(deviceRowId, collectionId, newSyncKey, [
         ...[...adds.filter((m) => !skipped.has(m.id)), ...changes].map((m) => ({ serverId: m.id, modSeq: m.modSeq })),
-        ...deletes.map((id) => ({ serverId: id, modSeq: null })),
+        ...departed.map((id) => ({ serverId: id, modSeq: null })),
       ]);
+      await forgetItems(deviceRowId, collectionId, vanished);
     }
 
     responseCollections.push(el('Collection', undefined, [

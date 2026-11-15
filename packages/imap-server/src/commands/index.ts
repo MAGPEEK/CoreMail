@@ -1,5 +1,5 @@
 import {
-  prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials,
+  prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
   attachmentKey, uploadBuffer,
   type RawSourceMessage,
@@ -346,6 +346,11 @@ export async function handleAppend(
     sendNo(session, tag, '[TRYCREATE] Mailbox does not exist');
     return;
   }
+  // v8.1 hard quota (ProhibitSendReceiveQuota): RFC 9208 §4.3 / RFC 5530 [OVERQUOTA].
+  if (await isMailboxWriteBlocked(folder.mailboxId)) {
+    sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
+    return;
+  }
 
   // The appended literal IS the message: store it unchanged (raw-always storage);
   // the columns are only metadata for search, lists and the web preview.
@@ -453,6 +458,11 @@ export async function handleCopy(
     await completeWithUpdates(session, tag, 'COPY completed (no messages matched)');
     return;
   }
+  // A copy adds its size to the mailbox: refused over the hard quota (RFC 9208 §4.3).
+  if (await isMailboxWriteBlocked(target.mailboxId)) {
+    sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
+    return;
+  }
   // Fresh UIDs + one modSeq in the target, reserved atomically (never a stale uidNext).
   const { mapping } = await prisma.$transaction((tx) => copyMessages(
     tx, sourceMsgs.map((m) => m.id), target.id, { targetMailboxId: target.mailboxId },
@@ -462,6 +472,13 @@ export async function handleCopy(
   await completeWithUpdates(session, tag, `${copyUid} COPY completed`);
 }
 
+const RECOVERABLE_PREFIX = 'Recoverable Items';
+
+/** Pure: does a MOVE add to the counted usage of the target mailbox? */
+export function movesIntoUsage(sourceFolder: string, targetFolder: string, sourceMailboxId: string, targetMailboxId: string): boolean {
+  if (sourceMailboxId !== targetMailboxId) return true;
+  return sourceFolder.startsWith(RECOVERABLE_PREFIX) && !targetFolder.startsWith(RECOVERABLE_PREFIX);
+}
 // ─────────────────────────────────────────────
 // MOVE — RFC 6851 (atomic COPY + EXPUNGE)
 // ─────────────────────────────────────────────
@@ -488,6 +505,13 @@ export async function handleMove(
   const matched = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
   if (matched.length === 0) {
     await completeWithUpdates(session, tag, 'MOVE completed (no messages matched)');
+    return;
+  }
+  // A move inside the mailbox does not change its usage — never blocked — except
+  // out of "Recoverable Items" (not counted) or into another mailbox.
+  if (movesIntoUsage(view.folderName, target.name, session.mailboxId!, target.mailboxId)
+    && await isMailboxWriteBlocked(target.mailboxId)) {
+    sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
     return;
   }
   // RFC 6851 §4.3: the moved messages get new UIDs in the target mailbox and a new
