@@ -3,23 +3,42 @@
  *
  * Called from `storeInboundMessage()` for every incoming mail.
  * Finds a VCALENDAR with `METHOD:REPLY` (text/calendar / application/ics
- * MIME parts, decoded from base64 / quoted-printable) and updates the
- * corresponding CalendarEvent.attendees entry.
+ * MIME parts, decoded from base64 / quoted-printable) and applies the
+ * attendee's PARTSTAT to the organizer's stored CalendarEvent.
  *
- * Deliberately minimal — no heavy ical parser lib in the inbound path,
- * only regex-based extraction of the relevant fields.
+ * v7.1.0: parsed with the shared `@coremail/core/calendar` parser (quoted
+ * parameter values such as `CN="Doe: J"` work), and the PARTSTAT is written into
+ * `icalData` too — that is what CalDAV clients read (RFC 5546 §3.2.3, RFC 4791 §4.1).
+ * A REPLY with RECURRENCE-ID only touches that instance (override component).
  *
  * Security (RFC 5546 §3.2.3 / §6.1): a REPLY is only applied when
  *  - it is delivered to a user mailbox and the event lives in one of that
  *    user's own calendars (no cross-user updates by UID),
+ *  - that user (primary address or alias) is the event's ORGANIZER,
  *  - the REPLY carries exactly one ATTENDEE, and
  *  - the From header address equals that attendee and the envelope sender is
  *    the attendee or an address of the attendee's domain (bounce/VERP
  *    addresses). Spoofed From headers are the job of SPF/DKIM/DMARC upstream.
  *
- * Supports PARTSTAT=ACCEPTED|DECLINED|TENTATIVE, SEQUENCE comparison
- * (old REPLYs are ignored), case-insensitive UID matching.
+ * Ordering (RFC 5546 §2.1.5): REPLYs with a lower SEQUENCE than the event are
+ * ignored; with the same SEQUENCE, a REPLY older (DTSTAMP) than the last one
+ * applied for that attendee/instance is ignored. UIDs are compared exactly.
  */
+import {
+  findMainVEvent,
+  formatDateOnly,
+  formatUtcDateTime,
+  getProperties,
+  getProperty,
+  parseDateProperty,
+  parseIcal,
+  parseVEventComponent,
+  resolveTzid,
+  serializeComponent,
+  utcToWallClockMs,
+  type IcalComponent,
+  type IcalDateValue,
+} from '@coremail/core/calendar';
 import { prisma } from './prisma/index.js';
 
 export interface ParsedReply {
@@ -27,6 +46,10 @@ export interface ParsedReply {
   sequence: number;
   attendeeEmail: string;
   partstat: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE' | 'NEEDS-ACTION';
+  /** RECURRENCE-ID of the answered instance; null = the whole series. */
+  recurrenceId: IcalDateValue | null;
+  /** DTSTAMP of the REPLY (null when missing). */
+  dtstamp: Date | null;
 }
 
 export interface ITipContext {
@@ -37,11 +60,6 @@ export interface ITipContext {
 }
 
 const VCAL_RE = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i;
-const METHOD_RE = /^METHOD:(\S+)\s*$/im;
-const UID_RE = /^UID:(.+?)\s*$/im;
-const SEQUENCE_RE = /^SEQUENCE:(\d+)\s*$/im;
-const ATTENDEE_LINE_RE = /^ATTENDEE[;:].*$/gim;
-const ATTENDEE_RE = /^ATTENDEE([^:]*?);?\s*PARTSTAT=([A-Z-]+)([^:]*?):mailto:([^\s>]+)\s*$/im;
 
 function splitHeadBody(part: string): { head: string; body: string } {
   const m = /\r?\n\r?\n/.exec(part);
@@ -85,27 +103,38 @@ export function extractCalendarParts(raw: string, depth = 0): string[] {
   return [];
 }
 
+function mailto(v: string): string {
+  return v.trim().replace(/^mailto:/i, '').trim().toLowerCase();
+}
+
 /** Pure: parse a REPLY from VCALENDAR text. Null when not a usable REPLY. */
 export function parseITipReply(vcalText: string): ParsedReply | null {
-  // RFC 5545 allows line folding with "\r\n " — unfold before regex parsing
-  const unfolded = vcalText.replace(/\r?\n[ \t]/g, '');
-  const vcal = VCAL_RE.exec(unfolded)?.[0];
+  const vcal = VCAL_RE.exec(vcalText)?.[0];
   if (!vcal) return null;
-  if (METHOD_RE.exec(vcal)?.[1]?.toUpperCase() !== 'REPLY') return null;
-  const uid = UID_RE.exec(vcal)?.[1]?.trim();
+  const root = parseIcal(vcal);
+  if (!root || root.name !== 'VCALENDAR') return null;
+  if (getProperty(root, 'METHOD')?.value.trim().toUpperCase() !== 'REPLY') return null;
+  const ev = root.components.find((c) => c.name === 'VEVENT');
+  if (!ev) return null;
+  const uid = getProperty(ev, 'UID')?.value.trim();
   if (!uid) return null;
-  const sequence = parseInt(SEQUENCE_RE.exec(vcal)?.[1] ?? '0', 10);
+  const seqRaw = getProperty(ev, 'SEQUENCE')?.value.trim() ?? '0';
+  const sequence = /^\d+$/.test(seqRaw) ? Number(seqRaw) : 0;
   // RFC 5546 §3.2.3: a REPLY contains exactly one ATTENDEE (the replying one)
-  const attendeeLines = vcal.match(ATTENDEE_LINE_RE) ?? [];
-  if (attendeeLines.length !== 1) return null;
-  const att = ATTENDEE_RE.exec(attendeeLines[0]!);
-  if (!att) return null;
-  const attendeeEmail = (att[4] ?? '').trim().toLowerCase();
+  const attendees = getProperties(ev, 'ATTENDEE');
+  if (attendees.length !== 1) return null;
+  const att = attendees[0]!;
+  const attendeeEmail = mailto(att.value);
   if (!attendeeEmail.includes('@')) return null;
-  const raw = (att[2] ?? '').toUpperCase();
+  const raw = (att.params['PARTSTAT'] ?? '').toUpperCase();
   const partstat: ParsedReply['partstat'] =
     raw === 'ACCEPTED' || raw === 'DECLINED' || raw === 'TENTATIVE' ? raw : 'NEEDS-ACTION';
-  return { uid, sequence, attendeeEmail, partstat };
+  const ridProp = getProperty(ev, 'RECURRENCE-ID');
+  const recurrenceId = ridProp ? parseDateProperty(ridProp, root) : null;
+  if (ridProp && !recurrenceId) return null;
+  const stampProp = getProperty(ev, 'DTSTAMP');
+  const dtstamp = stampProp ? parseDateProperty(stampProp, root)?.date ?? null : null;
+  return { uid, sequence, attendeeEmail, partstat, recurrenceId, dtstamp };
 }
 
 /** Extracts the REPLY from a raw mail buffer (null if none). */
@@ -135,9 +164,74 @@ export function isReplyFromAttendee(rawBuffer: Buffer, envelopeFrom: string, att
   return domainOf(env) === domainOf(attendee);
 }
 
+// ─── Applying the PARTSTAT to the stored calendar object ─────────────────────
+
+function cloneComponent(c: IcalComponent): IcalComponent {
+  return { name: c.name, properties: c.properties.map((p) => ({ ...p, params: { ...p.params } })), components: c.components.map(cloneComponent) };
+}
+
+function setPartstat(comp: IcalComponent, email: string, partstat: string): boolean {
+  const att = getProperties(comp, 'ATTENDEE').find((p) => mailto(p.value) === email);
+  if (!att) return false;
+  att.params['PARTSTAT'] = partstat;
+  return true;
+}
+
+/**
+ * Pure: write `partstat` for `email` into a stored calendar object — into the master
+ * VEVENT, or (with `recurrenceId`) into that instance's override component, which is
+ * created from the master when it does not exist yet. Null when nothing matched.
+ */
+export function applyReplyToIcal(icalText: string, email: string, partstat: string, recurrenceId: IcalDateValue | null): string | null {
+  const root = parseIcal(icalText);
+  if (!root) return null;
+  const master = findMainVEvent(root);
+  if (!master) return null;
+  const target = email.toLowerCase();
+  if (!recurrenceId) return setPartstat(master, target, partstat) ? serializeComponent(root) + '\r\n' : null;
+
+  const parsedMaster = parseVEventComponent(master, root);
+  if (!parsedMaster || (!parsedMaster.rrule && parsedMaster.rdates.length === 0)) return null; // not a series
+  const events = root.name === 'VEVENT' ? [root] : root.components.filter((c) => c.name === 'VEVENT');
+  const existing = events.find((c) => {
+    const rid = getProperty(c, 'RECURRENCE-ID');
+    return c !== master && rid && parseDateProperty(rid, root)?.date.getTime() === recurrenceId.date.getTime();
+  });
+  if (existing) return setPartstat(existing, target, partstat) ? serializeComponent(root) + '\r\n' : null;
+  if (root.name !== 'VCALENDAR') return null;
+
+  // New override: copy of the master at the instance time, without recurrence rules
+  const override = cloneComponent(master);
+  if (!setPartstat(override, target, partstat)) return null;
+  const startProp = getProperty(master, 'DTSTART');
+  const tz = !parsedMaster.allDay && startProp?.params['TZID'] ? resolveTzid(startProp.params['TZID'], root) : null;
+  const fmt = (name: string, d: Date) => parsedMaster.allDay
+    ? { name, params: { VALUE: 'DATE' }, value: formatDateOnly(d) }
+    : tz
+      ? { name, params: { TZID: tz }, value: formatUtcDateTime(new Date(utcToWallClockMs(d.getTime(), tz))).slice(0, -1) }
+      : { name, params: {}, value: formatUtcDateTime(d) };
+  const start = recurrenceId.date;
+  const end = new Date(start.getTime() + (parsedMaster.end.getTime() - parsedMaster.start.getTime()));
+  override.properties = override.properties.filter((p) =>
+    !['RRULE', 'RDATE', 'EXDATE', 'EXRULE', 'DTSTART', 'DTEND', 'DURATION', 'RECURRENCE-ID'].includes(p.name));
+  const at = Math.max(0, override.properties.findIndex((p) => p.name === 'UID') + 1);
+  override.properties.splice(at, 0, fmt('RECURRENCE-ID', start), fmt('DTSTART', start), fmt('DTEND', end));
+  root.components.push(override);
+  return serializeComponent(root) + '\r\n';
+}
+
+async function recipientAddresses(userId: string): Promise<Set<string>> {
+  const [user, aliases] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
+    prisma.emailAlias.findMany({ where: { targetUserId: userId, active: true }, select: { address: true } }),
+  ]);
+  return new Set([user?.email, ...aliases.map((a) => a.address)].filter((a): a is string => !!a).map((a) => a.toLowerCase()));
+}
+
 /**
  * Processes an incoming iTIP REPLY mail: verify sender, find the event by UID
- * in the recipient's own calendars, check SEQUENCE, update attendees array.
+ * in the recipient's own calendars, check organizer + SEQUENCE/DTSTAMP, update
+ * the attendee in the `attendees` column and in `icalData`.
  * Returns `true` if an event was actually updated, otherwise `false`.
  */
 export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): Promise<boolean> {
@@ -152,33 +246,53 @@ export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): P
   if (!isReplyFromAttendee(rawBuffer, ctx.envelopeFrom, reply.attendeeEmail)) return false;
 
   const event = await prisma.calendarEvent.findFirst({
-    where: { uid: { equals: reply.uid, mode: 'insensitive' }, calendar: { userId: ctx.recipientUserId } },
-    select: { id: true, sequence: true, attendees: true },
+    where: { uid: reply.uid, calendar: { userId: ctx.recipientUserId } },
+    select: { id: true, sequence: true, attendees: true, icalData: true, organizer: true },
   });
   if (!event) return false;
 
   // SEQUENCE check: ignore old REPLYs (RFC 5546 §3.4.3)
   if (reply.sequence < event.sequence) return false;
 
-  const attendees = Array.isArray(event.attendees) ? [...event.attendees] : [];
-  let updated = false;
+  // Only the organizer's copy takes REPLYs — not an invitee's copy of the same meeting
+  if (event.organizer) {
+    const own = await recipientAddresses(ctx.recipientUserId);
+    if (!own.has(event.organizer.trim().replace(/^mailto:/i, '').toLowerCase())) return false;
+  }
+
+  const ridKey = reply.recurrenceId ? reply.recurrenceId.date.toISOString() : null;
+  const attendees: unknown[] = Array.isArray(event.attendees) ? [...event.attendees] : [];
+  let index = -1;
   for (let i = 0; i < attendees.length; i++) {
     const a = attendees[i];
     if (typeof a === 'object' && a !== null && !Array.isArray(a)) {
-      const rec = a as Record<string, unknown>;
-      const email = typeof rec['email'] === 'string' ? rec['email'].toLowerCase() : null;
-      if (email === reply.attendeeEmail) {
-        attendees[i] = { ...rec, partstat: reply.partstat, rsvp: false };
-        updated = true;
-        break;
-      }
+      const email = (a as Record<string, unknown>)['email'];
+      if (typeof email === 'string' && email.toLowerCase() === reply.attendeeEmail) { index = i; break; }
     }
   }
-  if (!updated) return false;
+  if (index < 0) return false;
+  const rec = attendees[index] as Record<string, unknown>;
+
+  // DTSTAMP ordering for REPLYs with the same SEQUENCE (RFC 5546 §2.1.5)
+  const stamps = (typeof rec['replyStamps'] === 'object' && rec['replyStamps'] !== null && !Array.isArray(rec['replyStamps'])
+    ? rec['replyStamps'] : {}) as Record<string, string>;
+  const stampKey = ridKey ?? 'master';
+  const last = stamps[stampKey];
+  if (reply.dtstamp && typeof last === 'string' && reply.dtstamp.getTime() < Date.parse(last)) return false;
+  const newStamps: Record<string, string> = reply.dtstamp ? { ...stamps, [stampKey]: reply.dtstamp.toISOString() } : stamps;
+
+  attendees[index] = ridKey
+    ? { ...rec, replyStamps: newStamps } // a single instance does not change the series PARTSTAT
+    : { ...rec, partstat: reply.partstat, rsvp: false, replyStamps: newStamps };
+
+  const icalData = typeof event.icalData === 'string'
+    ? applyReplyToIcal(event.icalData, reply.attendeeEmail, reply.partstat, reply.recurrenceId)
+    : null;
+  if (ridKey && !icalData) return false; // instance reply that could not be applied
 
   await prisma.calendarEvent.update({
     where: { id: event.id },
-    data: { attendees: attendees as object },
+    data: { attendees: attendees as object, ...(icalData ? { icalData } : {}) },
   });
   return true;
 }

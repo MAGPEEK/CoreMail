@@ -59,7 +59,7 @@ test('REPLY ICS is accepted by the inbound REPLY parser (round trip)', () => {
   assert.match(ics, /^METHOD:REPLY$/m);
   assert.match(ics, /^ORGANIZER:mailto:olga@ext.test$/m);
   const parsed = parseITipReply(ics);
-  assert.deepEqual(parsed, { uid: 'u-1@ext.test', sequence: 4, attendeeEmail: 'me@example.com', partstat: 'DECLINED' });
+  assert.deepEqual(parsed, { uid: 'u-1@ext.test', sequence: 4, attendeeEmail: 'me@example.com', partstat: 'DECLINED', recurrenceId: null, dtstamp: new Date('2026-11-15T00:00:00Z') });
 });
 
 test('REPLY MIME: headers, inline text/calendar method=REPLY and .ics attachment', () => {
@@ -77,4 +77,13 @@ test('REPLY MIME: headers, inline text/calendar method=REPLY and .ics attachment
   // header injection via the summary is neutralised
   const evil = buildITipReplyMime({ ics, from: { email: 'me@example.com' }, to: 'olga@ext.test', summary: 'x\r\nBcc: victim@x', partstat: 'ACCEPTED' }).toString('utf8');
   assert.ok(!/^Bcc:/m.test(evil));
+});
+
+test('instance REQUEST → REPLY carries RECURRENCE-ID; a REQUEST without ORGANIZER is refused', () => {
+  const inst = RAW.replace('SEQUENCE:4', 'SEQUENCE:4\r\nRECURRENCE-ID;TZID=Europe/Berlin:20261127T100000');
+  const req = findITipRequest(inst)!;
+  const ics = buildITipReplyIcs(req, { email: 'me@example.com' }, 'ACCEPTED', new Date('2026-11-15T00:00:00Z'));
+  assert.match(ics, /^RECURRENCE-ID:20261127T090000Z$/m);
+  assert.equal(parseITipReply(ics)?.recurrenceId?.date.toISOString(), '2026-11-27T09:00:00.000Z');
+  assert.equal(findITipRequest(RAW.replace('ORGANIZER;CN=Olga:mailto:olga@ext.test\r\n', '')), null);
 });

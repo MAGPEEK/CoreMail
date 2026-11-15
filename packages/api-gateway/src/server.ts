@@ -208,6 +208,9 @@ app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
 app.use('/dav',          internalProxy(DAV_URL));
+// v7.1.0: CalDAV/CardDAV service discovery (RFC 6764 §5) — the caldav-server redirects
+// these to the /dav/ context path (previously a JSON 404 from the gateway).
+app.use(['/.well-known/caldav', '/.well-known/carddav'], internalProxy(DAV_URL));
 
 // Auth-service routes (MFA, app passwords, sessions) — BEFORE express.json()!
 // Login/Refresh/Logout are implemented directly in authRouter (no proxy needed).

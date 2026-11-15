@@ -9,6 +9,7 @@ import { connectDatabase } from '@coremail/storage';
 import { davAuthMiddleware } from './auth.js';
 import { caldavRouter } from './caldav/index.js';
 import { carddavRouter } from './carddav/index.js';
+import { principalRouter } from './principal/index.js';
 
 const log = createLogger('caldav-server');
 installProcessGuards(log);
@@ -32,19 +33,13 @@ async function main() {
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'caldav-server' }));
 
-  // Well-known redirects (RFC 6764)
-  app.all('/.well-known/caldav', (_req, res) => res.redirect(308, '/dav/calendars'));
-  app.all('/.well-known/carddav', (_req, res) => res.redirect(308, '/dav/addressbooks'));
+  // Well-known URIs (RFC 6764 §5): redirect to the context path, where PROPFIND
+  // answers DAV:current-user-principal (the api-gateway proxies /.well-known/{caldav,carddav})
+  app.all(['/.well-known/caldav', '/.well-known/carddav'], (_req, res) => res.redirect(301, '/dav/'));
 
-  // DAV principal discovery
-  app.all('/dav', davAuthMiddleware, (req, res) => {
-    const userId = (req as any).davUser?.userId ?? '';
-    res.redirect(301, `/dav/calendars/${userId}`);
-  });
-
-  // CalDAV + CardDAV routes (all require auth)
-  app.use('/dav', davAuthMiddleware, caldavRouter);
-  app.use('/dav', davAuthMiddleware, carddavRouter);
+  // Discovery (context path + principals), then CalDAV + CardDAV — one mount, so the
+  // credentials are verified once per request (not once per router)
+  app.use('/dav', davAuthMiddleware, principalRouter, caldavRouter, carddavRouter);
 
   // v6: shared error middleware (registered last)
   app.use(errorMiddleware(log));

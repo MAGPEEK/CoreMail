@@ -96,3 +96,16 @@ test('resourceIdFromHref strips path, extension and percent-encoding', () => {
   assert.equal(resourceIdFromHref('https://mail.example.com/dav/calendars/u/c/a%201.ics', '.ics'), 'a 1');
   assert.equal(resourceIdFromHref('/dav/addressbooks/u/default/x.vcf', '.vcf'), 'x');
 });
+
+test('parseReportRequest is namespace-aware: attributes on href, CDATA, entities, DOCTYPE entities not expanded', () => {
+  const r = parseReportRequest(`<?xml version="1.0"?><!DOCTYPE x [<!ENTITY big "aaaa">]>
+    <c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+      <d:prop><d:getetag/></d:prop>
+      <d:href xml:lang="en">/dav/a.ics</d:href><d:href><![CDATA[/dav/b&c.ics]]></d:href><d:href>/dav/&#100;.ics</d:href>
+    </c:calendar-multiget>`);
+  assert.equal(r.kind, 'calendar-multiget');
+  assert.deepEqual(r.hrefs, ['/dav/a.ics', '/dav/b&c.ics', '/dav/d.ics']);
+  assert.equal(r.wantsData, false, 'a getetag-only prop list does not want calendar-data');
+  // the CalDAV element name in the wrong namespace is not a calendar-query
+  assert.equal(parseReportRequest('<calendar-query xmlns="DAV:"/>').kind, 'unknown');
+});

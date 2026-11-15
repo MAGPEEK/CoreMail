@@ -21,6 +21,12 @@ import {
 import { buildVCalendar, patchVEvent, normalizeAllDayRange } from '@coremail/core/calendar';
 import { expandStoredEvent } from '../lib/recurrence.js';
 
+/** PRIVATE / CONFIDENTIAL events are masked or hidden for grantees — they are owner-only for writes. */
+function isProtectedClassification(cls: string | null | undefined): boolean {
+  const c = (cls ?? 'PUBLIC').toUpperCase();
+  return c === 'PRIVATE' || c === 'CONFIDENTIAL';
+}
+
 /**
  * Resolve the REST date input into stored instants.
  *  - all-day: `YYYY-MM-DD` (only the date part of any ISO string is used — no UTC
@@ -1011,6 +1017,12 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
+  // v7.1.0: a grantee only sees PRIVATE events masked (and CONFIDENTIAL ones not at all) —
+  // saving that copy would overwrite the owner's real data, so it may not write them.
+  if (!access.isOwner && isProtectedClassification(event.classification)) {
+    res.status(403).json({ error: 'Private Termine kann nur der Eigentümer ändern' });
+    return;
+  }
 
   const { summary, dtStart, dtEnd, description, location, allDay, rrule, classification, attendees } = parsed.data;
   const effectiveClass = classification ?? event.classification ?? 'PUBLIC';
@@ -1136,12 +1148,16 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     where: { id },
     select: { id: true, calendarId: true, uid: true, summary: true, description: true,
               location: true, dtStart: true, dtEnd: true, sequence: true,
-              allDay: true, rrule: true, organizer: true, attendees: true },
+              allDay: true, rrule: true, organizer: true, attendees: true, classification: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
+  if (!access.isOwner && isProtectedClassification(event.classification)) {
+    res.status(403).json({ error: 'Private Termine kann nur der Eigentümer löschen' });
+    return;
+  }
 
   await prisma.calendarEvent.delete({ where: { id } });
 
