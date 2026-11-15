@@ -226,7 +226,7 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
 export const api = {
   get:      <T>(path: string)                   => request<T>(path),
   post:     <T>(path: string, body: unknown)    => request<T>(path, { method: 'POST',  body: JSON.stringify(body) }),
-  postForm: <T>(path: string, form: FormData)   => request<T>(path, { method: 'POST',  body: form }, true),
+  postForm: <T>(path: string, form: FormData, init: RequestInit = {}) => request<T>(path, { ...init, method: 'POST', body: form }, true),
   put:      <T>(path: string, body: unknown)    => request<T>(path, { method: 'PUT',   body: JSON.stringify(body) }),
   patch:    <T>(path: string, body: unknown)    => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   /** DELETE with an optional JSON body (e.g. `{ currentPassword }` for re-authentication). */

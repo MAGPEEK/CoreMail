@@ -1,10 +1,22 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { MessageFilter } from '../api/types.js';
+import type { ShortcutSetId } from '../lib/shortcuts.js';
+import { DEFAULT_SEND_DELAY_SEC, normalizeSendDelay, type SendDelaySec } from '../lib/send-delay.js';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+/** Full compose state, used to reopen a mail whose send was undone. */
+export interface ComposeSnapshot {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  bodyHtml: string;
+  attachments: File[];
+}
 export interface ComposeContext {
   mode: ComposeMode;
+  restore?: ComposeSnapshot;
   id?: string;
   subject?: string;
   fromAddr?: string;
@@ -26,6 +38,9 @@ interface UiState {
   composeOpen: boolean;
   composeCtx: ComposeContext | null;
   sidebarCollapsed: boolean;
+  /** Keyboard shortcut help dialog (?) */
+  shortcutHelpOpen: boolean;
+  setShortcutHelpOpen: (v: boolean) => void;
 
   // Multi-selection in the message list
   selectedIds: Set<string>;
@@ -52,6 +67,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   composeOpen: false,
   composeCtx: null,
   sidebarCollapsed: false,
+  shortcutHelpOpen: false,
+  setShortcutHelpOpen: (v) => set({ shortcutHelpOpen: v }),
   selectedIds: new Set<string>(),
   lastSelectedId: null,
   filter: 'all',
@@ -107,6 +124,14 @@ interface UiPrefs {
   folderTreeCollapsed: boolean;
   calendarShowWeekNumbers: boolean;
   hiddenCalendarIds: string[];
+  /** Keyboard shortcuts on/off + set (Settings → View) */
+  shortcutsEnabled: boolean;
+  shortcutSet: ShortcutSetId;
+  /** Undo send: hold outgoing mails this many seconds (0 = off) */
+  sendDelaySec: SendDelaySec;
+  setShortcutsEnabled: (v: boolean) => void;
+  setShortcutSet: (s: ShortcutSetId) => void;
+  setSendDelaySec: (s: number) => void;
   setDensity: (d: Density) => void;
   setReadingPane: (p: ReadingPane) => void;
   setGroupByConversation: (v: boolean) => void;
@@ -127,6 +152,12 @@ export const useUiPrefs = create<UiPrefs>()(
       folderTreeCollapsed: false,
       calendarShowWeekNumbers: true,
       hiddenCalendarIds: [],
+      shortcutsEnabled: true,
+      shortcutSet: 'coremail',
+      sendDelaySec: DEFAULT_SEND_DELAY_SEC,
+      setShortcutsEnabled: (v) => set({ shortcutsEnabled: v }),
+      setShortcutSet: (s) => set({ shortcutSet: s === 'gmail' ? 'gmail' : 'coremail' }),
+      setSendDelaySec: (s) => set({ sendDelaySec: normalizeSendDelay(s) }),
       setDensity: (d) => set({ density: d }),
       setReadingPane: (p) => set({ readingPane: p }),
       setGroupByConversation: (v) => set({ groupByConversation: v }),

@@ -94,6 +94,18 @@ export interface MessagesResponse {
   total: number;
   limit: number;
   offset: number;
+  /** Search only: parsed operators (from:, is:unread, …) for the chip row */
+  chips?: SearchChip[];
+}
+
+export interface SearchChip {
+  key: string;
+  value: string;
+  negate: boolean;
+  /** false = operator with an invalid value, ignored by the server */
+  valid: boolean;
+  /** Token as typed (used to remove the operator from the query) */
+  raw: string;
 }
 
 export interface Calendar {

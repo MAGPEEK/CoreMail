@@ -1,0 +1,118 @@
+import { useEffect, useRef, useState } from 'react';
+import { HelpCircle, X } from 'lucide-react';
+import { useT } from '../i18n/useT.js';
+import type { TranslationKey } from '../i18n/translations.js';
+import type { SearchChip } from '../api/types.js';
+
+/** Operators understood by GET /mail/search (api-gateway lib/search-query.ts). */
+const OPERATORS: { example: string; insert: string; label: TranslationKey }[] = [
+  { example: 'from:anna', insert: 'from:', label: 'search_op_from' },
+  { example: 'to:bob@example.com', insert: 'to:', label: 'search_op_to' },
+  { example: 'cc:carl@example.com', insert: 'cc:', label: 'search_op_cc' },
+  { example: 'subject:invoice', insert: 'subject:', label: 'search_op_subject' },
+  { example: 'has:attachment', insert: 'has:attachment', label: 'search_op_has' },
+  { example: 'is:unread', insert: 'is:unread', label: 'search_op_unread' },
+  { example: 'is:flagged', insert: 'is:flagged', label: 'search_op_flagged' },
+  { example: 'before:2026-01-31', insert: 'before:', label: 'search_op_before' },
+  { example: 'after:2026-01-01', insert: 'after:', label: 'search_op_after' },
+  { example: 'older_than:7d', insert: 'older_than:', label: 'search_op_older' },
+  { example: 'newer_than:2w', insert: 'newer_than:', label: 'search_op_newer' },
+  { example: 'in:sent', insert: 'in:', label: 'search_op_in' },
+  { example: '"exact phrase"', insert: '""', label: 'search_op_phrase' },
+  { example: '-newsletter', insert: '-', label: 'search_op_negate' },
+];
+
+/** "?" button next to the search field with a popover listing the operators. */
+export function SearchOperatorsHelp({ onInsert }: { onInsert: (token: string) => void }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={t('search_help')}
+        title={t('search_help')}
+        className="p-1 rounded text-gray-400 hover:text-accent hover:bg-gray-100 dark:hover:bg-gray-700"
+      >
+        <HelpCircle size={14} />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label={t('search_help')}
+          className="absolute right-0 top-full mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-xl z-50 p-3 animate-fly-in origin-top-right"
+        >
+          <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">{t('search_help')}</p>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 mb-2">{t('search_help_intro')}</p>
+          <ul className="space-y-0.5 max-h-72 overflow-y-auto">
+            {OPERATORS.map((op) => (
+              <li key={op.example}>
+                <button
+                  type="button"
+                  onClick={() => { onInsert(op.insert); setOpen(false); }}
+                  className="w-full flex items-center justify-between gap-2 px-1.5 py-1 rounded text-left hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  <code className="text-[11px] font-mono text-accent">{op.example}</code>
+                  <span className="text-[11px] text-gray-600 dark:text-gray-300 text-right">{t(op.label)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Parsed operators of the current search as removable chips. */
+export function SearchChips({ chips, onRemove }: { chips: SearchChip[]; onRemove: (chip: SearchChip) => void }) {
+  const t = useT();
+  if (chips.length === 0) return null;
+  return (
+    <ul className="px-3 pb-2 flex flex-wrap gap-1" aria-label={t('search_help')}>
+      {chips.map((c) => (
+        <li
+          key={c.raw}
+          title={c.valid ? c.raw : `${c.raw} — ${t('search_chip_invalid')}`}
+          className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] border ${
+            !c.valid
+              ? 'border-red-300 text-red-600 bg-red-50 dark:bg-red-900/20 line-through'
+              : c.negate
+                ? 'border-gray-300 text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800'
+                : 'border-accent/40 text-accent bg-accent/5'
+          }`}
+        >
+          <span>
+            {c.negate && '−'}
+            {c.key === 'text' ? `"${c.value}"` : <><span className="font-semibold">{c.key}:</span>{c.value}</>}
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemove(c)}
+            aria-label={`${t('search_chip_remove')}: ${c.raw}`}
+            className="p-0.5 rounded-full hover:bg-black/10"
+          >
+            <X size={10} />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}

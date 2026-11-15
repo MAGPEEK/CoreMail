@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/auth.js';
 import { logoutSession } from '../api/client.js';
 import { Avatar } from './Avatar.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
+import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 
 interface Props {
   onSearch: (q: string) => void;
@@ -60,7 +61,9 @@ export function TopBar({ onSearch, currentApp }: Props) {
         <div className="relative group">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60 group-focus-within:text-white transition-colors" />
           <input
+            id={GLOBAL_SEARCH_INPUT_ID}
             type="text"
+            aria-keyshortcuts="/"
             placeholder="Suchen..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}

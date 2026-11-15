@@ -3,6 +3,11 @@ import { useEffect, useRef, type ReactNode } from 'react';
 // Stack of open dialogs — only the topmost one reacts to Escape/Tab
 const openStack: symbol[] = [];
 
+/** True while any accessible Modal is open (global shortcuts pause meanwhile). */
+export function isModalOpen(): boolean {
+  return openStack.length > 0;
+}
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
