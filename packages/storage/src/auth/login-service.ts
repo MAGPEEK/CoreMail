@@ -2,9 +2,17 @@
  * The single web/API login service (v7.0.0) — used by POST /auth/login and
  * POST /auth/mfa/verify in the api-gateway and (delegated) the auth-service.
  *
- * Steps: first factor (local password, then registered external
+ * Steps: lockout check → first factor (local password, then registered external
  * authenticators such as LDAP/OIDC) → active check → maintenance mode
  * (admins exempt) → MFA decision (challenge) → session issue.
+ *
+ * v8.1: brute-force protection shares the Redis per-account / per-IP counters
+ * of the mail protocols (mail-auth.ts → sharedLoginLockout): every failed
+ * password AND every failed MFA code counts; a locked account or IP gets 429
+ * ACCOUNT_LOCKED before any password work (same answer for unknown accounts —
+ * no enumeration, and `mfaRequired` is only ever returned after this check).
+ * Only a completed login (tokens issued) resets the account counter; a correct
+ * password that leads to an MFA challenge does not.
  *
  * Extension point: `registerAuthenticator()` adds an external first-factor step
  * (LDAP, SSO, …). Steps run in registration order after the local password
@@ -21,6 +29,7 @@ import {
 } from './mfa-challenge.js';
 import { verifyUserTotp } from './totp.js';
 import { consumeBackupCode } from './backup-codes.js';
+import { sharedLoginLockout } from '../mail-auth.js';
 
 const log = createLogger('auth:login');
 
@@ -141,16 +150,22 @@ export type LoginOutcome =
   | { kind: 'tokens'; tokens: TokenPair; userId: string; source: string }
   | { kind: 'mfa'; challengeToken: string; method: MfaChallengeData['method']; methods: MfaMethod[]; userId: string }
   | { kind: 'invalid' }
+  | { kind: 'locked'; retryAfterSec: number }
   | { kind: 'maintenance'; message: string }
   | { kind: 'mfa_failed'; exhausted: boolean }
   | { kind: 'mfa_ip_blocked' };
 
 /** HTTP mapping shared by every router that exposes the login service. */
-export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Record<string, unknown> } {
+export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Record<string, unknown>; headers?: Record<string, string> } {
   switch (o.kind) {
     case 'tokens': return { status: 200, body: { ...o.tokens } };
     case 'mfa': return { status: 200, body: { mfaRequired: true, challengeToken: o.challengeToken, method: o.method, methods: o.methods } };
     case 'invalid': return { status: 401, body: { error: 'Invalid credentials' } };
+    case 'locked': return {
+      status: 429,
+      body: { error: 'Too many failed login attempts. Please try again later.', code: 'ACCOUNT_LOCKED', retryAfter: o.retryAfterSec },
+      headers: { 'Retry-After': String(Math.max(1, o.retryAfterSec)) },
+    };
     case 'maintenance': return { status: 503, body: { error: 'maintenance', message: o.message } };
     case 'mfa_failed': return o.exhausted
       ? { status: 401, body: { error: 'Too many failed attempts — please log in again', code: 'MFA_CHALLENGE_EXHAUSTED' } }
@@ -161,9 +176,18 @@ export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Rec
 
 /** POST /auth/login */
 export async function login(email: string, password: string, client: ClientInfo): Promise<LoginOutcome> {
-  const user = await authenticatePassword(email, password);
+  const normalized = email.trim().toLowerCase();
+  const lockout = sharedLoginLockout();
+  const lock = await lockout.check(normalized, client.ip);
+  if (lock.locked) {
+    log.warn({ email: normalized, ip: client.ip, scope: lock.scope }, 'Login refused — locked out');
+    return { kind: 'locked', retryAfterSec: lock.retryAfterSec };
+  }
+
+  const user = await authenticatePassword(normalized, password);
   if (!user) {
-    log.warn({ email, ip: client.ip }, 'Login failed');
+    await lockout.fail(normalized, client.ip);
+    log.warn({ email: normalized, ip: client.ip }, 'Login failed');
     return { kind: 'invalid' };
   }
 
@@ -186,6 +210,7 @@ export async function login(email: string, password: string, client: ClientInfo)
   }
 
   const tokens = await issueSession(user, { ...client, mfaVerified: false });
+  await lockout.success(normalized);
   log.info({ userId: user.id, source: user.source }, 'Login successful');
   return { kind: 'tokens', tokens, userId: user.id, source: user.source };
 }
@@ -217,6 +242,16 @@ export async function completeMfaLogin(
     return { kind: 'mfa_failed', exhausted: false };
   }
 
+  // v8.1: the shared account lockout also covers the second factor.
+  const owner = await prisma.user.findUnique({ where: { id: challenge.userId }, select: { email: true } });
+  const lockEmail = owner?.email.toLowerCase() ?? `user:${challenge.userId}`;
+  const lockout = sharedLoginLockout();
+  const lock = await lockout.check(lockEmail, client.ip);
+  if (lock.locked) {
+    log.warn({ userId: challenge.userId, ip: client.ip, scope: lock.scope }, 'MFA verify refused — locked out');
+    return { kind: 'locked', retryAfterSec: lock.retryAfterSec };
+  }
+
   const code = (input.code ?? input.backupCode ?? '').trim();
   let verified = false;
   if (input.webauthnResponse !== undefined && input.webauthnResponse !== null) {
@@ -232,6 +267,7 @@ export async function completeMfaLogin(
 
   if (!verified) {
     const exhausted = await registerMfaFailure(input.challengeToken, client.ip);
+    await lockout.fail(lockEmail, client.ip);
     log.warn({ userId: challenge.userId, ip: client.ip, exhausted }, 'MFA verification failed');
     return { kind: 'mfa_failed', exhausted };
   }
@@ -246,6 +282,7 @@ export async function completeMfaLogin(
   if (blocked) return { kind: 'maintenance', message: blocked };
 
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
+  await lockout.success(lockEmail);
   log.info({ userId: user.id }, 'MFA verified — login complete');
   return { kind: 'tokens', tokens, userId: user.id, source: 'mfa' };
 }

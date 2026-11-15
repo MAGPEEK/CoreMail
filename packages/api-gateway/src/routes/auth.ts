@@ -5,10 +5,16 @@
  * login service in `@coremail/storage/auth` (shared with the auth-service):
  *   POST /auth/login          → { accessToken, refreshToken, expiresIn }
  *                               | { mfaRequired: true, challengeToken, method, methods }
- *                               | 401 invalid credentials | 503 { error: 'maintenance', message }
+ *                               | 401 invalid credentials | 429 ACCOUNT_LOCKED (v8.1, shared lockout)
+ *                               | 503 { error: 'maintenance', message }
  *   POST /auth/refresh        → rotates: { accessToken, refreshToken, expiresIn } (old token invalid)
  *   POST /auth/logout         → { ok: true } — revokes the session of { refreshToken }
  *   POST /auth/mfa/verify     → proxied to the auth-service (same login service)
+ *
+ * v8.1 browser clients (`X-CoreMail-Client: web`): the refresh token travels
+ * only in the HttpOnly cookie cm_rt (BCP: cm_rt_bcp, `X-CoreMail-App: bcp`),
+ * never in a body; /auth/refresh and /auth/logout accept the cookie when the
+ * body has no refreshToken and the request is same-origin (Origin/Referer).
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -24,6 +30,12 @@ import {
   isResetTokenValid,
   RESET_TOKEN_TTL,
   registerAuthenticator,
+  tokenPairResponse,
+  readRefreshCookie,
+  isSameOriginCookieRequest,
+  clearRefreshCookieHeader,
+  isWebClient,
+  type TokenPair,
 } from '@coremail/storage/auth';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
 import { createLogger, getRedisClient } from '@coremail/core';
@@ -76,8 +88,35 @@ const LoginSchema = z.object({
 });
 
 const RefreshSchema = z.object({
-  refreshToken: z.string().min(1).max(4096),
-});
+  refreshToken: z.string().min(1).max(4096).optional(),
+}).passthrough();
+
+// v8.1: browser clients (`X-CoreMail-Client: web`) get the refresh token as an
+// HttpOnly SameSite=Strict cookie on Path=/auth (cm_rt, BCP: cm_rt_bcp) instead
+// of the JSON body — see @coremail/storage/auth refresh-cookie.ts. Other clients
+// (admin CLI) keep the body tokens.
+function sendTokens(req: Request, res: Response, tokens: TokenPair, viaCookie = false): void {
+  const r = tokenPairResponse(req, tokens, { viaCookie });
+  if (r.setCookie) res.append('Set-Cookie', r.setCookie);
+  res.json(r.body);
+}
+
+/** Refresh token of a refresh/logout request: body first (CLI, migration), then the cookie. */
+async function refreshTokenOf(req: Request, res: Response): Promise<{ token: string; viaCookie: boolean } | null | 'rejected'> {
+  const body = (req.body ?? {}) as { refreshToken?: unknown };
+  if (typeof body.refreshToken === 'string' && body.refreshToken.length > 0) {
+    return { token: body.refreshToken, viaCookie: false };
+  }
+  const cookie = readRefreshCookie(req);
+  if (!cookie) return null;
+  // The cookie is an ambient credential — require a same-origin page (CSRF).
+  if (!(await isSameOriginCookieRequest(req))) {
+    log.warn({ ip: req.ip, origin: req.get('origin') ?? null, referer: req.get('referer') ?? null }, 'Cookie refresh/logout refused — cross-origin');
+    res.status(403).json({ error: 'Cross-origin request refused', code: 'ORIGIN_MISMATCH' });
+    return 'rejected';
+  }
+  return { token: cookie, viaCookie: true };
+}
 
 // ── POST /auth/login ──────────────────────────────────────────────────────────
 authRouter.post('/login', async (req: Request, res: Response) => {
@@ -88,7 +127,9 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   }
   try {
     const outcome = await login(parsed.data.email, parsed.data.password, clientInfo(req));
-    const { status, body } = loginOutcomeToHttp(outcome);
+    if (outcome.kind === 'tokens') { sendTokens(req, res, outcome.tokens); return; }
+    const { status, body, headers } = loginOutcomeToHttp(outcome);
+    if (headers) res.set(headers);
     res.status(status).json(body);
   } catch (err) {
     log.error({ err }, 'Login error');
@@ -100,16 +141,23 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 // Rotates the refresh token. A rotated (old) token presented again revokes the
 // whole session (token theft detection) — clients must store the new token and
 // must not refresh concurrently with the same token.
+// v8.1: token from the body (CLI; one-time migration of a browser's old
+// localStorage token) or from the cm_rt cookie (same-origin check). Browser
+// clients get the rotated token back as cookie only.
 authRouter.post('/refresh', async (req: Request, res: Response) => {
-  const parsed = RefreshSchema.safeParse(req.body);
+  const parsed = RefreshSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
+  const src = await refreshTokenOf(req, res);
+  if (src === 'rejected') return;
+  if (!src) { res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_MISSING' }); return; }
   try {
-    const r = await rotateSession(parsed.data.refreshToken, clientInfo(req));
-    if (r.ok) { res.json(r.tokens); return; }
+    const r = await rotateSession(src.token, clientInfo(req));
+    if (r.ok) { sendTokens(req, res, r.tokens, src.viaCookie); return; }
     if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
+    if (src.viaCookie) res.append('Set-Cookie', clearRefreshCookieHeader(req));
     const error = r.reason === 'expired' ? 'Session expired' : 'Invalid refresh token';
     res.status(401).json({ error, code: `REFRESH_${r.reason.toUpperCase()}` });
   } catch (err) {
@@ -119,16 +167,22 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
 });
 
 // ── POST /auth/logout ─────────────────────────────────────────────────────────
+// Revokes the session of { refreshToken } or (v8.1) of the refresh cookie and
+// always deletes the cookie.
 authRouter.post('/logout', async (req: Request, res: Response) => {
-  const token = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
-  if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+  const src = await refreshTokenOf(req, res);
+  if (src === 'rejected') return;
+  if (src && src.token.length <= 4096) {
     try {
-      await revokeSessionByRefreshToken(token);
+      await revokeSessionByRefreshToken(src.token);
     } catch (err) {
       log.error({ err }, 'Logout error');
       res.status(500).json({ error: 'Internal server error' });
       return;
     }
+  }
+  if (src?.viaCookie || isWebClient(req.headers) || readRefreshCookie(req)) {
+    res.append('Set-Cookie', clearRefreshCookieHeader(req));
   }
   res.json({ ok: true });
 });

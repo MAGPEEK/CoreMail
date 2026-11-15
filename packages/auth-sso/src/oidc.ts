@@ -19,12 +19,17 @@
  *     allowed domains (`forcedDomains`; empty = the provider's own domain)
  *   - an existing account is used when it is an OIDC account of this provider
  *     (externalId `oidc:<providerId>:<sub>`, bound on first use); LOCAL/LDAP
- *     accounts only with the per-provider `allowLinking` opt-in
+ *     accounts only with the per-provider `allowLinking` opt-in — and (v8.1)
+ *     bound to the first IdP subject that linked them (LOCAL: externalId, LDAP:
+ *     Redis `auth:sso:link:<userId>`); another subject → `account_mismatch`
  *   - unknown users are created + their mailbox provisioned with `autoProvision`
  *   - MFA: by default the IdP is trusted as second factor (no CoreMail MFA
  *     prompt). With `requireMfa` users with CoreMail MFA enrolled get the normal
  *     MFA challenge. The session counts as "MFA verified" (requireMfaForAdmins)
  *     only after that challenge or when the ID token's `amr` names an MFA method.
+ *     v8.1: with requireMfaForAdmins, admin roles never get "MFA verified" from
+ *     `amr` and always get the CoreMail challenge (when enrolled), unless the
+ *     provider has requireMfa=false AND OIDC_TRUST_IDP_MFA_FOR_ADMINS=true.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Issuer, custom, generators, type Client, type IdTokenClaims } from 'openid-client';
@@ -205,6 +210,48 @@ function claimString(claims: IdTokenClaims, name: string): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+// ── v8.1: binding of linked accounts + admin MFA policy ───────────────────────
+
+/** Redis key holding the IdP binding of a linked LDAP account (externalId is the directory id there). */
+export const SSO_LINK_PREFIX = 'auth:sso:link:';
+/** Bindings live as long as the account (Redis runs with appendonly); ~10 years. */
+const SSO_LINK_TTL = 10 * 365 * 24 * 3600;
+
+/**
+ * Binds a LOCAL/LDAP account that logs in through `allowLinking` to the IdP
+ * subject of its first SSO login; later logins must present the same subject.
+ *  - LOCAL accounts store it in `User.externalId` (unused for LOCAL).
+ *  - LDAP accounts keep their directory id in `externalId` (the LDAP login and
+ *    sync compare it), so their binding is kept in Redis (`auth:sso:link:<userId>`).
+ * Returns false when the account is bound to another subject.
+ */
+async function bindLinkedAccount(
+  user: { id: string; authSource: string; externalId: string | null },
+  externalId: string,
+): Promise<boolean> {
+  if (user.externalId?.startsWith('oidc:')) return user.externalId === externalId;
+  if (user.authSource === 'LOCAL' && !user.externalId) {
+    await prisma.user.update({ where: { id: user.id }, data: { externalId } });
+    log.info({ userId: user.id }, 'SSO: linked account bound to the IdP subject');
+    return true;
+  }
+  const key = `${SSO_LINK_PREFIX}${user.id}`;
+  const bound = await authRedis().get(key);
+  if (bound) return bound === externalId;
+  await authRedis().setex(key, SSO_LINK_TTL, externalId);
+  log.info({ userId: user.id }, 'SSO: linked account bound to the IdP subject');
+  return true;
+}
+
+async function requireMfaForAdmins(): Promise<boolean> {
+  const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { requireMfaForAdmins: true } });
+  return s?.requireMfaForAdmins === true;
+}
+
+function trustIdpMfaForAdmins(): boolean {
+  return process.env['OIDC_TRUST_IDP_MFA_FOR_ADMINS'] === 'true';
+}
+
 export async function completeSsoCallback(
   providerId: string,
   params: Record<string, string>,
@@ -276,6 +323,11 @@ export async function completeSsoCallback(
     } else if (!p.allowLinking) {
       log.warn({ providerId, email, authSource: user.authSource }, 'SSO: existing non-SSO account, linking disabled');
       return { ok: false, error: 'account_not_linked', target };
+    } else if (!(await bindLinkedAccount(user, externalId))) {
+      // v8.1: a linked LOCAL/LDAP account is bound to the first IdP subject that
+      // used it — another subject with the same (verified) e-mail is refused.
+      log.warn({ providerId, email, authSource: user.authSource }, 'SSO: linked account is bound to another IdP subject');
+      return { ok: false, error: 'account_mismatch', target };
     }
   } else {
     if (!p.autoProvision) return { ok: false, error: 'no_account', target };
@@ -296,8 +348,16 @@ export async function completeSsoCallback(
 
   const amr = (claims as Record<string, unknown>)['amr'];
   const idpMfa = Array.isArray(amr) && amr.some((a) => typeof a === 'string' && MFA_AMR.has(a.toLowerCase()));
-  let outcome: ExchangeOutcome = { kind: 'session', userId: user.id, mfaVerified: idpMfa };
-  if (p.requireMfa) {
+  // v8.1: with requireMfaForAdmins, an admin account does not get "MFA verified"
+  // from the IdP's `amr` claim (a self-asserted IdP statement) unless the
+  // provider does not require CoreMail MFA AND the operator explicitly trusts
+  // IdP MFA for admins (OIDC_TRUST_IDP_MFA_FOR_ADMINS=true, default false).
+  // Such admins get the CoreMail MFA challenge when enrolled; otherwise the
+  // session stays unverified and the admin API answers MFA_NOT_VERIFIED.
+  const adminNeedsLocalMfa = user.role !== 'USER' && await requireMfaForAdmins()
+    && (p.requireMfa || !trustIdpMfaForAdmins());
+  let outcome: ExchangeOutcome = { kind: 'session', userId: user.id, mfaVerified: idpMfa && !adminNeedsLocalMfa };
+  if (p.requireMfa || adminNeedsLocalMfa) {
     const mfa = await getMfaState(user.id);
     if (mfa.enabled) {
       const method = mfa.webauthn ? 'webauthn' : 'totp';

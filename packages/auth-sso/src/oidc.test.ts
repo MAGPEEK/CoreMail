@@ -208,6 +208,69 @@ test('MFA policy: IdP trusted by default; requireMfa → CoreMail challenge; amr
   assert.ok((ex as { challengeToken: string }).challengeToken);
 });
 
+test('linking (v8.1): a LOCAL account is bound to the first IdP subject; another subject is refused', async () => {
+  await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
+  const u = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'h', domainId } });
+  assert.ok((await flow(verifiedAlice)).cb.ok);
+  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['externalId'], `oidc:${providerId}:sub-alice`);
+  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['authSource'], 'LOCAL', 'still a LOCAL account');
+  // a second IdP identity that also claims the (verified) address
+  const attacker = { sub: 'sub-mallory', claims: { email: 'alice@example.com', email_verified: true } };
+  assert.equal(((await flow(attacker)).cb as { error?: string }).error, 'account_mismatch');
+  assert.ok((await flow(verifiedAlice)).cb.ok, 'the bound subject keeps working');
+});
+
+test('linking (v8.1): an LDAP account keeps its directory id; the IdP binding lives in Redis', async () => {
+  await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
+  const u = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LDAP', externalId: 'ldap:guid-1', domainId } });
+  assert.ok((await flow(verifiedAlice)).cb.ok);
+  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['externalId'], 'ldap:guid-1', 'directory id untouched');
+  assert.equal(await redis.get(`${sso.SSO_LINK_PREFIX}${String(u['id'])}`), `oidc:${providerId}:sub-alice`);
+  assert.equal(((await flow({ sub: 'sub-mallory', claims: { email: 'alice@example.com', email_verified: true } })).cb as { error?: string }).error, 'account_mismatch');
+  assert.ok((await flow(verifiedAlice)).cb.ok);
+});
+
+test('admin MFA (v8.1): with requireMfaForAdmins the IdP amr does not make an admin session MFA-verified', async () => {
+  await db.serverSettings.create({ data: { id: 'singleton', requireMfaForAdmins: true } });
+  const admin = await db.user.create({ data: { email: 'alice@example.com', authSource: 'OIDC', role: 'ORGANIZATION_MANAGEMENT', domainId } });
+  const withAmr = { ...verifiedAlice, claims: { ...verifiedAlice.claims, amr: ['pwd', 'mfa'] } };
+
+  // no CoreMail MFA enrolled → session, but NOT verified (admin API: MFA_REQUIRED / MFA_NOT_VERIFIED)
+  let { s, cb } = await flow(withAmr);
+  let ex = await sso.exchangeSsoCode((cb as { code: string }).code, s.cookie, CLIENT);
+  assert.equal(ex.kind, 'tokens');
+  assert.equal(core.verifyAccessToken((ex as { tokens: { accessToken: string } }).tokens.accessToken)!.mfaVerified, false);
+
+  // enrolled → CoreMail challenge even though the provider does not require MFA
+  await db.userMfa.create({ data: { userId: admin['id'], totpEnabled: true, totpSecret: 'x', backupCodes: [] } });
+  ({ s, cb } = await flow(withAmr));
+  ex = await sso.exchangeSsoCode((cb as { code: string }).code, s.cookie, CLIENT);
+  assert.equal(ex.kind, 'mfa');
+
+  // explicit operator opt-in (and provider requireMfa=false) → amr trusted again
+  process.env['OIDC_TRUST_IDP_MFA_FOR_ADMINS'] = 'true';
+  try {
+    ({ s, cb } = await flow(withAmr));
+    ex = await sso.exchangeSsoCode((cb as { code: string }).code, s.cookie, CLIENT);
+    assert.equal(ex.kind, 'tokens');
+    assert.equal(core.verifyAccessToken((ex as { tokens: { accessToken: string } }).tokens.accessToken)!.mfaVerified, true);
+    // … but never when the provider itself requires CoreMail MFA
+    await db.oidcProvider.update({ where: { id: providerId }, data: { requireMfa: true } });
+    ({ s, cb } = await flow(withAmr));
+    assert.equal((await sso.exchangeSsoCode((cb as { code: string }).code, s.cookie, CLIENT)).kind, 'mfa');
+  } finally {
+    delete process.env['OIDC_TRUST_IDP_MFA_FOR_ADMINS'];
+  }
+});
+
+test('admin MFA (v8.1): plain users keep the amr behaviour; admins without requireMfaForAdmins too', async () => {
+  const withAmr = { ...verifiedAlice, claims: { ...verifiedAlice.claims, amr: ['otp'] } };
+  await db.user.create({ data: { email: 'alice@example.com', authSource: 'OIDC', role: 'SERVER_MANAGEMENT', domainId } });
+  const { s, cb } = await flow(withAmr);
+  const ex = await sso.exchangeSsoCode((cb as { code: string }).code, s.cookie, CLIENT);
+  assert.equal(core.verifyAccessToken((ex as { tokens: { accessToken: string } }).tokens.accessToken)!.mfaVerified, true);
+});
+
 test('public provider list hides secrets and inactive providers', async () => {
   await db.oidcProvider.create({ data: { domainId, name: 'Off', discoveryUrl: 'https://x', clientId: 'c', clientSecret: 's', active: false } });
   const list = await sso.listPublicProviders();

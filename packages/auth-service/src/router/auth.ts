@@ -6,6 +6,11 @@
  * proxies /auth/mfa/* here, so /auth/mfa/verify (which needs WebAuthn) lives in
  * this service. /auth/login stays available for internal callers (CalDAV and
  * JMAP Basic-auth fallbacks).
+ *
+ * v8.1: token-issuing answers go through sendOutcome(): browser clients
+ * (`X-CoreMail-Client: web`) get the refresh token only as the HttpOnly cookie
+ * cm_rt / cm_rt_bcp (Path=/auth, passed through by the gateway proxy); a locked
+ * account answers 429 ACCOUNT_LOCKED with Retry-After.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -16,10 +21,24 @@ import {
   loginOutcomeToHttp,
   rotateSession,
   revokeSessionByRefreshToken,
+  tokenPairResponse,
+  type LoginOutcome,
 } from '@coremail/storage/auth';
 import { finishWebAuthnAuthentication } from '../mfa/webauthn.js';
 
 const log = createLogger('auth:router');
+
+function sendOutcome(req: Request, res: Response, outcome: LoginOutcome): void {
+  if (outcome.kind === 'tokens') {
+    const r = tokenPairResponse(req, outcome.tokens);
+    if (r.setCookie) res.append('Set-Cookie', r.setCookie);
+    res.json(r.body);
+    return;
+  }
+  const { status, body, headers } = loginOutcomeToHttp(outcome);
+  if (headers) res.set(headers);
+  res.status(status).json(body);
+}
 
 const LoginSchema = z.object({
   email: z.string().email(),
@@ -52,8 +71,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const { status, body } = loginOutcomeToHttp(await login(parsed.data.email, parsed.data.password, clientInfo(req)));
-    res.status(status).json(body);
+    sendOutcome(req, res, await login(parsed.data.email, parsed.data.password, clientInfo(req)));
   } catch (err) {
     log.error({ err }, 'Login error');
     res.status(500).json({ error: 'Internal server error' });
@@ -81,8 +99,7 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
           finishWebAuthnAuthentication(userId, response as Parameters<typeof finishWebAuthnAuthentication>[1], token),
       },
     );
-    const { status, body } = loginOutcomeToHttp(outcome);
-    res.status(status).json(body);
+    sendOutcome(req, res, outcome);
   } catch (err) {
     log.error({ err }, 'MFA verify error');
     res.status(500).json({ error: 'Internal server error' });
