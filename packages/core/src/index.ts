@@ -7,3 +7,4 @@ export * from './tls/index.js';
 export * from './http/index.js';
 export * from './logger/runtime.js';
 export * from './net/ssrf.js';
+export * from './net/connection-limiter.js';

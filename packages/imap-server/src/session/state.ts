@@ -62,6 +62,8 @@ export interface ImapSession {
   updateLock?: Promise<void>;
   // v7.1.0: periodic mailbox check while idling (expunges/flag changes by other clients)
   idleTimer?: ReturnType<typeof setInterval> | null;
+  // v8.1: set by the server — switches the idle timeout to the post-login value
+  onAuthenticated?: () => void;
 }
 
 function buildCapabilities(isTls: boolean, starttlsAvailable = false): string[] {
