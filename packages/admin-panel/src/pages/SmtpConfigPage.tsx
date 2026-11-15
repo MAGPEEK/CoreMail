@@ -21,8 +21,10 @@ interface SmtpSettings {
   ext8bitmime:          boolean;
   extEnhancedStatus:    boolean;
   // The following DB fields are kept for backwards compatibility but are
-  // hard-coded ignored in the server (see smtp-server/server.ts) since not implemented:
-  //   extAuthCramMd5, extSmtputf8, extDsn, extChunking
+  // ignored by the server:
+  //   extAuthCramMd5 — not implemented
+  //   extSmtputf8, extDsn, extChunking — implemented (9.0), switched via the
+  //   SMTP_EXT_SMTPUTF8 / SMTP_EXT_DSN / SMTP_EXT_CHUNKING environment variables
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
   bannerText:           string;
@@ -147,12 +149,18 @@ const EXT_DEFS: ExtDef[] = [
     desc: '8-Bit-Daten in SMTP-Nachrichten ohne MIME-Encoding erlauben' },
   { key: 'extEnhancedStatus', label: 'ENHANCEDSTATUSCODES', rfc: 'RFC 2034', risk: 'safe',
     desc: 'Erweiterte SMTP-Statuscodes (z.B. 5.7.1) für bessere Fehlerdiagnose' },
-  // Deliberately NOT available as toggles — these extensions are not implemented in the server
-  // and enabling them would violate the respective RFC (server would lie about its capabilities):
-  //   CRAM-MD5 (RFC 2195/4954) — handleAuth only knows PLAIN+LOGIN, 504 on CRAM-MD5
-  //   SMTPUTF8 (RFC 6531)      — UTF-8 in envelope addresses is not handled specially
-  //   DSN (RFC 3461)           — no NOTIFY/ORCPT/ENVID/RET parsing, no multipart/report
-  //   CHUNKING (RFC 3030)      — BDAT command is not recognized by the parser
+  // Deliberately NOT available as toggles:
+  //   CRAM-MD5 (RFC 2195/4954) — not implemented (handleAuth only knows PLAIN+LOGIN, 504 on CRAM-MD5)
+  //   SMTPUTF8 (RFC 6531), DSN (RFC 3461), CHUNKING + BINARYMIME (RFC 3030) — implemented
+  //   (9.0), on by default, switched via SMTP_EXT_* environment variables; shown read-only
+  //   in ENV_EXT_DEFS below.
+];
+
+/** Implemented extensions switched by environment variables (read-only in the BCP). */
+const ENV_EXT_DEFS: { label: string; rfc: string; env: string }[] = [
+  { label: 'SMTPUTF8',            rfc: 'RFC 6531', env: 'SMTP_EXT_SMTPUTF8' },
+  { label: 'DSN',                 rfc: 'RFC 3461', env: 'SMTP_EXT_DSN' },
+  { label: 'CHUNKING, BINARYMIME', rfc: 'RFC 3030', env: 'SMTP_EXT_CHUNKING' },
 ];
 
 const RISK_BADGE: Record<Risk, string> = {
@@ -252,6 +260,19 @@ function EsmtpSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Par
         <span>
           Änderungen werden in der Datenbank gespeichert und beim nächsten SMTP-Server-Neustart aktiv.
           Die deaktivierten Erweiterungen erscheinen nicht mehr im EHLO-Response.
+        </span>
+      </div>
+
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-xs text-gray-600 flex items-start gap-2">
+        <Info size={13} className="shrink-0 mt-0.5" />
+        <span>
+          Implementiert und standardmäßig aktiv, geschaltet über Umgebungsvariablen (nicht in der BCP):{' '}
+          {ENV_EXT_DEFS.map((e, i) => (
+            <span key={e.env}>
+              {i > 0 && ', '}
+              <span className="font-mono font-semibold text-gray-800">{e.label}</span> ({e.rfc}, <code className="font-mono">{e.env}=false</code> schaltet ab)
+            </span>
+          ))}.
         </span>
       </div>
     </div>

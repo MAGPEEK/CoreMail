@@ -83,6 +83,59 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
 
+      # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
+      # Every variable is described in .env.example; details in docs/mail-security.md,
+      # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
+      # docs/api-gateway-security.md and docs/deployment-security.md.
+      # Schema sync (pre-migration pg_dump)
+      COREMAIL_SCHEMA_BACKUP:      ${COREMAIL_SCHEMA_BACKUP:-}
+      COREMAIL_SCHEMA_BACKUP_DIR:  ${COREMAIL_SCHEMA_BACKUP_DIR:-}
+      # Quotas, recoverable items, out-of-office
+      DELETED_ITEM_RETENTION_DAYS: ${DELETED_ITEM_RETENTION_DAYS:-}
+      QUOTA_FULL_PERMANENT:        ${QUOTA_FULL_PERMANENT:-}
+      QUOTA_USAGE_CACHE_SEC:       ${QUOTA_USAGE_CACHE_SEC:-60}   # explicit default: an empty value would mean 0 (no cache)
+      OOF_REPLY_MEMORY_DAYS:       ${OOF_REPLY_MEMORY_DAYS:-}
+      # Inbound filtering
+      LOCAL_SPOOF_ACTION:          ${LOCAL_SPOOF_ACTION:-}
+      LOCAL_SPOOF_ALLOW:           ${LOCAL_SPOOF_ALLOW:-}
+      ARC_TRUSTED_SEALERS:         ${ARC_TRUSTED_SEALERS:-}
+      SECURITY_FILTER_FAIL_OPEN:   ${SECURITY_FILTER_FAIL_OPEN:-}
+      RULE_PATTERN_STEP_BUDGET:    ${RULE_PATTERN_STEP_BUDGET:-}
+      # SMTP
+      OUTBOUND_ALLOW_PRIVATE_MX:   ${OUTBOUND_ALLOW_PRIVATE_MX:-}
+      OUTBOUND_DELAY_DSN_HOURS:    ${OUTBOUND_DELAY_DSN_HOURS:-}
+      SMTP_TARPIT_MAX_DELAY_MS:    ${SMTP_TARPIT_MAX_DELAY_MS:-}
+      SMTP_EXT_SMTPUTF8:           ${SMTP_EXT_SMTPUTF8:-}
+      SMTP_EXT_DSN:                ${SMTP_EXT_DSN:-}
+      SMTP_EXT_CHUNKING:           ${SMTP_EXT_CHUNKING:-}
+      # Brute-force exemptions and connection limits
+      MAIL_AUTH_EXEMPT_CIDRS:      ${MAIL_AUTH_EXEMPT_CIDRS:-}
+      MAIL_CONN_EXEMPT_CIDRS:      ${MAIL_CONN_EXEMPT_CIDRS:-}
+      IMAP_MAX_CONNS:              ${IMAP_MAX_CONNS:-}
+      IMAP_MAX_CONNS_PER_IP:       ${IMAP_MAX_CONNS_PER_IP:-}
+      IMAP_MAX_CONNS_PER_USER:     ${IMAP_MAX_CONNS_PER_USER:-}
+      IMAP_SORT_MAX_MESSAGES:      ${IMAP_SORT_MAX_MESSAGES:-}
+      POP3_MAX_CONNS:              ${POP3_MAX_CONNS:-}
+      POP3_MAX_CONNS_PER_IP:       ${POP3_MAX_CONNS_PER_IP:-}
+      JMAP_UPLOAD_QUOTA_MB:        ${JMAP_UPLOAD_QUOTA_MB:-}
+      JMAP_UPLOAD_MAX_BLOBS:       ${JMAP_UPLOAD_MAX_BLOBS:-}
+      AUTOCONFIG_RATE_LIMIT:       ${AUTOCONFIG_RATE_LIMIT:-}
+      # Web / REST API
+      COREMAIL_ALLOWED_ORIGINS:    ${COREMAIL_ALLOWED_ORIGINS:-}
+      AUDIT_EXPORT_SIGNING_KEY:    ${AUDIT_EXPORT_SIGNING_KEY:-}
+      HTTP_REDIRECT_HTTPS:         ${HTTP_REDIRECT_HTTPS:-}
+      HTTPS_PUBLIC_PORT:           ${HTTPS_PUBLIC_PORT:-}
+      MAIL_SEND_MAX_RECIPIENTS:    ${MAIL_SEND_MAX_RECIPIENTS:-}
+      MAIL_SEND_RATE_LIMIT:        ${MAIL_SEND_RATE_LIMIT:-}
+      MAIL_SEND_RATE_WINDOW_SEC:   ${MAIL_SEND_RATE_WINDOW_SEC:-}
+      IMAGE_PROXY_RATE_LIMIT:      ${IMAGE_PROXY_RATE_LIMIT:-}
+      IMAGE_PROXY_RATE_WINDOW_SEC: ${IMAGE_PROXY_RATE_WINDOW_SEC:-}
+      BACKUP_IMPORT_MAX_BYTES:     ${BACKUP_IMPORT_MAX_BYTES:-}
+      OIDC_TRUST_IDP_MFA_FOR_ADMINS: ${OIDC_TRUST_IDP_MFA_FOR_ADMINS:-}
+      # SMTP_HOSTNAME / POP3_HOSTNAME are not passed through on purpose: an empty
+      # value would replace the default host name in Autodiscover. Set them in a
+      # docker-compose.override.yml if needed (see .env.example).
+
     ports:
       - "25:25"       # SMTP inbound (server → server)
       - "465:465"     # SMTPS (implicit TLS)

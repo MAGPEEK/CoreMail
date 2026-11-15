@@ -93,9 +93,24 @@ function decryptor(keys) {
   });
 }
 
-const [input, output] = process.argv.slice(2);
+const USAGE = `usage: BACKUP_ENCRYPTION_KEY=<64 hex | base64> decrypt-backup <in.enc> <out>
+       JWT_SECRET=... PEPPER=... decrypt-backup <in.enc> <out>   (derived key, installations without BACKUP_ENCRYPTION_KEY)
+
+  Repo:  node scripts/decrypt-backup.mjs <in.enc> <out>
+  Image: docker exec coremail coremail-decrypt-backup /tmp/<in.enc> /tmp/<out>
+         (inside the container BACKUP_ENCRYPTION_KEY, JWT_SECRET and PEPPER are already set)
+
+Decrypts a CoreMail backup (*.zip.enc, *.mbox.enc). Every frame is authenticated:
+a wrong key, a modified or a truncated file is an error and the partial output is deleted.`;
+
+const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(USAGE);
+  process.exit(0);
+}
+const [input, output] = args;
 if (!input || !output) {
-  console.error('usage: BACKUP_ENCRYPTION_KEY=<hex> node scripts/decrypt-backup.mjs <in.enc> <out>');
+  console.error(USAGE);
   process.exit(2);
 }
 try {

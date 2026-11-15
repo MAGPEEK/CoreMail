@@ -168,7 +168,7 @@ the command polls and prints progress. It streams and verifies every object (sha
 skips objects already present (run it again to resume) and never deletes the source.
 Procedure and backups: [storage.md](storage.md).
 
-## Audit log (`audit`, v8.1, compliance area)
+## Audit log (`audit`, v9.0, compliance area)
 
 ```bash
 coremail audit verify audit-log-2026-11-15.csv --signature 'hmac-sha256=<hex>'

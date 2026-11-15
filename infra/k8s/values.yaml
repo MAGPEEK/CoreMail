@@ -118,6 +118,33 @@ app:
     # when externalTrafficPolicy is Cluster (all clients then appear as node IPs).
     exemptCidrs: ""
 
+  # ── Tuning and escape hatches (CoreMail >= 9.0; empty = app default) ───────
+  # Variables without a value here can be set through extraEnv (list in
+  # .env.example). Details: docs/mail-security.md, docs/mailbox-quotas-recovery.md,
+  # docs/api-gateway-security.md.
+  # DELETED_ITEM_RETENTION_DAYS: days deleted items stay recoverable (default 14, 0 = never purge)
+  deletedItemRetentionDays: ""
+  # QUOTA_FULL_PERMANENT: RCPT TO reply for a full mailbox — "true" (552, default),
+  # "false" (452, sender retries) or N >= 100 (452 until N % of the quota, then 552)
+  quotaFullPermanent: ""
+  # HTTP_REDIRECT_HTTPS: redirect plain HTTP to HTTPS (default true). Requests via
+  # the ingress are recognised as HTTPS when trustProxy is in effect; set "false"
+  # if TLS ends elsewhere and the redirect loops.
+  httpRedirectHttps: ""
+  securityFilter:
+    # SECURITY_FILTER_FAIL_OPEN: true = accept mail unscanned when the content
+    # pipeline fails internally (default false = defer with 451)
+    failOpen: false
+  localSpoof:
+    # LOCAL_SPOOF_ACTION: unauthenticated mail claiming a local domain —
+    # policy (default: follow the domain's DMARC record) | junk | reject
+    action: ""
+    # LOCAL_SPOOF_ALLOW: trusted third-party senders (IPs/CIDRs and domains, comma-separated)
+    allow: ""
+  # ARC_TRUSTED_SEALERS: ARC sealer domains whose passing chain overrides the
+  # local-domain and DMARC checks (comma-separated)
+  arcTrustedSealers: ""
+
   extraEnv: []
   #  - name: GEOIP_DB_PATH
   #    value: /geoip/GeoLite2-Country.mmdb

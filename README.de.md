@@ -59,9 +59,10 @@
 | Feature | Status | RFC |
 |---------|--------|-----|
 | **SMTP** Inbound (Port 25) + Submission (465 implicit-TLS, 587 STARTTLS) | ✅ | 5321 + 6409 |
+| ESMTP-Erweiterungen: STARTTLS, AUTH PLAIN/LOGIN, PIPELINING, SIZE, 8BITMIME, ENHANCEDSTATUSCODES, DSN (Zustell-/Verzögerungs-/Fehlerberichte), CHUNKING + BINARYMIME (BDAT), SMTPUTF8 — DSN/CHUNKING/SMTPUTF8 standardmäßig an, abschaltbar über `SMTP_EXT_*` | ✅ | 3207, 4954, 2920, 1870, 6152, 2034, 3461, 3030, 6531 |
 | SMTP Outbound mit MX-Lookup & DKIM-Signierung | ✅ | 6376 |
 | **IMAP4rev2** (Port 993 implicit-TLS, Port 143 STARTTLS — Login erst nach TLS, davor `LOGINDISABLED`) — Originalnachrichten byte-genau inkl. Anhängen | ✅ | **9051** |
-| IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SEARCHRES, BINARY, LIST-EXTENDED, LIST-STATUS, QUOTA (nur lesend), SPECIAL-USE, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID, ENABLE, LITERAL+, STATUS=SIZE, vollständiges SEARCH; Sequenznummern pro Sitzung mit EXISTS/EXPUNGE/FLAGS-Updates | ✅ | 2087, 2971, 3502, 3516, 3691, 4314, 4731, 4978, 5161, 5182, 5258, 5819, 6154, 6851, 7162, 7888, 8438, 9208 |
+| IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, QRESYNC, ESEARCH, SEARCHRES, SORT, THREAD=ORDEREDSUBJECT, THREAD=REFERENCES, ACL (RIGHTS=texk), COMPRESS=DEFLATE, BINARY, LIST-EXTENDED, LIST-STATUS, QUOTA (nur lesend), SPECIAL-USE, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID, ENABLE, LITERAL+, STATUS=SIZE, vollständiges SEARCH; Sequenznummern pro Sitzung mit EXISTS/EXPUNGE/FLAGS-Updates | ✅ | 2087, 2971, 3502, 3516, 3691, 4314, 4731, 4978, 5161, 5182, 5256, 5258, 5819, 6154, 6851, 7162, 7888, 8438, 9208 |
 | **POP3** (Port 995 implicit-TLS, Port 110 STLS — USER/PASS erst nach TLS) + App-Password-Support | ⚠️ kein SASL (`AUTH`); nur USER/PASS | 1939, 2595 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | Admin-CLI `coremail` im Container (Benutzer, Postfächer, Konnektoren, Banner, Zertifikate) | ✅ | — |
@@ -189,6 +190,8 @@ CoreMail funktioniert mit allen Standard-Mail-Clients. Die empfohlene Konfigurat
 | **eM Client** | IMAP-Konto | IMAP+SMTP | CalDAV+CardDAV nativ |
 | **K-9 Mail** (Android) | IMAP-Konto | IMAP+SMTP | DAVx⁵ für CalDAV/CardDAV |
 | **Browser** | — | **MWA** unter `https://<dein-host>/` | inkl. Kalender/Kontakte im Web |
+
+**Automatische Einrichtung:** Thunderbird, K-9 Mail / Thunderbird für Android, FairEmail, Evolution, KMail und eM Client richten sich über **Mozilla Autoconfig** (`autoconfig.<domain>` bzw. `/.well-known/autoconfig/`) allein aus der E-Mail-Adresse ein; iPhone, iPad und Mac erhalten ein fertiges **Apple-Konfigurationsprofil** (`.mobileconfig`: IMAP/SMTP + CalDAV/CardDAV oder ActiveSync) unter MWA → Einstellungen → Externe Clients. Outlook nutzt Autodiscover. DNS-Einträge und Details: [docs/clients.md](docs/clients.md).
 
 ### IMAP-Einstellungen
 
@@ -447,8 +450,15 @@ POSTGRES_PASSWORD=…     # interne Datenbank-Passwörter
 REDIS_PASSWORD=…
 MINIO_ROOT_PASSWORD=…
 
+# ── Von setup.sh erzeugt (docs/deployment-security.md) ─────
+BACKUP_ENCRYPTION_KEY=…         # openssl rand -hex 32 — Backup-Verschlüsselung; KOPIE AUSSERHALB DES SERVERS AUFBEWAHREN
+RSPAMD_CONTROLLER_PASSWORD=…    # rspamd-Web-UI / Controller-API
+COREMAIL_DB_USER=coremail_app   # DB-Rolle ohne Superuser-Rechte (nur bei neuer Datenbank;
+COREMAIL_DB_PASSWORD=…          #   ungesetzt = Superuser „coremail")
+
 # ── Optional (Defaults in Klammern) ────────────────────────
 #COREMAIL_VERSION=8.0.0         # Image-Tag
+#RSPAMD_NET_PREFIX=10.253.253   # /29 des App ↔ rspamd-Netzes (nur bei Kollision ändern)
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
 #MINIO_ROOT_USER=minioadmin
@@ -458,6 +468,8 @@ MINIO_ROOT_PASSWORD=…
 #COREMAIL_CPU_LIMIT=2  /  COREMAIL_MEM_LIMIT=2g
 #VAPID_PUBLIC_KEY= / VAPID_PRIVATE_KEY= / VAPID_SUBJECT=   # Browser-Push (npx web-push generate-vapid-keys)
 #HTTPS_PORT=8443                # falls 443 am Host belegt
+# Feineinstellungen und Notausgänge (Quotas, Anti-Spoofing, Verbindungs- und
+# Rate-Limits, SMTP_EXT_*, …): siehe .env.example — die Compose-Dateien reichen sie durch.
 ```
 
 Hostname, Domains, Zertifikate, Konnektoren, Spam-/Virenschutz-Einstellungen, LDAP/SSO und Backups werden im **BCP** (`/bcp/`) oder per **CLI** verwaltet und in der Datenbank gespeichert.
