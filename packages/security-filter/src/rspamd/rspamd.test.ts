@@ -15,7 +15,7 @@ process.env['LOG_LEVEL'] = 'error';
 process.env['RSPAMD_URL'] = 'http://spam-filter.internal:21334/';
 process.env['RSPAMD_HOST'] = 'must-not-be-used';
 
-const { resolveRspamdEndpoints, parseRspamdUrl, scanMessage, learnSpam, learnHam } = await import('./index.js');
+const { resolveRspamdEndpoints, parseRspamdUrl, scanMessage, learnSpam, learnHam, rspamdControllerHeaders } = await import('./index.js');
 
 test('RSPAMD_URL is preferred and used for scanning and learning (controller)', () => {
   const e = resolveRspamdEndpoints({ RSPAMD_URL: 'http://rspamd:11334', RSPAMD_HOST: 'x', RSPAMD_PORT: '1' });
@@ -68,6 +68,32 @@ test('scanMessage / learnSpam / learnHam call the RSPAMD_URL endpoints', async (
     'http://spam-filter.internal:21334/learnspam',
     'http://spam-filter.internal:21334/learnham',
   ]);
+});
+
+test('v8.1: learn calls send the controller Password header from RSPAMD_CONTROLLER_PASSWORD', async () => {
+  assert.deepEqual(rspamdControllerHeaders({}), {});
+  assert.deepEqual(rspamdControllerHeaders({ RSPAMD_CONTROLLER_PASSWORD: 's3cret' }), { Password: 's3cret' });
+  assert.deepEqual(rspamdControllerHeaders({ RSPAMD_CONTROLLER_PASSWORD: 'x\r\nX-Evil: 1' }), {}, 'no header injection');
+
+  const seen: Array<string | null> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get('password'));
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  const prev = process.env['RSPAMD_CONTROLLER_PASSWORD'];
+  try {
+    process.env['RSPAMD_CONTROLLER_PASSWORD'] = 'ctrl-pw';
+    await learnSpam(Buffer.from('a'));
+    await learnHam(Buffer.from('b'));
+    delete process.env['RSPAMD_CONTROLLER_PASSWORD'];
+    await learnSpam(Buffer.from('c'));
+  } finally {
+    globalThis.fetch = realFetch;
+    if (prev === undefined) delete process.env['RSPAMD_CONTROLLER_PASSWORD'];
+    else process.env['RSPAMD_CONTROLLER_PASSWORD'] = prev;
+  }
+  assert.deepEqual(seen, ['ctrl-pw', 'ctrl-pw', null]);
 });
 
 test('scanMessage passes the SMTP session (IP, Helo, From, Rcpt, User) to rspamd', async () => {

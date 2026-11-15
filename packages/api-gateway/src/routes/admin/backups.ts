@@ -10,10 +10,12 @@
  *   POST /backup/admin/full            — trigger a full backup job
  *   GET  /backup/admin/list?limit=     — list S3 backup objects
  *   GET  /backup/admin/jobs?limit=     — list BackupJob records from the DB
- *   POST /backup/admin/import/:userId  — import MBOX for a user (multipart text)
+ *   POST /backup/admin/import/:userId?folderId= — import MBOX / encrypted .mbox.enc (raw bytes)
  */
+import { Readable, Transform } from 'node:stream';
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { requireArea, requireRole } from '../../middleware/auth.js'; // also loads the `apiUser` request augmentation
+import { prisma } from '@coremail/storage';
 import { audit, auditContext } from '../../lib/audit.js';
 
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
@@ -36,7 +38,8 @@ export function isMailboxDataRoute(req: Pick<Request, 'method' | 'path'>): boole
 /** COMPLIANCE_MANAGEMENT has no 'servers' area: it reaches the mailbox-data routes and the lists needed to pick a job. */
 const complianceBackupAccess = (role: string, req: Request): boolean =>
   role === 'COMPLIANCE_MANAGEMENT'
-  && (isMailboxDataRoute(req) || ((req.method === 'GET' || req.method === 'HEAD') && /^\/(jobs|list|users)\/?$/.test(req.path)));
+  && (isMailboxDataRoute(req) || ((req.method === 'GET' || req.method === 'HEAD')
+    && (/^\/(jobs|list|users)\/?$/.test(req.path) || /^\/users\/[^/]+\/folders\/?$/.test(req.path))));
 
 const mailboxDataGuard = requireRole('COMPLIANCE_MANAGEMENT'); // ORGANIZATION_MANAGEMENT always passes
 
@@ -124,6 +127,17 @@ adminBackupsRouter.post('/mailbox/:userId', async (req: Request, res: Response) 
 // v3.18.26 — user list for the mailbox picker
 adminBackupsRouter.get('/users', async (req: Request, res: Response) => {
   await forward(req, res, 'GET', '/backup/admin/users');
+});
+
+// v8.1 — folders of a user's mailbox: target picker of the MBOX import (?folderId=)
+adminBackupsRouter.get('/users/:userId/folders', async (req: Request, res: Response) => {
+  const { userId } = req.params as { userId: string };
+  const folders = await prisma.folder.findMany({
+    where: { mailbox: { userId } },
+    select: { id: true, name: true, displayName: true },
+    orderBy: { name: 'asc' },
+  });
+  res.json(folders);
 });
 
 // v3.18.26 — backup schedules CRUD
@@ -289,29 +303,78 @@ adminBackupsRouter.post('/schedules/:id/run-now', async (req: Request, res: Resp
   await forward(req, res, 'POST', `/backup/admin/schedules/${encodeURIComponent(id)}/run-now`);
 });
 
-// POST /api/v1/admin/backups/import/:userId — import MBOX for a user
-// Body is expected as text/mbox (up to 500MB).
+/** Max. import body (bytes) — env BACKUP_IMPORT_MAX_BYTES, default 500 MiB (the backup-service limit). */
+export function importMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env['BACKUP_IMPORT_MAX_BYTES']);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 500 * 1024 * 1024;
+}
+
+class ImportTooLargeError extends Error {}
+
+// POST /api/v1/admin/backups/import/:userId?folderId=… — MBOX import / restore
+// v8.1: the body is forwarded as RAW BYTES (streamed, never decoded as UTF-8 —
+// that corrupted encrypted `.mbox.enc` backups and non-UTF-8 mailboxes) with the
+// target folder as `?folderId=` (the backup-service requires it). Size cap:
+// BACKUP_IMPORT_MAX_BYTES (413 when exceeded).
 adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string };
-  // Body not yet consumed by express.json() because of mount order — backup
-  // router comes AFTER express.json()? — see server.ts. We read the raw body
-  // via req on('data') since MBOX is text/plain and potentially large.
-  const chunks: Buffer[] = [];
-  req.on('data', (c: Buffer) => chunks.push(c));
-  req.on('end', () => {
-    const body = Buffer.concat(chunks).toString('utf8');
+  const folderId = typeof req.query['folderId'] === 'string' ? req.query['folderId'] : '';
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(folderId)) {
+    res.status(400).json({ error: 'folderId query parameter required' });
+    return;
+  }
+  const max = importMaxBytes();
+  const declared = Number(req.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) {
+    res.status(413).json({ error: `Import too large (max ${max} bytes)` });
+    return;
+  }
+
+  let received = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      received += chunk.length;
+      if (received > max) { cb(new ImportTooLargeError('too large')); return; }
+      cb(null, chunk);
+    },
+  });
+  const source = req.pipe(counter);
+  req.on('error', (err) => counter.destroy(err));
+
+  try {
+    const upstream = await fetch(
+      `${BACKUP_URL}/backup/admin/import/${encodeURIComponent(userId)}?folderId=${encodeURIComponent(folderId)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          ...(req.get('Authorization') ? { Authorization: req.get('Authorization')! } : {}),
+        },
+        body: Readable.toWeb(source) as unknown as RequestInit['body'],
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' },
+    );
+    const text = await upstream.text();
     audit({
       actorId: req.apiUser!.userId,
       actorEmail: req.apiUser!.email,
       action: 'backup.mbox.import',
       targetType: 'user',
       targetId: userId,
-      changes: { sizeBytes: body.length },
+      changes: { sizeBytes: received, folderId, status: upstream.status },
+      success: upstream.ok,
       ...auditContext(req),
     });
-    void forward(req, res, 'POST', `/backup/admin/import/${encodeURIComponent(userId)}`, body, 'application/mbox');
-  });
-  req.on('error', () => {
-    if (!res.headersSent) res.status(400).json({ error: 'failed to read import body' });
-  });
+    res.status(upstream.status);
+    const ct = upstream.headers.get('content-type');
+    if (ct) res.setHeader('Content-Type', ct);
+    res.send(text);
+  } catch (err) {
+    if (received > max || err instanceof ImportTooLargeError || (err as { cause?: unknown })?.cause instanceof ImportTooLargeError) {
+      if (!res.headersSent) res.status(413).json({ error: `Import too large (max ${max} bytes)` });
+      req.resume(); // drain the rest of the upload
+      return;
+    }
+    upstreamUnavailable(res);
+  }
 });

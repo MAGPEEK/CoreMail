@@ -293,6 +293,20 @@ export async function downloadFile(path: string, filename: string): Promise<void
   saveBlob(await fetchBlob(path), filename);
 }
 
+/**
+ * Like downloadFile, but the server's Content-Disposition file name wins over
+ * `fallbackName` (backup downloads: the server knows the decrypted name).
+ */
+export async function downloadFileNamed(path: string, fallbackName: string, nameFromHeader: (h: string | null) => string | null): Promise<void> {
+  const res = await apiFetch(path, {}, null);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText })) as unknown;
+    throw apiErrorFromBody(body, res.status);
+  }
+  const name = nameFromHeader(res.headers.get('content-disposition')) ?? fallbackName;
+  saveBlob(await res.blob(), name);
+}
+
 // ── Login / MFA / logout ──────────────────────────────────────────────────────
 
 export type MfaMethod = 'webauthn' | 'totp' | 'backup_code';

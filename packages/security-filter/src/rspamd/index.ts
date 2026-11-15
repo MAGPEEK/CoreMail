@@ -144,10 +144,23 @@ export async function scanMessage(rawBuffer: Buffer, meta: RspamdMeta = {}): Pro
   }
 }
 
+/**
+ * v8.1: authentication for rspamd controller calls (learnspam/learnham, fuzzy):
+ * the `Password` header from RSPAMD_CONTROLLER_PASSWORD when set, so the
+ * controller no longer has to trust the app's IP (`secure_ip`). The value is
+ * never logged. CR/LF in the variable are refused (header injection).
+ */
+export function rspamdControllerHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const pw = env['RSPAMD_CONTROLLER_PASSWORD'] ?? '';
+  if (!pw || /[\r\n\0]/.test(pw)) return {};
+  return { Password: pw };
+}
+
 export async function learnSpam(rawBuffer: Buffer): Promise<void> {
   try {
     await fetch(`${rspamd().controller}/learnspam`, {
       method: 'POST',
+      headers: rspamdControllerHeaders(),
       body: rawBuffer,
       signal: AbortSignal.timeout(10_000),
     });
@@ -160,6 +173,7 @@ export async function learnHam(rawBuffer: Buffer): Promise<void> {
   try {
     await fetch(`${rspamd().controller}/learnham`, {
       method: 'POST',
+      headers: rspamdControllerHeaders(),
       body: rawBuffer,
       signal: AbortSignal.timeout(10_000),
     });

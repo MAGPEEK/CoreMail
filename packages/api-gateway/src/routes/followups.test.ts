@@ -152,6 +152,13 @@ test('message-trace export honours subject + status exactly like the list', asyn
   assert.equal(matchesTraceFilter(null, {}), true);
 });
 
+test('rspamd controller calls: Password header from RSPAMD_CONTROLLER_PASSWORD', async () => {
+  const { rspamdControllerHeaders } = await import('../lib/rspamd-controller.js');
+  assert.deepEqual(rspamdControllerHeaders({}), {});
+  assert.deepEqual(rspamdControllerHeaders({ RSPAMD_CONTROLLER_PASSWORD: 'pw' }), { Password: 'pw' });
+  assert.deepEqual(rspamdControllerHeaders({ RSPAMD_CONTROLLER_PASSWORD: 'pw\nX: y' }), {});
+});
+
 test('shared-mailbox message: attachment select includes contentId + inline', async () => {
   const r = await call('GET', '/api/v1/user/shared-mailboxes/sm1/messages/msg1', tok('u1'));
   assert.equal(r.status, 200, JSON.stringify(r.json));

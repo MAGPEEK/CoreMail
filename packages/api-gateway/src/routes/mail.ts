@@ -19,6 +19,7 @@ import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
+import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
 
 const replyLookup = prismaReplyLookup(
@@ -36,7 +37,7 @@ const RSPAMD_URL = process.env['RSPAMD_URL'] ?? 'http://rspamd:11334';
 async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promise<void> {
   await fetch(`${RSPAMD_URL}/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: { 'Content-Type': 'application/octet-stream', ...rspamdControllerHeaders() },
     body: raw,
     signal: AbortSignal.timeout(10_000),
   });

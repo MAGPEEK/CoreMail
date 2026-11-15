@@ -14,6 +14,7 @@ are the secure choice.
 | `MAIL_SEND_MAX_RECIPIENTS` | `500` | Max. recipients (to + cc + bcc) per message. |
 | `IMAGE_PROXY_RATE_LIMIT` | `120` | Image proxy requests per user and window (`0` = off). |
 | `IMAGE_PROXY_RATE_WINDOW_SEC` | `60` | Window of the image proxy limit. |
+| `BACKUP_IMPORT_MAX_BYTES` | `524288000` (500 MiB) | Max. body of `POST /api/v1/admin/backups/import/:userId` (checked on `Content-Length` and on the streamed bytes → `413`). |
 
 The rate limits count in Redis (`ratelimit:<scope>:<userId>:<window>`), so they
 hold across restarts. If Redis does not answer within 500 ms, an in-process
@@ -56,7 +57,23 @@ GET  /api/v1/events?ticket=<ticket>
 - `GET /api/v1/events?token=<access token>` still works for one release. It is
   **deprecated** and will be removed.
 - Frontends: request a fresh ticket before every `new EventSource(...)`,
-  including reconnects, because a ticket cannot be reused.
+  including reconnects, because a ticket cannot be reused. Since 8.1 the MWA
+  (`useMailEvents`) and the BCP dashboard do exactly that
+  (`lib/reconnectingEventSource.ts`, ticket request through the API client, one
+  refresh on a 401); neither puts the access token into a URL any more.
+
+## Refresh cookie for SSO logins
+
+`POST /auth/sso/exchange` answers like `POST /auth/login` (8.1): browser
+clients (`X-CoreMail-Client: web`, BCP additionally `X-CoreMail-App: bcp`) get
+the refresh token only as the HttpOnly cookie `cm_rt` / `cm_rt_bcp`, the body
+carries `{ accessToken, expiresIn }`. Other clients still get the full pair.
+
+## Password reset token check
+
+`POST /auth/reset-password/verify { token }` → `{ valid }` (8.1). The token
+travels in the body, not in a URL. `GET /auth/reset-password/verify?token=` is
+deprecated (`Deprecation: true` header) and will be removed in the next release.
 
 ## Image proxy (external images in mails)
 
@@ -99,6 +116,10 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   - An internal id is resolved within the mailboxes the caller can read. The
     headers then carry the parent's Message-ID and its References chain.
   - An internal id is never written into a header.
+- `references` (8.1, optional): the client's References chain — an array of
+  `<msg-id>` tokens or one space-separated string, at most 50, no CR/LF
+  (`400` otherwise). It replaces the server-resolved chain; the resolved
+  In-Reply-To is always its last entry. Without it the server chain is used.
 
 ## Admin exports
 
@@ -110,7 +131,8 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   key; it was previously an unkeyed `sha256=` hash.
 - `GET /api/v1/admin/message-trace/export` requires the Authorization header.
   Fetch it with `fetch()` and download it as a blob. A `window.open()` cannot
-  authenticate.
+  authenticate. Since 8.1 it honours `sender`, `recipient`, `subject` and
+  `status` exactly like the list endpoint.
 
 ## Admin RBAC additions
 
@@ -127,6 +149,17 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   - MBOX import (`POST /backups/import/:userId`)
 - SERVER_MANAGEMENT keeps full backups, schedules and the job list.
 - Downloads are recorded in the audit log.
+- MBOX import (8.1): `POST /backups/import/:userId?folderId=<id>`, the body is
+  forwarded to the backup-service as raw bytes (streamed, never decoded — so
+  encrypted `.mbox.enc` backups and non-UTF-8 mailboxes arrive intact), capped
+  by `BACKUP_IMPORT_MAX_BYTES`. The target folder list for the BCP picker comes
+  from `GET /backups/users/:userId/folders`.
+- "Sign out everywhere" (8.1): `POST /api/v1/admin/mailboxes/:id/revoke-sessions`
+  replaces the removed `DELETE /auth/sessions/admin/:userId`. Area `recipients`
+  (HELP_DESK included, USER accounts only); admin accounts only by
+  ORGANIZATION_MANAGEMENT (`canManageAccount`). Ends all web/API sessions
+  (`revokeAllSessions` → `publishUserAuthChange`), keeps app passwords, writes
+  the audit entry `mailbox.sessions.revoke`.
 
 ## Proxied services
 

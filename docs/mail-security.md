@@ -63,6 +63,12 @@ such patterns when a rule is saved (`POST/PUT /api/v1/user/rules` →
 `400 INVALID_RULE_PATTERN` with a readable message, shown in the MWA rule
 editor); invalid patterns stored earlier never match.
 
+## rspamd controller authentication
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `RSPAMD_CONTROLLER_PASSWORD` | unset | When set, every rspamd controller call (security-filter `/learnspam` + `/learnham`; api-gateway Bayes learning from "mark as junk/not junk" and the BCP threshold/stat calls) sends it as the `Password` header (8.1). Set the same value as the controller `password` / `enable_password` in rspamd, so the controller no longer needs to trust the app's IP via `secure_ip`. Values with CR/LF are ignored. |
+
 ## Failure policy
 
 | Variable | Default | Effect |
