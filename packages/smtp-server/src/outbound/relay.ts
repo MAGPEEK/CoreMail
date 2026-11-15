@@ -194,7 +194,7 @@ let _cachedConfig: OutboundConfig | null = null;
 let _cacheExpiresAt = 0;
 
 function fallbackHeloName(): string {
-  return process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+  return process.env['SMTP_HOSTNAME']?.trim() || process.env['MAIL_HOSTNAME']?.trim() || 'mail.localhost';
 }
 
 async function getOutboundConfig(): Promise<OutboundConfig> {

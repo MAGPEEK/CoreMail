@@ -34,7 +34,7 @@ const SMTP_PORT_587 = parseInt(process.env['SMTP_PORT_587'] ?? '587', 10);
 // ── Hostname (DB-backed, env var as migration fallback) ───────────────────────
 // Primary source: ServerSettings.publicHostname in DB (set via Admin Panel)
 // Fallback: SMTP_HOSTNAME / MAIL_HOSTNAME env vars (deprecated, for migration)
-let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+let _hostname: string = process.env['SMTP_HOSTNAME']?.trim() || process.env['MAIL_HOSTNAME']?.trim() || 'mail.localhost';
 
 // ── TLS configuration (for port 465 / implicit TLS) ───────────────────────────
 // Loaded from the DB at startup or generated as a self-signed certificate.
@@ -103,7 +103,7 @@ async function refreshHostname(): Promise<void> {
       log.debug({ hostname: _hostname }, 'SMTP hostname refreshed from DB');
     } else {
       // Seed env fallback into DB on first run so admin panel shows correct value
-      const envHostname = process.env['MAIL_HOSTNAME'] ?? process.env['SMTP_HOSTNAME'];
+      const envHostname = process.env['MAIL_HOSTNAME']?.trim() || process.env['SMTP_HOSTNAME']?.trim() || undefined;
       if (envHostname) {
         await prisma.serverSettings.upsert({
           where:  { id: 'singleton' },

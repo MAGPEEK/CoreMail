@@ -39,3 +39,30 @@ test('/internal/* guard: remote peers rejected even with spoofed X-Forwarded-For
   guard({ socket: { remoteAddress: '127.0.0.1' }, headers: {} }, res, () => { passed = true; });
   assert.equal(passed, true);
 });
+
+test('isBackupAdmin with path: mailbox content only for ORG + COMPLIANCE (9.1)', () => {
+  const dl = '/backup/admin/download/job1';
+  const mb = '/backup/admin/mailbox/u1';
+  const imp = '/backup/admin/import/u1';
+  const arch = '/backup/admin/archive/download';
+  for (const p of [dl, mb, imp, arch]) {
+    const m = p === dl || p === arch ? 'GET' : 'POST';
+    assert.equal(isBackupAdmin('ORGANIZATION_MANAGEMENT', m, p), true, p);
+    assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', m, p), true, p);
+    assert.equal(isBackupAdmin('SERVER_MANAGEMENT', m, p), false, p);
+    assert.equal(isBackupAdmin('VIEW_ONLY_ORG', m, p), false, p);
+    assert.equal(isBackupAdmin('HELP_DESK', m, p), false, p);
+  }
+  // listings
+  for (const p of ['/backup/admin/jobs', '/backup/admin/users', '/backup/admin/list']) {
+    assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', 'GET', p), true, p);
+    assert.equal(isBackupAdmin('VIEW_ONLY_ORG', 'GET', p), true, p);
+  }
+  // server administration stays with ORG + SERVER
+  assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', 'POST', '/backup/admin/full'), false);
+  assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', 'GET', '/backup/admin/schedules'), false);
+  assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', 'DELETE', '/backup/admin/jobs/j1'), false);
+  assert.equal(isBackupAdmin('SERVER_MANAGEMENT', 'POST', '/backup/admin/full'), true);
+  assert.equal(isBackupAdmin('SERVER_MANAGEMENT', 'DELETE', '/backup/admin/archive'), true);
+  assert.equal(isBackupAdmin('VIEW_ONLY_ORG', 'DELETE', '/backup/admin/archive'), false);
+});

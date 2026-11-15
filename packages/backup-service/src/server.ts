@@ -53,7 +53,7 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
 // (ORGANIZATION_MANAGEMENT + SERVER_MANAGEMENT write, VIEW_ONLY_ORG read).
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
   requireAuth(req, res, () => {
-    if (!isBackupAdmin((req as express.Request & { role: string }).role, req.method)) {
+    if (!isBackupAdmin((req as express.Request & { role: string }).role, req.method, req.path)) {
       res.status(403).json({ error: 'Admin role required' }); return;
     }
     next();
