@@ -193,6 +193,13 @@ app.kubernetes.io/component: {{ .component }}
 {{- if and $s.setupToken (lt (len $s.setupToken) 16) }}{{ fail "secrets.setupToken must be at least 16 characters" }}{{ end }}
 {{- if and (gt (int .Values.app.replicaCount) 1) (not $s.setupToken) }}{{ fail "app.replicaCount > 1 requires secrets.setupToken (each pod would otherwise print its own random setup token)" }}{{ end }}
 {{- end }}
+{{- if and $s.backupEncryptionKey (not (regexMatch "^([0-9a-fA-F]{64}|[A-Za-z0-9+/_-]{43}=?)$" $s.backupEncryptionKey)) }}{{ fail "secrets.backupEncryptionKey must be 32 bytes: 64 hex characters (openssl rand -hex 32) or base64 (openssl rand -base64 32)" }}{{ end }}
+{{- if and $s.rspamdControllerPassword (not (regexMatch "^[A-Za-z0-9._~+/=-]{12,}$" $s.rspamdControllerPassword)) }}{{ fail "secrets.rspamdControllerPassword must be at least 12 characters of [A-Za-z0-9._~+/=-] (openssl rand -hex 20) — it is embedded in the rspamd configuration" }}{{ end }}
+{{- /* Chart 2.0: removed values must not be silently ignored */}}
+{{- $m := .Values.app.mailAuth | default dict }}
+{{- if and (hasKey $m "limitPrivateIps") (not (kindIs "invalid" (index $m "limitPrivateIps"))) }}
+{{- fail "app.mailAuth.limitPrivateIps was removed in chart 2.0 (CoreMail 9.0: MAIL_AUTH_LIMIT_PRIVATE_IPS no longer exists — only loopback is exempt from per-IP limits by default). Remove it and use app.mailAuth.exemptCidrs instead: limitPrivateIps: true → leave exemptCidrs empty; limitPrivateIps: false (old default) → exemptCidrs: \"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7\" keeps the old behaviour (not recommended). See infra/k8s/README.md → Upgrading to chart 2.0" }}
+{{- end }}
 {{- $os := .Values.objectStorage }}
 {{- if not (has $os.driver (list "minio" "s3" "filesystem")) }}{{ fail "objectStorage.driver must be minio, s3 or filesystem" }}{{ end }}
 {{- if and (eq $os.driver "filesystem") (gt (int .Values.app.replicaCount) 1) }}{{ fail "objectStorage.driver=filesystem requires app.replicaCount: 1 (the object volume is ReadWriteOnce and not shared between pods)" }}{{ end }}

@@ -49,11 +49,17 @@ data:
   RSPAMD_URL: {{ .Values.rspamd.external.url | quote }}
   {{- else if $rspamd }}
   RSPAMD_URL: {{ printf "http://%s:%s" $rspamd (ternary "11334" (toString .Values.rspamd.external.controllerPort) .Values.rspamd.enabled) | quote }}
+  {{- else }}
+  # Neither bundled nor external rspamd: scanner off (overrides the BCP setting)
+  RSPAMD_ENABLED: "false"
   {{- end }}
   {{- $clamav := include "coremail.clamav.host" . }}
   {{- if $clamav }}
   CLAMAV_HOST: {{ $clamav | quote }}
   CLAMAV_PORT: {{ ternary "3310" (toString .Values.clamav.external.port) .Values.clamav.enabled | quote }}
+  {{- else }}
+  # Neither bundled nor external ClamAV: scanner off (overrides the BCP setting)
+  CLAMAV_ENABLED: "false"
   {{- end }}
 
   # Schedules (cron, UTC)

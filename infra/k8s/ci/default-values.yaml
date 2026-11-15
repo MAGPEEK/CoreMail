@@ -4,6 +4,8 @@ secrets:
   jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"
   pepper: "ci-pepper-0000000000000000000000000000000000000000000000000000000"
   mfaEncryptionKey: "abcdef0000000000000000000000000000000000000000000000000000000003"
+  backupEncryptionKey: "abcdef0000000000000000000000000000000000000000000000000000000004"
+  rspamdControllerPassword: ci-rspamd-controller-password
   postgresPassword: ci-postgres-password
   redisPassword: ci-redis-password
   minioRootPassword: ci-minio-password

@@ -1,5 +1,6 @@
 # Filesystem object storage (CoreMail >= 8.0.0) on a PVC, no MinIO,
-# NetworkPolicies off, NodePort mail service. Dummy secrets only.
+# NetworkPolicies off, NodePort mail service, no rspamd/ClamAV (scanners
+# switched off via RSPAMD_ENABLED/CLAMAV_ENABLED=false). Dummy secrets only.
 secrets:
   jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"
   pepper: "ci-pepper-0000000000000000000000000000000000000000000000000000000"
@@ -18,3 +19,7 @@ mailService:
   type: NodePort
   ports:
     smtp: { enabled: true, port: 25, targetPort: 25, nodePort: 30025 }
+rspamd:
+  enabled: false
+clamav:
+  enabled: false
