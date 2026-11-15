@@ -14,7 +14,7 @@ process.env['LOG_LEVEL'] ??= 'error';
 (globalThis as Record<string, unknown>)['__prisma'] = { $on: () => undefined };
 
 const { ConnectionLimiter } = await import('@coremail/core');
-const { admitConnection } = await import('./limits.js');
+const { admitConnection, pop3ConnectionLimiter, DEFAULT_POP3_MAX_CONNS_PER_IP } = await import('./limits.js');
 const { POP3Session } = await import('./session.js');
 const { selfSignedTestCert } = await import('./test-cert.js');
 const CERT = selfSignedTestCert();
@@ -91,4 +91,17 @@ test('an STLS handshake that never starts is cut off', async (t) => {
   await waitFor(() => c.data.includes('+OK Begin TLS'));
   // no ClientHello
   await Promise.race([c.closed, new Promise((_r, rej) => setTimeout(() => rej(new Error('still open')), 2000))]);
+});
+
+test('v8.1 review: the default per-IP cap is 50 (NAT offices)', { skip: !!process.env['POP3_MAX_CONNS_PER_IP'] }, () => {
+  assert.equal(DEFAULT_POP3_MAX_CONNS_PER_IP, 50);
+  const releases: Array<() => void> = [];
+  for (let i = 0; i < 50; i++) {
+    const r = pop3ConnectionLimiter.acquire('198.51.100.77');
+    assert.ok(r.ok, `connection ${i + 1}`);
+    if (r.ok) releases.push(r.release);
+  }
+  const over = pop3ConnectionLimiter.acquire('198.51.100.77');
+  assert.equal(over.ok, false);
+  for (const release of releases) release();
 });

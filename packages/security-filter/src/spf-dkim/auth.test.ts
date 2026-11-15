@@ -78,22 +78,25 @@ const baseAuth = (over: Partial<Auth> = {}): Auth => ({
 const isLocal = async (d: string) => d === 'corp.test';
 const ctx = { senderIp: '198.51.100.66', mailFrom: 'x@ext.example', rcptTo: 'u@corp.test' };
 
-test('anti-spoofing: a local domain in MAIL FROM or header From needs an aligned pass', async () => {
+const { loadSpoofPolicyOptions } = await import('../pipeline/index.js');
+const strict = loadSpoofPolicyOptions({ LOCAL_SPOOF_ACTION: 'reject' });
+
+test('anti-spoofing (LOCAL_SPOOF_ACTION=reject): a local domain in MAIL FROM or header From needs an aligned pass', async () => {
   // header From = local domain, nothing authenticated → reject
-  const r1 = await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test' }), ctx, isLocal);
+  const r1 = await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test' }), ctx, isLocal, strict);
   assert.ok(r1 && 'action' in r1 && r1.action === 'reject');
   // MAIL FROM = local domain → reject
-  const r2 = await decideAuthentication(baseAuth(), { ...ctx, mailFrom: 'ceo@CORP.test' }, isLocal);
+  const r2 = await decideAuthentication(baseAuth(), { ...ctx, mailFrom: 'ceo@CORP.test' }, isLocal, strict);
   assert.ok(r2 && 'action' in r2 && r2.action === 'reject');
   // SPF pass for an unrelated domain does not help
-  const r3 = await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test', spf: 'pass', spfDomain: 'ext.example', verifiedDomains: ['ext.example'] }), ctx, isLocal);
+  const r3 = await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test', spf: 'pass', spfDomain: 'ext.example', verifiedDomains: ['ext.example'] }), ctx, isLocal, strict);
   assert.ok(r3 && 'action' in r3 && r3.action === 'reject');
   // our own DKIM signature (forwarded back to us) → fine
-  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test', dkim: 'pass', dkimDomains: ['corp.test'], verifiedDomains: ['corp.test'] }), ctx, isLocal), null);
+  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test', dkim: 'pass', dkimDomains: ['corp.test'], verifiedDomains: ['corp.test'] }), ctx, isLocal, strict), null);
   // authenticated SMTP session → not checked here
-  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test' }), { ...ctx, authUser: 'ceo@corp.test' }, isLocal), null);
+  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test' }), { ...ctx, authUser: 'ceo@corp.test' }, isLocal, strict), null);
   // foreign domains without DMARC record → continue
-  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'ext.example' }), ctx, isLocal), null);
+  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'ext.example' }), ctx, isLocal, strict), null);
 });
 
 test('DMARC p=reject fails with reject, p=quarantine delivers to Junk with the AR header', async () => {

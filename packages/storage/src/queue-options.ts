@@ -94,14 +94,18 @@ export function attemptsForRetention(retentionHours: number, firstDelayMs = 60_0
  */
 export function outboundRetryDelay(
   attemptsMade: number,
-  job: { timestamp?: number | undefined; opts?: { delay?: number | undefined; backoff?: unknown } | undefined },
+  job: {
+    timestamp?: number | undefined;
+    opts?: { delay?: number | undefined; backoff?: unknown } | undefined;
+    data?: object | undefined;
+  },
   settings: Partial<QueueSettingsLike> | null | undefined,
   now = Date.now(),
 ): number {
   const s = normalizeQueueSettings(settings);
   const step = outboundRetryStepMs(attemptsMade, s.retryBackoffDelaySec * 1000);
-  if (job.timestamp === undefined) return step;
-  const expiry = job.timestamp + Math.max(0, job.opts?.delay ?? 0) + s.outboundRetentionHours * 3_600_000;
+  if (job.timestamp === undefined && (job.data as { expiryBaseMs?: unknown } | undefined)?.expiryBaseMs === undefined) return step;
+  const expiry = queueStartMs(job) + s.outboundRetentionHours * 3_600_000;
   const untilExpiry = expiry - now + 1000;
   return Math.max(1000, Math.min(step, untilExpiry));
 }
@@ -144,13 +148,36 @@ export function buildOutboundJobOptions(settings: Partial<QueueSettingsLike> | n
  * so a scheduled-send job does not expire before it was due).
  */
 export function isExpiredInQueue(
-  job: { timestamp: number; opts?: { delay?: number } | undefined },
+  job: { timestamp: number; opts?: { delay?: number | undefined } | undefined; data?: object | undefined },
   settings: Partial<QueueSettingsLike> | null | undefined,
   now = Date.now(),
 ): boolean {
   const s = normalizeQueueSettings(settings);
-  const start = job.timestamp + Math.max(0, job.opts?.delay ?? 0);
-  return now - start > s.outboundRetentionHours * 3_600_000;
+  return now - queueStartMs(job) > s.outboundRetentionHours * 3_600_000;
+}
+
+/**
+ * Pure: start of a job's retry window — `data.expiryBaseMs` when an admin
+ * retry reset it, else the enqueue time + initial delay.
+ */
+export function queueStartMs(job: {
+  timestamp?: number | undefined;
+  opts?: { delay?: number | undefined } | undefined;
+  data?: object | undefined;
+}): number {
+  const base = (job.data as { expiryBaseMs?: unknown } | undefined)?.expiryBaseMs;
+  if (typeof base === 'number' && Number.isFinite(base)) return base;
+  return (job.timestamp ?? Date.now()) + Math.max(0, job.opts?.delay ?? 0);
+}
+
+/**
+ * Pure: job data for an admin "Retry" of a dead letter (BCP queue view): the
+ * retry window starts again now (an expired message is not refused again at
+ * once). Delivery progress (`deliveredRcpts`, `bouncedRcpts`) is kept, so no
+ * recipient is delivered or bounced twice.
+ */
+export function adminRetryJobData<T extends Record<string, unknown>>(data: T, now = Date.now()): T & { expiryBaseMs: number } {
+  return { ...data, expiryBaseMs: now };
 }
 
 /** Pure: grace periods (ms) for the periodic queue cleaner; null = do not clean that state. */

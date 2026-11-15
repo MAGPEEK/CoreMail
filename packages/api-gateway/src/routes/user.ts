@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
-import { prisma, expunge, nextModSeq } from '@coremail/storage';
+import { prisma, expunge, nextModSeq, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
@@ -386,6 +386,38 @@ export function invalidRulePatternMessage(
   return null;
 }
 
+/**
+ * v8.1: at most MAX_REGEX_CONDITIONS_PER_USER `regex` conditions/exceptions
+ * over all of a user's rules (each one runs on every delivered message).
+ * Returns a 400 message when saving `next` (replacing `replacingId`) would
+ * exceed it, otherwise null.
+ */
+export function regexConditionLimitMessage(
+  existing: ReadonlyArray<{ id: string; conditions: unknown; exceptions: unknown }>,
+  next: ReadonlyArray<ReadonlyArray<unknown> | undefined>,
+  replacingId?: string,
+): string | null {
+  const others = existing.filter((r) => r.id !== replacingId);
+  const total = countRegexConditions(others.flatMap((r) => [r.conditions as unknown[], r.exceptions as unknown[]]))
+    + countRegexConditions(next);
+  return total > MAX_REGEX_CONDITIONS_PER_USER
+    ? `Too many regular-expression conditions: at most ${MAX_REGEX_CONDITIONS_PER_USER} per user (all rules together)`
+    : null;
+}
+
+async function regexLimitError(
+  userId: string,
+  next: ReadonlyArray<ReadonlyArray<unknown> | undefined>,
+  replacingId?: string,
+): Promise<string | null> {
+  if (countRegexConditions(next) === 0) return null;
+  const existing = await prisma.mailRule.findMany({
+    where: { userId },
+    select: { id: true, conditions: true, exceptions: true },
+  });
+  return regexConditionLimitMessage(existing, next, replacingId);
+}
+
 // GET /api/v1/user/rules
 userRouter.get('/rules', async (req: Request, res: Response) => {
   const rules = await prisma.mailRule.findMany({
@@ -404,6 +436,8 @@ userRouter.post('/rules', async (req: Request, res: Response) => {
   }
   const patternError = invalidRulePatternMessage([parsed.data.conditions, parsed.data.exceptions]);
   if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
+  const limitError = await regexLimitError(req.apiUser!.userId, [parsed.data.conditions, parsed.data.exceptions]);
+  if (limitError) { res.status(400).json({ error: limitError, code: 'TOO_MANY_REGEX_CONDITIONS' }); return; }
   // Auto priority: append at the end if not set explicitly
   let priority = parsed.data.priority;
   if (priority === 0) {
@@ -442,6 +476,11 @@ userRouter.put('/rules/:id', async (req: Request, res: Response) => {
   if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
+  const limitError = await regexLimitError(req.apiUser!.userId, [
+    parsed.data.conditions ?? (rule.conditions as unknown[]),
+    parsed.data.exceptions ?? (rule.exceptions as unknown[]),
+  ], id);
+  if (limitError) { res.status(400).json({ error: limitError, code: 'TOO_MANY_REGEX_CONDITIONS' }); return; }
 
   const updated = await prisma.mailRule.update({
     where: { id },

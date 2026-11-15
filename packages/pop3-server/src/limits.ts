@@ -1,7 +1,8 @@
 /**
  * v8.1: connection limits of the POP3 server (pre-auth DoS hardening).
  *
- *   POP3_MAX_CONNS_PER_IP (20)    concurrent connections per client IP
+ *   POP3_MAX_CONNS_PER_IP (50)    concurrent connections per client IP (NAT offices:
+ *                                 see docs/mail-protocol-limits.md)
  *   POP3_MAX_CONNS        (1000)  concurrent connections per process
  *   MAIL_CONN_EXEMPT_CIDRS        IPs/CIDRs without the per-IP cap (loopback always)
  *
@@ -17,8 +18,11 @@ const log = createLogger('pop3-limits');
 const exempt = createExemptIpMatcher(process.env['MAIL_CONN_EXEMPT_CIDRS']);
 export const invalidExemptEntries = exempt.invalid;
 
+/** Default of POP3_MAX_CONNS_PER_IP — room for an office behind one NAT address. */
+export const DEFAULT_POP3_MAX_CONNS_PER_IP = 50;
+
 export const pop3ConnectionLimiter = new ConnectionLimiter({
-  maxPerIp: envLimit('POP3_MAX_CONNS_PER_IP', 20),
+  maxPerIp: envLimit('POP3_MAX_CONNS_PER_IP', DEFAULT_POP3_MAX_CONNS_PER_IP),
   maxTotal: envLimit('POP3_MAX_CONNS', 1000),
   isExempt: exempt.isExempt,
 });

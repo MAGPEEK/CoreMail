@@ -173,3 +173,38 @@ test('v8.1: a transient failure retries until the expiry; then ONE final NDR wit
   // the BullMQ strategy delegates to the schedule (1 min after the first failure)
   assert.equal(await outboundBackoffStrategy(1, 'coremail-outbound', undefined, { timestamp: Date.now() }), 60_000);
 });
+
+test('v8.1 review: admin retry of an expired dead letter gets a fresh window and never a second final NDR', async () => {
+  const { queueExpiredError } = await import('./queue.js');
+  const { isExpiredInQueue, adminRetryJobData } = await import('@coremail/storage');
+  const h = harness([
+    () => ({ delivered: [], failures: [fail('slow@ext.test', 451, '4.4.1')] }),
+    () => ({ delivered: [], failures: [fail('slow@ext.test', 550, '5.1.1')] }),
+  ]);
+  const now = Date.now();
+  const j = job(['slow@ext.test']);
+  j.timestamp = now - 100 * 3_600_000;
+  j.opts = { attempts: 100 };
+  j.data.delayNotified = true; // the delay DSN went out long ago
+  await assert.rejects(deliverOutboundJob(j, Buffer.from('x'), h.deps), /Temporary failure/);
+
+  // expired → dead letter with ONE 5.4.7 NDR; the recipient is recorded in the job
+  assert.equal(isExpiredInQueue({ timestamp: j.timestamp, opts: j.opts, data: j.data }, null, now), true);
+  const dead = { ...j, attemptsMade: 31 };
+  handleFailedJob(dead, queueExpiredError(48), h.deps);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+  assert.deepEqual(dead.data.finalNdrRcpts, ['slow@ext.test']);
+
+  // admin "Retry" (api-gateway adminRetryJob): window restarts, recipient is tried again
+  dead.data = adminRetryJobData(dead.data as unknown as Record<string, unknown>, now) as unknown as typeof dead.data;
+  assert.equal(isExpiredInQueue({ timestamp: dead.timestamp!, opts: dead.opts, data: dead.data }, null, now + 1000), false);
+  const err = await deliverOutboundJob(dead, Buffer.from('x'), h.deps).catch((e: unknown) => e as Error);
+  assert.deepEqual(h.relayed.at(-1), ['slow@ext.test'], 'the retry delivers again');
+  assert.ok(err instanceof UnrecoverableError);
+  // permanent failure on the retry and the final give-up: no second NDR
+  handleFailedJob({ ...dead, attemptsMade: 1 }, err, h.deps);
+  handleFailedJob({ ...dead, attemptsMade: 2 }, queueExpiredError(48), h.deps);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+});

@@ -21,7 +21,7 @@
 import { prisma } from './prisma/index.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
-import { matchRulePattern } from './rule-pattern.js';
+import { matchRulePattern, createRulePatternBudget, type RulePatternBudget } from './rule-pattern.js';
 
 const log = createLogger('storage:transport-rules');
 
@@ -56,6 +56,8 @@ interface TransportEvalContext {
   envelopeRcpt?: string;
   /** rspamd score (if available) */
   spamScore?:   number;
+  /** Regex step budget shared by all rules of this message (default: a fresh one). */
+  patternBudget?: RulePatternBudget;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +97,7 @@ export function removeHeaderFields(headerText: string, name: string): string {
 }
 
 /** One condition operator against a field value (exported for tests). */
-export function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: string): boolean {
+export function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: string, budget?: RulePatternBudget): boolean {
   if (typeof fv === 'boolean') {
     if (op === 'is' || op === 'equals') return fv === (expected === 'true' || expected === '1');
     return false;
@@ -120,7 +122,7 @@ export function evaluateOp(fv: string | number | boolean, op: TransportOp, expec
     // v8.1: linear-time matcher (no backtracking) — the subject/body are
     // attacker-controlled and a backtracking RegExp could stall delivery (ReDoS).
     // Invalid/unsupported patterns never match (refused on save in the admin API).
-    case 'regex': return matchRulePattern(expected, fv);
+    case 'regex': return matchRulePattern(expected, fv, budget);
     case 'is': return fv === ev;
     default: return false;
   }
@@ -129,15 +131,21 @@ export function evaluateOp(fv: string | number | boolean, op: TransportOp, expec
 function ruleMatches(conditions: TransportCondition[], parsed: ParsedMessage, ctx: TransportEvalContext): boolean {
   // Conditions are AND-combined (Exchange Transport Rules standard)
   if (conditions.length === 0) return true;
-  return conditions.every((c) => evaluateOp(getFieldValue(c.field, parsed, ctx), c.op, c.value));
+  return conditions.every((c) => evaluateOp(getFieldValue(c.field, parsed, ctx), c.op, c.value, ctx.patternBudget));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function applyTransportRules(
   parsed: ParsedMessage,
-  ctx: TransportEvalContext = {},
+  ctxIn: TransportEvalContext = {},
 ): Promise<TransportOutcome> {
+  const ctx: TransportEvalContext = {
+    ...ctxIn,
+    patternBudget: ctxIn.patternBudget ?? createRulePatternBudget({
+      onExhausted: () => log.warn('Regex step budget exhausted (RULE_PATTERN_STEP_BUDGET) — remaining regex conditions do not match'),
+    }),
+  };
   const outcome: TransportOutcome = {
     rejected:        false,
     quarantined:     false,

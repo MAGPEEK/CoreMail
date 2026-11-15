@@ -143,6 +143,32 @@ describe('upload endpoint', () => {
     unblock();
     assert.equal((await first).status, 201);
   });
+
+  test('v8.1 review: a storage failure answers 500 problem+json and frees the upload slot', async (t) => {
+    const gate = new ConcurrencyGate();
+    const base = await serve(t, app(async () => { throw new Error('object store down'); }, { gate, maxConcurrentUpload: () => 1 }));
+    for (let i = 0; i < 3; i++) {
+      const r = await fetch(`${base}/jmap/upload/rw`, { method: 'POST', body: 'x', signal: AbortSignal.timeout(5000) });
+      assert.equal(r.status, 500);
+      assert.match(r.headers.get('content-type') ?? '', /application\/problem\+json/);
+      assert.equal(((await r.json()) as Row)['status'], 500);
+    }
+    assert.equal(gate.count('u1'), 0);
+  });
+
+  test('v8.1 review: an account lookup failure answers 500 instead of hanging', async (t) => {
+    const gate = new ConcurrencyGate();
+    const a = express();
+    a.use(createUploadRouter({
+      auth: fakeAuth, gate, maxConcurrentUpload: () => 1,
+      resolveAccounts: async () => { throw new Error('db down'); },
+      store: async () => ({ blobId: 'u-1', size: 1, type: 'x' }),
+    }));
+    const base = await serve(t, a);
+    const r = await fetch(`${base}/jmap/upload/rw`, { method: 'POST', body: 'x', signal: AbortSignal.timeout(5000) });
+    assert.equal(r.status, 500);
+    while (gate.count('u1') > 0) await new Promise((res) => setTimeout(res, 5));
+  });
 });
 
 describe('upload quota', () => {

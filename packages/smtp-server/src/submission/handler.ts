@@ -18,6 +18,7 @@ import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
 import { buildReceivedHeader, formatRfc5322Date, prependHeader } from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
+import { stripForLocalDelivery, bounceUnknownLocal } from '../handlers/local-delivery.js';
 import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
 
 // ── RFC 822 lightweight header extraction ─────────────────────────────────────
@@ -156,14 +157,22 @@ async function onMessage(
   // when both are done; a failure answers 451 and the client's retry skips
   // what was already delivered (no duplicates, no loss — RFC 5321 §6.1).
   const submittedRaw = raw;
+  // RFC 8601 §5: a local user must not hand colleagues a forged
+  // `Authentication-Results: <our host>; dmarc=pass` (port 25 strips on receipt).
+  const localRaw = expandedLocalRcpts.length > 0 ? await stripForLocalDelivery(submittedRaw, [hostname]) : submittedRaw;
   const txKey = deliveryKey(from, receivedRaw);
+  const unknownRcpts: string[] = [];
   await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
     // MAIL FROM was checked against the SMTP AUTH identity in onMailFrom.
-    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, {
-      fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
-      senderAuth: { authenticatedSender: from },
-    }),
+    // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
+    storeLocal: async (rcpt) => {
+      const result = await storeInboundMessage(localRaw, {
+        fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
+        senderAuth: { authenticatedSender: from },
+      });
+      if (result === 'unknown') unknownRcpts.push(rcpt);
+    },
     enqueueExternal: async (rcpts) => {
       // RFC 3461: the DSN request travels with the queue job (passed on to a
       // DSN-capable next hop, honoured by the queue's DSNs).
@@ -181,12 +190,18 @@ async function onMessage(
 
   // RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for local recipients (stored in the sender's mailbox).
   const dsn = meta?.envelope?.dsn;
-  if (dsn && localRcpts.length > 0) {
+  if (dsn && localRcpts.some((r) => !unknownRcpts.includes(r))) {
     const original = rawSubjectAndId(submittedRaw);
     await sendSuccessDsn({
-      from, rcpts: localRcpts, action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
+      from, rcpts: localRcpts.filter((r) => !unknownRcpts.includes(r)), action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
       subject: original.subject, messageId: original.messageId, deliverExternal: true,
     });
+  }
+  // A local recipient that does not exist (unknown address in a local domain)
+  // is never dropped silently: the sender gets an NDR.
+  if (unknownRcpts.length > 0) {
+    await bounceUnknownLocal(submittedRaw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
+      log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
   }
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)

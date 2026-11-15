@@ -103,8 +103,10 @@ test('content-filter answer carries authHeaders and validated verifiedDomains', 
 
 // ── resource bookings ─────────────────────────────────────────────────────────
 
-const invite = (method: string, uid: string, start = '20261201T090000Z') => Buffer.from([
-  'Subject: Meeting', '', 'BEGIN:VCALENDAR', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`,
+// v8.1 review: the organizer identity is the iCal ORGANIZER (else the header From), never the envelope
+const invite = (method: string, uid: string, start = '20261201T090000Z', organizer = 'org@ext.test') => Buffer.from([
+  `From: Org <${organizer}>`, 'Subject: Meeting', '', 'BEGIN:VCALENDAR', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`,
+  `ORGANIZER;CN="Org: Team":mailto:${organizer}`,
   `DTSTART:${start}`, 'DTEND:20261201T100000Z', 'SUMMARY:Sync', 'END:VEVENT', 'END:VCALENDAR', '',
 ].join('\r\n'));
 const AUTH_EXT = { verifiedDomains: ['ext.test'] };
@@ -126,8 +128,10 @@ test('resource bookings: scoped per resource; update/cancel only by the authenti
   assert.equal(bookings[0]!.calendarId, 'cal1');
 
   // a different (even authenticated) sender cannot cancel or overwrite
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
-  await processResourceMailboxes(invite('REQUEST', 'u-1', '20261203T090000Z'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
+  await processResourceMailboxes(invite('CANCEL', 'u-1', undefined, 'mallory@ext.test'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
+  await processResourceMailboxes(invite('REQUEST', 'u-1', '20261203T090000Z', 'mallory@ext.test'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
+  // the organizer's envelope address does not help when ORGANIZER names someone else
+  await processResourceMailboxes(invite('CANCEL', 'u-1', undefined, 'mallory@ext.test'), ['room1@corp.test'], 'org@ext.test', AUTH_EXT);
   // the organizer address without authentication (spoofed) cannot either
   await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', { verifiedDomains: [] });
   await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', null);
