@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
+import { isoDateTime } from '../lib/zod-compat.js';
 import { Readable } from 'stream';
 import multer from 'multer';
 import nodemailer, { type SendMailOptions } from 'nodemailer';
@@ -537,7 +538,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/mail/messages/:id/snooze — hide until date
-const SnoozeSchema = z.object({ until: z.string().datetime() });
+const SnoozeSchema = z.object({ until: isoDateTime() });
 mailRouter.post('/messages/:id/snooze', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const parsed = SnoozeSchema.safeParse(req.body);
@@ -811,7 +812,7 @@ mailRouter.post(
         bodyText: z.string().optional(),
         inReplyTo: z.string().optional(),
         references: z.union([z.array(z.string()), z.string()]).optional(),
-        scheduledAt: z.string().datetime().optional(),
+        scheduledAt: isoDateTime().optional(),
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
       });

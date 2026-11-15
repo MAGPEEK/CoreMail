@@ -7,6 +7,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { isoDateTime } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
@@ -22,8 +23,8 @@ adminSecurityAttacksRouter.get('/', async (req: Request, res: Response) => {
     offset: z.coerce.number().int().min(0).default(0),
     type:   z.string().optional(),
     ip:     z.string().optional(),
-    since:  z.string().datetime().optional(),
-    until:  z.string().datetime().optional(),
+    since:  isoDateTime().optional(),
+    until:  isoDateTime().optional(),
   });
 
   const parsed = QuerySchema.safeParse(req.query);
@@ -97,7 +98,7 @@ adminSecurityAttacksRouter.get('/summary', async (_req: Request, res: Response) 
 
 // ── DELETE /api/v1/admin/security/attacks ────────────────────────────────────
 adminSecurityAttacksRouter.delete('/', async (req: Request, res: Response) => {
-  const schema = z.object({ before: z.string().datetime() });
+  const schema = z.object({ before: isoDateTime() });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Datum fehlt oder ungültig (ISO 8601)' });

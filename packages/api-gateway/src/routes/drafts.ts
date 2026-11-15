@@ -29,6 +29,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
+import { isoDateTime } from '../lib/zod-compat.js';
 import type { SendMailOptions } from 'nodemailer';
 import {
   prisma, parseRawMessage, storeRawMessage, truncateBodyColumn, attachmentKey, uploadBuffer,
@@ -359,7 +360,7 @@ draftsRouter.delete('/:id', async (req: Request, res: Response) => {
 
 const SendDraftSchema = z.object({
   undoDelaySec: z.number().int().min(0).max(MAX_SEND_HOLD_MS / 1000).optional(),
-  scheduledAt: z.string().datetime().optional(),
+  scheduledAt: isoDateTime().optional(),
 });
 
 /**

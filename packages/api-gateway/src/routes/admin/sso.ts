@@ -59,7 +59,7 @@ const ProviderFields = {
   name:          z.string().min(1).max(64),
   discoveryUrl:  httpsUrl,
   clientId:      z.string().min(1).max(512),
-  claimMap:      z.record(z.string()),
+  claimMap:      z.record(z.string(), z.string()),
   autoProvision: z.boolean(),
   forcedDomains: domainList,
   scopes:        z.string().max(512).regex(/(^|\s)openid(\s|$)/, 'scopes must include openid'),
