@@ -1,6 +1,6 @@
 {
   "name": "@coremail/cli",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "private": true,
   "type": "module",
   "description": "CoreMail admin CLI — users, mailboxes, connectors, SMTP banner and certificates via the Admin API",

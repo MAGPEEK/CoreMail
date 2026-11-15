@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 7.0.0 — Docker Compose (production, single host)
+#  CoreMail 8.0.0 — Docker Compose (production, single host)
 #
 #  Getting started in 3 steps:
 #
@@ -46,7 +46,7 @@ services:
   #  REST API, webmail "MWA", admin panel "BCP", admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-7.0.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-8.0.0}
     # Use your own build instead of the Docker Hub image:
     # build:
     #   context: ../..

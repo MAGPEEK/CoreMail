@@ -1,6 +1,6 @@
 # CoreMail Helm chart
 
-Deploys CoreMail (default: 7.0.0) on Kubernetes the same way as the reference
+Deploys CoreMail (default: 8.0.0) on Kubernetes the same way as the reference
 Docker Compose setup (`infra/docker/docker-compose.yml`): **one app pod**
 running `magpeek/coremail-app` (all services under supervisord), plus
 PostgreSQL, Redis (with authentication), MinIO (`pgsty/minio`, pinned by digest),
@@ -10,7 +10,7 @@ with a PVC) or an external endpoint.
 | | |
 |---|---|
 | Chart version | `1.0.0` (independent SemVer of the chart; 1.0.0 = complete rewrite) |
-| App version | `7.0.0` → image `magpeek/coremail-app:7.0.0` |
+| App version | `8.0.0` → image `magpeek/coremail-app:8.0.0` |
 | Kubernetes | ≥ 1.25 |
 | Chart dependencies | none (installs without access to third-party chart repositories) |
 
