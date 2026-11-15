@@ -11,7 +11,7 @@ process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
 process.env['PEPPER'] ??= 'test-pepper-0123456789abcdef0123456789abcd';
 
 import {
-  createMailCredentialVerifier, createMemoryAuthRedis, isPrivateOrLoopbackIp, clientIpFromRequest,
+  createMailCredentialVerifier, createMemoryAuthRedis, createExemptIpMatcher, isPrivateOrLoopbackIp, clientIpFromRequest,
   registerExternalPasswordVerifier, unregisterExternalPasswordVerifier,
   type MailAuthDeps, type MailAuthPrisma, type MailAuthRedis,
 } from './mail-auth-core.js';
@@ -250,20 +250,58 @@ describe('brute-force protection', () => {
     assert.equal((await verifier.verify('totp@example.test', 'APP2-APP2', ctx())).status, 'locked');
   });
 
-  test('private/loopback IPs are exempt from the per-IP counter by default (not from the account counter)', async () => {
+  test('loopback IPs are exempt from the per-IP counter by default (not from the account counter)', async () => {
     const { verifier } = fixture();
     for (let i = 0; i < 8; i++) await verifier.verify(`user${i}@example.test`, 'x', ctx('127.0.0.1'));
     assert.equal((await verifier.verify('plain@example.test', 'secret', ctx('127.0.0.1'))).status, 'ok');
     assert.equal(await verifier.ipLockedFor('127.0.0.1'), 0);
+    assert.equal(await verifier.ipLockedFor('::1'), 0);
+  });
+
+  test('private IPs are counted per IP by default (proxy / Docker peers are not exempt)', async () => {
+    for (const ip of ['10.0.0.9', '172.17.0.1', '192.168.1.20', 'fd00::5', '::ffff:10.1.2.3']) {
+      const { verifier } = fixture();
+      for (let i = 0; i < 5; i++) await verifier.verify(`user${i}@example.test`, 'x', ctx(ip));
+      const r = await verifier.verify('plain@example.test', 'secret', ctx(ip));
+      assert.equal(r.status, 'locked', ip);
+      assert.ok(r.status === 'locked' && r.scope === 'ip', ip);
+      assert.ok((await verifier.ipLockedFor(ip)) > 0, ip);
+    }
+  });
+
+  test('createExemptIpMatcher: loopback always, configured CIDRs, invalid entries ignored', () => {
+    const none = createExemptIpMatcher(undefined);
+    assert.equal(none.isExempt('127.0.0.1'), true);
+    assert.equal(none.isExempt('::1'), true);
+    assert.equal(none.isExempt('::ffff:127.0.0.1'), true);
+    assert.equal(none.isExempt('10.0.0.1'), false);
+    assert.equal(none.isExempt('203.0.113.7'), false);
+    const m = createExemptIpMatcher('10.0.0.0/8, fd00::/8 192.0.2.7,bogus,10.0.0.0/33,1.2.3.4/x,0.0.0.0/');
+    assert.deepEqual(m.invalid, ['bogus', '10.0.0.0/33', '1.2.3.4/x', '0.0.0.0/']);
+    assert.equal(m.isExempt('10.200.1.1'), true);
+    assert.equal(m.isExempt('::ffff:10.200.1.1'), true);
+    assert.equal(m.isExempt('fd12::1'), true);
+    assert.equal(m.isExempt('192.0.2.7'), true);
+    assert.equal(m.isExempt('192.0.2.8'), false);
+    assert.equal(m.isExempt('172.17.0.1'), false);
+    assert.equal(m.isExempt(''), false);
+  });
+
+  test('configured exempt CIDRs skip the per-IP counter', async () => {
+    const { deps } = fixture();
+    const verifier = createMailCredentialVerifier({ ...deps, isExemptIp: createExemptIpMatcher('10.0.0.0/8').isExempt });
+    for (let i = 0; i < 8; i++) await verifier.verify(`user${i}@example.test`, 'x', ctx('10.0.0.9'));
+    assert.equal((await verifier.verify('plain@example.test', 'secret', ctx('10.0.0.9'))).status, 'ok');
+    assert.equal(await verifier.ipLockedFor('10.0.0.9'), 0);
   });
 
   test('lockouts back off exponentially', async () => {
     let now = 1_000_000;
     const { deps } = fixture();
     const redis = createMemoryAuthRedis(() => now);
-    const verifier = createMailCredentialVerifier({ ...deps, redis });
+    // the IP is exempt: only the account counter is involved
+    const verifier = createMailCredentialVerifier({ ...deps, redis, isExemptIp: () => true });
     const lockFor = async (): Promise<number> => {
-      // private IP: only the account counter is involved
       for (let i = 0; i < 3; i++) await verifier.verify('plain@example.test', 'x', ctx('10.0.0.1'));
       const r = await verifier.verify('plain@example.test', 'x', ctx('10.0.0.1'));
       assert.equal(r.status, 'locked');
