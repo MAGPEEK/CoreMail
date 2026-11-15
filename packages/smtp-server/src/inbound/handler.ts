@@ -12,8 +12,10 @@ import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, isAttendeeAuthenticated, t
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
-import { expandRecipients, isPostmasterAddress } from '../handlers/expand.js';
+import { expandRecipients, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
+import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
+import { dsnForRecipients } from '../core/dsn-params.js';
 import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
 import {
   buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS, stripOwnAuthResults, sanitizeAuthHeaders,
@@ -37,13 +39,19 @@ const SECURITY_FILTER_URL =
 // ── RFC 822 lightweight header extraction (regex, no full parse) ──────────────
 function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
   const end = raw.indexOf('\r\n\r\n');
-  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('binary');
+  // UTF-8 header fields (RFC 6532, SMTPUTF8 mail) are decoded as UTF-8.
+  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('utf8');
   const subjectMatch = /^Subject:\s*(.+?)(?=\r?\n\S|\r?\n\r?\n|$)/im.exec(text);
   const msgIdMatch   = /^Message-ID:\s*([^\r\n]+)/im.exec(text);
   return {
     subject:   (subjectMatch?.[1] ?? '').replace(/\r?\n[ \t]/g, ' ').trim(),
     messageId: (msgIdMatch?.[1] ?? '').trim(),
   };
+}
+
+/** JSON with every non-ASCII character \u-escaped (safe as an HTTP header value). */
+export function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 // ── onConnect ─────────────────────────────────────────────────────────────────
@@ -102,7 +110,8 @@ async function onRcptTo(
     if (settings && settings.localDeliveryEnabled === false) {
       return '5.7.1 Local delivery is disabled by administrator';
     }
-    const exists = await verifyRecipient(to);
+    // v8.1: an IDN domain matches the local domain in either spelling.
+    const exists = await verifyRecipient(await canonicalRecipient(to));
     if (!exists) return '5.1.1 User unknown';
   } catch (err) {
     log.error({ err, to }, 'verifyRecipient error');
@@ -163,7 +172,9 @@ async function onMessage(
     headers: {
       'Content-Type': 'application/octet-stream',
       // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
-      'X-Filter-Context': JSON.stringify({
+      // ASCII-only JSON: an HTTP header value cannot carry raw UTF-8
+      // (SMTPUTF8 addresses) — non-ASCII characters are \u-escaped.
+      'X-Filter-Context': asciiJson({
         senderIp: ip,
         mailFrom: from,
         rcptTo: to[0] ?? '',
@@ -245,6 +256,7 @@ async function onMessage(
   }
 
   // 2. Expand distribution groups → individual delivery addresses
+  //    (IDN domains are mapped onto the configured spelling — v8.1).
   const deliveryAddresses = await expandRecipients(to);
 
   // 3. Split into local vs. external (Distribution groups may contain external
@@ -254,14 +266,11 @@ async function onMessage(
   const localDeliveries:    string[] = [];
   const externalDeliveries: string[] = [];
   for (const rcpt of deliveryAddresses) {
-    const domain = rcpt.split('@')[1]?.toLowerCase();
-    if (!domain) { localDeliveries.push(rcpt); continue; }
-    const localDomain = await prisma.domain.findFirst({
-      where: { name: domain, active: true },
-    });
-    if (localDomain) localDeliveries.push(rcpt);
-    else             externalDeliveries.push(rcpt);
+    if (!rcpt.includes('@')) { localDeliveries.push(rcpt); continue; }
+    if (await isLocalDomainAddress(rcpt)) localDeliveries.push(rcpt);
+    else                                  externalDeliveries.push(rcpt);
   }
+  const dsn = meta?.envelope?.dsn;
 
   // 3. Local storage + external forwarding. 250 only when every part is done;
   //    a failure answers 451 and the retry skips what was already delivered
@@ -278,11 +287,13 @@ async function onMessage(
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     }),
     enqueueExternal: async (rcpts) => {
+      const jobDsn = dsnForRecipients(dsn, rcpts);
       await enqueueOutbound({
         messageId:  crypto.randomUUID(),
         from,
         to:         rcpts,
         rawMessage: delivered.toString('base64'),
+        ...(jobDsn ? { dsn: jobDsn } : {}),
       });
       log.info({ from, external: rcpts, originalTo: to }, 'External targets are forwarded via the outbound queue');
     },
@@ -290,6 +301,33 @@ async function onMessage(
 
   // 4. Handle resource mailbox auto-accept for calendar invitations
   await processResourceMailboxes(raw, to, from, senderAuth);
+
+  // 5. RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for the local recipients as
+  //    addressed. Not for mail filed as junk (no delivery confirmation to spammers).
+  if (dsn && !filterResult.junkFolder) {
+    await notifyLocalSuccess(from, to, dsn, hostname, delivered);
+  }
+}
+
+/** Sends the "delivered" DSN for the local recipients that asked for SUCCESS (never throws). */
+async function notifyLocalSuccess(
+  from: string,
+  to: string[],
+  dsn: NonNullable<NonNullable<MessageMeta['envelope']>['dsn']>,
+  hostname: string,
+  raw: Buffer,
+): Promise<void> {
+  try {
+    const local: string[] = [];
+    for (const rcpt of to) if (rcpt === BARE_POSTMASTER || await isLocalDomainAddress(rcpt)) local.push(rcpt);
+    const original = rawSubjectAndId(raw);
+    await sendSuccessDsn({
+      from, rcpts: local, action: 'delivered', dsn, hostname, originalRaw: raw,
+      subject: original.subject, messageId: original.messageId, deliverExternal: true,
+    });
+  } catch (err) {
+    log.warn({ err, from }, 'Success DSN not sent');
+  }
 }
 
 // ── Exported handler object ───────────────────────────────────────────────────
@@ -303,7 +341,7 @@ export const inboundHandlers: SmtpHandlers = {
 
 // ── Helper: verifyRecipient ───────────────────────────────────────────────────
 
-async function verifyRecipient(rcptTo: string): Promise<boolean> {
+export async function verifyRecipient(rcptTo: string): Promise<boolean> {
   const email = rcptTo.toLowerCase();
   // RFC 5321 §4.5.1: <Postmaster> MUST be accepted.
   if (email === BARE_POSTMASTER) return true;

@@ -6,8 +6,10 @@ import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
   outboundRetryDelay,
 } from '@coremail/storage';
-import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions } from './relay.js';
-import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
+import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
+import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
+import type { EnvelopeDsn } from '../core/dsn-params.js';
+import { domainVariants } from '../core/idn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
@@ -75,6 +77,12 @@ export interface OutboundJob {
    * not re-quarantine the message. Only internal producers can set job fields.
    */
   quarantineReleaseId?: string;
+  /**
+   * v8.1: DSN request of the SMTP transaction (RFC 3461 RET/ENVID and the
+   * per-recipient NOTIFY/ORCPT). Honoured by the bounce/delay/success DSNs and
+   * passed to a next hop that advertises DSN.
+   */
+  dsn?: EnvelopeDsn;
   // ── Delivery progress (written by the worker, survives retries) ──────────
   /** Recipients (after alias expansion) that were stored or accepted remotely. */
   deliveredRcpts?: string[];
@@ -84,6 +92,8 @@ export interface OutboundJob {
   pendingFailures?: RecipientFailure[];
   /** A delay DSN (RFC 3464 Action: delayed) was sent — at most one per message. */
   delayNotified?: boolean;
+  /** Recipients whose success DSN (delivered / relayed) was already sent. */
+  successNotified?: string[];
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -206,7 +216,7 @@ export interface OutboundDeps {
   expand(addrs: string[]): Promise<string[]>;
   storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void>;
   resolveDkim(job: OutboundJob): Promise<DkimOptions>;
-  relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions): Promise<RelayResult>;
+  relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions, opts?: RelayOptions): Promise<RelayResult>;
   bounce(opts: DsnOptions): Promise<void>;
   hostname(): Promise<string>;
   /** When the queue gives up on the job (Will-Retry-Until of a delay DSN). */
@@ -242,12 +252,28 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const { from, to } = data;
   const delivered = new Set(data.deliveredRcpts ?? []);
   const bounced   = new Set(data.bouncedRcpts ?? []);
+  const notified  = new Set(data.successNotified ?? []);
   const persist = (pending: RecipientFailure[]) => job.updateData({
     ...job.data,
     deliveredRcpts:  [...delivered],
     bouncedRcpts:    [...bounced],
     pendingFailures: pending,
+    ...(notified.size > 0 ? { successNotified: [...notified] } : {}),
   });
+  // v8.1: DSN request (RFC 3461) + the original for RET=HDRS/FULL.
+  const original = rawSubjectAndId(buffer);
+  const dsnExtra = { ...(data.dsn ? { dsn: data.dsn } : {}), originalRaw: buffer };
+  const subject = data.message?.subject ?? original.subject;
+  const messageIdHeader = data.message?.messageId ?? original.messageId;
+  const notifySuccess = async (rcpts: string[], action: 'delivered' | 'relayed'): Promise<void> => {
+    const open = rcpts.filter((r) => !notified.has(r));
+    if (open.length === 0 || !data.dsn) return;
+    const sent = await sendSuccessDsn({
+      from, rcpts: open, action, dsn: data.dsn, hostname: await deps.hostname(), originalRaw: buffer,
+      subject, messageId: messageIdHeader, deliverExternal: data.ruleRedirect !== true,
+    }, deps.bounce);
+    for (const r of sent) notified.add(r);
+  };
   const isLocal = async (addr: string) => addr.toLowerCase() === BARE_POSTMASTER || deps.isLocalAddress(addr);
 
   // Split → expand local recipients (aliases, postmaster) → split again.
@@ -272,22 +298,29 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     delivered.add(rcpt);
     log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
   }
+  // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases included).
+  if (finalLocal.length > 0) await notifySuccess(localRcpts, 'delivered');
 
   // ── External delivery via MX / smarthost ──────────────────────────────────
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
   let transient: RecipientFailure[] = [];
   const newlyBounced: string[] = [];
   if (pending.length > 0) {
-    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data));
+    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data), data.dsn ? { dsn: data.dsn } : {});
     for (const r of result.delivered) delivered.add(r);
+    // NOTIFY=SUCCESS to a next hop without DSN support → "relayed" (RFC 3461 §6.2.6.2).
+    const passedOn = new Set(result.dsnPassedOn ?? []);
+    await notifySuccess(result.delivered.filter((r) => !passedOn.has(r)), 'relayed');
+    for (const r of passedOn) notified.add(r);
     const permanent = result.failures.filter((f) => f.permanent);
     transient = result.failures.filter((f) => !f.permanent);
     if (permanent.length > 0) {
       await deps.bounce({
+        ...dsnExtra,
         originalFrom:      from,
         originalTo:        permanent.map((f) => f.rcpt),
-        originalSubject:   data.message?.subject ?? '',
-        originalMessageId: data.message?.messageId ?? null,
+        originalSubject:   subject,
+        originalMessageId: messageIdHeader,
         failureReason:     permanent[0]!.message,
         smtpCode:          permanent[0]!.code,
         serverHostname:    await deps.hostname(),
@@ -305,10 +338,11 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     await job.updateData({ ...job.data, delayNotified: true });
     try {
       await deps.bounce({
+        ...dsnExtra,
         originalFrom:      from,
         originalTo:        transient.map((f) => f.rcpt),
-        originalSubject:   data.message?.subject ?? '',
-        originalMessageId: data.message?.messageId ?? null,
+        originalSubject:   subject,
+        originalMessageId: messageIdHeader,
         failureReason:     transient[0]!.message,
         smtpCode:          transient[0]!.code,
         serverHostname:    await deps.hostname(),
@@ -411,7 +445,8 @@ const defaultOutboundDeps: OutboundDeps = {
   isLocalAddress: async (addr) => {
     const domain = addr.slice(addr.lastIndexOf('@') + 1).toLowerCase();
     if (!addr.includes('@') || !domain) return false;
-    return !!(await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } }));
+    // IDN: the domain may be stored as A-label or U-label (v8.1).
+    return !!(await prisma.domain.findFirst({ where: { name: { in: domainVariants(domain) }, active: true }, select: { id: true } }));
   },
   expand: (addrs) => expandRecipients(addrs),
   storeLocal: (raw, from, rcpt, job) => storeInboundMessage(raw, {
@@ -431,7 +466,7 @@ const defaultOutboundDeps: OutboundDeps = {
     ...(job.dkimSelector   ? { dkimSelector: job.dkimSelector }     : {}),
     ...(job.dkimPrivateKey ? { dkimPrivateKey: job.dkimPrivateKey } : {}),
   }),
-  relay: (raw, from, to, dkim) => relayMessage(raw, from, to, dkim),
+  relay: (raw, from, to, dkim, opts) => relayMessage(raw, from, to, dkim, undefined, opts),
   bounce: (opts) => sendDsnBounce(opts),
   hostname: publicHostname,
   retryUntil: async (job) => {
@@ -616,13 +651,18 @@ export function handleFailedJob(
     bounceList = finalBounceRecipients(job.data, err);
     if (bounceList.length > 0) {
       const list = bounceList;
+      // v8.1: RET/ENVID/NOTIFY/ORCPT honoured; SMTP-path jobs return the original (headers by default).
+      const originalRaw = job.data.rawMessage ? Buffer.from(job.data.rawMessage, 'base64') : undefined;
+      const original = originalRaw ? rawSubjectAndId(originalRaw) : { subject: '', messageId: null };
       void (async () => {
         try {
           await deps.bounce({
+            ...(job.data.dsn ? { dsn: job.data.dsn } : {}),
+            ...(originalRaw ? { originalRaw } : {}),
             originalFrom:      job.data.from,
             originalTo:        list.map((f) => f.rcpt),
-            originalSubject:   job.data.message?.subject ?? '',
-            originalMessageId: job.data.message?.messageId ?? null,
+            originalSubject:   job.data.message?.subject ?? original.subject,
+            originalMessageId: job.data.message?.messageId ?? original.messageId,
             failureReason:     err.message,
             smtpCode,
             serverHostname:    await deps.hostname(),
