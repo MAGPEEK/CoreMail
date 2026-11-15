@@ -320,7 +320,7 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
 | `redis` | `redis:7-alpine` | Sessions, SMTP-Queue (BullMQ), Live-Updates |
-| `minio` | `minio/minio` | Objektspeicher für Anhänge, Quarantäne und Backups |
+| `minio` | `pgsty/minio` (pinned) | Objektspeicher für Anhänge, Quarantäne und Backups |
 
 Der App-Container (`coremail`) enthält intern alle Mail-Dienste — SMTP, IMAP, POP3, JMAP, ActiveSync, CalDAV/CardDAV, Webmail, Admin-Panel und die Admin-CLI — verwaltet von `supervisord`. Nach außen sind Port 3000 (HTTP), 80/443 (ACME + HTTPS) sowie die Mail-Ports (25, 465, 587, 143, 993, 110, 995) sichtbar.
 
@@ -350,7 +350,7 @@ services:
       - "3000:3000" # HTTP ohne TLS — Ersteinrichtung / eigener Reverse-Proxy
   postgres: { image: postgres:16-alpine }
   redis:    { image: redis:7-alpine }
-  minio:    { image: minio/minio:latest }
+  minio:    { image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z }
   rspamd:   { image: rspamd/rspamd:4.0.0 }
   clamav:   { image: clamav/clamav:stable }
 ```

@@ -30,7 +30,7 @@ CoreMail uses a **6-container architecture**:
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Primary database (mails, users, calendars, contacts) |
 | `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live events via SSE, greylisting |
-| `minio` | `minio/minio` | S3-compatible object storage (attachments, quarantine, backups) |
+| `minio` | `pgsty/minio` (pinned by digest; official images discontinued) | S3-compatible object storage (attachments, quarantine, backups) |
 
 ### What is inside the `coremail` container?
 
