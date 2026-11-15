@@ -103,3 +103,56 @@ test('the same alias given twice is resolved both times to one target', async ()
 
   assert.deepEqual(result, ['bob@example.test']);
 });
+
+// ─── postmaster (RFC 5321 §4.5.1, review fix) ─────────────────────────────────
+
+interface UserRow { email: string; active: boolean; role: string; createdAt: Date }
+
+function fakePostmasterDb(users: UserRow[], shared: string[] = []): void {
+  testGlobals.__coremailTest.prisma = {
+    emailAlias: { findFirst: async () => null },
+    user: {
+      findFirst: async ({ where }: { where: { email?: string; active: boolean; role?: { in: string[] } } }) => {
+        const rows = users
+          .filter((u) => u.active === where.active)
+          .filter((u) => (where.email === undefined ? true : u.email === where.email))
+          .filter((u) => (where.role === undefined ? true : where.role.in.includes(u.role)))
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        return rows[0] ? { id: rows[0].email, email: rows[0].email } : null;
+      },
+    },
+    sharedMailbox: {
+      findFirst: async ({ where }: { where: { email: string } }) => (shared.includes(where.email) ? { id: where.email } : null),
+    },
+  };
+}
+
+const ADMINS: UserRow[] = [
+  { email: 'user@example.test', active: true, role: 'USER', createdAt: new Date('2020-01-01') },
+  { email: 'Newadmin@example.test', active: true, role: 'SERVER_MANAGEMENT', createdAt: new Date('2024-01-01') },
+  { email: 'boss@example.test', active: true, role: 'ORGANIZATION_MANAGEMENT', createdAt: new Date('2021-01-01') },
+];
+
+test('the bare <Postmaster> recipient is delivered to the oldest active administrator', async () => {
+  fakePostmasterDb(ADMINS);
+
+  const result = await expandRecipients(['postmaster']);
+
+  assert.deepEqual(result, ['boss@example.test']);
+});
+
+test('postmaster@<local domain> without an own mailbox is delivered to an administrator', async () => {
+  fakePostmasterDb(ADMINS);
+
+  const result = await expandRecipients(['PostMaster@example.test']);
+
+  assert.deepEqual(result, ['boss@example.test']);
+});
+
+test('a real postmaster mailbox (user or shared mailbox) is kept', async () => {
+  fakePostmasterDb([...ADMINS, { email: 'postmaster@example.test', active: true, role: 'USER', createdAt: new Date() }], ['postmaster@other.test']);
+
+  const result = await expandRecipients(['postmaster@example.test', 'postmaster@other.test']);
+
+  assert.deepEqual(result, ['postmaster@example.test', 'postmaster@other.test']);
+});

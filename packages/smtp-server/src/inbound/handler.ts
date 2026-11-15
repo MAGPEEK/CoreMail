@@ -12,14 +12,18 @@ import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS } from '@coremail/storage';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
-import { expandRecipients } from '../handlers/expand.js';
+import { expandRecipients, isPostmasterAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
-import type { SmtpHandlers, AuthUser } from '../core/types.js';
+import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
+import { buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS } from '../handlers/trace.js';
+import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import {
   callConnectionFilter,
   connectionAllowed,
   dataStageGreylistReply,
   rcptReplyForDecision,
+  interpretContentFilterResponse,
+  CONTENT_FILTER_MAX_BYTES,
   type ConnectionFilterDecision,
 } from './connection-filter.js';
 
@@ -54,13 +58,11 @@ async function onConnect(ip: string): Promise<boolean> {
   return connectionAllowed(decision);
 }
 
-// True once the session passes the client IP to onRcptTo — then greylisting
-// runs at RCPT TO and the DATA-stage fallback in onMessage is skipped.
-let rcptStageHasIp = false;
-
 async function greylistDecision(ip: string, from: string, rcpt: string): Promise<ConnectionFilterDecision> {
+  // Addresses keep the case of their local-part (RFC 5321 §2.4) — the greylist
+  // triple is case-insensitive.
   const decision = await callConnectionFilter(SECURITY_FILTER_URL, {
-    stage: 'rcpt', senderIp: ip, mailFrom: from, rcptTo: rcpt,
+    stage: 'rcpt', senderIp: ip, mailFrom: from.toLowerCase(), rcptTo: rcpt.toLowerCase(),
   });
   if (decision.kind === 'unavailable') {
     log.error({ ip, from, rcpt, detail: decision.detail }, 'Security filter unavailable (greylisting) — failing open');
@@ -108,7 +110,6 @@ async function onRcptTo(
   // Greylisting with the real (IP, MAIL FROM, RCPT TO) triple — only for
   // existing recipients, never for authenticated sessions.
   if (ip && !authUser) {
-    rcptStageHasIp = true;
     return rcptReplyForDecision(await greylistDecision(ip, from, to));
   }
   return null;
@@ -122,17 +123,34 @@ async function onMessage(
   to: string[],
   authUser: AuthUser | null,
   ip: string,
+  meta?: MessageMeta,
 ): Promise<void> {
   // Internal CoreMail headers (quarantine-release trace) are never accepted
   // from outside — strip them before filtering, quarantine or delivery.
-  const raw = stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS);
+  const stripped = stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS);
 
-  // 0. Greylisting fallback: if the SMTP session does not hand the client IP
-  //    to onRcptTo, the triple is checked here (after DATA) instead.
-  if (!rcptStageHasIp && !authUser) {
+  // RFC 5321 §6.3: loop detection by hop count.
+  if (countReceived(stripped) > MAX_RECEIVED_HOPS) {
+    throw new Error('554 5.4.6 Too many hops - mail loop detected');
+  }
+
+  // 0. Greylisting fallback for callers that do not pass the session data
+  //    (SmtpSession always passes `meta` and the client IP to onRcptTo, where
+  //    greylisting runs).
+  if (!meta && !authUser) {
     const decisions = await Promise.all(to.map((rcpt) => greylistDecision(ip, from, rcpt)));
     const reply = dataStageGreylistReply(decisions);
     if (reply) throw new Error(reply);
+  }
+
+  // RFC 5321 §4.4: every SMTP server that receives a message inserts a
+  // Received: trace field (`for` only with a single recipient, §7.2).
+  const raw = meta ? prependHeader(stripped, buildReceivedHeader({ ip, meta, recipients: to })) : stripped;
+
+  // The content filter cannot inspect larger bodies — never deliver unscanned
+  // and never defer forever (an over-limit 413 would repeat on every retry).
+  if (raw.length > CONTENT_FILTER_MAX_BYTES) {
+    throw new Error('552 5.3.4 Message too big for content inspection');
   }
 
   // 1. Full content scan (SPF/DKIM/DMARC, blacklist, ClamAV, rspamd)
@@ -150,13 +168,14 @@ async function onMessage(
     signal: AbortSignal.timeout(30_000),
   });
 
-  const filterResult = await response.json() as {
-    action: string;
-    reason?: string;
-    junkFolder?: boolean;
-    spamScore?: number;
-    virusName?: string;
-  };
+  let body: unknown;
+  try { body = await response.json(); } catch { body = undefined; }
+  const verdict = interpretContentFilterResponse(response.status, body);
+  if (verdict.kind === 'unavailable') {
+    log.error({ from, detail: verdict.detail }, 'Content filter answer invalid — message deferred');
+    throw new Error('451 4.7.1 Content filter temporarily unavailable, try again later');
+  }
+  const filterResult = verdict.result;
 
   log.info(
     { action: filterResult.action, from, score: filterResult.spamScore },
@@ -228,33 +247,27 @@ async function onMessage(
     else             externalDeliveries.push(rcpt);
   }
 
-  // 3a. Local mailbox storage
-  for (const rcpt of localDeliveries) {
-    await storeInboundMessage(raw, {
+  // 3. Local storage + external forwarding. 250 only when every part is done;
+  //    a failure answers 451 and the retry skips what was already delivered
+  //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
+  await deliverOnce(deliveryKey(from, receivedRaw), localDeliveries, externalDeliveries, {
+    ledger: redisDeliveryLedger,
+    storeLocal: (rcpt) => storeInboundMessage(raw, {
       fromAddr: from,
       rcptTo: rcpt,
       toJunk: filterResult.junkFolder ?? false,
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
-    });
-  }
-
-  // 3b. External members of expanded groups → enqueue outbound (forward)
-  if (externalDeliveries.length > 0) {
-    try {
+    }),
+    enqueueExternal: async (rcpts) => {
       await enqueueOutbound({
         messageId:  crypto.randomUUID(),
         from,
-        to:         externalDeliveries,
+        to:         rcpts,
         rawMessage: raw.toString('base64'),
       });
-      log.info(
-        { from, externalDeliveries, originalTo: to },
-        'External distribution-group members are forwarded via outbound queue',
-      );
-    } catch (err) {
-      log.error({ err, externalDeliveries }, 'Outbound forward for distribution-group members failed');
-    }
-  }
+      log.info({ from, external: rcpts, originalTo: to }, 'External targets are forwarded via the outbound queue');
+    },
+  });
 
   // 4. Handle resource mailbox auto-accept for calendar invitations
   await processResourceMailboxes(raw, to, from);
@@ -272,10 +285,18 @@ export const inboundHandlers: SmtpHandlers = {
 // ── Helper: verifyRecipient ───────────────────────────────────────────────────
 
 async function verifyRecipient(rcptTo: string): Promise<boolean> {
-  const [, domain] = rcptTo.toLowerCase().split('@');
-  if (!domain) return false;
-
   const email = rcptTo.toLowerCase();
+  // RFC 5321 §4.5.1: <Postmaster> MUST be accepted.
+  if (email === BARE_POSTMASTER) return true;
+  const domain = email.slice(email.lastIndexOf('@') + 1);
+  if (!email.includes('@') || !domain) return false;
+
+  // postmaster@<local domain> MUST be accepted even without a mailbox of that
+  // name — expandRecipients delivers it to an administrator.
+  if (isPostmasterAddress(email)) {
+    const local = await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } });
+    if (local) return true;
+  }
 
   const [user, sharedMailbox, resourceMailbox, alias] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),

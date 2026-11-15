@@ -101,6 +101,8 @@ services:
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       # Internal service in the same container — do not change
       SECURITY_FILTER_URL: http://localhost:3002
+      # Smarthost with a self-signed certificate: "true" disables verification (not recommended)
+      SMARTHOST_TLS_INSECURE: ${SMARTHOST_TLS_INSECURE:-false}
 
       # ── Schedules (cron, UTC) ────────────────────────────────────────────────
       BACKUP_SCHEDULE:       ${BACKUP_SCHEDULE:-0 2 * * *}   # daily full backup

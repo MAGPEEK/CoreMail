@@ -3,8 +3,9 @@ import { Readable } from 'stream';
 import nodemailer from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue } from '@coremail/storage';
-import { relayMessage } from './relay.js';
-import { extractSmtpCode, sendDsnBounce } from './dsn.js';
+import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions } from './relay.js';
+import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
+import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
@@ -63,6 +64,13 @@ export interface OutboundJob {
    * not re-quarantine the message. Only internal producers can set job fields.
    */
   quarantineReleaseId?: string;
+  // ── Delivery progress (written by the worker, survives retries) ──────────
+  /** Recipients (after alias expansion) that were stored or accepted remotely. */
+  deliveredRcpts?: string[];
+  /** Recipients that failed permanently and were already bounced. */
+  bouncedRcpts?:   string[];
+  /** Last temporary failure per recipient still pending (final bounce text). */
+  pendingFailures?: RecipientFailure[];
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -147,13 +155,181 @@ export async function enqueueOutbound(job: OutboundJob): Promise<string> {
   return result.id ?? '';
 }
 
+// ── Delivery of one job (pure orchestration, injectable I/O) ─────────────────
+
+/** The parts of a BullMQ job the delivery logic needs. */
+export interface OutboundJobLike {
+  id?: string | undefined;
+  data: OutboundJob;
+  attemptsMade: number;
+  opts: { attempts?: number | undefined };
+  updateData(data: OutboundJob): Promise<void>;
+}
+
+export interface OutboundDeps {
+  isLocalAddress(addr: string): Promise<boolean>;
+  expand(addrs: string[]): Promise<string[]>;
+  storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void>;
+  resolveDkim(job: OutboundJob): Promise<DkimOptions>;
+  relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions): Promise<RelayResult>;
+  bounce(opts: DsnOptions): Promise<void>;
+  hostname(): Promise<string>;
+}
+
+export interface DeliverySummary {
+  local:     string[];
+  external:  string[];
+  delivered: string[];
+  bounced:   string[];
+}
+
+/** Error thrown when recipients are still pending; carries the first remote reply code. */
+class TemporaryDeliveryError extends Error {
+  responseCode?: number;
+}
+
+/**
+ * Delivers one queue job. Progress is stored in the job (`deliveredRcpts`,
+ * `bouncedRcpts`) so a retry only handles the recipients that are still open:
+ * local copies are never stored twice and domains that accepted the message
+ * are not contacted again (RFC 5321 §6.1).
+ *
+ *  - permanent failures (5yz, null MX, NXDOMAIN) are bounced once, immediately
+ *  - temporary failures are retried (throws), the last reply per recipient is
+ *    kept for the final bounce
+ *  - when every recipient failed permanently the job ends as a dead letter
+ *    (UnrecoverableError) — the bounce has already been sent
+ */
+export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, deps: OutboundDeps): Promise<DeliverySummary> {
+  const data = job.data;
+  const { from, to } = data;
+  const delivered = new Set(data.deliveredRcpts ?? []);
+  const bounced   = new Set(data.bouncedRcpts ?? []);
+  const persist = (pending: RecipientFailure[]) => job.updateData({
+    ...job.data,
+    deliveredRcpts:  [...delivered],
+    bouncedRcpts:    [...bounced],
+    pendingFailures: pending,
+  });
+  const isLocal = async (addr: string) => addr.toLowerCase() === BARE_POSTMASTER || deps.isLocalAddress(addr);
+
+  // Split → expand local recipients (aliases, postmaster) → split again.
+  const localRcpts: string[] = [];
+  const externalRcpts: string[] = [];
+  for (const rcpt of to) (await isLocal(rcpt) ? localRcpts : externalRcpts).push(rcpt);
+  const expanded = localRcpts.length > 0 ? await deps.expand(localRcpts) : [];
+  const finalLocal: string[] = [];
+  const finalExternal: string[] = [...externalRcpts];
+  for (const rcpt of expanded) (await isLocal(rcpt) ? finalLocal : finalExternal).push(rcpt);
+  const external = [...new Set(finalExternal)];
+
+  // ── Local delivery (write directly into the mailbox) ──────────────────────
+  for (const rcpt of finalLocal) {
+    if (delivered.has(rcpt)) continue;
+    try {
+      await deps.storeLocal(buffer, from, rcpt, data);
+    } catch (err) {
+      await persist(data.pendingFailures ?? []);
+      throw err;
+    }
+    delivered.add(rcpt);
+    log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
+  }
+
+  // ── External delivery via MX / smarthost ──────────────────────────────────
+  const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
+  let transient: RecipientFailure[] = [];
+  const newlyBounced: string[] = [];
+  if (pending.length > 0) {
+    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data));
+    for (const r of result.delivered) delivered.add(r);
+    const permanent = result.failures.filter((f) => f.permanent);
+    transient = result.failures.filter((f) => !f.permanent);
+    if (permanent.length > 0) {
+      await deps.bounce({
+        originalFrom:      from,
+        originalTo:        permanent.map((f) => f.rcpt),
+        originalSubject:   data.message?.subject ?? '',
+        originalMessageId: data.message?.messageId ?? null,
+        failureReason:     permanent[0]!.message,
+        smtpCode:          permanent[0]!.code,
+        serverHostname:    await deps.hostname(),
+        recipients:        permanent.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
+        deliverExternal:   true,
+      });
+      for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
+    }
+  }
+  await persist(transient);
+
+  if (transient.length > 0) {
+    const err = new TemporaryDeliveryError(
+      `Temporary failure for ${transient.length} recipient(s): ${transient.map((f) => `<${f.rcpt}> ${f.message}`).join('; ')}`,
+    );
+    const code = transient.find((f) => f.code !== null)?.code;
+    if (code) err.responseCode = code;
+    throw err;
+  }
+  if (newlyBounced.length > 0 && delivered.size === 0) {
+    throw new UnrecoverableError(`All recipients failed permanently: ${newlyBounced.join(', ')}`);
+  }
+  return { local: finalLocal, external, delivered: [...delivered], bounced: [...bounced] };
+}
+
+/**
+ * Recipients of the final bounce when a job gives up (retries exhausted, expiry,
+ * unrecoverable error): every recipient neither delivered nor bounced before,
+ * with its last temporary failure when one is known.
+ */
+export function finalBounceRecipients(data: OutboundJob, err: unknown): RecipientFailure[] {
+  const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? [])]);
+  const known = (data.pendingFailures ?? []).filter((f) => !done.has(f.rcpt));
+  if (known.length > 0) return known;
+  const { code } = extractSmtpCode(err);
+  const message = (err instanceof Error ? err.message : String(err)).replace(/[\r\n]+/g, ' ');
+  return data.to
+    .filter((r) => !done.has(r))
+    .map((rcpt) => ({ rcpt, code, status: code ? `${Math.floor(code / 100)}.0.0` : '4.4.7', message, permanent: false }));
+}
+
 // ── Worker ────────────────────────────────────────────────────────────────────
+
+async function publicHostname(): Promise<string> {
+  const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
+  return settings?.publicHostname ?? 'mail.local';
+}
+
+const defaultOutboundDeps: OutboundDeps = {
+  isLocalAddress: async (addr) => {
+    const domain = addr.slice(addr.lastIndexOf('@') + 1).toLowerCase();
+    if (!addr.includes('@') || !domain) return false;
+    return !!(await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } }));
+  },
+  expand: (addrs) => expandRecipients(addrs),
+  storeLocal: (raw, from, rcpt, job) => storeInboundMessage(raw, {
+    fromAddr: from,
+    rcptTo:   rcpt,
+    toJunk:   false,
+    ...(job.quarantineReleaseId ? { quarantineRelease: true } : {}),
+  }),
+  // Jobs without DKIM fields (SMTP submission, rule forwards, EAS) get the key
+  // of the envelope-from domain — every local-domain mail is signed.
+  resolveDkim: (job) => resolveJobDkim({
+    from: job.from,
+    ...(job.dkimDomain     ? { dkimDomain: job.dkimDomain }         : {}),
+    ...(job.dkimSelector   ? { dkimSelector: job.dkimSelector }     : {}),
+    ...(job.dkimPrivateKey ? { dkimPrivateKey: job.dkimPrivateKey } : {}),
+  }),
+  relay: (raw, from, to, dkim) => relayMessage(raw, from, to, dkim),
+  bounce: (opts) => sendDsnBounce(opts),
+  hostname: publicHostname,
+};
 
 export function startOutboundWorker(): Worker<OutboundJob> {
   const worker = new Worker<OutboundJob>(
     QUEUE_NAME,
     async (job: Job<OutboundJob>) => {
-      const { from, to, senderUserId, dkimDomain, dkimSelector, dkimPrivateKey } = job.data;
+      const { from, to, senderUserId } = job.data;
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivery started');
 
@@ -191,7 +367,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         buffer = Buffer.from(job.data.rawMessage, 'base64');
         log.debug({ jobId: job.id }, 'RFC 5322 buffer decoded from base64 raw data');
       } else {
-        throw new Error('OutboundJob without message and rawMessage — invalid job');
+        throw new UnrecoverableError('OutboundJob without message and rawMessage — invalid job');
       }
 
       // ── Phase 9: S/MIME Auto-Sign / Auto-Encrypt ──────────────────────────
@@ -209,92 +385,27 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         }
       }
 
-      // Helper: checks whether an address belongs to a local domain
-      async function isLocalAddress(addr: string): Promise<boolean> {
-        const domain = addr.split('@')[1]?.toLowerCase();
-        if (!domain) return false;
-        const localDomain = await prisma.domain.findFirst({
-          where: { name: domain, active: true },
-        });
-        return !!localDomain;
-      }
-
-      // ── Phase 1: split recipients into local vs. external ───────────────
-      const localRcpts:    string[] = [];
-      const externalRcpts: string[] = [];
-
-      for (const rcpt of to) {
-        if (await isLocalAddress(rcpt)) localRcpts.push(rcpt);
-        else                            externalRcpts.push(rcpt);
-      }
-
-      // ── Phase 2: expand local recipients (aliases + distribution groups) ──
-      const expandedLocalRcpts = localRcpts.length > 0
-        ? await expandRecipients(localRcpts)
-        : [];
-
-      // ── Phase 3: split local/external AGAIN after expansion ─────────────
-      // CRITICAL FIX (v3.18.7): distribution groups may have external members
-      // (e.g. "all@firma.de" with member "partner@kunde.com"). Previously ALL
-      // expanded addresses were passed to storeInboundMessage as local —
-      // external members were silently lost (mail never arrived).
-      const finalLocalRcpts:    string[] = [];
-      const finalExternalRcpts: string[] = [...externalRcpts];
-
-      for (const rcpt of expandedLocalRcpts) {
-        if (await isLocalAddress(rcpt)) finalLocalRcpts.push(rcpt);
-        else                            finalExternalRcpts.push(rcpt);
-      }
-      // Dedup externals
-      const dedupedExternal = [...new Set(finalExternalRcpts)];
-
-      // ── Local delivery (write directly into the mailbox) ──────────────────
-      for (const rcpt of finalLocalRcpts) {
-        await storeInboundMessage(buffer, {
-          fromAddr: from,
-          rcptTo:   rcpt,
-          toJunk:   false,
-          ...(job.data.quarantineReleaseId ? { quarantineRelease: true } : {}),
-        });
-        log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
-      }
-
-      // ── External delivery via MX / smarthost ──────────────────────────────
-      if (dedupedExternal.length > 0) {
-        // Jobs without DKIM fields (SMTP submission, rule forwards, EAS)
-        // get the key of the envelope-from domain — every local-domain mail is signed.
-        const dkim = await resolveJobDkim({
-          from,
-          ...(dkimDomain     ? { dkimDomain }     : {}),
-          ...(dkimSelector   ? { dkimSelector }   : {}),
-          ...(dkimPrivateKey ? { dkimPrivateKey } : {}),
-        });
-        if (!dkim.dkimPrivateKey) {
-          log.warn({ jobId: job.id, from }, 'No DKIM key for sender domain — sending unsigned');
-        }
-        await relayMessage(buffer, from, dedupedExternal, dkim);
-        log.info({ to: dedupedExternal, jobId: job.id }, 'External delivery (group/alias expansion)');
-      }
+      const summary = await deliverOutboundJob(job, buffer, defaultOutboundDeps);
 
       // ── MAIL_FLOW log ─────────────────────────────────────────────────────
-      const allDelivered = [...finalLocalRcpts, ...dedupedExternal];
       void prisma.systemLog.create({
         data: {
           level:     'INFO',
           service:   'smtp-server',
           category:  'MAIL_FLOW',
-          message:   `Delivered: ${from} → ${allDelivered.join(', ')}`,
+          message:   `Delivered: ${from} → ${summary.delivered.join(', ')}`,
           messageId: job.data.messageId,
           ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
           metadata: {
             sender:        from,
-            recipient:     allDelivered.join(', '),
+            recipient:     summary.delivered.join(', '),
             subject:       job.data.message?.subject ?? '',
             status:        'DELIVERED',
             messageId:     job.data.messageId,
             size:          String(buffer.length),
-            localRcpts:    finalLocalRcpts.join(', '),
-            externalRcpts: dedupedExternal.join(', '),
+            localRcpts:    summary.local.join(', '),
+            externalRcpts: summary.external.join(', '),
+            bouncedRcpts:  summary.bounced.join(', '),
             direction:     'OUTBOUND',
           },
         },
@@ -331,83 +442,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       log.error({ jobId: job?.id, err }, 'Delivery failed (no job data)');
       return;
     }
-    const attemptsMax = job.opts.attempts ?? 10;
-    // v3.18.10: 5xx errors are PERMANENT — mark as final immediately even
-    // if attempts remain (otherwise the worker retries a
-    // 550 User unknown 10× → IP reputation suffers, recipient MX gets annoyed).
-    const { code: smtpCode, isPermanent: isPermanent5xx } = extractSmtpCode(err);
-    const attemptsExhausted = job.attemptsMade >= attemptsMax;
-    const unrecoverable = err instanceof UnrecoverableError || (err as Error | undefined)?.name === 'UnrecoverableError';
-    const isPermanent = isPermanent5xx || attemptsExhausted || unrecoverable;
-
-    log.error(
-      { jobId: job.id, err, smtpCode, isPermanent, isPermanent5xx, attemptsExhausted, attempt: job.attemptsMade },
-      isPermanent ? 'Delivery permanently failed' : 'Delivery temporarily failed (will be retried)',
-    );
-
-    // On immediate 5xx stop: do not retry the job further (BullMQ.discard is sync)
-    if (isPermanent5xx && !attemptsExhausted) {
-      try { job.discard(); } catch { /* ignore */ }
-    }
-
-    // Clean up MinIO attachments only on permanent failure (retries need them)
-    if (isPermanent && job.data.message?.attachments.length) {
-      void cleanupMinioAttachments(job.data.message).catch(
-        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO cleanup failed')
-      );
-    }
-
-    // DSN bounce to MAIL FROM on permanent failure
-    if (isPermanent) {
-      // QueueSettings.notifyOnDeadLetter → notice to the admins (throttled)
-      void notifyDeadLetter({
-        jobId:    String(job.id ?? ''),
-        from:     job.data.from,
-        to:       job.data.to,
-        subject:  job.data.message?.subject ?? '',
-        reason:   (err as Error).message,
-        smtpCode,
-        attempts: job.attemptsMade,
-      }).catch((e: unknown) => log.warn({ err: e, jobId: job.id }, 'Dead-letter notification failed'));
-      void (async () => {
-        try {
-          const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
-          await sendDsnBounce({
-            originalFrom:     job.data.from,
-            originalTo:       job.data.to,
-            originalSubject:  job.data.message?.subject ?? '',
-            originalMessageId: job.data.message?.messageId ?? null,
-            failureReason:    (err as Error).message,
-            smtpCode,
-            serverHostname:   settings?.publicHostname ?? 'mail.local',
-          });
-        } catch (dsnErr) {
-          log.error({ err: dsnErr, jobId: job.id }, 'DSN generation failed');
-        }
-      })();
-    }
-
-    void prisma.systemLog.create({
-      data: {
-        level:    isPermanent ? 'ERROR' : 'WARN',
-        service:  'smtp-server',
-        category: 'MAIL_FLOW',
-        message:  `${isPermanent ? 'Failed' : 'Deferred'}: ${job.data.from} → ${job.data.to.join(', ')}${smtpCode ? ` [${smtpCode}]` : ''}`,
-        messageId: job.data.messageId,
-        ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
-        metadata: {
-          sender:    job.data.from,
-          recipient: job.data.to.join(', '),
-          subject:   job.data.message?.subject ?? '',
-          status:    isPermanent ? 'REJECTED' : 'DEFERRED',
-          messageId: job.data.messageId,
-          reason:    (err as Error).message,
-          smtpCode:  smtpCode !== null ? String(smtpCode) : '',
-          attempt:   String(job.attemptsMade),
-          direction: 'OUTBOUND',
-        },
-      },
-    }).catch(() => {});
+    handleFailedJob(job, err, defaultOutboundDeps);
   });
 
   // QueueSettings retention: periodic cleaner (completed + auto-flushed dead letters)
@@ -415,4 +450,96 @@ export function startOutboundWorker(): Worker<OutboundJob> {
   worker.on('closed', stopMaintenance);
 
   return worker;
+}
+
+/**
+ * BullMQ `failed` event — emitted after EVERY failed attempt (after
+ * moveToFailed, so retry decisions are already made: a `job.discard()` here
+ * would be too late). Permanent per-recipient failures were bounced inside the
+ * processor; here only the final give-up bounces the still-open recipients.
+ */
+export function handleFailedJob(
+  job: Pick<OutboundJobLike, 'id' | 'data' | 'attemptsMade' | 'opts'>,
+  err: Error,
+  deps: Pick<OutboundDeps, 'bounce' | 'hostname'> & { deadLetter?: typeof notifyDeadLetter },
+): { final: boolean; bounced: string[] } {
+  const deadLetter = deps.deadLetter ?? notifyDeadLetter;
+  const attemptsMax = job.opts.attempts ?? 10;
+  const { code: smtpCode } = extractSmtpCode(err);
+  const unrecoverable = err instanceof UnrecoverableError || err?.name === 'UnrecoverableError';
+  const final = unrecoverable || job.attemptsMade >= attemptsMax;
+
+  log.error(
+    { jobId: job.id, err, smtpCode, final, attempt: job.attemptsMade },
+    final ? 'Delivery permanently failed' : 'Delivery temporarily failed (will be retried)',
+  );
+
+  let bounceList: RecipientFailure[] = [];
+  if (final) {
+    // Clean up MinIO attachments only on permanent failure (retries need them)
+    if (job.data.message?.attachments.length) {
+      void cleanupMinioAttachments(job.data.message).catch(
+        (e: unknown) => log.warn({ err: e, jobId: job.id }, 'MinIO cleanup failed')
+      );
+    }
+    // QueueSettings.notifyOnDeadLetter → notice to the admins (throttled)
+    void deadLetter({
+      jobId:    String(job.id ?? ''),
+      from:     job.data.from,
+      to:       job.data.to,
+      subject:  job.data.message?.subject ?? '',
+      reason:   err.message,
+      smtpCode,
+      attempts: job.attemptsMade,
+    }).catch((e: unknown) => log.warn({ err: e, jobId: job.id }, 'Dead-letter notification failed'));
+
+    // RFC 5321 §6.1: the message was accepted (250) → the sender MUST be
+    // notified, also when it is external. Exactly once: only on give-up and
+    // only for recipients that were not delivered or bounced before.
+    bounceList = finalBounceRecipients(job.data, err);
+    if (bounceList.length > 0) {
+      const list = bounceList;
+      void (async () => {
+        try {
+          await deps.bounce({
+            originalFrom:      job.data.from,
+            originalTo:        list.map((f) => f.rcpt),
+            originalSubject:   job.data.message?.subject ?? '',
+            originalMessageId: job.data.message?.messageId ?? null,
+            failureReason:     err.message,
+            smtpCode,
+            serverHostname:    await deps.hostname(),
+            recipients:        list.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
+            deliverExternal:   true,
+          });
+        } catch (dsnErr) {
+          log.error({ err: dsnErr, jobId: job.id }, 'DSN generation failed');
+        }
+      })();
+    }
+  }
+
+  void prisma.systemLog.create({
+    data: {
+      level:    final ? 'ERROR' : 'WARN',
+      service:  'smtp-server',
+      category: 'MAIL_FLOW',
+      message:  `${final ? 'Failed' : 'Deferred'}: ${job.data.from} → ${job.data.to.join(', ')}${smtpCode ? ` [${smtpCode}]` : ''}`,
+      messageId: job.data.messageId,
+      ...(job.data.senderUserId ? { userId: job.data.senderUserId } : {}),
+      metadata: {
+        sender:    job.data.from,
+        recipient: job.data.to.join(', '),
+        subject:   job.data.message?.subject ?? '',
+        status:    final ? 'REJECTED' : 'DEFERRED',
+        messageId: job.data.messageId,
+        reason:    err.message,
+        smtpCode:  smtpCode !== null ? String(smtpCode) : '',
+        attempt:   String(job.attemptsMade),
+        direction: 'OUTBOUND',
+      },
+    },
+  }).catch(() => {});
+
+  return { final, bounced: bounceList.map((f) => f.rcpt) };
 }

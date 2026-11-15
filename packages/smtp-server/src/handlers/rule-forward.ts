@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { createLogger } from '@coremail/core';
 import { enqueueOutbound } from '../outbound/queue.js';
+import { formatRfc5322Date } from './trace.js';
 
 const log = createLogger('smtp:rule-forward');
 
@@ -18,22 +19,12 @@ export function isRuleForwardedAlready(rawBuffer: Buffer): boolean {
 }
 
 /**
- * Appends headers to the buffer (header/body separated by CRLFCRLF).
- * If the separator is missing, the header is simply appended at the end.
+ * Prepends header fields to the message. Resent-* blocks MUST be added at the
+ * top of the header (RFC 5322 §3.6.6), like trace fields.
  */
-function addHeaders(rawBuffer: Buffer, extraHeaders: Record<string, string>): Buffer {
-  const headerEnd = rawBuffer.indexOf('\r\n\r\n');
-  const extra = Object.entries(extraHeaders)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\r\n');
-  if (headerEnd < 0) {
-    return Buffer.concat([rawBuffer, Buffer.from('\r\n' + extra + '\r\n')]);
-  }
-  return Buffer.concat([
-    rawBuffer.subarray(0, headerEnd),
-    Buffer.from('\r\n' + extra),
-    rawBuffer.subarray(headerEnd),
-  ]);
+export function prependHeaders(rawBuffer: Buffer, extraHeaders: Record<string, string>): Buffer {
+  const extra = Object.entries(extraHeaders).map(([k, v]) => `${k}: ${v}\r\n`).join('');
+  return Buffer.concat([Buffer.from(extra), rawBuffer]);
 }
 
 export interface RuleForwardOpts {
@@ -41,7 +32,25 @@ export interface RuleForwardOpts {
   toAddress:      string;        // target address (from the rule)
   forwardingUser: { id: string; email: string };
   mode:           'forward' | 'redirect';
-  originalFrom:   string;        // From: of the original mail (for the envelope on redirect)
+  /** Envelope reverse-path of the original mail ('' = null sender). */
+  originalFrom:   string;
+}
+
+/** Pure: envelope sender and header fields of a rule forward/redirect. */
+export function buildRuleForward(opts: RuleForwardOpts, now = new Date()): { envelopeFrom: string; raw: Buffer } {
+  const extra: Record<string, string> = {};
+  if (opts.mode === 'forward') {
+    extra['Resent-From'] = `<${opts.forwardingUser.email}>`;
+    extra['Resent-To']   = `<${opts.toAddress}>`;
+    extra['Resent-Date'] = formatRfc5322Date(now);
+    extra['Resent-Message-ID'] = `<${randomUUID()}@${opts.forwardingUser.email.split('@')[1] ?? 'localhost'}>`;
+  }
+  extra[LOOP_HEADER] = opts.forwardingUser.id;
+  // `redirect`: the envelope sender stays the ORIGINAL reverse-path (RFC 5321
+  // §3.9.1) — not the header From — so bounces reach the list/bounce address
+  // and a null sender (a bounce) stays null. `forward`: the user takes over.
+  const envelopeFrom = opts.mode === 'redirect' ? opts.originalFrom : opts.forwardingUser.email;
+  return { envelopeFrom, raw: prependHeaders(opts.rawBuffer, extra) };
 }
 
 /**
@@ -49,10 +58,11 @@ export interface RuleForwardOpts {
  *
  * - `forward`: the user becomes the sender (Resent-From/Resent-To headers),
  *   envelope-from = user's mail. Recipient sees "forwarded by user".
- * - `redirect`: original headers stay untouched, envelope-from = original sender.
- *   Recipient sees the mail as if it came directly from the original sender.
+ * - `redirect`: original headers stay untouched, envelope-from = original
+ *   envelope sender.
  *
- * In both cases the loop-protection header is set.
+ * In both cases the loop-protection header is set. Throws when the job cannot
+ * be enqueued (the caller defers the SMTP transaction).
  */
 export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
   if (isRuleForwardedAlready(opts.rawBuffer)) {
@@ -63,28 +73,13 @@ export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
     return;
   }
 
-  const extra: Record<string, string> = {
-    [LOOP_HEADER]: opts.forwardingUser.id,
-  };
-
-  if (opts.mode === 'forward') {
-    extra['Resent-From'] = `<${opts.forwardingUser.email}>`;
-    extra['Resent-To']   = `<${opts.toAddress}>`;
-    extra['Resent-Date'] = new Date().toUTCString();
-    extra['Resent-Message-ID'] = `<${randomUUID()}@${opts.forwardingUser.email.split('@')[1] ?? 'localhost'}>`;
-  }
-
-  const augmented = addHeaders(opts.rawBuffer, extra);
-
-  // For `redirect`: envelope-from stays = original sender, so bounces go to the
-  // originating sender. For `forward`: the user takes responsibility.
-  const envelopeFrom = opts.mode === 'redirect' ? opts.originalFrom : opts.forwardingUser.email;
+  const { envelopeFrom, raw } = buildRuleForward(opts);
 
   await enqueueOutbound({
     messageId:  randomUUID(),
     from:       envelopeFrom,
     to:         [opts.toAddress],
-    rawMessage: augmented.toString('base64'),
+    rawMessage: raw.toString('base64'),
     senderUserId: opts.forwardingUser.id,
   });
 

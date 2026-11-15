@@ -44,6 +44,46 @@ export function interpretConnectionFilterResponse(status: number, body: unknown)
   return reason !== undefined ? { kind: 'accept', reason } : { kind: 'accept' };
 }
 
+/** Answer of `/check/content` (security-filter). */
+export interface ContentFilterResult {
+  action: FilterAction;
+  reason?: string;
+  junkFolder?: boolean;
+  spamScore?: number;
+  virusName?: string;
+}
+
+/** Body limit of `/check/content` (security-filter: express.raw limit '52mb'). */
+export const CONTENT_FILTER_MAX_BYTES = 52 * 1024 * 1024;
+
+/**
+ * Pure: validates a `/check/content` answer. A non-200 status, a non-object
+ * body or an unknown `action` is "unavailable" — the message must not be
+ * delivered unscanned (the caller defers it with 451).
+ */
+export function interpretContentFilterResponse(
+  status: number,
+  body: unknown,
+): { kind: 'ok'; result: ContentFilterResult } | { kind: 'unavailable'; detail: string } {
+  if (status !== 200) return { kind: 'unavailable', detail: `HTTP ${status}` };
+  if (!body || typeof body !== 'object') return { kind: 'unavailable', detail: 'Response body is not a JSON object' };
+  const b = body as Record<string, unknown>;
+  const action = b['action'];
+  if (typeof action !== 'string' || !(ACTIONS as readonly string[]).includes(action)) {
+    return { kind: 'unavailable', detail: `Response without valid action (${JSON.stringify(action)})` };
+  }
+  return {
+    kind: 'ok',
+    result: {
+      action: action as FilterAction,
+      ...(typeof b['reason'] === 'string' ? { reason: b['reason'] } : {}),
+      ...(typeof b['junkFolder'] === 'boolean' ? { junkFolder: b['junkFolder'] } : {}),
+      ...(typeof b['spamScore'] === 'number' ? { spamScore: b['spamScore'] } : {}),
+      ...(typeof b['virusName'] === 'string' ? { virusName: b['virusName'] } : {}),
+    },
+  };
+}
+
 /** Pure: connect-stage verdict. Only an explicit reject/defer closes the connection. */
 export function connectionAllowed(decision: ConnectionFilterDecision): boolean {
   return decision.kind !== 'block';

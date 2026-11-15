@@ -73,6 +73,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - All object access (raw messages, attachments, quarantine, outbound queue, JMAP uploads,
   S/MIME) goes through the storage driver; outbound attachment keys no longer contain user
   file names.
+- **SMTP protocol strictness (RFC 5321).** `MAIL`/`RCPT` require the correct keyword
+  (`MAIL TO:` / `RCPT FROM:` → 501); unknown parameters are refused with 555 (MAIL accepts
+  `SIZE`, `BODY`, `AUTH`; RCPT accepts none — DSN is not advertised); recipients without a
+  valid local-part/domain get 501 5.1.3 at RCPT instead of a silent drop; `EHLO`/`HELO` without
+  a domain and `STARTTLS` with parameters → 501; `VRFY` answers 252 instead of 502; source
+  routes are accepted and ignored. The local-part keeps its case on relaying (only the domain is
+  lower-cased; local lookups stay case-insensitive).
+- **SMTP AUTH validation (RFC 4954 §4, RFC 4616).** Responses that are not valid base64 → 501;
+  a PLAIN message must have exactly three fields (a two-field message is refused), a non-empty
+  authzid must name the authenticated user.
+- A custom SMTP banner that does not start with a domain is prefixed with the host name
+  (`220 <host> <banner>`).
+- Bounces (DSN) are English, CRLF-formatted RFC 3464 reports with RFC 3463 status codes from
+  the remote reply, list only the failed recipients and are also sent to **external** senders
+  of mail that was accepted with 250 (RFC 5321 §6.1). Transport-rule rejects of inbound mail
+  keep the backscatter protection (no DSN to external senders).
+- Out-of-office replies are only sent when one of the user's addresses is in To/Cc/Bcc/Resent-*
+  (RFC 3834 §2) — no replies to Bcc'd copies or list mail without `List-*` headers.
+- Inbound content scan: an invalid answer of the security filter defers the message (451)
+  instead of delivering it unscanned; messages above the filter's 52 MB body limit are refused
+  with 552 instead of being deferred.
+- Mail rule redirects keep the original envelope sender (a null sender stays null) instead of
+  the header `From:`; forwards put their `Resent-*` block at the top of the header.
 
 ### Fixed
 
@@ -91,6 +114,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   its own copy of a colleague's meeting (ActiveSync MeetingResponse failed, CalDAV PUT of the
   invitation answered 409). The UID is now unique per calendar (RFC 4791 §5.3.2.1); the schema
   change (`@@unique([calendarId, uid])`) is applied automatically at container start.
+- **SMTP outbound lost mail on partial rejects.** When a remote server rejected some
+  recipients (4xx or 5xx) and accepted others, the rejected ones were dropped without retry or
+  bounce. Delivery is now tracked per recipient in the queue job: temporary failures are retried
+  for the open recipients only, permanent ones are bounced once, immediately.
+- **SMTP outbound retries duplicated mail and bounces.** A job with local and external
+  recipients stored the local copies again on every retry (greylisting was enough) and re-sent
+  to domains that had already accepted; a 5xx job kept retrying (`job.discard()` ran after
+  BullMQ had already scheduled the retry) and sent a bounce per attempt. Progress now survives
+  retries, permanent failures end the job (`UnrecoverableError`), and the give-up bounce goes
+  out once, only for recipients that are still open.
+- **SMTP: domains without MX records** are delivered to the domain's A/AAAA host (implicit MX,
+  RFC 5321 §5.1); a null MX (RFC 7505) and NXDOMAIN bounce at once (5.1.10 / 5.1.2), DNS server
+  failures are retried. Connection and timeout errors are always temporary (a port number in
+  the error text was read as a permanent "587" reply).
+- **SMTP: outbound EHLO** uses the public host name instead of `[127.0.0.1]` (RFC 5321
+  §4.1.1.1).
+- **SMTP: `<Postmaster>` and `postmaster@<local domain>` are accepted** (RFC 5321 §4.5.1) and
+  delivered to the oldest active administrator when no mailbox or alias of that name exists.
+- **SMTP trace fields (RFC 5321 §4.4).** Port 25 now adds a `Received:` header (HELO, IP, host,
+  `ESMTP[S][A]`, session id); every final delivery puts `Return-Path: <reverse-path>` first
+  (earlier `Return-Path:` fields are removed); mail with more than 100 `Received:` fields is
+  refused as a loop (554 5.4.6). The submission `Received:` only carries `for <…>` with a single
+  recipient — it exposed the first (possibly Bcc) recipient to everybody.
+- **SMTP submission adds a missing `Date:` / `Message-ID:`** (RFC 6409 §8).
+- **SMTP: partial delivery failures no longer lose or duplicate mail.** A failure while storing
+  one of several recipients or while queueing the external part (and rule forwards, which were
+  fire-and-forget after the 250) now answers 451; the recipients already delivered are
+  remembered (Redis, 5 days) and skipped on the client's retry.
+- **SMTP session:** the DATA timeout restarts for every received chunk (slow uploads no longer
+  fail after 10 minutes); a STARTTLS handshake that never completes is closed after 60 s; the
+  first period of every line starting with "." is removed (not only for ".."); internal handler
+  errors are answered with a fixed one-line 451 (a multi-line database error broke the reply
+  framing and leaked internals).
+- SMTP alias expansion: the same alias given twice (e.g. different case) delivered the second
+  copy to the alias address itself, which was then dropped as "mailbox not found".
 
 ### Security
 
@@ -145,6 +203,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   stayed open after a password change, session revocation, role change or deactivation; it now
   follows the same rules as JMAP Bearer connections and ends with `event: session-ended` (the
   browser's reconnect is then refused with 401).
+- **Smarthost certificates are verified.** Outbound smarthost connections with STARTTLS,
+  implicit TLS or credentials accepted any certificate, so an on-path attacker could harvest
+  the provider credentials (RFC 8314 §4.1). The certificate is now verified against the
+  smarthost name (TLS ≥ 1.2). **Operators with a self-signed smarthost** must install a valid
+  certificate or set `SMARTHOST_TLS_INSECURE=true` (explicit opt-out). Direct MX delivery stays
+  opportunistic (RFC 7435).
 
 ---
 

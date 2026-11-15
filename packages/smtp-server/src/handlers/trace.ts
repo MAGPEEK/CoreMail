@@ -1,0 +1,77 @@
+/**
+ * Trace information (RFC 5321 §4.4): `Received:` on every hop, `Return-Path:`
+ * on final delivery, hop counting against mail loops (§6.3).
+ */
+import { isValidDomain, oneLine } from '../core/envelope.js';
+import type { MessageMeta } from '../core/types.js';
+
+/** §6.3: a message with more Received: headers than this is treated as looping. */
+export const MAX_RECEIVED_HOPS = 100;
+
+/** RFC 5322 §3.3 date-time with a numeric zone (never the obsolete "GMT"). */
+export function formatRfc5322Date(date = new Date()): string {
+  return date.toUTCString().replace(/GMT$/, '+0000');
+}
+
+/** Address literal for the TCP-info clause: [192.0.2.1] / [IPv6:2001:db8::1]. */
+export function ipLiteral(ip: string): string {
+  const v4mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (v4mapped) return `[${v4mapped[1]}]`;
+  return ip.includes(':') ? `[IPv6:${ip}]` : `[${ip}]`;
+}
+
+function headerEnd(raw: Buffer): number {
+  const crlf = raw.indexOf('\r\n\r\n');
+  return crlf >= 0 ? crlf : raw.length;
+}
+
+/** Number of Received: header fields in the header block. */
+export function countReceived(raw: Buffer): number {
+  const head = raw.subarray(0, headerEnd(raw)).toString('latin1');
+  return (head.match(/^Received:/gim) ?? []).length;
+}
+
+export interface ReceivedOptions {
+  ip: string;
+  meta: MessageMeta;
+  /** Added only for exactly one recipient — never leaks Bcc recipients (§7.2). */
+  recipients: string[];
+  /** Comment for authenticated submissions. */
+  authenticatedUser?: string;
+  date?: Date;
+}
+
+/** Builds a folded `Received:` field (with trailing CRLF). */
+export function buildReceivedHeader(o: ReceivedOptions): string {
+  const helo = oneLine(o.meta.helo).replace(/[()\\]/g, '');
+  const from = isValidDomain(helo)
+    ? `from ${helo} (${ipLiteral(o.ip)})`
+    : `from ${ipLiteral(o.ip)}${helo ? ` (helo=${helo.slice(0, 255)})` : ''}`;
+  const auth = o.authenticatedUser ? ` (authenticated user ${oneLine(o.authenticatedUser).replace(/[()\\]/g, '')})` : '';
+  const single = o.recipients.length === 1 ? o.recipients[0] : undefined;
+  const forClause = single ? `\r\n\tfor <${oneLine(single)}>` : '';
+  return `Received: ${from}${auth}\r\n\tby ${o.meta.hostname} (CoreMail) with ${o.meta.protocol} id ${o.meta.sessionId}`
+    + `${forClause}; ${formatRfc5322Date(o.date)}\r\n`;
+}
+
+export function prependHeader(raw: Buffer, header: string): Buffer {
+  return Buffer.concat([Buffer.from(header, 'utf8'), raw]);
+}
+
+/**
+ * Final delivery (§4.4): removes Return-Path: fields added by earlier hops and
+ * puts `Return-Path: <reverse-path>` at the beginning of the message.
+ */
+export function withReturnPath(raw: Buffer, reversePath: string): Buffer {
+  const end = headerEnd(raw);
+  const head = raw.subarray(0, end).toString('latin1');
+  // Remove existing Return-Path fields (incl. folded continuation lines).
+  const cleaned = head
+    .replace(/^Return-Path:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*(?:\r\n|$)/gim, '')
+    .replace(/\r\n$/, ''); // the removed field was the last one
+  // Without remaining fields the prefix's own CRLF ends the (new) header line.
+  const body = cleaned === '' ? raw.subarray(Math.min(end + 2, raw.length)) : raw.subarray(end);
+  const prefix = `Return-Path: <${oneLine(reversePath)}>\r\n`;
+  if (cleaned.length === head.length) return Buffer.concat([Buffer.from(prefix, 'utf8'), raw]);
+  return Buffer.concat([Buffer.from(prefix, 'utf8'), Buffer.from(cleaned, 'latin1'), body]);
+}
