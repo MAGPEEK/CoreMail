@@ -15,6 +15,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
+import { publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea, requireRole } from '../../middleware/auth.js';
 import { canManageAccount, type AdminArea } from '../../lib/rbac.js';
 import { generateDkimPrivateKey } from '../../lib/dkim.js';
@@ -165,6 +166,10 @@ adminEmsRouter.put('/mailboxes/:identity', async (req: Request, res: Response) =
       ...(IsEnabled !== undefined ? { active: IsEnabled } : {}),
     },
   });
+  // v7.0.1: same semantics as PUT /admin/mailboxes/:id — disabling ends all
+  // sessions; any change of the enabled state drops cached logins.
+  if (IsEnabled === false && user.active) await revokeAllSessions(user.id, { reason: 'deactivated' });
+  else if (IsEnabled !== undefined && IsEnabled !== user.active) await publishUserAuthChange(user.id, 'reactivated');
   res.json({ Identity: user.id, Result: 'Success' });
 });
 
@@ -177,6 +182,7 @@ adminEmsRouter.delete('/mailboxes/:identity', async (req: Request, res: Response
     res.status(403).json({ error: 'Only Organization Management may delete admin accounts', code: 'FORBIDDEN_ROLE' }); return;
   }
   await prisma.user.delete({ where: { id: user.id } });
+  await revokeAllSessions(user.id, { reason: 'deleted' });
   res.status(204).end();
 });
 

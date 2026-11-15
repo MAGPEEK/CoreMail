@@ -819,4 +819,12 @@ Also: **`@coremail/core` is the source of truth** — never import `bcrypt` dire
 routes when user passwords are involved (except for OAuth client secrets
 and MFA backup codes — those need no pepper).
 
+**Credential invalidation (v7.0.1)**: any code that changes whether a user's credentials or
+sessions are valid (password, MFA, app passwords, active/role, deletion, session revocation)
+must call `publishUserAuthChange(userId, reason)` from `@coremail/storage/auth`
+(`revokeAllSessions` / `markSessionsRevoked(ids, userId)` already do). Caches of auth results
+use `CredentialCache` from `@coremail/core` (HMAC keys, `attachInvalidation()`, TTL fallback);
+services holding such state call `startAuthInvalidationSubscriber()` at start
+(channel `CHANNEL_AUTH_INVALIDATE`).
+
 *Last updated: 2026-11-14 (v6.0.0 — security & cleanup release, MAPI removed, EWS switch, tests; v5.8.0 — admin CLI, new compose; v5.7.1 — JMAP server; v5.7.0 — MAPI over HTTP optionally back + build hardening; v5.6.1 — distribution groups removed; v5.6.0 — OAuth2 / Modern Auth removed; v5.5.0 — IMAP4rev2 compliance; v5.4.0 — MAPI completely removed)*

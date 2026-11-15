@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { verifyAccessToken } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { isAccessTokenRevokedShared, revokeAllSessions } from '@coremail/storage/auth';
+import { isAccessTokenRevokedShared, markSessionsRevoked, revokeAllSessions } from '@coremail/storage/auth';
 
 export const sessionRouter: RouterType = Router();
 
@@ -33,6 +33,9 @@ sessionRouter.delete('/:id', async (req: Request, res: Response) => {
   if (!sessionId) { res.status(400).json({ error: 'Missing id' }); return; }
   const result = await prisma.session.deleteMany({ where: { id: sessionId, userId } });
   if (result.count === 0) { res.status(404).json({ error: 'Not found' }); return; }
+  // v7.0.1: access tokens of the deleted session are rejected immediately
+  // (memory + Redis marker + invalidation event), not only once they expire.
+  await markSessionsRevoked([sessionId], userId);
   res.json({ ok: true });
 });
 

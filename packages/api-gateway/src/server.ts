@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import { connectDatabase, prisma, migrateMailboxCounters } from '@coremail/storage';
 import {
-  getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD,
+  getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
   installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy,
 } from '@coremail/core';
 
@@ -414,6 +414,9 @@ async function start() {
   await initSetupToken(log).catch((err) => log.error({ err }, 'Setup token initialisation failed — setup wizard stays locked'));
   void initRuntimeLogLevel('api-gateway', { aliases: ['api'] }); // BCP per-service log level
   void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
+  // v7.0.1: session revocations done by the auth-service / LDAP sync reach
+  // requireAuth's in-process revocation check immediately.
+  startAuthInvalidationSubscriber();
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
   // allocation per mailbox repeats this check lazily in every service).

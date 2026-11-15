@@ -17,7 +17,7 @@ import { initRuntimeLogLevel } from '@coremail/core';
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express from 'express';
 import {
-  createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
+  createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
   installProcessGuards, installAsyncErrorHandling, resolveBindHost,
 } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
@@ -54,6 +54,8 @@ async function main(): Promise<void> {
   await connectDatabase();
   void initRuntimeLogLevel('jmap-server', { aliases: ['jmap'] }); // BCP per-service log level
   startChangeBus();
+  // v7.0.1: drop cached Basic logins + apply session revocations on credential changes
+  startAuthInvalidationSubscriber();
 
   try {
     const sub = getRedisClient().duplicate();
