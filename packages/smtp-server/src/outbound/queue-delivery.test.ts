@@ -141,3 +141,35 @@ test('the bare <Postmaster> recipient is delivered locally (expanded), not relay
   assert.deepEqual(h.stored, ['admin@corp.test']);
   assert.deepEqual(h.relayed, []);
 });
+
+test('v8.1: a transient failure retries until the expiry; then ONE final NDR with 5.4.7 (expired)', async () => {
+  const { queueExpiredError, isQueueExpiredError, finalBounceRecipients, outboundBackoffStrategy } = await import('./queue.js');
+  const h = harness([() => ({ delivered: [], failures: [fail('slow@ext.test', 451, '4.4.1')] })]);
+  const j = job(['slow@ext.test']);
+  j.opts = { attempts: 100 };
+  await assert.rejects(deliverOutboundJob(j, Buffer.from('x'), h.deps), /Temporary failure/);
+
+  // a retry while attempts remain and the window is open → no bounce
+  const mid = handleFailedJob({ ...j, attemptsMade: 30 }, new Error('451 4.4.1 try later'), h.deps);
+  assert.equal(mid.final, false);
+
+  // the worker's expiry check → final NDR, status 5.4.7, last remote reply kept as diagnostic
+  const err = queueExpiredError(48);
+  assert.ok(isQueueExpiredError(err));
+  assert.ok(err instanceof UnrecoverableError);
+  const done = handleFailedJob({ ...j, attemptsMade: 31 }, err, h.deps);
+  assert.equal(done.final, true);
+  assert.deepEqual(done.bounced, ['slow@ext.test']);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+  const ndr = h.bounces[0]!;
+  assert.equal(ndr.action ?? 'failed', 'failed');
+  assert.equal(ndr.recipients![0]!.status, '5.4.7');
+  assert.match(ndr.recipients![0]!.diagnostic, /451 4\.4\.1/);
+  assert.match(ndr.failureReason, /expired in queue after 48 hours/);
+
+  // no pending failure known → every open recipient gets 5.4.7
+  assert.deepEqual(finalBounceRecipients({ messageId: 'm', from: 'a@corp.test', to: ['x@y', 'z@y'], deliveredRcpts: ['z@y'] }, err).map((f) => [f.rcpt, f.status]), [['x@y', '5.4.7']]);
+  // the BullMQ strategy delegates to the schedule (1 min after the first failure)
+  assert.equal(await outboundBackoffStrategy(1, 'coremail-outbound', undefined, { timestamp: Date.now() }), 60_000);
+});

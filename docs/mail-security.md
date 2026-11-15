@@ -46,7 +46,9 @@ recipient, `User` for authenticated sessions, `MTA-Name`).
   passed DMARC/SPF/DKIM for a domain aligned with the attendee's domain, or the
   envelope sender is the authenticated local user (SMTP submission, REST, JMAP,
   ActiveSync). The mail itself is still delivered.
-* **Resource mailboxes**: bookings are scoped to the resource's calendar. An
+* **Resource mailboxes**: bookings are scoped to the resource's calendar
+  (unique per calendar + iCal UID since 8.1, so one meeting can book several
+  rooms). An
   existing booking is updated or cancelled only by its stored organizer, and
   only when that sender is authenticated. A new request from an unauthenticated
   sender is stored as `PENDING` (manual approval) instead of being auto-accepted.
@@ -56,9 +58,10 @@ recipient, `User` for authenticated sessions, `MTA-Name`).
 User rule patterns are executed by a linear-time matcher
 (`@coremail/storage` `matchRulePattern`), never by the backtracking JS engine:
 at most 200 characters, input capped at 64 KB, no backreferences, lookarounds
-or named groups; bounded repetitions up to `{100}`. API routes should validate
-patterns with `validateRulePattern()` when a rule is saved; invalid patterns
-never match.
+or named groups; bounded repetitions up to `{100}`. Since 8.1 the API refuses
+such patterns when a rule is saved (`POST/PUT /api/v1/user/rules` →
+`400 INVALID_RULE_PATTERN` with a readable message, shown in the MWA rule
+editor); invalid patterns stored earlier never match.
 
 ## Failure policy
 
@@ -74,9 +77,22 @@ never match.
 | `OUTBOUND_DELAY_DSN_HOURS` | `4` | When a message is still being retried after this many hours, the sender gets one delay notification (RFC 3464 `Action: delayed`, `Status: 4.4.7`, `Will-Retry-Until`). `0` disables it. |
 
 Message expiry stays time-based through BCP → Queues →
-`outboundRetentionHours` (default 48 h): after that the job ends with a final
-DSN. Loop detection rejects messages with more than 100 `Received:` fields
-(`554 5.4.6`).
+`outboundRetentionHours` (default 48 h). Since 8.1 a transient failure is
+retried for the whole window (Exchange-like): first after
+`retryBackoffDelaySec` (default 60 s), then after 5 min, 15 min and then every
+30 min; the last retry is pulled forward to the expiry moment, where the job
+ends with ONE final NDR (RFC 3464 `Action: failed`, `Status: 5.4.7`, the last
+remote reply as diagnostic). Time-based expiry wins: `maxRetryAttempts` is a
+minimum — each job gets at least enough attempts to cover the window. The delay
+DSN above is unchanged. Loop detection rejects messages with more than 100
+`Received:` fields (`554 5.4.6`).
+
+Regex patterns of transport rules (`regex` condition) and sender blacklist
+entries (`patternType: REGEX`) run on the same linear-time matcher as inbox
+rules; wildcard blacklist entries use a non-backtracking glob matcher. Rule
+patterns are validated when saved (`400 INVALID_RULE_PATTERN`). Existing REGEX
+blacklist entries with unsupported syntax (backreferences, lookarounds, > 200
+characters) are skipped and logged.
 
 ## Tarpit (port 25)
 

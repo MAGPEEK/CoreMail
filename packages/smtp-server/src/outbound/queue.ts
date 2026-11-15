@@ -2,7 +2,10 @@ import { Queue, Worker, UnrecoverableError, type Job } from 'bullmq';
 import { Readable } from 'stream';
 import nodemailer from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
-import { prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue } from '@coremail/storage';
+import {
+  prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
+  outboundRetryDelay,
+} from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
@@ -341,6 +344,15 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
 export function finalBounceRecipients(data: OutboundJob, err: unknown): RecipientFailure[] {
   const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? [])]);
   const known = (data.pendingFailures ?? []).filter((f) => !done.has(f.rcpt));
+  // v8.1: the retry window ended → RFC 3463 5.4.7 "delivery time expired" (a
+  // permanent failure now), the last remote reply stays the diagnostic.
+  if (isQueueExpiredError(err)) {
+    const reason = (err as Error).message.replace(/[\r\n]+/g, ' ');
+    const list = known.length > 0
+      ? known
+      : data.to.filter((r) => !done.has(r)).map((rcpt) => ({ rcpt, code: null, status: '5.4.7', message: reason, permanent: true }));
+    return list.map((f) => ({ ...f, status: '5.4.7', permanent: true }));
+  }
   if (known.length > 0) return known;
   const { code } = extractSmtpCode(err);
   const message = (err instanceof Error ? err.message : String(err)).replace(/[\r\n]+/g, ' ');
@@ -359,6 +371,33 @@ export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: S
   if (!job.senderUserId || job.ruleRedirect || job.quarantineReleaseId) return {};
   if (isRuleForwardedAlready(raw)) return {};
   return { senderAuth: { authenticatedSender: job.from } };
+}
+
+// ── Retry schedule + expiry ───────────────────────────────────────────────────
+
+const QUEUE_EXPIRED_PREFIX = 'Message expired in queue';
+
+/** The error the worker throws when a message outlived outboundRetentionHours. */
+export function queueExpiredError(hours: number): UnrecoverableError {
+  return new UnrecoverableError(`${QUEUE_EXPIRED_PREFIX} after ${hours} hours`);
+}
+
+export function isQueueExpiredError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith(QUEUE_EXPIRED_PREFIX);
+}
+
+/**
+ * BullMQ backoff strategy for `smtp-outbound` (type OUTBOUND_BACKOFF_TYPE):
+ * 1 min (retryBackoffDelaySec) → 5 → 15 → every 30 min, never past the
+ * expiry. Jobs of other backoff types keep BullMQ's built-ins (not called here).
+ */
+export async function outboundBackoffStrategy(
+  attemptsMade: number,
+  _type?: string,
+  _err?: Error,
+  job?: { timestamp?: number; opts?: { delay?: number } },
+): Promise<number> {
+  return outboundRetryDelay(attemptsMade, job ?? {}, await loadQueueSettings());
 }
 
 // ── Worker ────────────────────────────────────────────────────────────────────
@@ -413,7 +452,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       // too long in the queue (→ dead letter + DSN, no further retries).
       const queueSettings = await loadQueueSettings();
       if (isExpiredInQueue(job, queueSettings)) {
-        throw new UnrecoverableError(`Message expired in queue after ${queueSettings.outboundRetentionHours} hours`);
+        throw queueExpiredError(queueSettings.outboundRetentionHours);
       }
 
       // ── Schedule-send: cancellation check ────────────────────────────────
@@ -500,6 +539,8 @@ export function startOutboundWorker(): Worker<OutboundJob> {
     {
       connection: createBullMqConnection(), // maxRetriesPerRequest: null (required by BullMQ)
       concurrency: 10,
+      // v8.1: retries until outboundRetentionHours (1 / 5 / 15 / every 30 min, capped at the expiry)
+      settings: { backoffStrategy: outboundBackoffStrategy },
     },
   );
 

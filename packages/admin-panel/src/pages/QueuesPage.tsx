@@ -614,8 +614,10 @@ function SettingsSection() {
         <div className="mt-4 p-3 bg-gray-50 rounded-lg">
           <p className="text-xs font-medium text-gray-600 mb-2">{t('queue_settings_example')}</p>
           <div className="flex flex-wrap gap-1.5">
-            {Array.from({ length: Math.min(vals.maxRetryAttempts, 6) }, (_, i) => {
-              const delay = vals.retryBackoffDelaySec * Math.pow(2, i);
+            {/* v8.1 schedule (storage queue-options.ts): first retry after the base delay,
+                then 5 / 15 / every 30 min until outboundRetentionHours → final NDR 5.4.7 */}
+            {[vals.retryBackoffDelaySec, 300, 900, 1800].map((step, i) => {
+              const delay = Math.max(vals.retryBackoffDelaySec, step);
               const label = delay >= 3600 ? `${(delay/3600).toFixed(1)}h` : delay >= 60 ? `${Math.round(delay/60)}min` : `${delay}s`;
               return (
                 <span key={i} className="text-xs px-2 py-1 bg-white border border-gray-200 rounded">
@@ -623,7 +625,7 @@ function SettingsSection() {
                 </span>
               );
             })}
-            {vals.maxRetryAttempts > 6 && <span className="text-xs text-gray-400 px-1 py-1">… +{vals.maxRetryAttempts - 6} {t('queue_settings_more')}</span>}
+            <span className="text-xs text-gray-400 px-1 py-1">{t('queue_settings_until_expiry')}</span>
           </div>
         </div>
       </div>

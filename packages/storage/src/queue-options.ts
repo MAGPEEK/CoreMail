@@ -4,7 +4,9 @@
  * web/calendar/quarantine, JMAP, EWS, ActiveSync) so that retry policy and
  * retention are the same no matter where a message was submitted.
  *
- *   maxRetryAttempts / retryBackoffDelaySec → attempts + exponential backoff
+ *   maxRetryAttempts / retryBackoffDelaySec → attempts (a minimum — time-based expiry wins) +
+ *                                              retry schedule (first retry after retryBackoffDelaySec,
+ *                                              then 5 / 15 / every 30 min until expiry), v8.1
  *   completedRetentionHours                  → removeOnComplete { age, count 100 }
  *   deadLetterRetentionDays + autoFlushDead  → removeOnFail { age } (only with auto-flush;
  *                                              otherwise dead letters stay until flushed, capped by count)
@@ -45,9 +47,63 @@ export const COMPLETED_MAX_COUNT = 100;
 
 export interface OutboundJobOptions {
   attempts: number;
-  backoff: { type: 'exponential'; delay: number };
+  backoff: { type: typeof OUTBOUND_BACKOFF_TYPE; delay: number };
   removeOnComplete: { age: number; count: number };
   removeOnFail: { age: number } | { count: number };
+}
+
+// ── Retry schedule (v8.1, Exchange-like) ──────────────────────────────────────
+//
+// A transient failure is retried until the message expires
+// (outboundRetentionHours, default 48 h): first after retryBackoffDelaySec
+// (default 60 s = 1 min), then 5 min, 15 min, then every 30 min; the last
+// retry is pulled forward to the expiry moment, where the worker gives up and
+// sends the final NDR (5.4.7). Time-based expiry wins: `maxRetryAttempts` is a
+// MINIMUM — the job gets at least enough attempts to cover the whole window.
+// The delay DSN (OUTBOUND_DELAY_DSN_HOURS, default 4 h) is unchanged.
+
+/** BullMQ custom backoff type — resolved by the smtp-server worker (outboundBackoffStrategy). */
+export const OUTBOUND_BACKOFF_TYPE = 'coremail-outbound' as const;
+const RETRY_STEPS_MS = [5 * 60_000, 15 * 60_000] as const;
+const RETRY_INTERVAL_MS = 30 * 60_000;
+
+/** Pure: uncapped delay before retry number `attemptsMade` (1 = after the first failure). */
+export function outboundRetryStepMs(attemptsMade: number, firstDelayMs = 60_000): number {
+  const first = Math.max(1000, firstDelayMs);
+  if (attemptsMade <= 1) return first;
+  const step = RETRY_STEPS_MS[attemptsMade - 2] ?? RETRY_INTERVAL_MS;
+  return Math.max(first, step);
+}
+
+/** Pure: attempts needed so the retry schedule covers `retentionHours` (+ the expiry attempt). */
+export function attemptsForRetention(retentionHours: number, firstDelayMs = 60_000): number {
+  const window = retentionHours * 3_600_000;
+  let elapsed = 0;
+  let attempts = 1; // the first delivery
+  while (elapsed < window && attempts < 10_000) {
+    elapsed += outboundRetryStepMs(attempts, firstDelayMs);
+    attempts++;
+  }
+  return attempts + 1; // + the attempt at the expiry moment that gives up (final NDR)
+}
+
+/**
+ * Pure: delay before the next retry, capped so the retry never lands after the
+ * expiry (it is then scheduled 1 s past the expiry — the worker gives up and
+ * sends the final NDR right at the end of the window).
+ */
+export function outboundRetryDelay(
+  attemptsMade: number,
+  job: { timestamp?: number | undefined; opts?: { delay?: number | undefined; backoff?: unknown } | undefined },
+  settings: Partial<QueueSettingsLike> | null | undefined,
+  now = Date.now(),
+): number {
+  const s = normalizeQueueSettings(settings);
+  const step = outboundRetryStepMs(attemptsMade, s.retryBackoffDelaySec * 1000);
+  if (job.timestamp === undefined) return step;
+  const expiry = job.timestamp + Math.max(0, job.opts?.delay ?? 0) + s.outboundRetentionHours * 3_600_000;
+  const untilExpiry = expiry - now + 1000;
+  return Math.max(1000, Math.min(step, untilExpiry));
 }
 
 function intOr(v: unknown, d: number, min: number): number {
@@ -72,8 +128,9 @@ export function normalizeQueueSettings(s: Partial<QueueSettingsLike> | null | un
 export function buildOutboundJobOptions(settings: Partial<QueueSettingsLike> | null | undefined): OutboundJobOptions {
   const s = normalizeQueueSettings(settings);
   return {
-    attempts: s.maxRetryAttempts,
-    backoff:  { type: 'exponential', delay: s.retryBackoffDelaySec * 1000 },
+    // time-based expiry wins: maxRetryAttempts is only a minimum
+    attempts: Math.max(s.maxRetryAttempts, attemptsForRetention(s.outboundRetentionHours, s.retryBackoffDelaySec * 1000)),
+    backoff:  { type: OUTBOUND_BACKOFF_TYPE, delay: s.retryBackoffDelaySec * 1000 },
     removeOnComplete: { age: s.completedRetentionHours * 3600, count: COMPLETED_MAX_COUNT },
     removeOnFail: s.autoFlushDead
       ? { age: s.deadLetterRetentionDays * 86_400 }
