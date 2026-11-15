@@ -35,6 +35,27 @@ export interface StructuredAttachment {
   minioPath:   string;   // key in MinIO (outbound-queue/{jobId}/{filename})
   contentType: string;
   size:        number;
+  /** Content-ID without angle brackets (`cid:` references in the HTML body). Optional, validated. */
+  cid?:        string;
+  /** Inline part (Content-Disposition: inline), e.g. an image shown in the body. */
+  inline?:     boolean;
+}
+
+/** RFC 2392 Content-ID (without "<>") as accepted from producers. */
+const CONTENT_ID_RE = /^[A-Za-z0-9._@-]{1,200}$/;
+
+/**
+ * Pure: nodemailer attachment fields for one structured attachment. A valid
+ * `cid` becomes the part's Content-ID (and inline unless `inline: false`), so
+ * `<img src="cid:…">` in the body keeps working; an invalid one is ignored.
+ */
+export function attachmentMimeFields(att: Pick<StructuredAttachment, 'cid' | 'inline'>): { cid?: string; contentDisposition?: 'inline' | 'attachment' } {
+  const cid = typeof att.cid === 'string' && CONTENT_ID_RE.test(att.cid) ? att.cid : undefined;
+  const inline = att.inline === true || (cid !== undefined && att.inline !== false);
+  return {
+    ...(cid ? { cid } : {}),
+    ...(inline ? { contentDisposition: 'inline' as const } : {}),
+  };
 }
 
 export interface StructuredMessage {
@@ -111,13 +132,17 @@ export interface OutboundJob {
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
 
-async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
-  // Load attachments from MinIO (in parallel)
+export async function buildRawFromMessage(
+  msg: StructuredMessage,
+  download: (key: string) => Promise<Buffer> = downloadBuffer,
+): Promise<Buffer> {
+  // Load attachments from object storage (in parallel)
   const attachments: SendMailOptions['attachments'] = await Promise.all(
     msg.attachments.map(async (att) => ({
       filename:    att.filename,
-      content:     await downloadBuffer(att.minioPath),
+      content:     await download(att.minioPath),
       contentType: att.contentType,
+      ...attachmentMimeFields(att),
     }))
   );
 
@@ -293,11 +318,30 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const localRcpts: string[] = [];
   const externalRcpts: string[] = [];
   for (const rcpt of to) (await isLocal(rcpt) ? localRcpts : externalRcpts).push(rcpt);
-  const expanded = localRcpts.length > 0 ? await deps.expand(localRcpts) : [];
-  const finalLocal: string[] = [];
+  // Expanded per original recipient: DSNs/NDRs name the address as given (alias),
+  // not its target (RFC 3461 §4.2 — a full alias target must not get both a
+  // "delivered" DSN under the alias and an NDR under the target).
+  const finalLocalSet = new Set<string>();
   const finalExternal: string[] = [...externalRcpts];
-  for (const rcpt of expanded) (await isLocal(rcpt) ? finalLocal : finalExternal).push(rcpt);
+  const localTargetsOf = new Map<string, string[]>();
+  const originsOf = new Map<string, string[]>();
+  for (const original of localRcpts) {
+    const targets: string[] = [];
+    for (const rcpt of await deps.expand([original])) {
+      if (await isLocal(rcpt)) {
+        finalLocalSet.add(rcpt);
+        targets.push(rcpt);
+        originsOf.set(rcpt, [...(originsOf.get(rcpt) ?? []), original]);
+      } else {
+        finalExternal.push(rcpt);
+      }
+    }
+    localTargetsOf.set(original, targets);
+  }
+  const finalLocal = [...finalLocalSet];
   const external = [...new Set(finalExternal)];
+  const asOriginals = (targets: string[]): string[] =>
+    [...new Set(targets.flatMap((t) => originsOf.get(t) ?? [t]))];
 
   // ── Local delivery (write directly into the mailbox) ──────────────────────
   const unknownLocal: string[] = [];
@@ -329,7 +373,8 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const newlyBounced: string[] = [];
   if (unknownLocal.length > 0) {
     await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
-    const notify = unknownLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    const notify = asOriginals(unknownLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r)))
+      .filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
     if (notify.length > 0) {
       await deps.bounce({
         ...unknownRecipientDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
@@ -340,7 +385,8 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   }
   if (fullLocal.length > 0) {
     await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
-    const notify = fullLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    const notify = asOriginals(fullLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r)))
+      .filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
     if (notify.length > 0 && from) {
       await deps.bounce({
         ...quotaExceededDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
@@ -349,8 +395,16 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     }
     newlyBounced.push(...fullLocal);
   }
-  // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases included).
-  if (finalLocal.length > 0) await notifySuccess(localRcpts.filter((r) => !unknownLocal.includes(r) && !fullLocal.includes(r)), 'delivered');
+  // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases
+  // included) — judged on the persisted sets, so a retry never confirms a
+  // recipient an earlier attempt bounced: every local target of the address
+  // must be delivered and none bounced.
+  if (finalLocal.length > 0) {
+    await notifySuccess(localRcpts.filter((r) => {
+      const targets = localTargetsOf.get(r) ?? [];
+      return targets.length > 0 && targets.every((t) => delivered.has(t) && !bounced.has(t));
+    }), 'delivered');
+  }
 
   // ── External delivery via MX / smarthost ──────────────────────────────────
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
