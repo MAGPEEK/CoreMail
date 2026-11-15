@@ -53,11 +53,28 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x11: 'Update', 0x12: 'SyncKey', 0x13: 'FolderCreate', 0x14: 'FolderDelete',
     0x15: 'FolderUpdate', 0x16: 'FolderSync', 0x17: 'Count',
   },
+  // Code page 5: Move
+  5: {
+    0x05: 'MoveItems', 0x06: 'Move', 0x07: 'SrcMsgId', 0x08: 'SrcFldId',
+    0x09: 'DstFldId', 0x0a: 'Response', 0x0b: 'Status', 0x0c: 'DstMsgId',
+  },
   // Code page 8: MeetingResponse
   8: {
     0x05: 'CalendarId', 0x06: 'CollectionId', 0x07: 'MeetingResponse',
     0x08: 'RequestId', 0x09: 'Request', 0x0a: 'Result', 0x0b: 'Status',
     0x0c: 'UserResponse', 0x0e: 'InstanceId',
+    0x10: 'ProposedStartTime', 0x11: 'ProposedEndTime', 0x12: 'SendResponse',
+  },
+  // Code page 10: ResolveRecipients
+  10: {
+    0x05: 'ResolveRecipients', 0x06: 'Response', 0x07: 'Status', 0x08: 'Type',
+    0x09: 'Recipient', 0x0a: 'DisplayName', 0x0b: 'EmailAddress',
+    0x0c: 'Certificates', 0x0d: 'Certificate', 0x0e: 'MiniCertificate',
+    0x0f: 'Options', 0x10: 'To', 0x11: 'CertificateRetrieval',
+    0x12: 'RecipientCount', 0x13: 'MaxCertificates', 0x14: 'MaxAmbiguousRecipients',
+    0x15: 'CertificateCount', 0x16: 'Availability', 0x17: 'StartTime',
+    0x18: 'EndTime', 0x19: 'MergedFreeBusy', 0x1a: 'Picture', 0x1b: 'MaxSize',
+    0x1c: 'Data', 0x1d: 'MaxPictures',
   },
   // Code page 13: Ping
   13: {
@@ -90,6 +107,23 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x37: 'UnapprovedInROMApplicationList', 0x38: 'ApplicationName',
     0x39: 'ApprovedApplicationList', 0x3a: 'Hash',
   },
+  // Code page 15: Search
+  15: {
+    0x05: 'Search', 0x07: 'Store', 0x08: 'Name', 0x09: 'Query',
+    0x0a: 'Options', 0x0b: 'Range', 0x0c: 'Status', 0x0d: 'Response',
+    0x0e: 'Result', 0x0f: 'Properties', 0x10: 'Total', 0x11: 'EqualTo',
+    0x12: 'Value', 0x13: 'And', 0x14: 'Or', 0x15: 'FreeText',
+    0x17: 'DeepTraversal', 0x18: 'LongId', 0x19: 'RebuildResults',
+    0x1a: 'LessThan', 0x1b: 'GreaterThan', 0x1e: 'UserName', 0x1f: 'Password',
+    0x20: 'ConversationId', 0x21: 'Picture', 0x22: 'MaxSize', 0x23: 'MaxPictures',
+  },
+  // Code page 16: GAL
+  16: {
+    0x05: 'DisplayName', 0x06: 'Phone', 0x07: 'Office', 0x08: 'Title',
+    0x09: 'Company', 0x0a: 'Alias', 0x0b: 'FirstName', 0x0c: 'LastName',
+    0x0d: 'HomePhone', 0x0e: 'MobilePhone', 0x0f: 'EmailAddress',
+    0x10: 'Picture', 0x11: 'Status', 0x12: 'Data',
+  },
   // Code page 17: AirSyncBase
   17: {
     0x05: 'BodyPreference', 0x06: 'Type', 0x07: 'TruncationSize', 0x08: 'AllOrNone',
@@ -98,6 +132,20 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x11: 'FileReference', 0x12: 'Method', 0x13: 'ContentId',
     0x14: 'ContentLocation', 0x15: 'IsInline', 0x16: 'NativeBodyType',
     0x17: 'ContentType', 0x18: 'Preview',
+  },
+  // Code page 18: Settings
+  18: {
+    0x05: 'Settings', 0x06: 'Status', 0x07: 'Get', 0x08: 'Set', 0x09: 'Oof',
+    0x0a: 'OofState', 0x0b: 'StartTime', 0x0c: 'EndTime', 0x0d: 'OofMessage',
+    0x0e: 'AppliesToInternal', 0x0f: 'AppliesToExternalKnown',
+    0x10: 'AppliesToExternalUnknown', 0x11: 'Enabled', 0x12: 'ReplyMessage',
+    0x13: 'BodyType', 0x14: 'DevicePassword', 0x15: 'Password',
+    0x16: 'DeviceInformation', 0x17: 'Model', 0x18: 'IMEI', 0x19: 'FriendlyName',
+    0x1a: 'OS', 0x1b: 'OSLanguage', 0x1c: 'PhoneNumber', 0x1d: 'UserInformation',
+    0x1e: 'EmailAddresses', 0x1f: 'SmtpAddress', 0x20: 'UserAgent',
+    0x21: 'EnableOutboundSMS', 0x22: 'MobileOperator', 0x23: 'PrimarySmtpAddress',
+    0x24: 'Accounts', 0x25: 'Account', 0x26: 'AccountId', 0x27: 'AccountName',
+    0x28: 'UserDisplayName', 0x29: 'SendDisabled', 0x2b: 'RightsManagementInformation',
   },
   // Code page 20: ItemOperations
   20: {
@@ -132,8 +180,26 @@ for (const [cp, tokens] of Object.entries(CODE_PAGES)) {
   PAGE_NAME_TO_TOKEN[page] = byName;
 }
 
-/** [page, token] for `name`: the parent's page when it defines the name, else the default page. */
+/** Namespace prefixes for explicitly qualified element names ("GAL:DisplayName"). */
+const NAMESPACE_PAGES: Record<string, number> = {
+  AirSync: 0, Email: 2, FolderHierarchy: 7, Move: 5, MeetingResponse: 8,
+  ResolveRecipients: 10, Ping: 13, Provision: 14, Search: 15, GAL: 16,
+  AirSyncBase: 17, Settings: 18, ItemOperations: 20, ComposeMail: 21,
+};
+
+/**
+ * [page, token] for `name`: the parent's page when it defines the name, else the
+ * default page. A qualified name `Namespace:Name` forces the page — needed where a
+ * child lives on another page than its parent and the name is ambiguous (e.g.
+ * GAL:DisplayName inside Search:Properties).
+ */
 export function resolveToken(name: string, parentPage: number | null): [number, number] | undefined {
+  const colon = name.indexOf(':');
+  if (colon > 0) {
+    const page = NAMESPACE_PAGES[name.slice(0, colon)];
+    const t = page === undefined ? undefined : PAGE_NAME_TO_TOKEN[page]?.[name.slice(colon + 1)];
+    return page === undefined || t === undefined ? undefined : [page, t];
+  }
   if (parentPage !== null) {
     const t = PAGE_NAME_TO_TOKEN[parentPage]?.[name];
     if (t !== undefined) return [parentPage, t];

@@ -11,6 +11,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **ActiveSync `Settings`:** Oof Get/Set on the same out-of-office settings as the web client,
+  JMAP and the SMTP auto-reply (state, time range, internal/external texts, contacts-only);
+  DeviceInformation Set stores the device's friendly name; UserInformation Get returns the
+  primary address and aliases; RightsManagementInformation Get answers empty.
+- **ActiveSync `Search`:** mailbox search (free text, folder with subfolders, received date,
+  paging, body preview) in the user's own mailbox, and address book search over the users and
+  shared mailboxes of the user's own domain.
+- **ActiveSync `MoveItems`:** moves mail between the user's own folders; IMAP and JMAP clients
+  see the move.
+- **ActiveSync `MeetingResponse`:** accept, tentatively accept or decline an invitation from the
+  phone — the meeting is added to (or removed from) the calendar, the organizer receives an
+  iTIP reply, and the invitation moves to Deleted Items.
+- **ActiveSync `ResolveRecipients`:** names and addresses are resolved against the address book
+  of the user's domain and the user's contacts.
+
+### Changed
+
+- ActiveSync OPTIONS now lists only the commands the server implements
+  (`MS-ASProtocolCommands`); unimplemented commands such as FolderCreate are no longer advertised.
+
 ---
 
 ## [7.0.0] — 2026-11-15 — Secure by default: mandatory MFA for mail clients, TLS-first auth, EWS removed
