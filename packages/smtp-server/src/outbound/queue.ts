@@ -4,7 +4,7 @@ import nodemailer from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
-  outboundRetryDelay,
+  outboundRetryDelay, queueStartMs,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
@@ -84,6 +84,18 @@ export interface OutboundJob {
   pendingFailures?: RecipientFailure[];
   /** A delay DSN (RFC 3464 Action: delayed) was sent — at most one per message. */
   delayNotified?: boolean;
+  /**
+   * Start of the retry window (ms). Unset = enqueue time + initial delay; an
+   * admin "Retry" of a dead letter sets it to the retry time
+   * (storage adminRetryJobData) so an expired message gets a fresh window.
+   */
+  expiryBaseMs?: number;
+  /**
+   * Recipients that already got a final NDR when the job gave up (dead
+   * letter). An admin retry delivers to them again but never bounces them a
+   * second time.
+   */
+  finalNdrRcpts?: string[];
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -197,8 +209,7 @@ export function delayDsnHours(env: Record<string, string | undefined> = process.
 export function delayDsnDue(job: Pick<OutboundJobLike, 'data' | 'timestamp' | 'opts'>, hours: number, now = Date.now()): boolean {
   if (hours <= 0 || job.data.delayNotified || job.timestamp === undefined) return false;
   if (!job.data.from) return false; // null sender (bounces) never get a DSN
-  const start = job.timestamp + Math.max(0, job.opts.delay ?? 0);
-  return now - start >= hours * 3_600_000;
+  return now - queueStartMs(job) >= hours * 3_600_000;
 }
 
 export interface OutboundDeps {
@@ -210,7 +221,7 @@ export interface OutboundDeps {
   bounce(opts: DsnOptions): Promise<void>;
   hostname(): Promise<string>;
   /** When the queue gives up on the job (Will-Retry-Until of a delay DSN). */
-  retryUntil?(job: Pick<OutboundJobLike, 'timestamp' | 'opts'>): Promise<Date>;
+  retryUntil?(job: Pick<OutboundJobLike, 'timestamp' | 'opts' | 'data'>): Promise<Date>;
 }
 
 export interface DeliverySummary {
@@ -282,20 +293,23 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     for (const r of result.delivered) delivered.add(r);
     const permanent = result.failures.filter((f) => f.permanent);
     transient = result.failures.filter((f) => !f.permanent);
-    if (permanent.length > 0) {
+    // recipients that already got a final NDR (admin retry of a dead letter) are not bounced again
+    const alreadyNotified = new Set(data.finalNdrRcpts ?? []);
+    const toNotify = permanent.filter((f) => !alreadyNotified.has(f.rcpt));
+    if (toNotify.length > 0) {
       await deps.bounce({
         originalFrom:      from,
-        originalTo:        permanent.map((f) => f.rcpt),
+        originalTo:        toNotify.map((f) => f.rcpt),
         originalSubject:   data.message?.subject ?? '',
         originalMessageId: data.message?.messageId ?? null,
-        failureReason:     permanent[0]!.message,
-        smtpCode:          permanent[0]!.code,
+        failureReason:     toNotify[0]!.message,
+        smtpCode:          toNotify[0]!.code,
         serverHostname:    await deps.hostname(),
-        recipients:        permanent.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
+        recipients:        toNotify.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
         deliverExternal:   data.ruleRedirect !== true, // redirect rule: no backscatter to a forged external sender
       });
-      for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
     }
+    for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
   }
   await persist(transient);
 
@@ -342,7 +356,7 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
  * with its last temporary failure when one is known.
  */
 export function finalBounceRecipients(data: OutboundJob, err: unknown): RecipientFailure[] {
-  const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? [])]);
+  const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? []), ...(data.finalNdrRcpts ?? [])]);
   const known = (data.pendingFailures ?? []).filter((f) => !done.has(f.rcpt));
   // v8.1: the retry window ended → RFC 3463 5.4.7 "delivery time expired" (a
   // permanent failure now), the last remote reply stays the diagnostic.
@@ -395,7 +409,7 @@ export async function outboundBackoffStrategy(
   attemptsMade: number,
   _type?: string,
   _err?: Error,
-  job?: { timestamp?: number; opts?: { delay?: number } },
+  job?: { timestamp?: number; opts?: { delay?: number }; data?: { expiryBaseMs?: number } },
 ): Promise<number> {
   return outboundRetryDelay(attemptsMade, job ?? {}, await loadQueueSettings());
 }
@@ -436,7 +450,7 @@ const defaultOutboundDeps: OutboundDeps = {
   hostname: publicHostname,
   retryUntil: async (job) => {
     const s = await loadQueueSettings();
-    return new Date((job.timestamp ?? Date.now()) + Math.max(0, job.opts.delay ?? 0) + s.outboundRetentionHours * 3_600_000);
+    return new Date(queueStartMs(job) + s.outboundRetentionHours * 3_600_000);
   },
 };
 
@@ -576,7 +590,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
  * processor; here only the final give-up bounces the still-open recipients.
  */
 export function handleFailedJob(
-  job: Pick<OutboundJobLike, 'id' | 'data' | 'attemptsMade' | 'opts'>,
+  job: Pick<OutboundJobLike, 'id' | 'data' | 'attemptsMade' | 'opts'> & { updateData?: OutboundJobLike['updateData'] },
   err: Error,
   deps: Pick<OutboundDeps, 'bounce' | 'hostname'> & { deadLetter?: typeof notifyDeadLetter },
 ): { final: boolean; bounced: string[] } {
@@ -616,7 +630,20 @@ export function handleFailedJob(
     bounceList = finalBounceRecipients(job.data, err);
     if (bounceList.length > 0) {
       const list = bounceList;
+      // Recorded BEFORE the NDR is sent (at most once): an admin "Retry" of
+      // this dead letter tries these recipients again, but never sends them
+      // a second final NDR.
+      const data: OutboundJob = {
+        ...job.data,
+        finalNdrRcpts: [...new Set([...(job.data.finalNdrRcpts ?? []), ...list.map((f) => f.rcpt)])],
+      };
+      job.data = data;
       void (async () => {
+        try {
+          if (job.updateData) await job.updateData(data);
+        } catch (e) {
+          log.warn({ err: e, jobId: job.id }, 'Recording bounced recipients failed');
+        }
         try {
           await deps.bounce({
             originalFrom:      job.data.from,

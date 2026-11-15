@@ -11,7 +11,7 @@ const fakePrisma: Record<string, unknown> = { $on: () => undefined };
 
 const {
   buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings,
-  attemptsForRetention, outboundRetryStepMs, outboundRetryDelay,
+  attemptsForRetention, outboundRetryStepMs, outboundRetryDelay, adminRetryJobData, queueStartMs,
 } = await import('./queue-options.js');
 const {
   extractITipReply, isReplyFromAttendee, processITipInbound, parseITipReply, applyReplyToIcal, MAX_REPLY_OVERRIDES, MAX_REPLY_STAMPS,
@@ -45,6 +45,21 @@ test('outboundRetentionHours expiry counts from the planned send time', () => {
   assert.equal(isExpiredInQueue({ timestamp: now - 47 * h }, null, now), false);
   assert.equal(isExpiredInQueue({ timestamp: now - 49 * h, opts: { delay: 24 * h } }, null, now), false); // scheduled send
   assert.equal(isExpiredInQueue({ timestamp: now - 3 * h }, { outboundRetentionHours: 2 }, now), true);
+});
+
+test('admin retry of an expired dead letter restarts the retry window (expiryBaseMs)', () => {
+  const now = 1_000_000_000_000;
+  const h = 3_600_000;
+  const job = { timestamp: now - 100 * h, data: { to: ['a@x.test'], bouncedRcpts: ['b@x.test'] } };
+  assert.equal(isExpiredInQueue(job, null, now), true);
+  const data = adminRetryJobData(job.data, now);
+  assert.equal(data.expiryBaseMs, now);
+  assert.deepEqual(data.bouncedRcpts, ['b@x.test'], 'delivery progress is kept');
+  assert.equal(isExpiredInQueue({ ...job, data }, null, now + 1000), false);
+  assert.equal(isExpiredInQueue({ ...job, data }, null, now + 49 * h), true);
+  assert.equal(queueStartMs({ timestamp: 5, opts: { delay: 10 } }), 15);
+  // the backoff is capped at the new expiry, not the old one
+  assert.equal(outboundRetryDelay(0, { timestamp: now - 100 * h, data }, null, now), 60_000);
 });
 
 test('v8.1 retry schedule: 1, 5, 15, then every 30 min, capped at the expiry', () => {
