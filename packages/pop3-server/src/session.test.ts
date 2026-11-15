@@ -33,6 +33,8 @@ interface FakeMessage {
   bodyHtml: string;
   storagePath: string | null;
   deletedAt: Date | null;
+  /** 'inbox' unless another client moved the message. */
+  folderId: string;
 }
 
 interface FakeUser {
@@ -46,6 +48,8 @@ interface FakeDb {
   users: FakeUser[];
   appPasswords: Array<{ id: string; userId: string; hash: string }>;
   messages: FakeMessage[];
+  /** Makes the QUIT expunge fail (UPDATE state error path). */
+  failExpunge?: boolean;
 }
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -63,8 +67,26 @@ function message(n: number, overrides: Partial<FakeMessage> = {}): FakeMessage {
     bodyHtml: '',
     storagePath: null,
     deletedAt: null,
+    folderId: 'inbox',
     ...overrides,
   };
+}
+
+/**
+ * A message with its raw original in object storage (every row written since
+ * v6.1): exactly `rawSize` (100 × n) octets — headers, a padding header, the blank
+ * line and the body — so LIST/STAT sizes and RETR agree. `message()` alone is a
+ * legacy row (storagePath null) that is reconstructed from its columns.
+ */
+function storedMessage(n: number): FakeMessage {
+  const m = message(n);
+  const head = `Subject: ${m.subject}\r\nX-Pad: `;
+  const tail = `\r\n\r\n${m.bodyText}`;
+  const pad = m.rawSize - Buffer.byteLength(head + tail);
+  const raw = Buffer.from(head + 'x'.repeat(Math.max(0, pad)) + tail);
+  const key = `raw/fixture/${m.id}`;
+  (globalThis as unknown as { __coremailTest: { objects: Map<string, Buffer> } }).__coremailTest.objects.set(key, raw);
+  return { ...m, storagePath: key, rawSize: raw.length };
 }
 
 function installFakeDb(messages: FakeMessage[]): FakeDb {
@@ -100,8 +122,11 @@ function installFakeDb(messages: FakeMessage[]): FakeDb {
       findFirst: async ({ where }: { where: { userId: string } }) => {
         await tick();
         if (where.userId !== 'u1') return null;
-        const live = db.messages.filter((m) => m.deletedAt === null).sort((a, b) => a.uid - b.uid);
-        return { id: 'mb1', folders: [{ messages: live.map(({ id, uid, rawSize }) => ({ id, uid, rawSize })) }] };
+        const live = db.messages.filter((m) => m.deletedAt === null && m.folderId === 'inbox').sort((a, b) => a.uid - b.uid);
+        return {
+          id: 'mb1',
+          folders: [{ id: 'inbox', messages: live.map(({ id, uid, rawSize, storagePath }) => ({ id, uid, rawSize, storagePath })) }],
+        };
       },
       // message-store allocation (modSeq bump on expunge)
       update: async () => ({ uidNext: 1, highestModSeq: 1n }),
@@ -114,9 +139,24 @@ function installFakeDb(messages: FakeMessage[]): FakeDb {
         await tick();
         return db.messages.find((m) => m.id === where.id) ?? null;
       },
-      updateMany: async ({ where, data }: { where: { id: { in: string[] } }; data: { deletedAt: Date } }) => {
-        for (const m of db.messages) if (where.id.in.includes(m.id)) m.deletedAt = data.deletedAt;
-        return { count: where.id.in.length };
+      // Honors the conditions the server uses: id (single or `in`), folderId,
+      // deletedAt: null and storagePath: null (lazy raw materialization).
+      updateMany: async ({ where, data }: {
+        where: { id: string | { in: string[] }; folderId?: string; deletedAt?: null; storagePath?: null };
+        data: Partial<FakeMessage>;
+      }) => {
+        if (db.failExpunge && 'deletedAt' in data) throw new Error('database unavailable');
+        const ids = typeof where.id === 'string' ? [where.id] : where.id.in;
+        const rows = db.messages.filter((m) => ids.includes(m.id)
+          && (where.folderId === undefined || m.folderId === where.folderId)
+          && (!('deletedAt' in where) || m.deletedAt === null)
+          && (!('storagePath' in where) || m.storagePath === null));
+        for (const m of rows) {
+          if (data.deletedAt !== undefined) m.deletedAt = data.deletedAt;
+          if (data.storagePath !== undefined) m.storagePath = data.storagePath;
+          if (data.rawSize !== undefined) m.rawSize = data.rawSize;
+        }
+        return { count: rows.length };
       },
     },
   };
@@ -208,7 +248,7 @@ interface Harness {
   connectAgain(): Promise<Pop3Client>;
 }
 
-const THREE_MESSAGES = (): FakeMessage[] => [message(1), message(2), message(3)];
+const THREE_MESSAGES = (): FakeMessage[] => [storedMessage(1), storedMessage(2), storedMessage(3)];
 
 /** Starts a POP3 server on loopback, connects and consumes the greeting. */
 async function connect(t: TestContext, messages: FakeMessage[] = THREE_MESSAGES()): Promise<Harness & { greeting: string }> {

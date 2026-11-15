@@ -150,6 +150,16 @@ async function byMailbox(tx: MessageStoreTx, ids: string[], opts: ScopeOpts): Pr
   return out;
 }
 
+interface TouchOpts extends ScopeOpts {
+  /**
+   * Extra conditions every row must still meet when the statement runs
+   * (e.g. `{ folderId, deletedAt: null }`): rows that no longer match — moved to
+   * another folder or already deleted by a concurrent writer — are left alone.
+   * The check and the update are one `UPDATE … WHERE`, so it is atomic.
+   */
+  where?: Omit<Prisma.MessageWhereInput, 'id'>;
+}
+
 /**
  * Apply `data` to the given messages and give them a fresh modSeq (one per mailbox).
  * Use for any metadata change (pin, snooze, retention tag, read flag via a fixed list, …).
@@ -159,13 +169,13 @@ export async function touchMessages(
   tx: MessageStoreTx,
   ids: string[],
   data: Omit<Prisma.MessageUncheckedUpdateManyInput, 'uid' | 'modSeq' | 'folderId'> = {},
-  opts: ScopeOpts = {},
+  opts: TouchOpts = {},
 ): Promise<Map<string, bigint>> {
   const result = new Map<string, bigint>();
   for (const [mailboxId, list] of await byMailbox(tx, ids, opts)) {
     const modSeq = await nextModSeq(tx, mailboxId);
     await tx.message.updateMany({
-      where: { id: { in: list } },
+      where: { ...(opts.where ?? {}), id: { in: list } },
       data: { ...data, modSeq, changeKey: modSeq.toString() },
     });
     result.set(mailboxId, modSeq);
@@ -196,7 +206,7 @@ export async function setFlags(
 export async function expunge(
   tx: MessageStoreTx,
   ids: string[],
-  opts: ScopeOpts & { deletedAt?: Date } = {},
+  opts: TouchOpts & { deletedAt?: Date } = {},
 ): Promise<Map<string, bigint>> {
   return touchMessages(tx, ids, { deletedAt: opts.deletedAt ?? new Date() }, opts);
 }

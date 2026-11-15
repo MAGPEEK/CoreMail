@@ -6,8 +6,7 @@ import {
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
 } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
-import { handleAutodiscoverV1 } from './v1.js';
-import { handleAutodiscoverV2 } from './v2.js';
+import { createAutodiscoverApp } from './app.js';
 import { invalidateSettingsCache } from './settings.js';
 
 const log = createLogger('autodiscover');
@@ -35,28 +34,8 @@ async function main() {
     log.warn({ err }, 'Redis subscription failed — cache expires automatically after 60s');
   }
 
-  const app = express();
-  app.use(express.text({ type: 'text/xml' }));
-  app.use(express.text({ type: 'application/xml' }));
-  app.use(express.json());
-
-  app.get('/health', (_req, res) => res.json({ ok: true, service: 'autodiscover' }));
-
-  // Autodiscover v1 — Outlook 2010–2016 and older clients
-  app.post('/Autodiscover/Autodiscover.xml', handleAutodiscoverV1);
-  app.get('/Autodiscover/Autodiscover.xml', handleAutodiscoverV1);
-
-  // Autodiscover v2 — Outlook 2019/365 Modern Auth
-  // GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=IMAP|SMTP|ActiveSync|AutodiscoverV1
-  app.get(
-    '/autodiscover/autodiscover.json/v1.0/:email',
-    handleAutodiscoverV2,
-  );
-
-  // SRV record redirect compatibility
-  app.get('/', (_req, res) => {
-    res.redirect('/Autodiscover/Autodiscover.xml');
-  });
+  // Routes: app.ts (v1 POX incl. mobilesync, v2 JSON in both URL forms)
+  const app = createAutodiscoverApp();
 
   // v6: shared error middleware (registered last)
   app.use(errorMiddleware(log));

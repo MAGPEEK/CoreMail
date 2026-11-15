@@ -15,6 +15,9 @@
  */
 import { registerHooks } from 'node:module';
 
+// Maildrop lock (maildrop-lock.ts): in-process layer only, no Redis.
+globalThis.__pop3LockRedis ??= null;
+
 const STUB_URL = 'coremail-test-stub:all';
 
 // The real message-store (UID/modSeq allocation) has no runtime imports and only

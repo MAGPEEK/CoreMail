@@ -256,3 +256,18 @@ test('touchMessages and expunge give changed rows a fresh modSeq', async () => {
   assert.equal(byId('b')['modSeq'], 5n);
   assert.equal(mailbox()['highestModSeq'], 5n);
 });
+
+test('expunge with a where scope leaves rows alone that moved away or are already deleted', async () => {
+  // POP3 QUIT (RFC 1939 §6): a message DELE'd in INBOX and moved to Archive by
+  // another client before QUIT must survive; an already-deleted row keeps its deletedAt.
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['a'], 'archive', { targetMailboxId: 'mb1' }));
+  const earlier = new Date(0);
+  byId('c')['deletedAt'] = earlier;
+  await prisma.$transaction((tx) => store.expunge(tx, ['a', 'b', 'c'], {
+    mailboxId: 'mb1',
+    where: { folderId: 'inbox', deletedAt: null },
+  }));
+  assert.equal(byId('a')['deletedAt'], null, 'moved message was expunged in its new folder');
+  assert.ok(byId('b')['deletedAt'] instanceof Date);
+  assert.equal(byId('c')['deletedAt'], earlier);
+});

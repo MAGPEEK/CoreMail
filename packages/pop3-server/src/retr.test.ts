@@ -62,6 +62,8 @@ passwordHash = await hashPassword('secret');
 const { storeRawMessage, createMemoryAuthRedis } = await import('@coremail/storage');
 // In-memory lockout store for the shared mail credential check (no Redis in tests).
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = createMemoryAuthRedis();
+// Maildrop lock: in-process layer only (no Redis in tests).
+(globalThis as Record<string, unknown>)['__pop3LockRedis'] = null;
 const { POP3Session, dotStuff } = await import('./session.js');
 const { selfSignedTestCert } = await import('./test-cert.js');
 const CERT = selfSignedTestCert();

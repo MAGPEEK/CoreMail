@@ -44,7 +44,7 @@ const deleted: string[] = [];
   mailbox: {
     findFirst: async () => {
       if (dropGate) await dropGate;
-      return { id: 'mb1', folders: [{ messages: [{ id: 'm1', uid: 1, rawSize: 10 }, { id: 'm2', uid: 2, rawSize: 20 }] }] };
+      return { id: 'mb1', folders: [{ id: 'inbox', messages: [{ id: 'm1', uid: 1, rawSize: 10 }, { id: 'm2', uid: 2, rawSize: 20 }] }] };
     },
   },
   message: {
@@ -100,7 +100,10 @@ class Client {
 let server: tls.Server | null = null;
 async function port(): Promise<number> {
   if (!server) {
-    server = tls.createServer({ ...CERT }, (s) => new POP3Session(s, true).start());
+    // These tests need several concurrent sessions of one user (different
+    // credentials); the RFC 1939 §4 maildrop lock is covered in maildrop-lock.test.ts.
+    const noLock = async () => ({ status: 'ok' as const, release: async () => {} });
+    server = tls.createServer({ ...CERT }, (s) => new POP3Session(s, true, { lock: noLock }).start());
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
     server.unref();
   }
