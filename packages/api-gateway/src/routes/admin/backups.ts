@@ -12,14 +12,46 @@
  *   GET  /backup/admin/jobs?limit=     — list BackupJob records from the DB
  *   POST /backup/admin/import/:userId  — import MBOX for a user (multipart text)
  */
-import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { requireArea } from '../../middleware/auth.js'; // also loads the `apiUser` request augmentation
+import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
+import { requireArea, requireRole } from '../../middleware/auth.js'; // also loads the `apiUser` request augmentation
 import { audit, auditContext } from '../../lib/audit.js';
 
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
 
+/**
+ * Routes that hand out or write MAILBOX CONTENT (8.0.x): per-mailbox backup,
+ * job / archive downloads (a full backup contains every mailbox) and MBOX
+ * import. They are ORGANIZATION_MANAGEMENT / COMPLIANCE_MANAGEMENT only —
+ * SERVER_MANAGEMENT keeps the operational part (full backup trigger, schedules,
+ * job list, deleting jobs/archives). Paths are relative to /api/v1/admin/backups.
+ */
+export function isMailboxDataRoute(req: Pick<Request, 'method' | 'path'>): boolean {
+  if (req.method === 'POST') return /^\/(mailbox|import)\/[^/]+\/?$/.test(req.path);
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    return /^\/download\/[^/]+\/?$/.test(req.path) || /^\/archive\/download\/?$/.test(req.path);
+  }
+  return false;
+}
+
+/** COMPLIANCE_MANAGEMENT has no 'servers' area: it reaches the mailbox-data routes and the lists needed to pick a job. */
+const complianceBackupAccess = (role: string, req: Request): boolean =>
+  role === 'COMPLIANCE_MANAGEMENT'
+  && (isMailboxDataRoute(req) || ((req.method === 'GET' || req.method === 'HEAD') && /^\/(jobs|list|users)\/?$/.test(req.path)));
+
+const mailboxDataGuard = requireRole('COMPLIANCE_MANAGEMENT'); // ORGANIZATION_MANAGEMENT always passes
+
 export const adminBackupsRouter: RouterType = Router();
-adminBackupsRouter.use(requireArea('servers'));
+adminBackupsRouter.use(requireArea('servers', complianceBackupAccess));
+adminBackupsRouter.use((req: Request, res: Response, next: NextFunction) => {
+  if (isMailboxDataRoute(req)) mailboxDataGuard(req, res, next);
+  else next();
+});
+
+/** Generic upstream failure — never echo the internal error (URLs, ports, stack). */
+function upstreamUnavailable(res: Response): void {
+  if (!res.headersSent) res.status(502).json({ error: 'backup-service unavailable' });
+  else res.end();
+}
 
 async function forward(
   req: Request,
@@ -45,11 +77,8 @@ async function forward(
     const ct = upstream.headers.get('content-type');
     if (ct) res.setHeader('Content-Type', ct);
     res.send(text);
-  } catch (err) {
-    res.status(502).json({
-      error: 'backup-service unavailable',
-      details: err instanceof Error ? err.message : String(err),
-    });
+  } catch {
+    upstreamUnavailable(res);
   }
 }
 
@@ -170,8 +199,8 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
       await pump();
     };
     await pump();
-  } catch (err) {
-    res.status(502).json({ error: 'backup-service unavailable', details: err instanceof Error ? err.message : String(err) });
+  } catch {
+    upstreamUnavailable(res);
   }
 });
 
@@ -179,6 +208,15 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
 adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  // The generic audit middleware records the GET (AUDIT_SENSITIVE_GET), but not the key.
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.archive.download',
+    targetType: 'backup_archive',
+    targetId: key,
+    ...auditContext(req),
+  });
   try {
     const upstream = await fetch(`${BACKUP_URL}/backup/admin/archive/download?key=${encodeURIComponent(key)}`, {
       method: 'GET',
@@ -204,8 +242,8 @@ adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) 
       await pump();
     };
     await pump();
-  } catch (err) {
-    res.status(502).json({ error: 'backup-service unavailable', details: err instanceof Error ? err.message : String(err) });
+  } catch {
+    upstreamUnavailable(res);
   }
 });
 
@@ -273,7 +311,7 @@ adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) =
     });
     void forward(req, res, 'POST', `/backup/admin/import/${encodeURIComponent(userId)}`, body, 'application/mbox');
   });
-  req.on('error', (err) => {
-    res.status(400).json({ error: 'failed to read import body', details: err.message });
+  req.on('error', () => {
+    if (!res.headersSent) res.status(400).json({ error: 'failed to read import body' });
   });
 });

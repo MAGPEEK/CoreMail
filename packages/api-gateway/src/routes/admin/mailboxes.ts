@@ -6,6 +6,7 @@ import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@
 import { requireArea } from '../../middleware/auth.js';
 import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
+import { audit, auditContext } from '../../lib/audit.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -300,15 +301,26 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const user = await prisma.user.findUnique({ where: { id } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
   if (parsed.data.granteeId === id) { res.status(400).json({ error: 'User cannot delegate to themselves' }); return; }
+
+  // A delegation is access to the owner's mail: the same rule as for modifying
+  // the account applies (admin mailboxes are ORGANIZATION_MANAGEMENT-only), and
+  // a non-ORG admin must never grant mailbox access to themselves.
+  const actor = req.apiUser!;
+  if (!canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may delegate access to admin mailboxes'); return;
+  }
+  if (parsed.data.granteeId === actor.userId && actor.role !== 'ORGANIZATION_MANAGEMENT') {
+    forbidden(res, 'Admins may not grant mailbox access to themselves'); return;
+  }
 
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
   // v6: unknown grantee used to crash with a Prisma FK error
-  const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true } });
+  const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true, email: true } });
   if (!grantee) { res.status(404).json({ error: 'Grantee not found' }); return; }
 
   // Upsert: update if exists, create if not
@@ -322,6 +334,12 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
       grantedBy: req.apiUser!.userId,
     },
   });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.delegate.grant', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { owner: user.email, grantee: grantee.email, granteeId: grantee.id, permission: parsed.data.permission },
+    ...auditContext(req),
+  });
   res.status(201).json(delegate);
 });
 
@@ -329,10 +347,24 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
 adminMailboxesRouter.delete('/:id/delegates/:granteeId', async (req: Request, res: Response) => {
   const { id, granteeId } = req.params as { id: string; granteeId: string };
 
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = req.apiUser!;
+  if (!canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may change delegations of admin mailboxes'); return;
+  }
+
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
-  await prisma.mailboxDelegate.deleteMany({ where: { mailboxId: mailbox.id, granteeId } });
+  const grantee = await prisma.user.findUnique({ where: { id: granteeId }, select: { email: true } });
+  const removed = await prisma.mailboxDelegate.deleteMany({ where: { mailboxId: mailbox.id, granteeId } });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.delegate.revoke', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { owner: user.email, grantee: grantee?.email ?? granteeId, granteeId, removed: removed.count },
+    ...auditContext(req),
+  });
   res.json({ ok: true });
 });
 

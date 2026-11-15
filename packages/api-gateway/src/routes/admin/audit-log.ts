@@ -18,14 +18,9 @@
 
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import PDFDocument from 'pdfkit';
-import { createHash } from 'crypto';
 import { prisma } from '@coremail/storage/prisma';
 import { requireArea } from '../../middleware/auth.js';
-
-// SHA-256 helper: returns the hex digest of a string or buffer
-function sha256(input: string | Buffer): string {
-  return createHash('sha256').update(input).digest('hex');
-}
+import { csvCell, exportSignature } from '../../lib/export-safety.js';
 
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireArea('compliance'));
@@ -212,16 +207,16 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 
   const csv = [csvHeader, ...csvRows].join('\n');
   const dateStr = new Date().toISOString().slice(0, 10);
-  // Integrity signature: SHA-256 over the exact payload (incl. UTF-8 BOM).
-  // Auditors can verify the file after download with
-  //   shasum -a 256 audit-log-YYYY-MM-DD.csv
-  // → must match the hash delivered in the X-CoreMail-Signature header.
+  // Integrity signature: HMAC-SHA256 over the exact payload (incl. UTF-8 BOM),
+  // keyed with a server secret (lib/export-safety.ts) — an unkeyed hash could be
+  // recomputed by whoever modified the file. Verification needs the server key
+  // (verifyExportSignature); the header is `hmac-sha256=<hex>`.
   const payload = '﻿' + csv;
-  const signature = sha256(payload);
+  const signature = exportSignature(payload);
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.csv"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -266,12 +261,12 @@ adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
     })),
   };
   const payload = JSON.stringify(payloadObj, null, 2);
-  const signature = sha256(payload);
+  const signature = exportSignature(payload);
   const dateStr = new Date().toISOString().slice(0, 10);
 
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.json"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -420,11 +415,11 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
 
   doc.end();
   const pdfBuffer = await pdfDone;
-  const signature = sha256(pdfBuffer);
+  const signature = exportSignature(pdfBuffer);
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.pdf"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -584,9 +579,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// Formula-safe CSV cell (= + - @ TAB CR prefixed with ') — see lib/export-safety.ts.
 function csvEscape(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
+  return csvCell(value);
 }
