@@ -54,7 +54,7 @@ registerMethod('Blob/get', CAP_BLOB, async (args, ctx) => {
   const ids = args['ids'];
   if (!Array.isArray(ids) || !ids.every((i) => typeof i === 'string')) throw new MethodError('invalidArguments', 'ids must be Id[]');
   if (ids.length > LIMITS.maxObjectsInGet) throw requestTooLarge();
-  const props = Array.isArray(args['properties']) ? (args['properties'] as string[]) : ['data:asBase64', 'size'];
+  const props = Array.isArray(args['properties']) ? (args['properties'] as string[]) : ['data', 'size']; // RFC 9404 §4.2 default
   const offset = typeof args['offset'] === 'number' ? Math.max(0, Math.trunc(args['offset'])) : 0;
   const length = typeof args['length'] === 'number' ? Math.max(0, Math.trunc(args['length'])) : null;
   const list: JsonObject[] = []; const notFound: string[] = [];
@@ -104,5 +104,5 @@ registerMethod('Blob/lookup', CAP_BLOB, async (args, ctx) => {
     if (!matched) { notFound.push(id); continue; }
     list.push({ id, matchedIds: matched });
   }
-  return { accountId: account.accountId, list, notFound: notFound.length ? notFound : null };
+  return { accountId: account.accountId, list, notFound };
 });

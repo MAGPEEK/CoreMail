@@ -28,6 +28,19 @@ export function parseOriginList(v: string | undefined): string[] {
   return (v ?? '').split(',').map((s) => normalizeOrigin(s.trim())).filter((s): s is string => !!s);
 }
 
+/**
+ * WebSocket upgrade (RFC 8887 §8, RFC 6455 §10.2): browsers attach cached HTTP
+ * credentials to cross-site WebSocket handshakes and CORS does not apply. A
+ * handshake with an Origin outside the allow-list is only accepted when it carries
+ * an explicit access token (query parameter), which a foreign page cannot borrow.
+ * Non-browser clients send no Origin and are unaffected.
+ */
+export function isWsOriginAllowed(origin: string | undefined, allowed: readonly string[], explicitToken: boolean): boolean {
+  if (origin === undefined || explicitToken) return true;
+  const norm = normalizeOrigin(origin);
+  return !!norm && allowed.includes(norm);
+}
+
 /** Pure: response headers for a request with `origin`. */
 export function corsHeadersFor(origin: string | undefined, allowed: readonly string[]): CorsHeaders {
   const base: CorsHeaders = {

@@ -176,7 +176,10 @@ async function main(): Promise<void> {
   // 'trust proxy' above therefore only ever trusts the gateway.
   const host = resolveBindHost();
   const server = app.listen(PORT, host, () => log.info({ port: PORT, host }, 'JMAP server started'));
-  attachWebSocket(server);
+  attachWebSocket(server, async () => {
+    const own = await configuredPublicOrigin().catch(() => null);
+    return own ? [own, ...extraOrigins] : extraOrigins;
+  });
 
   process.on('SIGTERM', () => process.exit(0));
 }

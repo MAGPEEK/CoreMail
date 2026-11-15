@@ -11,7 +11,8 @@ import { cannotCalculateChanges, setError, unsupportedFilter, unsupportedSort } 
 import { decodeMailboxState, encodeMailboxState, mailboxState, mailboxStateParts } from '../state.js';
 import { roleForFolder, SYSTEM_FOLDER_NAMES } from '../mail/keywords.js';
 import { notifyMailboxChange } from '../mail/write.js';
-import { applyPatch, assertState, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
+import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
+import { parseMaxChanges } from './email-changes.js';
 import type { AccountContext, JsonObject } from '../types.js';
 
 type FolderRow = {
@@ -72,6 +73,7 @@ registerMethod('Mailbox/changes', CAP_MAIL, async (args, ctx) => {
   const account = ctx.account(args['accountId']);
   const old = decodeMailboxState(args['sinceState']);
   if (!old) throw cannotCalculateChanges();
+  const max = parseMaxChanges(args['maxChanges']);
   const parts = await mailboxStateParts(account.mailboxId);
   const newState = encodeMailboxState(parts);
   const oldState = encodeMailboxState(old);
@@ -84,6 +86,9 @@ registerMethod('Mailbox/changes', CAP_MAIL, async (args, ctx) => {
   const created = folders.filter((f) => f.createdAt.getTime() > old.maxCreatedMs).map((f) => f.id);
   // Deleted folders are no longer known → client must reload completely
   if (old.count + created.length !== folders.length) throw cannotCalculateChanges();
+  // The hash state has no intermediate states: more than maxChanges ids → full resync
+  // (RFC 8620 §5.2 forbids returning more than maxChanges).
+  if (folders.length > max) throw cannotCalculateChanges();
   const createdSet = new Set(created);
   return {
     accountId: account.accountId,
@@ -152,10 +157,7 @@ registerMethod('Mailbox/query', CAP_MAIL, async (args, ctx) => {
     accountId: account.accountId,
     queryState: await mailboxState(account.mailboxId),
     canCalculateChanges: false,
-    position: page.position,
-    ids: page.ids,
-    ...(args['calculateTotal'] === true ? { total: page.total } : {}),
-    ...(page.limit !== null ? { limit: page.limit } : {}),
+    ...pageFields(page, args),
   };
 });
 

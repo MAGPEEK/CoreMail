@@ -4,6 +4,7 @@
  */
 import { MethodError, anchorNotFound, requestTooLarge, stateMismatch } from '../errors.js';
 import { LIMITS } from '../settings.js';
+import { normalizeKeywordPatch } from '../mail/keywords.js';
 import type { AccountContext, JsonObject, MethodContext } from '../types.js';
 
 export interface GetArgs {
@@ -80,8 +81,16 @@ export function assertState(ifInState: string | null, current: string): void {
 const FORBIDDEN_PATCH_TOKENS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export function applyPatch(base: JsonObject, patch: JsonObject): JsonObject {
+  // RFC 8620 §5.3: no pointer may be a prefix of another pointer in the same PatchObject.
+  const paths = Object.keys(patch);
+  for (const p of paths) {
+    const clash = paths.find((q) => q !== p && q.startsWith(`${p}/`));
+    if (clash) throw new MethodError('invalidPatch', `Path "${p}" is a prefix of "${clash}"`);
+  }
   const out: JsonObject = structuredClone(base);
-  for (const [path, value] of Object.entries(patch)) {
+  // Email keywords are case-insensitive (RFC 8621 §4.1.1) and stored lower-case in
+  // the patched object, so "keywords/Foo": null must address "foo".
+  for (const [path, value] of Object.entries(normalizeKeywordPatch(patch) as JsonObject)) {
     const tokens = path.split('/').map((t) => t.replace(/~1/g, '/').replace(/~0/g, '~'));
     // Prototype pollution guard: a path like "keywords/__proto__/x" would
     // otherwise walk into Object.prototype and modify it process-wide.
@@ -115,23 +124,57 @@ export interface QueryPage {
   limit: number | null;
 }
 
+/** Default and maximum /query page size. RFC 8620 §5.5: a server-imposed limit is reported in "limit". */
+export const QUERY_DEFAULT_LIMIT = 256;
+export const QUERY_MAX_LIMIT = 1000;
+
 export function paginate(allIds: string[], args: JsonObject): QueryPage {
   let position = typeof args['position'] === 'number' ? Math.trunc(args['position']) : 0;
   const limitArg = args['limit'];
   if (limitArg !== undefined && limitArg !== null && (typeof limitArg !== 'number' || limitArg < 0)) {
     throw new MethodError('invalidArguments', 'limit must be a non-negative number');
   }
-  const limit = typeof limitArg === 'number' ? Math.min(Math.trunc(limitArg), 1000) : 256;
+  const requested = typeof limitArg === 'number' ? Math.trunc(limitArg) : null;
+  const limit = requested !== null ? Math.min(requested, QUERY_MAX_LIMIT) : QUERY_DEFAULT_LIMIT;
   const anchor = typeof args['anchor'] === 'string' ? args['anchor'] : null;
   if (anchor) {
     const idx = allIds.indexOf(anchor);
     if (idx === -1) throw anchorNotFound();
     const offset = typeof args['anchorOffset'] === 'number' ? Math.trunc(args['anchorOffset']) : 0;
-    position = idx + offset;
+    // RFC 8620 §5.5: with an anchor, a negative index is clamped to 0 (no wrap-around).
+    position = Math.max(0, idx + offset);
+  } else if (position < 0) {
+    position = Math.max(0, allIds.length + position);
   }
-  if (position < 0) position = Math.max(0, allIds.length + position);
   if (position > allIds.length) position = allIds.length;
-  return { position, ids: allIds.slice(position, position + limit), total: allIds.length, limit: typeof limitArg === 'number' ? limit : null };
+  return {
+    position, ids: allIds.slice(position, position + limit), total: allIds.length,
+    // Reported only when the server applied a limit the client did not ask for.
+    limit: requested === limit ? null : limit,
+  };
+}
+
+/** Query response fields shared by every /query method (position, ids, total, limit). */
+export function pageFields(page: QueryPage, args: JsonObject): JsonObject {
+  return {
+    position: page.position, ids: page.ids,
+    ...(args['calculateTotal'] === true ? { total: page.total } : {}),
+    ...(page.limit !== null ? { limit: page.limit } : {}),
+  };
+}
+
+/**
+ * Comparator chain (RFC 8620 §5.5: comparators in order of precedence — the
+ * first one decides, later ones only break ties).
+ */
+export function compareBy<T>(comparators: Array<(a: T, b: T) => number>): (a: T, b: T) => number {
+  return (a, b) => {
+    for (const c of comparators) {
+      const r = c(a, b);
+      if (r !== 0) return r;
+    }
+    return 0;
+  };
 }
 
 export function requireString(args: JsonObject, key: string): string {

@@ -216,6 +216,22 @@ test('moveMessages assigns a new UID in the target and a new modSeq, keeping the
   assert.equal(byId('a')['uid'], 4);
 });
 
+test('createdModSeq marks when a row entered its mailbox (create, copy, cross-mailbox move only)', async () => {
+  db.mailboxes.push({ id: 'mb2', uidNext: 1, highestModSeq: 0n, uidValidity: 1 });
+  db.folders.push({ id: 'other', mailboxId: 'mb2', name: 'INBOX' });
+  byId('a')['createdModSeq'] = 1n;
+  const created = await prisma.$transaction((tx) => store.createMessage(tx, 'mb1', 'inbox', { subject: 'n', date: new Date() } as never));
+  assert.equal(created.createdModSeq, created.modSeq);
+  const { mapping, modSeq } = await prisma.$transaction((tx) => store.copyMessages(tx, ['a'], 'archive'));
+  assert.equal(byId(mapping[0]!.newId)['createdModSeq'], modSeq);
+  // same-mailbox move: not a creation — the marker stays
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['a'], 'archive'));
+  assert.equal(byId('a')['createdModSeq'], 1n);
+  // into another mailbox: a creation from the target's point of view
+  const moved = await prisma.$transaction((tx) => store.moveMessages(tx, ['b'], 'other'));
+  assert.equal(byId('b')['createdModSeq'], moved.modSeq);
+});
+
 test('copyMessages never reuses source UIDs and duplicates attachment rows', async () => {
   // Stale snapshot of the mailbox, as the old IMAP COPY used it: uidNext=4.
   await prisma.$transaction((tx) => store.allocate(tx, 'mb1', 2)); // concurrent writer takes 4,5

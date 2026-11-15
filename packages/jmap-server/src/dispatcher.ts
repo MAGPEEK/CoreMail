@@ -77,7 +77,8 @@ function evalPointer(value: unknown, tokens: string[]): unknown {
     if (!Number.isInteger(idx) || idx < 0 || idx >= value.length) throw new MethodError('invalidResultReference', `Index ${t} out of range`);
     return evalPointer(value[idx], rest);
   }
-  if (value && typeof value === 'object' && t in (value as JsonObject)) {
+  // Own members only: inherited ones (constructor, __proto__, …) are not part of the JSON value.
+  if (value && typeof value === 'object' && Object.hasOwn(value as JsonObject, t)) {
     return evalPointer((value as JsonObject)[t], rest);
   }
   throw new MethodError('invalidResultReference', `Path segment "${t}" not found`);
@@ -162,7 +163,8 @@ export async function processRequest(
 
   return {
     methodResponses: responses,
-    ...(createdIds.size ? { createdIds: Object.fromEntries(createdIds) } : {}),
+    // RFC 8620 §3.4: createdIds is only returned if it was given in the request.
+    ...(req.createdIds ? { createdIds: Object.fromEntries(createdIds) } : {}),
     sessionState,
   };
 }

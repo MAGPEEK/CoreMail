@@ -307,6 +307,11 @@ model Message {
   folderId     String
   uid          Int
   modSeq       BigInt
+  // v7.1: modSeq at which the row appeared in its mailbox (create, copy, move from
+  // another mailbox); never changed afterwards. Lets JMAP Email/changes tell created
+  // from updated independently of createdAt (= receivedAt, which clients may
+  // backdate). Null on rows written before v7.1.
+  createdModSeq BigInt?
   flags        String[]
   subject      String      @default("")
   fromAddr     String      @default("")

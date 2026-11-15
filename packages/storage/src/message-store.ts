@@ -111,7 +111,7 @@ export async function createMessages(
   const created: Message[] = [];
   for (const [i, data] of rows.entries()) {
     created.push(await tx.message.create({
-      data: { changeKey: modSeq.toString(), ...data, folderId, uid: firstUid + i, modSeq },
+      data: { changeKey: modSeq.toString(), ...data, folderId, uid: firstUid + i, modSeq, createdModSeq: modSeq },
     }));
   }
   return created;
@@ -241,18 +241,25 @@ export async function moveMessages(
   if (src.length === 0) return { mapping: [], modSeq: null };
   const targetMailboxId = opts.targetMailboxId ?? await mailboxOfFolder(tx, targetFolderId);
   const { firstUid, modSeq } = await allocate(tx, targetMailboxId, src.length);
+  const mailboxByFolder = new Map<string, string>();
+  for (const folderId of new Set(src.map((m) => m.folderId))) {
+    mailboxByFolder.set(folderId, opts.sourceMailboxId ?? await mailboxOfFolder(tx, folderId));
+  }
   const mapping: UidMapping[] = [];
   for (const [i, m] of src.entries()) {
     const newUid = firstUid + i;
+    // Entering another mailbox is a creation from the target mailbox's point of view.
+    const crossMailbox = mailboxByFolder.get(m.folderId) !== targetMailboxId;
     await tx.message.update({
       where: { id: m.id },
-      data: { ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString() },
+      data: {
+        ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
+        ...(crossMailbox ? { createdModSeq: modSeq } : {}),
+      },
     });
     mapping.push({ id: m.id, oldUid: m.uid, newUid });
   }
-  const sourceMailboxes = new Set<string>();
-  if (opts.sourceMailboxId) sourceMailboxes.add(opts.sourceMailboxId);
-  else for (const folderId of new Set(src.map((m) => m.folderId))) sourceMailboxes.add(await mailboxOfFolder(tx, folderId));
+  const sourceMailboxes = new Set<string>(mailboxByFolder.values());
   for (const mbx of sourceMailboxes) if (mbx !== targetMailboxId) await nextModSeq(tx, mbx);
   return { mapping, modSeq };
 }
@@ -266,7 +273,7 @@ export interface CopyOpts {
 }
 
 /** Fields that identify a row or are derived per copy and must not be duplicated. */
-const NON_COPY_FIELDS = new Set(['id', 'folderId', 'uid', 'modSeq', 'changeKey', 'createdAt', 'threadId', 'attachments']);
+const NON_COPY_FIELDS = new Set(['id', 'folderId', 'uid', 'modSeq', 'createdModSeq', 'changeKey', 'createdAt', 'threadId', 'attachments']);
 
 /**
  * Copy messages into `targetFolderId` with fresh UIDs (never the source UIDs) and
@@ -301,6 +308,7 @@ export async function copyMessages(
         folderId: targetFolderId,
         uid: newUid,
         modSeq,
+        createdModSeq: modSeq,
         changeKey: modSeq.toString(),
         ...(atts.length > 0
           ? {

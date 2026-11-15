@@ -14,9 +14,11 @@ import { MethodError, cannotCalculateChanges, setError, type SetError } from '..
 import { emailState } from '../state.js';
 import { loadRawMessage, parseAddress, parseHeaders } from '../mail/raw.js';
 import { stripBccHeader } from '../mail/strip-bcc.js';
+import { checkSubmissionSendersFor } from '../mail/sender-check.js';
+import { MAX_DELAYED_SEND_SEC } from '../limits.js';
 import { listIdentities } from './identity.js';
 import { runEmailSet, setResponse } from './email.js';
-import { paginate, parseGetArgs, parseSetArgs, pick, parseDate, utc } from './common.js';
+import { compareBy, pageFields, paginate, parseGetArgs, parseSetArgs, pick, parseDate, utc } from './common.js';
 import type { AccountContext, JsonObject, MethodContext } from '../types.js';
 
 const log = createLogger('jmap:submission');
@@ -27,7 +29,7 @@ interface Submission {
   identityId: string;
   emailId: string;
   threadId: string;
-  envelope: { mailFrom: { email: string; parameters: null }; rcptTo: Array<{ email: string; parameters: null }> };
+  envelope: { mailFrom: { email: string; parameters: Record<string, string | null> | null }; rcptTo: Array<{ email: string; parameters: null }> };
   sendAt: string;
   undoStatus: 'pending' | 'final' | 'canceled';
   deliveryStatus: null;
@@ -81,6 +83,9 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   if (!identity) throw setError('invalidProperties', 'identityId unknown', ['identityId']);
   const identityEmail = String(identity['email']).toLowerCase();
 
+  // sendAt is server-set (RFC 8621 §7); a delayed send is requested via FUTURERELEASE.
+  if (obj['sendAt'] !== undefined) throw setError('invalidProperties', 'sendAt is server-set — use envelope HOLDFOR/HOLDUNTIL', ['sendAt']);
+
   const emailId = typeof obj['emailId'] === 'string' ? ctx.resolveId(obj['emailId']) : '';
   const msg = await prisma.message.findFirst({
     where: { id: emailId, folder: { mailboxId: account.mailboxId }, deletedAt: null },
@@ -88,20 +93,28 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   });
   if (!msg) throw setError('invalidProperties', 'emailId not found', ['emailId']);
 
-  // From header must match the identity (forbiddenFrom)
-  if (msg.fromAddr && msg.fromAddr.toLowerCase() !== identityEmail) {
-    throw setError('forbiddenFrom', `From ${msg.fromAddr} does not match identity ${identityEmail}`);
-  }
-
   const raw = await loadRawMessage(msg);
+  // RFC 8621 §7.5 forbiddenFrom: every From/Sender address must be one the user may send
+  // as (shared policy with SMTP submission); a missing/unparseable From is invalidEmail.
+  const verdict = await checkSubmissionSendersFor(raw, identityEmail, ctx.user.userId);
+  if (!verdict.ok) throw setError(verdict.type, verdict.description);
+
   let rcpt: string[];
   let mailFrom = identityEmail;
-  const env = obj['envelope'] as JsonObject | undefined;
-  if (env && typeof env === 'object') {
+  let mailFromParams: Record<string, string | null> | null = null;
+  const env = obj['envelope'] as JsonObject | undefined | null;
+  if (env !== undefined && env !== null && (typeof env !== 'object' || Array.isArray(env))) {
+    throw setError('invalidProperties', 'envelope must be an Envelope object', ['envelope']);
+  }
+  if (env) {
     const mf = env['mailFrom'] as JsonObject | undefined;
-    if (mf && typeof mf['email'] === 'string') mailFrom = mf['email'].toLowerCase();
-    const rt = Array.isArray(env['rcptTo']) ? (env['rcptTo'] as JsonObject[]) : [];
-    rcpt = rt.map((r) => String(r['email'] ?? '').trim()).filter(Boolean);
+    if (!mf || typeof mf['email'] !== 'string') throw setError('invalidProperties', 'envelope.mailFrom.email required', ['envelope']);
+    mailFrom = mf['email'].toLowerCase();
+    mailFromParams = parseParams(mf['parameters'], MAIL_FROM_PARAMS);
+    if (!Array.isArray(env['rcptTo'])) throw setError('invalidProperties', 'envelope.rcptTo required', ['envelope']);
+    const rt = env['rcptTo'] as JsonObject[];
+    for (const r of rt) parseParams(r?.['parameters'], new Set()); // no RCPT TO extension supported
+    rcpt = rt.map((r) => String(r?.['email'] ?? '').trim()).filter(Boolean);
   } else {
     const hdr = await parseHeaders(raw);
     const all = ['to', 'cc', 'bcc'].flatMap((h) => {
@@ -117,12 +130,52 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   const bad = rcpt.filter((r) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r));
   if (bad.length) throw setError('invalidRecipients', `invalid: ${bad.join(', ')}`);
 
-  const sendAt = parseDate(obj['sendAt']) ?? new Date();
+  const sendAt = releaseTime(mailFromParams, new Date());
   const threadId = msg.threadId ?? msg.id;
   return {
     identityId, emailId, sendAt, raw, threadId,
-    envelope: { mailFrom: { email: mailFrom, parameters: null }, rcptTo: rcpt.map((e) => ({ email: e, parameters: null })) },
+    envelope: { mailFrom: { email: mailFrom, parameters: mailFromParams }, rcptTo: rcpt.map((e) => ({ email: e, parameters: null })) },
   };
+}
+
+/** SMTP extension parameters accepted on MAIL FROM (advertised in submissionExtensions). */
+const MAIL_FROM_PARAMS = new Set(['HOLDFOR', 'HOLDUNTIL']);
+
+/** Envelope parameters (String[String|null]); unsupported ones are rejected, not dropped. */
+export function parseParams(v: unknown, supported: Set<string>): Record<string, string | null> | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw setError('invalidProperties', 'envelope parameters must be an object', ['envelope']);
+  const out: Record<string, string | null> = {};
+  for (const [k, val] of Object.entries(v as JsonObject)) {
+    const name = k.toUpperCase();
+    if (!supported.has(name)) throw setError('invalidProperties', `unsupported SMTP parameter ${k}`, ['envelope']);
+    if (val !== null && typeof val !== 'string') throw setError('invalidProperties', `parameter ${k} must be a String or null`, ['envelope']);
+    out[name] = val;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * FUTURERELEASE (RFC 4865): HOLDFOR=<seconds> or HOLDUNTIL=<RFC 3339 date-time>,
+ * at most MAX_DELAYED_SEND_SEC ahead. Returns the release time (now without hold).
+ */
+export function releaseTime(params: Record<string, string | null> | null, now: Date): Date {
+  const holdFor = params?.['HOLDFOR'];
+  const holdUntil = params?.['HOLDUNTIL'];
+  if (holdFor !== undefined && holdUntil !== undefined) throw setError('invalidProperties', 'HOLDFOR and HOLDUNTIL are mutually exclusive', ['envelope']);
+  let at = now;
+  if (holdFor !== undefined) {
+    if (holdFor === null || !/^\d{1,9}$/.test(holdFor)) throw setError('invalidProperties', 'HOLDFOR must be a number of seconds', ['envelope']);
+    at = new Date(now.getTime() + Number(holdFor) * 1000);
+  } else if (holdUntil !== undefined) {
+    const d = holdUntil === null ? null : parseDate(holdUntil);
+    if (!d || !/^\d{4}-\d{2}-\d{2}T/.test(holdUntil!)) throw setError('invalidProperties', 'HOLDUNTIL must be an RFC 3339 date-time', ['envelope']);
+    at = d.getTime() > now.getTime() ? d : now;
+  }
+  if (at.getTime() - now.getTime() > MAX_DELAYED_SEND_SEC * 1000) {
+    throw setError('invalidProperties', `delay exceeds maxDelayedSend (${MAX_DELAYED_SEND_SEC} s)`, ['envelope']);
+  }
+  return at;
 }
 
 async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInput & { raw: Buffer }, jobId: string): Promise<void> {
@@ -176,17 +229,18 @@ registerMethod('EmailSubmission/query', CAP_SUBMISSION, async (args, ctx) => {
     if (typeof f['after'] === 'string') all = all.filter((s) => s.sendAt >= (f['after'] as string));
   }
   const sort = Array.isArray(args['sort']) ? (args['sort'] as JsonObject[]) : [];
-  for (const s of sort) {
+  // RFC 8620 §5.5: first comparator is primary — one chained sort
+  all.sort(compareBy(sort.map((s) => {
     const prop = String(s['property']);
     if (!['emailId', 'threadId', 'sentAt', 'sendAt'].includes(prop)) throw new MethodError('unsupportedSort', `Cannot sort by ${prop}`);
     const dir = s['isAscending'] === false ? -1 : 1;
     const k = (prop === 'sentAt' ? 'sendAt' : prop) as keyof Submission;
-    all.sort((a, b) => String(a[k]).localeCompare(String(b[k])) * dir);
-  }
+    return (a: Submission, b: Submission) => String(a[k]).localeCompare(String(b[k])) * dir;
+  })));
   const page = paginate(all.map((s) => s.id), args);
   return {
     accountId: account.accountId, queryState: await state(account.accountId), canCalculateChanges: false,
-    position: page.position, ids: page.ids, ...(args['calculateTotal'] === true ? { total: page.total } : {}),
+    ...pageFields(page, args),
   };
 });
 
@@ -211,7 +265,7 @@ registerMethod('EmailSubmission/set', CAP_SUBMISSION, async (args, ctx) => {
       await enqueue(account, ctx, c, jobId);
       const sub: Submission = {
         id, identityId: c.identityId, emailId: c.emailId, threadId: c.threadId, envelope: c.envelope,
-        sendAt: utc(c.sendAt), undoStatus: c.sendAt.getTime() > Date.now() + 1000 ? 'pending' : 'final',
+        sendAt: utc(c.sendAt), undoStatus: c.sendAt.getTime() > Date.now() ? 'pending' : 'final',
         deliveryStatus: null, dsnBlobIds: [], mdnBlobIds: [], jobId,
       };
       await save(account.accountId, sub);

@@ -142,9 +142,9 @@ function headerProp(lines: EmailHeader[], key: string): unknown {
       case 'Raw': return h.value;
       case 'Text': return decodeWords(unfolded).trim();
       case 'Addresses': return splitAddresses(decodeWords(unfolded));
-      case 'GroupedAddresses': return [{ name: null, addresses: splitAddresses(decodeWords(unfolded)) }];
+      case 'GroupedAddresses': return splitGroupedAddresses(decodeWords(unfolded));
       case 'MessageIds': return splitMessageIds(unfolded);
-      case 'Date': { const d = new Date(unfolded.trim()); return isNaN(d.getTime()) ? null : d.toISOString(); }
+      case 'Date': { const d = new Date(unfolded.trim()); return isNaN(d.getTime()) ? null : utcDate(d); }
       case 'URLs': return unfolded.split(',').map((s) => s.trim().replace(/^<|>$/g, '')).filter(Boolean);
       default: return h.value;
     }
@@ -177,6 +177,68 @@ function splitAddresses(s: string): EmailAddress[] {
   }
   if (cur.trim()) out.push(parseAddress(cur));
   return out;
+}
+
+/**
+ * RFC 8621 §4.1.2.4 asGroupedAddresses: `Team: a@x, b@x;, c@y` →
+ * [{name:"Team", addresses:[a,b]}, {name:null, addresses:[c]}].
+ */
+export function splitGroupedAddresses(s: string): Array<{ name: string | null; addresses: EmailAddress[] }> {
+  const out: Array<{ name: string | null; addresses: EmailAddress[] }> = [];
+  let loose: EmailAddress[] = [];
+  let group: { name: string | null; addresses: EmailAddress[] } | null = null;
+  let cur = ''; let depth = 0; let inQuote = false;
+  const flushAddr = (): void => {
+    if (cur.trim()) (group ? group.addresses : loose).push(parseAddress(cur));
+    cur = '';
+  };
+  const flushLoose = (): void => {
+    if (loose.length) out.push({ name: null, addresses: loose });
+    loose = [];
+  };
+  for (const ch of s) {
+    if (ch === '"') inQuote = !inQuote;
+    if (!inQuote) { if (ch === '<') depth++; if (ch === '>') depth--; }
+    const top = !inQuote && depth === 0;
+    if (top && ch === ':' && !group) {
+      flushLoose();
+      group = { name: decodeWords(cur.trim().replace(/^"|"$/g, '')) || null, addresses: [] };
+      cur = '';
+      continue;
+    }
+    if (top && ch === ';' && group) { flushAddr(); out.push(group); group = null; continue; }
+    if (top && ch === ',') { flushAddr(); continue; }
+    cur += ch;
+  }
+  flushAddr();
+  if (group) out.push(group);
+  flushLoose();
+  return out;
+}
+
+// ── header:<Name>:as<Form> validity (RFC 8621 §4.1.2) ────────────────────────
+
+const FORMS = ['Raw', 'Text', 'Addresses', 'GroupedAddresses', 'MessageIds', 'Date', 'URLs'];
+const ADDRESS_HEADERS = ['from', 'sender', 'reply-to', 'to', 'cc', 'bcc',
+  'resent-from', 'resent-sender', 'resent-reply-to', 'resent-to', 'resent-cc', 'resent-bcc'];
+/** Forms allowed for header fields defined in RFC 5322 / RFC 2369; other fields allow every form. */
+const FORMS_BY_HEADER: Record<string, string[]> = {
+  ...Object.fromEntries(ADDRESS_HEADERS.map((h) => [h, ['Raw', 'Addresses', 'GroupedAddresses']])),
+  ...Object.fromEntries(['message-id', 'in-reply-to', 'references', 'resent-message-id'].map((h) => [h, ['Raw', 'MessageIds']])),
+  ...Object.fromEntries(['date', 'resent-date'].map((h) => [h, ['Raw', 'Date']])),
+  ...Object.fromEntries(['list-help', 'list-unsubscribe', 'list-subscribe', 'list-post', 'list-owner', 'list-archive'].map((h) => [h, ['Raw', 'URLs']])),
+  ...Object.fromEntries(['subject', 'comments', 'keywords', 'list-id'].map((h) => [h, ['Raw', 'Text']])),
+  ...Object.fromEntries(['return-path', 'received'].map((h) => [h, ['Raw']])),
+};
+
+/** Is `header:<Name>[:as<Form>][:all]` a valid property? */
+export function isValidHeaderProperty(prop: string): boolean {
+  const m = /^header:([\x21-\x39\x3B-\x7E]+)(?::as([A-Za-z]+))?(:all)?$/.exec(prop);
+  if (!m) return false;
+  const form = m[2] ?? 'Raw';
+  if (!FORMS.includes(form)) return false;
+  const allowed = FORMS_BY_HEADER[m[1]!.toLowerCase()];
+  return !allowed || allowed.includes(form);
 }
 
 // ── Main mapper ──────────────────────────────────────────────────────────────
@@ -233,7 +295,7 @@ export async function toJmapEmail(msg: MappableMessage, threadId: string, opts: 
       case 'bcc': out[p] = msg.bccAddrs.length ? msg.bccAddrs.map(parseAddress) : null; break;
       case 'replyTo': out[p] = msg.replyTo ? [parseAddress(msg.replyTo)] : null; break;
       case 'subject': out[p] = msg.subject; break;
-      case 'sentAt': out[p] = msg.date.toISOString(); break;
+      case 'sentAt': out[p] = utcDate(msg.date); break;
       case 'hasAttachment': out[p] = structure.hasAttachment; break;
       case 'preview': out[p] = previewOf(msg); break;
       case 'headers': out[p] = headerLines; break;
@@ -277,5 +339,5 @@ export function parseMapOptions(args: JsonObject): MapOptions {
 const KNOWN_EMAIL_PROPS = new Set([...DEFAULT_EMAIL_PROPERTIES, 'headers', 'bodyStructure']);
 export function invalidEmailProperties(props: string[] | null): string[] {
   if (!props) return [];
-  return props.filter((p) => !KNOWN_EMAIL_PROPS.has(p) && !/^header:[^:]+(:as[A-Za-z]+)?(:all)?$/.test(p));
+  return props.filter((p) => !KNOWN_EMAIL_PROPS.has(p) && !isValidHeaderProperty(p));
 }
