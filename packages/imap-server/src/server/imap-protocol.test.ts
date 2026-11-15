@@ -22,6 +22,7 @@ import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
+import zlib from 'node:zlib';
 import { createImapServer } from './index.js';
 import { setIdlePollInterval } from '../commands/index.js';
 import { selfSignedTestCert } from '../test-cert.js';
@@ -81,9 +82,12 @@ function matches(row: Row, where: Row | undefined): boolean {
     const value = row[key];
     if (cond === null) return value === null || value === undefined;
     if (typeof cond === 'object') {
-      const c = cond as { has?: unknown; in?: unknown[] };
+      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number };
       if ('has' in c) return (value as unknown[]).includes(c.has);
       if ('in' in c) return (c.in ?? []).includes(value);
+      if ('gte' in c || 'lte' in c) {
+        return (c.gte === undefined || (value as number) >= c.gte) && (c.lte === undefined || (value as number) <= c.lte);
+      }
       throw new Error(`fake prisma: unsupported condition on "${key}"`);
     }
     return value === cond;
@@ -2325,5 +2329,521 @@ describe('SASL (RFC 9051 §6.2.2, RFC 4616)', () => {
 
     assert.match(response.tagged, /NO \[AUTHORIZATIONFAILED\]/);
     assert.equal(same.status, 'OK', same.tagged);
+  });
+});
+
+// ─── QRESYNC (RFC 7162 §3.2) ─────────────────────────────────────────────────
+
+/** Another client expunges a message: tombstone with a fresh modSeq. */
+function tombstone(db: FakeDb, uid: number): void {
+  const m = db.byUid(uid);
+  db.mailbox.highestModSeq++;
+  m.deletedAt = new Date();
+  m.modSeq = db.mailbox.highestModSeq;
+}
+
+/** Another client changes flags. */
+function flagElsewhere(db: FakeDb, uid: number, flag: string): void {
+  const m = db.byUid(uid);
+  db.mailbox.highestModSeq++;
+  m.flags.push(flag);
+  m.modSeq = db.mailbox.highestModSeq;
+}
+
+describe('QRESYNC (RFC 7162 §3.2)', () => {
+  test('ENABLE QRESYNC is confirmed and implies CONDSTORE (MODSEQ in FETCH)', async (t) => {
+    const { client } = await login(t);
+
+    const enable = await client.cmd('ENABLE QRESYNC');
+    await client.cmd('SELECT INBOX');
+    const fetch = await client.cmd('FETCH 1 (FLAGS)');
+
+    assert.deepEqual(enable.lines, ['* ENABLED QRESYNC']);
+    assert.match(fetch.lines[0] ?? '', /MODSEQ \(10\)/);
+  });
+
+  test('SELECT … (QRESYNC …) without ENABLE QRESYNC is a BAD command', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('SELECT INBOX (QRESYNC (777 10))');
+
+    assert.equal(response.status, 'BAD');
+  });
+
+  test('malformed QRESYNC parameters are rejected with BAD', async (t) => {
+    const { client } = await login(t);
+    await client.cmd('ENABLE QRESYNC');
+
+    for (const params of ['(QRESYNC)', '(QRESYNC (0 10))', '(QRESYNC (777 x))', '(QRESYNC (777 10 1:x))', '(QRESYNC (777 10 1:5 (1:2)))', '(FOO)']) {
+      const response = await client.cmd(`SELECT INBOX ${params}`);
+      assert.equal(response.status, 'BAD', params);
+    }
+  });
+
+  test('Thunderbird/iOS resync: VANISHED (EARLIER) for known UIDs, FETCH for changes since the modseq', async (t) => {
+    const { client, db } = await login(t);
+    tombstone(db, 9);              // modSeq 11
+    flagElsewhere(db, 12, '\\Flagged');   // modSeq 12
+    const fresh = db.deliver('f-inbox');  // UID 13, modSeq 13
+    fresh.modSeq = 13n;
+    await client.cmd('ENABLE QRESYNC');
+
+    const response = await client.cmd('SELECT INBOX (QRESYNC (777 10 5,9,12))');
+
+    assert.equal(response.status, 'OK', response.tagged);
+    assert.deepEqual(untagged(response, /^\* VANISHED/), ['* VANISHED (EARLIER) 9']);
+    assert.deepEqual(untagged(response, / FETCH /), [
+      '* 2 FETCH (UID 12 FLAGS (\\Flagged) MODSEQ (12))',
+      '* 3 FETCH (UID 13 FLAGS () MODSEQ (13))',
+    ]);
+    // The resync data follows the standard SELECT responses.
+    const at = (l: string): number => response.lines.indexOf(l);
+    assert.ok(at('* VANISHED (EARLIER) 9') > response.lines.findIndex((l) => l.includes('[HIGHESTMODSEQ')));
+    assert.ok(at('* VANISHED (EARLIER) 9') < at('* 2 FETCH (UID 12 FLAGS (\\Flagged) MODSEQ (12))'));
+  });
+
+  test('without known UIDs every missing UID below UIDNEXT is reported, minus tombstones the client already knew', async (t) => {
+    const { client, db } = await login(t);
+    tombstone(db, 9); // modSeq 11
+    await client.cmd('ENABLE QRESYNC');
+
+    const fromTen = await client.cmd('SELECT INBOX (QRESYNC (777 10))');
+    const fromEleven = await client.cmd('EXAMINE INBOX (QRESYNC (777 11))');
+
+    // Live UIDs: 5, 12; UIDNEXT 13.
+    assert.deepEqual(untagged(fromTen, /^\* VANISHED/), ['* VANISHED (EARLIER) 1:4,6:11']);
+    // UID 9 vanished at modSeq 11 — a client at 11 already knows.
+    assert.deepEqual(untagged(fromEleven, /^\* VANISHED/), ['* VANISHED (EARLIER) 1:4,6:8,10:11']);
+    // Switching mailboxes reports CLOSED (RFC 7162 §3.2.11).
+    assert.equal(fromEleven.lines[0], '* OK [CLOSED] Previous mailbox closed');
+  });
+
+  test('a UIDVALIDITY mismatch suppresses the resync data', async (t) => {
+    const { client, db } = await login(t);
+    tombstone(db, 9);
+    await client.cmd('ENABLE QRESYNC');
+
+    const response = await client.cmd('SELECT INBOX (QRESYNC (1 1 1:20))');
+
+    assert.equal(response.status, 'OK');
+    assert.deepEqual(untagged(response, /VANISHED| FETCH /), []);
+  });
+
+  test('EXPUNGE reports VANISHED instead of EXPUNGE and carries HIGHESTMODSEQ', async (t) => {
+    const { client, db } = await login(t);
+    await client.cmd('ENABLE QRESYNC');
+    await client.cmd('SELECT INBOX');
+    await client.cmd('STORE 1:2 +FLAGS.SILENT (\\Deleted)');
+
+    const response = await client.cmd('EXPUNGE');
+
+    assert.deepEqual(untagged(response, /EXPUNGE|VANISHED/), ['* VANISHED 5,9']);
+    assert.match(response.tagged, new RegExp(`OK \\[HIGHESTMODSEQ ${db.mailbox.highestModSeq}\\] EXPUNGE completed`));
+  });
+
+  test('expunges by another client arrive as unsolicited VANISHED', async (t) => {
+    const { client, db } = await login(t);
+    await client.cmd('ENABLE QRESYNC');
+    await client.cmd('SELECT INBOX');
+    tombstone(db, 5);
+    tombstone(db, 12);
+
+    const noop = await client.cmd('NOOP');
+
+    assert.deepEqual(untagged(noop, /EXPUNGE|VANISHED/), ['* VANISHED 5,12']);
+  });
+
+  test('MOVE reports the moved messages with VANISHED', async (t) => {
+    const { client } = await login(t);
+    await client.cmd('ENABLE QRESYNC');
+    await client.cmd('SELECT INBOX');
+
+    const response = await client.cmd('UID MOVE 9 Archive');
+
+    assert.deepEqual(untagged(response, /EXPUNGE|VANISHED/), ['* VANISHED 9']);
+    assert.match(response.tagged, /OK \[HIGHESTMODSEQ \d+\] MOVE completed/);
+  });
+
+  test('UID FETCH … (CHANGEDSINCE m VANISHED) reports vanished UIDs of the set first', async (t) => {
+    const { client, db } = await login(t);
+    await client.cmd('ENABLE QRESYNC');
+    await client.cmd('SELECT INBOX');
+    tombstone(db, 9);              // 11
+    flagElsewhere(db, 12, '\\Answered');  // 12
+
+    const response = await client.cmd('UID FETCH 5:12 (FLAGS) (CHANGEDSINCE 10 VANISHED)');
+
+    assert.equal(response.status, 'OK', response.tagged);
+    // 6:8, 10:11 never existed in this folder — reporting them is allowed and harmless.
+    assert.equal(response.lines[0], '* VANISHED (EARLIER) 6:11');
+    assert.ok(response.lines.includes('* 3 FETCH (UID 12 FLAGS (\\Answered) MODSEQ (12))'), JSON.stringify(response.lines));
+    assert.equal(untagged(response, /UID 5 /).length, 0, 'unchanged message must not be fetched');
+    // UID FETCH may also deliver the pending expunge of the session's view.
+    assert.ok(response.lines.includes('* VANISHED 9'));
+  });
+
+  test('the VANISHED modifier needs QRESYNC, UID FETCH and CHANGEDSINCE', async (t) => {
+    const { client } = await login(t);
+    await client.cmd('SELECT INBOX');
+
+    const notEnabled = await client.cmd('UID FETCH 1:* (FLAGS) (CHANGEDSINCE 1 VANISHED)');
+    await client.cmd('ENABLE QRESYNC');
+    const notUid = await client.cmd('FETCH 1:* (FLAGS) (CHANGEDSINCE 1 VANISHED)');
+    const noSince = await client.cmd('UID FETCH 1:* (FLAGS) (VANISHED)');
+    const unknown = await client.cmd('UID FETCH 1:* (FLAGS) (CHANGEDSINCE 1 FOO)');
+
+    for (const r of [notEnabled, notUid, noSince, unknown]) assert.equal(r.status, 'BAD', r.tagged);
+  });
+
+  test('Thunderbird CONDSTORE flow: SELECT (CONDSTORE), UID FETCH 1:* (FLAGS) (CHANGEDSINCE m)', async (t) => {
+    const { client, db } = await login(t);
+
+    const selectResponse = await client.cmd('SELECT "INBOX" (CONDSTORE)');
+    flagElsewhere(db, 9, '\\Flagged');
+    const fetch = await client.cmd('UID FETCH 1:* (FLAGS) (CHANGEDSINCE 10)');
+
+    assert.equal(untagged(selectResponse, /\[HIGHESTMODSEQ 10\]/).length, 1);
+    // Reported once, by the FETCH itself (not again as an unsolicited update).
+    assert.deepEqual(untagged(fetch, / FETCH /), ['* 2 FETCH (UID 9 FLAGS (\\Seen \\Flagged) MODSEQ (11))']);
+  });
+
+  test('SELECT while a mailbox is selected reports [CLOSED] also without IMAP4rev2', async (t) => {
+    const { client } = await select(t);
+
+    const response = await client.cmd('SELECT Work');
+
+    assert.equal(response.lines[0], '* OK [CLOSED] Previous mailbox closed');
+  });
+
+  test('QRESYNC, SORT, THREAD and ACL are advertised; COMPRESS only after login', async (t) => {
+    const { client } = await connect(t);
+
+    const before = capabilitiesOf((await client.cmd('CAPABILITY')).lines[0] ?? '');
+    const loginResponse = await client.cmd('LOGIN bob@example.test secret');
+    const after = capabilitiesOf(loginResponse.tagged);
+
+    for (const cap of ['QRESYNC', 'SORT', 'THREAD=ORDEREDSUBJECT', 'THREAD=REFERENCES', 'ACL', 'RIGHTS=texk']) {
+      assert.ok(before.includes(cap), `${cap} missing`);
+    }
+    assert.ok(!before.includes('COMPRESS=DEFLATE'));
+    assert.ok(after.includes('COMPRESS=DEFLATE'), after.join(' '));
+  });
+});
+
+// ─── SORT / THREAD (RFC 5256) ────────────────────────────────────────────────
+
+describe('SORT and THREAD (RFC 5256)', () => {
+  /** INBOX: seq 1 = UID 5, seq 2 = UID 9, seq 3 = UID 12. */
+  function threadFixture(db: FakeDb): void {
+    Object.assign(db.byUid(5), { subject: 'Plan', messageId: '<a@x>', date: new Date('2026-02-01T00:00:00Z'), fromAddr: 'zoe@example.test', rawSize: 300 });
+    Object.assign(db.byUid(9), { subject: 'Re: plan', messageId: '<b@x>', inReplyTo: '<a@x>', date: new Date('2026-02-03T00:00:00Z'), fromAddr: 'adam@example.test', rawSize: 100 });
+    Object.assign(db.byUid(12), { subject: 'Budget', messageId: '<c@x>', date: new Date('2026-02-02T00:00:00Z'), fromAddr: 'mia@example.test', rawSize: 200 });
+  }
+
+  test('SORT returns sequence numbers, UID SORT returns UIDs', async (t) => {
+    const { client, db } = await select(t);
+    threadFixture(db);
+
+    const bySubject = await client.cmd('SORT (SUBJECT) UTF-8 ALL');
+    const byDate = await client.cmd('UID SORT (REVERSE DATE) US-ASCII ALL');
+    const byFrom = await client.cmd('SORT (FROM) utf-8 ALL');
+
+    assert.deepEqual(bySubject.lines, ['* SORT 3 1 2']);
+    assert.deepEqual(byDate.lines, ['* SORT 9 12 5']);
+    assert.deepEqual(byFrom.lines, ['* SORT 2 3 1']);
+  });
+
+  test('SORT applies the search criteria', async (t) => {
+    const { client, db } = await select(t);
+    threadFixture(db);
+
+    const response = await client.cmd('UID SORT (SIZE) UTF-8 SEEN');
+
+    assert.deepEqual(response.lines, ['* SORT 9 5']);
+  });
+
+  test('SORT with a MODSEQ criterion reports the highest MODSEQ', async (t) => {
+    const { client, db } = await select(t);
+    flagElsewhere(db, 12, '\\Flagged');
+    await client.cmd('NOOP');
+
+    const response = await client.cmd('SORT (ARRIVAL) UTF-8 MODSEQ 11');
+
+    assert.deepEqual(response.lines, ['* SORT 3 (MODSEQ 11)']);
+  });
+
+  test('THREAD REFERENCES and ORDEREDSUBJECT', async (t) => {
+    const { client, db } = await select(t);
+    threadFixture(db);
+
+    const refs = await client.cmd('THREAD REFERENCES UTF-8 ALL');
+    const uidRefs = await client.cmd('UID THREAD REFERENCES UTF-8 ALL');
+    const ordered = await client.cmd('UID THREAD ORDEREDSUBJECT UTF-8 ALL');
+    const none = await client.cmd('THREAD REFERENCES UTF-8 SUBJECT nothing-matches');
+
+    assert.deepEqual(refs.lines, ['* THREAD (1 2)(3)']);
+    assert.deepEqual(uidRefs.lines, ['* THREAD (5 9)(12)']);
+    assert.deepEqual(ordered.lines, ['* THREAD (5 9)(12)']);
+    assert.deepEqual(none.lines, ['* THREAD']);
+  });
+
+  test('errors: charset, sort keys, algorithm, state, size limit', async (t) => {
+    const { setMaxSortMessages } = await import('./limits.js');
+    const { client } = await login(t);
+
+    const notSelected = await client.cmd('SORT (DATE) UTF-8 ALL');
+    await client.cmd('SELECT INBOX');
+    const charset = await client.cmd('SORT (DATE) ISO-8859-1 ALL');
+    const key = await client.cmd('SORT (COLOR) UTF-8 ALL');
+    const algorithm = await client.cmd('THREAD FANCY UTF-8 ALL');
+    const noCriteria = await client.cmd('SORT (DATE) UTF-8');
+    setMaxSortMessages(2);
+    t.after(() => setMaxSortMessages(100_000));
+    const limited = await client.cmd('THREAD REFERENCES UTF-8 ALL');
+
+    assert.equal(notSelected.status, 'NO');
+    assert.match(charset.tagged, /NO \[BADCHARSET \(UTF-8 US-ASCII\)\]/);
+    assert.equal(key.status, 'BAD');
+    assert.equal(algorithm.status, 'BAD');
+    assert.equal(noCriteria.status, 'BAD');
+    assert.match(limited.tagged, /NO \[LIMIT\]/);
+  });
+
+  test('non-UID SORT holds back EXPUNGE, UID SORT delivers it', async (t) => {
+    const { client, db } = await select(t);
+    tombstone(db, 9);
+
+    const sort = await client.cmd('SORT (ARRIVAL) UTF-8 ALL');
+    const uidSort = await client.cmd('UID SORT (ARRIVAL) UTF-8 ALL');
+
+    assert.deepEqual(untagged(sort, /EXPUNGE/), []);
+    assert.deepEqual(untagged(uidSort, /EXPUNGE/), ['* 2 EXPUNGE']);
+  });
+});
+
+// ─── ACL (RFC 4314) ──────────────────────────────────────────────────────────
+
+describe('ACL (RFC 4314, read-only)', () => {
+  test('MYRIGHTS, GETACL and LISTRIGHTS on the own mailbox', async (t) => {
+    const { client } = await login(t);
+
+    const my = await client.cmd('MYRIGHTS INBOX');
+    const acl = await client.cmd('GETACL Archive.2025');
+    const owner = await client.cmd('LISTRIGHTS INBOX bob@example.test');
+    const other = await client.cmd('LISTRIGHTS INBOX anyone');
+
+    assert.deepEqual(my.lines, ['* MYRIGHTS "INBOX" lrswipkxteacd']);
+    assert.deepEqual(acl.lines, ['* ACL "Archive.2025" "bob@example.test" lrswipkxteacd']);
+    assert.deepEqual(owner.lines, ['* LISTRIGHTS "INBOX" "bob@example.test" lrswipkxteacd']);
+    assert.deepEqual(other.lines, ['* LISTRIGHTS "INBOX" "anyone" ""']);
+  });
+
+  test('SETACL / DELETEACL are refused with NOPERM; unknown mailboxes with NONEXISTENT', async (t) => {
+    const { client } = await login(t);
+
+    const set = await client.cmd('SETACL INBOX alice@example.test lr');
+    const del = await client.cmd('DELETEACL INBOX alice@example.test');
+    const missing = await client.cmd('GETACL Nope');
+    const syntax = await client.cmd('SETACL INBOX');
+
+    assert.match(set.tagged, /NO \[NOPERM\]/);
+    assert.match(del.tagged, /NO \[NOPERM\]/);
+    assert.match(missing.tagged, /NO \[NONEXISTENT\]/);
+    assert.equal(syntax.status, 'BAD');
+  });
+
+  test('ACL commands need authentication', async (t) => {
+    const { client } = await connect(t);
+
+    const response = await client.cmd('MYRIGHTS INBOX');
+
+    assert.equal(response.status, 'NO');
+  });
+});
+
+// ─── COMPRESS=DEFLATE (RFC 4978) ─────────────────────────────────────────────
+
+/** Minimal client that can switch to raw deflate in both directions. */
+class DeflateClient {
+  private text = '';
+  private wake: (() => void) | null = null;
+  private inflate: zlib.InflateRaw | null = null;
+  private deflate: zlib.DeflateRaw | null = null;
+  private tagCounter = 0;
+  closed = false;
+
+  constructor(readonly socket: net.Socket) {
+    socket.on('data', (chunk: Buffer) => {
+      if (this.inflate) this.inflate.write(chunk);
+      else this.received(chunk);
+    });
+    socket.on('close', () => {
+      // Compressed data may still be inflating: close after the inflate stream has drained.
+      if (this.inflate) { this.inflate.once('close', () => this.markClosed()); this.inflate.end(); } else this.markClosed();
+    });
+    socket.on('error', () => undefined);
+  }
+
+  private markClosed(): void { this.closed = true; this.wake?.(); }
+
+  private received(chunk: Buffer): void {
+    this.text += chunk.toString('utf8');
+    this.wake?.();
+  }
+
+  /** Switches both directions to deflate (after the tagged OK of COMPRESS). */
+  startCompression(): void {
+    assert.equal(this.text, '', 'no octets may follow the COMPRESS OK before the switch');
+    this.inflate = zlib.createInflateRaw();
+    this.inflate.on('data', (c: Buffer) => this.received(c));
+    this.inflate.on('error', () => { this.closed = true; this.wake?.(); });
+    this.deflate = zlib.createDeflateRaw();
+    this.deflate.on('data', (c: Buffer) => this.socket.write(c));
+  }
+
+  /** Raw deflate of `text`, sync-flushed (for pipelining tests). */
+  static compressSync(text: string): Buffer {
+    return zlib.deflateRawSync(Buffer.from(text, 'utf8'), { finishFlush: zlib.constants.Z_SYNC_FLUSH });
+  }
+
+  write(raw: string | Buffer): void {
+    if (this.deflate) {
+      this.deflate.write(raw);
+      this.deflate.flush(zlib.constants.Z_SYNC_FLUSH);
+    } else {
+      this.socket.write(raw);
+    }
+  }
+
+  async readLine(timeoutMs = 3000): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const idx = this.text.indexOf('\r\n');
+      if (idx !== -1) {
+        const line = this.text.slice(0, idx);
+        this.text = this.text.slice(idx + 2);
+        return line;
+      }
+      if (this.closed) throw new Error(`connection closed (buffered: ${JSON.stringify(this.text)})`);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`timeout (buffered: ${JSON.stringify(this.text)})`);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, remaining);
+        this.wake = () => { clearTimeout(timer); resolve(); };
+      });
+    }
+  }
+
+  async completion(tag: string): Promise<Response> {
+    const lines: string[] = [];
+    for (;;) {
+      const line = await this.readLine();
+      if (line.startsWith(`${tag} `)) return { tagged: line, status: line.split(' ')[1] ?? '', lines, raw: '' };
+      lines.push(line);
+    }
+  }
+
+  async cmd(command: string): Promise<Response> {
+    const tag = `Z${++this.tagCounter}`;
+    this.write(`${tag} ${command}\r\n`);
+    return this.completion(tag);
+  }
+
+  async waitForClose(timeoutMs = 3000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.closed && Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    return this.closed;
+  }
+}
+
+async function deflateConnect(t: TestContext): Promise<{ client: DeflateClient; db: FakeDb }> {
+  const { db } = installFakes();
+  const server = createImapServer(testCert());
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as net.AddressInfo;
+  const socket = tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
+  await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
+  const client = new DeflateClient(socket);
+  t.after(() => { socket.destroy(); server.close(); });
+  await client.readLine(); // greeting
+  return { client, db };
+}
+
+describe('COMPRESS=DEFLATE (RFC 4978)', () => {
+  test('COMPRESS before authentication is refused', async (t) => {
+    const { client } = await deflateConnect(t);
+
+    const response = await client.cmd('COMPRESS DEFLATE');
+
+    assert.equal(response.status, 'BAD');
+  });
+
+  test('iOS Mail sequence: LOGIN, ID, COMPRESS, ENABLE QRESYNC, SELECT (QRESYNC), FETCH over deflate', async (t) => {
+    const { client, db } = await deflateConnect(t);
+    assert.equal((await client.cmd('LOGIN bob@example.test secret')).status, 'OK');
+    await client.cmd('ID ("name" "iPhone Mail")');
+
+    const compress = await client.cmd('COMPRESS DEFLATE');
+    client.startCompression();
+    const caps = await client.cmd('CAPABILITY');
+    const enable = await client.cmd('ENABLE QRESYNC');
+    tombstone(db, 9);
+    const selectResponse = await client.cmd('SELECT INBOX (QRESYNC (777 10 5,9,12))');
+    const fetch = await client.cmd('UID FETCH 12 (BODY.PEEK[HEADER.FIELDS (SUBJECT)])');
+    const again = await client.cmd('COMPRESS DEFLATE');
+
+    assert.match(compress.tagged, /^Z\d+ OK DEFLATE active$/);
+    assert.ok(!capabilitiesOf(caps.lines[0] ?? '').includes('COMPRESS=DEFLATE'), 'COMPRESS is no longer advertised');
+    assert.deepEqual(enable.lines, ['* ENABLED QRESYNC']);
+    assert.ok(selectResponse.lines.includes('* VANISHED (EARLIER) 9'), JSON.stringify(selectResponse.lines));
+    assert.equal(fetch.status, 'OK', fetch.tagged);
+    assert.ok(fetch.lines.some((l) => l.includes('Subject: Subject 12')), JSON.stringify(fetch.lines));
+    assert.match(again.tagged, /NO \[COMPRESSIONACTIVE\]/);
+  });
+
+  test('compressed commands pipelined right after COMPRESS are executed', async (t) => {
+    const { client } = await deflateConnect(t);
+    await client.cmd('LOGIN bob@example.test secret');
+
+    client.write(Buffer.concat([Buffer.from('P1 COMPRESS DEFLATE\r\n'), DeflateClient.compressSync('P2 NOOP\r\n')]));
+    const compress = await client.completion('P1');
+    client.startCompression();
+    const noop = await client.completion('P2');
+
+    assert.equal(compress.tagged, 'P1 OK DEFLATE active');
+    assert.equal(noop.tagged, 'P2 OK NOOP completed');
+  });
+
+  test('unknown mechanisms are BAD', async (t) => {
+    const { client } = await deflateConnect(t);
+    await client.cmd('LOGIN bob@example.test secret');
+
+    const response = await client.cmd('COMPRESS GZIP');
+
+    assert.equal(response.status, 'BAD');
+  });
+
+  test('line limits apply to the inflated stream (decompression bomb)', async (t) => {
+    const { client } = await deflateConnect(t);
+    await client.cmd('LOGIN bob@example.test secret');
+    await client.cmd('COMPRESS DEFLATE');
+    client.startCompression();
+
+    // 8 MiB without a line end compress to a few KiB.
+    client.write(Buffer.alloc(8 * 1024 * 1024, 0x41));
+    const bye = await client.readLine();
+
+    assert.equal(bye, '* BYE Line too long');
+    assert.ok(await client.waitForClose());
+  });
+
+  test('a corrupt deflate stream closes the connection', async (t) => {
+    const { client } = await deflateConnect(t);
+    await client.cmd('LOGIN bob@example.test secret');
+    await client.cmd('COMPRESS DEFLATE');
+
+    client.socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+
+    assert.ok(await client.waitForClose());
   });
 });

@@ -19,6 +19,8 @@ import {
   appendTargetExists,
   // v7.1.0: QUOTA (RFC 9208, read-only) + per-session mailbox view updates
   handleGetQuotaRoot, handleGetQuota, handleSetQuota, notifyMailboxChanged, stopIdleTimer,
+  // SORT/THREAD (RFC 5256), ACL (RFC 4314)
+  handleSort, handleThread, handleMyRights, handleGetAcl, handleListRights, handleSetAcl,
 } from '../commands/index.js';
 import { CommandReader, type LiteralDecision } from './command-reader.js';
 import type { ConnectionLimiter } from '@coremail/core';
@@ -27,6 +29,7 @@ import {
   POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS,
 } from './limits.js';
 import { unregisterLiveSession } from '../session/live.js';
+import { CompressedSocket } from './compress.js';
 import {
   tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
   type Token, type CommandSegment,
@@ -142,8 +145,38 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       return reader;
     };
     let reader = createReader();
-    const onData = (chunk: Buffer): void => reader.push(chunk);
+    // Where transport octets go: the command reader, or the inflate stream
+    // once COMPRESS=DEFLATE is active.
+    let feed = (chunk: Buffer): void => reader.push(chunk);
+    const onData = (chunk: Buffer): void => feed(chunk);
     socket.on('data', onData);
+    // The socket that currently carries the IMAP stream (TCP, or TLS after STARTTLS).
+    let transport: net.Socket = socket;
+
+    // RFC 4978: COMPRESS=DEFLATE. Called by the dispatcher after its checks;
+    // the tagged OK is the last uncompressed response.
+    session.beginCompress = (tag: string): void => {
+      const carrier = transport;
+      carrier.write(`${tag} OK DEFLATE active\r\n`);
+      // Octets the client pipelined after "COMPRESS DEFLATE" are already compressed.
+      const leftover = reader.detach();
+      const compressed = new CompressedSocket(carrier, (chunk) => reader.push(chunk), (err) => {
+        log.warn({ err, id: session.id, ip }, 'IMAP COMPRESS stream error — connection closed');
+        carrier.destroy();
+      });
+      session.socket = compressed;
+      session.compressActive = true;
+      refreshCapabilities(session);
+      reader = createReader();
+      feed = (chunk) => compressed.input(chunk);
+      // The old reader paused the transport for this command; input resumes
+      // after the command has completed (dispatcher bookkeeping first).
+      setImmediate(() => {
+        if (leftover.length > 0) compressed.input(leftover);
+        if (!reader.isClosed) compressed.resume();
+      });
+      log.debug({ id: session.id }, 'IMAP COMPRESS=DEFLATE active');
+    };
 
     // v7: STARTTLS (RFC 9051 §6.2.1). Called by the dispatcher after the
     // checks; sends the tagged OK and upgrades the socket.
@@ -175,11 +208,13 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       secure.once('secure', () => {
         clearTimeout(handshakeTimer);
         session.socket = secure;
+        transport = secure;
         session.isTls = true;
         session.starttlsAvailable = false;
         refreshCapabilities(session); // re-advertised on the next CAPABILITY
         reader = createReader();
-        secure.on('data', (chunk: Buffer) => reader.push(chunk));
+        feed = (chunk) => reader.push(chunk);
+        secure.on('data', (chunk: Buffer) => feed(chunk));
         armIdleTimeout(secure);
         log.debug({ id: session.id }, 'IMAP STARTTLS upgrade complete');
       });
@@ -351,7 +386,7 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
   // recognized → Mac Mail's UID SEARCH/COPY/MOVE failed with "BAD".
   if (cmd === 'UID' && argTokens[0]?.type === 'atom') {
     const sub = argTokens[0].value.toUpperCase();
-    if (['FETCH', 'STORE', 'COPY', 'MOVE', 'SEARCH', 'EXPUNGE'].includes(sub)) {
+    if (['FETCH', 'STORE', 'COPY', 'MOVE', 'SEARCH', 'EXPUNGE', 'SORT', 'THREAD'].includes(sub)) {
       cmd = `UID ${sub}`;
       argTokens = argTokens.slice(1);
     }
@@ -568,6 +603,11 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
           } else if (name === 'IMAP4REV2' && !enabled.includes('IMAP4rev2')) {
             session.imap4rev2Enabled = true;
             enabled.push('IMAP4rev2');
+          } else if (name === 'QRESYNC' && !enabled.includes('QRESYNC')) {
+            // RFC 7162 §3.2.3: QRESYNC implies CONDSTORE.
+            session.qresyncEnabled = true;
+            session.condstoreEnabled = true;
+            enabled.push('QRESYNC');
           }
         }
         sendUntagged(session, `ENABLED${enabled.length ? ' ' + enabled.join(' ') : ''}`);
@@ -654,6 +694,54 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
           await handleSearch(session, tag, argTokens, true);
+        }
+        break;
+
+      // RFC 5256 SORT / THREAD
+      case 'SORT':
+      case 'UID SORT':
+      case 'THREAD':
+      case 'UID THREAD':
+        if (session.state !== 'SELECTED') {
+          session.socket.write(`${tag} NO No mailbox selected\r\n`);
+        } else if (cmd.endsWith('SORT')) {
+          await handleSort(session, tag, argTokens, cmd === 'UID SORT');
+        } else {
+          await handleThread(session, tag, argTokens, cmd === 'UID THREAD');
+        }
+        break;
+
+      // RFC 4314 ACL (read-only)
+      case 'MYRIGHTS':
+      case 'GETACL':
+      case 'LISTRIGHTS':
+      case 'SETACL':
+      case 'DELETEACL':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else if (cmd === 'MYRIGHTS') {
+          await handleMyRights(session, tag, args);
+        } else if (cmd === 'GETACL') {
+          await handleGetAcl(session, tag, args);
+        } else if (cmd === 'LISTRIGHTS') {
+          await handleListRights(session, tag, args);
+        } else {
+          await handleSetAcl(session, tag, args, cmd);
+        }
+        break;
+
+      // RFC 4978 COMPRESS=DEFLATE — authenticated / selected state only
+      case 'COMPRESS':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} BAD COMPRESS is only valid after authentication\r\n`);
+        } else if (args.length !== 1 || args[0]?.toUpperCase() !== 'DEFLATE') {
+          session.socket.write(`${tag} BAD Unsupported compression mechanism (DEFLATE)\r\n`);
+        } else if (session.compressActive) {
+          session.socket.write(`${tag} NO [COMPRESSIONACTIVE] DEFLATE is already active\r\n`);
+        } else if (!session.beginCompress) {
+          session.socket.write(`${tag} NO [UNAVAILABLE] COMPRESS is not available\r\n`);
+        } else {
+          session.beginCompress(tag);
         }
         break;
 

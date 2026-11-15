@@ -1,5 +1,17 @@
-import type { Socket } from 'net';
-import type { TLSSocket } from 'tls';
+/**
+ * The transport a session writes to: a plain TCP socket, a TLS socket, or the
+ * COMPRESS=DEFLATE wrapper around either (server/compress.ts).
+ */
+export interface ImapSocket {
+  write(data: string | Uint8Array, cb?: (err?: Error | null) => void): boolean;
+  end(data?: string | Uint8Array): unknown;
+  destroy(): unknown;
+  pause(): unknown;
+  resume(): unknown;
+  setTimeout(ms: number): unknown;
+  readonly remoteAddress?: string | undefined;
+  readonly writable: boolean;
+}
 
 export type ImapState = 'NOT_AUTHENTICATED' | 'AUTHENTICATED' | 'SELECTED' | 'LOGOUT';
 
@@ -27,7 +39,7 @@ export interface SelectedMailbox {
 
 export interface ImapSession {
   id: string;
-  socket: Socket | TLSSocket;
+  socket: ImapSocket;
   state: ImapState;
   userId: string | null;
   mailboxId: string | null;
@@ -40,6 +52,15 @@ export interface ImapSession {
   // RFC 9051 §6.3.1: set by "ENABLE IMAP4rev2" — ESEARCH-only SEARCH responses,
   // UTF-8 mailbox names, no \Recent
   imap4rev2Enabled: boolean;
+  // QRESYNC (RFC 7162 §3.2): set by "ENABLE QRESYNC" (implies CONDSTORE) —
+  // VANISHED instead of EXPUNGE, SELECT (QRESYNC …), UID FETCH … VANISHED
+  qresyncEnabled: boolean;
+  // COMPRESS=DEFLATE (RFC 4978) is active on this connection
+  compressActive: boolean;
+  // set by the server — switches the connection to DEFLATE after the tagged OK
+  beginCompress?: (tag: string) => void;
+  // login address of the authenticated user (ACL identifier, RFC 4314)
+  userEmail?: string | null;
   // v5.5.0: SASL state for AUTHENTICATE multi-step mechanisms (LOGIN, PLAIN)
   saslMech: 'PLAIN' | 'LOGIN' | null;
   saslStep: number;
@@ -66,7 +87,7 @@ export interface ImapSession {
   onAuthenticated?: () => void;
 }
 
-function buildCapabilities(isTls: boolean, starttlsAvailable = false): string[] {
+function buildCapabilities(isTls: boolean, starttlsAvailable = false, authenticated = false, compressActive = false): string[] {
   // Only capabilities that are actually implemented are advertised. Not
   // implemented: LOGIN-REFERRALS, UTF8=ACCEPT.
   // v7.1.0: IMAP4rev2 is backed by the extensions it includes — BINARY,
@@ -100,7 +121,16 @@ function buildCapabilities(isTls: boolean, starttlsAvailable = false): string[] 
     'LIST-STATUS',    // RFC 5819 — LIST … RETURN (STATUS (…))
     'QUOTA',          // RFC 9208 — read-only: GETQUOTAROOT / GETQUOTA
     'QUOTA=RES-STORAGE',
+    'QRESYNC',        // RFC 7162 §3.2 — active after "ENABLE QRESYNC"
+    'SORT',           // RFC 5256
+    'THREAD=ORDEREDSUBJECT',
+    'THREAD=REFERENCES',
+    'ACL',            // RFC 4314 — read-only (permissions are managed in the BCP)
+    'RIGHTS=texk',
   ];
+  // RFC 4978 §3: COMPRESS is only valid after authentication, so it is only
+  // advertised then (and no longer once compression is active).
+  if (authenticated && !compressActive) caps.push('COMPRESS=DEFLATE');
   if (isTls) {
     caps.push('AUTH=PLAIN', 'AUTH=LOGIN');
   } else {
@@ -110,7 +140,7 @@ function buildCapabilities(isTls: boolean, starttlsAvailable = false): string[] 
   return caps;
 }
 
-export function createSession(socket: Socket | TLSSocket, isTls: boolean, starttlsAvailable = false): ImapSession {
+export function createSession(socket: ImapSocket,isTls: boolean, starttlsAvailable = false): ImapSession {
   return {
     id: crypto.randomUUID(),
     socket,
@@ -122,6 +152,8 @@ export function createSession(socket: Socket | TLSSocket, isTls: boolean, startt
     idleTag: null,
     condstoreEnabled: false,
     imap4rev2Enabled: false,
+    qresyncEnabled: false,
+    compressActive: false,
     saslMech: null,
     saslStep: 0,
     saslUser: '',
@@ -137,7 +169,10 @@ export function createSession(socket: Socket | TLSSocket, isTls: boolean, startt
  * or after a successful login (LOGINDISABLED is removed).
  */
 export function refreshCapabilities(session: ImapSession): void {
-  session.capabilities = buildCapabilities(session.isTls, !session.isTls && session.starttlsAvailable);
+  session.capabilities = buildCapabilities(
+    session.isTls, !session.isTls && session.starttlsAvailable,
+    session.state !== 'NOT_AUTHENTICATED', session.compressActive,
+  );
 }
 
 export function send(session: ImapSession, line: string): void {

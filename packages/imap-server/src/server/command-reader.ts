@@ -88,6 +88,17 @@ export class CommandReader {
     this.segments = [];
   }
 
+  /**
+   * Stops processing and returns the input that was received but not
+   * processed yet (e.g. data pipelined after COMPRESS, which belongs to the
+   * next protocol layer).
+   */
+  detach(): Buffer {
+    const rest = Buffer.concat([this.buffer, ...this.pending]);
+    this.close();
+    return rest;
+  }
+
   push(chunk: Buffer): void {
     if (this.closed || chunk.length === 0) return;
     const prev = this.pending.length ? this.pending[this.pending.length - 1]! : this.buffer;
