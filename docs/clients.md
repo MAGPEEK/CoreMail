@@ -47,6 +47,14 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
 
 * `GET /api/v1/user/apple-profile` (Bearer token; the MWA downloads it with `fetch`, never
   with a token in the URL) → `application/x-apple-aspen-config`.
+* iOS / iPadOS (9.1): Safari hands a profile to its installer only on a plain navigation
+  (blob downloads are unreliable there). The MWA first gets a single-use download ticket —
+  `POST /api/v1/user/apple-profile/ticket` (Bearer) → `{ticket, expiresIn: 60}` — and then
+  navigates to `/api/v1/user/apple-profile?ticket=…[&type=eas]`. The ticket is valid for
+  60 s and one redemption, bound to the user and the issuing session (a revoked session
+  cannot redeem it) and to this purpose (an SSE ticket does not open a profile); only its
+  SHA-256 is stored (Redis `auth:apple-profile-ticket:<hash>`). Desktop browsers keep the
+  `fetch` + blob download.
 * Payloads: `com.apple.mail.managed` (IMAP + SMTP), `com.apple.caldav.account`,
   `com.apple.carddav.account` (principal URL `/dav/principals/<user id>/`).
   `?type=eas` returns a single `com.apple.eas.account` payload (Exchange ActiveSync for

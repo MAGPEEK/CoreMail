@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { actionOutcome, blocksWrite, can, canAction, canManageAccount, canOutcome, parsePermissions, permissionsAfterError } from './permissions.ts';
+import { actionOutcome, backupCapabilities, blocksWrite, can, canAction, canManageAccount, canOutcome, pageAccessFor, parsePermissions, permissionsAfterError } from './permissions.ts';
 import { accessForPath, areaForPath, firstAllowedPath } from './adminAreas.ts';
 
 // Shapes as returned by GET /api/v1/admin/me/permissions for each role
@@ -125,4 +125,59 @@ test('canManageAccount mirrors the API: admin accounts only for ORGANIZATION_MAN
   assert.equal(canManageAccount('RECIPIENT_MANAGEMENT', 'HELP_DESK'), false);
   assert.equal(canManageAccount('ORGANIZATION_MANAGEMENT', 'ORGANIZATION_MANAGEMENT'), true);
   assert.equal(canManageAccount(null, 'SERVER_MANAGEMENT'), true, 'unknown → the server decides');
+});
+
+// ── 9.1: COMPLIANCE_MANAGEMENT reaches Backups through backupMailboxData ──────
+const COMPLIANCE = { dashboard: 'read', compliance: 'write' } as const;
+const COMPLIANCE_ACTIONS = { servers: ['backupMailboxData' as const] };
+const SERVER = { dashboard: 'read', servers: 'write', organisation: 'read', domains: 'read' } as const;
+const effective = (areas: Parameters<typeof accessForPath>[0], actions: Parameters<typeof pageAccessFor>[1], path: string) =>
+  pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) });
+
+test('9.1 page access: COMPLIANCE sees Backups (read) via the action, nothing else of servers', () => {
+  assert.equal(accessForPath(COMPLIANCE, '/backups'), 'none', 'no servers area');
+  assert.equal(effective(COMPLIANCE, COMPLIANCE_ACTIONS, '/backups'), 'read');
+  assert.equal(effective(COMPLIANCE, COMPLIANCE_ACTIONS, '/bcp/backups'), 'read');
+  for (const p of ['/servers', '/queues', '/logs', '/certificates', '/services']) {
+    assert.equal(effective(COMPLIANCE, COMPLIANCE_ACTIONS, p), 'none', p);
+  }
+  assert.equal(effective(COMPLIANCE, COMPLIANCE_ACTIONS, '/audit-log'), 'write', 'own area unchanged');
+  // without the action (older backend sends no actions → backupMailboxData is never implied)
+  assert.equal(effective(COMPLIANCE, null, '/backups'), 'none');
+  assert.equal(effective(COMPLIANCE, {}, '/backups'), 'none');
+  // HELP_DESK holds no backup action
+  assert.equal(effective(HELP_DESK, { recipients: [...HD_ACTIONS.recipients] }, '/backups'), 'none');
+  // area access wins when present
+  assert.equal(effective(SERVER, {}, '/backups'), 'write');
+  assert.equal(effective(VIEW_ONLY, {}, '/backups'), 'read');
+  assert.equal(effective(null, null, '/backups'), 'write', 'unknown permissions keep full access');
+});
+
+test('9.1 Backups for COMPLIANCE: mailbox-data parts only; the write block lets those requests through', () => {
+  assert.deepEqual(backupCapabilities(COMPLIANCE, COMPLIANCE_ACTIONS), { operations: false, manage: false, mailboxData: true });
+  assert.deepEqual(backupCapabilities(SERVER, {}), { operations: true, manage: true, mailboxData: false });
+  assert.deepEqual(backupCapabilities(VIEW_ONLY, {}), { operations: true, manage: false, mailboxData: false });
+  assert.deepEqual(backupCapabilities({ ...SERVER, compliance: 'write' }, { servers: ['backupMailboxData'] }), { operations: true, manage: true, mailboxData: true });
+  // per-mailbox backup / import (POST) are not blocked client-side on the read-only page
+  const access = effective(COMPLIANCE, COMPLIANCE_ACTIONS, '/backups');
+  assert.equal(blocksWrite(COMPLIANCE, COMPLIANCE_ACTIONS, { area: areaForPath('/backups'), access }), false);
+  // delete buttons (<Can area="servers" access="write">) are hidden, downloads allowed
+  assert.equal(canOutcome(COMPLIANCE, 'servers', 'write', 'disable'), 'hide');
+  assert.equal(actionOutcome(COMPLIANCE, COMPLIANCE_ACTIONS, 'backupMailboxData', 'disable'), 'allow');
+});
+
+test('9.1 HELP_DESK end to end (client side): sign out everywhere / reset / enable-disable reach the API', () => {
+  const actions = { recipients: [...HD_ACTIONS.recipients] };
+  const access = effective(HELP_DESK, actions, '/mailboxes');
+  assert.equal(access, 'read');
+  // POST /admin/mailboxes/:id/revoke-sessions and PUT /admin/mailboxes/:id from the Mailboxes page
+  assert.equal(blocksWrite(HELP_DESK, actions, { area: areaForPath('/mailboxes'), access }), false);
+  for (const a of ['revokeSessions', 'resetPassword', 'toggleActive'] as const) {
+    assert.equal(actionOutcome(HELP_DESK, actions, a, 'disable'), 'allow', a);
+  }
+  // the buttons only show for USER accounts (mayOn → canManageAccount), as the API enforces
+  assert.equal(canManageAccount('HELP_DESK', 'USER'), true);
+  assert.equal(canManageAccount('HELP_DESK', 'ORGANIZATION_MANAGEMENT'), false);
+  // edit / delete stay hidden behind recipients write
+  assert.equal(canOutcome(HELP_DESK, 'recipients', 'write', 'disable'), 'disable');
 });

@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { ApiError, apiErrorFromBody } from '../lib/errors.js';
 import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
 import { accessForPath, areaForPath } from '../lib/adminAreas.js';
-import { blocksWrite } from '../lib/permissions.js';
+import { blocksWrite, pageAccessFor } from '../lib/permissions.js';
 import { useAccessStore } from '../store/access.js';
 
 /** Keys of the pre-8.1 token storage (localStorage) — only read once for migration. */
@@ -263,7 +263,8 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
 function pageBlocksWrite(): boolean {
   const { areas, actions } = useAccessStore.getState();
   const path = window.location.pathname;
-  return blocksWrite(areas, actions, { area: areaForPath(path), access: accessForPath(areas, path) });
+  const access = pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) });
+  return blocksWrite(areas, actions, { area: areaForPath(path), access });
 }
 
 async function request<T>(path: string, init: RequestInit = {}, contentType: string | null = 'application/json'): Promise<T> {

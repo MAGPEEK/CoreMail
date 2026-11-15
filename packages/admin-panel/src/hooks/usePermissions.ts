@@ -5,7 +5,7 @@ import { api } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { useAccessStore } from '../store/access.js';
 import { accessForPath, areaForPath, type AdminArea, type AreaAccess } from '../lib/adminAreas.js';
-import { can as canPure, canAction as canActionPure, canManageAccount, parsePermissions, permissionsAfterError, type AdminAction } from '../lib/permissions.js';
+import { can as canPure, canAction as canActionPure, canManageAccount, pageAccessFor, parsePermissions, permissionsAfterError, type AdminAction } from '../lib/permissions.js';
 
 /**
  * Loads the admin's permissions once per session: GET /admin/me/permissions
@@ -52,8 +52,10 @@ export interface PermissionsApi {
   canManage: (targetRole: string | undefined) => boolean;
   /** Area of the current page (null = page without an area). */
   pageArea: AdminArea | null;
-  /** Access to the current page: 'write' | 'read' | 'none'. */
+  /** Access to the current page: 'write' | 'read' | 'none' (9.1: a page action such as backupMailboxData gives 'read'). */
   pageAccess: AreaAccess | 'none';
+  /** 9.1: may the admin open this BCP path (sidebar)? Area read, or a page action (lib/permissions.ts PATH_ACTIONS). */
+  canSeePath: (path: string) => boolean;
 }
 
 /**
@@ -77,6 +79,7 @@ export function usePermissions(): PermissionsApi {
     canAction,
     canManage: (targetRole: string | undefined) => canManageAccount(role, targetRole),
     pageArea: areaForPath(pathname) ?? null,
-    pageAccess: accessForPath(areas, pathname),
+    pageAccess: pageAccessFor(areas, actions, { path: pathname, access: accessForPath(areas, pathname) }),
+    canSeePath: (path: string) => pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) }) !== 'none',
   };
 }

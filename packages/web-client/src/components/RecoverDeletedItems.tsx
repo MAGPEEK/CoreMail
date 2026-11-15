@@ -3,6 +3,7 @@
  * deleted from the mailbox within DELETED_ITEM_RETENTION_DAYS and restores or
  * permanently deletes the selected ones (/api/v1/mail/recoverable).
  * Used inline in Settings and as a dialog from the Trash folder menu.
+ * 9.1: `target` = a shared mailbox (FULL_ACCESS) → /api/v1/user/shared-mailboxes/:id/recoverable.
  */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +12,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useT, fmt } from '../i18n/useT.js';
 import { Modal } from './Modal.js';
+import { recoverableApiBase, recoverableQueryKey, type RecoverTarget } from '../lib/recoverable.js';
 
 interface RecoverableItem {
   id: string;
@@ -29,30 +31,37 @@ interface RecoverableList { items: RecoverableItem[]; total: number; retentionDa
 
 const fmtDate = (s: string | null): string => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
-export function RecoverDeletedItemsPanel() {
+export function RecoverDeletedItemsPanel({ target }: { target?: RecoverTarget } = {}) {
   const t = useT();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const apiBase = recoverableApiBase(target);
   const { data, isLoading } = useQuery({
-    queryKey: ['recoverable'],
-    queryFn: () => api.get<RecoverableList>('/mail/recoverable'),
+    queryKey: recoverableQueryKey(target),
+    queryFn: () => api.get<RecoverableList>(apiBase),
   });
   const items = data?.items ?? [];
 
   const done = () => {
     setSelected(new Set());
-    void qc.invalidateQueries({ queryKey: ['recoverable'] });
+    void qc.invalidateQueries({ queryKey: recoverableQueryKey(target) });
+    if (target?.kind === 'shared') {
+      void qc.invalidateQueries({ queryKey: ['shared-mailbox-folders', target.id] });
+      void qc.invalidateQueries({ queryKey: ['shared-mailbox-messages', target.id] });
+      void qc.invalidateQueries({ queryKey: ['shared-mailbox-quota', target.id] });
+      return;
+    }
     void qc.invalidateQueries({ queryKey: ['folders'] });
     void qc.invalidateQueries({ queryKey: ['messages'] });
     void qc.invalidateQueries({ queryKey: ['user-quota'] });
   };
   const restore = useMutation({
-    mutationFn: (ids: string[]) => api.post<{ restored: unknown[] }>('/mail/recoverable/restore', { ids }),
+    mutationFn: (ids: string[]) => api.post<{ restored: unknown[] }>(`${apiBase}/restore`, { ids }),
     onSuccess: (r) => { toast.success(fmt(t('recover_restored'), { n: r.restored.length })); done(); },
     onError: () => toast.error('Error'),
   });
   const purge = useMutation({
-    mutationFn: (ids: string[]) => api.post<{ purged: number }>('/mail/recoverable/purge', { ids }),
+    mutationFn: (ids: string[]) => api.post<{ purged: number }>(`${apiBase}/purge`, { ids }),
     onSuccess: (r) => { toast.success(fmt(t('recover_purged'), { n: r.purged })); done(); },
     onError: () => toast.error('Error'),
   });
@@ -120,7 +129,7 @@ export function RecoverDeletedItemsPanel() {
 }
 
 /** Dialog variant (Trash folder context menu). */
-export function RecoverDeletedItemsDialog({ onClose }: { onClose: () => void }) {
+export function RecoverDeletedItemsDialog({ onClose, target, subtitle }: { onClose: () => void; target?: RecoverTarget; subtitle?: string }) {
   const t = useT();
   return (
     <Modal onClose={onClose} label={t('recover_title')} className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl p-5">
@@ -128,7 +137,8 @@ export function RecoverDeletedItemsDialog({ onClose }: { onClose: () => void }) 
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('recover_title')}</h2>
         <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
       </div>
-      <RecoverDeletedItemsPanel />
+      {subtitle && <p className="-mt-2 mb-3 text-xs text-gray-500 dark:text-gray-400 truncate">{subtitle}</p>}
+      <RecoverDeletedItemsPanel {...(target ? { target } : {})} />
     </Modal>
   );
 }

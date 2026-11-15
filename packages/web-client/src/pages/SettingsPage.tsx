@@ -11,12 +11,16 @@ import {
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
+import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSection } from '../components/SignatureSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
-import { appleProfileFileName, appleProfilePath, type AppleProfileKind } from '../lib/appleProfile.js';
+import {
+  APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, appleProfileTicketUrl, isAppleMobileDevice,
+  type AppleProfileKind,
+} from '../lib/appleProfile.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
@@ -616,6 +620,29 @@ function RecoverSection() {
   );
 }
 
+// 9.1: quotas of the shared mailboxes the user can read (one bar each; hidden when none
+// or when a mailbox has no quota). Module level (never define components inline).
+function SharedMailboxQuotas() {
+  const t = useT();
+  const { data = [] } = useQuery<Array<{ id: string; email: string; displayName: string; permissions: string[] }>>({
+    queryKey: ['user-shared-mailboxes'],
+    queryFn: () => api.get('/user/shared-mailboxes'),
+    staleTime: 60_000,
+  });
+  const readable = data.filter((m) => m.permissions.includes('FULL_ACCESS') || m.permissions.includes('READ_ONLY'));
+  if (readable.length === 0) return null;
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">{t('quota_shared_mailboxes')}</h3>
+      <div className="space-y-1">
+        {readable.map((m) => (
+          <QuotaIndicator key={m.id} sharedMailboxId={m.id} label={m.displayName ? `${m.displayName} (${m.email})` : m.email} className="py-1" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StorageSection() {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -710,6 +737,8 @@ function StorageSection() {
           ))}
         </div>
       </div>
+
+      <SharedMailboxQuotas />
 
       {/* Table */}
       <div>
@@ -2048,6 +2077,13 @@ function AutoSetupCard({ email, requiresAppPassword }: { email: string; requires
   const download = async (kind: AppleProfileKind) => {
     setBusy(kind);
     try {
+      if (isAppleMobileDevice(navigator.userAgent, navigator.maxTouchPoints)) {
+        // 9.1 iOS/iPadOS: Safari opens the profile installer only on a plain navigation —
+        // single-use 60 s ticket instead of the token (blob downloads are unreliable there)
+        const { ticket } = await api.post<{ ticket: string }>(APPLE_PROFILE_TICKET_PATH, {});
+        window.location.assign(appleProfileTicketUrl(kind, ticket));
+        return;
+      }
       // fetch with the Authorization header — no token in the URL
       saveBlob(await fetchBlob(appleProfilePath(kind)), appleProfileFileName(email, kind));
     } catch {

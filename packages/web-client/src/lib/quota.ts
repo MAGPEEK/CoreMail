@@ -28,6 +28,19 @@ export function quotaColor(level: QuotaLevel): { bar: string; text: string } {
   }
 }
 
+/**
+ * 9.1: API path (relative to /api/v1) of a mailbox's quota — the user's own, or
+ * a shared mailbox the user may read (GET /user/shared-mailboxes/:id/quota).
+ */
+export function quotaPath(sharedMailboxId?: string | null): string {
+  return sharedMailboxId ? `/user/shared-mailboxes/${encodeURIComponent(sharedMailboxId)}/quota` : '/user/quota';
+}
+
+/** Query key matching quotaPath() (the own quota keeps the existing 'user-quota' key). */
+export function quotaQueryKey(sharedMailboxId?: string | null): readonly unknown[] {
+  return sharedMailboxId ? ['shared-mailbox-quota', sharedMailboxId] : ['user-quota'];
+}
+
 export function fmtQuotaBytes(n: number): string {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
   if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(0)} MB`;

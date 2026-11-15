@@ -8,6 +8,7 @@ import {
   connectDatabase, prisma, migrateMailboxCounters,
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
   startDeletedItemsPurger, type PurgeRedis,
+  startReferencesBackfill, type BackfillRedis,
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
@@ -28,7 +29,7 @@ import {
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
-import { recoverableRouter } from './routes/recoverable.js';
+import { recoverableRouter, sharedRecoverableRouter, delegatedRecoverableRouter } from './routes/recoverable.js';
 import { draftsRouter } from './routes/drafts.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
@@ -374,6 +375,9 @@ app.get('/api/v1/events', requireSseAuth, sseHandler);
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
 app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted items
+// 9.1: recover deleted items of shared / delegated mailboxes (FULL_ACCESS)
+app.use('/api/v1/user/shared-mailboxes/:id/recoverable', sharedRecoverableRouter);
+app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverableRouter);
 app.use('/api/v1/mail/drafts',    draftsRouter);
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
@@ -570,6 +574,10 @@ async function start() {
   // v8.1: Recover deleted items — hourly purge of expunge tombstones older than
   // DELETED_ITEM_RETENTION_DAYS (default 30; 0 = never). Redis-locked.
   startDeletedItemsPurger(getRedisClient() as unknown as PurgeRedis);
+
+  // 9.1: background backfill of Message References for older mail (IMAP THREAD /
+  // threading); REFERENCES_BACKFILL=on (default) | off. Redis-locked.
+  startReferencesBackfill(getRedisClient() as unknown as BackfillRedis);
 }
 
 async function syncProtocolCertState(): Promise<void> {
