@@ -7,8 +7,7 @@ import {
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, requireInternal, resolveBindHost,
 } from '@coremail/core';
 import { parseLimit, isBackupAdmin } from './http-utils.js';
-import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler } from './scheduler/index.js';
-import { runRetentionPolicies } from './retention/worker.js';
+import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler, runRetentionLocked } from './scheduler/index.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
 import { listBackups, ensureBackupBucket, streamObject, deleteObject } from './upload/s3.js';
 import { prisma } from '@coremail/storage';
@@ -362,8 +361,10 @@ app.get('/backup/admin/jobs', requireAdmin, async (req, res) => {
 // v6: loopback-only, or X-Internal-Token when INTERNAL_API_TOKEN is set
 app.post('/internal/retention/run', requireInternal(), async (_req, res) => {
   try {
-    const result = await runRetentionPolicies();
-    res.json(result);
+    // v7.1.0: never overlaps a scheduled or manual run on any instance
+    const out = await runRetentionLocked();
+    if (!out.ran) { res.status(409).json({ error: 'A retention run is already in progress' }); return; }
+    res.json(out.value);
   } catch (err) {
     log.error({ err }, 'Manual retention run failed');
     res.status(500).json({ error: 'Retention run failed' });

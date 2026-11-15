@@ -74,6 +74,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Fixed
 
 - ActiveSync: a Sync Change without `email:Read` no longer marks the message unread.
+- Backup schedules and the retention worker (Managed Folder Assistant) ran once per app
+  instance; with more than one instance every scheduled backup and retention run happened
+  several times, and retention runs could overlap. Each cron fire is now claimed by one
+  instance (Redis), a run lock held until the work has finished prevents overlapping runs, and
+  a manual retention run while another is in progress answers 409.
 
 ### Security
 

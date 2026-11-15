@@ -3,13 +3,55 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink, stat } from 'node:fs/promises';
 import { prisma } from '@coremail/storage';
-import { runRetentionPolicies } from '../retention/worker.js';
-import { createLogger } from '@coremail/core';
+import { runRetentionPolicies, type RetentionRunResult } from '../retention/worker.js';
+import { createLogger, getRedisClient } from '@coremail/core';
 import { exportZip } from '../export/zip.js';
 import { exportMbox } from '../export/mbox.js';
 import { uploadToS3, getSignedDownloadUrl } from '../upload/s3.js';
+import { claimSlot, withLock, LOCK_KEYS, type LockRedis, type LockResult } from './locks.js';
 
 const log = createLogger('backup:scheduler');
+
+function lockRedis(): LockRedis {
+  return getRedisClient() as unknown as LockRedis;
+}
+
+/** Retention runs (cron or manual) never overlap cluster-wide. */
+export function runRetentionLocked(r: LockRedis = lockRedis(), run: () => Promise<RetentionRunResult> = runRetentionPolicies): Promise<LockResult<RetentionRunResult>> {
+  return withLock(r, LOCK_KEYS.retentionRun, run, { onRenewError: (err) => log.warn({ err }, 'Retention lock renewal failed') });
+}
+
+/**
+ * v7.1.0: one retention run per cron fire across all instances — the instance
+ * that claims the fire slot runs it, and only if no run is still in progress.
+ */
+export async function retentionTick(
+  r: LockRedis = lockRedis(),
+  run: () => Promise<RetentionRunResult> = runRetentionPolicies,
+): Promise<'ran' | 'slot-taken' | 'busy'> {
+  if (!(await claimSlot(r, LOCK_KEYS.retentionSlot))) return 'slot-taken';
+  const out = await runRetentionLocked(r, run);
+  if (out.ran) log.info(out.value, 'Retention policy run complete');
+  return out.ran ? 'ran' : 'busy';
+}
+
+/**
+ * v7.1.0: one backup per schedule fire across all instances, and never two
+ * overlapping runs of the same schedule (the lock is held until the backup
+ * job has finished, not just until it was queued).
+ */
+export async function scheduleTick(
+  r: LockRedis,
+  scheduleId: string,
+  start: () => Promise<{ done: Promise<void> } | null>,
+): Promise<'ran' | 'slot-taken' | 'busy'> {
+  if (!(await claimSlot(r, LOCK_KEYS.scheduleSlot(scheduleId)))) return 'slot-taken';
+  const out = await withLock(r, LOCK_KEYS.scheduleRun(scheduleId), async () => {
+    const started = await start();
+    await started?.done;
+  }, { onRenewError: (err) => log.warn({ err, scheduleId }, 'Backup schedule lock renewal failed') });
+  return out.ran ? 'ran' : 'busy';
+}
 
 // v3.18.26: Map cron string → running CronJob; updated on schedule CRUD
 const activeJobs = new Map<string, CronJob>();
@@ -32,14 +74,13 @@ export function startBackupScheduler() {
   // Reloader: re-read the DB every 60s, synchronize schedules
   scheduleReloader = new CronJob('* * * * *', () => { void reloadSchedules(); }, null, true, 'UTC');
 
-  // Retention policy stays env-driven (separate worker)
+  // Retention policy stays env-driven (separate worker); v7.1.0: cluster-wide lock
   const retentionJob = new CronJob(
     retentionSchedule,
     async () => {
-      log.info('Starting scheduled retention policy run');
       try {
-        const result = await runRetentionPolicies();
-        log.info(result, 'Retention policy run complete');
+        const outcome = await retentionTick();
+        if (outcome !== 'ran') log.info({ outcome }, 'Scheduled retention run skipped (handled by another instance or still running)');
       } catch (err) {
         log.error({ err }, 'Retention policy run failed');
       }
@@ -84,22 +125,30 @@ async function reloadSchedules(): Promise<void> {
         const job = new CronJob(
           schedule.cron,
           async () => {
-            log.info({ scheduleId: schedule.id, name: schedule.name }, 'Schedule-triggered backup starting');
             try {
-              if (schedule.scope === 'full') {
-                await runFullBackup({ triggeredBy: 'CRON', scheduleId: schedule.id });
-              } else if (schedule.scope === 'user' && schedule.targetUserId) {
-                await runSingleMailboxBackup({
-                  userId: schedule.targetUserId,
-                  format: (schedule.format === 'mbox' ? 'mbox' : 'zip'),
-                  triggeredBy: 'CRON',
-                  scheduleId: schedule.id,
+              // v7.1.0: only one instance runs this fire; no overlap with a still-running run
+              const outcome = await scheduleTick(lockRedis(), schedule.id, async () => {
+                log.info({ scheduleId: schedule.id, name: schedule.name }, 'Schedule-triggered backup starting');
+                let started: { done: Promise<void> } | null = null;
+                if (schedule.scope === 'full') {
+                  started = await runFullBackup({ triggeredBy: 'CRON', scheduleId: schedule.id });
+                } else if (schedule.scope === 'user' && schedule.targetUserId) {
+                  started = await runSingleMailboxBackup({
+                    userId: schedule.targetUserId,
+                    format: (schedule.format === 'mbox' ? 'mbox' : 'zip'),
+                    triggeredBy: 'CRON',
+                    scheduleId: schedule.id,
+                  });
+                }
+                await prisma.backupSchedule.update({
+                  where: { id: schedule.id },
+                  data: { lastRunAt: new Date(), lastStatus: 'COMPLETED' },
                 });
-              }
-              await prisma.backupSchedule.update({
-                where: { id: schedule.id },
-                data: { lastRunAt: new Date(), lastStatus: 'COMPLETED' },
+                return started;
               });
+              if (outcome !== 'ran') {
+                log.info({ scheduleId: schedule.id, outcome }, 'Scheduled backup skipped (handled by another instance or still running)');
+              }
             } catch (err) {
               log.error({ err, scheduleId: schedule.id }, 'Scheduled backup failed');
               await prisma.backupSchedule.update({
@@ -137,7 +186,7 @@ interface RunOpts {
  * v3.18.26 fix: writes ONE master job upfront with status=RUNNING, then
  * child jobs per user. The frontend immediately sees a RUNNING job.
  */
-export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string }> {
+export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string; done: Promise<void> }> {
   const startedAt = new Date();
   const masterJob = await prisma.backupJob.create({
     data: {
@@ -150,7 +199,7 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
     },
   });
 
-  setImmediate(async () => {
+  const work = async (): Promise<void> => {
     try {
       const users = await prisma.user.findMany({
         where: { active: true },
@@ -245,9 +294,10 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
         },
       }).catch(() => undefined);
     }
-  });
-
-  return { jobId: masterJob.id };
+  };
+  // v7.1.0: done settles when the backup has finished (scheduler run lock)
+  const done = runInBackground(work, masterJob.id);
+  return { jobId: masterJob.id, done };
 }
 
 /**
@@ -260,7 +310,7 @@ export async function runSingleMailboxBackup(opts: {
   folderIds?: string[] | null;
   triggeredBy?: string;
   scheduleId?: string;
-}): Promise<{ jobId: string }> {
+}): Promise<{ jobId: string; done: Promise<void> }> {
   const startedAt = new Date();
   const job = await prisma.backupJob.create({
     data: {
@@ -274,7 +324,7 @@ export async function runSingleMailboxBackup(opts: {
     },
   });
 
-  setImmediate(async () => {
+  const work = async (): Promise<void> => {
     try {
       const outPath = join(tmpdir(), `coremail-mbox-${opts.userId}-${Date.now()}.${opts.format === 'mbox' ? 'mbox' : 'zip'}`);
       const folderIds = opts.folderIds ?? null;
@@ -320,9 +370,18 @@ export async function runSingleMailboxBackup(opts: {
         },
       }).catch(() => undefined);
     }
-  });
+  };
+  const done = runInBackground(work, job.id);
+  return { jobId: job.id, done };
+}
 
-  return { jobId: job.id };
+/** Runs the job body after the response (setImmediate); never rejects. */
+function runInBackground(work: () => Promise<void>, jobId: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(() => {
+      work().catch((err: unknown) => log.error({ err, jobId }, 'Backup job crashed')).finally(resolve);
+    });
+  });
 }
 
 /**

@@ -472,6 +472,11 @@ adminRetentionRouter.post('/run', async (_req: Request, res: Response) => {
       headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
     });
 
+    if (response.status === 409) {
+      // v7.1.0: a run (scheduled or manual, any instance) is still in progress
+      res.status(409).json({ error: 'A retention run is already in progress' });
+      return;
+    }
     if (!response.ok) {
       res.status(502).json({ error: 'Retention run failed', detail: `backup-service HTTP ${response.status}` });
       return;
