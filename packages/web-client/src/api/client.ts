@@ -183,6 +183,20 @@ export const api = {
   delete:   <T>(path: string, body?: unknown)   => request<T>(path, { method: 'DELETE', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
 };
 
+/**
+ * v8.1: single-use SSE ticket (POST /api/v1/events/ticket, 60 s) for
+ * `GET /api/v1/events?ticket=` — the access token never goes into a URL.
+ * apiFetch sends the in-memory token and refreshes once on a 401. Returns null
+ * when no session exists (the caller retries later).
+ */
+export async function fetchEventTicket(): Promise<string | null> {
+  if (!useAuthStore.getState().accessToken) return null;
+  const res = await apiFetch('/api/v1/events/ticket', { method: 'POST', body: '{}' }, 'application/json');
+  if (!res.ok) throw new Error(`SSE ticket: HTTP ${res.status}`);
+  const data = await res.json() as { ticket?: unknown };
+  return typeof data.ticket === 'string' && data.ticket ? data.ticket : null;
+}
+
 // ── Binary / text downloads without tokens in URLs ───────────────────────────
 
 /** Fetches an authenticated API resource as a Blob (Authorization header, no `?token=`). */

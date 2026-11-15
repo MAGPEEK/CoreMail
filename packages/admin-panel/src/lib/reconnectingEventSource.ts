@@ -1,9 +1,10 @@
 /**
  * EventSource that reconnects itself with exponential backoff and builds the
- * URL anew for every attempt — the access token rotates (refresh), so a URL
- * captured once would keep reconnecting with an expired token. The browser's
- * built-in auto-reconnect reuses the original URL, therefore the connection is
- * closed on error and reopened here. No imports — unit-tested with `node --test`.
+ * URL anew for every attempt. v8.1: the URL carries a single-use SSE ticket
+ * (POST /api/v1/events/ticket → GET /api/v1/events?ticket=…), so every
+ * (re)connect needs a fresh one — the browser's built-in auto-reconnect would
+ * reuse the original (already redeemed) URL, therefore the connection is closed
+ * on error and reopened here. No imports — unit-tested with `node --test`.
  */
 
 export interface EventSourceLike {
@@ -14,8 +15,12 @@ export interface EventSourceLike {
 }
 
 export interface ReconnectingOptions {
-  /** URL for the next attempt, or null when no credential is available (retry later) */
-  url: () => string | null;
+  /**
+   * URL for the next attempt (may be async, e.g. after requesting a ticket), or
+   * null when no credential is available (retry later). A rejection counts as
+   * a failed attempt (backoff).
+   */
+  url: () => string | null | Promise<string | null>;
   /** Event name → handler */
   handlers: Record<string, (ev: { data?: unknown }) => void>;
   /** Injection seams for tests */
@@ -29,6 +34,11 @@ export interface ReconnectingOptions {
 /** Backoff for attempt n (0-based): base·2ⁿ, capped at max. */
 export function reconnectDelay(attempt: number, baseMs = 1000, maxMs = 30_000): number {
   return Math.min(maxMs, baseMs * 2 ** Math.max(0, Math.min(attempt, 30)));
+}
+
+/** URL of the SSE stream for a ticket. */
+export function eventStreamUrl(ticket: string): string {
+  return `/api/v1/events?ticket=${encodeURIComponent(ticket)}`;
 }
 
 /** Opens the stream; returns a function that closes it for good. */
@@ -49,10 +59,8 @@ export function openReconnectingEventSource(opts: ReconnectingOptions): () => vo
     timer = setTimer(connect, reconnectDelay(attempt++, base, max));
   };
 
-  function connect() {
-    timer = null;
+  const open = (url: string | null) => {
     if (closed) return;
-    const url = opts.url();
     if (!url) { schedule(); return; }
     const source = create(url);
     es = source;
@@ -64,6 +72,23 @@ export function openReconnectingEventSource(opts: ReconnectingOptions): () => vo
       es = null;
       schedule();
     };
+  };
+
+  function connect() {
+    timer = null;
+    if (closed) return;
+    let next: string | null | Promise<string | null>;
+    try {
+      next = opts.url();
+    } catch {
+      schedule();
+      return;
+    }
+    if (next !== null && typeof next === 'object' && typeof next.then === 'function') {
+      next.then(open, () => schedule());
+    } else {
+      open(next as string | null);
+    }
   }
 
   connect();

@@ -225,6 +225,9 @@ const de = {
   mbox_reset_pw_btn:        'Passwort setzen',
   mbox_reset_pw_title_btn:  'Passwort zurücksetzen',
   mbox_delete_confirm:      'Postfach wirklich löschen?',
+  mbox_signout_title:       'Überall abmelden',
+  mbox_signout_confirm:     'Alle Web-/API-Sitzungen dieses Kontos beenden? Der Benutzer muss sich überall neu anmelden (App-Passwörter bleiben gültig).',
+  mbox_signout_done:        'Abgemeldet — beendete Sitzungen:',
   mbox_btn_edit_title:      'Bearbeiten',
   mbox_btn_delete_title:    'Löschen',
 
@@ -971,6 +974,9 @@ const en: { [K in keyof DE]: string } = {
   mbox_reset_pw_btn:        'Set password',
   mbox_reset_pw_title_btn:  'Reset password',
   mbox_delete_confirm:      'Really delete mailbox?',
+  mbox_signout_title:       'Sign out everywhere',
+  mbox_signout_confirm:     'End all web/API sessions of this account? The user has to sign in again everywhere (app passwords stay valid).',
+  mbox_signout_done:        'Signed out — sessions ended:',
   mbox_btn_edit_title:      'Edit',
   mbox_btn_delete_title:    'Delete',
 

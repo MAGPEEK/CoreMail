@@ -3,7 +3,7 @@ import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Search, Pencil, Trash2, X, KeyRound, ChevronDown, ChevronRight,
-  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Folder, Users,
+  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Folder, Users, LogOut,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -166,6 +166,13 @@ export function MailboxesPage() {
     mutationFn: ({ id, password }: { id: string; password: string }) =>
       api.put(`/admin/mailboxes/${id}`, { password }),
     onSuccess: () => { toast.success(t('mbox_pw_changed')); setShowResetPw(null); setNewPassword(''); },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // v8.1: sign out everywhere (ends all web/API sessions of the user)
+  const revokeSessionsMutation = useMutation({
+    mutationFn: (id: string) => api.post<{ ok: boolean; sessionsRevoked: number }>(`/admin/mailboxes/${id}/revoke-sessions`, {}),
+    onSuccess: (r) => toast.success(`${t('mbox_signout_done')} ${r.sessionsRevoked}`),
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -399,6 +406,12 @@ export function MailboxesPage() {
                       <button aria-label={t('mbox_reset_pw_title_btn')} onClick={() => { setShowResetPw(u); setNewPassword(''); }}
                         className="btn-ghost p-1.5 rounded" title={t('mbox_reset_pw_title_btn')}>
                         <KeyRound size={13} className="text-blue-500" />
+                      </button>
+                      <button aria-label={t('mbox_signout_title')}
+                        onClick={() => { if (confirm(`${t('mbox_signout_confirm')}\n\n${u.email}`)) revokeSessionsMutation.mutate(u.id); }}
+                        disabled={revokeSessionsMutation.isPending}
+                        className="btn-ghost p-1.5 rounded" title={t('mbox_signout_title')}>
+                        <LogOut size={13} className="text-amber-600" />
                       </button>
                       <button aria-label={t('mbox_btn_delete_title')}
                         onClick={() => { if (confirm(`${t('mbox_delete_confirm')} "${u.email}"`)) deleteMutation.mutate(u.id); }}

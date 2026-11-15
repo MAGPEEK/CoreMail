@@ -12,8 +12,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
 } from 'recharts';
-import { api, getToken } from '../api/client.js';
-import { openReconnectingEventSource } from '../lib/reconnectingEventSource.js';
+import { api, fetchEventTicket } from '../api/client.js';
+import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
 
@@ -390,10 +390,10 @@ function AttackEventsWidget() {
 
   // SSE subscription for live updates
   useEffect(() => openReconnectingEventSource({
-    // Current token on every (re)connect — the access token rotates on refresh
-    url: () => {
-      const token = getToken();
-      return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : null;
+    // v8.1: a fresh single-use ticket on every (re)connect — no token in the URL
+    url: async () => {
+      const ticket = await fetchEventTicket();
+      return ticket ? eventStreamUrl(ticket) : null;
     },
     handlers: {
       'security:attack': () => {

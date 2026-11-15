@@ -250,6 +250,20 @@ export const api = {
     request<T>(path, { method: 'POST', body: file }, contentType),
 };
 
+/**
+ * v8.1: single-use SSE ticket (POST /api/v1/events/ticket, 60 s) for
+ * `GET /api/v1/events?ticket=` — the access token never goes into a URL.
+ * apiFetch sends the in-memory token and refreshes once on a 401. Returns null
+ * when no session exists (the caller retries later).
+ */
+export async function fetchEventTicket(): Promise<string | null> {
+  if (!getToken()) return null;
+  const res = await apiFetch('/api/v1/events/ticket', { method: 'POST', body: '{}' });
+  if (!res.ok) throw new Error(`SSE ticket: HTTP ${res.status}`);
+  const data = await res.json() as { ticket?: unknown };
+  return typeof data.ticket === 'string' && data.ticket ? data.ticket : null;
+}
+
 // ── Downloads without tokens in URLs ──────────────────────────────────────────
 
 /** Fetches an authenticated resource as Blob (Authorization header). */
