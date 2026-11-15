@@ -27,6 +27,7 @@ import {
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
+import { draftsRouter } from './routes/drafts.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -370,6 +371,7 @@ app.get('/api/v1/events', requireSseAuth, sseHandler);
 // ── Feature Routes ────────────────────────────────────────────────────────────
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
+app.use('/api/v1/mail/drafts',    draftsRouter);
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
 app.use('/api/v1/contacts',       contactsRouter);

@@ -19,3 +19,4 @@ export * from './mail-auth.js';
 export * from './queue-options.js';
 export * from './provision-mailbox.js';
 export * from './itip-reply.js';
+export * from './draft.js';

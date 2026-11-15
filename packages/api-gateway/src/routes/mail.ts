@@ -7,7 +7,7 @@ import { Queue } from 'bullmq';
 import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
-  loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream,
+  loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -26,7 +26,7 @@ import {
   MAX_QUERY_LENGTH, type FolderRef,
 } from '../lib/search-query.js';
 
-const replyLookup = prismaReplyLookup(
+export const replyLookup = prismaReplyLookup(
   prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
   (p) => (p.storagePath ? loadRawMessage(p as unknown as Parameters<typeof loadRawMessage>[0], { persist: false }) : Promise.resolve(null)),
 );
@@ -75,13 +75,13 @@ mailRouter.use(requireAuth);
 // 8.0.x: the WHOLE request (all files + fields) is limited to the configured
 // max. message size, and at most MAX_SEND_FILES files (was 20 × 25 MB ≈ 500 MB
 // buffered in memory per request).
-const sendUploadMiddleware = withBodyLimit((limit) => multer({
+export const sendUploadMiddleware = withBodyLimit((limit) => multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: limit, files: MAX_SEND_FILES, fields: 50, fieldSize: limit, parts: MAX_SEND_FILES + 50 },
 }).array('attachments', MAX_SEND_FILES));
 
 // 8.0.x: per-user send rate limit (default 30 messages / 60 s, 0 disables)
-const sendRateLimiter = createUserRateLimiter({
+export const sendRateLimiter = createUserRateLimiter({
   scope: 'mail-send',
   limit: envInt('MAIL_SEND_RATE_LIMIT', 30),
   windowSec: Math.max(1, envInt('MAIL_SEND_RATE_WINDOW_SEC', 60)),
@@ -89,7 +89,10 @@ const sendRateLimiter = createUserRateLimiter({
 
 // ── BullMQ outbound queue (same as smtp-server) ───────────────────────────────
 let _outboundQueue: Queue | null = null;
-function getOutboundQueue(): Queue {
+export function getOutboundQueue(): Queue {
+  // Test seam (route tests install an in-memory queue)
+  const seam = (globalThis as { __outboundQueue?: Queue }).__outboundQueue;
+  if (seam) return seam;
   if (!_outboundQueue) {
     // BullMQ v5 requires maxRetriesPerRequest: null — createBullMqConnection() provides that.
     // getRedisClient() (shared, maxRetriesPerRequest: 3) crashes the process when BullMQ
@@ -108,7 +111,7 @@ function getOutboundQueue(): Queue {
 // nodemailer's smtp-connection does NOT normalize Buffer content automatically
 // (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
 // the header/body separator (\r\n\r\n) → raw MIME text in the body.
-async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
+export async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
   const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
@@ -845,16 +848,140 @@ mailRouter.post(
       if (req.body['sendOnBehalfOf']) sendOnBehalfOf = String(req.body['sendOnBehalfOf']).toLowerCase();
     }
 
-    if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const out = await performSend(req.apiUser!.userId, {
+      to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo, referencesRaw, scheduledAt,
+      sendAs: sendAsAddress, sendOnBehalfOf,
+      attachments: files.map((f) => ({ filename: f.originalname, contentType: f.mimetype, size: f.size, buffer: f.buffer })),
+    });
+    res.status(out.status).json(out.body);
+  },
+);
+
+// ── Send core (POST /send and POST /drafts/:id/send) ─────────────────────────
+// One implementation of every send check (recipients, references, schedule
+// window, sender identity) and of the enqueue step, so a draft is sent exactly
+// like a mail from /send. Routes add the transport concerns (rate limit, body
+// size limit) as middleware.
+
+export interface SendAttachment {
+  filename: string;
+  contentType: string;
+  size: number;
+  /** In-memory upload (POST /send) … */
+  buffer?: Buffer | undefined;
+  /** … or an existing object-store key (draft attachment). Copied to the outbound key, never moved. */
+  storagePath?: string | undefined;
+}
+
+export interface EnqueuedSend {
+  userId: string;
+  jobId: string;
+  queueJobId: string;
+  /** Message-ID header of the sent mail. */
+  messageId: string;
+  /** Time the worker sends (scheduledAt or the end of the undo hold), null = now. */
+  sendAt: Date | null;
+}
+
+export interface SendRequest {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  inReplyTo?: string | undefined;
+  referencesRaw?: unknown;
+  scheduledAt?: Date | null;
+  /**
+   * Undo-send hold in ms (drafts, 0–MAX_SEND_HOLD_MS): enqueued with a BullMQ
+   * delay without the 30 s minimum of scheduledAt, so it can still be cancelled.
+   */
+  holdMs?: number;
+  sendAs?: string | null;
+  sendOnBehalfOf?: string | null;
+  attachments: SendAttachment[];
+  /** Message-ID header to use (a draft keeps its own); default: a new one. */
+  messageId?: string | null;
+  /**
+   * Replaces the default Sent copy. Awaited, and runs only after the outbound
+   * job was enqueued (drafts: the draft itself becomes the Sent copy).
+   */
+  afterEnqueue?: (info: EnqueuedSend) => Promise<void>;
+}
+
+export interface SendResult { status: number; body: Record<string, unknown> }
+
+export const MAX_SEND_HOLD_MS = 30_000;
+
+export type SenderResolution =
+  | { ok: true; fromEmail: string; fromName: string; onBehalfHeader: string | null }
+  | { ok: false; status: 403; error: string };
+
+/**
+ * From/Sender of an outgoing mail (v3.18.9): own address, or a shared mailbox
+ * with SEND_AS/FULL_ACCESS (sendAs) or SEND_ON_BEHALF (sendOnBehalfOf).
+ */
+export async function resolveSender(
+  user: { id: string; email: string; displayName: string | null },
+  sendAsAddress: string | null,
+  sendOnBehalfOf: string | null,
+): Promise<SenderResolution> {
+  if (sendAsAddress) {
+    const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
+      where: {
+        userId: user.id,
+        permission: { in: ['SEND_AS', 'FULL_ACCESS'] },
+        sharedMailbox: { email: sendAsAddress, active: true },
+      },
+      include: { sharedMailbox: { select: { email: true, displayName: true } } },
+    });
+    if (!sharedPerm) return { ok: false, status: 403, error: `Keine SEND_AS-Berechtigung für ${sendAsAddress}` };
+    return { ok: true, fromEmail: sharedPerm.sharedMailbox.email, fromName: sharedPerm.sharedMailbox.displayName, onBehalfHeader: null };
+  }
+  if (sendOnBehalfOf) {
+    const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
+      where: {
+        userId: user.id,
+        permission: 'SEND_ON_BEHALF',
+        sharedMailbox: { email: sendOnBehalfOf, active: true },
+      },
+      include: { sharedMailbox: { select: { email: true, displayName: true } } },
+    });
+    if (!sharedPerm) return { ok: false, status: 403, error: `Keine SEND_ON_BEHALF-Berechtigung für ${sendOnBehalfOf}` };
+    // For „on behalf of": From=Shared, Sender=User → RFC 5322 §3.6.2
+    const own = (user.displayName ?? '').trim();
+    return {
+      ok: true,
+      fromEmail: sharedPerm.sharedMailbox.email,
+      fromName: sharedPerm.sharedMailbox.displayName,
+      onBehalfHeader: `${own ? `"${own}" ` : ''}<${user.email}>`,
+    };
+  }
+  return { ok: true, fromEmail: user.email, fromName: (user.displayName ?? '').trim(), onBehalfHeader: null };
+}
+
+/** Validates and enqueues one outgoing mail (BullMQ `smtp-outbound`) + Sent copy. */
+export async function performSend(userId: string, input: SendRequest): Promise<SendResult> {
+    const { to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo } = input;
+    const scheduledAt = input.scheduledAt ?? null;
+    const holdMs = input.holdMs ?? 0;
+    const fail = (status: number, body: Record<string, unknown>): SendResult => ({ status, body });
+
+    if (!to.length) return fail(400, { error: 'Kein Empfänger angegeben' });
     // Optional client References chain (validated <msg-id> list, max 50, no CR/LF)
-    const clientRefs = parseClientReferences(referencesRaw);
-    if (!clientRefs.ok) { res.status(400).json({ error: clientRefs.error }); return; }
+    const clientRefs = parseClientReferences(input.referencesRaw);
+    if (!clientRefs.ok) return fail(400, { error: clientRefs.error });
     // 8.0.x: recipient count + syntax (header injection, envelope abuse)
     const rcptCheck = checkRecipients([to, cc, bcc]);
     if (!rcptCheck.ok) {
-      res.status(400).json({ error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
-      return;
+      return fail(400, { error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
     }
+    if (!Number.isFinite(holdMs) || holdMs < 0 || holdMs > MAX_SEND_HOLD_MS) {
+      return fail(400, { error: `Sendeverzögerung muss zwischen 0 und ${MAX_SEND_HOLD_MS / 1000} Sekunden liegen` });
+    }
+    if (holdMs > 0 && scheduledAt) return fail(400, { error: 'Sendeverzögerung und geplanter Versand schließen sich aus' });
 
     // Schedule-send validation: time must be in the future (>30s),
     // not more than 1 year ahead (otherwise probably an error)
@@ -862,61 +989,25 @@ mailRouter.post(
     if (scheduledAt) {
       const delayMs = scheduledAt.getTime() - now;
       if (delayMs < 30_000) {
-        res.status(400).json({ error: 'Geplanter Versand muss mindestens 30 Sekunden in der Zukunft liegen' });
-        return;
+        return fail(400, { error: 'Geplanter Versand muss mindestens 30 Sekunden in der Zukunft liegen' });
       }
       if (delayMs > 365 * 24 * 60 * 60 * 1000) {
-        res.status(400).json({ error: 'Geplanter Versand darf nicht mehr als 1 Jahr in der Zukunft liegen' });
-        return;
+        return fail(400, { error: 'Geplanter Versand darf nicht mehr als 1 Jahr in der Zukunft liegen' });
       }
     }
 
     // Load sender (incl. the domain's DKIM key)
     const user = await prisma.user.findUnique({
-      where: { id: req.apiUser!.userId },
+      where: { id: userId },
       include: { domain: true },
     });
-    if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
+    if (!user) return fail(404, { error: 'Benutzer nicht gefunden' });
 
     // ── Shared-mailbox permission check (v3.18.9) ──────────────────────────
-    // If sendAs or sendOnBehalfOf is set, the user must have the matching
-    // permission on the shared mailbox.
-    let effectiveFromEmail        = user.email;
-    let effectiveFromDisplayName  = (user.displayName ?? '').trim();
-    let onBehalfHeader: string | null = null;
-    if (sendAsAddress) {
-      const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
-        where: {
-          userId: user.id,
-          permission: { in: ['SEND_AS', 'FULL_ACCESS'] },
-          sharedMailbox: { email: sendAsAddress, active: true },
-        },
-        include: { sharedMailbox: { select: { email: true, displayName: true } } },
-      });
-      if (!sharedPerm) {
-        res.status(403).json({ error: `Keine SEND_AS-Berechtigung für ${sendAsAddress}` });
-        return;
-      }
-      effectiveFromEmail       = sharedPerm.sharedMailbox.email;
-      effectiveFromDisplayName = sharedPerm.sharedMailbox.displayName;
-    } else if (sendOnBehalfOf) {
-      const sharedPerm = await prisma.sharedMailboxPerm.findFirst({
-        where: {
-          userId: user.id,
-          permission: 'SEND_ON_BEHALF',
-          sharedMailbox: { email: sendOnBehalfOf, active: true },
-        },
-        include: { sharedMailbox: { select: { email: true, displayName: true } } },
-      });
-      if (!sharedPerm) {
-        res.status(403).json({ error: `Keine SEND_ON_BEHALF-Berechtigung für ${sendOnBehalfOf}` });
-        return;
-      }
-      // For „on behalf of": From=Shared, Sender=User → RFC 5322 §3.6.2
-      effectiveFromEmail       = sharedPerm.sharedMailbox.email;
-      effectiveFromDisplayName = sharedPerm.sharedMailbox.displayName;
-      onBehalfHeader           = `${(user.displayName ?? '').trim() ? `"${(user.displayName ?? '').trim()}" ` : ''}<${user.email}>`;
-    }
+    const sender = await resolveSender(user, input.sendAs ?? null, input.sendOnBehalfOf ?? null);
+    if (!sender.ok) return fail(sender.status, { error: sender.error });
+    const effectiveFromEmail = sender.fromEmail;
+    const onBehalfHeader     = sender.onBehalfHeader;
 
     // 8.0.x: In-Reply-To/References from the parent's Message-ID (never an internal id)
     // The client's References list (when sent) wins over the server-resolved chain.
@@ -927,25 +1018,30 @@ mailRouter.post(
       ...(replyRefs ? { references: replyRefs } : {}),
     };
 
-    const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const files       = input.attachments;
     const jobId       = crypto.randomUUID();
-    const msgId       = `<${crypto.randomUUID()}@${user.domain.name}>`;
+    const msgId       = input.messageId || `<${crypto.randomUUID()}@${user.domain.name}>`;
     const sendDate    = new Date();
-    const displayName = effectiveFromDisplayName;
+    const displayName = sender.fromName;
 
     // ── Upload attachments to MinIO (no base64 blob in the Redis job) ────────
     // This keeps the BullMQ job small; the worker downloads the attachments
-    // from MinIO when building the RFC 5322 message.
+    // from MinIO when building the RFC 5322 message. The worker deletes these
+    // keys after delivery, so stored (draft) attachments are copied, not referenced.
     const queueAttachments = await Promise.all(
       files.map(async (f, index) => {
         // v7.1: index-based key — the user's file name (kept in `filename`) never
         // becomes a storage path (filesystem driver), and equal names do not collide.
         const minioPath = outboundAttachKey(jobId, String(index));
-        await uploadBuffer(minioPath, f.buffer, f.mimetype);
+        if (f.buffer) {
+          await uploadBuffer(minioPath, f.buffer, f.contentType);
+        } else if (f.storagePath) {
+          await getObjectStore().putStream(minioPath, await getObjectStream(f.storagePath), { contentType: f.contentType, size: f.size });
+        }
         return {
-          filename:    f.originalname,
+          filename:    f.filename,
           minioPath,
-          contentType: f.mimetype,
+          contentType: f.contentType,
           size:        f.size,
         };
       })
@@ -958,11 +1054,15 @@ mailRouter.post(
 
     // BullMQ job: with scheduledAt enqueue with `delay` — the worker starts
     // sending only at the scheduled time. delay is measured internally in ms.
+    // An undo-send hold uses the same mechanism (cancellable while delayed).
     const queueJobId = `api-${jobId}`;
     const jobOptions: Awaited<ReturnType<typeof getOutboundJobOptions>> & { jobId: string; delay?: number } = { ...(await getOutboundJobOptions()), jobId: queueJobId };
     if (scheduledAt) {
       jobOptions.delay = scheduledAt.getTime() - now;
+    } else if (holdMs > 0) {
+      jobOptions.delay = holdMs;
     }
+    const sendAt = scheduledAt ?? (holdMs > 0 ? new Date(now + holdMs) : null);
     try {
       await getOutboundQueue().add('send', {
         messageId:    jobId,
@@ -994,8 +1094,7 @@ mailRouter.post(
       }, jobOptions);
     } catch (queueErr) {
       log.error({ err: queueErr }, 'Outbound queue add failed');
-      res.status(500).json({ error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
-      return;
+      return fail(500, { error: 'Nachricht konnte nicht in die Warteschlange eingereiht werden' });
     }
 
     // ── MAIL_FLOW — ACCEPTED log ──────────────────────────────────────────────
@@ -1017,6 +1116,14 @@ mailRouter.post(
       },
     }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log write failed'));
 
+    if (input.afterEnqueue) {
+      try {
+        await input.afterEnqueue({ userId: user.id, jobId, queueJobId, messageId: msgId, sendAt });
+      } catch (e) {
+        // The mail is queued; only the follow-up (draft → Sent) failed.
+        log.warn({ err: e, jobId }, 'Post-enqueue step failed');
+      }
+    } else {
     // ── Save copy to Sent Items ──────────────────────────────────────────────
     // The RFC 5322 buffer is built separately here (with in-memory attachments, not MinIO)
     // so the Sent copy is available immediately without waiting for the worker.
@@ -1030,11 +1137,11 @@ mailRouter.post(
         if (!sentFolder || !mailbox) return;
 
         // Raw buffer for the Sent copy with in-memory attachments
-        const sentAttachments: SendMailOptions['attachments'] = files.map((f) => ({
-          filename:    f.originalname,
-          content:     f.buffer,
-          contentType: f.mimetype,
-        }));
+        const sentAttachments: SendMailOptions['attachments'] = await Promise.all(files.map(async (f) => ({
+          filename:    f.filename,
+          content:     f.buffer ?? await downloadBuffer(f.storagePath ?? ''),
+          contentType: f.contentType,
+        })));
         const fromAddress: SendMailOptions['from'] = displayName
           ? { name: displayName, address: user.email }
           : user.email;
@@ -1090,18 +1197,22 @@ mailRouter.post(
         log.warn({ err: e }, 'Could not store Sent copy');
       }
     })();
+    }
 
     log.info(
-      { userId: user.id, to, attachments: files.length, scheduled: !!scheduledAt },
+      { userId: user.id, to, attachments: files.length, scheduled: !!scheduledAt, holdMs },
       scheduledAt ? 'Scheduled message enqueued' : 'Message enqueued',
     );
-    res.json({
-      ok: true,
-      jobId,
-      ...(scheduledAt ? { scheduledAt: scheduledAt.toISOString(), scheduled: true } : { scheduled: false }),
-    });
-  },
-);
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        jobId,
+        ...(scheduledAt ? { scheduledAt: scheduledAt.toISOString(), scheduled: true } : { scheduled: false }),
+        ...(holdMs > 0 && sendAt ? { sendAt: sendAt.toISOString() } : {}),
+      },
+    };
+}
 
 // POST /api/v1/mail/messages/:id/cancel-scheduled — cancel scheduled send
 mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Response) => {

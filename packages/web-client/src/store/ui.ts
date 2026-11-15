@@ -3,8 +3,11 @@ import { persist } from 'zustand/middleware';
 import type { MessageFilter } from '../api/types.js';
 import type { ShortcutSetId } from '../lib/shortcuts.js';
 import { DEFAULT_SEND_DELAY_SEC, normalizeSendDelay, type SendDelaySec } from '../lib/send-delay.js';
+import type { DraftAttachmentRef } from '../lib/draft-autosave.js';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+/** A local file, or an attachment already stored with the server draft. */
+export type ComposeAttachment = File | DraftAttachmentRef;
 /** Full compose state, used to reopen a mail whose send was undone. */
 export interface ComposeSnapshot {
   to: string;
@@ -12,11 +15,13 @@ export interface ComposeSnapshot {
   bcc: string;
   subject: string;
   bodyHtml: string;
-  attachments: File[];
+  attachments: ComposeAttachment[];
 }
 export interface ComposeContext {
   mode: ComposeMode;
   restore?: ComposeSnapshot;
+  /** Server draft being edited (Drafts folder, undo send, failed send). */
+  draftId?: string;
   id?: string;
   subject?: string;
   fromAddr?: string;
