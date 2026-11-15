@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -54,7 +55,7 @@ notesRouter.post('/', async (req: Request, res: Response) => {
 // PUT /api/v1/notes/:id
 notesRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const parsed = NoteSchema.partial().safeParse(req.body);
+  const parsed = patchSchema(NoteSchema).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   const note = await prisma.note.findFirst({ where: { id, userId: req.apiUser!.userId } });
