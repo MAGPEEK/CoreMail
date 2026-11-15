@@ -1,8 +1,10 @@
 # Mail protocol limits (IMAP, POP3, shared login lockout)
 
-Resource limits and brute-force protection of the TCP mail protocols (v8.1).
+Resource limits and brute-force protection of the TCP mail protocols (v9.0).
 All values are environment variables of the `coremail` app container; a limit of
 `0` (or a negative value) disables that check.
+
+Set them in `.env`; the shipped Compose files pass them through to the `coremail` container (Helm: `app.mailAuth.*` or `app.extraEnv`).
 
 ## Connection limits
 
@@ -25,7 +27,7 @@ POP3 allows one session per maildrop anyway (RFC 1939 §4 lock, `-ERR [IN-USE]`)
 Behind a NAT gateway or a proxy that does not preserve the client address, every
 client shares one IP. A desktop IMAP client keeps 3–10 connections open (one
 per watched folder plus IDLE), phones 1–3 — so 10 users behind one office
-router can already need 50+ connections. The per-IP default is 50 since 8.1
+router can already need 50+ connections. The per-IP default is 50 since 9.0
 (was 20). For larger offices:
 
 * list the office's public address in `MAIL_CONN_EXEMPT_CIDRS` (e.g.
@@ -51,7 +53,7 @@ router can already need 50+ connections. The per-IP default is 50 since 8.1
 logins per client IP and per account in Redis and locks with exponential backoff
 (`MAIL_AUTH_IP_*`, `MAIL_AUTH_ACCOUNT_*`, see `mail-auth.ts`).
 
-Since v8.1 **private addresses are counted like public ones**: behind a reverse
+Since v9.0 **private addresses are counted like public ones**: behind a reverse
 proxy or the Docker userland proxy every attacker would otherwise appear as an
 exempt private peer. Only loopback is exempt by default.
 
@@ -59,5 +61,5 @@ exempt private peer. Only loopback is exempt by default.
 |----------|---------|---------|
 | `MAIL_AUTH_EXEMPT_CIDRS` | *(empty)* | Comma-separated IPs/CIDRs exempt from the **per-IP** failure counter (e.g. an internal webmail or monitoring host). The per-account counter always applies. Invalid entries are ignored and logged. |
 
-`MAIL_AUTH_LIMIT_PRIVATE_IPS` (pre-8.1) is obsolete and ignored — counting private
+`MAIL_AUTH_LIMIT_PRIVATE_IPS` (pre-9.0) is obsolete and ignored — counting private
 addresses is now the default.

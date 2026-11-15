@@ -102,7 +102,9 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `app.publicUrl` | `""` | `COREMAIL_PUBLIC_URL` (SSO redirect URIs) |
 | `app.webauthn.*`, `app.vapid.*`, `app.jmapCorsOrigins`, `app.ldapAllowInsecure` | | map to `WEBAUTHN_*`, `VAPID_*`, `JMAP_CORS_ORIGINS`, `LDAP_ALLOW_INSECURE` |
 | `app.mailAuth.*` | app defaults | `MAIL_AUTH_*` brute-force limits; `exemptCidrs` → `MAIL_AUTH_EXEMPT_CIDRS`/`MAIL_CONN_EXEMPT_CIDRS` (`limitPrivateIps` was removed in chart 2.0) |
-| `app.extraEnv`, `.extraVolumes`, `.extraVolumeMounts` | `[]` | e.g. a GeoIP database (`GEOIP_DB_PATH`) |
+| `app.deletedItemRetentionDays`, `app.quotaFullPermanent`, `app.httpRedirectHttps` | `""` (app defaults) | `DELETED_ITEM_RETENTION_DAYS`, `QUOTA_FULL_PERMANENT`, `HTTP_REDIRECT_HTTPS` (CoreMail >= 9.0) |
+| `app.securityFilter.failOpen`, `app.localSpoof.action`/`.allow`, `app.arcTrustedSealers` | `false` / `""` | `SECURITY_FILTER_FAIL_OPEN`, `LOCAL_SPOOF_ACTION`/`LOCAL_SPOOF_ALLOW`, `ARC_TRUSTED_SEALERS` (CoreMail >= 9.0, `docs/mail-security.md`) |
+| `app.extraEnv`, `.extraVolumes`, `.extraVolumeMounts` | `[]` | e.g. a GeoIP database (`GEOIP_DB_PATH`) or any other variable from `.env.example` |
 | `mailService.type` | `LoadBalancer` | or `NodePort` |
 | `mailService.externalTrafficPolicy` | `Local` | keep `Local`, see [Client IPs](#client-ips) |
 | `mailService.ports.<name>.enabled` | mail ports on, `http`/`https` off | e.g. disable POP3 |
@@ -286,6 +288,8 @@ to one replica.
 
 ### Upgrading to chart 2.0 (CoreMail 9.0)
 
+Chart 2.0.0 ships with app 9.0.0 (`appVersion`).
+
 - **`app.mailAuth.limitPrivateIps` was removed** (the app no longer reads
   `MAIL_AUTH_LIMIT_PRIVATE_IPS`). CoreMail 9.0 exempts only loopback from the
   per-IP lockout and the IMAP/POP3 per-IP connection caps; further exemptions go
@@ -308,6 +312,11 @@ to one replica.
   `clamav.enabled=false` without an external endpoint now set
   `RSPAMD_ENABLED=false` / `CLAMAV_ENABLED=false` (before, the BCP switch had to
   be turned off by hand).
+- **New optional values** for the 9.0 escape hatches: `app.deletedItemRetentionDays`,
+  `app.quotaFullPermanent`, `app.httpRedirectHttps`, `app.securityFilter.failOpen`,
+  `app.localSpoof.action`/`.allow` and `app.arcTrustedSealers` (empty = app
+  default). Further 9.0 variables (connection limits, send rate limits, …) go
+  into `app.extraEnv`.
 - **Schema sync:** unique-constraint-only changes are applied automatically
   (see [Security](#security)); images ≤ 8.0.0 fall back to a plain `prisma db push`.
 

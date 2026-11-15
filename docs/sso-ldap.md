@@ -31,7 +31,7 @@ Provider settings (`OidcProvider`):
 | `forcedDomains` | `[]` | Allowed e-mail domains; empty = only the provider's own domain. Every domain must also exist (active) in CoreMail |
 | `requireEmailVerified` | true | `email_verified` must be `true`. Switch off only for IdPs that never send it (Entra ID) and then restrict `forcedDomains` and use a single-tenant discovery URL |
 | `autoProvision` | true | Unknown users are created (authSource OIDC) and their mailbox is provisioned |
-| `allowLinking` | false | Existing LOCAL/LDAP accounts with the same verified address may log in via SSO (the account is not converted). Since v8.1 the account is bound to the IdP subject of its first SSO login; another subject with the same address gets `account_mismatch` |
+| `allowLinking` | false | Existing LOCAL/LDAP accounts with the same verified address may log in via SSO (the account is not converted). Since v9.0 the account is bound to the IdP subject of its first SSO login; another subject with the same address gets `account_mismatch` |
 | `requireMfa` | false | Users with CoreMail MFA enrolled must enter their code after the IdP |
 
 ### Flow and security properties
@@ -55,7 +55,7 @@ POST /auth/sso/exchange { code }         → same body as POST /auth/login
   bound to `oidc:<providerId>:<sub>` on first use (another subject is refused),
   LOCAL/LDAP accounts only with `allowLinking`, inactive accounts refused,
   maintenance mode respected.
-- Linked accounts (v8.1) are bound like OIDC accounts: the LOCAL or LDAP account
+- Linked accounts (v9.0) are bound like OIDC accounts: the LOCAL or LDAP account
   stores `oidc:<providerId>:<sub>` in the column `User.oidcSubject`. `externalId`
   stays free for the LDAP directory id (`ldap:<id>`). To re-link an account to
   another IdP identity, set `oidcSubject` to NULL. A linked LOCAL account can
@@ -81,7 +81,7 @@ CoreMail MFA code. The session counts as *MFA verified* (relevant for
 provider, users with CoreMail MFA enrolled get the normal MFA challenge
 (`/auth/mfa/verify`) and the session is MFA verified afterwards.
 
-Admins (v8.1): when `requireMfaForAdmins` is on, an account with an admin role
+Admins (v9.0): when `requireMfaForAdmins` is on, an account with an admin role
 (anything but `USER`) is **not** MFA verified through `amr` — the claim is the
 IdP's own statement. Such admins get the CoreMail MFA challenge when enrolled (even
 if the provider has `requireMfa` off); without CoreMail MFA the session stays
@@ -90,10 +90,10 @@ unverified and the admin API answers `MFA_REQUIRED` / `MFA_NOT_VERIFIED`. Set
 again — only effective for providers with `requireMfa` off.
 
 SSO accounts have no CoreMail password; mail clients use app passwords. Creating
-an app password (v8.1) needs re-authentication — SSO users confirm with a
+an app password (v9.0) needs re-authentication — SSO users confirm with a
 CoreMail TOTP or backup code (`mfaCode`).
 
-## Web login hardening (v8.1)
+## Web login hardening (v9.0)
 
 ### Shared lockout
 
@@ -143,7 +143,7 @@ configured public hostname or an entry of `COREMAIL_ALLOWED_ORIGINS`
 deletes it too.
 
 Compatibility: clients that send the refresh token in the body (admin CLI, API
-scripts) keep the old contract. A browser that still has a pre-8.1 token in
+scripts) keep the old contract. A browser that still has a pre-9.0 token in
 localStorage sends it once in the body; the answer moves it into the cookie and the
 frontend deletes the stored copy. The SSO exchange (`/auth/sso/exchange`) still
 returns the refresh token in its body; the frontends hand it over the same way.

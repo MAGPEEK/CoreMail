@@ -1,4 +1,4 @@
-# Mailbox quotas, Recover deleted items, Out of office (v8.1)
+# Mailbox quotas, Recover deleted items, Out of office (v9.0)
 
 CoreMail follows the Exchange 2019 mailbox model for these three features.
 
@@ -50,7 +50,7 @@ usage bar under the folder tree (amber at the warning level, red when blocked).
 
 Every user deletion keeps a soft-delete tombstone (message-store `expunge()`:
 row, raw message object and attachments stay): IMAP EXPUNGE, JMAP Email/set
-destroy, ActiveSync Delete, POP3 DELE, and — since v8.1 — deleting in the Trash,
+destroy, ActiveSync Delete, POP3 DELE, and — since v9.0 — deleting in the Trash,
 emptying Trash/Junk and `DELETE /mail/messages/:id?hard=true` in the web client.
 Tombstones are recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 14;
 `0` keeps them until purged by hand). Items the Managed Folder Assistant moved
@@ -96,6 +96,8 @@ header, `X-Auto-Response-Suppress: All|OOF`, mail delivered to Junk, and mail
 that does not name the user in To/Cc/Bcc/Resent-*.
 
 ## Environment
+
+Set these in `.env`; the shipped Compose files pass them through to the `coremail` container (Helm: `app.deletedItemRetentionDays`, `app.quotaFullPermanent`, others via `app.extraEnv`).
 
 | Variable | Default | |
 |---|---|---|

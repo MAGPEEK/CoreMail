@@ -95,13 +95,13 @@ model User {
   passwordHash    String?
   authSource      AuthSource     @default(LOCAL)
   externalId      String?        // LDAP objectGUID or OIDC sub
-  // v8.1: OIDC binding (`oidc:<providerId>:<sub>`) of a LOCAL/LDAP account linked
+  // v9.0: OIDC binding (`oidc:<providerId>:<sub>`) of a LOCAL/LDAP account linked
   // via SSO (OidcProvider.allowLinking). OIDC-only accounts keep it in externalId.
   oidcSubject     String?
   role            UserRole       @default(USER)
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)
-  // v8.1: Exchange-style quota levels. quotaBytes = ProhibitSendReceiveQuota;
+  // v9.0: Exchange-style quota levels. quotaBytes = ProhibitSendReceiveQuota;
   // null = server default (ServerSettings.quota*Percent of quotaBytes).
   quotaWarningBytes      BigInt?
   quotaProhibitSendBytes BigInt?
@@ -340,7 +340,7 @@ model Message {
   rawSize      Int         @default(0)
   storagePath  String?     // MinIO object key for large messages
   changeKey    String      @default("")
-  deletedAt    DateTime?   // soft-delete tombstone; recoverable for DELETED_ITEM_RETENTION_DAYS (v8.1, default 14), then purged
+  deletedAt    DateTime?   // soft-delete tombstone; recoverable for DELETED_ITEM_RETENTION_DAYS (v9.0, default 14), then purged
   // Phase 9: S/MIME metadata JSON — { signed, valid, signerEmail, decrypted, ... }
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
@@ -441,7 +441,7 @@ model SharedMailbox {
   domainId    String
   quotaBytes  BigInt              @default(10737418240)
   usedBytes   BigInt              @default(0)
-  // v8.1: quota levels, see User.quotaWarningBytes
+  // v9.0: quota levels, see User.quotaWarningBytes
   quotaWarningBytes      BigInt?
   quotaProhibitSendBytes BigInt?
   quotaWarnedAt          DateTime?
@@ -694,7 +694,7 @@ model UserSettings {
   oofUseTimeRange         Boolean   @default(false)
   oofStart                DateTime?
   oofEnd                  DateTime?
-  // v8.1: identifies the current out-of-office period — renewed whenever OOF is
+  // v9.0: identifies the current out-of-office period — renewed whenever OOF is
   // switched on or its texts/period change; one auto-reply per sender per period.
   oofPeriodId             String    @default("")
   // Personal inactivity timeout (null = use global setting)
@@ -960,7 +960,7 @@ model ResourceBooking {
   id         String           @id @default(cuid())
   calendar   ResourceCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
   calendarId String
-  // iCal UID — unique per resource calendar (v8.1; was globally unique, so a
+  // iCal UID — unique per resource calendar (v9.0; was globally unique, so a
   // meeting that books two rooms could only ever create one booking)
   uid        String
   summary    String
@@ -1518,7 +1518,7 @@ model ServerSettings {
   // Redis CHANNEL_SETTINGS_RELOAD (no container restart).
   jmapEnabled        Boolean @default(true)
 
-  // ── v8.1: mailbox quota defaults (Exchange 2019 ratios 1.9 / 2.0 / 2.3 GB) ──
+  // ── v9.0: mailbox quota defaults (Exchange 2019 ratios 1.9 / 2.0 / 2.3 GB) ──
   // Percent of the mailbox quota (= ProhibitSendReceiveQuota) at which the
   // warning mail is sent / sending is refused, when the mailbox sets no own level.
   quotaWarningPercent      Int    @default(83)

@@ -5,6 +5,16 @@ secrets:
 app:
   image:
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  # 9.0 escape hatches (0 / false must render, not be dropped as "empty")
+  deletedItemRetentionDays: 0
+  quotaFullPermanent: "false"
+  httpRedirectHttps: false
+  securityFilter:
+    failOpen: true
+  localSpoof:
+    action: junk
+    allow: "198.51.100.0/24,partner.example"
+  arcTrustedSealers: "google.com,microsoft.com"
 mailService:
   loadBalancerIP: 203.0.113.10
   loadBalancerSourceRanges: [0.0.0.0/0]

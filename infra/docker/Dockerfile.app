@@ -219,10 +219,15 @@ COPY infra/docker/entrypoint-app.sh /entrypoint.sh
 COPY infra/docker/schema-sync.sh /usr/local/bin/coremail-schema-sync
 # Classifies Prisma's data-loss warnings (new unique constraints are applied automatically)
 COPY infra/docker/schema-sync-classify.mjs /usr/local/lib/coremail/schema-sync-classify.mjs
+# Backup decryption without a running CoreMail (node built-ins only):
+# `docker exec coremail coremail-decrypt-backup --help` (docs/deployment-security.md).
+# Kept as .mjs behind a symlink: node resolves the link, so the file stays an ES module.
+COPY scripts/decrypt-backup.mjs /usr/local/lib/coremail/decrypt-backup.mjs
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs \
- && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs \
+ && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/decrypt-backup.mjs \
+ && ln -sf /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/bin/coremail-decrypt-backup
 
 # ── Directories + permissions ─────────────────────────────────────────────────
 # All runtime directories belong to the node user (uid 1000, gid 1000).
