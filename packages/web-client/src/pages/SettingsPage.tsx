@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
+import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch } from '../api/client.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
@@ -1899,6 +1900,9 @@ function ViewSection() {
         />
         <p className="text-xs text-gray-500 mt-2 ml-14">Zusammengehörige Nachrichten (gleicher Betreff) werden gebündelt angezeigt.</p>
       </div>
+
+      {/* ── Keyboard shortcuts + undo send ───────────────────────────────────── */}
+      <ViewKeyboardSettings />
     </section>
   );
 }

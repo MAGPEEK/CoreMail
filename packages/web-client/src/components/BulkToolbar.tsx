@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
-import { showUndoToast } from './UndoToast.js';
+import { useMailActions } from '../hooks/useMailActions.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import type { Folder } from '../api/types.js';
 
@@ -27,6 +27,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   const qc = useQueryClient();
   const { selectedIds, clearSelection, setSelectedMessage } = useUiStore();
   const [moveMenu, setMoveMenu] = useState<{ x: number; y: number } | null>(null);
+  const { runWithUndo, locateIds } = useMailActions();
 
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
@@ -50,24 +51,24 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
 
   if (count === 0) return null;
 
-  const run = (action: string, opts?: { folderId?: string; undoMsg?: string; undoFolderId?: string }) => {
-    const body = opts?.folderId
-      ? { ids, action, folderId: opts.folderId }
-      : { ids, action };
-    // Undo is only offered after the server confirmed the action — a failed
-    // request must not look like a success.
-    bulkMutation.mutate(body, {
-      onSuccess: () => {
-        if (!opts?.undoMsg || !opts.undoFolderId) return;
-        const undoFolderId = opts.undoFolderId;
-        showUndoToast({
-          message: opts.undoMsg,
-          onUndo: () => bulkMutation.mutateAsync({ ids: body.ids, action: 'move', folderId: undoFolderId }),
-        });
-      },
-    });
+  const run = (action: string) => {
+    bulkMutation.mutate({ ids, action });
     setSelectedMessage(null);
     clearSelection();
+  };
+
+  /**
+   * Delete / archive / junk / move: undo toast (8 s, also `z`) once the server
+   * confirmed — every message goes back to the folder it came from (bulk
+   * selections from a mailbox-wide search can span several folders).
+   */
+  const runUndoable = (action: 'delete' | 'archive' | 'spam' | 'move', folderId?: string) => {
+    const items = locateIds(ids, currentFolderId);
+    void runWithUndo(action, items, folderId).then((done) => {
+      if (!done) return;
+      setSelectedMessage(null);
+      clearSelection();
+    });
   };
 
   const moveItems: ContextMenuItem[] = folders
@@ -75,7 +76,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
     .map((f) => ({
       label: f.displayName ?? f.name,
       icon: <FolderInput size={14} style={f.color ? { color: f.color } : undefined} />,
-      onClick: () => run('move', { folderId: f.id }),
+      onClick: () => runUndoable('move', f.id),
     }));
 
   // BulkToolbar is positioned absolutely over the MessageList (FolderTree width 208 px = left-52)
@@ -102,12 +103,12 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       <IconBtn
         icon={<Archive size={15} />}
         title="Archivieren"
-        onClick={() => run('archive', { undoMsg: `${count} archiviert`, undoFolderId: currentFolderId })}
+        onClick={() => runUndoable('archive')}
       />
       <IconBtn
         icon={<Trash2 size={15} />}
         title="Löschen"
-        onClick={() => run('delete', { undoMsg: `${count} gelöscht`, undoFolderId: currentFolderId })}
+        onClick={() => runUndoable('delete')}
       />
       <IconBtn
         icon={<FolderInput size={15} />}
@@ -121,7 +122,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       <IconBtn icon={<Mail size={15} />}     title="Als ungelesen markieren" onClick={() => run('unread')} />
       <IconBtn icon={<Flag size={15} />}     title="Kennzeichnen"            onClick={() => run('flag')} />
       <IconBtn icon={<Pin size={15} />}      title="Anheften"                onClick={() => run('pin')} />
-      <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  onClick={() => run('spam')} />
+      <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  onClick={() => runUndoable('spam')} />
 
       {/* invisible anchor for the move menu (positioned directly below the bar) */}
       {moveMenu && (

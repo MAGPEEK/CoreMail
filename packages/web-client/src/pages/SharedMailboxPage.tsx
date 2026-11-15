@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { MessageListSkeleton, EmptyInbox } from '../components/Skeleton.js';
 import { MailBody } from '../components/MailBody.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
@@ -404,11 +405,11 @@ export function SharedMailboxPage() {
         {/* ── Message list ────────────────────────────────────────────────────── */}
         <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto shrink-0">
           {loadingMessages ? (
-            <p className="text-xs text-gray-400 p-3">Lade Nachrichten…</p>
+            <MessageListSkeleton rows={8} />
           ) : !messageList || messageList.messages.length === 0 ? (
-            <p className="text-xs text-gray-400 p-6 text-center">
-              {selectedFolderId ? 'Keine Nachrichten in diesem Ordner.' : 'Bitte einen Ordner wählen.'}
-            </p>
+            selectedFolderId
+              ? <EmptyInbox />
+              : <p className="text-xs text-gray-400 p-6 text-center">Bitte einen Ordner wählen.</p>
           ) : (
             <>
               <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100">

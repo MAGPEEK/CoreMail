@@ -13,7 +13,7 @@ import { BulkToolbar } from '../components/BulkToolbar.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
-import { showUndoToast } from '../components/UndoToast.js';
+import { useMailActions } from '../hooks/useMailActions.js';
 import { EmptyReader } from '../components/Skeleton.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
@@ -123,14 +123,7 @@ export function MailPage() {
     }
   }, [folders, selectedFolderId, setSelectedFolder]);
 
-  const bulkMutation = useMutation({
-    mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
-      api.post('/mail/messages/bulk', body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['messages'] });
-      qc.invalidateQueries({ queryKey: ['folders'] });
-    },
-  });
+  const { runWithUndo, locateIds } = useMailActions();
 
   const reparentFolder = useMutation({
     mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) =>
@@ -194,15 +187,8 @@ export function MailPage() {
     if (activeData.kind === 'message' && activeData.messageId) {
       const draggedId = activeData.messageId;
       const ids = selectedIds.has(draggedId) ? Array.from(selectedIds) : [draggedId];
-      const sourceFolderId = selectedFolderId;
-
-      bulkMutation.mutate({ ids, action: 'move', folderId: overData.folderId });
-      if (sourceFolderId) {
-        showUndoToast({
-          message: ids.length === 1 ? 'Nachricht verschoben' : `${ids.length} Nachrichten verschoben`,
-          onUndo: () => bulkMutation.mutateAsync({ ids, action: 'move', folderId: sourceFolderId }),
-        });
-      }
+      // Undo (8 s, also `z`) moves each mail back to the folder it came from
+      void runWithUndo('move', locateIds(ids, selectedFolderId ?? ''), overData.folderId);
       clearSelection();
     }
   };

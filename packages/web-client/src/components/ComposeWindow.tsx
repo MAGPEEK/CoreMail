@@ -23,8 +23,9 @@ import { escapeHtml, quoteMailHtml, textToQuotedHtml } from '../lib/mailHtml.js'
 import { replyThreading, safeLinkUrl } from '../lib/compose.js';
 import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
 import { toLocalInput } from '../lib/datetime.js';
-import { useUiStore } from '../store/ui.js';
+import { useUiStore, useUiPrefs } from '../store/ui.js';
 import toast from 'react-hot-toast';
+import { queueDelayedSend, isUnloading } from './DelayedSendToast.js';
 
 // ── Color palettes ────────────────────────────────────────────────────────────
 const TEXT_COLORS = [
@@ -422,15 +423,18 @@ export function ComposeWindow() {
       ? composeCtx?.fromAddr ?? ''
       : (composeCtx?.toAddrs ?? []).join(', ');
   const initialCc = composeCtx?.mode === 'replyAll' ? (composeCtx?.ccAddrs ?? []).join(', ') : '';
+  // Undo send / failed send: reopen with exactly what the user had written
+  const restore = composeCtx?.restore;
+  const { sendDelaySec } = useUiPrefs();
 
   const [minimized, setMinimized] = useState(false);
-  const [to, setTo]           = useState(initialTo);
-  const [cc, setCc]           = useState(initialCc);
-  const [bcc, setBcc]         = useState('');
-  const [showCc, setShowCc]   = useState(!!initialCc);
-  const [showBcc, setShowBcc] = useState(false);
-  const [subject, setSubject] = useState(initialSubject);
-  const [attachments, setAttachments] = useState<File[]>([]);
+  const [to, setTo]           = useState(restore ? restore.to : initialTo);
+  const [cc, setCc]           = useState(restore ? restore.cc : initialCc);
+  const [bcc, setBcc]         = useState(restore ? restore.bcc : '');
+  const [showCc, setShowCc]   = useState(restore ? !!restore.cc : !!initialCc);
+  const [showBcc, setShowBcc] = useState(!!restore?.bcc);
+  const [subject, setSubject] = useState(restore ? restore.subject : initialSubject);
+  const [attachments, setAttachments] = useState<File[]>(restore ? restore.attachments : []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signatureInserted = useRef(false);
 
@@ -452,7 +456,8 @@ export function ComposeWindow() {
   const [forwardLoading, setForwardLoading] = useState(false);
   const forwardAttached = useRef(false);
   useEffect(() => {
-    if (!isForwardMode || !original || forwardAttached.current) return;
+    // A restored mail already carries its attachments
+    if (!isForwardMode || !original || forwardAttached.current || restore) return;
     forwardAttached.current = true;
     const list = original.attachments ?? [];
     if (list.length === 0) return;
@@ -515,7 +520,15 @@ export function ComposeWindow() {
   // (for a reply/forward from the list context menu, wait for the original body)
   const waitForOriginal = !!originalId && !composeCtx?.bodyHtml && originalQuery.isLoading;
   useEffect(() => {
-    if (!editor || !sigData || signatureInserted.current || waitForOriginal) return;
+    if (!editor || signatureInserted.current) return;
+    if (restore) {
+      // Restored mail: its body already contains signature + quote
+      signatureInserted.current = true;
+      editor.commands.setContent(restore.bodyHtml);
+      editor.commands.focus('start');
+      return;
+    }
+    if (!sigData || waitForOriginal) return;
     signatureInserted.current = true;
     const isReply   = isReplyMode;
     const isForward = isForwardMode;
@@ -540,7 +553,7 @@ export function ComposeWindow() {
     if (!sig && !quoted) return;
     editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
     editor.commands.focus('start');
-  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode]);
+  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore]);
 
   // Insert / edit link
   const handleLink = useCallback(() => {
@@ -569,8 +582,7 @@ export function ComposeWindow() {
     return toLocalInput(d);
   });
 
-  const sendMutation = useMutation({
-    mutationFn: (scheduledAt?: Date) => {
+  const buildSendForm = (scheduledAt?: Date): FormData => {
       const form = new FormData();
       form.append('to',       to.split(',').map((s) => s.trim()).filter(Boolean).join(','));
       form.append('cc',       cc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
@@ -589,8 +601,12 @@ export function ComposeWindow() {
       }
       if (scheduledAt) form.append('scheduledAt', scheduledAt.toISOString());
       for (const file of attachments) form.append('attachments', file);
-      return api.postForm<{ ok: boolean; scheduled?: boolean; scheduledAt?: string }>('/mail/send', form);
-    },
+      return form;
+  };
+
+  const sendMutation = useMutation({
+    mutationFn: (scheduledAt?: Date) =>
+      api.postForm<{ ok: boolean; scheduled?: boolean; scheduledAt?: string }>('/mail/send', buildSendForm(scheduledAt)),
     onSuccess: (_data, scheduledAt) => {
       if (scheduledAt) {
         toast.success(`Versand geplant für ${scheduledAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`);
@@ -618,6 +634,29 @@ export function ComposeWindow() {
     ];
   })();
 
+  /**
+   * "Send" button / Ctrl+Enter. With a send delay (Settings → View, default
+   * 10 s) the mail is captured now, the window closes and the real request is
+   * made after the delay unless the user clicks Undo (which reopens it).
+   * Scheduled sends ("Send later") are not delayed.
+   */
+  const handleSend = () => {
+    if (sendMutation.isPending || forwardLoading || !to.trim()) return;
+    if (!sendDelaySec) { sendMutation.mutate(undefined); return; }
+    const form = buildSendForm();
+    const reopen = {
+      ...(composeCtx ?? { mode: 'new' as const }),
+      restore: { to, cc, bcc, subject, bodyHtml: editor?.getHTML() ?? '', attachments: [...attachments] },
+    };
+    queueDelayedSend({
+      delaySec: sendDelaySec,
+      send: () => api.postForm<{ ok: boolean }>('/mail/send', form, isUnloading() ? { keepalive: true } : {}),
+      reopen,
+      onSent: () => { void qc.invalidateQueries({ queryKey: ['messages'] }); },
+    });
+    closeCompose();
+  };
+
   const handleSchedule = (date: Date) => {
     setShowScheduleMenu(false);
     setShowCustomSchedule(false);
@@ -628,7 +667,7 @@ export function ComposeWindow() {
   const handleComposeKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      if (!sendMutation.isPending && !forwardLoading && to.trim()) sendMutation.mutate(undefined);
+      handleSend();
     }
   };
 
@@ -660,6 +699,7 @@ export function ComposeWindow() {
       role="dialog"
       aria-label={subject || 'Neue Nachricht'}
       onKeyDown={handleComposeKeyDown}
+      data-shortcut-scope="compose"
       className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col animate-fly-in"
       style={{ maxHeight: '92vh', height: '78vh' }}
     >
@@ -1059,8 +1099,9 @@ export function ComposeWindow() {
         <div className="relative flex">
           <button
             type="button"
-            onClick={() => sendMutation.mutate(undefined)}
+            onClick={handleSend}
             disabled={sendMutation.isPending || forwardLoading || !to.trim()}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
             className="btn-primary text-xs justify-center rounded-r-none px-4"
             title="Senden (⌘+Enter)"
           >

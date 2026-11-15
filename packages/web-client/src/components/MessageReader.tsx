@@ -13,7 +13,8 @@ import { useUiStore } from '../store/ui.js';
 import { toastError } from '../lib/errors.js';
 import { MailBody } from './MailBody.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
-import { showUndoToast } from './UndoToast.js';
+import { useMailActions } from '../hooks/useMailActions.js';
+import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
@@ -66,6 +67,29 @@ export function MessageReader({ messageId }: Props) {
     onSettled: invalidate,
   });
 
+  const ariaKeys = useAriaKeys();
+  const { runWithUndo } = useMailActions();
+
+  /** Reply / reply all / forward with the quoted original (toolbar + shortcuts). */
+  const doReply = (mode: 'reply' | 'replyAll' | 'forward'): boolean => {
+    if (!msg) return false;
+    const quoted = msg.bodyHtml || textToQuotedHtml(msg.bodyText ?? '');
+    if (mode !== 'forward' && !msg.flags.includes('\\Answered')) {
+      // Set \Answered flag when Reply/Reply all is used
+      patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
+    }
+    openCompose({
+      mode, id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quoted,
+      ...(mode === 'replyAll' ? { toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs } : {}),
+    });
+    return true;
+  };
+  useShortcutHandlers({
+    'mail.reply': () => doReply('reply'),
+    'mail.replyAll': () => doReply('replyAll'),
+    'mail.forward': () => doReply('forward'),
+  });
+
   if (isLoading) return <MessageReaderSkeleton />;
   if (!msg) {
     if (!isError) return null;
@@ -90,9 +114,6 @@ export function MessageReader({ messageId }: Props) {
     );
   }
 
-  // Quoted original for reply/forward (plain-text mails are escaped)
-  const quotedBody = msg.bodyHtml || textToQuotedHtml(msg.bodyText ?? '');
-
   const isFlagged = msg.flags.includes('\\Flagged');
   const isPinned = !!msg.pinnedAt;
 
@@ -100,30 +121,14 @@ export function MessageReader({ messageId }: Props) {
   const currentFolder = folders.find((f) => f.id === selectedFolderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
 
-  // Set \Answered flag when Reply/Reply all is clicked
-  const markAnswered = () => {
-    if (!msg.flags.includes('\\Answered')) {
-      patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
-    }
+  // Undo toast (8 s, also `z`) only after the server confirmed the action
+  const loc = { id: msg.id, folderId: msg.folderId ?? selectedFolderId ?? '' };
+  const withUndo = (action: 'delete' | 'archive' | 'spam' | 'move', target?: string) => {
+    void runWithUndo(action, [loc], target).then((done) => { if (done) setSelectedMessage(null); });
   };
 
-  // Undo toast only after the server confirmed the action
-  const withUndo = (action: 'delete' | 'archive', message: string) => {
-    const src = msg.folderId ?? selectedFolderId;
-    bulkMutation.mutate({ ids: [msg.id], action }, {
-      onSuccess: () => {
-        if (!src) return;
-        showUndoToast({
-          message,
-          onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: src }),
-        });
-      },
-    });
-    setSelectedMessage(null);
-  };
-
-  const handleDelete = () => withUndo('delete', 'In den Papierkorb verschoben');
-  const handleArchive = () => withUndo('archive', 'Archiviert');
+  const handleDelete = () => withUndo('delete');
+  const handleArchive = () => withUndo('archive');
 
   const snoozeUntil = (d: Date) => {
     api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
@@ -150,7 +155,7 @@ export function MessageReader({ messageId }: Props) {
       children: folders.filter((f) => f.id !== selectedFolderId).map((f) => ({
         label: f.displayName ?? f.name,
         onClick: () => {
-          bulkMutation.mutate({ ids: [msg.id], action: 'move', folderId: f.id });
+          withUndo('move', f.id);
           setSelectedMessage(null);
         },
       })),
@@ -159,7 +164,7 @@ export function MessageReader({ messageId }: Props) {
       ? { label: 'Kein Junk (False Positive)', icon: <ShieldOff size={14} />,
           onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
       : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
-          onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); } },
+          onClick: () => withUndo('spam') },
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
@@ -184,25 +189,28 @@ export function MessageReader({ messageId }: Props) {
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 dark:border-gray-700 shrink-0">
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quotedBody }); }}
+          onClick={() => doReply('reply')}
+          aria-keyshortcuts={ariaKeys('mail.reply')}
           className="btn-secondary text-xs">
           <Reply size={14} /> Antworten
         </button>
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: quotedBody }); }}
+          onClick={() => doReply('replyAll')}
+          aria-keyshortcuts={ariaKeys('mail.replyAll')}
           className="btn-secondary text-xs">
           <ReplyAll size={14} /> Allen antworten
         </button>
         <button
-          onClick={() => openCompose({ mode: 'forward', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quotedBody })}
+          onClick={() => doReply('forward')}
+          aria-keyshortcuts={ariaKeys('mail.forward')}
           className="btn-secondary text-xs">
           <Forward size={14} /> Weiterleiten
         </button>
         <div className="flex-1" />
-        <button onClick={handleArchive} className="btn-ghost text-xs">
+        <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs">
           <Archive size={14} /> Archivieren
         </button>
-        <button onClick={handleDelete} className="btn-ghost text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
           <Trash2 size={14} /> Löschen
         </button>
         <button
@@ -253,7 +261,7 @@ export function MessageReader({ messageId }: Props) {
               </button>
             ) : (
               <button
-                onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); }}
+                onClick={() => withUndo('spam')}
                 className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                 title="In Junk verschieben (Bayes-Lernen)"
               >

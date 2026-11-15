@@ -21,6 +21,9 @@ import { useMailEvents } from './hooks/useMailEvents.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import { useTaskReminders } from './hooks/useTaskReminders.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
+import { useSendGuard } from './components/DelayedSendToast.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -74,6 +77,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   useInactivityLogout();
   // Task reminders fire on every page, not only while /tasks is open
   useTaskReminders();
+  // Keyboard shortcuts (Settings → View) + undo-send unload guard
+  useGlobalShortcuts();
+  useSendGuard();
 
   const currentApp = APP_MAP[location.pathname] ?? 'mail';
 
@@ -90,6 +96,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
       </main>
       {composeOpen && <ComposeWindow />}
+      <ShortcutHelpDialog />
     </div>
   );
 }
