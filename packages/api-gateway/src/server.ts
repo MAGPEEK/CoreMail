@@ -7,6 +7,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import {
   connectDatabase, prisma, migrateMailboxCounters,
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
+  startDeletedItemsPurger, type PurgeRedis,
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
@@ -27,6 +28,7 @@ import {
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
+import { recoverableRouter } from './routes/recoverable.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -369,6 +371,7 @@ app.get('/api/v1/events', requireSseAuth, sseHandler);
 // ── Feature Routes ────────────────────────────────────────────────────────────
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
+app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted items
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
 app.use('/api/v1/contacts',       contactsRouter);
@@ -559,6 +562,10 @@ async function start() {
   // v6.1: scheduled LDAP directory sync (per-domain syncIntervalMinutes,
   // default daily; Redis-locked so only one instance syncs a domain).
   startLdapSyncScheduler();
+
+  // v8.1: Recover deleted items — hourly purge of expunge tombstones older than
+  // DELETED_ITEM_RETENTION_DAYS (default 14; 0 = never). Redis-locked.
+  startDeletedItemsPurger(getRedisClient() as unknown as PurgeRedis);
 }
 
 async function syncProtocolCertState(): Promise<void> {

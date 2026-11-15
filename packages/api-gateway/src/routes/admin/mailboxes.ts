@@ -1,12 +1,13 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { audit, auditContext } from '../../lib/audit.js';
+import { quotaLevelError } from '../../lib/quota-levels.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -23,8 +24,39 @@ adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
 const PUBLIC_USER_SELECT = {
   id: true, email: true, displayName: true, role: true, active: true,
   quotaBytes: true, usedBytes: true, domainId: true, authSource: true, externalId: true,
+  quotaWarningBytes: true, quotaProhibitSendBytes: true, quotaWarnedAt: true,
   createdAt: true, updatedAt: true,
 } as const;
+
+const QuotaDefaultsSchema = z.object({
+  quotaWarningPercent: z.number().int().min(1).max(100).optional(),
+  quotaProhibitSendPercent: z.number().int().min(1).max(100).optional(),
+}).strict();
+
+// GET /api/v1/admin/mailboxes/quota-defaults — v8.1 server-wide quota levels
+// (percent of a mailbox's quota, used when the mailbox sets no own level)
+adminMailboxesRouter.get('/quota-defaults', async (_req: Request, res: Response) => {
+  const s = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' }, select: { quotaWarningPercent: true, quotaProhibitSendPercent: true },
+  });
+  res.json({ quotaWarningPercent: s?.quotaWarningPercent ?? 83, quotaProhibitSendPercent: s?.quotaProhibitSendPercent ?? 87 });
+});
+
+// PUT /api/v1/admin/mailboxes/quota-defaults
+adminMailboxesRouter.put('/quota-defaults', async (req: Request, res: Response) => {
+  const parsed = QuotaDefaultsSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+  const cur = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' }, select: { quotaWarningPercent: true, quotaProhibitSendPercent: true },
+  });
+  const warning = parsed.data.quotaWarningPercent ?? cur?.quotaWarningPercent ?? 83;
+  const send = parsed.data.quotaProhibitSendPercent ?? cur?.quotaProhibitSendPercent ?? 87;
+  if (warning > send) { res.status(400).json({ error: 'quotaWarningPercent must not exceed quotaProhibitSendPercent' }); return; }
+  const data = { quotaWarningPercent: warning, quotaProhibitSendPercent: send };
+  await prisma.serverSettings.upsert({ where: { id: 'singleton' }, update: data, create: { id: 'singleton', ...data } });
+  resetQuotaCache();
+  res.json(data);
+});
 
 const ROLE_ENUM = z.enum(USER_ROLES);
 
@@ -50,7 +82,10 @@ async function calcUsedBytes(userId: string): Promise<number> {
 // updated in the user record at the same time (lazy sync).
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
+    select: {
+      id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true,
+      quotaWarningBytes: true, quotaProhibitSendBytes: true,
+    },
     orderBy: { email: 'asc' },
   });
 
@@ -89,7 +124,31 @@ adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   // Update DB (fire-and-forget)
   void prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null);
-  res.json({ ...user, usedBytes });
+  // v8.1: effective quota levels (explicit or server default) + current level
+  const quota = await getQuotaStatus({ kind: 'user', id }, { fresh: true }).catch(() => null);
+  res.json({ ...user, usedBytes, ...(quota ? { quotaLimits: quota.limits, quotaLevel: quota.level } : {}) });
+});
+
+// POST /api/v1/admin/mailboxes/:id/recoverable/purge — v8.1: permanently remove
+// the user's recoverable (deleted) items before DELETED_ITEM_RETENTION_DAYS ends.
+// Body { ids?: string[] } — without ids every recoverable item is purged.
+adminMailboxesRouter.post('/:id/recoverable/purge', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const parsed = z.object({ ids: z.array(z.string().min(1).max(64)).min(1).max(10_000).optional() }).strict().safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+  const user = await prisma.user.findUnique({ where: { id }, select: { role: true, mailbox: { select: { id: true } } } });
+  if (!user?.mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+  if (req.apiUser!.userId !== id && !canManageAccount(req.apiUser!.role, user.role)) {
+    forbidden(res, 'Only Organization Management may modify admin accounts'); return;
+  }
+  const purged = await purgeRecoverableItems(user.mailbox.id, parsed.data.ids);
+  audit({
+    actorId: req.apiUser!.userId, actorEmail: req.apiUser!.email,
+    action: 'mailbox.recoverable.purge', targetType: 'mailbox', targetId: id,
+    changes: { purged, ...(parsed.data.ids ? { ids: parsed.data.ids.length } : { all: true }) },
+    ...auditContext(req),
+  });
+  res.json({ ok: true, purged });
 });
 
 // POST /api/v1/admin/mailboxes/:id/recalculate-quota
@@ -125,6 +184,8 @@ const CreateMailboxSchema = z.object({
   domainId: z.string(),
   role: ROLE_ENUM.default('USER'),
   quotaBytes: z.number().int().default(5368709120),
+  quotaWarningBytes: z.number().int().min(0).nullable().optional(),
+  quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
 });
 
 // POST /api/v1/admin/mailboxes
@@ -132,7 +193,9 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   const parsed = CreateMailboxSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const { email, displayName, password, domainId, role, quotaBytes } = parsed.data;
+  const { email, displayName, password, domainId, role, quotaBytes, quotaWarningBytes, quotaProhibitSendBytes } = parsed.data;
+  const levelError = quotaLevelError(quotaWarningBytes, quotaProhibitSendBytes, quotaBytes);
+  if (levelError) { res.status(400).json({ error: levelError }); return; }
   // v6 escalation guard: only ORGANIZATION_MANAGEMENT may create admin accounts
   if (!canAssignRole(req.apiUser?.role, role)) {
     forbidden(res, 'Only Organization Management may assign admin roles'); return;
@@ -153,6 +216,8 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase(), displayName, passwordHash, role, quotaBytes: BigInt(quotaBytes), domainId,
+        ...(typeof quotaWarningBytes === 'number' ? { quotaWarningBytes: BigInt(quotaWarningBytes) } : {}),
+        ...(typeof quotaProhibitSendBytes === 'number' ? { quotaProhibitSendBytes: BigInt(quotaProhibitSendBytes) } : {}),
         mailbox: {
           create: {
             folders: {
@@ -182,6 +247,10 @@ const UpdateMailboxSchema = z.object({
   role: ROLE_ENUM.optional(), // v6: was z.string() → invalid enum value crashed Prisma
   active: z.boolean().optional(),
   quotaBytes: z.number().int().min(0).optional(),
+  // v8.1: Exchange quota levels (IssueWarningQuota / ProhibitSendQuota);
+  // null = server default (percent of quotaBytes = ProhibitSendReceiveQuota).
+  quotaWarningBytes: z.number().int().min(0).nullable().optional(),
+  quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
   password: z.string().min(1).max(128).optional(), // length policy: checkPasswordPolicy()
   // 8.0.0: with `password` — also delete all app passwords of the user (and end
   // the mail connections using them), e.g. when the account was compromised.
@@ -214,10 +283,12 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     forbidden(res, 'Only Organization Management may modify admin accounts'); return;
   }
 
-  const { displayName, role, active, quotaBytes, password, revokeAppPasswords } = parsed.data;
+  const { displayName, role, active, quotaBytes, quotaWarningBytes, quotaProhibitSendBytes, password, revokeAppPasswords } = parsed.data;
   if (revokeAppPasswords && !password) {
     res.status(400).json({ error: 'revokeAppPasswords is only valid together with password' }); return;
   }
+  const levelError = quotaLevelError(quotaWarningBytes, quotaProhibitSendBytes, quotaBytes);
+  if (levelError) { res.status(400).json({ error: levelError }); return; }
   if (password) {
     // v7.0.0: minimum length from ServerSettings.minPasswordLength
     const policyError = await checkPasswordPolicy(password);
@@ -230,11 +301,12 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
       ...(role ? { role } : {}),
       ...(active !== undefined ? { active } : {}),
       ...(quotaBytes !== undefined ? { quotaBytes: BigInt(quotaBytes) } : {}),
+      ...(quotaWarningBytes !== undefined ? { quotaWarningBytes: quotaWarningBytes === null ? null : BigInt(quotaWarningBytes) } : {}),
+      ...(quotaProhibitSendBytes !== undefined ? { quotaProhibitSendBytes: quotaProhibitSendBytes === null ? null : BigInt(quotaProhibitSendBytes) } : {}),
       ...(password ? { passwordHash: await hashPassword(password) } : {}),
     },
     select: { id: true, email: true, displayName: true, role: true, active: true },
-  });
-  // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
+  });  // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept unless revokeAppPasswords is set; inactive users
   // cannot use them anyway).
   const roleChanged = !!role && role !== user.role;
