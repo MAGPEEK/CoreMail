@@ -37,7 +37,11 @@ installFakePrisma({
     create: (a) => { const d = (a as { data: Row }).data; transportWrites.push(d); return { id: 't1', ...d }; },
   },
   systemLog: { findMany: () => traceRows, count: () => traceRows.length },
-  sharedMailboxPerm: { findFirst: () => ({ sharedMailbox: { id: 'sm1', active: true } }) },
+  sharedMailboxPerm: {
+    findFirst: () => ({ sharedMailbox: { id: 'sm1', active: true } }),
+    findMany: () => [{ permission: 'FULL_ACCESS', sharedMailbox: { id: 'sm1', email: 'team@ex.com', displayName: 'Team', active: true, mailbox: { id: 'mb-shared' } } }],
+  },
+  mailboxDelegate: { findMany: () => [] },
   mailbox: { findFirst: () => ({ id: 'mb-shared' }) },
   message: {
     findFirst: (a) => {

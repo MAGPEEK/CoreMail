@@ -17,6 +17,7 @@ import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { quotaLevelPatchError } from '../../lib/quota-levels.js';
+import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permission-events.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -140,6 +141,8 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
       },
       select: SELECT,
     });
+    // 9.1: (de)activation changes the access of every grantee.
+    if (p.data.active !== undefined) await publishPermissionChange(await sharedMailboxGrantees(id));
     res.json(item);
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
@@ -148,8 +151,10 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 adminSharedMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   try {
+    const grantees = await sharedMailboxGrantees(id);
     await prisma.sharedMailbox.delete({ where: { id } });
     log.info({ id }, 'Shared mailbox deleted');
+    await publishPermissionChange(grantees);
     res.status(204).end();
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
@@ -194,6 +199,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
       where: { sharedMailboxId, userId: p.data.userId },
       include: { user: { select: { email: true, displayName: true } } },
     });
+    await publishPermissionChange([p.data.userId]);
     res.status(201).json(updated);
   } catch (err) {
     log.error({ err }, 'Failed to set permissions');
@@ -208,6 +214,7 @@ adminSharedMailboxesRouter.delete('/:id/permissions/:userId', async (req: Reques
   try {
     const result = await prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId, userId } });
     if (result.count === 0) { res.status(404).json({ error: 'Not found' }); return; }
+    await publishPermissionChange([userId]);
     res.status(204).end();
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
@@ -230,6 +237,7 @@ adminSharedMailboxesRouter.delete('/:id/permissions/:userId/:permission', async 
         },
       },
     });
+    await publishPermissionChange([userId]);
     res.status(204).end();
   } catch { res.status(404).json({ error: 'Not found' }); }
 });

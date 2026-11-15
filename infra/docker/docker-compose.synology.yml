@@ -118,6 +118,7 @@ services:
       SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
       POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
       REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
+      REFERENCES_LAZY_BUDGET_MS:    ${REFERENCES_LAZY_BUDGET_MS:-}
 
       # Internal service URLs
       AUTH_SERVICE_URL: http://localhost:3003

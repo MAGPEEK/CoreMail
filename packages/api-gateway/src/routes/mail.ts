@@ -9,7 +9,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
-  checkSendQuota,
+  checkSendQuota, reservedFolderPrefix, reservedFolderNameError,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -157,7 +157,21 @@ const CreateFolderSchema = z.object({
   parentId: z.string().nullable().optional(),
   color: z.string().optional(),
 });
+/**
+ * 9.1: a new folder name must not start with an IMAP namespace prefix
+ * ("Shared/", "Other Users/", any case) — such a personal folder could never be
+ * selected over IMAP. Renaming an existing one AWAY from the prefix stays possible.
+ */
+function rejectReservedFolderName(name: unknown, res: Response): boolean {
+  if (typeof name !== 'string') return false;
+  const prefix = reservedFolderPrefix(name);
+  if (!prefix) return false;
+  res.status(400).json({ error: reservedFolderNameError(prefix), code: 'RESERVED_FOLDER_NAME' });
+  return true;
+}
+
 mailRouter.post('/folders', async (req: Request, res: Response) => {
+  if (rejectReservedFolderName((req.body as { name?: unknown } | undefined)?.name, res)) return;
   const parsed = CreateFolderSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
@@ -202,6 +216,7 @@ const PatchFolderSchema = z.object({
 });
 mailRouter.patch('/folders/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
+  if (rejectReservedFolderName((req.body as { name?: unknown } | undefined)?.name, res)) return;
   const parsed = PatchFolderSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 

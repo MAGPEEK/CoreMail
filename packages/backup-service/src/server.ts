@@ -19,6 +19,10 @@ const log = createLogger('backup-service');
 installProcessGuards(log);
 installAsyncErrorHandling(express);
 const app = express();
+// 9.1: routes match case-sensitively, like the RBAC path checks in http-utils.ts
+// (Express matches case-insensitively by default: /backup/admin/DOWNLOAD/x would
+// otherwise reach the download handler). Must be set before the first route.
+app.set('case sensitive routing', true);
 const PORT = parseInt(process.env['BACKUP_PORT'] ?? '3004', 10);
 
 // v3.18.30 CRITICAL FIX: BigInt fields (BackupJob.sizeBytes) crash

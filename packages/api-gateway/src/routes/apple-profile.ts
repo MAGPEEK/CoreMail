@@ -17,7 +17,7 @@
  * account. The profile is unsigned; signing it with the server certificate (CMS / PKCS#7)
  * is possible later and would only change how iOS labels it ("Verified").
  */
-import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { createHash } from 'node:crypto';
 import { prisma, hasMfa } from '@coremail/storage';
 import { requireAuth, requireTicketAuth } from '../middleware/auth.js';
@@ -217,14 +217,19 @@ appleProfileRouter.post('/ticket', requireAuth, async (req: Request, res: Respon
   }
 });
 
-appleProfileRouter.get('/', requireTicketAuth('apple-profile'), async (req: Request, res: Response) => {
+/** `?type=` is imap (default) or eas. */
+function validProfileType(raw: unknown): boolean {
+  return raw === undefined || raw === 'eas' || raw === 'imap';
+}
+
+// 9.1: `type` is validated BEFORE the single-use ticket is redeemed — a bad link
+// must not burn the ticket.
+appleProfileRouter.get('/', (req: Request, res: Response, next: NextFunction) => {
+  if (!validProfileType(req.query['type'])) { res.status(400).json({ error: 'type must be imap or eas' }); return; }
+  next();
+}, requireTicketAuth('apple-profile'), async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
-  const typeParam = req.query['type'];
-  if (typeParam !== undefined && typeParam !== 'eas' && typeParam !== 'imap') {
-    res.status(400).json({ error: 'type must be imap or eas' });
-    return;
-  }
-  const type: AppleProfileType = typeParam === 'eas' ? 'eas' : 'imap';
+  const type: AppleProfileType = req.query['type'] === 'eas' ? 'eas' : 'imap';
 
   const [settings, user, mfa] = await Promise.all([
     prisma.serverSettings.findUnique({

@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLimit, isBackupAdmin } from './http-utils.js';
+import { parseLimit, isBackupAdmin, isMailboxDataRoute } from './http-utils.js';
 import { requireInternal } from '@coremail/core/http';
 
 test('parseLimit', () => {
@@ -65,4 +65,19 @@ test('isBackupAdmin with path: mailbox content only for ORG + COMPLIANCE (9.1)',
   assert.equal(isBackupAdmin('SERVER_MANAGEMENT', 'POST', '/backup/admin/full'), true);
   assert.equal(isBackupAdmin('SERVER_MANAGEMENT', 'DELETE', '/backup/admin/archive'), true);
   assert.equal(isBackupAdmin('VIEW_ONLY_ORG', 'DELETE', '/backup/admin/archive'), false);
+});
+
+test('mailbox-data classification is case-insensitive; the app routes case-sensitively (9.1)', async () => {
+  for (const p of ['/backup/admin/DOWNLOAD/job1', '/Backup/Admin/Mailbox/u1', '/backup/admin/ARCHIVE/download', '/BACKUP/ADMIN/IMPORT/u1']) {
+    assert.equal(isMailboxDataRoute(p), true, p);
+    assert.equal(isBackupAdmin('SERVER_MANAGEMENT', 'GET', p), false, p);
+    assert.equal(isBackupAdmin('VIEW_ONLY_ORG', 'GET', p), false, p);
+  }
+  // listings stay case-sensitive for COMPLIANCE_MANAGEMENT (stricter, never wider)
+  assert.equal(isBackupAdmin('COMPLIANCE_MANAGEMENT', 'GET', '/backup/admin/JOBS'), false);
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('./server.ts', import.meta.url), 'utf8');
+  const setAt = src.indexOf("app.set('case sensitive routing', true)");
+  assert.ok(setAt > 0, 'server.ts enables case-sensitive routing');
+  assert.ok(setAt < src.indexOf('app.use('), 'before the first middleware/route creates the router');
 });

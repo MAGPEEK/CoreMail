@@ -206,7 +206,8 @@ describe('backfill', () => {
     db.messages.push({ id: 'done', folderId: 'inbox', uid: 99, modSeq: 5n, flags: [], deletedAt: null, createdAt: new Date(), storagePath: 'raw/1', references: '<kept@x>' });
 
     const r = await bf.backfillReferences({}, { limit: 100, deps });
-    assert.deepEqual(r, { scanned: 5, filled: 4, failed: 1 });
+    assert.deepEqual({ scanned: r.scanned, filled: r.filled, failed: r.failed, skipped: r.skipped, deferred: r.deferred, exhausted: r.exhausted },
+      { scanned: 5, filled: 4, failed: 1, skipped: 0, deferred: 0, exhausted: true });
     const col = (id: string) => db.messages.find((m) => m['id'] === id)!['references'];
     assert.equal(col('m1'), '<a@x> <b@x>');
     assert.equal(col('m2'), '');
@@ -287,6 +288,150 @@ describe('backfill', () => {
     const h = bf.startReferencesBackfill({ set: async () => { called = true; return 'OK' as const; } }, { env: { REFERENCES_BACKFILL: 'off' }, initialDelayMs: 0 });
     h.stop();
     assert.equal(called, false);
+  });
+
+  // ── 9.1 review fixes: starvation, lazy budget, id chunks, lock refresh ──────
+
+  /** Fake Redis with SET NX PX, EVAL (the two lock scripts), INCR/PEXPIRE/MGET. */
+  function fakeRedis() {
+    const kv = new Map<string, string>();
+    const calls: string[] = [];
+    return {
+      kv, calls,
+      set: async (key: string, value: string, _px: 'PX', _ttl: number, _nx: 'NX'): Promise<'OK' | null> => {
+        if (kv.has(key)) return null;
+        kv.set(key, value);
+        return 'OK';
+      },
+      eval: async (script: string, _n: number, key: string, token: string | number): Promise<number> => {
+        const mine = kv.get(key) === String(token);
+        if (script.includes("'pexpire'")) { calls.push('refresh'); return mine ? 1 : 0; }
+        calls.push('release');
+        if (mine) { kv.delete(key); return 1; }
+        return 0;
+      },
+      incr: async (key: string): Promise<number> => { const n = Number(kv.get(key) ?? 0) + 1; kv.set(key, String(n)); return n; },
+      pexpire: async (): Promise<number> => 1,
+      mget: async (...keys: string[]): Promise<Array<string | null>> => keys.map((k) => kv.get(k) ?? null),
+    };
+  }
+
+  test('background: rows that keep failing do not starve older rows; failures are capped per id', async () => {
+    // 4 newest rows unreadable, 6 older rows fine.
+    for (let i = 0; i < 4; i++) legacy(`bad${i}`, 'inbox', 'raw/broken', new Date(Date.UTC(2026, 5, 10 + i)));
+    objects.set('raw/ok', raw(['References: <o@x>']));
+    for (let i = 0; i < 6; i++) legacy(`ok${i}`, 'inbox', 'raw/ok', new Date(Date.UTC(2026, 0, 1 + i)));
+    const redis = fakeRedis();
+    let cursor: { createdAt: Date; id: string } | null = null;
+    // Run until the pass is complete: the cursor moves past the failing rows.
+    for (let run = 0; run < 10; run++) {
+      const r = await bf.runLockedReferencesBackfill(redis, { batchSize: 2, pauseMs: 0, deps, cursor });
+      assert.ok(r);
+      cursor = r.cursor;
+      if (!r.more) break;
+    }
+    for (let i = 0; i < 6; i++) assert.equal(db.messages.find((m) => m['id'] === `ok${i}`)!['references'], '<o@x>', `ok${i}`);
+    assert.equal(cursor, null, 'pass complete');
+    assert.equal(redis.kv.get(bf.REFERENCES_BACKFILL_LOCK_KEY), undefined, 'lock released at the end');
+    // Further passes re-read each failing object at most MAX_ATTEMPTS times in total.
+    for (let pass = 0; pass < 5; pass++) await bf.runLockedReferencesBackfill(redis, { batchSize: 100, pauseMs: 0, deps });
+    assert.equal(Number(redis.kv.get(`${bf.REFERENCES_BACKFILL_FAILURE_KEY_PREFIX}bad0`)), bf.REFERENCES_BACKFILL_MAX_ATTEMPTS);
+    const before = reads;
+    const r = await bf.runLockedReferencesBackfill(redis, { batchSize: 100, pauseMs: 0, deps });
+    assert.equal(reads, before, 'no object is read again while its counter lives');
+    assert.equal(r!.skipped, 4);
+    // The rows themselves stay null (never written as '' — a later pass may still succeed).
+    assert.equal(db.messages.find((m) => m['id'] === 'bad0')!['references'], undefined);
+  });
+
+  test('background: the lock is refreshed between batches; a lost lock stops the run and is not deleted', async () => {
+    for (let i = 0; i < 6; i++) legacy(`l${i}`, 'inbox', null, new Date(Date.UTC(2026, 0, 1 + i)));
+    const redis = fakeRedis();
+    const r = await bf.runLockedReferencesBackfill(redis, { batchSize: 2, pauseMs: 0, deps });
+    assert.equal(r!.filled, 6);
+    assert.deepEqual(redis.calls, ['refresh', 'refresh', 'refresh', 'release']);
+    assert.equal(redis.kv.has(bf.REFERENCES_BACKFILL_LOCK_KEY), false);
+
+    // Another holder takes over between batches (our TTL ran out): stop, keep its lock.
+    for (let i = 0; i < 4; i++) legacy(`t${i}`, 'inbox', null, new Date(Date.UTC(2025, 0, 1 + i)));
+    const r2 = fakeRedis();
+    const realEval = r2.eval;
+    let first = true;
+    r2.eval = async (script, n, key, token) => {
+      if (first) { first = false; r2.kv.set(key, 'someone-else'); }
+      return realEval(script, n, key, token);
+    };
+    const out = await bf.runLockedReferencesBackfill(r2, { batchSize: 2, pauseMs: 0, deps });
+    assert.equal(out!.batches, 1);
+    assert.equal(out!.stoppedForLock, true);
+    assert.equal(r2.kv.get(bf.REFERENCES_BACKFILL_LOCK_KEY), 'someone-else');
+  });
+
+  test('background without EVAL stops before the lock TTL runs out', async () => {
+    for (let i = 0; i < 6; i++) legacy(`e${i}`, 'inbox', null, new Date(Date.UTC(2026, 0, 1 + i)));
+    const redis = { set: async (): Promise<'OK'> => 'OK' as const };
+    const r = await bf.runLockedReferencesBackfill(redis, { batchSize: 2, pauseMs: 0, lockTtlMs: 2000, deps });
+    assert.equal(r!.batches, 1);
+    assert.equal(r!.stoppedForLock, true);
+    assert.equal(r!.more, true);
+    assert.ok(r!.cursor, 'continues after the cursor next time');
+    const r2 = await bf.runLockedReferencesBackfill(redis, { batchSize: 2, pauseMs: 0, lockTtlMs: 2000, deps, cursor: r!.cursor });
+    assert.equal(r2!.filled, 2);
+    assert.equal(db.messages.filter((m) => m['references'] === '').length, 4);
+  });
+
+  test('lazy THREAD backfill: time budget and row cap; the command never waits for a hanging read', async () => {
+    for (let i = 0; i < 250; i++) legacy(`c${i}`, 'inbox', null, new Date(Date.UTC(2026, 0, 1, 0, 0, i)));
+    await bf.loadThreadReferences('inbox', ['c0'], { deps, tracker: bf.createMemoryFailureTracker() });
+    assert.equal(db.messages.filter((m) => m['references'] === '').length, bf.REFERENCES_BACKFILL_COMMAND_LIMIT, 'row cap 200');
+
+    seed();
+    legacy('h1', 'inbox', 'raw/hang');
+    legacy('h2', 'inbox', 'raw/hang');
+    const hanging = { db: fake as never, readHeader: (): Promise<Buffer> => new Promise<Buffer>(() => undefined) };
+    const t0 = Date.now();
+    const map = await bf.loadThreadReferences('inbox', ['h1', 'h2'], { deps: hanging, budgetMs: 50, tracker: bf.createMemoryFailureTracker() });
+    assert.ok(Date.now() - t0 < 1000, `returned after ${Date.now() - t0} ms`);
+    assert.equal(map.size, 0);
+    assert.equal(bf.referencesLazyBudgetMs({}), 1500);
+    assert.equal(bf.referencesLazyBudgetMs({ REFERENCES_LAZY_BUDGET_MS: '0' }), 0);
+    assert.equal(bf.referencesLazyBudgetMs({ REFERENCES_LAZY_BUDGET_MS: 'x' }), 1500);
+    // budget 0 = no lazy step at all
+    legacy('z1', 'inbox', null);
+    await bf.loadThreadReferences('inbox', ['z1'], { deps, env: { REFERENCES_LAZY_BUDGET_MS: '0' } });
+    assert.equal(db.messages.find((m) => m['id'] === 'z1')!['references'], undefined);
+  });
+
+  test('lazy THREAD backfill skips ids that failed recently; older rows are still reached', async () => {
+    legacy('old', 'inbox', 'raw/old', new Date('2025-01-01T00:00:00Z'));
+    objects.set('raw/old', raw(['References: <q@x>']));
+    legacy('bad', 'inbox', 'raw/broken', new Date('2026-06-01T00:00:00Z'));
+    const tracker = bf.createMemoryFailureTracker();
+    await bf.loadThreadReferences('inbox', ['bad', 'old'], { deps, tracker, limit: 1 });
+    assert.equal(reads, 1, 'the newest (broken) row was tried');
+    const map = await bf.loadThreadReferences('inbox', ['bad', 'old'], { deps, tracker, limit: 1 });
+    assert.equal(reads, 2, 'the broken row is excluded, the older one is read');
+    assert.deepEqual(map.get('old'), ['<q@x>']);
+    assert.equal(map.has('bad'), false);
+  });
+
+  test('loadThreadReferences loads only the requested ids, in chunks of 1000', async () => {
+    db.messages.push({ id: 'other', folderId: 'inbox', uid: 1, modSeq: 5n, flags: [], deletedAt: null, createdAt: new Date(), storagePath: null, references: '<x@x>' });
+    const queries: unknown[] = [];
+    const spyDb = {
+      message: {
+        findMany: async (a: unknown) => { queries.push(a); return (fake as unknown as { message: { findMany(a: unknown): Promise<unknown[]> } }).message.findMany(a); },
+        updateMany: (a: unknown) => (fake as unknown as { message: { updateMany(a: unknown): Promise<{ count: number }> } }).message.updateMany(a),
+      },
+    };
+    const ids = Array.from({ length: 2500 }, (_, i) => `q${i}`);
+    const map = await bf.loadThreadReferences('inbox', ids, { deps: { db: spyDb, readHeader: deps.readHeader }, budgetMs: 0 });
+    assert.equal(map.size, 0, '"other" is not part of the result');
+    assert.equal(queries.length, 3);
+    for (const q of queries) {
+      const inIds = (q as { where: { id: { in: string[] } } }).where.id.in;
+      assert.ok(inIds.length <= 1000);
+    }
   });
 
   test('readHeaderSection stops at the blank line (also across chunks) and at the limit', async () => {

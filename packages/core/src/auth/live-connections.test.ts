@@ -33,6 +33,13 @@ test('password change/reset ends password connections, keeps app-password ones u
   }
 });
 
+test('permission-change (9.1) never ends a live connection of any credential type', () => {
+  for (const c of ['password', 'app_password', 'external', 'unknown'] as const) {
+    assert.equal(connectionAffected(ev('permission-change'), conn(c, { appPasswordId: 'a1' })), false, c);
+  }
+  assert.equal(connectionAffected(ev('permission-change'), conn('token', { sessionId: 's1', issuedAt: 1000 })), false);
+});
+
 test('MFA change ends password connections only', () => {
   assert.equal(connectionAffected(ev('mfa-change'), conn('password')), true);
   assert.equal(connectionAffected(ev('mfa-change'), conn('unknown')), true);

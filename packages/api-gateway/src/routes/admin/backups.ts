@@ -29,9 +29,12 @@ const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
  * job list, deleting jobs/archives). Paths are relative to /api/v1/admin/backups.
  */
 export function isMailboxDataRoute(req: Pick<Request, 'method' | 'path'>): boolean {
-  if (req.method === 'POST') return /^\/(mailbox|import)\/[^/]+\/?$/.test(req.path);
+  // 9.1: the router below matches case-sensitively; the lower-cased path is a
+  // second guard so no casing variant is ever classified as "not mailbox data".
+  const paths = [req.path, req.path.toLowerCase()];
+  if (req.method === 'POST') return paths.some((p) => /^\/(mailbox|import)\/[^/]+\/?$/.test(p));
   if (req.method === 'GET' || req.method === 'HEAD') {
-    return /^\/download\/[^/]+\/?$/.test(req.path) || /^\/archive\/download\/?$/.test(req.path);
+    return paths.some((p) => /^\/download\/[^/]+\/?$/.test(p) || /^\/archive\/download\/?$/.test(p));
   }
   return false;
 }
@@ -44,7 +47,10 @@ const complianceBackupAccess = (role: string, req: Request): boolean =>
 
 const mailboxDataGuard = requireAction('backupMailboxData'); // ORGANIZATION_MANAGEMENT + COMPLIANCE_MANAGEMENT (lib/rbac.ts)
 
-export const adminBackupsRouter: RouterType = Router();
+// 9.1: case-sensitive — Express matches routes case-insensitively by default, so
+// GET /DOWNLOAD/:jobId would reach the download handler while the (case-sensitive)
+// RBAC regexes above treated it as an ordinary route.
+export const adminBackupsRouter: RouterType = Router({ caseSensitive: true });
 adminBackupsRouter.use(requireArea('servers', complianceBackupAccess));
 adminBackupsRouter.use((req: Request, res: Response, next: NextFunction) => {
   if (isMailboxDataRoute(req)) mailboxDataGuard(req, res, next);

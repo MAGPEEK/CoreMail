@@ -46,7 +46,8 @@ const PASSWORD_REASONS = new Set([
 ]);
 
 /** Reasons that do not invalidate any existing credential. */
-const NEUTRAL_REASONS = new Set(['app-password-created', 'reactivated']);
+// 9.1: 'permission-change' (shared mailbox / delegation grants) only refreshes access caches.
+const NEUTRAL_REASONS = new Set(['app-password-created', 'reactivated', 'permission-change']);
 
 /** The account itself is gone or disabled — every connection ends. */
 const ACCOUNT_REASONS = new Set(['deactivated', 'deleted']);

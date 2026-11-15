@@ -4,6 +4,7 @@ import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
   prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
+  reservedFolderPrefix, reservedFolderNameError,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
@@ -757,6 +758,9 @@ userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Respo
   if (!displayName || displayName.trim().length === 0) {
     res.status(400).json({ error: 'displayName erforderlich' }); return;
   }
+  // 9.1: no names under an IMAP namespace prefix ("Shared/", "Other Users/").
+  const reserved = reservedFolderPrefix(displayName);
+  if (reserved) { res.status(400).json({ error: reservedFolderNameError(reserved), code: 'RESERVED_FOLDER_NAME' }); return; }
   // `name` is the internal IMAP name — we use the displayName and replace problematic characters
   const safeName = displayName.trim().replace(/[/\\\0]/g, '_').slice(0, 100);
 
@@ -808,6 +812,12 @@ userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request,
     displayName?: string; parentId?: string | null; color?: string | null;
     isFavorite?: boolean; sortOrder?: number;
   };
+
+  // 9.1: a new name must not start with an IMAP namespace prefix (renaming away is fine).
+  if (typeof displayName === 'string') {
+    const reserved = reservedFolderPrefix(displayName);
+    if (reserved) { res.status(400).json({ error: reservedFolderNameError(reserved), code: 'RESERVED_FOLDER_NAME' }); return; }
+  }
 
   // System folders must not be renamed or reparented
   if (PROTECTED_FOLDER_NAMES.has(folder.name)) {

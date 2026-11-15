@@ -14,7 +14,7 @@ import { installFakePrisma, setTestEnv } from '../../test-support/fake-prisma.js
 setTestEnv();
 process.env['BACKUP_IMPORT_MAX_BYTES'] = '4096';
 installFakePrisma({
-  user: { findUnique: () => ({ role: 'ORGANIZATION_MANAGEMENT', active: true }) },
+  user: { findUnique: (a) => ({ role: (a as { where: { id: string } }).where.id === 'srv' ? 'SERVER_MANAGEMENT' : 'ORGANIZATION_MANAGEMENT', active: true }) },
   folder: {
     findMany: (a) => {
       const userId = (a as { where: { mailbox: { userId: string } } }).where.mailbox.userId;
@@ -98,4 +98,22 @@ test('import: folderId required + validated; size cap → 413', async () => {
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
   assert.equal(r.status, 413);
+});
+
+test('9.1: casing variants of mailbox-data routes never reach a handler for SERVER_MANAGEMENT', async () => {
+  const srv = core.signAccessToken({ sub: 'srv', email: 'srv@ex.com', role: 'SERVER_MANAGEMENT', domainId: 'd1', sessionId: 's-srv', mfaVerified: true });
+  const start = seen.length;
+  for (const [method, path] of [
+    ['GET', '/DOWNLOAD/j1'], ['GET', '/Download/j1'], ['GET', '/ARCHIVE/download?key=x'], ['GET', '/archive/DOWNLOAD?key=x'],
+    ['POST', '/MAILBOX/u1'], ['POST', '/Import/u1?folderId=f-inbox'],
+  ] as const) {
+    const r = await fetch(`${base}/api/v1/admin/backups${path}`, { method, headers: { Authorization: `Bearer ${srv}` } });
+    assert.ok(r.status === 403 || r.status === 404, `${method} ${path} → ${r.status}`);
+  }
+  assert.equal(seen.length, start, 'nothing was forwarded to the backup-service');
+  // the canonical spelling is still refused for SERVER_MANAGEMENT, and an upper-case
+  // path is not routed even for ORGANIZATION_MANAGEMENT (case-sensitive router)
+  assert.equal((await fetch(`${base}/api/v1/admin/backups/download/j1`, { headers: { Authorization: `Bearer ${srv}` } })).status, 403);
+  assert.equal((await fetch(`${base}/api/v1/admin/backups/JOBS`, { headers: { Authorization: `Bearer ${token}` } })).status, 404);
+  assert.equal(seen.length, start);
 });

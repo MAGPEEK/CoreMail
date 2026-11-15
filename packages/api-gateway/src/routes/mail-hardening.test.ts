@@ -21,6 +21,7 @@ type Row = Record<string, unknown>;
 const folders: Record<string, { id: string; name: string; parentId: string | null; mailboxId: string; owner: string }> = {
   inbox: { id: 'inbox', name: 'INBOX', parentId: null, mailboxId: 'mb1', owner: 'u1' },
   a: { id: 'a', name: 'A', parentId: null, mailboxId: 'mb1', owner: 'u1' },
+  legacy: { id: 'legacy', name: 'Shared/old', parentId: null, mailboxId: 'mb1', owner: 'u1' },
   b: { id: 'b', name: 'B', parentId: 'a', mailboxId: 'mb1', owner: 'u1' },
   other: { id: 'other', name: 'X', parentId: null, mailboxId: 'mb2', owner: 'u2' },
 };
@@ -126,6 +127,25 @@ test('PATCH /mail/folders/:id: parent must be in the own mailbox, no cycles, sys
   assert.equal((await call('PATCH', '/api/v1/mail/folders/b', { token: t, body: { parentId: null } })).status, 200);
   assert.equal((await call('PATCH', '/api/v1/mail/folders/b', { token: t, body: { parentId: 'a' } })).status, 200);
   assert.deepEqual(folderUpdates, [{ parentId: null }, { parentId: 'a' }]);
+});
+
+test('9.1: folder names under "Shared/" / "Other Users/" are reserved; renaming away stays possible', async () => {
+  const t = tok('u1');
+  for (const name of ['Shared/x', 'shared/x', 'Other Users/bob@ex.com', 'OTHER USERS/y']) {
+    const c = await call('POST', '/api/v1/mail/folders', { token: t, body: { name } });
+    assert.equal(c.status, 400, name);
+    assert.equal(c.json['code'], 'RESERVED_FOLDER_NAME', name);
+    assert.match(String(c.json['error']), /reserved for shared and delegated mailboxes/);
+  }
+  folderUpdates.length = 0;
+  const r = await call('PATCH', '/api/v1/mail/folders/a', { token: t, body: { name: 'Shared/A' } });
+  assert.equal(r.status, 400);
+  assert.equal(r.json['code'], 'RESERVED_FOLDER_NAME');
+  assert.deepEqual(folderUpdates, []);
+  // A legacy folder named "Shared/old" can be renamed away from the prefix.
+  const away = await call('PATCH', '/api/v1/mail/folders/legacy', { token: t, body: { name: 'Old shared stuff' } });
+  assert.equal(away.status, 200, JSON.stringify(away.json));
+  assert.deepEqual(folderUpdates, [{ name: 'Old shared stuff', displayName: 'Old shared stuff' }]);
 });
 
 test('POST /mail/send: recipient limits + per-user rate limit', async () => {

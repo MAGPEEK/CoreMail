@@ -162,6 +162,7 @@ services:
       SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
       POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
       REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
+      REFERENCES_LAZY_BUDGET_MS:    ${REFERENCES_LAZY_BUDGET_MS:-}
 
     ports:
       - "25:25"       # SMTP inbound (server → server)

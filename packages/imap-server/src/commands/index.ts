@@ -33,7 +33,7 @@ import {
 } from './sort-thread.js';
 import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
 import {
-  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, resolveMailbox, revalidateSelected, selectedWritable,
+  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, reservedNamePerm, resolveMailbox, revalidateSelected, selectedWritable,
 } from './namespaces.js';
 import { runStatus } from './list.js';
 import {
@@ -157,7 +157,8 @@ export async function handleCreate(
   // v9.1: names in the Shared / Other Users namespaces create folders in that
   // mailbox (FULL_ACCESS only); an inaccessible or read-only one is NOPERM alike.
   const resolved = await resolveMailbox(session, rawName, true);
-  if (!resolved.ok || !resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!resolved.ok) { sendNo(session, tag, reservedNamePerm(session, rawName)); return; }
+  if (!resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
   const { target } = resolved;
   const name = target.folderName;
   if (name === 'INBOX') {
@@ -225,7 +226,8 @@ export async function handleRename(
   const to = await resolveMailbox(session, args[1]);
   if (!from.ok) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   if (!from.target.writable) { sendNo(session, tag, NOPERM); return; }
-  if (!to.ok || !to.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!to.ok) { sendNo(session, tag, reservedNamePerm(session, args[1])); return; }
+  if (!to.target.writable) { sendNo(session, tag, NOPERM); return; }
   if (to.target.mailboxId !== from.target.mailboxId) {
     sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into another account');
     return;
@@ -750,6 +752,8 @@ export async function handleThread(session: ImapSession, tag: string, tokens: To
   if (algorithm === 'REFERENCES') {
     // v9.1: the stored References chains (Message.references, lazily backfilled
     // for older rows) of the selected folder — own or foreign (session.selected).
+    // The lazy step is capped (200 rows, REFERENCES_LAZY_BUDGET_MS, default 1500 ms)
+    // and skips rows that failed recently; the rest is the background job's.
     const refs = await loadThreadReferences(session.selected!.folderId, rows.map((r) => r.id));
     const list = rows.map((r) => ({ ...r, references: refs.get(r.id) ?? null }));
     threads = threadReferences(list, idOf);

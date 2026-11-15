@@ -63,3 +63,18 @@ test("listAccessibleMailboxes queries only the caller's grants with read permiss
   assert.deepEqual(s!.where, { userId: 'u9', permission: { in: ['FULL_ACCESS', 'READ_ONLY'] } });
   assert.deepEqual(d!.where, { granteeId: 'u9', permission: { in: ['FULL_ACCESS', 'READ_ONLY'] } });
 });
+
+test('reservedFolderPrefix: IMAP namespace prefixes (any case), env overrides, disabled prefixes', async () => {
+  const { reservedFolderPrefix, reservedNamespacePrefixes } = await import('./mailbox-access.js');
+  assert.deepEqual(reservedNamespacePrefixes({}), ['Other Users', 'Shared']);
+  assert.equal(reservedFolderPrefix('Shared/x', {}), 'Shared');
+  assert.equal(reservedFolderPrefix('sHaReD/x', {}), 'Shared');
+  assert.equal(reservedFolderPrefix('other users/a@b/INBOX', {}), 'Other Users');
+  assert.equal(reservedFolderPrefix('Shared', {}), null, 'the bare level is not reserved');
+  assert.equal(reservedFolderPrefix('SharedStuff/x', {}), null);
+  assert.equal(reservedFolderPrefix('Projects', {}), null);
+  assert.equal(reservedFolderPrefix('Public/x', { IMAP_NAMESPACE_SHARED: 'Public' }), 'Public');
+  assert.equal(reservedFolderPrefix('Shared/x', { IMAP_NAMESPACE_SHARED: 'Public' }), null);
+  assert.equal(reservedFolderPrefix('Shared/x', { IMAP_NAMESPACE_SHARED: 'off' }), null);
+  assert.equal(reservedFolderPrefix('Shared/x', { IMAP_NAMESPACE_SHARED: 'bad/prefix.x' }), 'Shared', 'invalid → default');
+});

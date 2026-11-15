@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, appleProfileTicketUrl, isAppleMobileDevice } from './appleProfile.ts';
+import { APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, appleProfileTicketUrl, isAppleMobileDevice, openAppleProfileTicket } from './appleProfile.ts';
+
+test('9.1: the ticket URL is opened with location.replace (not kept in the history)', () => {
+  const calls: string[] = [];
+  const loc = {
+    replace: (u: string) => { calls.push(`replace ${u}`); },
+    assign: (u: string) => { calls.push(`assign ${u}`); },
+  };
+  openAppleProfileTicket(loc, 'eas', 'T1');
+  assert.deepEqual(calls, ['replace /api/v1/user/apple-profile?type=eas&ticket=T1']);
+});
 
 test('apple profile download: path without any token, file name per domain + kind', () => {
   assert.equal(appleProfilePath('imap'), '/user/apple-profile');

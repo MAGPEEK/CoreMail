@@ -99,6 +99,16 @@ export function patternMatcher(pattern: string): (name: string, delimiter?: stri
 
 interface FolderRow { id: string; name: string }
 
+/** Users already warned about personal folders hidden by a namespace prefix (bounded). */
+const warnedHidden = new Set<string>();
+
+function warnHiddenOnce(userKey: string, count: number): void {
+  if (warnedHidden.has(userKey)) return;
+  if (warnedHidden.size >= 10_000) warnedHidden.clear();
+  warnedHidden.add(userKey);
+  log.warn({ userId: userKey, count }, 'IMAP LIST: personal folders under a reserved namespace prefix (Shared/, Other Users/) are hidden — rename them in the webmail');
+}
+
 /** One listable name: an existing folder (folderId) or a non-existent parent. */
 interface ListEntry {
   /** Client name (decoded). */
@@ -123,10 +133,16 @@ export async function listEntries(session: ImapSession, withForeign = true): Pro
   });
   const entries = new Map<string, ListEntry>();
   const display = displayNames(own.map((f) => f.name));
+  let hidden = 0;
   for (const f of own) {
     const name = display.get(f.name) ?? f.name;
+    // v9.1: a personal folder named "Shared/…" or "Other Users/…" (any case) could
+    // never be selected (the name resolves into the namespace) and would shadow the
+    // real shared entries — it is not listed. Rename it in the webmail.
+    if (parseForeignName(name) !== null) { hidden++; continue; }
     entries.set(name, { name, delimiter: DELIMITER, folderId: f.id, special: specialUseFlag(name) });
   }
+  if (hidden > 0) warnHiddenOnce(session.userId ?? session.mailboxId ?? '', hidden);
   let foreign: AccessibleMailbox[] = [];
   try {
     if (withForeign) foreign = await foreignMailboxes(session);
