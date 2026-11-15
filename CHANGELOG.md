@@ -22,7 +22,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **ActiveSync `ItemOperations`:** Fetch by FileReference (attachment, Range/Total), Fetch by
   CollectionId+ServerId (full body or MIME) and EmptyFolderContents — only on the user's own
   items; foreign or unknown items answer "not found".
-- **ActiveSync `GetItemEstimate`:** counts the changes the next Sync would deliver.
+- **ActiveSync `GetItemEstimate`:** counts what the next Sync would deliver — items the device
+  already holds and the FilterType age window are taken into account (deletes included).
 - **ActiveSync `Settings`:** Oof Get/Set on the same out-of-office settings as the web client,
   JMAP and the SMTP auto-reply (state, time range, internal/external texts, contacts-only);
   DeviceInformation Set stores the device's friendly name; UserInformation Get returns the
@@ -38,16 +39,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   server sends one only for EAS 16.0 requests with `SendResponse`, so the organizer never gets two.
 - **ActiveSync `ResolveRecipients`:** names and addresses are resolved against the address book
   of the user's domain and the user's contacts.
+- **ActiveSync FolderSync changes:** folders created, renamed or deleted on the server (web
+  client, IMAP, JMAP) reach the phone as Add/Update/Delete; an unknown FolderSync key answers
+  Status 9.
+- **ActiveSync `FilterType`:** the phone's "mail days to sync" setting is honoured; changing it
+  restarts the folder's sync (Status 3).
 - **Helm chart 1.0.0 (`infra/k8s`)** — complete rewrite for the single `coremail-app` image:
-  app Deployment with schema-sync init container (non-root, read-only root filesystem,
-  `/healthz` probes), Ingress for HTTP and a LoadBalancer/NodePort Service for the mail ports,
-  optional bundled PostgreSQL, Redis (password mandatory), MinIO, rspamd and ClamAV or external
-  endpoints, NetworkPolicies, secrets via values or an existing Secret (rendering fails without
+  app Deployment with schema-sync init container (non-root, read-only root filesystem;
+  startup/liveness probes on `/livez`, readiness on `/healthz`, so a slow or misconfigured
+  object store keeps the pod "not ready" instead of restarting it in a loop), Ingress for HTTP
+  and a LoadBalancer/NodePort Service for the mail ports, optional bundled PostgreSQL, Redis
+  (password mandatory), MinIO, rspamd and ClamAV or external endpoints, NetworkPolicies, secrets via values or an existing Secret (rendering fails without
   them), `objectStorage.*` for the storage drivers; the app gets the same environment as with
   docker-compose (`OBJECT_STORAGE`, `MINIO_BUCKET_ATTACHMENTS`, `RSPAMD_URL` — rspamd via
   `rspamd.external.url` or `host` + `controllerPort`). `scripts/helm-check.sh` runs helm
   lint/template and kubeconform via pinned Docker images and checks the rendered environment
-  names. The old per-service chart (EWS, storage-api, 0.6.x images) is gone.
+  names.
 - **Object storage drivers** (`OBJECT_STORAGE=filesystem | minio | s3`, default `minio` =
   unchanged behaviour). The filesystem driver (`STORAGE_PATH`, default `/data/objects`) writes
   atomically (temp file + fsync + rename) with modes 0640/0750; the S3/MinIO driver supports
@@ -93,12 +100,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `time-range`; CardDAV `prop-filter` with `test`, `match-type`, `param-filter` and `limit`
   (507 when truncated). Unsupported filters answer 403 `supported-filter` /
   `supported-collation`. `CALDAV:expand` and `CALDAV:limit-recurrence-set` are implemented.
-
-- **ActiveSync FolderSync changes:** folders created, renamed or deleted on the server (web
-  client, IMAP, JMAP) reach the phone as Add/Update/Delete; an unknown FolderSync key answers
-  Status 9.
-- **ActiveSync `FilterType`:** the phone's "mail days to sync" setting is honoured; changing it
-  restarts the folder's sync (Status 3).
 - api-gateway `GET /livez`: liveness without the object-storage status (200 while the process
   serves HTTP); `/healthz` stays the readiness check (503 while the storage check blocks).
 
@@ -184,9 +185,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   an empty e-mail.
 - iTIP: a REQUEST without ORGANIZER is not answered (ActiveSync MeetingResponse reports an
   invalid request); a REPLY to a single occurrence carries its `RECURRENCE-ID`.
-- **Helm chart:** startup and liveness probes use `/livez`; readiness stays on `/healthz`. A
-  slow or misconfigured object store now keeps the pod "not ready" while the storage check
-  waits, instead of restarting it in a loop (CrashLoopBackOff).
 - Upgrade notes, compose files, `.env.example`, setup scripts and the Helm chart/README refer
   to this release as 8.0 (they said "7.1").
 
@@ -205,17 +203,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   recomputed from the database on every command, so after another client deleted a message
   `STORE 1 +FLAGS (\Deleted)` plus `EXPUNGE` removed the wrong message. IDLE checks the mailbox
   every 30 s and on new-mail events instead of sending a blind `EXISTS`/`1 RECENT`.
+- IMAP IDLE (every 30 s and on each new-mail push) and the end of every command no longer read
+  all message rows of the selected folder: the mailbox's highestModSeq and the folder's message
+  count are checked first, the full comparison only runs when they changed.
 - IMAP: EXPUNGE, UID EXPUNGE and MOVE are refused with `NO [READ-ONLY]` in a mailbox opened with
   EXAMINE (they deleted/moved messages).
 - IMAP: INBOX is case-insensitive in every mailbox argument (`SELECT inbox`, `STATUS inbox`, …).
 - IMAP: mailbox names are exchanged in modified UTF-7 with IMAP4rev1 clients (RFC 3501 §5.1.3);
   non-ASCII folders such as "Entwürfe" were sent as raw UTF-8 and could not be selected.
+- IMAP: folders created by IMAP clients up to 7.0.0 are stored with their modified UTF-7 name
+  (e.g. `Entw&APw-rfe`). They are not migrated or renamed: such a row is recognised (canonical
+  modified UTF-7 of another name) and shown as before to IMAP4rev1 clients and in UTF-8 after
+  `ENABLE IMAP4rev2`; SELECT/STATUS/APPEND/COPY/MOVE/DELETE/RENAME find it under either
+  spelling, and CREATE of the same name answers `ALREADYEXISTS` instead of adding a duplicate.
+  Previously the encoded name was encoded again and appeared as a new literal folder name.
 - IMAP: RENAME also renames inferior mailboxes (RFC 9051 §6.3.6); `[UNSEEN n]` is the sequence
   number of the first unseen message; LIST `%` no longer descends into child mailboxes and lists
   implied parents, `LIST "" ""` returns the hierarchy delimiter.
 - IMAP: LOGIN after authentication and ENABLE before authentication are rejected with BAD.
 - IMAP STORE: system flags are case-insensitive (`\seen` → `\Seen`), `\Recent` and unknown
   `\`-flags are rejected with BAD.
+- IMAP STORE (and the implicit `\Seen` of FETCH) lost a concurrent client's flag change: the new
+  flag list is now computed from the flags read under the mailbox lock
+  (`modifyFlags()` in the message store).
 - IMAP SEARCH HEADER matches any header field (raw header loaded on demand); an empty string
   matches every message that has the field.
 - IMAP UID commands on folders with more than ~150 000 messages failed with `NO Internal error`
@@ -223,7 +233,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - IMAP AUTHENTICATE: invalid base64 is answered with BAD; a PLAIN authorization identity that
   differs from the login is refused (`NO [AUTHORIZATIONFAILED]`); mailbox names are no longer
   "unquoted" a second time (`'Old'` kept its quotes stripped).
-
 - ActiveSync: a Sync Change without `email:Read` no longer marks the message unread.
 - ActiveSync SendMail/SmartReply/SmartForward took the opaque MIME as UTF-8 text, so 8-bit
   (e.g. Latin-1) messages were corrupted; the octets are now sent byte-exact.
@@ -233,6 +242,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   attachments); before they had no raw message, no attachments and no Message-ID.
 - ActiveSync WBXML decoder: truncated OPAQUE data, unterminated strings and unsupported global
   tokens are rejected instead of being read past the buffer or parsed as elements.
+- **ActiveSync: overlapping requests of one device** (parallel Syncs of different folders, a
+  FolderSync or Ping during a Sync) no longer write back each other's stale SyncKeys — each
+  command merges only the keys it changed into `ActiveSyncDevice.syncKeys` in one statement.
+  Before, the next Sync could get Status 3 and resync the whole folder, repeatedly.
+- **ActiveSync Sync:** a message whose original (MIME) cannot be read no longer fails the whole
+  Sync with HTTP 500 (the device retried forever); it is sent with the stored HTML/text body.
 - Backup schedules and the retention worker (Managed Folder Assistant) ran once per app
   instance; with more than one instance every scheduled backup and retention run happened
   several times, and retention runs could overlap. Each cron fire is now claimed by one
@@ -243,6 +258,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   always went to `<host>:11334`. `RSPAMD_URL` (the rspamd controller) is now used for scanning
   and learning, `RSPAMD_HOST`/`RSPAMD_PORT` remain as fallback when it is unset; an invalid URL
   is logged and falls back.
+- core config: an empty numeric variable (e.g. `MINIO_PORT:` from compose) uses its default
+  instead of 0.
 - Calendar event UIDs were unique server-wide, so an invitee on the same server could not keep
   its own copy of a colleague's meeting (ActiveSync MeetingResponse failed, CalDAV PUT of the
   invitation answered 409). The UID is now unique per calendar (RFC 4791 §5.3.2.1); the schema
@@ -270,11 +287,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   (earlier `Return-Path:` fields are removed); mail with more than 100 `Received:` fields is
   refused as a loop (554 5.4.6). The submission `Received:` only carries `for <…>` with a single
   recipient — it exposed the first (possibly Bcc) recipient to everybody.
+- SMTP: `Return-Path:` handling and hop counting found the end of the header only at CRLFCRLF,
+  so local delivery of bare-LF messages (ActiveSync SendMail, JMAP raw) removed a body line
+  starting with `Return-Path:` and inserted an extra blank line.
 - **SMTP submission adds a missing `Date:` / `Message-ID:`** (RFC 6409 §8).
 - **SMTP: partial delivery failures no longer lose or duplicate mail.** A failure while storing
   one of several recipients or while queueing the external part (and rule forwards, which were
   fire-and-forget after the 250) now answers 451; the recipients already delivered are
   remembered (Redis, 5 days) and skipped on the client's retry.
+- SMTP: a rule forward/redirect queued before a failed local store was queued again by the
+  sender's retry; forwards are now claimed per transaction, recipient and target.
 - **SMTP session:** the DATA timeout restarts for every received chunk (slow uploads no longer
   fail after 10 minutes); a STARTTLS handshake that never completes is closed after 60 s; the
   first period of every line starting with "." is removed (not only for ".."); internal handler
@@ -282,6 +304,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   framing and leaked internals).
 - SMTP alias expansion: the same alias given twice (e.g. different case) delivered the second
   copy to the alias address itself, which was then dropped as "mailbox not found".
+- SMTP inbound (port 25) advertises and enforces at most what the content filter can scan
+  (52 MB minus headroom) even when `maxMessageSizeMb` is higher — larger mail was transferred
+  completely and then refused with 552.
 - **POP3 QUIT could delete a message that was no longer in the maildrop** (RFC 1939 §6). The
   UPDATE state expunged the DELE'd ids without a folder condition, so a message moved to
   another folder (IMAP MOVE, JMAP, a rule) between DELE and QUIT was deleted there. QUIT now
@@ -296,7 +321,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - POP3 QUIT whose removal fails answers `-ERR [SYS/TEMP] some deleted messages not removed` and
   closes the connection (previously `-ERR internal error` and the session stayed open).
 - POP3 LIST/STAT are exact for rows without a stored raw message (they are materialized at
-  login instead of reporting the body-column size), messages stored with bare LF line endings
+  login instead of reporting the body-column size — at most 200 per login, 4 in parallel,
+  within 5 s, so the first login after an upgrade is not delayed; the others report their
+  stored size until RETR/TOP or a later login makes it exact), messages stored with bare LF line endings
   are sent with CRLF (the multi-line framing broke; sizes follow after the first RETR/TOP), a
   pipelining client that does not read can no longer make the server buffer every requested
   message (writes wait for `drain`), the 512-octet command limit counts octets, and empty
@@ -370,40 +397,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `GET /api/v1/contacts/gal` was shadowed by `GET /api/v1/contacts/:id` (404).
 - caldav-server: credentials were verified twice for every CardDAV request (one auth
   middleware per router).
-- IMAP: folders created by IMAP clients up to 7.0.0 are stored with their modified UTF-7 name
-  (e.g. `Entw&APw-rfe`). They are not migrated or renamed: such a row is recognised (canonical
-  modified UTF-7 of another name) and shown as before to IMAP4rev1 clients and in UTF-8 after
-  `ENABLE IMAP4rev2`; SELECT/STATUS/APPEND/COPY/MOVE/DELETE/RENAME find it under either
-  spelling, and CREATE of the same name answers `ALREADYEXISTS` instead of adding a duplicate.
-  Previously the encoded name was encoded again and appeared as a new literal folder name.
-- IMAP IDLE (every 30 s and on each new-mail push) and the end of every command no longer read
-  all message rows of the selected folder: the mailbox's highestModSeq and the folder's message
-  count are checked first, the full comparison only runs when they changed.
-- IMAP STORE (and the implicit `\Seen` of FETCH) lost a concurrent client's flag change: the new
-  flag list is now computed from the flags read under the mailbox lock
-  (`modifyFlags()` in the message store).
-- POP3: the first login after an upgrade no longer materializes every legacy message before
-  answering; at most 200 per login, 4 in parallel, within 5 s. The others report their stored
-  size until RETR/TOP or a later login makes it exact.
-- SMTP: `Return-Path:` handling and hop counting found the end of the header only at CRLFCRLF,
-  so local delivery of bare-LF messages (ActiveSync SendMail, JMAP raw) removed a body line
-  starting with `Return-Path:` and inserted an extra blank line.
-- SMTP: a rule forward/redirect queued before a failed local store was queued again by the
-  sender's retry; forwards are now claimed per transaction, recipient and target.
-- SMTP inbound (port 25) advertises and enforces at most what the content filter can scan
-  (52 MB minus headroom) even when `maxMessageSizeMb` is higher — larger mail was transferred
-  completely and then refused with 552.
 - Filesystem object store: `putStream` did not check short writes (`put` did).
-- **ActiveSync: overlapping requests of one device** (parallel Syncs of different folders, a
-  FolderSync or Ping during a Sync) no longer write back each other's stale SyncKeys — each
-  command merges only the keys it changed into `ActiveSyncDevice.syncKeys` in one statement.
-  Before, the next Sync could get Status 3 and resync the whole folder, repeatedly.
-- **ActiveSync Sync:** a message whose original (MIME) cannot be read no longer fails the whole
-  Sync with HTTP 500 (the device retried forever); it is sent with the stored HTML/text body.
-- **ActiveSync GetItemEstimate** counts what the next Sync sends: items the device already
-  holds and the FilterType age window are taken into account (deletes included).
-- core config: an empty numeric variable (e.g. `MINIO_PORT:` from compose) uses its default
-  instead of 0.
 
 ### Security
 
@@ -412,12 +406,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   empty or dummy one, while the login used the `Authorization` header first — so a foreign web
   page could open `/jmap/ws?access_token=` and ride on Basic credentials cached by the browser.
   A foreign Origin is now accepted only with a non-empty query token and no `Authorization`
-  header; ambient (header) credentials always need an allowed Origin.
-- **JMAP EmailSubmission `envelope.mailFrom` follows the SMTP MAIL FROM policy.** Besides
-  matching the identity, the envelope sender must be an address the user may send as
-  (`@coremail/storage` sender identity: own address, aliases, Shared Mailboxes with
-  SEND_AS/FULL_ACCESS); the null reverse-path `<>` is refused (`forbiddenMailFrom`), and the
-  DKIM key is looked up only from the verified address.
+  header; ambient (header) credentials always need an allowed Origin (RFC 6455 §10.2).
+  Web Push for a mailbox goes only to delegates with mailbox access.
 - **REST API: revoked access tokens survive no gateway restart.** `requireAuth` checked
   revocations only in process memory; after a restart or a lost invalidation event, tokens of
   logged-out, deactivated or password-changed sessions kept working until they expired. It now
@@ -444,15 +434,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   fields through the `headers` array. **Behaviour change:** mailbox delegates (MailboxDelegate
   FULL_ACCESS) no longer get send permission or the owner's identity in the delegated JMAP
   account — the same rule as SMTP and ActiveSync.
+- **JMAP EmailSubmission `envelope.mailFrom` follows the SMTP MAIL FROM policy.** Besides
+  matching the identity, the envelope sender must be an address the user may send as
+  (`@coremail/storage` sender identity: own address, aliases, Shared Mailboxes with
+  SEND_AS/FULL_ACCESS); the null reverse-path `<>` is refused (`forbiddenMailFrom`), and the
+  DKIM key is looked up only from the verified address.
 - **JMAP FUTURERELEASE.** `maxDelayedSend` was advertised, but `HOLDFOR`/`HOLDUNTIL` were
   dropped and the mail went out at once, while a client-set `sendAt` was accepted without
   limit. HOLDFOR/HOLDUNTIL now delay the send (max. 30 days, `FUTURERELEASE` in
   `submissionExtensions`), unknown envelope parameters and a client `sendAt` (server-set) are
   rejected with `invalidProperties`.
-- **JMAP WebSocket origin check.** A WebSocket handshake from a browser Origin outside the CORS
-  allow-list is refused unless it carries an explicit `access_token`, so a foreign page can no
-  longer ride on cached Basic credentials (RFC 6455 §10.2). Web Push for a mailbox goes only
-  to delegates with mailbox access.
 - **ActiveSync device block and remote wipe are enforced.** The admin API
   (`/api/v1/admin/mobile/devices`) set devices to BLOCKED or WIPED, but the ActiveSync service
   never read the status: a lost or stolen phone kept syncing the mailbox and never received a
@@ -462,6 +453,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   again) until an administrator sets it back to OK. Users can no longer delete a blocked or
   wiped device registration themselves (`DELETE /api/v1/smime/devices/:id` → 409), which would
   have let it re-register.
+- **ActiveSync MeetingResponse:** a meeting request is acted on only when its ORGANIZER matches
+  the organizer of the stored event with that UID and is not one of the user's own addresses.
+  Before, anybody who knew a UID (e.g. from an invite the user sent) could mail a REQUEST with
+  it, and Decline deleted — Accept overwrote — the user's own event.
 - **Credential changes take effect immediately on cached logins.** The jmap-server cached
   successful Basic logins for 60 s, so after enabling MFA, changing or resetting the password,
   revoking an app password, or deactivating/deleting a user, JMAP still accepted the old
@@ -513,12 +508,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   stayed open after a password change, session revocation, role change or deactivation; it now
   follows the same rules as JMAP Bearer connections and ends with `event: session-ended` (the
   browser's reconnect is then refused with 401).
-- **Smarthost certificates are verified.** Outbound smarthost connections with STARTTLS,
-  implicit TLS or credentials accepted any certificate, so an on-path attacker could harvest
-  the provider credentials (RFC 8314 §4.1). The certificate is now verified against the
-  smarthost name (TLS ≥ 1.2). **Operators with a self-signed smarthost** must install a valid
-  certificate or set `SMARTHOST_TLS_INSECURE=true` (explicit opt-out). Direct MX delivery stays
-  opportunistic (RFC 7435).
+- **Smarthost TLS is verified and mandatory with credentials.** Outbound smarthost connections
+  with STARTTLS, implicit TLS or credentials accepted any certificate, so an on-path attacker
+  could harvest the provider credentials (RFC 8314 §4.1); with credentials and the TLS box off,
+  STARTTLS was only opportunistic (strippable), and nodemailer's `opportunisticTLS` continued
+  in plaintext after a failed STARTTLS reply even with TLS required. The certificate is now
+  verified against the smarthost name (TLS ≥ 1.2), and STARTTLS is mandatory whenever
+  credentials are configured (unless implicit TLS), without plaintext fallback. **Operators
+  with a self-signed (or IP-address) smarthost** must install a valid certificate or set
+  `SMARTHOST_TLS_INSECURE=true` (explicit opt-out); a rejected certificate shows up as a
+  deferral reason naming that variable (queue/mail-flow log) and a throttled ERROR log line.
+  Direct MX delivery stays opportunistic (RFC 7435).
+- Bounces of a job created by a user's redirect rule (which keeps the original, possibly
+  forged, envelope sender) are delivered only to a local original sender, never to an external
+  one (backscatter).
 - **Autodiscover v1 only describes the caller's own account.** An authenticated user could ask
   for any other address and received that person's display name and internal user id
   (LegacyDN); unknown accounts and foreign domains got full settings, which told existing and
@@ -528,6 +531,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   answered with the Basic challenge without touching the database — a Bearer header used to
   write a `SystemLog` row with the client-supplied token claims on every request. The
   failed-login `SystemLog` category is now `AUTODISCOVER_AUTH` (was `MAPI_AUTH`).
+- **Autodiscover:** failed Basic logins write at most 10 SystemLog rows per client IP and 60
+  in total per minute (the service log still records every attempt; the next row notes how
+  many were left out). Before, an unauthenticated client could grow `system_logs` without
+  limit — notably behind a reverse proxy without `TRUST_PROXY`.
 - **PRIVATE events are masked with an allowlist.** Grantees of a shared calendar received
   `CONFERENCE` links, `GEO`, `STYLED-DESCRIPTION`, `RELATED-TO`, `IMAGE` and similar properties
   of PRIVATE events because the mask removed only a fixed list. CalDAV now keeps only UID,
@@ -535,45 +542,106 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   and CLASS plus `SUMMARY:Beschäftigt`, and drops alarms and calendar-level properties; an
   overridden instance with its own `CLASS:PRIVATE` is masked under a PUBLIC series. REPORT
   filters run on the masked view, so grantees cannot probe hidden fields with `text-match`.
-- iTIP REPLYs are applied only when the receiving user (address or alias) is the event's
-  ORGANIZER, not to an invitee's copy of the same meeting.
-- **IMAP LIST/LSUB pattern ReDoS.** The mailbox pattern was translated into a regular
-  expression that backtracked exponentially (`LIST "" "*a*a*a…X"` against a long folder name
-  blocked the IMAP process for every user for minutes). Patterns are now matched by a
-  linear-space O(name × pattern) wildcard matcher; patterns over 1024 characters and pattern
-  lists over 32 entries are refused with BAD.
-- **Smarthost credentials are never sent without TLS.** With credentials and the TLS box off,
-  STARTTLS was only opportunistic (strippable); and nodemailer's `opportunisticTLS` continued
-  in plaintext after a failed STARTTLS reply even with TLS required. STARTTLS is now mandatory
-  whenever credentials are configured (unless implicit TLS), without plaintext fallback.
-  Upgrade note: a smarthost whose certificate is rejected (self-signed, IP address) now fails
-  with a deferral reason naming `SMARTHOST_TLS_INSECURE=true` (queue/mail-flow log) and a
-  throttled ERROR log line, instead of only piling up mail in the queue.
-- iTIP REPLY with `RECURRENCE-ID`: an override is only created for a real instance of the
-  series (bounded RRULE expansion, RDATE, not EXDATE'd), at most 100 overrides per calendar
-  object and 100 per-instance reply stamps per attendee — a (spoofed) attendee could add phantom
-  occurrences to the organizer's calendar and grow `icalData` without limit.
-- Bounces of a job created by a user's redirect rule (which keeps the original, possibly
-  forged, envelope sender) are delivered only to a local original sender, never to an external
-  one (backscatter).
-- **Global address list per domain:** the webmail GAL (`/api/v1/contacts/gal`) and the
-  compose autocomplete (`/api/v1/contacts?q=`) list only active users of the caller's own
-  domain — on a server hosting several domains, users could list every other domain's users.
-  `/gal` is paginated in the database (at most 500 entries per page).
-- **ActiveSync MeetingResponse:** a meeting request is acted on only when its ORGANIZER matches
-  the organizer of the stored event with that UID and is not one of the user's own addresses.
-  Before, anybody who knew a UID (e.g. from an invite the user sent) could mail a REQUEST with
-  it, and Decline deleted — Accept overwrote — the user's own event.
 - **REST calendar writes by grantees** follow the CalDAV rule: a PUBLIC series with a
   PRIVATE/CONFIDENTIAL overridden instance can only be changed or deleted by its owner (the
   check is shared, `granteeView` in `@coremail/core/calendar`).
 - **CalDAV:** a PUT whose resource name is already used in another calendar, and an
   MKCALENDAR with a calendar ID of another user, answer a neutral `409 Conflict` instead of
   403/405 messages that said the object exists elsewhere.
-- **Autodiscover:** failed Basic logins write at most 10 SystemLog rows per client IP and 60
-  in total per minute (the service log still records every attempt; the next row notes how
-  many were left out). Before, an unauthenticated client could grow `system_logs` without
-  limit — notably behind a reverse proxy without `TRUST_PROXY`.
+- iTIP REPLYs are applied only when the receiving user (address or alias) is the event's
+  ORGANIZER, not to an invitee's copy of the same meeting.
+- iTIP REPLY with `RECURRENCE-ID`: an override is only created for a real instance of the
+  series (bounded RRULE expansion, RDATE, not EXDATE'd), at most 100 overrides per calendar
+  object and 100 per-instance reply stamps per attendee — a (spoofed) attendee could add phantom
+  occurrences to the organizer's calendar and grow `icalData` without limit.
+- **IMAP LIST/LSUB pattern ReDoS.** The mailbox pattern was translated into a regular
+  expression that backtracked exponentially (`LIST "" "*a*a*a…X"` against a long folder name
+  blocked the IMAP process for every user for minutes). Patterns are now matched by a
+  linear-space O(name × pattern) wildcard matcher; patterns over 1024 characters and pattern
+  lists over 32 entries are refused with BAD.
+- **Global address list per domain:** the webmail GAL (`/api/v1/contacts/gal`) and the
+  compose autocomplete (`/api/v1/contacts?q=`) list only active users of the caller's own
+  domain — on a server hosting several domains, users could list every other domain's users.
+  `/gal` is paginated in the database (at most 500 entries per page).
+
+### Removed
+
+- The old per-service Helm chart (per-service Deployments/HPAs, EWS, storage-api, CNPG cluster,
+  Bitnami Redis subchart, 0.6.x images) — replaced by Helm chart 1.0.0.
+
+### Upgrade notes (breaking)
+
+- **Object storage.** New `OBJECT_STORAGE` driver variable: existing installs keep MinIO
+  without any action (`OBJECT_STORAGE` unset = `minio`; compose sets `${OBJECT_STORAGE:-minio}`).
+  New installs (`scripts/setup.sh`, `.env.example`, Synology setup) use `filesystem` on the new
+  `coremail-data:/data` volume (`STORAGE_PATH`, default `/data/objects`). Do **not** copy
+  `OBJECT_STORAGE=filesystem` from the new `.env.example` into an existing `.env` without
+  migrating first (`coremail storage migrate --from minio --to filesystem`): SMTP/IMAP/POP3/JMAP/
+  ActiveSync stay closed and `/healthz` answers 503 while most referenced objects are missing.
+- **New environment variables:** `OBJECT_STORAGE`, `STORAGE_PATH`, `MINIO_USE_SSL`,
+  `MINIO_REGION`, `MINIO_PATH_STYLE`, `MINIO_CA_FILE` (S3/MinIO over TLS, URL endpoints) and
+  `SMARTHOST_TLS_INSECURE`. `RSPAMD_URL` (rspamd controller) is now actually used for scanning
+  and learning — check that it points at the controller (port 11334); `RSPAMD_HOST`/`RSPAMD_PORT`
+  are only a fallback. An empty numeric variable now means "default" instead of 0.
+- **Smarthost TLS:** certificates are verified and STARTTLS is mandatory with credentials. A
+  self-signed or IP-address smarthost defers all outbound mail until it has a valid certificate
+  or `SMARTHOST_TLS_INSECURE=true` is set.
+- **Helm chart 1.x:** complete rewrite (one `coremail-app` Deployment, bundled or external
+  dependencies). The old per-service values (`global.*`, `services.*`, `cnpg.*`, Bitnami
+  `redis.*`, …) are gone and `secrets.*`/`existingSecret` are mandatory; the default
+  attachment bucket is `coremail-attachments`. There is no in-place `helm upgrade` from the old
+  chart — follow the migration steps in `infra/k8s/README.md` (same `PEPPER`, restore the dump,
+  mirror the buckets). Probes: liveness `/livez` (new), readiness `/healthz`.
+- **Schema changes are applied automatically at container start** (`prisma db push`): new table
+  `active_sync_items`, new columns `Message.createdModSeq` and `ActiveSyncDevice.remoteWipeAckAt`,
+  and calendar event UIDs unique per calendar (`@@unique([calendarId, uid])`) instead of
+  server-wide. Take a database backup before upgrading.
+- **POP3 needs Redis for logins** (exclusive maildrop lock, `pop3:lock:<userId>`): without Redis
+  the login answers `-ERR [SYS/TEMP]`, and a second concurrent session of the same account gets
+  `-ERR [IN-USE]` (clients polling one account from two devices at once retry).
+- **ActiveSync:** every command except Provision needs the final (phase-2) policy key in
+  `X-MS-PolicyKey` (Status 142/144, HTTP 449 for protocol < 14) — standard phones re-provision
+  automatically, scripts and test clients must complete the handshake. BLOCKED/PENDING devices get
+  Status 129, WIPED devices Status 140 plus a remote wipe; users can no longer delete a blocked or
+  wiped device registration (409). A Delete from the phone now moves mail to Deleted Items
+  (`DeletesAsMoves` default); a SyncKey other than the current or previous one answers Status 3;
+  OPTIONS lists only implemented commands; MeetingResponse ignores requests whose ORGANIZER does
+  not match the stored event or that have no ORGANIZER.
+- **SMTP is stricter (RFC 5321/4954):** wrong `MAIL`/`RCPT` keywords and invalid recipient
+  syntax → 501, unknown MAIL/RCPT parameters → 555 (DSN is not advertised), `EHLO`/`HELO`
+  without a domain → 501, AUTH responses must be valid base64 and PLAIN must have exactly three
+  fields with an authzid equal to the login. Port 25 caps `SIZE` at what the content filter can
+  scan (≈ 52 MB) even when `maxMessageSizeMb` is higher; an invalid filter answer defers (451).
+  The local-part keeps its case when relaying; a custom banner without a leading domain gets the
+  host name prefixed. Bounces are now English RFC 3464 reports and also go to external senders of
+  accepted mail; out-of-office replies need one of the user's addresses in To/Cc/Bcc/Resent-*;
+  rule redirects keep the original envelope sender.
+- **IMAP:** IMAP4rev1 clients now get non-ASCII mailbox names in modified UTF-7 (RFC 3501
+  §5.1.3), IMAP4rev2 clients (`ENABLE IMAP4rev2`) in UTF-8 together with ESEARCH and a SELECT
+  without RECENT/UNSEEN. Folders created with an encoded name by IMAP clients up to 7.0.0 are
+  not renamed; they are found under both spellings, and CREATE of the same name answers
+  `ALREADYEXISTS`. STORE responses carry MODSEQ only after CONDSTORE is enabled; `SEARCH
+  RECENT`/`NEW` match nothing; LIST patterns over 1024 characters or more than 32 patterns → BAD.
+- **Autodiscover** answers only the caller's own primary address and aliases (everything else
+  gets Error 500), and failed logins are logged under the `SystemLog` category
+  `AUTODISCOVER_AUTH` (was `MAPI_AUTH`) — adjust log queries/SIEM rules.
+- **Shared calendars (CalDAV and REST):** grantees can no longer PUT/DELETE events they only see
+  masked (PRIVATE, also per overridden instance) or not at all (CONFIDENTIAL) — 403
+  `DAV:need-privileges` / REST 403 — and cannot PROPPATCH the owner's calendar; PRIVATE events
+  are masked with an allowlist. CalDAV advertises `DAV: 1, 3, calendar-access, addressbook`
+  (no class 2, no `access-control`, no `ACL` in `Allow`), VTODO/VJOURNAL → 403 (was 400), a CardDAV
+  resource must hold exactly one vCard, and name clashes in another calendar answer a neutral 409.
+- **JMAP:** mailbox delegates (FULL_ACCESS) no longer have `maySend` or the owner's identity;
+  `Email/set destroy` soft-deletes (30-day recovery window, reported in `/changes` `destroyed`);
+  EmailSubmission enforces the SMTP sender policy (`forbiddenFrom`, `forbiddenMailFrom` for
+  foreign or `<>` envelope senders, `invalidEmail` without exactly one From), From/Sender/trace
+  fields cannot be set through `headers`, and a client-set `sendAt` or unknown envelope
+  parameters are `invalidProperties`; unsupported sorts answer `unsupportedSort`.
+- **Web/API:** the global address list and compose autocomplete list only the caller's own
+  domain, and `/api/v1/contacts/gal` is paginated (max. 500 per page). A role change ends the
+  user's web sessions; admin routes re-check the role in the database (503 on a database error).
+  Credential changes end open IMAP/POP3/SMTP/ActiveSync Ping/JMAP push connections and the web
+  client's SSE stream — clients have to log in again.
 
 ---
 
