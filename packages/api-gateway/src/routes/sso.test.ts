@@ -113,6 +113,25 @@ test('end to end: start → IdP → callback → exchange (MWA), tokens never in
   assert.equal(rot.ok, true);
 });
 
+test('v8.1: exchange for browser clients sets the refresh cookie (cm_rt / cm_rt_bcp), no refresh token in the body', async () => {
+  for (const [target, headers, cookieName] of [
+    ['mwa', { 'X-CoreMail-Client': 'web' }, 'cm_rt'],
+    ['bcp', { 'X-CoreMail-Client': 'web', 'X-CoreMail-App': 'bcp' }, 'cm_rt_bcp'],
+  ] as const) {
+    const login = await browserLogin(target, { email: 'alice@example.com', email_verified: true });
+    const code = new URL(login.location, base).searchParams.get('code')!;
+    const ex = await postJson('/auth/sso/exchange', { code }, { Cookie: login.cookie, ...headers });
+    assert.equal(ex.status, 200, JSON.stringify(ex.body));
+    assert.equal(typeof ex.body['accessToken'], 'string');
+    assert.equal(ex.body['refreshToken'], undefined, 'refresh token only in the HttpOnly cookie');
+    const cookies = ex.headers.getSetCookie();
+    const rt = cookies.find((c) => c.startsWith(`${cookieName}=`));
+    assert.ok(rt, `${cookieName} set (${cookies.join(' | ')})`);
+    assert.match(rt!, /HttpOnly/);
+    assert.ok(cookies.some((c) => /^cm_sso=;/.test(c)), 'binding cookie still cleared');
+  }
+});
+
 test('BCP target redirects into /bcp; errors land on the login page', async () => {
   const ok = await browserLogin('bcp', { email: 'admin@example.com', email_verified: true });
   assert.match(ok.location, /^\/bcp\/sso\/callback\?code=/);

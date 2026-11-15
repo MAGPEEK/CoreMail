@@ -253,6 +253,22 @@ export async function login(email: string, password: string): Promise<LoginResul
   return data;
 }
 
+/**
+ * Trades the one-time SSO code for tokens (POST /auth/sso/exchange). v8.1: sent
+ * as browser client, so the refresh token comes back as the HttpOnly cookie
+ * `cm_rt` and the body only carries the access token (or an MFA challenge).
+ */
+export async function exchangeSsoCode(code: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+  const res = await fetch('/auth/sso/exchange', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+    body: JSON.stringify({ code }),
+  });
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return { ok: res.ok, body };
+}
+
 type TokenPair = { accessToken: string; refreshToken: string };
 
 async function postMfaVerify(body: Record<string, unknown>): Promise<TokenPair> {

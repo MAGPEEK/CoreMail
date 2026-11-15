@@ -10,6 +10,8 @@
  *                                            /login?sso_error=<reason> (/bcp/login for the BCP)
  *   POST /auth/sso/exchange { code }       → same body as POST /auth/login:
  *                                            { accessToken, refreshToken, expiresIn }
+ *                                            (browser clients: refresh token only in the
+ *                                            HttpOnly cookie cm_rt / cm_rt_bcp, v8.1)
  *                                            | { mfaRequired, challengeToken, method, methods }
  *
  * Redirect URI to register at the IdP: <public base URL>/auth/sso/<providerId>/callback
@@ -21,6 +23,7 @@ import { createLogger } from '@coremail/core';
 import {
   listPublicProviders, startSso, completeSsoCallback, exchangeSsoCode, SSO_COOKIE, SSO_STATE_TTL, type SsoTarget,
 } from '@coremail/auth-sso';
+import { tokenPairResponse } from '@coremail/storage/auth';
 import { deriveServerUrls } from '../lib/server-urls.js';
 
 const log = createLogger('api:sso');
@@ -105,7 +108,11 @@ ssoRouter.post('/exchange', async (req: Request, res: Response) => {
     res.setHeader('Set-Cookie', cookieHeader(req, '', 0)); // binding cookie no longer needed
     if (r.kind === 'maintenance') { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
     if (r.kind === 'mfa') { res.json({ mfaRequired: true, challengeToken: r.challengeToken, method: r.method, methods: r.methods }); return; }
-    res.json(r.tokens);
+    // v8.1: like /auth/login — browser clients (X-CoreMail-Client: web, BCP with
+    // X-CoreMail-App: bcp) get the refresh token as HttpOnly cookie only.
+    const out = tokenPairResponse(req, r.tokens);
+    if (out.setCookie) res.append('Set-Cookie', out.setCookie);
+    res.json(out.body);
   } catch (err) {
     log.error({ err }, 'SSO exchange failed');
     res.status(500).json({ error: 'Internal server error' });

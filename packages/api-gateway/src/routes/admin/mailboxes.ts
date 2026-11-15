@@ -10,9 +10,13 @@ import { audit, auditContext } from '../../lib/audit.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
-// reset / enable-disable of USER accounts only — enforced in the handler).
+// reset / enable-disable of USER accounts only — enforced in the handler) and
+// (v8.1) POST /:id/revoke-sessions ("sign out everywhere", USER accounts only).
 export const isHelpDeskReset = (role: string, req: Request): boolean =>
-  role === 'HELP_DESK' && req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path);
+  role === 'HELP_DESK' && (
+    (req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path))
+    || (req.method === 'POST' && /^\/[^/]+\/revoke-sessions\/?$/.test(req.path))
+  );
 adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
 
 // Fields of a user that may be returned to admins (never passwordHash).
@@ -269,6 +273,30 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   // (session rows are already gone via cascade; this sets the revocation mark).
   await revokeAllSessions(id, { reason: 'deleted' });
   res.json({ ok: true });
+});
+
+// POST /api/v1/admin/mailboxes/:id/revoke-sessions — "sign out everywhere" (v8.1)
+// Replaces the removed DELETE /auth/sessions/admin/:userId. Ends every web/API
+// session of the user (refresh tokens deleted, access tokens rejected via the
+// revocation marks, live SSE/EAS/JMAP connections closed through
+// publishUserAuthChange). App passwords are kept — revoke them via a password
+// reset with revokeAppPasswords.
+adminMailboxesRouter.post('/:id/revoke-sessions', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = req.apiUser!;
+  if (actor.userId !== id && !canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may sign out admin accounts'); return;
+  }
+  const r = await revokeAllSessions(id, { reason: 'admin-revoke-sessions' });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.sessions.revoke', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { sessionsRevoked: r.sessions },
+    ...auditContext(req),
+  });
+  res.json({ ok: true, sessionsRevoked: r.sessions });
 });
 
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────

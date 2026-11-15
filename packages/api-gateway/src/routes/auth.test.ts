@@ -18,6 +18,11 @@ process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 const { createFakePrisma, createFakeRedis } = await import('@coremail/storage/auth/testing');
 const db = createFakePrisma();
 const redis = createFakeRedis();
+// audit() target (not part of the auth fake)
+const auditRows: Record<string, unknown>[] = [];
+(db as unknown as Record<string, unknown>)['auditLog'] = {
+  create: async (a: { data: Record<string, unknown> }) => { auditRows.push(a.data); return a.data; },
+};
 (globalThis as Record<string, unknown>)['__prisma'] = db;
 (globalThis as Record<string, unknown>)['__authRedis'] = redis;
 
@@ -161,6 +166,40 @@ test('admin: password reset and deactivation revoke the target user sessions; mi
   assert.equal(db.appPassword.rows.length, 1, 'app passwords are kept on deactivation');
 });
 
+test('v8.1: POST /admin/mailboxes/:id/revoke-sessions signs the user out everywhere (role guards)', async () => {
+  await addUser('admin@example.com', { role: 'ORGANIZATION_MANAGEMENT' });
+  await addUser('hd@example.com', { role: 'HELP_DESK' });
+  await addUser('srv@example.com', { role: 'SERVER_MANAGEMENT' });
+  const bob = await addUser('bob@example.com');
+  const boss = await addUser('boss@example.com', { role: 'RECIPIENT_MANAGEMENT' });
+  const admin = await loginOk('admin@example.com');
+  const hd = await loginOk('hd@example.com');
+  const srv = await loginOk('srv@example.com');
+  const b1 = await loginOk('bob@example.com');
+  const b2 = await loginOk('bob@example.com');
+  await loginOk('boss@example.com');
+  const revoke = (id: unknown, tok: string) => post(`/api/v1/admin/mailboxes/${String(id)}/revoke-sessions`, {}, tok);
+
+  assert.equal((await revoke(bob['id'], b1.accessToken)).status, 403, 'plain users are not admins');
+  assert.equal((await revoke(bob['id'], srv.accessToken)).status, 403, 'no recipients area');
+  assert.equal((await revoke(boss['id'], hd.accessToken)).status, 403, 'help desk may not sign out admin accounts');
+  assert.equal((await revoke('nope', admin.accessToken)).status, 404);
+
+  const ok = await revoke(bob['id'], hd.accessToken);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body['sessionsRevoked'], 2);
+  assert.equal(db.session.rows.filter((s) => s['userId'] === bob['id']).length, 0);
+  assert.equal((await post('/auth/refresh', { refreshToken: b2.refreshToken })).status, 401);
+  const after = await fetch(`${base}/api/v1/user/profile`, { headers: { Authorization: `Bearer ${b1.accessToken}` } });
+  assert.equal(after.status, 401, 'access token rejected right away');
+  await new Promise((r) => setTimeout(r, 20)); // audit() is fire-and-forget
+  const entry = auditRows.find((a) => a['action'] === 'mailbox.sessions.revoke' && a['targetId'] === bob['id']);
+  assert.ok(entry, 'audit entry written');
+  assert.equal(entry!['actorEmail'], 'hd@example.com');
+
+  assert.equal((await revoke(boss['id'], admin.accessToken)).status, 200, 'ORG management may sign out admins');
+});
+
 test('requireAdmin: requireMfaForAdmins needs enrolment AND an MFA-verified session; fails closed', async () => {
   const a = await addUser('admin@example.com', { role: 'ORGANIZATION_MANAGEMENT' });
   const ping = (tok: string) => fetch(`${base}/api/v1/admin/ping`, { headers: { Authorization: `Bearer ${tok}` } })
@@ -198,7 +237,16 @@ test('requireAdmin: requireMfaForAdmins needs enrolment AND an MFA-verified sess
 test('password reset: single use over HTTP', async () => {
   const u = await addUser('alice@example.com');
   const raw = await sauth.createPasswordResetToken(u['id'] as string, 'ip');
+  // v8.1: POST /verify with the token in the body; GET ?token= still works (deprecated)
+  const v = await post('/auth/reset-password/verify', { token: raw });
+  assert.equal(v.status, 200);
+  assert.equal(v.body['valid'], true);
+  assert.equal((await post('/auth/reset-password/verify', {})).status, 400);
+  const legacy = await fetch(`${base}/auth/reset-password/verify?token=${raw}`);
+  assert.equal(legacy.headers.get('deprecation'), 'true');
+  assert.equal(((await legacy.json()) as { valid: boolean }).valid, true);
   assert.equal((await post('/auth/reset-password', { token: raw, newPassword: 'another-good-password' })).status, 200);
+  assert.equal((await post('/auth/reset-password/verify', { token: raw })).body['valid'], false, 'used token');
   assert.equal((await post('/auth/reset-password', { token: raw, newPassword: 'another-good-password' })).status, 400);
 });
 

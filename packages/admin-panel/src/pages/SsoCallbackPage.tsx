@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
-import { setToken, setRefreshToken, verifyMfaAdmin } from '../api/client.js';
+import { setToken, setRefreshToken, verifyMfaAdmin, exchangeSsoCode } from '../api/client.js';
 
 /**
  * v6.1: BCP landing page after the OIDC callback (/bcp/sso/callback?code=…).
@@ -24,14 +24,8 @@ export function SsoCallbackPage() {
     window.history.replaceState(null, '', '/bcp/sso/callback');
     void (async () => {
       try {
-        const res = await fetch('/auth/sso/exchange', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ code: oneTime }),
-        });
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-        if (!res.ok) {
+        const { ok, body } = await exchangeSsoCode(oneTime);
+        if (!ok) {
           setError(body['error'] === 'maintenance' ? String(body['message'] ?? 'Wartungsmodus aktiv') : String(body['error'] ?? 'SSO-Anmeldung fehlgeschlagen'));
           return;
         }

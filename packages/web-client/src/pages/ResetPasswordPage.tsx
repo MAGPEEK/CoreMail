@@ -64,7 +64,12 @@ export function ResetPasswordPage() {
 
     // Check token validity
     if (!token) { setTokenValid(false); return; }
-    fetch(`/auth/reset-password/verify?token=${encodeURIComponent(token)}`)
+    // POST with the token in the body — never in a URL (proxy/access logs)
+    fetch('/auth/reset-password/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
       .then((r) => r.json())
       .then((d: { valid?: boolean }) => setTokenValid(d.valid ?? false))
       .catch(() => setTokenValid(false));

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
-import { api, verifyMfa } from '../api/client.js';
+import { api, verifyMfa, exchangeSsoCode } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
 import type { UserProfile } from '../api/types.js';
 
@@ -34,19 +34,14 @@ export function SsoCallbackPage() {
     window.history.replaceState(null, '', '/sso/callback'); // drop the code from the address bar/history
     void (async () => {
       try {
-        const res = await fetch('/auth/sso/exchange', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ code: oneTime }),
-        });
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-        if (!res.ok) {
+        const { ok, body } = await exchangeSsoCode(oneTime);
+        if (!ok) {
           setError(body['error'] === 'maintenance' ? String(body['message'] ?? 'Wartungsmodus aktiv') : String(body['error'] ?? 'SSO-Anmeldung fehlgeschlagen'));
           return;
         }
         if (body['mfaRequired']) { setChallengeToken(String(body['challengeToken'])); return; }
-        await finalize(String(body['accessToken']), String(body['refreshToken']));
+        // v8.1: the refresh token is the HttpOnly cookie; only an older server sends it in the body
+        await finalize(String(body['accessToken']), typeof body['refreshToken'] === 'string' ? body['refreshToken'] : '');
       } catch {
         setError('SSO-Anmeldung fehlgeschlagen');
       }

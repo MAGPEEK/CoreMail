@@ -306,6 +306,22 @@ export async function loginAdmin(email: string, password: string): Promise<Login
   return data;
 }
 
+/**
+ * Trades the one-time SSO code for tokens (POST /auth/sso/exchange). v8.1: sent
+ * as BCP browser client, so the refresh token comes back as the HttpOnly cookie
+ * `cm_rt_bcp` and the body only carries the access token (or an MFA challenge).
+ */
+export async function exchangeSsoCode(code: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+  const res = await fetch('/auth/sso/exchange', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+    body: JSON.stringify({ code }),
+  });
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return { ok: res.ok, body };
+}
+
 async function postMfaVerify(body: Record<string, unknown>): Promise<string> {
   const res = await fetch('/auth/mfa/verify', {
     method: 'POST',
