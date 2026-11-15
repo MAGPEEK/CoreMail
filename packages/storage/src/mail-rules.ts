@@ -10,6 +10,7 @@ export {
   validateRulePattern, matchRulePattern, tryMatchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT,
   createRulePatternBudget, rulePatternStepBudget, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER,
   DEFAULT_RULE_PATTERN_STEP_BUDGET, canonicalizeCodeUnit, type RulePatternBudget,
+  DEFAULT_RULE_PATTERN_MESSAGE_STEP_BUDGET, ruleMessageStepBudget, withRuleBudget, evaluateRulePattern,
 } from './rule-pattern.js';
 
 const log = createLogger('storage:mail-rules');
