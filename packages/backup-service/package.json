@@ -18,7 +18,7 @@
     "@aws-sdk/lib-storage": "^3.600.0",
     "archiver": "^7.0.1",
     "cron": "^3.1.7",
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

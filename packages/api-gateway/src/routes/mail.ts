@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response, type Ne
 import { z } from 'zod';
 import { Readable } from 'stream';
 import multer from 'multer';
-import nodemailer from 'nodemailer';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { Queue } from 'bullmq';
 import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
@@ -104,7 +104,7 @@ function getOutboundQueue(): Queue {
 // nodemailer's smtp-connection does NOT normalize Buffer content automatically
 // (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
 // the header/body separator (\r\n\r\n) → raw MIME text in the body.
-async function buildRawMime(options: nodemailer.SendMailOptions): Promise<Buffer> {
+async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
   const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
@@ -1026,12 +1026,12 @@ mailRouter.post(
         if (!sentFolder || !mailbox) return;
 
         // Raw buffer for the Sent copy with in-memory attachments
-        const sentAttachments: nodemailer.SendMailOptions['attachments'] = files.map((f) => ({
+        const sentAttachments: SendMailOptions['attachments'] = files.map((f) => ({
           filename:    f.originalname,
           content:     f.buffer,
           contentType: f.mimetype,
         }));
-        const fromAddress: nodemailer.SendMailOptions['from'] = displayName
+        const fromAddress: SendMailOptions['from'] = displayName
           ? { name: displayName, address: user.email }
           : user.email;
 

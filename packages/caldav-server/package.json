@@ -15,7 +15,7 @@
     "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "ical.js": "^2.0.1",
     "uuid": "^10.0.0",
     "xml2js": "^0.6.2",

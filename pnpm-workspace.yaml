@@ -18,3 +18,36 @@ onlyBuiltDependencies:
   - msgpackr-extract
   - prisma
   - protobufjs
+
+# Security overrides for transitive dependencies (see CHANGELOG "Security").
+# Keep each one inside the major the parent package declares, except where noted.
+overrides:
+  # mailauth 4.x pins nodemailer 8 (addressparser DoS); nodemailer 10 keeps the CJS
+  # `nodemailer/lib/addressparser` export mailauth requires.
+  'mailauth>nodemailer': 10.5.0
+  'undici@7': ^7.30.2
+  'fast-xml-parser@5': ^5.12.1
+  'joi@18': ^18.3.2
+  # express 4 / body-parser 1
+  'body-parser@1': ^1.20.9
+  'proxy-addr@2': ^2.0.8
+  # acme-client -> axios -> follow-redirects / form-data
+  'axios@1': ^1.21.1
+  'follow-redirects@1': ^1.16.3
+  'form-data@4': ^4.0.6
+  # express-rate-limit -> ip-address
+  'ip-address@10': ^10.7.6
+  # xmlbuilder2 3.x -> js-yaml 3
+  'js-yaml@3': ^3.15.2
+  # tiptap 2 -> @tiptap/pm -> prosemirror-view / markdown-it / linkify-it
+  'prosemirror-view@1': ^1.42.9
+  'markdown-it@14': ^14.3.3
+  'linkify-it@5': ^5.0.2
+  # install-time only: bcrypt 5 -> @mapbox/node-pre-gyp 1 -> tar 6 / rimraf -> brace-expansion
+  '@mapbox/node-pre-gyp@1': ^2.0.3
+  # archiver -> readdir-glob / archiver-utils -> minimatch -> brace-expansion
+  'brace-expansion@1': ^1.1.22
+  'brace-expansion@2': ^2.1.8
+  # moderate, same major: pino-pretty -> fast-copy, ldapts -> uuid 11
+  'fast-copy@3': ^3.1.0
+  'uuid@11': ^11.1.1
