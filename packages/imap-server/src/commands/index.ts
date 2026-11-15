@@ -1,7 +1,7 @@
 import {
   prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
-  attachmentKey, uploadBuffer,
+  attachmentKey, uploadBuffer, loadThreadReferences,
   type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
@@ -746,7 +746,16 @@ export async function handleThread(session: ImapSession, tag: string, tokens: To
   if (found === null) return;
   const { rows } = found;
   const idOf = (m: SortMessage): number => (byUid ? m.uid : m.seq);
-  const threads = algorithm === 'REFERENCES' ? threadReferences(rows, idOf) : threadOrderedSubject(rows, idOf);
+  let threads;
+  if (algorithm === 'REFERENCES') {
+    // v9.1: the stored References chains (Message.references, lazily backfilled
+    // for older rows) of the selected folder — own or foreign (session.selected).
+    const refs = await loadThreadReferences(session.selected!.folderId, rows.map((r) => r.id));
+    const list = rows.map((r) => ({ ...r, references: refs.get(r.id) ?? null }));
+    threads = threadReferences(list, idOf);
+  } else {
+    threads = threadOrderedSubject(rows, idOf);
+  }
   const text = formatThreads(threads);
   sendUntagged(session, `THREAD${text ? ' ' + text : ''}`);
   await completeWithUpdates(session, tag, `${byUid ? 'UID THREAD' : 'THREAD'} completed`, byUid);

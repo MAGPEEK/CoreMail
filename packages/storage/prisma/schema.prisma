@@ -334,6 +334,12 @@ model Message {
   replyTo      String?
   messageId    String?     // RFC 2822 Message-ID header
   inReplyTo    String?
+  // v9.1: References header (RFC 5322 §3.6.4) as normalized msg-ids "<a@b> <c@d>",
+  // oldest first, capped at 100 ids of ≤ 998 chars (first id + the last 99).
+  // '' = the message has none; null = not indexed yet (rows written before 9.1:
+  // filled lazily by IMAP THREAD=REFERENCES and the background backfill,
+  // REFERENCES_BACKFILL). See src/references.ts.
+  references   String?
   date         DateTime
   bodyText     String      @default("")
   bodyHtml     String      @default("")

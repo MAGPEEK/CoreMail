@@ -27,3 +27,5 @@ export * from './oof.js';
 export * from './draft.js';
 export * from './draft-versions.js';
 export * from './mailbox-access.js';
+export * from './references.js';
+export * from './references-backfill.js';

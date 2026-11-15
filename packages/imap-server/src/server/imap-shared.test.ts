@@ -550,6 +550,14 @@ describe('SELECT and message commands on foreign folders', () => {
     assert.match((await client.cmd('STORE 1 +FLAGS (\\Seen)')).tagged, /NO \[READ-ONLY\]/);
   });
 
+  test('THREAD REFERENCES uses the References of the selected shared folder', async (t) => {
+    const { client, db } = await login(t);
+    Object.assign(db.msg('m-team-2'), { subject: 'Other subject', inReplyTo: '<gone@example.test>', references: '<m-team-1@example.test> <gone@example.test>' });
+    await client.cmd(`SELECT ${TEAM}`);
+    const r = await client.cmd('UID THREAD REFERENCES UTF-8 ALL');
+    assert.deepEqual(r.lines, ['* THREAD (1 2)']);
+  });
+
   test('IMAP4rev2 SELECT names the foreign mailbox with its "/" delimiter', async (t) => {
     const { client } = await login(t);
     await client.cmd('ENABLE IMAP4rev2');

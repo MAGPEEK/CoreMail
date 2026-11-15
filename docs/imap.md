@@ -83,10 +83,34 @@ get compact answers.
   prefixes, `(fwd)` trailers, `[fwd: …]` wrappers). Strings compare with
   i;ascii-casemap; FROM/TO/CC use the mailbox (local) part of the first address;
   DATE is the sent date, ARRIVAL the internal date; ties end in sequence order.
-- THREAD=REFERENCES runs the RFC 5256 algorithm with the stored `In-Reply-To`
-  and `Message-ID` columns. The full `References` header is not stored, so a
-  reply whose direct parent is not in the mailbox is attached by base subject
-  (step 5) instead of to an older ancestor.
+- THREAD=REFERENCES runs the full RFC 5256 algorithm (Zawinski): the parent
+  chain comes from the stored `References` header (`Message.references`,
+  since 9.1), falling back to the first `In-Reply-To` msg-id when a message has
+  none. Missing ancestors become dummy containers, existing links are kept and
+  links that would form a loop (reference cycles, self references) are not
+  added; duplicate or missing Message-IDs get a container of their own. Dummies
+  are pruned (children promoted; to the root set only for a single child),
+  roots with the same base subject are merged (step 5) and siblings/threads are
+  sorted by sent date (dummies by their earliest child, ties by sequence
+  number). The implementation is iterative (no recursion limit for long reply
+  chains) and uses maps for the subject merge, so a mailbox at the
+  `IMAP_SORT_MAX_MESSAGES` limit threads in well under a second of CPU.
+- `References` storage: every message written since 9.1 stores the msg-ids of
+  its `References` header (RFC 5322 §3.6.4) in header order — comments, quoted
+  strings, ids with whitespace/control characters or over 998 characters are
+  ignored, duplicates removed, at most 100 ids (the first and the last 99).
+  Messages written before 9.1 have no value yet (`null`) and are indexed from
+  their stored raw message (header section only):
+  - lazily — THREAD=REFERENCES indexes up to 2,000 unindexed messages of the
+    selected folder per command before threading (the rest use In-Reply-To
+    until a later command or the background job reaches them);
+  - in the background — `REFERENCES_BACKFILL=on` (default) works off all
+    mailboxes in batches of 500 with pauses, one instance at a time (Redis lock
+    `storage:references-backfill:lock`), every minute while rows are left and
+    every 6 hours once done. `off` leaves indexing to THREAD.
+  Indexing never touches mail delivery and does not change MODSEQ (the value is
+  derived from the immutable raw message). Messages without a raw object or
+  whose object is missing are recorded as having no References.
 - Work is done in memory on a column projection of the folder. Mailboxes with
   more than `IMAP_SORT_MAX_MESSAGES` messages (default 100000, `<= 0` =
   unlimited) are answered with `NO [LIMIT]`.
@@ -227,6 +251,7 @@ Unknown or inaccessible mailboxes → `NO [NONEXISTENT]`.
 | `IMAP_NAMESPACE_OTHER_USERS` | `Other Users` | prefix of the delegated-mailbox namespace; `off` / empty disables it. Printable ASCII without `. / % * " \`, not `INBOX`; an invalid value falls back to the default |
 | `IMAP_NAMESPACE_SHARED` | `Shared` | prefix of the Shared Mailbox namespace; same rules; must differ from the other prefix (else this namespace is disabled) |
 | `IMAP_SHARED_ACCESS_CACHE_MS` | 30000 | lifetime of the per-session permission cache (0–30000) |
+| `REFERENCES_BACKFILL` | on | background indexing of the References of messages written before 9.1 (`off`: only lazily by THREAD=REFERENCES) |
 
 Connection limits (`IMAP_MAX_CONNS*`, `MAIL_CONN_EXEMPT_CIDRS`) are documented
 in [mail-protocol-limits.md](mail-protocol-limits.md).
@@ -234,7 +259,11 @@ in [mail-protocol-limits.md](mail-protocol-limits.md).
 ## Tests
 
 - `src/commands/sort-thread.test.ts` — base subject, sort order, both thread
-  algorithms, UID range helpers.
+  algorithms (REFERENCES: References chains, In-Reply-To fallback, missing
+  parents, cycles, duplicate Message-IDs, subject merging, 20,000-deep chains,
+  100,000 roots), UID range helpers.
+- `packages/storage/src/references.test.ts` — References parsing, population
+  on message creation, lazy and background backfill (batching, Redis lock).
 - `src/server/imap-protocol.test.ts` (loopback server, `node src/run-protocol-tests.mjs`)
   — QRESYNC (Thunderbird CONDSTORE/QRESYNC flows), SORT/THREAD, ACL, and
   COMPRESS with an iOS Mail sequence (LOGIN, ID, COMPRESS, ENABLE QRESYNC,

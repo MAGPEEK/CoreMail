@@ -22,6 +22,7 @@
  */
 import { createHash } from 'node:crypto';
 import { buildRfc822FromFields, type FallbackAttachment } from './mime/build.js';
+import { extractReferences, rememberReferences } from './references.js';
 
 /** Max characters kept in `bodyText` / `bodyHtml` (search + preview); the raw object keeps everything. */
 export const BODY_COLUMN_MAX_CHARS = 1024 * 1024;
@@ -110,6 +111,9 @@ export function createRawMessageStore(store: RawObjectStore): RawMessageStore {
     let present = false;
     if (store.exists) present = await store.exists(storagePath).catch(() => false);
     if (!present) await store.upload(storagePath, raw);
+    // v9.1: the message store fills Message.references from this when a writer
+    // creates the row with this storagePath (content-addressed → never stale).
+    rememberReferences(storagePath, extractReferences(raw));
     return { storagePath, size: raw.length, sha256 };
   }
 

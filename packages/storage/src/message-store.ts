@@ -18,8 +18,13 @@
  * concurrent writers of the same mailbox are serialized and modSeqs become
  * visible in allocation order.
  *
- * This module has no runtime imports on purpose: it only talks to the
- * transaction client it is given (also makes it trivial to fake in tests).
+ * This module only talks to the transaction client it is given (also makes it
+ * trivial to fake in tests); its one runtime import is the pure references.ts.
+ *
+ * References (v9.1): a row created without `references` but with a
+ * `storagePath` gets the References of that raw object when this process stored
+ * it (references.ts cache, filled by storeRawMessage). Otherwise the column stays
+ * null and the backfill (references-backfill.ts) fills it later.
  *
  * Migration: rows written before v6.x may carry `Date.now()`-sized modSeqs and
  * (internal-notify) UIDs ≥ uidNext. The first allocation per mailbox and process
@@ -27,6 +32,7 @@
  * {@link ensureCounterFloor} and {@link migrateMailboxCounters}.
  */
 import type { Prisma, Message } from '@prisma/client';
+import { cachedReferencesColumn } from './references.js';
 
 /** Interactive transaction client (or the root client for single-statement use). */
 export type MessageStoreTx = Prisma.TransactionClient;
@@ -110,8 +116,15 @@ export async function createMessages(
   const { firstUid, modSeq } = await allocate(tx, mailboxId, rows.length);
   const created: Message[] = [];
   for (const [i, data] of rows.entries()) {
+    const refs = data.references === undefined && typeof data.storagePath === 'string'
+      ? cachedReferencesColumn(data.storagePath)
+      : undefined;
     created.push(await tx.message.create({
-      data: { changeKey: modSeq.toString(), ...data, folderId, uid: firstUid + i, modSeq, createdModSeq: modSeq },
+      data: {
+        changeKey: modSeq.toString(),
+        ...(refs !== undefined ? { references: refs } : {}),
+        ...data, folderId, uid: firstUid + i, modSeq, createdModSeq: modSeq,
+      },
     }));
   }
   return created;

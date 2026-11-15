@@ -40,6 +40,16 @@ export * from '${storageUrl('mime/build.ts')}';
 export * from '${storageUrl('mime/index.ts')}';
 export * from '${storageUrl('raw-message.ts')}';
 export * from '${storageUrl('mailbox-access.ts')}';
+export * from '${storageUrl('references.ts')}';
+import { splitReferences } from '${storageUrl('references.ts')}';
+// v9.1 THREAD=REFERENCES: the stored column of the (fake) message rows; no backfill here.
+export const loadThreadReferences = async (folderId, ids) => {
+  const wanted = new Set(ids);
+  const rows = await g.prisma.message.findMany({ where: { folderId, deletedAt: null } });
+  const out = new Map();
+  for (const r of rows) if (wanted.has(r.id) && typeof r.references === 'string') out.set(r.id, splitReferences(r.references));
+  return out;
+};
 import { createRawMessageStore } from '${storageUrl('raw-message.ts')}';
 const g = (globalThis.__coremailTest ??= {});
 const objects = (g.objects ??= new Map());
