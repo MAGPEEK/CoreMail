@@ -1,10 +1,13 @@
-import { useId, useState, useEffect, useMemo } from 'react';
+import { useId, useState, useEffect } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield } from 'lucide-react';
+import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
+import { useT } from '../i18n/useT.js';
+import { Can, WriteGuard } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 type PermType = 'FULL_ACCESS' | 'SEND_AS' | 'SEND_ON_BEHALF' | 'READ_ONLY';
 
@@ -26,6 +29,7 @@ const PERM_LABELS: Record<PermType, string> = {
 };
 
 export function SharedMailboxesPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -35,129 +39,145 @@ export function SharedMailboxesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [permItem, setPermItem] = useState<SharedMailbox | null>(null);
 
-  useMemo(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => clearTimeout(t);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
-  const { data, isLoading } = useQuery<{ items: SharedMailbox[]; total: number }>({
+  // Server-side search + paging (API: search/page/limit)
+  const { data, isLoading, isFetching, refetch } = useQuery<{ items: SharedMailbox[]; total: number }>({
     queryKey: ['admin-shared-mailboxes', debouncedSearch, page, limit],
     queryFn: () => api.get(`/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/shared-mailboxes/${id}`),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Gelöscht'); },
-    onError: () => toast.error('Löschen fehlgeschlagen'),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success(t('shared_deleted')); },
+    onError: () => toast.error(t('shared_delete_failed')),
+  });
+  const bulkDelete = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const r = await Promise.allSettled(ids.map((id) => api.delete(`/admin/shared-mailboxes/${id}`)));
+      return r.filter((x) => x.status === 'rejected').length;
+    },
+    onSuccess: (failed) => {
+      void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
+      if (failed) toast.error(`${failed} × ${t('shared_delete_failed')}`); else toast.success(t('shared_deleted'));
+    },
   });
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / limit));
+  const confirmDelete = (item: SharedMailbox) => {
+    if (window.confirm(`"${item.email}" ${t('shared_delete_confirm')}`)) deleteMutation.mutate(item.id);
+  };
+
+  const columns: Column<SharedMailbox>[] = [
+    {
+      key: 'email', header: t('shared_col_email'),
+      cell: (item) => (
+        <>
+          <p className="font-medium text-gray-900 text-sm">{item.email}</p>
+          <p className="text-xs text-gray-400">{item.displayName}</p>
+        </>
+      ),
+    },
+    {
+      key: 'perms', header: t('shared_col_permissions'),
+      cell: (item) => (
+        <div className="flex flex-wrap gap-1">
+          {item.permissions.length === 0
+            ? <span className="text-xs text-gray-400">–</span>
+            : item.permissions.slice(0, 3).map(p => (
+                <span key={p.id} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
+                  {p.user.email.split('@')[0]} · {PERM_LABELS[p.permission]}
+                </span>
+              ))}
+          {item.permissions.length > 3 && <span className="text-xs text-gray-400">+{item.permissions.length - 3}</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'status', header: t('mbox_col_status'),
+      cell: (item) => (
+        <span className={`px-2 py-0.5 rounded text-xs font-medium ${item.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {item.active ? t('status_active') : t('status_inactive')}
+        </span>
+      ),
+    },
+    {
+      key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true, headerClassName: 'text-right', className: 'text-right',
+      cell: (item) => (
+        <div className="flex items-center justify-end gap-1">
+          <button onClick={() => setPermItem(item)} title={t('shared_col_permissions')} aria-label={`${t('shared_col_permissions')}: ${item.email}`}
+            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
+            <Shield size={14} />
+          </button>
+          <Can area="recipients" access="write">
+            <button onClick={() => setEditItem(item)} title={t('tb_edit')} aria-label={`${t('tb_edit')}: ${item.email}`}
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
+              <Pencil size={14} />
+            </button>
+            <button onClick={() => confirmDelete(item)} title={t('tb_delete')} aria-label={`${t('tb_delete')}: ${item.email}`}
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              <Trash2 size={14} />
+            </button>
+          </Can>
+        </div>
+      ),
+    },
+  ];
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Inbox size={22} className="text-blue-600" />
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Freigegebene Postfächer</h1>
-            <p className="text-sm text-gray-500">{total} Postfach{total !== 1 ? 'fächer' : ''}</p>
-          </div>
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-3">
+        <Inbox size={22} className="text-blue-600" aria-hidden="true" />
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">{t('shared_title')}</h1>
+          <p className="text-sm text-gray-500">{total} {t('shared_count')}</p>
         </div>
-        <button onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
-          <Plus size={14} /> Neues Postfach
-        </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="p-3 border-b border-gray-200">
-          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Postfächer durchsuchen…"
-            className="input max-w-sm" />
-        </div>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12 text-gray-400">
-            <Loader2 size={20} className="animate-spin mr-2" /> Lade…
-          </div>
-        ) : items.length === 0 ? (
-          <div className="text-center py-12 text-gray-400 text-sm">Keine freigegebenen Postfächer</div>
-        ) : (
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">E-Mail / Name</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Berechtigungen</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {items.map(item => (
-                <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-gray-900 text-sm">{item.email}</p>
-                    <p className="text-xs text-gray-400">{item.displayName}</p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {item.permissions.length === 0
-                        ? <span className="text-xs text-gray-400">–</span>
-                        : item.permissions.slice(0, 3).map(p => (
-                            <span key={p.id} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
-                              {p.user.email.split('@')[0]} · {PERM_LABELS[p.permission]}
-                            </span>
-                          ))
-                      }
-                      {item.permissions.length > 3 && (
-                        <span className="text-xs text-gray-400">+{item.permissions.length - 3}</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${item.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {item.active ? 'Aktiv' : 'Inaktiv'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button aria-label="Berechtigungen" onClick={() => setPermItem(item)} title="Berechtigungen"
-                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                        <Shield size={14} />
-                      </button>
-                      <button aria-label="Bearbeiten" onClick={() => setEditItem(item)} title="Bearbeiten"
-                        className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
-                        <Pencil size={14} />
-                      </button>
-                      <button aria-label="Löschen" onClick={() => { if (window.confirm(`"${item.email}" löschen?`)) deleteMutation.mutate(item.id); }}
-                        title="Löschen"
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <DataTable<SharedMailbox>
+        caption={t('shared_title')}
+        rows={items}
+        columns={columns}
+        rowKey={(i) => i.id}
+        loading={isLoading}
+        server={{ page, pageSize: limit, total, onPageChange: setPage }}
+        search={{ placeholder: t('shared_search'), value: search, onChange: (q) => { setSearch(q); setPage(1); } }}
+        selectable
+        onActivate={(i) => setPermItem(i)}
+        emptyText={debouncedSearch ? undefined : t('shared_empty')}
+        toolbar={({ selectedRows, clearSelection }) => (
+          <>
+            <Can area="recipients" access="write">
+              <button onClick={() => setCreateOpen(true)} className="btn-primary flex items-center gap-1.5">
+                <Plus size={14} aria-hidden="true" /> {t('shared_new')}
+              </button>
+            </Can>
+            <Can area="recipients" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40" disabled={selectedRows.length !== 1}
+                onClick={() => selectedRows[0] && setEditItem(selectedRows[0])}>
+                <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
+              </button>
+            </Can>
+            <Can area="recipients" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+                disabled={selectedRows.length === 0 || bulkDelete.isPending}
+                onClick={() => {
+                  if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})\n${selectedRows.map((r) => r.email).join('\n')}`)) return;
+                  bulkDelete.mutate(selectedRows.map((r) => r.id), { onSuccess: clearSelection });
+                }}>
+                <Trash2 size={13} aria-hidden="true" /> {t('tb_delete')}
+              </button>
+            </Can>
+            <button onClick={() => void refetch()} className="btn-secondary flex items-center gap-1.5 text-xs">
+              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
+            </button>
+          </>
         )}
-
-        {/* Pagination */}
-        {pages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 text-sm text-gray-500">
-            <span>{total} Einträge</span>
-            <div className="flex gap-1">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">‹</button>
-              <span className="px-3 py-1">Seite {page} / {pages}</span>
-              <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
-                className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">›</button>
-            </div>
-          </div>
-        )}
-      </div>
+      />
 
       {createOpen && <SharedMailboxModal onClose={() => setCreateOpen(false)} />}
       {editItem   && <SharedMailboxModal item={editItem} onClose={() => setEditItem(null)} />}
@@ -368,7 +388,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
           </div>
           <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
-        <div className="p-5 space-y-4">
+        <WriteGuard area="recipients" className="p-5 space-y-4">
           {/* Existing permissions — grouped per user */}
           <div className="space-y-2">
             {Object.keys(grouped).length === 0 && !editingUser && (
@@ -511,7 +531,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
               </button>
             </div>
           </div>
-        </div>
+        </WriteGuard>
     </Modal>
   );
 }

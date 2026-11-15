@@ -14,9 +14,10 @@
  */
 import { Readable, Transform } from 'node:stream';
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
-import { requireArea, requireRole } from '../../middleware/auth.js'; // also loads the `apiUser` request augmentation
+import { requireArea, requireAction } from '../../middleware/auth.js'; // also loads the `apiUser` request augmentation
 import { prisma } from '@coremail/storage';
 import { audit, auditContext } from '../../lib/audit.js';
+import { hasAdminAction } from '../../lib/rbac.js';
 
 const BACKUP_URL = process.env['BACKUP_SERVICE_URL'] ?? 'http://localhost:3004';
 
@@ -37,11 +38,11 @@ export function isMailboxDataRoute(req: Pick<Request, 'method' | 'path'>): boole
 
 /** COMPLIANCE_MANAGEMENT has no 'servers' area: it reaches the mailbox-data routes and the lists needed to pick a job. */
 const complianceBackupAccess = (role: string, req: Request): boolean =>
-  role === 'COMPLIANCE_MANAGEMENT'
+  hasAdminAction(role, 'backupMailboxData') // 8.x action map (lib/rbac.ts)
   && (isMailboxDataRoute(req) || ((req.method === 'GET' || req.method === 'HEAD')
     && (/^\/(jobs|list|users)\/?$/.test(req.path) || /^\/users\/[^/]+\/folders\/?$/.test(req.path))));
 
-const mailboxDataGuard = requireRole('COMPLIANCE_MANAGEMENT'); // ORGANIZATION_MANAGEMENT always passes
+const mailboxDataGuard = requireAction('backupMailboxData'); // ORGANIZATION_MANAGEMENT + COMPLIANCE_MANAGEMENT (lib/rbac.ts)
 
 export const adminBackupsRouter: RouterType = Router();
 adminBackupsRouter.use(requireArea('servers', complianceBackupAccess));

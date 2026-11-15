@@ -27,8 +27,11 @@
  *  - Only ORGANIZATION_MANAGEMENT may assign/change roles, and modify, reset the
  *    password of, or delete another admin account (role ≠ USER).
  *
- * The caller's areas are exposed via GET /api/v1/user/me → `adminAreas`
- * (`{ "<area>": "write" | "read" }`) so the BCP can hide pages.
+ * The caller's areas are exposed via GET /api/v1/admin/me/permissions
+ * (`{ role, areas: { "<area>": "write" | "read" }, mfaVerified }`) and, for
+ * older clients, GET /api/v1/user/me → `adminAreas`, so the BCP can hide pages
+ * and render read-only forms. ROLE_PERMISSIONS (below) is the per-role view of
+ * this matrix and the one the guards consult.
  */
 
 export const USER_ROLES = [
@@ -55,6 +58,67 @@ export const AREA_MATRIX: Record<AdminArea, { write: readonly UserRoleName[]; re
   domains:      { write: [],                         read: ['RECIPIENT_MANAGEMENT', 'SERVER_MANAGEMENT', 'VIEW_ONLY_ORG'] },
   hygiene:      { write: ['HYGIENE_MANAGEMENT'],     read: ['VIEW_ONLY_ORG'] },
   compliance:   { write: ['COMPLIANCE_MANAGEMENT'],  read: [] },
+};
+
+/** One permission entry: `access` on `area` (write implies read). */
+export interface AreaPermission { readonly area: AdminArea; readonly access: AreaAccess }
+
+/**
+ * Role → permissions (8.x). THE map every area guard consults: `areaAccess()`
+ * — and therefore `canAccess()`, `requireArea()`, `allowedAreas()`,
+ * `GET /api/v1/user/me` (`adminAreas`) and `GET /api/v1/admin/me/permissions` —
+ * reads it. Built once from AREA_MATRIX (which stays the readable per-area
+ * view); ORGANIZATION_MANAGEMENT gets write on every area, USER gets nothing.
+ * `requireRole()` without roles (EMS fallback, /storage) is ORGANIZATION_MANAGEMENT
+ * only and therefore needs no area.
+ */
+export const ROLE_PERMISSIONS: Readonly<Record<UserRoleName, readonly AreaPermission[]>> = Object.freeze(
+  Object.fromEntries(USER_ROLES.map((role) => {
+    const perms: AreaPermission[] = [];
+    if (role !== 'USER') {
+      for (const area of ADMIN_AREAS) {
+        const m = AREA_MATRIX[area];
+        if (role === 'ORGANIZATION_MANAGEMENT' || m.write.includes(role)) perms.push(Object.freeze({ area, access: 'write' as const }));
+        else if (m.read.includes(role)) perms.push(Object.freeze({ area, access: 'read' as const }));
+      }
+    }
+    return [role, Object.freeze(perms)];
+  })) as Record<UserRoleName, readonly AreaPermission[]>,
+);
+
+/**
+ * Narrow admin actions (8.x) — rights finer than an area's read/write that the
+ * routes grant via `requireArea(area, extra)` / handler checks. The guards
+ * consult `hasAdminAction()` (mailboxes, backups), GET /admin/me/permissions
+ * reports them as `actions: { <area>: AdminAction[] }`, and the BCP shows
+ * exactly these actions (permissions.test.ts proves guards and map agree).
+ *
+ *  action             area        what (route)                                           granted to
+ *  ─────────────────  ──────────  ─────────────────────────────────────────────────────  ─────────────────────────────────────────
+ *  resetPassword      recipients  PUT /mailboxes/:id { password, revokeAppPasswords }    write on recipients + HELP_DESK (USER accounts only)
+ *  toggleActive       recipients  PUT /mailboxes/:id { active }                          write on recipients + HELP_DESK (USER accounts only)
+ *  revokeSessions     recipients  POST /mailboxes/:id/revoke-sessions                    write on recipients + HELP_DESK (USER accounts only)
+ *  backupMailboxData  servers     per-mailbox backup, job/archive download, MBOX import  ORGANIZATION_MANAGEMENT + COMPLIANCE_MANAGEMENT
+ *                                 (+ GET job/archive/user lists for COMPLIANCE)          (NOT implied by write on servers)
+ */
+export const ADMIN_ACTIONS = {
+  resetPassword:     { area: 'recipients', impliedByWrite: true },
+  toggleActive:      { area: 'recipients', impliedByWrite: true },
+  revokeSessions:    { area: 'recipients', impliedByWrite: true },
+  backupMailboxData: { area: 'servers',    impliedByWrite: false },
+} as const satisfies Record<string, { area: AdminArea; impliedByWrite: boolean }>;
+export type AdminAction = keyof typeof ADMIN_ACTIONS;
+
+/** Explicit action grants beyond the area matrix (ORGANIZATION_MANAGEMENT has every action). */
+export const ROLE_ACTION_GRANTS: Readonly<Partial<Record<UserRoleName, readonly AdminAction[]>>> = {
+  HELP_DESK:             ['resetPassword', 'toggleActive', 'revokeSessions'],
+  COMPLIANCE_MANAGEMENT: ['backupMailboxData'],
+};
+
+/** Request-body fields a role WITHOUT write on recipients may send to PUT /mailboxes/:id, per action. */
+export const ACTION_FIELDS: Readonly<Partial<Record<AdminAction, readonly string[]>>> = {
+  resetPassword: ['password', 'revokeAppPasswords'],
+  toggleActive:  ['active'],
 };
 
 export function isUserRole(v: unknown): v is UserRoleName {
@@ -88,12 +152,8 @@ export function isReadMethod(method: string): boolean {
 
 /** Access level of `role` on `area`, or null. */
 export function areaAccess(role: string | undefined, area: AdminArea): AreaAccess | null {
-  if (!role || !isUserRole(role) || role === 'USER') return null;
-  if (role === 'ORGANIZATION_MANAGEMENT') return 'write';
-  const m = AREA_MATRIX[area];
-  if (m.write.includes(role)) return 'write';
-  if (m.read.includes(role)) return 'read';
-  return null;
+  if (!role || !isUserRole(role)) return null;
+  return ROLE_PERMISSIONS[role].find((p) => p.area === area)?.access ?? null;
 }
 
 export function canAccess(role: string | undefined, area: AdminArea, method: string): boolean {
@@ -110,6 +170,38 @@ export function allowedAreas(role: string | undefined): Partial<Record<AdminArea
     if (a) out[area] = a;
   }
   return out;
+}
+
+/** May `role` perform the narrow admin `action` (see ADMIN_ACTIONS)? */
+export function hasAdminAction(role: string | undefined, action: AdminAction): boolean {
+  if (!role || !isUserRole(role) || role === 'USER') return false;
+  if (role === 'ORGANIZATION_MANAGEMENT') return true;
+  const def = ADMIN_ACTIONS[action];
+  if (def.impliedByWrite && areaAccess(role, def.area) === 'write') return true;
+  return (ROLE_ACTION_GRANTS[role] ?? []).includes(action);
+}
+
+/** `{ <area>: AdminAction[] }` for every action the role may perform (empty for USER). */
+export function allowedActions(role: string | undefined): Partial<Record<AdminArea, AdminAction[]>> {
+  const out: Partial<Record<AdminArea, AdminAction[]>> = {};
+  for (const action of Object.keys(ADMIN_ACTIONS) as AdminAction[]) {
+    if (!hasAdminAction(role, action)) continue;
+    (out[ADMIN_ACTIONS[action].area] ??= []).push(action);
+  }
+  return out;
+}
+
+/**
+ * Fields a role may send to PUT /mailboxes/:id: null = unrestricted (write on
+ * recipients), otherwise the union of ACTION_FIELDS of its granted actions.
+ */
+export function mailboxUpdateFields(role: string | undefined): ReadonlySet<string> | null {
+  if (areaAccess(role, 'recipients') === 'write') return null;
+  const fields = new Set<string>();
+  for (const [action, f] of Object.entries(ACTION_FIELDS) as Array<[AdminAction, readonly string[]]>) {
+    if (hasAdminAction(role, action)) f.forEach((x) => fields.add(x));
+  }
+  return fields;
 }
 
 /**

@@ -111,6 +111,9 @@ model User {
   // v6.1: set when the LDAP sync deactivated the account (missing in / disabled
   // in the directory) — only such accounts are re-activated by the sync.
   deactivatedBySync Boolean      @default(false)
+  // 8.x: last successful login (web/API, SSO, mail protocols). Written by
+  // recordLastLogin() (src/auth/last-login.ts), at most once per user per 5 min.
+  lastLoginAt     DateTime?
   domain          Domain         @relation(fields: [domainId], references: [id])
   domainId        String
   mailbox         Mailbox?

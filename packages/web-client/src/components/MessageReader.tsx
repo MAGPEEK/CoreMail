@@ -19,6 +19,7 @@ import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 import { Modal } from './Modal.js';
+import { translate } from '../i18n/useT.js';
 
 interface Props {
   messageId: string;
@@ -271,6 +272,20 @@ export function MessageReader({ messageId }: Props) {
           </div>
         );
       })()}
+
+      {/* Draft (own Drafts folder): continue editing in compose (server draft) */}
+      {currentFolder?.name === 'Drafts' && !msg.scheduledStatus && (
+        <div className="px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200">
+          <span className="flex-1">{translate('draft_banner')}</span>
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            onClick={() => openCompose({ mode: 'new', draftId: msg.id })}
+          >
+            {translate('draft_edit')}
+          </button>
+        </div>
+      )}
 
       {/* Scheduled send banner (Outlook style) — visible for PENDING/SENT/CANCELLED */}
       {msg.scheduledAt && msg.scheduledStatus && (

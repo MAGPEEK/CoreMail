@@ -2,8 +2,16 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
-import { canAccess, isAdminRole, isReadMethod, stricterRole, type AdminArea, type UserRoleName } from '../lib/rbac.js';
+import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 import { redeemEventTicket } from '../lib/event-tickets.js';
+
+// The single role → area permission map (and the narrow action map) the guards
+// below use (canAccess → areaAccess, hasAdminAction). Re-exported so routes and
+// tests import them from the guard module.
+export {
+  ROLE_PERMISSIONS, ADMIN_AREAS, ADMIN_ACTIONS, allowedAreas, allowedActions, hasAdminAction,
+  type AreaPermission, type AreaAccess, type AdminArea, type AdminAction,
+} from '../lib/rbac.js';
 
 const log = createLogger('api:auth');
 
@@ -285,4 +293,13 @@ export function requireRole(...roles: UserRoleName[]) {
  */
 export function requireArea(area: AdminArea, extra?: (role: string, req: Request) => boolean) {
   return adminGuard((role, req) => canAccess(role, area, req.method) || (!!extra && isAdminRole(role) && extra(role, req)));
+}
+
+/**
+ * Guard for a narrow admin action (8.x, lib/rbac.ts ADMIN_ACTIONS) — e.g. the
+ * mailbox-content backup routes (`backupMailboxData`). Same checks as every
+ * admin guard (current role, admin MFA).
+ */
+export function requireAction(action: AdminAction) {
+  return adminGuard((role) => hasAdminAction(role, action));
 }

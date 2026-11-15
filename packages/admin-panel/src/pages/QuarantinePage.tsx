@@ -4,12 +4,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
   ShieldAlert, CheckCircle, Trash2, Loader2, Bug, AlertTriangle,
-  FileWarning, X, Search, RefreshCw, Mail, Calendar,
-  User, ArrowRight, Eye, ChevronLeft, ChevronRight,
+  FileWarning, X, RefreshCw, Mail,
+  User, ArrowRight, Eye,
   Info, Clock, Download,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { Can } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -211,8 +214,9 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
           </div>
         )}
 
-        {/* Actions */}
+        {/* Actions (hidden without write access to the hygiene area) */}
         {data && (
+          <Can area="hygiene" access="write" mode="hide">
           <div className="px-5 py-4 border-t border-gray-200 bg-gray-50 flex items-center gap-2 shrink-0">
             {!data.released && data.reason !== 'VIRUS' && (
               <button
@@ -234,6 +238,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
               <Trash2 size={14} /> {t('quar_detail_delete_btn')}
             </button>
           </div>
+          </Can>
         )}
     </Modal>
   );
@@ -323,8 +328,9 @@ export function QuarantinePage() {
 
   // UI state
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
-  const [selectedRows,  setSelectedRows]  = useState<Set<string>>(new Set());
   const [showCleanup,   setShowCleanup]   = useState(false);
+  const { can } = usePermissions();
+  const canWrite = can('hygiene', 'write');
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -343,7 +349,6 @@ export function QuarantinePage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / LIMIT));
 
   function invalidate() {
     void qc.invalidateQueries({ queryKey: ['quarantine'] });
@@ -358,17 +363,23 @@ export function QuarantinePage() {
     onError:   () => toast.error(t('quar_release_error')),
   });
 
+  const releaseManyMut = useMutation({
+    mutationFn: (ids: string[]) => Promise.all(ids.map(id => api.post(`/admin/quarantine/${id}/release`, {}))),
+    onSuccess: (r) => { invalidate(); toast.success(`${r.length} × ${t('quar_released_toast')}`); },
+    onError:   () => { invalidate(); toast.error(t('quar_release_error')); },
+  });
+
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/quarantine/${id}`),
-    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success(t('quar_deleted_toast')); },
+    onSuccess: () => { invalidate(); toast.success(t('quar_deleted_toast')); },
     onError:   () => toast.error(t('quar_delete_error')),
   });
 
   const bulkDeleteMut = useMutation({
     mutationFn: (ids: string[]) =>
       Promise.all(ids.map(id => api.delete(`/admin/quarantine/${id}`))),
-    onSuccess: () => { invalidate(); setSelectedRows(new Set()); toast.success(`${selectedRows.size} ${t('quar_deleted_toast')}`); },
-    onError:   () => toast.error(t('quar_delete_error')),
+    onSuccess: (r) => { invalidate(); toast.success(`${r.length} ${t('quar_deleted_toast')}`); },
+    onError:   () => { invalidate(); toast.error(t('quar_delete_error')); },
   });
 
   const cleanupMut = useMutation({
@@ -378,27 +389,72 @@ export function QuarantinePage() {
     onError:   () => toast.error(t('quar_cleanup_error')),
   });
 
-  // ── Selection helpers ────────────────────────────────────────────────────
-
-  function toggleRow(id: string) {
-    setSelectedRows(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    if (selectedRows.size === items.length) {
-      setSelectedRows(new Set());
-    } else {
-      setSelectedRows(new Set(items.map(i => i.id)));
-    }
-  }
-
   function resetFilters() {
-    setSearch(''); setReason(''); setReleased('false'); setPage(1); setSelectedRows(new Set());
+    setSearch(''); setReason(''); setReleased('false'); setPage(1);
   }
+
+  const columns: Column<QuarantineItem>[] = [
+    {
+      key: 'from', header: t('quar_col_from_to'),
+      cell: (item) => (
+        <>
+          <p className="font-medium text-gray-800 truncate max-w-[170px]">{item.fromAddr}</p>
+          <p className="text-xs text-gray-400 flex items-center gap-0.5 truncate max-w-[170px]">
+            <ArrowRight size={9} aria-hidden="true" /> {item.toAddr}
+          </p>
+        </>
+      ),
+    },
+    {
+      key: 'subject', header: t('quar_col_subject'),
+      cell: (item) => <p className="text-gray-700 truncate max-w-[220px]">{item.subject || <span className="italic text-gray-400">{t('quar_no_subject')}</span>}</p>,
+    },
+    { key: 'reason', header: t('quar_col_reason'), cell: (item) => <ReasonBadge reason={item.reason} /> },
+    {
+      key: 'date', header: t('quar_col_date'), className: 'text-xs text-gray-500 whitespace-nowrap',
+      cell: (item) => (
+        <>
+          {new Date(item.createdAt).toLocaleDateString()}<br />
+          <span className="text-gray-400">{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        </>
+      ),
+    },
+    {
+      key: 'status', header: t('quar_col_status'),
+      cell: (item) => item.released ? (
+        <span className="inline-flex items-center gap-1 text-xs text-green-600"><CheckCircle size={11} aria-hidden="true" /> {t('quar_status_released')}</span>
+      ) : (
+        <span className="inline-flex items-center gap-1 text-xs text-amber-600"><Clock size={11} aria-hidden="true" /> {t('quar_status_pending')}</span>
+      ),
+    },
+    {
+      key: 'actions', header: t('quar_col_actions'), srOnlyHeader: true,
+      cell: (item) => (
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={() => setSelectedId(item.id === selectedId ? null : item.id)}
+            title={t('quar_btn_preview')} aria-label={`${t('quar_btn_preview')}: ${item.subject || item.fromAddr}`}
+            className={`p-1.5 rounded transition-colors ${selectedId === item.id ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-accent hover:bg-accent/10'}`}
+          >
+            <Eye size={14} />
+          </button>
+          <Can area="hygiene" access="write">
+            {!item.released && item.reason !== 'VIRUS' && (
+              <button onClick={() => releaseMut.mutate(item.id)} title={t('quar_btn_release')} aria-label={t('quar_btn_release')}
+                className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors">
+                <CheckCircle size={14} />
+              </button>
+            )}
+            <button onClick={() => { if (window.confirm(t('quar_delete_confirm'))) deleteMut.mutate(item.id); }}
+              title={t('quar_btn_delete')} aria-label={t('quar_btn_delete')}
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              <Trash2 size={14} />
+            </button>
+          </Can>
+        </div>
+      ),
+    },
+  ];
 
   // ── Stat cards config ────────────────────────────────────────────────────
 
@@ -428,10 +484,12 @@ export function QuarantinePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowCleanup(true)}
-              className="btn-secondary text-xs gap-1.5">
-              <Trash2 size={13} /> {t('quar_cleanup')}
-            </button>
+            <Can area="hygiene" access="write">
+              <button onClick={() => setShowCleanup(true)}
+                className="btn-secondary text-xs gap-1.5">
+                <Trash2 size={13} /> {t('quar_cleanup')}
+              </button>
+            </Can>
             <button onClick={() => { invalidate(); void qc.invalidateQueries({ queryKey: ['quarantine-stats'] }); }}
               className="btn-ghost text-xs gap-1">
               <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} /> {t('quar_refresh')}
@@ -464,222 +522,80 @@ export function QuarantinePage() {
         </div>
       </div>
 
-      {/* ── Filter bar ────────────────────────────────────────────────── */}
-      <div className="px-6 py-2.5 bg-white border-b border-gray-200 flex items-center gap-3 shrink-0">
-        <div className="relative flex-1 max-w-xs">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); setSelectedRows(new Set()); }}
-            placeholder={t('quar_search_placeholder')}
-            className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-          />
-          {search && (
-            <button aria-label="Suche leeren" onClick={() => { setSearch(''); setPage(1); }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-              <X size={12} />
-            </button>
-          )}
-        </div>
-
-        <select value={reason} onChange={e => { setReason(e.target.value); setPage(1); setSelectedRows(new Set()); }}
-          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
-          <option value="">{t('quar_filter_all_reasons')}</option>
-          <option value="VIRUS">{t('quar_stat_virus')}</option>
-          <option value="SPAM">{t('quar_stat_spam')}</option>
-          <option value="POLICY">{t('quar_stat_policy')}</option>
-        </select>
-
-        <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-          {([[`false`, t('quar_filter_pending')],[`true`, t('quar_filter_released')],[``, t('quar_filter_all')]] as [string, string][]).map(([val, label]) => (
-            <button
-              key={val}
-              onClick={() => { setReleased(val); setPage(1); setSelectedRows(new Set()); }}
-              className={`px-3 py-1.5 transition-colors ${released === val ? 'bg-accent text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {(search || reason || released !== 'false') && (
-          <button onClick={resetFilters} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-            <X size={12} /> {t('quar_filter_clear')}
-          </button>
-        )}
-
-        <span className="ml-auto text-xs text-gray-400">{total} {t('quar_entries')}</span>
-      </div>
-
-      {/* ── Bulk action bar ───────────────────────────────────────────── */}
-      {selectedRows.size > 0 && (
-        <div className="px-6 py-2 bg-accent/10 border-b border-accent/20 flex items-center gap-3 shrink-0">
-          <span className="text-sm font-medium text-accent">{selectedRows.size} {t('quar_bulk_selected')}</span>
-          <button
-            onClick={() => bulkDeleteMut.mutate([...selectedRows])}
-            disabled={bulkDeleteMut.isPending}
-            className="btn-secondary text-xs text-red-600 border-red-200 hover:bg-red-50 gap-1">
-            <Trash2 size={12} /> {t('quar_bulk_delete')}
-          </button>
-          <button onClick={() => setSelectedRows(new Set())} className="text-xs text-gray-500 hover:text-gray-700 ml-auto">
-            {t('quar_bulk_deselect')}
-          </button>
-        </div>
-      )}
-
-      {/* ── Table ─────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-24 text-gray-400">
-            <Loader2 size={22} className="animate-spin mr-2" /> {t('quar_loading')}
-          </div>
-        ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-gray-400 gap-3">
-            <ShieldAlert size={36} className="text-gray-200" />
-            <p className="text-sm">{t('quar_empty')}</p>
-            {(search || reason) && (
-              <button onClick={resetFilters} className="text-xs text-accent hover:underline">{t('quar_reset_filter')}</button>
-            )}
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-white border-b border-gray-200 sticky top-0 z-10">
-              <tr>
-                <th className="w-8 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedRows.size === items.length && items.length > 0}
-                    onChange={toggleAll}
-                    className="rounded border-gray-300 text-accent focus:ring-accent"
-                  />
-                </th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_from_to')}</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_subject')}</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_reason')}</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  <Calendar size={11} className="inline mr-1" />{t('quar_col_date')}
-                </th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_status')}</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('quar_col_actions')}</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-100">
-              {items.map(item => {
-                const isSelected  = selectedRows.has(item.id);
-                const isActive    = selectedId === item.id;
-                return (
-                  <tr
-                    key={item.id}
-                    className={`transition-colors hover:bg-gray-50 cursor-pointer ${item.released ? 'opacity-60' : ''} ${isActive ? 'bg-accent/5' : ''} ${isSelected ? 'bg-blue-50/60' : ''}`}
-                    onClick={() => setSelectedId(item.id === selectedId ? null : item.id)}
+      {/* ── List (server-side search + paging; API: search/reason/released/page/limit) ── */}
+      <div className="flex-1 overflow-auto px-6 py-4">
+        <DataTable<QuarantineItem>
+          caption={t('quar_page_title')}
+          rows={items}
+          columns={columns}
+          rowKey={(i) => i.id}
+          loading={isLoading}
+          server={{ page, pageSize: LIMIT, total, onPageChange: setPage }}
+          search={{ placeholder: t('quar_search_placeholder'), value: search, onChange: (q) => { setSearch(q); setPage(1); } }}
+          selectable={canWrite}
+          onActivate={(i) => setSelectedId(i.id)}
+          activeKey={selectedId}
+          rowClassName={(i) => (i.released ? 'opacity-60' : '')}
+          emptyText={
+            <span className="inline-flex flex-col items-center gap-2">
+              <ShieldAlert size={32} className="text-gray-200" aria-hidden="true" />
+              {t('quar_empty')}
+              {(search || reason) && (
+                <button onClick={resetFilters} className="text-xs text-accent hover:underline">{t('quar_reset_filter')}</button>
+              )}
+            </span>
+          }
+          filters={
+            <>
+              <select value={reason} onChange={e => { setReason(e.target.value); setPage(1); }}
+                aria-label={t('quar_filter_all_reasons')}
+                className="input w-auto py-1.5">
+                <option value="">{t('quar_filter_all_reasons')}</option>
+                <option value="VIRUS">{t('quar_stat_virus')}</option>
+                <option value="SPAM">{t('quar_stat_spam')}</option>
+                <option value="POLICY">{t('quar_stat_policy')}</option>
+              </select>
+              <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm" role="group" aria-label={t('quar_col_status')}>
+                {([[`false`, t('quar_filter_pending')],[`true`, t('quar_filter_released')],[``, t('quar_filter_all')]] as [string, string][]).map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => { setReleased(val); setPage(1); }}
+                    aria-pressed={released === val}
+                    className={`px-3 py-1.5 transition-colors ${released === val ? 'bg-accent text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                   >
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleRow(item.id)}
-                        className="rounded border-gray-300 text-accent focus:ring-accent"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-gray-800 truncate max-w-[170px]">{item.fromAddr}</p>
-                      <p className="text-xs text-gray-400 flex items-center gap-0.5 truncate max-w-[170px]">
-                        <ArrowRight size={9} /> {item.toAddr}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="text-gray-700 truncate max-w-[220px]">{item.subject || <span className="italic text-gray-400">{t('quar_no_subject')}</span>}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <ReasonBadge reason={item.reason} />
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                      {new Date(item.createdAt).toLocaleDateString('de-DE')}<br/>
-                      <span className="text-gray-400">{new Date(item.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {item.released ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-600">
-                          <CheckCircle size={11} /> {t('quar_status_released')}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-amber-600">
-                          <Clock size={11} /> {t('quar_status_pending')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        <button aria-label={t('quar_btn_preview')}
-                          onClick={() => setSelectedId(item.id === selectedId ? null : item.id)}
-                          title={t('quar_btn_preview')}
-                          className={`p-1.5 rounded transition-colors ${isActive ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-accent hover:bg-accent/10'}`}
-                        >
-                          <Eye size={14} />
-                        </button>
-                        {!item.released && item.reason !== 'VIRUS' && (
-                          <button aria-label={t('quar_btn_release')}
-                            onClick={() => releaseMut.mutate(item.id)}
-                            title={t('quar_btn_release')}
-                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                          >
-                            <CheckCircle size={14} />
-                          </button>
-                        )}
-                        <button aria-label={t('quar_btn_delete')}
-                          onClick={() => { if (window.confirm(t('quar_delete_confirm'))) deleteMut.mutate(item.id); }}
-                          title={t('quar_btn_delete')}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── Pagination ────────────────────────────────────────────────── */}
-      {pages > 1 && (
-        <div className="px-6 py-3 bg-white border-t border-gray-200 flex items-center justify-between text-sm text-gray-500 shrink-0">
-          <span>{total} {t('quar_entries')} · {t('quar_page_info')} {page} {t('quar_page_of')} {pages}</span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage(1)} disabled={page === 1}
-              className="p-1.5 border rounded hover:bg-gray-50 disabled:opacity-40 transition-colors">
-              «
-            </button>
-            <button aria-label="Vorherige Seite"
-              onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-              className="p-1.5 border rounded hover:bg-gray-50 disabled:opacity-40 transition-colors">
-              <ChevronLeft size={14} />
-            </button>
-            {Array.from({ length: Math.min(5, pages) }, (_, i) => {
-              const p = Math.max(1, Math.min(pages - 4, page - 2)) + i;
-              return (
-                <button key={p} onClick={() => setPage(p)}
-                  className={`min-w-[32px] px-2 py-1 rounded border text-xs transition-colors ${p === page ? 'bg-accent text-white border-accent' : 'hover:bg-gray-50'}`}>
-                  {p}
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {(search || reason || released !== 'false') && (
+                <button onClick={resetFilters} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+                  <X size={12} aria-hidden="true" /> {t('quar_filter_clear')}
                 </button>
-              );
-            })}
-            <button aria-label="Nächste Seite"
-              onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
-              className="p-1.5 border rounded hover:bg-gray-50 disabled:opacity-40 transition-colors">
-              <ChevronRight size={14} />
-            </button>
-            <button
-              onClick={() => setPage(pages)} disabled={page === pages}
-              className="p-1.5 border rounded hover:bg-gray-50 disabled:opacity-40 transition-colors">
-              »
-            </button>
-          </div>
-        </div>
-      )}
+              )}
+            </>
+          }
+          toolbar={({ selectedRows, clearSelection }) => (
+            <>
+              <Can area="hygiene" access="write">
+                <button
+                  onClick={() => releaseManyMut.mutate(selectedRows.filter((i) => !i.released && i.reason !== 'VIRUS').map((i) => i.id), { onSuccess: clearSelection })}
+                  disabled={releaseManyMut.isPending || !selectedRows.some((i) => !i.released && i.reason !== 'VIRUS')}
+                  className="btn-secondary text-xs gap-1 disabled:opacity-40">
+                  <CheckCircle size={12} aria-hidden="true" /> {t('quar_btn_release')}
+                </button>
+              </Can>
+              <Can area="hygiene" access="write">
+                <button
+                  onClick={() => { if (window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})`)) bulkDeleteMut.mutate(selectedRows.map((i) => i.id), { onSuccess: clearSelection }); }}
+                  disabled={bulkDeleteMut.isPending || selectedRows.length === 0}
+                  className="btn-secondary text-xs text-red-600 gap-1 disabled:opacity-40">
+                  <Trash2 size={12} aria-hidden="true" /> {t('quar_bulk_delete')}
+                </button>
+              </Can>
+            </>
+          )}
+        />
+      </div>
 
       {/* ── Detail Slide-Over ──────────────────────────────────────────── */}
       {selectedId && (

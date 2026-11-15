@@ -23,3 +23,4 @@ export * from './internal-notify.js';
 export * from './mailbox-quota.js';
 export * from './recoverable-items.js';
 export * from './oof.js';
+export * from './draft.js';

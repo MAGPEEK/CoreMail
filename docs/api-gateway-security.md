@@ -204,6 +204,35 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   (`revokeAllSessions` → `publishUserAuthChange`), keeps app passwords, writes
   the audit entry `mailbox.sessions.revoke`.
 
+### One permission map and `GET /api/v1/admin/me/permissions`
+
+`lib/rbac.ts` holds the only role → permission maps the guards use:
+
+- `ROLE_PERMISSIONS` (built from `AREA_MATRIX`): `read`/`write` per area,
+  consulted by `requireArea()` and `requireAdmin()`.
+- `ADMIN_ACTIONS` + `ROLE_ACTION_GRANTS`: narrow actions beyond read/write,
+  consulted by the route guards (`hasAdminAction()`, `requireAction()`):
+
+  | action              | area       | granted to                                                    |
+  |---------------------|------------|---------------------------------------------------------------|
+  | `resetPassword`     | recipients | write on recipients, HELP_DESK (USER accounts only)           |
+  | `toggleActive`      | recipients | write on recipients, HELP_DESK (USER accounts only)           |
+  | `revokeSessions`    | recipients | write on recipients, HELP_DESK (USER accounts only)           |
+  | `backupMailboxData` | servers    | ORGANIZATION_MANAGEMENT, COMPLIANCE_MANAGEMENT (not SERVER_MANAGEMENT) |
+
+`GET /api/v1/admin/me/permissions` (any admin role, current-role check and
+forced admin MFA apply) returns
+`{ role, areas: { <area>: 'read'|'write' }, actions: { <area>: AdminAction[] }, mfaVerified }`.
+The BCP hides areas and actions from it (`usePermissions()`, `<Can>`);
+`permissions.test.ts` proves that the guards of every admin router and the
+action routes agree with both maps for every role.
+
+`User.lastLoginAt` (8.x, nullable) is set on every successful login — web
+password/MFA login and SSO (`issueSession`) and mail-protocol logins
+(`verifyMailCredentials`) — at most once per user per 5 minutes and process
+(`recordLastLogin()`, `@coremail/storage/auth`). The admin mailbox list and
+detail return it.
+
 ## Proxied services
 
 For every request proxied to an internal service (JMAP, ActiveSync, CalDAV,

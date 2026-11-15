@@ -5,81 +5,136 @@ import { createSendQueue, normalizeSendDelay, DEFAULT_SEND_DELAY_SEC } from './s
 beforeEach(() => { mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 0 }); });
 afterEach(() => { mock.timers.reset(); });
 
-const flushMicrotasks = () => new Promise<void>((r) => queueMicrotask(r));
+const flushMicrotasks = async () => { for (let i = 0; i < 5; i++) await new Promise<void>((r) => queueMicrotask(r)); };
 
-test('send is held for the delay, ticks down, then sent exactly once', async () => {
+/** A start() the test resolves by hand (draft save + server hold request). */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+test('held on the server for the delay, ticks down, then reported as sent once', async () => {
   const q = createSendQueue();
   const ticks: number[] = [];
-  let sends = 0;
+  let starts = 0;
   let sent: string | null = null;
   const p = q.schedule({
     delayMs: 10_000,
-    send: async () => { sends++; return 'ok'; },
+    start: async () => { starts++; return 'draft-1'; },
+    undo: async () => true,
     onTick: (s) => ticks.push(s),
     onSent: (r) => { sent = r; },
   });
-  assert.equal(p.state, 'pending');
+  assert.equal(starts, 1, 'the draft is handed to the server right away');
+  await flushMicrotasks();
+  assert.equal(p.state, 'held');
   assert.equal(q.pendingCount(), 1);
   mock.timers.tick(9_999);
-  assert.equal(sends, 0, 'nothing sent during the delay');
+  assert.equal(sent, null);
   mock.timers.tick(1);
-  assert.equal(sends, 1);
-  await flushMicrotasks();
-  assert.equal(sent, 'ok');
+  assert.equal(sent, 'draft-1');
   assert.equal(p.state, 'sent');
   assert.equal(q.pendingCount(), 0);
   assert.deepEqual(ticks, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
-  mock.timers.tick(60_000);
-  assert.equal(sends, 1);
+  assert.equal(p.cancel(), false, 'too late after the delay');
 });
 
-test('cancel within the delay sends nothing; cancel after sending is refused', async () => {
+test('undo while held withdraws the server send and reopens', async () => {
   const q = createSendQueue();
-  let sends = 0;
-  let cancelled = 0;
-  const p = q.schedule({ delayMs: 5_000, send: async () => { sends++; }, onCancelled: () => { cancelled++; } });
+  const undone: string[] = [];
+  let undoCalls = 0;
+  const p = q.schedule({
+    delayMs: 5_000,
+    start: async () => 'd1',
+    undo: async (id) => { undoCalls++; return id === 'd1'; },
+    onUndone: (id) => undone.push(id),
+    onSent: () => assert.fail('must not be reported as sent'),
+  });
+  await flushMicrotasks();
   mock.timers.tick(4_000);
   assert.equal(p.cancel(), true);
-  assert.equal(p.state, 'cancelled');
-  assert.equal(cancelled, 1);
+  assert.equal(p.state, 'undoing');
+  await flushMicrotasks();
+  assert.equal(p.state, 'undone');
+  assert.deepEqual(undone, ['d1']);
+  assert.equal(undoCalls, 1);
   assert.equal(q.pendingCount(), 0);
   mock.timers.tick(10_000);
-  assert.equal(sends, 0);
   assert.equal(p.cancel(), false);
-
-  const p2 = q.schedule({ delayMs: 5_000, send: async () => { sends++; } });
-  mock.timers.tick(5_000);
-  assert.equal(p2.cancel(), false, 'too late');
-  assert.equal(sends, 1);
 });
 
-test('delay 0 sends immediately; failures are reported', async () => {
+test('undo requested while the draft is still being saved runs once the server accepted it', async () => {
   const q = createSendQueue();
-  let sends = 0;
-  q.schedule({ delayMs: 0, send: async () => { sends++; } });
-  assert.equal(sends, 1);
-  let err: unknown = null;
-  const p = q.schedule({ delayMs: 1_000, send: async () => { throw new Error('boom'); }, onError: (e) => { err = e; } });
-  mock.timers.tick(1_000);
+  const d = deferred<string>();
+  let undone = 0;
+  const p = q.schedule({ delayMs: 10_000, start: () => d.promise, undo: async () => true, onUndone: () => { undone++; } });
+  assert.equal(p.state, 'starting');
+  assert.equal(p.cancel(), true);
+  d.resolve('d2');
   await flushMicrotasks();
+  assert.equal(p.state, 'undone');
+  assert.equal(undone, 1);
+});
+
+test('server already sending: undo reports too late', async () => {
+  const q = createSendQueue();
+  let tooLate = 0;
+  const p = q.schedule({ delayMs: 5_000, start: async () => 'd3', undo: async () => false, onTooLate: () => { tooLate++; } });
+  await flushMicrotasks();
+  p.cancel();
+  await flushMicrotasks();
+  assert.equal(p.state, 'sent');
+  assert.equal(tooLate, 1);
+  const p2 = q.schedule({ delayMs: 5_000, start: async () => 'd4', undo: async () => { throw new Error('409'); }, onTooLate: () => { tooLate++; } });
+  await flushMicrotasks();
+  p2.cancel();
+  await flushMicrotasks();
+  assert.equal(tooLate, 2);
+});
+
+test('slow save: the countdown ends first, the send completes when the server accepted it', async () => {
+  const q = createSendQueue();
+  const d = deferred<string>();
+  let sent = 0;
+  const p = q.schedule({ delayMs: 2_000, start: () => d.promise, undo: async () => true, onSent: () => { sent++; } });
+  mock.timers.tick(2_000);
+  assert.equal(p.cancel(), false, 'delay over');
+  assert.equal(sent, 0);
+  d.resolve('d5');
+  await flushMicrotasks();
+  assert.equal(sent, 1);
+  assert.equal(p.state, 'sent');
+});
+
+test('delay 0 sends as soon as the server accepted; a failed start is reported', async () => {
+  const q = createSendQueue();
+  let sent = 0;
+  const p0 = q.schedule({ delayMs: 0, start: async () => 'x', undo: async () => true, onSent: () => { sent++; } });
+  assert.equal(p0.cancel(), false);
+  await flushMicrotasks();
+  assert.equal(sent, 1);
+  let err: unknown = null;
+  const p = q.schedule({ delayMs: 1_000, start: async () => { throw new Error('boom'); }, undo: async () => true, onError: (e) => { err = e; } });
   await flushMicrotasks();
   assert.equal(p.state, 'failed');
   assert.match(String(err), /boom/);
+  assert.equal(q.pendingCount(), 0);
 });
 
-test('flushAll sends all pending mails at once (page unload) and notifies subscribers', () => {
+test('pendingCount / subscribers follow starting + held sends', async () => {
   const q = createSendQueue();
   const counts: number[] = [];
   const unsub = q.subscribe((n) => counts.push(n));
-  let sends = 0;
-  q.schedule({ delayMs: 20_000, send: async () => { sends++; } });
-  q.schedule({ delayMs: 30_000, send: async () => { sends++; } });
+  q.schedule({ delayMs: 20_000, start: async () => 'a', undo: async () => true });
+  q.schedule({ delayMs: 30_000, start: async () => 'b', undo: async () => true });
+  await flushMicrotasks();
   assert.equal(q.pendingCount(), 2);
-  assert.equal(q.flushAll(), 2);
-  assert.equal(sends, 2);
+  mock.timers.tick(20_000);
+  assert.equal(q.pendingCount(), 1);
+  mock.timers.tick(10_000);
   assert.equal(q.pendingCount(), 0);
-  mock.timers.tick(60_000);
-  assert.equal(sends, 2, 'timers were cleared');
   assert.deepEqual(counts, [1, 2, 1, 0]);
   unsub();
 });

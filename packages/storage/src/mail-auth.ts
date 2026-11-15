@@ -18,6 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { createLogger, getRedisClient, hashPassword, verifyPassword } from '@coremail/core';
 import { prisma } from './prisma/index.js';
+import { recordLastLogin } from './auth/last-login.js';
 import {
   createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
   type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
@@ -98,7 +99,10 @@ export async function verifyMailCredentials(
   ctx: MailAuthContext,
 ): Promise<MailAuthResult> {
   try {
-    return await getVerifier().verify(login, password, ctx);
+    const result = await getVerifier().verify(login, password, ctx);
+    // 8.x: User.lastLoginAt (throttled, fire-and-forget)
+    if (result.status === 'ok') void recordLastLogin(result.user.id);
+    return result;
   } catch (error) {
     log.error({ err: error, protocol: ctx.protocol }, 'mail-auth: unexpected error');
     return { status: 'error', error };

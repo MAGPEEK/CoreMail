@@ -1,13 +1,14 @@
 /**
- * Undo send (OWA "send delay"): the compose window hands the finished mail to
- * `queueDelayedSend()`, which holds it client-side for the configured delay and
- * shows a countdown toast with "Undo" / "Send now". Undo reopens the compose
- * window with the full content (recipients, subject, body, attachments).
+ * Undo send (OWA "send delay") with a server-side hold: the compose window
+ * saves the draft and hands it to `queueHeldSend()`, which asks the server to
+ * send it after the configured delay and shows a countdown toast with "Undo".
+ * The server keeps the mail as a delayed job, so it is sent even when the tab
+ * is closed or the user signs out (the toast says so). Undo withdraws the job
+ * and reopens the draft; a failed send reopens the mail with everything the
+ * user wrote.
  *
- * While a mail is waiting, closing the tab triggers the browser's "leave page?"
- * warning; if the user leaves anyway, the waiting mails are sent right away on
- * `pagehide` (keepalive request — browsers cap keepalive bodies at 64 KB, so a
- * large mail can still be lost; the warning comes first for that reason).
+ * While a send is still starting or held, closing the tab shows the browser's
+ * "leave page?" warning (the Undo option would be lost — the mail is not).
  */
 import { useEffect } from 'react';
 import toast from 'react-hot-toast';
@@ -18,20 +19,18 @@ import { useUiStore, type ComposeContext } from '../store/ui.js';
 import { toastError } from '../lib/errors.js';
 
 const sendQueue = createSendQueue();
-let unloading = false;
 
-/** True while the page is being unloaded (sends then use `keepalive`). */
-export function isUnloading(): boolean {
-  return unloading;
-}
-
-interface DelayedSendOptions<T> {
+interface HeldSendOptions<T> {
   delaySec: number;
-  /** Performs the real POST /mail/send. */
-  send: () => Promise<T>;
-  /** Compose context incl. `restore` snapshot to reopen on undo / failure. */
-  reopen: ComposeContext;
-  onSent?: (r: T) => void;
+  /** Saves the draft and asks the server to send it after the delay. */
+  start: () => Promise<T>;
+  /** Withdraws the held send; false = too late. */
+  undo: (started: T) => Promise<boolean>;
+  /** Compose context to reopen after an undo. */
+  reopenAfterUndo: (started: T) => ComposeContext;
+  /** Compose context to reopen when the send failed (incl. `restore` snapshot). */
+  reopenOnError: () => ComposeContext;
+  onSent?: (started: T) => void;
 }
 
 function reopenCompose(ctx: ComposeContext): void {
@@ -46,47 +45,43 @@ function reopenCompose(ctx: ComposeContext): void {
   });
 }
 
-function CountdownToast({ visible, seconds, onUndo, onSendNow }: {
-  visible: boolean; seconds: number; onUndo: () => void; onSendNow: () => void;
+function CountdownToast({ visible, seconds, onUndo }: {
+  visible: boolean; seconds: number; onUndo: () => void;
 }) {
   return (
     <div
       role="status"
       aria-live="polite"
       className={`flex items-center gap-3 px-4 py-2.5 bg-gray-900 text-white rounded-md shadow-lg text-sm ${visible ? '' : 'opacity-0'}`}
-      style={{ minWidth: 300 }}
+      style={{ minWidth: 300, maxWidth: 420 }}
     >
       <Send size={14} className="text-blue-300 shrink-0" aria-hidden="true" />
-      <span className="flex-1 tabular-nums">{fmt(translate('send_sending_in'), { n: seconds })}</span>
-      <button onClick={onUndo} aria-keyshortcuts="Z" className="font-semibold text-blue-300 hover:text-blue-200 inline-flex items-center gap-1">
+      <span className="flex-1">
+        <span className="tabular-nums block">{fmt(translate('send_sending_in'), { n: seconds })}</span>
+        <span className="block text-[11px] text-gray-300">{translate('send_server_hold_hint')}</span>
+      </span>
+      <button onClick={onUndo} aria-keyshortcuts="Z" className="font-semibold text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 shrink-0">
         <Undo2 size={13} aria-hidden="true" /> {translate('undo')}
-      </button>
-      <button onClick={onSendNow} className="text-gray-300 hover:text-white text-xs">
-        {translate('send_now')}
       </button>
     </div>
   );
 }
 
 /**
- * Sends after `delaySec` seconds unless undone (0 = immediately, no toast).
- * Returns the pending handle.
+ * Hands the saved draft to the server with an undo hold of `delaySec` seconds
+ * (0 = immediately, no toast). Returns the pending handle.
  */
-export function queueDelayedSend<T>(o: DelayedSendOptions<T>): PendingSend {
+export function queueHeldSend<T>(o: HeldSendOptions<T>): PendingSend {
   const toastId = `delayed-send-${Math.random().toString(36).slice(2)}`;
   let handle: PendingSend | null = null;
   const render = (seconds: number) => toast.custom((t) => (
-    <CountdownToast
-      visible={t.visible}
-      seconds={seconds}
-      onUndo={() => { handle?.cancel(); }}
-      onSendNow={() => { handle?.flush(); }}
-    />
+    <CountdownToast visible={t.visible} seconds={seconds} onUndo={() => { handle?.cancel(); }} />
   ), { id: toastId, duration: Infinity });
 
   handle = sendQueue.schedule({
     delayMs: Math.max(0, o.delaySec) * 1000,
-    send: o.send,
+    start: o.start,
+    undo: o.undo,
     onTick: (s) => { render(s); },
     onSent: (r) => {
       toast.dismiss(toastId);
@@ -98,12 +93,17 @@ export function queueDelayedSend<T>(o: DelayedSendOptions<T>): PendingSend {
       toastError(err);
       // Do not lose the mail: reopen it with everything the user wrote
       toast.error(translate('send_failed_reopened'));
-      reopenCompose(o.reopen);
+      reopenCompose(o.reopenOnError());
     },
-    onCancelled: () => {
+    onUndone: (r) => {
       toast.dismiss(toastId);
       toast(translate('send_undone'), { duration: 3000 });
-      reopenCompose(o.reopen);
+      reopenCompose(o.reopenAfterUndo(r));
+    },
+    onTooLate: (r) => {
+      toast.dismiss(toastId);
+      toast(translate('send_too_late'), { duration: 4000 });
+      o.onSent?.(r);
     },
   });
   if (o.delaySec > 0) registerUndo(handle);
@@ -124,7 +124,7 @@ export function undoLatestSend(): boolean {
   return false;
 }
 
-/** Layout hook: warn before closing the tab with mails waiting, flush on pagehide. */
+/** Layout hook: warn before closing the tab while a send can still be undone. */
 export function useSendGuard(): void {
   useEffect(() => {
     const beforeUnload = (e: BeforeUnloadEvent) => {
@@ -133,16 +133,7 @@ export function useSendGuard(): void {
       // Legacy browsers need returnValue set to show the dialog
       e.returnValue = '';
     };
-    const pageHide = () => {
-      if (sendQueue.pendingCount() === 0) return;
-      unloading = true;
-      sendQueue.flushAll();
-    };
     window.addEventListener('beforeunload', beforeUnload);
-    window.addEventListener('pagehide', pageHide);
-    return () => {
-      window.removeEventListener('beforeunload', beforeUnload);
-      window.removeEventListener('pagehide', pageHide);
-    };
+    return () => { window.removeEventListener('beforeunload', beforeUnload); };
   }, []);
 }

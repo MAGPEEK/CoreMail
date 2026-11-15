@@ -9,6 +9,10 @@ import {
 import toast from 'react-hot-toast';
 import { api, downloadFileNamed } from '../api/client.js';
 import { backupFileName, contentDispositionName } from '../lib/backupNames.js';
+import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { Can } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 /**
  * v3.18.28 BackupsPage v3 — tab-based UI with:
@@ -105,11 +109,13 @@ function fmtDuration(ms: number | null): string {
 type Tab = 'jobs' | 'actions' | 'schedules' | 'archive' | 'restore';
 
 export function BackupsPage() {
+  const t = useT();
+  const { can, canAction } = usePermissions();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('jobs');
   const [scheduleEditor, setScheduleEditor] = useState<Partial<BackupSchedule> | null>(null);
 
-  const { data: jobsData = [], isLoading: jobsLoading, refetch: refetchJobs } = useQuery<BackupJob[]>({
+  const { data: jobsData = [], isLoading: jobsLoading, isFetching: jobsFetching, refetch: refetchJobs } = useQuery<BackupJob[]>({
     queryKey: ['admin-backups-jobs'],
     queryFn:  () => api.get<BackupJob[]>('/admin/backups/jobs?limit=50'),
     refetchInterval: (q) => {
@@ -230,6 +236,87 @@ export function BackupsPage() {
     }
   };
 
+  const jobColumns: Column<BackupJob>[] = [
+    {
+      key: 'created', header: t('bk_col_created'), sortValue: (j) => new Date(j.createdAt), className: 'whitespace-nowrap text-xs text-gray-700 dark:text-gray-200',
+      cell: (j) => fmtDate(j.createdAt),
+    },
+    {
+      key: 'scope', header: t('bk_col_scope'), sortValue: (j) => `${j.scope} ${j.userId ? userEmailById(j.userId) : ''}`, className: 'text-xs',
+      cell: (j) => (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-gray-700 dark:text-gray-200">
+          {j.scope}{j.userId ? ` · ${userEmailById(j.userId)}` : ''}
+        </span>
+      ),
+    },
+    { key: 'format', header: t('bk_col_format'), sortValue: (j) => j.format, className: 'uppercase text-xs text-gray-600 dark:text-gray-300', cell: (j) => j.format },
+    { key: 'trigger', header: t('bk_col_trigger'), sortValue: (j) => j.triggeredBy, className: 'text-xs text-gray-500 dark:text-gray-400', cell: (j) => j.triggeredBy },
+    {
+      key: 'status', header: t('bk_col_status'), sortValue: (j) => j.status,
+      cell: (j) => {
+        const st = STATUS_LABEL[j.status] ?? { label: j.status, color: 'text-gray-500', icon: null };
+        return (
+          <div className={`${st.color} text-xs`}>
+            <span className="inline-flex items-center gap-1.5">{st.icon} {st.label}</span>
+            {(j.status === 'RUNNING' || j.status === 'PROCESSING') && j.progress > 0 && (
+              <div className="mt-1 w-20 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden" role="progressbar"
+                aria-valuenow={j.progress} aria-valuemin={0} aria-valuemax={100}>
+                <div className="h-full bg-accent transition-all" style={{ width: `${j.progress}%` }} />
+              </div>
+            )}
+            {j.errorMsg && (
+              <div className="text-[10px] text-red-500 mt-1" title={j.errorMsg}>
+                {j.errorClass ? `[${j.errorClass}] ` : ''}{j.errorMsg.slice(0, 40)}{j.errorMsg.length > 40 ? '…' : ''}
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    { key: 'duration', header: t('bk_col_duration'), sortValue: (j) => j.durationMs, className: 'text-xs text-gray-600 dark:text-gray-300', cell: (j) => fmtDuration(j.durationMs) },
+    {
+      key: 'size', header: t('bk_col_size'), sortValue: (j) => (j.sizeBytes === null ? null : Number(j.sizeBytes)),
+      headerClassName: 'text-right', className: 'text-right text-xs text-gray-600 dark:text-gray-300', cell: (j) => fmtBytes(j.sizeBytes),
+    },
+    {
+      key: 'mails', header: 'Mails', sortValue: (j) => j.messageCount,
+      headerClassName: 'text-right', className: 'text-right text-xs text-gray-600 dark:text-gray-300', cell: (j) => j.messageCount ?? '—',
+    },
+    {
+      key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true,
+      cell: (j) => (
+        <div className="flex items-center justify-end gap-1">
+          {j.status === 'COMPLETED' && j.downloadUrl && (
+            // mailbox content: ORGANIZATION_MANAGEMENT / COMPLIANCE_MANAGEMENT only (action backupMailboxData)
+            <Can action="backupMailboxData">
+              <button
+                onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
+                className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                title="Backup herunterladen" aria-label="Backup herunterladen"
+              >
+                <HardDriveDownload size={13} />
+              </button>
+            </Can>
+          )}
+          <Can area="servers" access="write">
+            <button
+              onClick={() => {
+                if (window.confirm(`Backup-Job vom ${fmtDate(j.createdAt)} wirklich löschen? (S3-Object wird auch entfernt)`)) {
+                  deleteJob.mutate(j.id);
+                }
+              }}
+              disabled={deleteJob.isPending}
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+              title="Job löschen" aria-label="Job löschen"
+            >
+              <Trash2 size={13} />
+            </button>
+          </Can>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -256,104 +343,61 @@ export function BackupsPage() {
       <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="-mb-px flex gap-1 overflow-x-auto">
           <TabBtn active={tab === 'jobs'} onClick={() => setTab('jobs')} icon={<ListChecks size={14} />} label="Jobs" badge={jobsData.length} />
-          <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />
+          {can('servers', 'write') && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
           <TabBtn active={tab === 'schedules'} onClick={() => setTab('schedules')} icon={<CalendarClock size={14} />} label="Zeitpläne" badge={schedules.length} />
           <TabBtn active={tab === 'archive'} onClick={() => setTab('archive')} icon={<Archive size={14} />} label="Backup-Archiv" badge={s3Data.length} />
-          <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />
+          {canAction('backupMailboxData') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />}
         </nav>
       </div>
 
-      {/* TAB: Jobs */}
+      {/* TAB: Jobs — client-side list (API returns the newest 50 jobs) */}
       {tab === 'jobs' && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
-          {jobsLoading ? (
-            <div className="p-8 text-center text-gray-400"><Loader2 size={20} className="animate-spin mx-auto" /></div>
-          ) : jobsData.length === 0 ? (
-            <div className="p-12 text-center text-gray-400">
-              <ListChecks size={32} className="mx-auto mb-2 opacity-50" />
-              <p className="text-sm">Noch keine Backup-Jobs vorhanden</p>
-              <button onClick={() => setTab('actions')} className="mt-3 text-accent hover:underline text-sm">→ Erstes Backup starten</button>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-800 text-xs uppercase text-gray-500 dark:text-gray-400">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium">Datum</th>
-                  <th className="px-3 py-2 text-left font-medium">Scope/User</th>
-                  <th className="px-3 py-2 text-left font-medium">Format</th>
-                  <th className="px-3 py-2 text-left font-medium">Trigger</th>
-                  <th className="px-3 py-2 text-left font-medium">Status</th>
-                  <th className="px-3 py-2 text-left font-medium">Dauer</th>
-                  <th className="px-3 py-2 text-right font-medium">Größe</th>
-                  <th className="px-3 py-2 text-right font-medium">Mails</th>
-                  <th className="px-3 py-2 text-right font-medium">Aktionen</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                {jobsData.map((j) => {
-                  const st = STATUS_LABEL[j.status] ?? { label: j.status, color: 'text-gray-500', icon: null };
-                  return (
-                    <tr key={j.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-3 py-2 text-gray-700 dark:text-gray-200 whitespace-nowrap text-xs">{fmtDate(j.createdAt)}</td>
-                      <td className="px-3 py-2 text-gray-700 dark:text-gray-200 text-xs">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded">
-                          {j.scope}{j.userId ? ` · ${userEmailById(j.userId)}` : ''}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300 uppercase text-xs">{j.format}</td>
-                      <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">{j.triggeredBy}</td>
-                      <td className={`px-3 py-2 ${st.color} text-xs`}>
-                        <span className="inline-flex items-center gap-1.5">{st.icon} {st.label}</span>
-                        {(j.status === 'RUNNING' || j.status === 'PROCESSING') && j.progress > 0 && (
-                          <div className="mt-1 w-20 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-accent transition-all" style={{ width: `${j.progress}%` }} />
-                          </div>
-                        )}
-                        {j.errorMsg && (
-                          <div className="text-[10px] text-red-500 mt-1" title={j.errorMsg}>
-                            {j.errorClass ? `[${j.errorClass}] ` : ''}{j.errorMsg.slice(0, 40)}{j.errorMsg.length > 40 ? '…' : ''}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-300">{fmtDuration(j.durationMs)}</td>
-                      <td className="px-3 py-2 text-right text-xs text-gray-600 dark:text-gray-300">{fmtBytes(j.sizeBytes)}</td>
-                      <td className="px-3 py-2 text-right text-xs text-gray-600 dark:text-gray-300">{j.messageCount ?? '—'}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center justify-end gap-1">
-                          {j.status === 'COMPLETED' && j.downloadUrl && (
-                            <button aria-label="Backup herunterladen"
-                              onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
-                              className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
-                              title="Backup herunterladen"
-                            >
-                              <HardDriveDownload size={13} />
-                            </button>
-                          )}
-                          <button aria-label="Job löschen"
-                            onClick={() => {
-                              if (window.confirm(`Backup-Job vom ${fmtDate(j.createdAt)} wirklich löschen? (S3-Object wird auch entfernt)`)) {
-                                deleteJob.mutate(j.id);
-                              }
-                            }}
-                            disabled={deleteJob.isPending}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
-                            title="Job löschen"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <DataTable<BackupJob>
+          caption={t('bk_jobs')}
+          rows={jobsData}
+          columns={jobColumns}
+          rowKey={(j) => j.id}
+          loading={jobsLoading}
+          initialSort={{ key: 'created', dir: 'desc' }}
+          search={{ text: (j) => [j.scope, j.format, j.status, j.triggeredBy, j.userId ? userEmailById(j.userId) : null, j.errorMsg] }}
+          selectable={can('servers', 'write')}
+          emptyText={
+            <span className="inline-flex flex-col items-center gap-2">
+              <ListChecks size={32} className="opacity-50" aria-hidden="true" />
+              Noch keine Backup-Jobs vorhanden
+              <Can area="servers" access="write" mode="hide">
+                <button onClick={() => setTab('actions')} className="text-accent hover:underline text-sm">→ Erstes Backup starten</button>
+              </Can>
+            </span>
+          }
+          toolbar={({ selectedRows, clearSelection }) => (
+            <>
+              <Can area="servers" access="write">
+                <button onClick={() => setTab('actions')} className="btn-primary flex items-center gap-1.5">
+                  <Play size={14} aria-hidden="true" /> {t('tb_new')}
+                </button>
+              </Can>
+              <Can area="servers" access="write">
+                <button
+                  className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+                  disabled={selectedRows.length === 0 || deleteJob.isPending}
+                  onClick={() => {
+                    if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length}) — S3-Objekte werden auch entfernt`)) return;
+                    void Promise.allSettled(selectedRows.map((j) => deleteJob.mutateAsync(j.id))).then(clearSelection);
+                  }}>
+                  <Trash2 size={13} aria-hidden="true" /> {t('tb_delete')}
+                </button>
+              </Can>
+              <button onClick={() => void refetchJobs()} className="btn-secondary flex items-center gap-1.5 text-xs">
+                <RefreshCw size={13} className={jobsFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
+              </button>
+            </>
           )}
-        </div>
+        />
       )}
 
       {/* TAB: Quick actions */}
-      {tab === 'actions' && (
+      {tab === 'actions' && can('servers', 'write') && (
         <ActionsTab
           users={users}
           onFullBackup={() => triggerFullBackup.mutate()}
@@ -461,13 +505,15 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{fmtDate(b.lastModified)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button aria-label="Backup herunterladen"
-                            onClick={() => void downloadArchive(b.key)}
-                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
-                            title="Backup herunterladen"
-                          >
-                            <HardDriveDownload size={13} />
-                          </button>
+                          <Can action="backupMailboxData">
+                            <button aria-label="Backup herunterladen"
+                              onClick={() => void downloadArchive(b.key)}
+                              className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                              title="Backup herunterladen"
+                            >
+                              <HardDriveDownload size={13} />
+                            </button>
+                          </Can>
                           <button aria-label="Backup löschen"
                             onClick={() => {
                               if (window.confirm(`Backup „${b.key}" wirklich endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
@@ -492,7 +538,7 @@ export function BackupsPage() {
       )}
 
       {/* TAB: Restore */}
-      {tab === 'restore' && <RestoreTab users={users} />}
+      {tab === 'restore' && canAction('backupMailboxData') && <RestoreTab users={users} />}
 
       {/* Schedule-Editor */}
       {scheduleEditor && (
@@ -605,6 +651,7 @@ function ActionsTab(props: {
               <option value="mbox">MBOX (Thunderbird/Apple Mail)</option>
             </select>
           </div>
+          <Can action="backupMailboxData">
           <button
             onClick={() => props.onMailboxBackup(mailboxUserId, mailboxFormat)}
             disabled={!mailboxUserId || props.mailboxPending}
@@ -613,6 +660,7 @@ function ActionsTab(props: {
             <Play size={14} />
             {props.mailboxPending ? 'Wird gestartet…' : 'Mailbox sichern'}
           </button>
+          </Can>
         </div>
       </div>
     </div>

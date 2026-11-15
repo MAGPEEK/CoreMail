@@ -68,7 +68,8 @@ const { recoverableRouter } = await import('./recoverable.js');
 const { adminMailboxesRouter } = await import('./admin/mailboxes.js');
 const { quotaLevelError } = await import('../lib/quota-levels.js');
 
-const tok = (sub: string, role = 'USER') => core.signAccessToken({ sub, email: `${sub}@ex.com`, role, domainId: 'd1', sessionId: `s-${sub}`, mfaVerified: true });
+type TokenRole = Parameters<typeof core.signAccessToken>[0]['role'];
+const tok = (sub: string, role: TokenRole = 'USER') => core.signAccessToken({ sub, email: `${sub}@ex.com`, role, domainId: 'd1', sessionId: `s-${sub}`, mfaVerified: true });
 
 let server: Server;
 let base = '';

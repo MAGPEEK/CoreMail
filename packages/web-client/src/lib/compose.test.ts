@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { safeLinkUrl, normalizeMessageId, replyThreading } from './compose.ts';
+import { safeLinkUrl, normalizeMessageId, replyThreading, splitRecipients } from './compose.ts';
 
 test('safeLinkUrl allows only http, https and mailto', () => {
   assert.equal(safeLinkUrl('https://example.com/a?b=1'), 'https://example.com/a?b=1');
@@ -38,4 +38,10 @@ test('replyThreading sends the Message-ID header, not the database id', () => {
   );
   // No Message-ID header → internal id as fallback (resolved by the server), no References
   assert.deepEqual(replyThreading({ id: 'cmabc123', messageId: null }), { inReplyTo: 'cmabc123' });
+});
+
+test('splitRecipients keeps quoted names with commas together', () => {
+  assert.deepEqual(splitRecipients('a@x.test, "Doe, John" <j@x.test>; b@y.test,, '), ['a@x.test', '"Doe, John" <j@x.test>', 'b@y.test']);
+  assert.deepEqual(splitRecipients(''), []);
+  assert.deepEqual(splitRecipients('bob'), ['bob']);
 });

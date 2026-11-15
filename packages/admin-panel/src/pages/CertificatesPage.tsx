@@ -17,6 +17,10 @@ import {
   Lock, LockOpen, Server, Pencil,
 } from 'lucide-react';
 import { api } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { Can } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -171,12 +175,15 @@ interface TlsProxyInfo {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CertificatesPage() {
+  const t = useT();
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can('servers', 'write');
   const [modal, setModal] = useState<ModalMode>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingCert, setEditingCert] = useState<Certificate | null>(null);
 
-  const { data: certs = [], isLoading } = useQuery<Certificate[]>({
+  const { data: certs = [], isLoading, isFetching, refetch } = useQuery<Certificate[]>({
     queryKey: ['admin-certificates'],
     queryFn: () => api.get<Certificate[]>('/admin/certificates'),
     refetchInterval: 10_000,
@@ -245,134 +252,48 @@ export function CertificatesPage() {
   }
 
 
-  return (
-    <div className="p-6 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <ShieldCheck size={22} className="text-blue-600" />
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">SSL/TLS Zertifikate</h1>
-            <p className="text-sm text-gray-500">{certs.length} Zertifikat{certs.length !== 1 ? 'e' : ''}</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setModal('selfsigned')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
-            <Plus size={14} /> Self-Signed
-          </button>
-          <button
-            onClick={() => setModal('upload')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
-            <Upload size={14} /> Hochladen
-          </button>
-          <button
-            onClick={() => setModal('letsencrypt')}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-            <Plus size={14} /> Let's Encrypt
-          </button>
-        </div>
-      </div>
-
-      {/* HTTPS status banner — only when active */}
-      {tlsInfo?.activeCert && (
-        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
-          <Lock size={16} className="text-green-600 shrink-0" />
-          <span>
-            <strong>HTTPS aktiv</strong> — Port {tlsInfo.port} verwendet{' '}
-            <span className="font-mono font-medium">{tlsInfo.activeCert.name}</span>
-            {tlsInfo.activeCert.domains[0] && (
-              <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
-            )}
-            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken.
+  const columns: Column<Certificate>[] = [
+    {
+      key: 'name', header: t('cert_col_name'), sortValue: (c) => c.name,
+      cell: (cert) => (
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 text-gray-400 shrink-0" aria-hidden="true">
+            {expandedId === cert.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </span>
+          <div>
+            <p className="font-medium text-gray-900 text-sm">{cert.name}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{cert.domains.slice(0, 2).join(', ')}{cert.domains.length > 2 ? ` +${cert.domains.length - 2}` : ''}</p>
+          </div>
         </div>
-      )}
-
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <Loader2 size={24} className="animate-spin mr-2" /> Lade Zertifikate…
-          </div>
-        ) : certs.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
-            <ShieldCheck size={32} className="mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Noch keine Zertifikate. Erstelle dein erstes Zertifikat.</p>
-          </div>
-        ) : (
-          <>
-            {/* Status-Banner: PENDING/RENEWING */}
-            {certs.some(c => c.status === 'PENDING' || c.status === 'RENEWING') && (
-              <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex items-center gap-2 text-sm text-blue-700">
-                <Loader2 size={14} className="animate-spin shrink-0" />
-                <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-blue-100 px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
-              </div>
-            )}
-            {/* Status-Banner: ERROR */}
-            {certs.some(c => c.status === 'ERROR') && (
-              <div className="px-4 py-3 bg-red-50 border-b border-red-200 flex items-start gap-2 text-sm text-red-700">
-                <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                <span>
-                  <strong>Zertifikat fehlgeschlagen.</strong> Häufigste Ursache: <strong>Port 80</strong> muss öffentlich erreichbar sein (ACME HTTP-01 Challenge).
-                  {' '}Details: Zeile aufklappen (<ChevronDown size={12} className="inline mb-0.5" />).
-                </span>
-              </div>
-            )}
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name / Domains</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Typ</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Services</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {certs.map(cert => (
-                <>
-                  <tr key={cert.id} className="hover:bg-gray-50 transition-colors">
-                    {/* Name + Domains */}
-                    <td className="px-4 py-3">
-                      <div className="flex items-start gap-2">
-                        <button aria-label={expandedId === cert.id ? 'Details ausblenden' : 'Details anzeigen'}
-                          onClick={() => setExpandedId(expandedId === cert.id ? null : cert.id)}
-                          className="mt-0.5 text-gray-400 hover:text-gray-600 transition-colors shrink-0">
-                          {expandedId === cert.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </button>
-                        <div>
-                          <p className="font-medium text-gray-900 text-sm">{cert.name}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">{cert.domains.slice(0, 2).join(', ')}{cert.domains.length > 2 ? ` +${cert.domains.length - 2}` : ''}</p>
-                        </div>
-                      </div>
-                    </td>
-                    {/* Type */}
-                    <td className="px-4 py-3">
-                      <TypeBadge type={cert.type} />
-                    </td>
-                    {/* Status */}
-                    <td className="px-4 py-3">
-                      <StatusBadge status={cert.status} expiresAt={cert.expiresAt} />
-                    </td>
-                    {/* Services */}
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {cert.services.length === 0
-                          ? <span className="text-xs text-gray-400">–</span>
-                          : cert.services.map(s => (
-                              <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>
-                            ))
-                        }
-                      </div>
-                    </td>
-                    {/* Actions */}
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
+      ),
+    },
+    { key: 'type', header: t('cert_col_type'), sortValue: (c) => c.type, cell: (cert) => <TypeBadge type={cert.type} /> },
+    { key: 'status', header: t('cert_col_status'), sortValue: (c) => c.status, cell: (cert) => <StatusBadge status={cert.status} expiresAt={cert.expiresAt} /> },
+    {
+      key: 'expires', header: t('cert_col_expires'), sortValue: (c) => (c.expiresAt ? new Date(c.expiresAt) : null),
+      className: 'text-xs text-gray-500 whitespace-nowrap',
+      cell: (cert) => (cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString() : '–'),
+    },
+    {
+      key: 'services', header: t('cert_col_services'),
+      cell: (cert) => (
+        <div className="flex flex-wrap gap-1">
+          {cert.services.length === 0
+            ? <span className="text-xs text-gray-400">–</span>
+            : cert.services.map(s => (
+                <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>
+              ))}
+        </div>
+      ),
+    },
+    {
+      key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true, className: 'text-right',
+      cell: (cert) => (
+        <Can area="servers" access="write">
+          <div className="flex items-center justify-end gap-1">
                         {/* ── HTTPS proxy lock ── */}
                         {cert.isActiveHttps ? (
-                          <button aria-label="HTTPS-Proxy deaktivieren"
+                          <button
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
                             title="HTTPS-Proxy deaktivieren"
@@ -428,25 +349,88 @@ export function CertificatesPage() {
                             <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
                           </button>
                         )}
-                        <button aria-label="Bearbeiten (Name, Services, Auto-Renew)"
+                        <button
                           onClick={() => setEditingCert(cert)}
-                          title="Bearbeiten (Name, Services, Auto-Renew)"
+                          title="Bearbeiten (Name, Services, Auto-Renew)" aria-label={`${t('tb_edit')}: ${cert.name}`}
                           className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors">
                           <Pencil size={14} />
                         </button>
-                        <button aria-label="Löschen"
+                        <button
                           onClick={() => confirmDelete(cert)}
-                          title="Löschen"
+                          title="Löschen" aria-label={`${t('tb_delete')}: ${cert.name}`}
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
                           <Trash2 size={14} />
                         </button>
-                      </div>
-                    </td>
-                  </tr>
-                  {/* Expanded detail row */}
-                  {expandedId === cert.id && (
-                    <tr key={`${cert.id}-detail`} className="bg-blue-50/40">
-                      <td colSpan={5} className="px-4 py-3">
+          </div>
+        </Can>
+      ),
+    },
+  ];
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <ShieldCheck size={22} className="text-blue-600" />
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">SSL/TLS Zertifikate</h1>
+            <p className="text-sm text-gray-500">{certs.length} Zertifikat{certs.length !== 1 ? 'e' : ''}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* HTTPS status banner — only when active */}
+      {tlsInfo?.activeCert && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
+          <Lock size={16} className="text-green-600 shrink-0" />
+          <span>
+            <strong>HTTPS aktiv</strong> — Port {tlsInfo.port} verwendet{' '}
+            <span className="font-mono font-medium">{tlsInfo.activeCert.name}</span>
+            {tlsInfo.activeCert.domains[0] && (
+              <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
+            )}
+            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken.
+          </span>
+        </div>
+      )}
+
+      {/* Status banners */}
+      {certs.some(c => c.status === 'PENDING' || c.status === 'RENEWING') && (
+        <div className="mb-3 px-4 py-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-2 text-sm text-blue-700" role="status">
+          <Loader2 size={14} className="animate-spin shrink-0" aria-hidden="true" />
+          <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-blue-100 px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
+        </div>
+      )}
+      {certs.some(c => c.status === 'ERROR') && (
+        <div className="mb-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-sm text-red-700" role="alert">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+          <span>
+            <strong>Zertifikat fehlgeschlagen.</strong> Häufigste Ursache: <strong>Port 80</strong> muss öffentlich erreichbar sein (ACME HTTP-01 Challenge).
+            {' '}Details: Zeile aufklappen (<ChevronDown size={12} className="inline mb-0.5" aria-hidden="true" />).
+          </span>
+        </div>
+      )}
+
+      {/* List — client-side search/sort/paging (the API returns every certificate) */}
+      <DataTable<Certificate>
+        caption="SSL/TLS"
+        rows={certs}
+        columns={columns}
+        rowKey={(c) => c.id}
+        loading={isLoading}
+        initialSort={{ key: 'name', dir: 'asc' }}
+        search={{ text: (c) => [c.name, c.type, c.status, ...c.domains, ...c.services] }}
+        selectable={canWrite}
+        onActivate={(c) => setExpandedId(expandedId === c.id ? null : c.id)}
+        activeKey={expandedId}
+        emptyText={
+          <span className="inline-flex flex-col items-center gap-2">
+            <ShieldCheck size={32} className="opacity-30" aria-hidden="true" />
+            Noch keine Zertifikate. Erstelle dein erstes Zertifikat.
+          </span>
+        }
+        renderExpanded={(cert) => expandedId === cert.id ? (
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
                             <p className="text-xs text-gray-500 mb-1">Alle Domains</p>
@@ -505,16 +489,42 @@ export function CertificatesPage() {
                             </div>
                           )}
                         </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
+        ) : null}
+        toolbar={({ selectedRows, clearSelection }) => (
+          <>
+            <Can area="servers" access="write">
+              <button onClick={() => setModal('letsencrypt')} className="btn-primary flex items-center gap-1.5">
+                <Plus size={14} aria-hidden="true" /> Let's Encrypt
+              </button>
+            </Can>
+            <Can area="servers" access="write">
+              <button onClick={() => setModal('upload')} className="btn-secondary flex items-center gap-1.5 text-xs">
+                <Upload size={13} aria-hidden="true" /> Hochladen
+              </button>
+            </Can>
+            <Can area="servers" access="write">
+              <button onClick={() => setModal('selfsigned')} className="btn-secondary flex items-center gap-1.5 text-xs">
+                <Plus size={13} aria-hidden="true" /> Self-Signed
+              </button>
+            </Can>
+            <Can area="servers" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40" disabled={selectedRows.length !== 1}
+                onClick={() => selectedRows[0] && setEditingCert(selectedRows[0])}>
+                <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
+              </button>
+            </Can>
+            <Can area="servers" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40" disabled={selectedRows.length !== 1}
+                onClick={() => { if (selectedRows[0]) { confirmDelete(selectedRows[0]); clearSelection(); } }}>
+                <Trash2 size={13} aria-hidden="true" /> {t('tb_delete')}
+              </button>
+            </Can>
+            <button onClick={() => void refetch()} className="btn-secondary flex items-center gap-1.5 text-xs">
+              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
+            </button>
           </>
         )}
-      </div>
+      />
 
       {/* Modals — pass certs for exclusivity display */}
       {modal === 'letsencrypt' && <LetsEncryptModal onClose={() => setModal(null)} allCerts={certs} />}

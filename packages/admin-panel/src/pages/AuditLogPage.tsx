@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Download, FileText, Search,
+  ClipboardList, Download, FileText, RefreshCw,
   CheckCircle2, XCircle, Info, X, AlertTriangle,
   Activity, Users, BarChart3, Code2,
 } from 'lucide-react';
 import { api, downloadFile } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { useT } from '../i18n/useT.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 // v3.18.34: AnomaliesResponse interface + banner removed — the red banners were
 // confusing in practice (showed e.g. one's own settings changes as
@@ -378,7 +379,6 @@ export function AuditLogPage() {
   const data = query.data;
   const entries = data?.entries ?? [];
   const total   = data?.total ?? 0;
-  const pages   = Math.ceil(total / PAGE_SIZE);
   const page    = Math.floor(offset / PAGE_SIZE) + 1;
 
   const setFilter = (k: keyof typeof filters, v: string) => {
@@ -391,6 +391,36 @@ export function AuditLogPage() {
     filters.success || filters.actorEmail || filters.ipAddress || filters.searchText;
 
   const s = stats.data;
+
+  const columns: Column<AuditEntry>[] = [
+    { key: 'ts', header: 'Zeitpunkt', className: 'text-xs text-gray-600 whitespace-nowrap', cell: (e) => fmtDt(e.timestamp) },
+    {
+      key: 'actor', header: 'Akteur',
+      cell: (e) => (
+        // v3.18.37: Fallback when actorEmail is empty (e.g. cron jobs, system actions)
+        <p className="text-gray-900 text-xs font-medium">
+          {e.actorEmail || (e.actorId ? <span className="text-gray-400 italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-gray-400 italic">System</span>)}
+        </p>
+      ),
+    },
+    { key: 'action', header: 'Aktion', cell: (e) => <ActionBadge action={e.action} /> },
+    {
+      key: 'target', header: 'Ziel', className: 'text-xs text-gray-600',
+      cell: (e) => (
+        <>
+          <span className="text-gray-400">{e.targetType}</span>
+          {e.targetName && <span className="ml-1 text-gray-700">{e.targetName}</span>}
+        </>
+      ),
+    },
+    { key: 'ip', header: 'IP', className: 'text-xs text-gray-500 font-mono', cell: (e) => e.ipAddress ?? '—' },
+    {
+      key: 'ok', header: 'Status', headerClassName: 'text-center', className: 'text-center',
+      cell: (e) => e.success
+        ? <CheckCircle2 size={15} className="text-green-500 mx-auto" aria-label="Erfolgreich" />
+        : <XCircle size={15} className="text-red-500 mx-auto" aria-label="Fehlgeschlagen" />,
+    },
+  ];
 
   return (
     <div className="p-6">
@@ -471,38 +501,17 @@ export function AuditLogPage() {
         </div>
       )}
 
-      {/* Filters — row 1 */}
-      <div className="flex flex-wrap gap-2 mb-2">
-        <div className="flex items-center gap-1.5 bg-white border border-gray-300 rounded px-3 py-1.5">
-          <Search size={13} className="text-gray-400" />
-          <input value={filters.searchText} onChange={e => setFilter('searchText', e.target.value)}
-            className="w-56 text-sm focus:outline-none" placeholder={t('audit_filter_search')} />
-        </div>
-        <input value={filters.action} onChange={e => setFilter('action', e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-36"
-          placeholder="Aktion…" />
-        <input value={filters.targetType} onChange={e => setFilter('targetType', e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-36"
-          placeholder="Zieltyp…" />
-        <select value={filters.success} onChange={e => setFilter('success', e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
-          <option value="">Alle</option>
-          <option value="true">Erfolgreich</option>
-          <option value="false">Fehlgeschlagen</option>
-        </select>
-      </div>
-
-      {/* Filters — row 2 */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      {/* Additional filters (server-side, like every filter of this list) */}
+      <div className="flex flex-wrap gap-2 mb-3">
         <input value={filters.actorEmail} onChange={e => setFilter('actorEmail', e.target.value)}
           className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-56"
-          placeholder={t('audit_filter_actor_email')} />
+          placeholder={t('audit_filter_actor_email')} aria-label={t('audit_filter_actor_email')} />
         <input value={filters.ipAddress} onChange={e => setFilter('ipAddress', e.target.value)}
           className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-44"
-          placeholder={t('audit_filter_ip')} />
-        <input type="date" value={filters.from} onChange={e => setFilter('from', e.target.value)}
+          placeholder={t('audit_filter_ip')} aria-label={t('audit_filter_ip')} />
+        <input type="date" value={filters.from} onChange={e => setFilter('from', e.target.value)} aria-label="Von"
           className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
-        <input type="date" value={filters.to} onChange={e => setFilter('to', e.target.value)}
+        <input type="date" value={filters.to} onChange={e => setFilter('to', e.target.value)} aria-label="Bis"
           className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
         {hasAnyFilter && (
           <button
@@ -519,91 +528,57 @@ export function AuditLogPage() {
         )}
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              <th className="text-left px-4 py-3">Zeitpunkt</th>
-              <th className="text-left px-4 py-3">Akteur</th>
-              <th className="text-left px-4 py-3">Aktion</th>
-              <th className="text-left px-4 py-3">Ziel</th>
-              <th className="text-left px-4 py-3">IP</th>
-              <th className="text-center px-4 py-3">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {query.isLoading ? (
-              <tr><td colSpan={6} className="text-center py-12 text-gray-400">Laden…</td></tr>
-            ) : entries.length === 0 ? (
-              <tr><td colSpan={6} className="text-center py-12 text-gray-400">Keine Einträge gefunden</td></tr>
-            ) : entries.map(e => (
-              <React.Fragment key={e.id}>
-                <tr
-                  className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
-                  onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}>
-                  <td className="px-4 py-2.5 text-xs text-gray-600 whitespace-nowrap">{fmtDt(e.timestamp)}</td>
-                  <td className="px-4 py-2.5">
-                    {/* v3.18.37: Fallback when actorEmail is empty (e.g. cron jobs, system actions) */}
-                    <p className="text-gray-900 text-xs font-medium">
-                      {e.actorEmail || (e.actorId ? <span className="text-gray-400 italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-gray-400 italic">System</span>)}
-                    </p>
-                  </td>
-                  <td className="px-4 py-2.5"><ActionBadge action={e.action} /></td>
-                  <td className="px-4 py-2.5 text-xs text-gray-600">
-                    <span className="text-gray-400">{e.targetType}</span>
-                    {e.targetName && <span className="ml-1 text-gray-700">{e.targetName}</span>}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-gray-500 font-mono">{e.ipAddress ?? '—'}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {e.success
-                      ? <CheckCircle2 size={15} className="text-green-500 mx-auto" />
-                      : <XCircle size={15} className="text-red-500 mx-auto" />}
-                  </td>
-                </tr>
-                {expandedId === e.id && (
-                  <tr>
-                    <td colSpan={6} className="p-0">
-                      <div className="bg-gray-50 border-t border-gray-100 px-8 py-3">
-                        <div className="grid grid-cols-3 gap-2 text-xs">
-                          {e.targetId && <div><span className="text-gray-500">Ziel-ID: </span><span className="font-mono text-gray-700">{e.targetId}</span></div>}
-                          {e.actorId && <div><span className="text-gray-500">Akteur-ID: </span><span className="font-mono text-gray-700">{e.actorId}</span></div>}
-                          {e.userAgent && (
-                            <div className="col-span-3">
-                              <span className="text-gray-500">User-Agent: </span>
-                              <span className="font-mono text-gray-700 break-all">{e.userAgent}</span>
-                            </div>
-                          )}
-                          {e.errorMsg && <div className="col-span-3"><span className="text-red-500">Fehler: </span><span className="text-gray-700">{e.errorMsg}</span></div>}
-                          {e.changes && Object.keys(e.changes).length > 0 && (
-                            <div className="col-span-3">
-                              <span className="text-gray-500">Änderungen: </span>
-                              <pre className="inline text-gray-700 text-xs">{JSON.stringify(e.changes, null, 2)}</pre>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
-
-        {/* Pagination */}
-        {total > PAGE_SIZE && (
-          <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-            <span>{total.toLocaleString('de-DE')} Einträge · Seite {page} / {pages}</span>
-            <div className="flex gap-1">
-              <button onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}
-                className="px-3 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">← Zurück</button>
-              <button onClick={() => setOffset(offset + PAGE_SIZE)} disabled={offset + PAGE_SIZE >= total}
-                className="px-3 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40">Weiter →</button>
-            </div>
-          </div>
+      {/* List — server-side paging (API: limit/offset + filters) */}
+      <DataTable<AuditEntry>
+        caption="Audit-Log"
+        rows={entries}
+        columns={columns}
+        rowKey={(e) => e.id}
+        loading={query.isLoading}
+        server={{ page, pageSize: PAGE_SIZE, total, onPageChange: (p) => setOffset((p - 1) * PAGE_SIZE) }}
+        search={{ placeholder: t('audit_filter_search'), value: filters.searchText, onChange: (q) => setFilter('searchText', q) }}
+        onActivate={(e) => setExpandedId(expandedId === e.id ? null : e.id)}
+        activeKey={expandedId}
+        emptyText="Keine Einträge gefunden"
+        filters={
+          <>
+            <input value={filters.action} onChange={e => setFilter('action', e.target.value)}
+              className="input w-36" placeholder="Aktion…" aria-label="Aktion" />
+            <input value={filters.targetType} onChange={e => setFilter('targetType', e.target.value)}
+              className="input w-36" placeholder="Zieltyp…" aria-label="Zieltyp" />
+            <select value={filters.success} onChange={e => setFilter('success', e.target.value)}
+              className="input w-auto" aria-label="Status">
+              <option value="">Alle</option>
+              <option value="true">Erfolgreich</option>
+              <option value="false">Fehlgeschlagen</option>
+            </select>
+          </>
+        }
+        toolbar={() => (
+          <button onClick={() => { void query.refetch(); void stats.refetch(); }} className="btn-secondary flex items-center gap-1.5 text-xs">
+            <RefreshCw size={13} className={query.isFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
+          </button>
         )}
-      </div>
+        renderExpanded={(e) => expandedId === e.id ? (
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            {e.targetId && <div><span className="text-gray-500">Ziel-ID: </span><span className="font-mono text-gray-700">{e.targetId}</span></div>}
+            {e.actorId && <div><span className="text-gray-500">Akteur-ID: </span><span className="font-mono text-gray-700">{e.actorId}</span></div>}
+            {e.userAgent && (
+              <div className="col-span-3">
+                <span className="text-gray-500">User-Agent: </span>
+                <span className="font-mono text-gray-700 break-all">{e.userAgent}</span>
+              </div>
+            )}
+            {e.errorMsg && <div className="col-span-3"><span className="text-red-500">Fehler: </span><span className="text-gray-700">{e.errorMsg}</span></div>}
+            {e.changes && Object.keys(e.changes).length > 0 && (
+              <div className="col-span-3">
+                <span className="text-gray-500">Änderungen: </span>
+                <pre className="inline text-gray-700 text-xs">{JSON.stringify(e.changes, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+        ) : null}
+      />
     </div>
   );
 }

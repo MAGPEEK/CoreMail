@@ -29,6 +29,7 @@ import {
 
 import { mailRouter } from './routes/mail.js';
 import { recoverableRouter } from './routes/recoverable.js';
+import { draftsRouter } from './routes/drafts.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -41,6 +42,7 @@ import { categoriesRouter } from './routes/categories.js';
 // Journaling feature completely removed in v3.13.6
 import { getAcmeChallenge } from './routes/admin/certificates.js';
 import { mountAdminRoutes } from './routes/admin/index.js';
+import { adminMeRouter } from './routes/admin/me.js';
 import { startTlsProxy, setTlsUpgradeHandler, httpsRedirectState } from './tls-proxy.js';
 import { startCertRenewalScheduler } from './lib/cert-renewal.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
@@ -372,6 +374,7 @@ app.get('/api/v1/events', requireSseAuth, sseHandler);
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
 app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted items
+app.use('/api/v1/mail/drafts',    draftsRouter);
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
 app.use('/api/v1/contacts',       contactsRouter);
@@ -391,6 +394,7 @@ app.use('/api/v1/admin', adminMutationRateLimit);
 
 // v6: router table + per-router RBAC guards live in routes/admin/index.ts
 mountAdminRoutes(app);
+app.use('/api/v1/admin/me', adminMeRouter); // 8.x: GET /me/permissions for the BCP
 
 // ── Static frontend files (OWA under root + BCP under /bcp) ──────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
