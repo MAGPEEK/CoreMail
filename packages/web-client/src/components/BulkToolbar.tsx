@@ -86,7 +86,7 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
     <div
       className="absolute top-0 left-52 w-80 z-20 bg-white dark:bg-gray-800 border-b-2 border-accent flex items-center gap-1 px-2 py-1.5 shadow-sm animate-slide-down"
     >
-      <button
+      <button aria-label="Auswahl aufheben"
         onClick={clearSelection}
         className="p-1 rounded text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 active:scale-90"
         title="Auswahl aufheben"

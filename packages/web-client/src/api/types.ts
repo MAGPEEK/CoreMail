@@ -83,6 +83,10 @@ export interface Message extends MessageSummary {
   bodyText: string;
   bodyHtml: string;
   folderId: string;
+  /** RFC 5322 Message-ID header (with angle brackets), null for some imported mails */
+  messageId?: string | null;
+  /** In-Reply-To header of this message */
+  inReplyTo?: string | null;
 }
 
 export interface MessagesResponse {

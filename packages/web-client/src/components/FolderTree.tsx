@@ -129,7 +129,7 @@ function FolderItem({
         tabIndex={0}
       >
         {hasChildren ? (
-          <button
+          <button aria-label={expanded ? 'Ordner zuklappen' : 'Ordner aufklappen'}
             onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
             onPointerDown={(e) => e.stopPropagation()}
             className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
@@ -546,7 +546,7 @@ export function FolderTree({ onNewMail }: Props) {
           collapsed={folderTreeCollapsed}
           onToggle={toggleFolderTree}
           action={
-            <button
+            <button aria-label="Neuer Ordner"
               onClick={() => setDialog({ kind: 'createRoot' })}
               className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               title="Neuer Ordner"

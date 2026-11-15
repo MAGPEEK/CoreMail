@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import {
-  PLACEHOLDER_IMG, classifyUrl, normalizeCid, filterStyle, srcsetIsInlineOnly,
+  PLACEHOLDER_IMG, classifyUrl, normalizeCid, filterStyle, srcsetIsInlineOnly, proxyableUrl, escapeHtml,
 } from './mailHtmlCss.js';
 
 /**
@@ -26,6 +26,12 @@ export interface MailHtmlOptions {
   allowExternalImages?: boolean;
   /** normalised Content-ID → loadable URL (blob:) for inline images */
   cidMap?: ReadonlyMap<string, string>;
+  /**
+   * Absolute external URL (as listed in `externalUrls`) → blob: URL of the image
+   * loaded through the server-side image proxy. Mapped references are shown even
+   * while external resources are blocked (CSP img-src only allows self/data/blob).
+   */
+  externalMap?: ReadonlyMap<string, string>;
 }
 
 export interface MailHtmlResult {
@@ -34,6 +40,8 @@ export interface MailHtmlResult {
   blockedCount: number;
   /** Content-IDs referenced by the mail that are not (yet) in cidMap */
   unresolvedCids: string[];
+  /** Proxyable (absolute http/https) external URLs referenced by src/background/poster/style */
+  externalUrls: string[];
 }
 
 const purifier = DOMPurify(window);
@@ -61,8 +69,17 @@ const PLACEHOLDER_TAGS = new Set(['img', 'input']);
 export function renderMailHtml(html: string, opts: MailHtmlOptions = {}): MailHtmlResult {
   const allowExternal = opts.allowExternalImages === true;
   const cidMap = opts.cidMap ?? new Map<string, string>();
+  const externalMap = opts.externalMap ?? new Map<string, string>();
   let blockedCount = 0;
   const unresolved = new Set<string>();
+  const externalUrls = new Set<string>();
+
+  const resolveExternal = (raw: string): string | null => {
+    const url = proxyableUrl(raw);
+    if (!url) return null;
+    externalUrls.add(url);
+    return externalMap.get(url) ?? null;
+  };
 
   const resolveCid = (cid: string): string | null => {
     const url = cidMap.get(cid);
@@ -104,7 +121,11 @@ export function renderMailHtml(html: string, opts: MailHtmlOptions = {}): MailHt
         }
         continue;
       }
-      if (!allowExternal) block(node, attr, value);
+      if (!allowExternal) {
+        const proxied = resolveExternal(value);
+        if (proxied) node.setAttribute(attr, proxied);
+        else block(node, attr, value);
+      }
     }
 
     // 2. srcset (img/source)
@@ -126,7 +147,7 @@ export function renderMailHtml(html: string, opts: MailHtmlOptions = {}): MailHt
     // 4. Inline CSS
     const style = node.getAttribute('style');
     if (style !== null) {
-      const res = filterStyle(style, { allowExternal, resolveCid });
+      const res = filterStyle(style, { allowExternal, resolveCid, resolveExternal });
       blockedCount += res.blocked;
       if (res.style) node.setAttribute('style', res.style);
       else node.removeAttribute('style');
@@ -149,7 +170,24 @@ export function renderMailHtml(html: string, opts: MailHtmlOptions = {}): MailHt
   } finally {
     purifier.removeHook('afterSanitizeAttributes');
   }
-  return { html: out, blockedCount, unresolvedCids: [...unresolved] };
+  return { html: out, blockedCount, unresolvedCids: [...unresolved], externalUrls: [...externalUrls] };
+}
+
+export { escapeHtml };
+
+/**
+ * Sanitizes an original message body for quoting in the compose editor
+ * (reply/forward). Scripts, forms, overlay CSS etc. are removed like in the
+ * reader; external image references are kept so the recipient still sees them
+ * (the CSP keeps the compose window itself from loading them).
+ */
+export function quoteMailHtml(html: string): string {
+  return renderMailHtml(html, { allowExternalImages: true }).html;
+}
+
+/** Plain text → minimal HTML paragraph for quoting (escaped, line breaks kept). */
+export function textToQuotedHtml(text: string): string {
+  return `<p>${escapeHtml(text).replace(/\r?\n/g, '<br>')}</p>`;
 }
 
 /** Backwards-compatible helper: sanitizes and blocks all external resources. */

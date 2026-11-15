@@ -136,7 +136,7 @@ function ConditionRow({ value, onChange, onRemove }: {
         />
       )}
 
-      <button
+      <button aria-label="Bedingung entfernen"
         onClick={onRemove}
         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
         title="Bedingung entfernen"
@@ -221,7 +221,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
         </select>
       )}
 
-      <button
+      <button aria-label="Aktion entfernen"
         onClick={onRemove}
         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
         title="Aktion entfernen"
@@ -291,7 +291,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             {isNew ? 'Neue Regel' : 'Regel bearbeiten'}
           </h2>
-          <button onClick={onClose} className="btn-ghost p-1.5"><X size={18} /></button>
+          <button aria-label="Schließen" onClick={onClose} className="btn-ghost p-1.5"><X size={18} /></button>
         </div>
 
         {/* Body */}

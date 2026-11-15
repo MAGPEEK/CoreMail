@@ -2,16 +2,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
   AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, Image as ImageIcon,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { useRef, useState, useEffect, useMemo } from 'react';
-import { renderMailHtml } from '../lib/mailHtml.js';
+import { useRef, useState } from 'react';
+import { textToQuotedHtml } from '../lib/mailHtml.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
-import { useInlineImages } from '../hooks/useInlineImages.js';
 import { toastError } from '../lib/errors.js';
+import { MailBody } from './MailBody.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
@@ -29,27 +29,14 @@ export function MessageReader({ messageId }: Props) {
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
-  // Privacy: load external images only on user request (tracking pixel protection)
-  const [showExternalImages, setShowExternalImages] = useState(false);
-  // Reset the toggle when switching to another mail
-  useEffect(() => { setShowExternalImages(false); }, [messageId]);
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: msg, isLoading } = useQuery({
+  const { data: msg, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['message', messageId],
     queryFn: () => api.get<Message>(`/mail/messages/${messageId}`),
   });
-
-  // Inline (cid:) images are fetched with the Authorization header → blob: URLs
-  const cidMap = useInlineImages(msg?.bodyHtml, msg?.attachments);
-  // Sanitize + privacy filter (DOMPurify hooks). Re-run when "show images" toggles.
-  const rendered = useMemo(
-    () => (msg?.bodyHtml ? renderMailHtml(msg.bodyHtml, { allowExternalImages: showExternalImages, cidMap }) : null),
-    [msg?.bodyHtml, showExternalImages, cidMap],
-  );
-  const blockedCount = showExternalImages ? 0 : rendered?.blockedCount ?? 0;
 
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
@@ -80,7 +67,31 @@ export function MessageReader({ messageId }: Props) {
   });
 
   if (isLoading) return <MessageReaderSkeleton />;
-  if (!msg) return null;
+  if (!msg) {
+    if (!isError) return null;
+    return (
+      <div role="alert" className="flex-1 flex items-center justify-center bg-white dark:bg-gray-900 p-6">
+        <div className="text-center max-w-sm">
+          <AlertCircle size={32} className="mx-auto text-red-500 mb-2" aria-hidden="true" />
+          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Die Nachricht konnte nicht geladen werden.</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 break-words">
+            {error instanceof Error ? error.message : 'Unbekannter Fehler'}
+          </p>
+          <button
+            type="button"
+            onClick={() => { void refetch(); }}
+            disabled={isFetching}
+            className="btn-secondary text-xs mt-4 inline-flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> Erneut versuchen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Quoted original for reply/forward (plain-text mails are escaped)
+  const quotedBody = msg.bodyHtml || textToQuotedHtml(msg.bodyText ?? '');
 
   const isFlagged = msg.flags.includes('\\Flagged');
   const isPinned = !!msg.pinnedAt;
@@ -173,17 +184,17 @@ export function MessageReader({ messageId }: Props) {
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 dark:border-gray-700 shrink-0">
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
+          onClick={() => { markAnswered(); openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quotedBody }); }}
           className="btn-secondary text-xs">
           <Reply size={14} /> Antworten
         </button>
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
+          onClick={() => { markAnswered(); openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: quotedBody }); }}
           className="btn-secondary text-xs">
           <ReplyAll size={14} /> Allen antworten
         </button>
         <button
-          onClick={() => openCompose({ mode: 'forward', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` })}
+          onClick={() => openCompose({ mode: 'forward', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quotedBody })}
           className="btn-secondary text-xs">
           <Forward size={14} /> Weiterleiten
         </button>
@@ -199,8 +210,9 @@ export function MessageReader({ messageId }: Props) {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
             setMoreMenu({ x: r.right - 220, y: r.bottom });
           }}
-          className="btn-ghost text-xs" title="Mehr Optionen">
-          <MoreHorizontal size={14} />
+          className="btn-ghost text-xs" title="Mehr Optionen" aria-label="Mehr Optionen"
+          aria-haspopup="menu" aria-expanded={moreMenu !== null}>
+          <MoreHorizontal size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -357,38 +369,14 @@ export function MessageReader({ messageId }: Props) {
             </div>
           );
         }
-        const externalImageCount = blockedCount;
         return (
-          <>
-            {externalImageCount > 0 && !showExternalImages && (
-              <div className="px-4 py-2.5 border-b border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center gap-2.5 text-sm shrink-0">
-                <ImageIcon size={16} className="text-blue-600 dark:text-blue-300 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-blue-900 dark:text-blue-200 leading-tight">
-                    {externalImageCount === 1
-                      ? '1 externes Bild wurde blockiert.'
-                      : `${externalImageCount} externe Bilder wurden blockiert.`}
-                  </p>
-                  <p className="text-xs text-blue-800/80 dark:text-blue-300/80 leading-tight">
-                    Externe Bilder können verwendet werden, um Ihr Lese-Verhalten zu verfolgen (Tracking-Pixel).
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowExternalImages(true)}
-                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
-                  title="Externe Bilder einmalig nachladen"
-                >
-                  <ImageIcon size={13} /> Bilder anzeigen
-                </button>
-              </div>
-            )}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              <div
-                className="prose prose-sm dark:prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: rendered?.html ?? '' }}
-              />
-            </div>
-          </>
+          <MailBody
+            messageId={msg.id}
+            html={msg.bodyHtml}
+            attachments={msg.attachments}
+            scrollClassName="flex-1 overflow-y-auto px-6 py-4"
+            bodyClassName="prose prose-sm dark:prose-invert max-w-none"
+          />
         );
       })()}
 
