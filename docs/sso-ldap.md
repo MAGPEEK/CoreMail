@@ -55,13 +55,17 @@ POST /auth/sso/exchange { code }         → same body as POST /auth/login
   bound to `oidc:<providerId>:<sub>` on first use (another subject is refused),
   LOCAL/LDAP accounts only with `allowLinking`, inactive accounts refused,
   maintenance mode respected.
-- Linked accounts (v8.1) are bound like OIDC accounts: a LOCAL account stores
-  `oidc:<providerId>:<sub>` in `User.externalId`; an LDAP account keeps its
-  directory id there and its binding lives in Redis (`auth:sso:link:<userId>`,
-  persisted by `appendonly`). To re-link an account to another IdP identity, clear
-  `externalId` (LOCAL) or delete the Redis key (LDAP). A LOCAL account bound to an
-  IdP is no longer taken over by the LDAP login (`allowLocalTakeover`): the stored
-  id does not match the directory id.
+- Linked accounts (v8.1) are bound like OIDC accounts: the LOCAL or LDAP account
+  stores `oidc:<providerId>:<sub>` in the column `User.oidcSubject`. `externalId`
+  stays free for the LDAP directory id (`ldap:<id>`). To re-link an account to
+  another IdP identity, set `oidcSubject` to NULL. A linked LOCAL account can
+  still be taken over by LDAP (`allowLocalTakeover`, login or sync); the SSO
+  binding stays.
+  Migration of older bindings happens on use: a LOCAL account with
+  `externalId = oidc:…` and the Redis key `auth:sso:link:<userId>` (LDAP accounts)
+  stay bound. The next SSO login moves the binding into `oidcSubject` (and clears
+  the `oidc:` externalId or deletes the Redis key). An LDAP takeover of such a LOCAL
+  account moves it as well and then writes its directory id.
 - The callback never puts tokens into a URL: it issues a one-time code (60 s, Redis,
   single use, bound to the same cookie). The SPA posts it to `/auth/sso/exchange` and
   receives a normal CoreMail session (rotating refresh token) or an MFA challenge.
@@ -101,6 +105,24 @@ only a completed login resets the account counter. A locked account or IP gets
 `429 { code: 'ACCOUNT_LOCKED', retryAfter }` with `Retry-After` before any password
 check — also for unknown accounts, and `mfaRequired` is never revealed while locked.
 Failures on IMAP/SMTP/… and on the web count against the same budget.
+
+**Trade-off: lockout DoS.** The account counter does not depend on who sends the
+wrong passwords. Anyone who knows an address can lock that account with 10 wrong
+tries, from any IP. The lock lasts 5 minutes and doubles with each further strike.
+This affects the web login and all mail protocols, because they share the budget.
+We accept this because it bounds password guessing per account, even from
+distributed IPs. Mitigations:
+
+- The per-IP counter (50 / 15 min) slows down a single attacker. They need many
+  addresses to keep many accounts locked.
+- MFA: with TOTP/WebAuthn a guessed password alone is useless, so a higher
+  account threshold costs little security.
+- The env knobs: `MAIL_AUTH_ACCOUNT_MAX_FAILURES` (10), `MAIL_AUTH_ACCOUNT_WINDOW_SEC`
+  (900) and `MAIL_AUTH_ACCOUNT_LOCK_SEC` (300) set the account lock;
+  `MAIL_AUTH_IP_*` the per-IP lock. `MAIL_AUTH_EXEMPT_CIDRS` exempts trusted
+  networks (office NAT) from the per-IP counter only, not from the account
+  counter. Behind a reverse proxy set `TRUST_PROXY`, otherwise all clients share
+  the proxy's IP. Watch the logs for `ACCOUNT_LOCKED` bursts.
 
 ### Refresh-token cookie
 
