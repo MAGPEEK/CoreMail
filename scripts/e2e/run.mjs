@@ -5,7 +5,7 @@
 // so single steps can be re-run.
 import { flushResults, loadState, saveState } from './lib.mjs';
 
-const ALL = ['setup', 'users', 'smtp', 'imap', 'pop3', 'jmap', 'dav', 'eas', 'rest', 'admin', 'mfa', 'lockout', 'restart'];
+const ALL = ['setup', 'users', 'smtp', 'imap', 'pop3', 'jmap', 'dav', 'eas', 'eas-body', 'rest', 'admin', 'mfa', 'lockout', 'restart'];
 const steps = process.argv.slice(2).length ? process.argv.slice(2) : ALL;
 
 const state = loadState();

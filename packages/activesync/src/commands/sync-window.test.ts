@@ -5,7 +5,10 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadSyncWindow, parseSyncKey, isPrimingSyncKey, PRIMING_SYNC_KEY, type SyncMessageRow, type SyncWindowDb } from './sync-window.js';
+import {
+  loadSyncWindow, parseSyncKey, isPrimingSyncKey, PRIMING_SYNC_KEY, estimateSyncWindow, parseWindowSize,
+  SYNC_WINDOW_SIZE, MAX_WINDOW_SIZE, type SyncMessageRow, type SyncWindowDb,
+} from './sync-window.js';
 
 interface Msg extends SyncMessageRow { folderId: string; deletedAt: Date | null }
 let mailbox = { id: 'mb1', highestModSeq: 0n };
@@ -34,6 +37,8 @@ function deliver(id: string, folderId = 'inbox'): Msg {
   const m: Msg = {
     id, folderId, deletedAt: null, modSeq: mailbox.highestModSeq, flags: [], subject: id,
     fromAddr: 'a@b.de', toAddrs: [], date: new Date(), bodyText: '', bodyHtml: '',
+    fromName: '', ccAddrs: [], replyTo: null, messageId: null, inReplyTo: null, threadId: null,
+    storagePath: null, smimeMeta: null,
   };
   messages.push(m);
   return m;
@@ -128,4 +133,46 @@ test('priming key: SyncKey 0 is a priming request; the priming key returns every
   deliver('m1'); deliver('m2'); markSeen('m1'); deliver('m3');
   const w = await sync(PRIMING_SYNC_KEY);
   assert.deepEqual(ids(w).sort(), ['m1', 'm2', 'm3']);
+});
+
+// GetItemEstimate counts the same range the Sync window delivers (over all windows).
+const estDb = {
+  mailbox: db.mailbox,
+  message: { count: async ({ where }: { where: Record<string, unknown> }) => (await db.message.findMany({ where, select: {} })).length },
+};
+const estimate = (key: string | undefined) => estimateSyncWindow(estDb, { mailboxId: 'mb1', folderId: 'inbox', clientSyncKey: key });
+
+test('GetItemEstimate: equals the number of items the Sync windows deliver for the same key', async () => {
+  for (let i = 1; i <= 7; i++) deliver(`m${i}`);
+  deliver('other', 'sent');
+  assert.deepEqual(await estimate(PRIMING_SYNC_KEY), { status: 'ok', estimate: 7 });
+  let key = PRIMING_SYNC_KEY; let total = 0;
+  for (let round = 0; round < 10; round++) {
+    const w = await sync(key, 3);
+    if (w.status !== 'ok') break;
+    total += w.messages.length;
+    const e = await estimate(w.newSyncKey);
+    assert.equal(e.status === 'ok' && e.estimate, 7 - total, `after ${total} delivered`);
+    key = w.newSyncKey;
+    if (!w.moreAvailable) break;
+  }
+  assert.equal(total, 7);
+  markSeen('m2'); deliver('m8');
+  assert.deepEqual(await estimate(key), { status: 'ok', estimate: 2 });
+});
+
+test('GetItemEstimate: SyncKey 0 → not primed, garbage / future keys → invalid', async () => {
+  deliver('m1');
+  assert.deepEqual(await estimate('0'), { status: 'not-primed' });
+  assert.deepEqual(await estimate(undefined), { status: 'not-primed' });
+  assert.deepEqual(await estimate('abc'), { status: 'invalid' });
+  assert.deepEqual(await estimate(String(Date.now())), { status: 'invalid' });
+});
+
+test('WindowSize parsing: default, cap, garbage', () => {
+  assert.equal(parseWindowSize(undefined), SYNC_WINDOW_SIZE);
+  assert.equal(parseWindowSize('100'), 100);
+  assert.equal(parseWindowSize('100000'), MAX_WINDOW_SIZE);
+  assert.equal(parseWindowSize('0'), SYNC_WINDOW_SIZE);
+  assert.equal(parseWindowSize('x'), SYNC_WINDOW_SIZE);
 });

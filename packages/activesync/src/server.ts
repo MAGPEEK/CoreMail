@@ -12,6 +12,8 @@ import { handleSync } from './commands/sync.js';
 import { handleSendMail, handleSmartReply } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
 import { handleGetAttachment } from './commands/get-attachment.js';
+import { handleItemOperations, prismaItemOperationsDeps } from './commands/item-operations.js';
+import { handleGetItemEstimate } from './commands/get-item-estimate.js';
 import { getObjectStream } from '@coremail/storage/minio';
 
 const log = createLogger('activesync');
@@ -134,9 +136,18 @@ app.post(
           });
           break;
         }
+        case 'ItemOperations': {
+          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
+          const result = await handleItemOperations(wbxmlBody, user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)));
+          res.status(200).send(result);
+          break;
+        }
+        case 'GetItemEstimate': {
+          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
+          res.status(200).send(await handleGetItemEstimate(wbxmlBody, user.userId));
+          break;
+        }
         case 'Settings':
-        case 'GetItemEstimate':
-        case 'ItemOperations':
         case 'MeetingResponse':
         case 'ResolveRecipients':
         case 'Search':

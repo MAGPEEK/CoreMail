@@ -15,19 +15,14 @@
  * No runtime imports: the caller passes the Prisma client (or a fake).
  */
 
-export const SYNC_WINDOW_SIZE = 25;
+import type { EasMessage } from './body.js';
 
-export interface SyncMessageRow {
-  id: string;
-  modSeq: bigint;
-  flags: string[];
-  subject: string;
-  fromAddr: string;
-  toAddrs: string[];
-  date: Date;
-  bodyText: string;
-  bodyHtml: string;
-}
+export const SYNC_WINDOW_SIZE = 25;
+/** Upper bound for a client-supplied airsync:WindowSize. */
+export const MAX_WINDOW_SIZE = 512;
+
+/** Message columns of a Sync window row (attachments are loaded separately). */
+export type SyncMessageRow = Omit<EasMessage, 'attachments'> & { modSeq: bigint };
 
 export interface SyncWindowDb {
   mailbox: {
@@ -67,9 +62,44 @@ export function parseSyncKey(key: string | undefined, upper: bigint): ParsedSync
 }
 
 const SELECT = {
-  id: true, modSeq: true, flags: true, subject: true,
-  fromAddr: true, toAddrs: true, date: true, bodyText: true, bodyHtml: true,
+  id: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
+  toAddrs: true, ccAddrs: true, replyTo: true, messageId: true, inReplyTo: true, threadId: true,
+  date: true, bodyText: true, bodyHtml: true, storagePath: true, smimeMeta: true,
 } as const;
+
+/** airsync:WindowSize → window size (default SYNC_WINDOW_SIZE, capped at MAX_WINDOW_SIZE). */
+export function parseWindowSize(s: string | undefined): number {
+  if (!s || !/^\d{1,6}$/.test(s)) return SYNC_WINDOW_SIZE;
+  const n = Number(s);
+  return n < 1 ? SYNC_WINDOW_SIZE : Math.min(n, MAX_WINDOW_SIZE);
+}
+
+export interface SyncEstimateDb {
+  mailbox: SyncWindowDb['mailbox'];
+  message: { count(args: { where: Record<string, unknown> }): Promise<number> };
+}
+
+export type SyncEstimate = { status: 'ok'; estimate: number } | { status: 'invalid' } | { status: 'not-primed' };
+
+/**
+ * [MS-ASCMD] GetItemEstimate: number of items the next Sync(s) with `clientSyncKey`
+ * would deliver — the same modSeq range [key, upper) as loadSyncWindow, over all
+ * windows (no WindowSize cut). SyncKey 0/empty → not primed (Status 3).
+ */
+export async function estimateSyncWindow(
+  db: SyncEstimateDb,
+  opts: { mailboxId: string; folderId: string; clientSyncKey: string | undefined },
+): Promise<SyncEstimate> {
+  if (isPrimingSyncKey(opts.clientSyncKey)) return { status: 'not-primed' };
+  const mbx = await db.mailbox.findUnique({ where: { id: opts.mailboxId }, select: { highestModSeq: true } });
+  const upper = (mbx?.highestModSeq ?? 0n) + 1n;
+  const key = parseSyncKey(opts.clientSyncKey, upper);
+  if (key.kind === 'invalid') return { status: 'invalid' };
+  const estimate = await db.message.count({
+    where: { folderId: opts.folderId, deletedAt: null, modSeq: { gte: key.since, lt: upper } },
+  });
+  return { status: 'ok', estimate };
+}
 
 export type SyncWindow =
   | { status: 'ok'; messages: SyncMessageRow[]; newSyncKey: string; moreAvailable: boolean }
