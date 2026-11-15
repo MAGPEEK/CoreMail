@@ -4,19 +4,23 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createLogger } from '@coremail/core';
+import {
+  createEncryptStream, downloadDescriptor, ENCRYPTED_SUFFIX, ENCRYPTION_METADATA, loadKeyring, openDecryptedStream,
+  type BackupKeyring,
+} from '../crypto/backup-crypto.js';
+import { backupS3Options } from './config.js';
 
 const log = createLogger('backup:s3');
 
 function getClient(): S3Client {
-  return new S3Client({
-    endpoint: process.env['S3_ENDPOINT'] ?? 'http://minio:9000',
-    region: process.env['S3_REGION'] ?? 'us-east-1',
-    credentials: {
-      accessKeyId: process.env['S3_ACCESS_KEY'] ?? 'minioadmin',
-      secretAccessKey: process.env['S3_SECRET_KEY'] ?? 'minioadmin',
-    },
-    forcePathStyle: true, // Required for MinIO
-  });
+  return new S3Client(backupS3Options());
+}
+
+let _keyring: BackupKeyring | null = null;
+/** Backup encryption keyring (BACKUP_ENCRYPTION_KEY; fallback derived from JWT_SECRET + PEPPER). */
+export function backupKeyring(): BackupKeyring {
+  _keyring ??= loadKeyring(process.env, (msg) => log.warn(msg));
+  return _keyring;
 }
 
 const BUCKET = process.env['BACKUP_BUCKET'] ?? 'coremail-backups';
@@ -29,7 +33,15 @@ const BUCKET = process.env['BACKUP_BUCKET'] ?? 'coremail-backups';
  * Idempotent — if the bucket already exists (200 OK from HeadBucket): do nothing.
  */
 export async function ensureBackupBucket(): Promise<void> {
-  const client = getClient();
+  let client: S3Client;
+  try {
+    client = getClient();
+  } catch (err) {
+    // Missing credentials must not crash the backup-service (mail keeps working);
+    // every backup run then fails with the same clear message.
+    log.error({ err }, 'Backup storage is not configured — backups will fail');
+    return;
+  }
   try {
     await client.send(new HeadBucketCommand({ Bucket: BUCKET }));
     log.info({ bucket: BUCKET }, 'Backup bucket exists');
@@ -50,26 +62,36 @@ export async function ensureBackupBucket(): Promise<void> {
   }
 }
 
+/**
+ * Uploads a backup archive ENCRYPTED (AES-256-GCM frames, see
+ * crypto/backup-crypto.ts) under `<s3Key>.enc` and returns the stored key —
+ * callers persist that key (BackupJob.downloadUrl). The archive never leaves
+ * the container in plaintext.
+ */
 export async function uploadToS3(
   localPath: string,
   s3Key: string,
   contentType = 'application/octet-stream'
-): Promise<string> {
+): Promise<{ key: string; uri: string }> {
   const client = getClient();
+  const keyring = backupKeyring();
   const fileSize = (await stat(localPath)).size;
+  const storedKey = `${s3Key}${ENCRYPTED_SUFFIX}`;
 
-  log.info({ s3Key, fileSize }, 'Uploading backup to S3');
+  log.info({ s3Key: storedKey, fileSize }, 'Uploading encrypted backup to S3');
 
   const upload = new Upload({
     client,
     params: {
       Bucket: BUCKET,
-      Key: s3Key,
-      Body: createReadStream(localPath),
-      ContentType: contentType,
+      Key: storedKey,
+      Body: createReadStream(localPath).pipe(createEncryptStream(keyring.current)),
+      ContentType: 'application/octet-stream',
       Metadata: {
         'uploaded-at': new Date().toISOString(),
         'file-size': String(fileSize),
+        'encryption': ENCRYPTION_METADATA,
+        'plain-content-type': contentType,
       },
     },
     partSize: 10 * 1024 * 1024, // 10 MB parts
@@ -82,9 +104,9 @@ export async function uploadToS3(
 
   await upload.done();
 
-  const s3Uri = `s3://${BUCKET}/${s3Key}`;
+  const s3Uri = `s3://${BUCKET}/${storedKey}`;
   log.info({ s3Uri }, 'Upload complete');
-  return s3Uri;
+  return { key: storedKey, uri: s3Uri };
 }
 
 export async function listBackups(prefix: string): Promise<{ key: string; size: number; lastModified: Date }[]> {
@@ -122,14 +144,32 @@ export async function getSignedDownloadUrl(s3Key: string): Promise<string> {
  * v3.18.28: return an object from S3 as a stream — piped to the client in the
  * Express handler. Works without a presigned URL.
  */
-export async function streamObject(s3Key: string): Promise<{ stream: Readable; contentLength?: number; contentType?: string }> {
+export async function streamObject(s3Key: string): Promise<{ stream: Readable; contentLength?: number; contentType?: string; plainContentType?: string }> {
   const client = getClient();
   const result = await client.send(new GetObjectCommand({ Bucket: BUCKET, Key: s3Key }));
+  const plain = result.Metadata?.['plain-content-type'];
   return {
     stream: result.Body as Readable,
     ...(typeof result.ContentLength === 'number' ? { contentLength: result.ContentLength } : {}),
     ...(typeof result.ContentType === 'string' ? { contentType: result.ContentType } : {}),
+    ...(typeof plain === 'string' && plain ? { plainContentType: plain } : {}),
   };
+}
+
+/**
+ * Opens a stored backup for download: encrypted objects (`.enc`) are
+ * decrypted on the fly, legacy plaintext objects are passed through. Rejects
+ * (before anything is sent) when the key does not match or the object is not
+ * a valid encrypted backup.
+ */
+export async function openBackupDownload(s3Key: string): Promise<{ stream: Readable; filename: string; contentType: string; contentLength?: number }> {
+  const obj = await streamObject(s3Key);
+  const d = downloadDescriptor(s3Key, obj.contentType, obj.plainContentType);
+  if (!d.encrypted) {
+    return { stream: obj.stream, filename: d.filename, contentType: d.contentType, ...(obj.contentLength ? { contentLength: obj.contentLength } : {}) };
+  }
+  const stream = await openDecryptedStream(obj.stream, backupKeyring());
+  return { stream, filename: d.filename, contentType: d.contentType };
 }
 
 /**

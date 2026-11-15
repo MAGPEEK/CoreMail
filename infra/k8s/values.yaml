@@ -101,21 +101,29 @@ app:
     accountMaxFailures: ""
     accountWindowSec: ""
     accountLockSec: ""
-    # Also count failures from private/loopback IPs per IP. Set true when
-    # externalTrafficPolicy is Cluster (all clients then appear as node IPs).
-    limitPrivateIps: false
+    # Comma-separated IPs/CIDRs exempt from the per-IP lockout and the IMAP/POP3
+    # per-IP connection caps (MAIL_AUTH_EXEMPT_CIDRS / MAIL_CONN_EXEMPT_CIDRS).
+    # Since app 9.0 only loopback is exempt by default; set the node CIDR here
+    # when externalTrafficPolicy is Cluster (all clients then appear as node IPs).
+    exemptCidrs: ""
 
   extraEnv: []
   #  - name: GEOIP_DB_PATH
   #    value: /geoip/GeoLite2-Country.mmdb
   extraEnvFrom: []
 
-  # Schema sync (prisma db push --accept-data-loss) in an init container before
-  # the app starts — same as entrypoint-app.sh in Docker, but without pnpm/corepack
-  # (which needs a writable HOME and registry access when not running as root).
+  # Schema sync (prisma db push) in an init container before the app starts —
+  # the image's coremail-schema-sync, same as entrypoint-app.sh in Docker.
+  # Needs an image with coremail-schema-sync (> 8.0.0). A schema change that would DELETE data stops the
+  # rollout (init container fails, nothing changed) until allowDataLoss is set.
+  # With allowDataLoss a pg_dump is written first to the PVC backupClaim
+  # (mounted at /backups) — or set skipBackup when you made your own backup.
   schemaSync:
     enabled: true
     maxAttempts: 60
+    allowDataLoss: false
+    backupClaim: ""        # existing PVC for pre-migrate-<timestamp>.sql.gz
+    skipBackup: false
     resources: {}
 
   resources:

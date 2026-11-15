@@ -231,6 +231,14 @@ LOG_LEVEL=info                  # error | warn | info | debug
 BACKUP_SCHEDULE=0 2 * * *       # daily at 02:00 UTC
 BACKUP_RETENTION_DAYS=30
 RETENTION_SCHEDULE=0 3 * * *    # Managed Folder Assistant, daily at 03:00 UTC
+BACKUP_ENCRYPTION_KEY=<openssl rand -hex 32>   # backups are AES-256-GCM encrypted — keep a copy OFF the server
+
+# ─── Security (docs/deployment-security.md) ─────────────────────────────────
+RSPAMD_CONTROLLER_PASSWORD=<openssl rand -hex 20>
+# COREMAIL_DB_USER=coremail_app            # non-superuser DB role — fresh databases only (setup.sh)
+# COREMAIL_DB_PASSWORD=<openssl rand -hex 20>
+# COREMAIL_ALLOW_SCHEMA_DATA_LOSS=false    # true for ONE start: destructive schema update after a pg_dump
+# RSPAMD_NET_PREFIX=10.253.253             # app <-> rspamd /29 network
 
 # ─── VAPID Web Push — optional ───────────────────────────────────────────────
 # Generate keys: npx web-push generate-vapid-keys
