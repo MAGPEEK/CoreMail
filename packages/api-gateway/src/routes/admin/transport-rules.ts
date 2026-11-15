@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { invalidRegexConditionMessage } from '../../lib/rule-validation.js';
 
 const log = createLogger('admin:transport-rules');
 export const adminTransportRulesRouter: RouterType = Router();
@@ -57,6 +58,8 @@ adminTransportRulesRouter.get('/:id', async (req: Request, res: Response) => {
 adminTransportRulesRouter.post('/', async (req: Request, res: Response) => {
   const p = RuleSchema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
+  const patternError = invalidRegexConditionMessage(p.data.conditions);
+  if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
 
   const actorId = req.apiUser?.userId ?? 'system';
   const rule = await prisma.transportRule.create({
@@ -76,6 +79,8 @@ adminTransportRulesRouter.put('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const p = RuleSchema.partial().safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
+  const patternError = invalidRegexConditionMessage(p.data.conditions);
+  if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
   try {
     const rule = await prisma.transportRule.update({
       where: { id },

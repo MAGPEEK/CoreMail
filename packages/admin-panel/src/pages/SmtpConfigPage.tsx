@@ -702,7 +702,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     setTestStatus('testing');
     setTestMsg('');
     try {
-      // API client: correct token (bcp-token), refresh + error handling
+      // API client: in-memory access token in the Authorization header, refresh + error handling
       const data = await api.post<{ ok: boolean; message: string }>('/admin/smtp-config/test-smarthost', {
         host, port, tls, implicitTls, username, password: password || undefined,
       });

@@ -250,6 +250,20 @@ export const api = {
     request<T>(path, { method: 'POST', body: file }, contentType),
 };
 
+/**
+ * v8.1: single-use SSE ticket (POST /api/v1/events/ticket, 60 s) for
+ * `GET /api/v1/events?ticket=` — the access token never goes into a URL.
+ * apiFetch sends the in-memory token and refreshes once on a 401. Returns null
+ * when no session exists (the caller retries later).
+ */
+export async function fetchEventTicket(): Promise<string | null> {
+  if (!getToken()) return null;
+  const res = await apiFetch('/api/v1/events/ticket', { method: 'POST', body: '{}' });
+  if (!res.ok) throw new Error(`SSE ticket: HTTP ${res.status}`);
+  const data = await res.json() as { ticket?: unknown };
+  return typeof data.ticket === 'string' && data.ticket ? data.ticket : null;
+}
+
 // ── Downloads without tokens in URLs ──────────────────────────────────────────
 
 /** Fetches an authenticated resource as Blob (Authorization header). */
@@ -279,6 +293,20 @@ export async function downloadFile(path: string, filename: string): Promise<void
   saveBlob(await fetchBlob(path), filename);
 }
 
+/**
+ * Like downloadFile, but the server's Content-Disposition file name wins over
+ * `fallbackName` (backup downloads: the server knows the decrypted name).
+ */
+export async function downloadFileNamed(path: string, fallbackName: string, nameFromHeader: (h: string | null) => string | null): Promise<void> {
+  const res = await apiFetch(path, {}, null);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText })) as unknown;
+    throw apiErrorFromBody(body, res.status);
+  }
+  const name = nameFromHeader(res.headers.get('content-disposition')) ?? fallbackName;
+  saveBlob(await res.blob(), name);
+}
+
 // ── Login / MFA / logout ──────────────────────────────────────────────────────
 
 export type MfaMethod = 'webauthn' | 'totp' | 'backup_code';
@@ -304,6 +332,22 @@ export async function loginAdmin(email: string, password: string): Promise<Login
   const data = await res.json() as LoginResult;
   if ('accessToken' in data && data.refreshToken) setRefreshToken(data.refreshToken); // older server
   return data;
+}
+
+/**
+ * Trades the one-time SSO code for tokens (POST /auth/sso/exchange). v8.1: sent
+ * as BCP browser client, so the refresh token comes back as the HttpOnly cookie
+ * `cm_rt_bcp` and the body only carries the access token (or an MFA challenge).
+ */
+export async function exchangeSsoCode(code: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+  const res = await fetch('/auth/sso/exchange', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+    body: JSON.stringify({ code }),
+  });
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return { ok: res.ok, body };
 }
 
 async function postMfaVerify(body: Record<string, unknown>): Promise<string> {

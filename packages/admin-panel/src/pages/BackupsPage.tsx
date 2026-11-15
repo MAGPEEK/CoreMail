@@ -7,7 +7,8 @@ import {
   Pencil, PauseCircle, Archive, ListChecks,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { api, downloadFile } from '../api/client.js';
+import { api, downloadFileNamed } from '../api/client.js';
+import { backupFileName, contentDispositionName } from '../lib/backupNames.js';
 
 /**
  * v3.18.28 BackupsPage v3 — tab-based UI with:
@@ -181,7 +182,8 @@ export function BackupsPage() {
   // v3.18.29: Archive object download (stream proxy by S3 key) — Bearer header + token refresh
   const downloadArchive = async (key: string) => {
     try {
-      await downloadFile(`/admin/backups/archive/download?key=${encodeURIComponent(key)}`, key.split('/').pop() ?? 'backup.bin');
+      // v8.1: `.enc` objects are decrypted by the server — the file is the plaintext archive
+      await downloadFileNamed(`/admin/backups/archive/download?key=${encodeURIComponent(key)}`, backupFileName(key), contentDispositionName);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -218,7 +220,11 @@ export function BackupsPage() {
   // Download via Authorization header (no direct href — backend needs Bearer)
   const downloadJob = async (jobId: string, filenameHint?: string) => {
     try {
-      await downloadFile(`/admin/backups/download/${encodeURIComponent(jobId)}`, filenameHint ?? `backup-${jobId.slice(0, 8)}.bin`);
+      await downloadFileNamed(
+        `/admin/backups/download/${encodeURIComponent(jobId)}`,
+        backupFileName(filenameHint, `backup-${jobId.slice(0, 8)}.bin`),
+        contentDispositionName,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -316,7 +322,7 @@ export function BackupsPage() {
                         <div className="flex items-center justify-end gap-1">
                           {j.status === 'COMPLETED' && j.downloadUrl && (
                             <button aria-label="Backup herunterladen"
-                              onClick={() => void downloadJob(j.id, j.downloadUrl?.split('/').pop())}
+                              onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
                               className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
                               title="Backup herunterladen"
                             >
@@ -616,25 +622,38 @@ function ActionsTab(props: {
 // ─── Tab: Restore (MBOX import) ─────────────────────────────────────────────
 function RestoreTab(props: { users: UserItem[] }) {
   const [importUserId, setImportUserId] = useState('');
+  const [importFolderId, setImportFolderId] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
 
+  // v8.1: target folder (the backup-service requires ?folderId=)
+  const { data: folders = [] } = useQuery<Array<{ id: string; name: string; displayName: string }>>({
+    queryKey: ['admin-backups-user-folders', importUserId],
+    queryFn: () => api.get(`/admin/backups/users/${encodeURIComponent(importUserId)}/folders`),
+    enabled: !!importUserId,
+  });
+
   const handleImport = async () => {
     if (!importUserId.trim()) { toast.error('User erforderlich'); return; }
+    const folderId = importFolderId || folders.find((f) => f.name === 'INBOX')?.id || '';
+    if (!folderId) { toast.error('Zielordner erforderlich'); return; }
     const file = fileRef.current?.files?.[0];
     if (!file) { toast.error('Bitte MBOX-Datei auswählen'); return; }
     if (file.size > 500 * 1024 * 1024) { toast.error('Datei zu groß (max 500 MB)'); return; }
     setImporting(true);
     try {
-      // Send the File itself as body — the browser streams it; file.text() would
-      // load up to 500 MB into a JS string (and break non-UTF-8 mailboxes).
-      const result = await api.postFile<{ imported?: number; failed?: number }>(
-        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}`,
+      // Send the File itself as raw bytes — the browser streams it; file.text()
+      // would load up to 500 MB into a JS string and corrupt encrypted (.enc)
+      // backups and non-UTF-8 mailboxes.
+      const result = await api.postFile<{ imported?: number; errors?: number; failed?: number; encrypted?: boolean }>(
+        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}?folderId=${encodeURIComponent(folderId)}`,
         file,
-        'application/mbox',
+        'application/octet-stream',
       );
-      toast.success(`Import: ${result.imported ?? '?'} importiert${result.failed ? `, ${result.failed} fehlgeschlagen` : ''}`);
+      const failed = result.failed ?? result.errors ?? 0;
+      toast.success(`Import${result.encrypted ? ' (verschlüsseltes Backup)' : ''}: ${result.imported ?? '?'} importiert${failed ? `, ${failed} fehlgeschlagen` : ''}`);
       setImportUserId('');
+      setImportFolderId('');
       if (fileRef.current) fileRef.current.value = '';
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import fehlgeschlagen');
@@ -659,7 +678,7 @@ function RestoreTab(props: { users: UserItem[] }) {
           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Ziel-User</label>
           <select
             value={importUserId}
-            onChange={(e) => setImportUserId(e.target.value)}
+            onChange={(e) => { setImportUserId(e.target.value); setImportFolderId(''); }}
             className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">— bitte wählen —</option>
@@ -667,8 +686,20 @@ function RestoreTab(props: { users: UserItem[] }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">MBOX-Datei</label>
-          <input ref={fileRef} type="file" accept=".mbox,.txt"
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Zielordner</label>
+          <select
+            value={importFolderId || folders.find((f) => f.name === 'INBOX')?.id || ''}
+            onChange={(e) => setImportFolderId(e.target.value)}
+            disabled={!importUserId}
+            className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+          >
+            <option value="">— bitte wählen —</option>
+            {folders.map((f) => <option key={f.id} value={f.id}>{f.displayName || f.name}</option>)}
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">MBOX-Datei (auch verschlüsseltes CoreMail-Backup .mbox.enc)</label>
+          <input ref={fileRef} type="file" accept=".mbox,.txt,.enc"
             className="w-full text-sm text-gray-700 dark:text-gray-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent hover:file:bg-accent/20" />
         </div>
       </div>

@@ -421,6 +421,15 @@ const CACHE_MAX = 256;
  * patterns never match (and are refused at rule creation by validateRulePattern()).
  */
 export function matchRulePattern(pattern: string, input: string): boolean {
+  return tryMatchRulePattern(pattern, input) ?? false;
+}
+
+/**
+ * Like matchRulePattern, but returns null for an invalid/unsupported pattern
+ * (callers that log or skip such entries, e.g. admin blacklist patterns stored
+ * before validation existed).
+ */
+export function tryMatchRulePattern(pattern: string, input: string): boolean | null {
   let compiled = cache.get(pattern);
   if (compiled === undefined) {
     try {
@@ -431,5 +440,5 @@ export function matchRulePattern(pattern: string, input: string): boolean {
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value as string);
     cache.set(pattern, compiled);
   }
-  return compiled ? runRulePattern(compiled, input) : false;
+  return compiled ? runRulePattern(compiled, input) : null;
 }

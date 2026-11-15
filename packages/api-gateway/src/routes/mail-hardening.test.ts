@@ -145,6 +145,15 @@ test('POST /mail/send: recipient limits + per-user rate limit', async () => {
   assert.equal((await call('POST', '/api/v1/mail/send', { token: tok('u5'), body: { to: [], subject: 's' } })).status, 400);
 });
 
+test('POST /mail/send: an invalid client references list is a 400 (JSON and multipart field)', async () => {
+  const t = tok('u6');
+  const crlf = await call('POST', '/api/v1/mail/send', { token: t, body: { to: ['a@ex.com'], subject: 's', references: ['<a@x>\r\nBcc: v@x.com'] } });
+  assert.equal(crlf.status, 400);
+  assert.match(String(crlf.json['error']), /references/);
+  const tooMany = Array.from({ length: 51 }, (_, i) => `<m${i}@x>`).join(' ');
+  assert.equal((await call('POST', '/api/v1/mail/send', { token: t, body: { to: ['a@ex.com'], subject: 's', references: tooMany } })).status, 400);
+});
+
 test('GET /mail/image-proxy: authenticated and SSRF-checked', async () => {
   assert.equal((await call('GET', '/api/v1/mail/image-proxy?url=https%3A%2F%2Fexample.com%2Fa.png')).status, 401);
   const t = tok('u1');

@@ -416,13 +416,10 @@ export async function processResourceMailboxes(
 
     if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
 
-    // UIDs are unique in the table; a booking of ANOTHER resource with this UID
-    // is never read, changed or deleted from here.
-    const existing = await prisma.resourceBooking.findUnique({ where: { uid } });
-    if (existing && existing.calendarId !== calendarId) {
-      log.warn({ resource: email, uid }, 'Resource booking UID belongs to another resource — ignored');
-      continue;
-    }
+    // v8.1: UIDs are unique per resource calendar — a meeting that books two
+    // rooms gets one booking in each. Only this resource's booking is read,
+    // changed or deleted here.
+    const existing = await prisma.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid } } });
     const isOrganizer = !!existing && senderAuthenticated && bareAddress(existing.organizer) === sender;
 
     // Handle CANCEL method — remove this resource's booking (organizer only)

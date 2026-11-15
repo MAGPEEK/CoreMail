@@ -55,7 +55,55 @@ export function rawHeader(raw: Buffer, name: string): string | null {
   return m ? m[1]!.trim() : null;
 }
 
+/** Max. number of Message-IDs a client may send in `references`. */
+export const MAX_CLIENT_REFERENCES = 50;
+
+/**
+ * Validates the optional client `references` field of POST /mail/send: an array
+ * of `<msg-id>` tokens or one whitespace-separated string of them. Max
+ * MAX_CLIENT_REFERENCES ids, no CR/LF/NUL, every token a plausible Message-ID.
+ * Returns `refs: null` when the field is absent/empty.
+ */
+export function parseClientReferences(value: unknown): { ok: true; refs: string[] | null } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === '') return { ok: true, refs: null };
+  let tokens: string[];
+  if (typeof value === 'string') tokens = value.split(/[ \t]+/);
+  else if (Array.isArray(value) && value.every((v) => typeof v === 'string')) tokens = value as string[];
+  else return { ok: false, error: 'references must be a list of Message-IDs' };
+  // CR/LF/NUL anywhere (even trailing) is refused — never trimmed away
+  if (tokens.some((t) => /[\r\n\0]/.test(t))) return { ok: false, error: 'references: invalid Message-ID' };
+  tokens = tokens.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (tokens.length === 0) return { ok: true, refs: null };
+  if (tokens.length > MAX_CLIENT_REFERENCES) return { ok: false, error: `references: at most ${MAX_CLIENT_REFERENCES} Message-IDs` };
+  const refs: string[] = [];
+  for (const t of tokens) {
+    if (/[\r\n\0]/.test(t) || !/^<[^<>]+>$/.test(t)) return { ok: false, error: 'references: invalid Message-ID' };
+    const id = normalizeMessageId(t);
+    if (!id) return { ok: false, error: 'references: invalid Message-ID' };
+    if (!refs.includes(id)) refs.push(id);
+  }
+  return { ok: true, refs };
+}
+
+/**
+ * In-Reply-To / References for an outgoing message. `clientReferences` (validated
+ * by parseClientReferences) wins over the server-resolved chain; the resolved
+ * In-Reply-To is always the last References entry.
+ */
 export async function resolveReplyHeaders(
+  inReplyTo: string | undefined,
+  userId: string,
+  lookup: ReplyLookup,
+  clientReferences?: string[] | null,
+): Promise<{ inReplyTo?: string; references?: string }> {
+  const resolved = await resolveServerReplyHeaders(inReplyTo, userId, lookup);
+  if (!clientReferences || clientReferences.length === 0) return resolved;
+  const refs = clientReferences.filter((r) => r !== resolved.inReplyTo);
+  if (resolved.inReplyTo) refs.push(resolved.inReplyTo);
+  return { ...resolved, references: refs.slice(-MAX_CLIENT_REFERENCES).join(' ') };
+}
+
+async function resolveServerReplyHeaders(
   inReplyTo: string | undefined,
   userId: string,
   lookup: ReplyLookup,

@@ -18,7 +18,8 @@ import { requireAuth } from '../middleware/auth.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
-import { resolveReplyHeaders, prismaReplyLookup } from '../lib/reply-headers.js';
+import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
+import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
 
 const replyLookup = prismaReplyLookup(
@@ -36,7 +37,7 @@ const RSPAMD_URL = process.env['RSPAMD_URL'] ?? 'http://rspamd:11334';
 async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promise<void> {
   await fetch(`${RSPAMD_URL}/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: { 'Content-Type': 'application/octet-stream', ...rspamdControllerHeaders() },
     body: raw,
     signal: AbortSignal.timeout(10_000),
   });
@@ -789,6 +790,7 @@ mailRouter.post(
     let bodyHtml: string;
     let bodyText: string;
     let inReplyTo: string | undefined;
+    let referencesRaw: unknown;
     let scheduledAt: Date | null = null;
     let sendAsAddress: string | null = null;     // shared mailbox address as sender (SEND_AS)
     let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
@@ -803,6 +805,7 @@ mailRouter.post(
         bodyHtml: z.string().optional(),
         bodyText: z.string().optional(),
         inReplyTo: z.string().optional(),
+        references: z.union([z.array(z.string()), z.string()]).optional(),
         scheduledAt: z.string().datetime().optional(),
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
@@ -816,6 +819,7 @@ mailRouter.post(
       bodyHtml = parsed.data.bodyHtml ?? '';
       bodyText = parsed.data.bodyText ?? '';
       inReplyTo = parsed.data.inReplyTo;
+      referencesRaw = parsed.data.references;
       if (parsed.data.scheduledAt)    scheduledAt    = new Date(parsed.data.scheduledAt);
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
@@ -828,6 +832,7 @@ mailRouter.post(
       bodyHtml = String(req.body['bodyHtml'] ?? '');
       bodyText = String(req.body['bodyText'] ?? '');
       inReplyTo = req.body['inReplyTo'] ? String(req.body['inReplyTo']) : undefined;
+      referencesRaw = req.body['references'] as unknown;
       if (req.body['scheduledAt']) {
         const d = new Date(String(req.body['scheduledAt']));
         if (!isNaN(d.getTime())) scheduledAt = d;
@@ -837,6 +842,9 @@ mailRouter.post(
     }
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
+    // Optional client References chain (validated <msg-id> list, max 50, no CR/LF)
+    const clientRefs = parseClientReferences(referencesRaw);
+    if (!clientRefs.ok) { res.status(400).json({ error: clientRefs.error }); return; }
     // 8.0.x: recipient count + syntax (header injection, envelope abuse)
     const rcptCheck = checkRecipients([to, cc, bcc]);
     if (!rcptCheck.ok) {
@@ -907,7 +915,13 @@ mailRouter.post(
     }
 
     // 8.0.x: In-Reply-To/References from the parent's Message-ID (never an internal id)
-    const reply = await resolveReplyHeaders(inReplyTo, user.id, replyLookup);
+    // The client's References list (when sent) wins over the server-resolved chain.
+    const reply = await resolveReplyHeaders(inReplyTo, user.id, replyLookup, clientRefs.refs);
+    const replyRefs = reply.references ?? reply.inReplyTo;
+    const replyHeaders = {
+      ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo } : {}),
+      ...(replyRefs ? { references: replyRefs } : {}),
+    };
 
     const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
     const jobId       = crypto.randomUUID();
@@ -970,7 +984,7 @@ mailRouter.post(
           // For schedule-send: set the Date header to scheduledAt so that the
           // recipient sees the scheduled send time (not the creation time)
           date:      (scheduledAt ?? sendDate).toISOString(),
-          ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo, references: reply.references ?? reply.inReplyTo } : {}),
+          ...replyHeaders,
           attachments: queueAttachments,
         },
       }, jobOptions);
@@ -1031,7 +1045,7 @@ mailRouter.post(
           ...(bcc.length            ? { bcc }                                 : {}),
           ...(bodyHtml              ? { html: bodyHtml }                      : {}),
           ...(bodyText              ? { text: bodyText }                      : {}),
-          ...(reply.inReplyTo       ? { inReplyTo: reply.inReplyTo, references: reply.references ?? reply.inReplyTo } : {}),
+          ...replyHeaders,
           ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
         });
 

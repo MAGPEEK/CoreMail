@@ -9,7 +9,10 @@ process.env['NODE_ENV'] = 'test';
 const fakePrisma: Record<string, unknown> = { $on: () => undefined };
 (globalThis as unknown as { __prisma: unknown }).__prisma = fakePrisma;
 
-const { buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings } = await import('./queue-options.js');
+const {
+  buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings,
+  attemptsForRetention, outboundRetryStepMs, outboundRetryDelay,
+} = await import('./queue-options.js');
 const {
   extractITipReply, isReplyFromAttendee, processITipInbound, parseITipReply, applyReplyToIcal, MAX_REPLY_OVERRIDES, MAX_REPLY_STAMPS,
 } = await import('./itip-inbound.js');
@@ -19,13 +22,16 @@ const {
 test('outbound job options follow QueueSettings', () => {
   const d = buildOutboundJobOptions(null);
   assert.deepEqual(d, {
-    attempts: 10,
-    backoff: { type: 'exponential', delay: 60_000 },
+    // v8.1: enough attempts for 48 h (1 + 5 + 15 min, then every 30 min) + the expiry attempt
+    attempts: attemptsForRetention(48),
+    backoff: { type: 'coremail-outbound', delay: 60_000 },
     removeOnComplete: { age: 24 * 3600, count: 100 },
     removeOnFail: { count: 10_000 },
   });
-  const s = buildOutboundJobOptions({ maxRetryAttempts: 4, retryBackoffDelaySec: 30, completedRetentionHours: 2, deadLetterRetentionDays: 3, autoFlushDead: true });
-  assert.equal(s.attempts, 4);
+  assert.ok(d.attempts > 90 && d.attempts < 110, String(d.attempts));
+  const s = buildOutboundJobOptions({ maxRetryAttempts: 4, retryBackoffDelaySec: 30, completedRetentionHours: 2, deadLetterRetentionDays: 3, autoFlushDead: true, outboundRetentionHours: 1 });
+  assert.equal(s.attempts, attemptsForRetention(1, 30_000), 'expiry window wins over a small maxRetryAttempts');
+  assert.equal(buildOutboundJobOptions({ maxRetryAttempts: 500 }).attempts, 500, 'maxRetryAttempts is a minimum');
   assert.equal(s.backoff.delay, 30_000);
   assert.deepEqual(s.removeOnComplete, { age: 7200, count: 100 });
   assert.deepEqual(s.removeOnFail, { age: 3 * 86_400 });
@@ -39,6 +45,35 @@ test('outboundRetentionHours expiry counts from the planned send time', () => {
   assert.equal(isExpiredInQueue({ timestamp: now - 47 * h }, null, now), false);
   assert.equal(isExpiredInQueue({ timestamp: now - 49 * h, opts: { delay: 24 * h } }, null, now), false); // scheduled send
   assert.equal(isExpiredInQueue({ timestamp: now - 3 * h }, { outboundRetentionHours: 2 }, now), true);
+});
+
+test('v8.1 retry schedule: 1, 5, 15, then every 30 min, capped at the expiry', () => {
+  const min = 60_000;
+  const h = 3_600_000;
+  assert.deepEqual([1, 2, 3, 4, 5, 50].map((n) => outboundRetryStepMs(n)), [min, 5 * min, 15 * min, 30 * min, 30 * min, 30 * min]);
+  assert.equal(outboundRetryStepMs(1, 10 * min), 10 * min, 'first step = retryBackoffDelaySec');
+  assert.equal(outboundRetryStepMs(2, 10 * min), 10 * min, 'never shorter than the first step');
+
+  const now = 1_000_000_000_000;
+  // early in the window: the plain step
+  assert.equal(outboundRetryDelay(4, { timestamp: now - h }, null, now), 30 * min);
+  // 10 min before the 48 h expiry: pulled forward to 1 s past the expiry
+  assert.equal(outboundRetryDelay(90, { timestamp: now - 48 * h + 10 * min }, null, now), 10 * min + 1000);
+  // already expired: retry right away so the worker gives up (final NDR)
+  assert.equal(outboundRetryDelay(90, { timestamp: now - 50 * h }, null, now), 1000);
+  // scheduled send: the window starts at the planned time
+  assert.equal(outboundRetryDelay(4, { timestamp: now - 50 * h, opts: { delay: 24 * h } }, null, now), 30 * min);
+
+  // simulate the whole window: the retries reach the expiry within `attempts`
+  const opts = buildOutboundJobOptions(null);
+  let t = 0;
+  let attempt = 1;
+  while (!isExpiredInQueue({ timestamp: 0 }, null, t)) {
+    t += outboundRetryDelay(attempt, { timestamp: 0 }, null, t);
+    attempt++;
+  }
+  assert.ok(attempt <= opts.attempts, `${attempt} attempts needed, ${opts.attempts} configured`);
+  assert.ok(t >= 48 * h && t <= 48 * h + 2000, `gives up at ${t / h} h`);
 });
 
 test('queue cleaner plan: dead letters only with autoFlushDead', () => {

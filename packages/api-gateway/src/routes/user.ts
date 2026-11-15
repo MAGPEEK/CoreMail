@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import { prisma, expunge, nextModSeq } from '@coremail/storage';
+import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
@@ -370,6 +371,21 @@ const RuleSchema = z.object({
   matchAll: z.boolean().default(true),
 });
 
+/**
+ * Returns a 400 message when a `regex` condition/exception carries a pattern the
+ * linear-time rule matcher refuses (ReDoS-safe subset, see storage rule-pattern.ts),
+ * otherwise null.
+ */
+export function invalidRulePatternMessage(
+  lists: Array<Array<{ operator: string; value: unknown }> | undefined>,
+): string | null {
+  for (const list of lists) {
+    const msg = invalidRegexConditionMessage(list);
+    if (msg) return msg;
+  }
+  return null;
+}
+
 // GET /api/v1/user/rules
 userRouter.get('/rules', async (req: Request, res: Response) => {
   const rules = await prisma.mailRule.findMany({
@@ -386,6 +402,8 @@ userRouter.post('/rules', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
   }
+  const patternError = invalidRulePatternMessage([parsed.data.conditions, parsed.data.exceptions]);
+  if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
   // Auto priority: append at the end if not set explicitly
   let priority = parsed.data.priority;
   if (priority === 0) {
@@ -420,6 +438,8 @@ userRouter.put('/rules/:id', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;
   }
+  const patternError = invalidRulePatternMessage([parsed.data.conditions, parsed.data.exceptions]);
+  if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
   const rule = await prisma.mailRule.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!rule) { res.status(404).json({ error: 'Rule not found' }); return; }
 
@@ -676,7 +696,8 @@ userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request,
     where: { id: messageId, folder: { mailboxId: access.mailboxId }, deletedAt: null },
     include: {
       folder:      { select: { id: true, name: true, displayName: true } },
-      attachments: { select: { id: true, filename: true, mimeType: true, size: true } },
+      // contentId + inline: the shared reader resolves cid: images like the own reader
+      attachments: { select: { id: true, filename: true, mimeType: true, size: true, contentId: true, inline: true } },
     },
   });
   if (!message) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }

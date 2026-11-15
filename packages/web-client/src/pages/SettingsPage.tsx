@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useLocation } from 'react-router-dom';
+import { useLocation, Link } from 'react-router-dom';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
@@ -957,9 +957,10 @@ function SecuritySection() {
           <span className="text-sm font-medium">App-Passwörter</span>
         </div>
         <p className="text-xs text-gray-500 mb-3">Für externe E-Mail-Clients ohne Hauptpasswort verbinden.</p>
-        <a href="/auth/app-passwords" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
+        {/* In-app section (the old link opened the raw /auth/app-passwords JSON API, which needs a header token) */}
+        <Link to="/settings#appPasswords" className="btn-secondary text-xs">
           App-Passwörter verwalten
-        </a>
+        </Link>
       </div>
 
       {/* ── 2FA card ── */}

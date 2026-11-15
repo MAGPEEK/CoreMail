@@ -298,11 +298,12 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
-// ── GET /auth/reset-password/verify ──────────────────────────────────────────
-// Checks whether a token is still valid (for frontend feedback before the form)
-authRouter.get('/reset-password/verify', async (req: Request, res: Response) => {
-  const token = typeof req.query['token'] === 'string' ? req.query['token'] : '';
-  if (!token || token.length < 32) {
+// ── POST /auth/reset-password/verify ─────────────────────────────────────────
+// Checks whether a token is still valid (for frontend feedback before the form).
+// v8.1: the token travels in the JSON body `{ token }` so it does not end up in
+// proxy/access logs. GET ?token= is kept for one release (deprecated).
+async function verifyResetToken(token: string, res: Response): Promise<void> {
+  if (!token || token.length < 32 || token.length > 128) {
     res.status(400).json({ valid: false });
     return;
   }
@@ -311,4 +312,16 @@ authRouter.get('/reset-password/verify', async (req: Request, res: Response) => 
   } catch {
     res.status(500).json({ valid: false });
   }
+}
+
+authRouter.post('/reset-password/verify', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { token?: unknown };
+  await verifyResetToken(typeof body.token === 'string' ? body.token : '', res);
+});
+
+/** @deprecated since 8.1 — use POST /auth/reset-password/verify `{ token }`; removed in the next release. */
+authRouter.get('/reset-password/verify', async (req: Request, res: Response) => {
+  res.setHeader('Deprecation', 'true');
+  res.setHeader('Link', '</auth/reset-password/verify>; rel="successor-version"');
+  await verifyResetToken(typeof req.query['token'] === 'string' ? req.query['token'] : '', res);
 });

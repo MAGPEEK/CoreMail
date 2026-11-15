@@ -21,6 +21,7 @@
 import { prisma } from './prisma/index.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
+import { matchRulePattern } from './rule-pattern.js';
 
 const log = createLogger('storage:transport-rules');
 
@@ -72,7 +73,29 @@ function getFieldValue(field: TransportField, parsed: ParsedMessage, ctx: Transp
   }
 }
 
-function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: string): boolean {
+/**
+ * Removes every field `name` (case-insensitive, incl. folded continuation
+ * lines) from an RFC 5322 header block (without the final empty line).
+ */
+export function removeHeaderFields(headerText: string, name: string): string {
+  const target = name.trim().toLowerCase();
+  if (!target) return headerText;
+  const out: string[] = [];
+  let skipping = false;
+  for (const line of headerText.split('\r\n')) {
+    if (line.startsWith(' ') || line.startsWith('\t')) {
+      if (!skipping) out.push(line);
+      continue;
+    }
+    const colon = line.indexOf(':');
+    skipping = colon > 0 && line.slice(0, colon).trim().toLowerCase() === target;
+    if (!skipping) out.push(line);
+  }
+  return out.join('\r\n');
+}
+
+/** One condition operator against a field value (exported for tests). */
+export function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: string): boolean {
   if (typeof fv === 'boolean') {
     if (op === 'is' || op === 'equals') return fv === (expected === 'true' || expected === '1');
     return false;
@@ -94,9 +117,10 @@ function evaluateOp(fv: string | number | boolean, op: TransportOp, expected: st
     case 'equals':      return fv === ev;
     case 'startsWith':  return fv.startsWith(ev);
     case 'endsWith':    return fv.endsWith(ev);
-    case 'regex': {
-      try { return new RegExp(expected, 'i').test(fv); } catch { return false; }
-    }
+    // v8.1: linear-time matcher (no backtracking) — the subject/body are
+    // attacker-controlled and a backtracking RegExp could stall delivery (ReDoS).
+    // Invalid/unsupported patterns never match (refused on save in the admin API).
+    case 'regex': return matchRulePattern(expected, fv);
     case 'is': return fv === ev;
     default: return false;
   }
@@ -238,9 +262,10 @@ export function applyOutcomeToBuffer(buffer: Buffer, outcome: TransportOutcome):
   }
 
   // Header removes (case-insensitive, all occurrences)
+  // v8.1: line-based (no RegExp built from the admin-supplied name — the old
+  // escaping was broken and the last header field was never removed).
   for (const name of outcome.headerRemoves) {
-    const re = new RegExp(`^${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}:.*(?:\\r?\\n[ \\t].*)*\\r?\\n`, 'gim');
-    headerText = headerText.replace(re, '');
+    headerText = removeHeaderFields(headerText, name);
   }
 
   // Header adds

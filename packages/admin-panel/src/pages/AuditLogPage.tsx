@@ -410,12 +410,12 @@ export function AuditLogPage() {
           </button>
           <button onClick={() => handleExport('pdf')}
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
-            title="PDF — signiert mit SHA-256 (siehe X-CoreMail-Signature-Header)">
+            title="PDF — signiert mit HMAC-SHA256 (siehe X-CoreMail-Signature-Header)">
             <FileText size={14} /> PDF
           </button>
           <button onClick={() => handleExport('json')}
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
-            title="JSON — signiert mit SHA-256, für SIEM-Integration (Splunk, Azure Sentinel, ELK)">
+            title="JSON — signiert mit HMAC-SHA256, für SIEM-Integration (Splunk, Azure Sentinel, ELK)">
             <Code2 size={14} /> JSON
           </button>
         </div>
@@ -432,9 +432,12 @@ export function AuditLogPage() {
           <span className="flex-1">
             {t('audit_immutable_notice')}
             {' '}<strong>Exports sind kryptografisch signiert:</strong> Der HTTP-Response-Header
-            <code className="mx-1 font-mono bg-white px-1 rounded">X-CoreMail-Signature: sha256=…</code>
-            enthält den SHA-256-Hash über den Datei-Inhalt. Verifikation lokal mit
-            <code className="ml-1 font-mono bg-white px-1 rounded">shasum -a 256 audit-log-YYYY-MM-DD.csv</code>.
+            <code className="mx-1 font-mono bg-white px-1 rounded">X-CoreMail-Signature: hmac-sha256=…</code>
+            enthält einen HMAC-SHA256 über den exakten Datei-Inhalt, berechnet mit einem
+            Server-Schlüssel (abgeleitet aus JWT_SECRET + PEPPER). Eine veränderte Datei lässt
+            sich ohne diesen Schlüssel nicht neu signieren; die Prüfung erfolgt daher
+            serverseitig bzw. durch den Betreiber mit dem Schlüssel — ein einfacher
+            <code className="mx-1 font-mono bg-white px-1 rounded">shasum</code>-Vergleich passt nicht mehr.
           </span>
           <button onClick={dismissNotice} className="text-blue-500 hover:text-blue-700" aria-label="Dismiss">
             <X size={14} />
