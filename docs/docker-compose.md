@@ -116,11 +116,11 @@ The minimal stack has no rspamd and no ClamAV containers. The checks that run in
 `coremail` container stay active: SPF, DKIM, DMARC, ARC, DNSBL, greylisting, the attachment
 filter (blocked extensions, size) and the black lists.
 
-The scanners are switched **in the database** (BCP → Protection), not by an environment
-variable, and they default to **on**. After the setup wizard, switch both off:
-
-- BCP → **Protection** → rspamd **off**, ClamAV **off**, or
-- via the admin API:
+The minimal compose file sets `RSPAMD_ENABLED=false` and `CLAMAV_ENABLED=false`. These
+environment switches override the BCP → Protection settings (which default to on), so
+nothing has to be done after the setup wizard. `true` never forces a scanner on — then the
+BCP setting decides. Without the env switches (e.g. a custom compose file) switch both off
+in BCP → **Protection**, or via the admin API:
 
   ```bash
   TOKEN=$(curl -s -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' \
@@ -475,7 +475,8 @@ docker compose -f infra/docker/docker-compose.minimal.yml down
 docker compose -f infra/docker/docker-compose.full.yml --profile backup up -d
 ```
 
-Then turn rspamd and ClamAV **on** again in BCP → Protection (they stay off in the database).
+The full stack does not set `RSPAMD_ENABLED`/`CLAMAV_ENABLED`, so the BCP → Protection
+settings apply again (on by default; turn them on if you had switched them off there).
 ClamAV needs a few minutes for its first signature download; mail is accepted meanwhile.
 
 **Standard → full:** `.env` needs `OBJECT_STORAGE` (setup.sh tells you) and
@@ -494,7 +495,8 @@ docker compose -f infra/docker/docker-compose.yml down
 docker compose -f infra/docker/docker-compose.minimal.yml up -d --remove-orphans
 ```
 
-Switch rspamd/ClamAV off in BCP → Protection. The volumes `miniodata`, `rspamd-data` and
+The minimal file switches rspamd/ClamAV off by itself (`RSPAMD_ENABLED=false`,
+`CLAMAV_ENABLED=false`). The volumes `miniodata`, `rspamd-data` and
 `clamav-data` stay until you delete them (`docker volume rm coremail_miniodata …`) — keep
 `miniodata` until you are sure nothing (old backups) is needed from it.
 

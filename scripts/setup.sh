@@ -127,8 +127,8 @@ EXTRA=""
 case "$VARIANT" in
   minimal)
     EXTRA="
-  This variant has no rspamd/ClamAV: after the setup wizard switch both OFF in
-  BCP → Protection. Backups without MinIO: docs/docker-compose.md." ;;
+  This variant has no rspamd/ClamAV (switched off via RSPAMD_ENABLED/CLAMAV_ENABLED
+  in the compose file). Backups without MinIO: docs/docker-compose.md." ;;
   full)
     # MinIO is a profile here: needed for OBJECT_STORAGE=minio and as the default
     # target of the built-in backup service. backup = daily pg_dump sidecar.

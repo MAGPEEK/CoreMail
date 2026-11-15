@@ -210,3 +210,19 @@ test('greylist whitelist: real CIDR matching (IPv4/IPv6), IP, sender, domain', (
   assert.equal(isGreylistExempt(wl, '203.0.113.1', 'x@untrusted.example'), false);
   assert.equal(isGreylistExempt(['192.0.2.0/99', 'garbage/x'], '192.0.2.1', ''), false);
 });
+
+test('RSPAMD_ENABLED=false / CLAMAV_ENABLED=false override the BCP settings (minimal compose)', () => {
+  const on = buildPipelineConfig({ ...SEC, rspamdEnabled: true, clamavEnabled: true }, null, {});
+  assert.equal(on.rspamdEnabled, true);
+  assert.equal(on.clamavEnabled, true);
+  const off = buildPipelineConfig({ ...SEC, rspamdEnabled: true, clamavEnabled: true }, null, { RSPAMD_ENABLED: 'false', CLAMAV_ENABLED: '0' });
+  assert.equal(off.rspamdEnabled, false);
+  assert.equal(off.clamavEnabled, false);
+  // without a settings row as well
+  const none = buildPipelineConfig(null, null, { RSPAMD_ENABLED: 'off' });
+  assert.equal(none.rspamdEnabled, false);
+  assert.equal(none.clamavEnabled, DEFAULT_PIPELINE_CONFIG.clamavEnabled);
+  // "true" never forces a scanner on against the BCP
+  const keep = buildPipelineConfig({ ...SEC, rspamdEnabled: false }, null, { RSPAMD_ENABLED: 'true' });
+  assert.equal(keep.rspamdEnabled, false);
+});

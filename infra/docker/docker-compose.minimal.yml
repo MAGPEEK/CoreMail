@@ -17,12 +17,8 @@ name: coremail
 #    • no rspamd (spam scoring) and no ClamAV (virus scanning). SPF, DKIM, DMARC,
 #      ARC, DNSBL, greylisting, the attachment filter and the blacklists stay
 #      active — they run inside the coremail container.
-#      After the setup wizard switch both scanners off in BCP → Protection
-#      ("rspamd" and "ClamAV"; they default to on). Until then every inbound
-#      mail waits for the failing lookups of the missing hosts (measured ~10 s)
-#      and logs two errors — it is still delivered (rspamd fails open, ClamAV
-#      accepts unscanned), unless "block on failure" for ClamAV is on: then
-#      every inbound mail is deferred (451).
+#      RSPAMD_ENABLED=false / CLAMAV_ENABLED=false (below) switch both scanners
+#      off regardless of the BCP → Protection setting — no step after setup.
 #    • no MinIO: mail contents live on the volume coremail-data (/data/objects,
 #      OBJECT_STORAGE=filesystem). The built-in backup service needs an S3 target
 #      (S3_ENDPOINT etc. in .env); without it back up the volumes instead
@@ -59,6 +55,9 @@ services:
       # stack first (docs/storage.md) — otherwise the startup check blocks
       # (/healthz 503 "missing-objects"), nothing is lost.
       OBJECT_STORAGE: filesystem
+      # No scanner containers in this stack: override the BCP → Protection switches.
+      RSPAMD_ENABLED: "false"
+      CLAMAV_ENABLED: "false"
       STORAGE_PATH:   /data/objects
 
       # ── Built-in backup service (optional external S3 target) ───────────────
