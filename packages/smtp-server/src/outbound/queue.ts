@@ -10,7 +10,8 @@ import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions
 import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
-import { storeInboundMessage } from '../handlers/message.js';
+import { storeInboundMessage, type StoreResult } from '../handlers/message.js';
+import { stripForLocalDelivery, unknownRecipientDsn } from '../handlers/local-delivery.js';
 import { isRuleForwardedAlready } from '../handlers/rule-forward.js';
 import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
@@ -215,7 +216,8 @@ export function delayDsnDue(job: Pick<OutboundJobLike, 'data' | 'timestamp' | 'o
 export interface OutboundDeps {
   isLocalAddress(addr: string): Promise<boolean>;
   expand(addrs: string[]): Promise<string[]>;
-  storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void>;
+  /** 'unknown' = no such local mailbox/resource → bounced (5.1.1), never dropped silently. */
+  storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void | StoreResult>;
   resolveDkim(job: OutboundJob): Promise<DkimOptions>;
   relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions): Promise<RelayResult>;
   bounce(opts: DsnOptions): Promise<void>;
@@ -272,22 +274,41 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const external = [...new Set(finalExternal)];
 
   // ── Local delivery (write directly into the mailbox) ──────────────────────
+  const unknownLocal: string[] = [];
   for (const rcpt of finalLocal) {
-    if (delivered.has(rcpt)) continue;
+    if (delivered.has(rcpt) || bounced.has(rcpt)) continue;
+    let result: void | StoreResult;
     try {
-      await deps.storeLocal(buffer, from, rcpt, data);
+      result = await deps.storeLocal(buffer, from, rcpt, data);
     } catch (err) {
       await persist(data.pendingFailures ?? []);
       throw err;
     }
+    if (result === 'unknown') {
+      // no such mailbox (typo in a local domain, deleted user) → NDR below
+      bounced.add(rcpt);
+      unknownLocal.push(rcpt);
+      continue;
+    }
     delivered.add(rcpt);
     log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
+  }
+  const newlyBounced: string[] = [];
+  if (unknownLocal.length > 0) {
+    await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
+    const notify = unknownLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    if (notify.length > 0) {
+      await deps.bounce({
+        ...unknownRecipientDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
+        ...(data.message ? { originalSubject: data.message.subject, originalMessageId: data.message.messageId } : {}),
+      });
+    }
+    newlyBounced.push(...unknownLocal);
   }
 
   // ── External delivery via MX / smarthost ──────────────────────────────────
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
   let transient: RecipientFailure[] = [];
-  const newlyBounced: string[] = [];
   if (pending.length > 0) {
     const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data));
     for (const r of result.delivered) delivered.add(r);
@@ -387,6 +408,21 @@ export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: S
   return { senderAuth: { authenticatedSender: job.from } };
 }
 
+/**
+ * The buffer a queue job stores locally. Authentication-Results fields with
+ * our authserv-id are removed (RFC 8601 §5) for every producer — REST/MWA,
+ * JMAP, EAS, SMTP submission and rule forwards — so a local user cannot hand a
+ * colleague a forged `dmarc=pass`. Exception: a BCP quarantine release
+ * re-injects a message that carries our own genuine inbound verdict.
+ */
+export async function localDeliveryBuffer(
+  raw: Buffer,
+  job: Pick<OutboundJob, 'quarantineReleaseId'>,
+  strip: (raw: Buffer) => Promise<Buffer> = (r) => stripForLocalDelivery(r),
+): Promise<Buffer> {
+  return job.quarantineReleaseId ? raw : strip(raw);
+}
+
 // ── Retry schedule + expiry ───────────────────────────────────────────────────
 
 const QUEUE_EXPIRED_PREFIX = 'Message expired in queue';
@@ -428,7 +464,7 @@ const defaultOutboundDeps: OutboundDeps = {
     return !!(await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } }));
   },
   expand: (addrs) => expandRecipients(addrs),
-  storeLocal: (raw, from, rcpt, job) => storeInboundMessage(raw, {
+  storeLocal: async (raw, from, rcpt, job) => storeInboundMessage(await localDeliveryBuffer(raw, job), {
     fromAddr: from,
     rcptTo:   rcpt,
     toJunk:   false,

@@ -8,7 +8,8 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, isAttendeeAuthenticated, type SenderAuth } from '@coremail/storage';
+import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, type SenderAuth } from '@coremail/storage';
+import { bounceUnknownLocal } from '../handlers/local-delivery.js';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
@@ -163,15 +164,14 @@ async function onMessage(
     headers: {
       'Content-Type': 'application/octet-stream',
       // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
-      'X-Filter-Context': JSON.stringify({
+      'X-Filter-Context': JSON.stringify(filterContext({
         senderIp: ip,
         mailFrom: from,
-        rcptTo: to[0] ?? '',
         rcpts: to,
         hostname,
         ...(meta?.helo ? { helo: meta.helo } : {}),
         ...(authUser ? { authUser: authUser.email } : {}),
-      }),
+      })),
     },
     body: raw,
     signal: AbortSignal.timeout(30_000),
@@ -267,16 +267,21 @@ async function onMessage(
   //    a failure answers 451 and the retry skips what was already delivered
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
   const txKey = deliveryKey(from, receivedRaw);
+  const unknownRcpts: string[] = [];
   await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
-    storeLocal: (rcpt) => storeInboundMessage(delivered, {
-      fromAddr: from,
-      rcptTo: rcpt,
-      deliveryKey: txKey,
-      toJunk: filterResult.junkFolder ?? false,
-      senderAuth,
-      ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
-    }),
+    // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
+    storeLocal: async (rcpt) => {
+      const result = await storeInboundMessage(delivered, {
+        fromAddr: from,
+        rcptTo: rcpt,
+        deliveryKey: txKey,
+        toJunk: filterResult.junkFolder ?? false,
+        senderAuth,
+        ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
+      });
+      if (result === 'unknown') unknownRcpts.push(rcpt);
+    },
     enqueueExternal: async (rcpts) => {
       await enqueueOutbound({
         messageId:  crypto.randomUUID(),
@@ -288,8 +293,36 @@ async function onMessage(
     },
   });
 
-  // 4. Handle resource mailbox auto-accept for calendar invitations
-  await processResourceMailboxes(raw, to, from, senderAuth);
+  // 4. A recipient verified at RCPT TO but gone at delivery time (deleted in
+  //    between) — the message was accepted (250), so the sender gets an NDR.
+  if (unknownRcpts.length > 0) {
+    await bounceUnknownLocal(raw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
+      log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
+  }
+}
+
+/** Most recipients listed in X-Filter-Context (HTTP header size limit, 16 KB). */
+export const FILTER_CONTEXT_MAX_RCPTS = 100;
+
+/**
+ * Pure: the content-filter context. At most FILTER_CONTEXT_MAX_RCPTS recipients
+ * are listed (`rcptCount` carries the total) — a long list would exceed the
+ * HTTP header limit (431) and defer the message forever.
+ */
+export function filterContext(c: {
+  senderIp: string; mailFrom: string; rcpts: string[]; hostname: string; helo?: string; authUser?: string;
+}): Record<string, unknown> {
+  const capped = c.rcpts.length > FILTER_CONTEXT_MAX_RCPTS;
+  return {
+    senderIp: c.senderIp,
+    mailFrom: c.mailFrom,
+    rcptTo: c.rcpts[0] ?? '',
+    rcpts: capped ? c.rcpts.slice(0, FILTER_CONTEXT_MAX_RCPTS) : c.rcpts,
+    ...(capped ? { rcptCount: c.rcpts.length } : {}),
+    hostname: c.hostname,
+    ...(c.helo ? { helo: c.helo } : {}),
+    ...(c.authUser ? { authUser: c.authUser } : {}),
+  };
 }
 
 // ── Exported handler object ───────────────────────────────────────────────────
@@ -343,144 +376,6 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 // used by the outbound queue worker and the submission handler
 // (local delivery needs alias resolution BEFORE storeInboundMessage).
 
-// ── Helper: processResourceMailboxes ─────────────────────────────────────────
-
-function bareAddress(addr: string): string {
-  const m = /<([^>]*)>/.exec(addr);
-  return (m ? m[1]! : addr).trim().replace(/^mailto:/i, '').toLowerCase();
-}
-
-const parseDtStamp = (s: string): Date => {
-  const clean = s.replace(/Z$/, '');
-  if (clean.length === 8) {
-    return new Date(`${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`);
-  }
-  return new Date(
-    `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}T` +
-      `${clean.slice(9, 11)}:${clean.slice(11, 13)}:${clean.slice(13, 15)}Z`,
-  );
-};
-
-/**
- * Auto-accept/decline calendar invitations for resource mailboxes.
- *
- * Bookings belong to ONE resource (its ResourceCalendar): a REQUEST/CANCEL
- * never touches another resource's booking with the same UID. An existing
- * booking is updated or cancelled only by its stored organizer, and only when
- * that sender is authenticated (SPF/DKIM/DMARC-aligned or SMTP AUTH). A new
- * booking from an unauthenticated sender is stored as PENDING (manual approval)
- * instead of being auto-accepted.
- */
-export async function processResourceMailboxes(
-  rawMessage: Buffer,
-  rcptTo: string[],
-  mailFrom: string,
-  senderAuth: SenderAuth | null = null,
-): Promise<void> {
-  const sender = bareAddress(mailFrom);
-  const senderAuthenticated = !!sender && isAttendeeAuthenticated(sender, senderAuth);
-
-  for (const email of rcptTo) {
-    const resource = await prisma.resourceMailbox.findFirst({
-      where: { email: email.toLowerCase(), active: true },
-      include: { calendar: true },
-    });
-
-    if (!resource) continue;
-    const calendarId = resource.calendar?.id;
-    if (!calendarId) continue;
-
-    // Extract iCal data from message (look for VEVENT in text/calendar attachment)
-    const rawText = rawMessage.toString('utf8');
-    const icalMatch = rawText.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/);
-    if (!icalMatch) continue;
-
-    const icalData = icalMatch[0];
-
-    // Extract essential fields
-    const uidMatch = /^UID:(.+)$/m.exec(icalData);
-    const dtStartMatch = /^DTSTART[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
-    const dtEndMatch = /^DTEND[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
-    const summaryMatch = /^SUMMARY:(.+)$/m.exec(icalData);
-    const methodMatch = /^METHOD:(.+)$/m.exec(icalData);
-
-    if (!uidMatch || !dtStartMatch || !dtEndMatch) continue;
-
-    const uid = uidMatch[1]?.trim() ?? '';
-    if (!uid) continue;
-    const summary = summaryMatch?.[1]?.trim() ?? 'Meeting';
-    const method = methodMatch?.[1]?.trim().toUpperCase() ?? 'REQUEST';
-
-    const dtStart = parseDtStamp(dtStartMatch[1] ?? '');
-    const dtEnd = parseDtStamp(dtEndMatch[1] ?? '');
-
-    if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
-
-    // v8.1: UIDs are unique per resource calendar — a meeting that books two
-    // rooms gets one booking in each. Only this resource's booking is read,
-    // changed or deleted here.
-    const existing = await prisma.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid } } });
-    const isOrganizer = !!existing && senderAuthenticated && bareAddress(existing.organizer) === sender;
-
-    // Handle CANCEL method — remove this resource's booking (organizer only)
-    if (method === 'CANCEL') {
-      if (!existing) continue;
-      if (!isOrganizer) {
-        log.warn({ resource: email, uid, sender, authenticated: senderAuthenticated }, 'Resource booking CANCEL refused — not the authenticated organizer');
-        continue;
-      }
-      await prisma.resourceBooking.delete({ where: { id: existing.id } });
-      log.info({ resource: email, uid }, 'Resource booking cancelled');
-      continue;
-    }
-
-    if (existing && !isOrganizer) {
-      log.warn({ resource: email, uid, sender, authenticated: senderAuthenticated }, 'Resource booking update refused — not the authenticated organizer');
-      continue;
-    }
-
-    const save = async (status: 'PENDING' | 'DECLINED' | 'ACCEPTED'): Promise<void> => {
-      if (existing) {
-        await prisma.resourceBooking.update({
-          where: { id: existing.id },
-          data: status === 'DECLINED' ? { status } : { dtStart, dtEnd, summary, status, icalData },
-        });
-      } else {
-        await prisma.resourceBooking.create({
-          data: { calendarId, uid, summary, organizer: sender, dtStart, dtEnd, status, icalData },
-        });
-      }
-    };
-
-    if (!resource.autoAccept || resource.requireApproval || !senderAuthenticated) {
-      // Store as PENDING for manual approval
-      await save('PENDING');
-      log.info({ resource: email, uid, authenticated: senderAuthenticated }, 'Resource booking pending approval');
-      continue;
-    }
-
-    // Check for conflicts
-    if (resource.autoDeclineConflict) {
-      const conflict = await prisma.resourceBooking.findFirst({
-        where: {
-          calendarId,
-          uid: { not: uid },
-          status: { in: ['ACCEPTED', 'TENTATIVE'] },
-          dtStart: { lt: dtEnd },
-          dtEnd: { gt: dtStart },
-        },
-      });
-
-      if (conflict) {
-        log.info({ resource: email, uid, conflict: conflict.uid }, 'Resource booking declined — conflict');
-        await save('DECLINED');
-        continue;
-      }
-    }
-
-    // Auto-accept
-    await save('ACCEPTED');
-    log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
-  }
-}
-
+// Resource mailboxes (room/equipment bookings) are processed inside
+// storeInboundMessage() for every delivery path — see handlers/resource-booking.ts.
+export { processResourceMailboxes } from '../handlers/resource-booking.js';
