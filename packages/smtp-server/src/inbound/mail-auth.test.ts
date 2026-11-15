@@ -32,7 +32,9 @@ const none = async () => null;
   systemLog: { create: async () => ({}) },
   resourceMailbox: { findFirst: async ({ where }: { where: { email: string } }) => resources[where.email] ?? null },
   resourceBooking: {
-    findUnique: async ({ where }: { where: { uid: string } }) => bookings.find((b) => b.uid === where.uid) ?? null,
+    // v8.1: unique per (calendarId, uid)
+    findUnique: async ({ where }: { where: { calendarId_uid: { calendarId: string; uid: string } } }) =>
+      bookings.find((b) => b.calendarId === where.calendarId_uid.calendarId && b.uid === where.calendarId_uid.uid) ?? null,
     findFirst: async () => null,
     create: async ({ data }: { data: Omit<Booking, 'id'> }) => { const b = { id: `b${bookings.length + 1}`, ...data }; bookings.push(b); return b; },
     update: async ({ where, data }: { where: { id: string }; data: Partial<Booking> }) => { const b = bookings.find((x) => x.id === where.id)!; Object.assign(b, data); return b; },
@@ -112,9 +114,14 @@ test('resource bookings: scoped per resource; update/cancel only by the authenti
   await processResourceMailboxes(invite('REQUEST', 'u-1'), ['room1@corp.test'], 'Org <org@ext.test>', AUTH_EXT);
   assert.deepEqual(bookings.map((b) => [b.calendarId, b.uid, b.organizer, b.status]), [['cal1', 'u-1', 'org@ext.test', 'ACCEPTED']]);
 
-  // another resource with the same UID never touches room1's booking
+  // another resource with the same UID never touches room1's booking …
   await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
+  assert.equal(bookings.length, 1);
+  // … and (v8.1) the same meeting books room2 as well: one booking per room
   await processResourceMailboxes(invite('REQUEST', 'u-1', '20261205T090000Z'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
+  assert.deepEqual(bookings.map((b) => [b.calendarId, b.uid, b.status]), [['cal1', 'u-1', 'ACCEPTED'], ['cal2', 'u-1', 'ACCEPTED']]);
+  // cancelling at room2 removes only room2's booking
+  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
   assert.equal(bookings.length, 1);
   assert.equal(bookings[0]!.calendarId, 'cal1');
 
@@ -130,6 +137,12 @@ test('resource bookings: scoped per resource; update/cancel only by the authenti
   // the authenticated organizer can
   await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', AUTH_EXT);
   assert.equal(bookings.length, 0);
+});
+
+test('resource bookings: one invitation to two rooms creates a booking in each', async () => {
+  bookings.length = 0;
+  await processResourceMailboxes(invite('REQUEST', 'u-3'), ['room1@corp.test', 'room2@corp.test'], 'org@ext.test', AUTH_EXT);
+  assert.deepEqual(bookings.map((b) => b.calendarId).sort(), ['cal1', 'cal2']);
 });
 
 test('resource bookings: an unauthenticated new request is only PENDING (no auto-accept)', async () => {
