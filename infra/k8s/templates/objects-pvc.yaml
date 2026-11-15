@@ -1,6 +1,6 @@
 {{- $fs := .Values.objectStorage.filesystem }}
 {{- if and (eq .Values.objectStorage.driver "filesystem") (not $fs.existingClaim) }}
-# Object store of the filesystem driver (CoreMail >= 7.1.0). Kept on
+# Object store of the filesystem driver (CoreMail >= 8.0.0). Kept on
 # `helm uninstall` — it holds every message body and attachment.
 apiVersion: v1
 kind: PersistentVolumeClaim

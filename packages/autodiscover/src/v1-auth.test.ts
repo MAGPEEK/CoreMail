@@ -67,6 +67,28 @@ test('MFA account with the primary password → 401, no password derivative is l
   assert.doesNotMatch(logged, /pwLen|pwCodes|codes=/);
 });
 
+test('8.0.0: failed logins write a bounded number of SystemLog rows (pino logs every attempt)', async () => {
+  systemLogs.length = 0;
+  for (let i = 0; i < 40; i++) {
+    assert.equal((await run(`nobody${i}@example.com`, 'x')).status, 401);
+  }
+  await new Promise((r) => setImmediate(r));
+  assert.ok(systemLogs.length <= 10, `at most 10 rows per IP and minute, got ${systemLogs.length}`);
+});
+
+test('LogBudget: per-key and total limits, window reset, suppressed count reported', async () => {
+  const { LogBudget } = await import('./log-budget.js');
+  let now = 0;
+  const b = new LogBudget({ perKey: 2, total: 3, windowMs: 1000, now: () => now });
+  assert.deepEqual(b.take('a'), { ok: true, suppressedBefore: 0 });
+  assert.deepEqual(b.take('a'), { ok: true, suppressedBefore: 0 });
+  assert.deepEqual(b.take('a'), { ok: false });
+  assert.deepEqual(b.take('b'), { ok: true, suppressedBefore: 1 });
+  assert.deepEqual(b.take('c'), { ok: false }, 'total budget used up');
+  now = 1000;
+  assert.deepEqual(b.take('a'), { ok: true, suppressedBefore: 1 });
+});
+
 test('unknown user → 401', async () => {
   assert.equal((await run('nobody@example.com', 'x')).status, 401);
 });

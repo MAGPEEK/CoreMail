@@ -3,12 +3,12 @@
 CoreMail keeps **metadata** (users, folders, flags, UIDs, settings) in PostgreSQL and
 **contents** — the raw RFC 5322 message of every mail, attachments, quarantined mails,
 attachments of queued outbound mails, JMAP uploads, S/MIME files — in an *object store*.
-Since 7.1 the object store is a driver, selected with `OBJECT_STORAGE`:
+Since 8.0 the object store is a driver, selected with `OBJECT_STORAGE`:
 
 | Driver | Where the objects live | Typical use |
 |---|---|---|
 | `filesystem` | Directory `STORAGE_PATH` (default `/data/objects`) on the Docker volume `coremail-data` | **Default for new installations.** Single host, NAS (Synology), simple backups |
-| `minio` | Bundled MinIO container (`minio:9000`, bucket `coremail-attachments`) | **Default when `OBJECT_STORAGE` is not set** — every installation from before 7.1 |
+| `minio` | Bundled MinIO container (`minio:9000`, bucket `coremail-attachments`) | **Default when `OBJECT_STORAGE` is not set** — every installation from before 8.0 |
 | `s3` | Any S3 API: AWS S3, Backblaze B2, Wasabi, Hetzner Object Storage, Cloudflare R2, a remote MinIO | Off-host storage, large mailboxes, Kubernetes |
 
 The app container itself is stateless (Docker principle): recreate or update it at will,
@@ -129,6 +129,10 @@ curl -s http://localhost:3000/healthz
 # 503 + "status":"missing-objects" | "unavailable" | "ephemeral" while the check blocks
 docker exec -it coremail coremail storage status     # details, sampled/missing keys, hint
 ```
+
+`/healthz` is a readiness signal. For liveness (restart decisions) use `/livez`, which answers
+200 while the api-gateway serves HTTP, independent of the storage check — the Helm chart's
+startup and liveness probes do, so a blocking check never causes a restart loop.
 
 `STORAGE_STARTUP_CHECK=off` disables the check (emergencies only).
 

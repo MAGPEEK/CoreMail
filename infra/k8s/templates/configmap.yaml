@@ -19,7 +19,7 @@ data:
   TRUST_PROXY: {{ include "coremail.trustProxy" . | quote }}
 
   # Object storage (attachments, raw mail, quarantine) and backups.
-  # OBJECT_STORAGE/MINIO_USE_SSL/MINIO_REGION/MINIO_CA_FILE/STORAGE_PATH: CoreMail >= 7.1.0
+  # OBJECT_STORAGE/MINIO_USE_SSL/MINIO_REGION/MINIO_CA_FILE/STORAGE_PATH: CoreMail >= 8.0.0
   {{- $os := .Values.objectStorage }}
   OBJECT_STORAGE: {{ $os.driver | quote }}
   {{- if eq $os.driver "filesystem" }}
@@ -43,7 +43,7 @@ data:
   {{- end }}
 
   # Spam and virus protection
-  # RSPAMD_URL = rspamd controller: scanning (/checkv2), learning and stats (CoreMail >= 7.1.0)
+  # RSPAMD_URL = rspamd controller: scanning (/checkv2), learning and stats (CoreMail >= 8.0.0)
   {{- $rspamd := include "coremail.rspamd.host" . }}
   {{- if and (not .Values.rspamd.enabled) .Values.rspamd.external.url }}
   RSPAMD_URL: {{ .Values.rspamd.external.url | quote }}

@@ -99,6 +99,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   Status 9.
 - **ActiveSync `FilterType`:** the phone's "mail days to sync" setting is honoured; changing it
   restarts the folder's sync (Status 3).
+- api-gateway `GET /livez`: liveness without the object-storage status (200 while the process
+  serves HTTP); `/healthz` stays the readiness check (503 while the storage check blocks).
 
 ### Changed
 
@@ -182,6 +184,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   an empty e-mail.
 - iTIP: a REQUEST without ORGANIZER is not answered (ActiveSync MeetingResponse reports an
   invalid request); a REPLY to a single occurrence carries its `RECURRENCE-ID`.
+- **Helm chart:** startup and liveness probes use `/livez`; readiness stays on `/healthz`. A
+  slow or misconfigured object store now keeps the pod "not ready" while the storage check
+  waits, instead of restarting it in a loop (CrashLoopBackOff).
+- Upgrade notes, compose files, `.env.example`, setup scripts and the Helm chart/README refer
+  to this release as 8.0 (they said "7.1").
 
 ### Fixed
 
@@ -357,6 +364,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `GET /api/v1/contacts/gal` was shadowed by `GET /api/v1/contacts/:id` (404).
 - caldav-server: credentials were verified twice for every CardDAV request (one auth
   middleware per router).
+- **ActiveSync: overlapping requests of one device** (parallel Syncs of different folders, a
+  FolderSync or Ping during a Sync) no longer write back each other's stale SyncKeys — each
+  command merges only the keys it changed into `ActiveSyncDevice.syncKeys` in one statement.
+  Before, the next Sync could get Status 3 and resync the whole folder, repeatedly.
+- **ActiveSync Sync:** a message whose original (MIME) cannot be read no longer fails the whole
+  Sync with HTTP 500 (the device retried forever); it is sent with the stored HTML/text body.
+- **ActiveSync GetItemEstimate** counts what the next Sync sends: items the device already
+  holds and the FilterType age window are taken into account (deletes included).
+- core config: an empty numeric variable (e.g. `MINIO_PORT:` from compose) uses its default
+  instead of 0.
 
 ### Security
 
@@ -463,6 +480,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   filters run on the masked view, so grantees cannot probe hidden fields with `text-match`.
 - iTIP REPLYs are applied only when the receiving user (address or alias) is the event's
   ORGANIZER, not to an invitee's copy of the same meeting.
+- **Global address list per domain:** the webmail GAL (`/api/v1/contacts/gal`) and the
+  compose autocomplete (`/api/v1/contacts?q=`) list only active users of the caller's own
+  domain — on a server hosting several domains, users could list every other domain's users.
+  `/gal` is paginated in the database (at most 500 entries per page).
+- **ActiveSync MeetingResponse:** a meeting request is acted on only when its ORGANIZER matches
+  the organizer of the stored event with that UID and is not one of the user's own addresses.
+  Before, anybody who knew a UID (e.g. from an invite the user sent) could mail a REQUEST with
+  it, and Decline deleted — Accept overwrote — the user's own event.
+- **REST calendar writes by grantees** follow the CalDAV rule: a PUBLIC series with a
+  PRIVATE/CONFIDENTIAL overridden instance can only be changed or deleted by its owner (the
+  check is shared, `granteeView` in `@coremail/core/calendar`).
+- **CalDAV:** a PUT whose resource name is already used in another calendar, and an
+  MKCALENDAR with a calendar ID of another user, answer a neutral `409 Conflict` instead of
+  403/405 messages that said the object exists elsewhere.
+- **Autodiscover:** failed Basic logins write at most 10 SystemLog rows per client IP and 60
+  in total per minute (the service log still records every attempt; the next row notes how
+  many were left out). Before, an unauthenticated client could grow `system_logs` without
+  limit — notably behind a reverse proxy without `TRUST_PROXY`.
 
 ---
 

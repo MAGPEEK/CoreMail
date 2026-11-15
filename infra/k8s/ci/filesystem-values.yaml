@@ -1,4 +1,4 @@
-# Filesystem object storage (CoreMail >= 7.1.0) on a PVC, no MinIO,
+# Filesystem object storage (CoreMail >= 8.0.0) on a PVC, no MinIO,
 # NetworkPolicies off, NodePort mail service. Dummy secrets only.
 secrets:
   jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"

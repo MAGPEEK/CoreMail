@@ -221,3 +221,23 @@ test('WRITE grantee cannot PUT/DELETE a PRIVATE or CONFIDENTIAL event of the own
   const pub = await call('PUT', '/events/bobPub', { summary: 'Standup moved' });
   assert.equal(pub.status, 200);
 });
+
+test('8.0.0: WRITE grantee cannot PUT/DELETE a PUBLIC series with a PRIVATE override (same rule as CalDAV)', async () => {
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Test//EN',
+    'BEGIN:VEVENT', 'UID:bob-series', 'DTSTAMP:20260601T000000Z', 'DTSTART:20260701T100000Z', 'DTEND:20260701T110000Z',
+    'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:Weekly sync', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:bob-series', 'DTSTAMP:20260601T000000Z', 'RECURRENCE-ID:20260708T100000Z',
+    'DTSTART:20260708T100000Z', 'DTEND:20260708T110000Z', 'SUMMARY:Salary talk', 'DESCRIPTION:raise', 'CLASS:PRIVATE', 'END:VEVENT',
+    'END:VCALENDAR', '',
+  ].join('\r\n');
+  events.push({ id: 'bobSeries', uid: 'bob-series', calendarId: 'calBob', summary: 'Weekly sync', description: '', location: '',
+    dtStart: new Date('2026-07-01T10:00:00Z'), dtEnd: new Date('2026-07-01T11:00:00Z'), allDay: false, recurring: true,
+    rrule: 'FREQ=WEEKLY;COUNT=4', status: 'CONFIRMED', sequence: 0, attendees: [], organizer: null, classification: 'PUBLIC',
+    icalData: ics, updatedAt: new Date() });
+
+  assert.equal((await call('PUT', '/events/bobSeries', { summary: 'Weekly sync (moved)' })).status, 403);
+  assert.equal((await call('DELETE', '/events/bobSeries')).status, 403);
+  const row = events.find((e) => e['id'] === 'bobSeries')!;
+  assert.match(String(row['icalData']), /DESCRIPTION:raise/, 'private override untouched');
+});

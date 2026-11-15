@@ -100,7 +100,7 @@ immediately visible in IMAP clients and in the MWA, and vice versa.
   `/changes` response carries a fifth part, the creation base of the original state.
 - `/changes`: rows with a modSeq above the old state; created vs. updated by
   `Message.createdModSeq` (set by the message store on create/copy/cross-mailbox move; rows from
-  before v7.1 fall back to `createdAt`). `Email/set destroy` soft-deletes like IMAP EXPUNGE, so
+  before v8.0 fall back to `createdAt`). `Email/set destroy` soft-deletes like IMAP EXPUNGE, so
   the tombstone shows up in `destroyed`. At most `maxChanges` (server limit 5,000) ids per
   response, pages end on a modSeq boundary with `hasMoreChanges: true`.
 - **Mailbox**: `<count>.<maxCreatedMs>.<hash>`.

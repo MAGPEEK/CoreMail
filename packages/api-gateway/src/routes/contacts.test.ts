@@ -36,8 +36,31 @@ const COLUMNS = { email: '', email2: '', phone: '', mobile: '', company: '', dep
     },
     delete: async (a: { where: Row }) => contacts.splice(contacts.findIndex((c) => matches(c, a.where)), 1)[0],
   },
-  user: { findMany: async () => [{ id: 'u2', email: 'bob@example.com', displayName: 'Bob', domain: { name: 'example.com' } }] },
+  user: {
+    findUnique: async (a: { where: { id: string } }) => users.find((u) => u['id'] === a.where.id) ?? null,
+    findMany: async (a: { where: Row; skip?: number; take?: number }) => {
+      galQueries.push(a);
+      const rows = users.filter((u) => userMatches(u, a.where));
+      return rows.slice(a.skip ?? 0, (a.skip ?? 0) + (a.take ?? rows.length));
+    },
+    count: async (a: { where: Row }) => users.filter((u) => userMatches(u, a.where)).length,
+  },
 };
+
+/** Two tenants on one server: alice + bob on example.com, mallory on other.example. */
+const users: Row[] = [
+  { id: 'alice', email: 'alice@example.com', displayName: 'Alice', domainId: 'd1', active: true, domain: { name: 'example.com' } },
+  { id: 'u2', email: 'bob@example.com', displayName: 'Bob', domainId: 'd1', active: true, domain: { name: 'example.com' } },
+  { id: 'u3', email: 'mallory@other.example', displayName: 'Bobby Other', domainId: 'd2', active: true, domain: { name: 'other.example' } },
+];
+const galQueries: Array<{ where: Row; skip?: number; take?: number }> = [];
+function userMatches(u: Row, where: Row): boolean {
+  if (where['domainId'] !== undefined && u['domainId'] !== where['domainId']) return false;
+  if (where['active'] !== undefined && u['active'] !== where['active']) return false;
+  const or = where['OR'] as Array<Record<string, { contains: string }>> | undefined;
+  if (or && !or.some((c) => Object.entries(c).some(([k, v]) => String(u[k]).toLowerCase().includes(v.contains.toLowerCase())))) return false;
+  return true;
+}
 
 const express = (await import('express')).default;
 const { signAccessToken } = await import('@coremail/core');
@@ -122,5 +145,26 @@ test('POST/PUT persist the extended fields and escape ",", ";" and newlines (no 
 test('GET /gal is reachable (no longer shadowed by GET /:id)', async () => {
   const r = await call('GET', '/gal');
   assert.equal(r.status, 200);
-  assert.equal(r.json.entries[0].email, 'bob@example.com');
+  assert.ok(r.json.entries.some((e: { email: string }) => e.email === 'bob@example.com'));
+});
+
+test('GAL and autocomplete never list users of another domain (multi-tenant), /gal is paginated in the DB', async () => {
+  const gal = await call('GET', '/gal');
+  assert.deepEqual(gal.json.entries.map((e: { email: string }) => e.email).sort(), ['alice@example.com', 'bob@example.com']);
+  assert.equal(gal.json.total, 2);
+  const q = await call('GET', '/gal?q=bob');
+  assert.deepEqual(q.json.entries.map((e: { email: string }) => e.email), ['bob@example.com']);
+  const last = galQueries.at(-1)!;
+  assert.equal(last.where['domainId'], 'd1');
+  assert.equal(typeof last.take, 'number', 'GAL query is bounded');
+
+  const page = await call('GET', '/gal?limit=1&offset=1');
+  assert.equal(page.json.entries.length, 1);
+  assert.equal(page.json.total, 2);
+
+  const auto = await call('GET', '/?q=bob');
+  assert.equal(auto.status, 200);
+  const emails = auto.json.map((e: { email: string }) => e.email);
+  assert.ok(emails.includes('bob@example.com'));
+  assert.ok(!emails.includes('mallory@other.example'), 'autocomplete leaked another tenant');
 });

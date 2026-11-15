@@ -58,7 +58,7 @@ app:
     pullPolicy: IfNotPresent
 
   # Keep 1. SMTP/IMAP/POP3 state (lockouts, queues), the certificate renewal
-  # scheduler and (CoreMail >= 7.1.0) the backup scheduler / retention worker are
+  # scheduler and (CoreMail >= 8.0.0) the backup scheduler / retention worker are
   # coordinated through Redis; with > 1 replica the setup token must be fixed
   # (secrets.setupToken) and filesystem object storage is not possible. See README.
   replicaCount: 1
@@ -146,12 +146,16 @@ app:
       # bounding set, exec of node fails with "Operation not permitted".
       add: [NET_BIND_SERVICE]
 
+  # Startup + liveness use /livez (process alive, no storage status); readiness uses
+  # /healthz, which answers 503 while the object-storage startup check blocks on
+  # purpose — the pod then stays "not ready" and re-checks instead of being restarted
+  # in a loop. /livez exists from CoreMail 8.0.0 on.
   startupProbe:
-    httpGet: { path: /healthz, port: http }
+    httpGet: { path: /livez, port: http }
     periodSeconds: 5
     failureThreshold: 60
   livenessProbe:
-    httpGet: { path: /healthz, port: http }
+    httpGet: { path: /livez, port: http }
     periodSeconds: 30
     timeoutSeconds: 10
     failureThreshold: 5
@@ -257,7 +261,7 @@ networkPolicy:
   extraAppIngress: []
 
 # ── Object storage (attachments, raw RFC 5322 messages, quarantine) ───────────
-# Driver selection and TLS options of the storage abstraction (CoreMail ≥ 7.1.0;
+# Driver selection and TLS options of the storage abstraction (CoreMail ≥ 8.0.0;
 # 7.0.0 ignores these variables and always uses MinIO/S3 over plain HTTP).
 objectStorage:
   # OBJECT_STORAGE: minio | s3 | filesystem

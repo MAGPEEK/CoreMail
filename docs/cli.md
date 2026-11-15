@@ -150,7 +150,7 @@ Let's Encrypt uses HTTP-01: port 80 of the host must point to CoreMail
 (`"80:3000"` in the Compose file) and the domains must point to the server via DNS.
 Issuance runs asynchronously; `cert show` shows the status and, if applicable, the last error.
 
-## Mail storage (`storage`, v7.1, ORGANIZATION_MANAGEMENT)
+## Mail storage (`storage`, v8.0, ORGANIZATION_MANAGEMENT)
 
 ```bash
 coremail storage status                      # driver, location, startup-check result, last migration

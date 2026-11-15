@@ -34,7 +34,16 @@ test('IMAP/POP3/SMTP protocol replies are 7-bit ASCII (RFC 9051 TEXT-CHAR, RFC 5
   assert.deepEqual(offenders, []);
 });
 
-test('v7.1 storage: unchanged .env keeps MinIO; new .env uses the filesystem volume', () => {
+test('release version is consistent: Helm appVersion and compose image tags follow package.json', () => {
+  // Review 8.0.0: a chart whose appVersion lags behind deploys the previous image (e.g. the
+  // 7.0.0 image reads RSPAMD_HOST/PORT and ignores OBJECT_STORAGE) — keep them in lockstep.
+  const version = JSON.parse(read('package.json')).version;
+  assert.match(read('infra/k8s/Chart.yaml'), new RegExp(`^appVersion: "${version.replace(/\./g, '\\.')}"$`, 'm'), 'infra/k8s/Chart.yaml appVersion');
+  assert.match(read('infra/docker/docker-compose.yml'), new RegExp(`image: magpeek/coremail-app:\\$\\{COREMAIL_VERSION:-${version.replace(/\./g, '\\.')}\\}`), 'docker-compose.yml default tag');
+  assert.match(read('infra/docker/docker-compose.synology.yml'), new RegExp(`image: magpeek/coremail-app:${version.replace(/\./g, '\\.')}\\n`), 'docker-compose.synology.yml tag');
+});
+
+test('object storage (8.0): unchanged .env keeps MinIO; new .env uses the filesystem volume', () => {
   for (const f of ['infra/docker/docker-compose.yml', 'infra/docker/docker-compose.synology.yml']) {
     const dc = read(f);
     assert.match(dc, /OBJECT_STORAGE: \$\{OBJECT_STORAGE:-minio\}/, `${f}: default driver must stay minio for existing installs`);

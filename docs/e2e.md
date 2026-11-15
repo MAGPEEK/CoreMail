@@ -44,11 +44,11 @@ MinIO uses `pgsty/minio` (override with `E2E_MINIO_IMAGE`) because `minio/minio`
 longer pullable from Docker Hub. ClamAV downloads its signatures on first start
 (a few minutes); the mail tests do not wait for it.
 
-### Storage run modes (v7.1)
+### Storage run modes (v8.0)
 
 | `E2E_STORAGE` | Compose files | Object storage |
 |---|---|---|
-| `minio` (default) | `docker-compose.yml` + `docker-compose.e2e.yml` | bundled MinIO (`OBJECT_STORAGE` unset → pre-7.1 behaviour) |
+| `minio` (default) | `docker-compose.yml` + `docker-compose.e2e.yml` | bundled MinIO (`OBJECT_STORAGE` unset → pre-8.0 behaviour) |
 | `filesystem` | … + `docker-compose.e2e-filesystem.yml` | `coremail-data` volume, **no MinIO container** |
 
 ```bash

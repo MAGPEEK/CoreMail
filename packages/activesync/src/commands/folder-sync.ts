@@ -1,5 +1,6 @@
 import { prisma } from '@coremail/storage/prisma';
 import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
+import { mergeSyncKeys } from './sync-keys.js';
 
 // EAS folder type codes ([MS-ASCMD] FolderSync Type)
 const FOLDER_TYPES: Record<string, string> = {
@@ -100,11 +101,9 @@ export async function handleFolderSync(
     const newState: FolderState = answeredKey === clientSyncKey && state
       ? state
       : { key: answeredKey, folders: current, ...(isInitialSync ? {} : { prevKey: clientSyncKey, prevFolders: base }) };
-    syncKeys[SNAPSHOT_KEY] = JSON.stringify(newState);
-    await prisma.activeSyncDevice.update({
-      where: { id: device.id },
-      data: { folderSyncKey: newState.key, syncKeys, lastSyncAt: new Date() },
-    });
+    // 8.0.0: merge only the snapshot key atomically — never write back Sync/Ping keys
+    // read before (a Sync running in parallel would lose its issued SyncKey).
+    await mergeSyncKeys(device.id, { [SNAPSHOT_KEY]: JSON.stringify(newState) }, { folderSyncKey: newState.key, lastSyncAt: new Date() });
   }
 
   return encodeWbxml(el('FolderSync', undefined, [

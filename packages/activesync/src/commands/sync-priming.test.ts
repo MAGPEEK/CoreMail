@@ -13,8 +13,10 @@ process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
 process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 
 const deviceUpdates: unknown[] = [];
+const syncKeyMerges: unknown[] = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  $executeRaw: async (_sql: TemplateStringsArray, ...values: unknown[]) => { syncKeyMerges.push(values); return 1; },
   folder: { findFirst: async () => ({ id: 'inbox', mailboxId: 'mb1' }) },
   activeSyncDevice: {
     findUnique: async () => ({ id: 'd1', syncKeys: {} }),
@@ -39,7 +41,9 @@ test('SyncKey 0 → Status 1, priming SyncKey, no Commands', async () => {
   assert.ok(!json.includes('"Commands"'), json);
   assert.ok(json.includes(`"name":"SyncKey","children":[],"text":"${PRIMING_SYNC_KEY}"`), json);
   assert.ok(json.includes('"name":"Status","children":[],"text":"1"'), json);
-  assert.equal(deviceUpdates.length, 1);
+  assert.equal(syncKeyMerges.length, 1, 'one atomic syncKeys merge');
+  assert.deepEqual(JSON.parse(String((syncKeyMerges[0] as unknown[])[0])), { inbox: PRIMING_SYNC_KEY, 'ack:inbox': PRIMING_SYNC_KEY });
+  assert.equal(deviceUpdates.length, 1, 'lastSyncAt');
 });
 // The follow-up Sync with PRIMING_SYNC_KEY returning the whole folder is covered
 // in sync-window.test.ts ('priming key: …').

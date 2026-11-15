@@ -3,6 +3,10 @@ import { createLogger } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest, type MailAuthUser } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
+import { LogBudget } from './log-budget.js';
+
+/** SystemLog rows for failed Basic logins: at most 10 per IP and 60 in total per minute. */
+export const failedAuthLogBudget = new LogBudget({ perKey: 10, total: 60, windowMs: 60_000 });
 
 const log = createLogger('autodiscover:v1');
 
@@ -239,7 +243,10 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     // are bounded by the shared lockout (per IP and per account).
     log.warn({ login, ip: clientIp, status: auth.status, userAgent: req.get('User-Agent') ?? '' },
       'Autodiscover v1: authentication failed');
-    void prisma.systemLog.create({
+    // 8.0.0: the database row is sampled (per IP and in total per minute) — the pino
+    // line above records every attempt.
+    const budget = failedAuthLogBudget.take(clientIp || 'unknown');
+    if (budget.ok) void prisma.systemLog.create({
       data: {
         level:    'WARN',
         service:  'autodiscover',
@@ -252,6 +259,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
           ip:        clientIp || 'unknown',
           userAgent: (req.get('User-Agent') ?? '').slice(0, 256),
           path:      req.originalUrl.slice(0, 256),
+          ...(budget.suppressedBefore > 0 ? { suppressedBefore: budget.suppressedBefore } : {}),
         },
       },
     }).catch(() => { /* non-fatal */ });

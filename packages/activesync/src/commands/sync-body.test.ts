@@ -16,11 +16,12 @@ let transactions = 0;
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   $transaction: async () => { transactions++; },
+  $executeRaw: async (_sql: TemplateStringsArray, json: string) => { device.syncKeys = { ...device.syncKeys, ...JSON.parse(json) }; return 1; },
   folder: { findFirst: async ({ where }: { where: { id: string; mailbox: { userId: string } } }) =>
     (where.id === 'inbox' && where.mailbox.userId === 'u1' ? { id: 'inbox', mailboxId: 'mb1' } : null) },
   activeSyncDevice: {
     findUnique: async () => ({ ...device, syncKeys: { ...device.syncKeys } }),
-    update: async ({ data }: { data: { syncKeys: Record<string, string> } }) => { device.syncKeys = data.syncKeys; return {}; },
+    update: async ({ data }: { data: { syncKeys?: Record<string, string> } }) => { if (data.syncKeys) device.syncKeys = data.syncKeys; return {}; },
   },
   mailbox: { findUnique: async () => ({ highestModSeq: 5n }), updateMany: async () => ({ count: 0 }) },
   // per-device item state: the device holds nothing (every message is an Add)
@@ -83,6 +84,16 @@ test('Type 4 (MIME) with MIMESupport 2: loadRawMessage octets byte-exact', async
   assert.equal(r.type, '4');
   assert.equal(r.size, String(RAW_MESSAGE.length));
   assert.ok(r.data?.bytes?.equals(RAW_MESSAGE), 'MIME must be the stored raw message, byte for byte');
+});
+
+test('8.0.0: a missing raw object (Type 4) does not fail the Sync — the Add falls back to the stored HTML body', async () => {
+  const missing = async () => { throw new Error('NoSuchKey'); };
+  const tree = decodeWbxml(await handleSync(syncReq([[0, 0x22, '2'], PREF('4')]), 'u1', 'dev1', { loadRaw: missing }));
+  assert.equal(find(tree, 'Status')?.text, '1');
+  assert.equal(find(tree, 'ServerId')?.text, messageRow().id, 'the item is still sent');
+  const r = body(tree);
+  assert.equal(r.type, '2');
+  assert.equal(r.data?.text, messageRow().bodyHtml);
 });
 
 test('Type 4 without MIMESupport (0) falls back to plain text; MIMESupport 1 only for S/MIME', async () => {

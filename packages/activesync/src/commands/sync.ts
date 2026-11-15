@@ -4,9 +4,11 @@ import { encodeWbxml, el, pel, getText, getChild, CP, type WbxmlElement } from '
 import { loadSyncWindow, isPrimingSyncKey, parseWindowSize, PRIMING_SYNC_KEY, type SyncWindowDb } from './sync-window.js';
 import {
   parseBodyOptions, chooseBodyPreference, buildEmailProperties, filterCutoff, EAS_ATTACHMENT_SELECT,
-  type BodyOptions, type EasAttachment, type EasMessage, type LoadRaw,
+  type BodyOptions, type BodyPreference, type EasAttachment, type EasMessage, type LoadRaw,
 } from './body.js';
+import { createLogger } from '@coremail/core';
 import { ACK_KEY, acknowledgeSyncKey, forgetItems, knownItems, markKnown, recordPending, resetCollection } from './item-state.js';
+import { changedSyncKeys, mergeSyncKeys } from './sync-keys.js';
 
 /** [MS-ASCMD] Sync status values used here. */
 export const SYNC_STATUS = {
@@ -43,6 +45,40 @@ export interface SyncDeps {
   now?: () => Date;
 }
 
+const log = createLogger('activesync:sync');
+
+/**
+ * ApplicationData of one Add (8.0.0). A missing or unreadable raw object (BodyPreference 4
+ * = MIME, S/MIME) must not fail the whole Sync with HTTP 500 — the client would retry
+ * forever and never get past that folder. Fallback: the stored HTML/text body (no object
+ * store access). Only when that fails too is the item left out of this response (logged;
+ * it is not recorded as sent).
+ */
+export async function addProperties(
+  msg: EasMessage, pref: BodyPreference, loadRaw: LoadRaw, ctx: { userId: string; collectionId: string },
+): Promise<WbxmlElement[] | null> {
+  try {
+    return await buildEmailProperties(msg, pref, loadRaw);
+  } catch (err) {
+    log.warn({ err, userId: ctx.userId, collectionId: ctx.collectionId, messageId: msg.id, bodyType: pref.type },
+      'EAS Sync: message body not readable — falling back to the stored text/HTML body');
+  }
+  const fallback: BodyPreference = {
+    type: msg.bodyHtml ? 2 : 1,
+    allOrNone: pref.allOrNone,
+    ...(pref.truncationSize !== undefined ? { truncationSize: pref.truncationSize } : {}),
+    ...(pref.preview !== undefined ? { preview: pref.preview } : {}),
+  };
+  const noRaw: LoadRaw = async () => { throw new Error('raw message not readable'); };
+  try {
+    return await buildEmailProperties({ ...msg, smimeMeta: null }, fallback, noRaw);
+  } catch (err) {
+    log.error({ err, userId: ctx.userId, collectionId: ctx.collectionId, messageId: msg.id },
+      'EAS Sync: message skipped — properties could not be built');
+    return null;
+  }
+}
+
 /**
  * Sync Options are sticky ([MS-ASCMD] 2.2.3.115.5): a Sync without Options uses the
  * ones the client sent last for that collection. Stored next to the sync key in
@@ -50,7 +86,7 @@ export interface SyncDeps {
  */
 const OPTIONS_KEY = (collectionId: string) => `opts:${collectionId}`;
 
-function storedOptions(syncKeys: Record<string, string>, collectionId: string): BodyOptions | null {
+export function storedOptions(syncKeys: Record<string, string>, collectionId: string): BodyOptions | null {
   const raw = syncKeys[OPTIONS_KEY(collectionId)];
   if (!raw) return null;
   try { return JSON.parse(raw) as BodyOptions; } catch { return null; }
@@ -130,7 +166,7 @@ async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandCon
 }
 
 /** Known ServerIds that left the collection (expunged or moved) in the modSeq range [since, upper). */
-async function departedItems(deviceRowId: string, mailboxId: string, collectionId: string, since: bigint, upper: bigint): Promise<string[]> {
+export async function departedItems(deviceRowId: string, mailboxId: string, collectionId: string, since: bigint, upper: bigint): Promise<string[]> {
   if (since >= upper) return [];
   const candidates = await prisma.message.findMany({
     where: {
@@ -170,7 +206,8 @@ export async function handleSync(
     where: { userId_deviceId: { userId, deviceId } },
   });
   const deviceRowId = device?.id ?? null;
-  const syncKeys: Record<string, string> = { ...((device?.syncKeys as Record<string, string> | null) ?? {}) };
+  const storedSyncKeys: Record<string, string> = { ...((device?.syncKeys as Record<string, string> | null) ?? {}) };
+  const syncKeys: Record<string, string> = { ...storedSyncKeys };
   let syncKeysDirty = false;
   // Sync-level WindowSize applies to every collection without its own
   const requestWindow = getText(body, 'WindowSize') || undefined;
@@ -266,13 +303,16 @@ export async function handleSync(
 
     const attachments = await attachmentsByMessage(adds.map((m) => m.id));
     const serverCommands: WbxmlElement[] = [];
+    const skipped = new Set<string>();
     for (const row of adds) {
       const { modSeq: _modSeq, ...cols } = row;
       const msg: EasMessage = { ...cols, attachments: attachments.get(row.id) ?? [] };
       const pref = chooseBodyPreference(bodyOptions, msg);
+      const props = await addProperties(msg, pref, loadRaw, { userId, collectionId });
+      if (!props) { skipped.add(msg.id); continue; }
       serverCommands.push(el('Add', undefined, [
         el('ServerId', msg.id),
-        el('ApplicationData', undefined, await buildEmailProperties(msg, pref, loadRaw)),
+        el('ApplicationData', undefined, props),
       ]));
     }
     for (const row of changes) {
@@ -285,7 +325,7 @@ export async function handleSync(
 
     if (deviceRowId) {
       await recordPending(deviceRowId, collectionId, newSyncKey, [
-        ...[...adds, ...changes].map((m) => ({ serverId: m.id, modSeq: m.modSeq })),
+        ...[...adds.filter((m) => !skipped.has(m.id)), ...changes].map((m) => ({ serverId: m.id, modSeq: m.modSeq })),
         ...deletes.map((id) => ({ serverId: id, modSeq: null })),
       ]);
     }
@@ -301,10 +341,9 @@ export async function handleSync(
   }
 
   if (device && syncKeysDirty) {
-    await prisma.activeSyncDevice.update({
-      where: { id: device.id },
-      data: { syncKeys, lastSyncAt: new Date() },
-    });
+    // 8.0.0: only the keys this request changed, merged atomically — a parallel Sync of
+    // another folder, a FolderSync or a Ping keeps its own keys (no stale write-back).
+    await mergeSyncKeys(device.id, changedSyncKeys(storedSyncKeys, syncKeys), { lastSyncAt: new Date() });
   }
 
   return encodeWbxml(el('Sync', undefined, [
