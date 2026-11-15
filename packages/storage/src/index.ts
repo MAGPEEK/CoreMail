@@ -26,3 +26,5 @@ export * from './purge-objects.js';
 export * from './oof.js';
 export * from './draft.js';
 export * from './draft-versions.js';
+export * from './references.js';
+export * from './references-backfill.js';

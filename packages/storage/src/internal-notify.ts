@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import { createMessage } from './message-store.js';
+import { formatReferencesColumn, threadReferencesOf } from './references.js';
 
 const log = createLogger('internal-notify');
 
@@ -27,6 +28,8 @@ export interface InternalNotifyContent {
   bodyHtml?: string;
   /** Additional headers for threading (rarely used) */
   inReplyTo?: string;
+  /** References chain (msg-ids, oldest first); defaults to In-Reply-To. */
+  references?: string[];
   messageId?: string;
 }
 
@@ -67,6 +70,8 @@ export async function notifyMailboxInbox(mailboxId: string, opts: InternalNotify
       rawSize: Buffer.byteLength(`${opts.fromName} <${opts.fromAddr}>\n${opts.subject}\n\n${opts.bodyText}`, 'utf8'),
       messageId,
       ...(opts.inReplyTo ? { inReplyTo: opts.inReplyTo } : {}),
+      // No raw object: the References are known here, never left to the backfill.
+      references: formatReferencesColumn(threadReferencesOf(opts.references ?? [], opts.inReplyTo)),
     }));
     await prisma.folder.update({
       where: { id: inbox.id },

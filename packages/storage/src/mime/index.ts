@@ -1,5 +1,6 @@
 import { simpleParser, type ParsedMail, type Attachment } from 'mailparser';
 import { createHash } from 'crypto';
+import { extractReferences } from '../references.js';
 
 export interface ParsedMessage {
   subject: string;
@@ -11,6 +12,8 @@ export interface ParsedMessage {
   replyTo: string | null;
   messageId: string | null;
   inReplyTo: string | null;
+  /** References header: normalized msg-ids in header order, capped (references.ts). */
+  references: string[];
   date: Date;
   bodyText: string;
   bodyHtml: string;
@@ -70,7 +73,8 @@ export function capHeaderSection(raw: Buffer, maxBytes = MAX_PARSE_HEADER_BYTES)
 }
 
 export async function parseRawMessage(rawBuffer: Buffer): Promise<ParsedMessage> {
-  const parsed: ParsedMail = await simpleParser(capHeaderSection(rawBuffer));
+  const capped = capHeaderSection(rawBuffer);
+  const parsed: ParsedMail = await simpleParser(capped);
 
   const toAddrs = addressesToArray(parsed.to);
   const ccAddrs = addressesToArray(parsed.cc);
@@ -105,6 +109,7 @@ export async function parseRawMessage(rawBuffer: Buffer): Promise<ParsedMessage>
     replyTo,
     messageId: parsed.messageId ?? null,
     inReplyTo: parsed.inReplyTo ?? null,
+    references: extractReferences(capped),
     date: parsed.date ?? new Date(),
     bodyText: parsed.text ?? '',
     bodyHtml: parsed.html !== false ? (parsed.html ?? '') : '',
