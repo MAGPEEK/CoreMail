@@ -49,6 +49,20 @@ test('queue cleaner plan: dead letters only with autoFlushDead', () => {
 
 // ── iTIP REPLY ────────────────────────────────────────────────────────────────
 
+const AUTH = { verifiedDomains: ['partner.example'] };
+
+test('attendee authentication: aligned DMARC/SPF/DKIM domain or the authenticated local sender', async () => {
+  const { isAttendeeAuthenticated } = await import('./itip-inbound.js');
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', AUTH), true);
+  assert.equal(isAttendeeAuthenticated('bob@mail.partner.example', AUTH), true);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', { verifiedDomains: ['mail.partner.example'] }), true);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', { verifiedDomains: ['notpartner.example'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@corp.test', { authenticatedSender: 'Bob@corp.test' }), true);
+  assert.equal(isAttendeeAuthenticated('bob@corp.test', { authenticatedSender: 'alice@corp.test' }), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', null), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', {}), false);
+});
+
 const VCAL = [
   'BEGIN:VCALENDAR', 'METHOD:REPLY', 'BEGIN:VEVENT', 'UID:evt-1@example.org', 'SEQUENCE:2',
   'ATTENDEE;PARTSTAT=ACCEPTED;CN=Bob:mailto:bob@partner.example', 'END:VEVENT', 'END:VCALENDAR',
@@ -93,10 +107,15 @@ test('processITipInbound scopes the event lookup to the recipient and rejects fo
     update: async (u: unknown) => { updates.push(u); return {}; },
   };
   const m = mail('Bob <bob@partner.example>', b64Part);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'mallory@evil.example', recipientUserId: 'u1' }), false);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: null }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'mallory@evil.example', recipientUserId: 'u1', senderAuth: AUTH }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: null, senderAuth: AUTH }), false);
+  // forged From header: no authentication verdict, or one for another domain → ignored
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: null }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { verifiedDomains: [] } }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { verifiedDomains: ['evil.example'] } }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { authenticatedSender: 'carol@partner.example' } }), false);
   assert.equal(queries.length, 0);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   assert.deepEqual((queries[0] as { where: unknown }).where, { uid: 'evt-1@example.org', calendar: { userId: 'u1' } });
   assert.equal(((updates[0] as { data: { attendees: Array<{ partstat: string }> } }).data.attendees[0]!).partstat, 'ACCEPTED');
 });
@@ -142,7 +161,7 @@ test('REPLY parser handles quoted parameter values containing ":" (CN="Doe: J")'
 
 test('REPLY updates the PARTSTAT inside icalData (what CalDAV serves), keeping the rest', async () => {
   const { row } = fakeEvent();
-  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z']), { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z']), { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   const ical = String(row['icalData']).replace(/\r\n /g, '');
   assert.match(ical, /^ATTENDEE;CN="Doe: Bob";PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@partner.example$/m);
   assert.match(ical, /BEGIN:VALARM/);
@@ -153,7 +172,7 @@ test('REPLY updates the PARTSTAT inside icalData (what CalDAV serves), keeping t
 test('REPLY with RECURRENCE-ID only touches that instance (override created, series unchanged)', async () => {
   const { row } = fakeEvent();
   assert.equal(await processITipInbound(replyMail(['RECURRENCE-ID:20261109T090000Z', 'DTSTAMP:20261101T000000Z'], 'DECLINED'),
-    { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+    { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   const ical = String(row['icalData']).replace(/\r\n /g, '');
   const blocks = ical.split('BEGIN:VEVENT').slice(1);
   assert.equal(blocks.length, 2);
@@ -167,7 +186,7 @@ test('REPLY with RECURRENCE-ID only touches that instance (override created, ser
 
 test('REPLY with the same SEQUENCE but an older DTSTAMP than the last applied one is ignored', async () => {
   const { row, updates } = fakeEvent();
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261105T000000Z'], 'DECLINED'), ctx), true);
   assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z'], 'ACCEPTED'), ctx), false);
   assert.equal(updates.length, 1);
@@ -176,7 +195,7 @@ test('REPLY with the same SEQUENCE but an older DTSTAMP than the last applied on
 });
 
 test('REPLY is only applied to the organizer copy (recipient address or alias = ORGANIZER)', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   fakeEvent({ organizer: 'carol@elsewhere.example' });
   assert.equal(await processITipInbound(replyMail([]), ctx), false);
   fakeEvent({ organizer: 'TEAM@local.example' });
@@ -186,7 +205,7 @@ test('REPLY is only applied to the organizer copy (recipient address or alias = 
 // ── v8.0 review: phantom occurrences and unbounded growth ─────────────────────
 
 test('REPLY with a RECURRENCE-ID that is not an instance of the series adds no override', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   // Series: weekly 2026-11-02 09:00Z, COUNT=4 → 02, 09, 16, 23 Nov.
   for (const rid of ['20261110T090000Z', '20261109T100000Z', '20261130T090000Z', '20991231T090000Z']) {
     const { row, updates } = fakeEvent();
@@ -201,7 +220,7 @@ test('REPLY with a RECURRENCE-ID that is not an instance of the series adds no o
 });
 
 test('REPLY overrides and per-instance stamps are capped', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   const daily = STORED.replace('RRULE:FREQ=WEEKLY;COUNT=4', 'RRULE:FREQ=DAILY;COUNT=500');
   const instance = (i: number): string => new Date(Date.UTC(2026, 10, 2 + i, 9)).toISOString().replace(/[-:]/g, '').replace('.000', '');
   // Stamps: MAX_REPLY_STAMPS distinct instances already answered → a new instance is ignored.

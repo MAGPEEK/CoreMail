@@ -2,6 +2,9 @@ import { prisma } from './prisma/index.js';
 import { moveMessages, touchMessages } from './message-store.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
+import { matchRulePattern } from './rule-pattern.js';
+
+export { validateRulePattern, matchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT } from './rule-pattern.js';
 
 const log = createLogger('storage:mail-rules');
 
@@ -137,14 +140,10 @@ function evaluateOperator(
     case 'notEquals':   return fv !== ev;
     case 'startsWith':  return fv.startsWith(ev);
     case 'endsWith':    return fv.endsWith(ev);
-    case 'regex': {
-      try {
-        const re = new RegExp(String(expected), 'i');
-        return re.test(fv);
-      } catch {
-        return false;
-      }
-    }
+    case 'regex':
+      // Never the backtracking engine on mail content (ReDoS on the SMTP
+      // delivery path): linear-time matcher, input capped at 64 KB.
+      return matchRulePattern(String(expected), fv);
     case 'is': return fv === ev;
     default: return false;
   }

@@ -61,6 +61,13 @@ export interface DsnOptions {
    * answered 250 (RFC 5321 §6.1).
    */
   deliverExternal?:  boolean;
+  /**
+   * RFC 3464 §2.3.3 Action: `failed` (default, final bounce) or `delayed`
+   * (delay notification — delivery is still being retried).
+   */
+  action?:           'failed' | 'delayed';
+  /** RFC 3464 §2.3.9 Will-Retry-Until (delay notifications). */
+  willRetryUntil?:   Date;
 }
 
 function oneLine(text: string): string {
@@ -94,12 +101,22 @@ export function buildDsnMessage(opts: DsnOptions, now = new Date(), random = Mat
     remote: opts.smtpCode !== null,
   }));
 
+  const delayed = opts.action === 'delayed';
   const human = [
-    'This is the mail delivery system. Your message could not be delivered',
-    'to one or more recipients:',
+    ...(delayed
+      ? [
+        'This is the mail delivery system. Your message has not been delivered yet',
+        'to one or more recipients. Delivery is still being retried — you do not',
+        'need to resend it:',
+      ]
+      : [
+        'This is the mail delivery system. Your message could not be delivered',
+        'to one or more recipients:',
+      ]),
     '',
     ...recipients.map((r) => `  <${oneLine(r.rcpt)}>: ${oneLine(r.diagnostic)}`),
     '',
+    ...(delayed && opts.willRetryUntil ? [`Delivery attempts stop at: ${formatRfc5322Date(opts.willRetryUntil)}`, ''] : []),
     `Reporting server: ${opts.serverHostname}`,
     '',
   ].join('\r\n');
@@ -112,14 +129,15 @@ export function buildDsnMessage(opts: DsnOptions, now = new Date(), random = Mat
     '',
     recipients.map((r) => [
       `Final-Recipient: rfc822; ${oneLine(r.rcpt)}`,
-      'Action: failed',
+      `Action: ${delayed ? 'delayed' : 'failed'}`,
       `Status: ${r.status}`,
       `Diagnostic-Code: ${r.remote ? 'smtp' : 'x-local'}; ${oneLine(r.diagnostic)}`,
+      ...(delayed && opts.willRetryUntil ? [`Will-Retry-Until: ${formatRfc5322Date(opts.willRetryUntil)}`] : []),
     ].join('\r\n')).join('\r\n\r\n'),
     '',
   ].join('\r\n');
 
-  const subject = encodeHeaderWord(`Undelivered Mail Returned to Sender: ${opts.originalSubject || '(no subject)'}`);
+  const subject = encodeHeaderWord(`${delayed ? 'Delayed Mail (still being retried)' : 'Undelivered Mail Returned to Sender'}: ${opts.originalSubject || '(no subject)'}`);
   const refs = opts.originalMessageId
     ? [`In-Reply-To: ${oneLine(opts.originalMessageId)}`, `References: ${oneLine(opts.originalMessageId)}`]
     : [];
