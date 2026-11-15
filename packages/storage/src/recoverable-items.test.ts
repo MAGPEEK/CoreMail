@@ -179,7 +179,8 @@ test('purge job: removes orphaned ActiveSync item state and only unreferenced ob
   fake['userCertificate'] = { count: async () => 0 };
   const old = db.messages.find((m) => m['id'] === 'old')!;
   old['storagePath'] = 'raw/aa/unique.eml';
-  old['attachments'] = [{ storagePath: 'attachments/live/shared.pdf' }, { storagePath: 'attachments/old/own.png' }];
+  // nested message → attachments are resolved from db.attachments by the fake
+  db.attachments.push({ id: 'att-old-1', messageId: 'old', storagePath: 'attachments/live/shared.pdf' }, { id: 'att-old-2', messageId: 'old', storagePath: 'attachments/old/own.png' });
   db.messages.find((m) => m['id'] === 'live')!['storagePath'] = 'raw/bb/copied.eml';
   db.messages.find((m) => m['id'] === 'fromWork')!['storagePath'] = 'raw/bb/copied.eml';
   const deleted: string[] = [];
