@@ -185,6 +185,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Opening the TOTP setup no longer disconnects mail clients.** Generating a (not yet
+  confirmed) TOTP secret published an `mfa-change` event that ended every password-authenticated
+  IMAP/POP3/SMTP/JMAP/ActiveSync connection of the user; the event is now sent only when TOTP is
+  actually enabled.
+- api-gateway: duplicate side-effect import of `middleware/auth.js` removed from the admin
+  storage and backup routes (repo-hygiene now checks for it).
 - **IMAP sequence numbers no longer drift (data loss).** Every session keeps its own message
   sequence map; changes by other clients, the web client or delivery are reported as EXPUNGE,
   EXISTS and `FETCH (UID … FLAGS …)` on NOOP, CHECK, IDLE and at command completion — never an
@@ -360,6 +366,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Security
 
+- **JMAP WebSocket: Origin check could be bypassed with an empty `?access_token=`.** The
+  handshake skipped the Origin allow-list whenever the URL had a token parameter, even an
+  empty or dummy one, while the login used the `Authorization` header first — so a foreign web
+  page could open `/jmap/ws?access_token=` and ride on Basic credentials cached by the browser.
+  A foreign Origin is now accepted only with a non-empty query token and no `Authorization`
+  header; ambient (header) credentials always need an allowed Origin.
+- **JMAP EmailSubmission `envelope.mailFrom` follows the SMTP MAIL FROM policy.** Besides
+  matching the identity, the envelope sender must be an address the user may send as
+  (`@coremail/storage` sender identity: own address, aliases, Shared Mailboxes with
+  SEND_AS/FULL_ACCESS); the null reverse-path `<>` is refused (`forbiddenMailFrom`), and the
+  DKIM key is looked up only from the verified address.
+- **REST API: revoked access tokens survive no gateway restart.** `requireAuth` checked
+  revocations only in process memory; after a restart or a lost invalidation event, tokens of
+  logged-out, deactivated or password-changed sessions kept working until they expired. It now
+  also consults the shared Redis markers (5 s local cache, dropped by every invalidation event;
+  1 s timeout, then the in-process result applies).
+- **Revoke-all marks compare milliseconds.** Access tokens carry a new `iatMs` claim and
+  revoke-all marks a `beforeMs`; a token minted earlier in the same second as a password
+  reset, role change or deactivation is no longer accepted until it expires (whole-second
+  `iat` could not tell it apart), and a token minted right after the mark (e.g. the login
+  following an LDAP takeover) is not caught by it. Tokens of older releases from the same
+  second count as revoked.
+- **Admin password reset can revoke app passwords.** `PUT /api/v1/admin/mailboxes/:id` accepts
+  `revokeAppPasswords: true` together with `password` (HELP_DESK included): all app passwords
+  of the user are deleted and mail connections using them end — for compromised accounts.
+  Default `false` keeps the previous behaviour (app passwords survive an admin reset).
+  CLI: `coremail user set-password <user> --revoke-app-passwords`.
 - **JMAP EmailSubmission sender spoofing (RFC 8621 §7.5).** Only the first From address was
   compared with the identity, and the check was skipped when From was empty, so
   `From: me@corp, ceo@corp`, two From fields, `From: undisclosed` and any `Sender:` were sent.

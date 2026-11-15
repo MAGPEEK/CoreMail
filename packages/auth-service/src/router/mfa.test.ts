@@ -94,6 +94,22 @@ test('TOTP setup / disable / backup codes / WebAuthn registration require re-aut
   assert.equal(db.userMfa.rows[0]!['totpEnabled'], false);
 });
 
+test('TOTP setup publishes no mfa-change event; the confirmation does (8.0.0)', async () => {
+  const { id, token } = await userWithSession('carol@example.com');
+  const events: string[] = [];
+  const off = core.onAuthInvalidation((e) => { if (e.userId === id) events.push(String(e.reason)); });
+  try {
+    const setup = await call('POST', '/auth/mfa/totp/setup', { currentPassword: PW }, token);
+    assert.equal(setup.status, 200);
+    assert.deepEqual(events, [], 'a pending (unconfirmed) secret ends no live connection');
+    const ok = await call('POST', '/auth/mfa/totp/confirm', { code: sauth.totpCode(String(setup.body['secret'])) }, token);
+    assert.equal(ok.status, 200);
+    assert.deepEqual(events, ['mfa-change']);
+  } finally {
+    off();
+  }
+});
+
 test('POST /auth/mfa/verify accepts {challengeToken, code} with a backup code; session is mfaVerified', async () => {
   const { id } = await userWithSession();
   await db.userMfa.upsert({ where: { userId: id }, create: { userId: id, totpSecret: sauth.encryptMfaSecret('JBSWY3DPEHPK3PXP'), totpEnabled: true }, update: {} });

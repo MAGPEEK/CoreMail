@@ -14,7 +14,10 @@
  *   requireAuth + a Redis marker other services may consult).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { config, createLogger, onAuthInvalidation, signAccessToken, signRefreshToken, verifyRefreshToken } from '@coremail/core';
+import {
+  config, createLogger, issuedBeforeMark, onAuthInvalidation, signAccessToken, signRefreshToken, verifyRefreshToken,
+  type RevokeBeforeMark,
+} from '@coremail/core';
 import type { UserRole } from '@coremail/core/types';
 import { prisma } from '../prisma/index.js';
 import { authRedis } from './redis.js';
@@ -182,7 +185,7 @@ export async function revokeSessionByRefreshToken(refreshToken: string): Promise
 // (isAccessTokenRevokedShared). A per-user "issued before" mark additionally
 // covers access tokens whose sessionId is not a session row (pre-v6 tokens).
 
-interface UserMark { before: number; except: string | null; expires: number }
+type UserMark = RevokeBeforeMark;
 const userMarks = new Map<string, UserMark>();
 const revokedSessions = new Map<string, number>(); // sessionId → expiry (ms)
 export const REVOCATION_KEY_PREFIX = 'auth:revoked:';
@@ -202,9 +205,12 @@ function rememberRevokedSessions(sessionIds: string[], expires: number): void {
   }
 }
 
+/** Mark time in ms (marks of older publishers only have whole seconds). */
+const markMs = (m: UserMark): number => m.beforeMs ?? m.before * 1000;
+
 function rememberUserMark(userId: string, mark: UserMark): void {
   const cur = userMarks.get(userId);
-  if (!cur || cur.before <= mark.before || cur.expires < Date.now()) userMarks.set(userId, mark);
+  if (!cur || markMs(cur) <= markMs(mark) || cur.expires < Date.now()) userMarks.set(userId, mark);
 }
 
 // v7.1.0: revocations performed by another service (auth-service, LDAP sync,
@@ -215,6 +221,10 @@ onAuthInvalidation((e) => {
   const now = Date.now();
   if (e.sessionIds?.length) rememberRevokedSessions(e.sessionIds, now + markTtlSeconds() * 1000);
   if (e.revokeBefore && e.revokeBefore.expires > now) rememberUserMark(e.userId, e.revokeBefore);
+  // The Redis lookup cache must not hide a revocation that just happened.
+  lastLocalRevocationAt = now;
+  redisLookupCache.delete(`u:${e.userId}`);
+  for (const id of e.sessionIds ?? []) redisLookupCache.delete(`s:${id}`);
 });
 
 /** Local + Redis session revocation markers (no event). */
@@ -239,14 +249,19 @@ export async function markSessionsRevoked(sessionIds: string[], userId?: string)
   if (userId) await publishUserAuthChange(userId, 'sessions-revoked', { sessionIds });
 }
 
-function userMarkRevokes(mark: UserMark | null | undefined, iat: number | undefined, sessionId: string | undefined): boolean {
+/**
+ * 8.0.0: compares the token's millisecond issue time (`iatMs`) with the exact
+ * revocation time (`beforeMs`) — whole seconds let a token minted earlier in the
+ * same second as a revoke-all survive. See issuedBeforeMark() (@coremail/core).
+ */
+function userMarkRevokes(mark: UserMark | null | undefined, iat: number | undefined, sessionId: string | undefined, iatMs?: number): boolean {
   if (!mark) return false;
   if (mark.except && sessionId === mark.except) return false;
-  return (iat ?? 0) < mark.before;
+  return issuedBeforeMark(mark, iat ?? 0, iatMs);
 }
 
-/** In-process check (api-gateway requireAuth). */
-export function isAccessTokenRevoked(userId: string, iat: number | undefined, sessionId: string | undefined): boolean {
+/** In-process check only (memory maps, filled by this process and the auth bus). */
+export function isAccessTokenRevoked(userId: string, iat: number | undefined, sessionId: string | undefined, iatMs?: number): boolean {
   const now = Date.now();
   if (sessionId) {
     const exp = revokedSessions.get(sessionId);
@@ -257,21 +272,72 @@ export function isAccessTokenRevoked(userId: string, iat: number | undefined, se
   }
   const mark = userMarks.get(userId);
   if (mark && mark.expires < now) { userMarks.delete(userId); return false; }
-  return userMarkRevokes(mark, iat, sessionId);
+  return userMarkRevokes(mark, iat, sessionId, iatMs);
+}
+
+// 8.0.0: short local cache for the Redis markers, so a hot path (api-gateway
+// requireAuth, every request) does not cost two Redis round trips. Revocation
+// events drop the affected entries (above), and the in-process maps are always
+// consulted first, so the cache only delays revocations whose event was lost —
+// by at most REDIS_LOOKUP_TTL_MS.
+const REDIS_LOOKUP_TTL_MS = 5_000;
+const REDIS_LOOKUP_MAX = 20_000;
+type RedisLookup = { kind: 'session'; revoked: boolean } | { kind: 'user'; mark: UserMark | null };
+const redisLookupCache = new Map<string, { value: RedisLookup; expires: number }>();
+let lastLocalRevocationAt = 0;
+
+function cacheGet(key: string): RedisLookup | undefined {
+  const hit = redisLookupCache.get(key);
+  if (!hit) return undefined;
+  if (hit.expires < Date.now()) { redisLookupCache.delete(key); return undefined; }
+  return hit.value;
+}
+function cacheSet(key: string, value: RedisLookup, startedAt: number): void {
+  // A lookup that raced with a revocation event must not re-insert a stale result.
+  if (startedAt <= lastLocalRevocationAt) return;
+  if (redisLookupCache.size >= REDIS_LOOKUP_MAX) redisLookupCache.clear();
+  redisLookupCache.set(key, { value, expires: Date.now() + REDIS_LOOKUP_TTL_MS });
+}
+
+/** Clears the Redis lookup cache (tests). */
+export function resetRevocationLookupCache(): void {
+  redisLookupCache.clear();
 }
 
 /**
- * Like isAccessTokenRevoked, but also consults the Redis markers — for services
- * other than the api-gateway (e.g. the auth-service). Fails open on Redis errors
- * (signature and expiry were already verified).
+ * Like isAccessTokenRevoked, but also consults the shared Redis markers, so a
+ * restart of this process or a lost invalidation event cannot revive a revoked
+ * token. Used by every service, including the api-gateway's requireAuth (8.0.0;
+ * previously in-process only there). Redis results are cached for a few seconds
+ * (`cache: false` bypasses the cache). Fails open on Redis errors (signature
+ * and expiry were already verified, and the in-process maps still apply).
  */
-export async function isAccessTokenRevokedShared(userId: string, iat: number | undefined, sessionId: string | undefined): Promise<boolean> {
-  if (isAccessTokenRevoked(userId, iat, sessionId)) return true;
+export async function isAccessTokenRevokedShared(
+  userId: string, iat: number | undefined, sessionId: string | undefined, iatMs?: number,
+  opts: { cache?: boolean } = {},
+): Promise<boolean> {
+  if (isAccessTokenRevoked(userId, iat, sessionId, iatMs)) return true;
+  const useCache = opts.cache !== false;
+  const startedAt = Date.now();
   try {
-    const r = authRedis();
-    if (sessionId && (await r.get(`${REVOKED_SESSION_KEY_PREFIX}${sessionId}`))) return true;
-    const raw = await r.get(`${REVOCATION_KEY_PREFIX}${userId}`);
-    return raw ? userMarkRevokes(JSON.parse(raw) as UserMark, iat, sessionId) : false;
+    if (sessionId) {
+      const key = `s:${sessionId}`;
+      let hit = useCache ? cacheGet(key) : undefined;
+      if (!hit) {
+        const revoked = !!(await authRedis().get(`${REVOKED_SESSION_KEY_PREFIX}${sessionId}`));
+        hit = { kind: 'session', revoked };
+        if (useCache) cacheSet(key, hit, startedAt);
+      }
+      if (hit.kind === 'session' && hit.revoked) return true;
+    }
+    const key = `u:${userId}`;
+    let hit = useCache ? cacheGet(key) : undefined;
+    if (!hit) {
+      const raw = await authRedis().get(`${REVOCATION_KEY_PREFIX}${userId}`);
+      hit = { kind: 'user', mark: raw ? (JSON.parse(raw) as UserMark) : null };
+      if (useCache) cacheSet(key, hit, startedAt);
+    }
+    return hit.kind === 'user' ? userMarkRevokes(hit.mark, iat, sessionId, iatMs) : false;
   } catch {
     return false;
   }
@@ -294,10 +360,12 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
     : 0;
 
   await storeSessionRevocations(ids);
+  const now = Date.now();
   const mark: UserMark = {
-    before: Math.floor(Date.now() / 1000),
+    before: Math.floor(now / 1000),
+    beforeMs: now,
     except: opts.exceptSessionId ?? null,
-    expires: Date.now() + markTtlSeconds() * 1000,
+    expires: now + markTtlSeconds() * 1000,
   };
   rememberUserMark(userId, mark);
   try {

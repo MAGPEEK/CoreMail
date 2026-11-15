@@ -11,7 +11,7 @@
  * connectionAffected() decides which connections are terminated; terminate()
  * is protocol specific (IMAP BYE, POP3 -ERR, SMTP 421, EAS 401, WS close).
  */
-import { onAuthInvalidation, type AuthInvalidationEvent } from './invalidation.js';
+import { issuedBeforeMark, onAuthInvalidation, type AuthInvalidationEvent } from './invalidation.js';
 import { createLogger } from '../logger/index.js';
 
 const log = createLogger('auth:live');
@@ -34,6 +34,8 @@ export interface LiveConnection {
   sessionId?: string;
   /** `iat` (seconds) of the access token of a token-authenticated connection. */
   issuedAt?: number;
+  /** `iatMs` (milliseconds) of that access token, when the token carries it (8.0.0). */
+  issuedAtMs?: number;
   /** Ends the connection (protocol specific). Called at most once. */
   terminate(event: AuthInvalidationEvent): void;
 }
@@ -75,7 +77,7 @@ export function connectionAffected(event: AuthInvalidationEvent, conn: LiveConne
     if (conn.sessionId && event.sessionIds?.includes(conn.sessionId)) return true;
     if (event.revokeBefore) {
       if (event.revokeBefore.except && conn.sessionId === event.revokeBefore.except) return false;
-      return conn.issuedAt === undefined || conn.issuedAt < event.revokeBefore.before;
+      return issuedBeforeMark(event.revokeBefore, conn.issuedAt, conn.issuedAtMs);
     }
     return ACCOUNT_REASONS.has(reason);
   }

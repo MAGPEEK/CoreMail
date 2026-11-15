@@ -58,11 +58,14 @@ coremail user list [--domain example.com] [--inactive]
 coremail user show john@example.com          # including folder overview
 coremail user create john@example.com --name "John Doe" [--password …] [--role USER] [--quota 5GB] [--domain example.com]
 coremail user update john@example.com [--name …] [--role SERVER_MANAGEMENT] [--quota 20GB] [--enable|--disable]
-coremail user set-password john@example.com [--password …]
+coremail user set-password john@example.com [--password …] [--revoke-app-passwords]
 coremail user delete john@example.com [--yes]
 ```
 
 Without `--password` the CLI prompts interactively (without echo); alternatively `COREMAIL_NEW_PASSWORD`.
+`set-password` ends all web/API sessions of the user; app passwords stay valid unless
+`--revoke-app-passwords` is given (API: `revokeAppPasswords: true` next to `password` in
+`PUT /api/v1/admin/mailboxes/:id`) — use it when the account may be compromised.
 Roles: `USER, HELP_DESK, RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT, HYGIENE_MANAGEMENT,
 SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT`.
 

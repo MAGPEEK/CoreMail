@@ -13,7 +13,6 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { getObjectStore, getStorageHealth } from '@coremail/storage';
 import { requireRole } from '../../middleware/auth.js';
-import '../../middleware/auth.js';
 import { startMigration, getMigrationJob, cancelMigration, isDriver } from '../../lib/storage-migration.js';
 
 export const adminStorageRouter: RouterType = Router();

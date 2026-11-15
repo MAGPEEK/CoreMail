@@ -57,7 +57,9 @@ installFakePrisma({
   },
   sharedMailbox: { count: () => 1 },
   mailbox: { findUnique: () => ({ id: 'mb1' }) },
+  appPassword: { deleteMany: (a) => { appPasswordDeletes.push((a as { where: Row }).where); return { count: 2 }; } },
 });
+const appPasswordDeletes: Row[] = [];
 
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
@@ -215,6 +217,31 @@ test('only ORGANIZATION_MANAGEMENT may assign roles or touch admin accounts', as
   updates.length = 0;
   assert.equal((await call('PUT', `${P}/u_user`, 'ORGANIZATION_MANAGEMENT', { role: 'HELP_DESK' })).status, 200);
   assert.equal(updates[0]?.['role'], 'HELP_DESK');
+});
+
+test('admin password reset: app passwords are kept by default, revoked with revokeAppPasswords (8.0.0)', async () => {
+  const P = '/api/v1/admin/mailboxes';
+  const events: Array<{ reason: string; appPasswordsRevoked?: boolean }> = [];
+  const off = core.onAuthInvalidation((e) => { if (e.userId === 'u_user') events.push(e); });
+  try {
+    appPasswordDeletes.length = 0;
+    assert.equal((await call('PUT', `${P}/u_user`, 'HELP_DESK', { password: 'newpassword1' })).status, 200);
+    assert.equal(appPasswordDeletes.length, 0, 'plain reset keeps app passwords');
+    assert.equal(events.at(-1)?.appPasswordsRevoked, undefined);
+
+    const r = await call('PUT', `${P}/u_user`, 'HELP_DESK', { password: 'newpassword2', revokeAppPasswords: true });
+    assert.equal(r.status, 200);
+    assert.equal(r.json['appPasswordsRevoked'], 2);
+    assert.deepEqual(appPasswordDeletes, [{ userId: 'u_user' }]);
+    assert.equal(events.at(-1)?.reason, 'admin-password-reset');
+    assert.equal(events.at(-1)?.appPasswordsRevoked, true, 'live app-password connections end too');
+
+    // only valid together with a new password; must be a boolean
+    assert.equal((await call('PUT', `${P}/u_user`, 'HELP_DESK', { revokeAppPasswords: true })).status, 400);
+    assert.equal((await call('PUT', `${P}/u_user`, 'HELP_DESK', { password: 'newpassword3', revokeAppPasswords: 'yes' })).status, 400);
+  } finally {
+    off();
+  }
 });
 
 // ── Secrets ───────────────────────────────────────────────────────────────────

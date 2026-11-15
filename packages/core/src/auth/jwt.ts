@@ -11,8 +11,9 @@ import type { JwtPayload } from '../types/index.js';
  * session tokens within our trust boundary.
  */
 
-export function signAccessToken(payload: Omit<JwtPayload, 'iat' | 'exp'>): string {
-  return jwt.sign(payload, config.JWT_SECRET, { expiresIn: config.JWT_ACCESS_TTL });
+export function signAccessToken(payload: Omit<JwtPayload, 'iat' | 'iatMs' | 'exp'>): string {
+  // iatMs: millisecond issue time for revocation marks (see JwtPayload.iatMs).
+  return jwt.sign({ ...payload, iatMs: Date.now() }, config.JWT_SECRET, { expiresIn: config.JWT_ACCESS_TTL });
 }
 
 export function signRefreshToken(userId: string, sessionId: string): string {

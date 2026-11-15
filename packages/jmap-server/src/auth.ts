@@ -55,7 +55,7 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
     const payload = verifyAccessToken(token);
     if (!payload?.sub) return null;
     // v7.1.0: tokens of revoked sessions (logout, password change, admin revoke)
-    if (await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId)) return null;
+    if (await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
     const user = await loadUser({ id: payload.sub });
     return user ? {
       ...user,
@@ -63,6 +63,7 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
         credential: 'token', startedAt,
         ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
         ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
+        ...(typeof payload.iatMs === 'number' ? { issuedAtMs: payload.iatMs } : {}),
       },
     } : null;
   } catch {

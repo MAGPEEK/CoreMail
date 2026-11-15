@@ -85,7 +85,8 @@ export function registerUser(program: Command, api: () => CoreMailClient, json: 
 
   user.command('set-password <email|id>').description('Set a new password')
     .option('--password <password>', 'new password (prompted when omitted)')
-    .action(async (ref: string, opts: { password?: string }) => {
+    .option('--revoke-app-passwords', 'also delete all app passwords of the user (e.g. compromised account)')
+    .action(async (ref: string, opts: { password?: string; revokeAppPasswords?: boolean }) => {
       const u = await resolveUser(api(), ref);
       let password = opts.password ?? process.env['COREMAIL_NEW_PASSWORD'];
       if (!password) {
@@ -93,8 +94,8 @@ export function registerUser(program: Command, api: () => CoreMailClient, json: 
         if (password !== await promptHidden('Repeat password: ')) fail('Passwords do not match');
       }
       if (password.length < 8) fail('Password must have at least 8 characters');
-      await api().put(`/api/v1/admin/mailboxes/${u.id}`, { password });
-      process.stdout.write(`Password set for ${u.email}\n`);
+      await api().put(`/api/v1/admin/mailboxes/${u.id}`, { password, ...(opts.revokeAppPasswords ? { revokeAppPasswords: true } : {}) });
+      process.stdout.write(`Password set for ${u.email}${opts.revokeAppPasswords ? ' (app passwords revoked)' : ''}\n`);
     });
 
   user.command('delete <email|id>').alias('rm').description('Delete a user including the mailbox (irreversible)')

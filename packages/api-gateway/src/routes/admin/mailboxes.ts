@@ -178,10 +178,14 @@ const UpdateMailboxSchema = z.object({
   active: z.boolean().optional(),
   quotaBytes: z.number().int().min(0).optional(),
   password: z.string().min(1).max(128).optional(), // length policy: checkPasswordPolicy()
+  // 8.0.0: with `password` — also delete all app passwords of the user (and end
+  // the mail connections using them), e.g. when the account was compromised.
+  // Default false: a plain reset keeps app passwords (pre-8.0 behaviour).
+  revokeAppPasswords: z.boolean().optional(),
 }).strict();
 
 // Fields HELP_DESK may change (password reset + enable/disable).
-const HELP_DESK_FIELDS = new Set(['password', 'active']);
+const HELP_DESK_FIELDS = new Set(['password', 'revokeAppPasswords', 'active']);
 
 // PUT /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
@@ -205,7 +209,10 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     forbidden(res, 'Only Organization Management may modify admin accounts'); return;
   }
 
-  const { displayName, role, active, quotaBytes, password } = parsed.data;
+  const { displayName, role, active, quotaBytes, password, revokeAppPasswords } = parsed.data;
+  if (revokeAppPasswords && !password) {
+    res.status(400).json({ error: 'revokeAppPasswords is only valid together with password' }); return;
+  }
   if (password) {
     // v7.0.0: minimum length from ServerSettings.minPasswordLength
     const policyError = await checkPasswordPolicy(password);
@@ -223,10 +230,18 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     select: { id: true, email: true, displayName: true, role: true, active: true },
   });
   // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
-  // (app passwords are kept; inactive users cannot use them anyway).
+  // (app passwords are kept unless revokeAppPasswords is set; inactive users
+  // cannot use them anyway).
   const roleChanged = !!role && role !== user.role;
   if (password || (active === false && user.active)) {
-    await revokeAllSessions(id, { reason: password ? 'admin-password-reset' : 'deactivated' });
+    const r = await revokeAllSessions(id, {
+      reason: password ? 'admin-password-reset' : 'deactivated',
+      ...(password && revokeAppPasswords ? { appPasswords: true } : {}),
+    });
+    if (password && revokeAppPasswords) {
+      res.json({ ...updated, appPasswordsRevoked: r.appPasswords });
+      return;
+    }
   } else if (roleChanged) {
     // v7.1.0: the role travels in the access token — a role change ends all
     // web/API sessions (refresh tokens included) so no token keeps the old

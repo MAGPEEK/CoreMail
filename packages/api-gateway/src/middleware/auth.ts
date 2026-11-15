@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { isAccessTokenRevoked } from '@coremail/storage/auth';
+import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import { canAccess, isAdminRole, isReadMethod, stricterRole, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 
 const log = createLogger('api:auth');
@@ -16,6 +16,8 @@ export interface ApiUser {
   mfaVerified?: boolean;
   /** `iat` (seconds) of the access token (v7.1.0, live-connection termination). */
   issuedAt?: number;
+  /** `iatMs` (milliseconds) of the access token (8.0.0). */
+  issuedAtMs?: number;
   /** When the token check began (ms) — events since then still end a live connection. */
   authStartedAt?: number;
 }
@@ -49,21 +51,43 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
   // v7.0.0: tokens issued before a "revoke all sessions" event (deactivation,
   // password change/reset) are rejected even before they expire.
-  if (isAccessTokenRevoked(payload.sub, payload.iat, payload.sessionId)) {
-    res.status(401).json({ error: 'Session revoked', code: 'SESSION_REVOKED' });
-    return;
-  }
-  req.apiUser = {
-    userId: payload.sub,
-    role: payload.role,
-    email: payload.email,
-    sessionId: payload.sessionId,
-    mfaVerified: payload.mfaVerified === true,
-    ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
-    authStartedAt,
+  // 8.0.0: besides the in-process maps, the shared Redis markers are consulted
+  // (short local cache), so a gateway restart or a lost invalidation event cannot
+  // revive a revoked token.
+  const accept = (): void => {
+    req.apiUser = {
+      userId: payload.sub,
+      role: payload.role,
+      email: payload.email,
+      sessionId: payload.sessionId,
+      mfaVerified: payload.mfaVerified === true,
+      ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
+      ...(typeof payload.iatMs === 'number' ? { issuedAtMs: payload.iatMs } : {}),
+      authStartedAt,
+    };
+    next();
   };
-  next();
+  const reject = (): void => {
+    res.status(401).json({ error: 'Session revoked', code: 'SESSION_REVOKED' });
+  };
+  if (isAccessTokenRevoked(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) { reject(); return; }
+  // A slow or unreachable Redis must not stall every request: after
+  // SHARED_REVOCATION_TIMEOUT_MS the in-process verdict (not revoked) applies —
+  // the same fail-open rule as a Redis error inside isAccessTokenRevokedShared.
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => {
+      log.warn({ userId: payload.sub }, 'Shared revocation check timed out — using the in-process result');
+      resolve(false);
+    }, SHARED_REVOCATION_TIMEOUT_MS);
+  });
+  Promise.race([isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs), timeout]).then(
+    (revoked) => { clearTimeout(timer); if (revoked) reject(); else accept(); },
+    (err: unknown) => { clearTimeout(timer); log.error({ err }, 'Revocation check failed'); accept(); },
+  );
 }
+
+const SHARED_REVOCATION_TIMEOUT_MS = 1_000;
 
 // ── Admin RBAC (v6) ───────────────────────────────────────────────────────────
 // Role → area matrix and its documentation: lib/rbac.ts. There is no 'ADMIN'

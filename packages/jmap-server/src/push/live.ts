@@ -23,6 +23,7 @@ export function registerPushConnection(user: JmapUser, terminate: () => void): (
     ...(a?.appPasswordId ? { appPasswordId: a.appPasswordId } : {}),
     ...(a?.sessionId ? { sessionId: a.sessionId } : {}),
     ...(a?.issuedAt !== undefined ? { issuedAt: a.issuedAt } : {}),
+    ...(a?.issuedAtMs !== undefined ? { issuedAtMs: a.issuedAtMs } : {}),
     terminate,
   }, a?.startedAt);
 }

@@ -20,6 +20,12 @@ export interface JwtPayload {
   sessionId: string;
   mfaVerified: boolean;
   iat?: number;
+  /**
+   * Issue time in milliseconds (8.0.0). `iat` has whole-second precision, which
+   * cannot tell a token minted earlier in the same second as a "revoke all"
+   * from one minted after it; revocation marks compare this claim instead.
+   */
+  iatMs?: number;
   exp?: number;
 }
 

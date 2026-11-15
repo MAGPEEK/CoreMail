@@ -37,14 +37,17 @@ export function attachWebSocket(
     if (url.pathname !== path) return; // ignore other upgrades (socket stays open for other handlers)
     void (async () => {
       if (!(await isJmapEnabled())) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
-      const token = url.searchParams.get('access_token') ?? url.searchParams.get('token') ?? undefined;
-      if (!isWsOriginAllowed(req.headers.origin, await allowedOrigins(), token !== undefined)) {
+      // An empty query token counts as absent (it must neither authenticate nor
+      // lift the Origin check).
+      const token = (url.searchParams.get('access_token') ?? url.searchParams.get('token') ?? '').trim() || undefined;
+      const authorization = req.headers.authorization;
+      if (!isWsOriginAllowed(req.headers.origin, await allowedOrigins(), { authorization, queryToken: token })) {
         socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
         socket.destroy();
         return;
       }
       const user = await authenticateCredentials(
-        req.headers.authorization ?? '', token,
+        authorization ?? '', token,
         clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),
       );
       if (!user) {

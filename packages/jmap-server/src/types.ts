@@ -41,6 +41,8 @@ export interface JmapAuthInfo {
   sessionId?: string;
   /** iat (s) of a Bearer token. */
   issuedAt?: number;
+  /** iatMs (ms) of a Bearer token (8.0.0). */
+  issuedAtMs?: number;
   /** When the credential check of this request began (ms). */
   startedAt: number;
 }
