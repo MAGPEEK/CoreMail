@@ -12,7 +12,8 @@ import {
 import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
 import { format as fmtDate } from 'date-fns';
-import { api, apiFetch } from '../api/client.js';
+import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
+import { appleProfileFileName, appleProfilePath, type AppleProfileKind } from '../lib/appleProfile.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
@@ -1999,6 +2000,69 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
   );
 }
 
+// v8.1: automatic setup — Apple configuration profile (.mobileconfig) download and
+// hints for clients that configure themselves (Thunderbird autoconfig, Outlook).
+// Module level (never define components inline).
+function AutoSetupCard({ email, requiresAppPassword }: { email: string; requiresAppPassword: boolean }) {
+  const [busy, setBusy] = useState<AppleProfileKind | null>(null);
+  const download = async (kind: AppleProfileKind) => {
+    setBusy(kind);
+    try {
+      // fetch with the Authorization header — no token in the URL
+      saveBlob(await fetchBlob(appleProfilePath(kind)), appleProfileFileName(email, kind));
+    } catch {
+      toast.error('Profil konnte nicht geladen werden');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+      <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-1">
+        <Smartphone size={16} className="text-accent" /> Automatische Einrichtung
+      </h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Thunderbird, K-9 Mail / FairEmail, Outlook und eM Client richten das Konto nach Eingabe von
+        E-Mail-Adresse und Passwort selbst ein (Autoconfig / Autodiscover). Für iPhone, iPad und Mac
+        gibt es ein Konfigurationsprofil mit E-Mail, Kalender und Kontakten.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void download('imap')}
+          disabled={busy !== null}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 disabled:opacity-50"
+        >
+          {busy === 'imap' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+          Profil für iPhone/iPad/Mac laden
+        </button>
+        <button
+          type="button"
+          onClick={() => void download('eas')}
+          disabled={busy !== null}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+          title="Ein Exchange-ActiveSync-Konto statt IMAP + CalDAV + CardDAV"
+        >
+          {busy === 'eas' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+          Variante Exchange ActiveSync
+        </button>
+      </div>
+      <ol className="list-decimal ml-5 mt-4 text-xs text-gray-600 dark:text-gray-400 space-y-1">
+        <li>Profil herunterladen (am besten direkt auf dem Gerät in Safari öffnen, oder per AirDrop übertragen).</li>
+        <li>iPhone/iPad: <strong>Einstellungen → Profil geladen</strong> → Installieren. Mac: <strong>Systemeinstellungen → Allgemein → Geräteverwaltung</strong>.</li>
+        <li>
+          Beim Installieren fragt das Gerät nach dem Passwort —{' '}
+          {requiresAppPassword
+            ? <strong>wegen aktiver MFA ein App-Passwort verwenden</strong>
+            : 'dein Login-Passwort (bei aktiver MFA ein App-Passwort)'}.
+          Das Profil selbst enthält kein Passwort.
+        </li>
+        <li>Nur eine der beiden Varianten installieren, sonst erscheint das Konto doppelt.</li>
+      </ol>
+    </div>
+  );
+}
+
 function ExternalClientsSection() {
   const { data: cfg, isLoading } = useQuery<ClientConfig>({
     queryKey: ['client-config'],
@@ -2071,6 +2135,8 @@ function ExternalClientsSection() {
           </div>
         </div>
       )}
+
+      <AutoSetupCard email={cfg.user.email} requiresAppPassword={cfg.requiresAppPassword} />
 
       {/* E-Mail (IMAP / SMTP / POP3) */}
       <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">

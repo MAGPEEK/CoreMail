@@ -12,6 +12,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { promises as dnsPromises } from 'node:dns';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger } from '@coremail/core';
@@ -249,6 +250,118 @@ adminDomainsRouter.post('/:id/regenerate-dkim', async (req: Request, res: Respon
   res.json(dkimDnsRecord(privateKey, domain.dkimSelector, domain.name));
 });
 
+// ── DNS resolver (injectable for tests) ──────────────────────────────────────
+export interface DnsResolverLike {
+  resolve4(name: string): Promise<string[]>;
+  resolveMx(name: string): Promise<{ priority: number; exchange: string }[]>;
+  resolveTxt(name: string): Promise<string[][]>;
+  resolveCname(name: string): Promise<string[]>;
+  resolveSrv(name: string): Promise<{ priority: number; weight: number; port: number; name: string }[]>;
+  reverse(ip: string): Promise<string[]>;
+}
+let dnsResolver: DnsResolverLike = dnsPromises;
+/** Test seam: replace the resolver used by the dns-check (null restores node:dns). */
+export function setDnsResolverForTests(r: DnsResolverLike | null): void {
+  dnsResolver = r ?? dnsPromises;
+}
+
+// ── Client auto-setup records (v8.1) ─────────────────────────────────────────
+// RFC 6186 / RFC 8314 SRV records for mail clients, RFC 6764 SRV + TXT for CalDAV/
+// CardDAV, Outlook's _autodiscover._tcp SRV and the Thunderbird autoconfig host.
+// All of them are RECOMMENDED: missing → shown yellow in the BCP, never red, and not
+// counted with the required records (VISIBLE_DNS_KEYS in the BCP).
+export interface ClientSetupRecord {
+  type: 'SRV' | 'TXT' | 'CNAME';
+  /** Name relative to the domain (as DNS providers expect it). */
+  name: string;
+  expected: string;
+  ok: boolean;
+  found: string | null;
+  warning?: string;
+  recommended: true;
+}
+
+const norm = (h: string): string => h.trim().toLowerCase().replace(/\.$/, '');
+
+export async function checkClientSetupRecords(
+  dns: Pick<DnsResolverLike, 'resolveSrv' | 'resolveTxt' | 'resolveCname' | 'resolve4'>,
+  domainName: string, hostname: string, httpsPort = 443,
+): Promise<Record<string, ClientSetupRecord>> {
+  const target = norm(hostname);
+
+  async function srv(service: string, port: number, priority = 0, weight = 1): Promise<ClientSetupRecord> {
+    const expected = `${priority} ${weight} ${port} ${target}.`;
+    const base = { type: 'SRV' as const, name: `${service}._tcp`, expected, recommended: true as const };
+    let recs: { priority: number; weight: number; port: number; name: string }[];
+    try {
+      recs = await dns.resolveSrv(`${service}._tcp.${domainName}`);
+    } catch {
+      return { ...base, ok: false, found: null };
+    }
+    if (!recs.length) return { ...base, ok: false, found: null };
+    const found = recs.map((r) => `${r.priority} ${r.weight} ${r.port} ${norm(r.name) || '.'}.`).join(', ');
+    // "." target = service explicitly not offered (RFC 2782)
+    const ok = recs.some((r) => r.port === port && norm(r.name) === target);
+    return ok
+      ? { ...base, ok, found }
+      : { ...base, ok, found, warning: `SRV record exists but does not point to ${target}:${port}` };
+  }
+
+  async function davPath(service: string): Promise<ClientSetupRecord> {
+    const base = { type: 'TXT' as const, name: `${service}._tcp`, expected: 'path=/dav/', recommended: true as const };
+    try {
+      const flat = (await dns.resolveTxt(`${service}._tcp.${domainName}`)).map((c) => c.join(''));
+      const path = flat.find((s) => s.startsWith('path='));
+      if (!path) return { ...base, ok: false, found: null };
+      const ok = /^path=\/dav\/?$/.test(path);
+      return ok ? { ...base, ok, found: path } : { ...base, ok, found: path, warning: 'TXT path does not point to /dav/' };
+    } catch {
+      return { ...base, ok: false, found: null };
+    }
+  }
+
+  async function autoconfigHost(): Promise<ClientSetupRecord> {
+    const base = { type: 'CNAME' as const, name: 'autoconfig', expected: target, recommended: true as const };
+    try {
+      const cnames = await dns.resolveCname(`autoconfig.${domainName}`);
+      const c = cnames[0] ? norm(cnames[0]) : null;
+      if (!c) return { ...base, ok: false, found: null };
+      return c === target ? { ...base, ok: true, found: c } : { ...base, ok: false, found: c, warning: `CNAME points to ${c}, expected ${target}` };
+    } catch {
+      // an A record pointing at the server is fine as well
+      try {
+        const [as, server] = await Promise.all([
+          dns.resolve4(`autoconfig.${domainName}`),
+          dns.resolve4(target).catch(() => [] as string[]),
+        ]);
+        if (!as.length) return { ...base, ok: false, found: null };
+        const ok = server.length === 0 || as.some((ip) => server.includes(ip));
+        return ok
+          ? { ...base, ok: true, found: as.join(', ') }
+          : { ...base, ok: false, found: as.join(', '), warning: `A record does not match ${target} (${server.join(', ')})` };
+      } catch {
+        return { ...base, ok: false, found: null };
+      }
+    }
+  }
+
+  const [submissions, submission, imaps, imap, pop3s, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath] =
+    await Promise.all([
+      srv('_submissions', 465),
+      srv('_submission', 587),
+      srv('_imaps', 993),
+      srv('_imap', 143),
+      srv('_pop3s', 995),
+      srv('_autodiscover', httpsPort, 0, 0),
+      autoconfigHost(),
+      srv('_caldavs', httpsPort),
+      davPath('_caldavs'),
+      srv('_carddavs', httpsPort),
+      davPath('_carddavs'),
+    ]);
+  return { submissions, submission, imaps, imap, pop3s, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath };
+}
+
 // ── GET /:id/dns-check ────────────────────────────────────────────────────────
 // Checks all relevant DNS records via the server's local DNS resolver.
 adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => {
@@ -262,7 +375,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   const domain = rawDomain;
 
   const { createPublicKey } = await import('crypto');
-  const { promises: dns }   = await import('dns');
+  const dns = dnsResolver;
 
   const hostname   = settings?.publicHostname ?? 'mail.local';
   const domainName = domain.name;
@@ -381,10 +494,20 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   const aName = relativeName(hostname);
   const dkimNameRel = relativeName(dkimName);
 
+  // v8.1: client auto-setup records (recommended, not required). HTTPS SRV targets use
+  // the public HTTPS port (443 unless an HTTPS port is configured).
+  const httpsPort = settings?.useHttps && settings.httpPort && settings.httpPort !== 80 ? settings.httpPort : 443;
+  const clientSetup = await checkClientSetupRecords(dns, domainName, hostname, httpsPort);
+
   res.json({
     domain:   domainName,
     hostname,
     serverIp,
+    // Names the HTTPS certificate should cover (SANs) so autodiscover/autoconfig
+    // lookups over HTTPS do not fail with a hostname mismatch.
+    certificateHostnames: [hostname, `autodiscover.${domainName}`, `autoconfig.${domainName}`]
+      .filter((h, i, a) => a.indexOf(h) === i),
+    clientSetup,
     records: {
       a:            { type: 'A',     name: aName,                              expected: serverIp,           ok: !!serverIp,  found: serverIp || null },
       mx:           { type: 'MX',    name: '@',                                expected: `10 ${hostname}`,   ...mx },

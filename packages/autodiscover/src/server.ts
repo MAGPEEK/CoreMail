@@ -8,6 +8,7 @@ import {
 import { connectDatabase } from '@coremail/storage';
 import { createAutodiscoverApp } from './app.js';
 import { invalidateSettingsCache } from './settings.js';
+import { invalidateAutoconfigCache } from './autoconfig.js';
 
 const log = createLogger('autodiscover');
 installProcessGuards(log);
@@ -28,6 +29,7 @@ async function main() {
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);
     sub.on('message', () => {
       invalidateSettingsCache();
+      invalidateAutoconfigCache();
       log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {

@@ -31,6 +31,7 @@ import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
+import { appleProfileRouter } from './routes/apple-profile.js';
 import { categoriesRouter } from './routes/categories.js';
 // Public Folders completely removed in v3.18.31
 // eDiscovery & Legal Hold completely removed in v3.18.5
@@ -215,6 +216,14 @@ app.use('/jmap',             jmapProxy as express.RequestHandler);
 app.use('/.well-known/jmap', jmapProxy as express.RequestHandler);
 app.use('/Autodiscover', internalProxy(AUTODISCOVER_URL));
 app.use('/autodiscover', internalProxy(AUTODISCOVER_URL));
+// v8.1: Thunderbird / Mozilla autoconfig (autodiscover service): on the mail domain
+// (/.well-known/autoconfig/…) and on autoconfig.<domain> (/mail/config-v1.1.xml).
+// Anonymous; the service answers per domain only and rate-limits per client IP.
+app.use('/.well-known/autoconfig', internalProxy(AUTODISCOVER_URL));
+app.use('/mail/config-v1.1.xml',   internalProxy(AUTODISCOVER_URL));
+// v8.1: Apple configuration profile (.mobileconfig) for the signed-in user (requireAuth
+// inside; GET only, so it can sit before express.json()).
+app.use('/api/v1/user/apple-profile', appleProfileRouter);
 app.use('/Microsoft-Server-ActiveSync', internalProxy(EAS_URL));
 app.use('/dav',          internalProxy(DAV_URL));
 // v7.1.0: CalDAV/CardDAV service discovery (RFC 6764 §5) — the caldav-server redirects
