@@ -6,7 +6,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
 } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
@@ -377,7 +377,8 @@ async function reloadListeners(): Promise<void> {
 async function main(): Promise<void> {
   await connectDatabase();
   void initRuntimeLogLevel('smtp-server', { aliases: ['smtp'] }); // BCP per-service log level
-  await ensureBuckets();
+  // v7.1: refuses to open listeners while the object storage misses the referenced objects
+  await waitForObjectStorage('smtp-server');
   await refreshHostname();
   await refreshTlsConfig(); // load certificate or generate self-signed
   await refreshBanner();    // load banner text from SmtpSettings

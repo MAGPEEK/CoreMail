@@ -44,11 +44,28 @@ echo ""
 
 # ── 1. Directory structure ────────────────────────────────────────────────────
 echo "[1/3] Creating directories..."
+# v7.1: a fresh installation (no database yet) stores mail contents on the
+# filesystem (data/objects, covered by Hyper Backup). An existing installation
+# keeps its storage driver — nothing is changed for it.
+FRESH_INSTALL=0
+if [ ! -d "${COREMAIL_BASE}/data/postgres" ] || [ -z "$(ls -A "${COREMAIL_BASE}/data/postgres" 2>/dev/null)" ]; then
+  FRESH_INSTALL=1
+fi
 mkdir -p \
   "${COREMAIL_BASE}/data/postgres" \
   "${COREMAIL_BASE}/data/redis" \
-  "${COREMAIL_BASE}/data/minio"
+  "${COREMAIL_BASE}/data/minio" \
+  "${COREMAIL_BASE}/data/objects"
 echo "      ✓ ${COREMAIL_BASE}/ created"
+ENV_FILE="${COREMAIL_BASE}/.env"
+if [ "${FRESH_INSTALL}" = "1" ] && ! grep -qs '^OBJECT_STORAGE=' "${ENV_FILE}"; then
+  echo "OBJECT_STORAGE=filesystem" >> "${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  echo "      ✓ OBJECT_STORAGE=filesystem → ${ENV_FILE} (mail contents in data/objects)"
+elif ! grep -qs '^OBJECT_STORAGE=' "${ENV_FILE}"; then
+  echo "      ℹ Existing installation: mail contents stay in MinIO (OBJECT_STORAGE unset = minio)."
+  echo "        Switching to the filesystem is optional — see docs/storage.md (coremail storage migrate)."
+fi
 
 # ── 2. Copy docker-compose.yml ───────────────────────────────────────────────
 echo "[2/3] Copying docker-compose.synology.yml..."

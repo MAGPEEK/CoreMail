@@ -22,6 +22,9 @@ export const PORTS = {
 export const BASE = `http://${HOST}:${PORTS.http}`;
 export const CONTAINER = process.env.E2E_CONTAINER ?? 'coremail-e2e';
 export const DOMAIN = process.env.E2E_DOMAIN ?? 'e2e.test';
+/** v7.1 run mode: `minio` (default, MinIO container) or `filesystem` (no MinIO, coremail-data volume). */
+export const STORAGE_MODE = process.env.E2E_STORAGE ?? 'minio';
+if (!['minio', 'filesystem'].includes(STORAGE_MODE)) { console.error(`E2E_STORAGE must be minio or filesystem (got ${STORAGE_MODE})`); process.exit(2); }
 
 // ── State / credentials (kept OUTSIDE the repo: E2E_STATE_DIR) ───────────────
 export const STATE_DIR = process.env.E2E_STATE_DIR;
@@ -335,8 +338,20 @@ export function totp(secret, t = Date.now(), step = 0) {
 export async function nextTotpWindow() { const ms = 30000 - (Date.now() % 30000) + 300; await sleep(ms); }
 
 // ── Docker helpers ───────────────────────────────────────────────────────────
-export function dockerExec(args, { container = CONTAINER } = {}) {
-  return execFileSync('docker', ['exec', container, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export function dockerExec(args, { container = CONTAINER, env = {} } = {}) {
+  const e = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  return execFileSync('docker', ['exec', ...e, container, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+/** `docker compose` arguments of the e2e stack for the current E2E_STORAGE mode. */
+export function composeArgs() {
+  const project = process.env.E2E_COMPOSE_PROJECT ?? 'coremail-e2e';
+  const envFile = process.env.E2E_ENV_FILE ?? join(STATE_DIR, 'e2e.env');
+  return ['compose', '-p', project, '--env-file', envFile, '-f', 'infra/docker/docker-compose.yml', '-f', 'infra/docker/docker-compose.e2e.yml',
+    ...(STORAGE_MODE === 'filesystem' ? ['-f', 'infra/docker/docker-compose.e2e-filesystem.yml'] : [])];
+}
+/** Runs `docker compose <args>` for the e2e stack (extra env, e.g. OBJECT_STORAGE, overrides the env file). */
+export function compose(args, { env = {} } = {}) {
+  execFileSync('docker', [...composeArgs(), ...args], { stdio: 'inherit', env: { ...process.env, ...env } });
 }
 export function redisCli(args) {
   const env = readFileSync(process.env.E2E_ENV_FILE ?? join(STATE_DIR, 'e2e.env'), 'utf8');

@@ -44,6 +44,27 @@ MinIO uses `pgsty/minio` (override with `E2E_MINIO_IMAGE`) because `minio/minio`
 longer pullable from Docker Hub. ClamAV downloads its signatures on first start
 (a few minutes); the mail tests do not wait for it.
 
+### Storage run modes (v7.1)
+
+| `E2E_STORAGE` | Compose files | Object storage |
+|---|---|---|
+| `minio` (default) | `docker-compose.yml` + `docker-compose.e2e.yml` | bundled MinIO (`OBJECT_STORAGE` unset → pre-7.1 behaviour) |
+| `filesystem` | … + `docker-compose.e2e-filesystem.yml` | `coremail-data` volume, **no MinIO container** |
+
+```bash
+E2E_STORAGE=filesystem   # export it for `up` AND for run.mjs (restart/storage steps use it)
+docker compose -p coremail-e2e --env-file "$E2E_STATE_DIR/e2e.env" -f infra/docker/docker-compose.yml \
+  -f infra/docker/docker-compose.e2e.yml -f infra/docker/docker-compose.e2e-filesystem.yml up -d
+```
+
+The `storage` step checks `/healthz` + `/api/v1/admin/storage` in both modes. In filesystem mode it
+verifies the raw files on the volume (content = name, owner `node`, modes 0750/0640). In minio
+mode it runs the migration test: probe mail on MinIO → `OBJECT_STORAGE=filesystem` without
+migrating (mail services must stay closed, healthz 503 `missing-objects`) →
+`coremail storage migrate --from minio --to filesystem` → services start by themselves → probe,
+Archive message and attachment byte-exact over IMAP/POP3/REST → re-run copies nothing → restart.
+Afterwards the stack runs on the filesystem driver (`state.storageMigrated`).
+
 ## 3. Run
 
 ```bash
@@ -52,7 +73,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas rest admin mfa lockout restart`.
+Steps: `setup users smtp imap pop3 jmap dav eas rest admin mfa lockout restart storage`.
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-<steps>.json`; the exit code is
 non-zero when a check failed.
@@ -65,7 +86,7 @@ Notes:
   `greylistWaitSec` to 60 s through the admin API and retries after 62 s.
 - The `lockout` step clears the `mailauth:*` Redis keys afterwards.
 - Environment overrides: `E2E_HOST`, `E2E_*_PORT`, `E2E_CONTAINER`, `E2E_DOMAIN`
-  (default `e2e.test`), `E2E_ENV_FILE`, `E2E_COMPOSE_PROJECT`.
+  (default `e2e.test`), `E2E_ENV_FILE`, `E2E_COMPOSE_PROJECT`, `E2E_STORAGE` (`minio` | `filesystem`).
 
 ## 4. Tear down
 

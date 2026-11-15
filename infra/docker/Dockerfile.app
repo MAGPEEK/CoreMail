@@ -218,9 +218,11 @@ RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf && chmod +x /entrypoin
 # All runtime directories belong to the node user (uid 1000, gid 1000).
 # supervisord starts as root (PID 1 via tini) and switches to node via user=node
 # for every child process — this requires the SETUID/SETGID capability.
-RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail \
- && chown -R node:node /app /var/log/supervisor /var/run/supervisor /tmp/coremail \
- && chmod 750 /var/log/supervisor /var/run/supervisor
+# /data/objects: filesystem object storage (v7.1, volume coremail-data:/data) —
+# a fresh named volume copies this directory incl. owner/mode on first use.
+RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail /data/objects \
+ && chown -R node:node /app /var/log/supervisor /var/run/supervisor /tmp/coremail /data \
+ && chmod 750 /var/log/supervisor /var/run/supervisor /data /data/objects
 
 # Ports:
 #   3000 — HTTP (OWA, ECP, API, Auth, JMAP, ActiveSync, CalDAV, Autodiscover proxy)

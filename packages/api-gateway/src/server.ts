@@ -4,7 +4,10 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import { connectDatabase, prisma, migrateMailboxCounters } from '@coremail/storage';
+import {
+  connectDatabase, prisma, migrateMailboxCounters,
+  getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
+} from '@coremail/storage';
 import {
   getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD,
   installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy,
@@ -259,7 +262,22 @@ const APP_VERSION: string = (() => {
     return '0.0.0';
   }
 })();
-app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'api-gateway', version: APP_VERSION }));
+// v7.1: reports the object storage driver + startup-check status; 503 while the
+// check is blocking (objects referenced by the DB missing / storage unusable).
+app.get('/healthz', (_req, res) => {
+  let storage: { driver: string; status: string };
+  let ok = true;
+  try {
+    const last = peekStorageHealth();
+    void getStorageHealth().catch(() => undefined); // refresh in the background when stale
+    storage = last ? { driver: last.driver, status: last.status } : { driver: getObjectStore().driver, status: 'pending' };
+    ok = !last?.blocking;
+  } catch (err) {
+    storage = { driver: 'invalid', status: `config error: ${(err as Error).message}` };
+    ok = false;
+  }
+  res.status(ok ? 200 : 503).json({ ok, service: 'api-gateway', version: APP_VERSION, storage });
+});
 
 // ── Public maintenance-mode status (no auth needed) ───────────────────────────
 // Queried by the OWA LoginPage to display the maintenance banner.
@@ -422,6 +440,19 @@ async function start() {
     .catch((err) => log.warn({ err }, 'Mailbox counter migration failed — lazy per-mailbox check still applies'));
   // v5.6.0: initJwtKeys() removed (RS256 keys were for OAuth2 — completely gone)
   getRedisClient();
+  // v7.1 object storage: startup check (logged; /healthz reports it — the
+  // gateway itself stays up so the admin API / migration remain reachable) and
+  // the periodic expiry cleaner where no S3 lifecycle rules apply (filesystem
+  // driver, or providers that refuse lifecycle configuration).
+  void getStorageHealth(0, true).then((r) => {
+    const ctx = { driver: r.driver, location: r.location, status: r.status, sampled: r.sampled, missing: r.missing };
+    if (r.blocking) log.error({ ...ctx, error: r.error }, `Object storage check FAILED — mail services wait. ${r.error ?? ''} ${r.hint ?? ''}`.trim());
+    else log.info(ctx, 'Object storage ready');
+    if (r.driver === 'filesystem' || r.lifecycle === false) {
+      startObjectStorageCleaner(getObjectStore(), getRedisClient() as unknown as CleanerRedis);
+      log.info({ driver: r.driver }, 'Object storage expiry cleaner scheduled (outbound-queue 7 d, quarantine 90 d, jmap-upload 7 d)');
+    }
+  }).catch((err) => log.error({ err }, 'Object storage check failed'));
   log.info({ port: PORT }, 'API Gateway listening');
   const httpServer = app.listen(PORT);
   // v5.7.1: JMAP over WebSocket (RFC 8887) — pass upgrade requests through to the jmap-server

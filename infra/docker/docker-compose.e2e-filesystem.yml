@@ -1,0 +1,24 @@
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail — e2e run mode E2E_STORAGE=filesystem (see docs/e2e.md)
+#
+#    docker compose -p coremail-e2e --env-file <e2e.env> \
+#      -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.e2e.yml \
+#      -f infra/docker/docker-compose.e2e-filesystem.yml up -d
+#
+#  Mail contents on the coremail-data volume (OBJECT_STORAGE=filesystem) and NO
+#  MinIO container: proves that nothing in the mail path still needs MinIO.
+#  (Backups to S3 are not part of the e2e suite.)
+# ═════════════════════════════════════════════════════════════════════════════
+
+services:
+  coremail:
+    environment:
+      OBJECT_STORAGE: filesystem
+    depends_on: !override
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      sink:     { condition: service_started }
+
+  # Not started in this mode (profile never activated).
+  minio:
+    profiles: ["e2e-minio-disabled"]

@@ -872,8 +872,10 @@ mailRouter.post(
     // This keeps the BullMQ job small; the worker downloads the attachments
     // from MinIO when building the RFC 5322 message.
     const queueAttachments = await Promise.all(
-      files.map(async (f) => {
-        const minioPath = outboundAttachKey(jobId, f.originalname);
+      files.map(async (f, index) => {
+        // v7.1: index-based key — the user's file name (kept in `filename`) never
+        // becomes a storage path (filesystem driver), and equal names do not collide.
+        const minioPath = outboundAttachKey(jobId, String(index));
         await uploadBuffer(minioPath, f.buffer, f.mimetype);
         return {
           filename:    f.originalname,

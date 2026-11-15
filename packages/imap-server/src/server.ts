@@ -5,7 +5,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
 } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 
 const log = createLogger('imap:main');
@@ -211,7 +211,8 @@ async function reloadListeners(): Promise<void> {
 async function main() {
   await connectDatabase();
   void initRuntimeLogLevel('imap-server', { aliases: ['imap'] }); // BCP per-service log level
-  await ensureBuckets();
+  // v7.1: refuses to open listeners while the object storage misses the referenced objects
+  await waitForObjectStorage('imap-server');
   await refreshHostname();
   await refreshTlsConfig();
 

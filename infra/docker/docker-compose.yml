@@ -35,7 +35,8 @@ name: coremail
 #    3000 HTTP without TLS — for initial setup and behind your own reverse proxy
 #
 #  Containers: coremail (all services) · postgres · redis · minio · rspamd · clamav
-#  All data lives in named Docker volumes (see below) → backup = back up the volumes.
+#  All data lives in named Docker volumes (see below) → backup = back up the volumes
+#  (database dump first, then the volumes — docs/storage.md).
 # ═════════════════════════════════════════════════════════════════════════════
 
 services:
@@ -60,12 +61,26 @@ services:
       # ── Databases (hostnames = container names in this Compose file) ────────
       DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}@postgres:5432/coremail
       REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
-      MINIO_ENDPOINT:   minio
-      MINIO_PORT:       "9000"
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD missing in .env}
-      MINIO_BUCKET:     mail-attachments
-      # Backups go to the same MinIO (bucket coremail-backups)
+
+      # ── Object storage (v7.1, docs/storage.md) ───────────────────────────────
+      # Mail contents, attachments, quarantine. OBJECT_STORAGE unset = minio
+      # (installations from before 7.1 keep working unchanged); new installations
+      # (scripts/setup.sh) use "filesystem" = the coremail-data volume below.
+      OBJECT_STORAGE: ${OBJECT_STORAGE:-minio}     # minio | s3 | filesystem
+      STORAGE_PATH:   /data/objects                # filesystem driver (volume coremail-data)
+      # minio / s3 driver — defaults = the bundled MinIO container; for external
+      # S3 (AWS, Backblaze B2, Wasabi, Hetzner, Cloudflare R2) set these in .env.
+      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT:       ${MINIO_PORT:-}
+      MINIO_USE_SSL:    ${MINIO_USE_SSL:-false}
+      MINIO_REGION:     ${MINIO_REGION:-}
+      MINIO_PATH_STYLE: ${MINIO_PATH_STYLE:-}
+      MINIO_CA_FILE:    ${MINIO_CA_FILE:-}       # PEM of a private CA (mount it read-only)
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD missing in .env}}
+      MINIO_BUCKET_ATTACHMENTS: ${MINIO_BUCKET_ATTACHMENTS:-coremail-attachments}
+      # Backups go to the bundled MinIO (bucket coremail-backups) — with every
+      # OBJECT_STORAGE driver, which is why the minio service stays in this file.
       S3_ENDPOINT:   http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -120,6 +135,11 @@ services:
       - "443:443"     # HTTPS: integrated TLS proxy (certificate in BCP → SSL/TLS)
       - "3000:3000"   # HTTP without TLS: initial setup; behind your own reverse proxy (Traefik,
                       # Caddy, nginx, Synology) → use only this port, remove 80/443 above
+    volumes:
+      # v7.1: persistent app data — /data/objects holds mail contents with
+      # OBJECT_STORAGE=filesystem (unused but harmless with minio). The container
+      # itself stays stateless: recreate it at will, the volume keeps the data.
+      - coremail-data:/data
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -178,7 +198,11 @@ services:
     networks: [coremail]
 
   minio:
-    # Object storage for attachments, raw mails, quarantine and backups
+    # S3 object storage: backups (bucket coremail-backups) and — with
+    # OBJECT_STORAGE=minio, the default of installations from before 7.1 — mail
+    # contents, attachments and quarantine. Filesystem installations that send
+    # backups elsewhere (S3_ENDPOINT) or do not need them may remove this service
+    # and the depends_on entry above (docs/storage.md).
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372   # community build of MinIO (official images discontinued); pinned by digest
     container_name: coremail-minio
     restart: unless-stopped
@@ -233,13 +257,15 @@ services:
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Data — back up these volumes (docker run --rm -v coremail_pgdata:/d alpine tar …)
-#    pgdata      PostgreSQL: users, folders, mail metadata, settings
-#    miniodata   MinIO: mail contents, attachments, backups
+#    pgdata        PostgreSQL: users, folders, mail metadata, settings
+#    coremail-data mail contents + attachments with OBJECT_STORAGE=filesystem (/data/objects)
+#    miniodata     MinIO: backups; mail contents with OBJECT_STORAGE=minio (pre-7.1 installs)
 #    redisdata   Redis: sessions, queues (expendable)
 #    rspamd-data Bayes training data    clamav-data virus signatures (re-downloaded)
 # ─────────────────────────────────────────────────────────────────────────────
 volumes:
   pgdata:
+  coremail-data:
   redisdata:
   miniodata:
   rspamd-data:

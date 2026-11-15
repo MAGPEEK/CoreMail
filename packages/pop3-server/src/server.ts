@@ -4,7 +4,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
-import { prisma, loadProtocolCert } from '@coremail/storage';
+import { prisma, loadProtocolCert, waitForObjectStorage } from '@coremail/storage';
 import { POP3Session, setPop3Hostname } from './session.js';
 
 const log = createLogger('pop3-server');
@@ -222,6 +222,8 @@ async function reloadListeners(): Promise<void> {
 
 async function main() {
   void initRuntimeLogLevel('pop3-server', { aliases: ['pop3'] }); // BCP per-service log level
+  // v7.1: never serve mails whose raw objects are missing (OBJECT_STORAGE switched without migration)
+  await waitForObjectStorage('pop3-server');
   await refreshHostname();
   await refreshTlsConfig();
 

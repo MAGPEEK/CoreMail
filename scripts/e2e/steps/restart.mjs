@@ -1,18 +1,14 @@
 // Step 13: `docker compose restart coremail` — services come back, data persists.
 // Run with: node scripts/e2e/run.mjs restart   (needs E2E_ENV_FILE / E2E_COMPOSE_PROJECT like docs/e2e.md)
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { check, assert, creds, http, session, waitFor, dockerExec, imapCmd, BASE, STATE_DIR } from '../lib.mjs';
+import { check, assert, creds, http, session, waitFor, dockerExec, imapCmd, compose, BASE, STORAGE_MODE } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
-import { join } from 'node:path';
 
 export async function run(state) {
   const c = creds();
-  const project = process.env.E2E_COMPOSE_PROJECT ?? 'coremail-e2e';
-  const envFile = process.env.E2E_ENV_FILE ?? join(STATE_DIR, 'e2e.env');
   await check('restart: docker compose restart coremail → healthy again', async () => {
     const t0 = Date.now();
-    execFileSync('docker', ['compose', '-p', project, '--env-file', envFile, '-f', 'infra/docker/docker-compose.yml', '-f', 'infra/docker/docker-compose.e2e.yml', 'restart', 'coremail'], { stdio: 'inherit' });
+    compose(['restart', 'coremail']);
     await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, { timeout: 180000, interval: 2000, what: 'healthz' });
     await waitFor(async () => {
       const out = dockerExec(['supervisorctl', '-c', '/etc/supervisord.conf', 'status']);
@@ -34,7 +30,7 @@ export async function run(state) {
     const att = await http('GET', `/api/v1/mail/attachments/${state.attachmentId}`, { token: tok, raw: true });
     const body = Buffer.from(await att.arrayBuffer());
     assert(att.status === 200 && createHash('sha256').update(body).digest('hex') === state.a2b.attSha256, `attachment after restart ${att.status}`);
-    return 'login OK, Archive message byte-identical, attachment (MinIO) intact';
+    return `login OK, Archive message byte-identical, attachment (${STORAGE_MODE}) intact`;
   });
   await check('restart: app password + TOTP state survive', async () => {
     if (!state.appPwA) return 'skipped (mfa step not run)';

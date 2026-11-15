@@ -17,6 +17,7 @@ import { registerDomain } from './commands/domain.js';
 import { registerConnector } from './commands/connector.js';
 import { registerSmtp } from './commands/smtp.js';
 import { registerCert } from './commands/cert.js';
+import { registerStorage } from './commands/storage.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -46,6 +47,7 @@ registerDomain(program, api, json);
 registerConnector(program, api, json);
 registerSmtp(program, api, json);
 registerCert(program, api, json);
+registerStorage(program, api, json);
 
 program.addHelpText('after', `
 Examples:
@@ -59,6 +61,8 @@ Examples:
   coremail smtp banner set "mail.example.com ESMTP"
   coremail cert letsencrypt --domains mail.example.com,autodiscover.example.com --email admin@example.com --services SMTP,IMAP,POP3
   coremail cert activate mail.example.com --https --protocol
+  coremail storage status
+  coremail storage migrate --from minio --to filesystem --dry-run
 
 Environment:
   COREMAIL_API_URL  COREMAIL_TOKEN  COREMAIL_ADMIN_EMAIL  COREMAIL_ADMIN_PASSWORD  COREMAIL_ADMIN_TOTP  COREMAIL_CLI_CREDENTIALS
