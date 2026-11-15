@@ -37,7 +37,7 @@ data:
   {{- if or $os.caFile.configMap $os.caFile.secret }}
   MINIO_CA_FILE: {{ printf "/etc/coremail/storage-ca/%s" $os.caFile.key | quote }}
   {{- end }}
-  MINIO_BUCKET: {{ .Values.minio.bucket | quote }}
+  MINIO_BUCKET_ATTACHMENTS: {{ .Values.minio.bucket | quote }}
   S3_ENDPOINT: {{ printf "%s://%s:%s" (ternary "https" "http" $os.useSSL) $minioHost (include "coremail.minio.port" .) | quote }}
   BACKUP_BUCKET: {{ .Values.minio.backupBucket | quote }}
   {{- end }}

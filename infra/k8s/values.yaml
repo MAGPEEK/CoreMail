@@ -359,8 +359,8 @@ minio:
     tag: RELEASE.2026-08-04T00-00-00Z
     digest: sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     pullPolicy: IfNotPresent
-  # Bucket for attachments/raw mail (MINIO_BUCKET) and for backups (BACKUP_BUCKET)
-  bucket: mail-attachments
+  # Bucket for attachments/raw mail (MINIO_BUCKET_ATTACHMENTS) and for backups (BACKUP_BUCKET)
+  bucket: coremail-attachments
   backupBucket: coremail-backups
   persistence:
     enabled: true

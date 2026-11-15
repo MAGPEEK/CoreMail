@@ -85,6 +85,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   and learning, `RSPAMD_HOST`/`RSPAMD_PORT` remain as fallback when it is unset; an invalid URL
   is logged and falls back. The Helm chart renders only `RSPAMD_URL` (`rspamd.external.url`
   or `host` + `controllerPort`; `rspamd.external.port` was removed).
+- Helm chart: the attachment bucket was rendered as `MINIO_BUCKET`, which the app does not
+  read, so `minio.bucket` had no effect; it is now `MINIO_BUCKET_ATTACHMENTS` (default
+  `coremail-attachments`, the app's default).
 
 ### Security
 

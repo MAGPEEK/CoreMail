@@ -43,6 +43,11 @@ for values in infra/k8s/ci/*-values.yaml; do
     # env names the app actually reads (regressions: RSPAMD_HOST/PORT instead of RSPAMD_URL)
     if ! grep -q '^  RSPAMD_URL: "https\?://' "$OUT/$name.yaml"; then echo "ERROR: $name: RSPAMD_URL missing"; fail=1; fi
     if grep -q '^  RSPAMD_\(HOST\|PORT\):' "$OUT/$name.yaml"; then echo "ERROR: $name: legacy RSPAMD_HOST/RSPAMD_PORT rendered"; fail=1; fi
+    # the object store reads MINIO_BUCKET_ATTACHMENTS (MINIO_BUCKET is ignored by the app)
+    if grep -q '^  MINIO_BUCKET:' "$OUT/$name.yaml"; then echo "ERROR: $name: MINIO_BUCKET is not read by the app"; fail=1; fi
+    if grep -q '^  MINIO_ENDPOINT:' "$OUT/$name.yaml" && ! grep -q '^  MINIO_BUCKET_ATTACHMENTS:' "$OUT/$name.yaml"; then
+      echo "ERROR: $name: MINIO_BUCKET_ATTACHMENTS missing"; fail=1
+    fi
     docker run --rm -v "$CHART_HOST:/chart" "$KUBECONFORM_IMAGE" \
       -strict -ignore-missing-schemas -summary \
       -kubernetes-version "$KUBE_VERSION" "/chart/.rendered/$name.yaml" || fail=1
