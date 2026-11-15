@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import {
@@ -1007,7 +1008,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
 calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
-  const parsed = EventSchema.partial().safeParse(req.body);
+  const parsed = patchSchema(EventSchema).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   const event = await prisma.calendarEvent.findUnique({

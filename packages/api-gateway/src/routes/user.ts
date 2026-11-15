@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
   prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus,
@@ -476,7 +477,7 @@ userRouter.post('/rules', async (req: Request, res: Response) => {
 // PUT /api/v1/user/rules/:id
 userRouter.put('/rules/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const parsed = RuleSchema.partial().safeParse(req.body);
+  const parsed = patchSchema(RuleSchema).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     return;

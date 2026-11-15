@@ -7,6 +7,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
@@ -46,7 +47,7 @@ adminOrganisationRouter.post('/sharing-policies', async (req: Request, res: Resp
 
 adminOrganisationRouter.put('/sharing-policies/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const p = SharingSchema.partial().safeParse(req.body);
+  const p = patchSchema(SharingSchema).safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   try {
     if (p.data.isDefault) {
@@ -80,7 +81,7 @@ adminOrganisationRouter.delete('/sharing-policies/:id', async (req: Request, res
 const AddressListSchema = z.object({
   name:        z.string().min(1).max(200),
   description: z.string().max(500).default(''),
-  filter:      z.record(z.unknown()).default({}),
+  filter:      z.record(z.string(), z.unknown()).default({}),
   isGal:       z.boolean().default(false),
 });
 
@@ -100,7 +101,7 @@ adminOrganisationRouter.post('/address-lists', async (req: Request, res: Respons
 
 adminOrganisationRouter.put('/address-lists/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const p = AddressListSchema.partial().safeParse(req.body);
+  const p = patchSchema(AddressListSchema).safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   try {
     const d = p.data;

@@ -10,6 +10,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
@@ -90,7 +91,7 @@ adminConnectorsRouter.post('/', async (req: Request, res: Response) => {
 // ── PUT /:id ──────────────────────────────────────────────────────────────────
 adminConnectorsRouter.put('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const p = Schema.partial().safeParse(req.body);
+  const p = patchSchema(Schema).safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   const { username, password, type: _type, ...rest } = p.data;
   try {

@@ -35,6 +35,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
 import { z } from 'zod';
+import { patchSchema } from '../../lib/zod-compat.js';
 import { requireArea } from '../../middleware/auth.js';
 import { internalAuthHeaders } from '@coremail/core';
 
@@ -103,7 +104,7 @@ adminRetentionRouter.put('/tags/:id', async (req: Request, res: Response) => {
   if (!tag) { res.status(404).json({ error: 'Tag not found' }); return; }
   if (tag.isSystem) { res.status(403).json({ error: 'System-Tags können nicht geändert werden' }); return; }
 
-  const p = TagSchema.partial().safeParse(req.body);
+  const p = patchSchema(TagSchema).safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
   const updated = await prisma.retentionTag.update({

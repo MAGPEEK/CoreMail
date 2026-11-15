@@ -11,6 +11,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { patchSchema } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
@@ -77,7 +78,7 @@ adminTransportRulesRouter.post('/', async (req: Request, res: Response) => {
 // ── PUT /:id ──────────────────────────────────────────────────────────────────
 adminTransportRulesRouter.put('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const p = RuleSchema.partial().safeParse(req.body);
+  const p = patchSchema(RuleSchema).safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   const patternError = invalidRegexConditionMessage(p.data.conditions);
   if (patternError) { res.status(400).json({ error: patternError, code: 'INVALID_RULE_PATTERN' }); return; }
