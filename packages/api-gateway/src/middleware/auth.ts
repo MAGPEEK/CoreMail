@@ -1,8 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken, createLogger } from '@coremail/core';
+import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { isAccessTokenRevoked } from '@coremail/storage/auth';
-import { canAccess, isAdminRole, isReadMethod, type AdminArea, type UserRoleName } from '../lib/rbac.js';
+import { canAccess, isAdminRole, isReadMethod, stricterRole, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 
 const log = createLogger('api:auth');
 
@@ -110,16 +110,75 @@ function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void 
   })();
 }
 
+// ── Current role (v7.1.0) ─────────────────────────────────────────────────────
+// The role travels inside the access token (up to JWT_ACCESS_TTL). A role
+// change revokes the user's sessions, but an admin guard must not rely on that
+// event alone: when a token claims admin rights, the CURRENT role is read from
+// the database (short in-process cache, dropped on every auth invalidation
+// event of the user) and the stricter of both roles applies.
+
+const ROLE_CACHE_TTL_MS = 15_000;
+const roleCache = new Map<string, { role: string | null; expires: number }>();
+const roleInvalidatedAt = new Map<string, number>();
+
+onAuthInvalidation((e) => {
+  roleCache.delete(e.userId);
+  roleInvalidatedAt.set(e.userId, Date.now());
+  if (roleInvalidatedAt.size > 10_000) {
+    const cutoff = Date.now() - ROLE_CACHE_TTL_MS;
+    for (const [u, t] of roleInvalidatedAt) if (t < cutoff) roleInvalidatedAt.delete(u);
+  }
+});
+
+/** Clears the current-role cache (tests). */
+export function clearCurrentRoleCache(): void {
+  roleCache.clear();
+  roleInvalidatedAt.clear();
+}
+
+/** Current role of an active user; null when the user is gone or inactive. Throws on database errors. */
+export async function currentRole(userId: string): Promise<string | null> {
+  const now = Date.now();
+  const hit = roleCache.get(userId);
+  if (hit && hit.expires > now) return hit.role;
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, active: true } });
+  const role = row && row.active !== false ? String(row.role) : null;
+  // A lookup that raced with an invalidation is not cached (could be stale).
+  if ((roleInvalidatedAt.get(userId) ?? 0) < now) {
+    if (roleCache.size > 10_000) roleCache.clear();
+    roleCache.set(userId, { role, expires: now + ROLE_CACHE_TTL_MS });
+  }
+  return role;
+}
+
 /** Authenticate (unless an earlier guard already did), check `allowed`, enforce admin MFA. */
 function adminGuard(allowed: (role: string, req: Request) => boolean) {
   return function adminGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
     const check = (): void => {
-      const role = req.apiUser?.role;
-      if (!role || !allowed(role, req)) {
+      const apiUser = req.apiUser;
+      const tokenRole = apiUser?.role;
+      if (!apiUser || !tokenRole || !allowed(tokenRole, req)) {
         res.status(403).json({ error: 'Insufficient admin role for this operation', code: 'FORBIDDEN_ROLE' });
         return;
       }
-      enforceAdminMfa(req, res, next);
+      // v7.1.0: the token claims admin rights → both the token role and the
+      // current role must pass; the stricter one is what the route sees.
+      currentRole(apiUser.userId).then((dbRole) => {
+        if (dbRole === null) {
+          res.status(401).json({ error: 'Account is disabled or no longer exists', code: 'SESSION_REVOKED' });
+          return;
+        }
+        if (!allowed(dbRole, req)) {
+          log.warn({ userId: apiUser.userId, tokenRole, currentRole: dbRole }, 'Admin access denied: role in the token is outdated');
+          res.status(403).json({ error: 'Insufficient admin role for this operation', code: 'FORBIDDEN_ROLE' });
+          return;
+        }
+        if (dbRole !== tokenRole) apiUser.role = stricterRole(tokenRole, dbRole);
+        enforceAdminMfa(req, res, next);
+      }, (err: unknown) => {
+        log.error({ err }, 'Current role check failed — denying admin access');
+        if (!res.headersSent) res.status(503).json({ error: 'Admin access temporarily unavailable' });
+      });
     };
     if (req.apiUser) check();
     else requireAuth(req, res, check);

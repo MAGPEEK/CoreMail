@@ -1,10 +1,11 @@
-import { initRuntimeLogLevel } from '@coremail/core';
+import { initRuntimeLogLevel, startAuthInvalidationSubscriber } from '@coremail/core';
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
 import { prisma } from '@coremail/storage/prisma';
-import { requireAuth } from './auth.js';
+import { requireAuth, type EasUser } from './auth.js';
+import { easLiveRequests } from './live-sessions.js';
 import { decodeWbxml, type WbxmlElement } from './wbxml.js';
 import { EAS_COMMANDS } from './commands.js';
 import { handleProvision } from './commands/provision.js';
@@ -47,7 +48,7 @@ app.post(
   '/Microsoft-Server-ActiveSync',
   requireAuth as express.RequestHandler,
   async (req: Request, res: Response): Promise<void> => {
-    const user = (req as Request & { easUser: { userId: string; email: string } }).easUser;
+    const user = (req as Request & { easUser: EasUser }).easUser;
     const command = req.query['Cmd'] as string | undefined;
     const deviceId = req.query['DeviceId'] as string ?? 'unknown';
     const deviceType = req.query['DeviceType'] as string ?? 'Unknown';
@@ -117,7 +118,7 @@ app.post(
             return;
           }
           // Ping is handled specially: it holds the connection
-          await handlePing(wbxmlBody, user.userId, res);
+          await handlePing(wbxmlBody, user.userId, res, user);
           break;
         }
         case 'GetAttachment': {
@@ -186,6 +187,9 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use(errorMiddleware(log));
 
 void initRuntimeLogLevel('activesync', { aliases: ['eas'] }); // BCP per-service log level
+// v7.1.0: credential changes end the user's Ping long-polls with 401.
+easLiveRequests.attachInvalidation();
+startAuthInvalidationSubscriber();
 // v6: internal service behind the api-gateway — loopback by default
 const HOST = resolveBindHost();
 app.listen(PORT, HOST, () => {

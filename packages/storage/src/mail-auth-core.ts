@@ -50,7 +50,7 @@ export interface MailAuthUser {
 }
 
 export type MailAuthResult =
-  | { status: 'ok'; user: MailAuthUser; method: 'password' | 'app_password' | 'external' }
+  | { status: 'ok'; user: MailAuthUser; method: 'password' | 'app_password' | 'external'; /** v7.1.0: the app password used (method app_password). */ appPasswordId?: string }
   | { status: 'invalid' }
   | { status: 'locked'; scope: 'ip' | 'account'; retryAfterSec: number }
   | { status: 'mfa_app_password_required' }
@@ -449,6 +449,7 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
       return {
         status: 'ok',
         method,
+        ...(appPasswordId ? { appPasswordId } : {}),
         user: {
           id: user!.id,
           email: user!.email,

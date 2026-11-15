@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
+import { publishUserAuthChange } from '@coremail/storage/auth';
 import { createLogger, hashPassword } from '@coremail/core';
 
 const log = createLogger('auth:app-passwords');
@@ -23,6 +24,7 @@ export async function createAppPassword(
     data: { userId, name, hash },
   });
 
+  await publishUserAuthChange(userId, 'app-password-created');
   log.info({ userId, name }, 'App password created');
   return { id: record.id, password };
 }
@@ -41,6 +43,9 @@ export async function deleteAppPassword(userId: string, id: string): Promise<boo
   const record = await prisma.appPassword.findFirst({ where: { id, userId } });
   if (!record) return false;
   await prisma.appPassword.delete({ where: { id } });
+  // v7.1.0: cached mail logins with this app password are dropped immediately (JMAP).
+  // v7.1.0: live IMAP/POP3/SMTP/EAS/JMAP connections that used THIS app password end.
+  await publishUserAuthChange(userId, 'app-password-revoked', { appPasswordId: id });
   log.info({ userId, id }, 'App password deleted');
   return true;
 }

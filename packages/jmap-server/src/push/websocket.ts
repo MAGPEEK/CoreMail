@@ -15,6 +15,7 @@ import { sessionStateFor } from '../session.js';
 import { isJmapEnabled } from '../feature-flag.js';
 import { LIMITS } from '../settings.js';
 import { accountsOf, buildStateChange, changeBus } from './bus.js';
+import { registerPushConnection, WS_CLOSE_CREDENTIALS_CHANGED, WS_CLOSE_REASON } from './live.js';
 import type { JmapUser, JsonObject } from '../types.js';
 
 const log = createLogger('jmap:ws');
@@ -73,7 +74,18 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
 
   const alive = setInterval(() => { if (ws.readyState === ws.OPEN) ws.ping(); }, 30_000);
 
+  // v7.1.0: the connection ends when its credentials become invalid.
+  let revoked = false;
+  const unregister = registerPushConnection(user, () => {
+    revoked = true;
+    pushEnabled = false;
+    ws.close(WS_CLOSE_CREDENTIALS_CHANGED, WS_CLOSE_REASON);
+    // A peer that does not answer the close handshake is cut off.
+    setTimeout(() => ws.terminate(), 5000).unref();
+  });
+
   ws.on('message', (data) => {
+    if (revoked) return; // nothing runs on revoked credentials
     void (async () => {
       let msg: JsonObject;
       try {
@@ -118,6 +130,7 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
   });
 
   ws.on('close', () => {
+    unregister();
     changeBus.off('change', onChange);
     clearInterval(alive);
     if (timer) clearTimeout(timer);

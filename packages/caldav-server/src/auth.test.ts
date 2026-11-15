@@ -35,6 +35,10 @@ const state = { dbDown: false };
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
 
+// v7.1.0: Bearer checks consult the session revocation markers (fake Redis).
+const { createFakeRedis } = await import('@coremail/storage/auth/testing');
+(globalThis as Record<string, unknown>)['__authRedis'] = createFakeRedis();
+
 const { signAccessToken, signRefreshToken } = await import('@coremail/core');
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
@@ -97,6 +101,16 @@ test('a refresh token is not accepted as bearer token', async () => {
 
 test('a bearer token of a deactivated user is rejected', async () => {
   assert.equal((await run(`Bearer ${accessFor('gone')}`)).status, 401);
+});
+
+test('a bearer token of a revoked session is rejected (v7.1.0)', async () => {
+  const token = signAccessToken({
+    sub: 'alice', email: 'alice@example.com', role: 'USER', domainId: 'domain-1', sessionId: 'session-revoked', mfaVerified: false,
+  });
+  assert.equal((await run(`Bearer ${token}`)).nextCalled, true);
+  const sauth = await import('@coremail/storage/auth');
+  await sauth.markSessionsRevoked(['session-revoked'], 'alice');
+  assert.equal((await run(`Bearer ${token}`)).status, 401);
 });
 
 test('Basic auth uses the shared credential check (no auth-service call)', async () => {

@@ -41,7 +41,7 @@ api-gateway (port 3000, optional TLS proxy 443)
    │  Proxies /jmap/* and /.well-known/jmap, WebSocket upgrade passed through
    ▼
 jmap-server (port 3006)
-   ├─ auth.ts          Basic (app password) / Bearer (session JWT), 60s cache
+   ├─ auth.ts          Basic (app password) / Bearer (session JWT); Basic cache keyed by HMAC, dropped on CHANNEL_AUTH_INVALIDATE (60s TTL fallback)
    ├─ accounts.ts      own mailbox · shared-<id> · delegated mailboxes
    ├─ dispatcher.ts    request → method calls, result references, errors
    ├─ methods/         Mailbox · Email · Thread · Identity · EmailSubmission ·

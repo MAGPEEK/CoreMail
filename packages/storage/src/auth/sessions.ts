@@ -14,10 +14,11 @@
  *   requireAuth + a Redis marker other services may consult).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { config, createLogger, signAccessToken, signRefreshToken, verifyRefreshToken } from '@coremail/core';
+import { config, createLogger, onAuthInvalidation, signAccessToken, signRefreshToken, verifyRefreshToken } from '@coremail/core';
 import type { UserRole } from '@coremail/core/types';
 import { prisma } from '../prisma/index.js';
 import { authRedis } from './redis.js';
+import { publishUserAuthChange } from './invalidation.js';
 import { maintenanceBlock } from './policy.js';
 
 const log = createLogger('auth:sessions');
@@ -102,7 +103,7 @@ export async function rotateSession(refreshToken: string, client: ClientInfo): P
     if (payload.sessionId) {
       const revoked = await prisma.session.deleteMany({ where: { id: payload.sessionId, userId: payload.sub } });
       if (revoked.count > 0) {
-        await markSessionsRevoked([payload.sessionId]);
+        await markSessionsRevoked([payload.sessionId], payload.sub);
         log.warn({ userId: payload.sub, sessionId: payload.sessionId, ip: client.ip },
           'Refresh token reuse detected — session revoked');
         return { ok: false, status: 401, reason: 'reused' };
@@ -138,7 +139,7 @@ export async function rotateSession(refreshToken: string, client: ClientInfo): P
   if (swapped.count !== 1) {
     // Lost a race against another refresh with the same token → reuse.
     await prisma.session.deleteMany({ where: { id: session.id } });
-    await markSessionsRevoked([session.id]);
+    await markSessionsRevoked([session.id], user.id);
     log.warn({ userId: user.id, sessionId: session.id }, 'Concurrent refresh with the same token — session revoked');
     return { ok: false, status: 401, reason: 'reused' };
   }
@@ -159,14 +160,16 @@ export async function revokeSessionByRefreshToken(refreshToken: string): Promise
     where: { OR: [{ tokenHash: hashRefreshToken(refreshToken) }, { tokenHash: refreshToken }] },
   })).count;
   let sessionId: string | null = null;
+  let userId: string | undefined;
   try {
     const p = verifyRefreshToken(refreshToken);
     sessionId = p.sessionId;
+    userId = p.sub;
     if (count === 0) count = (await prisma.session.deleteMany({ where: { id: p.sessionId, userId: p.sub } })).count;
   } catch {
     /* unsigned/expired token — only the hash match above applies */
   }
-  if (count > 0 && sessionId) await markSessionsRevoked([sessionId]);
+  if (count > 0 && sessionId) await markSessionsRevoked([sessionId], userId);
   return count;
 }
 
@@ -189,20 +192,51 @@ function markTtlSeconds(): number {
   return config.JWT_ACCESS_TTL + 60;
 }
 
-/** Marks sessions as revoked for access-token checks (memory + Redis). */
-export async function markSessionsRevoked(sessionIds: string[]): Promise<void> {
-  if (sessionIds.length === 0) return;
+function rememberRevokedSessions(sessionIds: string[], expires: number): void {
   const now = Date.now();
   if (revokedSessions.size > 10_000) {
     for (const [id, exp] of revokedSessions) if (exp < now) revokedSessions.delete(id);
   }
-  for (const id of sessionIds) revokedSessions.set(id, now + markTtlSeconds() * 1000);
+  for (const id of sessionIds) {
+    if ((revokedSessions.get(id) ?? 0) < expires) revokedSessions.set(id, expires);
+  }
+}
+
+function rememberUserMark(userId: string, mark: UserMark): void {
+  const cur = userMarks.get(userId);
+  if (!cur || cur.before <= mark.before || cur.expires < Date.now()) userMarks.set(userId, mark);
+}
+
+// v7.1.0: revocations performed by another service (auth-service, LDAP sync,
+// password reset) arrive via CHANNEL_AUTH_INVALIDATE and are applied to this
+// process's in-memory maps — previously the api-gateway only knew revocations it
+// had performed itself. Requires startAuthInvalidationSubscriber() at service start.
+onAuthInvalidation((e) => {
+  const now = Date.now();
+  if (e.sessionIds?.length) rememberRevokedSessions(e.sessionIds, now + markTtlSeconds() * 1000);
+  if (e.revokeBefore && e.revokeBefore.expires > now) rememberUserMark(e.userId, e.revokeBefore);
+});
+
+/** Local + Redis session revocation markers (no event). */
+async function storeSessionRevocations(sessionIds: string[]): Promise<void> {
+  if (sessionIds.length === 0) return;
+  rememberRevokedSessions(sessionIds, Date.now() + markTtlSeconds() * 1000);
   try {
     const r = authRedis();
     await Promise.all(sessionIds.map((id) => r.setex(`${REVOKED_SESSION_KEY_PREFIX}${id}`, markTtlSeconds(), '1')));
   } catch (err) {
     log.warn({ err }, 'Could not write session revocation markers to Redis');
   }
+}
+
+/**
+ * Marks sessions as revoked for access-token checks (memory + Redis) and, when
+ * the owner is known, publishes an invalidation event (other processes + caches).
+ */
+export async function markSessionsRevoked(sessionIds: string[], userId?: string): Promise<void> {
+  if (sessionIds.length === 0) return;
+  await storeSessionRevocations(sessionIds);
+  if (userId) await publishUserAuthChange(userId, 'sessions-revoked', { sessionIds });
 }
 
 function userMarkRevokes(mark: UserMark | null | undefined, iat: number | undefined, sessionId: string | undefined): boolean {
@@ -259,18 +293,25 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
     ? (await prisma.appPassword.deleteMany({ where: { userId } })).count
     : 0;
 
-  await markSessionsRevoked(ids);
+  await storeSessionRevocations(ids);
   const mark: UserMark = {
     before: Math.floor(Date.now() / 1000),
     except: opts.exceptSessionId ?? null,
     expires: Date.now() + markTtlSeconds() * 1000,
   };
-  userMarks.set(userId, mark);
+  rememberUserMark(userId, mark);
   try {
     await authRedis().setex(`${REVOCATION_KEY_PREFIX}${userId}`, markTtlSeconds(), JSON.stringify(mark));
   } catch (err) {
     log.warn({ err, userId }, 'Could not write the access-token revocation marker to Redis');
   }
+  // v7.1.0: other processes apply the marks; credential caches drop the user.
+  await publishUserAuthChange(userId, opts.reason, {
+    ...(ids.length > 0 ? { sessionIds: ids } : {}),
+    revokeBefore: mark,
+    // v7.1.0: live mail connections authenticated with an app password end too.
+    ...(opts.appPasswords ? { appPasswordsRevoked: true } : {}),
+  });
   log.info({ userId, sessions, appPasswords, reason: opts.reason }, 'All sessions revoked');
   return { sessions, appPasswords };
 }

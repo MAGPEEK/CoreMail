@@ -6,15 +6,20 @@
  *    v7: via the shared mail-protocol check verifyMailCredentials() (shared
  *    lockout; LDAP/OIDC users without a local hash → auth-service via the
  *    external-verifier extension point).
- * Basic results are cached in memory for 60s (JMAP clients send many
- * small requests; bcrypt per request would be too expensive).
+ * Basic results are cached in memory (JMAP clients send many small requests;
+ * bcrypt per request would be too expensive). v7.1.0: the cache is keyed by
+ * HMAC(login, password) — never the plaintext — and entries of a user are
+ * dropped immediately on every CHANNEL_AUTH_INVALIDATE event (password change,
+ * MFA change, app password created/revoked, deactivation, deletion, role
+ * change, session revocation); the 60 s TTL is only the fallback when the
+ * event is lost. Bearer tokens are checked against session revocation.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { createHash } from 'node:crypto';
-import { verifyAccessToken, createLogger } from '@coremail/core';
+import { verifyAccessToken, createLogger, CredentialCache } from '@coremail/core';
 import {
   prisma, verifyMailCredentials, clientIpFromRequest,
 } from '@coremail/storage';
+import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import type { JmapUser } from './types.js';
 
 const log = createLogger('jmap:auth');
@@ -32,11 +37,9 @@ export class AuthUnavailableError extends Error {
   }
 }
 
-const basicCache = new Map<string, { user: JmapUser; expires: number }>();
-
-function cacheKey(email: string, password: string): string {
-  return createHash('sha256').update(`${email}\u0000${password}`).digest('hex');
-}
+/** Successful Basic logins (exported for tests). */
+export const basicCache = new CredentialCache<JmapUser>({ ttlMs: 60_000, maxEntries: 5000 });
+basicCache.attachInvalidation();
 
 async function loadUser(where: { id: string } | { email: string }): Promise<JmapUser | null> {
   const u = await prisma.user.findFirst({
@@ -47,10 +50,21 @@ async function loadUser(where: { id: string } | { email: string }): Promise<Jmap
 }
 
 export async function authenticateBearer(token: string): Promise<JmapUser | null> {
+  const startedAt = Date.now();
   try {
     const payload = verifyAccessToken(token);
     if (!payload?.sub) return null;
-    return await loadUser({ id: payload.sub });
+    // v7.1.0: tokens of revoked sessions (logout, password change, admin revoke)
+    if (await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId)) return null;
+    const user = await loadUser({ id: payload.sub });
+    return user ? {
+      ...user,
+      auth: {
+        credential: 'token', startedAt,
+        ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
+        ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
+      },
+    } : null;
   } catch {
     return null;
   }
@@ -65,9 +79,9 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
  * not cached; `error` (database down) is reported as AuthUnavailableError.
  */
 export async function authenticateBasic(email: string, password: string, ip?: string): Promise<JmapUser | null> {
-  const key = cacheKey(email.trim().toLowerCase(), password);
-  const hit = basicCache.get(key);
-  if (hit && hit.expires > Date.now()) return hit.user;
+  const startedAt = Date.now();
+  const hit = basicCache.get(email, password);
+  if (hit) return { ...hit, ...(hit.auth ? { auth: { ...hit.auth, startedAt } } : {}) };
 
   const result = await verifyMailCredentials(email, password, { ip, protocol: 'jmap' });
   if (result.status === 'error') throw new AuthUnavailableError('temporary');
@@ -78,12 +92,10 @@ export async function authenticateBasic(email: string, password: string, ip?: st
   const jmapUser: JmapUser = {
     userId: user.id, email: user.email, displayName: user.displayName, domainId: user.domainId,
     role: user.role,
+    auth: { credential: result.method, startedAt, ...(result.appPasswordId ? { appPasswordId: result.appPasswordId } : {}) },
   };
-  basicCache.set(key, { user: jmapUser, expires: Date.now() + 60_000 });
-  if (basicCache.size > 5000) {
-    const now = Date.now();
-    for (const [k, v] of basicCache) if (v.expires < now) basicCache.delete(k);
-  }
+  // Not cached when the user was invalidated while the check was running.
+  basicCache.set(email, password, user.id, jmapUser, startedAt);
   return jmapUser;
 }
 

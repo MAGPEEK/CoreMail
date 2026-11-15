@@ -6,6 +6,7 @@
 import { createHmac } from 'node:crypto';
 import { prisma } from '../prisma/index.js';
 import { decryptMfaSecret, encryptMfaSecret } from './mfa-crypto.js';
+import { publishUserAuthChange } from './invalidation.js';
 
 const PERIOD = 30;
 const DIGITS = 6;
@@ -108,5 +109,8 @@ export async function verifyUserTotp(
       ...(!requireEnabled ? { totpEnabled: true } : {}),
     },
   });
+  // v7.1.0: enabling TOTP makes the primary password invalid for mail
+  // protocols — cached mail logins (JMAP) must be dropped immediately.
+  if (claimed.count === 1 && !requireEnabled && !mfa.totpEnabled) await publishUserAuthChange(userId, 'mfa-change');
   return claimed.count === 1;
 }

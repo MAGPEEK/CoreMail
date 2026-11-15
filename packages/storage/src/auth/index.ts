@@ -14,3 +14,4 @@ export * from './reauth.js';
 export * from './password-reset.js';
 export * from './legacy-ldap.js';
 export { authRedis, type AuthRedis } from './redis.js';
+export * from './invalidation.js';

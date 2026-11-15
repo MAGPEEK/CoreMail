@@ -71,6 +71,13 @@ export const getRedisClient = () => g.redis ?? {
   publish: async () => 0,
 };
 export const CHANNEL_MAIL_NEW = 'mail:new';
+// v7.1.0 live-connection registry (credential changes) — inert in these tests.
+export class LiveConnectionRegistry {
+  register() { return () => {}; }
+  terminateAffected() { return 0; }
+  count() { return 0; }
+  attachInvalidation() { return () => {}; }
+}
 export const CHANNEL_ADMIN_ATTACK = 'admin:attack';
 export const prisma = new Proxy({}, {
   get(_target, model) {

@@ -27,6 +27,22 @@ export interface JmapUser {
   displayName: string;
   domainId: string;
   role: UserRole | string;
+  /**
+   * v7.1.0: how this request authenticated — long-lived push connections
+   * (WebSocket, EventSource) end when these credentials become invalid.
+   */
+  auth?: JmapAuthInfo;
+}
+
+export interface JmapAuthInfo {
+  credential: 'password' | 'app_password' | 'external' | 'token';
+  appPasswordId?: string;
+  /** Web session of a Bearer token. */
+  sessionId?: string;
+  /** iat (s) of a Bearer token. */
+  issuedAt?: number;
+  /** When the credential check of this request began (ms). */
+  startedAt: number;
 }
 
 /**

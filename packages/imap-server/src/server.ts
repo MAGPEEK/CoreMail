@@ -4,9 +4,11 @@ import net from 'node:net';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
+  startAuthInvalidationSubscriber,
 } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
+import { imapLiveSessions } from './session/live.js';
 
 const log = createLogger('imap:main');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
@@ -211,6 +213,10 @@ async function reloadListeners(): Promise<void> {
 async function main() {
   await connectDatabase();
   void initRuntimeLogLevel('imap-server', { aliases: ['imap'] }); // BCP per-service log level
+  // v7.1.0: credential changes (password, MFA, app password, deactivation …)
+  // end the user's live IMAP connections (incl. IDLE) with * BYE.
+  imapLiveSessions.attachInvalidation();
+  startAuthInvalidationSubscriber();
   await ensureBuckets();
   await refreshHostname();
   await refreshTlsConfig();

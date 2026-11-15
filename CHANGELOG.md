@@ -47,6 +47,56 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - ActiveSync: a Sync Change without `email:Read` no longer marks the message unread.
 
+### Security
+
+- **Credential changes take effect immediately on cached logins.** The jmap-server cached
+  successful Basic logins for 60 s, so after enabling MFA, changing or resetting the password,
+  revoking an app password, or deactivating/deleting a user, JMAP still accepted the old
+  credentials for up to a minute. New invalidation bus in `@coremail/core`
+  (`CHANNEL_AUTH_INVALIDATE`, `publishAuthInvalidation`, `startAuthInvalidationSubscriber`,
+  `CredentialCache`): every credential-changing event publishes `{ userId, reason }` and the
+  cache drops that user at once; the 60 s TTL remains only as a fallback when Redis loses the
+  event. Published on password change / admin reset / reset by mail, TOTP setup / enable /
+  disable, WebAuthn registration, backup-code regeneration, app password create / revoke,
+  user deactivate / reactivate / delete / role change (BCP and EMS bridge), and every session
+  revocation. Cache keys are HMAC-SHA256 under a per-process random key (previously an
+  unkeyed SHA-256 of login + password); a login check that started before an invalidation can
+  no longer re-insert a stale entry.
+- **Session revocations reach every service.** Revocations performed by the auth-service or
+  the LDAP sync were only known in-process; the api-gateway's `requireAuth` kept accepting
+  those access tokens until they expired. Revocation marks now travel with the invalidation
+  event and are applied in the api-gateway, auth-service, jmap-server and caldav-server.
+- **Revoked sessions are refused by JMAP and CalDAV/CardDAV Bearer auth** (previously only
+  signature and expiry were checked), and deleting a single session
+  (`DELETE /auth/sessions/:id`) now revokes its access tokens immediately.
+- **EMS bridge:** `Set-Mailbox -IsEnabled $false` and `Remove-Mailbox` now end all sessions,
+  like the BCP mailbox routes; deleting a mailbox in the BCP does the same.
+- **A role change ends the user's web/API sessions.** The role is part of the access token, so
+  a demoted admin kept the old rights for up to 15 minutes. Changing the role
+  (`PUT /api/v1/admin/mailboxes/:id`, the only role-changing path) now revokes all sessions of
+  the user (refresh tokens deleted, access tokens rejected); mail-protocol logins and app
+  passwords are unaffected.
+- **Admin guards check the current role.** When an access token claims admin rights,
+  `requireAdmin` / `requireRole` / `requireArea` read the user's current role from the database
+  (15 s in-process cache, dropped by the invalidation bus); both roles must pass and routes see
+  the stricter one. A disabled or deleted account gets 401, a database error 503. A missed
+  invalidation event can no longer keep elevated rights.
+- **Long-lived protocol connections end after a credential change.** Authenticated IMAP
+  (incl. IDLE), POP3 and SMTP submission sessions, ActiveSync Ping long-polls and JMAP
+  WebSocket/EventSource connections stayed authenticated after a password change. They are now
+  registered per user and credential (`LiveConnectionRegistry` in `@coremail/core`) and
+  terminated on the invalidation bus: IMAP `* BYE Credentials changed, please log in again`,
+  POP3 `-ERR [AUTH] Credentials changed …` (no UPDATE state), SMTP `421 4.7.0 … Credentials
+  changed …` (never mid-DATA: the body is read to its end and the message rejected; a delivery
+  already in progress completes), ActiveSync Ping HTTP 401 with `WWW-Authenticate`, JMAP
+  WebSocket close code 1008 / EventSource stream end. Password change/reset ends password
+  logins (app-password logins only when the app passwords were deleted too), MFA enabled ends
+  password logins, revoking an app password ends only the connections that used that app
+  password (event carries `appPasswordId`), deactivation/deletion/"revoke all sessions" end
+  everything; JMAP Bearer connections follow their web session. A login whose credential check
+  began before the change but completed after it is terminated as well. Role changes, web
+  logouts and app password creation do not touch protocol connections.
+
 ---
 
 ## [7.0.0] — 2026-11-15 — Secure by default: mandatory MFA for mail clients, TLS-first auth, EWS removed

@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
-import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
+import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
@@ -224,8 +224,17 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   });
   // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept; inactive users cannot use them anyway).
+  const roleChanged = !!role && role !== user.role;
   if (password || (active === false && user.active)) {
     await revokeAllSessions(id, { reason: password ? 'admin-password-reset' : 'deactivated' });
+  } else if (roleChanged) {
+    // v7.1.0: the role travels in the access token — a role change ends all
+    // web/API sessions (refresh tokens included) so no token keeps the old
+    // role. Mail-protocol logins and app passwords are not affected.
+    await revokeAllSessions(id, { reason: 'role-change' });
+  } else if (active !== undefined && active !== user.active) {
+    // v7.1.0: cached logins carry the active state — drop them now.
+    await publishUserAuthChange(id, 'reactivated');
   }
   res.json(updated);
 });
@@ -240,6 +249,9 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
     forbidden(res, 'Only Organization Management may delete admin accounts'); return;
   }
   await prisma.user.delete({ where: { id } });
+  // v7.1.0: access tokens + cached mail logins of the deleted user end now
+  // (session rows are already gone via cascade; this sets the revocation mark).
+  await revokeAllSessions(id, { reason: 'deleted' });
   res.json({ ok: true });
 });
 

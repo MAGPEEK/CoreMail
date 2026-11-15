@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
+import { smtpLiveSessions } from './live-sessions.js';
 
 const log = createLogger('smtp:session');
 
@@ -121,6 +122,15 @@ export class SmtpSession {
   /** Failed AUTH attempts in this session (421 + disconnect at the limit). */
   private authFailures = 0;
 
+  /**
+   * v7.1.0: the credentials of the authenticated user changed. Queued commands
+   * no longer run; a message body that is being received is read to its end and
+   * then rejected (the session closes with 421 instead of accepting it).
+   */
+  private terminating = false;
+  private terminateAfterData = false;
+  private unregisterLive: (() => void) | null = null;
+
   constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig) {
     this.socket = socket;
     this.config = config;
@@ -142,6 +152,8 @@ export class SmtpSession {
     });
     this.socket.on('close', () => {
       this.clearTimer();
+      this.unregisterLive?.();
+      this.unregisterLive = null;
       log.debug({ id: this.id }, 'Socket closed');
     });
 
@@ -182,7 +194,7 @@ export class SmtpSession {
     const epoch = this.epoch;
     this.cmdQueue = this.cmdQueue.then(async () => {
       // Skip if session already terminated
-      if (this.state === 'QUIT') return;
+      if (this.state === 'QUIT' || this.terminating) return;
       // Received before a STARTTLS that has since been executed → discard.
       if (epoch !== this.epoch) return;
       await (fn() ?? Promise.resolve());
@@ -250,6 +262,11 @@ export class SmtpSession {
     // Dot-stuffing terminator: single dot on its own line
     if (line === '.') {
       this.inData = false;
+      if (this.terminateAfterData) {
+        // v7.1.0: credentials changed during the transfer — not accepted.
+        this.closeForCredentialChange();
+        return;
+      }
       if (this.dataOverflow) {
         // Oversized message fully consumed — exactly one reply, then back to
         // command mode with the transaction discarded.
@@ -581,6 +598,7 @@ export class SmtpSession {
       return;
     }
 
+    const authStartedAt = Date.now();
     try {
       const result = await this.config.verifyCredentials(username.toLowerCase().trim(), password, this.ip);
       if (result && 'failure' in result) {
@@ -592,6 +610,7 @@ export class SmtpSession {
         if (result.failure === 'locked') this.countAuthFailure();
       } else if (result) {
         this.authUser = result;
+        this.registerLive(result, authStartedAt);
         this.send('235 2.7.0 Authentication successful');
         log.info({ id: this.id, email: result.email }, 'SMTP auth success');
         return;
@@ -604,6 +623,49 @@ export class SmtpSession {
       log.error({ id: this.id, err }, 'verifyCredentials error');
       this.send('454 4.7.0 Temporary authentication failure');
     }
+  }
+
+  /** v7.1.0: the session ends when the credentials it authenticated with become invalid. */
+  private registerLive(user: AuthUser, authStartedAt: number): void {
+    this.unregisterLive?.();
+    this.unregisterLive = smtpLiveSessions.register({
+      userId: user.id,
+      credential: user.credential ?? 'unknown',
+      ...(user.appPasswordId ? { appPasswordId: user.appPasswordId } : {}),
+      terminate: () => this.terminateForCredentialChange(),
+    }, authStartedAt);
+  }
+
+  /**
+   * Credential change: the command in progress (e.g. delivery of a complete
+   * message) finishes, queued commands are dropped, then 421 4.7.0 and close.
+   * During a DATA transfer the body is consumed to its terminator first and
+   * the message is rejected — the connection never closes mid-body.
+   */
+  private terminateForCredentialChange(): void {
+    this.unregisterLive = null;
+    if (this.state === 'QUIT' || this.closing || this.terminating) return;
+    this.terminating = true;
+    this.cmdQueue = this.cmdQueue.then(() => {
+      if (this.state === 'QUIT' || this.closing) return;
+      if (this.inData) { this.terminateAfterData = true; return; }
+      this.closeForCredentialChange();
+    });
+  }
+
+  private closeForCredentialChange(): void {
+    this.closing = true;
+    this.terminateAfterData = false;
+    this.lineBuffer = '';
+    this.transaction = null;
+    this.inData = false;
+    this.dataOverflow = false;
+    this.authUser = null;
+    this.state = 'QUIT';
+    this.clearTimer();
+    this.send(`421 4.7.0 ${this.config.hostname} Credentials changed, please authenticate again - closing connection`);
+    this.socket.end();
+    log.info({ id: this.id, ip: this.ip }, 'SMTP session closed after a credential change');
   }
 
   /** Closes the AUTH loop: after N failed attempts → 421 and disconnect. */

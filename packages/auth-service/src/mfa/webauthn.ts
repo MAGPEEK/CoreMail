@@ -10,7 +10,7 @@ import type {
 } from '@simplewebauthn/types';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { authRedis } from '@coremail/storage/auth';
+import { authRedis, publishUserAuthChange } from '@coremail/storage/auth';
 
 const log = createLogger('auth:webauthn');
 
@@ -108,6 +108,9 @@ export async function finishWebAuthnRegistration(
       update: { webAuthnCredentials: [...existing, newCred] },
     });
 
+    // v7.1.0: a WebAuthn key enables MFA → the primary password is no longer
+    // valid for mail protocols; cached mail logins are dropped immediately.
+    await publishUserAuthChange(userId, 'mfa-change');
     log.info({ userId, keyName }, 'WebAuthn key registered');
     return true;
   } catch (err) {

@@ -2,7 +2,7 @@
 // password; an app password works on IMAP/SMTP/POP3/JMAP/CalDAV/ActiveSync.
 import {
   check, assert, creds, setCred, http, basic, totp, nextTotpWindow, imapCmd, PORTS, LineClient, popCmd,
-  smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend, buildMime, sleep,
+  smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend, buildMime,
 } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 import { popLogin } from './pop3.mjs';
@@ -46,9 +46,19 @@ export async function run(state) {
       assert(s.status === 200 && s.json?.secret, `${s.status} ${s.text.slice(0, 200)}`);
       secret = s.json.secret;
       state.totpSecretA = secret; // test-only secret, kept in the state dir outside the repo
+      // Prime the jmap-server Basic-auth cache with the primary password right
+      // before MFA is switched on (v7.1.0: the cache must not outlive the change).
+      const primed = await http('GET', '/jmap/session', { headers: { Authorization: basic(A, c.userA) } });
+      assert(primed.status === 200, `JMAP primary-password login before MFA → ${primed.status}`);
       const conf = await http('POST', '/auth/mfa/totp/confirm', { token: tok, body: { code: totp(secret) } });
       assert(conf.status === 200, `confirm ${conf.status} ${conf.text}`);
-      return `setup without re-auth → ${noReauth.status}; confirmed`;
+      return `setup without re-auth → ${noReauth.status}; JMAP primed; confirmed`;
+    });
+
+    await check('mfa: JMAP Basic with the primary password → 401 immediately after enabling MFA (no cache window)', async () => {
+      const j = await http('GET', '/jmap/session', { headers: { Authorization: basic(A, c.userA) } });
+      assert(j.status === 401, `cached JMAP login survived the MFA change: ${j.status}`);
+      return '401 on the immediate retry';
     });
   }
   state.mfaA = true;
@@ -71,20 +81,11 @@ export async function run(state) {
   });
 
   await check('mfa: primary password refused on IMAP/SMTP/POP3/JMAP/CalDAV/EAS', async () => {
+    // v7.1.0: no grace period — the JMAP Basic-auth cache is invalidated by the MFA change.
     const r = await protocolLogins(A, c.userA, state);
-    let accepted = Object.entries(r).filter(([, v]) => v === 'ok');
-    let note = '';
-    if (accepted.length === 1 && accepted[0][0] === 'jmap') {
-      // jmap-server caches successful Basic auth for 60 s (auth.ts) — a password that
-      // authenticated just before MFA was enabled keeps working until the entry expires.
-      await sleep(61_000);
-      const j = await http('GET', '/jmap/session', { headers: { Authorization: basic(A, c.userA) } });
-      r.jmap = j.status === 200 ? 'ok' : `${j.status}`;
-      accepted = Object.entries(r).filter(([, v]) => v === 'ok');
-      note = ` (JMAP accepted the primary password for up to 60 s after MFA was enabled — Basic auth cache; refused after expiry: ${r.jmap})`;
-    }
+    const accepted = Object.entries(r).filter(([, v]) => v === 'ok');
     assert(accepted.length === 0, `accepted with primary password: ${accepted.map(([k]) => k).join(', ')} — ${JSON.stringify(r)}`);
-    return JSON.stringify(r).slice(0, 400) + note;
+    return JSON.stringify(r).slice(0, 400);
   });
 
   await check('mfa: app password created and works on IMAP/SMTP/POP3/JMAP/CalDAV/EAS', async () => {
@@ -103,5 +104,18 @@ export async function run(state) {
     const l = await http('POST', '/auth/login', { body: { email: A, password: creds().appPwA } });
     assert(l.status === 401, `${l.status} ${l.text.slice(0, 120)}`);
     return '401';
+  });
+
+  await check('mfa: revoked app password → JMAP 401 on the immediate retry (no cache window)', async () => {
+    const ap = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e revoke' } });
+    assert(ap.status === 201 && ap.json?.password, `${ap.status} ${ap.text.slice(0, 200)}`);
+    const auth = basic(A, ap.json.password);
+    const before = await http('GET', '/jmap/session', { headers: { Authorization: auth } });
+    assert(before.status === 200, `fresh app password on JMAP → ${before.status}`);
+    const del = await http('DELETE', `/auth/app-passwords/${ap.json.id}`, { token: mfaTok });
+    assert(del.status === 200 || del.status === 204, `revoke → ${del.status} ${del.text.slice(0, 120)}`);
+    const after = await http('GET', '/jmap/session', { headers: { Authorization: auth } });
+    assert(after.status === 401, `revoked app password still accepted by JMAP: ${after.status}`);
+    return 'JMAP 200 → revoke → 401';
   });
 }

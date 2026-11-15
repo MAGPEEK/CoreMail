@@ -19,6 +19,7 @@ import {
   appendTargetExists,
 } from '../commands/index.js';
 import { CommandReader, type LiteralDecision } from './command-reader.js';
+import { unregisterLiveSession } from '../session/live.js';
 import {
   tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
   type Token, type CommandSegment,
@@ -93,22 +94,18 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
         },
         onLiteral: (segments, size, sync, tooLarge) => checkLiteral(session, segments, size, sync, tooLarge),
         onCommand: async (segments) => {
-          const first = segments[0];
-          if (segments.length === 1 && typeof first === 'string') {
-            // IDLE is terminated by a bare "DONE" line (RFC 2177).
-            if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
-              handleIdleDone(session);
-              return;
-            }
-            // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
-            // a base64-encoded data line (or "*" to abort), not a tagged command.
-            if (session.saslMech) {
-              await handleSaslContinuation(session, session.saslPendingTag ?? '*', first);
-              return;
-            }
+          // v7.1.0: after a credential-change BYE nothing is executed any more.
+          if (isLoggedOut(session)) { reader.close(); return; }
+          session.busy = true;
+          try {
+            await runCommand(session, segments);
+          } finally {
+            session.busy = false;
+            const after = session.afterCommand;
+            session.afterCommand = null;
+            after?.();
           }
-          await dispatchCommand(session, segments);
-          if (session.state === 'LOGOUT') reader.close();
+          if (isLoggedOut(session)) reader.close();
         },
         pause: () => session.socket.pause(),
         resume: () => session.socket.resume(),
@@ -156,19 +153,21 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
         log.warn({ err, id: session.id, ip }, 'IMAP STARTTLS handshake/socket error');
         secure.destroy();
       });
-      secure.on('close', () => { reader.close(); sessions.delete(session.id); });
+      secure.on('close', () => { reader.close(); sessions.delete(session.id); unregisterLiveSession(session); });
       socket.setTimeout(0);
     };
 
     socket.on('close', () => {
       reader.close();
       sessions.delete(session.id);
+      unregisterLiveSession(session);
       log.debug({ id: session.id }, 'IMAP disconnect');
     });
 
     socket.on('error', (err) => {
       log.error({ err, id: session.id }, 'IMAP socket error');
       sessions.delete(session.id);
+      unregisterLiveSession(session);
     });
 
     socket.setTimeout(1800_000); // 30 min idle timeout
@@ -237,6 +236,30 @@ async function checkLiteral(
     }
   }
   return 'continue';
+}
+
+/** State check that is not narrowed away across awaits (the state changes asynchronously). */
+function isLoggedOut(session: ImapSession): boolean {
+  return session.state === 'LOGOUT';
+}
+
+/** One complete client line: IDLE "DONE", a SASL continuation or a tagged command. */
+async function runCommand(session: ImapSession, segments: CommandSegment[]): Promise<void> {
+  const first = segments[0];
+  if (segments.length === 1 && typeof first === 'string') {
+    // IDLE is terminated by a bare "DONE" line (RFC 2177).
+    if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
+      handleIdleDone(session);
+      return;
+    }
+    // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
+    // a base64-encoded data line (or "*" to abort), not a tagged command.
+    if (session.saslMech) {
+      await handleSaslContinuation(session, session.saslPendingTag ?? '*', first);
+      return;
+    }
+  }
+  await dispatchCommand(session, segments);
 }
 
 async function dispatchCommand(session: ImapSession, segments: CommandSegment[]): Promise<void> {

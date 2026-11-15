@@ -5,6 +5,7 @@ import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
 import { resolveAccounts } from '../accounts.js';
 import { accountsOf, buildStateChange, changeBus } from './bus.js';
+import { registerPushConnection } from './live.js';
 
 const log = createLogger('jmap:eventsource');
 
@@ -46,7 +47,11 @@ export async function eventSourceHandler(req: Request, res: Response): Promise<v
 
   const ping = pingSec > 0 ? setInterval(() => res.write(`event: ping\ndata: {"interval":${pingSec}}\n\n`), pingSec * 1000) : null;
 
+  // v7.1.0: the stream ends when its credentials become invalid (the client's
+  // reconnect then fails with 401).
+  const unregister = registerPushConnection(user, () => cleanup());
   const cleanup = (): void => {
+    unregister();
     changeBus.off('change', onChange);
     if (ping) clearInterval(ping);
     if (timer) clearTimeout(timer);

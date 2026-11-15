@@ -1,8 +1,14 @@
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
+import type { EasCredentialInfo } from './live-sessions.js';
 
 const log = createLogger('activesync:auth');
+
+export interface EasUser extends EasCredentialInfo {
+  userId: string;
+  email: string;
+}
 
 /**
  * ActiveSync Basic auth.
@@ -28,6 +34,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const login = credentials.slice(0, colonIdx);
   const password = credentials.slice(colonIdx + 1);
 
+  const authStartedAt = Date.now();
   const result = await verifyMailCredentials(login, password, {
     ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
     protocol: 'activesync',
@@ -49,9 +56,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  (req as Request & { easUser: { userId: string; email: string } }).easUser = {
+  (req as Request & { easUser: EasUser }).easUser = {
     userId: result.user.id,
     email: result.user.email,
+    // v7.1.0: a Ping long-poll ends (401) when these credentials become invalid.
+    credential: result.method,
+    ...(result.appPasswordId ? { appPasswordId: result.appPasswordId } : {}),
+    authStartedAt,
   };
   next();
 }

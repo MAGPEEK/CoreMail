@@ -1,7 +1,7 @@
 import * as OTPAuth from 'otpauth';
 import QRCode from 'qrcode';
 import { prisma } from '@coremail/storage';
-import { encryptMfaSecret, verifyUserTotp } from '@coremail/storage/auth';
+import { encryptMfaSecret, publishUserAuthChange, verifyUserTotp } from '@coremail/storage/auth';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('auth:totp');
@@ -36,6 +36,7 @@ export async function setupTotp(
     update: { totpSecret: stored, totpEnabled: false, totpLastUsedStep: null },
   });
 
+  await publishUserAuthChange(userId, 'mfa-change');
   log.info({ userId }, 'TOTP secret generated (not yet confirmed)');
   return { secret, otpauthUrl, qrCodeDataUrl };
 }
@@ -57,4 +58,5 @@ export async function disableTotp(userId: string): Promise<void> {
     where: { userId },
     data: { totpSecret: null, totpEnabled: false, totpLastUsedStep: null },
   });
+  await publishUserAuthChange(userId, 'mfa-change');
 }

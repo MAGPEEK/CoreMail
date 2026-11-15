@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
+import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
 
 const log = createLogger('caldav:auth');
 
@@ -24,8 +25,8 @@ export async function davAuthMiddleware(
 
   if (authHeader.startsWith('Bearer ')) {
     const payload = verifyAccessToken(authHeader.slice(7));
-    if (payload) {
-      
+    // v7.1.0: tokens of revoked sessions (logout, password change, admin revoke) are refused
+    if (payload && !(await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId))) {
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
         select: { id: true, email: true, active: true },

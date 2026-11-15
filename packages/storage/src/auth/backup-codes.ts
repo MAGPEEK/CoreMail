@@ -8,6 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { hashOneTimeSecret, verifyOneTimeSecret } from '@coremail/core';
 import { prisma } from '../prisma/index.js';
+import { publishUserAuthChange } from './invalidation.js';
 
 export const BACKUP_CODE_COUNT = 10;
 
@@ -28,6 +29,7 @@ export async function regenerateBackupCodes(userId: string): Promise<string[]> {
     create: { userId, backupCodes: hashes, backupCodesUsed: 0 },
     update: { backupCodes: hashes, backupCodesUsed: 0 },
   });
+  await publishUserAuthChange(userId, 'mfa-change');
   return raw.map((c) => `${c.slice(0, 4)}-${c.slice(4)}`);
 }
 

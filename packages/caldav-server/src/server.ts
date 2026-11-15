@@ -3,6 +3,7 @@ import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express from 'express';
 import {
   createLogger, installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
+  startAuthInvalidationSubscriber,
 } from '@coremail/core';
 import { connectDatabase } from '@coremail/storage';
 import { davAuthMiddleware } from './auth.js';
@@ -18,6 +19,8 @@ const PORT = parseInt(process.env['CALDAV_PORT'] ?? '8082', 10);
 
 async function main() {
   await connectDatabase();
+  // v7.1.0: session revocations from other services (Bearer token checks)
+  startAuthInvalidationSubscriber();
   void initRuntimeLogLevel('caldav-server', { aliases: ['caldav', 'carddav', 'dav'] }); // BCP per-service log level
   // v5.6.0: initJwtKeys() removed (back to HS256)
 
