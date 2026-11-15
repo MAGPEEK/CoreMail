@@ -217,9 +217,11 @@ COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
 # Schema sync: used by the entrypoint and the Helm init container
 COPY infra/docker/schema-sync.sh /usr/local/bin/coremail-schema-sync
+# Classifies Prisma's data-loss warnings (new unique constraints are applied automatically)
+COPY infra/docker/schema-sync-classify.mjs /usr/local/lib/coremail/schema-sync-classify.mjs
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync \
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs \
  && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync
 
 # ── Directories + permissions ─────────────────────────────────────────────────
