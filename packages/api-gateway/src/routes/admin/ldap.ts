@@ -75,7 +75,7 @@ const LdapConfigSchema = z.object({
   userDN:      z.string().min(1),
   userFilter:  z.string().min(3).default('(sAMAccountName={{username}})'),
   groupFilter: z.string().nullable().optional(),
-  attributeMap: z.record(z.string()).default({}),
+  attributeMap: z.record(z.string(), z.string()).default({}),
   enabled:     z.boolean().default(true),
   syncEnabled: z.boolean().default(true),
   syncIntervalMinutes: z.number().int().min(15).max(10080).default(1440),

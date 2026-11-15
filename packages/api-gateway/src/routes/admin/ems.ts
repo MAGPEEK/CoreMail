@@ -242,8 +242,8 @@ adminEmsRouter.post('/transport-rules', async (req: Request, res: Response) => {
     Name: z.string().min(1),
     Description: z.string().default(''),
     Priority: z.number().int().default(0),
-    Conditions: z.array(z.record(z.unknown())).default([]),
-    Actions: z.array(z.record(z.unknown())).default([]),
+    Conditions: z.array(z.record(z.string(), z.unknown())).default([]),
+    Actions: z.array(z.record(z.string(), z.unknown())).default([]),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -270,8 +270,8 @@ adminEmsRouter.put('/transport-rules/:identity', async (req: Request, res: Respo
     Name: z.string().optional(),
     Priority: z.number().int().optional(),
     State: z.enum(['Enabled', 'Disabled']).optional(),
-    Conditions: z.array(z.record(z.unknown())).optional(),
-    Actions: z.array(z.record(z.unknown())).optional(),
+    Conditions: z.array(z.record(z.string(), z.unknown())).optional(),
+    Actions: z.array(z.record(z.string(), z.unknown())).optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }

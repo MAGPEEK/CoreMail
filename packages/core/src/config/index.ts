@@ -47,7 +47,7 @@ function loadConfig() {
   const result = EnvSchema.safeParse(process.env);
   if (!result.success) {
     console.error('Invalid environment configuration:');
-    console.error(result.error.flatten().fieldErrors);
+    console.error(z.flattenError(result.error).fieldErrors);
     process.exit(1);
   }
   const weak = placeholderSecrets(process.env);
