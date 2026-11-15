@@ -26,13 +26,12 @@
   "dependencies": {
     "@coremail/core": "workspace:*",
     "@prisma/client": "^5.20.0",
-    "mailparser": "^3.7.1",
+    "mailparser": "^3.14.3",
     "minio": "^8.0.2",
-    "nodemailer": "^6.9.15",
+    "nodemailer": "^10.5.0",
     "prisma": "^5.20.0"
   },
   "devDependencies": {
-    "@types/mailparser": "^3.4.4",
     "@types/node": "^22.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0"

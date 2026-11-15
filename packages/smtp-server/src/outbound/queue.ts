@@ -1,6 +1,6 @@
 import { Queue, Worker, UnrecoverableError, type Job } from 'bullmq';
 import { Readable } from 'stream';
-import nodemailer from 'nodemailer';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
@@ -90,7 +90,7 @@ export interface OutboundJob {
 
 async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
   // Load attachments from MinIO (in parallel)
-  const attachments: nodemailer.SendMailOptions['attachments'] = await Promise.all(
+  const attachments: SendMailOptions['attachments'] = await Promise.all(
     msg.attachments.map(async (att) => ({
       filename:    att.filename,
       content:     await downloadBuffer(att.minioPath),
@@ -103,7 +103,7 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
     newline: 'crlf',   // RFC 5321: SMTP requires CRLF line endings
   });
 
-  const fromField: nodemailer.SendMailOptions['from'] = msg.fromName
+  const fromField: SendMailOptions['from'] = msg.fromName
     ? { name: msg.fromName, address: msg.from }
     : msg.from;
 
