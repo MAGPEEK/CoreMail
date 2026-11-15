@@ -9,7 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test --test-force-exit src/lib/dkim.test.ts src/lib/quarantine-release.test.ts src/lib/cert-lifecycle.test.ts src/lib/cert-renewal.test.ts src/lib/recurrence.test.ts src/routes/calendar.test.ts src/routes/auth.test.ts src/lib/http-hardening.test.ts src/routes/setup.test.ts src/routes/admin/rbac.test.ts src/lib/sse-hub.test.ts src/lib/attachment-download.test.ts src/routes/sso.test.ts src/middleware/setup-rate-limit.test.ts src/middleware/current-role.test.ts"
+    "test": "node --import tsx --test --test-force-exit src/lib/dkim.test.ts src/lib/quarantine-release.test.ts src/lib/cert-lifecycle.test.ts src/lib/cert-renewal.test.ts src/lib/recurrence.test.ts src/routes/calendar.test.ts src/routes/auth.test.ts src/lib/http-hardening.test.ts src/routes/setup.test.ts src/routes/admin/rbac.test.ts src/lib/sse-hub.test.ts src/lib/attachment-download.test.ts src/lib/storage-migration.test.ts src/routes/sso.test.ts src/middleware/setup-rate-limit.test.ts src/middleware/current-role.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

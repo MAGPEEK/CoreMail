@@ -20,7 +20,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
   installProcessGuards, installAsyncErrorHandling, resolveBindHost,
 } from '@coremail/core';
-import { connectDatabase } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage } from '@coremail/storage';
 import { jmapAuthMiddleware } from './auth.js';
 import { resolveAccounts } from './accounts.js';
 import { parseRequest, processRequest } from './dispatcher.js';
@@ -54,6 +54,7 @@ function problem(res: express.Response, err: RequestError): void {
 async function main(): Promise<void> {
   await connectDatabase();
   void initRuntimeLogLevel('jmap-server', { aliases: ['jmap'] }); // BCP per-service log level
+  await waitForObjectStorage('jmap-server'); // v7.1 object-storage startup check
   startChangeBus();
   // v7.1.0: drop cached Basic logins + apply session revocations on credential changes;
   // WebSocket / EventSource push connections of the user end.

@@ -44,11 +44,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   endpoints, NetworkPolicies, secrets via values or an existing Secret (rendering fails without
   them). `scripts/helm-check.sh` runs helm lint/template and kubeconform via pinned Docker
   images. The old per-service chart (EWS, storage-api, 0.6.x images) is gone.
+- **Object storage drivers** (`OBJECT_STORAGE=filesystem | minio | s3`, default `minio` =
+  unchanged behaviour). The filesystem driver (`STORAGE_PATH`, default `/data/objects`) writes
+  atomically (temp file + fsync + rename) with modes 0640/0750; the S3/MinIO driver supports
+  TLS (`MINIO_USE_SSL`, private CA via `MINIO_CA_FILE`), `MINIO_REGION`, `MINIO_PATH_STYLE` and
+  URL endpoints. Expiry uses bucket lifecycle rules, or a Redis-locked periodic cleaner where
+  they are unavailable (filesystem). Docs: `docs/storage.md`.
+- **Object storage startup check:** SMTP, IMAP, POP3, JMAP and ActiveSync do not open their
+  listeners while the store is unusable or misses most of the sampled objects the database
+  references (e.g. `OBJECT_STORAGE` switched without migrating); `/healthz` reports
+  `storage { driver, status }` and answers 503 while the check blocks.
+- **Storage migration:** `coremail storage status | check | migrate --from … --to …` and the
+  admin API `/api/v1/admin/storage` (Organization Management) copy all objects between drivers
+  as a resumable background job — streamed, verified by SHA-256 and size, with dry run; the
+  source is never deleted.
 
 ### Changed
 
 - ActiveSync OPTIONS now lists only the commands the server implements
   (`MS-ASProtocolCommands`); unimplemented commands such as FolderCreate are no longer advertised.
+- Docker Compose: the app container gets a `coremail-data:/data` volume and
+  `OBJECT_STORAGE=${OBJECT_STORAGE:-minio}`; the MinIO service stays, so existing installs need
+  no action. `scripts/setup.sh`, `.env.example` and the Synology setup choose the filesystem
+  driver for new installs.
+- All object access (raw messages, attachments, quarantine, outbound queue, JMAP uploads,
+  S/MIME) goes through the storage driver; outbound attachment keys no longer contain user
+  file names.
 
 ### Fixed
 

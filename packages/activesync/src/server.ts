@@ -22,6 +22,7 @@ import { handleMoveItems } from './commands/move-items.js';
 import { handleMeetingResponse } from './commands/meeting-response.js';
 import { handleResolveRecipients } from './commands/resolve-recipients.js';
 import { getObjectStream } from '@coremail/storage/minio';
+import { waitForObjectStorage } from '@coremail/storage';
 
 const log = createLogger('activesync');
 installProcessGuards(log);
@@ -192,6 +193,9 @@ easLiveRequests.attachInvalidation();
 startAuthInvalidationSubscriber();
 // v6: internal service behind the api-gateway — loopback by default
 const HOST = resolveBindHost();
-app.listen(PORT, HOST, () => {
-  log.info({ port: PORT, host: HOST }, 'ActiveSync (EAS) server started');
+// v7.1: no listener while the object storage misses the referenced objects
+void waitForObjectStorage('activesync').then(() => {
+  app.listen(PORT, HOST, () => {
+    log.info({ port: PORT, host: HOST }, 'ActiveSync (EAS) server started');
+  });
 });

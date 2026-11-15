@@ -1,5 +1,7 @@
 export * from './prisma/index.js';
 export * from './minio/index.js';
+export * from './object-store/index.js';
+export * from './object-store-runtime.js';
 export * from './mime/index.js';
 export * from './mime/tree.js';
 export * from './mime/address.js';

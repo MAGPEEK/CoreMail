@@ -30,8 +30,16 @@ else
     -e "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=$(rnd 20)|" \
     -e "s|^MINIO_ROOT_PASSWORD=.*|MINIO_ROOT_PASSWORD=$(rnd 20)|" \
     .env && rm -f .env.bak
+  # v7.1: new installations keep mail contents on the filesystem (volume
+  # coremail-data) — .env.example already says so; enforce it for old templates.
+  grep -q '^OBJECT_STORAGE=' .env || echo "OBJECT_STORAGE=filesystem" >> .env
   chmod 600 .env
-  echo "✓ .env created with random keys (chmod 600)."
+  echo "✓ .env created with random keys (chmod 600), OBJECT_STORAGE=filesystem."
+fi
+if ! grep -q '^OBJECT_STORAGE=' .env; then
+  # Existing installation from before 7.1: OBJECT_STORAGE unset = minio. Nothing to do.
+  echo "ℹ  OBJECT_STORAGE not set in .env → mail contents stay in MinIO (unchanged)."
+  echo "   Moving them to the filesystem volume is optional: docs/storage.md"
 fi
 
 # Compose reads .env from the directory of the Compose file or from the invocation directory.

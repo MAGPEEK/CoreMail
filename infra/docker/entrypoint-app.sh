@@ -51,6 +51,29 @@ while true; do
   sleep 5
 done
 
-# ── 3. Start supervisord ─────────────────────────────────────────────────────
+# ── 3. Object storage directory (v7.1) ───────────────────────────────────────
+# The services run as `node`. A fresh named volume inherits the image's
+# /data/objects (owned by node); a bind mount (Synology) or an old volume may
+# belong to root → hand the directory to node once. Only the storage directory
+# is touched, never other paths.
+STORAGE_DIR="${STORAGE_PATH:-/data/objects}"
+case "${STORAGE_DIR}" in
+  /?*) ;;
+  *) log "WARNING: STORAGE_PATH must be absolute (got '${STORAGE_DIR}') — skipped"; STORAGE_DIR="" ;;
+esac
+if [ -n "${STORAGE_DIR}" ] && { [ "${OBJECT_STORAGE:-minio}" = "filesystem" ] || [ -d "$(dirname "${STORAGE_DIR}")" ]; }; then
+  if mkdir -p "${STORAGE_DIR}" 2>/dev/null; then
+    if [ "$(stat -c %u "${STORAGE_DIR}" 2>/dev/null)" != "$(id -u node)" ]; then
+      log "Handing ${STORAGE_DIR} to user node (first start or bind mount)"
+      chown -R node:node "${STORAGE_DIR}" || log "WARNING: chown ${STORAGE_DIR} failed"
+    fi
+    chmod 750 "${STORAGE_DIR}" 2>/dev/null || true
+  else
+    log "WARNING: cannot create ${STORAGE_DIR}"
+  fi
+fi
+log "Object storage: OBJECT_STORAGE=${OBJECT_STORAGE:-minio (default)}"
+
+# ── 4. Start supervisord ─────────────────────────────────────────────────────
 log "Starting supervisord..."
 exec "$@"

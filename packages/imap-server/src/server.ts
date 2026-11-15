@@ -6,7 +6,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber,
 } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 
@@ -217,7 +217,8 @@ async function main() {
   // end the user's live IMAP connections (incl. IDLE) with * BYE.
   imapLiveSessions.attachInvalidation();
   startAuthInvalidationSubscriber();
-  await ensureBuckets();
+  // v7.1: refuses to open listeners while the object storage misses the referenced objects
+  await waitForObjectStorage('imap-server');
   await refreshHostname();
   await refreshTlsConfig();
 

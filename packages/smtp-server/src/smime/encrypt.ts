@@ -11,10 +11,9 @@
 import forge from 'node-forge';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
-import { getMinioClient } from '@coremail/storage/minio';
+import { downloadBuffer } from '@coremail/storage/minio';
 
 const log = createLogger('smime:encrypt');
-const MINIO_BUCKET = process.env['MINIO_BUCKET'] ?? 'mail-attachments';
 
 /**
  * Encrypt an outgoing message for a recipient by their email address.
@@ -45,15 +44,7 @@ export async function encryptMessageForRecipient(
     const pemPath = cert.storagePath.replace(/\.p12$/, '.pem');
     let recipientCert: forge.pki.Certificate;
     try {
-      const minio = getMinioClient();
-      const stream = await minio.getObject(MINIO_BUCKET, pemPath);
-      const chunks: Buffer[] = [];
-      await new Promise<void>((resolve, reject) => {
-        stream.on('data', (c: Buffer) => chunks.push(c));
-        stream.on('end', resolve);
-        stream.on('error', reject);
-      });
-      recipientCert = forge.pki.certificateFromPem(Buffer.concat(chunks).toString('utf8'));
+      recipientCert = forge.pki.certificateFromPem((await downloadBuffer(pemPath)).toString('utf8'));
     } catch {
       log.debug({ pemPath }, 'No PEM file found — cannot encrypt');
       return rawMessage;

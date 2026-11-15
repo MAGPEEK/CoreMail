@@ -150,6 +150,21 @@ Let's Encrypt uses HTTP-01: port 80 of the host must point to CoreMail
 (`"80:3000"` in the Compose file) and the domains must point to the server via DNS.
 Issuance runs asynchronously; `cert show` shows the status and, if applicable, the last error.
 
+## Mail storage (`storage`, v7.1, ORGANIZATION_MANAGEMENT)
+
+```bash
+coremail storage status                      # driver, location, startup-check result, last migration
+coremail storage check                       # run the startup check now (exit 1 while it blocks)
+coremail storage migrate --from minio --to filesystem [--dry-run] [--verify-existing] [--no-wait]
+coremail storage migrate-status
+coremail storage migrate-cancel
+```
+
+The migration runs as a background job in the api-gateway (`/api/v1/admin/storage/migrate`);
+the command polls and prints progress. It streams and verifies every object (sha256 + size),
+skips objects already present (run it again to resume) and never deletes the source.
+Procedure and backups: [storage.md](storage.md).
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

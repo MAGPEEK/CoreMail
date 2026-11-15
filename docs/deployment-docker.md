@@ -30,7 +30,9 @@ CoreMail uses a **6-container architecture**:
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Primary database (mails, users, calendars, contacts) |
 | `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live events via SSE, greylisting |
-| `minio` | `pgsty/minio` (pinned by digest; official images discontinued) | S3-compatible object storage (attachments, quarantine, backups) |
+| `minio` | `pgsty/minio` (pinned by digest; official images discontinued) | S3-compatible object storage: backups; mail contents with `OBJECT_STORAGE=minio` (installations from before 7.1) |
+
+**Mail storage (v7.1):** new installations keep mail contents, attachments and quarantine on the Docker volume `coremail-data` (`OBJECT_STORAGE=filesystem`, written by `scripts/setup.sh`); installations without that setting keep using MinIO unchanged. Drivers, external S3 (AWS, B2, Wasabi, Hetzner, R2) with TLS, migration and backups: [storage.md](storage.md).
 
 ### What is inside the `coremail` container?
 
@@ -204,9 +206,19 @@ POSTGRES_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 # ─── Redis ───────────────────────────────────────────────────────────────────
 REDIS_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 
-# ─── MinIO (S3-compatible object storage) ─────────────────────────────────────
+# ─── MinIO (S3-compatible object storage: backups; mail with OBJECT_STORAGE=minio)
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=CHANGE-ME-openssl-rand-hex-20
+
+# ─── Mail storage (v7.1, docs/storage.md) ────────────────────────────────────
+OBJECT_STORAGE=filesystem       # filesystem | minio | s3 — unset = minio (pre-7.1 installs)
+# External S3 / MinIO with TLS (OBJECT_STORAGE=s3):
+# MINIO_ENDPOINT=s3.eu-central-1.amazonaws.com
+# MINIO_USE_SSL=true
+# MINIO_REGION=eu-central-1
+# MINIO_PATH_STYLE=false
+# MINIO_CA_FILE=/etc/coremail/s3-ca.pem
+# MINIO_ACCESS_KEY= / MINIO_SECRET_KEY= / MINIO_BUCKET_ATTACHMENTS=coremail-attachments
 
 # ─── Operation ───────────────────────────────────────────────────────────────
 NODE_ENV=production
@@ -263,6 +275,7 @@ MAXMIND_LICENSE_KEY=
 | `POSTGRES_PASSWORD` | PostgreSQL database password | Yes |
 | `REDIS_PASSWORD` | Redis authentication password | Yes |
 | `MINIO_ROOT_PASSWORD` | MinIO administrator password (min. 8 characters) | Yes |
+| `OBJECT_STORAGE` | Mail storage driver `filesystem` / `minio` / `s3` ([storage.md](storage.md)) | No (`minio`; setup.sh writes `filesystem`) |
 | `LOG_LEVEL` | `error` / `warn` / `info` / `debug` | No (`info`) |
 | `HTTPS_PROXY_ENABLED` | Enable the integrated TLS proxy | No (`true`) |
 | `GATEWAY_MODE` | SMTP gateway/relay mode | No (`false`) |
@@ -277,7 +290,8 @@ MAXMIND_LICENSE_KEY=
 |--------|--------|----------|
 | `pgdata` | PostgreSQL database files | postgres |
 | `redisdata` | Redis AOF persistence | redis |
-| `miniodata` | Email attachments, quarantine, backups | minio |
+| `coremail-data` | Mail contents, attachments, quarantine with `OBJECT_STORAGE=filesystem` (`/data/objects`) | coremail |
+| `miniodata` | Backups; mail contents with `OBJECT_STORAGE=minio` | minio |
 | `rspamd-data` | Rspamd data, Bayes database | rspamd |
 
 ### Database backup (manual)
@@ -306,6 +320,9 @@ docker compose -f infra/docker/docker-compose.yml start
 
 ### Volume backup (complete)
 
+Online variant (database dump first, then the objects), Synology Hyper Backup and restore:
+[storage.md → Backup and restore](storage.md#backup-and-restore).
+
 ```bash
 # Stop the containers
 docker compose -f infra/docker/docker-compose.yml stop
@@ -313,6 +330,9 @@ docker compose -f infra/docker/docker-compose.yml stop
 # Back up the volumes
 docker run --rm -v pgdata:/data -v "$(pwd)":/backup alpine \
   tar czf /backup/pgdata-$(date +%Y%m%d).tar.gz /data
+
+docker run --rm -v coremail_coremail-data:/data -v "$(pwd)":/backup alpine \
+  tar czf /backup/coremail-data-$(date +%Y%m%d).tar.gz /data
 
 docker run --rm -v miniodata:/data -v "$(pwd)":/backup alpine \
   tar czf /backup/miniodata-$(date +%Y%m%d).tar.gz /data
@@ -365,6 +385,11 @@ docker compose -f infra/docker/docker-compose.yml up -d
 ## Synology NAS
 
 For Synology NAS and other home servers there is a dedicated Compose file (`docker-compose.synology.yml`) that avoids port conflicts with the DSM web interface (ports 80/443).
+
+Mail storage: `scripts/synology-setup.sh` sets `OBJECT_STORAGE=filesystem` for a fresh
+installation — mail contents are then plain files in `/volume1/docker/coremail/data/objects`
+(include it in Hyper Backup together with a database dump, see [storage.md](storage.md#synology-hyper-backup)).
+Existing installations keep MinIO.
 
 ### Prerequisites (Synology)
 

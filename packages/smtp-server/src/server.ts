@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber,
 } from '@coremail/core';
-import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import type { SmtpServerHandle } from './core/factory.js';
@@ -382,7 +382,8 @@ async function main(): Promise<void> {
   // v7.1.0: credential changes end the user's authenticated submission sessions (421).
   smtpLiveSessions.attachInvalidation();
   startAuthInvalidationSubscriber();
-  await ensureBuckets();
+  // v7.1: refuses to open listeners while the object storage misses the referenced objects
+  await waitForObjectStorage('smtp-server');
   await refreshHostname();
   await refreshTlsConfig(); // load certificate or generate self-signed
   await refreshBanner();    // load banner text from SmtpSettings

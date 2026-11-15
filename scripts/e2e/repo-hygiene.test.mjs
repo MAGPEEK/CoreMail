@@ -34,6 +34,20 @@ test('IMAP/POP3/SMTP protocol replies are 7-bit ASCII (RFC 9051 TEXT-CHAR, RFC 5
   assert.deepEqual(offenders, []);
 });
 
+test('v7.1 storage: unchanged .env keeps MinIO; new .env uses the filesystem volume', () => {
+  for (const f of ['infra/docker/docker-compose.yml', 'infra/docker/docker-compose.synology.yml']) {
+    const dc = read(f);
+    assert.match(dc, /OBJECT_STORAGE: \$\{OBJECT_STORAGE:-minio\}/, `${f}: default driver must stay minio for existing installs`);
+    assert.match(dc, /^ {2}minio:\n(?: {4}#.*\n)* {4}image:/m, `${f}: minio service must stay enabled by default`);
+    const minioBlock = dc.slice(dc.indexOf('\n  minio:'));
+    assert.doesNotMatch(minioBlock.split('\n  rspamd:')[0].split('\nnetworks:')[0], /profiles:/, `${f}: no profile on minio`);
+    assert.match(dc, /:\/data(\/objects)?\n/, `${f}: storage volume mounted`);
+  }
+  assert.match(read('infra/docker/docker-compose.yml'), /- coremail-data:\/data\n/);
+  assert.match(read('.env.example'), /^OBJECT_STORAGE=filesystem$/m);
+  assert.match(read('scripts/setup.sh'), /OBJECT_STORAGE=filesystem/);
+});
+
 test('rspamd local.d/actions.conf has no nested actions { } block (rspamd 4 refuses it)', () => {
   const conf = read('infra/docker/rspamd/local.d/actions.conf')
     .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');

@@ -6,12 +6,10 @@
  */
 
 import forge from 'node-forge';
-import { getMinioClient } from '@coremail/storage/minio';
+import { downloadBuffer } from '@coremail/storage/minio';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('smime:loader');
-
-const MINIO_BUCKET = process.env['MINIO_BUCKET'] ?? 'mail-attachments';
 
 export interface LoadedCertificate {
   privateKey: forge.pki.rsa.PrivateKey;
@@ -31,18 +29,8 @@ export async function loadP12FromMinio(
   storagePath: string,
   p12Password: string = '',
 ): Promise<LoadedCertificate> {
-  const minio = getMinioClient();
-  const stream = await minio.getObject(MINIO_BUCKET, storagePath);
-
-  // Collect stream into buffer
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve, reject) => {
-    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-    stream.on('end', () => resolve());
-    stream.on('error', reject);
-  });
-
-  const p12Der = Buffer.concat(chunks).toString('binary');
+  // v7.1: through the configured object store (minio/s3/filesystem)
+  const p12Der = (await downloadBuffer(storagePath)).toString('binary');
   const p12Asn1 = forge.asn1.fromDer(p12Der);
   const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, p12Password);
 

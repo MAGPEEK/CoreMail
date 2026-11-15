@@ -33,12 +33,20 @@ services:
 
       DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:-CoreMail2024!}@postgres:5432/coremail
       REDIS_URL: redis://:${REDIS_PASSWORD:-RedisSecret2024}@redis:6379
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
-      MINIO_USE_SSL: "false"
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-MinioSecret2024!}
-      MINIO_BUCKET: mail-attachments
+      # v7.1 object storage (docs/storage.md): unset = minio (installations from
+      # before 7.1, unchanged); new installations: OBJECT_STORAGE=filesystem in .env
+      # → mail contents in /volume1/docker/coremail/data/objects (Hyper Backup).
+      OBJECT_STORAGE: ${OBJECT_STORAGE:-minio}
+      STORAGE_PATH: /data/objects
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_REGION: ${MINIO_REGION:-}
+      MINIO_PATH_STYLE: ${MINIO_PATH_STYLE:-}
+      MINIO_CA_FILE: ${MINIO_CA_FILE:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-MinioSecret2024!}}
+      MINIO_BUCKET_ATTACHMENTS: ${MINIO_BUCKET_ATTACHMENTS:-coremail-attachments}
 
       # ⚠ Replace before production use: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-CHANGE-ME-openssl-rand-hex-32}
@@ -104,6 +112,10 @@ services:
       - "993:993"
       - "110:110"
       - "995:995"
+    volumes:
+      # v7.1: mail contents with OBJECT_STORAGE=filesystem. Only the objects
+      # directory is mounted — the parent data/ also holds postgres/redis/minio.
+      - /volume1/docker/coremail/data/objects:/data/objects
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
