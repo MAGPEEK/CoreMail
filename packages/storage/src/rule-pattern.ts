@@ -454,6 +454,59 @@ export function createRulePatternBudget(opts: { steps?: number; onExhausted?: ()
   };
 }
 
+/**
+ * Default VM steps for all rules of one message together (RULE_PATTERN_MESSAGE_STEP_BUDGET).
+ * Every rule gets its own RULE_PATTERN_STEP_BUDGET, bounded by what is left of this cap.
+ */
+export const DEFAULT_RULE_PATTERN_MESSAGE_STEP_BUDGET = 4 * DEFAULT_RULE_PATTERN_STEP_BUDGET;
+
+/** RULE_PATTERN_MESSAGE_STEP_BUDGET (default 4 × the per-rule budget; never below it). */
+export function ruleMessageStepBudget(env: Record<string, string | undefined> = process.env): number {
+  const perRule = rulePatternStepBudget(env);
+  const n = Number((env['RULE_PATTERN_MESSAGE_STEP_BUDGET'] ?? '').trim());
+  const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : Math.max(DEFAULT_RULE_PATTERN_MESSAGE_STEP_BUDGET, 4 * perRule);
+  return Math.max(value, perRule);
+}
+
+/**
+ * Runs one rule with its own step budget (RULE_PATTERN_STEP_BUDGET), bounded by
+ * what is left of the message budget; the steps used are charged to the
+ * message budget afterwards. A sender who pads a message so that one rule's
+ * patterns run out of steps cannot thereby starve the following rules.
+ */
+export function withRuleBudget<T>(
+  message: RulePatternBudget,
+  fn: (rule: RulePatternBudget) => T,
+  perRule: number = rulePatternStepBudget(),
+): T {
+  const start = Math.max(0, Math.min(perRule, message.remaining));
+  const rule = createRulePatternBudget({ steps: start });
+  if (message.exhausted || start === 0) rule.exhausted = true;
+  try {
+    return fn(rule);
+  } finally {
+    message.remaining = Math.max(0, message.remaining - (start - rule.remaining));
+    if (message.remaining === 0 && !message.exhausted) exhaust(message);
+  }
+}
+
+/**
+ * Tri-state pattern evaluation: `exhausted` when the budget ran out before an
+ * answer was found (callers decide fail-closed / fail-open), `invalid` for a
+ * pattern that does not compile.
+ */
+export function evaluateRulePattern(
+  pattern: string,
+  input: string,
+  budget: RulePatternBudget,
+): 'match' | 'nomatch' | 'exhausted' | 'invalid' {
+  if (budget.exhausted) return 'exhausted';
+  const r = tryMatchRulePattern(pattern, input, budget);
+  if (r === null) return 'invalid';
+  if (r) return 'match';
+  return budget.exhausted ? 'exhausted' : 'nomatch';
+}
+
 function exhaust(budget: RulePatternBudget): false {
   if (!budget.exhausted) {
     budget.exhausted = true;

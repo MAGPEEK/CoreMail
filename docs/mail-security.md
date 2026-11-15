@@ -114,8 +114,22 @@ matches `HELLO`). Limits since 8.1:
 
 | Limit | Value | Effect |
 |-------|-------|--------|
-| `RULE_PATTERN_STEP_BUDGET` | `5000000` | Matcher steps for **all** regex conditions (transport rules + inbox rules) evaluated for one delivered message. When it is used up, the remaining regex conditions of that message do not match; a warning is logged once. |
+| `RULE_PATTERN_STEP_BUDGET` | `5000000` | Matcher steps for the regex conditions of **one rule** (transport rule or inbox rule) for one delivered message. Every rule starts with its own budget, so a padded message cannot use up the steps of the rules that follow. |
+| `RULE_PATTERN_MESSAGE_STEP_BUDGET` | 4 × `RULE_PATTERN_STEP_BUDGET` (`20000000`) | Upper bound for all rules of one message together; each rule gets at most what is left of it. Never lower than the per-rule budget. |
 | regex conditions per user | 20 | Conditions + exceptions with operator `regex`, over all of a user's inbox rules. Saving more → `400 TOO_MANY_REGEX_CONDITIONS`. |
+
+When a budget runs out before a regex condition is decided (for example because
+the sender padded the message), the result depends on what the rule does — an
+exhausted budget must never switch off a blocking rule:
+
+| Rule | Exhausted condition | Exhausted exception |
+|------|---------------------|---------------------|
+| Transport rule with a `reject`, `quarantine` or `redirect` action | counts as **match** (fail-closed) | — (transport rules have no exceptions) |
+| Other transport rules (headers, subject, disclaimer, add/remove recipient) | no match | — |
+| Inbox rules (user mail rules) | no match | counts as matched → the rule is skipped |
+
+Every exhausted evaluation is logged as a warning with the rule id (and, for
+transport rules, whether it failed closed).
 
 ## rspamd controller authentication
 

@@ -60,6 +60,11 @@ line. There is no dot-stuffing and no line parsing, so any octet value works
   (binary content can only be sent with BDAT).
 - A BDAT without a valid size gets `501 5.5.4` and consumes nothing.
 - `BDAT 0 LAST` ends a message without adding data.
+- Memory bounds: chunk octets are only kept for a transaction with an accepted
+  (or pipelined, still pending) recipient. Chunks before MAIL, after a rejected
+  RCPT or after `LAST` are read and dropped, and answered `503`. The server
+  stops reading while more than one chunk, or more than 100 commands, wait in
+  the command queue (pipelining backpressure).
 
 Limitation: a `BODY=BINARYMIME` message is stored as is. When it is relayed,
 it is sent unchanged with DATA (there is no conversion to 7bit/8bit).
@@ -93,7 +98,21 @@ the outbound queue job (`OutboundJob.dsn`).
   retrying.
 - **delivered**: after local delivery (port 25, submission or the queue). The
   report covers each recipient as it was addressed, aliases included. Mail
-  filed as junk on port 25 gets no success report.
+  filed as junk on port 25 gets no success report. On port 25 (no SMTP AUTH)
+  a success report is only sent when the MAIL FROM domain passed SPF or
+  aligned DKIM (`verifiedDomains` of the content filter), and always with
+  `RET=HDRS` — a forged MAIL FROM with `NOTIFY=SUCCESS` must not reflect mail
+  to a third party (backscatter).
+- Local outcomes are reported per address as given: an alias whose target
+  mailbox is full gets one NDR under the alias and no success report. When a
+  transaction fails after part of it was stored (451, client retry), the
+  retry still sends the NDRs of recipients that were over quota or unknown in
+  the first attempt (the partial-delivery ledger keeps each outcome). The
+  queue worker judges success reports on its persisted delivered/bounced
+  sets, so a retry never confirms a recipient that was bounced earlier.
+- A transport rule that redirects or adds a local recipient that is full or
+  unknown sends the sender an NDR (`5.2.2` / `5.1.1`) instead of dropping the
+  copy.
 - **relayed**: after an external delivery to a next hop that does not
   advertise DSN. When the next hop does advertise DSN, nodemailer passes
   `RET`/`ENVID`/`NOTIFY`/`ORCPT` on (`dsn` mail option), and that hop is then
