@@ -3,6 +3,8 @@ import { promises as dns } from 'dns';
 import { isIP } from 'net';
 import { createLogger, isBlockedAddress, normalizeIp } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
+import { hasDsnRequest, rcptDsn, type EnvelopeDsn } from '../core/dsn-params.js';
+import { envelopeNeedsSmtputf8, toAsciiDomainAddress } from '../core/idn.js';
 
 const log = createLogger('smtp:relay');
 
@@ -71,6 +73,63 @@ export interface RecipientFailure {
 export interface RelayResult {
   delivered: string[];
   failures:  RecipientFailure[];
+  /**
+   * Delivered recipients whose next hop advertised DSN and received the
+   * NOTIFY/ORCPT/RET/ENVID parameters — it now owns their notifications
+   * (RFC 3461 §5.2). Delivered recipients not listed here were "relayed".
+   */
+  dsnPassedOn?: string[];
+}
+
+/** Per-message envelope extras for one relay call. */
+export interface RelayOptions {
+  /** RFC 3461 DSN request of the transaction (passed on when the next hop supports DSN). */
+  dsn?: EnvelopeDsn;
+}
+
+/** nodemailer `dsn` message option (applies to MAIL FROM and every RCPT TO of the transaction). */
+export interface NmDsn { ret?: string; envid?: string; notify?: string; orcpt?: string }
+
+/** RFC 6531 §3.2: the next hop must support SMTPUTF8 for a UTF-8 envelope. */
+export const SMTPUTF8_UNSUPPORTED: Omit<RecipientFailure, 'rcpt'> = {
+  code: null,
+  status: '5.6.7',
+  message: 'Next-hop server does not support SMTPUTF8; the address requires it (RFC 6531)',
+  permanent: true,
+};
+
+/**
+ * Pure: splits recipients into SMTP transactions with one NOTIFY/ORCPT each —
+ * nodemailer applies its `dsn` option to every RCPT of a transaction, so
+ * recipients with different requests (or an ORCPT of their own) need their
+ * own transaction. Without a DSN request: one group, no `dsn`.
+ */
+export function dsnGroups(rcpts: string[], dsn?: EnvelopeDsn): Array<{ rcpts: string[]; dsn?: NmDsn }> {
+  if (!hasDsnRequest(dsn)) return [{ rcpts }];
+  const groups = new Map<string, { rcpts: string[]; dsn: NmDsn }>();
+  for (const rcpt of rcpts) {
+    const r = rcptDsn(dsn, rcpt);
+    const notify = r?.notify ? (r.notify.length > 0 ? r.notify.join(',') : 'NEVER') : undefined;
+    const orcpt = r?.orcpt ? `${r.orcpt.type};${r.orcpt.address}` : undefined;
+    const key = `${notify ?? ''}\0${orcpt ?? ''}`;
+    const group = groups.get(key) ?? {
+      rcpts: [],
+      dsn: {
+        ...(dsn?.ret ? { ret: dsn.ret } : {}),
+        ...(dsn?.envid !== undefined ? { envid: dsn.envid } : {}),
+        ...(notify ? { notify } : {}),
+        ...(orcpt ? { orcpt } : {}),
+      },
+    };
+    group.rcpts.push(rcpt);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((g) => (Object.keys(g.dsn).length > 0 ? g : { rcpts: g.rcpts }));
+}
+
+/** True when an EHLO keyword list advertises `keyword`. */
+export function ehloHas(lines: string[] | undefined, keyword: string): boolean {
+  return !!lines?.some((l) => l.trim().split(/\s+/)[0]?.toUpperCase() === keyword);
 }
 
 /** Error properties nodemailer sets on SMTP failures. */
@@ -286,23 +345,53 @@ export function mxTransportOptions(host: string, heloName: string, dkimCfg?: NmD
 
 // ── Injectable I/O (tests) ────────────────────────────────────────────────────
 
-export interface SendInfo { accepted?: unknown[]; rejected?: unknown[]; rejectedErrors?: SmtpError[] }
+/** `ehlo`: the next hop's EHLO keywords (nodemailer reports them on success). */
+export interface SendInfo { accepted?: unknown[]; rejected?: unknown[]; rejectedErrors?: SmtpError[]; ehlo?: string[] }
 
 export interface RelayDeps {
   config(): Promise<OutboundConfig>;
   resolveMx(domain: string): Promise<Array<{ exchange: string; priority: number }>>;
-  send(transportOptions: Record<string, unknown>, envelope: { from: string; to: string[] }, raw: Buffer): Promise<SendInfo>;
+  send(transportOptions: Record<string, unknown>, envelope: { from: string; to: string[] }, raw: Buffer, dsn?: NmDsn): Promise<SendInfo>;
   /** A/AAAA of an MX host (SSRF check before connecting); absent = no check. */
   resolveHost?: (host: string) => Promise<string[]>;
+  /**
+   * EHLO keywords of a next hop (connect + EHLO + QUIT), used only before
+   * sending a UTF-8 envelope; null when unknown. Absent = no check.
+   */
+  probe?: (transportOptions: Record<string, unknown>) => Promise<string[] | null>;
+}
+
+/** Connects, reads the EHLO keywords (after STARTTLS when offered) and quits. */
+async function probeEhlo(options: Record<string, unknown>): Promise<string[] | null> {
+  const { default: SMTPConnection } = await import('nodemailer/lib/smtp-connection/index.js');
+  const { dkim: _dkim, ...connOptions } = options;
+  const conn = new SMTPConnection(connOptions as ConstructorParameters<typeof SMTPConnection>[0]);
+  return new Promise<string[] | null>((resolve) => {
+    let done = false;
+    const finish = (lines: string[] | null): void => {
+      if (done) return;
+      done = true;
+      try { if (lines) conn.quit(); else conn.close(); } catch { /* already closed */ }
+      resolve(lines);
+    };
+    conn.once('error', () => finish(null));
+    conn.connect((err?: unknown) => {
+      if (err) { finish(null); return; }
+      const lines = (conn as unknown as { _ehloLines?: unknown })._ehloLines;
+      finish(Array.isArray(lines) ? lines.map(String) : null);
+    });
+  });
 }
 
 const defaultRelayDeps: RelayDeps = {
   config: getOutboundConfig,
   resolveMx: (domain) => dns.resolveMx(domain),
   resolveHost: async (host) => (await dns.lookup(host, { all: true, verbatim: true })).map((a) => a.address),
-  send: async (options, envelope, raw) => {
+  probe: probeEhlo,
+  send: async (options, envelope, raw, dsn) => {
     const transporter = nodemailer.createTransport(options as Parameters<typeof nodemailer.createTransport>[0]);
-    return await transporter.sendMail({ envelope, raw }) as SendInfo;
+    // `dsn`: nodemailer adds RET/ENVID/NOTIFY/ORCPT only when the next hop advertises DSN.
+    return await transporter.sendMail({ envelope, raw, ...(dsn ? { dsn } : {}) }) as SendInfo;
   },
 };
 
@@ -318,6 +407,13 @@ const defaultRelayDeps: RelayDeps = {
  * @param from       SMTP envelope sender (MAIL FROM), '' = null sender
  * @param to         SMTP envelope recipients (RCPT TO) — external addresses only
  * @param dkim       Optional DKIM key data of the sender domain
+ * @param opts       DSN request to pass on (RFC 3461)
+ *
+ * v8.1: IDN domains go out as A-labels (MX lookup + envelope); an envelope
+ * that still needs SMTPUTF8 (UTF-8 local-part) is only sent to a next hop
+ * that advertises SMTPUTF8 — otherwise the recipients fail with 5.6.7
+ * (RFC 6531 §3.2). With a DSN request the parameters are passed on when the
+ * next hop advertises DSN (`dsnPassedOn`).
  */
 export async function relayMessage(
   rawBuffer: Buffer,
@@ -325,6 +421,7 @@ export async function relayMessage(
   to: string[],
   dkim: DkimOptions,
   deps: RelayDeps = defaultRelayDeps,
+  opts: RelayOptions = {},
 ): Promise<RelayResult> {
   const cfg     = await deps.config();
   const dkimCfg = buildDkim(dkim);
@@ -335,21 +432,52 @@ export async function relayMessage(
     log.warn({ from }, 'No DKIM key configured — sending message unsigned');
   }
 
-  if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
-    const result = await sendAndCollect(withCertificateHint(deps, cfg.smarthostHost), smarthostTransportOptions(cfg, dkimCfg), from, to, rawBuffer);
-    log.info({ smarthost: cfg.smarthostHost, port: cfg.smarthostPort, dkim: !!dkimCfg, delivered: result.delivered, failed: result.failures.length },
-      'Delivered via smarthost');
-    return result;
-  }
+  // Wire form: A-label domains; results are reported with the original spelling.
+  const original = new Map<string, string>();
+  const wireFrom = toAsciiDomainAddress(from);
+  const wire = (rcpt: string): string => {
+    const w = toAsciiDomainAddress(rcpt);
+    if (!original.has(w)) original.set(w, rcpt);
+    return w;
+  };
+  const back = (r: RelayResult): RelayResult => ({
+    delivered: r.delivered.map((w) => original.get(w) ?? w),
+    failures: r.failures.map((f) => ({ ...f, rcpt: original.get(f.rcpt) ?? f.rcpt })),
+    ...(r.dsnPassedOn ? { dsnPassedOn: r.dsnPassedOn.map((w) => original.get(w) ?? w) } : {}),
+  });
 
-  // Direct MX delivery — group recipients by domain
   const result: RelayResult = { delivered: [], failures: [] };
-  for (const [domain, recipients] of groupByDomain(to)) {
-    const r = await deliverToDomain(deps, rawBuffer, from, recipients, domain, cfg.heloName, dkimCfg);
+  const add = (r: RelayResult): void => {
     result.delivered.push(...r.delivered);
     result.failures.push(...r.failures);
+    if (r.dsnPassedOn?.length) (result.dsnPassedOn ??= []).push(...r.dsnPassedOn);
+  };
+
+  for (const group of dsnGroups(to, opts.dsn)) {
+    const rcpts = group.rcpts.map(wire);
+    const extra: SendExtra = {
+      ...(group.dsn ? { dsn: group.dsn } : {}),
+      needsUtf8: envelopeNeedsSmtputf8(wireFrom, rcpts),
+    };
+    if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
+      const r = await sendAndCollect(withCertificateHint(deps, cfg.smarthostHost), smarthostTransportOptions(cfg, dkimCfg), wireFrom, rcpts, rawBuffer, extra);
+      log.info({ smarthost: cfg.smarthostHost, port: cfg.smarthostPort, dkim: !!dkimCfg, delivered: r.delivered, failed: r.failures.length },
+        'Delivered via smarthost');
+      add(back(r));
+      continue;
+    }
+    // Direct MX delivery — group recipients by domain
+    for (const [domain, recipients] of groupByDomain(rcpts)) {
+      add(back(await deliverToDomain(deps, rawBuffer, wireFrom, recipients, domain, cfg.heloName, dkimCfg, extra)));
+    }
   }
   return result;
+}
+
+interface SendExtra {
+  dsn?: NmDsn;
+  /** The envelope has a UTF-8 local-part: the next hop must advertise SMTPUTF8. */
+  needsUtf8?: boolean;
 }
 
 /** One SMTP transaction; accepted/rejected recipients are taken from the reply. */
@@ -359,14 +487,24 @@ async function sendAndCollect(
   from: string,
   to: string[],
   raw: Buffer,
+  extra: SendExtra = {},
 ): Promise<RelayResult> {
+  if (extra.needsUtf8 && deps.probe) {
+    const ehlo = await deps.probe(options).catch(() => null);
+    if (ehlo && !ehloHas(ehlo, 'SMTPUTF8')) {
+      log.warn({ host: options['host'], to }, 'Next hop does not support SMTPUTF8 — UTF-8 envelope not sent');
+      return { delivered: [], failures: to.map((rcpt) => ({ rcpt, ...SMTPUTF8_UNSUPPORTED })) };
+    }
+  }
   try {
-    const info = await deps.send(options, { from, to }, raw);
+    const info = await deps.send(options, { from, to }, raw, extra.dsn);
     const rejected = new Set((info.rejected ?? []).map(String));
     const errors = new Map((info.rejectedErrors ?? []).map((e) => [e.recipient ?? '', e] as const));
+    const delivered = to.filter((r) => !rejected.has(r));
     return {
-      delivered: to.filter((r) => !rejected.has(r)),
+      delivered,
       failures: to.filter((r) => rejected.has(r)).map((rcpt) => ({ rcpt, ...classifySmtpError(errors.get(rcpt) ?? new Error('Recipient rejected')) })),
+      ...(extra.dsn && ehloHas(info.ehlo, 'DSN') ? { dsnPassedOn: delivered } : {}),
     };
   } catch (err) {
     return { delivered: [], failures: failuresFor(to, err) };
@@ -451,6 +589,7 @@ async function deliverToDomain(
   domain: string,
   heloName: string,
   dkimCfg: NmDkim | undefined,
+  extra: SendExtra = {},
 ): Promise<RelayResult> {
   const mx = await lookupMx(domain, deps.resolveMx);
   if (mx.kind === 'fail') {
@@ -468,7 +607,7 @@ async function deliverToDomain(
     }
     const options = mxTransportOptions(target.address ?? host, heloName, dkimCfg);
     if (target.address) options['tls'] = { ...(options['tls'] as object), servername: host };
-    const result = await sendAndCollect(deps, options, from, recipients, rawBuffer);
+    const result = await sendAndCollect(deps, options, from, recipients, rawBuffer, extra);
     // A permanent reply or a (partial) acceptance is authoritative. When
     // nothing was accepted and every failure is temporary (connection error,
     // 421 greeting, 4yz), the next MX is tried (§5.1).

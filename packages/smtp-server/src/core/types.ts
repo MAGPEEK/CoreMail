@@ -1,8 +1,11 @@
 /**
  * SMTP Core Types — RFC 5321 State Machine
  */
+import type { BodyType } from './envelope.js';
+import type { EnvelopeDsn } from './dsn-params.js';
 
-export type SmtpState = 'INIT' | 'READY' | 'AUTH_WAIT' | 'MAIL' | 'RCPT' | 'DATA' | 'QUIT';
+/** `BDAT`: at least one non-LAST BDAT chunk of the transaction was received (RFC 3030). */
+export type SmtpState = 'INIT' | 'READY' | 'AUTH_WAIT' | 'MAIL' | 'RCPT' | 'DATA' | 'BDAT' | 'QUIT';
 export type AuthMechanism = 'PLAIN' | 'LOGIN';
 
 export interface AuthUser {
@@ -19,6 +22,22 @@ export interface Transaction {
   rcptTo: string[];
   data: Buffer[];
   size: number;
+  /** MAIL … SMTPUTF8 (RFC 6531). */
+  smtputf8: boolean;
+  /** MAIL … BODY= (RFC 6152 / RFC 3030). */
+  body: BodyType;
+  /** RET / ENVID / per-recipient NOTIFY + ORCPT (RFC 3461). */
+  dsn: EnvelopeDsn;
+}
+
+/** Envelope extension data of one transaction, handed to `onMessage` via `MessageMeta`. */
+export interface MessageEnvelope {
+  smtputf8: boolean;
+  body: BodyType;
+  /** Present when the client used any DSN parameter. */
+  dsn?: EnvelopeDsn;
+  /** The content was transferred with BDAT (RFC 3030). */
+  chunking: boolean;
 }
 
 export interface SmtpHandlers {
@@ -44,12 +63,17 @@ export interface SmtpHandlers {
 export interface MessageMeta {
   /** Argument of EHLO/HELO as sent by the client. */
   helo: string;
-  /** RFC 3848 "with" keyword: SMTP, ESMTP, ESMTPS, ESMTPA, ESMTPSA. */
-  protocol: 'SMTP' | 'ESMTP' | 'ESMTPS' | 'ESMTPA' | 'ESMTPSA';
+  /**
+   * RFC 3848 "with" keyword: SMTP, ESMTP, ESMTPS, ESMTPA, ESMTPSA; RFC 6531
+   * §3.7.3 UTF8SMTP, UTF8SMTPS, UTF8SMTPA, UTF8SMTPSA for SMTPUTF8 transactions.
+   */
+  protocol: 'SMTP' | 'ESMTP' | 'ESMTPS' | 'ESMTPA' | 'ESMTPSA' | 'UTF8SMTP' | 'UTF8SMTPS' | 'UTF8SMTPA' | 'UTF8SMTPSA';
   /** Our own host name (220 greeting / EHLO). */
   hostname: string;
   /** Session id (trace header `id` clause, logs). */
   sessionId: string;
+  /** SMTPUTF8 / BODY / DSN parameters and the transfer mode (optional for other callers). */
+  envelope?: MessageEnvelope;
 }
 
 /**
@@ -73,12 +97,11 @@ export interface EsmtpExtensions {
 export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
   starttls: true, authPlain: true, authLogin: true,
   pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
-  // Deliberately false — these extensions are NOT implemented in the server:
-  //   CRAM-MD5 (RFC 4954) — handleAuth only recognizes PLAIN + LOGIN
-  //   SMTPUTF8 (RFC 6531) — UTF-8 addresses are not handled specially
-  //   DSN (RFC 3461)      — no NOTIFY/ORCPT/ENVID parsing, no multipart/report
-  //   CHUNKING (RFC 3030) — BDAT command is not recognized by the parser
-  authCramMd5: false, smtputf8: false, dsn: false, chunking: false,
+  // v8.1: SMTPUTF8 (RFC 6531), DSN (RFC 3461) and CHUNKING + BINARYMIME
+  // (RFC 3030) are implemented — Exchange 2019 EHLO parity.
+  smtputf8: true, dsn: true, chunking: true,
+  // CRAM-MD5 (RFC 4954) stays off — handleAuth only recognizes PLAIN + LOGIN.
+  authCramMd5: false,
 };
 
 /** Bare `RCPT TO:<Postmaster>` (RFC 5321 §4.1.1.3) is passed to the handlers as this value. */

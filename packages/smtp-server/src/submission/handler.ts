@@ -12,8 +12,10 @@ import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses,
 } from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
-import { expandRecipients } from '../handlers/expand.js';
+import { expandRecipients, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
+import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
+import { dsnForRecipients } from '../core/dsn-params.js';
 import { buildReceivedHeader, formatRfc5322Date, prependHeader } from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
@@ -21,7 +23,8 @@ import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
 // ── RFC 822 lightweight header extraction ─────────────────────────────────────
 function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
   const end = raw.indexOf('\r\n\r\n');
-  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('binary');
+  // UTF-8 header fields (RFC 6532, SMTPUTF8 mail) are decoded as UTF-8.
+  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('utf8');
   const subjectMatch = /^Subject:\s*(.+?)(?=\r?\n\S|\r?\n\r?\n|$)/im.exec(text);
   const msgIdMatch   = /^Message-ID:\s*([^\r\n]+)/im.exec(text);
   return {
@@ -135,13 +138,9 @@ async function onMessage(
   for (const rcpt of to) {
     // Bare <Postmaster> (RFC 5321 §4.1.1.3) is the local postmaster.
     if (!rcpt.includes('@')) { localRcpts.push(rcpt); continue; }
-    const domain = rcpt.slice(rcpt.lastIndexOf('@') + 1);
 
-    const localDomain = await prisma.domain.findFirst({
-      where: { name: domain.toLowerCase(), active: true },
-    });
-
-    if (localDomain) {
+    // IDN domains match the local domain in either spelling (v8.1).
+    if (await isLocalDomainAddress(rcpt)) {
       localRcpts.push(rcpt);
     } else {
       externalRcpts.push(rcpt);
@@ -166,15 +165,29 @@ async function onMessage(
       senderAuth: { authenticatedSender: from },
     }),
     enqueueExternal: async (rcpts) => {
+      // RFC 3461: the DSN request travels with the queue job (passed on to a
+      // DSN-capable next hop, honoured by the queue's DSNs).
+      const jobDsn = dsnForRecipients(meta?.envelope?.dsn, rcpts);
       await enqueueOutbound({
         messageId: crypto.randomUUID(),
         from,
         to: rcpts,
         rawMessage: submittedRaw.toString('base64'),
         senderUserId: authUser.id,
+        ...(jobDsn ? { dsn: jobDsn } : {}),
       });
     },
   });
+
+  // RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for local recipients (stored in the sender's mailbox).
+  const dsn = meta?.envelope?.dsn;
+  if (dsn && localRcpts.length > 0) {
+    const original = rawSubjectAndId(submittedRaw);
+    await sendSuccessDsn({
+      from, rcpts: localRcpts, action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
+      subject: original.subject, messageId: original.messageId, deliverExternal: true,
+    });
+  }
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
   const headers = extractRawHeaders(raw);
