@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
-  prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus,
+  prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
@@ -55,9 +55,8 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
   // MFA active → CalDAV/CardDAV/IMAP/SMTP clients need an app password
   // (bearer token does not work in the clients, the normal password is
   // blocked by MFA).
-  const mfaEnabled = !!(mfa?.totpEnabled || (mfa?.webAuthnCredentials &&
-    typeof mfa.webAuthnCredentials === 'string' &&
-    mfa.webAuthnCredentials.length > 2));
+  // 8.1: webAuthnCredentials is a Json array — same rule as the mail login (hasMfa)
+  const mfaEnabled = hasMfa({ mfa });
 
   res.json({
     user: {
