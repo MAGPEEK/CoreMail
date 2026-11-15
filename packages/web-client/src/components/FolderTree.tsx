@@ -4,8 +4,10 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
   Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
   Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
-  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check,
+  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check, RotateCcw,
 } from 'lucide-react';
+import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
+import { QuotaIndicator } from './QuotaIndicator.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Folder as FolderType, RetentionTag } from '../api/types.js';
@@ -189,6 +191,7 @@ export function FolderTree({ onNewMail }: Props) {
   const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [recoverOpen, setRecoverOpen] = useState(false);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
 
   const { data: folders } = useQuery({
@@ -432,12 +435,19 @@ export function FolderTree({ onNewMail }: Props) {
     if (isTrashOrJunk) {
       items.push(
         { type: 'divider' },
+        // v8.1: Exchange "Recover deleted items" — from the Trash folder
+        ...(folder.name === 'Trash' ? [{
+          label: t('recover_title'),
+          icon: <RotateCcw size={14} />,
+          onClick: () => setRecoverOpen(true),
+        }] : []),
         {
           label: t('empty_folder'),
           icon: <Eraser size={14} />,
           danger: true,
           onClick: () => {
-            if (!window.confirm('Alle Nachrichten in diesem Ordner werden unwiderruflich gelöscht. Fortfahren?')) return;
+            // v8.1: emptied items stay recoverable (Recover deleted items)
+            if (!window.confirm(`${t('empty_folder')}?`)) return;
             emptyFolder.mutate(folder.id);
           },
         },
@@ -566,7 +576,11 @@ export function FolderTree({ onNewMail }: Props) {
         {/* Public folders completely removed in v3.18.31 */}
       </nav>
 
+      {/* v8.1: mailbox usage / quota level */}
+      <QuotaIndicator />
+
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {recoverOpen && <RecoverDeletedItemsDialog onClose={() => setRecoverOpen(false)} />}
 
       {dialog?.kind === 'createRoot' && (
         <PromptDialog
