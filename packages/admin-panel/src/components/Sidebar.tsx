@@ -16,13 +16,14 @@ type NavGroup = { groupKey: string; items: NavItem[] };
 
 export function Sidebar() {
   const t = useT();
-  const { can, ready } = usePermissions();
+  const { canSeePath, ready } = usePermissions();
   // Only areas the role may at least read (EAC: features without rights are not shown).
   // Until the permissions are known only the always-visible entries are shown.
   const visible = (path: string) => {
     const area = areaForPath(path);
     if (area === null || area === undefined) return true;
-    return ready && can(area, 'read');
+    // 9.1: or a page action (COMPLIANCE_MANAGEMENT → Backups via backupMailboxData)
+    return ready && canSeePath(path);
   };
 
   const ALL_NAV: (NavItem | NavGroup)[] = [

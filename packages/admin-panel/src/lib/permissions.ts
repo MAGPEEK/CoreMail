@@ -112,6 +112,52 @@ export function blocksWrite(
 }
 
 /**
+ * 9.1: BCP pages (first path segment) an admin may open through a narrow action
+ * WITHOUT read access to the page's area. The page then opens read-only and
+ * shows only what the action covers — COMPLIANCE_MANAGEMENT reaches Backups
+ * through backupMailboxData (per-mailbox backup, downloads, import, job list),
+ * mirroring complianceBackupAccess in api-gateway routes/admin/backups.ts.
+ */
+export const PATH_ACTIONS: Readonly<Record<string, readonly AdminAction[]>> = {
+  backups: ['backupMailboxData'],
+};
+
+const firstSegment = (pathname: string): string =>
+  pathname.replace(/^\/bcp(?=\/|$)/, '').split('/').filter(Boolean)[0] ?? 'dashboard';
+
+/**
+ * Effective access to a page: the area access (`page.access`, from accessForPath)
+ * or — when that is 'none' — 'read' if the admin holds one of the page's
+ * PATH_ACTIONS. Used for the sidebar, the 403 page and the client write block.
+ */
+export function pageAccessFor(
+  areas: AdminAreas | null, actions: AdminActions | null,
+  page: { path: string; access: AreaAccess | 'none' },
+): AreaAccess | 'none' {
+  if (page.access !== 'none') return page.access;
+  const via = PATH_ACTIONS[firstSegment(page.path)] ?? [];
+  return via.some((a) => canAction(areas, actions, a)) ? 'read' : 'none';
+}
+
+/** What the Backups page offers (9.1). */
+export interface BackupCapabilities {
+  /** servers read: schedules tab + operational lists */
+  operations: boolean;
+  /** servers write: full backup, schedules CRUD, deleting jobs / archive objects */
+  manage: boolean;
+  /** backupMailboxData: per-mailbox backup, job/archive download, MBOX import */
+  mailboxData: boolean;
+}
+
+export function backupCapabilities(areas: AdminAreas | null, actions: AdminActions | null): BackupCapabilities {
+  return {
+    operations: can(areas, 'servers', 'read'),
+    manage: can(areas, 'servers', 'write'),
+    mailboxData: canAction(areas, actions, 'backupMailboxData'),
+  };
+}
+
+/**
  * What a failed GET /admin/me/permissions means:
  *  - 404 → older backend: ask /user/me (adminAreas) instead ('legacy');
  *  - 401/403 → the session is not an admin session (e.g. role USER): no areas;

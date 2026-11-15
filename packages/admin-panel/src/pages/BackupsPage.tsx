@@ -11,6 +11,8 @@ import { api, downloadFileNamed } from '../api/client.js';
 import { backupFileName, contentDispositionName } from '../lib/backupNames.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useAccessStore } from '../store/access.js';
+import { backupCapabilities } from '../lib/permissions.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 
@@ -27,6 +29,11 @@ import { DataTable, type Column } from '../components/DataTable.js';
  * - Backup jobs can be deleted
  * - Download works (stream proxy via api-gateway)
  * - Cron editor with weekday/hour/minute dropdowns (instead of free text)
+ *
+ * 9.1: COMPLIANCE_MANAGEMENT (action backupMailboxData, no 'servers' area) opens
+ * this page too and sees only the mailbox-data parts: jobs list + download,
+ * per-mailbox backup, archive list + download, restore. Schedules, the full
+ * backup and every delete stay with 'servers' (lib/permissions.ts backupCapabilities).
  */
 
 type JobStatus =
@@ -111,6 +118,7 @@ type Tab = 'jobs' | 'actions' | 'schedules' | 'archive' | 'restore';
 export function BackupsPage() {
   const t = useT();
   const { can, canAction } = usePermissions();
+  const caps = backupCapabilities(useAccessStore((s) => s.areas), useAccessStore((s) => s.actions));
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('jobs');
   const [scheduleEditor, setScheduleEditor] = useState<Partial<BackupSchedule> | null>(null);
@@ -134,6 +142,7 @@ export function BackupsPage() {
     queryKey: ['admin-backups-schedules'],
     queryFn:  () => api.get<BackupSchedule[]>('/admin/backups/schedules'),
     staleTime: 30_000,
+    enabled: caps.operations, // 9.1: COMPLIANCE_MANAGEMENT has no schedules (403)
   });
 
   const { data: users = [] } = useQuery<UserItem[]>({
@@ -343,8 +352,8 @@ export function BackupsPage() {
       <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="-mb-px flex gap-1 overflow-x-auto">
           <TabBtn active={tab === 'jobs'} onClick={() => setTab('jobs')} icon={<ListChecks size={14} />} label="Jobs" badge={jobsData.length} />
-          {can('servers', 'write') && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
-          <TabBtn active={tab === 'schedules'} onClick={() => setTab('schedules')} icon={<CalendarClock size={14} />} label="Zeitpläne" badge={schedules.length} />
+          {(caps.manage || caps.mailboxData) && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
+          {caps.operations && <TabBtn active={tab === 'schedules'} onClick={() => setTab('schedules')} icon={<CalendarClock size={14} />} label="Zeitpläne" badge={schedules.length} />}
           <TabBtn active={tab === 'archive'} onClick={() => setTab('archive')} icon={<Archive size={14} />} label="Backup-Archiv" badge={s3Data.length} />
           {canAction('backupMailboxData') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />}
         </nav>
@@ -397,8 +406,9 @@ export function BackupsPage() {
       )}
 
       {/* TAB: Quick actions */}
-      {tab === 'actions' && can('servers', 'write') && (
+      {tab === 'actions' && (caps.manage || caps.mailboxData) && (
         <ActionsTab
+          showFullBackup={caps.manage}
           users={users}
           onFullBackup={() => triggerFullBackup.mutate()}
           fullPending={triggerFullBackup.isPending}
@@ -408,7 +418,7 @@ export function BackupsPage() {
       )}
 
       {/* TAB: Schedules */}
-      {tab === 'schedules' && (
+      {tab === 'schedules' && caps.operations && (
         <div className="space-y-3">
           <div className="flex justify-end">
             <button
@@ -514,6 +524,8 @@ export function BackupsPage() {
                               <HardDriveDownload size={13} />
                             </button>
                           </Can>
+                          {/* 9.1: deleting archive objects is 'servers' write only (API: DELETE /archive) */}
+                          <Can area="servers" access="write">
                           <button aria-label="Backup löschen"
                             onClick={() => {
                               if (window.confirm(`Backup „${b.key}" wirklich endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
@@ -526,6 +538,7 @@ export function BackupsPage() {
                           >
                             <Trash2 size={13} />
                           </button>
+                          </Can>
                         </div>
                       </td>
                     </tr>
@@ -581,6 +594,8 @@ function TabBtn(props: { active: boolean; onClick: () => void; icon: React.React
 
 // ─── Tab: Quick actions ─────────────────────────────────────────────────────
 function ActionsTab(props: {
+  /** 9.1: false for COMPLIANCE_MANAGEMENT (mailbox data only, no full backup) */
+  showFullBackup: boolean;
   users: UserItem[];
   onFullBackup: () => void;
   fullPending: boolean;
@@ -593,6 +608,7 @@ function ActionsTab(props: {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {/* Full backup */}
+      {props.showFullBackup && (
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
         <div className="flex items-start gap-3 mb-3">
           <Database size={20} className="text-accent mt-0.5" />
@@ -612,6 +628,7 @@ function ActionsTab(props: {
           {props.fullPending ? 'Wird gestartet…' : 'Vollbackup jetzt starten'}
         </button>
       </div>
+      )}
 
       {/* Mailbox backup */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
