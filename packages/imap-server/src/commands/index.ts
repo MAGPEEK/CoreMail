@@ -750,6 +750,8 @@ export async function handleThread(session: ImapSession, tag: string, tokens: To
   if (algorithm === 'REFERENCES') {
     // v9.1: the stored References chains (Message.references, lazily backfilled
     // for older rows) of the selected folder — own or foreign (session.selected).
+    // The lazy step is capped (200 rows, REFERENCES_LAZY_BUDGET_MS, default 1500 ms)
+    // and skips rows that failed recently; the rest is the background job's.
     const refs = await loadThreadReferences(session.selected!.folderId, rows.map((r) => r.id));
     const list = rows.map((r) => ({ ...r, references: refs.get(r.id) ?? null }));
     threads = threadReferences(list, idOf);
