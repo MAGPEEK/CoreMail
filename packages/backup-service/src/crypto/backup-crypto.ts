@@ -39,7 +39,7 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { Transform, type TransformCallback, type Readable } from 'node:stream';
+import { pipeline as pipelineCallback, Transform, type TransformCallback, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 export const MAGIC = Buffer.from('CMBK', 'ascii');
@@ -310,6 +310,24 @@ export function openDecryptedStream(source: Readable, keyring: Pick<BackupKeyrin
 }
 
 /** Encrypts a file (streaming). */
+/**
+ * Encrypted view of `source` for streaming consumers (S3 multipart upload).
+ * Built with stream.pipeline, not `.pipe()`: an error of the source (missing
+ * file, I/O error mid-read) destroys the returned stream WITH that error, so
+ * the consumer rejects instead of waiting forever for data or uploading a
+ * truncated object.
+ */
+export function encryptReadable(source: Readable, key: BackupKey, opts: { frameSize?: number } = {}): Readable {
+  // The callback form returns the last stream; errors are delivered to its
+  // consumer through destroy(err), the callback itself has nothing to add.
+  return pipelineCallback(source, createEncryptStream(key, opts), () => undefined);
+}
+
+/** Encrypted contents of the file at `path` as a stream (see encryptReadable). */
+export function createEncryptedFileStream(path: string, key: BackupKey, opts: { frameSize?: number } = {}): Readable {
+  return encryptReadable(createReadStream(path), key, opts);
+}
+
 export async function encryptFile(src: string, dst: string, key: BackupKey, opts: { frameSize?: number } = {}): Promise<void> {
   await pipeline(createReadStream(src), createEncryptStream(key, opts), createWriteStream(dst, { mode: 0o600 }));
 }

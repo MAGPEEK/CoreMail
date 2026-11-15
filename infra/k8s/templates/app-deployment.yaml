@@ -62,7 +62,28 @@ spec:
               set -eu
               echo "[schema-sync] waiting for PostgreSQL at ${DB_HOST}:${DB_PORT} ..."
               until nc -z "${DB_HOST}" "${DB_PORT}" 2>/dev/null; do sleep 2; done
-              exec /usr/local/bin/coremail-schema-sync
+              if [ -x /usr/local/bin/coremail-schema-sync ]; then
+                exec /usr/local/bin/coremail-schema-sync
+              fi
+              # Images <= 8.0.0 ship no coremail-schema-sync: plain `prisma db push`
+              # WITHOUT --accept-data-loss (a data-loss warning stops the rollout).
+              echo "[schema-sync] WARNING: this image has no coremail-schema-sync (CoreMail <= 8.0.0) —"
+              echo "[schema-sync]          falling back to 'prisma db push' without --accept-data-loss"
+              cd /app/packages/storage
+              attempt=0
+              while :; do
+                attempt=$((attempt + 1))
+                if node node_modules/prisma/build/index.js db push --skip-generate >/tmp/schema-sync.out 2>&1; then
+                  cat /tmp/schema-sync.out; echo "[schema-sync] Schema applied (fallback)"; exit 0
+                fi
+                cat /tmp/schema-sync.out
+                if grep -qiE "data loss|cannot be executed" /tmp/schema-sync.out; then
+                  echo "[schema-sync] ERROR: the schema change needs a newer image (coremail-schema-sync) or a manual migration — database NOT changed"
+                  exit 1
+                fi
+                if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then echo "[schema-sync] ERROR: giving up after ${attempt} attempts"; exit 1; fi
+                sleep 5
+              done
           env:
             - name: COREMAIL_ALLOW_SCHEMA_DATA_LOSS
               value: {{ ternary "true" "false" (and $a.schemaSync.allowDataLoss true) | quote }}
@@ -148,6 +169,12 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MFA_ENCRYPTION_KEY, optional: true } }
             - name: SETUP_TOKEN
               valueFrom: { secretKeyRef: { name: {{ $secret }}, key: SETUP_TOKEN, optional: true } }
+            # Backups: AES-256-GCM key (unset = derived from JWT_SECRET + PEPPER, warning)
+            - name: BACKUP_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: BACKUP_ENCRYPTION_KEY, optional: true } }
+            # rspamd controller password the app sends (bundled rspamd gets the same key)
+            - name: RSPAMD_CONTROLLER_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: RSPAMD_CONTROLLER_PASSWORD, optional: true } }
             - name: VAPID_PRIVATE_KEY
               valueFrom: { secretKeyRef: { name: {{ $secret }}, key: VAPID_PRIVATE_KEY, optional: true } }
             - name: DATABASE_URL

@@ -102,28 +102,62 @@ else
   set_env MINIO_ROOT_PASSWORD 'MinioSecret2024!' && LEGACY_SECRETS="${LEGACY_SECRETS} MINIO_ROOT_PASSWORD"
   set_env PEPPER 'CHANGE-ME-openssl-rand-hex-32' && LEGACY_SECRETS="${LEGACY_SECRETS} PEPPER"
   # A publicly known JWT_SECRET lets anyone forge login tokens → rotate it now.
-  # Its only other use is deriving the 2FA (TOTP) encryption key, so that key is
-  # pinned first as MFA_ENCRYPTION_KEY (same bytes → existing 2FA keeps working).
-  # Rotating only logs every user out once.
-  if ! grep -qs '^JWT_SECRET=' "${ENV_FILE}"; then
+  # Two keys are derived from it as long as they are not set explicitly, so both
+  # are pinned FIRST with exactly the derived bytes:
+  #   MFA_ENCRYPTION_KEY    = HKDF(JWT\0PEPPER, "coremail-mfa", "totp-secret-v1")
+  #                           → existing 2FA keeps working
+  #   BACKUP_ENCRYPTION_KEY = HKDF(JWT\0PEPPER, "coremail-backup-key",
+  #                           "coremail backup encryption key v1")
+  #                           (packages/backup-service/src/crypto/backup-crypto.ts)
+  #                           → existing encrypted backups stay restorable
+  # Rotating only logs every user out once. If a key cannot be computed, the
+  # old JWT_SECRET is kept (and reported) rather than losing 2FA or backups.
+  LEGACY_JWT_DEFAULT='CHANGE-ME-openssl-rand-hex-32'
+  LEGACY_PEPPER="$(grep '^PEPPER=' "${ENV_FILE}" | head -1 | cut -d= -f2-)"
+  CURRENT_JWT="$(grep '^JWT_SECRET=' "${ENV_FILE}" | head -1 | cut -d= -f2-)"
+  APP_IMAGE="$(grep -m1 'image: magpeek/coremail-app' "${REPO_ROOT}/infra/docker/docker-compose.synology.yml" | awk '{print $2}')"
+  # legacy_key SALT INFO → 64 hex chars of HKDF-SHA256(<default JWT>\0<PEPPER>, SALT, INFO, 32)
+  legacy_key() {
+    LEGACY_JWT="${LEGACY_JWT_DEFAULT}" LEGACY_PEPPER="${LEGACY_PEPPER}" HKDF_SALT="$1" HKDF_INFO="$2" \
+      docker run --rm -e LEGACY_JWT -e LEGACY_PEPPER -e HKDF_SALT -e HKDF_INFO \
+      --entrypoint node "${APP_IMAGE:-magpeek/coremail-app:8.0.0}" -e \
+      "process.stdout.write(Buffer.from(require('crypto').hkdfSync('sha256', process.env.LEGACY_JWT + '\0' + process.env.LEGACY_PEPPER, process.env.HKDF_SALT, process.env.HKDF_INFO, 32)).toString('hex'))" \
+      2>/dev/null || true
+  }
+  is_hex64() { printf '%s' "$1" | grep -Eq '^[0-9a-f]{64}$'; }
+  if [ -z "${CURRENT_JWT}" ] || [ "${CURRENT_JWT}" = "${LEGACY_JWT_DEFAULT}" ]; then
+    PINNED_OK=1
     if ! grep -qs '^MFA_ENCRYPTION_KEY=' "${ENV_FILE}"; then
-      LEGACY_PEPPER="$(grep '^PEPPER=' "${ENV_FILE}" | head -1 | cut -d= -f2-)"
-      APP_IMAGE="$(grep -m1 'image: magpeek/coremail-app' "${REPO_ROOT}/infra/docker/docker-compose.synology.yml" | awk '{print $2}')"
-      MFA_KEY="$(LEGACY_JWT='CHANGE-ME-openssl-rand-hex-32' LEGACY_PEPPER="${LEGACY_PEPPER}" docker run --rm -e LEGACY_JWT -e LEGACY_PEPPER \
-        --entrypoint node "${APP_IMAGE:-magpeek/coremail-app:8.0.0}" -e \
-        "process.stdout.write(Buffer.from(require('crypto').hkdfSync('sha256', process.env.LEGACY_JWT + '\0' + process.env.LEGACY_PEPPER, 'coremail-mfa', 'totp-secret-v1', 32)).toString('hex'))" \
-        2>/dev/null || true)"
-      if printf '%s' "${MFA_KEY}" | grep -Eq '^[0-9a-f]{64}$'; then
+      MFA_KEY="$(legacy_key 'coremail-mfa' 'totp-secret-v1')"
+      if is_hex64 "${MFA_KEY}"; then
         set_env MFA_ENCRYPTION_KEY "${MFA_KEY}" || true
-        set_env JWT_SECRET "$(rnd 32)" || true
-        echo "      ✓ JWT_SECRET rotated (was the public default); 2FA key pinned as MFA_ENCRYPTION_KEY"
+        echo "      ✓ 2FA key pinned as MFA_ENCRYPTION_KEY"
       else
-        set_env JWT_SECRET 'CHANGE-ME-openssl-rand-hex-32' || true
+        PINNED_OK=0
+      fi
+    fi
+    if ! grep -qs '^BACKUP_ENCRYPTION_KEY=' "${ENV_FILE}"; then
+      BACKUP_KEY="$(legacy_key 'coremail-backup-key' 'coremail backup encryption key v1')"
+      if is_hex64 "${BACKUP_KEY}"; then
+        set_env BACKUP_ENCRYPTION_KEY "${BACKUP_KEY}" || true
+        echo "      ✓ backup key pinned as BACKUP_ENCRYPTION_KEY (existing backups stay restorable)"
+        echo "        Copy it from ${ENV_FILE} to a safe place OFF the NAS."
+      else
+        PINNED_OK=0
+      fi
+    fi
+    if [ -z "${CURRENT_JWT}" ]; then
+      if [ "${PINNED_OK}" = "1" ]; then
+        set_env JWT_SECRET "$(rnd 32)" || true
+        echo "      ✓ JWT_SECRET rotated (was the public default)"
+      else
+        set_env JWT_SECRET "${LEGACY_JWT_DEFAULT}" || true
         LEGACY_SECRETS="${LEGACY_SECRETS} JWT_SECRET(!)"
       fi
     else
-      set_env JWT_SECRET "$(rnd 32)" || true
-      echo "      ✓ JWT_SECRET rotated (was the public default; MFA_ENCRYPTION_KEY is set)"
+      # JWT_SECRET is still the public default from an earlier run: keys are now
+      # pinned, rotate it by hand (docs/deployment-security.md).
+      LEGACY_SECRETS="${LEGACY_SECRETS} JWT_SECRET(!)"
     fi
   fi
 fi

@@ -6,6 +6,8 @@
 #      --set secrets.jwtSecret=$(openssl rand -hex 32) \
 #      --set secrets.pepper=$(openssl rand -hex 32) \
 #      --set secrets.mfaEncryptionKey=$(openssl rand -hex 32) \
+#      --set secrets.backupEncryptionKey=$(openssl rand -hex 32) \
+#      --set secrets.rspamdControllerPassword=$(openssl rand -hex 20) \
 #      --set secrets.postgresPassword=$(openssl rand -hex 20) \
 #      --set secrets.redisPassword=$(openssl rand -hex 20) \
 #      --set secrets.minioRootPassword=$(openssl rand -hex 20)
@@ -33,6 +35,13 @@ imagePullSecrets: []
 #   MFA_ENCRYPTION_KEY    optional  64 hex chars (strongly recommended)
 #   SETUP_TOKEN           optional  ≥ 16 chars   (required for app.replicaCount > 1)
 #   VAPID_PRIVATE_KEY     optional  web push
+#   BACKUP_ENCRYPTION_KEY optional  64 hex chars or base64 of 32 bytes (strongly
+#                                   recommended; unset = derived from JWT_SECRET +
+#                                   PEPPER). Keep a copy OFF the cluster — without
+#                                   it encrypted backups cannot be restored.
+#   RSPAMD_CONTROLLER_PASSWORD optional ≥ 12 chars [A-Za-z0-9._~+/=-]: password
+#                                   of the rspamd controller (bundled rspamd gets
+#                                   it as well; the app sends it)
 # The passwords are embedded in DATABASE_URL / REDIS_URL — use URL-safe
 # characters only ([A-Za-z0-9._~-]; hex is ideal).
 secrets:
@@ -40,6 +49,8 @@ secrets:
   jwtSecret: ""
   pepper: ""
   mfaEncryptionKey: ""
+  backupEncryptionKey: ""        # openssl rand -hex 32
+  rspamdControllerPassword: ""   # openssl rand -hex 20
   setupToken: ""
   postgresPassword: ""
   redisPassword: ""
@@ -114,10 +125,15 @@ app:
 
   # Schema sync (prisma db push) in an init container before the app starts —
   # the image's coremail-schema-sync, same as entrypoint-app.sh in Docker.
-  # Needs an image with coremail-schema-sync (> 8.0.0). A schema change that would DELETE data stops the
-  # rollout (init container fails, nothing changed) until allowDataLoss is set.
-  # With allowDataLoss a pg_dump is written first to the PVC backupClaim
-  # (mounted at /backups) — or set skipBackup when you made your own backup.
+  # Images <= 8.0.0 have no coremail-schema-sync: the init container then falls
+  # back to a plain `prisma db push` without --accept-data-loss (logged).
+  # New unique constraints are applied automatically after a duplicate check
+  # (best-effort dump to backupClaim if mounted). A schema change that would
+  # DELETE data stops the rollout (init container fails, nothing changed) until
+  # allowDataLoss is set. With allowDataLoss a pg_dump is written first to the
+  # PVC backupClaim (mounted at /backups) — or set skipBackup when you made your
+  # own backup. The image ships pg_dump 16: with an external PostgreSQL >= 17
+  # the dump is impossible — dump it yourself and set skipBackup.
   schemaSync:
     enabled: true
     maxAttempts: 60
@@ -433,7 +449,9 @@ rspamd:
   tolerations: []
   affinity: {}
   # CoreMail talks to the rspamd controller only (RSPAMD_URL): it serves
-  # scanning (/checkv2) as well as learn spam/ham and stats.
+  # scanning (/checkv2) as well as learn spam/ham and stats. The controller
+  # password is secrets.rspamdControllerPassword (RSPAMD_CONTROLLER_PASSWORD).
+  # enabled: false and no external url/host → RSPAMD_ENABLED=false (scanner off).
   external:
     url: ""                 # full controller URL, e.g. https://rspamd.internal:11334 (wins over host)
     host: ""
@@ -465,6 +483,7 @@ clamav:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # enabled: false and no external host → CLAMAV_ENABLED=false (scanner off).
   external:
     host: ""
     port: 3310
