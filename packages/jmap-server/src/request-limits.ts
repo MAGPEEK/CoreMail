@@ -66,6 +66,8 @@ export function concurrencyLimit(gate: ConcurrencyGate, max: () => number, limit
     }
     res.once('finish', release);
     res.once('close', release);
+    // handlers can free the slot early (idempotent), e.g. in a `finally`
+    res.locals['releaseConcurrencySlot'] = release;
     next();
   };
 }

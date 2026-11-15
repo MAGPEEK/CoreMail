@@ -31,6 +31,15 @@ function problem(res: express.Response, err: RequestError): void {
   res.status(err.status).type('application/problem+json').send(JSON.stringify(err.toJson()));
 }
 
+/** 500 problem+json (RFC 7807) for an unexpected failure; the cause is only logged. */
+function internalError(res: express.Response, err: unknown, msg: string): void {
+  log.error({ err }, msg);
+  if (res.headersSent) { res.end(); return; }
+  res.status(500).type('application/problem+json').send(JSON.stringify({
+    type: 'about:blank', status: 500, title: 'Internal Server Error', detail: 'The upload could not be stored, try again later',
+  }));
+}
+
 export function createUploadRouter(deps: UploadRouteDeps): express.Router {
   const router = express.Router();
   const maxSize = deps.maxSizeUpload ?? LIMITS.maxSizeUpload;
@@ -39,12 +48,18 @@ export function createUploadRouter(deps: UploadRouteDeps): express.Router {
     deps.auth,
     concurrencyLimit(deps.gate ?? uploadGate, deps.maxConcurrentUpload ?? (() => LIMITS.maxConcurrentUpload), 'maxConcurrentUpload'),
     async (req, res, next) => {
-      const accounts = await deps.resolveAccounts((req as AuthedRequest).jmapUser!);
-      const account = accounts.get(String(req.params['accountId']));
-      if (!account) { problem(res, new RequestError('accountNotFound', 404)); return; }
-      if (account.readOnly) { problem(res, new RequestError('forbidden', 403, 'The account is read-only')); return; }
-      res.locals['account'] = account;
-      next();
+      // Express 4 does not catch rejected promises: every failure is answered
+      // here (otherwise the request hangs and keeps its upload slot).
+      try {
+        const accounts = await deps.resolveAccounts((req as AuthedRequest).jmapUser!);
+        const account = accounts.get(String(req.params['accountId']));
+        if (!account) { problem(res, new RequestError('accountNotFound', 404)); return; }
+        if (account.readOnly) { problem(res, new RequestError('forbidden', 403, 'The account is read-only')); return; }
+        res.locals['account'] = account;
+        next();
+      } catch (err) {
+        internalError(res, err, 'JMAP upload: account lookup failed');
+      }
     },
     express.raw({ type: () => true, limit: maxSize }),
     async (req, res) => {
@@ -61,7 +76,9 @@ export function createUploadRouter(deps: UploadRouteDeps): express.Router {
           problem(res, new RequestError('overQuota', 403, err.message));
           return;
         }
-        throw err;
+        internalError(res, err, 'JMAP upload: storing the blob failed');
+      } finally {
+        (res.locals['releaseConcurrencySlot'] as (() => void) | undefined)?.();
       }
     },
   );
