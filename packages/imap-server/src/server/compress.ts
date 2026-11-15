@@ -63,6 +63,8 @@ export class CompressedSocket implements ImapSocket {
     if (this.ended) return this;
     if (data !== undefined) this.write(data);
     this.ended = true;
+    // The connection is closing: stop inflating further input (e.g. the rest of a bomb).
+    this.inflate.destroy();
     this.deflate.end();
     return this;
   }
