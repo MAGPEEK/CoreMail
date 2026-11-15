@@ -16,14 +16,21 @@ const log = createLogger('smtp:delivery');
 export const PARTIAL_DELIVERY_TTL_SEC = 5 * 24 * 3600;
 
 export interface DeliveryLedger {
-  /** Recipients already delivered by an earlier, failed attempt. */
+  /** Ledger entries of earlier, failed attempts (see `ledgerEntry`). */
   delivered(key: string): Promise<Set<string>>;
-  /** Records the recipients delivered so far (only after a failed attempt and on its completing retry). */
-  remember(key: string, recipients: string[]): Promise<void>;
+  /** Records the entries so far (only after a failed attempt and on its completing retry). */
+  remember(key: string, entries: string[]): Promise<void>;
 }
 
+/**
+ * Result of one local store: stored, or not storable (mailbox over its hard
+ * quota / recipient gone) — the latter two need an NDR to the sender.
+ */
+export type LocalOutcome = 'delivered' | 'quota' | 'unknown';
+
 export interface DeliveryDeps {
-  storeLocal(rcpt: string): Promise<void>;
+  /** `void` counts as delivered (pre-8.1 callers). */
+  storeLocal(rcpt: string): Promise<LocalOutcome | void>;
   enqueueExternal(rcpts: string[]): Promise<void>;
   ledger: DeliveryLedger;
 }
@@ -36,16 +43,41 @@ export function deliveryKey(from: string, raw: Buffer): string {
 const EXTERNAL_MARK = 'external:';
 
 /**
+ * Pure: ledger entry of a local outcome. A delivered recipient is stored as the
+ * bare address (pre-8.1 ledgers), a failed one with its outcome as prefix — so
+ * a retry still sends the NDR the failed attempt never got to send.
+ */
+export function ledgerEntry(rcpt: string, outcome: LocalOutcome): string {
+  return outcome === 'delivered' ? rcpt : `${outcome}:${rcpt}`;
+}
+
+/** Pure: the outcome recorded for a local recipient, or null when it was not handled yet. */
+export function ledgerOutcome(entries: Set<string>, rcpt: string): LocalOutcome | null {
+  if (entries.has(rcpt)) return 'delivered';
+  if (entries.has(`quota:${rcpt}`)) return 'quota';
+  if (entries.has(`unknown:${rcpt}`)) return 'unknown';
+  return null;
+}
+
+export interface DeliveryResult {
+  stored: string[];
+  skipped: string[];
+  /** Outcome per local recipient — this attempt's or the one recorded by an earlier attempt. */
+  outcomes: Map<string, LocalOutcome>;
+}
+
+/**
  * Stores every local recipient and enqueues the external ones. Throws when a
- * step fails (the caller answers 451); recipients delivered before the failure
- * are recorded so a retry does not deliver them again.
+ * step fails (the caller answers 451); recipients handled before the failure
+ * are recorded WITH their outcome, so a retry neither delivers them again nor
+ * loses the NDR of a recipient that was over quota or unknown.
  */
 export async function deliverOnce(
   key: string,
   local: string[],
   external: string[],
   deps: DeliveryDeps,
-): Promise<{ stored: string[]; skipped: string[] }> {
+): Promise<DeliveryResult> {
   let done: Set<string>;
   try {
     done = await deps.ledger.delivered(key);
@@ -56,12 +88,15 @@ export async function deliverOnce(
   const progress: string[] = [...done];
   const stored: string[] = [];
   const skipped: string[] = [];
+  const outcomes = new Map<string, LocalOutcome>();
   try {
     for (const rcpt of local) {
-      if (done.has(rcpt)) { skipped.push(rcpt); continue; }
-      await deps.storeLocal(rcpt);
-      stored.push(rcpt);
-      progress.push(rcpt);
+      const earlier = ledgerOutcome(done, rcpt);
+      if (earlier) { skipped.push(rcpt); outcomes.set(rcpt, earlier); continue; }
+      const outcome = (await deps.storeLocal(rcpt)) ?? 'delivered';
+      outcomes.set(rcpt, outcome);
+      if (outcome === 'delivered') stored.push(rcpt);
+      progress.push(ledgerEntry(rcpt, outcome));
     }
     const pendingExternal = external.filter((r) => !done.has(EXTERNAL_MARK + r));
     skipped.push(...external.filter((r) => done.has(EXTERNAL_MARK + r)));
@@ -81,9 +116,31 @@ export async function deliverOnce(
   if (done.size > 0) {
     await deps.ledger.remember(key, progress).catch((e: unknown) => log.warn({ err: e, key }, 'Delivery ledger not writable'));
   }
-  return { stored, skipped };
+  return { stored, skipped, outcomes };
 }
 
+/**
+ * Pure: maps the per-target outcomes back onto the recipients as the client
+ * addressed them (aliases → their targets). A recipient counts as delivered
+ * only when every local target it expanded to was delivered; a failed target
+ * is reported under the original address(es) — the NDR names what the sender
+ * typed, and a full alias target never gets both a "delivered" DSN and an NDR.
+ */
+export function outcomesByOriginal(
+  origins: ReadonlyMap<string, readonly string[]>,
+  outcomes: ReadonlyMap<string, LocalOutcome>,
+): { delivered: string[]; quota: string[]; unknown: string[] } {
+  const state = new Map<string, LocalOutcome>();
+  const rank: Record<LocalOutcome, number> = { delivered: 0, quota: 1, unknown: 2 };
+  for (const [target, outcome] of outcomes) {
+    for (const original of origins.get(target) ?? [target]) {
+      const prev = state.get(original);
+      if (!prev || rank[outcome] > rank[prev]) state.set(original, outcome);
+    }
+  }
+  const pick = (o: LocalOutcome): string[] => [...state].filter(([, v]) => v === o).map(([k]) => k);
+  return { delivered: pick('delivered'), quota: pick('quota'), unknown: pick('unknown') };
+}
 /** Redis ledger: a set per failed transaction, kept for the sender's retry window. */
 export const redisDeliveryLedger: DeliveryLedger = {
   async delivered(key) {

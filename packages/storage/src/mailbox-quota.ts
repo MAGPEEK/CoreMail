@@ -363,6 +363,32 @@ export async function checkReceiveQuota(owner: QuotaOwner, opts: { now?: Date; e
   return receiveQuotaReply(status.usedBytes, status.limits.prohibitSendReceiveBytes, opts.env);
 }
 
+/** Client-visible text when a write is refused by the hard quota (IMAP/JMAP/EAS). */
+export const OVER_QUOTA_MESSAGE = 'Mailbox is full (over its storage quota): delete items and empty the Trash';
+
+/**
+ * Hard quota (ProhibitSendReceiveQuota) for client writes that ADD content to a
+ * mailbox — IMAP APPEND / COPY, JMAP Email/import and Email/set create, items
+ * moved out of Recoverable Items. Uses a FRESH usage aggregate (no cache), so a
+ * client cannot outrun the cached value with a burst of APPENDs. Moves within
+ * the mailbox do not change the usage and must not be checked. Fail-open on a
+ * database error (logged), like every other quota check.
+ */
+export async function isMailboxWriteBlocked(mailboxId: string, opts: { now?: number } = {}): Promise<boolean> {
+  try {
+    const m = await prisma.mailbox.findUnique({ where: { id: mailboxId }, select: { userId: true, sharedBoxId: true } });
+    const owner: QuotaOwner | null = m?.userId ? { kind: 'user', id: m.userId } : m?.sharedBoxId ? { kind: 'shared', id: m.sharedBoxId } : null;
+    if (!owner) return false;
+    const status = await getQuotaStatus(owner, { fresh: true, ...(opts.now !== undefined ? { now: opts.now } : {}) });
+    if (!status || status.level !== 'prohibitSendReceive') return false;
+    void maybeSendQuotaWarning(status);
+    return true;
+  } catch (err) {
+    log.warn({ err, mailboxId }, 'write quota check failed — allowing');
+    return false;
+  }
+}
+
 /** Receive check by recipient address (port 25 RCPT TO). */
 export async function checkReceiveQuotaForAddress(address: string, opts: { now?: Date; env?: Record<string, string | undefined> } = {}): Promise<string | null> {
   let owner: QuotaOwner | null;

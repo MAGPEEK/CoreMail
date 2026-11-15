@@ -21,7 +21,9 @@
 import { prisma } from './prisma/index.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
-import { matchRulePattern, createRulePatternBudget, type RulePatternBudget } from './rule-pattern.js';
+import {
+  matchRulePattern, createRulePatternBudget, evaluateRulePattern, withRuleBudget, ruleMessageStepBudget, type RulePatternBudget,
+} from './rule-pattern.js';
 
 const log = createLogger('storage:transport-rules');
 
@@ -128,10 +130,34 @@ export function evaluateOp(fv: string | number | boolean, op: TransportOp, expec
   }
 }
 
-function ruleMatches(conditions: TransportCondition[], parsed: ParsedMessage, ctx: TransportEvalContext): boolean {
-  // Conditions are AND-combined (Exchange Transport Rules standard)
+/** Actions that protect the recipient: their rules fail CLOSED on an exhausted regex budget. */
+const FAIL_CLOSED_ACTIONS = new Set(['reject', 'quarantine', 'redirect']);
+
+/** Pure: does the rule fail closed (reject / quarantine / redirect action)? */
+export function ruleFailsClosed(actions: readonly { type: string }[]): boolean {
+  return actions.some((a) => FAIL_CLOSED_ACTIONS.has(a.type));
+}
+
+/**
+ * Conditions are AND-combined (Exchange Transport Rules standard). A regex
+ * condition whose step budget ran out (a sender padded the message) counts as
+ * MATCH for a fail-closed rule (reject/quarantine/redirect) and as no-match
+ * otherwise — padding can no longer switch a blocking rule off.
+ */
+export function ruleMatches(
+  conditions: TransportCondition[], parsed: ParsedMessage, ctx: TransportEvalContext,
+  budget: RulePatternBudget | undefined = ctx.patternBudget, failClosed = false, onExhausted?: () => void,
+): boolean {
   if (conditions.length === 0) return true;
-  return conditions.every((c) => evaluateOp(getFieldValue(c.field, parsed, ctx), c.op, c.value, ctx.patternBudget));
+  return conditions.every((c) => {
+    const fv = getFieldValue(c.field, parsed, ctx);
+    if (c.op === 'regex' && typeof fv === 'string' && budget) {
+      const r = evaluateRulePattern(c.value, fv, budget);
+      if (r === 'exhausted') { onExhausted?.(); return failClosed; }
+      return r === 'match';
+    }
+    return evaluateOp(fv, c.op, c.value, budget);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +169,8 @@ export async function applyTransportRules(
   const ctx: TransportEvalContext = {
     ...ctxIn,
     patternBudget: ctxIn.patternBudget ?? createRulePatternBudget({
-      onExhausted: () => log.warn('Regex step budget exhausted (RULE_PATTERN_STEP_BUDGET) — remaining regex conditions do not match'),
+      steps: ruleMessageStepBudget(),
+      onExhausted: () => log.warn('Message regex step budget exhausted (RULE_PATTERN_MESSAGE_STEP_BUDGET)'),
     }),
   };
   const outcome: TransportOutcome = {
@@ -177,7 +204,13 @@ export async function applyTransportRules(
     const conditions = Array.isArray(raw.conditions) ? raw.conditions as unknown as TransportCondition[] : [];
     const actions    = Array.isArray(raw.actions)    ? raw.actions as unknown as TransportAction[]    : [];
 
-    if (!ruleMatches(conditions, parsed, ctx)) continue;
+    // Each rule has its own step budget (bounded by the message budget).
+    const failClosed = ruleFailsClosed(actions);
+    const matched = withRuleBudget(ctx.patternBudget!, (budget) => ruleMatches(conditions, parsed, ctx, budget, failClosed, () =>
+      log.warn({ ruleId: raw.id, failClosed }, failClosed
+        ? 'Regex step budget exhausted — blocking transport rule treated as MATCH (fail-closed)'
+        : 'Regex step budget exhausted — transport rule condition treated as no match')));
+    if (!matched) continue;
     outcome.appliedRuleIds.push(raw.id);
 
     for (const action of actions) {

@@ -48,6 +48,10 @@ class SmtpClient {
     this.socket.write(raw, 'latin1');
   }
 
+  writeBuffer(raw: Buffer): void {
+    this.socket.write(raw);
+  }
+
   private takeLine(): string | null {
     const idx = this.buffer.indexOf('\r\n');
     if (idx === -1) return null;
@@ -130,6 +134,8 @@ interface HarnessOptions {
   handlerDelayMs?: number;
   onRcptTo?: (to: string) => Promise<string | null>;
   onMessage?: () => Promise<void>;
+  /** Receives the server-side session (flow-control assertions). */
+  onSession?: (session: SmtpSession) => void;
 }
 
 const VALID_USER: AuthUser = { id: 'u1', email: 'user@example.test' };
@@ -176,11 +182,17 @@ async function connect(t: TestContext, options: HarnessOptions = {}): Promise<Ha
     ...options.config,
   };
 
+  const startSession = (socket: net.Socket): void => {
+    const session = new SmtpSession(socket, config);
+    options.onSession?.(session);
+    session.start();
+  };
+
   // v7: AUTH is only offered on encrypted connections, so the AUTH harness
   // runs over implicit TLS (the port 465 configuration).
   const server = options.auth
-    ? tls.createServer({ ...testCert() }, (socket) => new SmtpSession(socket, config).start())
-    : net.createServer((socket) => new SmtpSession(socket, config).start());
+    ? tls.createServer({ ...testCert() }, (socket) => startSession(socket))
+    : net.createServer((socket) => startSession(socket));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as net.AddressInfo;
 
@@ -1673,5 +1685,99 @@ describe('enhanced status codes on the new replies (RFC 2034)', () => {
     replies.push(await client.cmd('BDAT 0 LAST'));
 
     for (const r of replies) assert.match(r.text, /^\d{3} [245]\.\d{1,3}\.\d{1,3} /, r.text);
+  });
+});
+
+describe('BDAT memory bounds and flow control (review fix)', () => {
+  test('unauthenticated BDAT floods before MAIL are read and dropped without buffering', async (t) => {
+    let session: SmtpSession | null = null;
+    const { client, recorded } = await connectReady(t, {
+      config: { maxSize: 20 * 1024 * 1024 },
+      onSession: (s) => { session = s; },
+    });
+    const chunk = Buffer.alloc(2 * 1024 * 1024, 0x61);
+    const before = process.memoryUsage().arrayBuffers;
+    for (let i = 0; i < 10; i++) {
+      client.write(`BDAT ${chunk.length} LAST\r\n`);
+      client.writeBuffer(chunk);
+    }
+    client.write('NOOP\r\n');
+    const replies: number[] = [];
+    for (let i = 0; i < 11; i++) replies.push((await client.reply()).code);
+    assert.deepEqual(replies, [...Array(10).fill(503), 250]);
+    assert.equal(recorded.messages.length, 0);
+    const stats = session!.flowStats();
+    assert.equal(stats.peakBdatBuffered, 0, 'no chunk octet buffered without a transaction');
+    // 20 MiB of chunks went through; nothing near that stays allocated.
+    assert.ok(process.memoryUsage().arrayBuffers - before < 8 * 1024 * 1024);
+  });
+
+  test('chunks after a rejected recipient and after LAST are not buffered', async (t) => {
+    let session: SmtpSession | null = null;
+    const { client, recorded } = await connectReady(t, {
+      config: { maxSize: 1024 * 1024 },
+      onRcptTo: async () => '550 5.1.1 No such user',
+      onSession: (s) => { session = s; },
+    });
+    const body = 'x'.repeat(100_000);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test>')).code, 250);
+    assert.equal((await client.cmd('RCPT TO:<nobody@example.test>')).code, 550);
+    client.write(`BDAT ${body.length} LAST\r\n${body}`);
+    assert.equal((await client.reply()).code, 503);
+    assert.equal(session!.flowStats().peakBdatBuffered, 0);
+    assert.equal(recorded.messages.length, 0);
+  });
+
+  test('chunks pipelined after BDAT LAST are not buffered', async (t) => {
+    let session: SmtpSession | null = null;
+    const { client, recorded } = await connectWithRecipient(t, {
+      config: { maxSize: 1024 * 1024 },
+      onSession: (s) => { session = s; },
+    });
+    const body = 'x'.repeat(100_000);
+    client.write(`BDAT 3 LAST\r\nabc${`BDAT ${body.length} LAST\r\n${body}`.repeat(5)}`);
+    assert.equal((await client.reply()).code, 250);
+    for (let i = 0; i < 5; i++) assert.equal((await client.reply()).code, 503);
+    assert.equal(recorded.messages.length, 1);
+    assert.equal(session!.flowStats().peakBdatBuffered, 3);
+  });
+
+  test('a pipelined BDAT transaction (MAIL, RCPT and chunks in one packet) is delivered', async (t) => {
+    const { client, recorded } = await connectReady(t, { handlerDelayMs: 30 });
+    client.write('MAIL FROM:<a@example.test>\r\nRCPT TO:<b@example.test>\r\nBDAT 5\r\nHelloBDAT 6 LAST\r\n, BDATNOOP\r\n');
+    const codes: number[] = [];
+    for (let i = 0; i < 5; i++) codes.push((await client.reply()).code);
+    assert.deepEqual(codes, [250, 250, 250, 250, 250]);
+    assert.equal(recorded.messages.length, 1);
+    assert.equal(recorded.messages[0]!.raw.toString('latin1'), 'Hello, BDAT');
+  });
+
+  test('pipelined chunks pause the socket: at most two chunks are held in memory', async (t) => {
+    let session: SmtpSession | null = null;
+    const { client, recorded } = await connectWithRecipient(t, {
+      config: { maxSize: 2 * 1024 * 1024 },
+      onSession: (s) => { session = s; },
+    });
+    const size = 100_000;
+    let out = '';
+    for (let i = 0; i < 8; i++) out += `BDAT ${size}\r\n${'y'.repeat(size)}`;
+    out += 'BDAT 1 LAST\r\nz';
+    client.write(out);
+    for (let i = 0; i < 9; i++) assert.equal((await client.reply()).code, 250);
+    assert.equal(recorded.messages.length, 1);
+    assert.equal(recorded.messages[0]!.raw.length, 8 * size + 1);
+    assert.ok(session!.flowStats().peakBdatBuffered <= 2 * size, `peak ${session!.flowStats().peakBdatBuffered}`);
+  });
+
+  test('the command queue is capped: a pipelined flood behind a slow handler pauses reading', async (t) => {
+    let session: SmtpSession | null = null;
+    const { client } = await connectReady(t, {
+      onRcptTo: async () => { await delay(300); return null; },
+      onSession: (s) => { session = s; },
+    });
+    client.write('MAIL FROM:<a@example.test>\r\nRCPT TO:<b@example.test>\r\n' + 'NOOP\r\n'.repeat(500));
+    for (let i = 0; i < 502; i++) assert.equal((await client.reply()).code, 250);
+    assert.ok(session!.flowStats().peakQueued <= 100, `peak queue ${session!.flowStats().peakQueued}`);
+    assert.equal(session!.flowStats().queued, 0);
   });
 });

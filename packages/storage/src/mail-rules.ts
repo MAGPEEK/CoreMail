@@ -2,12 +2,15 @@ import { prisma } from './prisma/index.js';
 import { moveMessages, touchMessages } from './message-store.js';
 import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
-import { matchRulePattern, createRulePatternBudget, type RulePatternBudget } from './rule-pattern.js';
+import {
+  matchRulePattern, createRulePatternBudget, evaluateRulePattern, withRuleBudget, ruleMessageStepBudget, type RulePatternBudget,
+} from './rule-pattern.js';
 
 export {
   validateRulePattern, matchRulePattern, tryMatchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT,
   createRulePatternBudget, rulePatternStepBudget, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER,
   DEFAULT_RULE_PATTERN_STEP_BUDGET, canonicalizeCodeUnit, type RulePatternBudget,
+  DEFAULT_RULE_PATTERN_MESSAGE_STEP_BUDGET, ruleMessageStepBudget, withRuleBudget, evaluateRulePattern,
 } from './rule-pattern.js';
 
 const log = createLogger('storage:mail-rules');
@@ -159,16 +162,43 @@ function matchCondition(cond: RuleCondition, parsed: ParsedMessage, userEmail: s
   return evaluateOperator(fv, cond.operator, cond.value, budget);
 }
 
-function matchRule(rule: MailRuleData, parsed: ParsedMessage, userEmail: string, budget?: RulePatternBudget): boolean {
-  // Exceptions are ALWAYS OR: if any exception matches → skip the rule
-  for (const exc of rule.exceptions) {
-    if (matchCondition(exc, parsed, userEmail, budget)) return false;
+/** Tri-state: a regex condition whose step budget ran out is `exhausted`, not a plain no-match. */
+function conditionState(cond: RuleCondition, parsed: ParsedMessage, userEmail: string, budget?: RulePatternBudget): 'match' | 'nomatch' | 'exhausted' {
+  const fv = getFieldValue(cond.field, parsed, userEmail);
+  if (cond.operator === 'regex' && budget && typeof fv !== 'boolean' && typeof fv !== 'number') {
+    const r = evaluateRulePattern(String(cond.value), String(fv), budget);
+    return r === 'match' ? 'match' : r === 'exhausted' ? 'exhausted' : 'nomatch';
   }
-  if (rule.conditions.length === 0) return true;
-  if (rule.matchAll) {
-    return rule.conditions.every((c) => matchCondition(c, parsed, userEmail, budget));
+  return evaluateOperator(fv, cond.operator, cond.value, budget) ? 'match' : 'nomatch';
+}
+
+/**
+ * Inbox rules fail OPEN on an exhausted regex budget: a condition that cannot be
+ * evaluated does not match, an exception that cannot be evaluated counts as
+ * matched — either way the rule is not applied (and `onExhausted` logs it).
+ * Inbox rules only file/flag/forward the user's own mail; the security-relevant
+ * fail-closed handling is in the transport rules.
+ */
+function matchRule(
+  rule: MailRuleData, parsed: ParsedMessage, userEmail: string, budget?: RulePatternBudget, onExhausted?: () => void,
+): boolean {
+  let exhausted = false;
+  const state = (c: RuleCondition): 'match' | 'nomatch' | 'exhausted' => {
+    const s = conditionState(c, parsed, userEmail, budget);
+    if (s === 'exhausted') exhausted = true;
+    return s;
+  };
+  try {
+    // Exceptions are ALWAYS OR: if any exception matches → skip the rule
+    for (const exc of rule.exceptions) {
+      if (state(exc) !== 'nomatch') return false;
+    }
+    if (rule.conditions.length === 0) return true;
+    if (rule.matchAll) return rule.conditions.every((c) => state(c) === 'match');
+    return rule.conditions.some((c) => state(c) === 'match');
+  } finally {
+    if (exhausted) onExhausted?.();
   }
-  return rule.conditions.some((c) => matchCondition(c, parsed, userEmail, budget));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +277,7 @@ export async function applyMailRules(
    * Regex step budget for this message (RULE_PATTERN_STEP_BUDGET), shared with
    * the transport rules by the delivery path; default: a fresh one.
    */
-  patternBudget: RulePatternBudget = createRulePatternBudget({ onExhausted: () => logBudgetExhausted(userId) }),
+  patternBudget: RulePatternBudget = createRulePatternBudget({ steps: ruleMessageStepBudget(), onExhausted: () => logBudgetExhausted(userId) }),
 ): Promise<RuleOutcome> {
   const outcome: RuleOutcome = {
     targetFolderId: defaultFolderId,
@@ -291,7 +321,10 @@ export async function applyMailRules(
       matchAll: raw.matchAll,
     };
 
-    if (!matchRule(rule, parsed, userEmail, patternBudget)) continue;
+    // Each rule has its own step budget, bounded by the message budget.
+    const matched = withRuleBudget(patternBudget, (budget) => matchRule(rule, parsed, userEmail, budget, () =>
+      log.warn({ userId, ruleId: rule.id }, 'Regex step budget exhausted — inbox rule treated as not matching')));
+    if (!matched) continue;
 
     try {
       await executeActions(rule, outcome, userId);
@@ -308,7 +341,7 @@ export async function applyMailRules(
 }
 
 function logBudgetExhausted(userId: string): void {
-  log.warn({ userId }, 'Regex step budget exhausted (RULE_PATTERN_STEP_BUDGET) — remaining regex conditions do not match');
+  log.warn({ userId }, 'Message regex step budget exhausted (RULE_PATTERN_MESSAGE_STEP_BUDGET) — remaining inbox rules with regex conditions do not apply');
 }
 
 // Convenience export for tests

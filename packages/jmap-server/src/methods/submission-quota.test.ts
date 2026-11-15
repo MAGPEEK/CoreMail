@@ -15,6 +15,7 @@ let used = 0;
   },
   serverSettings: { findUnique: async () => ({ quotaWarningPercent: 80, quotaProhibitSendPercent: 90 }) },
   message: { aggregate: async () => ({ _sum: { rawSize: used } }) },
+  mailbox: { findUnique: async ({ where }: { where: { id: string } }) => (where.id === 'mb1' ? { userId: 'u1', sharedBoxId: null } : null) },
 };
 
 const storage = await import('@coremail/storage');
@@ -29,4 +30,18 @@ test('below the prohibit-send level: no error; at it: overQuota', async () => {
   assert.equal(e?.type, 'overQuota');
   assert.match(String(e?.description), /send quota/);
   assert.equal(await submissionQuotaError('unknown'), null, 'unknown user: no quota row');
+});
+
+test('Email/set create, Email/import, Email/copy: SetError overQuota at the hard quota (fresh usage)', async () => {
+  const { writeQuotaError, storeEmailFromRaw } = await import('../mail/write.js');
+  storage.resetQuotaCache();
+  used = 99 * MB;
+  assert.equal(await writeQuotaError('mb1'), null);
+  used = 100 * MB; // no cache reset: the write check aggregates fresh
+  const e = await writeQuotaError('mb1');
+  assert.equal(e?.type, 'overQuota');
+  await assert.rejects(
+    storeEmailFromRaw({ mailboxId: 'mb1' } as never, 'f1', Buffer.from('Subject: x\r\n\r\nb'), []),
+    (err: { type?: string }) => err.type === 'overQuota',
+  );
 });

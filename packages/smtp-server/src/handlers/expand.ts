@@ -84,9 +84,31 @@ export async function resolvePostmaster(address: string): Promise<string | null>
  * Otherwise aliases would be silently dropped.
  */
 export async function expandRecipients(rcptTo: string[]): Promise<string[]> {
-  const result: string[] = [];
+  return (await expandRecipientsWithOrigins(rcptTo)).targets;
+}
 
+/**
+ * expandRecipients plus the reverse mapping: for every delivery target the
+ * recipient address(es) as the client gave them (DSNs and NDRs report the
+ * original recipient, RFC 3461 §4.2 ORCPT semantics).
+ */
+export async function expandRecipientsWithOrigins(
+  rcptTo: string[],
+): Promise<{ targets: string[]; origins: Map<string, string[]> }> {
+  const origins = new Map<string, string[]>();
   for (const email of rcptTo) {
+    for (const target of await expandOne(email)) {
+      const list = origins.get(target) ?? [];
+      if (!list.includes(email)) list.push(email);
+      origins.set(target, list);
+    }
+  }
+  return { targets: [...origins.keys()], origins };
+}
+
+async function expandOne(email: string): Promise<string[]> {
+  const result: string[] = [];
+  {
     const normalised = (await canonicalRecipient(email)).toLowerCase();
 
     // 1. Email alias? → replace with target primary address
@@ -104,7 +126,7 @@ export async function expandRecipients(rcptTo: string[]): Promise<string[]> {
         : null;
     if (targetEmail) {
       result.push(targetEmail.toLowerCase());
-      continue;
+      return result;
     }
 
     // 2. postmaster without an own mailbox
@@ -112,14 +134,12 @@ export async function expandRecipients(rcptTo: string[]): Promise<string[]> {
       const admin = await resolvePostmaster(normalised);
       if (admin) {
         result.push(admin);
-        continue;
+        return result;
       }
     }
 
     // 3. Regular recipient (User / SharedMailbox / ResourceMailbox)
     result.push(normalised);
   }
-
-  // Deduplicate
-  return [...new Set(result)];
+  return result;
 }

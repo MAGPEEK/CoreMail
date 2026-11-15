@@ -9,13 +9,12 @@
 
 import { createLogger } from '@coremail/core';
 import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, checkReceiveQuotaForAddress, type SenderAuth } from '@coremail/storage';
-import { bounceUnknownLocal, bounceQuotaLocal } from '../handlers/local-delivery.js';
+import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
-import { expandRecipients, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
+import { expandRecipientsWithOrigins, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
-import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
 import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
 import {
@@ -262,7 +261,7 @@ async function onMessage(
 
   // 2. Expand distribution groups → individual delivery addresses
   //    (IDN domains are mapped onto the configured spelling — v8.1).
-  const deliveryAddresses = await expandRecipients(to);
+  const { targets: deliveryAddresses, origins } = await expandRecipientsWithOrigins(to);
 
   // 3. Split into local vs. external (Distribution groups may contain external
   //    members like "partner@kunde.com" — these need outbound forwarding, not
@@ -281,9 +280,7 @@ async function onMessage(
   //    a failure answers 451 and the retry skips what was already delivered
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
   const txKey = deliveryKey(from, receivedRaw);
-  const unknownRcpts: string[] = [];
-  const fullRcpts: string[] = [];
-  await deliverOnce(txKey, localDeliveries, externalDeliveries, {
+  const { outcomes } = await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
     // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
     storeLocal: async (rcpt) => {
@@ -295,8 +292,7 @@ async function onMessage(
         senderAuth,
         ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
       });
-      if (result === 'unknown') unknownRcpts.push(rcpt);
-      if (result === 'quota') fullRcpts.push(rcpt);
+      return result === 'unknown' || result === 'quota' ? result : 'delivered';
     },
     enqueueExternal: async (rcpts) => {
       const jobDsn = dsnForRecipients(dsn, rcpts);
@@ -312,43 +308,16 @@ async function onMessage(
   });
 
   // 4. RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for the local recipients as
-  //    addressed. Not for mail filed as junk (no delivery confirmation to spammers).
-  if (dsn && !filterResult.junkFolder) {
-    await notifyLocalSuccess(from, to.filter((r) => !unknownRcpts.includes(r) && !fullRcpts.includes(r)), dsn, hostname, delivered);
-  }
-
-  // 5. A recipient verified at RCPT TO but gone at delivery time (deleted in
-  //    between) — the message was accepted (250), so the sender gets an NDR.
-  if (unknownRcpts.length > 0) {
-    await bounceUnknownLocal(raw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
-      log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
-  }
-  // 6. v8.1: a mailbox that filled up between RCPT TO and delivery → NDR (5.2.2).
-  if (fullRcpts.length > 0) {
-    await bounceQuotaLocal(raw, from, fullRcpts, { hostname }).catch((err: unknown) =>
-      log.error({ err, from, fullRcpts }, 'NDR for over-quota local recipients failed'));
-  }
-}
-
-/** Sends the "delivered" DSN for the local recipients that asked for SUCCESS (never throws). */
-async function notifyLocalSuccess(
-  from: string,
-  to: string[],
-  dsn: NonNullable<NonNullable<MessageMeta['envelope']>['dsn']>,
-  hostname: string,
-  raw: Buffer,
-): Promise<void> {
-  try {
-    const local: string[] = [];
-    for (const rcpt of to) if (rcpt === BARE_POSTMASTER || await isLocalDomainAddress(rcpt)) local.push(rcpt);
-    const original = rawSubjectAndId(raw);
-    await sendSuccessDsn({
-      from, rcpts: local, action: 'delivered', dsn, hostname, originalRaw: raw,
-      subject: original.subject, messageId: original.messageId, deliverExternal: true,
-    });
-  } catch (err) {
-    log.warn({ err, from }, 'Success DSN not sent');
-  }
+  //    addressed — only for an authenticated MAIL FROM domain and with RET=HDRS
+  //    on port 25 (backscatter), never for mail filed as junk.
+  // 5. NDRs for recipients gone (5.1.1) or over quota (5.2.2) at delivery time
+  //    — including those an earlier, failed attempt recorded in the ledger.
+  await notifyLocalOutcomes({
+    from, originals: to, origins, outcomes, dsn, hostname,
+    deliveredRaw: delivered, ndrRaw: raw,
+    noSuccess: filterResult.junkFolder ?? false,
+    ...(authUser ? {} : { unauthenticated: { senderAuth } }),
+  });
 }
 
 

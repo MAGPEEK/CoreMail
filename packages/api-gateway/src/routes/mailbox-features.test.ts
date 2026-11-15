@@ -138,7 +138,7 @@ test('/mail/recoverable: auth, validation and own-mailbox scoping', async () => 
   const list = await call('GET', '/api/v1/mail/recoverable', { token: tok('u1') });
   assert.equal(list.status, 200);
   assert.deepEqual(list.json['items'], []);
-  assert.equal(list.json['retentionDays'], 14);
+  assert.equal(list.json['retentionDays'], 30, 'default DELETED_ITEM_RETENTION_DAYS (8.0 documented window)');
   assert.ok(messageQueries.every((w) => JSON.stringify(w).includes('"mailboxId":"mb1"')), 'queries are scoped to the caller mailbox');
   assert.equal((await call('POST', '/api/v1/mail/recoverable/restore', { token: tok('u1'), body: { ids: [] } })).status, 400);
   assert.equal((await call('POST', '/api/v1/mail/recoverable/restore', { token: tok('u1'), body: {} })).status, 400);

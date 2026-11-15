@@ -12,13 +12,13 @@ import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
 } from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
-import { expandRecipients, isLocalDomainAddress } from '../handlers/expand.js';
+import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
-import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
 import { buildReceivedHeader, formatRfc5322Date, prependHeader } from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
-import { stripForLocalDelivery, bounceUnknownLocal, bounceQuotaLocal } from '../handlers/local-delivery.js';
+import { stripForLocalDelivery } from '../handlers/local-delivery.js';
+import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
 
 // ── RFC 822 lightweight header extraction ─────────────────────────────────────
@@ -157,9 +157,9 @@ async function onMessage(
   }
 
   // Resolve local recipients first (aliases, distribution groups, shared mailbox aliases)
-  const expandedLocalRcpts = localRcpts.length > 0
-    ? await expandRecipients(localRcpts)
-    : [];
+  const { targets: expandedLocalRcpts, origins } = localRcpts.length > 0
+    ? await expandRecipientsWithOrigins(localRcpts)
+    : { targets: [] as string[], origins: new Map<string, string[]>() };
 
   // Local delivery (mailbox) + external delivery (outbound queue). 250 only
   // when both are done; a failure answers 451 and the client's retry skips
@@ -169,9 +169,7 @@ async function onMessage(
   // `Authentication-Results: <our host>; dmarc=pass` (port 25 strips on receipt).
   const localRaw = expandedLocalRcpts.length > 0 ? await stripForLocalDelivery(submittedRaw, [hostname]) : submittedRaw;
   const txKey = deliveryKey(from, receivedRaw);
-  const unknownRcpts: string[] = [];
-  const fullRcpts: string[] = [];
-  await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
+  const { outcomes } = await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
     // MAIL FROM was checked against the SMTP AUTH identity in onMailFrom.
     // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
@@ -180,8 +178,7 @@ async function onMessage(
         fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
         senderAuth: { authenticatedSender: from },
       });
-      if (result === 'unknown') unknownRcpts.push(rcpt);
-      if (result === 'quota') fullRcpts.push(rcpt);
+      return result === 'unknown' || result === 'quota' ? result : 'delivered';
     },
     enqueueExternal: async (rcpts) => {
       // RFC 3461: the DSN request travels with the queue job (passed on to a
@@ -199,25 +196,12 @@ async function onMessage(
   });
 
   // RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for local recipients (stored in the sender's mailbox).
-  const dsn = meta?.envelope?.dsn;
-  const failed = (r: string): boolean => unknownRcpts.includes(r) || fullRcpts.includes(r);
-  if (dsn && localRcpts.some((r) => !failed(r))) {
-    const original = rawSubjectAndId(submittedRaw);
-    await sendSuccessDsn({
-      from, rcpts: localRcpts.filter((r) => !failed(r)), action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
-      subject: original.subject, messageId: original.messageId, deliverExternal: true,
-    });
-  }
-  // A local recipient that does not exist (unknown address in a local domain)
-  // is never dropped silently: the sender gets an NDR.
-  if (unknownRcpts.length > 0) {
-    await bounceUnknownLocal(submittedRaw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
-      log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
-  }
-  if (fullRcpts.length > 0) {
-    await bounceQuotaLocal(submittedRaw, from, fullRcpts, { hostname }).catch((err: unknown) =>
-      log.error({ err, from, fullRcpts }, 'NDR for over-quota local recipients failed'));
-  }
+  // A local recipient that does not exist or is over quota is never dropped
+  // silently: the sender gets an NDR (also on a retry after a partial failure).
+  await notifyLocalOutcomes({
+    from, originals: localRcpts, origins, outcomes, dsn: meta?.envelope?.dsn, hostname,
+    deliveredRaw: submittedRaw, ndrRaw: submittedRaw,
+  });
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
   const headers = extractRawHeaders(raw);

@@ -22,6 +22,7 @@ export * from './itip-reply.js';
 export * from './internal-notify.js';
 export * from './mailbox-quota.js';
 export * from './recoverable-items.js';
+export * from './purge-objects.js';
 export * from './oof.js';
 export * from './draft.js';
 export * from './draft-versions.js';

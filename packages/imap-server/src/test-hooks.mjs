@@ -72,6 +72,9 @@ export const getRedisClient = () => g.redis ?? {
   publish: async () => 0,
 };
 export const CHANNEL_MAIL_NEW = 'mail:new';
+// v8.1 hard quota for client writes — g.overQuota(mailboxId) decides in tests.
+export const isMailboxWriteBlocked = async (mailboxId) => (g.overQuota ? !!(await g.overQuota(mailboxId)) : false);
+export const OVER_QUOTA_MESSAGE = 'Mailbox is full (over its storage quota): delete items and empty the Trash';
 // v7.1.0 live-connection registry (credential changes) — inert in these tests.
 export class LiveConnectionRegistry {
   register() { return () => {}; }

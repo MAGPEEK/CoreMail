@@ -5,8 +5,9 @@
  */
 import {
   prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey,
-  createMessage, moveMessages, setFlags, expunge,
+  createMessage, moveMessages, setFlags, expunge, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
 } from '@coremail/storage';
+import { setError, type SetError } from '../errors.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
 import type { AccountContext } from '../types.js';
 import { resolveThreadId } from './thread.js';
@@ -20,6 +21,11 @@ export interface StoredMessage {
   size: number;
 }
 
+/** SetError overQuota when the mailbox is at its hard quota (fresh usage), else null. */
+export async function writeQuotaError(mailboxId: string): Promise<SetError | null> {
+  return (await isMailboxWriteBlocked(mailboxId)) ? setError('overQuota', OVER_QUOTA_MESSAGE) : null;
+}
+
 export async function storeEmailFromRaw(
   account: AccountContext,
   folderId: string,
@@ -27,6 +33,10 @@ export async function storeEmailFromRaw(
   flags: string[],
   receivedAt?: Date,
 ): Promise<StoredMessage> {
+  // v8.1 hard quota (ProhibitSendReceiveQuota): Email/set create, Email/import and
+  // Email/copy add content to the mailbox — SetError overQuota (RFC 8621 §4.6).
+  const quotaError = await writeQuotaError(account.mailboxId);
+  if (quotaError) throw quotaError;
   const parsed = await parseRawMessage(raw);
   const seen = flags.includes('\\Seen');
   // Raw-always storage, written before the row exists so no reader ever sees the

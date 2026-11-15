@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -156,9 +156,10 @@ export async function storeInboundMessage(
 
   let parsed = await parseRawMessage(effectiveBuffer);
 
-  // One regex step budget (RULE_PATTERN_STEP_BUDGET) for all transport and
-  // inbox rules evaluated for this message.
+  // Regex step budget of this message (RULE_PATTERN_MESSAGE_STEP_BUDGET) for all
+  // transport and inbox rules; each rule gets its own RULE_PATTERN_STEP_BUDGET within it.
   const patternBudget = createRulePatternBudget({
+    steps: ruleMessageStepBudget(),
     onExhausted: () => log.warn({ rcptTo: opts.rcptTo }, 'Regex step budget exhausted — remaining rule regex conditions do not match'),
   });
 

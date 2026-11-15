@@ -2847,3 +2847,25 @@ describe('COMPRESS=DEFLATE (RFC 4978)', () => {
     assert.ok(await client.waitForClose());
   });
 });
+
+describe('hard quota on client writes (review fix, RFC 9208 §4.3)', () => {
+  test('APPEND and COPY are refused with NO [OVERQUOTA]; MOVE inside the mailbox is not blocked', async (t) => {
+    const { client, db } = await login(t);
+    const g = (globalThis as unknown as { __coremailTest: { overQuota?: (id: string) => Promise<boolean> } }).__coremailTest;
+    const checked: string[] = [];
+    g.overQuota = async (id) => { checked.push(id); return true; };
+    t.after(() => { delete g.overQuota; });
+    const before = db.messages.length;
+
+    const append = await appendRaw(client, 'INBOX', 'Subject: x\r\n\r\nbody\r\n');
+    await client.cmd('SELECT Work');
+    const copy = await client.cmd('COPY 1 INBOX');
+    const move = await client.cmd('MOVE 2 INBOX');
+
+    assert.match(append.tagged, /^\S+ NO \[OVERQUOTA\]/);
+    assert.match(copy.tagged, /^\S+ NO \[OVERQUOTA\]/);
+    assert.equal(move.status, 'OK', move.tagged);
+    assert.equal(db.messages.length, before, 'nothing stored');
+    assert.deepEqual(checked, ['mb1', 'mb1'], 'the move did not consult the quota');
+  });
+});

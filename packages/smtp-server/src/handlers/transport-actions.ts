@@ -21,6 +21,7 @@
 import crypto from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma, applyOutcomeToBuffer, type TransportOutcome } from '@coremail/storage';
+import type { StoreResult } from './message.js';
 
 const log = createLogger('smtp:transport-actions');
 
@@ -49,7 +50,12 @@ export interface TransportActionDeps {
     details: Record<string, unknown>; spamScore?: number;
   }) => Promise<string>;
   /** Local delivery of an extra recipient (storeInboundMessage). */
-  storeLocal: (raw: Buffer, fromAddr: string, rcptTo: string, opts: ExtraDeliveryOptions) => Promise<void>;
+  /** Returns the store result: an over-quota or unknown target is bounced, never dropped silently. */
+  storeLocal: (raw: Buffer, fromAddr: string, rcptTo: string, opts: ExtraDeliveryOptions) => Promise<void | StoreResult>;
+  /** NDR (5.1.1) for rule-added local recipients that do not exist. Default: bounceUnknownLocal. */
+  bounceUnknown?: (raw: Buffer, fromAddr: string, rcpts: string[]) => Promise<void>;
+  /** NDR (5.2.2) for rule-added local recipients over their hard quota. Default: bounceQuotaLocal. */
+  bounceQuota?: (raw: Buffer, fromAddr: string, rcpts: string[]) => Promise<void>;
   /** External delivery via the BullMQ 'smtp-outbound' queue (rawMessage). */
   enqueueExternal: (raw: Buffer, fromAddr: string, to: string[]) => Promise<void>;
   isLocalAddress: (addr: string) => Promise<boolean>;
@@ -172,12 +178,26 @@ export async function handleTransportOutcome(
       if (await deps.isLocalAddress(addr)) local.push(addr);
       else external.push(addr);
     }
+    const unknown: string[] = [];
+    const full: string[] = [];
     for (const addr of local.length > 0 ? await deps.expand(local) : []) {
       try {
-        await deps.storeLocal(extraRaw, ctx.fromAddr, addr, { skipTransportRules: true });
+        const result = await deps.storeLocal(extraRaw, ctx.fromAddr, addr, { skipTransportRules: true });
+        if (result === 'unknown') unknown.push(addr);
+        if (result === 'quota') full.push(addr);
       } catch (err) {
         log.error({ err, addr }, 'TransportRule extra local delivery failed');
       }
+    }
+    // A redirect/add-recipient target that is gone or over quota is reported
+    // to the sender (NDR) — the copy is never dropped silently.
+    if (unknown.length > 0) {
+      await (deps.bounceUnknown ?? defaultDeps.bounceUnknown!)(extraRaw, ctx.fromAddr, unknown)
+        .catch((err: unknown) => log.error({ err, unknown }, 'NDR for unknown rule recipients failed'));
+    }
+    if (full.length > 0) {
+      await (deps.bounceQuota ?? defaultDeps.bounceQuota!)(extraRaw, ctx.fromAddr, full)
+        .catch((err: unknown) => log.error({ err, full }, 'NDR for over-quota rule recipients failed'));
     }
     if (external.length > 0) {
       try {
@@ -206,7 +226,15 @@ const defaultDeps: TransportActionDeps = {
   },
   storeLocal: async (raw, fromAddr, rcptTo, opts) => {
     const { storeInboundMessage } = await import('./message.js');
-    await storeInboundMessage(raw, { fromAddr, rcptTo, toJunk: false, ...opts });
+    return storeInboundMessage(raw, { fromAddr, rcptTo, toJunk: false, ...opts });
+  },
+  bounceUnknown: async (raw, fromAddr, rcpts) => {
+    const { bounceUnknownLocal } = await import('./local-delivery.js');
+    await bounceUnknownLocal(raw, fromAddr, rcpts);
+  },
+  bounceQuota: async (raw, fromAddr, rcpts) => {
+    const { bounceQuotaLocal } = await import('./local-delivery.js');
+    await bounceQuotaLocal(raw, fromAddr, rcpts);
   },
   enqueueExternal: async (raw, fromAddr, to) => {
     const { enqueueOutbound } = await import('../outbound/queue.js');
