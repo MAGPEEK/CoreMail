@@ -1,11 +1,13 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, ChevronDown, RefreshCw } from 'lucide-react';
+import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
+import { Can } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -454,12 +456,13 @@ export function DomainsPage() {
 
   // Debounced search query string
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  useMemo(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => clearTimeout(t);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
-  const { data, isLoading } = useQuery<DomainsResponse>({
+  // Server-side search + paging (API: search/page/limit)
+  const { data, isLoading, isFetching, refetch } = useQuery<DomainsResponse>({
     queryKey: ['admin-domains', debouncedSearch, page, limit],
     queryFn:  () => api.get<DomainsResponse>(
       `/admin/domains?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`
@@ -469,7 +472,6 @@ export function DomainsPage() {
 
   const domains = data?.domains ?? [];
   const total   = data?.total   ?? 0;
-  const totalPages = Math.ceil(total / limit);
 
   const toggleMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/admin/domains/${id}/toggle`, {}),
@@ -486,157 +488,97 @@ export function DomainsPage() {
     onError: () => toast.error('Fehler beim Setzen der primären Domain'),  // no key exists for this
   });
 
+  const columns: Column<Domain>[] = [
+    {
+      key: 'name', header: t('domain_col_domain'),
+      cell: (d) => <span className="text-gray-800 text-sm font-medium">{d.name}</span>,
+    },
+    {
+      key: 'primary', header: t('domain_primary_label'), srOnlyHeader: true, className: 'w-44',
+      cell: (d) => d.primary ? (
+        <span className="text-sm text-gray-500">{t('domain_primary_label')}</span>
+      ) : (
+        <Can area="domains" access="write">
+          <button
+            onClick={() => makePrimaryMutation.mutate(d.id)}
+            disabled={makePrimaryMutation.isPending}
+            className="px-4 py-1.5 text-xs font-bold text-blue-600 border border-blue-300 rounded hover:bg-blue-50 transition-colors uppercase tracking-wide disabled:opacity-50"
+          >
+            {t('domain_make_primary')}
+          </button>
+        </Can>
+      ),
+    },
+    {
+      key: 'users', header: t('mbox_page_title'),
+      cell: (d) => <span className="text-gray-500 text-xs">{d._count?.users ?? 0}</span>,
+    },
+    {
+      key: 'status', header: t('domain_col_status'), headerClassName: 'text-center', className: 'text-center',
+      cell: (d) => (
+        <Can area="domains" access="write" fallback={<span className="text-xs text-gray-500">{d.active ? t('status_active') : t('status_inactive')}</span>}>
+          <Toggle active={d.active} onToggle={() => toggleMutation.mutate(d.id)} />
+        </Can>
+      ),
+    },
+    {
+      key: 'actions', header: t('domain_col_actions'), srOnlyHeader: true, className: 'text-center',
+      cell: (d) => (
+        <Can area="domains" access="write">
+          <button
+            onClick={() => setEditing(d)}
+            className="p-1.5 text-blue-500 hover:text-blue-700 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
+            title={t('domain_edit_title_btn')}
+            aria-label={`${t('domain_edit_title_btn')}: ${d.name}`}
+          >
+            <Pencil size={14} />
+          </button>
+        </Can>
+      ),
+    },
+  ];
+
   return (
-    <div className="min-h-full bg-gray-100">
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-8 py-5">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">{t('domain_page_title')}</h1>
-        </div>
+    <div className="p-6 space-y-4">
+      <div>
+        <h1 className="text-xl font-semibold text-gray-900">{t('domain_page_title')}</h1>
+        <p className="text-xs text-gray-400 mt-0.5">{total} Domain{total !== 1 ? 's' : ''} {t('domain_total')}</p>
       </div>
 
-      {/* ── Content area ───────────────────────────────────────────────────── */}
-      <div className="p-8">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          {/* ── Toolbar ──────────────────────────────────────── */}
-          <div className="flex items-center gap-4 p-5 border-b border-gray-200">
-            <h2 className="text-lg font-bold text-gray-900 shrink-0">{t('domain_section_title')}</h2>
-
-            {/* Search */}
-            <div className="flex-1 max-w-lg">
-              <input
-                type="text"
-                value={search}
-                onChange={e => { setSearch(e.target.value); setPage(1); }}
-                placeholder={t('domain_search_placeholder')}
-                className="w-full border border-gray-300 rounded px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-center placeholder-gray-400"
-              />
-            </div>
-
-            <div className="flex-1" />
-
-            {/* ADD DOMAIN */}
-            <button
-              onClick={() => setShowAdd(true)}
-              className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors uppercase tracking-wide"
+      <DataTable<Domain>
+        caption={t('domain_section_title')}
+        rows={domains}
+        columns={columns}
+        rowKey={(d) => d.id}
+        loading={isLoading}
+        server={{ page, pageSize: limit, total, onPageChange: setPage }}
+        search={{ placeholder: t('domain_search_placeholder'), value: search, onChange: (q) => { setSearch(q); setPage(1); } }}
+        emptyText={search ? t('domain_no_results') : t('domain_empty')}
+        filters={
+          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+            <select
+              value={limit}
+              onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
+              className="input w-auto py-1"
             >
-              <Plus size={15} />
-              {t('domain_add_btn')}
+              {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            {t('domain_per_page')}
+          </label>
+        }
+        toolbar={() => (
+          <>
+            <Can area="domains" access="write">
+              <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-1.5">
+                <Plus size={15} aria-hidden="true" /> {t('domain_add_btn')}
+              </button>
+            </Can>
+            <button onClick={() => void refetch()} className="btn-secondary flex items-center gap-1.5 text-xs">
+              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
             </button>
-          </div>
-
-          {/* ── Table ─────────────────────────────────────────── */}
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide w-12">#</th>
-                <th className="text-left px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_domain')}</th>
-                <th className="px-6 py-3 w-44"></th>
-                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_status')}</th>
-                <th className="text-center px-6 py-3 text-xs font-bold text-gray-700 uppercase tracking-wide">{t('domain_col_actions')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {isLoading && (
-                <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">{t('domain_loading')}</td>
-                </tr>
-              )}
-              {!isLoading && domains.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-12 text-center text-gray-400 text-sm">
-                    {search ? t('domain_no_results') : t('domain_empty')}
-                  </td>
-                </tr>
-              )}
-              {domains.map((d, i) => (
-                <tr key={d.id} className="hover:bg-gray-50 transition-colors">
-                  {/* # */}
-                  <td className="px-6 py-4 text-gray-500 text-sm">{(page - 1) * limit + i + 1}</td>
-
-                  {/* Domain Name */}
-                  <td className="px-6 py-4 text-gray-800 text-sm font-medium">{d.name}</td>
-
-                  {/* MAKE PRIMARY / Primary Domain label */}
-                  <td className="px-6 py-4">
-                    {d.primary ? (
-                      <span className="text-sm text-gray-500">{t('domain_primary_label')}</span>
-                    ) : (
-                      <button
-                        onClick={() => makePrimaryMutation.mutate(d.id)}
-                        disabled={makePrimaryMutation.isPending}
-                        className="px-4 py-1.5 text-xs font-bold text-blue-600 border border-blue-300 rounded hover:bg-blue-50 transition-colors uppercase tracking-wide disabled:opacity-50"
-                      >
-                        {t('domain_make_primary')}
-                      </button>
-                    )}
-                  </td>
-
-                  {/* STATUS Toggle */}
-                  <td className="px-6 py-4 text-center">
-                    <Toggle
-                      active={d.active}
-                      onToggle={() => toggleMutation.mutate(d.id)}
-                    />
-                  </td>
-
-                  {/* ACTIONS — Pencil-Edit */}
-                  <td className="px-6 py-4 text-center">
-                    <button
-                      onClick={() => setEditing(d)}
-                      className="p-1.5 text-blue-500 hover:text-blue-700 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
-                      title={t('domain_edit_title_btn')}
-                    >
-                      <Pencil size={14} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* ── Footer: pagination ────────────────────────────── */}
-          <div className="flex items-center gap-3 px-6 py-3 border-t border-gray-200">
-            {/* Limit selection */}
-            <div className="relative flex items-center">
-              <select
-                value={limit}
-                onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
-                className="appearance-none border border-gray-300 rounded px-3 py-1.5 pr-7 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-              >
-                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <ChevronDown size={12} className="absolute right-2 text-gray-400 pointer-events-none" />
-            </div>
-            <span className="text-sm text-gray-500">{t('domain_per_page')}</span>
-
-            <div className="flex-1" />
-
-            {/* Page navigation */}
-            {totalPages > 1 && (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded disabled:opacity-40"
-                >
-                  ‹
-                </button>
-                <span className="text-sm text-gray-600">{page} / {totalPages}</span>
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                  className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded disabled:opacity-40"
-                >
-                  ›
-                </button>
-              </div>
-            )}
-
-            <span className="text-xs text-gray-400">{total} Domain{total !== 1 ? 's' : ''} {t('domain_total')}</span>
-          </div>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {showAdd  && <AddDomainModal  onClose={() => setShowAdd(false)} />}

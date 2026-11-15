@@ -2,11 +2,15 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
-  Workflow, Plus, Trash2, Pencil, X, Loader2, GripVertical, ToggleLeft, ToggleRight,
+  Workflow, Plus, Trash2, Pencil, X, Loader2, ToggleLeft, ToggleRight, RefreshCw,
   Sparkles, ShieldAlert, ShieldCheck, FileWarning, Mail, AlertTriangle,
   CreditCard, BookOpen, Forward, Ban,
 } from 'lucide-react';
 import { api } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { Can } from '../components/Can.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface Condition { field: string; op: string; value: string }
 interface Action    { type: string; value: string }
@@ -275,14 +279,17 @@ function TemplatePickerModal({
 }
 
 export function TransportRulesPage() {
+  const t = useT();
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can('hygiene', 'write');
   const [editItem, setEditItem] = useState<TransportRule | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Initial state when the rule is started from a template:
   const [createInitial, setCreateInitial] = useState<RuleTemplate['rule'] | null>(null);
 
-  const { data: rules = [], isLoading } = useQuery<TransportRule[]>({
+  const { data: rules = [], isLoading, isFetching, refetch } = useQuery<TransportRule[]>({
     queryKey: ['admin-transport-rules'],
     queryFn: () => api.get<TransportRule[]>('/admin/transport-rules'),
   });
@@ -295,110 +302,146 @@ export function TransportRulesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/transport-rules/${id}`),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }); toast.success('Gelöscht'); },
-    onError: () => toast.error('Löschen fehlgeschlagen'),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }); toast.success(t('shared_deleted')); },
+    onError: () => toast.error(t('shared_delete_failed')),
+  });
+  const bulkDelete = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const r = await Promise.allSettled(ids.map((id) => api.delete(`/admin/transport-rules/${id}`)));
+      return r.filter((x) => x.status === 'rejected').length;
+    },
+    onSuccess: (failed) => {
+      void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] });
+      if (failed) toast.error(`${failed} × ${t('shared_delete_failed')}`); else toast.success(t('shared_deleted'));
+    },
   });
 
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Workflow size={22} className="text-blue-600" />
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Transportregeln</h1>
-            <p className="text-sm text-gray-500">{rules.length} Regel{rules.length !== 1 ? 'n' : ''}</p>
-          </div>
+  const columns: Column<TransportRule>[] = [
+    {
+      key: 'priority', header: t('tr_col_priority'), sortValue: (r) => r.priority, className: 'w-24',
+      cell: (r) => <span className="text-sm font-mono text-gray-500">{r.priority}</span>,
+    },
+    {
+      key: 'name', header: t('tr_col_name'), sortValue: (r) => r.name,
+      cell: (rule) => (
+        <>
+          <p className="font-medium text-gray-900 text-sm">{rule.name}</p>
+          {rule.description && <p className="text-xs text-gray-400">{rule.description}</p>}
+        </>
+      ),
+    },
+    {
+      key: 'conditions', header: t('tr_col_conditions'),
+      cell: (rule) => (
+        <div className="space-y-0.5">
+          {rule.conditions.slice(0, 2).map((c, i) => (
+            <p key={i} className="text-xs text-gray-600">
+              <span className="font-medium">{CONDITION_FIELDS.find(f => f.value === c.field)?.label ?? c.field}</span>
+              {' '}{CONDITION_OPS.find(o => o.value === c.op)?.label ?? c.op}
+              {' '}<span className="font-mono bg-gray-100 px-1 rounded">{c.value}</span>
+            </p>
+          ))}
+          {rule.conditions.length > 2 && <p className="text-xs text-gray-400">+{rule.conditions.length - 2}</p>}
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setPickerOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2 text-blue-700 bg-blue-50 border border-blue-200 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors">
-            <Sparkles size={14} /> Aus Vorlage
-          </button>
-          <button onClick={() => { setCreateInitial(null); setCreateOpen(true); }}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
-            <Plus size={14} /> Neue Regel
-          </button>
+      ),
+    },
+    {
+      key: 'actions', header: t('tr_col_actions'),
+      cell: (rule) => (
+        <div className="space-y-0.5">
+          {rule.actions.slice(0, 2).map((a, i) => (
+            <p key={i} className="text-xs text-gray-600">
+              <span className="font-medium">{ACTION_TYPES.find(at => at.value === a.type)?.label ?? a.type}</span>
+              {a.value && <span className="font-mono bg-gray-100 px-1 rounded ml-1">{a.value.slice(0, 30)}</span>}
+            </p>
+          ))}
+        </div>
+      ),
+    },
+    {
+      key: 'enabled', header: t('mbox_col_status'), sortValue: (r) => r.enabled, headerClassName: 'text-right', className: 'text-right',
+      cell: (rule) => (
+        <div className="flex items-center justify-end gap-1">
+          <Can area="hygiene" access="write" fallback={<span className="text-xs text-gray-500">{rule.enabled ? t('status_active') : t('status_inactive')}</span>}>
+            <button onClick={() => toggleMutation.mutate(rule.id)}
+              title={rule.enabled ? t('mbox_quick_disable') : t('mbox_quick_enable')}
+              aria-label={`${rule.enabled ? t('mbox_quick_disable') : t('mbox_quick_enable')}: ${rule.name}`}
+              aria-pressed={rule.enabled}
+              className={`p-1.5 rounded transition-colors ${rule.enabled ? 'text-green-500 hover:text-green-700 hover:bg-green-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}>
+              {rule.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+            </button>
+            <button onClick={() => setEditItem(rule)} title={t('tb_edit')} aria-label={`${t('tb_edit')}: ${rule.name}`}
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
+              <Pencil size={14} />
+            </button>
+            <button onClick={() => { if (window.confirm(`"${rule.name}" ${t('shared_delete_confirm')}`)) deleteMutation.mutate(rule.id); }}
+              title={t('tb_delete')} aria-label={`${t('tb_delete')}: ${rule.name}`}
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              <Trash2 size={14} />
+            </button>
+          </Can>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-3">
+        <Workflow size={22} className="text-blue-600" aria-hidden="true" />
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">{t('nav_transport_rules')}</h1>
+          <p className="text-sm text-gray-500">{rules.length} {t('tr_count')}</p>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12 text-gray-400">
-            <Loader2 size={20} className="animate-spin mr-2" /> Lade…
-          </div>
-        ) : rules.length === 0 ? (
-          <div className="text-center py-12 text-gray-400 text-sm">
-            <Workflow size={28} className="mx-auto mb-2 opacity-30" />
-            Keine Transportregeln. Erstelle deine erste Regel.
-          </div>
-        ) : (
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="w-8 px-4 py-3"></th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Priorität</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name / Beschreibung</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Bedingungen</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Aktionen</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status / Aktionen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rules.map(rule => (
-                <tr key={rule.id} className={`hover:bg-gray-50 transition-colors ${!rule.enabled ? 'opacity-60' : ''}`}>
-                  <td className="px-4 py-3 text-gray-300"><GripVertical size={14} /></td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm font-mono text-gray-500">{rule.priority}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-gray-900 text-sm">{rule.name}</p>
-                    {rule.description && <p className="text-xs text-gray-400">{rule.description}</p>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="space-y-0.5">
-                      {rule.conditions.slice(0, 2).map((c, i) => (
-                        <p key={i} className="text-xs text-gray-600">
-                          <span className="font-medium">{CONDITION_FIELDS.find(f => f.value === c.field)?.label ?? c.field}</span>
-                          {' '}{CONDITION_OPS.find(o => o.value === c.op)?.label ?? c.op}
-                          {' '}<span className="font-mono bg-gray-100 px-1 rounded">{c.value}</span>
-                        </p>
-                      ))}
-                      {rule.conditions.length > 2 && <p className="text-xs text-gray-400">+{rule.conditions.length - 2} weitere</p>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="space-y-0.5">
-                      {rule.actions.slice(0, 2).map((a, i) => (
-                        <p key={i} className="text-xs text-gray-600">
-                          <span className="font-medium">{ACTION_TYPES.find(t => t.value === a.type)?.label ?? a.type}</span>
-                          {a.value && <span className="font-mono bg-gray-100 px-1 rounded ml-1">{a.value.slice(0, 30)}</span>}
-                        </p>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => toggleMutation.mutate(rule.id)} title={rule.enabled ? 'Deaktivieren' : 'Aktivieren'}
-                        className={`p-1.5 rounded transition-colors ${rule.enabled ? 'text-green-500 hover:text-green-700 hover:bg-green-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}>
-                        {rule.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                      </button>
-                      <button onClick={() => setEditItem(rule)} title="Bearbeiten"
-                        className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
-                        <Pencil size={14} />
-                      </button>
-                      <button onClick={() => { if (window.confirm(`Regel "${rule.name}" löschen?`)) deleteMutation.mutate(rule.id); }}
-                        title="Löschen"
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <DataTable<TransportRule>
+        caption={t('nav_transport_rules')}
+        rows={rules}
+        columns={columns}
+        rowKey={(r) => r.id}
+        loading={isLoading}
+        initialSort={{ key: 'priority', dir: 'asc' }}
+        search={{ placeholder: t('dt_search'), text: (r) => [r.name, r.description, ...r.conditions.map((c) => c.value), ...r.actions.map((a) => a.value)] }}
+        selectable={canWrite}
+        {...(canWrite ? { onActivate: (r: TransportRule) => setEditItem(r) } : {})}
+        rowClassName={(r) => (!r.enabled ? 'opacity-60' : '')}
+        emptyText={t('tr_empty')}
+        toolbar={({ selectedRows, clearSelection }) => (
+          <>
+            <Can area="hygiene" access="write">
+              <button onClick={() => { setCreateInitial(null); setCreateOpen(true); }} className="btn-primary flex items-center gap-1.5">
+                <Plus size={14} aria-hidden="true" /> {t('tr_new')}
+              </button>
+            </Can>
+            <Can area="hygiene" access="write">
+              <button onClick={() => setPickerOpen(true)}
+                className="btn-secondary flex items-center gap-1.5 text-xs">
+                <Sparkles size={13} aria-hidden="true" /> {t('tr_from_template')}
+              </button>
+            </Can>
+            <Can area="hygiene" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40" disabled={selectedRows.length !== 1}
+                onClick={() => selectedRows[0] && setEditItem(selectedRows[0])}>
+                <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
+              </button>
+            </Can>
+            <Can area="hygiene" access="write">
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+                disabled={selectedRows.length === 0 || bulkDelete.isPending}
+                onClick={() => {
+                  if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})\n${selectedRows.map((r) => r.name).join('\n')}`)) return;
+                  bulkDelete.mutate(selectedRows.map((r) => r.id), { onSuccess: clearSelection });
+                }}>
+                <Trash2 size={13} aria-hidden="true" /> {t('tb_delete')}
+              </button>
+            </Can>
+            <button onClick={() => void refetch()} className="btn-secondary flex items-center gap-1.5 text-xs">
+              <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> {t('tb_refresh')}
+            </button>
+          </>
         )}
-      </div>
+      />
 
       {pickerOpen && (
         <TemplatePickerModal
