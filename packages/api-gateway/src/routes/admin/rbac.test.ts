@@ -12,8 +12,11 @@ import type { Server } from 'node:http';
 import { installFakePrisma, applySelect, setTestEnv } from '../../test-support/fake-prisma.js';
 
 setTestEnv();
+// nothing listens here: backup proxy routes answer 502 once they pass the guards
+process.env['BACKUP_SERVICE_URL'] = 'http://127.0.0.1:1';
 
 type Row = Record<string, unknown>;
+const auditRows: Row[] = [];
 const users: Record<string, Row> = {
   u_user:  { id: 'u_user',  email: 'user@ex.com',  displayName: 'U', role: 'USER', active: true, passwordHash: '$2b$SECRET', quotaBytes: 1n, usedBytes: 0n, domainId: 'd1' },
   u_admin: { id: 'u_admin', email: 'adm@ex.com',   displayName: 'A', role: 'SERVER_MANAGEMENT', active: true, passwordHash: '$2b$SECRET2', quotaBytes: 1n, usedBytes: 0n, domainId: 'd1' },
@@ -58,6 +61,11 @@ installFakePrisma({
   sharedMailbox: { count: () => 1 },
   mailbox: { findUnique: () => ({ id: 'mb1' }) },
   appPassword: { deleteMany: (a) => { appPasswordDeletes.push((a as { where: Row }).where); return { count: 2 }; } },
+  mailboxDelegate: {
+    upsert: (a) => ({ id: 'del1', ...(a as { create: Row }).create }),
+    deleteMany: () => ({ count: 1 }),
+  },
+  auditLog: { create: (a) => { auditRows.push((a as { data: Row }).data); return {}; } },
 });
 const appPasswordDeletes: Row[] = [];
 
@@ -291,4 +299,61 @@ test('known crash paths return 4xx instead of killing the process', async () => 
   assert.equal((await call('PUT', '/api/v1/admin/domains/d2', 'ORGANIZATION_MANAGEMENT', { name: 'taken.com' })).status, 409);
   // delegate with unknown grantee
   assert.equal((await call('POST', '/api/v1/admin/mailboxes/u_user/delegates', 'ORGANIZATION_MANAGEMENT', { granteeId: 'nobody', permission: 'FULL_ACCESS' })).status, 404);
+});
+
+// ── 8.0.x OWASP wave ──────────────────────────────────────────────────────────
+
+test('mailbox delegation: admin mailboxes are ORG-only, no self-grant, audited with names', async () => {
+  const P = '/api/v1/admin/mailboxes';
+  const grant = (owner: string, role: string, granteeId: string) =>
+    call('POST', `${P}/${owner}/delegates`, role, { granteeId, permission: 'FULL_ACCESS' });
+  // RECIPIENT_MANAGEMENT cannot grant access to an admin's mailbox …
+  assert.equal((await grant('u_admin', 'RECIPIENT_MANAGEMENT', 'u_user')).status, 403);
+  // … nor grant themselves access to any mailbox
+  assert.equal((await grant('u_user', 'RECIPIENT_MANAGEMENT', 'actor-RECIPIENT_MANAGEMENT')).status, 403);
+  // … nor revoke delegations on an admin mailbox
+  assert.equal((await call('DELETE', `${P}/u_admin/delegates/u_user`, 'RECIPIENT_MANAGEMENT')).status, 403);
+  // USER mailbox → another user: allowed
+  auditRows.length = 0;
+  assert.equal((await grant('u_user', 'RECIPIENT_MANAGEMENT', 'u_admin')).status, 201);
+  // ORGANIZATION_MANAGEMENT: everything, incl. admin mailboxes and itself
+  assert.equal((await grant('u_admin', 'ORGANIZATION_MANAGEMENT', 'u_user')).status, 201);
+  assert.equal((await grant('u_user', 'ORGANIZATION_MANAGEMENT', 'actor-ORGANIZATION_MANAGEMENT')).status, 201);
+  assert.equal((await call('DELETE', `${P}/u_admin/delegates/u_user`, 'ORGANIZATION_MANAGEMENT')).status, 200);
+  await new Promise((r) => setTimeout(r, 30));
+  const g = auditRows.find((r) => r['action'] === 'mailbox.delegate.grant');
+  assert.ok(g, 'grant audited');
+  assert.equal(g['targetName'], 'user@ex.com');
+  assert.deepEqual((g['changes'] as Row)['grantee'], 'adm@ex.com');
+  const rv = auditRows.find((r) => r['action'] === 'mailbox.delegate.revoke');
+  assert.ok(rv, 'revoke audited');
+  assert.equal((rv['changes'] as Row)['owner'], 'adm@ex.com');
+  assert.equal((rv['changes'] as Row)['grantee'], 'user@ex.com');
+});
+
+test('backups: mailbox content only for ORG / COMPLIANCE, no upstream error details', async () => {
+  const B = '/api/v1/admin/backups';
+  const data: Array<[string, string]> = [
+    ['GET', `${B}/download/cjob00000000000000000000x`],
+    ['GET', `${B}/archive/download?key=backups%2Fa.zip`],
+    ['POST', `${B}/mailbox/u_user`],
+  ];
+  for (const [m, p] of data) {
+    const body = m === 'GET' ? undefined : {};
+    assert.equal((await call(m, p, 'SERVER_MANAGEMENT', body)).status, 403, `${m} ${p} SERVER_MANAGEMENT`);
+    assert.equal((await call(m, p, 'VIEW_ONLY_ORG', body)).status, 403, `${m} ${p} VIEW_ONLY_ORG`);
+    assert.equal((await call(m, p, 'COMPLIANCE_MANAGEMENT', body)).status, 502, `${m} ${p} COMPLIANCE_MANAGEMENT passes the guard`);
+    assert.equal((await call(m, p, 'ORGANIZATION_MANAGEMENT', body)).status, 502, `${m} ${p} ORG passes the guard`);
+  }
+  // MBOX import writes into a mailbox: same rule
+  assert.equal((await call('POST', `${B}/import/u_user`, 'SERVER_MANAGEMENT')).status, 403);
+  // operational part stays with SERVER_MANAGEMENT; COMPLIANCE may only list
+  const jobs = await call('GET', `${B}/jobs`, 'SERVER_MANAGEMENT');
+  assert.equal(jobs.status, 502);
+  assert.deepEqual(jobs.json, { error: 'backup-service unavailable' }, 'no err.message / internal URL in the response');
+  assert.equal((await call('POST', `${B}/full`, 'SERVER_MANAGEMENT')).status, 502);
+  assert.equal((await call('GET', `${B}/jobs`, 'COMPLIANCE_MANAGEMENT')).status, 502);
+  assert.equal((await call('POST', `${B}/full`, 'COMPLIANCE_MANAGEMENT')).status, 403);
+  assert.equal((await call('DELETE', `${B}/jobs/cjob00000000000000000000x`, 'COMPLIANCE_MANAGEMENT')).status, 403);
+  assert.equal((await call('GET', `${B}/schedules`, 'COMPLIANCE_MANAGEMENT')).status, 403);
 });
