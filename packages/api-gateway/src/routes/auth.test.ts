@@ -201,3 +201,150 @@ test('password reset: single use over HTTP', async () => {
   assert.equal((await post('/auth/reset-password', { token: raw, newPassword: 'another-good-password' })).status, 200);
   assert.equal((await post('/auth/reset-password', { token: raw, newPassword: 'another-good-password' })).status, 400);
 });
+
+// ── v8.1: shared lockout over HTTP + refresh-token cookie for browser clients ──
+
+const WEB = { 'X-CoreMail-Client': 'web' };
+
+async function rawPost(path: string, body: unknown, headers: Record<string, string> = {}) {
+  const r = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  return {
+    status: r.status,
+    headers: r.headers,
+    setCookie: r.headers.getSetCookie(),
+    body: (await r.json().catch(() => ({}))) as Record<string, unknown>,
+  };
+}
+
+function cookieValue(setCookie: string[], name: string): string | undefined {
+  const c = setCookie.find((s) => s.startsWith(`${name}=`));
+  return c ? decodeURIComponent(c.slice(name.length + 1).split(';')[0]!) : undefined;
+}
+
+test('POST /auth/login: 10 failures → 429 ACCOUNT_LOCKED with Retry-After (shared lockout)', async () => {
+  await addUser('alice@example.com');
+  for (let i = 0; i < 10; i++) assert.equal((await post('/auth/login', { email: 'alice@example.com', password: `bad${i}` })).status, 401);
+  const r = await rawPost('/auth/login', { email: 'alice@example.com', password: PW });
+  assert.equal(r.status, 429);
+  assert.equal(r.body['code'], 'ACCOUNT_LOCKED');
+  assert.ok(Number(r.headers.get('retry-after')) > 0);
+});
+
+test('cookie: web login sets an HttpOnly SameSite=Strict cm_rt cookie on /auth; body has no refresh token', async () => {
+  await addUser('alice@example.com');
+  const r = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, WEB);
+  assert.equal(r.status, 200);
+  assert.ok(r.body['accessToken']);
+  assert.equal(r.body['refreshToken'], undefined, 'never in the body for browsers');
+  const c = r.setCookie.find((s) => s.startsWith('cm_rt='))!;
+  assert.ok(c, JSON.stringify(r.setCookie));
+  assert.match(c, /; Path=\/auth;/);
+  assert.match(c, /; HttpOnly/);
+  assert.match(c, /; SameSite=Strict/);
+  assert.match(c, /Max-Age=\d{4,}/);
+  assert.doesNotMatch(c, /Secure/, 'plain-http page → no Secure flag');
+  assert.equal(db.session.rows[0]!['tokenHash'], sauth.hashRefreshToken(cookieValue(r.setCookie, 'cm_rt')!));
+
+  // https page (TLS terminated in front) → Secure
+  const s = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, { ...WEB, Origin: 'https://mail.example.com' });
+  assert.match(s.setCookie.find((x) => x.startsWith('cm_rt='))!, /; Secure/);
+
+  // CLI / API clients keep the body token and get no cookie
+  const cli = await rawPost('/auth/login', { email: 'alice@example.com', password: PW });
+  assert.ok(cli.body['refreshToken']);
+  assert.equal(cli.setCookie.length, 0);
+});
+
+test('cookie: refresh rotates the cookie (same-origin); the old value is reuse → 401 + cookie cleared', async () => {
+  await addUser('alice@example.com');
+  const login = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, WEB);
+  const rt1 = cookieValue(login.setCookie, 'cm_rt')!;
+  const r1 = await rawPost('/auth/refresh', {}, { ...WEB, Origin: base, Cookie: `cm_rt=${encodeURIComponent(rt1)}` });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.ok(r1.body['accessToken']);
+  assert.equal(r1.body['refreshToken'], undefined);
+  const rt2 = cookieValue(r1.setCookie, 'cm_rt')!;
+  assert.ok(rt2 && rt2 !== rt1, 'rotated');
+
+  const reuse = await rawPost('/auth/refresh', {}, { ...WEB, Origin: base, Cookie: `cm_rt=${encodeURIComponent(rt1)}` });
+  assert.equal(reuse.status, 401);
+  assert.equal(reuse.body['code'], 'REFRESH_REUSED');
+  assert.match(reuse.setCookie.find((s) => s.startsWith('cm_rt='))!, /Max-Age=0/);
+
+  const none = await rawPost('/auth/refresh', {}, WEB);
+  assert.equal(none.status, 401);
+  assert.equal(none.body['code'], 'REFRESH_MISSING');
+});
+
+test('cookie: refresh/logout with the cookie need a same-origin Origin or Referer (CSRF)', async () => {
+  await addUser('alice@example.com');
+  const login = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, WEB);
+  const cookie = `cm_rt=${encodeURIComponent(cookieValue(login.setCookie, 'cm_rt')!)}`;
+
+  for (const h of [{ Origin: 'https://evil.example' }, {}, { Referer: 'https://evil.example/page' }, { Origin: 'null' }]) {
+    const r = await rawPost('/auth/refresh', {}, { ...WEB, ...h, Cookie: cookie });
+    assert.equal(r.status, 403, JSON.stringify(h));
+    assert.equal(r.body['code'], 'ORIGIN_MISMATCH');
+  }
+  const lo = await rawPost('/auth/logout', {}, { ...WEB, Origin: 'https://evil.example', Cookie: cookie });
+  assert.equal(lo.status, 403);
+  assert.equal(db.session.rows.length, 1, 'cross-origin logout revoked nothing');
+
+  // the own page's Referer works when no Origin is sent
+  const viaReferer = await rawPost('/auth/refresh', {}, { ...WEB, Referer: `${base}/mail`, Cookie: cookie });
+  assert.equal(viaReferer.status, 200);
+
+  // the configured public hostname counts as same origin (a reverse proxy rewrote Host)
+  await db.serverSettings.create({ data: { id: 'singleton', publicHostname: 'mail.example.com' } });
+  const next = `cm_rt=${encodeURIComponent(cookieValue(viaReferer.setCookie, 'cm_rt')!)}`;
+  const viaPublic = await rawPost('/auth/refresh', {}, { ...WEB, Origin: 'https://mail.example.com', Cookie: next });
+  assert.equal(viaPublic.status, 200);
+  assert.match(viaPublic.setCookie[0]!, /; Secure/);
+});
+
+test('cookie: logout revokes the cookie session and clears the cookie', async () => {
+  await addUser('alice@example.com');
+  const login = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, WEB);
+  const cookie = `cm_rt=${encodeURIComponent(cookieValue(login.setCookie, 'cm_rt')!)}`;
+  const lo = await rawPost('/auth/logout', {}, { ...WEB, Origin: base, Cookie: cookie });
+  assert.deepEqual(lo.body, { ok: true });
+  assert.equal(db.session.rows.length, 0);
+  assert.match(lo.setCookie.find((s) => s.startsWith('cm_rt='))!, /Max-Age=0/);
+  assert.equal((await rawPost('/auth/refresh', {}, { ...WEB, Origin: base, Cookie: cookie })).status, 401);
+});
+
+test('cookie: migration — a web client presents its old body token once; the answer moves it into the cookie', async () => {
+  await addUser('alice@example.com');
+  const old = await loginOk('alice@example.com'); // pre-8.1 client: body tokens
+  const r = await rawPost('/auth/refresh', { refreshToken: old.refreshToken }, WEB);
+  assert.equal(r.status, 200);
+  assert.equal(r.body['refreshToken'], undefined);
+  assert.ok(cookieValue(r.setCookie, 'cm_rt'));
+  // CLI keeps the body contract
+  const cli = await loginOk('alice@example.com');
+  const c = await rawPost('/auth/refresh', { refreshToken: cli.refreshToken });
+  assert.ok(c.body['refreshToken']);
+  assert.equal(c.setCookie.length, 0);
+});
+
+test('cookie: the BCP has its own cookie (cm_rt_bcp) — MWA and BCP sessions do not overwrite each other', async () => {
+  await addUser('alice@example.com');
+  await addUser('admin@example.com', { role: 'SERVER_MANAGEMENT' });
+  const mwa = await rawPost('/auth/login', { email: 'alice@example.com', password: PW }, WEB);
+  const bcp = await rawPost('/auth/login', { email: 'admin@example.com', password: PW }, { ...WEB, 'X-CoreMail-App': 'bcp' });
+  const mwaRt = cookieValue(mwa.setCookie, 'cm_rt')!;
+  const bcpRt = cookieValue(bcp.setCookie, 'cm_rt_bcp')!;
+  assert.ok(mwaRt && bcpRt);
+  assert.equal(cookieValue(bcp.setCookie, 'cm_rt'), undefined);
+  const both = `cm_rt=${encodeURIComponent(mwaRt)}; cm_rt_bcp=${encodeURIComponent(bcpRt)}`;
+  const r = await rawPost('/auth/refresh', {}, { ...WEB, 'X-CoreMail-App': 'bcp', Origin: base, Cookie: both });
+  assert.equal(r.status, 200);
+  assert.equal(core.verifyAccessToken(String(r.body['accessToken']))!.email, 'admin@example.com');
+  assert.ok(cookieValue(r.setCookie, 'cm_rt_bcp'));
+  const m = await rawPost('/auth/refresh', {}, { ...WEB, Origin: base, Cookie: both });
+  assert.equal(core.verifyAccessToken(String(m.body['accessToken']))!.email, 'alice@example.com');
+});

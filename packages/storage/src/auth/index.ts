@@ -16,3 +16,4 @@ export * from './legacy-ldap.js';
 export { authRedis, type AuthRedis } from './redis.js';
 export * from './invalidation.js';
 export * from './notify.js';
+export * from './refresh-cookie.js';

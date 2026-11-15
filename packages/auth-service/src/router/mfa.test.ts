@@ -173,3 +173,33 @@ test('auth-service /auth/login, /auth/refresh, /auth/logout delegate to the shar
   await call('POST', '/auth/logout', { refreshToken: r.body['refreshToken'] });
   assert.equal(db.session.rows.length, 0);
 });
+
+test('v8.1: /auth/mfa/verify for a browser client sets the refresh cookie (cm_rt / cm_rt_bcp), no body token', async () => {
+  const u = await db.user.create({ data: { email: 'dora@example.com', passwordHash: pwHash } });
+  await db.userMfa.create({ data: { userId: u['id'], totpSecret: sauth.encryptMfaSecret('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'), totpEnabled: true } });
+  const verify = async (headers: Record<string, string>, at = Date.now()) => {
+    const ch = await call('POST', '/auth/login', { email: 'dora@example.com', password: PW });
+    assert.equal(ch.body['mfaRequired'], true);
+    const r = await fetch(`${base}/auth/mfa/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ challengeToken: ch.body['challengeToken'], code: sauth.totpCode('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', at) }),
+    });
+    return { status: r.status, setCookie: r.headers.getSetCookie(), body: (await r.json()) as Record<string, unknown> };
+  };
+  const web = await verify({ 'X-CoreMail-Client': 'web', Origin: 'https://mail.example.org' });
+  assert.equal(web.status, 200, JSON.stringify(web.body));
+  assert.ok(web.body['accessToken']);
+  assert.equal(web.body['refreshToken'], undefined);
+  const c = web.setCookie.find((s) => s.startsWith('cm_rt='))!;
+  assert.match(c, /; Path=\/auth;.*; HttpOnly; SameSite=Strict; Secure$/);
+
+  const bcp = await verify({ 'X-CoreMail-Client': 'web', 'X-CoreMail-App': 'bcp' }, Date.now() + 30_000);
+  assert.ok(bcp.setCookie.some((s) => s.startsWith('cm_rt_bcp=')));
+  assert.ok(!bcp.setCookie.some((s) => /Secure/.test(s)), 'plain http → no Secure');
+
+  await db.userMfa.update({ where: { userId: u['id'] }, data: { totpLastUsedStep: null } }); // allow the current step again
+  const cli = await verify({});
+  assert.ok(cli.body['refreshToken'], 'non-browser clients keep the body token');
+  assert.equal(cli.setCookie.length, 0);
+});
