@@ -10,7 +10,9 @@ import { decodeWbxml, type WbxmlElement } from './wbxml.js';
 import { EAS_COMMANDS } from './commands.js';
 import { handleProvision } from './commands/provision.js';
 import { handleFolderSync } from './commands/folder-sync.js';
-import { handleSync } from './commands/sync.js';
+import { handleSync, emptySyncResponse } from './commands/sync.js';
+import { deviceAccess, deniedResponse } from './device-policy.js';
+import { readFileSync } from 'node:fs';
 import { handleSendMail, handleSmartReply } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
 import { handleGetAttachment } from './commands/get-attachment.js';
@@ -32,6 +34,11 @@ registerLdapMailVerifier();
 installAsyncErrorHandling(express);
 const app = express();
 const PORT = parseInt(process.env['EAS_PORT'] ?? '3005', 10);
+const APP_VERSION = (() => {
+  try {
+    return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown';
+  } catch { return 'unknown'; }
+})();
 
 // ─── Raw body parser for WBXML ────────────────────────────────────────────────
 app.use('/Microsoft-Server-ActiveSync', express.raw({ type: '*/*', limit: '25mb' }));
@@ -53,6 +60,7 @@ app.post(
     const command = req.query['Cmd'] as string | undefined;
     const deviceId = req.query['DeviceId'] as string ?? 'unknown';
     const deviceType = req.query['DeviceType'] as string ?? 'Unknown';
+    const protocolVersion = req.get('MS-ASProtocolVersion') ?? '14.1';
 
     res.setHeader('MS-Server-ActiveSync', '14.1');
     res.setHeader('Content-Type', 'application/vnd.ms-sync.wbxml');
@@ -63,7 +71,7 @@ app.post(
     }
 
     const bodyBuf = req.body as Buffer;
-    let wbxmlBody = null;
+    let wbxmlBody: WbxmlElement | null = null;
     if (bodyBuf && bodyBuf.length > 0) {
       try {
         wbxmlBody = decodeWbxml(bodyBuf);
@@ -75,113 +83,90 @@ app.post(
     }
 
     try {
-      switch (command) {
-        case 'Provision': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleProvision(wbxmlBody, user.userId, deviceId, deviceType);
-          res.status(200).send(result);
-          break;
-        }
-        case 'FolderSync': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleFolderSync(wbxmlBody, user.userId, deviceId);
-          res.status(200).send(result);
-          break;
-        }
-        case 'Sync': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleSync(wbxmlBody, user.userId, deviceId);
-          res.status(200).send(result);
-          break;
-        }
-        case 'SendMail': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleSendMail(wbxmlBody, user.userId);
-          res.status(200).send(result);
-          break;
-        }
-        case 'SmartReply': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleSmartReply(wbxmlBody, user.userId, 'SmartReply');
-          res.status(200).send(result);
-          break;
-        }
-        case 'SmartForward': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleSmartReply(wbxmlBody, user.userId, 'SmartForward');
-          res.status(200).send(result);
-          break;
-        }
-        case 'Ping': {
-          if (!wbxmlBody) {
-            // Empty ping — return heartbeat
-            res.status(200).end();
-            return;
-          }
-          // Ping is handled specially: it holds the connection
-          await handlePing(wbxmlBody, user.userId, res, user);
-          break;
-        }
-        case 'GetAttachment': {
-          // Simple attachment fetch by AttachmentName query param
-          const attachmentName = req.query['AttachmentName'] as string | undefined;
-          if (!attachmentName) { res.status(400).send('Missing AttachmentName'); return; }
-          res.removeHeader('Content-Type'); // set by the handler (attachment MIME type)
-          await handleGetAttachment(res, user.userId, attachmentName, {
-            findAttachment: (id, userId) => prisma.attachment.findFirst({
-              where: { id, message: { deletedAt: null, folder: { mailbox: { userId } } } },
-              select: { mimeType: true, size: true, storagePath: true },
-            }),
-            openStream: getObjectStream,
-            warn: (msg, err) => log.warn({ err }, msg),
-          });
-          break;
-        }
-        case 'ItemOperations': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await handleItemOperations(wbxmlBody, user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)));
-          res.status(200).send(result);
-          break;
-        }
-        case 'GetItemEstimate': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          res.status(200).send(await handleGetItemEstimate(wbxmlBody, user.userId));
-          break;
-        }
-        case 'Settings':
-        case 'Search':
-        case 'MoveItems':
-        case 'MeetingResponse':
-        case 'ResolveRecipients': {
-          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
-          const result = await runCommand(command, wbxmlBody, user.userId, deviceId, req.get('MS-ASProtocolVersion') ?? '14.1');
-          res.status(200).send(result);
-          break;
-        }
-        default:
-          log.warn({ command }, 'Unknown EAS command');
-          res.status(501).send('Not implemented');
+      // Device access: provisioned, current policy key, not blocked / wiped ([MS-ASPROV]).
+      const device = await prisma.activeSyncDevice.findUnique({
+        where: { userId_deviceId: { userId: user.userId, deviceId } },
+        select: { status: true, policyKey: true },
+      });
+      const access = deviceAccess(device, command, req.get('X-MS-PolicyKey'));
+      if (!access.allow) {
+        const denied = deniedResponse(command, access.status, protocolVersion);
+        log.info({ userId: user.userId, deviceId, command, status: access.status }, 'EAS request refused by device policy');
+        if (denied.body) res.status(denied.httpStatus).send(denied.body);
+        else { res.removeHeader('Content-Type'); res.status(denied.httpStatus).end(); }
+        return;
       }
+
+      const handler = HANDLERS[command];
+      if (!handler) {
+        log.warn({ command }, 'Unknown EAS command');
+        res.status(501).send('Not implemented');
+        return;
+      }
+      if (handler.needsBody && !wbxmlBody) {
+        if (command === 'Sync') { res.status(200).send(emptySyncResponse()); return; }
+        res.status(400).send('Missing body');
+        return;
+      }
+      await handler.run({ req, res, body: wbxmlBody as WbxmlElement, user, deviceId, deviceType, protocolVersion });
     } catch (err) {
       log.error({ err, command }, 'EAS command error');
-      res.status(500).send('Internal server error');
+      if (!res.headersSent) res.status(500).send('Internal server error');
     }
   },
 );
 
-function runCommand(command: string, body: WbxmlElement, userId: string, deviceId: string, protocolVersion: string): Promise<Buffer> {
-  switch (command) {
-    case 'Settings': return handleSettings(body, userId, deviceId, protocolVersion);
-    case 'Search': return handleSearch(body, userId);
-    case 'MoveItems': return handleMoveItems(body, userId);
-    case 'MeetingResponse': return handleMeetingResponse(body, userId);
-    default: return handleResolveRecipients(body, userId);
-  }
+interface CommandContext {
+  req: Request;
+  res: Response;
+  /** Decoded request (null only for commands with needsBody = false). */
+  body: WbxmlElement;
+  user: EasUser;
+  deviceId: string;
+  deviceType: string;
+  protocolVersion: string;
 }
+
+/** Reply with a WBXML buffer. */
+const wbxml = (run: (c: CommandContext) => Promise<Buffer>) => async (c: CommandContext) => { c.res.status(200).send(await run(c)); };
+
+const HANDLERS: Record<string, { needsBody: boolean; run: (c: CommandContext) => Promise<void> }> = {
+  Provision: { needsBody: true, run: wbxml((c) => handleProvision(c.body, c.user.userId, c.deviceId, c.deviceType)) },
+  FolderSync: { needsBody: true, run: wbxml((c) => handleFolderSync(c.body, c.user.userId, c.deviceId)) },
+  Sync: { needsBody: true, run: wbxml((c) => handleSync(c.body, c.user.userId, c.deviceId)) },
+  SendMail: { needsBody: true, run: wbxml((c) => handleSendMail(c.body, c.user.userId)) },
+  SmartReply: { needsBody: true, run: wbxml((c) => handleSmartReply(c.body, c.user.userId, 'SmartReply')) },
+  SmartForward: { needsBody: true, run: wbxml((c) => handleSmartReply(c.body, c.user.userId, 'SmartForward')) },
+  // Ping holds the connection; an empty Ping reuses the device's last parameters.
+  Ping: { needsBody: false, run: (c) => handlePing(c.req.body?.length ? c.body : null, c.user.userId, c.res, c.user, { deviceId: c.deviceId }) },
+  GetAttachment: {
+    needsBody: false,
+    run: async ({ req, res, user }) => {
+      const attachmentName = req.query['AttachmentName'] as string | undefined;
+      if (!attachmentName) { res.status(400).send('Missing AttachmentName'); return; }
+      res.removeHeader('Content-Type'); // set by the handler (attachment MIME type)
+      await handleGetAttachment(res, user.userId, attachmentName, {
+        findAttachment: (id, userId) => prisma.attachment.findFirst({
+          where: { id, message: { deletedAt: null, folder: { mailbox: { userId } } } },
+          select: { mimeType: true, size: true, storagePath: true },
+        }),
+        openStream: getObjectStream,
+        warn: (msg, err) => log.warn({ err }, msg),
+      });
+    },
+  },
+  ItemOperations: { needsBody: true, run: wbxml((c) => handleItemOperations(c.body, c.user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)))) },
+  GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId)) },
+  Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.protocolVersion)) },
+  Search: { needsBody: true, run: wbxml((c) => handleSearch(c.body, c.user.userId)) },
+  MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId)) },
+  MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.protocolVersion)) },
+  ResolveRecipients: { needsBody: true, run: wbxml((c) => handleResolveRecipients(c.body, c.user.userId)) },
+};
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'activesync', version: '0.7.0' });
+  res.json({ status: 'ok', service: 'activesync', version: process.env['COREMAIL_VERSION'] ?? APP_VERSION });
 });
 
 // v6: shared error middleware (registered last)

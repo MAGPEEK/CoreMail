@@ -205,6 +205,12 @@ smimeRouter.delete('/devices/:id', async (req: Request, res: Response) => {
     res.status(404).json({ error: 'Device not found' });
     return;
   }
+  // A blocked device or one with a pending remote wipe must not escape the admin's
+  // decision by re-registering as a new device (it would provision again as OK).
+  if (['BLOCKED', 'PENDING', 'WIPED'].includes(device.status)) {
+    res.status(409).json({ error: 'This device is blocked or being wiped by an administrator', code: 'DEVICE_MANAGED' });
+    return;
+  }
   await prisma.activeSyncDevice.delete({ where: { id } });
   res.json({ ok: true });
 });

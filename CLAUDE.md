@@ -419,12 +419,34 @@ HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
 | `Settings` | `commands/settings.ts` | Oof ↔ `UserSettings.oof*`, DeviceInformation, UserInformation, RightsManagementInformation |
 | `Search` | `commands/search.ts` | Store Mailbox (own mailbox only) + GAL (`commands/directory.ts`: own domain only) |
 | `MoveItems` | `commands/move-items.ts` | `moveMessages` (new UID), own folders only |
-| `MeetingResponse` | `commands/meeting-response.ts` | Calendar event + iTIP REPLY (`@coremail/storage` `itip-reply.ts`), request → Trash |
+| `MeetingResponse` | `commands/meeting-response.ts` | Calendar event + iTIP REPLY only for ≥ 16.0 + SendResponse (`@coremail/storage` `itip-reply.ts`), request → Trash |
 | `ResolveRecipients` | `commands/resolve-recipients.ts` | GAL + own contacts; Certificates/Availability minimal |
 | `ItemOperations` | `commands/item-operations.ts` | Fetch (FileReference / ServerId, body + MIME), EmptyFolderContents; own items only |
 | `GetItemEstimate` | `commands/get-item-estimate.ts` | Count over the Sync window's modSeq range |
 
 Sync bodies: `commands/body.ts` (AirSyncBase Body per BodyPreference, MIME = `loadRawMessage()`).
+
+**Device policy (v7.1, `src/device-policy.ts`)**: `server.ts` checks every command except Provision
+before dispatching (`HANDLERS` table): no device / key "0" → Status 142, `X-MS-PolicyKey` ≠
+`ActiveSyncDevice.policyKey` → 144, status BLOCKED/PENDING → 129, WIPED → 140 (status inside the
+command's WBXML root for 14.x; HTTP 449/403 for < 14 and GetAttachment). Provision: phase 1 → policy
+doc + temporary key (`pendingPolicyKey`), phase 2 → final random uint32 key; WIPED → `<RemoteWipe/>`,
+the ack sets `remoteWipeAckAt` (device stays WIPED until an admin sets OK). e2e and tests must use the
+phase-2 key.
+
+**Per-device item state (v7.1, `commands/item-state.ts`, model `ActiveSyncItem`)**: committed rows
+(`pendingKey ''`) = what the device holds (serverId → modSeq); rows with `pendingKey = <issued key>` =
+what the last response sent. `syncKeys[<folderId>]` = issued key, `syncKeys['ack:<folderId>']` =
+acknowledged key; presenting the issued key commits, the acknowledged key discards (retry), anything
+else → Status 3; no `ack:` entry (pre-7.1 device) → state rebuilt from the folder. Sync: Add for
+unknown items, Change (Read) for known items with a newer modSeq, Delete for known items that left the
+folder (tombstone or moved, same mailbox); the device's own Read change / MoveItems update the
+committed state (no echo). Client Delete honours `DeletesAsMoves` (default → Trash). `FilterType` is
+sticky in `opts:<folderId>`; a change → Status 3. Other `syncKeys` entries: `ping` (cached Ping
+parameters), `folders` (FolderSync snapshot for Add/Update/Delete deltas, previous key accepted once).
+MeetingResponse sends the iTIP REPLY only for protocol ≥ 16.0 + SendResponse (14.1 devices send it).
+Tests: `device-policy.test.ts`, `commands/sync-state.test.ts`, `ping.test.ts`, `send-mail.test.ts`,
+`folder-sync.test.ts` (in-memory Prisma `test-support/fake-db.ts`).
 
 `src/commands.ts` (`EAS_COMMANDS`) is the OPTIONS command list — only commands with a real handler.
 

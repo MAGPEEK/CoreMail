@@ -33,8 +33,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **ActiveSync `MoveItems`:** moves mail between the user's own folders; IMAP and JMAP clients
   see the move.
 - **ActiveSync `MeetingResponse`:** accept, tentatively accept or decline an invitation from the
-  phone — the meeting is added to (or removed from) the calendar, the organizer receives an
-  iTIP reply, and the invitation moves to Deleted Items.
+  phone — the meeting is added to (or removed from) the calendar and the invitation moves to
+  Deleted Items. The iTIP reply to the organizer is sent by the phone itself (EAS 14.1); the
+  server sends one only for EAS 16.0 requests with `SendResponse`, so the organizer never gets two.
 - **ActiveSync `ResolveRecipients`:** names and addresses are resolved against the address book
   of the user's domain and the user's contacts.
 - **Helm chart 1.0.0 (`infra/k8s`)** — complete rewrite for the single `coremail-app` image:
@@ -93,8 +94,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   (507 when truncated). Unsupported filters answer 403 `supported-filter` /
   `supported-collation`. `CALDAV:expand` and `CALDAV:limit-recurrence-set` are implemented.
 
+- **ActiveSync FolderSync changes:** folders created, renamed or deleted on the server (web
+  client, IMAP, JMAP) reach the phone as Add/Update/Delete; an unknown FolderSync key answers
+  Status 9.
+- **ActiveSync `FilterType`:** the phone's "mail days to sync" setting is honoured; changing it
+  restarts the folder's sync (Status 3).
+
 ### Changed
 
+- **ActiveSync devices must be provisioned (breaking for non-compliant clients).** Every command
+  except Provision needs the final policy key of the [MS-ASPROV] handshake in `X-MS-PolicyKey`:
+  phase 1 hands out a temporary key with the policy, phase 2 the final key (random 32-bit, was
+  `Date.now()`). Without a key the server answers global Status 142, with an outdated one 144
+  (HTTP 449 for protocol < 14 and for GetAttachment) — standard clients then provision
+  automatically. Clients or scripts that skipped Provision or kept using the phase-1 key must
+  use the phase-2 key. The policy no longer limits devices to one month of mail
+  (`MaxEmailAgeFilter` 0).
+- ActiveSync Sync tracks per device which items the phone holds (new table
+  `active_sync_items`, created at container start): items the phone already has are sent as
+  `Change`, items deleted or moved away on the server as `Delete`, and the phone's own changes
+  (read state, MoveItems) are no longer echoed back. A retried Sync with the previous SyncKey
+  gets the same changes again; any other old key answers Status 3. Devices synced before this
+  release continue without a full resync.
+- ActiveSync: a Delete from the phone moves the mail to Deleted Items (default
+  `DeletesAsMoves`), as Exchange does; only `DeletesAsMoves 0` or a delete inside Deleted Items
+  removes it.
+- ActiveSync SmartReply / SmartForward add the original message (as an embedded message with
+  all its attachments; inline for a reply) unless the phone sends `ReplaceMime`, and mark the
+  original answered / forwarded. An unknown source item answers Status 150.
+- ActiveSync Ping: the response lists the changed folders as `<Folder>id</Folder>` (it used the
+  request shape, so phones could not tell which folder changed); changes made after the last
+  Sync but before the Ping are reported at once, and flag changes, deletes and moves are
+  detected (it compared message counts). A heartbeat outside 60–3540 s answers Status 5 with
+  the limit, unknown folders Status 7, missing parameters Status 3; an empty Ping reuses the
+  last parameters; an abandoned Ping stops polling when the client disconnects.
+- ActiveSync: a Sync without body answers Status 13 instead of HTTP 400.
 - ActiveSync OPTIONS now lists only the commands the server implements
   (`MS-ASProtocolCommands`); unimplemented commands such as FolderCreate are no longer advertised.
 - Docker Compose: the app container gets a `coremail-data:/data` volume and
@@ -178,6 +212,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   "unquoted" a second time (`'Old'` kept its quotes stripped).
 
 - ActiveSync: a Sync Change without `email:Read` no longer marks the message unread.
+- ActiveSync SendMail/SmartReply/SmartForward took the opaque MIME as UTF-8 text, so 8-bit
+  (e.g. Latin-1) messages were corrupted; the octets are now sent byte-exact.
+- ActiveSync: a SendMail retried with the same `ClientId` (e.g. after a timeout) is answered
+  with Status 118 instead of being sent a second time.
+- ActiveSync Sent copies are stored like every other message (raw original, parsed headers,
+  attachments); before they had no raw message, no attachments and no Message-ID.
+- ActiveSync WBXML decoder: truncated OPAQUE data, unterminated strings and unsupported global
+  tokens are rejected instead of being read past the buffer or parsed as elements.
 - Backup schedules and the retention worker (Managed Folder Assistant) ran once per app
   instance; with more than one instance every scheduled backup and retention run happened
   several times, and retention runs could overlap. Each cron fire is now claimed by one
@@ -337,6 +379,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   allow-list is refused unless it carries an explicit `access_token`, so a foreign page can no
   longer ride on cached Basic credentials (RFC 6455 §10.2). Web Push for a mailbox goes only
   to delegates with mailbox access.
+- **ActiveSync device block and remote wipe are enforced.** The admin API
+  (`/api/v1/admin/mobile/devices`) set devices to BLOCKED or WIPED, but the ActiveSync service
+  never read the status: a lost or stolen phone kept syncing the mailbox and never received a
+  wipe. Now a BLOCKED (or PENDING) device is refused with Status 129; a device with a requested
+  wipe is refused with Status 140 and gets `<RemoteWipe/>` on Provision; its acknowledgement is
+  recorded (`remoteWipeAckAt`, new column) and the device stays refused (a new Provision wipes
+  again) until an administrator sets it back to OK. Users can no longer delete a blocked or
+  wiped device registration themselves (`DELETE /api/v1/smime/devices/:id` → 409), which would
+  have let it re-register.
 - **Credential changes take effect immediately on cached logins.** The jmap-server cached
   successful Basic logins for 60 s, so after enabling MFA, changing or resetting the password,
   revoking an app password, or deactivating/deleting a user, JMAP still accepted the old

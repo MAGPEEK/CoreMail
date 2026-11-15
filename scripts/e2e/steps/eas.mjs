@@ -72,7 +72,26 @@ export async function run(state) {
     const req2 = encode(['Provision', [['Policies', [['Policy', [['PolicyType', 'MS-EAS-Provisioning-WBXML'], ['PolicyKey', policyKey], ['PStatus', '1']]]]]]]);
     const r2 = await post('Provision', req2, { 'X-MS-PolicyKey': policyKey });
     assert(r2.status === 200, `phase 2 ${r2.status}`);
-    return `PolicyKey ${policyKey}`;
+    // [MS-ASPROV]: phase 1 hands out a temporary key, phase 2 the final one for X-MS-PolicyKey
+    const tree2 = decodeWbxml(Buffer.from(await r2.arrayBuffer()));
+    const pol2 = tree2.children?.find((x) => x.name === 'Policies')?.children?.find((x) => x.name === 'Policy');
+    const finalKey = pol2?.children?.find((x) => x.name === 'PolicyKey')?.text;
+    assert(finalKey && finalKey !== policyKey, `phase 2 must return a new final PolicyKey: ${JSON.stringify(tree2).slice(0, 300)}`);
+    const temporary = policyKey;
+    policyKey = finalKey;
+    return `temporary ${temporary} → final ${policyKey}`;
+  });
+
+  await check('eas: commands need the final policy key (none → 142, temporary/wrong → 144)', async () => {
+    const status = async (headers) => {
+      const r = await post('FolderSync', encode(['FolderSync', [['FSyncKey', '0']]]), headers);
+      assert(r.status === 200, `HTTP ${r.status}`);
+      return decodeWbxml(Buffer.from(await r.arrayBuffer())).children?.find((x) => x.name === 'Status')?.text;
+    };
+    const none = await status({});
+    const wrong = await status({ 'X-MS-PolicyKey': String((Number(policyKey) % 4294967294) + 1) });
+    assert(none === '142' && wrong === '144', `no key → ${none}, wrong key → ${wrong}`);
+    return `no key ${none}, wrong key ${wrong}`;
   });
 
   await check('eas: Provision response uses the Provision code page for Status (MS-ASWBXML)', async () => {

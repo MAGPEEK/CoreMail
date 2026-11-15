@@ -21,6 +21,7 @@ const deviceUpdates: unknown[] = [];
     update: async (a: unknown) => { deviceUpdates.push(a); return {}; },
   },
   mailbox: { findUnique: async () => ({ highestModSeq: 5n }) },
+  activeSyncItem: { deleteMany: async () => ({ count: 0 }) },
   message: { findMany: async () => [{ id: 'm1', modSeq: 1n, flags: [], subject: 's', fromAddr: 'a@b', toAddrs: [], date: new Date(), bodyText: 'x', bodyHtml: '' }] },
 };
 

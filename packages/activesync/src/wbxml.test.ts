@@ -91,3 +91,18 @@ test('encode → decode round trip keeps names', () => {
   assert.deepEqual(kids(back).map((c) => c.name), ['Status', 'Folders']);
   assert.ok(tags(encodeWbxml(tree)).every(([p]) => p === 13));
 });
+
+test('decoder rejects truncated OPAQUE data, unterminated strings and unsupported global tokens', () => {
+  const H = [0x03, 0x01, 0x6a, 0x00, 0x00, 21];
+  // Mime (0x50) with OPAQUE length 10 but only 3 bytes left
+  assert.throws(() => decodeWbxml(Buffer.from([...H, 0x45, 0x50, 0xc3, 0x0a, 0x41, 0x42, 0x43])), /OPAQUE/);
+  // STR_I without terminator
+  assert.throws(() => decodeWbxml(Buffer.from([...H, 0x45, 0x50, 0x03, 0x41, 0x42])), /Unterminated/);
+  // STR_T (0x83), LITERAL (0x04), EXT_I_0 (0x40) are not EAS — never parsed as elements
+  for (const g of [0x83, 0x04, 0x40, 0x02]) {
+    assert.throws(() => decodeWbxml(Buffer.from([...H, 0x45, g, 0x00, 0x01, 0x01])), /global token/, `0x${g.toString(16)}`);
+  }
+  // a valid OPAQUE still decodes byte-exact
+  const ok = decodeWbxml(Buffer.from([...H, 0x45, 0x50, 0xc3, 0x02, 0xe9, 0x00, 0x01, 0x01]));
+  assert.deepEqual([...(kids(ok)[0]!.bytes ?? [])], [0xe9, 0x00]);
+});

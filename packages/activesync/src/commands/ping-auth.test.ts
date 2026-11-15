@@ -31,8 +31,10 @@ let countGate: Promise<void> | null = null;
     update: async () => ({}),
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
-  folder: { findMany: async () => [{ id: 'f1' }] },
-  message: { count: async () => { if (countGate) await countGate; return 0; } },
+  // the folder check runs before the long-poll registers (gate = "still validating")
+  folder: { findMany: async () => { if (countGate) await countGate; return [{ id: 'f1', mailboxId: 'mb1' }]; } },
+  mailbox: { findUnique: async () => ({ highestModSeq: 0n }) },
+  message: { findFirst: async () => null, findMany: async () => [] },
 };
 
 const core = await import('@coremail/core');
@@ -61,7 +63,7 @@ app.post('/eas', requireAuth as RequestHandler, async (req, res) => {
     el('HeartbeatInterval', heartbeat),
     el('Folders', undefined, [el('Folder', undefined, [el('Id', 'f1'), el('Class', 'Email')])]),
   ]);
-  await handlePing(body, u.userId, res, u, 20);
+  await handlePing(body, u.userId, res, u, { pollIntervalMs: 20, minHeartbeatSec: 1 });
 });
 const server = app.listen(0, '127.0.0.1');
 await new Promise((r) => server.once('listening', r));
@@ -121,7 +123,7 @@ describe('ActiveSync Ping after credential changes', () => {
     countGate = new Promise<void>((r) => { release = r; });
     try {
       const bob = ping('bob@example.com', 'pw');
-      await settle(); // authenticated, baseline counting is blocked → not registered yet
+      await settle(); // authenticated, the folder check is blocked → not registered yet
       await publish({ userId: 'u1', reason: 'password-change' });
       countGate = null;
       release();

@@ -52,7 +52,9 @@ export async function run(state) {
   await check('eas-body: provision + FolderSync', async () => {
     const p1 = await post('Provision', ['Provision', [['Policies', [['Policy', [['PolicyType', 'MS-EAS-Provisioning-WBXML']]]]]]]);
     policyKey = find(p1, 'PolicyKey')?.text;
-    await post('Provision', ['Provision', [['Policies', [['Policy', [['PolicyType', 'MS-EAS-Provisioning-WBXML'], ['PolicyKey', policyKey], ['PStatus', '1']]]]]]]);
+    const p2 = await post('Provision', ['Provision', [['Policies', [['Policy', [['PolicyType', 'MS-EAS-Provisioning-WBXML'], ['PolicyKey', policyKey], ['PStatus', '1']]]]]]]);
+    policyKey = find(p2, 'PolicyKey')?.text; // the final key ([MS-ASPROV] phase 2)
+    assert(policyKey, 'no final PolicyKey in phase 2');
     const fs = await post('FolderSync', ['FolderSync', [['FSyncKey', '0']]]);
     const inbox = findAll(fs, 'Add').find((a) => find(a, 'Type')?.text === '2');
     inboxId = find(inbox, 'ServerId')?.text;

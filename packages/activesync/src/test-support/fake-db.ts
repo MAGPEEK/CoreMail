@@ -142,6 +142,19 @@ export function createFakeDb(tables: Tables) {
         applyData(r, args['data'] as Row);
         return shape(name, r, args);
       },
+      createMany: async (args: Row) => {
+        log('createMany', args);
+        const rows = args['data'] as Row[];
+        for (const data of rows) t(name).push({ ...data });
+        return { count: rows.length };
+      },
+      deleteMany: async (args: Row = {}) => {
+        log('deleteMany', args);
+        const keep = t(name).filter((x) => !match(name, x, args['where'] as Row));
+        const count = t(name).length - keep.length;
+        tables[name] = keep;
+        return { count };
+      },
       updateMany: async (args: Row) => {
         log('updateMany', args);
         const rows = t(name).filter((x) => match(name, x, args['where'] as Row));
@@ -175,7 +188,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'mailbox', 'folder', 'message', 'sharedMailbox', 'contact', 'calendar', 'calendarEvent', 'systemLog']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm','contact', 'calendar', 'calendarEvent', 'systemLog']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

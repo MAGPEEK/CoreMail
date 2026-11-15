@@ -9,10 +9,13 @@ import { readFileSync } from 'node:fs';
 import { EAS_COMMANDS } from './commands.js';
 
 const server = readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
-const dispatcher = server.slice(server.indexOf("switch (command) {"), server.indexOf('default:', server.indexOf("switch (command) {")));
-const cases = [...dispatcher.matchAll(/case '(\w+)':/g)].map((m) => m[1]!);
-const stubBlock = /((?:case '\w+':\s*)+)\/\/ Return empty success/.exec(dispatcher)?.[1] ?? '';
-const stubs = [...stubBlock.matchAll(/case '(\w+)':/g)].map((m) => m[1]!);
+// The dispatcher is the HANDLERS table: one `Command: { needsBody, run }` entry per command.
+const start = server.indexOf('const HANDLERS');
+assert.ok(start > 0, 'HANDLERS table not found in server.ts');
+const dispatcher = server.slice(start, server.indexOf('\n};', start));
+const cases = [...dispatcher.matchAll(/^ {2}(\w+): \{/gm)].map((m) => m[1]!);
+const stubBlock = /((?:^ {2}\w+: \{[^\n]*\n)+)\s*\/\/ Return empty success/m.exec(dispatcher)?.[1] ?? '';
+const stubs = [...stubBlock.matchAll(/^ {2}(\w+): \{/gm)].map((m) => m[1]!);
 
 test('every advertised command is dispatched and none is an empty-200 stub', () => {
   for (const c of EAS_COMMANDS) {
