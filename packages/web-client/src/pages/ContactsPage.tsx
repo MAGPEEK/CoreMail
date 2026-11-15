@@ -129,7 +129,7 @@ export function ContactsPage() {
               placeholder="Kontakt suchen…"
             />
           </div>
-          <button onClick={startNew} className="btn-primary text-xs shrink-0" title="Neuer Kontakt">
+          <button aria-label="Neuer Kontakt" onClick={startNew} className="btn-primary text-xs shrink-0" title="Neuer Kontakt">
             <Plus size={14} />
           </button>
         </div>
@@ -166,7 +166,7 @@ export function ContactsPage() {
               <h2 className="text-base font-semibold text-gray-900">
                 {selected ? 'Kontakt bearbeiten' : 'Neuer Kontakt'}
               </h2>
-              <button
+              <button aria-label="Bearbeiten abbrechen"
                 onClick={() => { setEditMode(false); setFormData(emptyForm()); }}
                 className="btn-ghost p-1"
               >

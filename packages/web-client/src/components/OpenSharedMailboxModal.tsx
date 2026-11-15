@@ -71,7 +71,7 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
               Freigegebene Postfächer, auf die du Zugriff hast
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          <button aria-label="Schließen" onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
             <X size={18} />
           </button>
         </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router-dom';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
@@ -210,7 +211,7 @@ function PasswordSection() {
               placeholder="Aktuelles Passwort eingeben"
               autoComplete="current-password"
             />
-            <button
+            <button aria-label={showCurrent ? 'Passwort verbergen' : 'Passwort anzeigen'}
               type="button"
               onClick={() => setShowCurrent(v => !v)}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -232,7 +233,7 @@ function PasswordSection() {
               placeholder="Mindestens 8 Zeichen"
               autoComplete="new-password"
             />
-            <button
+            <button aria-label={showNew ? 'Passwort verbergen' : 'Passwort anzeigen'}
               type="button"
               onClick={() => setShowNew(v => !v)}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -1010,7 +1011,7 @@ function SecuritySection() {
               <p className="text-xs text-gray-500 mb-1">Oder geben Sie den Secret-Schlüssel manuell ein:</p>
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded px-3 py-1.5">
                 <code className="text-xs font-mono text-gray-700 flex-1 select-all break-all">{setupData.secret}</code>
-                <button onClick={copySecret} className="text-gray-400 hover:text-gray-600 shrink-0">
+                <button aria-label="Geheimnis kopieren" onClick={copySecret} className="text-gray-400 hover:text-gray-600 shrink-0">
                   <Copy size={13} />
                 </button>
               </div>
@@ -1469,17 +1470,17 @@ function CategoryRow({
       <Tag size={16} style={{ color: cat.color, fill: `${cat.color}33` }} className="shrink-0" />
       <span className="flex-1 text-sm text-gray-800 truncate">{cat.name}</span>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
+        <button aria-label="Favorit"
           onClick={onToggleFavorite}
           className="p-1.5 rounded text-gray-400 hover:text-amber-500 hover:bg-gray-100 transition-all active:scale-90"
           title="Favorit"
         >
           <Star size={14} className={cat.isFavorite ? 'fill-amber-400 text-amber-500' : ''} />
         </button>
-        <button onClick={onEdit} className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90" title="Bearbeiten">
+        <button aria-label="Bearbeiten" onClick={onEdit} className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90" title="Bearbeiten">
           <Pencil size={14} />
         </button>
-        <button onClick={onDelete} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90" title="Löschen">
+        <button aria-label="Löschen" onClick={onDelete} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90" title="Löschen">
           <Trash2 size={14} />
         </button>
       </div>
@@ -1974,7 +1975,7 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
       <code className={`flex-1 text-xs ${mono ? 'font-mono' : ''} text-gray-800 dark:text-gray-200 break-all`}>
         {value}
       </code>
-      <button
+      <button aria-label={`${label} kopieren`}
         onClick={() => { void copyToClipboard(value); toast.success(`${label} kopiert`); }}
         className="shrink-0 p-1.5 text-gray-400 hover:text-accent rounded hover:bg-gray-100 dark:hover:bg-gray-700"
         title={`${label} kopieren`}
@@ -2240,7 +2241,12 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
 // MAIN EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 export function SettingsPage() {
-  const [section, setSection] = useState<Section>('profile');
+  // Deep link via hash (e.g. /settings#rules from the message list context menu)
+  const { hash } = useLocation();
+  const hashSection = hash.replace(/^#/, '');
+  const sectionFromHash = Object.prototype.hasOwnProperty.call(SECTION_MAP, hashSection) ? hashSection as Section : null;
+  const [section, setSection] = useState<Section>(sectionFromHash ?? 'profile');
+  useEffect(() => { if (sectionFromHash) setSection(sectionFromHash); }, [sectionFromHash]);
   const SectionComp = SECTION_MAP[section];
 
   return (

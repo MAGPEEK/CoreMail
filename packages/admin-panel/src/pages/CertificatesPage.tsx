@@ -7,7 +7,8 @@
  * - Generating a self-signed certificate
  * - Renewing / deleting certificates
  */
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -336,7 +337,7 @@ export function CertificatesPage() {
                     {/* Name + Domains */}
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-2">
-                        <button
+                        <button aria-label={expandedId === cert.id ? 'Details ausblenden' : 'Details anzeigen'}
                           onClick={() => setExpandedId(expandedId === cert.id ? null : cert.id)}
                           className="mt-0.5 text-gray-400 hover:text-gray-600 transition-colors shrink-0">
                           {expandedId === cert.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -371,7 +372,7 @@ export function CertificatesPage() {
                       <div className="flex items-center justify-end gap-1">
                         {/* ── HTTPS proxy lock ── */}
                         {cert.isActiveHttps ? (
-                          <button
+                          <button aria-label="HTTPS-Proxy deaktivieren"
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
                             title="HTTPS-Proxy deaktivieren"
@@ -379,7 +380,7 @@ export function CertificatesPage() {
                             <Lock size={14} />
                           </button>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
-                          <button
+                          <button aria-label="HTTPS-Proxy (Port 443) aktivieren"
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
                             title="HTTPS-Proxy (Port 443) aktivieren"
@@ -393,7 +394,7 @@ export function CertificatesPage() {
                             <Server size={14} />
                           </span>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
-                          <button
+                          <button aria-label="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
                             onClick={() => activateProtocolMutation.mutate(cert.id)}
                             disabled={activateProtocolMutation.isPending}
                             title="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
@@ -402,7 +403,14 @@ export function CertificatesPage() {
                           </button>
                         ) : null}
                         {cert.type === 'LETSENCRYPT' && (
-                          <button
+                          <button aria-label={
+                              cert.status === 'PENDING'   ? 'ACME-Prozess läuft noch — bitte warten' :
+                              cert.status === 'RENEWING'  ? 'Erneuerung läuft…' :
+                              cert.status === 'EXPIRED'   ? 'Abgelaufen — jetzt erneuern' :
+                              cert.status === 'EXPIRING'  ? `Läuft in ${daysUntil(cert.expiresAt) ?? '?'} Tagen ab — jetzt erneuern${cert.autoRenew ? ' (Auto-Renew aktiv)' : ''}` :
+                              cert.status === 'ERROR'     ? 'Letzte Erneuerung fehlgeschlagen — erneut versuchen' :
+                              'Jetzt erneuern'
+                            }
                             onClick={() => renewMutation.mutate(cert.id)}
                             disabled={cert.status === 'RENEWING' || cert.status === 'PENDING'}
                             title={
@@ -420,13 +428,13 @@ export function CertificatesPage() {
                             <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
                           </button>
                         )}
-                        <button
+                        <button aria-label="Bearbeiten (Name, Services, Auto-Renew)"
                           onClick={() => setEditingCert(cert)}
                           title="Bearbeiten (Name, Services, Auto-Renew)"
                           className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors">
                           <Pencil size={14} />
                         </button>
-                        <button
+                        <button aria-label="Löschen"
                           onClick={() => confirmDelete(cert)}
                           title="Löschen"
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
@@ -836,18 +844,22 @@ function EditCertModal({ cert, allCerts, onClose }: {
 // ── UI-Helpers ────────────────────────────────────────────────────────────────
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <AccessibleModal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="font-semibold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-            <X size={18} />
+          <h2 id={titleId} className="font-semibold text-gray-900">{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600 transition-colors">
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
         <div className="p-5">{children}</div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 

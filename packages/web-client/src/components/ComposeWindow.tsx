@@ -17,7 +17,11 @@ import { Color } from '@tiptap/extension-color';
 import TextStyle from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import FontFamilyExt from '@tiptap/extension-font-family';
-import { api } from '../api/client.js';
+import { api, fetchBlob } from '../api/client.js';
+import type { Message } from '../api/types.js';
+import { escapeHtml, quoteMailHtml, textToQuotedHtml } from '../lib/mailHtml.js';
+import { replyThreading, safeLinkUrl } from '../lib/compose.js';
+import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
 import { toLocalInput } from '../lib/datetime.js';
 import { useUiStore } from '../store/ui.js';
 import toast from 'react-hot-toast';
@@ -426,10 +430,57 @@ export function ComposeWindow() {
   const [showCc, setShowCc]   = useState(!!initialCc);
   const [showBcc, setShowBcc] = useState(false);
   const [subject, setSubject] = useState(initialSubject);
-  const [inReplyTo]           = useState(composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll' ? composeCtx?.id : undefined);
   const [attachments, setAttachments] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signatureInserted = useRef(false);
+
+  // Original message of a reply/forward: Message-ID for threading, attachments
+  // for forwarding, body when the compose context carries none (list context menu)
+  const isReplyMode   = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll';
+  const isForwardMode = composeCtx?.mode === 'forward';
+  const originalId = (isReplyMode || isForwardMode) ? composeCtx?.id : undefined;
+  const originalQuery = useQuery({
+    queryKey: ['message', originalId],
+    queryFn: () => api.get<Message>(`/mail/messages/${originalId}`),
+    enabled: !!originalId,
+    retry: false,
+  });
+  const original = originalQuery.data;
+
+  // Forward: attach the original attachments (fetched with the Authorization
+  // header, sent again as regular multipart attachments — the user can remove them)
+  const [forwardLoading, setForwardLoading] = useState(false);
+  const forwardAttached = useRef(false);
+  useEffect(() => {
+    if (!isForwardMode || !original || forwardAttached.current) return;
+    forwardAttached.current = true;
+    const list = original.attachments ?? [];
+    if (list.length === 0) return;
+    let cancelled = false;
+    let done = false;
+    setForwardLoading(true);
+    void Promise.all(list.map(async (a) => {
+      try {
+        const blob = await fetchBlob(`/mail/attachments/${a.id}`);
+        return new File([blob], a.filename || 'attachment', { type: a.mimeType || blob.type || 'application/octet-stream' });
+      } catch {
+        return null;
+      }
+    })).then((files) => {
+      if (cancelled) return;
+      done = true;
+      const ok = files.filter((f): f is File => f !== null);
+      if (ok.length < list.length) toast.error(`${list.length - ok.length} Anhang/Anhänge des Originals konnten nicht geladen werden`);
+      setAttachments((prev) => [...ok, ...prev]);
+    }).finally(() => { if (!cancelled) setForwardLoading(false); });
+    return () => {
+      if (done) return;
+      // Unmounted/re-run before the files arrived → allow a fresh attempt
+      cancelled = true;
+      forwardAttached.current = false;
+      setForwardLoading(false);
+    };
+  }, [isForwardMode, original]);
 
   const [showTextColor,  setShowTextColor]  = useState(false);
   const [showHighlight,  setShowHighlight]  = useState(false);
@@ -449,6 +500,10 @@ export function ComposeWindow() {
       Color,
       Highlight.configure({ multicolor: true }),
       FontFamilyExt,
+      // Same as the signature editor: font sizes + images of signatures and
+      // quoted originals must survive (tables are not supported by the editor)
+      FontSizeExt,
+      InlineImageExt,
     ],
     content: '',
     editorProps: {
@@ -457,29 +512,35 @@ export function ComposeWindow() {
   });
 
   // Insert auto signature + quoted original text once editor + signature data are ready
+  // (for a reply/forward from the list context menu, wait for the original body)
+  const waitForOriginal = !!originalId && !composeCtx?.bodyHtml && originalQuery.isLoading;
   useEffect(() => {
-    if (!editor || !sigData || signatureInserted.current) return;
+    if (!editor || !sigData || signatureInserted.current || waitForOriginal) return;
     signatureInserted.current = true;
-    const isReply   = composeCtx?.mode === 'reply' || composeCtx?.mode === 'replyAll';
-    const isForward = composeCtx?.mode === 'forward';
+    const isReply   = isReplyMode;
+    const isForward = isForwardMode;
     const shouldInsert = (isReply || isForward) ? sigData.autoReply : sigData.autoNew;
     const sig = shouldInsert && sigData.signature ? sigData.signature : '';
 
+    const sourceBody = composeCtx?.bodyHtml
+      || (original ? (original.bodyHtml || textToQuotedHtml(original.bodyText ?? '')) : '');
+    const fromAddr = composeCtx?.fromAddr ?? original?.fromAddr ?? '';
     let quoted = '';
-    if ((isReply || isForward) && composeCtx?.bodyHtml) {
+    if ((isReply || isForward) && sourceBody) {
+      // Sender address and original body are untrusted: escape / sanitize before setContent
       const headerLine = isForward
-        ? `Weitergeleitete Nachricht von ${composeCtx.fromAddr ?? ''}`
-        : `Am ${new Date().toLocaleString('de-DE')} schrieb ${composeCtx.fromAddr ?? ''}:`;
+        ? `Weitergeleitete Nachricht von ${escapeHtml(fromAddr)}`
+        : `Am ${escapeHtml(new Date().toLocaleString('de-DE'))} schrieb ${escapeHtml(fromAddr)}:`;
       quoted = `<blockquote style="border-left:2px solid #ccc;padding-left:12px;margin:0;color:#555">
         <p style="margin:0 0 8px 0;font-size:0.85em;color:#888">${headerLine}</p>
-        ${composeCtx.bodyHtml}
+        ${quoteMailHtml(sourceBody)}
       </blockquote>`;
     }
 
     if (!sig && !quoted) return;
     editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
     editor.commands.focus('start');
-  }, [editor, sigData, composeCtx]);
+  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode]);
 
   // Insert / edit link
   const handleLink = useCallback(() => {
@@ -490,9 +551,14 @@ export function ComposeWindow() {
     if (url === null) return;
     if (!url.trim()) {
       editor.chain().focus().unsetLink().run();
-    } else {
-      editor.chain().focus().setLink({ href: url.trim() }).run();
+      return;
     }
+    const href = safeLinkUrl(url);
+    if (!href) {
+      toast.error('Ungültiger Link — erlaubt sind http://, https:// und mailto:');
+      return;
+    }
+    editor.chain().focus().setLink({ href }).run();
   }, [editor]);
 
   const [showScheduleMenu, setShowScheduleMenu] = useState(false);
@@ -512,7 +578,15 @@ export function ComposeWindow() {
       form.append('subject',  subject);
       form.append('bodyHtml', editor?.getHTML() ?? '');
       form.append('bodyText', editor?.getText() ?? '');
-      if (inReplyTo) form.append('inReplyTo', inReplyTo);
+      // Threading: the original's Message-ID header (+ References); the internal id
+      // only when the original has no Message-ID or could not be loaded
+      if (isReplyMode && composeCtx?.id) {
+        const threading = original
+          ? replyThreading(original)
+          : { inReplyTo: composeCtx.id };
+        form.append('inReplyTo', threading.inReplyTo);
+        if ('references' in threading && threading.references) form.append('references', threading.references);
+      }
       if (scheduledAt) form.append('scheduledAt', scheduledAt.toISOString());
       for (const file of attachments) form.append('attachments', file);
       return api.postForm<{ ok: boolean; scheduled?: boolean; scheduledAt?: string }>('/mail/send', form);
@@ -554,7 +628,7 @@ export function ComposeWindow() {
   const handleComposeKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      if (!sendMutation.isPending && to.trim()) sendMutation.mutate(undefined);
+      if (!sendMutation.isPending && !forwardLoading && to.trim()) sendMutation.mutate(undefined);
     }
   };
 
@@ -565,10 +639,10 @@ export function ComposeWindow() {
         <div className="flex items-center justify-between px-3 py-2">
           <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
           <div className="flex items-center gap-1">
-            <button onClick={() => setMinimized(false)} className="p-0.5 hover:bg-white/20 rounded" title="Vergrößern">
+            <button aria-label="Vergrößern" onClick={() => setMinimized(false)} className="p-0.5 hover:bg-white/20 rounded" title="Vergrößern">
               <Maximize2 size={13} />
             </button>
-            <button onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
+            <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
               <X size={13} />
             </button>
           </div>
@@ -593,10 +667,10 @@ export function ComposeWindow() {
       <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0">
         <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
         <div className="flex items-center gap-1">
-          <button onClick={() => setMinimized(true)} className="p-0.5 hover:bg-white/20 rounded" title="Minimieren">
+          <button aria-label="Minimieren" onClick={() => setMinimized(true)} className="p-0.5 hover:bg-white/20 rounded" title="Minimieren">
             <Minus size={13} />
           </button>
-          <button onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
+          <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
             <X size={13} />
           </button>
         </div>
@@ -933,7 +1007,7 @@ export function ComposeWindow() {
                   ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
                   : `${Math.round(file.size / 1024)} KB`}
               </span>
-              <button
+              <button aria-label="Anhang entfernen"
                 type="button"
                 onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
                 className="text-gray-400 hover:text-red-500 shrink-0"
@@ -986,7 +1060,7 @@ export function ComposeWindow() {
           <button
             type="button"
             onClick={() => sendMutation.mutate(undefined)}
-            disabled={sendMutation.isPending || !to.trim()}
+            disabled={sendMutation.isPending || forwardLoading || !to.trim()}
             className="btn-primary text-xs justify-center rounded-r-none px-4"
             title="Senden (⌘+Enter)"
           >
@@ -996,10 +1070,10 @@ export function ComposeWindow() {
               <><Send size={14} /> Senden</>
             )}
           </button>
-          <button
+          <button aria-label="Senden planen"
             type="button"
             onClick={() => { setShowScheduleMenu((v) => !v); setShowCustomSchedule(false); }}
-            disabled={sendMutation.isPending || !to.trim()}
+            disabled={sendMutation.isPending || forwardLoading || !to.trim()}
             className="btn-primary text-xs rounded-l-none border-l border-blue-700/40 px-2"
             title="Senden planen"
           >

@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   HardDriveDownload, Play, RefreshCw, Upload, AlertCircle, CheckCircle2,
@@ -314,7 +315,7 @@ export function BackupsPage() {
                       <td className="px-3 py-2">
                         <div className="flex items-center justify-end gap-1">
                           {j.status === 'COMPLETED' && j.downloadUrl && (
-                            <button
+                            <button aria-label="Backup herunterladen"
                               onClick={() => void downloadJob(j.id, j.downloadUrl?.split('/').pop())}
                               className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
                               title="Backup herunterladen"
@@ -322,7 +323,7 @@ export function BackupsPage() {
                               <HardDriveDownload size={13} />
                             </button>
                           )}
-                          <button
+                          <button aria-label="Job löschen"
                             onClick={() => {
                               if (window.confirm(`Backup-Job vom ${fmtDate(j.createdAt)} wirklich löschen? (S3-Object wird auch entfernt)`)) {
                                 deleteJob.mutate(j.id);
@@ -401,15 +402,15 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-xs">{s.lastStatus ?? '—'}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => runScheduleNow.mutate(s.id)} disabled={runScheduleNow.isPending}
+                          <button aria-label="Jetzt ausführen" onClick={() => runScheduleNow.mutate(s.id)} disabled={runScheduleNow.isPending}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded disabled:opacity-50" title="Jetzt ausführen">
                             <Play size={13} />
                           </button>
-                          <button onClick={() => setScheduleEditor(s)}
+                          <button aria-label="Bearbeiten" onClick={() => setScheduleEditor(s)}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded" title="Bearbeiten">
                             <Pencil size={13} />
                           </button>
-                          <button onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen?`)) deleteSchedule.mutate(s.id); }}
+                          <button aria-label="Löschen" onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen?`)) deleteSchedule.mutate(s.id); }}
                             className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded" title="Löschen">
                             <Trash2 size={13} />
                           </button>
@@ -454,14 +455,14 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{fmtDate(b.lastModified)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button
+                          <button aria-label="Backup herunterladen"
                             onClick={() => void downloadArchive(b.key)}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
                             title="Backup herunterladen"
                           >
                             <HardDriveDownload size={13} />
                           </button>
-                          <button
+                          <button aria-label="Backup löschen"
                             onClick={() => {
                               if (window.confirm(`Backup „${b.key}" wirklich endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
                                 deleteArchive.mutate(b.key);
@@ -739,15 +740,22 @@ function ScheduleEditorModal(props: {
   const [enabled, setEnabled] = useState(props.initial.enabled !== false);
 
   const effectiveCron = buildCron(freq, minute, hour, weekday, day, customCron);
+  const titleId = useId();
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col">
+    <Modal
+      onClose={props.onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col"
+    >
         <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+          <h2 id={titleId} className="text-base font-semibold text-gray-900 dark:text-gray-100">
             {props.initial.id ? 'Zeitplan bearbeiten' : 'Neuer Zeitplan'}
           </h2>
-          <button onClick={props.onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          <button type="button" onClick={props.onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
         <div className="px-5 py-4 space-y-3 overflow-y-auto">
@@ -902,7 +910,6 @@ function ScheduleEditorModal(props: {
             {props.saving ? 'Speichern…' : 'Speichern'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Search, Pencil, Trash2, X, KeyRound, ChevronDown, ChevronRight,
@@ -316,7 +317,7 @@ export function MailboxesPage() {
                 >
                   {/* Expand arrow */}
                   <td className="px-2 py-3 text-center">
-                    <button onClick={() => toggleExpand(u.id)}
+                    <button aria-label={isExpanded ? 'Details ausblenden' : 'Details anzeigen'} onClick={() => toggleExpand(u.id)}
                       className="text-gray-400 hover:text-gray-600 transition-colors">
                       {isExpanded
                         ? <ChevronDown size={15} className="text-accent" />
@@ -392,14 +393,14 @@ export function MailboxesPage() {
                   {/* Actions */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')}>
+                      <button aria-label={t('mbox_btn_edit_title')} onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')}>
                         <Pencil size={13} className="text-gray-500" />
                       </button>
-                      <button onClick={() => { setShowResetPw(u); setNewPassword(''); }}
+                      <button aria-label={t('mbox_reset_pw_title_btn')} onClick={() => { setShowResetPw(u); setNewPassword(''); }}
                         className="btn-ghost p-1.5 rounded" title={t('mbox_reset_pw_title_btn')}>
                         <KeyRound size={13} className="text-blue-500" />
                       </button>
-                      <button
+                      <button aria-label={t('mbox_btn_delete_title')}
                         onClick={() => { if (confirm(`${t('mbox_delete_confirm')} "${u.email}"`)) deleteMutation.mutate(u.id); }}
                         className="btn-ghost p-1.5 rounded" title={t('mbox_btn_delete_title')}>
                         <Trash2 size={13} className="text-red-500" />
@@ -624,16 +625,20 @@ export function MailboxesPage() {
 
 // ── Modal ────────────────────────────────────────────────────────────────────
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+    <AccessibleModal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-lg"
+    >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="btn-ghost p-1 rounded"><X size={16} className="text-gray-500" /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="btn-ghost p-1 rounded"><X size={16} className="text-gray-500" aria-hidden="true" /></button>
         </div>
         <div className="px-6 py-5">{children}</div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 

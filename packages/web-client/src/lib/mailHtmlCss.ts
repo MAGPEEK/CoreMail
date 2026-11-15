@@ -27,6 +27,16 @@ export function classifyUrl(raw: string): UrlKind {
   return 'external';
 }
 
+/** Escapes text for interpolation into HTML (element content or quoted attribute). */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /** Normalised Content-ID (without `cid:`, angle brackets, lower-case). */
 export function normalizeCid(value: string): string {
   return value.trim().replace(/^cid:/i, '').replace(/^<|>$/g, '').trim().toLowerCase();
@@ -83,18 +93,68 @@ export interface StyleFilterOptions {
   allowExternal: boolean;
   /** Maps a normalised Content-ID to a loadable URL (e.g. blob:), or null if unknown */
   resolveCid: (cid: string) => string | null;
+  /**
+   * Called for every external url() while blocking. Returning a URL (e.g. a blob:
+   * URL of an image loaded through the server-side image proxy) keeps the
+   * declaration with that URL instead of blocking it.
+   */
+  resolveExternal?: (url: string) => string | null;
+}
+
+/** Highest z-index a mail element may use (the body is an isolated stacking context). */
+export const MAX_MAIL_Z_INDEX = 10;
+
+/**
+ * Layout declarations that could let mail content escape its container and
+ * overlay the application UI (phishing): position fixed/sticky becomes static,
+ * z-index is clamped to 0..MAX_MAIL_Z_INDEX. Returns the (possibly rewritten)
+ * declaration, or null to drop it. Expects escapes to be decoded (decodeCss).
+ */
+export function neutralizeLayoutDeclaration(decl: string): string | null {
+  const colon = decl.indexOf(':');
+  if (colon <= 0) return decl;
+  const prop = decl.slice(0, colon).trim().toLowerCase();
+  const value = decl.slice(colon + 1).trim();
+  if (prop === 'position') {
+    return /fixed|sticky/i.test(value) ? 'position: static' : decl;
+  }
+  if (prop === 'z-index') {
+    const v = value.replace(/!\s*important\s*$/i, '').trim();
+    if (/^auto$/i.test(v)) return 'z-index: auto';
+    if (!/^[+-]?\d+$/.test(v)) return null;
+    const n = Math.min(Math.max(parseInt(v, 10), 0), MAX_MAIL_Z_INDEX);
+    return `z-index: ${n}`;
+  }
+  return decl;
+}
+
+/**
+ * Absolute http(s) URL for the server-side image proxy, or null when the
+ * reference cannot be proxied (relative paths, other schemes). Protocol-relative
+ * URLs become https.
+ */
+export function proxyableUrl(raw: string): string | null {
+  // eslint-disable-next-line no-control-regex
+  const u = raw.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
+  if (/^\/\/[^/]/.test(u)) return `https:${u}`;
+  if (/^https?:\/\/[^/]/i.test(u)) return u;
+  return null;
 }
 
 /**
  * Removes every declaration that would load an external resource (unless
- * `allowExternal`), rewrites `url(cid:…)` to resolved URLs and drops script
- * vectors. Returns the new style and the number of blocked declarations.
+ * `allowExternal` or `resolveExternal` supplies a replacement), rewrites
+ * `url(cid:…)` to resolved URLs, neutralises overlay layout (position
+ * fixed/sticky, large z-index) and drops script vectors. Returns the new style
+ * and the number of blocked declarations.
  */
 export function filterStyle(style: string, opts: StyleFilterOptions): { style: string; blocked: number } {
   let blocked = 0;
   const kept: string[] = [];
-  for (const decl of splitCssDeclarations(decodeCss(style))) {
-    if (DANGEROUS.test(decl)) continue;
+  for (const rawDecl of splitCssDeclarations(decodeCss(style))) {
+    if (DANGEROUS.test(rawDecl)) continue;
+    const decl = neutralizeLayoutDeclaration(rawDecl);
+    if (decl === null) continue;
     if (!opts.allowExternal && IMAGE_FUNCTIONS.test(decl)) { blocked++; continue; }
 
     const urlCount = (decl.match(/url\s*\(/gi) ?? []).length;
@@ -112,7 +172,11 @@ export function filterStyle(style: string, opts: StyleFilterOptions): { style: s
         drop = true;
         return m;
       }
-      if (!opts.allowExternal) { drop = true; isBlocked = true; }
+      if (!opts.allowExternal) {
+        const replacement = opts.resolveExternal?.(target) ?? null;
+        if (replacement) return `url("${replacement.replace(/["\\]/g, '')}")`;
+        drop = true; isBlocked = true;
+      }
       return m;
     });
     // url( tokens we could not parse are treated as external

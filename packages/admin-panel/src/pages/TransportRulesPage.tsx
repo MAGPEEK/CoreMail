@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -204,19 +205,26 @@ function TemplatePickerModal({
   const [filter, setFilter] = useState<'all' | RuleTemplate['category']>('all');
   const visible = filter === 'all' ? RULE_TEMPLATES : RULE_TEMPLATES.filter((t) => t.category === filter);
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
           <div>
-            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+            <h2 id={titleId} className="font-semibold text-gray-900 flex items-center gap-2">
               <Sparkles size={17} className="text-blue-600" /> Regel aus Vorlage erstellen
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">
               Wähle eine Vorlage als Ausgangsbasis — Bedingungen und Aktionen werden vorgefüllt, du passt sie danach an.
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
         <div className="px-5 py-2 border-b border-gray-100 shrink-0 flex items-center gap-1.5 text-xs flex-wrap">
@@ -269,8 +277,7 @@ function TemplatePickerModal({
             Abbrechen
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -378,15 +385,15 @@ export function TransportRulesPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => toggleMutation.mutate(rule.id)} title={rule.enabled ? 'Deaktivieren' : 'Aktivieren'}
+                      <button aria-label={rule.enabled ? 'Deaktivieren' : 'Aktivieren'} onClick={() => toggleMutation.mutate(rule.id)} title={rule.enabled ? 'Deaktivieren' : 'Aktivieren'}
                         className={`p-1.5 rounded transition-colors ${rule.enabled ? 'text-green-500 hover:text-green-700 hover:bg-green-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}>
                         {rule.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                       </button>
-                      <button onClick={() => setEditItem(rule)} title="Bearbeiten"
+                      <button aria-label="Bearbeiten" onClick={() => setEditItem(rule)} title="Bearbeiten"
                         className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => { if (window.confirm(`Regel "${rule.name}" löschen?`)) deleteMutation.mutate(rule.id); }}
+                      <button aria-label="Löschen" onClick={() => { if (window.confirm(`Regel "${rule.name}" löschen?`)) deleteMutation.mutate(rule.id); }}
                         title="Löschen"
                         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
                         <Trash2 size={14} />
@@ -458,12 +465,19 @@ function RuleModal({ rule, initial, onClose }: {
   function updateCond(i: number, field: Partial<Condition>) { setConds(cs => cs.map((c, j) => j === i ? { ...c, ...field } : c)); }
   function updateAction(i: number, field: Partial<Action>) { setActions(as => as.map((a, j) => j === i ? { ...a, ...field } : a)); }
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white">
-          <h2 className="font-semibold text-gray-900">{rule ? 'Regel bearbeiten' : 'Neue Transportregel'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <h2 id={titleId} className="font-semibold text-gray-900">{rule ? 'Regel bearbeiten' : 'Neue Transportregel'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-5">
           {/* Basic data */}
@@ -504,7 +518,7 @@ function RuleModal({ rule, initial, onClose }: {
                   {CONDITION_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <input value={c.value} onChange={e => updateCond(i, { value: e.target.value })} className="input flex-1" placeholder="Wert" />
-                <button onClick={() => setConds(cs => cs.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
+                <button aria-label="Bedingung entfernen" onClick={() => setConds(cs => cs.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
                   <X size={14} />
                 </button>
               </div>
@@ -524,7 +538,7 @@ function RuleModal({ rule, initial, onClose }: {
                   {ACTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
                 <input value={a.value} onChange={e => updateAction(i, { value: e.target.value })} className="input flex-1" placeholder="Wert (optional)" />
-                <button onClick={() => setActions(as => as.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
+                <button aria-label="Aktion entfernen" onClick={() => setActions(as => as.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
                   <X size={14} />
                 </button>
               </div>
@@ -540,7 +554,6 @@ function RuleModal({ rule, initial, onClose }: {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

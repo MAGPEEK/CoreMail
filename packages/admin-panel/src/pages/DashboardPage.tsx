@@ -13,6 +13,7 @@ import {
   ResponsiveContainer, Cell,
 } from 'recharts';
 import { api, getToken } from '../api/client.js';
+import { openReconnectingEventSource } from '../lib/reconnectingEventSource.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
 
@@ -388,21 +389,19 @@ function AttackEventsWidget() {
   });
 
   // SSE subscription for live updates
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    const url = `/api/v1/events?token=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-
-    es.addEventListener('security:attack', () => {
-      // Invalidating is enough — the query fetches the new data
-      void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
-    });
-
-    es.onerror = () => { /* reconnect handled by browser */ };
-    return () => es.close();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => openReconnectingEventSource({
+    // Current token on every (re)connect — the access token rotates on refresh
+    url: () => {
+      const token = getToken();
+      return token ? `/api/v1/events?token=${encodeURIComponent(token)}` : null;
+    },
+    handlers: {
+      'security:attack': () => {
+        // Invalidating is enough — the query fetches the new data
+        void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
+      },
+    },
+  }), [queryClient]);
 
   const typeLabel: Record<string, string> = {
     AUTH_BRUTE_FORCE: 'Brute-Force',

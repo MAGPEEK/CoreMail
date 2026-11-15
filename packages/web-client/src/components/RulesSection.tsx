@@ -86,7 +86,7 @@ function SortableRuleRow({ rule, onEdit, onRunNow }: {
         rule.enabled ? '' : 'opacity-60'
       } hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors`}
     >
-      <button
+      <button aria-label="Reihenfolge ändern"
         {...attributes}
         {...listeners}
         className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500"
@@ -122,13 +122,13 @@ function SortableRuleRow({ rule, onEdit, onRunNow }: {
       </div>
 
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button onClick={() => onRunNow(rule)} className="btn-ghost p-1.5" title="Jetzt auf Posteingang anwenden">
+        <button aria-label="Jetzt auf Posteingang anwenden" onClick={() => onRunNow(rule)} className="btn-ghost p-1.5" title="Jetzt auf Posteingang anwenden">
           <Play size={13} />
         </button>
-        <button onClick={() => onEdit(rule)} className="btn-ghost p-1.5" title="Bearbeiten">
+        <button aria-label="Bearbeiten" onClick={() => onEdit(rule)} className="btn-ghost p-1.5" title="Bearbeiten">
           <Pencil size={13} />
         </button>
-        <button
+        <button aria-label="Löschen"
           onClick={() => { if (confirm(`Regel „${rule.name}" wirklich löschen?`)) remove.mutate(); }}
           className="btn-ghost p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
           title="Löschen"

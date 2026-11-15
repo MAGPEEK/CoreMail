@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyUrl, normalizeCid, decodeCss, splitCssDeclarations, filterStyle, srcsetIsInlineOnly,
+  neutralizeLayoutDeclaration, proxyableUrl, escapeHtml, MAX_MAIL_Z_INDEX,
 } from './mailHtmlCss.ts';
 import { base64UrlToBuffer, bufferToBase64Url } from './webauthn.ts';
 
@@ -99,6 +100,73 @@ test('srcsetIsInlineOnly', () => {
   assert.equal(srcsetIsInlineOnly('http://t/a.png 1x'), false);
   assert.equal(srcsetIsInlineOnly('data:image/png;base64,AA 1x, http://t/a.png 2x'), false);
   assert.equal(srcsetIsInlineOnly('a.png'), false);
+});
+
+// ── Overlay phishing: mail CSS must not escape the body container ────────────
+test('filterStyle neutralises position fixed/sticky (overlay phishing)', () => {
+  const overlay = filterStyle('position:fixed; inset:0; z-index:9999; background:#fff', block);
+  assert.ok(!/fixed/i.test(overlay.style), overlay.style);
+  assert.match(overlay.style, /position: static/);
+  assert.match(overlay.style, /z-index: 10\b/);
+  assert.match(overlay.style, /inset:0/);
+
+  for (const css of [
+    'position: FIXED !important',
+    'position:sticky',
+    'position:-webkit-sticky',
+    'pos\\69 tion:fixed',          // CSS escape
+    'position:/**/fixed',          // comment
+  ]) {
+    const res = filterStyle(css, block);
+    assert.equal(res.style, 'position: static', css);
+  }
+  // Other positioning stays (contained by the body container)
+  assert.equal(filterStyle('position:absolute', block).style, 'position:absolute');
+  assert.equal(filterStyle('position:relative', block).style, 'position:relative');
+});
+
+test('filterStyle clamps z-index', () => {
+  assert.equal(filterStyle('z-index:2147483647', block).style, `z-index: ${MAX_MAIL_Z_INDEX}`);
+  assert.equal(filterStyle('z-index:-5', block).style, 'z-index: 0');
+  assert.equal(filterStyle('z-index:3', block).style, 'z-index: 3');
+  assert.equal(filterStyle('z-index:auto', block).style, 'z-index: auto');
+  assert.equal(filterStyle('z-index:99 !important', block).style, `z-index: ${MAX_MAIL_Z_INDEX}`);
+  assert.equal(filterStyle('z-index:calc(1e9)', block).style, '');
+  assert.equal(neutralizeLayoutDeclaration('color:red'), 'color:red');
+});
+
+test('filterStyle uses resolveExternal (image proxy blob URLs) instead of blocking', () => {
+  const seen: string[] = [];
+  const res = filterStyle('background:url(https://t/p.gif); color:red', {
+    allowExternal: false,
+    resolveCid: () => null,
+    resolveExternal: (u) => { seen.push(u); return u === 'https://t/p.gif' ? 'blob:http://h/9' : null; },
+  });
+  assert.deepEqual(seen, ['https://t/p.gif']);
+  assert.equal(res.blocked, 0);
+  assert.match(res.style, /url\("blob:http:\/\/h\/9"\)/);
+  assert.ok(!res.style.includes('https://t/'));
+
+  const unresolved = filterStyle('background:url(https://t/x.gif)', { ...block, resolveExternal: () => null });
+  assert.equal(unresolved.blocked, 1);
+  assert.equal(unresolved.style, '');
+});
+
+test('proxyableUrl', () => {
+  assert.equal(proxyableUrl('https://t.example/p.gif'), 'https://t.example/p.gif');
+  assert.equal(proxyableUrl(' http://t.example/p.gif '), 'http://t.example/p.gif');
+  assert.equal(proxyableUrl('//t.example/p.gif'), 'https://t.example/p.gif');
+  assert.equal(proxyableUrl('ht\ttps://t.example/a'), 'https://t.example/a');
+  assert.equal(proxyableUrl('/relative.png'), null);
+  assert.equal(proxyableUrl('pixel.png'), null);
+  assert.equal(proxyableUrl('javascript:alert(1)'), null);
+  assert.equal(proxyableUrl('ftp://t/x'), null);
+  assert.equal(proxyableUrl('https:///x'), null);
+});
+
+test('escapeHtml', () => {
+  assert.equal(escapeHtml(`<img src=x onerror="a('1')">&`), '&lt;img src=x onerror=&quot;a(&#39;1&#39;)&quot;&gt;&amp;');
+  assert.equal(escapeHtml('"Evil" <x@y>'), '&quot;Evil&quot; &lt;x@y&gt;');
 });
 
 test('webauthn base64url round trip', () => {

@@ -30,7 +30,15 @@ function PasswordStrengthBar({ password, minLen }: { password: string; minLen: n
 export function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const token = searchParams.get('token') ?? '';
+  // Read the reset token once, then remove it from the address bar (history,
+  // screenshots, Referer of later requests) — it stays in component state only.
+  const [token] = useState(() => searchParams.get('token') ?? '');
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('token')) return;
+    url.searchParams.delete('token');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const [tokenValid, setTokenValid]   = useState<boolean | null>(null); // null = loading
   const [password, setPassword]       = useState('');
@@ -156,7 +164,7 @@ export function ResetPasswordPage() {
                   autoFocus
                   autoComplete="new-password"
                 />
-                <button
+                <button aria-label={showPw ? 'Passwort verbergen' : 'Passwort anzeigen'}
                   type="button"
                   onClick={() => setShowPw((v) => !v)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"

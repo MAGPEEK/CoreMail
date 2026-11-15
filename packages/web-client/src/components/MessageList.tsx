@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
@@ -186,21 +186,21 @@ function MessageRow({
 
         {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
-          <button
+          <button aria-label="Archivieren"
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
             className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title="Archivieren"
           >
             <Archive size={13} />
           </button>
-          <button
+          <button aria-label="Löschen"
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
             className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90"
             title="Löschen"
           >
             <Trash2 size={13} />
           </button>
-          <button
+          <button aria-label={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
             className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
@@ -261,6 +261,7 @@ export function MessageList({ folderId }: Props) {
 
   // Global search from the TopBar navigates to /mail?q=… → run it as a mailbox-wide search
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const urlQuery = searchParams.get('q');
   useEffect(() => {
     if (urlQuery === null) return;
@@ -481,7 +482,7 @@ export function MessageList({ folderId }: Props) {
         : {
             label: 'Kategorien anlegen …',
             icon: <Tag size={14} />,
-            onClick: () => { window.location.href = '/settings'; },
+            onClick: () => navigate('/settings#categories'),
           },
       { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
@@ -501,7 +502,7 @@ export function MessageList({ folderId }: Props) {
         { label: 'Regel erstellen …', icon: <ListFilter size={14} />,
           onClick: () => setRuleEditor({ open: true, preset: { fromAddr: msg.fromAddr, subject: msg.subject } }) },
         { label: 'Regeln verwalten …', icon: <Settings size={14} />,
-          onClick: () => { window.location.hash = '#rules'; window.location.pathname = '/settings'; } },
+          onClick: () => navigate('/settings#rules') },
       ]},
       { type: 'divider' },
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
@@ -567,7 +568,7 @@ export function MessageList({ folderId }: Props) {
             placeholder="Suchen…"
           />
           {searchText && (
-            <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button aria-label="Suche leeren" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <X size={12} />
             </button>
           )}
@@ -680,7 +681,7 @@ export function MessageList({ folderId }: Props) {
                 >
                   <Download size={12} /> .eml herunterladen
                 </button>
-                <button className="btn-ghost p-1" onClick={() => setRawModal(null)}>
+                <button aria-label="Schließen" className="btn-ghost p-1" onClick={() => setRawModal(null)}>
                   <X size={16} />
                 </button>
               </div>
