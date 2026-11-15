@@ -96,8 +96,7 @@ CoreMail TOTP or backup code (`mfaCode`).
 `POST /auth/login` and `/auth/mfa/verify` use the same Redis failure counters as
 the mail protocols (`MAIL_AUTH_*` variables, see `packages/storage/src/mail-auth.ts`):
 per account (default 10 failures / 15 min → 5 min lock, doubling per strike) and per
-client IP (50 / 15 min; private/loopback addresses are exempt unless
-`MAIL_AUTH_LIMIT_PRIVATE_IPS=true`). Wrong passwords and wrong MFA codes count alike;
+client IP (50 / 15 min; only loopback and `MAIL_AUTH_EXEMPT_CIDRS` are exempt). Wrong passwords and wrong MFA codes count alike;
 only a completed login resets the account counter. A locked account or IP gets
 `429 { code: 'ACCOUNT_LOCKED', retryAfter }` with `Retry-After` before any password
 check — also for unknown accounts, and `mfaRequired` is never revealed while locked.

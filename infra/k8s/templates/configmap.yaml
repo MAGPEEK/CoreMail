@@ -88,8 +88,9 @@ data:
   {{ $env }}: {{ . | quote }}
   {{- end }}
   {{- end }}
-  {{- if $m.limitPrivateIps }}
-  MAIL_AUTH_LIMIT_PRIVATE_IPS: "true"
+  {{- with $m.exemptCidrs }}
+  MAIL_AUTH_EXEMPT_CIDRS: {{ . | quote }}
+  MAIL_CONN_EXEMPT_CIDRS: {{ . | quote }}
   {{- end }}
 
   # Prisma CLI (schema sync): no update checks / telemetry

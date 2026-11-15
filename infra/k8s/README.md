@@ -239,10 +239,9 @@ DNSBL, GeoIP country filter, greylisting triples and the per-IP brute-force
 lockout (`MAIL_AUTH_*`) all use it. `mailService.externalTrafficPolicy: Local`
 preserves it (traffic goes only to nodes that run the pod; the cloud LB health
 check handles that). With `Cluster`, all clients appear as node IPs — SPF fails,
-DNSBL checks the wrong address, and because private addresses are exempt from
-per-IP lockouts by default, brute-force protection falls back to the per-account
-counter only (`app.mailAuth.limitPrivateIps: true` would instead lock out
-everybody at once). CoreMail does not speak PROXY protocol on the mail ports.
+DNSBL checks the wrong address, and the per-IP lockout and connection caps count
+all clients as a few node IPs (set `app.mailAuth.exemptCidrs` to the node CIDR so
+only the per-account counter applies, or better keep `Local`). CoreMail does not speak PROXY protocol on the mail ports.
 
 ### Replicas
 

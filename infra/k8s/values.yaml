@@ -101,9 +101,11 @@ app:
     accountMaxFailures: ""
     accountWindowSec: ""
     accountLockSec: ""
-    # Also count failures from private/loopback IPs per IP. Set true when
-    # externalTrafficPolicy is Cluster (all clients then appear as node IPs).
-    limitPrivateIps: false
+    # Comma-separated IPs/CIDRs exempt from the per-IP lockout and the IMAP/POP3
+    # per-IP connection caps (MAIL_AUTH_EXEMPT_CIDRS / MAIL_CONN_EXEMPT_CIDRS).
+    # Since app 9.0 only loopback is exempt by default; set the node CIDR here
+    # when externalTrafficPolicy is Cluster (all clients then appear as node IPs).
+    exemptCidrs: ""
 
   extraEnv: []
   #  - name: GEOIP_DB_PATH
