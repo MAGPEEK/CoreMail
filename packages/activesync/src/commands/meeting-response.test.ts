@@ -191,6 +191,27 @@ test('request in a foreign mailbox, unknown id or bad UserResponse → Status 2,
   assert.equal(db.tables['message']!.find((m) => m['id'] === 'bobreq')!['folderId'], 'bob-inbox');
 });
 
+test('integration 7.1.0: a REQUEST without ORGANIZER → Status 2 for 14.1 and 16.0, no event, no REPLY', async () => {
+  // DAV review: findITipRequest() skips a REQUEST without ORGANIZER (RFC 5546 §3.2.2);
+  // ActiveSync review: the server REPLY depends on the protocol version. Both rules must hold together.
+  const noOrganizer = Buffer.from(RAW.toString('utf8').replace(
+    Buffer.from(ICS).toString('base64'),
+    Buffer.from(ICS.replace(/^ORGANIZER[^\r\n]*\r\n/m, '')).toString('base64'),
+  ));
+  assert.notEqual(noOrganizer.toString(), RAW.toString(), 'fixture really lost its ORGANIZER');
+  for (const [version, withSendResponse] of [['14.1', false], ['16.0', true]] as const) {
+    reset(); queued.length = 0;
+    const buf = await handleMeetingResponse(
+      decodeWbxml(clientWbxml(request('1', 'req1', 'inbox', withSendResponse))), 'u1',
+      { ...deps, loadRaw: async () => noOrganizer }, version,
+    );
+    assert.equal(kid(kid(decodeWbxml(buf), 'Result'), 'Status')?.text, '2', version);
+    assert.equal(queued.length, 0, `${version}: no REPLY`);
+    assert.equal(db.tables['calendarEvent']!.length, 0, `${version}: no event`);
+    assert.equal(db.tables['message']!.find((m) => m['id'] === 'req1')!['folderId'], 'inbox', `${version}: request stays`);
+  }
+});
+
 test('a mail without a REQUEST → Status 2', async () => {
   reset(); queued.length = 0;
   const plain = Buffer.from('From: a@b\r\nSubject: hi\r\n\r\nno calendar\r\n');
