@@ -151,4 +151,5 @@ Next steps (variant $VARIANT — docs/docker-compose.md):
        docker exec -it coremail coremail cert letsencrypt --domains mail.example.de \\
          --email admin@example.de --services SMTP,IMAP,POP3
   Admin CLI: docker exec -it coremail coremail --help$EXTRA
+  Office behind NAT? Put its IP in MAIL_CONN_EXEMPT_CIDRS + MAIL_AUTH_EXEMPT_CIDRS (docs/mail-protocol-limits.md).
 MSG

@@ -148,7 +148,7 @@ export function buildOutboundJobOptions(settings: Partial<QueueSettingsLike> | n
  * so a scheduled-send job does not expire before it was due).
  */
 export function isExpiredInQueue(
-  job: { timestamp: number; opts?: { delay?: number } | undefined; data?: object | undefined },
+  job: { timestamp: number; opts?: { delay?: number | undefined } | undefined; data?: object | undefined },
   settings: Partial<QueueSettingsLike> | null | undefined,
   now = Date.now(),
 ): boolean {

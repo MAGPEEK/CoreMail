@@ -11,18 +11,30 @@ ports 993/995 — before the TLS handshake.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `IMAP_MAX_CONNS_PER_IP` | `20` | Concurrent IMAP connections per client IP. Above it: `* BYE [UNAVAILABLE] Too many connections` (port 143) or the connection is dropped (port 993). |
+| `IMAP_MAX_CONNS_PER_IP` | `50` | Concurrent IMAP connections per client IP. Above it: `* BYE [UNAVAILABLE] Too many connections` (port 143) or the connection is dropped (port 993). |
 | `IMAP_MAX_CONNS` | `2000` | Concurrent IMAP connections per process (all clients). |
 | `IMAP_MAX_CONNS_PER_USER` | `20` | Concurrent authenticated IMAP sessions per user. A login above it is answered with `NO [LIMIT]`. |
-| `POP3_MAX_CONNS_PER_IP` | `20` | Concurrent POP3 connections per client IP (`-ERR [SYS/TEMP] too many connections`). |
+| `POP3_MAX_CONNS_PER_IP` | `50` | Concurrent POP3 connections per client IP (`-ERR [SYS/TEMP] too many connections`). |
 | `POP3_MAX_CONNS` | `1000` | Concurrent POP3 connections per process. |
 | `MAIL_CONN_EXEMPT_CIDRS` | *(empty)* | Comma-separated IPs/CIDRs without the per-IP cap (the global cap still applies). Loopback is always exempt. |
 
 POP3 allows one session per maildrop anyway (RFC 1939 §4 lock, `-ERR [IN-USE]`).
 
+### Offices behind NAT
+
 Behind a NAT gateway or a proxy that does not preserve the client address, every
-client shares one IP — raise the per-IP limit or list that address in
-`MAIL_CONN_EXEMPT_CIDRS`.
+client shares one IP. A desktop IMAP client keeps 3–10 connections open (one
+per watched folder plus IDLE), phones 1–3 — so 10 users behind one office
+router can already need 50+ connections. The per-IP default is 50 since 8.1
+(was 20). For larger offices:
+
+* list the office's public address in `MAIL_CONN_EXEMPT_CIDRS` (e.g.
+  `MAIL_CONN_EXEMPT_CIDRS=203.0.113.10,198.51.100.0/28`) — no per-IP connection
+  cap for it, the global cap still applies;
+* list it in `MAIL_AUTH_EXEMPT_CIDRS` as well when many users log in from there,
+  so one user's typos cannot trip the **per-IP** login-failure counter for the
+  whole office (the per-account counter still applies, see below);
+* or raise `IMAP_MAX_CONNS_PER_IP` / `POP3_MAX_CONNS_PER_IP`.
 
 ## Timeouts and size caps (fixed)
 

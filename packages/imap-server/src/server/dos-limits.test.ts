@@ -43,7 +43,7 @@ storage.configureMailAuth({
   limits: { accountMaxFailures: 1000, ipMaxFailures: 1000 },
 });
 const { createImapServer } = await import('./index.js');
-const { setMaxConnsPerUser, PRE_AUTH_MAX_LITERAL } = await import('./limits.js');
+const { setMaxConnsPerUser, PRE_AUTH_MAX_LITERAL, imapConnectionLimiter, DEFAULT_IMAP_MAX_CONNS_PER_IP } = await import('./limits.js');
 const { selfSignedTestCert } = await import('../test-cert.js');
 const CERT = selfSignedTestCert();
 
@@ -229,4 +229,16 @@ describe('sessions per user', () => {
     await new Promise((r2) => setTimeout(r2, 50));
     assert.equal((await third.cmd('b', 'LOGIN bob@example.test secret')).status, 'OK');
   });
+});
+
+test('v8.1 review: the default per-IP cap is 50 (NAT offices)', { skip: !!process.env['IMAP_MAX_CONNS_PER_IP'] }, () => {
+  assert.equal(DEFAULT_IMAP_MAX_CONNS_PER_IP, 50);
+  const releases: Array<() => void> = [];
+  for (let i = 0; i < 50; i++) {
+    const r = imapConnectionLimiter.acquire('198.51.100.77');
+    assert.ok(r.ok, `connection ${i + 1}`);
+    if (r.ok) releases.push(r.release);
+  }
+  assert.equal(imapConnectionLimiter.acquire('198.51.100.77').ok, false);
+  for (const release of releases) release();
 });

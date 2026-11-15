@@ -17,24 +17,62 @@ port 25 with the data of the real SMTP session:
 smtp-server passes `mailFrom`, `helo`, `hostname` (our authserv-id), `rcpts`
 and, for an authenticated session, `authUser` in `X-Filter-Context`.
 
-Decisions (unauthenticated sessions only):
+Decisions (unauthenticated sessions only — SMTP submission with AUTH is never
+affected):
 
-1. **Local-domain anti-spoofing** — when `MAIL FROM` or the header `From` uses
+1. **Exactly one From mailbox** (8.1) — a message whose header has no `From`
+   field, several `From` fields, or a `From` with more than one mailbox
+   (`From: ceo@ourdomain, x@evil.test`) is refused with
+   `550 5.7.1 multiple or missing From`. DMARC cannot evaluate such a message
+   (it would otherwise pass as `dmarc=none` and bypass the anti-spoofing check).
+   RFC 5322 allows several mailboxes only together with a `Sender` field; like
+   most MTAs, CoreMail refuses this for unauthenticated inbound mail.
+2. **Local-domain anti-spoofing** — when `MAIL FROM` or the header `From` uses
    one of our own (active) domains, the message must be authenticated for that
    domain: DMARC pass, or SPF/DKIM pass for an aligned domain (equal, or parent /
-   subdomain). Otherwise `550 5.7.1 Unauthenticated mail claiming local domain …`.
-   Devices or applications that send mail "as" a local domain through port 25
-   must use SMTP submission (587/465 with AUTH) or be covered by SPF.
-2. **DMARC policy** — on `dmarc=fail` the published policy applies:
+   subdomain). What happens otherwise is set by `LOCAL_SPOOF_ACTION` (below).
+3. **DMARC policy** — on `dmarc=fail` the published policy applies:
    `p=reject` → `550 5.7.1`, `p=quarantine` → delivered to Junk, `p=none` →
    only recorded. `dmarc=none` (no record) and `temperror` never reject.
-   Mailing lists that break DKIM and are not ARC-trusted are rejected when the
-   original domain publishes `p=reject` (same as other strict receivers).
+   `pct` is honoured (RFC 7489 §6.6.4, 8.1): with `pct=N` only N % of the
+   failing messages (random sample) get the policy, the rest the next weaker one
+   (`reject` → Junk, `quarantine` → only recorded). Mailing lists that break
+   DKIM are rejected when the original domain publishes `p=reject`, unless they
+   are ARC-trusted (below).
+
+### Local-domain anti-spoofing switches (8.1)
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `LOCAL_SPOOF_ACTION` | `policy` | `policy`: follow the local domain's **own** published policy. Header `From` of a local domain: our DMARC `p=reject` → `550 5.7.1 Unauthenticated mail claiming local domain …`; `p=quarantine`, `p=none` or no DMARC record → delivered to **Junk** with an extra `Authentication-Results: <host>; x-local-spoof=fail … header.from=<domain>` field. `MAIL FROM` of a local domain only: SPF hard fail (our `-all`) → 550, otherwise Junk + tag. `junk`: always Junk + tag, never reject. `reject`: always `550 5.7.1` (the pre-8.1 behaviour). |
+| `LOCAL_SPOOF_ALLOW` | *(empty)* | Comma-separated trusted third-party senders that may use a local domain without alignment: IPs / CIDRs (matched against the client IP) and domains (matched against the domains the message is **authenticated** for — SPF pass or DKIM `d=`; subdomains included), e.g. `LOCAL_SPOOF_ALLOW=203.0.113.25,198.51.100.0/24,sendgrid.net,mcsv.net`. Such mail is also exempt from our own DMARC reject. Invalid entries are logged and ignored. |
+| `ARC_TRUSTED_SEALERS` | *(empty)* | Comma-separated ARC sealer domains (e.g. `google.com,microsoft.com,lists.example.org`). A **passing** ARC chain whose newest seal comes from such a sealer (or a subdomain) overrides the local-domain check and any DMARC reject/quarantine — unless that sealer's own ARC-Authentication-Results recorded `dmarc=fail`. |
+
+Why `policy` is the default: our own domain with `p=none` (or no record yet)
+says "do not reject unaligned mail" — contact forms on a web host, SaaS tools
+(newsletters, ticket systems, CRM) and mailing lists legitimately send with a
+local `From`. They now land in Junk (visible, flagged) instead of being
+rejected. Publish `p=reject` for your domains once SPF/DKIM are in place to get
+hard rejects back, or set `LOCAL_SPOOF_ACTION=reject`. These switches are
+environment-only (no BCP field).
+
+Devices or applications that send mail "as" a local domain should use SMTP
+submission (587/465 with AUTH), be covered by SPF/DKIM, or be listed in
+`LOCAL_SPOOF_ALLOW`.
 
 Every delivered message gets `Received-SPF:` and an RFC 8601
 `Authentication-Results: <hostname>; …` header. Incoming
 `Authentication-Results` fields that carry our own host name as authserv-id are
-removed before filtering (they could only be forged).
+removed before filtering (they could only be forged). Since 8.1 the same
+stripping applies to every **local** delivery path — SMTP submission, the
+outbound worker for MWA/REST, JMAP and ActiveSync, and rule forwards — for all
+our authserv-ids (`ServerSettings.publicHostname`, `SMTP_HOSTNAME`,
+`MAIL_HOSTNAME`), so a local user cannot hand a colleague a forged
+`dmarc=pass`. Only a BCP quarantine release keeps the original inbound verdict.
+
+The content filter context lists at most 100 recipients (plus `rcptCount`
+with the total) so the `X-Filter-Context` header stays far below the HTTP
+header limit for messages with many recipients.
 
 rspamd receives the session as well (`IP`, `Helo`, `From`, `Rcpt` per
 recipient, `User` for authenticated sessions, `MTA-Name`).
@@ -48,10 +86,17 @@ recipient, `User` for authenticated sessions, `MTA-Name`).
   ActiveSync). The mail itself is still delivered.
 * **Resource mailboxes**: bookings are scoped to the resource's calendar
   (unique per calendar + iCal UID since 8.1, so one meeting can book several
-  rooms). An
-  existing booking is updated or cancelled only by its stored organizer, and
-  only when that sender is authenticated. A new request from an unauthenticated
-  sender is stored as `PENDING` (manual approval) instead of being auto-accepted.
+  rooms). The organizer is the iCal `ORGANIZER` (`mailto:`), else the header
+  `From` — never the envelope sender, so updates through mailing lists or
+  forwarders with SRS/VERP return paths work (8.1). An existing booking is
+  updated or cancelled only by its stored organizer, and only when that
+  identity is authenticated (domain aligned with a verified domain, or the
+  authenticated local sender). A new request from an unauthenticated sender is
+  stored as `PENDING` (manual approval) instead of being auto-accepted.
+  Invitations from local users (MWA, JMAP, ActiveSync, SMTP submission) reach
+  rooms as well (8.1) — they are processed on every delivery path. A local
+  recipient that does not exist (anymore) at delivery time is never dropped
+  silently: the sender gets an NDR (`5.1.1`).
 
 ## Mail rules (`regex` conditions)
 
@@ -62,6 +107,15 @@ or named groups; bounded repetitions up to `{100}`. Since 8.1 the API refuses
 such patterns when a rule is saved (`POST/PUT /api/v1/user/rules` →
 `400 INVALID_RULE_PATTERN` with a readable message, shown in the MWA rule
 editor); invalid patterns stored earlier never match.
+
+Matching is case-insensitive exactly like JavaScript's `/i` flag (8.1: a
+negated class such as `[^a-z]` is folded before it is negated, so it no longer
+matches `HELLO`). Limits since 8.1:
+
+| Limit | Value | Effect |
+|-------|-------|--------|
+| `RULE_PATTERN_STEP_BUDGET` | `5000000` | Matcher steps for **all** regex conditions (transport rules + inbox rules) evaluated for one delivered message. When it is used up, the remaining regex conditions of that message do not match; a warning is logged once. |
+| regex conditions per user | 20 | Conditions + exceptions with operator `regex`, over all of a user's inbox rules. Saving more → `400 TOO_MANY_REGEX_CONDITIONS`. |
 
 ## rspamd controller authentication
 
@@ -92,6 +146,12 @@ remote reply as diagnostic). Time-based expiry wins: `maxRetryAttempts` is a
 minimum — each job gets at least enough attempts to cover the window. The delay
 DSN above is unchanged. Loop detection rejects messages with more than 100
 `Received:` fields (`554 5.4.6`).
+
+**Retry of a dead letter** (BCP → Queues → Retry, 8.1): the retry window starts
+again at the moment of the retry (job field `expiryBaseMs`) and the attempt
+counter is reset — an expired message is really delivered again instead of
+failing at once. Recipients already delivered are skipped; recipients that
+already got the final NDR are tried again but never get a second NDR.
 
 Regex patterns of transport rules (`regex` condition) and sender blacklist
 entries (`patternType: REGEX`) run on the same linear-time matcher as inbox

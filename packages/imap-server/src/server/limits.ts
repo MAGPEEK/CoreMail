@@ -1,7 +1,8 @@
 /**
  * v8.1: resource limits of the IMAP server (pre-auth DoS hardening).
  *
- *   IMAP_MAX_CONNS_PER_IP   (20)    concurrent connections per client IP
+ *   IMAP_MAX_CONNS_PER_IP   (50)    concurrent connections per client IP (NAT offices:
+ *                                   see docs/mail-protocol-limits.md)
  *   IMAP_MAX_CONNS          (2000)  concurrent connections per process
  *   IMAP_MAX_CONNS_PER_USER (20)    concurrent authenticated sessions per user (NO [LIMIT])
  *   MAIL_CONN_EXEMPT_CIDRS          IPs/CIDRs without the per-IP cap (loopback always)
@@ -34,8 +35,11 @@ export function setMaxConnsPerUser(n: number): void { maxPerUser = n; }
 const exempt = createExemptIpMatcher(process.env['MAIL_CONN_EXEMPT_CIDRS']);
 export const invalidExemptEntries = exempt.invalid;
 
+/** Default of IMAP_MAX_CONNS_PER_IP — room for an office behind one NAT address. */
+export const DEFAULT_IMAP_MAX_CONNS_PER_IP = 50;
+
 export const imapConnectionLimiter = new ConnectionLimiter({
-  maxPerIp: envLimit('IMAP_MAX_CONNS_PER_IP', 20),
+  maxPerIp: envLimit('IMAP_MAX_CONNS_PER_IP', DEFAULT_IMAP_MAX_CONNS_PER_IP),
   maxTotal: envLimit('IMAP_MAX_CONNS', 2000),
   isExempt: exempt.isExempt,
 });
