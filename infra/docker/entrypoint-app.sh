@@ -30,26 +30,16 @@ log "PostgreSQL TCP reachable after ${WAITED}s"
 # On Synology NAS (slow volume mount) the DB initialization keeps running
 # for up to 2 minutes after nc -z reports true.
 # Therefore: prisma db push with a retry loop of up to 60 attempts (5 min).
+# 8.0.1: never --accept-data-loss implicitly — a destructive change stops the
+# start until the operator sets COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true, and then
+# a pg_dump is written to /data/backups first (schema-sync.sh).
 
 log "Applying Prisma schema (db push) — with retry on slow init..."
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-60}" /usr/local/bin/coremail-schema-sync || {
+  log "ERROR: schema sync failed — not starting the services (see above)"
+  exit 1
+}
 cd /app
-
-MAX_ATTEMPTS=60
-ATTEMPT=0
-while true; do
-  ATTEMPT=$((ATTEMPT + 1))
-  if pnpm --filter @coremail/storage exec prisma db push \
-       --skip-generate --accept-data-loss 2>&1; then
-    log "Schema applied successfully (attempt ${ATTEMPT}/${MAX_ATTEMPTS})"
-    break
-  fi
-  if [ "${ATTEMPT}" -ge "${MAX_ATTEMPTS}" ]; then
-    log "ERROR: Schema push failed after ${MAX_ATTEMPTS} attempts — aborting"
-    exit 1
-  fi
-  log "Schema push not ready yet (attempt ${ATTEMPT}/${MAX_ATTEMPTS}) — retrying in 5s..."
-  sleep 5
-done
 
 # ── 3. Object storage directory (v8.0) ───────────────────────────────────────
 # The services run as `node`. A fresh named volume inherits the image's

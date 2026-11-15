@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   BackupDecryptError, BackupKeyConfigError, createDecryptStream, createEncryptStream, decryptFile, downloadDescriptor,
   encryptFile, HEADER_LENGTH, isEncryptedFile, loadKeyring, openDecryptedStream, parseKeyString, TAG_LENGTH,
@@ -209,6 +211,34 @@ describe('import + download helpers', () => {
     assert.deepEqual(downloadDescriptor('full-backup/2025-01-01/old.zip', 'application/zip'),
       { encrypted: false, filename: 'old.zip', contentType: 'application/zip' });
     assert.equal(downloadDescriptor('x/a"b\r\n.zip').filename, 'a_b__.zip');
+  });
+
+  test('scripts/decrypt-backup.mjs (disaster recovery) decrypts the same format and rejects tampering', async () => {
+    const script = fileURLToPath(new URL('../../../../scripts/decrypt-backup.mjs', import.meta.url));
+    const dir = await mkdtemp(join(tmpdir(), 'cm-dr-'));
+    try {
+      const plain = randomBytes(150_000);
+      const derivedEnv = { JWT_SECRET: ENV.JWT_SECRET, PEPPER: ENV.PEPPER };
+      // one file with the configured key, one with the derived key
+      await writeFile(join(dir, 'a.enc'), await encrypt(plain, keyring().current, 4096));
+      await writeFile(join(dir, 'b.enc'), await encrypt(plain, loadKeyring(derivedEnv).current));
+      const run = (env: Record<string, string>, inp: string, out: string) =>
+        spawnSync(process.execPath, [script, join(dir, inp), join(dir, out)], { env: { PATH: process.env['PATH'] ?? '', ...env }, encoding: 'utf8' });
+      assert.equal(run({ BACKUP_ENCRYPTION_KEY: HEX_KEY }, 'a.enc', 'a.out').status, 0);
+      assert.deepEqual(await readFile(join(dir, 'a.out')), plain);
+      assert.equal(run(derivedEnv, 'b.enc', 'b.out').status, 0);
+      assert.deepEqual(await readFile(join(dir, 'b.out')), plain);
+      const bad = await readFile(join(dir, 'a.enc'));
+      bad[HEADER_LENGTH + 10] = bad[HEADER_LENGTH + 10]! ^ 1;
+      await writeFile(join(dir, 'c.enc'), bad);
+      const r = run({ BACKUP_ENCRYPTION_KEY: HEX_KEY }, 'c.enc', 'c.out');
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /corrupted, truncated or was modified/);
+      assert.ok(!(await readdir(dir)).includes('c.out'), 'partial output deleted');
+      assert.match(run({ BACKUP_ENCRYPTION_KEY: 'd'.repeat(64) }, 'a.enc', 'd.out').stderr, /no matching key/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test('backup S3 credentials fail closed (no minioadmin fallback)', () => {

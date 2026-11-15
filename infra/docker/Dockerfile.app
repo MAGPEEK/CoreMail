@@ -124,7 +124,9 @@ ENV NODE_ENV=production
 # libcap: setcap tool — allows the node binary to bind to ports < 1024
 #         without root privileges (cap_net_bind_service).
 # tini:   init process (PID 1) — clean signal handling, no zombie processes.
-RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap
+# postgresql16-client: pg_dump for the pre-migration dump of schema-sync.sh
+#         (8.0.1; matches the bundled postgres:16 — pg_dump must be >= the server).
+RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap postgresql16-client
 
 # ── setcap: node may bind privileged ports (25, 110, 143, …) ──────────────────
 # cap_net_bind_service=+eip:
@@ -133,6 +135,9 @@ RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap
 #   p (permitted)    — capability is in the permitted set
 # This lets supervisord child processes (user=node) bind privileged ports
 # despite a non-root UID, as long as no-new-privileges is NOT set.
+# docker-compose.yml sets no-new-privileges + cap_drop ALL and instead
+# net.ipv4.ip_unprivileged_port_start=0; NET_BIND_SERVICE must stay in the
+# capability bounding set there, otherwise exec of this binary fails (EPERM).
 RUN setcap 'cap_net_bind_service=+eip' /usr/local/bin/node
 
 RUN corepack enable && corepack prepare pnpm@11 --activate
@@ -210,9 +215,12 @@ RUN chmod +x /app/packages/cli/dist/index.js \
 # supervisord configuration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
+# Schema sync (8.0.1): used by the entrypoint and the Helm init container
+COPY infra/docker/schema-sync.sh /usr/local/bin/coremail-schema-sync
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf && chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync \
+ && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync
 
 # ── Directories + permissions ─────────────────────────────────────────────────
 # All runtime directories belong to the node user (uid 1000, gid 1000).
