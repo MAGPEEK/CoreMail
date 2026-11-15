@@ -1,0 +1,41 @@
+# Real-cluster test profile (scripts/k8s-e2e.sh on kind): locally built image,
+# bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV, filesystem object storage on a
+# PVC, NetworkPolicies on, NodePort mail Service (kind has no load-balancer
+# controller: a LoadBalancer Service stays <pending> and `helm --wait` times out).
+# Dummy secrets for scripts/helm-check.sh only — k8s-e2e.sh overrides them with
+# freshly generated values.
+secrets:
+  jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"
+  pepper: "ci-pepper-0000000000000000000000000000000000000000000000000000000"
+  mfaEncryptionKey: "abcdef0000000000000000000000000000000000000000000000000000000005"
+  backupEncryptionKey: "abcdef0000000000000000000000000000000000000000000000000000000006"
+  rspamdControllerPassword: ci-rspamd-controller-password
+  postgresPassword: ci-postgres-password
+  redisPassword: ci-redis-password
+  minioRootPassword: ci-minio-password
+app:
+  image:
+    repository: coremail-app
+    tag: k8s-test
+    pullPolicy: Never
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
+# Message objects on the PVC; the bundled MinIO stays on as the backup target
+# (BACKUP_BUCKET) — the same layout as a new Docker install (scripts/setup.sh).
+objectStorage:
+  driver: filesystem
+  filesystem:
+    size: 2Gi
+minio:
+  persistence: { size: 2Gi }
+mailService:
+  type: NodePort
+postgresql:
+  persistence: { size: 2Gi }
+redis:
+  persistence: { size: 1Gi }
+rspamd:
+  persistence: { size: 1Gi }
+clamav:
+  persistence: { size: 2Gi }

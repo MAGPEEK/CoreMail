@@ -59,6 +59,21 @@ for values in infra/k8s/ci/*-values.yaml; do
     if grep -q '^  MINIO_ENDPOINT:' "$OUT/$name.yaml" && ! grep -q '^  MINIO_BUCKET_ATTACHMENTS:' "$OUT/$name.yaml"; then
       echo "ERROR: $name: MINIO_BUCKET_ATTACHMENTS missing"; fail=1
     fi
+    # Pod Security "restricted" (verified on a real cluster by scripts/k8s-e2e.sh):
+    # every container (incl. init) and every pod spec keeps the required fields.
+    containers="$(grep -c '^ *image: ' "$OUT/$name.yaml")"
+    workloads="$(grep -cE '^kind: (Deployment|StatefulSet)$' "$OUT/$name.yaml")"
+    for field in 'allowPrivilegeEscalation: false' 'readOnlyRootFilesystem: true'; do
+      n="$(grep -c "$field" "$OUT/$name.yaml")"
+      if [ "$n" -lt "$containers" ]; then echo "ERROR: $name: '$field' on $n of $containers containers"; fail=1; fi
+    done
+    for field in 'runAsNonRoot: true' 'type: RuntimeDefault'; do
+      n="$(grep -c "$field" "$OUT/$name.yaml")"
+      if [ "$n" -lt "$workloads" ]; then echo "ERROR: $name: '$field' on $n of $workloads pod specs"; fail=1; fi
+    done
+    if grep -qE '^ *(privileged: true|hostNetwork: true|hostPID: true|hostPath:)' "$OUT/$name.yaml"; then
+      echo "ERROR: $name: privileged/host* setting rendered (not allowed under restricted)"; fail=1
+    fi
     docker run --rm -v "$CHART_HOST:/chart" "$KUBECONFORM_IMAGE" \
       -strict -ignore-missing-schemas -summary \
       -kubernetes-version "$KUBE_VERSION" "/chart/.rendered/$name.yaml" || fail=1

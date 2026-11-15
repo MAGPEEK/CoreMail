@@ -21,6 +21,10 @@ CoreMail {{ .Chart.AppVersion }} — release "{{ .Release.Name }}" in namespace 
 3. Mail ports:
 {{- if .Values.mailService.enabled }}
      kubectl -n {{ .Release.Namespace }} get svc {{ include "coremail.componentName" (dict "root" . "component" "mail") }}
+{{- if eq .Values.mailService.type "LoadBalancer" }}
+   (EXTERNAL-IP stays <pending> without a load-balancer controller — e.g. kind,
+   bare metal without MetalLB; use mailService.type=NodePort there.)
+{{- end }}
    Point MX/A records at the external IP. Mail-protocol TLS certificates are
    managed inside CoreMail (BCP → SSL/TLS, or `coremail cert letsencrypt`).
 {{- if eq .Values.mailService.externalTrafficPolicy "Cluster" }}
@@ -40,8 +44,15 @@ TRUST_PROXY = "{{ include "coremail.trustProxy" . }}"{{ if not (include "coremai
 NOTE: secrets.mfaEncryptionKey is not set — TOTP secrets are then encrypted with
 a key derived from JWT_SECRET + PEPPER. Set it before you ever rotate those.
 {{- end }}{{ end }}
+{{- if and (eq .Values.objectStorage.driver "filesystem") (not (include "coremail.minio.host" .)) }}
+
+WARNING: objectStorage.driver=filesystem without MinIO/S3 — backups have no target
+(the backup service logs "Backup storage needs S3_ACCESS_KEY and S3_SECRET_KEY").
+Keep minio.enabled=true (or set minio.external) to store backups.
+{{- end }}
 {{- if gt (int .Values.app.replicaCount) 1 }}
 
-WARNING: app.replicaCount={{ .Values.app.replicaCount }}. The backup scheduler and the retention
-worker have no cross-pod lock and run in every pod. See the chart README.
+WARNING: app.replicaCount={{ .Values.app.replicaCount }}. Schedulers are coordinated through
+Redis, but a starting pod marks backup jobs still running in another pod as
+failed. See the chart README → Replicas.
 {{- end }}
