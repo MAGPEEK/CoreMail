@@ -42,8 +42,10 @@ function table(rows: Row[], defaults: () => Row) {
     findFirst: async (a: { where?: Row } = {}) => rows.find((r) => matches(r, a.where)) ?? null,
     findUnique: async (a: { where: Row }) => {
       const w = { ...a.where };
-      const compound = w['calendarId_granteeId'] as Row | undefined;
-      if (compound) { delete w['calendarId_granteeId']; Object.assign(w, compound); }
+      for (const key of ['calendarId_granteeId', 'calendarId_uid']) {
+        const compound = w[key] as Row | undefined;
+        if (compound) { delete w[key]; Object.assign(w, compound); }
+      }
       return rows.find((r) => matches(r, w)) ?? null;
     },
     create: async (a: { data: Row }) => {

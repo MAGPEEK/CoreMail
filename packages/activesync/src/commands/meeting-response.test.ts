@@ -116,6 +116,30 @@ test('accept: event in the default calendar with own PARTSTAT, REPLY to the orga
   assert.equal(req['uid'], 50, 'moved via the message store (new UID)');
 });
 
+test('internal invitation: the organizer on this server already holds the UID → the invitee still gets its own copy', async () => {
+  // e2e regression: CalendarEvent.uid was unique server-wide, so accepting an
+  // invitation from a colleague failed with P2002 (Status 4). The schema key is
+  // read from schema.prisma, the fake table is then checked against it.
+  const { readFileSync } = await import('node:fs');
+  const schema = readFileSync(new URL('../../../storage/prisma/schema.prisma', import.meta.url), 'utf8');
+  const model = schema.slice(schema.indexOf('model CalendarEvent {'), schema.indexOf('}', schema.indexOf('model CalendarEvent {')));
+  const globalUid = /^\s*uid\s+String\s+@unique/m.test(model);
+  assert.ok(!globalUid && /@@unique\(\[calendarId, uid\]\)/.test(model), 'UID unique per calendar (RFC 4791 §5.3.2.1)');
+
+  reset(); queued.length = 0;
+  db.tables['calendar']!.push({ id: 'cal-organizer', userId: 'u2', isDefault: true, sortOrder: 0, createdAt: new Date(0) });
+  db.tables['calendarEvent']!.push({ id: 'ev-org', calendarId: 'cal-organizer', uid: 'evt-123@ext.test', sequence: 2, summary: 'Project kickoff' });
+  const result = await run(request('1'));
+  assert.equal(kid(result, 'Status')?.text, '1');
+  const mine = db.tables['calendarEvent']!.find((e) => e['calendarId'] === 'cal-default');
+  assert.ok(mine, 'invitee copy created in the own default calendar');
+  assert.equal(kid(result, 'CalendarId')?.text, mine!['id']);
+  const org = db.tables['calendarEvent']!.find((e) => e['id'] === 'ev-org')!;
+  assert.equal(org['summary'], 'Project kickoff', "the organizer's event is untouched");
+  const keys = db.tables['calendarEvent']!.map((e) => `${String(e['calendarId'])}|${String(e['uid']).toLowerCase()}`);
+  assert.equal(new Set(keys).size, keys.length, 'no duplicate (calendarId, uid)');
+});
+
 test('tentative on an existing event updates it; decline removes it and still replies', async () => {
   reset(); queued.length = 0;
   db.tables['calendarEvent']!.push({ id: 'ev1', calendarId: 'cal-other', uid: 'EVT-123@ext.test', sequence: 1, summary: 'old' });

@@ -554,7 +554,9 @@ model CalendarEvent {
   id          String   @id @default(cuid())
   calendar    Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
   calendarId  String
-  uid         String   @unique // iCal UID
+  // iCal UID — unique per calendar (RFC 4791 §5.3.2.1), not server-wide: organizer
+  // and invitees on the same server keep their own copy of a meeting (v7.1.0).
+  uid         String
   icalData    String
   summary     String
   description String   @default("")
@@ -582,7 +584,9 @@ model CalendarEvent {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@unique([calendarId, uid])
   @@index([calendarId, dtStart])
+  @@index([uid])
   @@map("calendar_events")
 }
 

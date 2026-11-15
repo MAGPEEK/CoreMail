@@ -87,6 +87,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   always went to `<host>:11334`. `RSPAMD_URL` (the rspamd controller) is now used for scanning
   and learning, `RSPAMD_HOST`/`RSPAMD_PORT` remain as fallback when it is unset; an invalid URL
   is logged and falls back.
+- Calendar event UIDs were unique server-wide, so an invitee on the same server could not keep
+  its own copy of a colleague's meeting (ActiveSync MeetingResponse failed, CalDAV PUT of the
+  invitation answered 409). The UID is now unique per calendar (RFC 4791 §5.3.2.1); the schema
+  change (`@@unique([calendarId, uid])`) is applied automatically at container start.
 
 ### Security
 

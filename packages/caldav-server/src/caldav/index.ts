@@ -519,8 +519,9 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', asyncHandler(async (
     res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(204).send();
   } else {
     const uid = ev.uid ?? id;
-    // RFC 4791 §5.3.2.1 no-uid-conflict: UID is globally unique in our schema
-    const clash = await prisma.calendarEvent.findUnique({ where: { uid }, select: { id: true, calendarId: true } });
+    // RFC 4791 §5.3.2.1 no-uid-conflict: a UID is unique within one calendar
+    // collection (v7.1.0: no longer server-wide — invitees keep their own copy)
+    const clash = await prisma.calendarEvent.findUnique({ where: { calendarId_uid: { calendarId, uid } }, select: { id: true, calendarId: true } });
     if (clash) {
       res.status(409).set('Content-Type', 'application/xml; charset=utf-8').send(xmlResponse(
         create({ version: '1.0', encoding: 'utf-8' })
