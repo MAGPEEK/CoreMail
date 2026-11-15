@@ -373,6 +373,12 @@ test('reauth: requires password or MFA code; wrong ones fail; lockout after repe
   assert.equal(await auth.verifyReauth(uid, { currentPassword: PW }), 'locked');
 });
 
+test('reauth: failures map to 403 (never 401 — the session itself is valid)', () => {
+  assert.deepEqual([auth.reauthErrorBody('missing').status, auth.reauthErrorBody('invalid').status], [403, 403]);
+  assert.equal(auth.reauthErrorBody('invalid').body['code'], 'REAUTH_FAILED');
+  assert.equal(auth.reauthErrorBody('locked').status, 429);
+});
+
 // ── Password reset ────────────────────────────────────────────────────────────
 
 test('reset: token single use, concurrent redemption has one winner', async () => {

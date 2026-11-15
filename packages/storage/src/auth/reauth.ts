@@ -46,10 +46,15 @@ export async function verifyReauth(userId: string, input: ReauthInput): Promise<
   return 'ok';
 }
 
+/**
+ * HTTP mapping of a failed re-auth. 403, never 401: the caller's session is
+ * valid, only the confirmation was missing or wrong. A 401 made the frontends
+ * refresh the token, re-send the request (a second counted failure) and log out.
+ */
 export function reauthErrorBody(r: Exclude<ReauthResult, 'ok'>): { status: number; body: Record<string, unknown> } {
   switch (r) {
-    case 'missing': return { status: 401, body: { error: 'Re-authentication required (currentPassword or mfaCode)', code: 'REAUTH_REQUIRED' } };
-    case 'invalid': return { status: 401, body: { error: 'Re-authentication failed', code: 'REAUTH_FAILED' } };
+    case 'missing': return { status: 403, body: { error: 'Re-authentication required (currentPassword or mfaCode)', code: 'REAUTH_REQUIRED' } };
+    case 'invalid': return { status: 403, body: { error: 'Re-authentication failed', code: 'REAUTH_FAILED' } };
     case 'locked': return { status: 429, body: { error: 'Too many failed re-authentication attempts', code: 'REAUTH_LOCKED' } };
   }
 }

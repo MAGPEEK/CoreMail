@@ -20,6 +20,7 @@ import {
   suspiciousInputGuard,
   generalRateLimit,
   authRateLimit,
+  authRouteRateLimit,
   setupRateLimit,
   adminMutationRateLimit,
   ssoRateLimit,
@@ -261,8 +262,8 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 // ── SSO (OIDC) — v6.1: own limiter (one login = 3 requests), before /auth ────
 app.use('/auth/sso', ssoRateLimit, ssoRouter);
 
-// ── Auth — strict rate limiting on login/token/refresh ───────────────────────
-app.use('/auth', authRateLimit, authRouter);
+// ── Auth — strict limiter on login/reset; refresh/logout own limiter (v8.1) ───
+app.use('/auth', authRouteRateLimit, authRouter);
 
 // ── Health ────────────────────────────────────────────────────────────────────
 // No rate limit on /healthz (called by Docker every 30s)
