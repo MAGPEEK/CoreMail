@@ -70,7 +70,7 @@ export function RecoverDeletedItemsPanel() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-gray-500 dark:text-gray-400">{fmt(t('recover_hint'), { days: data?.retentionDays ?? 14 })}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">{fmt(t('recover_hint'), { days: data?.retentionDays ?? 30 })}</p>
       <div className="flex items-center gap-2">
         <button className="btn-primary" disabled={ids.length === 0 || busy} onClick={() => restore.mutate(ids)}>
           <RotateCcw size={14} /> {t('recover_restore')}

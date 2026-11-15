@@ -340,7 +340,7 @@ model Message {
   rawSize      Int         @default(0)
   storagePath  String?     // MinIO object key for large messages
   changeKey    String      @default("")
-  deletedAt    DateTime?   // soft-delete tombstone; recoverable for DELETED_ITEM_RETENTION_DAYS (v9.0, default 14), then purged
+  deletedAt    DateTime?   // soft-delete tombstone; recoverable for DELETED_ITEM_RETENTION_DAYS (v9.0, default 30), then purged
   // Phase 9: S/MIME metadata JSON — { signed, valid, signerEmail, decrypted, ... }
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
