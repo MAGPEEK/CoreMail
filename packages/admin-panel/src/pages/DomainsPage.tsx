@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
+import { clientSetupRows, clientSetupSummary } from '../lib/dnsClientSetup.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -22,10 +23,13 @@ interface DomainsResponse { domains: Domain[]; total: number; page: number; limi
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
 // ── DNS check types ───────────────────────────────────────────────────────────
-interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string }
+interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string; recommended?: boolean }
 interface DnsCheckResult {
   domain: string; hostname: string; serverIp: string;
   records: { a: DnsRec; mx: DnsRec; spf: DnsRec; dkim: DnsRec; dmarc: DnsRec; autodiscover: DnsRec; ptr: DnsRec };
+  // v8.1: recommended client auto-setup records (SRV/autoconfig) + certificate SAN hint
+  clientSetup?: Record<string, DnsRec>;
+  certificateHostnames?: string[];
 }
 
 // ── DNS helpers (module level) ────────────────────────────────────────────────
@@ -62,12 +66,14 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
       <div className="flex items-start gap-2">
         {record.ok
           ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-green-500" />
-          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning ? 'text-amber-500' : 'text-red-500'}`} />}
+          // v8.1: recommended records are yellow when missing, never red
+          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning || record.recommended ? 'text-amber-500' : 'text-red-500'}`} />}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 leading-none ${
           record.type === 'TXT'  ? 'bg-purple-100 text-purple-700' :
           record.type === 'MX'   ? 'bg-blue-100   text-blue-700'   :
           record.type === 'A'    ? 'bg-green-100  text-green-700'  :
           record.type === 'CNAME'? 'bg-amber-100  text-amber-700'  :
+          record.type === 'SRV'  ? 'bg-teal-100   text-teal-700'   :
                                    'bg-gray-100   text-gray-500'
         }`}>{record.type}</span>
         <div className="flex-1 min-w-0">
@@ -136,6 +142,40 @@ function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string;
   );
 }
 
+
+// ── Recommended client auto-setup records (v8.1, module level) ────────────────
+function ClientSetupDnsSection({ dnsCheck }: { dnsCheck: DnsCheckResult }) {
+  const t = useT();
+  const rows = clientSetupRows(dnsCheck.clientSetup);
+  if (rows.length === 0) return null;
+  const summary = clientSetupSummary(rows);
+  return (
+    <div className="border-t border-gray-200">
+      <div className="bg-amber-50/60 px-3 py-2 border-b border-gray-100">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-gray-700">{t('domain_dns_recommended_title')}</span>
+          <span className={`text-[10px] font-mono ${summary.ok === summary.total ? 'text-green-600' : 'text-amber-600'}`}>
+            {summary.ok}/{summary.total} {t('domain_dns_recommended_count')}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">{t('domain_dns_recommended_hint')}</p>
+      </div>
+      <div className="px-3">
+        {rows.map((row) => (
+          <DnsRow key={row.key} label={t(row.labelKey)} record={{ ...row.record, recommended: true }} domain={dnsCheck.domain} />
+        ))}
+      </div>
+      {dnsCheck.certificateHostnames && dnsCheck.certificateHostnames.length > 0 && (
+        <div className="px-3 py-2 border-t border-gray-100 text-[10px] text-gray-500 leading-relaxed">
+          ℹ {t('domain_dns_cert_hint')}{' '}
+          {dnsCheck.certificateHostnames.map((h, i) => (
+            <span key={h}>{i > 0 && ', '}<code className="font-mono text-gray-700">{h}</code></span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Add-Domain-Modal ──────────────────────────────────────────────────────────
 function AddDomainModal({ onClose }: { onClose: () => void }) {
@@ -420,6 +460,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                     extra={<p className="mt-1 text-[10px] text-gray-400">ℹ {t('domain_dns_ptr_note')}</p>}
                   />
                 </div>
+                <ClientSetupDnsSection dnsCheck={dnsCheck} />
               </div>
             )}
           </div>

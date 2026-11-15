@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import { handleAutodiscoverV1 } from './v1.js';
 import { handleAutodiscoverV2 } from './v2.js';
+import { handleAutoconfig } from './autoconfig.js';
 
 /** The Autodiscover HTTP routes (server.ts adds the error middleware and listens). */
 export function createAutodiscoverApp(): Express {
@@ -20,6 +21,12 @@ export function createAutodiscoverApp(): Express {
   //   /autodiscover/autodiscover.json?Email={email}&Protocol=…
   app.get('/autodiscover/autodiscover.json/v1.0/:email', handleAutodiscoverV2);
   app.get('/autodiscover/autodiscover.json', handleAutodiscoverV2);
+
+  // v8.1: Thunderbird / Mozilla autoconfig (ISPDB config-v1.1.xml), both lookup URLs:
+  //   https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=…
+  //   https://autoconfig.<domain>/mail/config-v1.1.xml?emailaddress=…
+  app.get('/.well-known/autoconfig/mail/config-v1.1.xml', handleAutoconfig);
+  app.get('/mail/config-v1.1.xml', handleAutoconfig);
 
   // A request to the bare service root is pointed at the v1 endpoint.
   app.get('/', (_req, res) => {

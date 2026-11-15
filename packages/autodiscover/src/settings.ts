@@ -24,6 +24,14 @@ export interface ServerConfig {
   smtpHost: string;
   smtpPort: number;
   smtpTls: boolean;
+  // v8.1 (Thunderbird autoconfig / Apple profile): POP3 + the public web endpoint
+  pop3Host: string;
+  pop3Port: number;
+  pop3Ssl: boolean;
+  publicHostname: string;
+  useHttps: boolean;
+  httpPort: number;
+  orgName: string;
 }
 
 /** The settings could not be read and nothing was read before (→ HTTP 503). */
@@ -42,6 +50,7 @@ let lastGood: ServerConfig | null = null;
 const CACHE_TTL_MS = 60_000;
 const DEFAULT_IMAPS_PORT = 993;
 const DEFAULT_SUBMISSION_PORT = 587;
+const DEFAULT_POP3S_PORT = 995;
 
 function envDefaults(): ServerConfig {
   const hostname = process.env['MAIL_HOSTNAME'] ?? 'mail.local';
@@ -58,6 +67,13 @@ function envDefaults(): ServerConfig {
     smtpHost:        process.env['SMTP_HOSTNAME']    ?? hostname,
     smtpPort:        DEFAULT_SUBMISSION_PORT,
     smtpTls:         true,
+    pop3Host:        process.env['POP3_HOSTNAME']    ?? hostname,
+    pop3Port:        DEFAULT_POP3S_PORT,
+    pop3Ssl:         true,
+    publicHostname:  hostname,
+    useHttps:        proto === 'https',
+    httpPort:        parseInt(port, 10) || 8080,
+    orgName:         'CoreMail',
   };
 }
 
@@ -91,6 +107,14 @@ export async function getServerConfig(now: number = Date.now()): Promise<ServerC
     smtpHost:         settings.smtpHost,
     smtpPort:         settings.smtpPort,
     smtpTls:          settings.smtpTls,
+    // `??` fallbacks: rows from partial test fakes may lack the newer fields.
+    pop3Host:         settings.pop3Host ?? settings.imapHost,
+    pop3Port:         settings.pop3Port ?? DEFAULT_POP3S_PORT,
+    pop3Ssl:          settings.pop3Ssl ?? true,
+    publicHostname:   settings.publicHostname ?? settings.imapHost,
+    useHttps:         settings.useHttps ?? false,
+    httpPort:         settings.httpPort ?? 8080,
+    orgName:          settings.orgName ?? 'CoreMail',
   };
   lastGood = cache;
   cacheExpiry = now + CACHE_TTL_MS;
