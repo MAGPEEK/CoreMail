@@ -15,6 +15,7 @@ import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
 import { useAuthStore } from './store/auth.js';
+import { useSessionChecked } from './api/client.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
@@ -57,6 +58,10 @@ const APP_MAP: Record<string, 'mail' | 'calendar' | 'contacts' | 'tasks' | 'note
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken);
+  // v8.1: the access token is memory-only — after a reload wait for the
+  // cookie-based session check before deciding to show the login page.
+  const sessionChecked = useSessionChecked();
+  if (!token && !sessionChecked) return null;
   if (!token) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

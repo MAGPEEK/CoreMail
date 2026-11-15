@@ -1,34 +1,104 @@
+import { useEffect, useSyncExternalStore } from 'react';
 import { ApiError, apiErrorFromBody } from '../lib/errors.js';
 import { accessForPath } from '../lib/adminAreas.js';
 import { useAccessStore } from '../store/access.js';
 
-const TOKEN_KEY   = 'bcp-token';
-const REFRESH_KEY = 'bcp-refresh-token';
+/** Keys of the pre-8.1 token storage (localStorage) — only read once for migration. */
+const LEGACY_TOKEN_KEY   = 'bcp-token';
+const LEGACY_REFRESH_KEY = 'bcp-refresh-token';
 const BASE = '/api/v1';
 
+/**
+ * v8.1: the BCP keeps the access token in memory only. The refresh token is the
+ * HttpOnly cookie `cm_rt_bcp` (Path=/auth), selected by `X-CoreMail-App: bcp` —
+ * separate from the MWA cookie so both apps can hold different sessions.
+ * After a page load the access token is re-obtained via /auth/refresh
+ * (ensureSession / useSessionChecked).
+ */
+const WEB_CLIENT_HEADERS: Record<string, string> = { 'X-CoreMail-Client': 'web', 'X-CoreMail-App': 'bcp' };
+
+let accessToken: string | null = null;
+/** A refresh token received in a body (SSO exchange, legacy migration) — moved into the cookie by the next refresh. */
+let pendingRefreshToken: string | null = null;
+let sessionChecked = false;
+const listeners = new Set<() => void>();
+const notify = () => { for (const l of listeners) l(); };
+
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  return accessToken;
 }
 
 export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
+  accessToken = token;
+  sessionChecked = true;
+  notify();
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+  accessToken = null;
+  pendingRefreshToken = null;
+  sessionChecked = true;
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_REFRESH_KEY);
+  } catch { /* storage unavailable */ }
+  notify();
 }
 
+/** @deprecated v8.1 — the refresh token is an HttpOnly cookie; only a not yet adopted body token is returned. */
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY);
+  return pendingRefreshToken;
 }
 
+/**
+ * Hands over a refresh token received in a response body (SSO exchange): it is
+ * moved into the HttpOnly cookie right away by one /auth/refresh.
+ */
 export function setRefreshToken(token: string) {
-  localStorage.setItem(REFRESH_KEY, token);
+  if (!token) return;
+  pendingRefreshToken = token;
+  void refreshOnce().catch(() => undefined);
 }
 
 export function clearRefreshToken() {
-  localStorage.removeItem(REFRESH_KEY);
+  pendingRefreshToken = null;
+}
+
+/** One-time migration of a pre-8.1 refresh token; call only inside the refresh lock. */
+function takeLegacyRefreshToken(): string | null {
+  try {
+    const t = localStorage.getItem(LEGACY_REFRESH_KEY);
+    localStorage.removeItem(LEGACY_REFRESH_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
+let sessionCheck: Promise<void> | null = null;
+
+/** Start-up session check: with no access token in memory, asks /auth/refresh (cookie) for one. */
+export function ensureSession(): Promise<void> {
+  if (sessionChecked) return Promise.resolve();
+  sessionCheck ??= (async () => {
+    if (!accessToken) {
+      try { await refreshOnce(); } catch { /* maintenance / offline → logged out */ }
+    }
+    sessionChecked = true;
+    notify();
+  })().finally(() => { sessionCheck = null; });
+  return sessionCheck;
+}
+
+/** Hook for route guards: false while the start-up session check runs; re-renders on token changes. */
+export function useSessionChecked(): boolean {
+  const checked = useSyncExternalStore(
+    (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+    () => sessionChecked,
+  );
+  useEffect(() => { if (!checked) void ensureSession(); }, [checked]);
+  return checked;
 }
 
 /** Decode JWT exp claim without a library (returns seconds since epoch or null). */
@@ -44,32 +114,32 @@ function getJwtExp(token: string): number | null {
 const MAINTENANCE = Symbol('maintenance');
 
 /**
- * Refreshes the access token. The server rotates the refresh token on every call
- * and treats two refreshes with the same token as reuse (session killed), so the
- * refresh is single-flight within the tab (refreshPromise) and across tabs
- * (Web Locks; a waiting tab adopts the token pair another tab just stored).
+ * Refreshes the access token. v8.1: authenticated by the HttpOnly cookie
+ * `cm_rt_bcp`, which the server rotates on every call; it treats two refreshes
+ * with the same token as reuse (session killed), so the refresh is single-flight
+ * within the tab (refreshPromise) and across tabs (Web Locks — a waiting tab
+ * sends the cookie the previous response already replaced). A body token (SSO
+ * exchange, pre-8.1 localStorage) is sent once and thereby moved into the cookie.
  */
 async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
-  const used = getRefreshToken();
   const doRefresh = async (): Promise<string | null | typeof MAINTENANCE> => {
-    const current = getRefreshToken();
-    const currentAccess = getToken();
-    if (current && currentAccess && current !== used) return currentAccess; // rotated by another tab
-    if (!current) return null;
+    const bodyToken = pendingRefreshToken ?? takeLegacyRefreshToken();
+    pendingRefreshToken = null;
     try {
       const res = await fetch('/auth/refresh', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: current }),
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+        body: JSON.stringify(bodyToken ? { refreshToken: bodyToken } : {}),
       });
       if (res.status === 503) return MAINTENANCE;
-      if (!res.ok) return null; // REFRESH_INVALID|EXPIRED|REUSED|INACTIVE
-      const data = await res.json() as { accessToken: string; refreshToken?: string };
+      if (!res.ok) return null; // REFRESH_INVALID|EXPIRED|REUSED|INACTIVE|MISSING
+      const data = await res.json() as { accessToken?: string };
       if (!data.accessToken) return null;
       setToken(data.accessToken);
-      if (data.refreshToken) setRefreshToken(data.refreshToken); // always store the rotated token
       return data.accessToken;
     } catch {
+      if (bodyToken && !pendingRefreshToken) pendingRefreshToken = bodyToken; // retry later
       return MAINTENANCE; // network error — transient
     }
   };
@@ -220,33 +290,36 @@ export type LoginResult =
 export async function loginAdmin(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error?: string; message?: string };
+    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error?: string; message?: string; code?: string };
     if (body.error === 'maintenance') throw new Error(body.message ?? 'Wartungsmodus aktiv');
+    if (body.code === 'ACCOUNT_LOCKED') throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
     throw apiErrorFromBody(body, res.status, 'Anmeldung fehlgeschlagen');
   }
+  // v8.1: the refresh token arrives as HttpOnly cookie, not in the body
   const data = await res.json() as LoginResult;
-  if ('accessToken' in data && data.refreshToken) {
-    setRefreshToken(data.refreshToken);
-  }
+  if ('accessToken' in data && data.refreshToken) setRefreshToken(data.refreshToken); // older server
   return data;
 }
 
 async function postMfaVerify(body: Record<string, unknown>): Promise<string> {
   const res = await fetch('/auth/mfa/verify', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as unknown;
+    const err = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as { code?: string };
+    if (err.code === 'ACCOUNT_LOCKED') throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
     throw apiErrorFromBody(err, res.status, 'Überprüfung fehlgeschlagen');
   }
   const data = await res.json() as { accessToken: string; refreshToken?: string };
-  if (data.refreshToken) setRefreshToken(data.refreshToken);
+  if (data.refreshToken) setRefreshToken(data.refreshToken); // older server
   return data.accessToken;
 }
 
@@ -278,20 +351,20 @@ export async function startMfaWebAuthn(challengeToken: string): Promise<unknown>
  * local tokens. Server/network errors never block the local logout.
  */
 export async function logoutSession(): Promise<void> {
-  const refreshToken = getRefreshToken();
-  const accessToken = getToken();
-  if (refreshToken) {
-    try {
-      await fetch('/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ refreshToken }),
-        keepalive: true,
-      });
-    } catch { /* offline — still log out locally */ }
-  }
+  const token = getToken();
+  try {
+    await fetch('/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        ...WEB_CLIENT_HEADERS,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      // v8.1: the server revokes the session of the cm_rt_bcp cookie and deletes it
+      body: JSON.stringify(pendingRefreshToken ? { refreshToken: pendingRefreshToken } : {}),
+      keepalive: true,
+    });
+  } catch { /* offline — still log out locally */ }
   clearToken();
 }
