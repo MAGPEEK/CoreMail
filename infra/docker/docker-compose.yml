@@ -1,7 +1,15 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 8.0.0 — Docker Compose (production, single host)
+#  CoreMail 8.0.0 — Docker Compose, variant STANDARD (production, single host)
+#
+#  Variants (docs/docker-compose.md has the comparison table):
+#    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis (1–50 users)
+#    docker-compose.yml           STANDARD  ← this file: + minio, rspamd, clamav
+#                                           (the file existing installations use)
+#    docker-compose.full.yml      MAXIMAL   + limits, log rotation, optional
+#                                           profiles minio / backup / geoip
+#  All three use the same volume names — switching keeps the data.
 #
 #  Getting started in 3 steps:
 #

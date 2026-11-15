@@ -1,0 +1,45 @@
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail — example override: host directories (bind mounts) instead of
+#  named Docker volumes. Works with all three variants (docs/docker-compose.md
+#  → Storage). Copy it, adjust the paths, and add it as a SECOND -f file:
+#
+#    cp infra/docker/docker-compose.bind-mounts.example.yml infra/docker/docker-compose.bind-mounts.yml
+#    docker compose -f infra/docker/docker-compose.minimal.yml \
+#                   -f infra/docker/docker-compose.bind-mounts.yml up -d
+#
+#  Entries with the same container path replace the named volume of the base
+#  file. Prepare the directories first (owners = users inside the images):
+#
+#    sudo install -d -m 750 -o 1000 -g 1000 /srv/coremail/data       # coremail (node)
+#    sudo install -d -m 700 -o 70   -g 70   /srv/coremail/postgres   # postgres:16-alpine
+#    sudo install -d -m 700 -o 999  -g 1000 /srv/coremail/redis      # redis:7-alpine
+#
+#  Moving existing data from the volumes: docs/docker-compose.md → "Moving data".
+#  PostgreSQL must stay on a LOCAL file system (ext4/xfs/zfs), never NFS/SMB.
+# ═════════════════════════════════════════════════════════════════════════════
+
+services:
+  coremail:
+    volumes:
+      - ${COREMAIL_DATA_ROOT:-/srv/coremail}/data:/data
+  postgres:
+    volumes:
+      - ${COREMAIL_DATA_ROOT:-/srv/coremail}/postgres:/var/lib/postgresql/data
+  redis:
+    volumes:
+      - ${COREMAIL_DATA_ROOT:-/srv/coremail}/redis:/data
+
+  # Standard / full variant only — uncomment (an override for a service the base
+  # file does not define makes `docker compose` fail):
+  # rspamd:
+  #   volumes:
+  #     - ${COREMAIL_DATA_ROOT:-/srv/coremail}/rspamd:/var/lib/rspamd       # owner 11333:11333
+  # clamav:
+  #   volumes:
+  #     - ${COREMAIL_DATA_ROOT:-/srv/coremail}/clamav:/var/lib/clamav       # chowned by the image
+  # minio:
+  #   volumes:
+  #     - ${COREMAIL_DATA_ROOT:-/srv/coremail}/minio:/data                  # runs as root
+  # pg-backup:            # full variant, profile backup (or set PG_BACKUP_DIR in .env)
+  #   volumes:
+  #     - ${COREMAIL_DATA_ROOT:-/srv/coremail}/backups:/backups             # owner root, 0700

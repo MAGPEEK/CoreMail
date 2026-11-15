@@ -2,6 +2,12 @@
 
 > **6-container architecture** — all CoreMail services run in a single app container (`magpeek/coremail-app`), managed by `supervisord`. Rspamd, ClamAV, PostgreSQL, Redis and MinIO run in separate standard images.
 
+> **Compose variants:** besides the standard `docker-compose.yml` described here there are
+> `docker-compose.minimal.yml` (coremail + postgres + redis, 1–50 users) and
+> `docker-compose.full.yml` (everything, resource limits, log rotation, optional
+> `minio`/`backup`/`geoip` profiles). Comparison, quick start per variant, storage on a separate
+> disk / NAS, backups and switching variants: **[docker-compose.md](docker-compose.md)**.
+
 ---
 
 ## Contents
@@ -88,6 +94,8 @@ cd CoreMail
 ### 2. Configuration
 
 ```bash
+bash scripts/setup.sh                      # standard; --variant minimal|full: docs/docker-compose.md
+# or by hand:
 cp .env.example .env
 ```
 
@@ -296,6 +304,9 @@ MAXMIND_LICENSE_KEY=
 ---
 
 ## Data management
+
+Bind mounts, a separate disk, NFS/SMB, ownership, moving data and sizing:
+[docker-compose.md → Storage](docker-compose.md#storage).
 
 ### Docker volumes
 
