@@ -18,6 +18,7 @@ import { registerConnector } from './commands/connector.js';
 import { registerSmtp } from './commands/smtp.js';
 import { registerCert } from './commands/cert.js';
 import { registerStorage } from './commands/storage.js';
+import { registerAudit } from './commands/audit.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -48,6 +49,7 @@ registerConnector(program, api, json);
 registerSmtp(program, api, json);
 registerCert(program, api, json);
 registerStorage(program, api, json);
+registerAudit(program, api, json);
 
 program.addHelpText('after', `
 Examples:

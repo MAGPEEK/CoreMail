@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/output.test.ts src/commands/storage.test.ts",
+    "test": "node --import tsx --test src/output.test.ts src/commands/storage.test.ts src/commands/audit.test.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
