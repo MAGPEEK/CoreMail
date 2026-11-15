@@ -52,6 +52,12 @@ export interface OutboundJob {
   from:           string;    // SMTP-Envelope MAIL FROM
   to:             string[];  // SMTP envelope RCPT TO (all: To + CC + BCC)
   senderUserId?:  string;    // for S/MIME auto-sign
+  /**
+   * Created by a user's redirect rule: the envelope sender is the ORIGINAL
+   * (possibly forged) sender, so a failure is bounced only to a local sender —
+   * never to an external one (no backscatter).
+   */
+  ruleRedirect?:  boolean;
   dkimDomain?:    string;
   dkimSelector?:  string;
   dkimPrivateKey?: string;
@@ -255,7 +261,7 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
         smtpCode:          permanent[0]!.code,
         serverHostname:    await deps.hostname(),
         recipients:        permanent.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
-        deliverExternal:   true,
+        deliverExternal:   data.ruleRedirect !== true, // redirect rule: no backscatter to a forged external sender
       });
       for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
     }
@@ -310,6 +316,8 @@ const defaultOutboundDeps: OutboundDeps = {
     fromAddr: from,
     rcptTo:   rcpt,
     toJunk:   false,
+    // Stable across the job's retries: rule forwards are not queued twice.
+    deliveryKey: `job:${job.messageId}`,
     ...(job.quarantineReleaseId ? { quarantineRelease: true } : {}),
   }),
   // Jobs without DKIM fields (SMTP submission, rule forwards, EAS) get the key
@@ -510,7 +518,7 @@ export function handleFailedJob(
             smtpCode,
             serverHostname:    await deps.hostname(),
             recipients:        list.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
-            deliverExternal:   true,
+            deliverExternal:   job.data.ruleRedirect !== true, // redirect rule: no backscatter
           });
         } catch (dsnErr) {
           log.error({ err: dsnErr, jobId: job.id }, 'DSN generation failed');

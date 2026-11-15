@@ -56,6 +56,19 @@ export interface ContentFilterResult {
 /** Body limit of `/check/content` (security-filter: express.raw limit '52mb'). */
 export const CONTENT_FILTER_MAX_BYTES = 52 * 1024 * 1024;
 
+/** Room for the Received: field the inbound handler prepends before the scan. */
+const TRACE_HEADROOM_BYTES = 16 * 1024;
+
+/**
+ * SIZE limit advertised and enforced on the inbound listener (port 25): the
+ * configured maximum, but never more than the content filter can scan — a
+ * bigger message would otherwise be transferred completely and then refused
+ * with 552 after DATA.
+ */
+export function inboundMaxSize(configuredBytes: number): number {
+  return Math.min(configuredBytes, CONTENT_FILTER_MAX_BYTES - TRACE_HEADROOM_BYTES);
+}
+
 /**
  * Pure: validates a `/check/content` answer. A non-200 status, a non-object
  * body or an unknown `action` is "unavailable" — the message must not be

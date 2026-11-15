@@ -20,9 +20,25 @@ export function ipLiteral(ip: string): string {
   return ip.includes(':') ? `[IPv6:${ip}]` : `[${ip}]`;
 }
 
-function headerEnd(raw: Buffer): number {
+/**
+ * End of the header block: `end` is the offset of the line break that ends the
+ * last header field (the empty line follows it), `lineBreak` its length.
+ * CRLF and bare-LF messages (ActiveSync/JMAP raw uploads) are both handled;
+ * without an empty line the whole message is header (RFC 5322 §2.1).
+ */
+export function headerBounds(raw: Buffer): { end: number; lineBreak: number } {
+  if (raw[0] === 0x0a) return { end: 0, lineBreak: 0 };
+  if (raw[0] === 0x0d && raw[1] === 0x0a) return { end: 0, lineBreak: 0 };
   const crlf = raw.indexOf('\r\n\r\n');
-  return crlf >= 0 ? crlf : raw.length;
+  const lf = raw.indexOf('\n\n');
+  const lfEnd = lf < 0 ? -1 : raw[lf - 1] === 0x0d ? lf - 1 : lf;  // "…\r\n\n"
+  if (lfEnd >= 0 && (crlf < 0 || lfEnd < crlf)) return { end: lfEnd, lineBreak: raw[lfEnd] === 0x0d ? 2 : 1 };
+  if (crlf >= 0) return { end: crlf, lineBreak: 2 };
+  return { end: raw.length, lineBreak: 0 };
+}
+
+function headerEnd(raw: Buffer): number {
+  return headerBounds(raw).end;
 }
 
 /** Number of Received: header fields in the header block. */
@@ -63,14 +79,15 @@ export function prependHeader(raw: Buffer, header: string): Buffer {
  * puts `Return-Path: <reverse-path>` at the beginning of the message.
  */
 export function withReturnPath(raw: Buffer, reversePath: string): Buffer {
-  const end = headerEnd(raw);
+  const { end, lineBreak } = headerBounds(raw);
   const head = raw.subarray(0, end).toString('latin1');
-  // Remove existing Return-Path fields (incl. folded continuation lines).
+  // Remove existing Return-Path fields (incl. folded continuation lines) — only
+  // inside the header block; CRLF or bare-LF line endings.
   const cleaned = head
-    .replace(/^Return-Path:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*(?:\r\n|$)/gim, '')
-    .replace(/\r\n$/, ''); // the removed field was the last one
+    .replace(/^Return-Path:[^\r\n]*(?:\r?\n[ \t][^\r\n]*)*(?:\r?\n|$)/gim, '')
+    .replace(/\r?\n$/, ''); // the removed field was the last one
   // Without remaining fields the prefix's own CRLF ends the (new) header line.
-  const body = cleaned === '' ? raw.subarray(Math.min(end + 2, raw.length)) : raw.subarray(end);
+  const body = cleaned === '' ? raw.subarray(Math.min(end + lineBreak, raw.length)) : raw.subarray(end);
   const prefix = `Return-Path: <${oneLine(reversePath)}>\r\n`;
   if (cleaned.length === head.length) return Buffer.concat([Buffer.from(prefix, 'utf8'), raw]);
   return Buffer.concat([Buffer.from(prefix, 'utf8'), Buffer.from(cleaned, 'latin1'), body]);

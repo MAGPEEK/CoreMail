@@ -192,13 +192,18 @@ export function smarthostTransportOptions(
   const auth = cfg.smarthostUsername ? { user: cfg.smarthostUsername, pass: cfg.smarthostPassword } : undefined;
   const tlsWanted = cfg.smarthostTls || cfg.smarthostImplicitTls || !!auth;
   const insecure = env['SMARTHOST_TLS_INSECURE'] === 'true';
+  const requireStartTls = (cfg.smarthostTls || !!auth) && !cfg.smarthostImplicitTls;
   return {
     host:             cfg.smarthostHost,
     port:             cfg.smarthostPort,
     name:             cfg.heloName,
     secure:           cfg.smarthostImplicitTls,
-    requireTLS:       cfg.smarthostTls && !cfg.smarthostImplicitTls,
-    opportunisticTLS: cfg.smarthostTls && !cfg.smarthostImplicitTls,
+    // Credentials are never sent over a connection whose STARTTLS could be
+    // stripped: with auth, STARTTLS is mandatory even when the TLS box is off.
+    // opportunisticTLS would let nodemailer continue in plaintext after a failed
+    // STARTTLS reply (an attacker's "454") — only where TLS is not required.
+    requireTLS:       requireStartTls,
+    opportunisticTLS: !requireStartTls && !cfg.smarthostImplicitTls,
     ...(auth ? { auth } : {}),
     tls: tlsWanted && !insecure
       ? { rejectUnauthorized: true, servername: cfg.smarthostHost, minVersion: 'TLSv1.2' }
@@ -207,6 +212,57 @@ export function smarthostTransportOptions(
     greetingTimeout:   GREETING_TIMEOUT_MS,
     socketTimeout:     SOCKET_TIMEOUT_MS,
     ...(dkimCfg ? { dkim: dkimCfg } : {}),
+  };
+}
+
+/** Remedy shown when the smarthost certificate is rejected (since v8.0 verified by default). */
+export const SMARTHOST_TLS_HINT =
+  'smarthost TLS certificate verification failed: install a certificate valid for the smarthost host name, '
+  + 'or set SMARTHOST_TLS_INSECURE=true for a smarthost with a self-signed certificate or an IP address';
+
+const CERT_ERROR_CODES = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_UNTRUSTED', 'CERT_SIGNATURE_FAILURE',
+]);
+
+/** True for TLS certificate verification failures (also wrapped by nodemailer as ESOCKET/ETLS). */
+export function isCertificateError(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== 'object' || depth > 3) return false;
+  const e = err as { code?: unknown; message?: unknown; cause?: unknown };
+  if (typeof e.code === 'string' && CERT_ERROR_CODES.has(e.code)) return true;
+  if (typeof e.message === 'string'
+    && /self[- ]signed certificate|unable to verify the first certificate|certificate has expired|does not match certificate's altnames|unable to get (local )?issuer certificate/i.test(e.message)) {
+    return true;
+  }
+  return isCertificateError(e.cause, depth + 1);
+}
+
+let lastCertWarning = 0;
+
+/**
+ * Smarthost sends whose certificate is rejected fail with a message that names
+ * the remedy (it ends up in the queue/mail-flow log), plus a throttled ERROR log
+ * line — an upgrade from ≤ 7.0.0 (no verification) otherwise only shows mail
+ * piling up in the queue.
+ */
+function withCertificateHint(deps: RelayDeps, host: string): RelayDeps {
+  return {
+    ...deps,
+    send: async (options, envelope, raw) => {
+      try {
+        return await deps.send(options, envelope, raw);
+      } catch (err) {
+        if (!isCertificateError(err)) throw err;
+        const now = Date.now();
+        if (now - lastCertWarning > 10 * 60_000) {
+          lastCertWarning = now;
+          log.error({ err, smarthost: host }, SMARTHOST_TLS_HINT);
+        }
+        const message = `${err instanceof Error ? err.message : String(err)} (${SMARTHOST_TLS_HINT})`;
+        throw Object.assign(new Error(message), { code: (err as { code?: unknown }).code });
+      }
+    },
   };
 }
 
@@ -276,7 +332,7 @@ export async function relayMessage(
   }
 
   if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
-    const result = await sendAndCollect(deps, smarthostTransportOptions(cfg, dkimCfg), from, to, rawBuffer);
+    const result = await sendAndCollect(withCertificateHint(deps, cfg.smarthostHost), smarthostTransportOptions(cfg, dkimCfg), from, to, rawBuffer);
     log.info({ smarthost: cfg.smarthostHost, port: cfg.smarthostPort, dkim: !!dkimCfg, delivered: result.delivered, failed: result.failures.length },
       'Delivered via smarthost');
     return result;

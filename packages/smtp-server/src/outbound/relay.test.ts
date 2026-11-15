@@ -12,7 +12,7 @@ process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 process.env['LOG_LEVEL'] = 'error';
 (globalThis as unknown as { __prisma: unknown }).__prisma = { $on: () => undefined };
 
-const { relayMessage, classifySmtpError, lookupMx, smarthostTransportOptions, mxTransportOptions } = await import('./relay.js');
+const { relayMessage, classifySmtpError, lookupMx, smarthostTransportOptions, mxTransportOptions, isCertificateError } = await import('./relay.js');
 type Deps = NonNullable<Parameters<typeof relayMessage>[4]>;
 
 const MX_CONFIG = {
@@ -123,4 +123,41 @@ test('smarthost: certificate verified against the host when TLS or credentials a
   assert.deepEqual(optOut['tls'], { rejectUnauthorized: false });
   assert.deepEqual(plainNoAuth['tls'], { rejectUnauthorized: false });
   assert.equal(mxTransportOptions('mx.ext.test', 'mail.corp.test')['name'], 'mail.corp.test');
+});
+
+// v8.0 review: credentials with the TLS box off went out after an opportunistic
+// (strippable) STARTTLS; opportunisticTLS also allowed plaintext after a failed STARTTLS reply.
+test('smarthost: STARTTLS is mandatory whenever credentials are sent; never an opportunistic fallback then', () => {
+  const base = { ...MX_CONFIG, mode: 'smarthost' as const, smarthostHost: 'relay.provider.test', smarthostPort: 587 };
+  const authNoTlsBox = smarthostTransportOptions({ ...base, smarthostTls: false, smarthostUsername: 'u', smarthostPassword: 'p' }, undefined, {});
+  const authTls = smarthostTransportOptions({ ...base, smarthostTls: true, smarthostUsername: 'u', smarthostPassword: 'p' }, undefined, {});
+  const implicit = smarthostTransportOptions({ ...base, smarthostImplicitTls: true, smarthostPort: 465, smarthostUsername: 'u', smarthostPassword: 'p' }, undefined, {});
+  const anonPlain = smarthostTransportOptions({ ...base, smarthostTls: false, smarthostUsername: '' }, undefined, {});
+
+  assert.equal(authNoTlsBox['requireTLS'], true);
+  assert.equal(authNoTlsBox['opportunisticTLS'], false);
+  assert.deepEqual(authNoTlsBox['tls'], { rejectUnauthorized: true, servername: 'relay.provider.test', minVersion: 'TLSv1.2' });
+  assert.equal(authTls['requireTLS'], true);
+  assert.equal(authTls['opportunisticTLS'], false);
+  assert.equal(implicit['secure'], true);
+  assert.equal(implicit['requireTLS'], false);
+  assert.equal(anonPlain['requireTLS'], false);
+});
+
+test('smarthost: a rejected certificate fails with a message naming SMARTHOST_TLS_INSECURE', async () => {
+  assert.ok(isCertificateError(Object.assign(new Error('self-signed certificate'), { code: 'ESOCKET' })));
+  assert.ok(isCertificateError({ code: 'ERR_TLS_CERT_ALTNAME_INVALID', message: 'x' }));
+  assert.ok(isCertificateError(Object.assign(new Error('wrapped'), { cause: { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' } })));
+  assert.ok(!isCertificateError(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNECTION' })));
+
+  const deps: Deps = {
+    config: async () => ({ ...MX_CONFIG, mode: 'smarthost', smarthostHost: 'relay.provider.test' }),
+    resolveMx: async () => [],
+    send: async () => { throw Object.assign(new Error('self-signed certificate'), { code: 'ESOCKET' }); },
+  };
+  const r = await relayMessage(Buffer.from('x'), 'a@corp.test', ['b@ext.test'], {}, deps);
+
+  assert.equal(r.failures.length, 1);
+  assert.equal(r.failures[0]!.permanent, false, 'deferred, not bounced');
+  assert.match(r.failures[0]!.message, /SMARTHOST_TLS_INSECURE=true/);
 });

@@ -14,7 +14,44 @@ process.env['LOG_LEVEL'] = 'error';
 (globalThis as unknown as { __prisma: unknown }).__prisma = { $on: () => undefined };
 
 const { buildReceivedHeader, withReturnPath, countReceived, formatRfc5322Date, ipLiteral } = await import('./trace.js');
-const { buildRuleForward } = await import('./rule-forward.js');
+const { buildRuleForward, enqueueRuleForward } = await import('./rule-forward.js');
+const { inboundMaxSize, CONTENT_FILTER_MAX_BYTES } = await import('../inbound/connection-filter.js');
+
+// v8.0 review: the forward is queued before the local store; a store failure made
+// the sender's retry queue it again.
+test('a rule forward is queued once per transaction, recipient and target; an enqueue failure releases the claim', async () => {
+  const claims = new Set<string>();
+  const queued: Array<{ to: string[]; ruleRedirect?: boolean }> = [];
+  let failNext = false;
+  const deps = {
+    claim: async (k: string) => { if (claims.has(k)) return false; claims.add(k); return true; },
+    release: async (k: string) => { claims.delete(k); },
+    enqueue: async (j: { to: string[]; ruleRedirect?: boolean }) => {
+      if (failNext) { failNext = false; throw new Error('redis down'); }
+      queued.push(j);
+    },
+  };
+  const opts = {
+    rawBuffer: Buffer.from('Subject: s\r\n\r\nb'), toAddress: 'me@ext.test', forwardingUser: { id: 'u1', email: 'bob@corp.test' },
+    mode: 'redirect' as const, originalFrom: 'alice@ext.test', dedupKey: 'tx1', recipient: 'bob@corp.test',
+  };
+
+  failNext = true;
+  await assert.rejects(enqueueRuleForward(opts, deps as never), /redis down/);
+  await enqueueRuleForward(opts, deps as never);               // retry after the failed enqueue
+  await enqueueRuleForward(opts, deps as never);               // retry after a failed local store
+  await enqueueRuleForward({ ...opts, dedupKey: 'tx2' }, deps as never); // a different transaction
+  await enqueueRuleForward({ ...opts, dedupKey: undefined }, deps as never); // no key: no dedup
+
+  assert.equal(queued.length, 3);
+  assert.ok(queued.every((j) => j.ruleRedirect === true), 'redirect jobs are marked (no backscatter bounces)');
+});
+
+test('the inbound SIZE limit never exceeds what the content filter can scan', () => {
+  assert.equal(inboundMaxSize(25 * 1024 * 1024), 25 * 1024 * 1024);
+  assert.ok(inboundMaxSize(200 * 1024 * 1024) < CONTENT_FILTER_MAX_BYTES);
+  assert.ok(inboundMaxSize(200 * 1024 * 1024) > 50 * 1024 * 1024);
+});
 const { deliverOnce } = await import('./delivery.js');
 const { completeSubmissionHeaders } = await import('../submission/handler.js');
 
@@ -43,6 +80,23 @@ test('Return-Path: replaces earlier Return-Path fields and is the first line of 
 
   assert.equal(withReturnPath(raw, 'alice@ext.test').toString(), 'Return-Path: <alice@ext.test>\r\nSubject: s\r\n\r\nbody\r\n');
   assert.equal(withReturnPath(Buffer.from('Subject: s\r\n\r\nb'), '').toString(), 'Return-Path: <>\r\nSubject: s\r\n\r\nb');
+});
+
+// v8.0 review: bare-LF messages (ActiveSync SendMail, JMAP raw) were treated as all-header.
+test('Return-Path: on a bare-LF message only touches the header block (body unchanged, no extra blank line)', () => {
+  const raw = Buffer.from('Return-Path: <forged@x.test>\nSubject: s\n\nReturn-Path: in the body\nmore\n');
+  assert.equal(withReturnPath(raw, 'alice@ext.test').toString(),
+    'Return-Path: <alice@ext.test>\r\nSubject: s\n\nReturn-Path: in the body\nmore\n');
+
+  const onlyReturnPath = Buffer.from('Return-Path: <old@x.test>\n\nReturn-Path: body\n');
+  assert.equal(withReturnPath(onlyReturnPath, 'a@b.test').toString(), 'Return-Path: <a@b.test>\r\n\nReturn-Path: body\n');
+
+  const lfBody = Buffer.from('Subject: s\n\nReturn-Path: x\n');
+  assert.equal(withReturnPath(lfBody, '').toString(), 'Return-Path: <>\r\nSubject: s\n\nReturn-Path: x\n');
+  assert.equal(countReceived(Buffer.from('Received: a\nSubject: s\n\nReceived: in body\n')), 1);
+  // A CRLF header followed by a bare-LF empty line.
+  assert.equal(withReturnPath(Buffer.from('Subject: s\r\n\nReturn-Path: b\n'), 'z@y.test').toString(),
+    'Return-Path: <z@y.test>\r\nSubject: s\r\n\nReturn-Path: b\n');
 });
 
 test('hop counting counts the Received: fields of the header block only', () => {

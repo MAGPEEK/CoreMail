@@ -37,6 +37,16 @@ export interface FilesystemStoreOptions {
 
 const RETRYABLE_RENAME = new Set(['EPERM', 'EACCES', 'EEXIST', 'EBUSY']);
 
+/** Writes all of `data` (FileHandle.write may write fewer bytes than asked). */
+export async function writeFully(fh: Pick<FileHandle, 'write'>, data: Buffer): Promise<void> {
+  let off = 0;
+  while (off < data.length) {
+    const { bytesWritten } = await fh.write(data, off, data.length - off);
+    if (bytesWritten <= 0) throw new Error('short write: no progress');
+    off += bytesWritten;
+  }
+}
+
 function errCode(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | null)?.code;
 }
@@ -84,20 +94,15 @@ export class FilesystemObjectStore implements ObjectStore {
   }
 
   async put(key: string, data: Buffer, opts: PutOptions = {}): Promise<void> {
-    await this.writeAtomic(key, opts, async (fh) => {
-      let off = 0;
-      while (off < data.length) {
-        const { bytesWritten } = await fh.write(data, off, data.length - off);
-        off += bytesWritten;
-      }
-    });
+    await this.writeAtomic(key, opts, (fh) => writeFully(fh, data));
   }
 
   async putStream(key: string, stream: Readable, opts: PutOptions = {}): Promise<void> {
     const written = await this.writeAtomic(key, opts, async (fh) => {
       await pipeline(stream, new Writable({
         write(chunk: Buffer, _enc, cb) {
-          fh.write(chunk).then(() => cb(), cb);
+          // A short write must not go unnoticed (truncated object): loop like put().
+          writeFully(fh, chunk).then(() => cb(), cb);
         },
       }));
     });

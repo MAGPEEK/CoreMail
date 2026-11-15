@@ -116,6 +116,22 @@ test('failed handler: no bounce while retries remain; on give-up only the still-
   assert.equal(h.bounces[0]?.recipients?.[0]?.status, '4.3.0');
 });
 
+// v8.0 review: a redirect keeps the original (possibly forged) sender → no backscatter.
+test('a job from a redirect rule is never bounced to an external sender (now or on give-up)', async () => {
+  const h = harness([
+    () => ({ delivered: [], failures: [fail('gone@ext.test', 550, '5.1.1'), fail('grey@ext.test', 451, '4.3.0')] }),
+  ]);
+  const j = job(['gone@ext.test', 'grey@ext.test'], 'forged@victim.test');
+  j.data.ruleRedirect = true;
+
+  const err = await deliverOutboundJob(j, Buffer.from('x'), h.deps).then(() => new Error('expected a failure'), (e: unknown) => e as Error);
+  handleFailedJob({ ...j, attemptsMade: 5 }, err, h.deps);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(h.bounces.length, 2);
+  assert.ok(h.bounces.every((b) => b.deliverExternal === false), 'sendDsnBounce then only reaches a LOCAL original sender');
+});
+
 test('the bare <Postmaster> recipient is delivered locally (expanded), not relayed', async () => {
   const h = harness([]);
   h.deps.expand = async (a) => a.map((x) => (x === 'postmaster' ? 'admin@corp.test' : x));

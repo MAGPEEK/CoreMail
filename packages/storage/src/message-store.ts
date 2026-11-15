@@ -202,6 +202,38 @@ export async function setFlags(
   return out;
 }
 
+/**
+ * Read-modify-write of flags without lost updates: the mailbox row lock is
+ * taken first (modSeq allocation), THEN the current flags are read, so two
+ * concurrent "+FLAGS" on the same message are serialized and both survive.
+ * `compute` returns the new flag list, or null to leave the message unchanged
+ * (also gets the current modSeq, e.g. for CONDSTORE UNCHANGEDSINCE).
+ * Returns the rows that were written. A modSeq is allocated even when nothing
+ * changes in the end (gaps are allowed, RFC 7162 §3.1).
+ */
+export async function modifyFlags(
+  tx: MessageStoreTx,
+  ids: string[],
+  compute: (flags: string[], modSeq: bigint, id: string) => string[] | null,
+  opts: ScopeOpts = {},
+): Promise<Array<{ id: string; flags: string[]; modSeq: bigint }>> {
+  const out: Array<{ id: string; flags: string[]; modSeq: bigint }> = [];
+  for (const [mailboxId, list] of await byMailbox(tx, ids, opts)) {
+    const modSeq = await nextModSeq(tx, mailboxId);
+    const rows = await tx.message.findMany({
+      where: { id: { in: list } },
+      select: { id: true, flags: true, modSeq: true },
+    });
+    for (const row of rows) {
+      const flags = compute([...row.flags], row.modSeq, row.id);
+      if (flags === null) continue;
+      await tx.message.update({ where: { id: row.id }, data: { flags, modSeq, changeKey: modSeq.toString() } });
+      out.push({ id: row.id, flags, modSeq });
+    }
+  }
+  return out;
+}
+
 /** Soft-delete (expunge) messages; the change is visible as a modSeq bump. */
 export async function expunge(
   tx: MessageStoreTx,

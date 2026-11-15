@@ -83,7 +83,7 @@ db.passwordHash = await hashPassword('secret');
 const { storeRawMessage, createMemoryAuthRedis } = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = createMemoryAuthRedis();
 (globalThis as Record<string, unknown>)['__pop3LockRedis'] = null; // in-process lock layer only
-const { POP3Session, dotStuff, toCrlf } = await import('./session.js');
+const { POP3Session, dotStuff, toCrlf, materializeBounded, legacyMaterializeLimits } = await import('./session.js');
 const { selfSignedTestCert } = await import('./test-cert.js');
 const CERT = selfSignedTestCert();
 
@@ -235,6 +235,54 @@ test('legacy row: LIST/STAT report the size RETR sends before the first RETR (RF
   // The payload is the message (+ the CRLF the framing adds when the last line has none).
   assert.ok(payload.length === list || payload.length === list + 2, `${payload.length} vs ${list}`);
   assert.notEqual(list, 7, 'size comes from the materialized raw message, not the stale column');
+});
+
+// v8.0 review: the first login after an upgrade materialized EVERY legacy row before +OK.
+test('legacy materialization at login is bounded (count, time budget, parallelism)', async () => {
+  const ids = Array.from({ length: 50 }, (_, i) => `m${i}`);
+  let running = 0;
+  let peak = 0;
+  const load = async (id: string): Promise<number | null> => {
+    running++; peak = Math.max(peak, running);
+    await new Promise((r) => setTimeout(r, 2));
+    running--;
+    if (id === 'm3') throw new Error('object store down');
+    return id.length;
+  };
+  const byCount = await materializeBounded(ids, load, { max: 10, budgetMs: 60_000, concurrency: 3 });
+  assert.equal(byCount.size, 9, '10 tried, the failing one is skipped');
+  assert.ok(peak <= 3, `peak parallelism ${peak}`);
+
+  let clock = 0;
+  const byTime = await materializeBounded(ids, async (id) => { clock += 100; return id.length; },
+    { max: 1000, budgetMs: 450, concurrency: 1 }, () => clock);
+  assert.ok(byTime.size >= 4 && byTime.size <= 6, `stops after the budget (${byTime.size})`);
+});
+
+test('legacy rows beyond the per-login limit keep the stored size until RETR corrects it', async (t) => {
+  const saved = { ...legacyMaterializeLimits };
+  legacyMaterializeLimits.max = 1;
+  t.after(() => Object.assign(legacyMaterializeLimits, saved));
+  const legacy = (id: string, uid: number): Row => ({
+    id, uid, rawSize: 7, storagePath: null, folderId: 'inbox', deletedAt: null,
+    subject: `Legacy ${id}`, fromAddr: 'a@x.test', fromName: '', toAddrs: ['b@x.test'], ccAddrs: [], replyTo: null,
+    messageId: null, inReplyTo: null, date: new Date(0), bodyText: 'text', bodyHtml: '',
+  });
+  db.messages = [legacy('A1', 1), legacy('A2', 2), legacy('A3', 3)];
+  const srv = await startServer(t);
+  const c = await srv.connect();
+  await login(c);
+  c.write('LIST\r\n');
+  const list = await c.until(/\r\n\.\r\n$/);
+  const sizes = [...list.matchAll(/^(\d) (\d+)\r$/gm)].map((m) => Number(m[2]));
+  assert.equal(sizes.length, 3, list);
+  assert.notEqual(sizes[0], 7, 'the first legacy row was materialized');
+  assert.deepEqual(sizes.slice(1), [7, 7], 'the others keep the stored size for now');
+  c.write('RETR 2\r\n');
+  const out = await c.until(/\r\n\.\r\n$/);
+  const announced = Number(/^\+OK (\d+) octets/.exec(out)?.[1]);
+  c.write('LIST 2\r\n');
+  assert.equal(await c.until(/\r\n$/), `+OK 2 ${announced}\r\n`, 'RETR made the size exact');
 });
 
 test('a message stored with bare LF line endings is sent with CRLF and a proper terminator (RFC 1939 §3)', async (t) => {

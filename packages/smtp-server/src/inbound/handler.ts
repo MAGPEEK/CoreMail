@@ -250,11 +250,13 @@ async function onMessage(
   // 3. Local storage + external forwarding. 250 only when every part is done;
   //    a failure answers 451 and the retry skips what was already delivered
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
-  await deliverOnce(deliveryKey(from, receivedRaw), localDeliveries, externalDeliveries, {
+  const txKey = deliveryKey(from, receivedRaw);
+  await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
     storeLocal: (rcpt) => storeInboundMessage(raw, {
       fromAddr: from,
       rcptTo: rcpt,
+      deliveryKey: txKey,
       toJunk: filterResult.junkFolder ?? false,
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     }),

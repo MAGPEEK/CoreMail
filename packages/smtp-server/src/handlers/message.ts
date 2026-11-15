@@ -22,6 +22,11 @@ export interface StoreOptions {
    * from a message header.
    */
   quarantineRelease?: boolean;
+  /**
+   * SMTP transaction key (handlers/delivery.ts deliveryKey): a retry of a
+   * transaction whose local store failed does not queue the rule forwards again.
+   */
+  deliveryKey?: string;
 }
 
 export async function storeInboundMessage(
@@ -216,7 +221,9 @@ export async function storeInboundMessage(
 
   // Rule forwards/redirects are enqueued BEFORE the message is committed and a
   // failure propagates (the SMTP transaction is answered 4yz and retried):
-  // after a 250 a forward must not be lost silently (RFC 5321 §6.1).
+  // after a 250 a forward must not be lost silently (RFC 5321 §6.1). When the
+  // store below fails instead, the retry finds the forward claimed under the
+  // transaction key and does not queue it twice.
   // Redirects keep the original envelope sender (§3.9.1) — a null reverse-path
   // stays null, so a redirected bounce cannot loop.
   if (user) {
@@ -227,6 +234,8 @@ export async function storeInboundMessage(
         forwardingUser: { id: user.id, email: user.email },
         mode:           fwd.mode,
         originalFrom:   opts.fromAddr,
+        dedupKey:       opts.deliveryKey,
+        recipient:      opts.rcptTo,
       });
     }
   }

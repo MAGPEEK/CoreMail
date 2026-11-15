@@ -357,6 +357,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `GET /api/v1/contacts/gal` was shadowed by `GET /api/v1/contacts/:id` (404).
 - caldav-server: credentials were verified twice for every CardDAV request (one auth
   middleware per router).
+- IMAP: folders created by IMAP clients up to 7.0.0 are stored with their modified UTF-7 name
+  (e.g. `Entw&APw-rfe`). They are not migrated or renamed: such a row is recognised (canonical
+  modified UTF-7 of another name) and shown as before to IMAP4rev1 clients and in UTF-8 after
+  `ENABLE IMAP4rev2`; SELECT/STATUS/APPEND/COPY/MOVE/DELETE/RENAME find it under either
+  spelling, and CREATE of the same name answers `ALREADYEXISTS` instead of adding a duplicate.
+  Previously the encoded name was encoded again and appeared as a new literal folder name.
+- IMAP IDLE (every 30 s and on each new-mail push) and the end of every command no longer read
+  all message rows of the selected folder: the mailbox's highestModSeq and the folder's message
+  count are checked first, the full comparison only runs when they changed.
+- IMAP STORE (and the implicit `\Seen` of FETCH) lost a concurrent client's flag change: the new
+  flag list is now computed from the flags read under the mailbox lock
+  (`modifyFlags()` in the message store).
+- POP3: the first login after an upgrade no longer materializes every legacy message before
+  answering; at most 200 per login, 4 in parallel, within 5 s. The others report their stored
+  size until RETR/TOP or a later login makes it exact.
+- SMTP: `Return-Path:` handling and hop counting found the end of the header only at CRLFCRLF,
+  so local delivery of bare-LF messages (ActiveSync SendMail, JMAP raw) removed a body line
+  starting with `Return-Path:` and inserted an extra blank line.
+- SMTP: a rule forward/redirect queued before a failed local store was queued again by the
+  sender's retry; forwards are now claimed per transaction, recipient and target.
+- SMTP inbound (port 25) advertises and enforces at most what the content filter can scan
+  (52 MB minus headroom) even when `maxMessageSizeMb` is higher — larger mail was transferred
+  completely and then refused with 552.
+- Filesystem object store: `putStream` did not check short writes (`put` did).
 
 ### Security
 
@@ -463,6 +487,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   filters run on the masked view, so grantees cannot probe hidden fields with `text-match`.
 - iTIP REPLYs are applied only when the receiving user (address or alias) is the event's
   ORGANIZER, not to an invitee's copy of the same meeting.
+- **IMAP LIST/LSUB pattern ReDoS.** The mailbox pattern was translated into a regular
+  expression that backtracked exponentially (`LIST "" "*a*a*a…X"` against a long folder name
+  blocked the IMAP process for every user for minutes). Patterns are now matched by a
+  linear-space O(name × pattern) wildcard matcher; patterns over 1024 characters and pattern
+  lists over 32 entries are refused with BAD.
+- **Smarthost credentials are never sent without TLS.** With credentials and the TLS box off,
+  STARTTLS was only opportunistic (strippable); and nodemailer's `opportunisticTLS` continued
+  in plaintext after a failed STARTTLS reply even with TLS required. STARTTLS is now mandatory
+  whenever credentials are configured (unless implicit TLS), without plaintext fallback.
+  Upgrade note: a smarthost whose certificate is rejected (self-signed, IP address) now fails
+  with a deferral reason naming `SMARTHOST_TLS_INSECURE=true` (queue/mail-flow log) and a
+  throttled ERROR log line, instead of only piling up mail in the queue.
+- iTIP REPLY with `RECURRENCE-ID`: an override is only created for a real instance of the
+  series (bounded RRULE expansion, RDATE, not EXDATE'd), at most 100 overrides per calendar
+  object and 100 per-instance reply stamps per attendee — a (spoofed) attendee could add phantom
+  occurrences to the organizer's calendar and grow `icalData` without limit.
+- Bounces of a job created by a user's redirect rule (which keeps the original, possibly
+  forged, envelope sender) are delivered only to a local original sender, never to an external
+  one (backscatter).
 
 ---
 

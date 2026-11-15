@@ -264,6 +264,17 @@ test('setFlags bumps message modSeq and mailbox HIGHESTMODSEQ (CONDSTORE invaria
   assert.equal(again[0]!.modSeq, 5n);
 });
 
+test('modifyFlags computes from the flags read after the modSeq lock; null leaves a row alone', async () => {
+  byId('a')['flags'] = ['\\Answered']; // e.g. committed by another client after the caller's own read
+  const out = await prisma.$transaction((tx) => store.modifyFlags(
+    tx, ['a', 'b'], (flags, _modSeq, id) => (id === 'b' ? null : [...flags, '\\Flagged']), { mailboxId: 'mb1' },
+  ));
+  assert.deepEqual(out, [{ id: 'a', flags: ['\\Answered', '\\Flagged'], modSeq: 4n }]);
+  assert.deepEqual(byId('a')['flags'], ['\\Answered', '\\Flagged']);
+  assert.equal(byId('b')['modSeq'], 2n, 'unchanged row keeps its modSeq');
+  assert.equal(mailbox()['highestModSeq'], 4n);
+});
+
 test('touchMessages and expunge give changed rows a fresh modSeq', async () => {
   await prisma.$transaction((tx) => store.touchMessages(tx, ['c'], { pinnedAt: new Date(0) }));
   assert.equal(byId('c')['modSeq'], 4n);
