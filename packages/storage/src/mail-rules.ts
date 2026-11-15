@@ -4,7 +4,7 @@ import type { ParsedMessage } from './mime/index.js';
 import { createLogger } from '@coremail/core';
 import { matchRulePattern } from './rule-pattern.js';
 
-export { validateRulePattern, matchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT } from './rule-pattern.js';
+export { validateRulePattern, matchRulePattern, tryMatchRulePattern, MAX_RULE_PATTERN_LENGTH, MAX_RULE_MATCH_INPUT } from './rule-pattern.js';
 
 const log = createLogger('storage:mail-rules');
 

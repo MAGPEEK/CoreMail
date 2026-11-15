@@ -13,7 +13,7 @@ process.env['NODE_ENV'] = 'test';
 const { buildPipelineConfig, DEFAULT_PIPELINE_CONFIG } = await import('./settings.js');
 const { runIpChecks, runContentChecks, runGreylistCheck, decideClamav } = await import('./pipeline/index.js');
 const { checkAttachments, fileExtension } = await import('./attachment/index.js');
-const { matchBlacklistEntry } = await import('./blacklist/index.js');
+const { matchBlacklistEntry, matchWildcard } = await import('./blacklist/index.js');
 const { parseClamdResponse } = await import('./clamav/index.js');
 const { isGreylistExempt } = await import('./greylisting/index.js');
 
@@ -150,6 +150,24 @@ test('blacklist REGEX is not lower-cased (\\D stays \\D) and is case-insensitive
   assert.equal(matchBlacklistEntry({ pattern: 'news?@*', patternType: 'WILDCARD' }, 'news?@x.example')?.matched, true);
   assert.equal(matchBlacklistEntry({ pattern: 'news?@*', patternType: 'WILDCARD' }, 'new@x.example')?.matched, false);
   assert.equal(matchBlacklistEntry({ pattern: 'A@B.C', patternType: 'EXACT' }, 'a@b.c')?.matched, true);
+});
+
+test('v8.1: blacklist REGEX/WILDCARD run in linear time on hostile sender addresses (no ReDoS)', () => {
+  const hostile = `${'a'.repeat(5000)}!@x.example`;
+  const t0 = Date.now();
+  // catastrophic for a backtracking engine
+  assert.equal(matchBlacklistEntry({ pattern: '^(a+)+$', patternType: 'REGEX' }, hostile)?.matched, false);
+  assert.equal(matchBlacklistEntry({ pattern: '*a*a*a*a*a*a*a*a*b', patternType: 'WILDCARD' }, hostile)?.matched, false);
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+  // backreferences / lookarounds are unsupported → skipped (null), never a throw
+  assert.equal(matchBlacklistEntry({ pattern: '(a)\\1', patternType: 'REGEX' }, 'aa@x'), null);
+  assert.equal(matchBlacklistEntry({ pattern: '(?=a)a', patternType: 'REGEX' }, 'a@x'), null);
+  // wildcard semantics unchanged
+  assert.equal(matchWildcard('bulk-42@news.example', 'bulk-*@*.example'), true);
+  assert.equal(matchWildcard('bulk@news.example', 'bulk-*@*.example'), false);
+  assert.equal(matchWildcard('', '*'), true);
+  assert.equal(matchWildcard('abc', 'a*c*'), true);
+  assert.equal(matchWildcard('abcd', 'a*c'), false);
 });
 
 // ── ClamAV ────────────────────────────────────────────────────────────────────

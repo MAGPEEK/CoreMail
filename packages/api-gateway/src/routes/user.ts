@@ -1,7 +1,8 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
-import { prisma, expunge, nextModSeq, validateRulePattern } from '@coremail/storage';
+import { prisma, expunge, nextModSeq } from '@coremail/storage';
+import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
@@ -379,11 +380,8 @@ export function invalidRulePatternMessage(
   lists: Array<Array<{ operator: string; value: unknown }> | undefined>,
 ): string | null {
   for (const list of lists) {
-    for (const cond of list ?? []) {
-      if (cond.operator !== 'regex') continue;
-      const v = validateRulePattern(cond.value);
-      if (!v.ok) return `Invalid regular expression "${String(cond.value).slice(0, 80)}": ${v.error}`;
-    }
+    const msg = invalidRegexConditionMessage(list);
+    if (msg) return msg;
   }
   return null;
 }

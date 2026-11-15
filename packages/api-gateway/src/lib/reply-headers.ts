@@ -70,6 +70,8 @@ export function parseClientReferences(value: unknown): { ok: true; refs: string[
   if (typeof value === 'string') tokens = value.split(/[ \t]+/);
   else if (Array.isArray(value) && value.every((v) => typeof v === 'string')) tokens = value as string[];
   else return { ok: false, error: 'references must be a list of Message-IDs' };
+  // CR/LF/NUL anywhere (even trailing) is refused — never trimmed away
+  if (tokens.some((t) => /[\r\n\0]/.test(t))) return { ok: false, error: 'references: invalid Message-ID' };
   tokens = tokens.map((t) => t.trim()).filter((t) => t.length > 0);
   if (tokens.length === 0) return { ok: true, refs: null };
   if (tokens.length > MAX_CLIENT_REFERENCES) return { ok: false, error: `references: at most ${MAX_CLIENT_REFERENCES} Message-IDs` };
