@@ -117,7 +117,8 @@ export function parseObjectStorageConfig(env: Env = process.env, driver: ObjectS
   // 8.0.1: fail closed — no silent fallback to the well-known minioadmin/minioadmin.
   const accessKey = (env['MINIO_ACCESS_KEY'] ?? '').trim();
   const secretKey = env['MINIO_SECRET_KEY'] ?? '';
-  if (!accessKey || !secretKey.trim()) {
+  // (Test seam: a fake client injected via globalThis.__minioClient needs no credentials.)
+  if ((!accessKey || !secretKey.trim()) && !globalThis.__minioClient) {
     throw new ObjectStorageConfigError(
       `OBJECT_STORAGE=${driver} needs MINIO_ACCESS_KEY and MINIO_SECRET_KEY (no default credentials). `
       + 'Bundled MinIO: MINIO_ACCESS_KEY=$MINIO_ROOT_USER, MINIO_SECRET_KEY=$MINIO_ROOT_PASSWORD (docker-compose.yml sets both).',

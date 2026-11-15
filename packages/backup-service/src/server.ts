@@ -9,7 +9,10 @@ import {
 import { parseLimit, isBackupAdmin } from './http-utils.js';
 import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler, runRetentionLocked } from './scheduler/index.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
-import { listBackups, ensureBackupBucket, streamObject, deleteObject } from './upload/s3.js';
+import { listBackups, ensureBackupBucket, openBackupDownload, deleteObject, backupKeyring } from './upload/s3.js';
+import { BackupDecryptError, BackupKeyConfigError } from './crypto/backup-crypto.js';
+import { prepareImportFile } from './restore/import-file.js';
+import { pipeline } from 'node:stream/promises';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
@@ -250,22 +253,34 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
   const { jobId } = req.params as { jobId: string };
   const job = await prisma.backupJob.findUnique({ where: { id: jobId } });
   if (!job?.downloadUrl) { res.status(404).json({ error: 'Backup nicht gefunden' }); return; }
-  try {
-    const { stream, contentLength, contentType } = await streamObject(job.downloadUrl);
-    const filename = job.downloadUrl.split('/').pop() ?? `backup-${jobId}.bin`;
-    res.setHeader('Content-Type', contentType ?? (job.format === 'mbox' ? 'application/mbox' : 'application/zip'));
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (contentLength) res.setHeader('Content-Length', String(contentLength));
-    stream.pipe(res);
-    stream.on('error', (err) => {
-      log.error({ err, jobId }, 'Stream error during download');
-      if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
-    });
-  } catch (err) {
-    log.error({ err, jobId }, 'Download failed');
-    res.status(500).json({ error: 'Download failed', detail: err instanceof Error ? err.message : String(err) });
-  }
+  await sendBackup(res, job.downloadUrl, { jobId });
 });
+
+/**
+ * Streams a stored backup to the client. 8.0.1: encrypted backups (`.enc`)
+ * are decrypted on the fly; a wrong key / foreign file is answered with 500
+ * before any byte is sent, a corrupted frame later aborts the connection (the
+ * client never receives an apparently complete file).
+ */
+async function sendBackup(res: express.Response, key: string, ctx: Record<string, string>): Promise<void> {
+  let dl: Awaited<ReturnType<typeof openBackupDownload>>;
+  try {
+    dl = await openBackupDownload(key);
+  } catch (err) {
+    log.error({ err, ...ctx }, 'Download failed');
+    const detail = err instanceof BackupDecryptError || err instanceof BackupKeyConfigError ? err.message : undefined;
+    res.status(500).json({ error: 'Download failed', ...(detail ? { detail } : {}) });
+    return;
+  }
+  res.setHeader('Content-Type', dl.contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${dl.filename}"`);
+  if (dl.contentLength) res.setHeader('Content-Length', String(dl.contentLength));
+  pipeline(dl.stream, res).catch((err: unknown) => {
+    log.error({ err, ...ctx }, 'Stream error during download');
+    if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
+    else res.destroy();
+  });
+}
 
 // v3.18.29 — backup archive download (by S3 key, not job ID — for the archive tab
 // where objects without a DB reference are shown, e.g. old backups from before
@@ -273,21 +288,7 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
 app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
-  try {
-    const { stream, contentLength, contentType } = await streamObject(key);
-    const filename = key.split('/').pop() ?? 'backup.bin';
-    res.setHeader('Content-Type', contentType ?? 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (contentLength) res.setHeader('Content-Length', String(contentLength));
-    stream.pipe(res);
-    stream.on('error', (err) => {
-      log.error({ err, key }, 'Archive stream error');
-      if (!res.headersSent) res.status(500).json({ error: 'Download failed' });
-    });
-  } catch (err) {
-    log.error({ err, key }, 'Archive download failed');
-    res.status(500).json({ error: 'Download failed', detail: err instanceof Error ? err.message : String(err) });
-  }
+  await sendBackup(res, key, { key });
 });
 
 // v3.18.29 — delete a backup archive (S3 object). Additionally looks for
@@ -372,29 +373,39 @@ app.post('/internal/retention/run', requireInternal(), async (_req, res) => {
 });
 
 // POST /backup/admin/import/:userId — import MBOX for a specific user (admin)
-app.post('/backup/admin/import/:userId', requireAdmin, express.text({ type: 'application/mbox', limit: '500mb' }), async (req, res) => {
+// 8.0.1: the body is read as raw bytes (application/mbox or application/octet-stream)
+// and may be a legacy plaintext MBOX or an encrypted CoreMail backup (.mbox.enc,
+// decrypted + authenticated before anything is imported). The target folder is
+// given as ?folderId= (the old text body could never carry it).
+app.post('/backup/admin/import/:userId', requireAdmin, express.raw({ type: ['application/mbox', 'application/octet-stream'], limit: '500mb' }), async (req, res) => {
   const { userId } = req.params as { userId: string };
-  const { folderId } = req.body as { folderId?: string };
+  const folderId = typeof req.query['folderId'] === 'string' ? req.query['folderId'] : '';
 
-  if (!folderId || typeof req.body !== 'string') {
-    res.status(400).json({ error: 'folderId and MBOX body required' });
+  if (!folderId || !Buffer.isBuffer(req.body) || req.body.length === 0) {
+    res.status(400).json({ error: 'folderId (query) and MBOX body required' });
     return;
   }
 
-  const { writeFile, mkdtemp } = await import('node:fs/promises');
+  const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const { unlink } = await import('node:fs/promises');
 
   const tmpDir = await mkdtemp(join(tmpdir(), 'coremail-import-'));
-  const mboxPath = join(tmpDir, 'import.mbox');
-  await writeFile(mboxPath, req.body as unknown as string);
-
   try {
-    const result = await importMbox(userId, folderId, mboxPath);
-    res.json(result);
+    let prepared: Awaited<ReturnType<typeof prepareImportFile>>;
+    try {
+      prepared = await prepareImportFile(req.body, tmpDir, backupKeyring);
+    } catch (err) {
+      if (err instanceof BackupDecryptError || err instanceof BackupKeyConfigError) {
+        res.status(422).json({ error: 'Encrypted backup could not be decrypted', detail: err.message });
+        return;
+      }
+      throw err;
+    }
+    const result = await importMbox(userId, folderId, prepared.path);
+    res.json({ ...result, encrypted: prepared.encrypted });
   } finally {
-    await unlink(mboxPath).catch(() => undefined);
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
 });
 
@@ -410,6 +421,16 @@ async function start() {
   // v3.18.26 bugfix: create the backup bucket idempotently — otherwise
   // listBackups() crashes with NoSuchBucket on every first start.
   await ensureBackupBucket();
+
+  // 8.0.1: backups are encrypted — report the key situation at start (warning
+  // for the derived fallback key; an invalid BACKUP_ENCRYPTION_KEY makes every
+  // backup run fail instead of silently writing plaintext).
+  try {
+    const kr = backupKeyring();
+    log.info({ keySource: kr.current.source, keyId: kr.current.id.toString('hex') }, 'Backup encryption enabled (AES-256-GCM)');
+  } catch (err) {
+    log.error({ err }, 'Backup encryption key invalid — backups will fail until BACKUP_ENCRYPTION_KEY is fixed');
+  }
 
   // v3.18.34: orphan cleanup. If the container is restarted during a backup,
   // the master job stays stuck in the DB with status RUNNING/PENDING/RETRYING/
