@@ -18,6 +18,11 @@ export interface SelectedMailbox {
   known: Map<number, bigint>;
   /** SEARCHRES (RFC 5182): UIDs saved by SEARCH RETURN (SAVE), referenced as "$". */
   searchRes: number[];
+  /**
+   * Mailbox highestModSeq + message count of the folder at the last full
+   * comparison (session/view.ts syncView); unchanged → nothing to report.
+   */
+  syncStamp?: string | undefined;
 }
 
 export interface ImapSession {

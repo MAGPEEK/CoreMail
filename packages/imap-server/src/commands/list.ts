@@ -9,7 +9,7 @@
 import { prisma } from '@coremail/storage';
 import { tokenString, type Token } from '../server/tokenizer.js';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
-import { fromClient, toClient } from './mailbox-name.js';
+import { displayNames, formatName, fromClient, resolveStoredName, toClient } from './mailbox-name.js';
 
 const DELIMITER = '.';
 
@@ -30,20 +30,63 @@ export function specialUseFlag(name: string): string | null {
   return null;
 }
 
+/** Longest accepted LIST/LSUB pattern (reference + pattern, in characters). */
+export const MAX_PATTERN_LENGTH = 1024;
+/** Most patterns in one LIST-EXTENDED pattern list. */
+export const MAX_PATTERNS = 32;
+
+/**
+ * Wildcard match in O(name × pattern) time and O(name) space (RFC 9051 §6.3.9):
+ * "*" matches any run of characters, "%" any run without the hierarchy
+ * delimiter. A dynamic programme over the name instead of a regular expression,
+ * so no input can make it backtrack exponentially (e.g. "*a*a*a…X" against
+ * "aaaa…" — a service-wide DoS with the former regex translation).
+ */
+export function wildcardMatch(pattern: string, name: string, foldCase = false): boolean {
+  const p = foldCase ? pattern.toLowerCase() : pattern;
+  const n = foldCase ? name.toLowerCase() : name;
+  // reach[j] = 1: the pattern prefix processed so far matches the first j characters of the name.
+  let reach = new Uint8Array(n.length + 1);
+  let next = new Uint8Array(n.length + 1);
+  reach[0] = 1;
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i] as string;
+    next.fill(0);
+    let alive = 0;
+    if (c === '*') {
+      let run = 0;
+      for (let j = 0; j <= n.length; j++) { run |= reach[j] as number; next[j] = run; alive |= run; }
+    } else if (c === '%') {
+      let run = 0;
+      for (let j = 0; j <= n.length; j++) {
+        if (j > 0 && n[j - 1] === DELIMITER) run = 0;
+        run |= reach[j] as number;
+        next[j] = run;
+        alive |= run;
+      }
+    } else {
+      for (let j = 1; j <= n.length; j++) {
+        const v = reach[j - 1] === 1 && n[j - 1] === c ? 1 : 0;
+        next[j] = v;
+        alive |= v;
+      }
+    }
+    [reach, next] = [next, reach];
+    if (!alive) return false;
+  }
+  return reach[n.length] === 1;
+}
+
 /**
  * Mailbox pattern (RFC 9051 §6.3.9): "*" matches everything, "%" everything
  * except the hierarchy delimiter. Names are case-sensitive except INBOX.
  */
 export function patternMatcher(pattern: string): (name: string) => boolean {
-  const source = pattern
-    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/%/g, '[^.]*');
-  const exact = new RegExp(`^${source}$`, 's');
-  const insensitive = new RegExp(`^${source}$`, 'is');
+  // A run of wildcards is one wildcard: "*" when it contains a "*", else "%".
+  const p = pattern.replace(/[*%]{2,}/g, (run) => (run.includes('*') ? '*' : '%'));
   // Patterns that spell out INBOX were already canonicalised (fromClient);
   // INBOX itself also matches wildcard patterns in any letter case ("in*").
-  return (name: string): boolean => exact.test(name) || (name === 'INBOX' && insensitive.test(name));
+  return (name: string): boolean => wildcardMatch(p, name) || (name === 'INBOX' && wildcardMatch(p, name, true));
 }
 
 interface FolderRow { id: string; name: string }
@@ -108,6 +151,10 @@ export async function handleList(session: ImapSession, tag: string, tokens: Toke
   } else {
     patterns = [tokenString(patternToken) as string];
   }
+  if (patterns.length > MAX_PATTERNS || patterns.some((p) => reference.length + p.length > MAX_PATTERN_LENGTH)) {
+    sendBad(session, tag, 'LIST pattern too long');
+    return;
+  }
   const rest = tokens.slice(i + 2);
   if (rest.length > 0) {
     if (rest[0]?.type !== 'atom' || rest[0].value.toUpperCase() !== 'RETURN' || rest[1]?.type !== 'list' || rest.length !== 2) {
@@ -155,7 +202,10 @@ export async function handleList(session: ImapSession, tag: string, tokens: Toke
 async function listFolders(session: ImapSession, folders: FolderRow[], patterns: string[], opts: ListOptions): Promise<void> {
   const matchers = patterns.map(patternMatcher);
   const matches = (name: string): boolean => matchers.some((m) => m(name));
-  const existing = new Map(folders.map((f) => [f.name, f]));
+  // Matching, hierarchy and output work on display names (legacy modified
+  // UTF-7 rows decoded, see mailbox-name.ts); the stored rows stay untouched.
+  const display = displayNames(folders.map((f) => f.name));
+  const existing = new Map(folders.map((f) => [display.get(f.name) ?? f.name, f]));
   const names = new Set(existing.keys());
   // Parents of hierarchical names that do not exist themselves.
   for (const name of existing.keys()) {
@@ -193,9 +243,9 @@ async function listFolders(session: ImapSession, folders: FolderRow[], patterns:
     attrs.push(children.length > 0 || !folder ? '\\HasChildren' : '\\HasNoChildren');
     if (folder && special) attrs.push(special);
     const extra = childInfo && opts.subscribedOnly ? ' ("CHILDINFO" ("SUBSCRIBED"))' : '';
-    sendUntagged(session, `LIST (${attrs.join(' ')}) "${DELIMITER}" ${toClient(session, name)}${extra}`);
+    sendUntagged(session, `LIST (${attrs.join(' ')}) "${DELIMITER}" ${formatName(session, name)}${extra}`);
     if (folder && opts.returnStatus) {
-      const status = await statusLine(session, folder.id, opts.returnStatus);
+      const status = await statusLine(session, folder.id, opts.returnStatus, name);
       if (status) sendUntagged(session, status);
     }
   }
@@ -215,20 +265,23 @@ export async function handleLsub(session: ImapSession, tag: string, tokens: Toke
     select: { id: true, name: true },
     orderBy: { name: 'asc' },
   });
+  if (reference.length + pattern.length > MAX_PATTERN_LENGTH) { sendBad(session, tag, 'LSUB pattern too long'); return; }
   const matches = patternMatcher(fromClient(session, reference + pattern));
+  const display = displayNames(folders.map((f) => f.name));
   for (const folder of folders) {
-    if (!matches(folder.name)) continue;
+    const name = display.get(folder.name) ?? folder.name;
+    if (!matches(name)) continue;
     // SPECIAL-USE attributes in LSUB as well — Mac Mail validates them.
     const flags: string[] = ['\\HasNoChildren'];
-    const special = specialUseFlag(folder.name);
+    const special = specialUseFlag(name);
     if (special) flags.push(special);
-    sendUntagged(session, `LSUB (${flags.join(' ')}) "${DELIMITER}" ${toClient(session, folder.name)}`);
+    sendUntagged(session, `LSUB (${flags.join(' ')}) "${DELIMITER}" ${formatName(session, name)}`);
   }
   sendOk(session, tag, 'LSUB completed');
 }
 
 /** Untagged STATUS line for a folder (null when the folder vanished). */
-async function statusLine(session: ImapSession, folderId: string, items: string[]): Promise<string | null> {
+async function statusLine(session: ImapSession, folderId: string, items: string[], shownName?: string): Promise<string | null> {
   const folder = await prisma.folder.findFirst({ where: { id: folderId }, include: { mailbox: true } });
   if (!folder) return null;
   const base = { folderId: folder.id, deletedAt: null };
@@ -260,7 +313,8 @@ async function statusLine(session: ImapSession, folderId: string, items: string[
       case 'SIZE':           parts.push(`SIZE ${size}`); break;
     }
   }
-  return `STATUS ${toClient(session, folder.name)} (${parts.join(' ')})`;
+  const name = shownName !== undefined ? formatName(session, shownName) : toClient(session, folder.name);
+  return `STATUS ${name} (${parts.join(' ')})`;
 }
 
 /**
@@ -282,13 +336,14 @@ export async function runStatus(session: ImapSession, tag: string, args: string[
     return false;
   }
   const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: fromClient(session, args[0]) },
+    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, args[0]) },
     select: { id: true },
   });
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return false; }
   // RFC 7162 §3.1: STATUS HIGHESTMODSEQ is a CONDSTORE-enabling command.
   if (items.includes('HIGHESTMODSEQ')) session.condstoreEnabled = true;
-  const line = await statusLine(session, folder.id, items);
+  // The response names the mailbox the way the client asked for it.
+  const line = await statusLine(session, folder.id, items, fromClient(session, args[0]));
   if (!line) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return false; }
   sendUntagged(session, line);
   return true;
@@ -315,7 +370,7 @@ async function quotaLine(session: ImapSession): Promise<string> {
 
 export async function handleGetQuotaRoot(session: ImapSession, tag: string, args: string[]): Promise<void> {
   if (args.length !== 1 || !session.mailboxId) { sendBad(session, tag, 'GETQUOTAROOT requires a mailbox'); return; }
-  const name = fromClient(session, args[0] as string);
+  const name = await resolveStoredName(session, args[0] as string);
   const folder = await prisma.folder.findFirst({ where: { mailboxId: session.mailboxId, name }, select: { id: true } });
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   sendUntagged(session, `QUOTAROOT ${toClient(session, name)} ""`);

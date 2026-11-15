@@ -45,7 +45,10 @@ const prismaFake = {
       return { count: r ? 1 : 0 };
     },
     aggregate: async () => ({ _max: { modSeq: 1n, uid: 1 } }),
+    count: async () => rows.length,
   },
+  // view sync stamp (session/view.ts syncStampOf)
+  folder: { findFirst: async () => ({ mailbox: { highestModSeq: 50n } }) },
   mailbox: {
     update: async () => ({ uidNext: 10, highestModSeq: 50n }),
     updateMany: async () => ({ count: 0 }),

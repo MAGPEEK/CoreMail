@@ -35,10 +35,13 @@ import {
   parseVEventComponent,
   resolveTzid,
   serializeComponent,
+  toIsoDate,
   utcToWallClockMs,
   type IcalComponent,
   type IcalDateValue,
+  type ParsedVEvent,
 } from '@coremail/core/calendar';
+import { expandOccurrences } from '@coremail/core/recurrence';
 import { prisma } from './prisma/index.js';
 
 export interface ParsedReply {
@@ -177,6 +180,28 @@ function setPartstat(comp: IcalComponent, email: string, partstat: string): bool
   return true;
 }
 
+/** Most override (RECURRENCE-ID) components a REPLY may create in one calendar object. */
+export const MAX_REPLY_OVERRIDES = 100;
+/** Most per-instance DTSTAMP entries kept per attendee (`replyStamps`). */
+export const MAX_REPLY_STAMPS = 100;
+
+/**
+ * Pure: is `recurrenceId` an instance of the series? RDATE, or an RRULE
+ * occurrence (expansion limited to a 2 ms window around the instance, so it is
+ * bounded whatever the rule says); EXDATE'd instances are not.
+ */
+export function isSeriesInstance(master: ParsedVEvent, recurrenceId: IcalDateValue): boolean {
+  const t = recurrenceId.date.getTime();
+  if (Number.isNaN(t)) return false;
+  const same = (d: Date): boolean => (master.allDay ? toIsoDate(d) === toIsoDate(recurrenceId.date) : d.getTime() === t);
+  if (master.rdates.some((r) => same(r.date))) return true;
+  if (!master.rrule) return same(master.start);
+  return expandOccurrences(
+    { start: master.start, end: master.end, allDay: master.allDay, tzid: master.tzid, rrule: master.rrule, exdates: master.exdates },
+    new Date(t - 1), new Date(t + 1), { max: 10 },
+  ).some((o) => same(o.start));
+}
+
 /**
  * Pure: write `partstat` for `email` into a stored calendar object — into the master
  * VEVENT, or (with `recurrenceId`) into that instance's override component, which is
@@ -199,6 +224,11 @@ export function applyReplyToIcal(icalText: string, email: string, partstat: stri
   });
   if (existing) return setPartstat(existing, target, partstat) ? serializeComponent(root) + '\r\n' : null;
   if (root.name !== 'VCALENDAR') return null;
+  // A new override only for a real instance of the series (bounded expansion),
+  // and not more than MAX_REPLY_OVERRIDES of them: otherwise any (spoofed)
+  // attendee could add phantom occurrences and grow icalData without limit.
+  if (!isSeriesInstance(parsedMaster, recurrenceId)) return null;
+  if (events.length - 1 >= MAX_REPLY_OVERRIDES) return null;
 
   // New override: copy of the master at the instance time, without recurrence rules
   const override = cloneComponent(master);
@@ -279,6 +309,8 @@ export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): P
   const stampKey = ridKey ?? 'master';
   const last = stamps[stampKey];
   if (reply.dtstamp && typeof last === 'string' && reply.dtstamp.getTime() < Date.parse(last)) return false;
+  // Bounded bookkeeping: no new instance stamps beyond the cap.
+  if (ridKey && last === undefined && Object.keys(stamps).length >= MAX_REPLY_STAMPS) return false;
   const newStamps: Record<string, string> = reply.dtstamp ? { ...stamps, [stampKey]: reply.dtstamp.toISOString() } : stamps;
 
   attendees[index] = ridKey

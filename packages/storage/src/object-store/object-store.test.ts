@@ -522,3 +522,21 @@ describe('migration', () => {
     assert.equal((await collect(target.list(''))).length, 5);
   });
 });
+
+// v8.0 review: putStream ignored short writes (put() already looped on bytesWritten).
+test('writeFully loops on short writes and fails on a write without progress', async () => {
+  const { writeFully } = await import('./filesystem.js');
+  const out: Buffer[] = [];
+  const shortWriter = {
+    write: async (buf: Buffer, off: number, len: number) => {
+      const n = Math.min(3, len);
+      out.push(Buffer.from(buf.subarray(off, off + n)));
+      return { bytesWritten: n, buffer: buf };
+    },
+  };
+  const data = Buffer.from('0123456789abcdef');
+  await writeFully(shortWriter as never, data);
+  assert.deepEqual(Buffer.concat(out), data);
+  const stuck = { write: async (buf: Buffer) => ({ bytesWritten: 0, buffer: buf }) };
+  await assert.rejects(writeFully(stuck as never, data), /short write/);
+});

@@ -1,7 +1,8 @@
-import { randomUUID } from 'crypto';
-import { createLogger } from '@coremail/core';
-import { enqueueOutbound } from '../outbound/queue.js';
-import { formatRfc5322Date } from './trace.js';
+import { createHash, randomUUID } from 'crypto';
+import { createLogger, getRedisClient } from '@coremail/core';
+import { enqueueOutbound, type OutboundJob } from '../outbound/queue.js';
+import { PARTIAL_DELIVERY_TTL_SEC } from './delivery.js';
+import { formatRfc5322Date, headerBounds } from './trace.js';
 
 const log = createLogger('smtp:rule-forward');
 
@@ -13,8 +14,8 @@ const LOOP_HEADER = 'X-CoreMail-RuleForwarded';
  * no further forward action.
  */
 export function isRuleForwardedAlready(rawBuffer: Buffer): boolean {
-  const headerEnd = rawBuffer.indexOf('\r\n\r\n');
-  const slice = headerEnd > 0 ? rawBuffer.subarray(0, headerEnd) : rawBuffer.subarray(0, Math.min(rawBuffer.length, 16384));
+  const { end } = headerBounds(rawBuffer);
+  const slice = rawBuffer.subarray(0, Math.min(end, 256 * 1024));
   return slice.toString('utf8').toLowerCase().includes(LOOP_HEADER.toLowerCase() + ':');
 }
 
@@ -34,7 +35,24 @@ export interface RuleForwardOpts {
   mode:           'forward' | 'redirect';
   /** Envelope reverse-path of the original mail ('' = null sender). */
   originalFrom:   string;
+  /** SMTP transaction key (handlers/delivery.ts deliveryKey) — dedups retries. */
+  dedupKey?:      string | undefined;
+  /** Local recipient whose rule fired (part of the dedup key). */
+  recipient?:     string | undefined;
 }
+
+export interface RuleForwardDeps {
+  /** Claims `key` for the retry window; false when it was claimed before. */
+  claim(key: string): Promise<boolean>;
+  release(key: string): Promise<void>;
+  enqueue(job: OutboundJob): Promise<unknown>;
+}
+
+const defaultRuleForwardDeps: RuleForwardDeps = {
+  claim: async (key) => (await getRedisClient().set(key, '1', 'EX', PARTIAL_DELIVERY_TTL_SEC, 'NX')) === 'OK',
+  release: async (key) => { await getRedisClient().del(key); },
+  enqueue: (job) => enqueueOutbound(job),
+};
 
 /** Pure: envelope sender and header fields of a rule forward/redirect. */
 export function buildRuleForward(opts: RuleForwardOpts, now = new Date()): { envelopeFrom: string; raw: Buffer } {
@@ -64,7 +82,7 @@ export function buildRuleForward(opts: RuleForwardOpts, now = new Date()): { env
  * In both cases the loop-protection header is set. Throws when the job cannot
  * be enqueued (the caller defers the SMTP transaction).
  */
-export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
+export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwardDeps = defaultRuleForwardDeps): Promise<void> {
   if (isRuleForwardedAlready(opts.rawBuffer)) {
     log.warn(
       { userId: opts.forwardingUser.id, to: opts.toAddress },
@@ -73,15 +91,40 @@ export async function enqueueRuleForward(opts: RuleForwardOpts): Promise<void> {
     return;
   }
 
+  // The forward is queued before the local copy is committed; when the store
+  // then fails, the sender retries the whole transaction. The claim (keyed by
+  // the SMTP transaction, recipient and target) makes that retry skip it.
+  const claimKey = opts.dedupKey
+    ? `smtp:rulefwd:${createHash('sha256').update(`${opts.dedupKey}\0${opts.recipient ?? ''}\0${opts.mode}\0${opts.toAddress.toLowerCase()}`).digest('hex')}`
+    : null;
+  if (claimKey) {
+    let claimed = true;
+    try {
+      claimed = await deps.claim(claimKey);
+    } catch (err) {
+      log.warn({ err }, 'Rule forward dedup store not reachable — forwarding without dedup');
+    }
+    if (!claimed) {
+      log.info({ userId: opts.forwardingUser.id, to: opts.toAddress }, 'Rule forward already queued by an earlier attempt — skipping');
+      return;
+    }
+  }
+
   const { envelopeFrom, raw } = buildRuleForward(opts);
 
-  await enqueueOutbound({
-    messageId:  randomUUID(),
-    from:       envelopeFrom,
-    to:         [opts.toAddress],
-    rawMessage: raw.toString('base64'),
-    senderUserId: opts.forwardingUser.id,
-  });
+  try {
+    await deps.enqueue({
+      messageId:  randomUUID(),
+      from:       envelopeFrom,
+      to:         [opts.toAddress],
+      rawMessage: raw.toString('base64'),
+      senderUserId: opts.forwardingUser.id,
+      ...(opts.mode === 'redirect' ? { ruleRedirect: true } : {}),
+    });
+  } catch (err) {
+    if (claimKey) await deps.release(claimKey).catch(() => undefined);
+    throw err;
+  }
 
   log.info(
     { userId: opts.forwardingUser.id, to: opts.toAddress, mode: opts.mode },

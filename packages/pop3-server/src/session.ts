@@ -389,22 +389,19 @@ export class POP3Session {
     const inbox = mailbox?.folders[0] as { id?: string; messages: MailDropRow[] } | undefined;
     this.mailboxId = mailbox?.id ?? null;
     this.inboxFolderId = inbox?.id ?? null;
-    const drop: MailDrop[] = [];
-    for (const m of inbox?.messages ?? []) {
-      let rawSize = m.rawSize;
-      // RFC 1939 §5/§11: LIST/STAT report the exact size RETR sends. A legacy row
-      // (no raw object yet) is materialized now — once, the raw store persists it —
-      // instead of reporting a size computed from the body column.
-      if (m.storagePath === null) {
-        try {
-          rawSize = (await this.loadRaw(m.id))?.length ?? rawSize;
-        } catch (err) {
-          log.warn({ err, messageId: m.id }, 'POP3: could not materialize a legacy message, size may be inexact');
-        }
-      }
-      drop.push({ id: m.id, uid: m.uid, rawSize, deleted: false });
-    }
-    this.maildrop = drop;
+    const rows = inbox?.messages ?? [];
+    // RFC 1939 §5/§11: LIST/STAT report the exact size RETR sends. Legacy rows
+    // (no raw object yet) are materialized — once, the raw store persists them —
+    // instead of reporting a size computed from the body column. Bounded per
+    // login (count, time, parallelism): the first login after an upgrade of a
+    // big old inbox must not time out. The rest keeps the stored size until
+    // its RETR/TOP (which corrects it) or a later login.
+    const sizes = await materializeBounded(
+      rows.filter((m) => m.storagePath === null).map((m) => m.id),
+      async (id) => (await this.loadRaw(id))?.length ?? null,
+      legacyMaterializeLimits,
+    );
+    this.maildrop = rows.map((m) => ({ id: m.id, uid: m.uid, rawSize: sizes.get(m.id) ?? m.rawSize, deleted: false }));
   }
 
   /**
@@ -534,6 +531,50 @@ export class POP3Session {
 }
 
 /** 0-based maildrop index of a message-number argument (-1 when not a positive number). */
+export interface MaterializeLimits {
+  /** Most legacy messages materialized per login. */
+  max: number;
+  /** Time budget per login (ms); started work finishes, no new work starts after it. */
+  budgetMs: number;
+  /** Parallel loads. */
+  concurrency: number;
+}
+
+/** Per-login limits for legacy materialization (tests lower them). */
+export const legacyMaterializeLimits: MaterializeLimits = { max: 200, budgetMs: 5_000, concurrency: 4 };
+
+/**
+ * Runs `load` for up to `max` ids, `concurrency` at a time, starting no new
+ * load after `budgetMs`. Returns the sizes that were determined; failures are
+ * logged and skipped (the caller keeps the stored size).
+ */
+export async function materializeBounded(
+  ids: string[],
+  load: (id: string) => Promise<number | null>,
+  limits: MaterializeLimits,
+  now: () => number = Date.now,
+): Promise<Map<string, number>> {
+  const sizes = new Map<string, number>();
+  const queue = ids.slice(0, Math.max(0, limits.max));
+  const deadline = now() + limits.budgetMs;
+  const worker = async (): Promise<void> => {
+    for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+      if (now() > deadline) return;
+      try {
+        const size = await load(id);
+        if (size !== null) sizes.set(id, size);
+      } catch (err) {
+        log.warn({ err, messageId: id }, 'POP3: could not materialize a legacy message, size may be inexact');
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, limits.concurrency) }, worker));
+  if (sizes.size < ids.length) {
+    log.info({ legacy: ids.length, materialized: sizes.size }, 'POP3: legacy messages left for later (bounded per login)');
+  }
+  return sizes;
+}
+
 function msgIndex(arg: string | undefined): number {
   return /^[1-9]\d{0,8}$/.test(arg ?? '') ? Number(arg) - 1 : -1;
 }

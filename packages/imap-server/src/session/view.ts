@@ -30,6 +30,20 @@ export async function loadViewRows(folderId: string): Promise<ViewRow[]> {
   });
 }
 
+/**
+ * Change stamp of a folder: its mailbox's highestModSeq (bumped by every
+ * message-store write) and the folder's live message count (hard deletes).
+ * null when the folder is gone (the full comparison then reports it).
+ */
+export async function syncStampOf(folderId: string): Promise<string | null> {
+  const [folder, count] = await Promise.all([
+    prisma.folder.findFirst({ where: { id: folderId }, select: { mailbox: { select: { highestModSeq: true } } } }),
+    prisma.message.count({ where: { folderId, deletedAt: null } }),
+  ]);
+  if (!folder?.mailbox) return null;
+  return `${folder.mailbox.highestModSeq}:${count}`;
+}
+
 /** Builds the view of a freshly selected mailbox. */
 export function createView(
   folder: { id: string; name: string; uidValidity: number },
@@ -145,14 +159,23 @@ export interface SyncOptions {
 export async function syncView(session: ImapSession, opts: SyncOptions): Promise<void> {
   const view = session.selected;
   if (!view) return;
+  // Cheap check first (IDLE polls every 30 s, every command ends with a sync):
+  // every message change goes through the message store and bumps the
+  // mailbox's highestModSeq; hard deletes change the count. Only when one of
+  // them moved are all rows of the folder read and compared. The stamp is read
+  // BEFORE the rows, so a change racing with the comparison triggers the next one.
+  const stamp = await syncStampOf(view.folderId);
+  if (stamp !== null && stamp === view.syncStamp) return;
   const rows = await loadViewRows(view.folderId);
   // The mailbox may have been closed while the query ran (IDLE push vs. logout).
   if (session.selected !== view || session.state === 'LOGOUT') return;
 
   const present = new Map(rows.map((r) => [r.uid, r]));
-  if (opts.expunge) {
-    reportExpunged(session, view, new Set(view.uids.filter((uid) => !present.has(uid))));
-  }
+  const gone = new Set(view.uids.filter((uid) => !present.has(uid)));
+  if (opts.expunge) reportExpunged(session, view, gone);
+  // Withheld EXPUNGEs (FETCH/STORE/SEARCH) keep the stamp stale, so the next
+  // sync that may send them compares again.
+  view.syncStamp = opts.expunge || gone.size === 0 ? (stamp ?? undefined) : undefined;
 
   for (const [i, uid] of view.uids.entries()) {
     const row = present.get(uid);

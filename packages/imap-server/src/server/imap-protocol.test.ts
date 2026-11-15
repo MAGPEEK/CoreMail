@@ -65,6 +65,10 @@ interface FakeDb {
   /** Simulates delivery of a new message by the SMTP server. */
   deliver(folderId: string, overrides?: Partial<FakeMessage>): FakeMessage;
   byUid(uid: number): FakeMessage;
+  /** Number of message.findMany calls (full folder reads). */
+  messageReads: number;
+  /** Runs at the start of every transaction (simulates a concurrent writer). */
+  beforeTransaction?: (() => void) | undefined;
 }
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -156,6 +160,7 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     deliver(folderId, overrides = {}) {
       const msg = baseMessage(mailbox.uidNext++, folderId, overrides);
       db.messages.push(msg);
+      mailbox.highestModSeq++; // the message store bumps the mailbox counter on every write
       return msg;
     },
     byUid(uid) {
@@ -163,6 +168,7 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
       if (!found) throw new Error(`fixture: no message with UID ${uid}`);
       return found;
     },
+    messageReads: 0,
   };
 
   const users = [{
@@ -184,7 +190,7 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
       update: async () => ({}),
     },
     // Interactive transaction: the message-store primitives run against this same fake.
-    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(prisma),
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => { db.beforeTransaction?.(); return fn(prisma); },
     mailbox: {
       update: async ({ data }: { data: Row }) => { await tick(); applyData(asRow(mailbox), data); return { ...mailbox }; },
       updateMany: async ({ where, data }: { where: Row; data: Row }) => {
@@ -220,6 +226,7 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     },
     message: {
       findMany: async ({ where, orderBy }: { where: Row; orderBy?: { uid?: 'asc' | 'desc' } }) => {
+        db.messageReads++;
         await tick();
         return sortByUid(db.messages.filter((m) => matches(asRow(m), where)), orderBy).map((m) => ({ ...m, flags: [...m.flags] }));
       },
@@ -1291,6 +1298,22 @@ describe('STORE and UID STORE (RFC 9051 §6.4.6)', () => {
     assert.deepEqual(db.byUid(2).flags, ['\\Seen']);
   });
 
+  // v8.0 review: STORE computed the new list from flags read outside the transaction.
+  test('+FLAGS keeps a flag another client stored concurrently (no lost update)', async (t) => {
+    const { client, db } = await select(t, 'Work');
+    // Another client's "+FLAGS (\Answered)" commits between our read and our write.
+    db.beforeTransaction = () => {
+      db.beforeTransaction = undefined;
+      db.byUid(2).flags.push('\\Answered');
+      db.byUid(2).modSeq = 11n; db.mailbox.highestModSeq = 11n;
+    };
+
+    const response = await client.cmd('STORE 2 +FLAGS (\\Flagged)');
+
+    assert.deepEqual(db.byUid(2).flags, ['\\Answered', '\\Flagged']);
+    assert.equal(untagged(response, /^\* 2 FETCH \(FLAGS \(\\Answered \\Flagged\)\)$/).length, 1, JSON.stringify(response.lines));
+  });
+
   test('-FLAGS removes a flag', async (t) => {
     const { client, db } = await select(t, 'Work');
 
@@ -1623,6 +1646,40 @@ describe('IDLE and mailbox updates (RFC 9051 §6.3.13, §7.4.1)', () => {
 
     assert.ok(response.lines.includes('* 4 EXISTS'), JSON.stringify(response.lines));
   });
+
+  // v8.0 review: IDLE polls and every command end used to read all rows of the folder.
+  test('an unchanged mailbox is not re-read on IDLE polls and NOOP', async (t) => {
+    setIdlePollInterval(20);
+    t.after(() => setIdlePollInterval(30_000));
+    const { client, db } = await select(t);
+    await client.cmd('NOOP'); // first comparison records the stamp
+    const before = db.messageReads;
+
+    client.write('I1 IDLE\r\n');
+    await client.readLine();
+    await new Promise((resolve) => setTimeout(resolve, 150)); // several poll rounds
+    client.write('DONE\r\n');
+    await client.completion('I1');
+    await client.cmd('NOOP');
+    const unchangedReads = db.messageReads - before;
+
+    db.deliver('f-inbox');
+    const after = await client.cmd('NOOP');
+
+    assert.equal(unchangedReads, 0, 'no full folder read while nothing changed');
+    assert.ok(after.lines.includes('* 4 EXISTS'), JSON.stringify(after.lines));
+  });
+
+  test('withheld EXPUNGEs (FETCH) are still sent by the next NOOP', async (t) => {
+    const { client, db } = await select(t);
+    expungeElsewhere(db, 9);
+
+    const fetch = await client.cmd('FETCH 1 (UID)');
+    const noop = await client.cmd('NOOP');
+
+    assert.ok(!fetch.lines.some((l) => l.endsWith('EXPUNGE')), JSON.stringify(fetch.lines));
+    assert.ok(noop.lines.includes('* 2 EXPUNGE'), JSON.stringify(noop.lines));
+  });
 });
 
 // ─── UID routing and input limits (added with the UID routing fix) ──────────
@@ -1754,7 +1811,7 @@ describe('per-session sequence map and unsolicited updates (RFC 9051 §2.3.1.2, 
   test('a flag change by another client is reported with an unsolicited FETCH including UID', async (t) => {
     const { client, db } = await select(t);
     db.byUid(9).flags.push('\\Flagged');
-    db.byUid(9).modSeq = 11n;
+    db.byUid(9).modSeq = 11n; db.mailbox.highestModSeq = 11n;
 
     const response = await client.cmd('NOOP');
 
@@ -1825,7 +1882,7 @@ describe('EXAMINE is read-only (RFC 9051 §6.3.3, RFC 6851 §3.3)', () => {
 describe('CONDSTORE (RFC 7162)', () => {
   test('STORE UNCHANGEDSINCE stores where possible and reports the rest as MODIFIED', async (t) => {
     const { client, db } = await select(t);
-    db.byUid(9).modSeq = 20n;
+    db.byUid(9).modSeq = 20n; db.mailbox.highestModSeq = 20n;
 
     const response = await client.cmd('STORE 1:3 (UNCHANGEDSINCE 15) +FLAGS (\\Flagged)');
 
@@ -1837,7 +1894,7 @@ describe('CONDSTORE (RFC 7162)', () => {
 
   test('UID STORE UNCHANGEDSINCE reports UIDs in MODIFIED', async (t) => {
     const { client, db } = await select(t);
-    db.byUid(9).modSeq = 20n;
+    db.byUid(9).modSeq = 20n; db.mailbox.highestModSeq = 20n;
 
     const response = await client.cmd('UID STORE 9 (UNCHANGEDSINCE 15) +FLAGS (\\Flagged)');
 
@@ -1846,7 +1903,7 @@ describe('CONDSTORE (RFC 7162)', () => {
 
   test('SEARCH MODSEQ ends with the highest MODSEQ of the result', async (t) => {
     const { client, db } = await select(t);
-    db.byUid(12).modSeq = 42n;
+    db.byUid(12).modSeq = 42n; db.mailbox.highestModSeq = 42n;
 
     const search = await client.cmd('SEARCH MODSEQ 1');
     const esearch = await client.cmd('SEARCH RETURN (ALL) MODSEQ 1');
@@ -1937,6 +1994,72 @@ describe('mailbox names (RFC 9051 §5.1, RFC 3501 §5.1.3)', () => {
 
     assert.equal(response.status, 'OK');
     assert.deepEqual(db.folders.map((f) => f.name).filter((n) => n.startsWith('Old') || n.startsWith('Archive')).sort(), ['Old', 'Old.2025']);
+  });
+
+  // v8.0 review: up to 7.0.0, CREATE stored non-ASCII names as the client sent them
+  // (modified UTF-7). Such rows are not migrated: they keep their stored name and
+  // look exactly as before to rev1 clients.
+  test('a legacy folder stored in modified UTF-7 keeps its name for rev1 clients and is reachable', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-legacy', mailboxId: 'mb1', name: 'Entw&APw-rfe', displayName: 'Entw&APw-rfe' });
+    db.folders.push({ id: 'f-legacy-sub', mailboxId: 'mb1', name: 'Entw&APw-rfe.Alt', displayName: 'Entw&APw-rfe.Alt' });
+
+    const list = await client.cmd('LIST "" "Entw*"');
+    const status = await client.cmd('STATUS "Entw&APw-rfe" (MESSAGES)');
+    const select = await client.cmd('SELECT "Entw&APw-rfe"');
+    const create = await client.cmd('CREATE "Entw&APw-rfe"');
+    const append = await appendRaw(client, 'Entw&APw-rfe', 'Subject: x\r\n\r\nbody\r\n');
+
+    assert.deepEqual(untagged(list, /^\* LIST /), [
+      '* LIST (\\HasChildren \\Drafts) "." "Entw&APw-rfe"',
+      '* LIST (\\HasNoChildren) "." "Entw&APw-rfe.Alt"',
+    ]);
+    assert.deepEqual(status.lines, ['* STATUS "Entw&APw-rfe" (MESSAGES 0)']);
+    assert.equal(select.status, 'OK', select.tagged);
+    assert.match(create.tagged, /NO \[ALREADYEXISTS\]/, 'no duplicate "Entwürfe" next to the legacy row');
+    assert.equal(append.status, 'OK', append.tagged);
+    assert.ok(db.messages.some((m) => m.folderId === 'f-legacy'));
+    assert.deepEqual(db.folders.filter((f) => f.id.startsWith('f-legacy')).map((f) => f.name), ['Entw&APw-rfe', 'Entw&APw-rfe.Alt'],
+      'stored names are never rewritten');
+  });
+
+  test('a legacy modified UTF-7 folder is shown in UTF-8 after ENABLE IMAP4rev2', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-legacy', mailboxId: 'mb1', name: 'Entw&APw-rfe', displayName: 'Entw&APw-rfe' });
+    await client.cmd('ENABLE IMAP4rev2');
+
+    const list = await client.cmd('LIST "" "Entw*"');
+    const select = await client.cmd('SELECT "Entwürfe"');
+
+    assert.match(list.raw, /\* LIST \(\\HasNoChildren \\Drafts\) "\." \{9\}\r\nEntwürfe/);
+    assert.equal(select.status, 'OK', select.tagged);
+  });
+
+  test('RENAME of a legacy modified UTF-7 folder renames it and its inferiors', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-legacy', mailboxId: 'mb1', name: 'Entw&APw-rfe', displayName: 'Entw&APw-rfe' });
+    db.folders.push({ id: 'f-legacy-sub', mailboxId: 'mb1', name: 'Entw&APw-rfe.Alt', displayName: 'Entw&APw-rfe.Alt' });
+
+    const response = await client.cmd('RENAME "Entw&APw-rfe" "Caf&AOk-"');
+
+    assert.equal(response.status, 'OK', response.tagged);
+    assert.deepEqual(db.folders.filter((f) => f.id.startsWith('f-legacy')).map((f) => f.name), ['Café', 'Café.Alt']);
+  });
+
+  test('an over-long LIST pattern is refused; a backtracking pattern answers quickly', async (t) => {
+    const { client, db } = await login(t);
+    await client.cmd(`CREATE ${'a'.repeat(40)}`);
+    assert.ok(db.folders.some((f) => f.name === 'a'.repeat(40)));
+
+    const started = Date.now();
+    const evil = await client.cmd(`LIST "" "${'*a'.repeat(20)}X"`);
+    const elapsed = Date.now() - started;
+    const tooLong = await client.cmd(`LIST "" "${'*'.repeat(1100)}"`);
+
+    assert.equal(evil.status, 'OK');
+    assert.deepEqual(untagged(evil, /^\* LIST /), []);
+    assert.ok(elapsed < 2000, `LIST took ${elapsed} ms`);
+    assert.equal(tooLong.status, 'BAD');
   });
 });
 

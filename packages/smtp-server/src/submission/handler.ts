@@ -157,9 +157,10 @@ async function onMessage(
   // when both are done; a failure answers 451 and the client's retry skips
   // what was already delivered (no duplicates, no loss — RFC 5321 §6.1).
   const submittedRaw = raw;
-  await deliverOnce(deliveryKey(from, receivedRaw), expandedLocalRcpts, externalRcpts, {
+  const txKey = deliveryKey(from, receivedRaw);
+  await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
-    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, { fromAddr: from, rcptTo: rcpt, toJunk: false }),
+    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, { fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey }),
     enqueueExternal: async (rcpts) => {
       await enqueueOutbound({
         messageId: crypto.randomUUID(),

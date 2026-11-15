@@ -73,3 +73,60 @@ test('INBOX is case-insensitive, also as the first hierarchy level', () => {
   assert.equal(canonicalInbox('Inboxes'), 'Inboxes');
   assert.equal(canonicalInbox('Sent'), 'Sent');
 });
+
+// ─── v8.0 pre-release review fixes ──────────────────────────────────────────
+
+const { patternMatcher, wildcardMatch } = await import('../commands/list.js');
+const { legacyDecoded, displayName, displayNames, storedCandidates } = await import('../commands/mailbox-name.js');
+
+test('LIST patterns: "*" crosses the delimiter, "%" does not, INBOX in any case', () => {
+  const m = (p: string, n: string): boolean => patternMatcher(p)(n);
+  assert.ok(m('*', 'Archive.2025'));
+  assert.ok(m('%', 'Archive') && !m('%', 'Archive.2025'));
+  assert.ok(m('Archive.%', 'Archive.2025') && !m('Archive.%', 'Archive.2025.Q1'));
+  assert.ok(m('A*5', 'Archive.2025') && !m('A%5', 'Archive.2025'));
+  assert.ok(m('*.%', 'a.b.c') && m('%.*', 'a.b.c'));
+  assert.ok(m('%%*%', 'x.y'), 'a run of wildcards with a "*" is "*"');
+  assert.ok(!m('%%', 'x.y'), 'a run of "%" is "%"');
+  assert.ok(m('a.b', 'a.b') && !m('a.b', 'aXb'), '"." is a literal, not a regex dot');
+  assert.ok(m('(x)[y]+$', '(x)[y]+$') && !m('Arch', 'Archive'));
+  assert.ok(m('in%', 'INBOX') && !m('in%', 'Inbound'));
+  assert.ok(wildcardMatch('', '') && !wildcardMatch('', 'a') && wildcardMatch('*', ''));
+});
+
+test('LIST pattern matching is linear: no catastrophic backtracking (ReDoS)', () => {
+  // The former regex translation needed minutes for this (12+ wildcards, 40-char name).
+  const evil = `${'*a'.repeat(40)}X`;
+  const evilPct = `${'%a'.repeat(40)}X`;
+  const names = ['a'.repeat(40), 'a'.repeat(255), `${'a'.repeat(500)}.${'a'.repeat(500)}`];
+  const started = process.hrtime.bigint();
+  for (let i = 0; i < 50; i++) {
+    for (const name of names) {
+      assert.equal(patternMatcher(evil)(name), false);
+      assert.equal(patternMatcher(evilPct)(name), false);
+    }
+  }
+  // Maximum pattern length against a long name, too.
+  assert.equal(patternMatcher(`${'*a'.repeat(511)}X`)('a'.repeat(1000)), false);
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(ms < 2000, `pattern matching took ${ms.toFixed(0)} ms`);
+});
+
+test('legacy folder rows stored in modified UTF-7 (<= 7.0.0) keep their name and display decoded', () => {
+  assert.equal(legacyDecoded('Entw&APw-rfe'), 'Entwürfe');
+  assert.equal(displayName('Entw&APw-rfe'), 'Entwürfe');
+  assert.equal(encodeMutf7(displayName('Entw&APw-rfe')), 'Entw&APw-rfe', 'a rev1 client sees the octets it saw before');
+  assert.equal(legacyDecoded('Entw&APw-rfe.Sub'), 'Entwürfe.Sub');
+  assert.equal(legacyDecoded('A&-B'), 'A&B');
+  // Not the canonical encoding of a different name ("&AGE-" = "a" is never produced by an encoder).
+  for (const plain of ['Entwürfe', 'R&D', 'Tom&Jerry-x', 'Sent', 'A&B', 'x&AGE-', '&AEE-']) {
+    assert.equal(legacyDecoded(plain), null, plain);
+    assert.equal(displayName(plain), plain);
+  }
+  assert.deepEqual(storedCandidates('Entwürfe'), ['Entwürfe', 'Entw&APw-rfe']);
+  assert.deepEqual(storedCandidates('Sent'), ['Sent']);
+  assert.deepEqual(storedCandidates('A&B'), ['A&B', 'A&-B']);
+  // A legacy row next to a UTF-8 row of the same name keeps its stored name (both reachable).
+  assert.deepEqual([...displayNames(['Entw&APw-rfe', 'Entwürfe'])], [['Entw&APw-rfe', 'Entw&APw-rfe'], ['Entwürfe', 'Entwürfe']]);
+  assert.deepEqual([...displayNames(['Entw&APw-rfe', 'Sent'])], [['Entw&APw-rfe', 'Entwürfe'], ['Sent', 'Sent']]);
+});

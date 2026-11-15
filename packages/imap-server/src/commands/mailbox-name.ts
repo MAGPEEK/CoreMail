@@ -6,8 +6,11 @@
  * and accepted as UTF-8 (RFC 9051 §5.1). INBOX is case-insensitive
  * (RFC 9051 §5.1), so any spelling — also as the first level of a
  * hierarchical name ("inbox.Sub") — maps to "INBOX".
+ * Rows written by ≤ 7.0.0 may hold the modified UTF-7 form; they are never
+ * rewritten and are resolved/displayed through legacyDecoded() below.
  */
 import type { ImapSession } from '../session/state.js';
+import { prisma } from '@coremail/storage';
 import { mailboxName } from '../fetch/imap-string.js';
 
 const DELIMITER = '.';
@@ -74,7 +77,71 @@ export function fromClient(session: ImapSession, raw: string): string {
   return canonicalInbox(decoded);
 }
 
+/**
+ * Legacy rows: up to v7.0.0 IMAP CREATE/RENAME stored the name exactly as a
+ * rev1 client sent it, i.e. non-ASCII names in modified UTF-7
+ * ("Entw&APw-rfe"). Those rows are never rewritten: a stored name that is the
+ * canonical modified UTF-7 encoding of a different name is shown as that name,
+ * so a rev1 client sees exactly the mailbox name it saw before the upgrade
+ * (encoding the decoded name gives back the stored octets) and a rev2 client
+ * sees UTF-8. Returns null for every other stored name.
+ */
+export function legacyDecoded(stored: string): string | null {
+  if (!stored.includes('&') || !/^[\x20-\x7e]*$/.test(stored)) return null;
+  const decoded = decodeMutf7(stored);
+  if (decoded === null || decoded === stored || encodeMutf7(decoded) !== stored) return null;
+  return decoded;
+}
+
+/** The mailbox name a stored folder name stands for (see {@link legacyDecoded}). */
+export function displayName(stored: string): string {
+  return legacyDecoded(stored) ?? stored;
+}
+
+/**
+ * Display names of all folders of a mailbox. When a legacy row would show the
+ * same name as another row (e.g. "Entw&APw-rfe" next to "Entwürfe"), the legacy
+ * row keeps its stored name, so both stay listed and reachable.
+ */
+export function displayNames(stored: string[]): Map<string, string> {
+  const all = new Set(stored);
+  const out = new Map<string, string>();
+  for (const name of stored) {
+    const decoded = legacyDecoded(name);
+    out.set(name, decoded !== null && !all.has(decoded) ? decoded : name);
+  }
+  return out;
+}
+
+/** Stored names a (decoded) mailbox name may have: itself and, for legacy rows, its modified UTF-7 form. */
+export function storedCandidates(name: string): string[] {
+  const encoded = encodeMutf7(name);
+  return encoded !== name && legacyDecoded(encoded) === name ? [name, encoded] : [name];
+}
+
+/**
+ * The stored name of the folder a client means by `raw`: the UTF-8 row when it
+ * exists, else a legacy modified UTF-7 row, else the UTF-8 name (new folders
+ * are always stored in UTF-8).
+ */
+export async function resolveStoredName(session: ImapSession, raw: string): Promise<string> {
+  const name = fromClient(session, raw);
+  const candidates = storedCandidates(name);
+  if (candidates.length === 1 || !session.mailboxId) return name;
+  const rows: Array<{ name: string }> = await prisma.folder.findMany({
+    where: { mailboxId: session.mailboxId, name: { in: candidates } },
+    select: { name: true },
+  });
+  if (rows.some((r) => r.name === name)) return name;
+  return rows[0]?.name ?? name;
+}
+
+/** Renders a mailbox (display) name for a response (quoted string or literal). */
+export function formatName(session: ImapSession, display: string): string {
+  return mailboxName(session.imap4rev2Enabled ? display : encodeMutf7(display));
+}
+
 /** Renders a stored mailbox name for a response (quoted string or literal). */
 export function toClient(session: ImapSession, name: string): string {
-  return mailboxName(session.imap4rev2Enabled ? name : encodeMutf7(name));
+  return formatName(session, displayName(name));
 }

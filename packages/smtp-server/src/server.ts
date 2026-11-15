@@ -16,6 +16,7 @@ import { submissionHandlers } from './submission/handler.js';
 import { verifySmtpCredentials } from './auth/verifier.js';
 import { startOutboundWorker } from './outbound/queue.js';
 import { invalidateOutboundConfigCache } from './outbound/relay.js';
+import { inboundMaxSize } from './inbound/connection-filter.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:server');
@@ -85,6 +86,10 @@ async function refreshSmtpSettings(): Promise<void> {
     };
     _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
     _maxRcpt = Math.max(1, s?.maxRecipients ?? 100);
+    if (inboundMaxSize(_maxSize) < _maxSize) {
+      log.warn({ configured: _maxSize, inbound: inboundMaxSize(_maxSize) },
+        'maxMessageSizeMb exceeds what the content filter can scan — inbound (port 25) is limited to the filter size');
+    }
     log.info({ banner: _bannerText || '(default)', maxSize: _maxSize, maxRcpt: _maxRcpt, esmtp: _esmtp }, 'SMTP settings refreshed');
   } catch (err) {
     log.error({ err }, 'Failed to refresh SMTP settings');
@@ -281,7 +286,9 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       tls:        { get: () => _tlsConfig ?? undefined, enumerable: true, configurable: true },
       hostname:   { get: () => _hostname,   enumerable: true, configurable: true },
       bannerText: { get: () => _bannerText, enumerable: true, configurable: true },
-      maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
+      // Inbound mail is scanned by the content filter (52 MB body limit):
+      // advertise and enforce what can actually be accepted.
+      maxSize:    { get: () => (isSubmission ? _maxSize : inboundMaxSize(_maxSize)), enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
       // ALWAYS advertise STARTTLS (on all ports incl. 25 inbound) — opportunistic TLS

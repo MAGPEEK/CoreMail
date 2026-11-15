@@ -10,7 +10,9 @@ const fakePrisma: Record<string, unknown> = { $on: () => undefined };
 (globalThis as unknown as { __prisma: unknown }).__prisma = fakePrisma;
 
 const { buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings } = await import('./queue-options.js');
-const { extractITipReply, isReplyFromAttendee, processITipInbound, parseITipReply } = await import('./itip-inbound.js');
+const {
+  extractITipReply, isReplyFromAttendee, processITipInbound, parseITipReply, applyReplyToIcal, MAX_REPLY_OVERRIDES, MAX_REPLY_STAMPS,
+} = await import('./itip-inbound.js');
 
 // ── queue options per settings ────────────────────────────────────────────────
 
@@ -179,4 +181,42 @@ test('REPLY is only applied to the organizer copy (recipient address or alias = 
   assert.equal(await processITipInbound(replyMail([]), ctx), false);
   fakeEvent({ organizer: 'TEAM@local.example' });
   assert.equal(await processITipInbound(replyMail([]), ctx), true);
+});
+
+// ── v8.0 review: phantom occurrences and unbounded growth ─────────────────────
+
+test('REPLY with a RECURRENCE-ID that is not an instance of the series adds no override', async () => {
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  // Series: weekly 2026-11-02 09:00Z, COUNT=4 → 02, 09, 16, 23 Nov.
+  for (const rid of ['20261110T090000Z', '20261109T100000Z', '20261130T090000Z', '20991231T090000Z']) {
+    const { row, updates } = fakeEvent();
+    assert.equal(await processITipInbound(replyMail([`RECURRENCE-ID:${rid}`, 'DTSTAMP:20261101T000000Z'], 'DECLINED'), ctx), false, rid);
+    assert.equal(updates.length, 0, rid);
+    assert.equal(String(row['icalData']).split('BEGIN:VEVENT').length, 2, rid);
+  }
+  const { row } = fakeEvent();
+  assert.equal(await processITipInbound(replyMail(['RECURRENCE-ID:20261123T090000Z', 'DTSTAMP:20261101T000000Z'], 'DECLINED'), ctx), true,
+    'the last real instance is accepted');
+  assert.match(String(row['icalData']), /RECURRENCE-ID:20261123T090000Z/);
+});
+
+test('REPLY overrides and per-instance stamps are capped', async () => {
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const daily = STORED.replace('RRULE:FREQ=WEEKLY;COUNT=4', 'RRULE:FREQ=DAILY;COUNT=500');
+  const instance = (i: number): string => new Date(Date.UTC(2026, 10, 2 + i, 9)).toISOString().replace(/[-:]/g, '').replace('.000', '');
+  // Stamps: MAX_REPLY_STAMPS distinct instances already answered → a new instance is ignored.
+  const stamps: Record<string, string> = {};
+  for (let i = 1; i <= MAX_REPLY_STAMPS; i++) stamps[`k${i}`] = '2026-11-01T00:00:00.000Z';
+  const { updates } = fakeEvent({ icalData: daily, attendees: [{ email: 'bob@partner.example', partstat: 'NEEDS-ACTION', replyStamps: stamps }] });
+  assert.equal(await processITipInbound(replyMail([`RECURRENCE-ID:${instance(3)}`, 'DTSTAMP:20261101T000000Z']), ctx), false);
+  assert.equal(updates.length, 0);
+  // Overrides: an object that already holds MAX_REPLY_OVERRIDES overrides gets no new one.
+  let ical: string | null = daily;
+  for (let i = 1; i <= MAX_REPLY_OVERRIDES; i++) {
+    ical = applyReplyToIcal(ical!, 'bob@partner.example', 'DECLINED', { date: new Date(Date.UTC(2026, 10, 2 + i, 9)) } as never);
+    assert.ok(ical, `override ${i}`);
+  }
+  assert.equal(applyReplyToIcal(ical!, 'bob@partner.example', 'DECLINED', { date: new Date(Date.UTC(2026, 10, 2 + MAX_REPLY_OVERRIDES + 1, 9)) } as never), null);
+  // An existing override can still be updated.
+  assert.ok(applyReplyToIcal(ical!, 'bob@partner.example', 'ACCEPTED', { date: new Date(Date.UTC(2026, 10, 3, 9)) } as never));
 });

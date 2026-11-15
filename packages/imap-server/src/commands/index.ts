@@ -1,5 +1,5 @@
 import {
-  prisma, createMessage, copyMessages, moveMessages, setFlags, expunge, verifyMailCredentials,
+  prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
   attachmentKey, uploadBuffer,
   type RawSourceMessage,
@@ -26,7 +26,7 @@ import {
   parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
   type SearchProgram, type SearchableMessage, type ReturnOption,
 } from './search-parser.js';
-import { fromClient, toClient } from './mailbox-name.js';
+import { displayNames, fromClient, resolveStoredName, toClient } from './mailbox-name.js';
 import { runStatus } from './list.js';
 
 export { handleList, handleLsub, handleGetQuotaRoot, handleGetQuota, handleSetQuota } from './list.js';
@@ -95,7 +95,7 @@ export async function handleSubscribe(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-  const folderName = fromClient(session, args[0] ?? '');
+  const folderName = await resolveStoredName(session, args[0] ?? '');
   if (!folderName) { sendNo(session, tag, 'Folder name required'); return; }
   const folder = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name: folderName },
@@ -143,14 +143,16 @@ export async function handleCreate(
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   // A trailing hierarchy delimiter only declares the intent to create inferiors
   // (Mac Mail sometimes sends "Parent.Child.").
-  const name = fromClient(session, (args[0] ?? '').replace(/[./]+$/, ''));
+  const rawName = (args[0] ?? '').replace(/[./]+$/, '');
+  const name = fromClient(session, rawName);
   if (!name) { sendBad(session, tag, 'Folder name required'); return; }
   if (name === 'INBOX') {
     sendNo(session, tag, '[ALREADYEXISTS] INBOX cannot be created');
     return;
   }
+  // A legacy (modified UTF-7) row of the same mailbox name counts as existing.
   const existing = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name },
+    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, rawName) },
     select: { id: true },
   });
   if (existing) {
@@ -173,7 +175,7 @@ export async function handleDeleteFolder(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  const name = fromClient(session, args[0] ?? '');
+  const name = await resolveStoredName(session, args[0] ?? '');
   if (!name) { sendBad(session, tag, 'Folder name required'); return; }
   if (name === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be deleted');
@@ -216,7 +218,11 @@ export async function handleRename(
     where: { mailboxId: session.mailboxId },
     select: { id: true, name: true },
   });
-  const folder = folders.find((f) => f.name === oldName);
+  // Hierarchy works on display names: inferiors of a legacy (modified UTF-7)
+  // folder may be stored either way. Renamed rows are written in UTF-8.
+  const display = displayNames(folders.map((f) => f.name));
+  const shown = (f: { name: string }): string => display.get(f.name) ?? f.name;
+  const folder = folders.find((f) => shown(f) === oldName);
   if (!folder) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
@@ -225,9 +231,9 @@ export async function handleRename(
     sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into itself');
     return;
   }
-  const renames = [folder, ...folders.filter((f) => f.name.startsWith(`${oldName}${DELIMITER}`))]
-    .map((f) => ({ id: f.id, name: `${newName}${f.name.slice(oldName.length)}` }));
-  const taken = new Set(folders.map((f) => f.name));
+  const renames = [folder, ...folders.filter((f) => shown(f).startsWith(`${oldName}${DELIMITER}`))]
+    .map((f) => ({ id: f.id, name: `${newName}${shown(f).slice(oldName.length)}` }));
+  const taken = new Set(folders.flatMap((f) => [f.name, shown(f)]));
   if (newName === 'INBOX' || renames.some((r) => taken.has(r.name))) {
     sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
     return;
@@ -250,7 +256,7 @@ export async function handleRename(
 export async function appendTargetExists(session: ImapSession, name: string): Promise<boolean> {
   if (!session.mailboxId) return false;
   const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: fromClient(session, name) },
+    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, name) },
     select: { id: true },
   });
   return !!folder;
@@ -306,7 +312,7 @@ export async function handleAppend(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length < 2 || args.length > 4) { sendBad(session, tag, 'APPEND requires mailbox and message literal'); return; }
-  const folderName = fromClient(session, args[0] ?? '');
+  const folderName = await resolveStoredName(session, args[0] ?? '');
   const raw = message ?? Buffer.from(args[args.length - 1] ?? '', 'utf8');
   // Optional flag list and date-time between mailbox and message. Invalid
   // flags and \Recent are dropped (a client cannot set them).
@@ -427,7 +433,7 @@ export async function handleCopy(
   if (!isValidSequenceSet(seqSet)) { sendBad(session, tag, 'Invalid sequence set'); return; }
 
   const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: fromClient(session, args[1]) },
+    where: { mailboxId: session.mailboxId!, name: await resolveStoredName(session, args[1]) },
     include: { mailbox: true },
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
@@ -464,7 +470,7 @@ export async function handleMove(
   if (view.readOnly) { sendNo(session, tag, '[READ-ONLY] Mailbox is read-only'); return; }
 
   const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: fromClient(session, args[1]) },
+    where: { mailboxId: session.mailboxId!, name: await resolveStoredName(session, args[1]) },
     include: { mailbox: true },
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
@@ -855,7 +861,7 @@ export async function handleSelect(
   }
 
   const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: fromClient(session, args[0]) },
+    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, args[0]) },
     include: { mailbox: true },
   });
   if (!folder) {
@@ -948,8 +954,9 @@ export async function handleFetch(
     const unseen = messages.filter((m) => !hasFlag(m.flags, '\\Seen'));
     if (unseen.length > 0) {
       const mailboxId = session.mailboxId;
-      const updated = await prisma.$transaction((tx) => setFlags(
-        tx, unseen.map((m) => ({ id: m.id, flags: [...m.flags, '\\Seen'] })), { mailboxId },
+      // Flags are re-read under the mailbox lock: a concurrent STORE is not overwritten.
+      const updated = await prisma.$transaction((tx) => modifyFlags(
+        tx, unseen.map((m) => m.id), (flags) => (hasFlag(flags, '\\Seen') ? null : [...flags, '\\Seen']), { mailboxId },
       ));
       const byId = new Map(updated.map((u) => [u.id, u]));
       for (const m of unseen) {
@@ -1130,28 +1137,53 @@ export async function handleStore(
   const messages = await loadMessages(view.folderId, resolveSet(view, sequenceSet, byUid), false);
   const modified: number[] = [];
   const results: Array<{ uid: number; id: string; flags: string[]; modSeq: bigint; changed: boolean; seenBefore: boolean }> = [];
+  const apply = (flags: string[]): string[] => {
+    if (command.startsWith('+')) return uniqueFlags([...flags, ...newFlags]);
+    if (command.startsWith('-')) return flags.filter((f) => !hasFlag(newFlags, f));
+    return newFlags;
+  };
+  const differs = (a: string[], b: string[]): boolean => a.length !== b.length || a.some((f, i) => f !== b[i]);
   for (const msg of messages) {
     if (unchangedSince !== null && msg.modSeq > unchangedSince) {
       modified.push(byUid ? msg.uid : seqOf(view, msg.uid));
       continue;
     }
-    let updated: string[];
-    if (command.startsWith('+')) updated = uniqueFlags([...msg.flags, ...newFlags]);
-    else if (command.startsWith('-')) updated = msg.flags.filter((f) => !hasFlag(newFlags, f));
-    else updated = newFlags;
-    const changed = updated.length !== msg.flags.length || updated.some((f, i) => f !== msg.flags[i]);
+    const updated = apply(msg.flags);
     results.push({
-      uid: msg.uid, id: msg.id, flags: updated, modSeq: msg.modSeq, changed,
+      uid: msg.uid, id: msg.id, flags: updated, modSeq: msg.modSeq, changed: differs(updated, msg.flags),
       seenBefore: view.known.get(msg.uid) === msg.modSeq,
     });
   }
 
   // One new mailbox modSeq for the whole STORE (RFC 7162 §3.1: HIGHESTMODSEQ ≥ every MODSEQ).
+  // The flags read above only decide whether a write is needed: the new flags
+  // are computed from the rows re-read under the mailbox lock (modifyFlags), so
+  // concurrent "+FLAGS" from two clients both survive.
   const toWrite = results.filter((r) => r.changed);
   const mailboxId = session.mailboxId!;
-  const stored = toWrite.length === 0 ? [] : await prisma.$transaction((tx) => setFlags(
-    tx, toWrite.map((c) => ({ id: c.id, flags: c.flags })), { mailboxId },
+  const fresh = new Map<string, { flags: string[]; modSeq: bigint }>();
+  const conflicts = new Set<string>();
+  const stored = toWrite.length === 0 ? [] : await prisma.$transaction((tx) => modifyFlags(
+    tx, toWrite.map((c) => c.id), (flags, modSeq, id) => {
+      fresh.set(id, { flags, modSeq });
+      if (unchangedSince !== null && modSeq > unchangedSince) { conflicts.add(id); return null; }
+      const updated = apply(flags);
+      return differs(updated, flags) ? updated : null;
+    }, { mailboxId },
   ));
+  const storedById = new Map(stored.map((s) => [s.id, s]));
+  for (const r of [...results]) {
+    if (conflicts.has(r.id)) {
+      modified.push(byUid ? r.uid : seqOf(view, r.uid));
+      results.splice(results.indexOf(r), 1);
+      continue;
+    }
+    const s = storedById.get(r.id);
+    const f = fresh.get(r.id);
+    if (s) { r.flags = s.flags; r.modSeq = s.modSeq; }
+    else if (f) { r.flags = f.flags; r.modSeq = f.modSeq; r.changed = false; }
+  }
+  modified.sort((a, b) => a - b);
   const modSeqById = new Map(stored.map((s) => [s.id, s.modSeq]));
 
   const silent = command.endsWith('.SILENT');
