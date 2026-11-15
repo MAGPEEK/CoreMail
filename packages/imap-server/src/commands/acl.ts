@@ -1,35 +1,38 @@
 /**
  * ACL (RFC 4314), read-only.
  *
- * IMAP exposes only the user's own mailbox (personal namespace, see NAMESPACE);
- * shared mailboxes and delegated mailboxes are not part of the IMAP namespace.
- * On its own folders the owner holds every right, so:
+ * Rights reflect the real permissions (see namespaces.ts):
+ *   own folders                       → lrswipkxteacd (everything)
+ *   Shared Mailbox / delegation with FULL_ACCESS → lrswipkxtecd (no "a": the ACL
+ *                                       itself is administered in the BCP)
+ *   … with READ_ONLY                  → lr
  *
- *   MYRIGHTS   → all rights
- *   GETACL     → one entry: the owner (login address) with all rights
- *   LISTRIGHTS → the owner: all rights (always granted); anyone else: none
+ *   MYRIGHTS   → the caller's rights on the folder
+ *   GETACL     → own folders: one entry, the owner (login address) with all rights;
+ *                foreign folders: NO [NOPERM] (RFC 4314 §4: needs "a" — and the
+ *                other grantees of a shared mailbox are not disclosed)
+ *   LISTRIGHTS → own folders: the owner all rights, anyone else none; foreign
+ *                folders: only for the caller's own identifier (its fixed rights),
+ *                anything else NO [NOPERM]
  *   SETACL / DELETEACL → NO [NOPERM] — permissions (shared mailbox FULL_ACCESS /
- *                SEND_AS, mailbox delegation) are managed by administrators in
- *                the BCP, not over IMAP.
+ *                READ_ONLY / SEND_AS, mailbox delegation) are managed by
+ *                administrators in the BCP, not over IMAP.
+ *
+ * A foreign name the user may not open is answered exactly like a missing mailbox.
  */
-import { prisma } from '@coremail/storage';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
-import { resolveStoredName, toClient } from './mailbox-name.js';
+import { displayName, formatName } from './mailbox-name.js';
+import { NOPERM, OWNER_RIGHTS, clientNameOf, findTargetFolder } from './namespaces.js';
 
-/**
- * RFC 4314 §2.1 rights plus the obsolete RFC 2086 "c" (create) and "d"
- * (delete) that §2.1.1 asks servers to report for compatibility.
- */
-export const OWNER_RIGHTS = 'lrswipkxteacd';
+export { OWNER_RIGHTS } from './namespaces.js';
 
 const quote = (value: string): string => `"${value.replace(/[\\"]/g, '\\$&')}"`;
 
-async function findFolder(session: ImapSession, name: string): Promise<{ name: string } | null> {
+async function findFolder(session: ImapSession, name: string) {
   if (!session.mailboxId || !name) return null;
-  return prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, name) },
-    select: { name: true },
-  });
+  const folder = await findTargetFolder(session, name);
+  if (!folder) return null;
+  return { ...folder, shown: formatName(session, clientNameOf(folder.target, displayName(folder.name))) };
 }
 
 /** The user's own ACL identifier (RFC 4314 §3: the login name). */
@@ -41,7 +44,7 @@ export async function handleMyRights(session: ImapSession, tag: string, args: st
   if (args.length !== 1) { sendBad(session, tag, 'MYRIGHTS requires a mailbox name'); return; }
   const folder = await findFolder(session, args[0]!);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
-  sendUntagged(session, `MYRIGHTS ${toClient(session, folder.name)} ${OWNER_RIGHTS}`);
+  sendUntagged(session, `MYRIGHTS ${folder.shown} ${folder.target.rights}`);
   sendOk(session, tag, 'MYRIGHTS completed');
 }
 
@@ -49,7 +52,8 @@ export async function handleGetAcl(session: ImapSession, tag: string, args: stri
   if (args.length !== 1) { sendBad(session, tag, 'GETACL requires a mailbox name'); return; }
   const folder = await findFolder(session, args[0]!);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
-  sendUntagged(session, `ACL ${toClient(session, folder.name)} ${quote(ownerIdentifier(session))} ${OWNER_RIGHTS}`);
+  if (folder.target.foreign) { sendNo(session, tag, `${NOPERM} — the ACL of this mailbox is managed in the BCP`); return; }
+  sendUntagged(session, `ACL ${folder.shown} ${quote(ownerIdentifier(session))} ${OWNER_RIGHTS}`);
   sendOk(session, tag, 'GETACL completed');
 }
 
@@ -58,9 +62,10 @@ export async function handleListRights(session: ImapSession, tag: string, args: 
   const folder = await findFolder(session, args[0]!);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   const identifier = args[1];
-  const isOwner = identifier.toLowerCase() === ownerIdentifier(session).toLowerCase();
+  const isSelf = identifier.toLowerCase() === ownerIdentifier(session).toLowerCase();
+  if (folder.target.foreign && !isSelf) { sendNo(session, tag, `${NOPERM} — the ACL of this mailbox is managed in the BCP`); return; }
   // The first rights string is always granted; no optional rights can be granted over IMAP.
-  sendUntagged(session, `LISTRIGHTS ${toClient(session, folder.name)} ${quote(identifier)} ${isOwner ? OWNER_RIGHTS : '""'}`);
+  sendUntagged(session, `LISTRIGHTS ${folder.shown} ${quote(identifier)} ${isSelf ? folder.target.rights : '""'}`);
   sendOk(session, tag, 'LISTRIGHTS completed');
 }
 

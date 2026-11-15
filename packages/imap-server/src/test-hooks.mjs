@@ -39,6 +39,7 @@ export * from '${storageUrl('mime/address.ts')}';
 export * from '${storageUrl('mime/build.ts')}';
 export * from '${storageUrl('mime/index.ts')}';
 export * from '${storageUrl('raw-message.ts')}';
+export * from '${storageUrl('mailbox-access.ts')}';
 import { createRawMessageStore } from '${storageUrl('raw-message.ts')}';
 const g = (globalThis.__coremailTest ??= {});
 const objects = (g.objects ??= new Map());

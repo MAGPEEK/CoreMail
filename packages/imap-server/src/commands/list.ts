@@ -6,12 +6,18 @@
  * Subscriptions are not stored: every existing mailbox counts as subscribed
  * (SUBSCRIBE/UNSUBSCRIBE are accepted as no-ops).
  */
-import { prisma } from '@coremail/storage';
+import { prisma, type AccessibleMailbox } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
 import { tokenString, type Token } from '../server/tokenizer.js';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
-import { displayNames, formatName, fromClient, resolveStoredName, toClient } from './mailbox-name.js';
+import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
+import {
+  FOREIGN_DELIMITER, clientNameOf, decodeClientName, findTargetFolder, foreignClientName, foreignMailboxes,
+  parseForeignName, prefixOf,
+} from './namespaces.js';
 
 const DELIMITER = '.';
+const log = createLogger('imap:list');
 
 /**
  * Maps a folder name (case-insensitive) to its SPECIAL-USE attribute.
@@ -42,7 +48,7 @@ export const MAX_PATTERNS = 32;
  * so no input can make it backtrack exponentially (e.g. "*a*a*a…X" against
  * "aaaa…" — a service-wide DoS with the former regex translation).
  */
-export function wildcardMatch(pattern: string, name: string, foldCase = false): boolean {
+export function wildcardMatch(pattern: string, name: string, foldCase = false, delimiter = DELIMITER): boolean {
   const p = foldCase ? pattern.toLowerCase() : pattern;
   const n = foldCase ? name.toLowerCase() : name;
   // reach[j] = 1: the pattern prefix processed so far matches the first j characters of the name.
@@ -59,7 +65,7 @@ export function wildcardMatch(pattern: string, name: string, foldCase = false): 
     } else if (c === '%') {
       let run = 0;
       for (let j = 0; j <= n.length; j++) {
-        if (j > 0 && n[j - 1] === DELIMITER) run = 0;
+        if (j > 0 && n[j - 1] === delimiter) run = 0;
         run |= reach[j] as number;
         next[j] = run;
         alive |= run;
@@ -81,15 +87,79 @@ export function wildcardMatch(pattern: string, name: string, foldCase = false): 
  * Mailbox pattern (RFC 9051 §6.3.9): "*" matches everything, "%" everything
  * except the hierarchy delimiter. Names are case-sensitive except INBOX.
  */
-export function patternMatcher(pattern: string): (name: string) => boolean {
+export function patternMatcher(pattern: string): (name: string, delimiter?: string) => boolean {
   // A run of wildcards is one wildcard: "*" when it contains a "*", else "%".
   const p = pattern.replace(/[*%]{2,}/g, (run) => (run.includes('*') ? '*' : '%'));
   // Patterns that spell out INBOX were already canonicalised (fromClient);
   // INBOX itself also matches wildcard patterns in any letter case ("in*").
-  return (name: string): boolean => wildcardMatch(p, name) || (name === 'INBOX' && wildcardMatch(p, name, true));
+  // v9.1: names of the Shared / Other Users namespaces use "/" as delimiter.
+  return (name: string, delimiter = DELIMITER): boolean =>
+    wildcardMatch(p, name, false, delimiter) || (name === 'INBOX' && wildcardMatch(p, name, true, delimiter));
 }
 
 interface FolderRow { id: string; name: string }
+
+/** One listable name: an existing folder (folderId) or a non-existent parent. */
+interface ListEntry {
+  /** Client name (decoded). */
+  name: string;
+  delimiter: string;
+  folderId: string | null;
+  /** SPECIAL-USE attribute — only for the user's own folders (no collisions). */
+  special: string | null;
+}
+
+/**
+ * Every name the session can see: the own folders ("." hierarchy) and — v9.1 —
+ * the folders of the foreign mailboxes under their namespace prefix ("/"
+ * hierarchy), plus the non-existent parents of all of them. A personal folder
+ * wins over a namespace level of the same name.
+ */
+export async function listEntries(session: ImapSession, withForeign = true): Promise<ListEntry[]> {
+  const own: FolderRow[] = await prisma.folder.findMany({
+    where: { mailboxId: session.mailboxId ?? '' },
+    select: { id: true, name: true },
+    orderBy: { name: 'asc' },
+  });
+  const entries = new Map<string, ListEntry>();
+  const display = displayNames(own.map((f) => f.name));
+  for (const f of own) {
+    const name = display.get(f.name) ?? f.name;
+    entries.set(name, { name, delimiter: DELIMITER, folderId: f.id, special: specialUseFlag(name) });
+  }
+  let foreign: AccessibleMailbox[] = [];
+  try {
+    if (withForeign) foreign = await foreignMailboxes(session);
+  } catch (err) {
+    // The own folders are still listed; foreign ones only with a successful check.
+    log.warn({ err, id: session.id }, 'IMAP LIST: shared mailbox permissions unavailable');
+  }
+  if (foreign.length > 0) {
+    const rows: Array<FolderRow & { mailboxId: string }> = await prisma.folder.findMany({
+      where: { mailboxId: { in: foreign.map((a) => a.mailboxId) } },
+      select: { id: true, name: true, mailboxId: true },
+      orderBy: { name: 'asc' },
+    });
+    for (const access of foreign) {
+      const folders = rows.filter((r) => r.mailboxId === access.mailboxId);
+      const shown = displayNames(folders.map((f) => f.name));
+      for (const f of folders) {
+        const name = foreignClientName(access, shown.get(f.name) ?? f.name);
+        if (name === null || entries.has(name)) continue;
+        entries.set(name, { name, delimiter: FOREIGN_DELIMITER, folderId: f.id, special: null });
+      }
+    }
+  }
+  // Parents of hierarchical names that do not exist themselves.
+  for (const entry of [...entries.values()]) {
+    const parts = entry.name.split(entry.delimiter);
+    for (let n = 1; n < parts.length; n++) {
+      const parent = parts.slice(0, n).join(entry.delimiter);
+      if (!entries.has(parent)) entries.set(parent, { name: parent, delimiter: entry.delimiter, folderId: null, special: null });
+    }
+  }
+  return [...entries.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 interface ListOptions {
   subscribedOnly: boolean;
@@ -183,49 +253,40 @@ export async function handleList(session: ImapSession, tag: string, tokens: Toke
     }
   }
 
-  // RFC 9051 §6.3.9: an empty pattern asks for the hierarchy delimiter.
+  // RFC 9051 §6.3.9: an empty pattern asks for the hierarchy delimiter (and the
+  // root of the reference's hierarchy — v9.1: "/" inside a foreign namespace).
   if (patterns.length === 1 && patterns[0] === '') {
-    sendUntagged(session, `LIST (\\Noselect) "${DELIMITER}" ""`);
+    const foreign = parseForeignName(decodeClientName(session, reference));
+    const root = foreign ? (prefixOf(foreign.kind) ?? '') : '';
+    sendUntagged(session, `LIST (\\Noselect) "${foreign ? FOREIGN_DELIMITER : DELIMITER}" ${root ? formatName(session, root) : '""'}`);
     sendOk(session, tag, 'LIST completed');
     return;
   }
 
-  const folders: FolderRow[] = await prisma.folder.findMany({
-    where: { mailboxId: session.mailboxId },
-    select: { id: true, name: true },
-    orderBy: { name: 'asc' },
-  });
-  await listFolders(session, folders, patterns.map((p) => fromClient(session, reference + p)), opts);
+  await listFolders(session, await listEntries(session), patterns.map((p) => fromClient(session, reference + p)), opts);
   sendOk(session, tag, 'LIST completed');
 }
 
-async function listFolders(session: ImapSession, folders: FolderRow[], patterns: string[], opts: ListOptions): Promise<void> {
+async function listFolders(session: ImapSession, entries: ListEntry[], patterns: string[], opts: ListOptions): Promise<void> {
   const matchers = patterns.map(patternMatcher);
-  const matches = (name: string): boolean => matchers.some((m) => m(name));
+  const matches = (e: Pick<ListEntry, 'name' | 'delimiter'>): boolean => matchers.some((m) => m(e.name, e.delimiter));
   // Matching, hierarchy and output work on display names (legacy modified
   // UTF-7 rows decoded, see mailbox-name.ts); the stored rows stay untouched.
-  const display = displayNames(folders.map((f) => f.name));
-  const existing = new Map(folders.map((f) => [display.get(f.name) ?? f.name, f]));
-  const names = new Set(existing.keys());
-  // Parents of hierarchical names that do not exist themselves.
-  for (const name of existing.keys()) {
-    const parts = name.split(DELIMITER);
-    for (let n = 1; n < parts.length; n++) names.add(parts.slice(0, n).join(DELIMITER));
-  }
-  const sorted = [...names].sort((a, b) => a.localeCompare(b));
-  const descendants = (name: string): string[] => [...existing.keys()].filter((n) => n.startsWith(`${name}${DELIMITER}`));
+  const existing = entries.filter((e) => e.folderId !== null);
+  const descendants = (e: ListEntry): ListEntry[] => existing.filter((n) => n.name.startsWith(`${e.name}${e.delimiter}`));
 
-  for (const name of sorted) {
-    if (!matches(name)) continue;
-    const folder = existing.get(name);
-    const children = descendants(name);
-    const special = specialUseFlag(name);
+  for (const entry of entries) {
+    if (!matches(entry)) continue;
+    const name = entry.name;
+    const folder = entry.folderId !== null ? { id: entry.folderId } : undefined;
+    const children = descendants(entry);
+    const special = entry.special;
     const attrs: string[] = [];
     let childInfo = false;
     if (folder) {
       const selected = (!opts.specialUseOnly || special !== null);
       if (!selected) {
-        if (!(opts.recursiveMatch && children.some((c) => specialUseFlag(c) !== null))) continue;
+        if (!(opts.recursiveMatch && children.some((c) => c.special !== null))) continue;
         childInfo = true;
       } else if (opts.recursiveMatch && children.length > 0) {
         childInfo = true;
@@ -243,7 +304,7 @@ async function listFolders(session: ImapSession, folders: FolderRow[], patterns:
     attrs.push(children.length > 0 || !folder ? '\\HasChildren' : '\\HasNoChildren');
     if (folder && special) attrs.push(special);
     const extra = childInfo && opts.subscribedOnly ? ' ("CHILDINFO" ("SUBSCRIBED"))' : '';
-    sendUntagged(session, `LIST (${attrs.join(' ')}) "${DELIMITER}" ${formatName(session, name)}${extra}`);
+    sendUntagged(session, `LIST (${attrs.join(' ')}) "${entry.delimiter}" ${formatName(session, name)}${extra}`);
     if (folder && opts.returnStatus) {
       const status = await statusLine(session, folder.id, opts.returnStatus, name);
       if (status) sendUntagged(session, status);
@@ -260,22 +321,15 @@ export async function handleLsub(session: ImapSession, tag: string, tokens: Toke
     sendBad(session, tag, 'LSUB requires a reference and a mailbox pattern');
     return;
   }
-  const folders: FolderRow[] = await prisma.folder.findMany({
-    where: { mailboxId: session.mailboxId },
-    select: { id: true, name: true },
-    orderBy: { name: 'asc' },
-  });
   if (reference.length + pattern.length > MAX_PATTERN_LENGTH) { sendBad(session, tag, 'LSUB pattern too long'); return; }
   const matches = patternMatcher(fromClient(session, reference + pattern));
-  const display = displayNames(folders.map((f) => f.name));
-  for (const folder of folders) {
-    const name = display.get(folder.name) ?? folder.name;
-    if (!matches(name)) continue;
-    // SPECIAL-USE attributes in LSUB as well — Mac Mail validates them.
+  // v9.1: folders of shared / delegated mailboxes count as subscribed as well.
+  for (const entry of await listEntries(session)) {
+    if (entry.folderId === null || !matches(entry.name, entry.delimiter)) continue;
+    // SPECIAL-USE attributes in LSUB as well — Mac Mail validates them (own folders only).
     const flags: string[] = ['\\HasNoChildren'];
-    const special = specialUseFlag(name);
-    if (special) flags.push(special);
-    sendUntagged(session, `LSUB (${flags.join(' ')}) "${DELIMITER}" ${formatName(session, name)}`);
+    if (entry.special) flags.push(entry.special);
+    sendUntagged(session, `LSUB (${flags.join(' ')}) "${entry.delimiter}" ${formatName(session, entry.name)}`);
   }
   sendOk(session, tag, 'LSUB completed');
 }
@@ -335,10 +389,8 @@ export async function runStatus(session: ImapSession, tag: string, args: string[
     sendBad(session, tag, unknown ? `Unknown STATUS item ${unknown}` : 'Empty STATUS item list');
     return false;
   }
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, args[0]) },
-    select: { id: true },
-  });
+  // v9.1: also folders of shared / delegated mailboxes (current permission required).
+  const folder = await findTargetFolder(session, args[0]);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return false; }
   // RFC 7162 §3.1: STATUS HIGHESTMODSEQ is a CONDSTORE-enabling command.
   if (items.includes('HIGHESTMODSEQ')) session.condstoreEnabled = true;
@@ -370,10 +422,16 @@ async function quotaLine(session: ImapSession): Promise<string> {
 
 export async function handleGetQuotaRoot(session: ImapSession, tag: string, args: string[]): Promise<void> {
   if (args.length !== 1 || !session.mailboxId) { sendBad(session, tag, 'GETQUOTAROOT requires a mailbox'); return; }
-  const name = await resolveStoredName(session, args[0] as string);
-  const folder = await prisma.folder.findFirst({ where: { mailboxId: session.mailboxId, name }, select: { id: true } });
+  const folder = await findTargetFolder(session, args[0] as string);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
-  sendUntagged(session, `QUOTAROOT ${toClient(session, name)} ""`);
+  if (folder.target.foreign) {
+    // v9.1: a foreign mailbox has its own quota, which is not one of the user's
+    // quota roots — RFC 9208 §4.3.2 allows a mailbox without roots.
+    sendUntagged(session, `QUOTAROOT ${formatName(session, clientNameOf(folder.target, displayName(folder.name)))}`);
+    sendOk(session, tag, 'GETQUOTAROOT completed');
+    return;
+  }
+  sendUntagged(session, `QUOTAROOT ${toClient(session, folder.name)} ""`);
   sendUntagged(session, await quotaLine(session));
   sendOk(session, tag, 'GETQUOTAROOT completed');
 }

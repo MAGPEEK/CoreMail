@@ -50,6 +50,7 @@ export function createView(
   folder: { id: string; name: string; uidValidity: number },
   rows: ViewRow[],
   readOnly: boolean,
+  extra: Pick<SelectedMailbox, 'mailboxId' | 'foreign' | 'clientName' | 'delimiter' | 'noWrite'> = {},
 ): SelectedMailbox {
   return {
     folderId: folder.id,
@@ -59,6 +60,7 @@ export function createView(
     uids: rows.map((r) => r.uid),
     known: new Map(rows.map((r) => [r.uid, r.modSeq])),
     searchRes: [],
+    ...extra,
   };
 }
 

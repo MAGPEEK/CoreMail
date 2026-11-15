@@ -185,6 +185,9 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
 
   const prisma = {
     domain: { findFirst: async () => ({ name: 'example.test' }) },
+    // v9.1: no shared / delegated mailboxes in this fixture (see imap-shared.test.ts).
+    sharedMailboxPerm: { findMany: async () => [] },
+    mailboxDelegate: { findMany: async () => [] },
     user: {
       findFirst: async ({ where }: { where: Row }) => { await tick(); return users.find((u) => matches(asRow(u), where)) ?? null; },
     },
@@ -834,12 +837,21 @@ describe('LIST, NAMESPACE and STATUS (RFC 9051 §6.3.9–11)', () => {
     assert.match(untagged(response, /^\* LIST /)[0] ?? '', /\\HasChildren/);
   });
 
-  test('NAMESPACE returns one personal namespace with delimiter "."', async (t) => {
+  test('NAMESPACE returns the personal namespace with delimiter "." plus Other Users and Shared (v9.1)', async (t) => {
     const { client } = await login(t);
 
     const response = await client.cmd('NAMESPACE');
 
-    assert.deepEqual(untagged(response, /^\* NAMESPACE/), ['* NAMESPACE (("" ".")) NIL NIL']);
+    assert.deepEqual(untagged(response, /^\* NAMESPACE/), ['* NAMESPACE (("" ".")) (("Other Users/" "/")) (("Shared/" "/"))']);
+  });
+
+  test('without shared or delegated mailboxes LIST shows only the own folders (v9.1)', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST "" "*"');
+
+    assert.ok(response.lines.every((l) => l.endsWith('"."' ) || / "\." /.test(l)), response.raw);
+    assert.equal(untagged(response, /Shared|Other Users/).length, 0);
   });
 
   test('STATUS returns the requested item', async (t) => {

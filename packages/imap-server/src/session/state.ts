@@ -1,3 +1,5 @@
+import type { AccessibleMailbox } from '@coremail/storage';
+
 /**
  * The transport a session writes to: a plain TCP socket, a TLS socket, or the
  * COMPRESS=DEFLATE wrapper around either (server/compress.ts).
@@ -35,6 +37,15 @@ export interface SelectedMailbox {
    * comparison (session/view.ts syncView); unchanged → nothing to report.
    */
   syncStamp?: string | undefined;
+  /** v9.1: mailbox the folder belongs to (the own one, a Shared Mailbox or a delegated one). */
+  mailboxId?: string | undefined;
+  /** v9.1: set when the folder belongs to a foreign mailbox (Shared / Other Users namespace). */
+  foreign?: { kind: 'shared' | 'delegated'; email: string } | null | undefined;
+  /** v9.1: the mailbox name as the client sees it (decoded) and its hierarchy delimiter. */
+  clientName?: string | undefined;
+  delimiter?: string | undefined;
+  /** v9.1: the user's rights do not permit changes (read-only permission) → NO [NOPERM]. */
+  noWrite?: boolean | undefined;
 }
 
 export interface ImapSession {
@@ -85,6 +96,8 @@ export interface ImapSession {
   idleTimer?: ReturnType<typeof setInterval> | null;
   // v8.1: set by the server — switches the idle timeout to the post-login value
   onAuthenticated?: () => void;
+  // v9.1: cached foreign mailbox permissions (commands/namespaces.ts, ≤ 30 s)
+  foreignAccess?: { userId: string; at: number; gen: number; list: AccessibleMailbox[] } | undefined;
 }
 
 function buildCapabilities(isTls: boolean, starttlsAvailable = false, authenticated = false, compressActive = false): string[] {

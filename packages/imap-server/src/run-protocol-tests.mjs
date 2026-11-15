@@ -18,5 +18,7 @@ const run = spawnSync(process.execPath, [
   '--experimental-transform-types', '--no-warnings',
   '--import', new URL('./test-hooks.mjs', import.meta.url).href,
   '--test', fileURLToPath(new URL('./server/imap-protocol.test.ts', import.meta.url)),
+  // v9.1: shared / delegated mailboxes (multi-mailbox fake)
+  fileURLToPath(new URL('./server/imap-shared.test.ts', import.meta.url)),
 ], { stdio: 'inherit' });
 process.exit(run.status ?? 1);

@@ -31,7 +31,10 @@ import {
   parseSortCriteria, parseCharset, sortMessages, threadOrderedSubject, threadReferences, formatThreads,
   type SortCriterion, type SortMessage,
 } from './sort-thread.js';
-import { displayNames, fromClient, resolveStoredName, toClient } from './mailbox-name.js';
+import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
+import {
+  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, resolveMailbox, revalidateSelected, selectedWritable,
+} from './namespaces.js';
 import { runStatus } from './list.js';
 import {
   parseSelectParams, selectCandidates, sendVanishedEarlier, vanishedUids, type SelectParams,
@@ -105,12 +108,8 @@ export async function handleSubscribe(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-  const folderName = await resolveStoredName(session, args[0] ?? '');
-  if (!folderName) { sendNo(session, tag, 'Folder name required'); return; }
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: folderName },
-    select: { id: true },
-  });
+  if (!args[0]) { sendNo(session, tag, 'Folder name required'); return; }
+  const folder = await findTargetFolder(session, args[0]);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   sendOk(session, tag, 'SUBSCRIBE completed');
 }
@@ -128,10 +127,10 @@ export async function handleUnsubscribe(
 // ─────────────────────────────────────────────
 // NAMESPACE — RFC 2342
 // ─────────────────────────────────────────────
-// Personal namespace with "." as hierarchy delimiter. No other-user or shared
-// namespaces.
+// Personal namespace with "." as hierarchy delimiter; v9.1: "Other Users/" (delegated
+// mailboxes) and "Shared/" (Shared Mailboxes) with "/" — see namespaces.ts.
 export function handleNamespace(session: ImapSession, tag: string): void {
-  sendUntagged(session, 'NAMESPACE (("" ".")) NIL NIL');
+  sendUntagged(session, namespaceResponse());
   sendOk(session, tag, 'NAMESPACE completed');
 }
 
@@ -154,15 +153,20 @@ export async function handleCreate(
   // A trailing hierarchy delimiter only declares the intent to create inferiors
   // (Mac Mail sometimes sends "Parent.Child.").
   const rawName = (args[0] ?? '').replace(/[./]+$/, '');
-  const name = fromClient(session, rawName);
-  if (!name) { sendBad(session, tag, 'Folder name required'); return; }
+  if (!fromClient(session, rawName)) { sendBad(session, tag, 'Folder name required'); return; }
+  // v9.1: names in the Shared / Other Users namespaces create folders in that
+  // mailbox (FULL_ACCESS only); an inaccessible or read-only one is NOPERM alike.
+  const resolved = await resolveMailbox(session, rawName, true);
+  if (!resolved.ok || !resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
+  const { target } = resolved;
+  const name = target.folderName;
   if (name === 'INBOX') {
     sendNo(session, tag, '[ALREADYEXISTS] INBOX cannot be created');
     return;
   }
   // A legacy (modified UTF-7) row of the same mailbox name counts as existing.
   const existing = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, rawName) },
+    where: { mailboxId: target.mailboxId, name: target.storedName },
     select: { id: true },
   });
   if (existing) {
@@ -170,9 +174,9 @@ export async function handleCreate(
     return;
   }
   await prisma.folder.create({
-    data: { mailboxId: session.mailboxId, name, displayName: name },
+    data: { mailboxId: target.mailboxId, name, displayName: name },
   });
-  log.info({ mailboxId: session.mailboxId, name }, 'IMAP folder created');
+  log.info({ mailboxId: target.mailboxId, name, foreign: target.foreign?.kind }, 'IMAP folder created');
   sendOk(session, tag, 'CREATE completed');
 }
 
@@ -185,20 +189,18 @@ export async function handleDeleteFolder(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  const name = await resolveStoredName(session, args[0] ?? '');
-  if (!name) { sendBad(session, tag, 'Folder name required'); return; }
-  if (name === 'INBOX') {
+  if (!args[0]) { sendBad(session, tag, 'Folder name required'); return; }
+  const resolved = await resolveMailbox(session, args[0], true);
+  if (resolved.ok && resolved.target.folderName === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be deleted');
     return;
   }
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name },
-    select: { id: true },
-  });
+  const folder = await findTargetFolder(session, args[0]); // the access list was just re-read
   if (!folder) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
+  if (!folder.target.writable) { sendNo(session, tag, NOPERM); return; }
   // Soft-delete the messages, then delete the folder
   await prisma.message.updateMany({
     where: { folderId: folder.id, deletedAt: null },
@@ -218,14 +220,25 @@ export async function handleRename(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length !== 2 || !args[0] || !args[1]) { sendBad(session, tag, 'Old + new folder name required'); return; }
-  const oldName = fromClient(session, args[0]);
-  const newName = fromClient(session, args[1]);
+  // v9.1: both names must lie in the same mailbox (own, or a foreign one with FULL_ACCESS).
+  const from = await resolveMailbox(session, args[0], true);
+  const to = await resolveMailbox(session, args[1]);
+  if (!from.ok) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
+  if (!from.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!to.ok || !to.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (to.target.mailboxId !== from.target.mailboxId) {
+    sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into another account');
+    return;
+  }
+  const mailboxId = from.target.mailboxId;
+  const oldName = from.target.folderName;
+  const newName = to.target.folderName;
   if (oldName === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be renamed');
     return;
   }
   const folders = await prisma.folder.findMany({
-    where: { mailboxId: session.mailboxId },
+    where: { mailboxId },
     select: { id: true, name: true },
   });
   // Hierarchy works on display names: inferiors of a legacy (modified UTF-7)
@@ -255,7 +268,10 @@ export async function handleRename(
   });
   const selected = session.selected;
   const renamedSelected = selected ? renames.find((r) => r.id === selected.folderId) : undefined;
-  if (selected && renamedSelected) selected.folderName = renamedSelected.name;
+  if (selected && renamedSelected) {
+    selected.folderName = renamedSelected.name;
+    selected.clientName = clientNameOf(from.target, renamedSelected.name);
+  }
   sendOk(session, tag, 'RENAME completed');
 }
 
@@ -264,12 +280,19 @@ export async function handleRename(
 // ─────────────────────────────────────────────
 /** True when the APPEND target mailbox exists (checked before reading the literal). */
 export async function appendTargetExists(session: ImapSession, name: string): Promise<boolean> {
-  if (!session.mailboxId) return false;
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, name) },
-    select: { id: true },
-  });
-  return !!folder;
+  return (await appendTargetCheck(session, name)) === null;
+}
+
+/**
+ * v9.1: APPEND target check before the literal is read — null when the message
+ * may be appended, else the response text (missing mailbox / no write permission).
+ */
+export async function appendTargetCheck(session: ImapSession, name: string): Promise<string | null> {
+  if (!session.mailboxId) return '[TRYCREATE] Mailbox does not exist';
+  const folder = await findTargetFolder(session, name, true);
+  if (!folder) return '[TRYCREATE] Mailbox does not exist';
+  if (!folder.target.writable) return NOPERM;
+  return null;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -322,7 +345,6 @@ export async function handleAppend(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length < 2 || args.length > 4) { sendBad(session, tag, 'APPEND requires mailbox and message literal'); return; }
-  const folderName = await resolveStoredName(session, args[0] ?? '');
   const raw = message ?? Buffer.from(args[args.length - 1] ?? '', 'utf8');
   // Optional flag list and date-time between mailbox and message. Invalid
   // flags and \Recent are dropped (a client cannot set them).
@@ -338,15 +360,14 @@ export async function handleAppend(
     internalDate = parseDateTime(a);
     if (!internalDate) { sendBad(session, tag, 'Invalid APPEND date-time'); return; }
   }
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: folderName },
-    include: { mailbox: true },
-  });
+  // v9.1: the target may be a foreign mailbox — permission re-read without the cache.
+  const folder = await findTargetFolder(session, args[0] ?? '', true);
   if (!folder) {
     sendNo(session, tag, '[TRYCREATE] Mailbox does not exist');
     return;
   }
-  // v8.1 hard quota (ProhibitSendReceiveQuota): RFC 9208 §4.3 / RFC 5530 [OVERQUOTA].
+  if (!folder.target.writable) { sendNo(session, tag, NOPERM); return; }
+  // v8.1 hard quota (of the target mailbox) (ProhibitSendReceiveQuota): RFC 9208 §4.3 / RFC 5530 [OVERQUOTA].
   if (await isMailboxWriteBlocked(folder.mailboxId)) {
     sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
     return;
@@ -410,6 +431,11 @@ export async function handleAppend(
 // ─────────────────────────────────────────────
 const IN_LIST_LIMIT = 1000;
 
+/** v9.1: the mailbox the selected folder belongs to (own, shared or delegated). */
+function selectedMailboxId(session: ImapSession, view: NonNullable<ImapSession['selected']>): string {
+  return view.mailboxId ?? session.mailboxId!;
+}
+
 /**
  * Database rows of the given UIDs in the selected folder (ascending). UIDs of
  * the view that were expunged elsewhere have no row ("ghosts") and are skipped.
@@ -447,11 +473,10 @@ export async function handleCopy(
   if (args.length !== 2 || !args[1]) { sendBad(session, tag, 'COPY: seq + target required'); return; }
   if (!isValidSequenceSet(seqSet)) { sendBad(session, tag, 'Invalid sequence set'); return; }
 
-  const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: await resolveStoredName(session, args[1]) },
-    include: { mailbox: true },
-  });
+  // v9.1: the target may be a foreign mailbox (permission re-read without the cache).
+  const target = await findTargetFolder(session, args[1], true);
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
+  if (!target.target.writable) { sendNo(session, tag, NOPERM); return; }
 
   const sourceMsgs = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
   if (sourceMsgs.length === 0) {
@@ -493,14 +518,16 @@ export async function handleMove(
   const seqSet = args[0] ?? '';
   if (args.length !== 2 || !args[1]) { sendBad(session, tag, 'MOVE: seq + target required'); return; }
   if (!isValidSequenceSet(seqSet)) { sendBad(session, tag, 'Invalid sequence set'); return; }
+  // v9.1: moving out of a mailbox needs the "t"/"e" rights (read-only permission → NOPERM).
+  if (view.noWrite) { sendNo(session, tag, NOPERM); return; }
   // RFC 9051 §6.3.3: no permanent changes in a mailbox opened with EXAMINE.
   if (view.readOnly) { sendNo(session, tag, '[READ-ONLY] Mailbox is read-only'); return; }
+  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
 
-  const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: await resolveStoredName(session, args[1]) },
-    include: { mailbox: true },
-  });
+  const target = await findTargetFolder(session, args[1], true);
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
+  if (!target.target.writable) { sendNo(session, tag, NOPERM); return; }
+  const sourceMailboxId = selectedMailboxId(session, view);
 
   const matched = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
   if (matched.length === 0) {
@@ -509,7 +536,7 @@ export async function handleMove(
   }
   // A move inside the mailbox does not change its usage — never blocked — except
   // out of "Recoverable Items" (not counted) or into another mailbox.
-  if (movesIntoUsage(view.folderName, target.name, session.mailboxId!, target.mailboxId)
+  if (movesIntoUsage(view.folderName, target.name, sourceMailboxId, target.mailboxId)
     && await isMailboxWriteBlocked(target.mailboxId)) {
     sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
     return;
@@ -518,7 +545,7 @@ export async function handleMove(
   // modSeq; the rows keep their id.
   const { mapping } = await prisma.$transaction((tx) => moveMessages(
     tx, matched.map((m) => m.id), target.id,
-    { targetMailboxId: target.mailboxId, sourceMailboxId: session.mailboxId! },
+    { targetMailboxId: target.mailboxId, sourceMailboxId },
   ));
   if (mapping.length > 0) {
     sendUntagged(session, `OK [COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}] Moved`);
@@ -735,17 +762,19 @@ export async function handleClose(
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
   // Implicitly remove messages with the \Deleted flag (not for a mailbox
   // opened with EXAMINE). The expunge bumps the modSeq.
-  if (!session.selected.readOnly) {
+  const closing = session.selected;
+  // v9.1: a foreign mailbox is only expunged with a current write permission.
+  if (!closing.readOnly && !closing.noWrite && (!closing.foreign || await selectedWritable(session))) {
     const doomed = await prisma.message.findMany({
       where: {
-        folderId:  session.selected.folderId,
+        folderId:  closing.folderId,
         deletedAt: null,
         flags:     { has: '\\Deleted' },
       },
       select: { id: true },
     });
     if (doomed.length > 0) {
-      const mailboxId = session.mailboxId!;
+      const mailboxId = selectedMailboxId(session, closing);
       await prisma.$transaction((tx) => expunge(tx, doomed.map((m) => m.id), { mailboxId }));
     }
   }
@@ -1002,25 +1031,35 @@ export async function handleSelect(
     sendUntagged(session, 'OK [CLOSED] Previous mailbox closed');
   }
 
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: await resolveStoredName(session, args[0]) },
-    include: { mailbox: true },
-  });
+  // v9.1: foreign mailboxes (Shared / Other Users) — the permission is always re-read here.
+  const folder = await findTargetFolder(session, args[0], true);
   if (!folder) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
   if (condstore) session.condstoreEnabled = true;
+  const { target } = folder;
+  // Read-only permission → EXAMINE semantics even for SELECT (RFC 4314 §4, RFC 9051 §6.3.2).
+  const noWrite = !target.writable;
+  const effectiveReadOnly = readOnly || noWrite;
 
   const rows = await loadViewRows(folder.id);
-  const view = createView({ id: folder.id, name: folder.name, uidValidity: folder.mailbox.uidValidity }, rows, readOnly);
+  const view = createView({ id: folder.id, name: folder.name, uidValidity: folder.mailbox.uidValidity }, rows, effectiveReadOnly, {
+    mailboxId: target.mailboxId,
+    foreign: target.foreign ? { kind: target.foreign.kind, email: target.foreign.email } : null,
+    clientName: target.foreign ? clientNameOf(target, displayName(folder.name)) : undefined,
+    delimiter: target.delimiter,
+    noWrite,
+  });
   session.state = 'SELECTED';
   session.selected = view;
 
   sendUntagged(session, `${view.uids.length} EXISTS`);
   if (session.imap4rev2Enabled) {
     // RFC 9051 §6.3.2: a LIST response with the mailbox name; no RECENT, no UNSEEN code.
-    sendUntagged(session, `LIST () "${DELIMITER}" ${toClient(session, folder.name)}`);
+    sendUntagged(session, view.clientName !== undefined
+      ? `LIST () "${target.delimiter}" ${formatName(session, view.clientName)}`
+      : `LIST () "${DELIMITER}" ${toClient(session, folder.name)}`);
   } else {
     sendUntagged(session, '0 RECENT');
     // RFC 3501 §7.1: [UNSEEN n] carries the sequence number of the first unseen message.
@@ -1031,7 +1070,7 @@ export async function handleSelect(
   sendUntagged(session, `OK [UIDNEXT ${folder.mailbox.uidNext}] Predicted next UID`);
   sendUntagged(session, `OK [HIGHESTMODSEQ ${folder.mailbox.highestModSeq}] Highest`);
   sendUntagged(session, `FLAGS (${SYSTEM_FLAGS.join(' ')})`);
-  sendUntagged(session, readOnly
+  sendUntagged(session, effectiveReadOnly
     ? 'OK [PERMANENTFLAGS ()] No permanent flags permitted'
     : `OK [PERMANENTFLAGS (${SYSTEM_FLAGS.join(' ')} \\*)] Flags permitted`);
 
@@ -1048,7 +1087,7 @@ export async function handleSelect(
     }
   }
 
-  sendOk(session, tag, `${readOnly ? '[READ-ONLY]' : '[READ-WRITE]'} ${verb} completed`);
+  sendOk(session, tag, `${effectiveReadOnly ? '[READ-ONLY]' : '[READ-WRITE]'} ${verb} completed`);
 }
 
 // ─────────────────────────────────────────────
@@ -1135,8 +1174,13 @@ export async function handleFetch(
   const seenNow = new Set<string>();
   if (setsSeen && !view.readOnly && session.mailboxId) {
     const unseen = messages.filter((m) => !hasFlag(m.flags, '\\Seen'));
+    // v9.1: a write to a foreign mailbox re-checks the permission first.
+    if (unseen.length > 0 && view.foreign && !(await selectedWritable(session))) {
+      if (session.selected !== view) { sendNo(session, tag, NOPERM); return; }
+      unseen.length = 0;
+    }
     if (unseen.length > 0) {
-      const mailboxId = session.mailboxId;
+      const mailboxId = selectedMailboxId(session, view);
       // Flags are re-read under the mailbox lock: a concurrent STORE is not overwritten.
       const updated = await prisma.$transaction((tx) => modifyFlags(
         tx, unseen.map((m) => m.id), (flags) => (hasFlag(flags, '\\Seen') ? null : [...flags, '\\Seen']), { mailboxId },
@@ -1309,11 +1353,14 @@ export async function handleStore(
     requested.push(flag);
   }
   const newFlags = uniqueFlags(requested);
+  // v9.1: read-only permission on a foreign mailbox → NOPERM (RFC 4314 §4).
+  if (view.noWrite) { sendNo(session, tag, NOPERM); return; }
   // RFC 9051 §6.3.3: no permanent state changes in a mailbox opened with EXAMINE.
   if (view.readOnly) {
     sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
     return;
   }
+  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
   // RFC 7162 §3.1: STORE UNCHANGEDSINCE enables CONDSTORE.
   if (unchangedSince !== null) session.condstoreEnabled = true;
 
@@ -1343,7 +1390,7 @@ export async function handleStore(
   // are computed from the rows re-read under the mailbox lock (modifyFlags), so
   // concurrent "+FLAGS" from two clients both survive.
   const toWrite = results.filter((r) => r.changed);
-  const mailboxId = session.mailboxId!;
+  const mailboxId = selectedMailboxId(session, view);
   const fresh = new Map<string, { flags: string[]; modSeq: bigint }>();
   const conflicts = new Set<string>();
   const stored = toWrite.length === 0 ? [] : await prisma.$transaction((tx) => modifyFlags(
@@ -1412,17 +1459,19 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
     sendBad(session, tag, 'Invalid UID set');
     return;
   }
+  if (view.noWrite) { sendNo(session, tag, NOPERM); return; }
   // RFC 9051 §6.3.3: nothing is removed from a mailbox opened with EXAMINE.
   if (view.readOnly) {
     sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
     return;
   }
+  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
 
   // Only messages the client knows about (its view) are candidates.
   const candidates = uidSet !== undefined ? resolveSet(view, uidSet, true) : view.uids;
   const toDelete = (await loadMessages(view.folderId, candidates, false)).filter((m) => hasFlag(m.flags, '\\Deleted'));
   if (toDelete.length > 0) {
-    const mailboxId = session.mailboxId!;
+    const mailboxId = selectedMailboxId(session, view);
     await prisma.$transaction((tx) => expunge(tx, toDelete.map((m) => m.id), { mailboxId }));
   }
   // The EXPUNGE responses (ours and those of other clients) come from the view sync.
@@ -1442,6 +1491,8 @@ export function setIdlePollInterval(ms: number): void {
 async function idleSync(session: ImapSession): Promise<void> {
   if (!session.idleActive || !session.selected) return;
   try {
+    // v9.1: a revoked permission on a selected foreign mailbox closes it ([CLOSED]).
+    if (!(await revalidateSelected(session, false))) return;
     await syncView(session, { expunge: true });
   } catch (err) {
     log.warn({ err, id: session.id }, 'IMAP IDLE: mailbox check failed');
