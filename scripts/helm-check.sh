@@ -40,6 +40,9 @@ for values in infra/k8s/ci/*-values.yaml; do
   if helm template coremail /chart -n coremail --kube-version "$KUBE_VERSION" \
        -f "/chart/ci/$name.yaml" > "$OUT/$name.yaml"; then
     echo "rendered $(grep -c '^kind:' "$OUT/$name.yaml") objects → infra/k8s/.rendered/$name.yaml"
+    # env names the app actually reads (regressions: RSPAMD_HOST/PORT instead of RSPAMD_URL)
+    if ! grep -q '^  RSPAMD_URL: "https\?://' "$OUT/$name.yaml"; then echo "ERROR: $name: RSPAMD_URL missing"; fail=1; fi
+    if grep -q '^  RSPAMD_\(HOST\|PORT\):' "$OUT/$name.yaml"; then echo "ERROR: $name: legacy RSPAMD_HOST/RSPAMD_PORT rendered"; fail=1; fi
     docker run --rm -v "$CHART_HOST:/chart" "$KUBECONFORM_IMAGE" \
       -strict -ignore-missing-schemas -summary \
       -kubernetes-version "$KUBE_VERSION" "/chart/.rendered/$name.yaml" || fail=1

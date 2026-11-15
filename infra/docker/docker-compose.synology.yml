@@ -139,7 +139,6 @@ services:
     volumes:
       - /volume1/docker/coremail/rspamd:/var/lib/rspamd
     expose:
-      - "11333"
       - "11334"
     healthcheck:
       test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]

@@ -45,7 +45,7 @@ spec:
     {{- with $np.extraAppIngress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-{{- range $component, $cfg := dict "postgresql" (list 5432) "redis" (list 6379) "minio" (list 9000) "rspamd" (list 11333 11334) "clamav" (list 3310) }}
+{{- range $component, $cfg := dict "postgresql" (list 5432) "redis" (list 6379) "minio" (list 9000) "rspamd" (list 11334) "clamav" (list 3310) }}
 {{- if (index $.Values $component).enabled }}
 ---
 # ── {{ $component }}: reachable only from the CoreMail app pod

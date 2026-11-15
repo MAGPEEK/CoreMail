@@ -125,7 +125,7 @@ minio:
   external: { host: s3.internal, port: 9000 }                  # credentials = MINIO_ROOT_USER/PASSWORD
 rspamd:
   enabled: false
-  external: { host: rspamd.internal, port: 11333, controllerPort: 11334 }
+  external: { host: rspamd.internal, controllerPort: 11334 }    # → RSPAMD_URL (controller: scan + learn), or set external.url
 clamav:
   enabled: false
   external: { host: clamav.internal, port: 3310 }

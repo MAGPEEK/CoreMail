@@ -420,10 +420,12 @@ rspamd:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # CoreMail talks to the rspamd controller only (RSPAMD_URL): it serves
+  # scanning (/checkv2) as well as learn spam/ham and stats.
   external:
+    url: ""                 # full controller URL, e.g. https://rspamd.internal:11334 (wins over host)
     host: ""
-    port: 11333             # normal worker (scanning)
-    controllerPort: 11334   # controller (learn, stats) — CoreMail uses both
+    controllerPort: 11334   # → RSPAMD_URL=http://<host>:<controllerPort>
 
 clamav:
   enabled: true

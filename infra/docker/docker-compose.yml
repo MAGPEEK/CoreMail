@@ -86,7 +86,7 @@ services:
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
 
       # ── Spam and virus protection (containers below) ─────────────────────────
-      RSPAMD_URL:  http://rspamd:11334
+      RSPAMD_URL:  http://rspamd:11334   # rspamd controller: scanning + Bayes learning + stats
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
 

@@ -279,6 +279,8 @@ MAXMIND_LICENSE_KEY=
 | `LOG_LEVEL` | `error` / `warn` / `info` / `debug` | No (`info`) |
 | `HTTPS_PROXY_ENABLED` | Enable the integrated TLS proxy | No (`true`) |
 | `GATEWAY_MODE` | SMTP gateway/relay mode | No (`false`) |
+| `RSPAMD_URL` | rspamd **controller** URL, used for scanning (`/checkv2`), Bayes learning and stats; `http`/`https`, optional path prefix. Set in `docker-compose.yml` | No (`http://rspamd:11334`) |
+| `RSPAMD_HOST` / `RSPAMD_PORT` | Legacy (before 7.1): scan host/port of the rspamd normal worker; only used when `RSPAMD_URL` is not set | No (`rspamd` / `11333`) |
 
 ---
 

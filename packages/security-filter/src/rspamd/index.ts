@@ -2,9 +2,68 @@ import { createLogger } from '@coremail/core';
 
 const log = createLogger('security-filter:rspamd');
 
-const RSPAMD_HOST = process.env['RSPAMD_HOST'] ?? 'rspamd';
-const RSPAMD_PORT = process.env['RSPAMD_PORT'] ?? '11333';
-const RSPAMD_BASE = `http://${RSPAMD_HOST}:${RSPAMD_PORT}`;
+export interface RspamdEndpoints {
+  /** Base URL for /checkv2. */
+  scan: string;
+  /** Base URL of the controller (/learnspam, /learnham). */
+  controller: string;
+  /** Where the values came from (logged at startup). */
+  source: 'RSPAMD_URL' | 'RSPAMD_HOST/RSPAMD_PORT';
+}
+
+/**
+ * v7.1.0: rspamd endpoints from the environment.
+ *
+ * - `RSPAMD_URL` (preferred; what docker-compose, the Helm chart and the
+ *   api-gateway use): the rspamd **controller**, e.g. `http://rspamd:11334`.
+ *   The controller serves /checkv2 as well as /learnspam and /learnham, so one
+ *   URL covers scanning and learning. http/https only, no credentials, an
+ *   optional path prefix (reverse proxy) is kept.
+ * - Fallback (pre-7.1 configuration): `RSPAMD_HOST` (default `rspamd`) +
+ *   `RSPAMD_PORT` (default 11333, normal worker) for scanning, the controller
+ *   on `RSPAMD_HOST:11334` for learning.
+ *
+ * An invalid RSPAMD_URL is reported and the fallback is used.
+ */
+export function resolveRspamdEndpoints(
+  env: Record<string, string | undefined> = process.env,
+  warn: (msg: string) => void = (msg) => log.error(msg),
+): RspamdEndpoints {
+  const raw = (env['RSPAMD_URL'] ?? '').trim();
+  if (raw) {
+    const parsed = parseRspamdUrl(raw);
+    if ('error' in parsed) warn(`RSPAMD_URL ignored: ${parsed.error} — falling back to RSPAMD_HOST/RSPAMD_PORT`);
+    else return { scan: parsed.url, controller: parsed.url, source: 'RSPAMD_URL' };
+  }
+  const host = (env['RSPAMD_HOST'] ?? '').trim() || 'rspamd';
+  const port = (env['RSPAMD_PORT'] ?? '').trim() || '11333';
+  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host; // IPv6 literal
+  return { scan: `http://${h}:${port}`, controller: `http://${h}:11334`, source: 'RSPAMD_HOST/RSPAMD_PORT' };
+}
+
+/** Normalised base URL (no trailing slash) or an error text. */
+export function parseRspamdUrl(raw: string): { url: string } | { error: string } {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return { error: 'not a URL' };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: `unsupported scheme ${u.protocol}` };
+  if (u.username || u.password) return { error: 'credentials in the URL are not supported' };
+  if (u.search || u.hash) return { error: 'query or fragment not allowed' };
+  const path = u.pathname.replace(/\/+$/, '');
+  return { url: `${u.protocol}//${u.host}${path}` };
+}
+
+let endpoints: RspamdEndpoints | null = null;
+function rspamd(): RspamdEndpoints {
+  if (!endpoints) {
+    endpoints = resolveRspamdEndpoints();
+    log.info({ scan: endpoints.scan, controller: endpoints.controller, source: endpoints.source }, 'rspamd endpoints');
+  }
+  return endpoints;
+}
 
 export interface RspamdResult {
   score: number;
@@ -15,7 +74,7 @@ export interface RspamdResult {
 
 export async function scanMessage(rawBuffer: Buffer): Promise<RspamdResult> {
   try {
-    const response = await fetch(`${RSPAMD_BASE}/checkv2`, {
+    const response = await fetch(`${rspamd().scan}/checkv2`, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain',
@@ -51,7 +110,7 @@ export async function scanMessage(rawBuffer: Buffer): Promise<RspamdResult> {
 
 export async function learnSpam(rawBuffer: Buffer): Promise<void> {
   try {
-    await fetch(`http://${RSPAMD_HOST}:11334/learnspam`, {
+    await fetch(`${rspamd().controller}/learnspam`, {
       method: 'POST',
       body: rawBuffer,
       signal: AbortSignal.timeout(10_000),
@@ -63,7 +122,7 @@ export async function learnSpam(rawBuffer: Buffer): Promise<void> {
 
 export async function learnHam(rawBuffer: Buffer): Promise<void> {
   try {
-    await fetch(`http://${RSPAMD_HOST}:11334/learnham`, {
+    await fetch(`${rspamd().controller}/learnham`, {
       method: 'POST',
       body: rawBuffer,
       signal: AbortSignal.timeout(10_000),

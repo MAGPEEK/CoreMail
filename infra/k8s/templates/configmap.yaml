@@ -43,10 +43,11 @@ data:
   {{- end }}
 
   # Spam and virus protection
+  # RSPAMD_URL = rspamd controller: scanning (/checkv2), learning and stats (CoreMail >= 7.1.0)
   {{- $rspamd := include "coremail.rspamd.host" . }}
-  {{- if $rspamd }}
-  RSPAMD_HOST: {{ $rspamd | quote }}
-  RSPAMD_PORT: {{ ternary "11333" (toString .Values.rspamd.external.port) .Values.rspamd.enabled | quote }}
+  {{- if and (not .Values.rspamd.enabled) .Values.rspamd.external.url }}
+  RSPAMD_URL: {{ .Values.rspamd.external.url | quote }}
+  {{- else if $rspamd }}
   RSPAMD_URL: {{ printf "http://%s:%s" $rspamd (ternary "11334" (toString .Values.rspamd.external.controllerPort) .Values.rspamd.enabled) | quote }}
   {{- end }}
   {{- $clamav := include "coremail.clamav.host" . }}

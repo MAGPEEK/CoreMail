@@ -79,6 +79,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   several times, and retention runs could overlap. Each cron fire is now claimed by one
   instance (Redis), a run lock held until the work has finished prevents overlapping runs, and
   a manual retention run while another is in progress answers 409.
+- The security-filter ignored `RSPAMD_URL` (set by docker-compose, the Helm chart and the
+  docs) and scanned on the hard-coded `RSPAMD_HOST`/`RSPAMD_PORT` defaults; Bayes learning
+  always went to `<host>:11334`. `RSPAMD_URL` (the rspamd controller) is now used for scanning
+  and learning, `RSPAMD_HOST`/`RSPAMD_PORT` remain as fallback when it is unset; an invalid URL
+  is logged and falls back. The Helm chart renders only `RSPAMD_URL` (`rspamd.external.url`
+  or `host` + `controllerPort`; `rspamd.external.port` was removed).
 
 ### Security
 
