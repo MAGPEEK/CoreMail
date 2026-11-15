@@ -192,6 +192,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   framing and leaked internals).
 - SMTP alias expansion: the same alias given twice (e.g. different case) delivered the second
   copy to the alias address itself, which was then dropped as "mailbox not found".
+- **POP3 QUIT could delete a message that was no longer in the maildrop** (RFC 1939 §6). The
+  UPDATE state expunged the DELE'd ids without a folder condition, so a message moved to
+  another folder (IMAP MOVE, JMAP, a rule) between DELE and QUIT was deleted there. QUIT now
+  removes, in one statement, only rows still live in the INBOX the session opened
+  (`expunge(…, { where })`, additive option in the message store); rows moved or deleted by
+  another client are left alone.
+- POP3 takes an exclusive maildrop lock (RFC 1939 §4): a second concurrent session for the same
+  account gets `-ERR [IN-USE]` (RFC 2449 §8.1.1) until the first one ends (QUIT, autologout or
+  dropped connection). In-process plus Redis key `pop3:lock:<userId>` (renewed, owner token);
+  without Redis the login answers `-ERR [SYS/TEMP]`. Clients that polled one account from two
+  devices at the same moment now see the second poll refused and retry.
+- POP3 QUIT whose removal fails answers `-ERR [SYS/TEMP] some deleted messages not removed` and
+  closes the connection (previously `-ERR internal error` and the session stayed open).
+- POP3 LIST/STAT are exact for rows without a stored raw message (they are materialized at
+  login instead of reporting the body-column size), messages stored with bare LF line endings
+  are sent with CRLF (the multi-line framing broke; sizes follow after the first RETR/TOP), a
+  pipelining client that does not read can no longer make the server buffer every requested
+  message (writes wait for `drain`), the 512-octet command limit counts octets, and empty
+  arguments (`LIST  1`) are rejected.
+- Autodiscover: a database error no longer makes the service hand out (and cache for 60 s) the
+  built-in `mail.local` URLs — the last known settings are served, otherwise 503. The documented
+  v2 form `/autodiscover/autodiscover.json?Email=…&Protocol=…` is routed; a repeated
+  `Protocol`/`emailaddress` parameter no longer causes a 500. SMTP on port 465 is announced as
+  implicit TLS (`SSL`) instead of STARTTLS.
+- Autodiscover v1 honours `AcceptableResponseSchema`: ActiveSync clients asking for the
+  `mobilesync` schema (MS-ASCMD) get the MobileSync server URL, unknown schemas get Error 601.
+  The Outlook (2006a) response no longer contains the schema-invalid second `ActiveSync`
+  account. `EMailAddress` with a namespace prefix or XML entities is understood.
 
 ### Security
 
@@ -252,6 +280,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   smarthost name (TLS ≥ 1.2). **Operators with a self-signed smarthost** must install a valid
   certificate or set `SMARTHOST_TLS_INSECURE=true` (explicit opt-out). Direct MX delivery stays
   opportunistic (RFC 7435).
+- **Autodiscover v1 only describes the caller's own account.** An authenticated user could ask
+  for any other address and received that person's display name and internal user id
+  (LegacyDN); unknown accounts and foreign domains got full settings, which told existing and
+  missing accounts apart. Only the caller's primary address and aliases are answered now;
+  everything else gets the same Error 500.
+- Autodiscover: requests without valid Basic credentials (Bearer, Negotiate/NTLM, none) are
+  answered with the Basic challenge without touching the database — a Bearer header used to
+  write a `SystemLog` row with the client-supplied token claims on every request. The
+  failed-login `SystemLog` category is now `AUTODISCOVER_AUTH` (was `MAPI_AUTH`).
 
 ---
 

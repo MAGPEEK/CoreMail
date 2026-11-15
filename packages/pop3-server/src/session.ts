@@ -6,6 +6,7 @@ import { prisma } from '@coremail/storage/prisma';
 import {
   expunge, verifyMailCredentials, loadRawMessage, parseMimeTree, headerBytes, type RawSourceMessage,
 } from '@coremail/storage';
+import { acquireMaildropLock, type AcquireResult } from './maildrop-lock.js';
 
 const log = createLogger('pop3-session');
 
@@ -15,6 +16,11 @@ export interface Pop3SessionOptions {
    * Without a certificate the port stays plaintext and refuses USER/PASS.
    */
   starttls?: () => { cert: Buffer; key: Buffer } | null | undefined;
+  /**
+   * Exclusive maildrop lock (RFC 1939 §4); default: {@link acquireMaildropLock}
+   * (in-process + Redis). Injectable for tests.
+   */
+  lock?: (userId: string) => Promise<AcquireResult>;
 }
 
 // Module-level hostname — updated via setPop3Hostname() when settings change
@@ -38,8 +44,10 @@ export const CREDENTIALS_CHANGED_ERR = '-ERR [AUTH] Credentials changed, please 
 
 /** RFC 1939 §3: the autologout timer must be at least 10 minutes. */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-/** Max characters buffered without a line break (commands are ≤ 512 octets). */
+/** Max octets buffered without a line break (commands are ≤ 512 octets). */
 const MAX_PENDING_CHARS = 8 * 1024;
+/** RFC 2449 §4: a command line is at most 512 octets including CRLF. */
+const MAX_COMMAND_OCTETS = 512;
 
 interface MailDrop {
   id: string;
@@ -48,12 +56,19 @@ interface MailDrop {
   deleted: boolean;
 }
 
+/** Maildrop row as loaded from the database. */
+interface MailDropRow { id: string; uid: number; rawSize: number; storagePath?: string | null }
+
 export class POP3Session {
   private state: State = 'AUTHORIZATION';
   private user: string | null = null;
   private userId: string | null = null;
   private maildrop: MailDrop[] = [];
   private mailboxId: string | null = null;
+  /** INBOX folder of the maildrop — QUIT only expunges rows still in this folder. */
+  private inboxFolderId: string | null = null;
+  /** Releases the maildrop lock (set while the session holds it). */
+  private releaseLock: (() => Promise<void>) | null = null;
   private buf = '';
   /** v7: the connection is encrypted (implicit TLS on 995 or after STLS). */
   private secure: boolean;
@@ -79,9 +94,14 @@ export class POP3Session {
   }
 
   start() {
-    this.socket.setEncoding('utf8');
+    // latin1: one character per octet, so line limits count octets (RFC 2449 §4);
+    // arguments are decoded as UTF-8 in handleCommand.
+    this.socket.setEncoding('latin1');
     this.socket.on('data', this.onDataBound);
-    this.socket.once('close', () => { this.unregisterLive?.(); this.unregisterLive = null; });
+    this.socket.once('close', () => {
+      this.unregisterLive?.(); this.unregisterLive = null;
+      void this.unlock();
+    });
     // RFC 1939 §3: inactivity autologout timer (≥ 10 minutes). No UPDATE state:
     // messages marked as deleted stay in the maildrop.
     this.socket.setTimeout(IDLE_TIMEOUT_MS, () => {
@@ -97,6 +117,28 @@ export class POP3Session {
     this.socket.write(line + '\r\n');
   }
 
+  /**
+   * Writes a (large) multi-line body and waits until the socket buffer drained, so a
+   * pipelining client that does not read cannot make the server buffer every
+   * requested message (the command queue waits here).
+   */
+  private async writeBody(data: Buffer): Promise<void> {
+    if (this.closed) return;
+    const socket = this.socket;
+    if (socket.write(data) || socket.destroyed) return;
+    await new Promise<void>((resolve) => {
+      const done = () => { socket.off('drain', done); socket.off('close', done); resolve(); };
+      socket.on('drain', done);
+      socket.on('close', done);
+    });
+  }
+
+  private async unlock(): Promise<void> {
+    const release = this.releaseLock;
+    this.releaseLock = null;
+    await release?.();
+  }
+
   private onData(chunk: string) {
     if (this.closed) return;
     this.buf += chunk;
@@ -110,7 +152,7 @@ export class POP3Session {
     }
     for (const line of lines) {
       const epoch = this.epoch;
-      if (line.length > 512) {
+      if (line.length + 2 > MAX_COMMAND_OCTETS) {
         this.enqueue(epoch, async () => this.send('-ERR line too long'));
         continue;
       }
@@ -138,14 +180,35 @@ export class POP3Session {
     return !this.secure && !!this.options.starttls?.();
   }
 
-  private async handleCommand(rawLine: string) {
-    const line = rawLine.trim();
+  private async handleCommand(wireLine: string) {
+    // The line arrives as octets (latin1); arguments such as passwords are UTF-8.
+    const rawLine = Buffer.from(wireLine, 'latin1').toString('utf8').trimStart();
+    const line = rawLine.trimEnd();
     const [cmd, ...args] = line.split(' ');
     const command = (cmd ?? '').toUpperCase();
 
+    // RFC 1939 §3: keyword and arguments are separated by single spaces. An empty
+    // argument ("LIST  1") must not be read as "no argument". PASS is exempt: the
+    // password is everything after "PASS " and may contain spaces.
+    if (command !== 'PASS' && args.some((a) => a === '')) {
+      return this.send('-ERR syntax error: arguments are separated by a single space');
+    }
+
     if (command === 'QUIT') {
-      if (this.state === 'TRANSACTION') await this.updateAndDelete();
-      this.send('+OK CoreMail POP3 server signing off');
+      let reply = '+OK CoreMail POP3 server signing off';
+      if (this.state === 'TRANSACTION') {
+        // RFC 1939 §6: UPDATE state — remove the marked messages, release the
+        // lock and close the connection whether or not the removal succeeded.
+        this.state = 'UPDATE';
+        try {
+          await this.updateAndDelete();
+        } catch (err) {
+          log.error({ err, userId: this.userId }, 'POP3 UPDATE: removing deleted messages failed');
+          reply = '-ERR [SYS/TEMP] some deleted messages not removed';
+        }
+        await this.unlock();
+      }
+      this.send(reply);
       this.closed = true;
       this.socket.end();
       return;
@@ -209,7 +272,7 @@ export class POP3Session {
       this.secure = true;
       this.user = null;
       this.buf = '';
-      secure.setEncoding('utf8');
+      secure.setEncoding('latin1');
       secure.on('data', this.onDataBound);
       log.debug('POP3 STLS upgrade complete');
     });
@@ -251,8 +314,24 @@ export class POP3Session {
         return this.send('-ERR [AUTH] invalid credentials (accounts with two-factor authentication need an app password)');
       }
 
+      // RFC 1939 §4: exclusive-access lock on the maildrop, else -ERR [IN-USE] (RFC 2449 §8.1.1).
+      const lock = await (this.options.lock ?? acquireMaildropLock)(result.user.id);
+      if (lock.status === 'busy') {
+        return this.send('-ERR [IN-USE] maildrop already locked by another session, try again later');
+      }
+      if (lock.status === 'error') {
+        return this.send('-ERR [SYS/TEMP] unable to lock the maildrop, try again later');
+      }
+      this.releaseLock = lock.release;
+      if (this.socket.destroyed) { await this.unlock(); return; }
+
       this.userId = result.user.id;
-      await this.loadMaildrop();
+      try {
+        await this.loadMaildrop();
+      } catch (err) {
+        await this.unlock();
+        throw err;
+      }
       this.state = 'TRANSACTION';
       this.registerLive(result.method, result.appPasswordId, authStartedAt);
       this.send(`+OK mailbox has ${this.maildrop.length} messages`);
@@ -292,7 +371,6 @@ export class POP3Session {
   }
 
   private async loadMaildrop() {
-    
     const mailbox = await prisma.mailbox.findFirst({
       where: { userId: this.userId! },
       include: {
@@ -301,18 +379,45 @@ export class POP3Session {
           include: {
             messages: {
               where: { deletedAt: null },
-              select: { id: true, uid: true, rawSize: true },
+              select: { id: true, uid: true, rawSize: true, storagePath: true },
               orderBy: { uid: 'asc' },
             },
           },
         },
       },
     });
+    const inbox = mailbox?.folders[0] as { id?: string; messages: MailDropRow[] } | undefined;
     this.mailboxId = mailbox?.id ?? null;
-    this.maildrop = (mailbox?.folders[0]?.messages ?? []).map((m: { id: string; uid: number; rawSize: number }) => ({
-      ...m,
-      deleted: false,
-    }));
+    this.inboxFolderId = inbox?.id ?? null;
+    const drop: MailDrop[] = [];
+    for (const m of inbox?.messages ?? []) {
+      let rawSize = m.rawSize;
+      // RFC 1939 §5/§11: LIST/STAT report the exact size RETR sends. A legacy row
+      // (no raw object yet) is materialized now — once, the raw store persists it —
+      // instead of reporting a size computed from the body column.
+      if (m.storagePath === null) {
+        try {
+          rawSize = (await this.loadRaw(m.id))?.length ?? rawSize;
+        } catch (err) {
+          log.warn({ err, messageId: m.id }, 'POP3: could not materialize a legacy message, size may be inexact');
+        }
+      }
+      drop.push({ id: m.id, uid: m.uid, rawSize, deleted: false });
+    }
+    this.maildrop = drop;
+  }
+
+  /**
+   * The message as POP3 sends it: the stored raw octets with every line ending
+   * normalized to CRLF (RFC 1939 §3, §11). null when the row is gone.
+   */
+  private async loadRaw(id: string): Promise<Buffer | null> {
+    const msg = await prisma.message.findUnique({
+      where: { id },
+      include: { attachments: { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } } },
+    });
+    if (!msg) return null;
+    return toCrlf(await loadRawMessage(msg as unknown as RawSourceMessage));
   }
 
   private async handleTransaction(command: string, args: string[]) {
@@ -382,25 +487,20 @@ export class POP3Session {
    * message before byte-stuffing, as LIST reports it.
    */
   private async sendMessage(drop: MailDrop, topLines: number | null) {
-    const msg = await prisma.message.findUnique({
-      where: { id: drop.id },
-      include: { attachments: { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } } },
-    });
-    if (!msg) return this.send('-ERR message not found');
-
-    let raw: Buffer;
+    let raw: Buffer | null;
     try {
-      raw = await loadRawMessage(msg as unknown as RawSourceMessage);
+      raw = await this.loadRaw(drop.id);
     } catch (err) {
       log.error({ err, messageId: drop.id }, 'POP3: raw message unavailable');
       return this.send('-ERR [SYS/TEMP] message temporarily unavailable');
     }
-    // A legacy row was just materialized: report its real size from now on.
+    if (!raw) return this.send('-ERR message not found');
+    // Exact size as sent from now on (legacy row materialized, bare LF converted).
     drop.rawSize = raw.length;
 
     if (topLines === null) {
       this.send(`+OK ${raw.length} octets`);
-      this.socket.write(dotStuff(raw));
+      await this.writeBody(dotStuff(raw));
       return;
     }
     const tree = parseMimeTree(raw);
@@ -410,17 +510,26 @@ export class POP3Session {
       end = lf === -1 ? raw.length : lf + 1;
     }
     this.send('+OK top of message follows');
-    this.socket.write(dotStuff(Buffer.concat([headerBytes(raw, tree), raw.subarray(tree.bodyStart, end)])));
+    await this.writeBody(dotStuff(Buffer.concat([headerBytes(raw, tree), raw.subarray(tree.bodyStart, end)])));
   }
 
+  /**
+   * UPDATE state (RFC 1939 §6): removes exactly the messages marked as deleted in
+   * THIS session — by their stable id, and only while they are still live in the
+   * INBOX the maildrop was opened from. A message another client moved (IMAP MOVE,
+   * JMAP, rules) or deleted in the meantime is left alone ("in no case may the
+   * server remove any messages not marked as deleted"). One UPDATE … WHERE, with
+   * a modSeq bump so IMAP/JMAP/ActiveSync clients notice.
+   */
   private async updateAndDelete() {
-
     const toDelete = this.maildrop.filter((m) => m.deleted).map((m) => m.id);
-    if (toDelete.length > 0) {
-      // Expunge with a modSeq bump so IMAP/JMAP/ActiveSync clients notice.
-      const mailboxId = this.mailboxId;
-      await prisma.$transaction((tx) => expunge(tx, toDelete, mailboxId ? { mailboxId } : {}));
-    }
+    const folderId = this.inboxFolderId;
+    if (toDelete.length === 0 || !folderId) return;
+    const mailboxId = this.mailboxId;
+    await prisma.$transaction((tx) => expunge(tx, toDelete, {
+      ...(mailboxId ? { mailboxId } : {}),
+      where: { folderId, deletedAt: null },
+    }));
   }
 }
 
@@ -430,10 +539,30 @@ function msgIndex(arg: string | undefined): number {
 }
 
 /**
- * Multi-line response body (RFC 1939 §3): byte-stuffs every line that starts with
- * ".", makes sure the data ends with CRLF and appends the terminating ".\r\n".
+ * Converts every bare LF to CRLF (RFC 1939 §3: lines end in CRLF). Messages stored
+ * with bare LF line endings (e.g. imported through JMAP) would otherwise break the
+ * multi-line framing. Returns the input unchanged when there is no bare LF.
  */
-export function dotStuff(data: Buffer): Buffer {
+export function toCrlf(data: Buffer): Buffer {
+  let bare = 0;
+  for (let i = 0; i < data.length; i++) if (data[i] === 0x0a && (i === 0 || data[i - 1] !== 0x0d)) bare++;
+  if (bare === 0) return data;
+  const out = Buffer.allocUnsafe(data.length + bare);
+  let o = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === 0x0a && (i === 0 || data[i - 1] !== 0x0d)) out[o++] = 0x0d;
+    out[o++] = data[i]!;
+  }
+  return out;
+}
+
+/**
+ * Multi-line response body (RFC 1939 §3): normalizes bare LF to CRLF, byte-stuffs
+ * every line that starts with ".", makes sure the data ends with CRLF and appends
+ * the terminating ".\r\n".
+ */
+export function dotStuff(input: Buffer): Buffer {
+  const data = toCrlf(input);
   const out: Buffer[] = [];
   let start = 0;
   for (let i = 0; i < data.length; i++) {

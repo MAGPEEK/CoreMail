@@ -1,41 +1,109 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
-import { prisma, verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
-import { getServerConfig } from './settings.js';
+import { prisma, verifyMailCredentials, clientIpFromRequest, type MailAuthUser } from '@coremail/storage';
+import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
+import { SMTPS_PORT } from './v2.js';
 
 const log = createLogger('autodiscover:v1');
 
-// v7: Basic-Auth credentials are verified by the shared mail-protocol check
-// verifyMailCredentials() (@coremail/storage) — login normalisation
-// (DOMAIN\user, bare user name → primary domain), MFA → app passwords only,
-// shared lockout, database errors → 503 instead of 401.
-// (v5.2.14 background: Autodiscover must validate, otherwise Outlook loops.)
+// Autodiscover v1 (POX, MS-OXDSCLI; ActiveSync clients: MS-ASCMD "Autodiscover").
+//
+//  - Basic auth is required and verified by the shared mail-protocol check
+//    verifyMailCredentials() (@coremail/storage): login normalisation
+//    (DOMAIN\user, bare user name → primary domain), MFA → app passwords only,
+//    shared lockout, database errors → 503 instead of 401. (v5.2.14: Autodiscover
+//    must validate, otherwise Outlook loops on a wrong password.)
+//  - A caller only gets settings for its OWN address (primary address or one of
+//    its aliases). Any other address — another user, an unknown account, a domain
+//    this server does not host — gets the same Error 500, so nothing about other
+//    accounts can be learned.
+//  - AcceptableResponseSchema selects the answer: outlook/2006a (default) →
+//    IMAP + SMTP account; mobilesync/2006 → MobileSync server URL; anything else →
+//    Error 601.
+//
+// MAPI over HTTP (v6.0.0) and EWS (v7.0.0) were removed: no EXCH/EXPR/EXHTTP
+// blocks — those make Outlook attempt a binary MAPI/RPC connection (v3.18.39).
 
-// MAPI over HTTP (v6.0.0) and EWS (v7.0.0) are not supported (removed). The
-// v1 response only announces IMAP + SMTP + ActiveSync, so Outlook sets itself
-// up as an IMAP account. No EXCH/EXPR/EXHTTP blocks: those make Outlook
-// attempt a binary MAPI/RPC connection (see v3.18.39).
+const REALM_CHALLENGE = 'Basic realm="CoreMail Autodiscover"';
+const NS_RESPONSE = 'http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006';
+export const NS_OUTLOOK = 'http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a';
+export const NS_MOBILESYNC = 'http://schemas.microsoft.com/exchange/autodiscover/mobilesync/responseschema/2006';
+/** Organisation part of the X.500 LegacyDN (Outlook expects the Exchange 2007+ format). */
+const LEGACY_DN_PREFIX = '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=';
 
-function buildAutodiscoverResponse(
-  email: string,
-  displayName: string,
-  legacyDn: string,
-  cfg: Awaited<ReturnType<typeof getServerConfig>>,
-): string {
-  // v3.18.38: Outlook LTSC 2019/2021/2024 compatible Autodiscover response.
-  // CRITICAL (per research of Microsoft Docs + the Grommunio implementation):
-  //   - AuthPackage MUST be "Basic" (capital B), some Outlook builds are case-sensitive
-  //   - <User><LegacyDN> is mandatory (Outlook uses it as the internal user identity)
-  //   - <PublicFolderInformation> dummy even if no public folders exist
+/** MS-OXDSCLI §2.2.4.2.1 error codes. */
+const ERROR = {
+  notFound: { code: 500, message: 'The e-mail address cannot be found.' },
+  invalidRequest: { code: 600, message: 'Invalid Request' },
+  schemaNotSupported: { code: 601, message: 'The requested schema version is not supported' },
+} as const;
+type AutodiscoverError = typeof ERROR[keyof typeof ERROR];
+
+type ResponseSchema = 'outlook' | 'mobilesync';
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function decodeXmlEntities(str: string): string {
+  return str.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e: string) => {
+    const lower = e.toLowerCase();
+    if (lower === 'amp') return '&';
+    if (lower === 'lt') return '<';
+    if (lower === 'gt') return '>';
+    if (lower === 'quot') return '"';
+    if (lower === 'apos') return "'";
+    const cp = lower.startsWith('#x') ? parseInt(lower.slice(2), 16) : parseInt(lower.slice(1), 10);
+    return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+  });
+}
+
+/** Text content of the first `<[prefix:]name>` element (entities decoded), or null. */
+export function xmlElementText(body: string, name: string): string | null {
+  const re = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${name}(?:\\s[^>]*)?>([^<]*)</(?:[A-Za-z_][\\w.-]*:)?${name}\\s*>`, 'i');
+  const m = re.exec(body);
+  return m ? decodeXmlEntities(m[1]!).trim() : null;
+}
+
+function sendChallenge(res: Response): void {
+  res.set('WWW-Authenticate', REALM_CHALLENGE);
+  res.status(401).send('Unauthorized');
+}
+
+/** Error response (HTTP 200, MS-OXDSCLI §2.2.4.2.1 / MS-ASCMD Autodiscover Error). */
+function sendError(res: Response, err: AutodiscoverError): void {
+  res.set('Content-Type', 'text/xml; charset=utf-8');
+  res.status(200).send(`<?xml version="1.0" encoding="utf-8"?>
+<Autodiscover xmlns="${NS_RESPONSE}">
+  <Response>
+    <Error Time="${new Date().toISOString().slice(11, 19)}" Id="0">
+      <ErrorCode>${err.code}</ErrorCode>
+      <Message>${escapeXml(err.message)}</Message>
+      <DebugData />
+    </Error>
+  </Response>
+</Autodiscover>`);
+}
+
+function buildOutlookResponse(user: MailAuthUser, email: string, cfg: ServerConfig): string {
+  // Outlook LTSC 2019/2021/2024 compatible (v3.18.38): <User><LegacyDN> is mandatory.
+  // The LegacyDN carries the caller's own id — the response only ever describes
+  // the authenticated account itself.
   const webHost = (() => {
     try { return new URL(cfg.owaUrl).hostname; } catch { return cfg.smtpHost; }
   })();
+  const smtpEncryption = !cfg.smtpTls ? 'None' : cfg.smtpPort === SMTPS_PORT ? 'SSL' : 'TLS';
   return `<?xml version="1.0" encoding="utf-8"?>
-<Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
-  <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
+<Autodiscover xmlns="${NS_RESPONSE}">
+  <Response xmlns="${NS_OUTLOOK}">
     <User>
-      <DisplayName>${escapeXml(displayName)}</DisplayName>
-      <LegacyDN>${escapeXml(legacyDn)}</LegacyDN>
+      <DisplayName>${escapeXml(user.displayName || email)}</DisplayName>
+      <LegacyDN>${escapeXml(LEGACY_DN_PREFIX + user.id)}</LegacyDN>
       <AutoDiscoverSMTPAddress>${escapeXml(email)}</AutoDiscoverSMTPAddress>
     </User>
     <Account>
@@ -59,7 +127,7 @@ function buildAutodiscoverResponse(
         <LoginName>${escapeXml(email)}</LoginName>
         <DomainRequired>off</DomainRequired>
         <SPA>off</SPA>
-        <Encryption>${cfg.smtpTls ? 'TLS' : 'None'}</Encryption>
+        <Encryption>${smtpEncryption}</Encryption>
         <AuthRequired>on</AuthRequired>
         <UsePOPAuth>off</UsePOPAuth>
         <SMTPLast>off</SMTPLast>
@@ -68,166 +136,94 @@ function buildAutodiscoverResponse(
         <SmtpAddress>publicfolder@${escapeXml(webHost.replace(/^mail\./, ''))}</SmtpAddress>
       </PublicFolderInformation>
     </Account>
-    <Account>
-      <AccountType>email</AccountType>
-      <Action>settings</Action>
-      <Protocol>
-        <Type>ActiveSync</Type>
-        <Server>${escapeXml(cfg.easUrl)}</Server>
-        <LoginName>${escapeXml(email)}</LoginName>
-        <DomainRequired>off</DomainRequired>
-        <SSL>${cfg.imapSsl ? 'on' : 'off'}</SSL>
-      </Protocol>
-    </Account>
   </Response>
 </Autodiscover>`;
 }
 
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+/** MS-ASCMD Autodiscover response (mobilesync schema): the ActiveSync URL. */
+function buildMobileSyncResponse(user: MailAuthUser, email: string, cfg: ServerConfig): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<Autodiscover xmlns="${NS_RESPONSE}">
+  <Response xmlns="${NS_MOBILESYNC}">
+    <Culture>en:us</Culture>
+    <User>
+      <DisplayName>${escapeXml(user.displayName || email)}</DisplayName>
+      <EMailAddress>${escapeXml(email)}</EMailAddress>
+    </User>
+    <Action>
+      <Settings>
+        <Server>
+          <Type>MobileSync</Type>
+          <Url>${escapeXml(cfg.easUrl)}</Url>
+          <Name>${escapeXml(cfg.easUrl)}</Name>
+        </Server>
+      </Settings>
+    </Action>
+  </Response>
+</Autodiscover>`;
 }
 
-function extractEmailFromXml(body: string): string | null {
-  const match = /<EMailAddress>(.*?)<\/EMailAddress>/i.exec(body);
-  return match?.[1] ?? null;
+interface ParsedRequest { email: string | null; schema: ResponseSchema | 'unsupported'; invalid: boolean }
+
+function parseRequest(req: Request): ParsedRequest {
+  let email: string | null = null;
+  let schemaRaw: string | null = null;
+  if (req.method === 'POST') {
+    const body = typeof req.body === 'string' ? req.body : '';
+    email = xmlElementText(body, 'EMailAddress');
+    schemaRaw = xmlElementText(body, 'AcceptableResponseSchema');
+  } else {
+    const q = req.query['emailaddress'];
+    if (q !== undefined && typeof q !== 'string') return { email: null, schema: 'outlook', invalid: true };
+    email = q ?? null;
+  }
+  const schema: ParsedRequest['schema'] = !schemaRaw || schemaRaw === NS_OUTLOOK
+    ? 'outlook'
+    : schemaRaw === NS_MOBILESYNC ? 'mobilesync' : 'unsupported';
+  return { email: email || null, schema, invalid: false };
+}
+
+/** True when `email` is the caller's own primary address or one of its aliases. */
+async function isOwnAddress(user: MailAuthUser, email: string): Promise<boolean> {
+  const wanted = email.toLowerCase();
+  if (wanted === user.email.toLowerCase()) return true;
+  const alias = await prisma.emailAlias.findFirst({
+    where: { address: wanted, targetUserId: user.id },
+    select: { id: true },
+  });
+  return alias !== null;
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
-  // v5.2.3 fix: Outlook first does a GET probe without an Auth header on
-  // the V1 endpoint. It expects 401 + WWW-Authenticate (that is how Outlook knows
-  // the endpoint supports auth). If we return 400 instead,
-  // Outlook aborts discovery and prompts endlessly for a password.
-  //
-  // Solution: on missing Authorization → 401 with a multi-scheme header,
-  // so Outlook sends the credentials. In the second request (with auth)
-  // we then parse the body and return the XML.
-  //
-  // Note: we do NOT validate the credentials here (Autodiscover only returns
-  // setup data, no user data). That is customary for Exchange.
+  // v5.2.3: Outlook first probes without an Authorization header and expects
+  // 401 + WWW-Authenticate before it sends credentials.
   const authHeader = req.get('Authorization') ?? '';
-  // v5.2.15: match the auth scheme case-insensitively (RFC 7235 §2.1). Some
-  // Outlook builds (especially Outlook LTSC on current Win11 patches)
-  // send `basic` (lowercase). Express returns the raw value, so
-  // startsWith('Basic ') is case-sensitive.
-  const authSchemeLower = authHeader.split(' ')[0]?.toLowerCase() ?? '';
-  if (!authHeader) {
-    log.debug({ method: req.method, url: req.originalUrl }, 'Autodiscover v1: no auth, sending 401 challenge');
-    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-  // Negotiate/NTLM token → we reject and push for Basic
-  if (authSchemeLower === 'negotiate' || authSchemeLower === 'ntlm') {
-    log.debug({ scheme: authSchemeLower }, 'Autodiscover v1: Negotiate/NTLM → requesting Basic');
-    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-  // v5.3.2: log Bearer tokens forensically — Outlook 2024 LTSC only sends
-  // Bearer. We decode the JWT payload (NOT verify, just base64
-  // decode) to see: iss (which identity provider?), aud (addressed to
-  // whom?), sub (which user?), scp (which scopes?). That tells us
-  // precisely where Outlook got the token from and lets us decide whether WS-
-  // Trust emulation or an ADFS login UI is needed.
-  if (authSchemeLower === 'bearer') {
-    const tokenStart = authHeader.indexOf(' ');
-    const tok = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
-    let claims: Record<string, unknown> = {};
-    try {
-      const parts = tok.split('.');
-      if (parts.length >= 2 && parts[1]) {
-        const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const padded = payloadB64 + '='.repeat((4 - payloadB64.length % 4) % 4);
-        const json = Buffer.from(padded, 'base64').toString('utf8');
-        claims = JSON.parse(json) as Record<string, unknown>;
-      }
-    } catch { /* unverified decode failed — empty token */ }
-    log.warn({
-      ip: req.ip,
-      tokenLen: tok.length,
-      iss: claims['iss'],
-      aud: claims['aud'],
-      sub: claims['sub'],
-      scp: claims['scp'],
-      tid: claims['tid'],
-      appid: claims['appid'],
-      exp: claims['exp'],
-      userAgent: req.get('User-Agent') ?? '',
-    }, 'Autodiscover v1: Bearer token received (forensically decoded, not verified)');
-    // SystemLog for BCP visibility
-    void prisma.systemLog.create({
-      data: {
-        level:    'INFO',
-        service:  'autodiscover',
-        category: 'MAPI_AUTH',
-        message:  `Autodiscover Bearer-Token (iss=${claims['iss'] ?? 'n/a'}, aud=${claims['aud'] ?? 'n/a'}, sub=${claims['sub'] ?? 'n/a'})`,
-        metadata: {
-          protocol:  'AUTODISCOVER',
-          reason:    'BEARER_TOKEN_INSPECTION',
-          claims:    JSON.parse(JSON.stringify(claims)),  // Prisma JSON-safe
-          ip:        req.ip ?? 'unknown',
-          userAgent: req.get('User-Agent') ?? '',
-        },
-      },
-    }).catch(() => { /* non-fatal */ });
-    // Bearer not accepted by us (we do not sign for the Outlook aud)
-    // — send back 401 with an ADFS challenge
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { publicHostname: true, useHttps: true, httpPort: true },
-    }).catch(() => null);
-    const hostname = settings?.publicHostname ?? 'mail.localhost';
-    const scheme = settings?.useHttps !== false ? 'https' : 'http';
-    const port = settings?.httpPort ?? 443;
-    const portSuffix = (scheme === 'https' && port === 443) || (scheme === 'http' && port === 80) ? '' : `:${port}`;
-    const base = `${scheme}://${hostname}${portSuffix}`;
-    // v5.3.4: Bearer removed — otherwise Outlook 2024 LTSC would start Modern Auth
-    // at login.microsoftonline.com instead of sending Basic auth to us.
-    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
-    res.status(401).send('Unauthorized');
+  // v5.2.15: the scheme is case-insensitive (RFC 7235 §2.1) — some Outlook builds send `basic`.
+  const scheme = authHeader.split(' ')[0]?.toLowerCase() ?? '';
+  if (scheme !== 'basic') {
+    // No header, Negotiate/NTLM, Bearer (Outlook Modern Auth tokens we cannot
+    // validate) …: ask for Basic. No database access and no persistent log for
+    // unauthenticated requests (v7.1: the old Bearer "forensic" SystemLog write
+    // let anyone fill the database).
+    log.debug({ scheme: scheme || 'none', method: req.method }, 'Autodiscover v1: requesting Basic auth');
+    sendChallenge(res);
     return;
   }
 
-  // v5.2.14: CRITICAL — Basic auth must be VALIDATED!
-  // Previously V1 accepted any password. Outlook then got valid XML
-  // with a WRONG password, but failed at IMAP/SMTP (which check correctly),
-  // prompted the user again, sent to Autodiscover again (which said OK
-  // again), → ENDLESS LOOP.
-  let basicAuthUser: string | null = null;  // raw username (can be admin or admin@domain)
-  let basicAuthPassword: string | null = null;
-  if (authSchemeLower === 'basic') {
-    // Whitespace-tolerant slicing (Outlook sometimes inserts multiple spaces)
-    const tokenStart = authHeader.indexOf(' ');
-    const b64 = tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '';
-    try {
-      const decoded = Buffer.from(b64, 'base64').toString('utf8');
-      const colonIdx = decoded.indexOf(':');
-      if (colonIdx !== -1) {
-        basicAuthUser     = decoded.slice(0, colonIdx).trim();
-        basicAuthPassword = decoded.slice(colonIdx + 1);
-      }
-    } catch { /* malformed header — handled as 401 below */ }
-  }
-
-  if (!basicAuthUser || !basicAuthPassword) {
-    log.warn({
-      ip: req.ip,
-      scheme: authSchemeLower,
-      hasUser: !!basicAuthUser,
-      hasPassword: !!basicAuthPassword,
-    }, 'Autodiscover v1: Basic-Auth-Header malformed → 401');
-    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
-    res.status(401).send('Unauthorized');
+  // Whitespace-tolerant slicing (Outlook sometimes inserts multiple spaces)
+  const tokenStart = authHeader.indexOf(' ');
+  const decoded = Buffer.from(tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '', 'base64').toString('utf8');
+  const colonIdx = decoded.indexOf(':');
+  const login = colonIdx !== -1 ? decoded.slice(0, colonIdx).trim() : '';
+  const password = colonIdx !== -1 ? decoded.slice(colonIdx + 1) : '';
+  if (!login || !password) {
+    log.debug({ hasUser: !!login, hasPassword: !!password }, 'Autodiscover v1: Basic-Auth header malformed → 401');
+    sendChallenge(res);
     return;
   }
 
   const clientIp = clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']);
-  const auth = await verifyMailCredentials(basicAuthUser, basicAuthPassword, { ip: clientIp, protocol: 'autodiscover' });
+  const auth = await verifyMailCredentials(login, password, { ip: clientIp, protocol: 'autodiscover' });
   if (auth.status === 'locked') {
     res.set('Retry-After', String(auth.retryAfterSec));
     res.status(429).send('Too Many Requests');
@@ -239,64 +235,63 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
   if (auth.status !== 'ok') {
-    // v7: the forensic password length/char-code logging was removed — no
-    // derivative of a submitted password is ever logged.
-    log.warn({ login: basicAuthUser, ip: clientIp, status: auth.status, userAgent: req.get('User-Agent') ?? '' },
+    // v7: no derivative of a submitted password is ever logged. Failed attempts
+    // are bounded by the shared lockout (per IP and per account).
+    log.warn({ login, ip: clientIp, status: auth.status, userAgent: req.get('User-Agent') ?? '' },
       'Autodiscover v1: authentication failed');
     void prisma.systemLog.create({
       data: {
         level:    'WARN',
         service:  'autodiscover',
-        category: 'MAPI_AUTH',
-        message:  `Autodiscover Basic-Auth failed: ${basicAuthUser} (${auth.status})`,
+        category: 'AUTODISCOVER_AUTH',
+        message:  `Autodiscover Basic-Auth failed: ${login.slice(0, 320)} (${auth.status})`,
         metadata: {
           protocol:  'AUTODISCOVER',
-          email:     basicAuthUser,
+          email:     login.slice(0, 320),
           reason:    auth.status === 'mfa_app_password_required' ? 'MFA_APP_PASSWORD_REQUIRED' : 'WRONG_PASSWORD_OR_USER',
           ip:        clientIp || 'unknown',
-          userAgent: req.get('User-Agent') ?? '',
-          path:      req.originalUrl,
+          userAgent: (req.get('User-Agent') ?? '').slice(0, 256),
+          path:      req.originalUrl.slice(0, 256),
         },
       },
     }).catch(() => { /* non-fatal */ });
-    res.set('WWW-Authenticate', 'Basic realm="CoreMail Autodiscover"');
-    res.status(401).send('Unauthorized');
-    return;
-  }
-  const basicAuthEmail = auth.user.email;
-
-  // Auth OK — extract e-mail from the body (or fall back to the Basic-Auth e-mail)
-  let email: string | null = null;
-  if (req.method === 'POST') {
-    const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-    email = extractEmailFromXml(body);
-  } else {
-    email = (req.query['emailaddress'] as string | undefined) ?? null;
-  }
-  if (!email && basicAuthEmail.includes('@')) email = basicAuthEmail;
-
-  if (!email) {
-    log.warn({ method: req.method }, 'Autodiscover v1: no email found in request body or header');
-    res.status(400).send('<?xml version="1.0"?><Autodiscover><Response><Error/></Response></Autodiscover>');
+    sendChallenge(res);
     return;
   }
 
-  log.info({ email, method: req.method }, 'Autodiscover v1 request (authenticated)');
+  const parsed = parseRequest(req);
+  if (parsed.invalid) return sendError(res, ERROR.invalidRequest);
+  if (parsed.schema === 'unsupported') return sendError(res, ERROR.schemaNotSupported);
+  const email = parsed.email ?? auth.user.email;
 
-  const [user, cfg] = await Promise.all([
-    prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-      select: { id: true, displayName: true, email: true },
-    }),
-    getServerConfig(),
-  ]);
+  let own: boolean;
+  try {
+    own = await isOwnAddress(auth.user, email);
+  } catch (err) {
+    log.error({ err }, 'Autodiscover v1: alias lookup failed');
+    res.set('Retry-After', '30');
+    res.status(503).send('Service Unavailable');
+    return;
+  }
+  if (!own) {
+    // Same answer for other users, unknown accounts and foreign domains.
+    log.debug({ userId: auth.user.id }, 'Autodiscover v1: address is not the caller\'s own → Error 500');
+    return sendError(res, ERROR.notFound);
+  }
 
-  const displayName = user?.displayName ?? email;
-  // v3.18.38: LegacyDN is mandatory for MAPI profiles (Outlook uses it as the
-  // internal user identity). Format per Microsoft spec.
-  const userId = user?.id ?? email.split('@')[0] ?? 'unknown';
-  const legacyDn = `/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=${userId}`;
+  let cfg: ServerConfig;
+  try {
+    cfg = await getServerConfig();
+  } catch (err) {
+    if (!(err instanceof ServerConfigUnavailableError)) throw err;
+    res.set('Retry-After', '30');
+    res.status(503).send('Service Unavailable');
+    return;
+  }
 
+  log.info({ userId: auth.user.id, schema: parsed.schema, method: req.method }, 'Autodiscover v1 request (authenticated)');
   res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(buildAutodiscoverResponse(email, displayName, legacyDn, cfg));
+  res.send(parsed.schema === 'mobilesync'
+    ? buildMobileSyncResponse(auth.user, email, cfg)
+    : buildOutlookResponse(auth.user, email, cfg));
 }

@@ -8,7 +8,7 @@
     "dev": "tsc -p tsconfig.json --watch & node --watch dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/stls.test.ts src/retr.test.ts src/live-sessions.test.ts"
+    "test": "node --import tsx --test src/stls.test.ts src/retr.test.ts src/live-sessions.test.ts src/update-state.test.ts src/maildrop-lock.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

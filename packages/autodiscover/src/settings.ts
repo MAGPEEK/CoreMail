@@ -1,7 +1,13 @@
 /**
  * Read server settings from the database.
- * Used by Autodiscover v1 + v2 so URLs are configurable in the ECP.
- * Falls back to environment variables if no DB entry exists yet.
+ * Used by Autodiscover v1 + v2 so URLs are configurable in the BCP.
+ *
+ *  - Fresh install without a ServerSettings row: environment defaults (not cached).
+ *  - Database error: the last value read from the database is served (stale) if
+ *    there is one; otherwise {@link ServerConfigUnavailableError} is thrown and the
+ *    handlers answer 503. The built-in `mail.local` defaults are never served or
+ *    cached because of a database error — Outlook would store those hosts in the
+ *    profile.
  */
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -15,19 +21,27 @@ export interface ServerConfig {
   imapHost: string;
   imapPort: number;
   imapSsl: boolean;
-  pop3Host: string;
-  pop3Port: number;
-  pop3Ssl: boolean;
   smtpHost: string;
   smtpPort: number;
   smtpTls: boolean;
-  orgName: string;
+}
+
+/** The settings could not be read and nothing was read before (→ HTTP 503). */
+export class ServerConfigUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super('server settings unavailable', { cause });
+    this.name = 'ServerConfigUnavailableError';
+  }
 }
 
 // In-memory cache (60 second TTL) — avoids a DB query per Autodiscover request
 let cache: ServerConfig | null = null;
 let cacheExpiry = 0;
+/** Last value read from the database; served while the database is unreachable. */
+let lastGood: ServerConfig | null = null;
 const CACHE_TTL_MS = 60_000;
+const DEFAULT_IMAPS_PORT = 993;
+const DEFAULT_SUBMISSION_PORT = 587;
 
 function envDefaults(): ServerConfig {
   const hostname = process.env['MAIL_HOSTNAME'] ?? 'mail.local';
@@ -39,56 +53,58 @@ function envDefaults(): ServerConfig {
     easUrl:          process.env['EAS_URL']          ?? `${base}/Microsoft-Server-ActiveSync`,
     autodiscoverBase: process.env['AUTODISCOVER_BASE'] ?? base,
     imapHost:        process.env['IMAP_HOSTNAME']    ?? hostname,
-    imapPort:        993,
+    imapPort:        DEFAULT_IMAPS_PORT,
     imapSsl:         true,
-    pop3Host:        process.env['IMAP_HOSTNAME']    ?? hostname,
-    pop3Port:        995,
-    pop3Ssl:         true,
     smtpHost:        process.env['SMTP_HOSTNAME']    ?? hostname,
-    smtpPort:        587,
+    smtpPort:        DEFAULT_SUBMISSION_PORT,
     smtpTls:         true,
-    orgName:         'CoreMail',
   };
 }
 
-export async function getServerConfig(): Promise<ServerConfig> {
-  const now = Date.now();
+export async function getServerConfig(now: number = Date.now()): Promise<ServerConfig> {
   if (cache && now < cacheExpiry) return cache;
 
+  let settings;
   try {
-    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
-    if (settings) {
-      cache = {
-        owaUrl:           settings.owaUrl,
-        easUrl:           settings.easUrl,
-        autodiscoverBase: settings.autodiscoverBase,
-        imapHost:         settings.imapHost,
-        imapPort:         settings.imapPort,
-        imapSsl:          settings.imapSsl,
-        pop3Host:         settings.pop3Host,
-        pop3Port:         settings.pop3Port,
-        pop3Ssl:          settings.pop3Ssl,
-        smtpHost:         settings.smtpHost,
-        smtpPort:         settings.smtpPort,
-        smtpTls:          settings.smtpTls,
-        orgName:          settings.orgName,
-      };
-      cacheExpiry = now + CACHE_TTL_MS;
-      return cache;
-    }
+    settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
   } catch (err) {
-    log.warn({ err }, 'Could not read ServerSettings from DB — using env defaults');
+    if (lastGood) {
+      log.warn({ err }, 'Could not read ServerSettings — serving the last known settings');
+      return lastGood;
+    }
+    log.error({ err }, 'Could not read ServerSettings and no earlier value is known');
+    throw new ServerConfigUnavailableError(err);
   }
 
-  // Fallback: environment variables
-  const defaults = envDefaults();
-  cache = defaults;
+  if (!settings) {
+    // Fresh install (no settings row yet): environment defaults, re-checked next time.
+    return envDefaults();
+  }
+
+  cache = {
+    owaUrl:           settings.owaUrl,
+    easUrl:           settings.easUrl,
+    autodiscoverBase: settings.autodiscoverBase,
+    imapHost:         settings.imapHost,
+    imapPort:         settings.imapPort,
+    imapSsl:          settings.imapSsl,
+    smtpHost:         settings.smtpHost,
+    smtpPort:         settings.smtpPort,
+    smtpTls:          settings.smtpTls,
+  };
+  lastGood = cache;
   cacheExpiry = now + CACHE_TTL_MS;
-  return defaults;
+  return cache;
 }
 
-/** Invalidate the cache (after ECP changes) */
+/** Invalidate the cache (after BCP changes). The last known value stays as an outage fallback. */
 export function invalidateSettingsCache(): void {
   cache = null;
   cacheExpiry = 0;
+}
+
+/** Test helper: forget everything, including the outage fallback. */
+export function resetSettingsCacheForTests(): void {
+  invalidateSettingsCache();
+  lastGood = null;
 }

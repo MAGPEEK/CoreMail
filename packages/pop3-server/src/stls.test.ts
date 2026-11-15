@@ -36,6 +36,8 @@ const guard = () => { if (state.dbDown) throw new Error('db down'); };
 };
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
+// Maildrop lock: in-process layer only (no Redis in tests).
+(globalThis as Record<string, unknown>)['__pop3LockRedis'] = null;
 storage.configureMailAuth({
   verifyPassword: async (p: string, h: string) => h === `hash:${p}`,
   dummyHash: async () => 'hash:\0dummy',
