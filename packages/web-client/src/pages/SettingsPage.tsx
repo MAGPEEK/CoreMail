@@ -12,7 +12,7 @@ import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch } from '../api/client.js';
-import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
 import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
@@ -1203,20 +1203,21 @@ function AppPasswordsSection() {
     queryFn: () => authFetch<AppPassword[]>('/auth/app-passwords'),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (name: string) =>
-      authFetch<{ id: string; password: string }>('/auth/app-passwords', {
-        method: 'POST',
-        body: JSON.stringify({ name }),
-      }),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['app-passwords'] });
-      setCreatedPw({ name: newName, password: data.password });
-      setCreating(false);
-      setNewName('');
-    },
-    onError: (e: Error) => toast.error(e.message || 'Fehler beim Erstellen'),
-  });
+  // v8.1: creating an app password needs re-authentication (current password or
+  // an authenticator/backup code); the dialog shows server errors and stays open.
+  const [reauthFor, setReauthFor] = useState<string | null>(null);
+  const createWithReauth = async (secret: string, kind: ReauthKind) => {
+    const name = reauthFor ?? '';
+    const data = await authFetch<{ id: string; password: string }>('/auth/app-passwords', {
+      method: 'POST',
+      body: JSON.stringify(kind === 'mfa' ? { name, mfaCode: secret } : { name, currentPassword: secret }),
+    });
+    qc.invalidateQueries({ queryKey: ['app-passwords'] });
+    setCreatedPw({ name, password: data.password });
+    setCreating(false);
+    setNewName('');
+  };
+  const startCreate = () => { if (newName.trim()) setReauthFor(newName.trim()); };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => authFetch(`/auth/app-passwords/${id}`, { method: 'DELETE' }),
@@ -1291,7 +1292,7 @@ function AppPasswordsSection() {
             placeholder="z. B. Thunderbird"
             className="input text-sm"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim());
+              if (e.key === 'Enter') startCreate();
               if (e.key === 'Escape') { setCreating(false); setNewName(''); }
             }}
           />
@@ -1300,15 +1301,26 @@ function AppPasswordsSection() {
               <XIcon size={13} /> Abbrechen
             </button>
             <button
-              onClick={() => createMutation.mutate(newName.trim())}
-              disabled={!newName.trim() || createMutation.isPending}
+              onClick={startCreate}
+              disabled={!newName.trim() || reauthFor !== null}
               className="btn-primary text-xs"
             >
-              {createMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              {reauthFor !== null ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
               Erstellen
             </button>
           </div>
         </div>
+      )}
+
+      {reauthFor !== null && (
+        <PasswordPromptDialog
+          title="App-Passwort erstellen"
+          confirmLabel="Erstellen"
+          description="App-Passwörter umgehen die Zwei-Faktor-Anmeldung. Bitte bestätigen Sie mit Ihrem aktuellen Passwort."
+          allowMfaCode
+          onConfirm={createWithReauth}
+          onClose={() => setReauthFor(null)}
+        />
       )}
 
       {/* List */}

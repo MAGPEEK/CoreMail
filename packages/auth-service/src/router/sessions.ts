@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { verifyAccessToken } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { isAccessTokenRevokedShared, markSessionsRevoked, revokeAllSessions } from '@coremail/storage/auth';
+import { isAccessTokenRevokedShared, markSessionsRevoked } from '@coremail/storage/auth';
 
 export const sessionRouter: RouterType = Router();
 
@@ -12,6 +12,19 @@ async function getAuthenticatedUserId(req: Request): Promise<string | null> {
   if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
   return payload.sub;
 }
+
+// v8.1: the admin "revoke all sessions of a user" endpoint (DELETE
+// /auth/sessions/admin/:userId) is gone from the auth-service — it did its own
+// role check and skipped requireMfaForAdmins, the current-role re-check and the
+// audit log of the admin API. Revoking another user's sessions belongs under
+// /api/v1/admin (requireAdmin + audit). Registered BEFORE '/:id' so that the old
+// path answers 410 (never reaches the own-session handler).
+sessionRouter.all(['/admin', '/admin/:userId'], (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'Gone — use the admin API (/api/v1/admin/...) to revoke the sessions of another user',
+    code: 'ENDPOINT_REMOVED',
+  });
+});
 
 sessionRouter.get('/', async (req: Request, res: Response) => {
   const userId = await getAuthenticatedUserId(req);
@@ -36,22 +49,5 @@ sessionRouter.delete('/:id', async (req: Request, res: Response) => {
   // v7.1.0: access tokens of the deleted session are rejected immediately
   // (memory + Redis marker + invalidation event), not only once they expire.
   await markSessionsRevoked([sessionId], userId);
-  res.json({ ok: true });
-});
-
-// Admin: revoke all sessions of a user
-sessionRouter.delete('/admin/:userId', async (req: Request, res: Response) => {
-  const adminId = await getAuthenticatedUserId(req);
-  if (!adminId) { res.status(401).json({ error: 'Unauthorized' }); return; }
-
-  const admin = await prisma.user.findUnique({ where: { id: adminId }, select: { role: true, active: true } });
-  if (!admin?.active || admin.role !== 'ORGANIZATION_MANAGEMENT') {
-    res.status(403).json({ error: 'Forbidden' });
-    return;
-  }
-
-  const targetUserId = req.params['userId'];
-  if (!targetUserId) { res.status(400).json({ error: 'Missing userId' }); return; }
-  await revokeAllSessions(targetUserId, { reason: `admin-revoke:${adminId}` });
   res.json({ ok: true });
 });

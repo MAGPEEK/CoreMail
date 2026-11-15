@@ -2,37 +2,53 @@ import { useState } from 'react';
 import { Loader2, Lock } from 'lucide-react';
 import { Modal } from './Modal.js';
 
+/** What the user entered: the current password or (allowMfaCode) an authenticator/backup code. */
+export type ReauthKind = 'password' | 'mfa';
+
 interface Props {
   title: string;
   description?: string;
   confirmLabel?: string;
-  /** Runs the protected action with the entered password; a thrown error keeps the dialog open */
-  onConfirm: (currentPassword: string) => Promise<void>;
+  /**
+   * v8.1: also offer "authenticator or backup code" instead of the password
+   * (SSO accounts have no CoreMail password). The caller sends `mfaCode` then.
+   */
+  allowMfaCode?: boolean;
+  /** Runs the protected action with the entered secret; a thrown error keeps the dialog open */
+  onConfirm: (secret: string, kind: ReauthKind) => Promise<void>;
   onClose: () => void;
 }
 
 /**
  * Re-authentication prompt for sensitive account changes (MFA on/off, backup
- * codes, security keys). The password is sent as `currentPassword` by the caller.
+ * codes, security keys, app passwords). The caller sends the password as
+ * `currentPassword` (or, with allowMfaCode, the code as `mfaCode`).
  */
-export function PasswordPromptDialog({ title, description, confirmLabel = 'Bestätigen', onConfirm, onClose }: Props) {
-  const [password, setPassword] = useState('');
+export function PasswordPromptDialog({ title, description, confirmLabel = 'Bestätigen', allowMfaCode = false, onConfirm, onClose }: Props) {
+  const [secret, setSecret] = useState('');
+  const [kind, setKind] = useState<ReauthKind>('password');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password) return;
+    if (!secret) return;
     setBusy(true);
     setError('');
     try {
-      await onConfirm(password);
+      await onConfirm(kind === 'mfa' ? secret.trim() : secret, kind);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Aktion fehlgeschlagen');
     } finally {
       setBusy(false);
     }
+  };
+
+  const switchKind = () => {
+    setKind((k) => (k === 'password' ? 'mfa' : 'password'));
+    setSecret('');
+    setError('');
   };
 
   return (
@@ -42,22 +58,45 @@ export function PasswordPromptDialog({ title, description, confirmLabel = 'Best�
           <Lock size={15} /> {title}
         </h2>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {description ?? 'Bitte bestätigen Sie diese Änderung mit Ihrem aktuellen Passwort.'}
+          {kind === 'mfa'
+            ? 'Bitte bestätigen Sie diese Änderung mit einem Code aus Ihrer Authenticator-App oder einem Backup-Code.'
+            : (description ?? 'Bitte bestätigen Sie diese Änderung mit Ihrem aktuellen Passwort.')}
         </p>
-        <input
-          type="password"
-          autoFocus
-          autoComplete="current-password"
-          aria-label="Aktuelles Passwort"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="input"
-          placeholder="Aktuelles Passwort"
-        />
+        {kind === 'mfa' ? (
+          <input
+            key="mfa"
+            type="text"
+            inputMode="text"
+            autoFocus
+            autoComplete="one-time-code"
+            aria-label="Authenticator- oder Backup-Code"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            className="input font-mono tracking-wider"
+            placeholder="123456 oder XXXX-XXXX"
+          />
+        ) : (
+          <input
+            key="password"
+            type="password"
+            autoFocus
+            autoComplete="current-password"
+            aria-label="Aktuelles Passwort"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            className="input"
+            placeholder="Aktuelles Passwort"
+          />
+        )}
+        {allowMfaCode && (
+          <button type="button" onClick={switchKind} className="text-xs text-accent hover:underline">
+            {kind === 'mfa' ? 'Stattdessen Passwort verwenden' : 'Stattdessen Authenticator- oder Backup-Code verwenden'}
+          </button>
+        )}
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="btn-secondary text-xs">Abbrechen</button>
-          <button type="submit" disabled={busy || !password} className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50">
+          <button type="submit" disabled={busy || !secret} className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50">
             {busy && <Loader2 size={12} className="animate-spin" />} {confirmLabel}
           </button>
         </div>
