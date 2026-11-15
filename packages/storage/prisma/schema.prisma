@@ -101,6 +101,12 @@ model User {
   role            UserRole       @default(USER)
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)
+  // v8.1: Exchange-style quota levels. quotaBytes = ProhibitSendReceiveQuota;
+  // null = server default (ServerSettings.quota*Percent of quotaBytes).
+  quotaWarningBytes      BigInt?
+  quotaProhibitSendBytes BigInt?
+  // Last quota warning mail (at most one per 24 h).
+  quotaWarnedAt          DateTime?
   active          Boolean        @default(true)
   // v6.1: set when the LDAP sync deactivated the account (missing in / disabled
   // in the directory) — only such accounts are re-activated by the sync.
@@ -331,7 +337,7 @@ model Message {
   rawSize      Int         @default(0)
   storagePath  String?     // MinIO object key for large messages
   changeKey    String      @default("")
-  deletedAt    DateTime?   // soft-delete (30 day recovery window)
+  deletedAt    DateTime?   // soft-delete tombstone; recoverable for DELETED_ITEM_RETENTION_DAYS (v8.1, default 14), then purged
   // Phase 9: S/MIME metadata JSON — { signed, valid, signerEmail, decrypted, ... }
   smimeMeta    String?
   pinnedAt     DateTime?   // user pinned this message (top of list)
@@ -432,6 +438,10 @@ model SharedMailbox {
   domainId    String
   quotaBytes  BigInt              @default(10737418240)
   usedBytes   BigInt              @default(0)
+  // v8.1: quota levels, see User.quotaWarningBytes
+  quotaWarningBytes      BigInt?
+  quotaProhibitSendBytes BigInt?
+  quotaWarnedAt          DateTime?
   active      Boolean             @default(true)
   permissions SharedMailboxPerm[]
   mailbox     Mailbox?
@@ -681,6 +691,9 @@ model UserSettings {
   oofUseTimeRange         Boolean   @default(false)
   oofStart                DateTime?
   oofEnd                  DateTime?
+  // v8.1: identifies the current out-of-office period — renewed whenever OOF is
+  // switched on or its texts/period change; one auto-reply per sender per period.
+  oofPeriodId             String    @default("")
   // Personal inactivity timeout (null = use global setting)
   inactivityTimeoutMinutes Int?
   updatedAt               DateTime  @updatedAt
@@ -1501,6 +1514,12 @@ model ServerSettings {
   // /.well-known/jmap. Default ON; off → 404. Hot reload via
   // Redis CHANNEL_SETTINGS_RELOAD (no container restart).
   jmapEnabled        Boolean @default(true)
+
+  // ── v8.1: mailbox quota defaults (Exchange 2019 ratios 1.9 / 2.0 / 2.3 GB) ──
+  // Percent of the mailbox quota (= ProhibitSendReceiveQuota) at which the
+  // warning mail is sent / sending is refused, when the mailbox sets no own level.
+  quotaWarningPercent      Int    @default(83)
+  quotaProhibitSendPercent Int    @default(87)
 
   // ── Maintenance ───────────────────────────────────────────────────────────────
   maintenanceMode    Boolean @default(false)
