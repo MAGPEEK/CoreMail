@@ -84,10 +84,24 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
   const responder = findOwnAttendee(ev, own) ?? user.email.toLowerCase();
 
   // 1. Calendar
+  // 8.0.0 (iTIP spoofing): a REQUEST naming one of the caller's own addresses as ORGANIZER
+  // is never acted on — the caller organizes that meeting, nobody can invite them to it.
+  const organizer = normalizeAddress(ev.organizer);
+  if (!organizer || own.includes(organizer)) {
+    log.warn({ userId, requestId, uid: ev.uid }, 'meeting request names the caller as organizer — refused');
+    return result(MEETING_STATUS.INVALID_REQUEST);
+  }
   const existing = await prisma.calendarEvent.findFirst({
     where: { uid: { equals: ev.uid, mode: 'insensitive' }, calendar: { userId } },
-    select: { id: true, calendarId: true, sequence: true },
+    select: { id: true, calendarId: true, sequence: true, organizer: true },
   });
+  // An existing event with this UID is only updated or deleted when the request comes
+  // from the same organizer. Otherwise anybody who learnt a UID (e.g. from an invite the
+  // caller sent) could overwrite or — via Decline — delete the caller's own event.
+  if (existing && normalizeAddress(existing.organizer) !== organizer) {
+    log.warn({ userId, requestId, uid: ev.uid, eventId: existing.id }, 'meeting request organizer differs from the stored event — refused');
+    return result(MEETING_STATUS.INVALID_REQUEST);
+  }
   let calendarId: string | undefined;
   if (partstat === 'DECLINED') {
     if (existing) await prisma.calendarEvent.delete({ where: { id: existing.id } });
@@ -149,10 +163,20 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
   return result(MEETING_STATUS.SUCCESS, calendarId);
 }
 
+/** Calendar address for comparisons: without `mailto:`, trimmed, lower-case. */
+export function normalizeAddress(addr: string | null | undefined): string {
+  return (addr ?? '').trim().replace(/^mailto:/i, '').toLowerCase();
+}
+
 /**
  * [MS-ASCMD] MeetingResponse: the SendResponse element exists from protocol 16.0 on and asks
  * the server to send the response to the organizer. Up to 14.1 the client always sends it
  * itself (as a SendMail / SmartReply after the MeetingResponse).
+ *
+ * NOTE: the server announces only EAS 14.0/14.1 (`MS-ASProtocolVersions` in server.ts), so
+ * a conforming client never takes the server-reply path today. It is kept (and tested) as
+ * the ready half of EAS 16.x support; until then it only runs for a client that sends a
+ * 16.x `MS-ASProtocolVersion` header without it being announced.
  */
 export function serverSendsReply(req: WbxmlElement, protocolVersion: string): boolean {
   const version = Number.parseFloat(protocolVersion);

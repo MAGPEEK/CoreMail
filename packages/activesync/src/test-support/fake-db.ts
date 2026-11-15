@@ -192,6 +192,21 @@ export function createFakeDb(tables: Tables) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+  // Raw SQL: only the atomic syncKeys merge of commands/sync-keys.ts (jsonb `||`).
+  db['$executeRaw'] = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join('?');
+    calls.push({ model: 'activeSyncDevice', op: '$executeRaw', args: { sql, values } });
+    if (/UPDATE "active_sync_devices" SET "syncKeys" = \(CASE WHEN jsonb_typeof\("syncKeys"\) = 'object' THEN "syncKeys" ELSE '\{\}'::jsonb END\) \|\| \?::jsonb WHERE "id" = \?/.test(sql)) {
+      const [json, id] = values as [string, string];
+      const row = t('activeSyncDevice').find((r) => r['id'] === id);
+      if (!row) return 0;
+      const cur = row['syncKeys'];
+      const base = cur && typeof cur === 'object' && !Array.isArray(cur) ? (cur as Row) : {};
+      row['syncKeys'] = { ...base, ...(JSON.parse(json) as Row) };
+      return 1;
+    }
+    throw new Error(`fake $executeRaw: unsupported SQL ${sql}`);
+  };
   return db as Row & { calls: typeof calls; tables: Tables };
 }
 

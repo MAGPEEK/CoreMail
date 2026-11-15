@@ -185,3 +185,68 @@ test('devices synced before v7.1 (no acknowledged key): state rebuilt from the f
   assert.deepEqual(s.adds, ['m6'], 'only the new message');
   assert.equal(s.status, '1');
 });
+
+test('8.0.0: overlapping requests of one device do not write back stale syncKeys (no Status 3 loop)', async () => {
+  const dev = db.tables['activeSyncDevice']![0]!;
+  db.tables['activeSyncItem'] = [];
+  dev['syncKeys'] = {};
+  // Prime both folders and acknowledge their first keys.
+  await sync('inbox', '0'); const i1 = await sync('inbox', '1');
+  await sync('news', '0'); const n1 = await sync('news', '1');
+  const iKey = (await sync('inbox', i1.key)).key;
+
+  // A Sync of "news" reads the device row; while it runs, a parallel Sync of "inbox"
+  // and a Ping store their keys. The news Sync must not put back the old inbox key.
+  const deviceModel = (db as unknown as Record<string, Record<string, (...a: never[]) => Promise<unknown>>>)['activeSyncDevice']!;
+  const realFind = deviceModel['findUnique']!;
+  let interleaved = false;
+  deviceModel['findUnique'] = (async (...args: never[]) => {
+    const snapshot = structuredClone(await realFind(...args)) as Record<string, unknown>;
+    if (!interleaved) {
+      interleaved = true;
+      deliver('m9', 'inbox');
+      const parallel = await sync('inbox', iKey); // runs to completion "in between"
+      assert.deepEqual([parallel.status, parallel.adds], ['1', ['m9']]);
+      dev['syncKeys'] = { ...(dev['syncKeys'] as Record<string, string>), ping: '{"heartbeat":300,"folders":["inbox"]}' };
+    }
+    return snapshot;
+  }) as never;
+  try {
+    const n2 = await sync('news', n1.key);
+    assert.equal(n2.status, '1');
+  } finally {
+    deviceModel['findUnique'] = realFind;
+  }
+  const keys = dev['syncKeys'] as Record<string, string>;
+  assert.equal(keys['ping'], '{"heartbeat":300,"folders":["inbox"]}', 'Ping key survives');
+  assert.notEqual(keys['inbox'], iKey, 'the parallel inbox Sync issued a new key …');
+  const next = await sync('inbox', keys['inbox']!);
+  assert.equal(next.status, '1', '… and it is still valid (was Status 3 before 8.0.0)');
+});
+
+test('8.0.0: GetItemEstimate counts what the next Sync sends (held items and FilterType respected)', async () => {
+  const { handleGetItemEstimate } = await import('./get-item-estimate.js');
+  const dev = db.tables['activeSyncDevice']![0]!;
+  db.tables['activeSyncItem'] = [];
+  dev['syncKeys'] = {};
+  await sync('inbox', '0');
+  const first = await sync('inbox', '1');
+  const held = (await sync('inbox', first.key)).key; // device holds every inbox item
+  const estimate = async (key: string, filterType = '0') => {
+    const req = decodeWbxml(clientWbxml([6, 0x05, [[6, 0x07, [[6, 0x08, [[0, 0x0b, key], [6, 0x0a, 'inbox'], [0, 0x17, [[0, 0x18, filterType]]]]]]]]]));
+    const tree = decodeWbxml(await handleGetItemEstimate(req, 'u1', 'dev1', () => NOW));
+    const walk = (e: E): string | undefined => e.name === 'Estimate' ? e.text : (e.children ?? []).filter((c): c is E => typeof c !== 'string').map(walk).find((x) => x !== undefined);
+    return walk(tree);
+  };
+  assert.equal(await estimate(held), '0', 'nothing pending — the raw modSeq window is not empty');
+
+  deliver('e1', 'inbox');                                                        // Add
+  deliver('e2', 'inbox', { date: new Date(NOW.getTime() - 30 * day) });          // Add, older than 1 week
+  msg(first.adds[0]!)['flags'] = ['\\Seen'];                                     // Change
+  const mb = mailbox(); mb['highestModSeq'] = (mb['highestModSeq'] as bigint) + 1n;
+  msg(first.adds[0]!)['modSeq'] = mb['highestModSeq'];
+  assert.equal(await estimate(held), '3');
+  assert.equal(await estimate(held, '3'), '2', 'FilterType 3 (1 week) leaves out the old message');
+  const s = await sync('inbox', held, [A(0x17, [A(0x18, '3')])]);
+  assert.equal(s.adds.length + s.changes.length + s.deletes.length, 2, 'Sync sends exactly the estimate');
+});

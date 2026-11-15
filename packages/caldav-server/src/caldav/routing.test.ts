@@ -274,6 +274,18 @@ test('MKCALENDAR reaches its handler; unsupported methods on a collection get 40
   assert.equal((await dav('PROPFIND', CAL, { user: 'mallory' })).status, 403);
 });
 
+test('8.0.0: IDs taken in another user\'s / another calendar answer a neutral 409 (no existence hint)', async () => {
+  // Calendar ID of alice under mallory's home: 409, not the 405 "already exists" of an own calendar
+  const mk = await dav('MKCALENDAR', '/dav/calendars/mallory/cal1', { user: 'mallory' });
+  assert.equal(mk.status, 409);
+  assert.doesNotMatch(mk.text, /exists/i);
+  // Event ID used in cal1, PUT into cal2: 409 without "belongs to another calendar"
+  assert.equal((await dav('PUT', `${CAL}/dup-id.ics`, { body: ICS_ALLDAY.replace(/UID:[^\r\n]+/, 'UID:dup-a'), type: 'text/calendar' })).status, 201);
+  const put = await dav('PUT', '/dav/calendars/alice/cal2/dup-id.ics', { body: ICS_ALLDAY.replace(/UID:[^\r\n]+/, 'UID:dup-b'), type: 'text/calendar' });
+  assert.equal(put.status, 409);
+  assert.doesNotMatch(put.text, /another calendar|belongs/i);
+});
+
 test('CardDAV: REPORT reaches its handler, ETag/ctag change on edit, If-Match enforced', async () => {
   const AB = '/dav/addressbooks/alice/default';
   const vcard = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN;CHARSET=UTF-8:Jane\r\n  Doe\r\nitem1.EMAIL;TYPE=INTERNET:jane@example.com\r\nORG:ACME\\; Inc;Sales\r\nEND:VCARD\r\n';

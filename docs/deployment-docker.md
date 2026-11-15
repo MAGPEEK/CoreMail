@@ -30,9 +30,9 @@ CoreMail uses a **6-container architecture**:
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Primary database (mails, users, calendars, contacts) |
 | `redis` | `redis:7-alpine` | Sessions, SMTP queue (BullMQ), live events via SSE, greylisting |
-| `minio` | `pgsty/minio` (pinned by digest; official images discontinued) | S3-compatible object storage: backups; mail contents with `OBJECT_STORAGE=minio` (installations from before 7.1) |
+| `minio` | `pgsty/minio` (pinned by digest; official images discontinued) | S3-compatible object storage: backups; mail contents with `OBJECT_STORAGE=minio` (installations from before 8.0) |
 
-**Mail storage (v7.1):** new installations keep mail contents, attachments and quarantine on the Docker volume `coremail-data` (`OBJECT_STORAGE=filesystem`, written by `scripts/setup.sh`); installations without that setting keep using MinIO unchanged. Drivers, external S3 (AWS, B2, Wasabi, Hetzner, R2) with TLS, migration and backups: [storage.md](storage.md).
+**Mail storage (v8.0):** new installations keep mail contents, attachments and quarantine on the Docker volume `coremail-data` (`OBJECT_STORAGE=filesystem`, written by `scripts/setup.sh`); installations without that setting keep using MinIO unchanged. Drivers, external S3 (AWS, B2, Wasabi, Hetzner, R2) with TLS, migration and backups: [storage.md](storage.md).
 
 ### What is inside the `coremail` container?
 
@@ -213,8 +213,8 @@ REDIS_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=CHANGE-ME-openssl-rand-hex-20
 
-# ─── Mail storage (v7.1, docs/storage.md) ────────────────────────────────────
-OBJECT_STORAGE=filesystem       # filesystem | minio | s3 — unset = minio (pre-7.1 installs)
+# ─── Mail storage (v8.0, docs/storage.md) ────────────────────────────────────
+OBJECT_STORAGE=filesystem       # filesystem | minio | s3 — unset = minio (pre-8.0 installs)
 # External S3 / MinIO with TLS (OBJECT_STORAGE=s3):
 # MINIO_ENDPOINT=s3.eu-central-1.amazonaws.com
 # MINIO_USE_SSL=true
@@ -283,7 +283,7 @@ MAXMIND_LICENSE_KEY=
 | `HTTPS_PROXY_ENABLED` | Enable the integrated TLS proxy | No (`true`) |
 | `GATEWAY_MODE` | SMTP gateway/relay mode | No (`false`) |
 | `RSPAMD_URL` | rspamd **controller** URL, used for scanning (`/checkv2`), Bayes learning and stats; `http`/`https`, optional path prefix. Set in `docker-compose.yml` | No (`http://rspamd:11334`) |
-| `RSPAMD_HOST` / `RSPAMD_PORT` | Legacy (before 7.1): scan host/port of the rspamd normal worker; only used when `RSPAMD_URL` is not set | No (`rspamd` / `11333`) |
+| `RSPAMD_HOST` / `RSPAMD_PORT` | Legacy (before 8.0): scan host/port of the rspamd normal worker; only used when `RSPAMD_URL` is not set | No (`rspamd` / `11333`) |
 
 ---
 

@@ -18,13 +18,16 @@ import {
   type EventData,
   type AttendeeData,
 } from '../lib/imip.js';
-import { buildVCalendar, patchVEvent, normalizeAllDayRange } from '@coremail/core/calendar';
+import { buildVCalendar, patchVEvent, normalizeAllDayRange, granteeMayWrite } from '@coremail/core/calendar';
 import { expandStoredEvent } from '../lib/recurrence.js';
 
-/** PRIVATE / CONFIDENTIAL events are masked or hidden for grantees — they are owner-only for writes. */
-function isProtectedClassification(cls: string | null | undefined): boolean {
-  const c = (cls ?? 'PUBLIC').toUpperCase();
-  return c === 'PRIVATE' || c === 'CONFIDENTIAL';
+/**
+ * Grantees only write events they see unmasked — the same rule as CalDAV (8.0.0,
+ * `granteeView` in @coremail/core/calendar): PRIVATE/CONFIDENTIAL events AND PUBLIC
+ * series with a PRIVATE/CONFIDENTIAL recurrence override are owner-only for writes.
+ */
+function isProtectedForGrantee(event: { classification: string | null; icalData?: string | null }): boolean {
+  return !granteeMayWrite(event.icalData, event.classification);
 }
 
 /**
@@ -1019,7 +1022,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
   // v7.1.0: a grantee only sees PRIVATE events masked (and CONFIDENTIAL ones not at all) —
   // saving that copy would overwrite the owner's real data, so it may not write them.
-  if (!access.isOwner && isProtectedClassification(event.classification)) {
+  if (!access.isOwner && isProtectedForGrantee(event)) {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer ändern' });
     return;
   }
@@ -1148,13 +1151,13 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     where: { id },
     select: { id: true, calendarId: true, uid: true, summary: true, description: true,
               location: true, dtStart: true, dtEnd: true, sequence: true,
-              allDay: true, rrule: true, organizer: true, attendees: true, classification: true },
+              allDay: true, rrule: true, organizer: true, attendees: true, classification: true, icalData: true },
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
-  if (!access.isOwner && isProtectedClassification(event.classification)) {
+  if (!access.isOwner && isProtectedForGrantee(event)) {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer löschen' });
     return;
   }

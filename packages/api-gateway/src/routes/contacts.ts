@@ -20,6 +20,20 @@ const CONTACT_LIST_SELECT = {
   company: true, department: true, jobTitle: true, notes: true,
 } as const;
 
+/**
+ * Domain of the caller — the GAL boundary (8.0.0). A server may host several
+ * customer domains; a user only ever sees the active users of their own domain,
+ * exactly like the ActiveSync GAL (`activesync/src/commands/directory.ts`).
+ * Read from the database, not the JWT, so a moved user never sees the old domain.
+ */
+async function callerDomainId(userId: string): Promise<string | null> {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { domainId: true } });
+  return u?.domainId ?? null;
+}
+
+/** Hard cap for one GAL page. */
+const GAL_MAX_PAGE = 500;
+
 // GET /api/v1/contacts?q= — unified search across all address sources for the
 // compose autocomplete (v3.18.7):
 //   1. The user's private contacts (Contact table)
@@ -56,17 +70,19 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
 
   // GAL (domain users). (ExternalMailContact removed in v3.18.33, distribution
   // groups in v5.6.1 — external recipients are typed directly in the compose window.)
-  const galUsers = await prisma.user.findMany({
+  const domainId = await callerDomainId(userId);
+  const galUsers = !domainId ? [] : (await prisma.user.findMany({
     where: {
+      domainId,
       active: true,
       OR: [
         { email:       { contains: q, mode: 'insensitive' } },
         { displayName: { contains: q, mode: 'insensitive' } },
       ],
     },
-    select: { id: true, email: true, displayName: true },
+    select: { id: true, email: true, displayName: true, domainId: true },
     take: 30,
-  });
+  })).filter((u) => u.domainId === domainId); // defence in depth: the domain is the boundary
 
   // Unified format. Dedup by email.
   const seen = new Set<string>(privateContacts.map((c) => c.email.toLowerCase()));
@@ -86,30 +102,40 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
 // Returns the entries from the User table. (ExternalMailContact removed in
 // v3.18.33, DistributionGroup in v5.6.1 — the type filters `external`/`group`
 // return empty lists so that old frontend calls do not break.)
+// 8.0.0: scoped to the caller's own domain (multi-tenant servers), paginated in the DB.
 // v7.1.0: registered BEFORE `/:id` — it used to be shadowed (GET /gal → 404 "Contact not found").
 contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const type = String(req.query['type'] ?? 'all') as 'all' | 'users' | 'external' | 'groups';
-  const limit = Math.min(parseInt(String(req.query['limit'] ?? '100'), 10) || 100, 500);
+  const limit = Math.min(parseInt(String(req.query['limit'] ?? '100'), 10) || 100, GAL_MAX_PAGE);
   const offset = Math.max(0, parseInt(String(req.query['offset'] ?? '0'), 10) || 0);
 
   const searchWhere = q.length >= 2 ? q.toLowerCase() : null;
 
-  const users = (type === 'all' || type === 'users')
-    ? await prisma.user.findMany({
-        where: {
-          active: true,
-          ...(searchWhere ? {
-            OR: [
-              { email:       { contains: searchWhere, mode: 'insensitive' as const } },
-              { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
-            ],
-          } : {}),
-        },
-        orderBy: [{ displayName: 'asc' }, { email: 'asc' }],
-        select: { id: true, email: true, displayName: true, domain: { select: { name: true } } },
-      })
-    : [];
+  // 8.0.0: own domain only, paginated in the database (no unbounded read of the user table).
+  const domainId = (type === 'all' || type === 'users') ? await callerDomainId(req.apiUser!.userId) : null;
+  const userWhere = {
+    domainId: domainId ?? '',
+    active: true,
+    ...(searchWhere ? {
+      OR: [
+        { email:       { contains: searchWhere, mode: 'insensitive' as const } },
+        { displayName: { contains: searchWhere, mode: 'insensitive' as const } },
+      ],
+    } : {}),
+  };
+  const [users, total] = domainId
+    ? await Promise.all([
+        prisma.user.findMany({
+          where: userWhere,
+          orderBy: [{ displayName: 'asc' }, { email: 'asc' }],
+          select: { id: true, email: true, displayName: true, domainId: true, domain: { select: { name: true } } },
+          skip: offset,
+          take: limit,
+        }),
+        prisma.user.count({ where: userWhere }),
+      ])
+    : [[], 0] as const;
 
   // Unified format with `kind` and `id` prefix as stabilizer
   type GalEntry = {
@@ -120,7 +146,8 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
     subtitle?: string;
     domain?: string;
   };
-  const entries: GalEntry[] = users.map((u): GalEntry => ({
+  // Defence in depth: the domain filter is the security boundary.
+  const entries: GalEntry[] = users.filter((u) => u.domainId === domainId).map((u): GalEntry => ({
     id:          `user-${u.id}`,
     kind:        'USER',
     email:       u.email,
@@ -128,12 +155,8 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
     ...(u.domain?.name ? { domain: u.domain.name } : {}),
   }));
 
-  // Sort alphabetically by displayName, then paginate
-  entries.sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
-  const total = entries.length;
-  const paged = entries.slice(offset, offset + limit);
-
-  res.json({ entries: paged, total, limit, offset });
+  // Sorted and paginated by the database (displayName, email).
+  res.json({ entries, total, limit, offset });
 });
 
 // GET /api/v1/contacts/:id

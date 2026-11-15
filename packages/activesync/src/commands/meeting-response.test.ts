@@ -160,7 +160,7 @@ test('internal invitation: the organizer on this server already holds the UID �
 
 test('tentative on an existing event updates it; decline removes it and still replies', async () => {
   reset(); queued.length = 0;
-  db.tables['calendarEvent']!.push({ id: 'ev1', calendarId: 'cal-other', uid: 'EVT-123@ext.test', sequence: 1, summary: 'old' });
+  db.tables['calendarEvent']!.push({ id: 'ev1', calendarId: 'cal-other', uid: 'EVT-123@ext.test', sequence: 1, summary: 'old', organizer: 'mailto:Olga@ext.test' });
   const t = await run(request('2'));
   assert.equal(kid(t, 'CalendarId')?.text, 'ev1');
   const ev = db.tables['calendarEvent']![0]!;
@@ -178,6 +178,38 @@ test('tentative on an existing event updates it; decline removes it and still re
   assert.equal(queued.length, 2);
   assert.match(replyIcs(queued[1]!).raw, /^Subject: Declined: Project kickoff$/m);
   assert.match(replyIcs(queued[1]!).ics, /PARTSTAT=DECLINED/);
+});
+
+test('8.0.0 iTIP spoofing: a REQUEST reusing the UID of an event with another organizer (or naming the caller as organizer) changes nothing', async () => {
+  // The caller organizes "Board meeting" (UID leaked through an invite they sent). An outside
+  // sender mails a REQUEST with that UID: neither Decline (delete) nor Accept (overwrite) may touch it.
+  for (const response of ['3', '1', '2']) {
+    reset(); queued.length = 0;
+    db.tables['calendarEvent']!.push({ id: 'own', calendarId: 'cal-default', uid: 'evt-123@ext.test', sequence: 4, summary: 'Board meeting', organizer: 'alice@example.com' });
+    const r = await run(request(response));
+    assert.equal(kid(r, 'Status')?.text, '2', `response ${response}`);
+    assert.equal(db.tables['calendarEvent']!.length, 1, 'own event not deleted');
+    assert.equal(db.tables['calendarEvent']![0]!['summary'], 'Board meeting', 'own event not overwritten');
+    assert.equal(queued.length, 0, 'no REPLY');
+    assert.equal(db.tables['message']!.find((m) => m['id'] === 'req1')!['folderId'], 'inbox', 'request stays');
+  }
+
+  // Same UID, but stored with a different external organizer → refused as well.
+  reset(); queued.length = 0;
+  db.tables['calendarEvent']!.push({ id: 'x', calendarId: 'cal-default', uid: 'evt-123@ext.test', sequence: 1, summary: 'Mine', organizer: 'someone@else.test' });
+  assert.equal(kid(await run(request('3')), 'Status')?.text, '2');
+  assert.equal(db.tables['calendarEvent']!.length, 1);
+
+  // A REQUEST naming one of the caller's own addresses (alias) as ORGANIZER → refused, nothing created.
+  reset(); queued.length = 0;
+  const selfOrganized = Buffer.from(RAW.toString('utf8').replace(
+    Buffer.from(ICS).toString('base64'),
+    Buffer.from(ICS.replace('ORGANIZER;CN=Olga:mailto:olga@ext.test', 'ORGANIZER:mailto:INFO@example.com')).toString('base64'),
+  ));
+  const buf = await handleMeetingResponse(decodeWbxml(clientWbxml(request('1'))), 'u1', { ...deps, loadRaw: async () => selfOrganized }, '16.0');
+  assert.equal(kid(kid(decodeWbxml(buf), 'Result'), 'Status')?.text, '2');
+  assert.equal(db.tables['calendarEvent']!.length, 0);
+  assert.equal(queued.length, 0);
 });
 
 test('request in a foreign mailbox, unknown id or bad UserResponse → Status 2, nothing changes', async () => {

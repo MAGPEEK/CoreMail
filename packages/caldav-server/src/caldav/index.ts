@@ -5,9 +5,13 @@ import {
   escapeText,
   findMainVEvent,
   getProperty,
+  granteeView,
+  MASKED_SUMMARY,
+  normClass,
   parseCalendarObject,
   parseIcal,
   serializeComponent,
+  type EventView,
   type IcalComponent,
 } from '@coremail/core/calendar';
 import { eventOverlapsRange, expandCalendarData, limitRecurrenceSet } from '@coremail/core/recurrence';
@@ -47,14 +51,13 @@ const log = createLogger('caldav');
 
 export const caldavRouter: RouterType = Router();
 
-/** SUMMARY of a masked PRIVATE event — the same text the REST API shows (api-gateway lib/calendar-access.ts). */
-export const MASKED_SUMMARY = 'Beschäftigt';
+/** Privacy helpers shared with the REST API (8.0.0: moved to @coremail/core/calendar). */
+export { MASKED_SUMMARY, granteeView, type EventView };
 /** Display-name prefix of calendars shared with the user. */
 export const SHARED_CALENDAR_PREFIX = '[Geteilt] ';
 export const DEFAULT_CALENDAR_COLOR = '#0078D4';
 
 type Permission = 'OWNER' | 'WRITE' | 'READ';
-type Classification = 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
 
 function caldavBase(userId: string): string {
   return `/dav/calendars/${userId}`;
@@ -113,76 +116,12 @@ async function calendarTag(calendarId: string): Promise<string> {
   return (await calendarTags([calendarId])).get(calendarId)!;
 }
 
-// ─── Privacy (v3.18.15, allowlist since v7.1.0) ──────────────────────────────
-
-function normClass(v: string | null | undefined): Classification {
-  const c = (v ?? 'PUBLIC').trim().toUpperCase();
-  return c === 'PRIVATE' || c === 'CONFIDENTIAL' ? c : 'PUBLIC';
-}
+// ─── Privacy (v3.18.15, allowlist since 8.0.0) ──────────────────────────────
+// granteeView / normClass / MASKED_SUMMARY live in @coremail/core/calendar (8.0.0) so the
+// REST API applies exactly the same rule (incl. CLASS of recurrence overrides).
 
 function isConfidential(cls: string | null | undefined): boolean {
   return normClass(cls) === 'CONFIDENTIAL';
-}
-
-const CLASS_RANK: Record<Classification, number> = { PUBLIC: 0, PRIVATE: 1, CONFIDENTIAL: 2 };
-const stricter = (a: Classification, b: Classification): Classification => (CLASS_RANK[a] >= CLASS_RANK[b] ? a : b);
-const componentClass = (c: IcalComponent | null): Classification => normClass(c ? getProperty(c, 'CLASS')?.value : null);
-
-/**
- * Properties a grantee may see of a PRIVATE component: the scheduling skeleton only
- * (RFC 5545 §3.8.1.3). Everything else — SUMMARY, DESCRIPTION, LOCATION, attendees,
- * CONFERENCE, GEO, STYLED-DESCRIPTION, RELATED-TO, IMAGE, URL, X-…, alarms — is dropped.
- */
-const MASK_KEEP_VEVENT = new Set([
-  'UID', 'DTSTAMP', 'DTSTART', 'DTEND', 'DURATION', 'RRULE', 'RDATE', 'EXDATE',
-  'RECURRENCE-ID', 'TRANSP', 'STATUS', 'SEQUENCE', 'CLASS',
-]);
-const MASK_KEEP_VCALENDAR = new Set(['VERSION', 'PRODID', 'CALSCALE']);
-
-function maskComponent(ev: IcalComponent): void {
-  ev.properties = ev.properties.filter((p) => MASK_KEEP_VEVENT.has(p.name));
-  ev.properties.push({ name: 'SUMMARY', params: {}, value: escapeText(MASKED_SUMMARY) });
-  ev.components = [];
-}
-
-export interface EventView {
-  /** Calendar object text the viewer may see. */
-  data: string;
-  /** true when at least one component was masked (the view differs from the stored object). */
-  masked: boolean;
-}
-
-/**
- * What a viewer may see of a stored event:
- *  - owner: everything
- *  - CONFIDENTIAL (column or master CLASS): null → hidden
- *  - PRIVATE master: every VEVENT masked to the allowlist + SUMMARY "Busy"
- *  - PUBLIC master: overridden instances with their own CLASS:PRIVATE/CONFIDENTIAL are masked
- */
-export function granteeView(icalData: string, classification: string | null, isOwner: boolean): EventView | null {
-  if (isOwner) return { data: icalData, masked: false };
-  const columnCls = normClass(classification);
-  if (columnCls === 'CONFIDENTIAL') return null;
-  const root = parseIcal(icalData);
-  if (!root) return columnCls === 'PUBLIC' ? { data: icalData, masked: false } : null;
-  const master = findMainVEvent(root);
-  const masterCls = stricter(columnCls, componentClass(master));
-  if (masterCls === 'CONFIDENTIAL') return null;
-
-  const events = root.name === 'VEVENT' ? [root] : root.components.filter((c) => c.name === 'VEVENT');
-  let masked = false;
-  for (const ev of events) {
-    const cls = ev === master || masterCls === 'PRIVATE' ? masterCls : componentClass(ev);
-    if (cls === 'PUBLIC') continue;
-    maskComponent(ev); // an override marked CONFIDENTIAL is shown as "busy" like PRIVATE
-    masked = true;
-  }
-  if (!masked) return { data: icalData, masked: false };
-  if (root.name === 'VCALENDAR') {
-    root.properties = root.properties.filter((p) => MASK_KEEP_VCALENDAR.has(p.name));
-    root.components = root.components.filter((c) => c.name === 'VEVENT' || c.name === 'VTIMEZONE');
-  }
-  return { data: serializeComponent(root) + '\r\n', masked: true };
 }
 
 /** Backwards-compatible wrapper: masked text, or null when hidden. */
@@ -480,8 +419,12 @@ async function handleCalendarProppatch(req: Request, res: Response, userId: stri
 
 // MKCALENDAR — create a new calendar (only OWNER under their own URL); RFC 4791 §5.3.1
 async function handleMkcalendar(req: Request, res: Response, userId: string, calendarId: string): Promise<void> {
-  const existing = await prisma.calendar.findUnique({ where: { id: calendarId }, select: { id: true } });
-  if (existing) { res.status(405).send('Calendar already exists'); return; }
+  const existing = await prisma.calendar.findUnique({ where: { id: calendarId }, select: { id: true, userId: true } });
+  // RFC 4791 §5.3.1: MKCALENDAR on an existing resource of the caller → 405. Calendar IDs
+  // are global keys: an ID taken by ANOTHER user gets a neutral 409 that does not say the
+  // calendar exists elsewhere (8.0.0 — was the same 405 as for the caller's own calendar).
+  if (existing && existing.userId === userId) { res.status(405).send('Calendar already exists'); return; }
+  if (existing) { res.status(409).send('Conflict — choose another resource name'); return; }
 
   const root = parseXml(req.body);
   if (typeof req.body === 'string' && req.body.trim() && !root) { res.status(400).send('Bad Request — malformed XML'); return; }
@@ -742,8 +685,10 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', asyncHandler(async (
 
   if (existing) {
     // Prevent cross-calendar manipulation
+    // Event IDs are global keys: an ID used in another calendar (possibly another user's)
+    // gets a neutral 409 — 8.0.0: no longer "belongs to another calendar" (existence leak).
     if (existing.calendarId !== calendarId) {
-      res.status(403).send('Forbidden — event belongs to another calendar');
+      res.status(409).send('Conflict — choose another resource name');
       return;
     }
     // A grantee must never overwrite an event it only sees masked (PRIVATE) or not at all

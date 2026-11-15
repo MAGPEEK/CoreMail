@@ -756,3 +756,89 @@ export function patchVEvent(icalText: string, patch: VEventFields & { dtstamp?: 
 
   return serializeComponent(root) + '\r\n';
 }
+
+// ─── Grantee privacy (CLASS, RFC 5545 §3.8.1.3) ──────────────────────────────
+// Shared by CalDAV and the REST API (8.0.0: moved here from caldav-server so both
+// apply the same rule, including CLASS of individual recurrence overrides).
+
+/** SUMMARY of a masked PRIVATE event (CalDAV and REST show the same text). */
+export const MASKED_SUMMARY = 'Beschäftigt';
+
+export type Classification = 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
+
+export function normClass(v: string | null | undefined): Classification {
+  const c = (v ?? 'PUBLIC').trim().toUpperCase();
+  return c === 'PRIVATE' || c === 'CONFIDENTIAL' ? c : 'PUBLIC';
+}
+
+const CLASS_RANK: Record<Classification, number> = { PUBLIC: 0, PRIVATE: 1, CONFIDENTIAL: 2 };
+const stricterClass = (a: Classification, b: Classification): Classification => (CLASS_RANK[a] >= CLASS_RANK[b] ? a : b);
+const componentClass = (c: IcalComponent | null): Classification => normClass(c ? getProperty(c, 'CLASS')?.value : null);
+
+/**
+ * Properties a grantee may see of a PRIVATE component: the scheduling skeleton only.
+ * Everything else — SUMMARY, DESCRIPTION, LOCATION, attendees, CONFERENCE, GEO,
+ * STYLED-DESCRIPTION, RELATED-TO, IMAGE, URL, X-…, alarms — is dropped.
+ */
+const MASK_KEEP_VEVENT = new Set([
+  'UID', 'DTSTAMP', 'DTSTART', 'DTEND', 'DURATION', 'RRULE', 'RDATE', 'EXDATE',
+  'RECURRENCE-ID', 'TRANSP', 'STATUS', 'SEQUENCE', 'CLASS',
+]);
+const MASK_KEEP_VCALENDAR = new Set(['VERSION', 'PRODID', 'CALSCALE']);
+
+function maskComponent(ev: IcalComponent): void {
+  ev.properties = ev.properties.filter((p) => MASK_KEEP_VEVENT.has(p.name));
+  ev.properties.push({ name: 'SUMMARY', params: {}, value: escapeText(MASKED_SUMMARY) });
+  ev.components = [];
+}
+
+export interface EventView {
+  /** Calendar object text the viewer may see. */
+  data: string;
+  /** true when at least one component was masked (the view differs from the stored object). */
+  masked: boolean;
+}
+
+/**
+ * What a viewer may see of a stored event:
+ *  - owner: everything
+ *  - CONFIDENTIAL (column or master CLASS): null → hidden
+ *  - PRIVATE master: every VEVENT masked to the allowlist + SUMMARY "Busy"
+ *  - PUBLIC master: overridden instances with their own CLASS:PRIVATE/CONFIDENTIAL are masked
+ */
+export function granteeView(icalData: string, classification: string | null, isOwner: boolean): EventView | null {
+  if (isOwner) return { data: icalData, masked: false };
+  const columnCls = normClass(classification);
+  if (columnCls === 'CONFIDENTIAL') return null;
+  const root = parseIcal(icalData);
+  if (!root) return columnCls === 'PUBLIC' ? { data: icalData, masked: false } : null;
+  const master = findMainVEvent(root);
+  const masterCls = stricterClass(columnCls, componentClass(master));
+  if (masterCls === 'CONFIDENTIAL') return null;
+
+  const events = root.name === 'VEVENT' ? [root] : root.components.filter((c) => c.name === 'VEVENT');
+  let masked = false;
+  for (const ev of events) {
+    const cls = ev === master || masterCls === 'PRIVATE' ? masterCls : componentClass(ev);
+    if (cls === 'PUBLIC') continue;
+    maskComponent(ev); // an override marked CONFIDENTIAL is shown as "busy" like PRIVATE
+    masked = true;
+  }
+  if (!masked) return { data: icalData, masked: false };
+  if (root.name === 'VCALENDAR') {
+    root.properties = root.properties.filter((p) => MASK_KEEP_VCALENDAR.has(p.name));
+    root.components = root.components.filter((c) => c.name === 'VEVENT' || c.name === 'VTIMEZONE');
+  }
+  return { data: serializeComponent(root) + '\r\n', masked: true };
+}
+
+/**
+ * May a grantee (not the owner) with write permission modify or delete this event?
+ * Only when it sees the stored object unmasked: never a PRIVATE/CONFIDENTIAL event, and
+ * never a PUBLIC series with a PRIVATE/CONFIDENTIAL override — writing the masked copy
+ * back would overwrite (or deleting would destroy) data the grantee may not see.
+ */
+export function granteeMayWrite(icalData: string | null | undefined, classification: string | null): boolean {
+  const view = granteeView(icalData ?? '', classification, false);
+  return view !== null && !view.masked;
+}

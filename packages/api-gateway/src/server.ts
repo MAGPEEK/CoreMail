@@ -55,6 +55,7 @@ import { sseLiveConnections } from './lib/live-sse.js';
 import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
+import { livenessHandler } from './lib/liveness.js';
 
 const log = createLogger('api-gateway');
 installProcessGuards(log);
@@ -282,6 +283,9 @@ app.get('/healthz', (_req, res) => {
   }
   res.status(ok ? 200 : 503).json({ ok, service: 'api-gateway', version: APP_VERSION, storage });
 });
+// 8.0.0: liveness without the storage status (Kubernetes liveness/startup probes) —
+// /healthz above is the readiness signal.
+app.get('/livez', livenessHandler);
 
 // ── Public maintenance-mode status (no auth needed) ───────────────────────────
 // Queried by the OWA LoginPage to display the maintenance banner.

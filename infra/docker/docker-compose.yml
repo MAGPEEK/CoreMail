@@ -62,9 +62,9 @@ services:
       DATABASE_URL: postgresql://coremail:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}@postgres:5432/coremail
       REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
 
-      # ── Object storage (v7.1, docs/storage.md) ───────────────────────────────
+      # ── Object storage (v8.0, docs/storage.md) ───────────────────────────────
       # Mail contents, attachments, quarantine. OBJECT_STORAGE unset = minio
-      # (installations from before 7.1 keep working unchanged); new installations
+      # (installations from before 8.0 keep working unchanged); new installations
       # (scripts/setup.sh) use "filesystem" = the coremail-data volume below.
       OBJECT_STORAGE: ${OBJECT_STORAGE:-minio}     # minio | s3 | filesystem
       STORAGE_PATH:   /data/objects                # filesystem driver (volume coremail-data)
@@ -138,7 +138,7 @@ services:
       - "3000:3000"   # HTTP without TLS: initial setup; behind your own reverse proxy (Traefik,
                       # Caddy, nginx, Synology) → use only this port, remove 80/443 above
     volumes:
-      # v7.1: persistent app data — /data/objects holds mail contents with
+      # v8.0: persistent app data — /data/objects holds mail contents with
       # OBJECT_STORAGE=filesystem (unused but harmless with minio). The container
       # itself stays stateless: recreate it at will, the volume keeps the data.
       - coremail-data:/data
@@ -201,7 +201,7 @@ services:
 
   minio:
     # S3 object storage: backups (bucket coremail-backups) and — with
-    # OBJECT_STORAGE=minio, the default of installations from before 7.1 — mail
+    # OBJECT_STORAGE=minio, the default of installations from before 8.0 — mail
     # contents, attachments and quarantine. Filesystem installations that send
     # backups elsewhere (S3_ENDPOINT) or do not need them may remove this service
     # and the depends_on entry above (docs/storage.md).
@@ -261,7 +261,7 @@ services:
 #  Data — back up these volumes (docker run --rm -v coremail_pgdata:/d alpine tar …)
 #    pgdata        PostgreSQL: users, folders, mail metadata, settings
 #    coremail-data mail contents + attachments with OBJECT_STORAGE=filesystem (/data/objects)
-#    miniodata     MinIO: backups; mail contents with OBJECT_STORAGE=minio (pre-7.1 installs)
+#    miniodata     MinIO: backups; mail contents with OBJECT_STORAGE=minio (pre-8.0 installs)
 #    redisdata   Redis: sessions, queues (expendable)
 #    rspamd-data Bayes training data    clamav-data virus signatures (re-downloaded)
 # ─────────────────────────────────────────────────────────────────────────────

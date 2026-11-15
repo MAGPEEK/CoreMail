@@ -51,7 +51,7 @@ while true; do
   sleep 5
 done
 
-# ── 3. Object storage directory (v7.1) ───────────────────────────────────────
+# ── 3. Object storage directory (v8.0) ───────────────────────────────────────
 # The services run as `node`. A fresh named volume inherits the image's
 # /data/objects (owned by node); a bind mount (Synology) or an old volume may
 # belong to root → hand the directory to node once. Only the storage directory

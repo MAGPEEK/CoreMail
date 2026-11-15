@@ -3,6 +3,7 @@ import { encodeWbxml, el, getText, getChild, type WbxmlElement } from '../wbxml.
 import type { Response } from 'express';
 import { easLiveRequests, type EasCredentialInfo } from '../live-sessions.js';
 import { knownItems } from './item-state.js';
+import { mergeSyncKeys } from './sync-keys.js';
 
 /** [MS-ASCMD] Ping status values. */
 export const PING_STATUS = {
@@ -115,7 +116,8 @@ export async function handlePing(
   if (device) {
     const params = JSON.stringify({ heartbeat, folders: folderIds });
     if (syncKeys[PING_CACHE_KEY] !== params) {
-      await prisma.activeSyncDevice.update({ where: { id: device.id }, data: { syncKeys: { ...syncKeys, [PING_CACHE_KEY]: params } } });
+      // 8.0.0: atomic merge of the Ping key only (no stale write-back of Sync keys).
+      await mergeSyncKeys(device.id, { [PING_CACHE_KEY]: params });
     }
   }
 

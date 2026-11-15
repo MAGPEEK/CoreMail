@@ -90,15 +90,27 @@ export async function estimateSyncWindow(
   db: SyncEstimateDb,
   opts: { mailboxId: string; folderId: string; clientSyncKey: string | undefined },
 ): Promise<SyncEstimate> {
+  const range = await syncRange(db, opts);
+  if (range.status !== 'ok') return range;
+  const estimate = await db.message.count({
+    where: { folderId: opts.folderId, deletedAt: null, modSeq: { gte: range.since, lt: range.upper } },
+  });
+  return { status: 'ok', estimate };
+}
+
+export type SyncRange = { status: 'ok'; since: bigint; upper: bigint } | { status: 'invalid' } | { status: 'not-primed' };
+
+/** The modSeq range [since, upper) a Sync with `clientSyncKey` covers (no WindowSize cut). */
+export async function syncRange(
+  db: Pick<SyncEstimateDb, 'mailbox'>,
+  opts: { mailboxId: string; clientSyncKey: string | undefined },
+): Promise<SyncRange> {
   if (isPrimingSyncKey(opts.clientSyncKey)) return { status: 'not-primed' };
   const mbx = await db.mailbox.findUnique({ where: { id: opts.mailboxId }, select: { highestModSeq: true } });
   const upper = (mbx?.highestModSeq ?? 0n) + 1n;
   const key = parseSyncKey(opts.clientSyncKey, upper);
   if (key.kind === 'invalid') return { status: 'invalid' };
-  const estimate = await db.message.count({
-    where: { folderId: opts.folderId, deletedAt: null, modSeq: { gte: key.since, lt: upper } },
-  });
-  return { status: 'ok', estimate };
+  return { status: 'ok', since: key.since, upper };
 }
 
 export type SyncWindow =

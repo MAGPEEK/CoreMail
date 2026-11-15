@@ -156,7 +156,7 @@ const HANDLERS: Record<string, { needsBody: boolean; run: (c: CommandContext) =>
     },
   },
   ItemOperations: { needsBody: true, run: wbxml((c) => handleItemOperations(c.body, c.user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)))) },
-  GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId)) },
+  GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId, c.deviceId)) },
   Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.protocolVersion)) },
   Search: { needsBody: true, run: wbxml((c) => handleSearch(c.body, c.user.userId)) },
   MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId)) },

@@ -106,7 +106,7 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `ingress.certManager.enabled`, `.issuer`, `.issuerKind` | off | adds `cert-manager.io/(cluster-)issuer` |
 | `networkPolicy.enabled` | `true` | |
 | `networkPolicy.httpFrom` | namespace `ingress-nginx` | who may reach port 3000 — adjust to your controller |
-| `objectStorage.driver` | `minio` | `minio` \| `s3` \| `filesystem` (≥ 7.1.0), see [Object storage](#object-storage) |
+| `objectStorage.driver` | `minio` | `minio` \| `s3` \| `filesystem` (≥ 8.0.0), see [Object storage](#object-storage) |
 | `<dep>.enabled` | `true` | `postgresql`, `redis`, `minio`, `rspamd`, `clamav` |
 | `<dep>.external.*` | | endpoint when `enabled: false` |
 | `<dep>.persistence.*` | enabled | size / storageClass of the bundled StatefulSets |
@@ -140,7 +140,7 @@ the port to the app pod.
 
 ### Object storage
 
-CoreMail 7.1.0 adds a storage driver abstraction; the chart passes the variables
+CoreMail 8.0.0 adds a storage driver abstraction; the chart passes the variables
 through (7.0.0 ignores them and always uses MinIO/S3 over HTTP):
 
 | Value | Env |
@@ -245,7 +245,7 @@ everybody at once). CoreMail does not speak PROXY protocol on the mail ports.
 the outbound queue (BullMQ), per-IP/per-account lockouts, sessions, SSE fan-out,
 the certificate renewal scheduler (Redis scheduler lock + per-certificate lock),
 LDAP sync, auto-reply and dead-letter throttles (Redis `SET NX`), and since
-CoreMail 7.1.0 the backup scheduler and the retention worker (one run per cron
+CoreMail 8.0.0 the backup scheduler and the retention worker (one run per cron
 fire, Redis run lock) and credential invalidation (JMAP Basic-auth cache, live
 connections, via the Redis auth bus). What is **not**: a starting pod marks
 backup jobs that are still `RUNNING` elsewhere as failed (startup orphan cleanup),

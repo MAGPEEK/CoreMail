@@ -44,7 +44,7 @@ echo ""
 
 # ── 1. Directory structure ────────────────────────────────────────────────────
 echo "[1/3] Creating directories..."
-# v7.1: a fresh installation (no database yet) stores mail contents on the
+# v8.0: a fresh installation (no database yet) stores mail contents on the
 # filesystem (data/objects, covered by Hyper Backup). An existing installation
 # keeps its storage driver — nothing is changed for it.
 FRESH_INSTALL=0
