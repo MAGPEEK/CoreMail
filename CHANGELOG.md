@@ -61,6 +61,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   admin API `/api/v1/admin/storage` (Organization Management) copy all objects between drivers
   as a resumable background job — streamed, verified by SHA-256 and size, with dry run; the
   source is never deleted.
+- **IMAP4rev2 extensions:** BINARY (RFC 3516: `BINARY[]`, `BINARY.PEEK[]`, `BINARY.SIZE[]`,
+  APPEND with literal8), SEARCHRES (RFC 5182: `RETURN (SAVE)` and `$`), LIST-EXTENDED (RFC 5258:
+  selection options SUBSCRIBED/SPECIAL-USE/RECURSIVEMATCH, several patterns, RETURN options),
+  LIST-STATUS (RFC 5819) and read-only QUOTA (RFC 9208, `GETQUOTAROOT`/`GETQUOTA`, STORAGE from
+  the user's quota) are implemented and advertised. After `ENABLE IMAP4rev2` SEARCH answers with
+  ESEARCH, mailbox names are UTF-8, SELECT sends a LIST response and `[CLOSED]` and no longer
+  RECENT/UNSEEN.
+- **IMAP CONDSTORE:** `STORE … (UNCHANGEDSINCE n)` with the `[MODIFIED …]` response code;
+  `SEARCH MODSEQ` returns the highest MODSEQ (`(MODSEQ n)` / ESEARCH `MODSEQ`); SELECT/EXAMINE
+  `(CONDSTORE)`, FETCH MODSEQ/CHANGEDSINCE, SEARCH MODSEQ, STORE UNCHANGEDSINCE and STATUS
+  HIGHESTMODSEQ enable CONDSTORE (RFC 7162 §3.1).
+- **IMAP APPEND** uses the date-time argument as the internal date (RFC 9051 §6.3.12).
 
 ### Changed
 
@@ -96,8 +108,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   with 552 instead of being deferred.
 - Mail rule redirects keep the original envelope sender (a null sender stays null) instead of
   the header `From:`; forwards put their `Resent-*` block at the top of the header.
+- IMAP: STORE responses carry MODSEQ only after CONDSTORE was enabled (RFC 7162 §3.1); EXAMINE
+  reports `PERMANENTFLAGS ()`; a failed SELECT/EXAMINE leaves no mailbox selected; the ID
+  response no longer carries a stale version number. `SEARCH RECENT`/`NEW` match nothing and
+  `OLD` everything (SELECT always reported `0 RECENT`). The protocol suite
+  (`imap-protocol.test.ts`) is part of `pnpm test` (skipped on Node < 22.15).
 
 ### Fixed
+
+- **IMAP sequence numbers no longer drift (data loss).** Every session keeps its own message
+  sequence map; changes by other clients, the web client or delivery are reported as EXPUNGE,
+  EXISTS and `FETCH (UID … FLAGS …)` on NOOP, CHECK, IDLE and at command completion — never an
+  EXPUNGE during FETCH, STORE or SEARCH (RFC 9051 §7.5.1). Previously sequence numbers were
+  recomputed from the database on every command, so after another client deleted a message
+  `STORE 1 +FLAGS (\Deleted)` plus `EXPUNGE` removed the wrong message. IDLE checks the mailbox
+  every 30 s and on new-mail events instead of sending a blind `EXISTS`/`1 RECENT`.
+- IMAP: EXPUNGE, UID EXPUNGE and MOVE are refused with `NO [READ-ONLY]` in a mailbox opened with
+  EXAMINE (they deleted/moved messages).
+- IMAP: INBOX is case-insensitive in every mailbox argument (`SELECT inbox`, `STATUS inbox`, …).
+- IMAP: mailbox names are exchanged in modified UTF-7 with IMAP4rev1 clients (RFC 3501 §5.1.3);
+  non-ASCII folders such as "Entwürfe" were sent as raw UTF-8 and could not be selected.
+- IMAP: RENAME also renames inferior mailboxes (RFC 9051 §6.3.6); `[UNSEEN n]` is the sequence
+  number of the first unseen message; LIST `%` no longer descends into child mailboxes and lists
+  implied parents, `LIST "" ""` returns the hierarchy delimiter.
+- IMAP: LOGIN after authentication and ENABLE before authentication are rejected with BAD.
+- IMAP STORE: system flags are case-insensitive (`\seen` → `\Seen`), `\Recent` and unknown
+  `\`-flags are rejected with BAD.
+- IMAP SEARCH HEADER matches any header field (raw header loaded on demand); an empty string
+  matches every message that has the field.
+- IMAP UID commands on folders with more than ~150 000 messages failed with `NO Internal error`
+  (`Math.max(...uids)` RangeError).
+- IMAP AUTHENTICATE: invalid base64 is answered with BAD; a PLAIN authorization identity that
+  differs from the login is refused (`NO [AUTHORIZATIONFAILED]`); mailbox names are no longer
+  "unquoted" a second time (`'Old'` kept its quotes stripped).
 
 - ActiveSync: a Sync Change without `email:Read` no longer marks the message unread.
 - Backup schedules and the retention worker (Managed Folder Assistant) ran once per app

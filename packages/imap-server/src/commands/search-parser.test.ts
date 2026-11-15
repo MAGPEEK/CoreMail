@@ -90,8 +90,38 @@ test('unknown keys and missing arguments are syntax errors', () => {
 test('RETURN and CHARSET prefixes', () => {
   assert.deepEqual(parse('RETURN (MIN COUNT) CHARSET UTF-8 ALL'), { returnOptions: ['MIN', 'COUNT'], charset: 'UTF-8', key: { op: 'all' } });
   assert.deepEqual(parse('RETURN () ALL').returnOptions, ['ALL']);
-  assert.throws(() => parse('RETURN (SAVE) ALL'), SearchSyntaxError);
+  // v7.1.0: SEARCHRES (RFC 5182) — SAVE is a RETURN option, "$" a search key.
+  assert.deepEqual(parse('RETURN (SAVE MIN) ALL').returnOptions, ['SAVE', 'MIN']);
+  assert.deepEqual(parse('$').key, { op: 'saved' });
+  assert.deepEqual(parse('UID $').key, { op: 'saved' });
+  assert.throws(() => parse('RETURN (PARTIAL 1:5) ALL'), SearchSyntaxError);
+  assert.throws(() => parse('RETURN (SAVE'), Error);
   assert.equal(parse('ALL').returnOptions, null);
+});
+
+test('RECENT/NEW match nothing and OLD everything (\\Recent is never set)', () => {
+  assert.deepEqual(run('RECENT'), []);
+  assert.deepEqual(run('NEW'), []);
+  assert.deepEqual(run('OLD'), [5, 9, 12]);
+});
+
+test('"$" matches the saved result; MODSEQ in ESEARCH', () => {
+  const { key } = parse('$');
+  const saved = new Set([9, 12]);
+  const hits = MESSAGES.filter((m, i) => evaluateSearch(key, m, { seq: i + 1, maxSeq: 3, maxUid: 12, saved }));
+  assert.deepEqual(hits.map((m) => m.uid), [9, 12]);
+  assert.equal(formatEsearch('A3', false, [2, 3], ['ALL'], 30n), '(TAG "A3") ALL 2:3 MODSEQ 30');
+  assert.equal(formatEsearch('A4', false, [], ['ALL'], 30n), '(TAG "A4")');
+});
+
+test('HEADER with raw headers: any field, and "" matches every message that has the field', () => {
+  const { key } = parse('HEADER X-Priority ""');
+  const { key: high } = parse('HEADER X-Priority 1');
+  const msg = MESSAGES[0]!;
+  const headers = [{ name: 'X-Priority', value: '1 (Highest)' }];
+  assert.equal(evaluateSearch(key, msg, { seq: 1, maxSeq: 3, maxUid: 12, headers }), true);
+  assert.equal(evaluateSearch(key, msg, { seq: 1, maxSeq: 3, maxUid: 12, headers: [] }), false);
+  assert.equal(evaluateSearch(high, msg, { seq: 1, maxSeq: 3, maxUid: 12, headers }), true);
 });
 
 test('needsBody only for BODY and TEXT', () => {

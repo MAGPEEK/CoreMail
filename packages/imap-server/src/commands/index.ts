@@ -4,25 +4,36 @@ import {
   attachmentKey, uploadBuffer,
   type RawSourceMessage,
 } from '@coremail/storage';
-import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer, mailboxName } from '../fetch/imap-string.js';
+import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
 import { parseFetchItems, sectionLabel, FetchParseError, type FetchItem } from '../fetch/fetch-items.js';
 import {
   extractSection, applyPartial, renderBodyStructure, renderEnvelope, envelopeFromHeaders, envelopeFromDb,
 } from '../fetch/render.js';
+import { binarySection, binaryLiteral, UnknownCteError } from '../fetch/binary.js';
 import { getRaw, type CachedRaw } from '../fetch/raw-cache.js';
 import { createLogger } from '@coremail/core';
 import {
   type ImapSession,
   sendOk, sendNo, sendBad, sendUntagged, send, refreshCapabilities,
 } from '../session/state.js';
+import {
+  createView, loadViewRows, seqOf, lastUid, resolveSet, isValidSequenceSet, markReported, reportExpunged,
+  syncView, completeWithUpdates, withUpdateLock,
+} from '../session/view.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
 import { registerLiveSession } from '../session/live.js';
 import {
-  parseSearch, needsBody, evaluateSearch, formatEsearch,
-  type SearchProgram, type SearchableMessage,
+  parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
+  type SearchProgram, type SearchableMessage, type ReturnOption,
 } from './search-parser.js';
+import { fromClient, toClient } from './mailbox-name.js';
+import { runStatus } from './list.js';
+
+export { handleList, handleLsub, handleGetQuotaRoot, handleGetQuota, handleSetQuota } from './list.js';
 
 const log = createLogger('imap:commands');
+
+const DELIMITER = '.';
 
 // ─────────────────────────────────────────────
 // CAPABILITY
@@ -36,20 +47,15 @@ export async function handleCapability(
 }
 
 // ─────────────────────────────────────────────
-// LOGIN
+// LOGIN (the dispatcher only calls this in the not-authenticated state)
 // ─────────────────────────────────────────────
 export async function handleLogin(
   session: ImapSession,
   tag: string,
   args: string[],
 ): Promise<void> {
-  if (args.length < 2) {
-    sendBad(session, tag, 'LOGIN requires username and password');
-    return;
-  }
-
   // Arguments arrive already decoded by the tokenizer (atom, quoted string
-  // with \" and \\ escapes resolved, or literal) — no further unquoting.
+  // with \" and \\ escapes resolved, or literal).
   if (args.length !== 2) {
     sendBad(session, tag, 'LOGIN requires username and password');
     return;
@@ -79,145 +85,17 @@ export async function handleLogout(session: ImapSession, tag: string): Promise<v
 }
 
 // ─────────────────────────────────────────────
-// LIST — v5.2.18 with SPECIAL-USE flags (RFC 6154)
-// ─────────────────────────────────────────────
-//
-// Mac Mail / Apple Mail only recognizes the system folders via SPECIAL-USE flags:
-//   \Drafts, \Sent, \Trash, \Junk, \Archive, \Flagged, \All
-// Without these flags Mac Mail only shows INBOX — the other folders are
-// included in LIST but are not recognized by Mac Mail as "standard folders"
-// and are therefore hidden.
-
-/**
- * Maps a folder name (case-insensitive) to its SPECIAL-USE flag.
- * Supports both English (INBOX, Drafts, Sent, …) and typical German
- * aliases (Entwürfe, Gesendet, …) — in case someone renames their
- * folder scheme.
- */
-function specialUseFlag(name: string): string | null {
-  const n = name.toLowerCase();
-  if (n === 'inbox' || n === 'posteingang') return null; // INBOX has NO SPECIAL-USE
-  if (n === 'drafts' || n === 'entwürfe' || n === 'entwurf') return '\\Drafts';
-  if (n === 'sent' || n === 'gesendet' || n === 'sent items' || n === 'sent messages') return '\\Sent';
-  if (n === 'trash' || n === 'gelöscht' || n === 'deleted items' || n === 'deleted messages') return '\\Trash';
-  if (n === 'junk' || n === 'spam' || n === 'junk-e-mail' || n === 'junk e-mail') return '\\Junk';
-  if (n === 'archive' || n === 'archiv') return '\\Archive';
-  if (n === 'flagged' || n === 'starred') return '\\Flagged';
-  if (n === 'all' || n === 'all mail' || n === 'alle nachrichten') return '\\All';
-  return null;
-}
-
-export async function handleList(
-  session: ImapSession,
-  tag: string,
-  args: string[],
-): Promise<void> {
-  if (!session.mailboxId) {
-    sendNo(session, tag, 'No mailbox');
-    return;
-  }
-
-  const reference = unquote(args[0] ?? '');
-  const pattern   = unquote(args[1] ?? '*');
-  const regexPattern = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/%/g, '[^.]*');
-  // v5.2.19: Defensive — also escape the reference in case the client sends it
-  // with special characters. Plus try/catch around RegExp so invalid patterns
-  // do not lead to a 500 but return all folders instead.
-  const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
-  let regex: RegExp;
-  try {
-    regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
-  } catch {
-    // Fallback: match all folders
-    regex = /.*/;
-  }
-
-  const folders = await prisma.folder.findMany({
-    where: { mailboxId: session.mailboxId },
-    orderBy: { name: 'asc' },
-  });
-
-  for (const folder of folders) {
-    if (pattern === '*' || pattern === '%' || regex.test(folder.name)) {
-      // RFC 3348 (CHILDREN) / RFC 9051 §7.3.1: \HasChildren when an inferior mailbox exists.
-      const hasChildren = folders.some((f) => f.name.startsWith(`${folder.name}.`));
-      const flags: string[] = [hasChildren ? '\\HasChildren' : '\\HasNoChildren'];
-      const special = specialUseFlag(folder.name);
-      if (special) flags.push(special);
-      sendUntagged(session, `LIST (${flags.join(' ')}) "." ${mailboxName(folder.name)}`);
-    }
-  }
-
-  sendOk(session, tag, 'LIST completed');
-}
-
-// ─────────────────────────────────────────────
-// LSUB — Mac Mail's first query after login (RFC 3501 §6.3.9)
-// ─────────────────────────────────────────────
-// Without an LSUB handler our server replies "BAD" → Mac Mail assumes
-// that only INBOX exists. We treat all standard folders as
-// automatically subscribed.
-export async function handleLsub(
-  session: ImapSession,
-  tag: string,
-  args: string[],
-): Promise<void> {
-  if (!session.mailboxId) {
-    sendNo(session, tag, 'No mailbox');
-    return;
-  }
-
-  const reference = unquote(args[0] ?? '');
-  const pattern   = unquote(args[1] ?? '*');
-  const regexPattern = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/%/g, '[^.]*');
-  // v5.2.19: Defensive — also escape the reference in case the client sends it
-  // with special characters. Plus try/catch around RegExp so invalid patterns
-  // do not lead to a 500 but return all folders instead.
-  const escapedReference = reference.replace(/[.+^${}()|[\]\\*]/g, '\\$&');
-  let regex: RegExp;
-  try {
-    regex = new RegExp(`^${escapedReference}${regexPattern}$`, 'i');
-  } catch {
-    // Fallback: match all folders
-    regex = /.*/;
-  }
-
-  const folders = await prisma.folder.findMany({
-    where: { mailboxId: session.mailboxId },
-    orderBy: { name: 'asc' },
-  });
-
-  for (const folder of folders) {
-    if (pattern === '*' || pattern === '%' || regex.test(folder.name)) {
-      // Emit SPECIAL-USE flags in LSUB as well — Mac Mail validates them
-      const flags: string[] = ['\\HasNoChildren'];
-      const special = specialUseFlag(folder.name);
-      if (special) flags.push(special);
-      sendUntagged(session, `LSUB (${flags.join(' ')}) "." ${mailboxName(folder.name)}`);
-    }
-  }
-
-  sendOk(session, tag, 'LSUB completed');
-}
-
-// ─────────────────────────────────────────────
 // SUBSCRIBE / UNSUBSCRIBE — RFC 3501 §6.3.6/6.3.7
 // ─────────────────────────────────────────────
-// We accept both as no-ops (all standard folders are always
-// subscribed). Mac Mail often calls SUBSCRIBE on its own after LIST.
+// Both are accepted as no-ops (every mailbox counts as subscribed). Mac Mail
+// often calls SUBSCRIBE on its own after LIST.
 export async function handleSubscribe(
   session: ImapSession,
   tag: string,
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-  const folderName = unquote(args[0] ?? '');
+  const folderName = fromClient(session, args[0] ?? '');
   if (!folderName) { sendNo(session, tag, 'Folder name required'); return; }
   const folder = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name: folderName },
@@ -233,92 +111,29 @@ export async function handleUnsubscribe(
   _args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-  // We allow unsubscribe (no-op) — on the next LSUB everything is
-  // subscribed again. Mac Mail copes with this behavior.
+  // Unsubscribe is a no-op — on the next LSUB everything is subscribed again.
   sendOk(session, tag, 'UNSUBSCRIBE completed');
 }
 
 // ─────────────────────────────────────────────
 // NAMESPACE — RFC 2342
 // ─────────────────────────────────────────────
-// Personal namespace with "." as hierarchy delimiter. No other-user
-// or shared namespaces (would require CoreMail shared mailboxes —
-// may follow later).
+// Personal namespace with "." as hierarchy delimiter. No other-user or shared
+// namespaces.
 export function handleNamespace(session: ImapSession, tag: string): void {
   sendUntagged(session, 'NAMESPACE (("" ".")) NIL NIL');
   sendOk(session, tag, 'NAMESPACE completed');
 }
 
 // ─────────────────────────────────────────────
-// STATUS — RFC 3501 §6.3.10
+// STATUS — RFC 9051 §6.3.11 (implementation in list.ts, shared with LIST-STATUS)
 // ─────────────────────────────────────────────
-// Mac Mail uses STATUS to refresh the folder overview without SELECT.
-// Returns MESSAGES, UIDNEXT, UIDVALIDITY, UNSEEN, RECENT, HIGHESTMODSEQ.
-export async function handleStatus(
-  session: ImapSession,
-  tag: string,
-  args: string[],
-): Promise<void> {
-  if (!session.mailboxId) { sendNo(session, tag, 'No mailbox'); return; }
-
-  // RFC 9051 §6.3.11: STATUS <mailbox> "(" status-att *(SP status-att) ")".
-  // The tokenizer groups the parenthesised list into one argument.
-  const folderName = args[0] ?? '';
-  const list = /^\((.*)\)$/.exec(args[1] ?? '');
-  if (!folderName || !list || args.length !== 2) {
-    sendBad(session, tag, 'STATUS requires a mailbox and a parenthesised item list');
-    return;
-  }
-  const items = (list[1] ?? '').toUpperCase().split(/\s+/).filter(Boolean);
-  const KNOWN = ['MESSAGES', 'UIDNEXT', 'UIDVALIDITY', 'UNSEEN', 'DELETED', 'RECENT', 'HIGHESTMODSEQ', 'SIZE'];
-  const unknown = items.find((i) => !KNOWN.includes(i));
-  if (items.length === 0 || unknown) {
-    sendBad(session, tag, unknown ? `Unknown STATUS item ${unknown}` : 'Empty STATUS item list');
-    return;
-  }
-
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: folderName },
-    include: { mailbox: true },
-  });
-  if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
-
-  const base = { folderId: folder.id, deletedAt: null };
-  const want = (item: string): boolean => items.includes(item);
-  const [messages, unseen, deleted, sizeRows] = await Promise.all([
-    want('MESSAGES') ? prisma.message.count({ where: base }) : Promise.resolve(0),
-    want('UNSEEN')
-      ? prisma.message.count({ where: { ...base, NOT: { flags: { has: '\\Seen' } } } })
-      : Promise.resolve(0),
-    want('DELETED')
-      ? prisma.message.count({ where: { ...base, flags: { has: '\\Deleted' } } })
-      : Promise.resolve(0),
-    // RFC 8438: SIZE is the total size of the mailbox in octets (sum of RFC822.SIZE).
-    want('SIZE')
-      ? prisma.message.findMany({ where: base, select: { rawSize: true } })
-      : Promise.resolve([] as Array<{ rawSize: number }>),
-  ]);
-  const size = sizeRows.reduce((sum, m) => sum + m.rawSize, 0);
-
-  const parts: string[] = [];
-  for (const item of items) {
-    switch (item) {
-      case 'MESSAGES':       parts.push(`MESSAGES ${messages}`); break;
-      case 'UIDNEXT':        parts.push(`UIDNEXT ${folder.mailbox.uidNext}`); break;
-      case 'UIDVALIDITY':    parts.push(`UIDVALIDITY ${folder.mailbox.uidValidity}`); break;
-      case 'UNSEEN':         parts.push(`UNSEEN ${unseen}`); break;
-      case 'DELETED':        parts.push(`DELETED ${deleted}`); break;
-      case 'RECENT':         parts.push('RECENT 0'); break;
-      case 'HIGHESTMODSEQ':  parts.push(`HIGHESTMODSEQ ${folder.mailbox.highestModSeq}`); break;
-      case 'SIZE':           parts.push(`SIZE ${size}`); break;
-    }
-  }
-  sendUntagged(session, `STATUS ${mailboxName(folder.name)} (${parts.join(' ')})`);
-  sendOk(session, tag, 'STATUS completed');
+export async function handleStatus(session: ImapSession, tag: string, args: string[]): Promise<void> {
+  if (await runStatus(session, tag, args)) await completeWithUpdates(session, tag, 'STATUS completed');
 }
 
 // ─────────────────────────────────────────────
-// CREATE — RFC 3501 §6.3.3 (Mac Mail needs this for "New Folder" + Drafts/Sent upload)
+// CREATE — RFC 9051 §6.3.4
 // ─────────────────────────────────────────────
 export async function handleCreate(
   session: ImapSession,
@@ -326,15 +141,14 @@ export async function handleCreate(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  let name = unquote(args[0] ?? '');
+  // A trailing hierarchy delimiter only declares the intent to create inferiors
+  // (Mac Mail sometimes sends "Parent.Child.").
+  const name = fromClient(session, (args[0] ?? '').replace(/[./]+$/, ''));
   if (!name) { sendBad(session, tag, 'Folder name required'); return; }
-  // Remove trailing slash (Mac Mail sometimes sends "Parent.Child.")
-  name = name.replace(/[.\/]+$/, '');
-  if (name.toUpperCase() === 'INBOX') {
-    sendNo(session, tag, 'INBOX cannot be created');
+  if (name === 'INBOX') {
+    sendNo(session, tag, '[ALREADYEXISTS] INBOX cannot be created');
     return;
   }
-  // Prevent duplicate folders
   const existing = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name },
     select: { id: true },
@@ -351,7 +165,7 @@ export async function handleCreate(
 }
 
 // ─────────────────────────────────────────────
-// DELETE — RFC 3501 §6.3.4
+// DELETE — RFC 9051 §6.3.5
 // ─────────────────────────────────────────────
 export async function handleDeleteFolder(
   session: ImapSession,
@@ -359,9 +173,9 @@ export async function handleDeleteFolder(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  const name = unquote(args[0] ?? '');
+  const name = fromClient(session, args[0] ?? '');
   if (!name) { sendBad(session, tag, 'Folder name required'); return; }
-  if (name.toUpperCase() === 'INBOX') {
+  if (name === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be deleted');
     return;
   }
@@ -383,7 +197,7 @@ export async function handleDeleteFolder(
 }
 
 // ─────────────────────────────────────────────
-// RENAME — RFC 3501 §6.3.5
+// RENAME — RFC 9051 §6.3.6 (inferior mailboxes are renamed too)
 // ─────────────────────────────────────────────
 export async function handleRename(
   session: ImapSession,
@@ -391,51 +205,96 @@ export async function handleRename(
   args: string[],
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
-  const oldName = unquote(args[0] ?? '');
-  const newName = unquote(args[1] ?? '');
-  if (!oldName || !newName) { sendBad(session, tag, 'Old + new folder name required'); return; }
-  if (oldName.toUpperCase() === 'INBOX') {
+  if (args.length !== 2 || !args[0] || !args[1]) { sendBad(session, tag, 'Old + new folder name required'); return; }
+  const oldName = fromClient(session, args[0]);
+  const newName = fromClient(session, args[1]);
+  if (oldName === 'INBOX') {
     sendNo(session, tag, 'INBOX cannot be renamed');
     return;
   }
-  const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: oldName },
-    select: { id: true },
+  const folders = await prisma.folder.findMany({
+    where: { mailboxId: session.mailboxId },
+    select: { id: true, name: true },
   });
+  const folder = folders.find((f) => f.name === oldName);
   if (!folder) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
-  // Conflict with an existing folder?
-  const conflict = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name: newName },
-    select: { id: true },
-  });
-  if (conflict) {
+  if (newName === oldName || newName.startsWith(`${oldName}${DELIMITER}`)) {
+    sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into itself');
+    return;
+  }
+  const renames = [folder, ...folders.filter((f) => f.name.startsWith(`${oldName}${DELIMITER}`))]
+    .map((f) => ({ id: f.id, name: `${newName}${f.name.slice(oldName.length)}` }));
+  const taken = new Set(folders.map((f) => f.name));
+  if (newName === 'INBOX' || renames.some((r) => taken.has(r.name))) {
     sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
     return;
   }
-  await prisma.folder.update({
-    where: { id: folder.id },
-    data:  { name: newName, displayName: newName },
+  await prisma.$transaction(async (tx) => {
+    for (const r of renames) {
+      await tx.folder.update({ where: { id: r.id }, data: { name: r.name, displayName: r.name } });
+    }
   });
+  const selected = session.selected;
+  const renamedSelected = selected ? renames.find((r) => r.id === selected.folderId) : undefined;
+  if (selected && renamedSelected) selected.folderName = renamedSelected.name;
   sendOk(session, tag, 'RENAME completed');
 }
 
 // ─────────────────────────────────────────────
-// APPEND — RFC 3501 §6.3.11 (Mac Mail uploads Drafts/Sent to the server)
+// APPEND — RFC 9051 §6.3.12
 // ─────────────────────────────────────────────
 /** True when the APPEND target mailbox exists (checked before reading the literal). */
 export async function appendTargetExists(session: ImapSession, name: string): Promise<boolean> {
   if (!session.mailboxId) return false;
   const folder = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId, name },
+    where: { mailboxId: session.mailboxId, name: fromClient(session, name) },
     select: { id: true },
   });
   return !!folder;
 }
 
-// RFC 9051 §6.3.12: APPEND <mailbox> [<flag-list>] [<date-time>] <literal>.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** RFC 9051 §9 date-time: "dd-Mon-yyyy hh:mm:ss +zzzz" (day may be space-padded). */
+export function parseDateTime(value: string): Date | null {
+  const m = /^ ?(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})$/.exec(value);
+  if (!m) return null;
+  const month = MONTHS.findIndex((x) => x.toLowerCase() === (m[2] as string).toLowerCase());
+  const [day, year, hh, mm, ss, zh, zm] = [m[1], m[3], m[4], m[5], m[6], m[8], m[9]].map(Number) as number[];
+  if (month < 0 || day! < 1 || day! > 31 || hh! > 23 || mm! > 59 || ss! > 60 || zm! > 59) return null;
+  const offset = (m[7] === '-' ? -1 : 1) * (zh! * 60 + zm!);
+  const date = new Date(Date.UTC(year!, month, day!, hh!, mm!, ss!) - offset * 60_000);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+const SYSTEM_FLAGS = ['\\Answered', '\\Flagged', '\\Deleted', '\\Seen', '\\Draft'];
+
+/**
+ * Normalises a flag sent by a client (RFC 9051 §2.3.2): system flags are
+ * case-insensitive; \Recent and unknown "\" flags cannot be set by a client.
+ * Returns null for a flag that must be rejected.
+ */
+export function normalizeFlag(flag: string): string | null {
+  if (flag.startsWith('\\')) {
+    return SYSTEM_FLAGS.find((f) => f.toLowerCase() === flag.toLowerCase()) ?? null;
+  }
+  return isValidFlag(flag) ? flag : null;
+}
+
+/** Case-insensitive union / difference that keeps the existing spelling. */
+function hasFlag(list: string[], flag: string): boolean {
+  return list.some((f) => f.toLowerCase() === flag.toLowerCase());
+}
+
+function uniqueFlags(list: string[]): string[] {
+  const out: string[] = [];
+  for (const f of list) if (!hasFlag(out, f)) out.push(f);
+  return out;
+}
+
 // The command reader delivers the literal as raw octets (`message`); the
 // existence of the mailbox is already checked before the continuation request
 // is sent (see server/index.ts), and again here.
@@ -447,14 +306,21 @@ export async function handleAppend(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length < 2 || args.length > 4) { sendBad(session, tag, 'APPEND requires mailbox and message literal'); return; }
-  const folderName = args[0] ?? '';
+  const folderName = fromClient(session, args[0] ?? '');
   const raw = message ?? Buffer.from(args[args.length - 1] ?? '', 'utf8');
-  // Optional flag list between mailbox and message (only syntactically valid flags;
-  // \Recent cannot be set by a client).
+  // Optional flag list and date-time between mailbox and message. Invalid
+  // flags and \Recent are dropped (a client cannot set them).
   let flags: string[] = [];
+  let internalDate: Date | null = null;
   for (const a of args.slice(1, -1)) {
-    const m = /^\((.*)\)$/.exec(a);
-    if (m && m[1]) flags = m[1].split(/\s+/).filter((f) => isValidFlag(f) && f.toLowerCase() !== '\\recent');
+    const m = /^\((.*)\)$/s.exec(a);
+    if (m) {
+      flags = uniqueFlags((m[1] ?? '').split(/\s+/).filter(Boolean)
+        .map(normalizeFlag).filter((f): f is string => f !== null));
+      continue;
+    }
+    internalDate = parseDateTime(a);
+    if (!internalDate) { sendBad(session, tag, 'Invalid APPEND date-time'); return; }
   }
   const folder = await prisma.folder.findFirst({
     where: { mailboxId: session.mailboxId, name: folderName },
@@ -492,6 +358,8 @@ export async function handleAppend(
       bodyHtml:  truncateBodyColumn(parsed.bodyHtml),
       flags,
       messageId: parsed.messageId,
+      // RFC 9051 §6.3.12: the date-time argument sets the internal date.
+      ...(internalDate ? { createdAt: internalDate } : {}),
   }));
   const newUid = created.uid;
 
@@ -512,11 +380,39 @@ export async function handleAppend(
   }
 
   log.info({ folderId: folder.id, uid: newUid }, 'IMAP APPEND stored message');
-  sendOk(session, tag, `[APPENDUID ${folder.mailbox.uidValidity} ${newUid}] APPEND completed`);
+  // RFC 9051 §6.3.12: appending to the selected mailbox is announced with EXISTS.
+  await completeWithUpdates(session, tag, `[APPENDUID ${folder.mailbox.uidValidity} ${newUid}] APPEND completed`);
 }
 
 // ─────────────────────────────────────────────
-// COPY — RFC 3501 §6.4.7 (Mac Mail "move to folder" = COPY + STORE \Deleted + EXPUNGE)
+// Message rows of the selected mailbox
+// ─────────────────────────────────────────────
+const IN_LIST_LIMIT = 1000;
+
+/**
+ * Database rows of the given UIDs in the selected folder (ascending). UIDs of
+ * the view that were expunged elsewhere have no row ("ghosts") and are skipped.
+ */
+async function loadMessages(folderId: string, uids: number[], withAttachments: boolean) {
+  if (uids.length === 0) return [];
+  const where = uids.length <= IN_LIST_LIMIT
+    ? { folderId, deletedAt: null, uid: { in: uids } }
+    : { folderId, deletedAt: null };
+  const rows = await prisma.message.findMany({
+    where,
+    orderBy: { uid: 'asc' },
+    include: {
+      attachments: withAttachments
+        ? { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } }
+        : false,
+    },
+  });
+  const wanted = new Set(uids);
+  return rows.filter((r) => wanted.has(r.uid));
+}
+
+// ─────────────────────────────────────────────
+// COPY — RFC 9051 §6.4.7, RFC 4315 COPYUID
 // ─────────────────────────────────────────────
 export async function handleCopy(
   session: ImapSession,
@@ -524,39 +420,30 @@ export async function handleCopy(
   args: string[],
   byUid = false,
 ): Promise<void> {
-  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  const view = session.selected;
+  if (!view) { sendNo(session, tag, 'No mailbox selected'); return; }
   const seqSet = args[0] ?? '';
-  const targetName = unquote(args[1] ?? '');
-  if (!seqSet || !targetName) { sendBad(session, tag, 'COPY: seq + target required'); return; }
+  if (args.length !== 2 || !args[1]) { sendBad(session, tag, 'COPY: seq + target required'); return; }
+  if (!isValidSequenceSet(seqSet)) { sendBad(session, tag, 'Invalid sequence set'); return; }
 
   const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: targetName },
+    where: { mailboxId: session.mailboxId!, name: fromClient(session, args[1]) },
     include: { mailbox: true },
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
 
-  // Load messages of the current folder
-  const messages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    orderBy: { uid: 'asc' },
-  });
-  // Parse sequence set (UID or seq number)
-  const uids = messages.map((m) => m.uid);
-  const matchedUids = parseSequenceSet(seqSet, uids, byUid);
-
-  if (matchedUids.length === 0) {
-    sendOk(session, tag, 'COPY completed (no messages matched)');
+  const sourceMsgs = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
+  if (sourceMsgs.length === 0) {
+    await completeWithUpdates(session, tag, 'COPY completed (no messages matched)');
     return;
   }
-
-  const sourceMsgs = messages.filter((m) => matchedUids.includes(m.uid));
   // Fresh UIDs + one modSeq in the target, reserved atomically (never a stale uidNext).
   const { mapping } = await prisma.$transaction((tx) => copyMessages(
     tx, sourceMsgs.map((m) => m.id), target.id, { targetMailboxId: target.mailboxId },
   ));
 
   const copyUid = `[COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}]`;
-  sendOk(session, tag, `${copyUid} COPY completed`);
+  await completeWithUpdates(session, tag, `${copyUid} COPY completed`);
 }
 
 // ─────────────────────────────────────────────
@@ -568,29 +455,25 @@ export async function handleMove(
   args: string[],
   byUid = false,
 ): Promise<void> {
-  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  const view = session.selected;
+  if (!view) { sendNo(session, tag, 'No mailbox selected'); return; }
   const seqSet = args[0] ?? '';
-  const targetName = unquote(args[1] ?? '');
-  if (!seqSet || !targetName) { sendBad(session, tag, 'MOVE: seq + target required'); return; }
+  if (args.length !== 2 || !args[1]) { sendBad(session, tag, 'MOVE: seq + target required'); return; }
+  if (!isValidSequenceSet(seqSet)) { sendBad(session, tag, 'Invalid sequence set'); return; }
+  // RFC 9051 §6.3.3: no permanent changes in a mailbox opened with EXAMINE.
+  if (view.readOnly) { sendNo(session, tag, '[READ-ONLY] Mailbox is read-only'); return; }
 
   const target = await prisma.folder.findFirst({
-    where: { mailboxId: session.mailboxId!, name: targetName },
+    where: { mailboxId: session.mailboxId!, name: fromClient(session, args[1]) },
     include: { mailbox: true },
   });
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
 
-  const messages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    select: { id: true, uid: true },
-    orderBy: { uid: 'asc' },
-  });
-  const uids = messages.map((m) => m.uid);
-  const matchedUids = parseSequenceSet(seqSet, uids, byUid);
-  if (matchedUids.length === 0) {
-    sendOk(session, tag, 'MOVE completed (no messages matched)');
+  const matched = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
+  if (matched.length === 0) {
+    await completeWithUpdates(session, tag, 'MOVE completed (no messages matched)');
     return;
   }
-  const matched = messages.filter((m) => matchedUids.includes(m.uid));
   // RFC 6851 §4.3: the moved messages get new UIDs in the target mailbox and a new
   // modSeq; the rows keep their id.
   const { mapping } = await prisma.$transaction((tx) => moveMessages(
@@ -600,90 +483,128 @@ export async function handleMove(
   if (mapping.length > 0) {
     sendUntagged(session, `OK [COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}] Moved`);
   }
-  // RFC 6851 §3.3: EXPUNGE responses for the moved messages (sequence numbers shift
-  // down after every response). Nothing to expunge when moving into the same folder.
-  const moved = new Set(mapping.map((m) => m.oldUid));
-  let removed = 0;
-  for (const [i, msg] of messages.entries()) {
-    if (moved.has(msg.uid)) {
-      sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
-      removed++;
-    }
-  }
-  session.selected.exists = Math.max(0, session.selected.exists - removed);
-  sendOk(session, tag, 'MOVE completed');
+  // RFC 6851 §3.3: EXPUNGE responses for the moved messages. Nothing to expunge
+  // when moving into the same folder.
+  reportExpunged(session, view, new Set(mapping.map((m) => m.oldUid)));
+  await completeWithUpdates(session, tag, 'MOVE completed');
 }
 
 // ─────────────────────────────────────────────
-// SEARCH — RFC 3501 §6.4.4 — Mac Mail uses this on every folder open!
+// SEARCH — RFC 9051 §6.4.4, ESEARCH (RFC 4731), SEARCHRES (RFC 5182),
+// CONDSTORE MODSEQ (RFC 7162 §3.1.5)
 // ─────────────────────────────────────────────
-// The search program is parsed into an AST (search-parser.ts) and evaluated
-// against the non-deleted messages of the selected folder, ordered by UID —
-// the same ordering that defines message sequence numbers. Evaluation happens
-// in memory because sequence-set keys, OR/NOT nesting and HEADER cannot be
-// expressed as a single Prisma filter; only the columns the program needs are
-// loaded (bodies only for BODY/TEXT).
-// Without SEARCH, Mac Mail shows folders as empty because it first runs SEARCH ALL
-// to fetch the UID list.
+// The search program is parsed into an AST (search-parser.ts) and evaluated in
+// memory against the messages of the session's view (sequence numbers come
+// from the view, never from the database order). Bodies are loaded only for
+// BODY/TEXT, raw headers only for HEADER fields without their own column.
 export async function handleSearch(
   session: ImapSession,
   tag: string,
   tokens: Token[],
   byUid = false,
 ): Promise<void> {
-  if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
+  const view = session.selected;
+  if (!view) { sendNo(session, tag, 'No mailbox selected'); return; }
 
   let program: SearchProgram;
   try {
     program = parseSearch(tokens);
   } catch (err) {
+    // RFC 5182 §2.1: a failed SEARCH ... RETURN (SAVE) leaves "$" empty.
+    if (tokens.some((t) => t.type === 'list' && t.items.some((i) => i.type === 'atom' && i.value.toUpperCase() === 'SAVE'))) {
+      view.searchRes = [];
+    }
     sendBad(session, tag, err instanceof ImapParseError ? err.message : 'Invalid search program');
     return;
   }
+  const saving = program.returnOptions?.includes('SAVE') ?? false;
   if (program.charset && program.charset !== 'UTF-8' && program.charset !== 'US-ASCII') {
+    if (saving) view.searchRes = [];
     sendNo(session, tag, '[BADCHARSET (UTF-8 US-ASCII)] Unsupported charset');
     return;
   }
+  const withModseq = hasModseq(program.key);
+  // RFC 7162 §3.1: SEARCH MODSEQ is a CONDSTORE-enabling command.
+  if (withModseq) session.condstoreEnabled = true;
 
   const withBody = needsBody(program.key);
-  const messages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    select: {
-      uid: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
-      toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true, messageId: true, inReplyTo: true,
-      date: true, createdAt: true, rawSize: true,
-      ...(withBody ? { bodyText: true, bodyHtml: true } : {}),
-    },
-    orderBy: { uid: 'asc' },
-  });
+  const withHeaders = needsRawHeaders(program.key);
+  const rows = withHeaders
+    ? await loadMessages(view.folderId, view.uids, true)
+    : await prisma.message.findMany({
+      where: { folderId: view.folderId, deletedAt: null },
+      select: {
+        id: true, uid: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
+        toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true, messageId: true, inReplyTo: true,
+        date: true, createdAt: true, rawSize: true,
+        ...(withBody ? { bodyText: true, bodyHtml: true } : {}),
+      },
+      orderBy: { uid: 'asc' },
+    });
 
-  const maxSeq = messages.length;
-  const maxUid = messages.length ? (messages[messages.length - 1]?.uid ?? 0) : 0;
-  const results: number[] = [];
-  messages.forEach((msg, idx) => {
-    if (evaluateSearch(program.key, msg as SearchableMessage, { seq: idx + 1, maxSeq, maxUid })) {
-      results.push(byUid ? msg.uid : idx + 1);
+  const maxSeq = view.uids.length;
+  const maxUid = lastUid(view);
+  const saved = new Set(view.searchRes);
+  const matched: Array<{ uid: number; seq: number; modSeq: bigint }> = [];
+  for (const msg of rows) {
+    const seq = seqOf(view, msg.uid);
+    if (seq === 0) continue; // not announced to the client yet
+    let headers: Array<{ name: string; value: string }> | undefined;
+    if (withHeaders) {
+      try {
+        headers = (await getRaw(session, msg as unknown as RawSourceMessage)).tree().headers;
+      } catch (err) {
+        log.error({ err, uid: msg.uid }, 'IMAP SEARCH: raw message unavailable');
+        sendNo(session, tag, '[UNAVAILABLE] Message content temporarily unavailable');
+        return;
+      }
     }
-  });
-
-  if (program.returnOptions) {
-    sendUntagged(session, `ESEARCH ${formatEsearch(tag, byUid, results, program.returnOptions)}`);
-  } else {
-    sendUntagged(session, `SEARCH${results.length ? ' ' + results.join(' ') : ''}`);
+    const ctx = { seq, maxSeq, maxUid, saved, ...(headers ? { headers } : {}) };
+    if (evaluateSearch(program.key, msg as SearchableMessage, ctx)) {
+      matched.push({ uid: msg.uid, seq, modSeq: msg.modSeq });
+    }
   }
-  sendOk(session, tag, `${byUid ? 'UID SEARCH' : 'SEARCH'} completed`);
+  const results = matched.map((m) => (byUid ? m.uid : m.seq));
+
+  // IMAP4rev2: SEARCH without RETURN is answered with ESEARCH (RETURN (ALL)).
+  const options: ReturnOption[] | null = program.returnOptions ?? (session.imap4rev2Enabled ? ['ALL'] : null);
+  const reported = options === null ? [] : options.filter((o) => o !== 'SAVE');
+  // Messages whose values are returned (MIN/MAX only → just those two).
+  const minMaxOnly = reported.length > 0 && !reported.includes('ALL') && !reported.includes('COUNT');
+  const returned = minMaxOnly && matched.length > 0
+    ? [
+      ...(reported.includes('MIN') ? [matched[0]!] : []),
+      ...(reported.includes('MAX') ? [matched[matched.length - 1]!] : []),
+    ]
+    : matched;
+  if (saving) {
+    // RFC 5182 §2.4: with MIN/MAX only, just those messages are saved.
+    view.searchRes = (minMaxOnly ? returned : matched).map((m) => m.uid);
+  }
+  const modseq = withModseq && returned.length > 0
+    ? returned.reduce((max, m) => (m.modSeq > max ? m.modSeq : max), 0n)
+    : null;
+
+  if (options === null) {
+    const tail = modseq !== null ? ` (MODSEQ ${modseq})` : '';
+    sendUntagged(session, `SEARCH${results.length ? ' ' + results.join(' ') : ''}${tail}`);
+  } else if (reported.length > 0) {
+    sendUntagged(session, `ESEARCH ${formatEsearch(tag, byUid, results, reported, modseq)}`);
+  }
+  // RFC 5182 §2.4: RETURN (SAVE) alone produces no ESEARCH response.
+  await completeWithUpdates(session, tag, `${byUid ? 'UID SEARCH' : 'SEARCH'} completed`, byUid);
 }
 
 // ─────────────────────────────────────────────
-// CLOSE — RFC 3501 §6.4.2 (deselect mailbox + implicit EXPUNGE)
+// CLOSE — RFC 9051 §6.4.1 (deselect mailbox + silent EXPUNGE)
 // ─────────────────────────────────────────────
 export async function handleClose(
   session: ImapSession,
   tag: string,
 ): Promise<void> {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
-  // Implicitly remove messages with the \Deleted flag (RFC 9051 §6.4.1: not
-  // for a mailbox opened with EXAMINE). The expunge bumps the modSeq.
+  // Implicitly remove messages with the \Deleted flag (not for a mailbox
+  // opened with EXAMINE). The expunge bumps the modSeq.
   if (!session.selected.readOnly) {
     const doomed = await prisma.message.findMany({
       where: {
@@ -704,17 +625,16 @@ export async function handleClose(
 }
 
 // ─────────────────────────────────────────────
-// CHECK — RFC 3501 §6.4.1 (server sync, essentially a NOOP for us)
+// CHECK — RFC 3501 §6.4.1 (a NOOP that reports mailbox updates)
 // ─────────────────────────────────────────────
-export function handleCheck(session: ImapSession, tag: string): void {
-  sendOk(session, tag, 'CHECK completed');
+export async function handleCheck(session: ImapSession, tag: string): Promise<void> {
+  await completeWithUpdates(session, tag, 'CHECK completed');
 }
 
 // ─────────────────────────────────────────────
-// UNSELECT — RFC 3691 / RFC 9051 IMAP4rev2 mandatory
+// UNSELECT — RFC 3691 / RFC 9051
 // ─────────────────────────────────────────────
 // Closes the currently selected folder WITHOUT performing EXPUNGE.
-// Unlike CLOSE, \Deleted messages are preserved.
 export function handleUnselect(session: ImapSession, tag: string): void {
   if (!session.selected) { sendNo(session, tag, 'No mailbox selected'); return; }
   session.selected = null;
@@ -725,32 +645,37 @@ export function handleUnselect(session: ImapSession, tag: string): void {
 // ─────────────────────────────────────────────
 // ID — RFC 2971 (Client/Server Identification)
 // ─────────────────────────────────────────────
-// Client identifies itself with ("name" "Thunderbird" "version" "115.0")
-// — we reply with our server ID. Some clients send ID
-// proactively; the server response may be NIL.
 export function handleId(session: ImapSession, tag: string, _args: string[]): void {
-  sendUntagged(session, 'ID ("name" "CoreMail" "version" "5.5.0" "vendor" "MAGPEEK" "support-url" "https://github.com/MAGPEEK/CoreMail")');
+  sendUntagged(session, 'ID ("name" "CoreMail" "vendor" "MAGPEEK" "support-url" "https://github.com/MAGPEEK/CoreMail")');
   sendOk(session, tag, 'ID completed');
 }
 
 // ─────────────────────────────────────────────
-// AUTHENTICATE — RFC 3501 §6.2.2 + RFC 4959 SASL-IR
+// AUTHENTICATE — RFC 9051 §6.2.2 + RFC 4959 SASL-IR
 // ─────────────────────────────────────────────
 // Supported: PLAIN (RFC 4616), LOGIN (deprecated but widespread).
-// With the SASL-IR capability the client may send the initial response
-// directly (`A1 AUTHENTICATE PLAIN <base64>`). Otherwise the server prompts with
-// `+ ` (challenge) → client sends the base64 response.
-//
-// XOAUTH2 would be RFC 7628 — deliberately NOT implemented because mainstream
-// clients (Apple Mail, Outlook LTSC) offer no UI for custom OAuth servers.
-// App passwords are the practical MFA bypass.
+// XOAUTH2 (RFC 7628) is deliberately NOT implemented — mainstream clients offer
+// no UI for custom OAuth servers; app passwords are the MFA path.
+
+/** Strict base64 (RFC 4648 §4); null when the client sent something else. */
+function decodeBase64(data: string): string | null {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) return null;
+  return Buffer.from(data, 'base64').toString('utf8');
+}
+
+function resetSasl(session: ImapSession): void {
+  session.saslMech = null;
+  session.saslStep = 0;
+  session.saslUser = '';
+}
+
 export async function handleAuthenticate(
   session: ImapSession,
   tag: string,
   args: string[],
 ): Promise<void> {
   const mech = (args[0] ?? '').toUpperCase();
-  const initialResponse = args[1] ?? '';
+  const initialResponse = args[1];
 
   // v7: no AUTH= mechanisms are advertised before TLS — refuse before any
   // continuation so the client never sends credentials in cleartext.
@@ -759,10 +684,16 @@ export async function handleAuthenticate(
     return;
   }
 
+  // RFC 4959: "=" is an empty initial response.
+  const initial = initialResponse === undefined ? null : initialResponse === '=' ? '' : decodeBase64(initialResponse);
+  if (initialResponse !== undefined && initial === null) {
+    sendBad(session, tag, 'Invalid base64 in initial response');
+    return;
+  }
+
   if (mech === 'PLAIN') {
-    // RFC 4616 PLAIN: base64("\x00user\x00password")
-    if (initialResponse) {
-      await processPlainAuth(session, tag, initialResponse);
+    if (initial !== null) {
+      await processPlainAuth(session, tag, initial);
       return;
     }
     // No SASL-IR → server sends an empty continuation and waits for the response
@@ -773,22 +704,19 @@ export async function handleAuthenticate(
   }
 
   if (mech === 'LOGIN') {
-    // SASL LOGIN: 2-step (Username challenge → Password challenge)
-    if (initialResponse) {
-      // Some clients send username as initial response
-      session.saslMech = 'LOGIN';
+    session.saslMech = 'LOGIN';
+    if (initial !== null) {
+      // Some clients send the user name as initial response
       session.saslStep = 1;
-      try { session.saslUser = Buffer.from(initialResponse, 'base64').toString('utf8'); } catch { /* ignore */ }
+      session.saslUser = initial;
       send(session, '+ ' + Buffer.from('Password:').toString('base64'));
       return;
     }
-    session.saslMech = 'LOGIN';
     session.saslStep = 0;
     send(session, '+ ' + Buffer.from('Username:').toString('base64'));
     return;
   }
 
-  // v5.5.0: XOAUTH2 explicitly NOT implemented — see comment above
   sendNo(session, tag, `[CANNOT] Unsupported SASL mechanism. Use PLAIN, LOGIN, or LOGIN command`);
 }
 
@@ -804,33 +732,34 @@ export async function handleSaslContinuation(
   const data = line.trim();
   // Client may abort with "*"
   if (data === '*') {
-    session.saslMech = null;
-    session.saslStep = 0;
+    resetSasl(session);
     sendBad(session, tag, 'Authentication cancelled');
+    return;
+  }
+  // RFC 9051 §6.2.2: a response that is not valid base64 is answered with BAD.
+  const decoded = decodeBase64(data);
+  if (decoded === null) {
+    resetSasl(session);
+    sendBad(session, tag, 'Invalid base64 in SASL response');
     return;
   }
 
   if (session.saslMech === 'PLAIN') {
-    session.saslMech = null;
-    await processPlainAuth(session, tag, data);
+    resetSasl(session);
+    await processPlainAuth(session, tag, decoded);
     return;
   }
 
   if (session.saslMech === 'LOGIN') {
     if (session.saslStep === 0) {
-      // Username
-      try { session.saslUser = Buffer.from(data, 'base64').toString('utf8'); } catch { /* ignore */ }
+      session.saslUser = decoded;
       session.saslStep = 1;
       send(session, '+ ' + Buffer.from('Password:').toString('base64'));
       return;
     }
-    // Password
-    let password = '';
-    try { password = Buffer.from(data, 'base64').toString('utf8'); } catch { /* ignore */ }
-    session.saslMech = null;
-    session.saslStep = 0;
-    await loginUser(session, tag, session.saslUser, password);
-    session.saslUser = '';
+    const user = session.saslUser;
+    resetSasl(session);
+    await loginUser(session, tag, user, decoded);
     return;
   }
 
@@ -838,15 +767,16 @@ export async function handleSaslContinuation(
   sendBad(session, tag, 'Unexpected continuation');
 }
 
-async function processPlainAuth(session: ImapSession, tag: string, b64Data: string): Promise<void> {
-  let decoded: string;
-  try { decoded = Buffer.from(b64Data, 'base64').toString('utf8'); }
-  catch { sendBad(session, tag, '[ALERT] Invalid base64 in PLAIN'); return; }
-  // RFC 4616: [authzid] \0 authcid \0 password
-  const parts = decoded.split(' ');
-  if (parts.length < 3) { sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid PLAIN format'); return; }
-  const user     = parts[1] ?? '';
-  const password = parts[2] ?? '';
+async function processPlainAuth(session: ImapSession, tag: string, decoded: string): Promise<void> {
+  // RFC 4616: [authzid] NUL authcid NUL passwd
+  const parts = decoded.split('\0');
+  if (parts.length !== 3) { sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid PLAIN format'); return; }
+  const [authzid, user, password] = parts as [string, string, string];
+  // No proxy authorization: an authorization identity must be the login itself.
+  if (authzid !== '' && authzid.toLowerCase() !== user.toLowerCase()) {
+    sendNo(session, tag, '[AUTHORIZATIONFAILED] Authorization identity not permitted');
+    return;
+  }
   await loginUser(session, tag, user, password);
 }
 
@@ -894,7 +824,7 @@ async function loginUser(
 }
 
 // ─────────────────────────────────────────────
-// SELECT / EXAMINE
+// SELECT / EXAMINE — RFC 9051 §6.3.2–3, RFC 7162 §3.1.8 (CONDSTORE parameter)
 // ─────────────────────────────────────────────
 export async function handleSelect(
   session: ImapSession,
@@ -906,62 +836,64 @@ export async function handleSelect(
     sendNo(session, tag, 'Not authenticated');
     return;
   }
+  const verb = readOnly ? 'EXAMINE' : 'SELECT';
+  if (args.length < 1 || args.length > 2 || !args[0]) { sendBad(session, tag, `${verb} requires a mailbox name`); return; }
+  let condstore = false;
+  if (args[1] !== undefined) {
+    const params = /^\((.*)\)$/s.exec(args[1]);
+    const names = (params?.[1] ?? '').toUpperCase().split(/\s+/).filter(Boolean);
+    if (!params || names.some((p) => p !== 'CONDSTORE')) { sendBad(session, tag, `Unknown ${verb} parameter`); return; }
+    condstore = names.length > 0;
+  }
 
-  const folderName = unquote(args[0] ?? 'INBOX');
+  // RFC 9051 §6.3.2: the selected mailbox is closed first (no EXPUNGE); a
+  // failed SELECT leaves the session in the authenticated state.
+  if (session.selected) {
+    session.selected = null;
+    session.state = 'AUTHENTICATED';
+    if (session.imap4rev2Enabled) sendUntagged(session, 'OK [CLOSED] Previous mailbox closed');
+  }
 
   const folder = await prisma.folder.findFirst({
-    where: {
-      mailboxId: session.mailboxId,
-      OR: [{ name: folderName }, { name: 'INBOX', ...(folderName === 'INBOX' ? {} : { id: 'never' }) }],
-    },
+    where: { mailboxId: session.mailboxId, name: fromClient(session, args[0]) },
     include: { mailbox: true },
   });
-
   if (!folder) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
+  if (condstore) session.condstoreEnabled = true;
 
-  const [exists, recent, unseen] = await Promise.all([
-    prisma.message.count({ where: { folderId: folder.id, deletedAt: null } }),
-    Promise.resolve(0), // recent = new since last SELECT (simplified)
-    prisma.message.count({
-      where: { folderId: folder.id, deletedAt: null, NOT: { flags: { has: '\\Seen' } } },
-    }),
-  ]);
-
+  const rows = await loadViewRows(folder.id);
+  const view = createView({ id: folder.id, name: folder.name, uidValidity: folder.mailbox.uidValidity }, rows, readOnly);
   session.state = 'SELECTED';
-  session.selected = {
-    folderId: folder.id,
-    folderName: folder.name,
-    uidValidity: folder.mailbox.uidValidity,
-    exists,
-    recent,
-    unseen,
-    uidNext: folder.mailbox.uidNext,
-    readOnly,
-    highestModSeq: folder.mailbox.highestModSeq,
-  };
+  session.selected = view;
 
-  sendUntagged(session, `${exists} EXISTS`);
-  sendUntagged(session, `${recent} RECENT`);
-  if (unseen > 0) {
-    sendUntagged(session, `OK [UNSEEN ${unseen}] first unseen message`);
+  sendUntagged(session, `${view.uids.length} EXISTS`);
+  if (session.imap4rev2Enabled) {
+    // RFC 9051 §6.3.2: a LIST response with the mailbox name; no RECENT, no UNSEEN code.
+    sendUntagged(session, `LIST () "${DELIMITER}" ${toClient(session, folder.name)}`);
+  } else {
+    sendUntagged(session, '0 RECENT');
+    // RFC 3501 §7.1: [UNSEEN n] carries the sequence number of the first unseen message.
+    const firstUnseen = rows.findIndex((r) => !hasFlag(r.flags, '\\Seen'));
+    if (firstUnseen >= 0) sendUntagged(session, `OK [UNSEEN ${firstUnseen + 1}] First unseen message`);
   }
   sendUntagged(session, `OK [UIDVALIDITY ${folder.mailbox.uidValidity}] UIDs valid`);
   sendUntagged(session, `OK [UIDNEXT ${folder.mailbox.uidNext}] Predicted next UID`);
   sendUntagged(session, `OK [HIGHESTMODSEQ ${folder.mailbox.highestModSeq}] Highest`);
-  sendUntagged(session, `FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)`);
-  sendUntagged(session, `OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted`);
+  sendUntagged(session, `FLAGS (${SYSTEM_FLAGS.join(' ')})`);
+  sendUntagged(session, readOnly
+    ? 'OK [PERMANENTFLAGS ()] No permanent flags permitted'
+    : `OK [PERMANENTFLAGS (${SYSTEM_FLAGS.join(' ')} \\*)] Flags permitted`);
 
-  const rw = readOnly ? '[READ-ONLY]' : '[READ-WRITE]';
-  sendOk(session, tag, `${rw} ${readOnly ? 'EXAMINE' : 'SELECT'} completed`);
+  sendOk(session, tag, `${readOnly ? '[READ-ONLY]' : '[READ-WRITE]'} ${verb} completed`);
 }
 
 // ─────────────────────────────────────────────
 // FETCH — RFC 9051 §6.4.5. Message content is always served from the original
 // raw message (object storage; legacy rows are reconstructed deterministically),
-// so BODY[]/RFC822.SIZE/sections/BODYSTRUCTURE are byte-exact and consistent.
+// so BODY[]/RFC822.SIZE/sections/BODYSTRUCTURE/BINARY are byte-exact and consistent.
 // ─────────────────────────────────────────────
 export async function handleFetch(
   session: ImapSession,
@@ -969,7 +901,8 @@ export async function handleFetch(
   args: string[],
   byUid = false,
 ): Promise<void> {
-  if (!session.selected) {
+  const view = session.selected;
+  if (!view) {
     sendBad(session, tag, 'No mailbox selected');
     return;
   }
@@ -996,24 +929,42 @@ export async function handleFetch(
   }
 
   const has = (k: string): boolean => items.some((i) => i.kind === k);
+  // RFC 7162 §3.1: FETCH MODSEQ and FETCH CHANGEDSINCE enable CONDSTORE.
+  if (has('MODSEQ') || changedSince !== null) session.condstoreEnabled = true;
   const contentItems = items.some((i) => i.kind === 'SECTION' || i.kind === 'BODYSTRUCTURE' || i.kind === 'BODY'
-    || i.kind === 'RFC822' || i.kind === 'RFC822.HEADER' || i.kind === 'RFC822.TEXT');
-  const setsSeen = items.some((i) => (i.kind === 'SECTION' && !i.peek) || i.kind === 'RFC822' || i.kind === 'RFC822.TEXT');
-  const wantModSeq = has('MODSEQ') || session.condstoreEnabled || changedSince !== null;
+    || i.kind === 'RFC822' || i.kind === 'RFC822.HEADER' || i.kind === 'RFC822.TEXT'
+    || i.kind === 'BINARY' || i.kind === 'BINARY.SIZE');
+  const setsSeen = items.some((i) => ((i.kind === 'SECTION' || i.kind === 'BINARY') && !i.peek)
+    || i.kind === 'RFC822' || i.kind === 'RFC822.TEXT');
+  const wantModSeq = session.condstoreEnabled;
 
-  const messages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    orderBy: { uid: 'asc' },
-    include: { attachments: { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } } },
-  });
+  const messages = (await loadMessages(view.folderId, resolveSet(view, sequenceSet, byUid), contentItems))
+    .filter((m) => changedSince === null || m.modSeq > changedSince);
 
-  // UID mode is passed explicitly by the dispatcher (UID FETCH); the dispatcher
-  // strips the "UID" token, so it cannot be detected from args.
-  const wanted = new Set(parseSequenceSet(sequenceSet, messages.map((m) => m.uid), byUid));
+  // Implicit \Seen (never in an EXAMINEd mailbox) in one store operation; the
+  // new flags are reported in the FETCH responses.
+  const seenNow = new Set<string>();
+  if (setsSeen && !view.readOnly && session.mailboxId) {
+    const unseen = messages.filter((m) => !hasFlag(m.flags, '\\Seen'));
+    if (unseen.length > 0) {
+      const mailboxId = session.mailboxId;
+      const updated = await prisma.$transaction((tx) => setFlags(
+        tx, unseen.map((m) => ({ id: m.id, flags: [...m.flags, '\\Seen'] })), { mailboxId },
+      ));
+      const byId = new Map(updated.map((u) => [u.id, u]));
+      for (const m of unseen) {
+        const u = byId.get(m.id);
+        if (!u) continue;
+        m.flags = u.flags;
+        m.modSeq = u.modSeq;
+        seenNow.add(m.id);
+      }
+    }
+  }
 
-  for (const [seqNum, msg] of messages.entries()) {
-    if (!wanted.has(msg.uid)) continue;
-    if (changedSince !== null && msg.modSeq <= changedSince) continue;
+  for (const msg of messages) {
+    const seqNum = seqOf(view, msg.uid);
+    if (seqNum === 0) continue;
 
     // The raw message is needed for content items, and for RFC822.SIZE of legacy
     // rows (no stored object yet → the size of the reconstruction).
@@ -1028,17 +979,8 @@ export async function handleFetch(
       }
     }
 
-    // Implicit \Seen (never in an EXAMINEd mailbox); the new flags are reported.
-    let flags = msg.flags;
-    let flagsChanged = false;
-    if (setsSeen && !flags.includes('\\Seen') && !session.selected.readOnly && session.mailboxId) {
-      const mailboxId = session.mailboxId;
-      flags = [...flags, '\\Seen'];
-      const [updated] = await prisma.$transaction((tx) => setFlags(tx, [{ id: msg.id, flags }], { mailboxId }));
-      if (updated) msg.modSeq = updated.modSeq;
-      flagsChanged = true;
-    }
-
+    const flags = msg.flags;
+    const flagsChanged = seenNow.has(msg.id);
     const parts: Chunk[][] = [[`UID ${msg.uid}`]];
     const emitted = new Set<string>(['UID']);
     const once = (key: string): boolean => {
@@ -1085,15 +1027,38 @@ export async function handleFetch(
           parts.push(data === null ? [`${label} NIL`] : [`${label} `, ...literal(applyPartial(data, item.partial))]);
           break;
         }
+        case 'BINARY':
+        case 'BINARY.SIZE': {
+          const path = item.path.join('.');
+          const label = item.kind === 'BINARY'
+            ? `BINARY[${path}]${item.partial ? `<${item.partial.origin}>` : ''}`
+            : `BINARY.SIZE[${path}]`;
+          if (!once(label)) break;
+          let data: Buffer | null;
+          try {
+            data = binarySection(cached!.raw, cached!.tree(), item.path);
+          } catch (err) {
+            if (!(err instanceof UnknownCteError)) throw err;
+            // RFC 3516 §4.3: the part's encoding cannot be decoded.
+            sendNo(session, tag, '[UNKNOWN-CTE] Unknown Content-Transfer-Encoding');
+            return;
+          }
+          if (item.kind === 'BINARY.SIZE') parts.push([`${label} ${data?.length ?? 0}`]);
+          else parts.push(data === null ? [`${label} NIL`] : [`${label} `, ...binaryLiteral(applyPartial(data, item.partial))]);
+          break;
+        }
       }
     }
     if (flagsChanged && once('FLAGS')) parts.push([`FLAGS ${flagList(flags)}`]);
     if (wantModSeq) parts.push([`MODSEQ (${msg.modSeq})`]);
+    // Flags reported here count as known (no second unsolicited FETCH later).
+    if (emitted.has('FLAGS')) markReported(view, msg.uid, msg.modSeq);
 
-    session.socket.write(toBuffer([`* ${seqNum + 1} FETCH (`, ...joinChunks(parts), ')\r\n']));
+    session.socket.write(toBuffer([`* ${seqNum} FETCH (`, ...joinChunks(parts), ')\r\n']));
   }
 
-  sendOk(session, tag, 'FETCH completed');
+  // RFC 9051 §7.5.1: no EXPUNGE responses during FETCH (UID FETCH may send them).
+  await completeWithUpdates(session, tag, 'FETCH completed', byUid);
 }
 
 // ─────────────────────────────────────────────
@@ -1102,9 +1067,8 @@ export async function handleFetch(
 
 /** RFC 3501 §6.4.5 INTERNALDATE format: "01-Jan-2026 12:34:56 +0000" */
 function formatInternalDate(d: Date): string {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const dd = String(d.getUTCDate()).padStart(2, '0');
-  const mon = months[d.getUTCMonth()] ?? 'Jan';
+  const mon = MONTHS[d.getUTCMonth()] ?? 'Jan';
   const yyyy = d.getUTCFullYear();
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
@@ -1113,7 +1077,7 @@ function formatInternalDate(d: Date): string {
 }
 
 // ─────────────────────────────────────────────
-// STORE — set/add/remove flags
+// STORE — RFC 9051 §6.4.6, CONDSTORE UNCHANGEDSINCE (RFC 7162 §3.1.3)
 // ─────────────────────────────────────────────
 export async function handleStore(
   session: ImapSession,
@@ -1121,69 +1085,96 @@ export async function handleStore(
   args: string[],
   byUid = false,
 ): Promise<void> {
-  if (!session.selected) {
+  const view = session.selected;
+  if (!view) {
     sendBad(session, tag, 'No mailbox selected');
     return;
   }
 
   const sequenceSet = args[0] ?? '';
-  const command     = (args[1] ?? '').toUpperCase();
-  const flagsStr    = args.slice(2).join(' ').replace(/[()]/g, '');
-  const newFlags    = flagsStr.split(/\s+/).filter(Boolean);
-
   if (!isValidSequenceSet(sequenceSet)) {
     sendBad(session, tag, 'Invalid sequence set');
     return;
   }
+  // STORE <set> [(UNCHANGEDSINCE <modseq>)] <item> <flags>
+  let index = 1;
+  let unchangedSince: bigint | null = null;
+  if (args[1]?.startsWith('(')) {
+    const m = /^\(\s*UNCHANGEDSINCE\s+(\d{1,19})\s*\)$/i.exec(args[1]);
+    if (!m) { sendBad(session, tag, 'Unknown STORE modifier'); return; }
+    unchangedSince = BigInt(m[1]!);
+    index = 2;
+  }
+  const command = (args[index] ?? '').toUpperCase();
   if (!/^[+-]?FLAGS(?:\.SILENT)?$/.test(command)) {
     sendBad(session, tag, 'Unknown STORE data item');
     return;
   }
+  const flagArgs = args.slice(index + 1);
+  const flagText = flagArgs.length === 1 && /^\(.*\)$/s.test(flagArgs[0]!) ? flagArgs[0]!.slice(1, -1) : flagArgs.join(' ');
+  const requested: string[] = [];
+  for (const raw of flagText.split(/\s+/).filter(Boolean)) {
+    const flag = normalizeFlag(raw);
+    if (flag === null) { sendBad(session, tag, `Invalid flag ${raw}${raw.toLowerCase() === '\\recent' ? ' (\\Recent cannot be changed)' : ''}`); return; }
+    requested.push(flag);
+  }
+  const newFlags = uniqueFlags(requested);
   // RFC 9051 §6.3.3: no permanent state changes in a mailbox opened with EXAMINE.
-  if (session.selected.readOnly) {
+  if (view.readOnly) {
     sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
     return;
   }
+  // RFC 7162 §3.1: STORE UNCHANGEDSINCE enables CONDSTORE.
+  if (unchangedSince !== null) session.condstoreEnabled = true;
 
-  const messages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    select: { id: true, uid: true, flags: true, modSeq: true },
-    orderBy: { uid: 'asc' },
-  });
-
-  // byUid comes from the dispatcher: plain STORE uses sequence numbers,
-  // UID STORE uses UIDs (RFC 9051 §6.4.6, §6.4.9).
-  const uids = parseSequenceSet(sequenceSet, messages.map((m: { uid: number }) => m.uid), byUid);
-
-  const changes: Array<{ seqNum: number; id: string; flags: string[] }> = [];
-  for (const [seqNum, msg] of messages.entries()) {
-    if (!uids.includes(msg.uid)) continue;
-
-    let updatedFlags: string[];
-    if (command === 'FLAGS' || command === 'FLAGS.SILENT') {
-      updatedFlags = newFlags;
-    } else if (command === '+FLAGS' || command === '+FLAGS.SILENT') {
-      updatedFlags = [...new Set([...msg.flags, ...newFlags])];
-    } else {
-      updatedFlags = msg.flags.filter((f: string) => !newFlags.includes(f));
+  const messages = await loadMessages(view.folderId, resolveSet(view, sequenceSet, byUid), false);
+  const modified: number[] = [];
+  const results: Array<{ uid: number; id: string; flags: string[]; modSeq: bigint; changed: boolean; seenBefore: boolean }> = [];
+  for (const msg of messages) {
+    if (unchangedSince !== null && msg.modSeq > unchangedSince) {
+      modified.push(byUid ? msg.uid : seqOf(view, msg.uid));
+      continue;
     }
-    changes.push({ seqNum, id: msg.id, flags: updatedFlags });
+    let updated: string[];
+    if (command.startsWith('+')) updated = uniqueFlags([...msg.flags, ...newFlags]);
+    else if (command.startsWith('-')) updated = msg.flags.filter((f) => !hasFlag(newFlags, f));
+    else updated = newFlags;
+    const changed = updated.length !== msg.flags.length || updated.some((f, i) => f !== msg.flags[i]);
+    results.push({
+      uid: msg.uid, id: msg.id, flags: updated, modSeq: msg.modSeq, changed,
+      seenBefore: view.known.get(msg.uid) === msg.modSeq,
+    });
   }
 
   // One new mailbox modSeq for the whole STORE (RFC 7162 §3.1: HIGHESTMODSEQ ≥ every MODSEQ).
+  const toWrite = results.filter((r) => r.changed);
   const mailboxId = session.mailboxId!;
-  const stored = changes.length === 0 ? [] : await prisma.$transaction((tx) => setFlags(
-    tx, changes.map((c) => ({ id: c.id, flags: c.flags })), { mailboxId },
+  const stored = toWrite.length === 0 ? [] : await prisma.$transaction((tx) => setFlags(
+    tx, toWrite.map((c) => ({ id: c.id, flags: c.flags })), { mailboxId },
   ));
   const modSeqById = new Map(stored.map((s) => [s.id, s.modSeq]));
 
-  if (!command.includes('SILENT')) {
-    for (const c of changes) {
-      sendUntagged(session, `${c.seqNum + 1} FETCH (FLAGS ${flagList(c.flags)} MODSEQ (${modSeqById.get(c.id) ?? 0n}))`);
+  const silent = command.endsWith('.SILENT');
+  for (const r of results) {
+    const seq = seqOf(view, r.uid);
+    const modSeq = modSeqById.get(r.id) ?? r.modSeq;
+    const uidItem = byUid ? `UID ${r.uid} ` : '';
+    const modSeqItem = session.condstoreEnabled ? ` MODSEQ (${modSeq})` : '';
+    if (!silent || !r.seenBefore) {
+      // .SILENT still reports flags another client changed in the meantime.
+      sendUntagged(session, `${seq} FETCH (${uidItem}FLAGS ${flagList(r.flags)}${modSeqItem})`);
+    } else if (r.changed && session.condstoreEnabled) {
+      // RFC 7162 §3.1.3: with CONDSTORE the new MODSEQ is sent even for .SILENT.
+      sendUntagged(session, `${seq} FETCH (${uidItem}MODSEQ (${modSeq}))`);
     }
+    markReported(view, r.uid, modSeq);
   }
 
-  sendOk(session, tag, 'STORE completed');
+  const text = modified.length > 0
+    ? `[MODIFIED ${toSequenceSet(modified)}] Conditional STORE failed for some messages`
+    : 'STORE completed';
+  // RFC 9051 §7.5.1: no EXPUNGE responses during STORE (UID STORE may send them).
+  await completeWithUpdates(session, tag, text, byUid);
 }
 
 // ─────────────────────────────────────────────
@@ -1192,12 +1183,13 @@ export async function handleStore(
 /**
  * EXPUNGE (RFC 9051 §6.4.3) and UID EXPUNGE (RFC 4315 §2.1).
  *
- * @param uidSet  undefined → plain EXPUNGE (all \Deleted messages);
+ * @param uidSet  undefined → plain EXPUNGE (all \Deleted messages of the view);
  *                a UID set → UID EXPUNGE: only \Deleted messages whose UID
  *                is in the set are removed.
  */
 export async function handleExpunge(session: ImapSession, tag: string, uidSet?: string): Promise<void> {
-  if (!session.selected) {
+  const view = session.selected;
+  if (!view) {
     sendBad(session, tag, 'No mailbox selected');
     return;
   }
@@ -1205,137 +1197,80 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
     sendBad(session, tag, 'Invalid UID set');
     return;
   }
+  // RFC 9051 §6.3.3: nothing is removed from a mailbox opened with EXAMINE.
+  if (view.readOnly) {
+    sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
+    return;
+  }
 
-  // Snapshot of the current view (ascending UID = sequence-number order),
-  // taken BEFORE deleting so the EXPUNGE sequence numbers can be computed.
-  const allMessages = await prisma.message.findMany({
-    where: { folderId: session.selected.folderId, deletedAt: null },
-    orderBy: { uid: 'asc' },
-    select: { id: true, uid: true, flags: true },
-  });
-
-  const inSet = uidSet !== undefined
-    ? new Set(parseSequenceSet(uidSet, allMessages.map((m: { uid: number }) => m.uid), true))
-    : null;
-
-  const toDelete = allMessages.filter(
-    (m: { uid: number; flags: string[] }) =>
-      m.flags.includes('\\Deleted') && (inSet === null || inSet.has(m.uid)),
-  );
-
+  // Only messages the client knows about (its view) are candidates.
+  const candidates = uidSet !== undefined ? resolveSet(view, uidSet, true) : view.uids;
+  const toDelete = (await loadMessages(view.folderId, candidates, false)).filter((m) => hasFlag(m.flags, '\\Deleted'));
   if (toDelete.length > 0) {
     const mailboxId = session.mailboxId!;
-    await prisma.$transaction((tx) => expunge(tx, toDelete.map((m: { id: string }) => m.id), { mailboxId }));
+    await prisma.$transaction((tx) => expunge(tx, toDelete.map((m) => m.id), { mailboxId }));
   }
-
-  // RFC 9051 §7.5.1: each EXPUNGE response immediately decrements the sequence
-  // numbers of all later messages, so subtract the ones already reported.
-  const deletedUids = new Set(toDelete.map((m: { uid: number }) => m.uid));
-  let removed = 0;
-  for (const [i, msg] of allMessages.entries()) {
-    if (deletedUids.has(msg.uid)) {
-      sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
-      removed++;
-    }
-  }
-  session.selected.exists = Math.max(0, session.selected.exists - removed);
-
-  sendOk(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed');
+  // The EXPUNGE responses (ours and those of other clients) come from the view sync.
+  await completeWithUpdates(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed');
 }
 
 // ─────────────────────────────────────────────
-// IDLE (RFC 2177)
+// IDLE (RFC 2177 / RFC 9051 §6.3.13)
 // ─────────────────────────────────────────────
-export function handleIdle(session: ImapSession, tag: string): void {
+let idlePollMs = 30_000;
+
+/** Interval of the mailbox check while idling (expunges and flag changes are not pushed). */
+export function setIdlePollInterval(ms: number): void {
+  if (Number.isFinite(ms) && ms > 0) idlePollMs = ms;
+}
+
+async function idleSync(session: ImapSession): Promise<void> {
+  if (!session.idleActive || !session.selected) return;
+  try {
+    await syncView(session, { expunge: true });
+  } catch (err) {
+    log.warn({ err, id: session.id }, 'IMAP IDLE: mailbox check failed');
+  }
+}
+
+/** Queues a mailbox check for an idling session (new-mail push). */
+export function notifyMailboxChanged(session: ImapSession): void {
+  if (!session.idleActive) return;
+  void withUpdateLock(session, () => idleSync(session));
+}
+
+/** Stops the IDLE poll timer (DONE, logout, connection closed). */
+export function stopIdleTimer(session: ImapSession): void {
+  if (session.idleTimer) clearInterval(session.idleTimer);
+  session.idleTimer = null;
+}
+
+export async function handleIdle(session: ImapSession, tag: string): Promise<void> {
   session.idleActive = true;
   session.idleTag = tag;
   send(session, '+ idling');
+  if (!session.selected) return;
+  // Pending updates first, then periodic checks until DONE.
+  await withUpdateLock(session, () => idleSync(session));
+  stopIdleTimer(session);
+  if (!session.idleActive) return;
+  session.idleTimer = setInterval(() => notifyMailboxChanged(session), idlePollMs);
+  session.idleTimer.unref?.();
 }
 
-export function handleIdleDone(session: ImapSession): void {
+export async function handleIdleDone(session: ImapSession): Promise<void> {
   if (!session.idleActive || !session.idleTag) return;
+  const tag = session.idleTag;
   session.idleActive = false;
-  sendOk(session, session.idleTag, 'IDLE terminated');
   session.idleTag = null;
+  stopIdleTimer(session);
+  // A check that is still writing finishes before the tagged OK.
+  await withUpdateLock(session, async () => { sendOk(session, tag, 'IDLE terminated'); });
 }
 
 // ─────────────────────────────────────────────
-// NOOP
+// NOOP — RFC 9051 §6.1.2: reports mailbox updates
 // ─────────────────────────────────────────────
 export async function handleNoop(session: ImapSession, tag: string): Promise<void> {
-  sendOk(session, tag, 'NOOP completed');
-}
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-function unquote(s: string): string {
-  return s.replace(/^["']|["']$/g, '');
-}
-
-/**
- * Parses an IMAP sequence-set notation (RFC 3501 §9):
- *   "1,3,5:9"     — elements 1, 3, 5-9
- *   "1:*"         — everything
- *   "*"           — last element
- *
- * Returns the matching UIDs.
- *
- * @param set     sequence-set string
- * @param uids    array of all UIDs in the current folder view (sorted)
- * @param byUid   true: input is a UID set (UID FETCH/STORE/COPY/MOVE),
- *                false: input is a seq-num set (1-based positions in uids[])
- */
-/** RFC 9051 §9 sequence-set syntax: seq-number / seq-range, comma-separated; "*" allowed. */
-function isValidSequenceSet(set: string): boolean {
-  return /^(?:[1-9]\d*|\*)(?::(?:[1-9]\d*|\*))?(?:,(?:[1-9]\d*|\*)(?::(?:[1-9]\d*|\*))?)*$/.test(set);
-}
-
-function parseSequenceSet(set: string, uids: number[], byUid: boolean): number[] {
-  if (!uids.length) return [];
-
-  if (byUid) {
-    const maxUid = Math.max(...uids);
-    const result = new Set<number>();
-    for (const part of set.split(',')) {
-      if (part.includes(':')) {
-        const [startStr, endStr] = part.split(':') as [string, string];
-        const start = startStr === '*' ? maxUid : parseInt(startStr, 10);
-        const end   = endStr   === '*' ? maxUid : parseInt(endStr, 10);
-        for (const uid of uids) {
-          if (uid >= Math.min(start, end) && uid <= Math.max(start, end)) {
-            result.add(uid);
-          }
-        }
-      } else {
-        const n = part === '*' ? maxUid : parseInt(part, 10);
-        if (uids.includes(n)) result.add(n);
-      }
-    }
-    return [...result];
-  }
-
-  // Seq-num mode: input are 1-based positions in uids[]
-  const max = uids.length;
-  const result = new Set<number>();
-  for (const part of set.split(',')) {
-    if (part.includes(':')) {
-      const [startStr, endStr] = part.split(':') as [string, string];
-      const start = startStr === '*' ? max : parseInt(startStr, 10);
-      const end   = endStr   === '*' ? max : parseInt(endStr, 10);
-      for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-        if (i >= 1 && i <= max) {
-          const uid = uids[i - 1];
-          if (uid !== undefined) result.add(uid);
-        }
-      }
-    } else {
-      const n = part === '*' ? max : parseInt(part, 10);
-      if (n >= 1 && n <= max) {
-        const uid = uids[n - 1];
-        if (uid !== undefined) result.add(uid);
-      }
-    }
-  }
-  return [...result];
+  await completeWithUpdates(session, tag, 'NOOP completed');
 }

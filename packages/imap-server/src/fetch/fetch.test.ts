@@ -175,7 +175,13 @@ function session() {
     text: () => Buffer.concat(out).toString('utf8'),
     s: {
       id: 's1', state: 'SELECTED', userId: 'u1', mailboxId: 'mb1', condstoreEnabled: false,
-      selected: { folderId: 'f1', folderName: 'INBOX', readOnly: false, exists: 2 },
+      // v7.1.0: the session's sequence map is built from the rows of the test
+      selected: {
+        folderId: 'f1', folderName: 'INBOX', uidValidity: 1, readOnly: false,
+        uids: rows.map((r) => r.uid).sort((a, b) => a - b),
+        known: new Map(rows.map((r) => [r.uid, r.modSeq])),
+        searchRes: [],
+      },
       socket: { write: (d: string | Buffer) => { out.push(Buffer.isBuffer(d) ? d : Buffer.from(d)); return true; } },
     },
   };

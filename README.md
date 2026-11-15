@@ -61,7 +61,7 @@
 | **SMTP** inbound (port 25) + submission (465 implicit TLS, 587 STARTTLS) | ✅ | 5321 + 6409 |
 | SMTP outbound with MX lookup & DKIM signing | ✅ | 6376 |
 | **IMAP4rev2** (port 993 implicit TLS, port 143 STARTTLS — login only after TLS, `LOGINDISABLED` before) — original messages served byte-exact incl. attachments | ✅ | **9051** |
-| IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SPECIAL-USE, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID, ENABLE, LITERAL+, STATUS=SIZE, full SEARCH | ⚠️ QUOTA, LIST-EXTENDED and LIST-STATUS are not implemented (not advertised) | 2087, 2971, 3502, 3691, 4314, 4731, 4978, 5161, 6154, 6851, 7162, 7888, 8438 |
+| IMAP capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SEARCHRES, BINARY, LIST-EXTENDED, LIST-STATUS, QUOTA (read-only), SPECIAL-USE, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID, ENABLE, LITERAL+, STATUS=SIZE, full SEARCH; per-session sequence numbers with EXISTS/EXPUNGE/FLAGS updates | ✅ | 2087, 2971, 3502, 3516, 3691, 4314, 4731, 4978, 5161, 5182, 5258, 5819, 6154, 6851, 7162, 7888, 8438, 9208 |
 | **POP3** (port 995 implicit TLS, port 110 STLS — USER/PASS only after TLS) + app-password support | ⚠️ no SASL (`AUTH`); USER/PASS only | 1939, 2595 |
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ⚠️ successful Basic logins are cached for 60 s (a password change or revoked app password takes up to 60 s to apply) | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | Admin CLI `coremail` inside the container (users, mailboxes, connectors, banner, certificates) | ✅ | — |

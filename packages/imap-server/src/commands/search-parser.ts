@@ -22,9 +22,11 @@ export type SearchKey =
   | { op: 'size'; cmp: 'larger' | 'smaller'; octets: number }
   | { op: 'uid'; set: string }
   | { op: 'seq'; set: string }
-  | { op: 'modseq'; value: bigint };
+  | { op: 'modseq'; value: bigint }
+  // RFC 5182 SEARCHRES: "$" — the result saved by an earlier SEARCH RETURN (SAVE)
+  | { op: 'saved' };
 
-export type ReturnOption = 'MIN' | 'MAX' | 'COUNT' | 'ALL';
+export type ReturnOption = 'MIN' | 'MAX' | 'COUNT' | 'ALL' | 'SAVE';
 
 export interface SearchProgram {
   /** null = classic SEARCH response; otherwise ESEARCH with these options. */
@@ -44,10 +46,12 @@ const FLAG_KEYS: Record<string, [string, boolean]> = {
   DRAFT: ['\\Draft', true], UNDRAFT: ['\\Draft', false],
   FLAGGED: ['\\Flagged', true], UNFLAGGED: ['\\Flagged', false],
   SEEN: ['\\Seen', true], UNSEEN: ['\\Seen', false],
-  // \Recent is not tracked (removed in IMAP4rev2). For compatibility with
-  // older clients RECENT/NEW behave like UNSEEN and OLD like SEEN.
-  RECENT: ['\\Seen', false], NEW: ['\\Seen', false], OLD: ['\\Seen', true],
 };
+
+// \Recent is not tracked (removed in IMAP4rev2): SELECT reports "0 RECENT", so
+// no message is ever recent — RECENT and NEW (= RECENT UNSEEN) match nothing,
+// OLD (= NOT RECENT) matches every message (RFC 3501 §6.4.4).
+const NOTHING: SearchKey = { op: 'not', key: { op: 'all' } };
 
 const TEXT_KEYS: Record<string, TextField> = {
   FROM: 'from', TO: 'to', CC: 'cc', BCC: 'bcc', SUBJECT: 'subject', BODY: 'body', TEXT: 'text',
@@ -105,7 +109,9 @@ function parseKey(c: Cursor): SearchKey {
   if (token.type !== 'atom') throw new SearchSyntaxError('Unexpected string in search program');
 
   const name = token.value.toUpperCase();
-  if (name === 'ALL') return { op: 'all' };
+  if (name === 'ALL' || name === 'OLD') return { op: 'all' };
+  if (name === 'RECENT' || name === 'NEW') return NOTHING;
+  if (token.value === '$') return { op: 'saved' };
   const flag = FLAG_KEYS[name];
   if (flag) return { op: 'flag', flag: flag[0], set: flag[1] };
   const textField = TEXT_KEYS[name];
@@ -134,6 +140,7 @@ function parseKey(c: Cursor): SearchKey {
     }
     case 'UID': {
       const set = c.atom(name);
+      if (set === '$') return { op: 'saved' };
       if (!isSequenceSet(set)) throw new SearchSyntaxError('UID expects a sequence set');
       return { op: 'uid', set };
     }
@@ -180,7 +187,7 @@ export function parseSearch(tokens: Token[]): SearchProgram {
     returnOptions = [];
     for (const item of list.items) {
       const opt = item.type === 'atom' ? item.value.toUpperCase() : '';
-      if (opt !== 'MIN' && opt !== 'MAX' && opt !== 'COUNT' && opt !== 'ALL') {
+      if (opt !== 'MIN' && opt !== 'MAX' && opt !== 'COUNT' && opt !== 'ALL' && opt !== 'SAVE') {
         throw new SearchSyntaxError(`Unsupported RETURN option ${opt || '?'}`);
       }
       if (!returnOptions.includes(opt)) returnOptions.push(opt);
@@ -198,6 +205,35 @@ export function parseSearch(tokens: Token[]): SearchProgram {
   const keys = parseKeys(c);
   if (keys.length === 0) throw new SearchSyntaxError('Missing search key');
   return { returnOptions, charset, key: andOf(keys) };
+}
+
+/** True when the program contains a MODSEQ criterion (RFC 7162 §3.1.5). */
+export function hasModseq(key: SearchKey): boolean {
+  switch (key.op) {
+    case 'modseq': return true;
+    case 'and': return key.keys.some(hasModseq);
+    case 'or': return hasModseq(key.left) || hasModseq(key.right);
+    case 'not': return hasModseq(key.key);
+    default: return false;
+  }
+}
+
+// Header fields that are stored in their own columns (fast path for HEADER).
+const STORED_HEADERS = new Set(['subject', 'from', 'to', 'cc', 'bcc', 'reply-to', 'message-id', 'in-reply-to', 'date']);
+
+/**
+ * True when a HEADER criterion has to be evaluated against the raw header of
+ * the message: a field without its own column, or an empty string (which
+ * matches every message that has the field — RFC 9051 §6.4.4).
+ */
+export function needsRawHeaders(key: SearchKey): boolean {
+  switch (key.op) {
+    case 'header': return key.value === '' || !STORED_HEADERS.has(key.name);
+    case 'and': return key.keys.some(needsRawHeaders);
+    case 'or': return needsRawHeaders(key.left) || needsRawHeaders(key.right);
+    case 'not': return needsRawHeaders(key.key);
+    default: return false;
+  }
 }
 
 /** True when evaluating the key needs bodyText/bodyHtml. */
@@ -238,6 +274,10 @@ export interface SearchContext {
   maxSeq: number;
   /** Highest UID in the mailbox (value of "*" for UID sets). */
   maxUid: number;
+  /** UIDs of the saved search result ("$", RFC 5182). */
+  saved?: ReadonlySet<number>;
+  /** Raw header fields of the message (loaded when needsRawHeaders()). */
+  headers?: ReadonlyArray<{ name: string; value: string }>;
 }
 
 /** Membership test for a sequence set; "*" stands for `max`. */
@@ -306,6 +346,9 @@ export function evaluateSearch(key: SearchKey, msg: SearchableMessage, ctx: Sear
     }
     case 'text': return contains(textValue(msg, key.field), key.value);
     case 'header': {
+      if (ctx.headers && (key.value === '' || !STORED_HEADERS.has(key.name))) {
+        return ctx.headers.some((h) => h.name.toLowerCase() === key.name && contains(h.value, key.value));
+      }
       const value = headerValue(msg, key.name);
       return value !== null && contains(value, key.value);
     }
@@ -320,6 +363,7 @@ export function evaluateSearch(key: SearchKey, msg: SearchableMessage, ctx: Sear
     case 'uid': return inSequenceSet(key.set, msg.uid, ctx.maxUid);
     case 'seq': return inSequenceSet(key.set, ctx.seq, ctx.maxSeq);
     case 'modseq': return msg.modSeq >= key.value;
+    case 'saved': return ctx.saved?.has(msg.uid) ?? false;
   }
 }
 
@@ -338,8 +382,13 @@ export function toSequenceSet(numbers: number[]): string {
   return parts.join(',');
 }
 
-/** Builds the ESEARCH response data (RFC 4731 §3.1) without the leading "ESEARCH". */
-export function formatEsearch(tag: string, byUid: boolean, results: number[], options: ReturnOption[]): string {
+/**
+ * Builds the ESEARCH response data (RFC 4731 §3.1) without the leading "ESEARCH".
+ * `modseq` adds the MODSEQ item of RFC 7162 §3.1.6 (only when there are results).
+ */
+export function formatEsearch(
+  tag: string, byUid: boolean, results: number[], options: ReturnOption[], modseq: bigint | null = null,
+): string {
   const parts = [`(TAG "${tag.replace(/[\\"]/g, '\\$&')}")`];
   if (byUid) parts.push('UID');
   const sorted = [...results].sort((a, b) => a - b);
@@ -350,5 +399,6 @@ export function formatEsearch(tag: string, byUid: boolean, results: number[], op
     else if (opt === 'MAX') parts.push(`MAX ${sorted[sorted.length - 1]}`);
     else if (opt === 'ALL') parts.push(`ALL ${toSequenceSet(sorted)}`);
   }
+  if (modseq !== null && sorted.length > 0) parts.push(`MODSEQ ${modseq}`);
   return parts.join(' ');
 }
