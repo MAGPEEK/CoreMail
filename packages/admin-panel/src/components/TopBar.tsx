@@ -1,5 +1,6 @@
 import { Sun, Moon, Monitor, Mail, ChevronDown, LogOut, Languages } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { usePopoverDismiss } from './usePopoverDismiss.js';
 import { useThemeStore, resolveIsDark, type ThemeMode } from '../store/theme.js';
 import { useLanguageStore, type Lang } from '../store/language.js';
 import { getToken, logoutSession } from '../api/client.js';
@@ -34,6 +35,9 @@ export function TopBar() {
   const { theme, setTheme } = useThemeStore();
   const { pending, setPending, applyPending } = useLanguageStore();
   const [profileOpen, setProfileOpen] = useState(false);
+  const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const profilePanelRef = useRef<HTMLDivElement>(null);
+  usePopoverDismiss(profileOpen, () => setProfileOpen(false), profileTriggerRef, profilePanelRef);
 
   const token = getToken();
   const { email = '', role = '' } = token ? decodeJwtPayload(token) : {};
@@ -73,17 +77,24 @@ export function TopBar() {
 
       {/* Theme-Toggle */}
       <button
+        type="button"
         onClick={cycleTheme}
         title={`${t('topbar_theme_hint')}: ${themeLabel}`}
+        aria-label={`${t('topbar_theme_hint')}: ${themeLabel}`}
         className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
       >
-        <ThemeIcon size={16} />
+        <ThemeIcon size={16} aria-hidden="true" />
       </button>
 
       {/* User profile */}
       <div className="relative">
         <button
+          ref={profileTriggerRef}
+          type="button"
           onClick={() => setProfileOpen((o) => !o)}
+          aria-haspopup="dialog"
+          aria-expanded={profileOpen}
+          aria-label={email ? `Profil: ${email}` : 'Profil'}
           className="flex items-center gap-1.5 px-2 py-1 rounded text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
         >
           <div className="w-6 h-6 rounded-full bg-accent/30 flex items-center justify-center text-xs font-bold text-white select-none">
@@ -98,7 +109,7 @@ export function TopBar() {
             {/* Click outside closes the dropdown */}
             <div className="fixed inset-0 z-40" onClick={() => setProfileOpen(false)} />
 
-            <div className="absolute right-0 top-full mt-1 w-64 bg-white dark:bg-gray-800 shadow-xl border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden z-50">
+            <div ref={profilePanelRef} role="dialog" aria-label={email || 'Profil'} className="absolute right-0 top-full mt-1 w-64 bg-white dark:bg-gray-800 shadow-xl border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden z-50">
 
               {/* Avatar + Info */}
               <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 text-center">

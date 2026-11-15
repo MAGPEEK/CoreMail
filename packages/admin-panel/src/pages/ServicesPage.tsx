@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -47,10 +48,17 @@ function ListenerModal({ initial, onSave, onClose }: {
   const set = (f: keyof ListenerFormData, v: string | boolean) =>
     setForm(prev => ({ ...prev, [f]: v }));
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
-        <h3 className="text-base font-semibold text-gray-800 mb-4">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6"
+    >
+        <h3 id={titleId} className="text-base font-semibold text-gray-800 mb-4">
           {initial ? 'Listener bearbeiten' : 'Listener hinzufügen'}
         </h3>
         <div className="space-y-3">
@@ -87,8 +95,7 @@ function ListenerModal({ initial, onSave, onClose }: {
             Speichern
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -194,11 +201,11 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">
-                      <button onClick={() => setModal(l.id)}
+                      <button aria-label="Bearbeiten" onClick={() => setModal(l.id)}
                         className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors border border-gray-200" title="Bearbeiten">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => { if (confirm(`Listener ${l.address}:${l.port} löschen?`)) deleteMut.mutate(l.id); }}
+                      <button aria-label="Löschen" onClick={() => { if (confirm(`Listener ${l.address}:${l.port} löschen?`)) deleteMut.mutate(l.id); }}
                         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors border border-gray-200" title="Löschen">
                         <Trash2 size={14} />
                       </button>

@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useId, useState, useMemo } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, ChevronDown, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
@@ -38,7 +39,7 @@ function getHostPart(name: string, domain: string): string {
 function CopyBtn({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
+    <button aria-label="Kopieren"
       onClick={() => { void copyToClipboard(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
       className="shrink-0 p-1 text-gray-400 hover:text-blue-600 transition-colors"
       title="Kopieren"
@@ -153,12 +154,19 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
     onError: (err: Error) => toast.error(err.message || t('domain_add_error')),
   });
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6"
+    >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded">
             <X size={16} />
           </button>
         </div>
@@ -202,8 +210,7 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
             {createMutation.isPending ? t('domain_add_btn_adding') : t('domain_add_btn_add')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -277,12 +284,19 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     }
   };
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}>
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
+    >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
         </div>
 
         <div className="space-y-3">
@@ -340,14 +354,14 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                 <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_dns_name')}</label>
                 <div className="flex items-center gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
+                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_txt_value')}</label>
                 <div className="flex items-start gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
+                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
                 </div>
               </div>
             </div>
@@ -436,8 +450,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -582,7 +595,7 @@ export function DomainsPage() {
 
                   {/* ACTIONS — Pencil-Edit */}
                   <td className="px-6 py-4 text-center">
-                    <button
+                    <button aria-label={t('domain_edit_title_btn')}
                       onClick={() => setEditing(d)}
                       className="p-1.5 text-blue-500 hover:text-blue-700 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
                       title={t('domain_edit_title_btn')}
