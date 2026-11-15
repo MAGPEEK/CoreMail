@@ -5,13 +5,14 @@ import { api } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { useAccessStore } from '../store/access.js';
 import { accessForPath, areaForPath, type AdminArea, type AreaAccess } from '../lib/adminAreas.js';
-import { can as canPure, parsePermissions } from '../lib/permissions.js';
+import { can as canPure, parsePermissions, permissionsAfterError } from '../lib/permissions.js';
 
 /**
  * Loads the admin's permissions once per session: GET /admin/me/permissions
  * (8.x); an older backend without it (404) falls back to /user/me → adminAreas.
- * Any other failure keeps the previous behaviour (everything visible — the
- * server enforces every request anyway).
+ * 401/403 (not an admin session) → no areas. Other failures (5xx, network)
+ * keep the previous behaviour (everything visible — the server enforces every
+ * request anyway). See permissionsAfterError().
  */
 export function usePermissionsLoader(): void {
   const setPermissions = useAccessStore((s) => s.setPermissions);
@@ -22,8 +23,10 @@ export function usePermissionsLoader(): void {
       try {
         return parsePermissions(await api.get<unknown>('/admin/me/permissions'));
       } catch (err) {
-        if (err instanceof ApiError && err.status === 404) return parsePermissions(await api.get<unknown>('/user/me'));
-        throw err;
+        // MFA_REQUIRED / MFA_NOT_VERIFIED / expired sessions are redirected by the API client.
+        if (!(err instanceof ApiError)) throw err;
+        const next = permissionsAfterError(err.status);
+        return next === 'legacy' ? parsePermissions(await api.get<unknown>('/user/me')) : next;
       }
     },
     staleTime: 5 * 60_000,

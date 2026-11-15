@@ -42,6 +42,18 @@ export function can(areas: AdminAreas | null, area: AdminArea, access: AreaAcces
   return access === 'read' || granted === 'write';
 }
 
+/**
+ * What a failed GET /admin/me/permissions means:
+ *  - 404 → older backend: ask /user/me (adminAreas) instead ('legacy');
+ *  - 401/403 → the session is not an admin session (e.g. role USER): no areas;
+ *  - anything else (5xx, network) → unknown: keep the previous behaviour (null areas).
+ */
+export function permissionsAfterError(status: number | undefined): Permissions | 'legacy' {
+  if (status === 404) return 'legacy';
+  if (status === 401 || status === 403) return { role: null, areas: {}, mfaVerified: false };
+  return { role: null, areas: null, mfaVerified: false };
+}
+
 /** What <Can> renders: the children, a disabled copy (read-only), or nothing. */
 export type CanOutcome = 'allow' | 'disable' | 'hide';
 

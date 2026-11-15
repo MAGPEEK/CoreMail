@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { can, canOutcome, parsePermissions } from './permissions.ts';
+import { can, canOutcome, parsePermissions, permissionsAfterError } from './permissions.ts';
 import { accessForPath, firstAllowedPath } from './adminAreas.ts';
 
 // Shapes as returned by GET /api/v1/admin/me/permissions for each role
@@ -53,6 +53,17 @@ test('<Can> outcomes: allow / disable (read-only) / hide (no access)', () => {
   assert.equal(canOutcome(HELP_DESK, 'recipients', 'write', 'hide'), 'hide');
   assert.equal(canOutcome(HELP_DESK, 'servers', 'write', 'disable'), 'hide', 'no read → never shown, not even disabled');
   assert.equal(canOutcome(null, 'servers', 'write', 'disable'), 'allow');
+});
+
+test('permissionsAfterError: 404 → legacy lookup, 401/403 → nothing visible, others → unknown', () => {
+  assert.equal(permissionsAfterError(404), 'legacy');
+  assert.deepEqual(permissionsAfterError(403), { role: null, areas: {}, mfaVerified: false });
+  assert.deepEqual(permissionsAfterError(401), { role: null, areas: {}, mfaVerified: false });
+  const unknown = permissionsAfterError(503);
+  assert.ok(unknown !== 'legacy' && unknown.areas === null);
+  const none = permissionsAfterError(403);
+  assert.ok(none !== 'legacy');
+  assert.equal(can(none.areas, 'dashboard'), false, 'a USER token sees no admin area');
 });
 
 test('route access and landing page per role', () => {

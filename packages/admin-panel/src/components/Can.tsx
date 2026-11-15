@@ -35,7 +35,7 @@ export function Can({ area, access = 'read', mode, fallback = null, children }: 
   if (outcome === 'allow') return <>{children}</>;
   if (outcome === 'hide') return <>{fallback}</>;
   return (
-    <span className="inline-flex cursor-not-allowed opacity-50" title={t('perm_readonly_tooltip')}>
+    <span data-can-disabled="" className="inline-flex cursor-not-allowed opacity-50" title={t('perm_readonly_tooltip')}>
       <fieldset disabled aria-disabled="true" className="contents [&_*]:pointer-events-none">
         {children}
       </fieldset>

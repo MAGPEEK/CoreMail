@@ -65,7 +65,7 @@ export interface DataTableProps<T> {
   renderExpanded?: (row: T) => ReactNode;
 }
 
-const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [role="menuitem"]';
+const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [role="menuitem"], [data-can-disabled]';
 
 /**
  * EAC-style list: toolbar → search → sortable, paged table with selection
