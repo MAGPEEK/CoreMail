@@ -3,7 +3,7 @@ import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/c
 import { prisma } from '@coremail/storage';
 import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
-import { redeemEventTicket } from '../lib/event-tickets.js';
+import { redeemEventTicket, type TicketPurpose } from '../lib/event-tickets.js';
 
 // The single role → area permission map (and the narrow action map) the guards
 // below use (canAccess → areaAccess, hasAdminAction). Re-exported so routes and
@@ -90,6 +90,30 @@ export function requireSseAuth(req: Request, res: Response, next: NextFunction):
   const token = typeof req.query['token'] === 'string' ? req.query['token'] : '';
   if (token) { authenticateRawToken(token, req, res, next); return; }
   res.status(401).json({ error: 'Authorization required' });
+}
+
+/**
+ * 9.1: Bearer header OR a single-use ticket of `purpose` (?ticket=…) — for GET
+ * downloads a browser must open by plain navigation (iOS Safari only hands a
+ * .mobileconfig to the profile installer when it navigates to it). Never a raw
+ * token in the URL. The ticket carries the claims of the issuing session, so the
+ * usual revocation checks apply on redemption.
+ */
+export function requireTicketAuth(purpose: TicketPurpose) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const header = req.get('Authorization') ?? '';
+    if (header.startsWith('Bearer ')) { authenticateRawToken(header.slice(7), req, res, next); return; }
+    const ticket = typeof req.query['ticket'] === 'string' ? req.query['ticket'] : '';
+    if (!ticket) { res.status(401).json({ error: 'Authorization required' }); return; }
+    const authStartedAt = Date.now();
+    redeemEventTicket(ticket, purpose).then((claims) => {
+      if (!claims) { res.status(401).json({ error: 'Invalid or expired ticket' }); return; }
+      authenticateClaims(claims, authStartedAt, req, res, next);
+    }, (err: unknown) => {
+      log.error({ err, purpose }, 'Ticket redemption failed');
+      res.status(503).json({ error: 'Authentication temporarily unavailable' });
+    });
+  };
 }
 
 function authenticateRawToken(rawToken: string, req: Request, res: Response, next: NextFunction): void {

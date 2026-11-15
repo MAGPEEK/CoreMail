@@ -8,7 +8,9 @@
  *                                               mail, calendar and contacts in one account
  *
  * Authenticated (MWA session, Bearer header — the MWA downloads it via fetch, never with
- * a token in the URL). The profile carries the account address but NO password: the
+ * a token in the URL) or, since 9.1, with a single-use ticket: POST /api/v1/user/apple-profile/ticket
+ * → GET ?ticket=… (60 s, one redemption, bound to the user + session; iOS Safari opens the
+ * profile installer only on a plain navigation, its blob downloads are unreliable). The profile carries the account address but NO password: the
  * device asks for it on install. With MFA on, that must be an app password (mentioned in
  * the profile description). Payload UUIDs and identifiers are stable per user, so
  * installing a newer download replaces the earlier profile instead of adding a second
@@ -18,7 +20,8 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { createHash } from 'node:crypto';
 import { prisma, hasMfa } from '@coremail/storage';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireTicketAuth } from '../middleware/auth.js';
+import { issueEventTicket } from '../lib/event-tickets.js';
 
 export const appleProfileRouter: RouterType = Router();
 
@@ -202,7 +205,19 @@ function fileName(email: string, type: AppleProfileType): string {
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
-appleProfileRouter.get('/', requireAuth, async (req: Request, res: Response) => {
+// 9.1: POST /ticket → { ticket, expiresIn } (Bearer). A single-use, 60-second ticket bound
+// to the user and session; GET /?ticket=…[&type=eas] then works by plain navigation, which
+// iOS Safari needs to hand the profile to its installer (blob downloads are unreliable there).
+appleProfileRouter.post('/ticket', requireAuth, async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json(await issueEventTicket(req.apiUser!, 'apple-profile'));
+  } catch {
+    res.status(503).json({ error: 'Ticket service temporarily unavailable' });
+  }
+});
+
+appleProfileRouter.get('/', requireTicketAuth('apple-profile'), async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const typeParam = req.query['type'];
   if (typeParam !== undefined && typeParam !== 'eas' && typeParam !== 'imap') {

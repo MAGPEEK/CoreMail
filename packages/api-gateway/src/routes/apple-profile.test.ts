@@ -1,6 +1,7 @@
 /**
  * Apple configuration profile (v8.1): auth required, plist parses back (minimal XML plist
- * parser below), expected payloads, no password, stable UUIDs, escaping, EAS variant.
+ * parser below), expected payloads, no password, stable UUIDs, escaping, EAS variant;
+ * 9.1 single-use download ticket (iOS): single use, purpose-bound, session-bound, expiry.
  * Prisma faked via globalThis.__prisma.
  * Run: node --import tsx --test --test-force-exit src/routes/apple-profile.test.ts
  */
@@ -11,6 +12,14 @@ import type { Server } from 'node:http';
 import { installFakePrisma, setTestEnv } from '../test-support/fake-prisma.js';
 
 setTestEnv();
+
+// 9.1: in-memory store for the single-use download tickets (seam of lib/event-tickets.ts)
+const ticketKv = new Map<string, string>();
+(globalThis as Record<string, unknown>)['__ticketRedis'] = {
+  async setex(k: string, _s: number, v: string) { ticketKv.set(k, v); return 'OK'; },
+  async get(k: string) { return ticketKv.get(k) ?? null; },
+  async del(k: string) { return ticketKv.delete(k) ? 1 : 0; },
+};
 
 const state = {
   mfa: null as null | { totpEnabled: boolean; webAuthnCredentials: unknown },
@@ -227,4 +236,60 @@ test('plist writer: escaping, empty containers, booleans', () => {
   const xml = toPlist({ a: '<&>', b: [], c: {}, d: false, e: [1, 'x'] });
   assert.deepEqual(parsePlist(xml), { a: '<&>', b: [], c: {}, d: false, e: [1, 'x'] });
   assert.throws(() => toPlist({ x: 1.5 }));
+});
+
+// ── 9.1: single-use download ticket (iOS Safari opens the installer only by navigation) ──
+
+async function issueTicket(token: string | null = tok('alice')) {
+  const r = await fetch(`${base}/api/v1/user/apple-profile/ticket`, {
+    method: 'POST',
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  return { status: r.status, cache: r.headers.get('cache-control'), body: (await r.json().catch(() => ({}))) as { ticket?: string; expiresIn?: number } };
+}
+
+test('ticket: Bearer required, 60 s, no-store, only its hash is stored', async () => {
+  assert.equal((await issueTicket(null)).status, 401);
+  const r = await issueTicket();
+  assert.equal(r.status, 200);
+  assert.equal(r.cache, 'no-store');
+  assert.equal(r.body.expiresIn, 60);
+  assert.match(r.body.ticket ?? '', /^[A-Za-z0-9_-]{43}$/);
+  const keys = [...ticketKv.keys()];
+  assert.ok(keys.some((k) => k.startsWith('auth:apple-profile-ticket:')));
+  assert.ok(keys.every((k) => !k.includes(r.body.ticket!)), 'raw ticket never stored');
+});
+
+test('ticket: opens the profile once (navigation, no header), with the type parameter', async () => {
+  const { body } = await issueTicket();
+  const res = await fetch(`${base}/api/v1/user/apple-profile?type=eas&ticket=${body.ticket}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type')?.split(';')[0], 'application/x-apple-aspen-config');
+  const root = parsePlist(await res.text()) as Record<string, PV>;
+  assert.equal(root['PayloadIdentifier'], 'com.example.mail.coremail.alice.profile-eas', 'bound to the issuing user');
+  const again = await fetch(`${base}/api/v1/user/apple-profile?ticket=${body.ticket}`);
+  assert.equal(again.status, 401, 'single use');
+});
+
+test('ticket: unknown / malformed / expired tickets and SSE tickets are refused', async () => {
+  assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=${'a'.repeat(43)}`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=..%2F`)).status, 401);
+  // expiry = the store dropping the key after the TTL
+  const { body } = await issueTicket();
+  for (const k of [...ticketKv.keys()]) ticketKv.delete(k);
+  assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=${body.ticket}`)).status, 401);
+  // a ticket for the SSE stream is not a profile ticket (purpose-bound)
+  const { issueEventTicket } = await import('../lib/event-tickets.js');
+  const sse = await issueEventTicket({ userId: 'alice', role: 'USER', email: 'alice@example.com', sessionId: 's-alice', mfaVerified: true });
+  assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=${sse.ticket}`)).status, 401);
+});
+
+test('ticket: bound to the session — a ticket of a revoked session is refused', async () => {
+  const { body } = await issueTicket(tok('carol'));
+  const authRedis = (globalThis as Record<string, unknown>)['__authRedis'] as { setex(k: string, s: number, v: string): Promise<unknown> };
+  await authRedis.setex('auth:revoked-session:s-carol', 60, '1');
+  (await import('@coremail/storage/auth')).resetRevocationLookupCache(); // 5 s lookup cache
+  const res = await fetch(`${base}/api/v1/user/apple-profile?ticket=${body.ticket}`);
+  assert.equal(res.status, 401);
+  assert.equal(((await res.json()) as { code?: string }).code, 'SESSION_REVOKED');
 });

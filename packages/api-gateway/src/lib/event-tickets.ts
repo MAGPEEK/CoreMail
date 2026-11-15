@@ -35,9 +35,17 @@ function store(): TicketStore {
   return seam ?? (getRedisClient() as unknown as TicketStore);
 }
 
-const keyFor = (ticket: string): string => `auth:sse-ticket:${createHash('sha256').update(ticket).digest('hex')}`;
+/**
+ * 9.1: the same single-use ticket mechanism serves other GET-only downloads that
+ * cannot carry an Authorization header (iOS Safari opening a .mobileconfig).
+ * Tickets are bound to their purpose — an SSE ticket never opens a profile.
+ */
+export type TicketPurpose = 'sse' | 'apple-profile';
 
-export async function issueEventTicket(user: ApiUser): Promise<{ ticket: string; expiresIn: number }> {
+const keyFor = (ticket: string, purpose: TicketPurpose = 'sse'): string =>
+  `auth:${purpose}-ticket:${createHash('sha256').update(ticket).digest('hex')}`;
+
+export async function issueEventTicket(user: ApiUser, purpose: TicketPurpose = 'sse'): Promise<{ ticket: string; expiresIn: number }> {
   const ticket = randomBytes(32).toString('base64url');
   const claims: AuthClaims = {
     sub: user.userId,
@@ -48,7 +56,7 @@ export async function issueEventTicket(user: ApiUser): Promise<{ ticket: string;
     ...(user.issuedAt !== undefined ? { iat: user.issuedAt } : {}),
     ...(user.issuedAtMs !== undefined ? { iatMs: user.issuedAtMs } : {}),
   };
-  await store().setex(keyFor(ticket), EVENT_TICKET_TTL_SEC, JSON.stringify(claims));
+  await store().setex(keyFor(ticket, purpose), EVENT_TICKET_TTL_SEC, JSON.stringify(claims));
   return { ticket, expiresIn: EVENT_TICKET_TTL_SEC };
 }
 
@@ -65,10 +73,10 @@ export async function eventTicketHandler(req: Request, res: Response): Promise<v
 }
 
 /** Claims of a valid, unused ticket (consumed now), or null. */
-export async function redeemEventTicket(ticket: string): Promise<AuthClaims | null> {
+export async function redeemEventTicket(ticket: string, purpose: TicketPurpose = 'sse'): Promise<AuthClaims | null> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(ticket)) return null;
   const s = store();
-  const key = keyFor(ticket);
+  const key = keyFor(ticket, purpose);
   let raw: string | null;
   if (typeof s.getdel === 'function') {
     raw = await s.getdel(key);

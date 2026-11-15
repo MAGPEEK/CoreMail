@@ -9,6 +9,7 @@ import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
+import { getReadableSharedMailbox, getWritableSharedMailbox } from '../lib/mailbox-access.js';
 
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
@@ -642,29 +643,7 @@ userRouter.get('/shared-mailboxes', async (req: Request, res: Response) => {
   res.json([...map.values()].sort((a, b) => a.email.localeCompare(b.email)));
 });
 
-// ── Helper: checks read access to a shared mailbox + fetches mailbox record ──
-async function getReadableSharedMailbox(userId: string, sharedMailboxId: string) {
-  const perm = await prisma.sharedMailboxPerm.findFirst({
-    where: {
-      userId,
-      sharedMailboxId,
-      permission: { in: ['FULL_ACCESS', 'READ_ONLY'] },
-    },
-    include: {
-      sharedMailbox: {
-        select: { id: true, email: true, displayName: true, active: true },
-      },
-    },
-  });
-  if (!perm || !perm.sharedMailbox.active) return null;
-  // The mailbox table is 1:1 with SharedMailbox via sharedBoxId
-  const mailbox = await prisma.mailbox.findFirst({
-    where: { sharedBoxId: sharedMailboxId },
-    select: { id: true },
-  });
-  if (!mailbox) return null;
-  return { mailboxId: mailbox.id, shared: perm.sharedMailbox, permission: perm.permission };
-}
+// Read/full-access checks: lib/mailbox-access.ts (shared with recover deleted items + quota)
 
 // GET /api/v1/user/shared-mailboxes/:id — detail (incl. permissions[])
 userRouter.get('/shared-mailboxes/:id', async (req: Request, res: Response) => {
@@ -682,6 +661,17 @@ userRouter.get('/shared-mailboxes/:id', async (req: Request, res: Response) => {
     id: sm.id, email: sm.email, displayName: sm.displayName, active: sm.active,
     permissions: perms.map((p) => p.permission),
   });
+});
+
+// GET /api/v1/user/shared-mailboxes/:id/quota — 9.1: quota of a shared mailbox
+// (same shape as GET /user/quota). Read access (FULL_ACCESS or READ_ONLY) required.
+userRouter.get('/shared-mailboxes/:id/quota', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const access = await getReadableSharedMailbox(req.apiUser!.userId, id);
+  if (!access) { res.status(403).json({ error: 'Kein Lese-Zugriff auf diese Mailbox' }); return; }
+  const status = await getQuotaStatus({ kind: 'shared', id: access.shared.id });
+  if (!status) { res.status(404).json({ error: 'Mailbox not found' }); return; }
+  res.json({ usedBytes: status.usedBytes, level: status.level, ...status.limits });
 });
 
 // GET /api/v1/user/shared-mailboxes/:id/folders
@@ -753,20 +743,6 @@ userRouter.get('/shared-mailboxes/:id/messages/:messageId', async (req: Request,
 });
 
 // ── Folder CRUD for shared mailboxes (FULL_ACCESS only) ──────────────────────
-
-/** Like getReadableSharedMailbox, but requires FULL_ACCESS for write operations. */
-async function getWritableSharedMailbox(userId: string, sharedMailboxId: string) {
-  const perm = await prisma.sharedMailboxPerm.findFirst({
-    where: { userId, sharedMailboxId, permission: 'FULL_ACCESS' },
-    include: { sharedMailbox: { select: { id: true, active: true } } },
-  });
-  if (!perm || !perm.sharedMailbox.active) return null;
-  const mailbox = await prisma.mailbox.findFirst({
-    where: { sharedBoxId: sharedMailboxId }, select: { id: true },
-  });
-  if (!mailbox) return null;
-  return { mailboxId: mailbox.id };
-}
 
 // Protected system folders that must not be renamed/deleted
 const PROTECTED_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Outbox']);

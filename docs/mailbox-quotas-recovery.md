@@ -52,6 +52,9 @@ warning ≤ prohibit-send ≤ quota is enforced). Server defaults:
 
 Users: `GET /api/v1/user/quota` (usage, level, limits); the web client shows a
 usage bar under the folder tree (amber at the warning level, red when blocked).
+Shared mailboxes (9.1): `GET /api/v1/user/shared-mailboxes/:id/quota` (same shape;
+FULL_ACCESS or READ_ONLY on the shared mailbox, otherwise 403) — the shared-mailbox
+view shows its bar, Settings → Storage lists the shared mailboxes' quotas.
 
 ## Recover deleted items
 
@@ -72,6 +75,14 @@ to "Recoverable Items/Deletions" are listed and restorable too.
   them as new messages; the old UID is never reused.
 - `POST /api/v1/mail/recoverable/purge {ids}` — permanent removal
 - Admin: `POST /api/v1/admin/mailboxes/:id/recoverable/purge {ids?}` (audited)
+- Shared mailboxes (9.1): the same three routes under
+  `/api/v1/user/shared-mailboxes/:id/recoverable` (`:id` = shared mailbox) for users
+  with **FULL_ACCESS** on that (active) shared mailbox, and under
+  `/api/v1/mail/delegated-mailboxes/:id/recoverable` (`:id` = mailbox id from
+  `GET /mail/delegated-mailboxes`) for FULL_ACCESS delegates. READ_ONLY, SEND_AS and
+  SEND_ON_BEHALF are not enough; anything else answers 403. A purge there is audited
+  (`mailbox.recoverable.purge`, target the shared mailbox / mailbox). Web client:
+  shared-mailbox view → Trash → "Recover deleted items".
 
 The api-gateway removes tombstones past the retention hourly (Redis lock
 `storage:deleted-items-purge:lock`). No modSeq is allocated for that: tombstones

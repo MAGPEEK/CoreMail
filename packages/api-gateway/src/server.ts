@@ -28,7 +28,7 @@ import {
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
-import { recoverableRouter } from './routes/recoverable.js';
+import { recoverableRouter, sharedRecoverableRouter, delegatedRecoverableRouter } from './routes/recoverable.js';
 import { draftsRouter } from './routes/drafts.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
@@ -374,6 +374,9 @@ app.get('/api/v1/events', requireSseAuth, sseHandler);
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
 app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted items
+// 9.1: recover deleted items of shared / delegated mailboxes (FULL_ACCESS)
+app.use('/api/v1/user/shared-mailboxes/:id/recoverable', sharedRecoverableRouter);
+app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverableRouter);
 app.use('/api/v1/mail/drafts',    draftsRouter);
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);

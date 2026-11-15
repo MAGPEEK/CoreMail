@@ -115,9 +115,8 @@ services:
       IMAGE_PROXY_RATE_WINDOW_SEC: ${IMAGE_PROXY_RATE_WINDOW_SEC:-}
       BACKUP_IMPORT_MAX_BYTES:     ${BACKUP_IMPORT_MAX_BYTES:-}
       OIDC_TRUST_IDP_MFA_FOR_ADMINS: ${OIDC_TRUST_IDP_MFA_FOR_ADMINS:-}
-      # SMTP_HOSTNAME / POP3_HOSTNAME are not passed through on purpose: an empty
-      # value would replace the default host name in Autodiscover. Set them in a
-      # docker-compose.override.yml if needed (see .env.example).
+      SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
+      POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
 
       # Internal service URLs
       AUTH_SERVICE_URL: http://localhost:3003

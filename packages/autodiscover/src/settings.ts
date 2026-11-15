@@ -52,8 +52,19 @@ const DEFAULT_IMAPS_PORT = 993;
 const DEFAULT_SUBMISSION_PORT = 587;
 const DEFAULT_POP3S_PORT = 995;
 
-function envDefaults(): ServerConfig {
-  const hostname = process.env['MAIL_HOSTNAME'] ?? 'mail.local';
+/**
+ * A host-name variable, trimmed; empty or whitespace-only counts as unset (9.1).
+ * The Compose files pass optional variables through as `${VAR:-}`, so an unset
+ * variable arrives as an empty string and must not replace the default host.
+ */
+export function envHost(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const v = env[name]?.trim();
+  return v ? v : undefined;
+}
+
+/** Settings used before the setup wizard has created the ServerSettings row. */
+export function envDefaults(): ServerConfig {
+  const hostname = envHost('MAIL_HOSTNAME') || 'mail.local';
   const port = process.env['AUTODISCOVER_HTTP_PORT'] ?? '8080';
   const proto = process.env['MAIL_USE_HTTPS'] === 'true' ? 'https' : 'http';
   const base = `${proto}://${hostname}:${port}`;
@@ -61,13 +72,13 @@ function envDefaults(): ServerConfig {
     owaUrl:          process.env['OWA_URL']          ?? `${base}/owa/`,
     easUrl:          process.env['EAS_URL']          ?? `${base}/Microsoft-Server-ActiveSync`,
     autodiscoverBase: process.env['AUTODISCOVER_BASE'] ?? base,
-    imapHost:        process.env['IMAP_HOSTNAME']    ?? hostname,
+    imapHost:        envHost('IMAP_HOSTNAME')    || hostname,
     imapPort:        DEFAULT_IMAPS_PORT,
     imapSsl:         true,
-    smtpHost:        process.env['SMTP_HOSTNAME']    ?? hostname,
+    smtpHost:        envHost('SMTP_HOSTNAME')    || hostname,
     smtpPort:        DEFAULT_SUBMISSION_PORT,
     smtpTls:         true,
-    pop3Host:        process.env['POP3_HOSTNAME']    ?? hostname,
+    pop3Host:        envHost('POP3_HOSTNAME')    || hostname,
     pop3Port:        DEFAULT_POP3S_PORT,
     pop3Ssl:         true,
     publicHostname:  hostname,
