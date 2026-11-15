@@ -4,7 +4,7 @@
  * (CoreMail keeps no thread counters).
  */
 import { createsParentCycle } from './mailbox-tree.js';
-import { prisma } from '@coremail/storage';
+import { prisma, reservedFolderPrefix } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_MAIL } from '../capabilities.js';
 import { cannotCalculateChanges, setError, unsupportedFilter, unsupportedSort } from '../errors.js';
@@ -176,6 +176,9 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
 
   for (const [cid, obj] of Object.entries(create)) {
     const name = typeof obj['name'] === 'string' ? obj['name'].trim() : '';
+    // 9.1: names under an IMAP namespace prefix ("Shared/", "Other Users/") are reserved.
+    const reservedCreate = reservedFolderPrefix(name);
+    if (reservedCreate) { notCreated[cid] = setError('invalidProperties', `names starting with "${reservedCreate}/" are reserved for shared and delegated mailboxes`, ['name']); continue; }
     if (!name || name.length > 100 || /[/\\]/.test(name)) { notCreated[cid] = setError('invalidProperties', 'name invalid', ['name']); continue; }
     if (obj['role'] !== undefined && obj['role'] !== null) { notCreated[cid] = setError('invalidProperties', 'role cannot be set', ['role']); continue; }
     let parentId: string | null = null;
@@ -216,7 +219,13 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
     if (role && (patch['name'] !== undefined || patch['parentId'] !== undefined)) bad.push('name');
     if (bad.length) { notUpdated[id] = setError('invalidProperties', 'immutable or unknown property', [...new Set(bad)]); continue; }
     const name = String(next['name'] ?? '').trim();
-    if (!name || name.length > 100 || /[/\\]/.test(name)) { notUpdated[id] = setError('invalidProperties', 'name invalid', ['name']); continue; }
+    // 9.1: the name is validated only when it changes, so a legacy folder whose name
+    // starts with a reserved prefix (or contains "/") can still be renamed away from it
+    // or get a new sortOrder / isSubscribed.
+    const renamed = name !== (f.displayName || f.name);
+    const reservedUpdate = renamed ? reservedFolderPrefix(name) : null;
+    if (reservedUpdate) { notUpdated[id] = setError('invalidProperties', `names starting with "${reservedUpdate}/" are reserved for shared and delegated mailboxes`, ['name']); continue; }
+    if (!name || (renamed && (name.length > 100 || /[/\\]/.test(name)))) { notUpdated[id] = setError('invalidProperties', 'name invalid', ['name']); continue; }
     let parentId: string | null = null;
     if (typeof next['parentId'] === 'string') {
       try { parentId = ctx.resolveId(next['parentId']); } catch { notUpdated[id] = setError('invalidProperties', 'parentId unknown', ['parentId']); continue; }

@@ -271,6 +271,16 @@ test('ticket: opens the profile once (navigation, no header), with the type para
   assert.equal(again.status, 401, 'single use');
 });
 
+test('ticket: an invalid type is refused before the ticket is redeemed (ticket stays usable)', async () => {
+  const { body } = await issueTicket();
+  for (const t of ['bogus', 'EAS', '']) {
+    const bad = await fetch(`${base}/api/v1/user/apple-profile?type=${t}&ticket=${body.ticket}`);
+    assert.equal(bad.status, 400, t);
+  }
+  const ok = await fetch(`${base}/api/v1/user/apple-profile?type=imap&ticket=${body.ticket}`);
+  assert.equal(ok.status, 200, 'the ticket was not consumed by the bad requests');
+});
+
 test('ticket: unknown / malformed / expired tickets and SSE tickets are refused', async () => {
   assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=${'a'.repeat(43)}`)).status, 401);
   assert.equal((await fetch(`${base}/api/v1/user/apple-profile?ticket=..%2F`)).status, 401);

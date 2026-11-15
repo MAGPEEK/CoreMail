@@ -118,3 +118,40 @@ export function accessFromRows(userId: string, perms: SharedPermRow[], delegatio
 
   return [...out.values()].sort((a, b) => (a.kind === b.kind ? a.email.localeCompare(b.email) : a.kind.localeCompare(b.kind)));
 }
+
+// ─── Reserved folder names (IMAP namespace prefixes) ─────────────────────────
+
+const DISABLED_PREFIX = new Set(['', 'off', 'none', 'false', 'disabled']);
+
+function prefixFromEnv(value: string | undefined, fallback: string): string | null {
+  if (value === undefined) return fallback;
+  const v = value.trim().replace(/\/+$/, '');
+  if (DISABLED_PREFIX.has(v.toLowerCase())) return null;
+  // Same validity rule as the IMAP server (imap-server namespaces.ts): invalid → default.
+  if (v.length > 64 || !/^[\x20-\x7e]+$/.test(v) || /[./%*"\\]/.test(v) || v.toUpperCase() === 'INBOX') return fallback;
+  return v;
+}
+
+/**
+ * The IMAP namespace prefixes (9.1) — IMAP_NAMESPACE_OTHER_USERS (default
+ * "Other Users") and IMAP_NAMESPACE_SHARED (default "Shared"); disabled ones are
+ * left out. A personal folder named "<prefix>/…" can never be selected over IMAP
+ * (the name resolves into the namespace), so new folders must not get such names.
+ */
+export function reservedNamespacePrefixes(env: Record<string, string | undefined> = process.env): string[] {
+  return [
+    prefixFromEnv(env['IMAP_NAMESPACE_OTHER_USERS'], 'Other Users'),
+    prefixFromEnv(env['IMAP_NAMESPACE_SHARED'], 'Shared'),
+  ].filter((p): p is string => p !== null);
+}
+
+/** The reserved prefix a folder name starts with ("<prefix>/", any case), or null. */
+export function reservedFolderPrefix(name: string, env: Record<string, string | undefined> = process.env): string | null {
+  const lower = name.trim().toLowerCase();
+  return reservedNamespacePrefixes(env).find((p) => lower.startsWith(`${p.toLowerCase()}/`)) ?? null;
+}
+
+/** User-facing error for a reserved folder name. */
+export function reservedFolderNameError(prefix: string): string {
+  return `Folder names starting with "${prefix}/" are reserved for shared and delegated mailboxes`;
+}

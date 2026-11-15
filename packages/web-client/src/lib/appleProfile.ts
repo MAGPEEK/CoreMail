@@ -25,6 +25,14 @@ export function appleProfileTicketUrl(kind: AppleProfileKind, ticket: string, ap
 }
 
 /**
+ * 9.1: navigates to the ticket URL with `location.replace` — the single-use ticket
+ * URL does not stay in the session history (Back never re-requests a spent ticket).
+ */
+export function openAppleProfileTicket(loc: Pick<Location, 'replace'>, kind: AppleProfileKind, ticket: string): void {
+  loc.replace(appleProfileTicketUrl(kind, ticket));
+}
+
+/**
  * iPhone / iPod / iPad, including iPadOS 13+ which reports a desktop Mac user agent
  * ("Macintosh") but has a touch screen. A real Mac has maxTouchPoints 0 and keeps the
  * blob download (macOS opens downloaded profiles from System Settings).

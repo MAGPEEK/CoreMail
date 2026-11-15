@@ -204,6 +204,7 @@ services:
       SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
       POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
       REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
+      REFERENCES_LAZY_BUDGET_MS:    ${REFERENCES_LAZY_BUDGET_MS:-}
 
       # ── Optional: different HTTPS port if 443 is already in use on the host ──
       # HTTPS_PORT: "8443"     # then also map "8443:8443" below

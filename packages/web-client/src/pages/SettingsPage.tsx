@@ -18,7 +18,7 @@ import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
 import {
-  APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, appleProfileTicketUrl, isAppleMobileDevice,
+  APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, isAppleMobileDevice, openAppleProfileTicket,
   type AppleProfileKind,
 } from '../lib/appleProfile.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
@@ -2081,7 +2081,7 @@ function AutoSetupCard({ email, requiresAppPassword }: { email: string; requires
         // 9.1 iOS/iPadOS: Safari opens the profile installer only on a plain navigation —
         // single-use 60 s ticket instead of the token (blob downloads are unreliable there)
         const { ticket } = await api.post<{ ticket: string }>(APPLE_PROFILE_TICKET_PATH, {});
-        window.location.assign(appleProfileTicketUrl(kind, ticket));
+        openAppleProfileTicket(window.location, kind, ticket);
         return;
       }
       // fetch with the Authorization header — no token in the URL

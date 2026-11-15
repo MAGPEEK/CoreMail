@@ -101,16 +101,28 @@ get compact answers.
   ignored, duplicates removed, at most 100 ids (the first and the last 99).
   Messages written before 9.1 have no value yet (`null`) and are indexed from
   their stored raw message (header section only):
-  - lazily — THREAD=REFERENCES indexes up to 2,000 unindexed messages of the
-    selected folder per command before threading (the rest use In-Reply-To
-    until a later command or the background job reaches them);
+  - lazily — THREAD=REFERENCES indexes at most 200 unindexed messages of the
+    selected folder per command and stops after `REFERENCES_LAZY_BUDGET_MS`
+    (default 1500 ms, `0` = no lazy step), so a slow object store never blocks
+    the session for long; messages whose object failed to read recently are
+    skipped. The rest use In-Reply-To until a later command or the background
+    job reaches them. The References column is loaded only for the messages
+    being threaded (in chunks of 1000 ids);
   - in the background — `REFERENCES_BACKFILL=on` (default) works off all
     mailboxes in batches of 500 with pauses, one instance at a time (Redis lock
-    `storage:references-backfill:lock`), every minute while rows are left and
-    every 6 hours once done. `off` leaves indexing to THREAD.
+    `storage:references-backfill:lock`, refreshed with a token check between
+    batches and released with compare-and-delete), every minute while a pass is
+    in progress and every 6 hours once a pass is complete. `off` leaves indexing
+    to THREAD.
   Indexing never touches mail delivery and does not change MODSEQ (the value is
   derived from the immutable raw message). Messages without a raw object or
-  whose object is missing are recorded as having no References.
+  whose object is missing are recorded as having no References. Other read
+  errors leave the message unindexed — it is never marked as "no References",
+  so it is indexed once the object store is readable again. The background pass
+  walks the table with a cursor (newest first), so messages that keep failing
+  never block older ones, and failures are counted per message (Redis keys
+  `storage:references-backfill:fail:<id>`, 24 h from the first failure): after 3
+  failures a message is not read again until its counter expires.
 - Work is done in memory on a column projection of the folder. Mailboxes with
   more than `IMAP_SORT_MAX_MESSAGES` messages (default 100000, `<= 0` =
   unlimited) are answered with `NO [LIMIT]`.
@@ -175,19 +187,47 @@ namespaces).
 
 ### Permission changes on live sessions
 
-There is no event for permission changes yet, so permissions are re-read:
+Permission changes made in the BCP / admin API are published at once: setting or
+removing a Shared Mailbox permission, (de)activating or deleting a shared
+mailbox (all its grantees) and granting or revoking a delegation publish a
+`permission-change` event for each affected user on the auth invalidation bus
+(`CHANNEL_AUTH_INVALIDATE`; it never ends a connection). On any such event — and
+on every other auth invalidation event, e.g. a deactivated owner — the IMAP
+server clears the permission caches and re-checks the selected foreign mailbox
+of that user's IDLE sessions right away; other sessions re-check it before their
+next command. Permissions are also re-read:
 
 - on SELECT / EXAMINE and before every write (STORE, EXPUNGE, CLOSE's expunge,
   implicit `\Seen`, COPY / MOVE / APPEND target, CREATE / DELETE / RENAME) —
   without the cache;
 - before every other command on a selected foreign mailbox, for LIST / STATUS and
   during IDLE — from a per-session cache that lives at most
-  `IMAP_SHARED_ACCESS_CACHE_MS` (≤ 30 s). Any auth invalidation event
-  (`CHANNEL_AUTH_INVALIDATE`, e.g. a deactivated owner) clears the caches.
+  `IMAP_SHARED_ACCESS_CACHE_MS` (≤ 30 s), the fallback when Redis (and thus the
+  event) is unavailable.
 
 A revoked permission closes the selected mailbox with `* OK [CLOSED] Access to
 the selected mailbox was revoked`; the command that needed it gets
 `NO [NOPERM]`. A downgrade to READ_ONLY turns the selected mailbox read-only.
+
+### Reserved folder names (migration note)
+
+Names that start with a namespace prefix and `/` — `Shared/…` and
+`Other Users/…` in any letter case, or the configured `IMAP_NAMESPACE_*`
+prefixes — belong to the namespaces. Since 9.1:
+
+- IMAP LIST / LSUB / STATUS-listing no longer show a personal folder with such a
+  name (it could never be selected, because the name resolves into the
+  namespace, and it would shadow the real shared entry). The server logs a
+  warning once per user.
+- New folders with such names are refused: IMAP CREATE / RENAME answer
+  `NO [NOPERM] … names under "Shared/" are reserved …`, the REST folder routes
+  `400 RESERVED_FOLDER_NAME`, JMAP Mailbox/set `invalidProperties` on `name`.
+
+**Migration:** personal folders created before 9.1 with such a name (e.g. a
+folder `Shared/Projects` made by an IMAP client while the namespace did not
+exist) keep their messages but are invisible over IMAP. Rename them in the
+webmail (or via JMAP) to a name without the prefix — renaming *away* from a
+reserved prefix is always allowed — and they reappear in IMAP clients.
 
 ### Client setup
 
@@ -252,6 +292,7 @@ Unknown or inaccessible mailboxes → `NO [NONEXISTENT]`.
 | `IMAP_NAMESPACE_SHARED` | `Shared` | prefix of the Shared Mailbox namespace; same rules; must differ from the other prefix (else this namespace is disabled) |
 | `IMAP_SHARED_ACCESS_CACHE_MS` | 30000 | lifetime of the per-session permission cache (0–30000) |
 | `REFERENCES_BACKFILL` | on | background indexing of the References of messages written before 9.1 (`off`: only lazily by THREAD=REFERENCES) |
+| `REFERENCES_LAZY_BUDGET_MS` | 1500 | time budget of the lazy References indexing in one THREAD=REFERENCES command (at most 200 messages; `0` = no lazy step; max 30000) |
 
 Connection limits (`IMAP_MAX_CONNS*`, `MAIL_CONN_EXEMPT_CIDRS`) are documented
 in [mail-protocol-limits.md](mail-protocol-limits.md).

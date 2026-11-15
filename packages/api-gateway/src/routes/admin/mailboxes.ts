@@ -8,6 +8,7 @@ import { canAssignRole, canManageAccount, hasAdminAction, mailboxUpdateFields, U
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js';
+import { publishPermissionChange } from '../../lib/permission-events.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -467,6 +468,7 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
     changes: { owner: user.email, grantee: grantee.email, granteeId: grantee.id, permission: parsed.data.permission },
     ...auditContext(req),
   });
+  await publishPermissionChange([grantee.id]); // 9.1: grantee caches (IMAP, JMAP) refresh at once
   res.status(201).json(delegate);
 });
 
@@ -492,6 +494,7 @@ adminMailboxesRouter.delete('/:id/delegates/:granteeId', async (req: Request, re
     changes: { owner: user.email, grantee: grantee?.email ?? granteeId, granteeId, removed: removed.count },
     ...auditContext(req),
   });
+  if (removed.count > 0) await publishPermissionChange([granteeId]); // 9.1: a selected folder closes ([CLOSED])
   res.json({ ok: true });
 });
 
