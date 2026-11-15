@@ -20,8 +20,8 @@
  *   - an existing account is used when it is an OIDC account of this provider
  *     (externalId `oidc:<providerId>:<sub>`, bound on first use); LOCAL/LDAP
  *     accounts only with the per-provider `allowLinking` opt-in — and (v8.1)
- *     bound to the first IdP subject that linked them (LOCAL: externalId, LDAP:
- *     Redis `auth:sso:link:<userId>`); another subject → `account_mismatch`
+ *     bound to the first IdP subject that linked them (durable column
+ *     `User.oidcSubject`; externalId stays the LDAP id); another subject → `account_mismatch`
  *   - unknown users are created + their mailbox provisioned with `autoProvision`
  *   - MFA: by default the IdP is trusted as second factor (no CoreMail MFA
  *     prompt). With `requireMfa` users with CoreMail MFA enrolled get the normal
@@ -212,35 +212,43 @@ function claimString(claims: IdTokenClaims, name: string): string | undefined {
 
 // ── v8.1: binding of linked accounts + admin MFA policy ───────────────────────
 
-/** Redis key holding the IdP binding of a linked LDAP account (externalId is the directory id there). */
+/**
+ * Legacy (pre-8.1 release candidate) Redis key that held the IdP binding of a
+ * linked LDAP account. Read once and migrated into `User.oidcSubject`.
+ */
 export const SSO_LINK_PREFIX = 'auth:sso:link:';
-/** Bindings live as long as the account (Redis runs with appendonly); ~10 years. */
-const SSO_LINK_TTL = 10 * 365 * 24 * 3600;
 
 /**
  * Binds a LOCAL/LDAP account that logs in through `allowLinking` to the IdP
  * subject of its first SSO login; later logins must present the same subject.
- *  - LOCAL accounts store it in `User.externalId` (unused for LOCAL).
- *  - LDAP accounts keep their directory id in `externalId` (the LDAP login and
- *    sync compare it), so their binding is kept in Redis (`auth:sso:link:<userId>`).
+ * The binding lives in the durable column `User.oidcSubject` — `externalId`
+ * stays free for the LDAP directory id (LDAP login/sync and a later LOCAL→LDAP
+ * takeover compare it with `ldap:<id>`).
+ * Older bindings are migrated on use: a LOCAL account's `externalId = oidc:…`
+ * (moved to oidcSubject, externalId cleared) and the Redis key above.
  * Returns false when the account is bound to another subject.
  */
 async function bindLinkedAccount(
-  user: { id: string; authSource: string; externalId: string | null },
-  externalId: string,
+  user: { id: string; externalId: string | null; oidcSubject: string | null },
+  subject: string,
 ): Promise<boolean> {
-  if (user.externalId?.startsWith('oidc:')) return user.externalId === externalId;
-  if (user.authSource === 'LOCAL' && !user.externalId) {
-    await prisma.user.update({ where: { id: user.id }, data: { externalId } });
-    log.info({ userId: user.id }, 'SSO: linked account bound to the IdP subject');
-    return true;
-  }
+  if (user.oidcSubject) return user.oidcSubject === subject;
   const key = `${SSO_LINK_PREFIX}${user.id}`;
-  const bound = await authRedis().get(key);
-  if (bound) return bound === externalId;
-  await authRedis().setex(key, SSO_LINK_TTL, externalId);
-  log.info({ userId: user.id }, 'SSO: linked account bound to the IdP subject');
-  return true;
+  const legacyColumn = user.externalId?.startsWith('oidc:') ? user.externalId : null;
+  const legacyRedis = legacyColumn ? null : await authRedis().get(key).catch(() => null);
+  const bound = legacyColumn ?? legacyRedis ?? subject;
+  // conditional write: two concurrent first logins cannot both bind
+  const r = await prisma.user.updateMany({
+    where: { id: user.id, oidcSubject: null },
+    data: { oidcSubject: bound, ...(legacyColumn ? { externalId: null } : {}) },
+  });
+  if (r.count === 0) {
+    const now = await prisma.user.findUnique({ where: { id: user.id }, select: { oidcSubject: true } });
+    return now?.oidcSubject === subject;
+  }
+  if (legacyRedis) await authRedis().del(key).catch(() => undefined);
+  log.info({ userId: user.id, migrated: bound !== subject || Boolean(legacyColumn ?? legacyRedis) }, 'SSO: linked account bound to the IdP subject');
+  return bound === subject;
 }
 
 async function requireMfaForAdmins(): Promise<boolean> {
@@ -310,7 +318,7 @@ export async function completeSsoCallback(
   const displayName = claimString(claims, map['name'] || 'name') ?? email;
   let user = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, email: true, role: true, domainId: true, active: true, authSource: true, externalId: true },
+    select: { id: true, email: true, role: true, domainId: true, active: true, authSource: true, externalId: true, oidcSubject: true },
   });
   if (user) {
     if (!user.active) return { ok: false, error: 'account_inactive', target };
@@ -334,7 +342,7 @@ export async function completeSsoCallback(
     try {
       user = await prisma.user.create({
         data: { email, displayName, passwordHash: null, role: 'USER', authSource: 'OIDC', externalId, domainId: domain.id },
-        select: { id: true, email: true, role: true, domainId: true, active: true, authSource: true, externalId: true },
+        select: { id: true, email: true, role: true, domainId: true, active: true, authSource: true, externalId: true, oidcSubject: true },
       });
     } catch (err) {
       if ((err as { code?: string }).code === 'P2002') return { ok: false, error: 'account_mismatch', target };
