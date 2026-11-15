@@ -13,6 +13,55 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [9.1.0] — 2026-11-15 — Shared mailboxes over IMAP, full REFERENCES threading, Helm tested on a real cluster
+
+Minor release (SemVer: new features, no breaking changes). It closes the known limitations of
+9.0.0. Every change was reviewed independently, and all findings were fixed with regression tests.
+
+### Added
+- **IMAP access to Shared Mailboxes and delegated mailboxes.**
+  - They appear in the `Shared/` and `Other Users/` namespaces (RFC 2342). The prefixes are set with `IMAP_NAMESPACE_SHARED` and `IMAP_NAMESPACE_OTHER_USERS`; `off` disables a namespace.
+  - Every mailbox command works on these folders and uses the target mailbox's UID/modSeq, QRESYNC state, IDLE push and quota.
+  - Read-only grants open with `[READ-ONLY]`, and writes are refused with `NO [NOPERM]`.
+  - ACL `MYRIGHTS` reports the real rights: `lrswipkxtecd` for full access, `lr` for read-only.
+- **References header stored.** `Message.references` is a new additive column. A background backfill fills it for older messages (`REFERENCES_BACKFILL`, default on), plus a time-boxed lazy step in THREAD (`REFERENCES_LAZY_BUDGET_MS`, default 1500 ms).
+  - IMAP `THREAD=REFERENCES` implements the full RFC 5256 algorithm.
+  - JMAP threads a reply under its nearest known ancestor when the direct parent is missing.
+- **Recover deleted items in shared and delegated mailboxes** with FULL_ACCESS. Routes:
+  - `/api/v1/user/shared-mailboxes/:id/recoverable`
+  - `/api/v1/mail/delegated-mailboxes/:id/recoverable`
+
+  Both support list, restore and purge; restore and purge are audited. The webmail has an entry in the shared mailbox view.
+- **Shared mailbox quota.** New endpoint `GET /api/v1/user/shared-mailboxes/:id/quota`. The webmail shows the quota of the open shared mailbox and lists shared mailbox quotas under Settings → Storage.
+- **Apple profile on iPhone/iPad.** A single-use, 60 s download ticket (`POST /api/v1/user/apple-profile/ticket`) lets iOS/iPadOS Safari open the profile installer directly.
+- **Helm chart tested on a real cluster.** `scripts/k8s-e2e.sh` runs the chart on kind:
+  - Pod Security "restricted" and NetworkPolicy enforcement
+  - schema sync and the setup token
+  - SMTP submission → IMAP
+  - `helm upgrade` / `rollback`
+
+  `helm-check` also verifies the restricted security fields of every rendered container.
+- `listAccessibleMailboxes()` in `@coremail/storage` is the single access rule for shared and delegated mailboxes. IMAP, JMAP and REST all use it.
+
+### Changed
+- Changes to shared-mailbox permissions and delegations take effect immediately (`permission-change` event). A revoked folder that is open in IMAP is closed with `[CLOSED]`.
+- NAMESPACE lists the Other Users and Shared namespaces.
+- Personal folders named `Shared/…` or `Other Users/…` are hidden from IMAP LIST, and new folders with these names are refused in IMAP, REST and JMAP. Rename existing ones in the webmail.
+- The BCP shows the Backups page to COMPLIANCE_MANAGEMENT, limited to mailbox data. backup-service applies the same path-aware rule as the gateway.
+- Helm chart 2.0.1:
+  - NOTES warn when filesystem storage has no backup target, and when a LoadBalancer has no controller.
+  - README documents the real-cluster test.
+
+### Fixed
+- `SMTP_HOSTNAME` / `POP3_HOSTNAME` can be set from `.env`; an empty value now counts as unset (autodiscover, smtp-server).
+
+### Security
+- A delegate no longer keeps access to the recoverable items of a deactivated owner.
+- The admin backup routes and backup-service route paths case-sensitively, and also check the lower-cased path. A different letter case can no longer bypass the mailbox-data role check.
+- backup-service mirrors the gateway's mailbox-data RBAC. SERVER_MANAGEMENT can no longer reach mailbox content even when calling the service directly.
+
+---
+
 ## [9.0.0] — 2026-11-15 — OWASP security hardening, Exchange-parity mail logic, encrypted backups
 
 Major release (SemVer: several security fixes and new limits change behaviour for operators,

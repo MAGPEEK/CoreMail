@@ -80,7 +80,8 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest admin mfa live lockout restart storage`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest admin mfa live lockout restart storage schema-upgrade`.
+`schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `live`: B keeps an IMAP IDLE connection, an authenticated SMTP submission session and a
 POP3 session open, changes the password in the web client and expects `* BYE`, `421 4.7.0` and
 `-ERR [AUTH]` right away; A's IDLE connection (app password) stays usable. The new password of B
