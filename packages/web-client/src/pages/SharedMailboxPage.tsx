@@ -14,7 +14,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Inbox, ArrowLeft, Folder as FolderIcon, Star, Trash2, Send,
-  FileText, AlertCircle, Paperclip, FolderPlus, Pencil, X, Archive,
+  FileText, AlertCircle, Paperclip, FolderPlus, Pencil, X, Archive, RotateCcw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -22,6 +22,9 @@ import { MessageListSkeleton, EmptyInbox } from '../components/Skeleton.js';
 import { MailBody } from '../components/MailBody.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
+import { QuotaIndicator } from '../components/QuotaIndicator.js';
+import { RecoverDeletedItemsDialog } from '../components/RecoverDeletedItems.js';
+import { canRecoverShared } from '../lib/recoverable.js';
 
 interface SharedMailbox {
   id:          string;
@@ -136,6 +139,8 @@ export function SharedMailboxPage() {
   const [newFolderName, setNewFolderName] = useState('');
   const [renamingId,    setRenamingId]    = useState<string | null>(null);
   const [renameValue,   setRenameValue]   = useState('');
+  // 9.1: Recover deleted items of this shared mailbox (FULL_ACCESS)
+  const [recoverOpen,   setRecoverOpen]   = useState(false);
 
   const invalidateFolders = () => qc.invalidateQueries({ queryKey: ['shared-mailbox-folders', id] });
 
@@ -248,6 +253,7 @@ export function SharedMailboxPage() {
   }
 
   const isReadOnly = !mailbox.permissions.includes('FULL_ACCESS');
+  const mayRecover = canRecoverShared(mailbox.permissions);
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -271,6 +277,14 @@ export function SharedMailboxPage() {
           <ArrowLeft size={12} /> Zu meinem Postfach
         </button>
       </div>
+
+      {recoverOpen && (
+        <RecoverDeletedItemsDialog
+          target={{ kind: 'shared', id: mailbox.id }}
+          subtitle={mailbox.displayName ? `${mailbox.displayName} <${mailbox.email}>` : mailbox.email}
+          onClose={() => setRecoverOpen(false)}
+        />
+      )}
 
       {/* ── 3-column layout (folder / messages / reader) ──────────────────── */}
       <div className="flex-1 flex min-h-0">
@@ -374,6 +388,14 @@ export function SharedMailboxPage() {
                               </span>
                             )}
                           </button>
+                          {/* 9.1: Trash → Recover deleted items (full access only) */}
+                          {mayRecover && f.name === 'Trash' && (
+                            <button aria-label={t('recover_title')} type="button"
+                              onClick={() => setRecoverOpen(true)}
+                              title={t('recover_title')}
+                              className="p-1 text-gray-400 hover:text-accent rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shrink-0"
+                            ><RotateCcw size={11} /></button>
+                          )}
                           {/* Rename/delete buttons (custom folders + full access only) */}
                           {!isReadOnly && !protectedFolder && (
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
@@ -400,6 +422,18 @@ export function SharedMailboxPage() {
               </ul>
             )}
           </nav>
+
+          {/* 9.1: Recover deleted items + quota of THIS shared mailbox */}
+          {mayRecover && (
+            <div className="px-3 py-2 border-t border-gray-100 shrink-0">
+              <button type="button" onClick={() => setRecoverOpen(true)}
+                className="w-full flex items-center gap-1.5 text-xs text-gray-600 hover:text-accent rounded py-1"
+              >
+                <RotateCcw size={12} /> {t('recover_title')}
+              </button>
+            </div>
+          )}
+          <QuotaIndicator sharedMailboxId={mailbox.id} />
         </aside>
 
         {/* ── Message list ────────────────────────────────────────────────────── */}
