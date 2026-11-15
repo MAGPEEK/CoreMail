@@ -34,3 +34,20 @@ test('set numeric variables are coerced; unset ones use the default; garbage is 
   assert.equal(r.data.PORT, 3000);
   assert.equal(parseEnvConfig({ ...base, MINIO_PORT: 'abc' }).success, false);
 });
+
+test('placeholder secrets (old Compose fallbacks) are detected', async () => {
+  const { placeholderSecrets } = await import('./index.js');
+  assert.deepEqual(placeholderSecrets({ JWT_SECRET: 'CHANGE-ME-openssl-rand-hex-32', PEPPER: 'a'.repeat(64) }), ['JWT_SECRET']);
+  assert.deepEqual(placeholderSecrets({ JWT_SECRET: 'x', PEPPER: 'change-me-pepper', BACKUP_ENCRYPTION_KEY: 'CHANGE-ME' }), ['PEPPER', 'BACKUP_ENCRYPTION_KEY']);
+  assert.deepEqual(placeholderSecrets({ JWT_SECRET: 'b'.repeat(64), PEPPER: 'c'.repeat(64) }), []);
+});
+
+test('no well-known MinIO default credentials (minioadmin) in the core config', () => {
+  const r = parseEnvConfig(base);
+  assert.ok(r.success);
+  assert.equal(r.data.MINIO_ACCESS_KEY, undefined);
+  assert.equal(r.data.MINIO_SECRET_KEY, undefined);
+  const set = parseEnvConfig({ ...base, MINIO_ACCESS_KEY: 'u', MINIO_SECRET_KEY: 'p' });
+  assert.ok(set.success);
+  assert.equal(set.data.MINIO_SECRET_KEY, 'p');
+});

@@ -279,9 +279,18 @@ describe('expiry cleaner', () => {
 
 // ── Configuration ────────────────────────────────────────────────────────────
 describe('configuration', () => {
+  const CREDS = { MINIO_ACCESS_KEY: 'ak', MINIO_SECRET_KEY: 'sk' };
+
+  test('minio/s3 without credentials fails closed (no minioadmin fallback)', () => {
+    assert.throws(() => parseObjectStorageConfig({}), /needs MINIO_ACCESS_KEY and MINIO_SECRET_KEY/);
+    assert.throws(() => parseObjectStorageConfig({ OBJECT_STORAGE: 's3', MINIO_ACCESS_KEY: 'ak' }), ObjectStorageConfigError);
+    assert.throws(() => parseObjectStorageConfig({ MINIO_ACCESS_KEY: ' ', MINIO_SECRET_KEY: 'sk' }), ObjectStorageConfigError);
+    assert.equal(parseObjectStorageConfig({ OBJECT_STORAGE: 'filesystem' }).driver, 'filesystem', 'filesystem needs no S3 credentials');
+  });
+
   test('unset OBJECT_STORAGE keeps the pre-7.1 MinIO behaviour', () => {
-    const cfg = parseObjectStorageConfig({});
-    assert.deepEqual(cfg, { driver: 'minio', endPoint: 'minio', port: 9000, useSSL: false, accessKey: 'minioadmin', secretKey: 'minioadmin', bucket: 'coremail-attachments' });
+    const cfg = parseObjectStorageConfig({ ...CREDS });
+    assert.deepEqual(cfg, { driver: 'minio', endPoint: 'minio', port: 9000, useSSL: false, accessKey: 'ak', secretKey: 'sk', bucket: 'coremail-attachments' });
     const legacy = parseObjectStorageConfig({ MINIO_ENDPOINT: 'minio', MINIO_PORT: '9000', MINIO_ACCESS_KEY: 'u', MINIO_SECRET_KEY: 'p', MINIO_BUCKET: 'mail-attachments' });
     assert.equal((legacy as S3StorageConfig).bucket, 'coremail-attachments', 'MINIO_BUCKET (compose leftover) is not the bucket');
     assert.equal(describeConfig(legacy), 'http://minio:9000/coremail-attachments');
@@ -309,11 +318,11 @@ describe('configuration', () => {
     assert.equal(cfg.pathStyle, false);
     assert.equal(describeConfig(cfg), 'https://s3.eu-central-003.backblazeb2.com/cm-mail');
 
-    const url = parseObjectStorageConfig({ OBJECT_STORAGE: 's3', MINIO_ENDPOINT: 'https://acc.r2.cloudflarestorage.com', MINIO_REGION: 'auto' }) as S3StorageConfig;
+    const url = parseObjectStorageConfig({ OBJECT_STORAGE: 's3', MINIO_ENDPOINT: 'https://acc.r2.cloudflarestorage.com', MINIO_REGION: 'auto', ...CREDS }) as S3StorageConfig;
     assert.equal(url.endPoint, 'acc.r2.cloudflarestorage.com');
     assert.equal(url.useSSL, true);
     assert.equal(url.port, 443);
-    const urlPort = parseObjectStorageConfig({ MINIO_ENDPOINT: 'http://10.0.0.5:9100' }) as S3StorageConfig;
+    const urlPort = parseObjectStorageConfig({ MINIO_ENDPOINT: 'http://10.0.0.5:9100', ...CREDS }) as S3StorageConfig;
     assert.equal(urlPort.port, 9100);
     assert.equal(urlPort.useSSL, false);
 
@@ -327,7 +336,7 @@ describe('configuration', () => {
   });
 
   test('client options carry TLS, region, path style and a custom CA agent', () => {
-    const cfg = parseObjectStorageConfig({ MINIO_ENDPOINT: 'minio.internal', MINIO_USE_SSL: 'true', MINIO_PORT: '9443', MINIO_CA_FILE: '/etc/ssl/private-ca.pem', MINIO_REGION: 'us-east-1', MINIO_PATH_STYLE: 'true' }) as S3StorageConfig;
+    const cfg = parseObjectStorageConfig({ MINIO_ENDPOINT: 'minio.internal', MINIO_USE_SSL: 'true', MINIO_PORT: '9443', MINIO_CA_FILE: '/etc/ssl/private-ca.pem', MINIO_REGION: 'us-east-1', MINIO_PATH_STYLE: 'true', ...CREDS }) as S3StorageConfig;
     let readPath = '';
     const opts = minioClientOptions(cfg, (p) => { readPath = p; return Buffer.from('-----BEGIN CERTIFICATE-----\n'); });
     assert.equal(readPath, '/etc/ssl/private-ca.pem');
@@ -336,7 +345,7 @@ describe('configuration', () => {
     assert.equal(opts.region, 'us-east-1');
     assert.equal(opts.pathStyle, true);
     assert.ok(opts.transportAgent, 'https agent with the CA');
-    const plain = minioClientOptions(parseObjectStorageConfig({}) as S3StorageConfig);
+    const plain = minioClientOptions(parseObjectStorageConfig({ ...CREDS }) as S3StorageConfig);
     assert.equal(plain.useSSL, false);
     assert.equal(plain.transportAgent, undefined);
     assert.equal('region' in plain, false, 'region auto-detected when unset');
@@ -344,7 +353,7 @@ describe('configuration', () => {
 
   test('createObjectStore picks the driver', () => {
     assert.ok(createObjectStore({ driver: 'filesystem', root: tempRoot() }) instanceof FilesystemObjectStore);
-    const s3 = createObjectStore(parseObjectStorageConfig({ OBJECT_STORAGE: 's3' }));
+    const s3 = createObjectStore(parseObjectStorageConfig({ OBJECT_STORAGE: 's3', ...CREDS }));
     assert.ok(s3 instanceof S3ObjectStore);
     assert.equal(s3.driver, 's3');
   });

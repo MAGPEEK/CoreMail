@@ -13,7 +13,7 @@
  *   MINIO_CA_FILE             PEM bundle of a private CA for the S3 endpoint (needs SSL)
  *   MINIO_PATH_STYLE          true = https://host/bucket/key, false = https://bucket.host/key
  *                             (default: the client decides — path style except for AWS)
- *   MINIO_ACCESS_KEY / MINIO_SECRET_KEY, MINIO_BUCKET_ATTACHMENTS (default coremail-attachments)
+ *   MINIO_ACCESS_KEY / MINIO_SECRET_KEY (required, no default), MINIO_BUCKET_ATTACHMENTS (default coremail-attachments)
  *
  * `minio` and `s3` differ only in defaults: `minio` creates the bucket in
  * eu-central-1 (as before 7.1); `s3` expects an existing bucket and creates it
@@ -114,14 +114,25 @@ export function parseObjectStorageConfig(env: Env = process.env, driver: ObjectS
   const bucket = (env['MINIO_BUCKET_ATTACHMENTS'] ?? '').trim() || DEFAULT_BUCKET;
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new ObjectStorageConfigError(`MINIO_BUCKET_ATTACHMENTS is not a valid bucket name: ${bucket}`);
 
+  // Fail closed — no silent fallback to the well-known minioadmin/minioadmin.
+  const accessKey = (env['MINIO_ACCESS_KEY'] ?? '').trim();
+  const secretKey = env['MINIO_SECRET_KEY'] ?? '';
+  // (Test seam: a fake client injected via globalThis.__minioClient needs no credentials.)
+  if ((!accessKey || !secretKey.trim()) && !globalThis.__minioClient) {
+    throw new ObjectStorageConfigError(
+      `OBJECT_STORAGE=${driver} needs MINIO_ACCESS_KEY and MINIO_SECRET_KEY (no default credentials). `
+      + 'Bundled MinIO: MINIO_ACCESS_KEY=$MINIO_ROOT_USER, MINIO_SECRET_KEY=$MINIO_ROOT_PASSWORD (docker-compose.yml sets both).',
+    );
+  }
+
   return {
     driver,
     endPoint,
     port,
     useSSL: ssl,
     ...(region ? { region } : {}),
-    accessKey: env['MINIO_ACCESS_KEY'] ?? 'minioadmin',
-    secretKey: env['MINIO_SECRET_KEY'] ?? 'minioadmin',
+    accessKey,
+    secretKey,
     bucket,
     ...(pathStyle !== undefined ? { pathStyle } : {}),
     ...(caFile ? { caFile } : {}),

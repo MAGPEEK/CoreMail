@@ -225,9 +225,9 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
           const outPath = join(tmpdir(), `coremail-backup-${user.id}-${Date.now()}.zip`);
           const { fileCount } = await exportZip(user.id, null, outPath);
           const s3Key = `full-backup/${dateStr}/${user.email.replace('@', '_at_')}.zip`;
-          await uploadToS3(outPath, s3Key, 'application/zip');
           const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
-          await unlink(outPath).catch(() => undefined);
+          // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
+          const stored = await uploadToS3(outPath, s3Key, 'application/zip').finally(() => unlink(outPath).catch(() => undefined));
 
           await prisma.backupJob.create({
             data: {
@@ -235,7 +235,7 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
               scope: 'user',
               format: 'zip',
               status: 'COMPLETED',
-              downloadUrl: s3Key,
+              downloadUrl: stored.key,
               startedAt,
               completedAt: new Date(),
               durationMs: Date.now() - startedAt.getTime(),
@@ -339,10 +339,10 @@ export async function runSingleMailboxBackup(opts: {
 
       const s3Key = `mailbox/${opts.userId}/${Date.now()}.${opts.format === 'mbox' ? 'mbox' : 'zip'}`;
       const contentType = opts.format === 'mbox' ? 'application/mbox' : 'application/zip';
-      await uploadToS3(outPath, s3Key, contentType);
       const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
-      await unlink(outPath).catch(() => undefined);
-      const downloadUrl = await getSignedDownloadUrl(s3Key);
+      // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
+      const stored = await uploadToS3(outPath, s3Key, contentType).finally(() => unlink(outPath).catch(() => undefined));
+      const downloadUrl = await getSignedDownloadUrl(stored.key);
 
       const finishedAt = new Date();
       await prisma.backupJob.update({

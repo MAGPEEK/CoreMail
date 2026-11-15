@@ -48,7 +48,11 @@ spec:
       {{- if $a.schemaSync.enabled }}
       initContainers:
         # Equivalent of entrypoint-app.sh steps 1+2: wait for PostgreSQL, then
-        # apply the Prisma schema (db push --accept-data-loss), with retries.
+        # apply the Prisma schema with the image's coremail-schema-sync (retries;
+        # destructive changes only with schemaSync.allowDataLoss, after a pg_dump).
+        {{- if and $a.schemaSync.allowDataLoss (not $a.schemaSync.backupClaim) (not $a.schemaSync.skipBackup) }}
+        {{- fail "app.schemaSync.allowDataLoss needs app.schemaSync.backupClaim (PVC for the pre-migration dump) or app.schemaSync.skipBackup=true" }}
+        {{- end }}
         - name: schema-sync
           image: {{ include "coremail.image" (dict "image" $a.image "default" .Chart.AppVersion) }}
           imagePullPolicy: {{ $a.image.pullPolicy }}
@@ -58,18 +62,14 @@ spec:
               set -eu
               echo "[schema-sync] waiting for PostgreSQL at ${DB_HOST}:${DB_PORT} ..."
               until nc -z "${DB_HOST}" "${DB_PORT}" 2>/dev/null; do sleep 2; done
-              cd /app/packages/storage
-              n=0
-              until node node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss; do
-                n=$((n + 1))
-                if [ "$n" -ge "${MAX_ATTEMPTS}" ]; then
-                  echo "[schema-sync] schema push failed after ${n} attempts"; exit 1
-                fi
-                echo "[schema-sync] not ready (attempt ${n}/${MAX_ATTEMPTS}) — retrying in 5 s"
-                sleep 5
-              done
-              echo "[schema-sync] schema applied"
+              exec /usr/local/bin/coremail-schema-sync
           env:
+            - name: COREMAIL_ALLOW_SCHEMA_DATA_LOSS
+              value: {{ ternary "true" "false" (and $a.schemaSync.allowDataLoss true) | quote }}
+            - name: COREMAIL_SCHEMA_BACKUP
+              value: {{ ternary "skip" "required" (and $a.schemaSync.skipBackup true) | quote }}
+            - name: COREMAIL_SCHEMA_BACKUP_DIR
+              value: /backups
             - name: HOME
               value: /tmp
             - name: DB_HOST
@@ -94,6 +94,9 @@ spec:
           {{- end }}
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- if $a.schemaSync.backupClaim }}
+            - { name: schema-backups, mountPath: /backups }
+            {{- end }}
       {{- end }}
       containers:
         - name: coremail
@@ -199,6 +202,11 @@ spec:
         - name: home
           emptyDir:
             sizeLimit: 16Mi
+        {{- if and $a.schemaSync.enabled $a.schemaSync.backupClaim }}
+        - name: schema-backups
+          persistentVolumeClaim:
+            claimName: {{ $a.schemaSync.backupClaim }}
+        {{- end }}
         {{- if eq $os.driver "filesystem" }}
         - name: objects
           persistentVolumeClaim:

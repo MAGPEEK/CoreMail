@@ -171,12 +171,17 @@ S3 target unless `minio.external` is configured.
   capability is missing from the bounding set, exec of `node` fails with
   "Operation not permitted". supervisord runs directly as uid 1000 (no setuid
   needed, no `SETUID`/`SETGID` capabilities).
-- **No image entrypoint:** `entrypoint-app.sh` calls `pnpm` through corepack,
-  which needs a writable `$HOME` and registry access when not root. The chart runs
-  the same two steps (wait for PostgreSQL, `prisma db push --accept-data-loss`
-  with retries) in the `schema-sync` init container with the Prisma CLI
-  directly, then starts `tini → supervisord`. Keep this in mind if
-  `entrypoint-app.sh` gains new steps.
+- **No image entrypoint:** the entrypoint also prepares directories as root.
+  The chart runs the same schema step (wait for PostgreSQL, then the image's
+  `coremail-schema-sync`) in the `schema-sync` init container, then starts
+  `tini → supervisord`. Keep this in mind if `entrypoint-app.sh` gains new steps.
+- **Destructive schema changes fail closed:** `coremail-schema-sync` runs
+  `prisma db push` without `--accept-data-loss`. If an upgrade would delete data
+  the init container fails and nothing is changed. After a backup, set
+  `app.schemaSync.allowDataLoss=true` plus either `app.schemaSync.backupClaim`
+  (an existing PVC; a `pre-migrate-<timestamp>.sql.gz` pg_dump is written there
+  first) or `app.schemaSync.skipBackup=true`, roll out once, then unset it again.
+  Needs an image that contains `coremail-schema-sync` (newer than 8.0.0).
 - **ClamAV** is started with the same steps as the image's `/init`, minus the
   `chown` of the database volume (fails as non-root on a PVC).
 - **Redis requires a password**; it is passed on stdin (not in argv), probes use
@@ -274,7 +279,8 @@ auth and a 4-node MinIO. Migrate like this:
    existing CNPG cluster: host `<name>-rw`, database/user from the old values,
    `postgresql.enabled=false`), mirror the buckets back into MinIO (`minio.bucket`,
    `minio.backupBucket`), then restart the app pod — the schema sync upgrades the
-   schema (destructive changes are applied with `--accept-data-loss`, like in Docker).
+   schema (a change that would delete data stops the rollout until
+   `app.schemaSync.allowDataLoss` is set — see "Destructive schema changes" above).
 5. Read the CoreMail 7.0.0 upgrade notes in `CHANGELOG.md` (app passwords for MFA
    users, STARTTLS-only auth, `TRUST_PROXY`, setup token, EWS removal).
 
