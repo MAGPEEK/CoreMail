@@ -871,6 +871,10 @@ export interface SendAttachment {
   buffer?: Buffer | undefined;
   /** … or an existing object-store key (draft attachment). Copied to the outbound key, never moved. */
   storagePath?: string | undefined;
+  /** 8.1: Content-ID without angle brackets (inline image referenced as cid: in the HTML). */
+  cid?: string | undefined;
+  /** 8.1: Content-Disposition inline. */
+  inline?: boolean | undefined;
 }
 
 export interface EnqueuedSend {
@@ -1054,6 +1058,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           minioPath,
           contentType: f.contentType,
           size:        f.size,
+          // 8.1: inline images (worker: cid + Content-Disposition inline)
+          ...(f.cid ? { cid: f.cid.replace(/^<|>$/g, '') } : {}),
+          ...(f.inline ? { inline: true } : {}),
         };
       })
     );
@@ -1131,8 +1138,13 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
       try {
         await input.afterEnqueue({ userId: user.id, jobId, queueJobId, messageId: msgId, sendAt });
       } catch (e) {
-        // The mail is queued; only the follow-up (draft → Sent) failed.
-        log.warn({ err: e, jobId }, 'Post-enqueue step failed');
+        // 8.1: the mail IS queued, but its state could not be recorded. Not a
+        // 200 (the client must know), and `queued: true` tells it not to resend.
+        log.error({ err: e, jobId }, 'Post-enqueue step failed — mail queued, state not saved');
+        return fail(500, {
+          error: 'Die Nachricht wurde gesendet, ihr Status konnte aber nicht gespeichert werden',
+          code: 'SEND_STATE_UNSAVED', queued: true, jobId,
+        });
       }
     } else {
     // ── Save copy to Sent Items ──────────────────────────────────────────────
@@ -1152,6 +1164,8 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           filename:    f.filename,
           content:     f.buffer ?? await downloadBuffer(f.storagePath ?? ''),
           contentType: f.contentType,
+          ...(f.cid ? { cid: f.cid.replace(/^<|>$/g, '') } : {}),
+          ...(f.inline ? { contentDisposition: 'inline' as const } : {}),
         })));
         const fromAddress: SendMailOptions['from'] = displayName
           ? { name: displayName, address: user.email }
