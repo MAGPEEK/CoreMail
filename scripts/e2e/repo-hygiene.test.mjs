@@ -48,6 +48,23 @@ test('v7.1 storage: unchanged .env keeps MinIO; new .env uses the filesystem vol
   assert.match(read('scripts/setup.sh'), /OBJECT_STORAGE=filesystem/);
 });
 
+test('TypeScript sources imported by the e2e steps use erasable syntax only (Node strip-only mode)', async () => {
+  // e.g. a TS parameter property in activesync/src/wbxml.ts aborted the eas steps
+  const { stripTypeScriptTypes } = await import('node:module');
+  const { readdirSync } = await import('node:fs');
+  const stepsDir = join(root, 'scripts', 'e2e', 'steps');
+  const files = new Set();
+  for (const f of readdirSync(stepsDir)) {
+    for (const m of read(`scripts/e2e/steps/${f}`).matchAll(/from '(\.\.\/[^']+\.ts)'/g)) {
+      files.add(join(stepsDir, m[1]));
+    }
+  }
+  assert.ok(files.size > 0, 'the eas steps import packages/activesync/src/wbxml.ts');
+  for (const f of files) {
+    assert.doesNotThrow(() => stripTypeScriptTypes(readFileSync(f, 'utf8'), { mode: 'strip' }), f);
+  }
+});
+
 test('rspamd local.d/actions.conf has no nested actions { } block (rspamd 4 refuses it)', () => {
   const conf = read('infra/docker/rspamd/local.d/actions.conf')
     .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');

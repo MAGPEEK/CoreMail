@@ -296,7 +296,9 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     return s;
   }
   /** String / opaque content: utf8 text + raw octets. */
-  class Content { constructor(readonly raw: Buffer) {} }
+  // No TS parameter property: the e2e runner imports this file with Node's
+  // strip-only TypeScript support (erasable syntax only).
+  class Content { readonly raw: Buffer; constructor(raw: Buffer) { this.raw = raw; } }
 
   function readOpaque(): Buffer {
     const length = readMBUInt32();
