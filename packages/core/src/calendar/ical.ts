@@ -267,16 +267,96 @@ export function resolveTzid(tzid: string, root?: IcalComponent | null): string |
   return null;
 }
 
-/** Fixed STANDARD offset of a VTIMEZONE (last-resort approximation), in ms. */
-function vtimezoneStandardOffset(tzid: string, root?: IcalComponent | null): number | null {
-  if (!root) return null;
-  const vtz = root.components.find((c) => c.name === 'VTIMEZONE' && getProperty(c, 'TZID')?.value.trim() === tzid.trim());
-  const std = vtz?.components.find((c) => c.name === 'STANDARD') ?? vtz?.components[0];
-  const off = std ? getProperty(std, 'TZOFFSETTO')?.value.trim() : undefined;
-  const m = off ? /^([+-])(\d{2})(\d{2})(\d{2})?$/.exec(off) : null;
+function parseUtcOffset(v: string | undefined): number | null {
+  const m = v ? /^([+-])(\d{2})(\d{2})(\d{2})?$/.exec(v.trim()) : null;
   if (!m) return null;
   const sign = m[1] === '-' ? -1 : 1;
   return sign * ((Number(m[2]) * 60 + Number(m[3])) * 60 + Number(m[4] ?? '0')) * 1000;
+}
+
+const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+/**
+ * Onset (wall clock, "fake UTC" ms) of a VTIMEZONE STANDARD/DAYLIGHT rule in `year`:
+ * supports the yearly rules zones are written with — `FREQ=YEARLY;BYMONTH=m;BYDAY=±nDD`
+ * and `BYDAY=DD;BYMONTHDAY=d1,d2,…`. Null when the rule is not of that shape.
+ */
+function yearlyOnset(rrule: string, dtstartWall: number, year: number): number | null {
+  const parts = new Map(rrule.toUpperCase().split(';').map((kv) => kv.split('=') as [string, string]));
+  if (parts.get('FREQ') !== 'YEARLY') return null;
+  const month = Number(parts.get('BYMONTH') ?? NaN) - 1;
+  if (!(month >= 0 && month < 12)) return null;
+  const until = parts.get('UNTIL');
+  const untilDate = until ? parseDateString(until)?.date.getTime() ?? null : null;
+  const t = new Date(dtstartWall);
+  const timeOfDay = ((t.getUTCHours() * 60 + t.getUTCMinutes()) * 60 + t.getUTCSeconds()) * 1000;
+  const byday = /^([+-]?\d{1,2})?([A-Z]{2})$/.exec(parts.get('BYDAY') ?? '');
+  const wd = byday ? WEEKDAYS.indexOf(byday[2]!) : -1;
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  let day: number | null = null;
+  if (wd >= 0 && byday?.[1]) {
+    const n = Number(byday[1]);
+    if (n > 0) {
+      const first = new Date(Date.UTC(year, month, 1)).getUTCDay();
+      day = 1 + ((wd - first + 7) % 7) + (n - 1) * 7;
+    } else {
+      const last = new Date(Date.UTC(year, month, daysInMonth)).getUTCDay();
+      day = daysInMonth - ((last - wd + 7) % 7) + (n + 1) * 7;
+    }
+  } else if (wd >= 0 && parts.get('BYMONTHDAY')) {
+    const candidates = parts.get('BYMONTHDAY')!.split(',').map(Number).sort((a, b) => a - b);
+    day = candidates.find((d) => d >= 1 && d <= daysInMonth && new Date(Date.UTC(year, month, d)).getUTCDay() === wd) ?? null;
+  } else if (!parts.has('BYDAY') && parts.get('BYMONTHDAY')) {
+    day = Number(parts.get('BYMONTHDAY'));
+  }
+  if (day === null || day < 1 || day > daysInMonth) return null;
+  const onset = Date.UTC(year, month, day) + timeOfDay;
+  if (onset < dtstartWall) return null;
+  if (untilDate !== null && onset > untilDate + 86_400_000) return null;
+  return onset;
+}
+
+/**
+ * UTC offset (ms) a VTIMEZONE defines for the wall-clock time `wallMs`, evaluated
+ * from its STANDARD/DAYLIGHT sub-components (DTSTART, yearly RRULE, RDATE).
+ * Used for custom zones without an IANA id or X-LIC-LOCATION (RFC 5545 §3.6.5).
+ */
+export function vtimezoneOffsetAt(tzid: string, root: IcalComponent | null | undefined, wallMs: number): number | null {
+  if (!root) return null;
+  const vtz = root.components.find((c) => c.name === 'VTIMEZONE' && getProperty(c, 'TZID')?.value.trim() === tzid.trim());
+  if (!vtz) return null;
+  const year = new Date(wallMs).getUTCFullYear();
+  let best: { onset: number; offset: number } | null = null;
+  let earliest: { onset: number; offsetFrom: number } | null = null;
+  for (const sub of vtz.components) {
+    if (sub.name !== 'STANDARD' && sub.name !== 'DAYLIGHT') continue;
+    const to = parseUtcOffset(getProperty(sub, 'TZOFFSETTO')?.value);
+    const from = parseUtcOffset(getProperty(sub, 'TZOFFSETFROM')?.value);
+    // A sub-component without DTSTART (invalid, but seen in the wild) applies from the beginning of time
+    const dtstart = getProperty(sub, 'DTSTART')?.value;
+    const start = dtstart ? parseDateString(dtstart)?.date.getTime() : Number.NEGATIVE_INFINITY;
+    if (to === null || start === undefined) continue;
+    const onsets = [start];
+    const rrule = getProperty(sub, 'RRULE')?.value;
+    if (rrule && Number.isFinite(start)) {
+      for (const y of [year - 1, year]) {
+        const o = yearlyOnset(rrule, start, y);
+        if (o !== null) onsets.push(o);
+      }
+    }
+    for (const rd of getProperties(sub, 'RDATE')) {
+      for (const v of rd.value.split(',')) {
+        const d = parseDateString(v)?.date.getTime();
+        if (d !== undefined) onsets.push(d);
+      }
+    }
+    for (const onset of onsets) {
+      if (onset <= wallMs && (!best || onset > best.onset)) best = { onset, offset: to };
+      if (!earliest || onset < earliest.onset) earliest = { onset, offsetFrom: from ?? to };
+    }
+  }
+  if (best) return best.offset;
+  return earliest ? earliest.offsetFrom : null;
 }
 
 // ─── Date values ─────────────────────────────────────────────────────────────
@@ -309,8 +389,8 @@ export function parseDateString(
   if (tzid) {
     const iana = resolveTzid(tzid, root);
     if (iana) return { date: new Date(wallClockToUtcMs(wall, iana)), dateOnly: false, tzid: iana };
-    const fixed = vtimezoneStandardOffset(tzid, root);
-    if (fixed !== null) return { date: new Date(wall - fixed), dateOnly: false, tzid: null };
+    const offset = vtimezoneOffsetAt(tzid, root, wall);
+    if (offset !== null) return { date: new Date(wall - offset), dateOnly: false, tzid: null };
   }
   // Floating time (or unknown zone): interpreted as UTC — deterministic on every server
   return { date: new Date(wall), dateOnly: false, tzid: null };
@@ -570,11 +650,18 @@ export function buildVCalendar(opts: VEventFields & {
   summary: string;
   dtstamp?: Date;
   method?: string;
+  /** RECURRENCE-ID of a single instance (iTIP replies for one occurrence, RFC 5546 §3.2.3). */
+  recurrenceId?: { date: Date; dateOnly: boolean };
 }): string {
   const ev: IcalComponent = { name: 'VEVENT', properties: [], components: [] };
   const now = opts.dtstamp ?? new Date();
   ev.properties.push({ name: 'UID', params: {}, value: opts.uid.replace(/[\r\n]/g, '') });
   ev.properties.push({ name: 'DTSTAMP', params: {}, value: formatUtcDateTime(now) });
+  if (opts.recurrenceId) {
+    ev.properties.push(opts.recurrenceId.dateOnly
+      ? { name: 'RECURRENCE-ID', params: { VALUE: 'DATE' }, value: formatDateOnly(opts.recurrenceId.date) }
+      : { name: 'RECURRENCE-ID', params: {}, value: formatUtcDateTime(opts.recurrenceId.date) });
+  }
   ev.properties.push(...dateProps(opts.start, opts.end, opts.allDay ?? false, null));
   ev.properties.push(textProp('SUMMARY', opts.summary));
   if (opts.description) ev.properties.push(textProp('DESCRIPTION', opts.description));

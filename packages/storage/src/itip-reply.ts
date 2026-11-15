@@ -34,7 +34,8 @@ export function findITipRequest(raw: Buffer | string): ITipRequest | null {
     const vcal = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i.exec(part)?.[0];
     if (!vcal) continue;
     const parsed = parseCalendarObject(vcal);
-    if (!parsed?.main.uid) continue;
+    // RFC 5546 §3.2.2: a REQUEST names its ORGANIZER — the REPLY is addressed to it
+    if (!parsed?.main.uid || !parsed.main.organizer) continue;
     return { vcal, event: parsed.main as ParsedVEvent & { uid: string } };
   }
   return null;
@@ -86,6 +87,8 @@ export function buildITipReplyIcs(req: ITipRequest, responder: { email: string; 
     method: 'REPLY',
     dtstamp: now,
     uid: e.uid,
+    // RFC 5546 §3.2.3: the answer to one instance carries its RECURRENCE-ID
+    ...(e.recurrenceId ? { recurrenceId: { date: e.recurrenceId.date, dateOnly: e.recurrenceId.dateOnly } } : {}),
     summary: e.summary,
     start: e.start,
     end: e.end,

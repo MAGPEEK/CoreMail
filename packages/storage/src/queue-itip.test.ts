@@ -95,6 +95,88 @@ test('processITipInbound scopes the event lookup to the recipient and rejects fo
   assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: null }), false);
   assert.equal(queries.length, 0);
   assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
-  assert.deepEqual((queries[0] as { where: unknown }).where, { uid: { equals: 'evt-1@example.org', mode: 'insensitive' }, calendar: { userId: 'u1' } });
+  assert.deepEqual((queries[0] as { where: unknown }).where, { uid: 'evt-1@example.org', calendar: { userId: 'u1' } });
   assert.equal(((updates[0] as { data: { attendees: Array<{ partstat: string }> } }).data.attendees[0]!).partstat, 'ACCEPTED');
+});
+
+// ── v7.1.0: REPLY → icalData, RECURRENCE-ID, DTSTAMP ordering, organizer check ──
+
+const STORED = [
+  'BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT', 'UID:evt-1@example.org', 'SEQUENCE:2',
+  'DTSTART:20261102T090000Z', 'DTEND:20261102T100000Z', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:Weekly',
+  'ORGANIZER:mailto:alice@local.example',
+  'ATTENDEE;CN="Doe: Bob";PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:bob@partner.example',
+  'BEGIN:VALARM', 'TRIGGER:-PT5M', 'ACTION:DISPLAY', 'END:VALARM',
+  'END:VEVENT', 'END:VCALENDAR', '',
+].join('\r\n');
+
+function replyMail(extra: string[], partstat = 'ACCEPTED', attendeeParams = ''): Buffer {
+  const vcal = ['BEGIN:VCALENDAR', 'METHOD:REPLY', 'BEGIN:VEVENT', 'UID:evt-1@example.org', 'SEQUENCE:2', ...extra,
+    `ATTENDEE${attendeeParams};PARTSTAT=${partstat}:mailto:bob@partner.example`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  return mail('Bob <bob@partner.example>', `Content-Type: text/calendar; method=REPLY\r\n\r\n${vcal}`);
+}
+
+function fakeEvent(over: Record<string, unknown> = {}) {
+  const row: Record<string, unknown> = {
+    id: 'e1', sequence: 2, organizer: 'alice@local.example', icalData: STORED,
+    attendees: [{ email: 'bob@partner.example', partstat: 'NEEDS-ACTION' }], ...over,
+  };
+  const updates: Array<Record<string, unknown>> = [];
+  fakePrisma['calendarEvent'] = {
+    findFirst: async () => row,
+    update: async (u: { data: Record<string, unknown> }) => { updates.push(u.data); Object.assign(row, u.data); return row; },
+  };
+  fakePrisma['user'] = { findUnique: async () => ({ email: 'alice@local.example' }) };
+  fakePrisma['emailAlias'] = { findMany: async () => [{ address: 'team@local.example' }] };
+  return { row, updates };
+}
+
+test('REPLY parser handles quoted parameter values containing ":" (CN="Doe: J")', () => {
+  const r = extractITipReply(replyMail(['DTSTAMP:20261101T000000Z'], 'TENTATIVE', ';CN="Doe: Bob";DELEGATED-FROM="mailto:x@partner.example"'));
+  assert.equal(r?.attendeeEmail, 'bob@partner.example');
+  assert.equal(r?.partstat, 'TENTATIVE');
+  assert.equal(r?.dtstamp?.toISOString(), '2026-11-01T00:00:00.000Z');
+});
+
+test('REPLY updates the PARTSTAT inside icalData (what CalDAV serves), keeping the rest', async () => {
+  const { row } = fakeEvent();
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z']), { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  const ical = String(row['icalData']).replace(/\r\n /g, '');
+  assert.match(ical, /^ATTENDEE;CN="Doe: Bob";PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@partner.example$/m);
+  assert.match(ical, /BEGIN:VALARM/);
+  assert.match(ical, /RRULE:FREQ=WEEKLY;COUNT=4/);
+  assert.equal((row['attendees'] as Array<{ partstat: string }>)[0]!.partstat, 'ACCEPTED');
+});
+
+test('REPLY with RECURRENCE-ID only touches that instance (override created, series unchanged)', async () => {
+  const { row } = fakeEvent();
+  assert.equal(await processITipInbound(replyMail(['RECURRENCE-ID:20261109T090000Z', 'DTSTAMP:20261101T000000Z'], 'DECLINED'),
+    { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  const ical = String(row['icalData']).replace(/\r\n /g, '');
+  const blocks = ical.split('BEGIN:VEVENT').slice(1);
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0]!, /PARTSTAT=NEEDS-ACTION/);                     // master unchanged
+  assert.match(blocks[1]!, /RECURRENCE-ID:20261109T090000Z/);
+  assert.match(blocks[1]!, /DTSTART:20261109T090000Z/);
+  assert.match(blocks[1]!, /PARTSTAT=DECLINED/);
+  assert.doesNotMatch(blocks[1]!, /RRULE/);
+  assert.equal((row['attendees'] as Array<{ partstat: string }>)[0]!.partstat, 'NEEDS-ACTION');
+});
+
+test('REPLY with the same SEQUENCE but an older DTSTAMP than the last applied one is ignored', async () => {
+  const { row, updates } = fakeEvent();
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261105T000000Z'], 'DECLINED'), ctx), true);
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z'], 'ACCEPTED'), ctx), false);
+  assert.equal(updates.length, 1);
+  assert.equal((row['attendees'] as Array<{ partstat: string }>)[0]!.partstat, 'DECLINED');
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261106T000000Z'], 'ACCEPTED'), ctx), true);
+});
+
+test('REPLY is only applied to the organizer copy (recipient address or alias = ORGANIZER)', async () => {
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  fakeEvent({ organizer: 'carol@elsewhere.example' });
+  assert.equal(await processITipInbound(replyMail([]), ctx), false);
+  fakeEvent({ organizer: 'TEAM@local.example' });
+  assert.equal(await processITipInbound(replyMail([]), ctx), true);
 });

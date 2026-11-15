@@ -37,12 +37,18 @@ let seq = 0;
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   calendar: {
-    findUnique: async (a: { where: Row }) => (a.where['id'] === 'cal1' ? { id: 'cal1', userId: 'alice' } : null),
+    findUnique: async (a: { where: Row }) => (a.where['id'] === 'cal1' ? { id: 'cal1', userId: 'alice' }
+      : a.where['id'] === 'calBob' ? { id: 'calBob', userId: 'bob' } : null),
     findMany: async (a: { where: Row }) => (a.where['userId'] === 'alice'
       ? [{ id: 'cal1', name: 'Work', color: '#000', icon: null, sortOrder: 0, isDefault: true, userId: 'alice' }]
       : []),
   },
-  calendarShare: { findUnique: async () => null, findMany: async () => [] },
+  // alice holds a WRITE share on bob's calendar "calBob"
+  calendarShare: {
+    findUnique: async (a: { where: { calendarId_granteeId?: { calendarId: string; granteeId: string } } }) =>
+      (a.where.calendarId_granteeId?.calendarId === 'calBob' && a.where.calendarId_granteeId.granteeId === 'alice' ? { permission: 'WRITE' } : null),
+    findMany: async () => [],
+  },
   user: { findUnique: async () => ({ email: 'alice@example.com', displayName: 'Alice' }) },
   serverSettings: { findUnique: async () => ({ publicHostname: 'mail.example.com' }) },
   calendarEvent: {
@@ -67,7 +73,7 @@ let seq = 0;
 const express = (await import('express')).default;
 const { signAccessToken } = await import('@coremail/core');
 const { calendarRouter } = await import('./calendar.js');
-const { parseCalendarObject, parseIcal, findMainVEvent, getProperty } = await import('@coremail/core/calendar');
+const { parseCalendarObject, parseIcal, findMainVEvent, getProperty, buildVCalendar } = await import('@coremail/core/calendar');
 
 const token = signAccessToken({
   sub: 'alice', email: 'alice@example.com', role: 'USER',
@@ -193,4 +199,25 @@ test('PUT moving a TZID series keeps its zone, RRULE and bumps SEQUENCE', async 
   assert.deepEqual(getProperty(ev2, 'DTSTART'), { name: 'DTSTART', params: { TZID: 'Europe/Berlin' }, value: '20260105T110000' });
   assert.equal(getProperty(ev2, 'RRULE')?.value, 'FREQ=WEEKLY;BYDAY=MO');
   assert.equal(stored['sequence'], 2, 'date change bumps SEQUENCE');
+});
+
+test('WRITE grantee cannot PUT/DELETE a PRIVATE or CONFIDENTIAL event of the owner (masked copy would overwrite it)', async () => {
+  const ics = buildVCalendar({ uid: 'bob-priv', summary: 'Doctor', description: 'diagnosis', start: new Date('2026-07-01T10:00:00Z'), end: new Date('2026-07-01T11:00:00Z'), classification: 'PRIVATE' });
+  const base = { calendarId: 'calBob', description: 'diagnosis', location: 'Clinic', dtStart: new Date('2026-07-01T10:00:00Z'), dtEnd: new Date('2026-07-01T11:00:00Z'),
+    allDay: false, recurring: false, rrule: null, status: 'CONFIRMED', sequence: 0, attendees: [], organizer: null, updatedAt: new Date() };
+  events.push({ ...base, id: 'bobPriv', uid: 'bob-priv', summary: 'Doctor', classification: 'PRIVATE', icalData: ics });
+  events.push({ ...base, id: 'bobConf', uid: 'bob-conf', summary: 'Secret', classification: 'CONFIDENTIAL', icalData: ics.replace('PRIVATE', 'CONFIDENTIAL') });
+  events.push({ ...base, id: 'bobPub', uid: 'bob-pub', summary: 'Standup', classification: 'PUBLIC', icalData: ics.replace('CLASS:PRIVATE\r\n', '') });
+
+  for (const id of ['bobPriv', 'bobConf']) {
+    const put = await call('PUT', `/events/${id}`, { summary: 'Beschäftigt', description: '', location: '' });
+    assert.equal(put.status, 403, id);
+    assert.equal((await call('DELETE', `/events/${id}`)).status, 403, id);
+  }
+  const row = events.find((e) => e['id'] === 'bobPriv')!;
+  assert.equal(row['summary'], 'Doctor');
+  assert.match(String(row['icalData']), /DESCRIPTION:diagnosis/);
+
+  const pub = await call('PUT', '/events/bobPub', { summary: 'Standup moved' });
+  assert.equal(pub.status, 200);
 });

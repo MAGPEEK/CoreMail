@@ -73,6 +73,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `(CONDSTORE)`, FETCH MODSEQ/CHANGEDSINCE, SEARCH MODSEQ, STORE UNCHANGEDSINCE and STATUS
   HIGHESTMODSEQ enable CONDSTORE (RFC 7162 §3.1).
 - **IMAP APPEND** uses the date-time argument as the internal date (RFC 9051 §6.3.12).
+- **CalDAV/CardDAV discovery (RFC 6764, RFC 5397):** `/.well-known/caldav` and
+  `/.well-known/carddav` are proxied by the api-gateway and redirect to `/dav/`; PROPFIND there
+  answers `DAV:current-user-principal`, and the new principal resource
+  `/dav/principals/<id>/` lists `calendar-home-set`, `addressbook-home-set` and
+  `calendar-user-address-set` (primary address + aliases). iOS/macOS, DAVx5 and Thunderbird can
+  set up accounts from the server name alone.
+- **CalDAV PROPPATCH** on calendars: display name, `calendar-color` and `calendar-order` (Apple
+  namespace) are stored; other properties answer 403, and the request is atomic (424 for the
+  rest). Grantees cannot change the owner's calendar properties.
+- **MKCALENDAR** applies display name, colour and order from the request body; a calendar
+  without VEVENT in `supported-calendar-component-set` is refused as a whole (403
+  `mkcalendar-response`).
+- PROPFIND on single `.ics` / `.vcf` resources (ETag, content type, privileges).
+- **REPORT filters are evaluated** instead of returning every object: CalDAV `prop-filter`,
+  `param-filter`, `text-match` (collations `i;ascii-casemap`, `i;unicode-casemap`, `i;octet`;
+  `negate-condition`), `is-not-defined`, recurring series checked instance by instance against
+  `time-range`; CardDAV `prop-filter` with `test`, `match-type`, `param-filter` and `limit`
+  (507 when truncated). Unsupported filters answer 403 `supported-filter` /
+  `supported-collation`. `CALDAV:expand` and `CALDAV:limit-recurrence-set` are implemented.
 
 ### Changed
 
@@ -113,6 +132,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   response no longer carries a stale version number. `SEARCH RECENT`/`NEW` match nothing and
   `OLD` everything (SELECT always reported `0 RECENT`). The protocol suite
   (`imap-protocol.test.ts`) is part of `pnpm test` (skipped on Node < 22.15).
+- CalDAV/CardDAV advertise only what is implemented: `DAV: 1, 3, calendar-access, addressbook`
+  (no class 2 — LOCK is not supported — and no `access-control`), `Allow` without `ACL`.
+- CalDAV PUT enforces the RFC 4791 preconditions: `METHOD` in a stored object or components
+  with different UIDs → 403 `valid-calendar-object-resource`; VTODO/VJOURNAL → 403
+  `supported-calendar-component` (was 400); a UID change on update is checked against the
+  calendar (409 `no-uid-conflict`) and stored; a concurrent duplicate answers 409 instead of 500.
+- CardDAV PUT requires exactly one vCard per resource (403 `valid-address-data`) and a UID
+  unique within the address book (409 `no-uid-conflict`); all contact columns (phones, second
+  e-mail, department, title, notes) are indexed from the vCard.
+- Recurrence expansion moved from the api-gateway to `@coremail/core/recurrence` (shared with
+  the caldav-server); vCard handling is in `@coremail/core/vcard`.
+- `GET /api/v1/contacts` returns all contact fields; `POST`/`PUT` accept and store `email2`,
+  `phone`, `mobile`, `department`, `jobTitle` and `notes` (they were silently dropped) and accept
+  an empty e-mail.
+- iTIP: a REQUEST without ORGANIZER is not answered (ActiveSync MeetingResponse reports an
+  invalid request); a REPLY to a single occurrence carries its `RECURRENCE-ID`.
 
 ### Fixed
 
@@ -256,6 +291,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   account capability (`currentUserPrincipalId`); `VacationResponse/set` refuses a subject
   instead of dropping it and escapes `textBody`; `Blob/get` defaults to `["data", "size"]`;
   English quota name/description.
+- **Data loss: a WRITE grantee could overwrite a PRIVATE event with its masked copy.** The
+  masked view carried the owner's ETag, so the grantee's client PUT the "Busy" copy back with a
+  valid `If-Match` and the owner's title, description, attendees and alarms were gone. The
+  masked view now has its own ETag, and grantees can neither PUT nor DELETE events they only
+  see masked (PRIVATE, also per overridden instance) or not at all (CONFIDENTIAL): 403
+  `DAV:need-privileges`. The REST API (`PUT`/`DELETE /api/v1/calendar/events/:id`) applies the
+  same rule.
+- **Data loss: a webmail contact edit rebuilt the vCard from four fields** and discarded
+  everything a CardDAV client had stored (TEL, ADR, PHOTO, UID, BDAY, X-…); the client then
+  synced the stripped card back. `PUT /api/v1/contacts/:id` now patches the stored vCard and
+  rewrites only the changed fields; new vCards escape `,` `;` and line breaks, build `N` as
+  `family;given;;;` and carry a UID.
+- iTIP REPLY: the attendee's answer is written into the stored iCalendar too (CalDAV clients of
+  the organizer saw the old PARTSTAT); a REPLY with `RECURRENCE-ID` changes only that
+  occurrence; with equal SEQUENCE an older DTSTAMP is ignored; quoted parameters such as
+  `CN="Doe: J"` are parsed; UIDs are compared exactly.
+- CalDAV `calendar-query`: a zero-duration event at the start of the time range was not found
+  (RFC 4791 §9.9), and recurring series without an occurrence in the range were returned.
+- CardDAV PROPFIND on the address book home described only the child book, not the home itself.
+- A custom VTIMEZONE (no IANA id / `X-LIC-LOCATION`) was evaluated with its STANDARD offset all
+  year; its DAYLIGHT/STANDARD rules are now applied, so summer times are no longer an hour off.
+- `GET /api/v1/contacts/gal` was shadowed by `GET /api/v1/contacts/:id` (404).
+- caldav-server: credentials were verified twice for every CardDAV request (one auth
+  middleware per router).
 
 ### Security
 
@@ -344,6 +403,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   answered with the Basic challenge without touching the database — a Bearer header used to
   write a `SystemLog` row with the client-supplied token claims on every request. The
   failed-login `SystemLog` category is now `AUTODISCOVER_AUTH` (was `MAPI_AUTH`).
+- **PRIVATE events are masked with an allowlist.** Grantees of a shared calendar received
+  `CONFERENCE` links, `GEO`, `STYLED-DESCRIPTION`, `RELATED-TO`, `IMAGE` and similar properties
+  of PRIVATE events because the mask removed only a fixed list. CalDAV now keeps only UID,
+  DTSTAMP, DTSTART/DTEND/DURATION, RRULE/RDATE/EXDATE, RECURRENCE-ID, TRANSP, STATUS, SEQUENCE
+  and CLASS plus `SUMMARY:Beschäftigt`, and drops alarms and calendar-level properties; an
+  overridden instance with its own `CLASS:PRIVATE` is masked under a PUBLIC series. REPORT
+  filters run on the masked view, so grantees cannot probe hidden fields with `text-match`.
+- iTIP REPLYs are applied only when the receiving user (address or alias) is the event's
+  ORGANIZER, not to an invitee's copy of the same meeting.
 
 ---
 

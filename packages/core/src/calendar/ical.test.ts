@@ -270,3 +270,30 @@ test('parseCalendarObject returns overrides (RECURRENCE-ID) separately from the 
   assert.equal(parsed.overrides.length, 1);
   assert.equal(parsed.overrides[0]?.recurrenceId?.date.toISOString(), '2026-01-02T10:00:00.000Z');
 });
+
+test('custom VTIMEZONE without IANA id: DAYLIGHT/STANDARD yearly rules are evaluated (summer offset)', () => {
+  const doc = (dt: string) => [
+    'BEGIN:VCALENDAR',
+    'BEGIN:VTIMEZONE', 'TZID:My Office Zone',
+    'BEGIN:DAYLIGHT', 'DTSTART:19810329T020000', 'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU', 'TZOFFSETFROM:+0100', 'TZOFFSETTO:+0200', 'END:DAYLIGHT',
+    'BEGIN:STANDARD', 'DTSTART:19961027T030000', 'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU', 'TZOFFSETFROM:+0200', 'TZOFFSETTO:+0100', 'END:STANDARD',
+    'END:VTIMEZONE',
+    'BEGIN:VEVENT', 'UID:x', `DTSTART;TZID=My Office Zone:${dt}`, 'END:VEVENT',
+    'END:VCALENDAR',
+  ].join(CRLF);
+  assert.equal(parseCalendarObject(doc('20260701T100000'))!.main.start.toISOString(), '2026-07-01T08:00:00.000Z');
+  assert.equal(parseCalendarObject(doc('20260115T100000'))!.main.start.toISOString(), '2026-01-15T09:00:00.000Z');
+  // 2026: DST starts Sun 29 March 02:00, ends Sun 25 October 03:00
+  assert.equal(parseCalendarObject(doc('20260329T030000'))!.main.start.toISOString(), '2026-03-29T01:00:00.000Z');
+  assert.equal(parseCalendarObject(doc('20261025T040000'))!.main.start.toISOString(), '2026-10-25T03:00:00.000Z');
+  // US-style "second Sunday" written with BYMONTHDAY
+  const us = doc('20260310T120000')
+    .replace('BYMONTH=3;BYDAY=-1SU', 'BYMONTH=3;BYDAY=SU;BYMONTHDAY=8,9,10,11,12,13,14');
+  assert.equal(parseCalendarObject(us)!.main.start.toISOString(), '2026-03-10T10:00:00.000Z');
+});
+
+test('buildVCalendar writes RECURRENCE-ID for an instance', () => {
+  const ics = buildVCalendar({ uid: 'u', summary: 's', start: new Date('2026-01-08T09:00:00Z'), end: new Date('2026-01-08T10:00:00Z'),
+    recurrenceId: { date: new Date('2026-01-08T09:00:00Z'), dateOnly: false } });
+  assert.match(ics, /^RECURRENCE-ID:20260108T090000Z$/m);
+});

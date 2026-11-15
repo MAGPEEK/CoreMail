@@ -56,7 +56,10 @@ The `api-gateway` handles all HTTP routing without nginx:
 - `/auth/` → auth-service (localhost:3003)
 - `/EWS`, `/OAB`, `/mapi` → 404 (EWS removed in v7.0.0, MAPI over HTTP in v6.0.0)
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
-- `/dav/` → caldav-server (localhost:8082)
+- `/dav/`, `/.well-known/caldav`, `/.well-known/carddav` → caldav-server (localhost:8082);
+  clients only need the server name — the well-known URIs lead to `/dav/`, which names the
+  user's principal with the calendar and address book homes (RFC 6764). An external reverse
+  proxy must forward the two well-known paths as well.
 - `/api/v1/` → direct handlers
 
 **TLS** is handled either by the integrated HTTPS proxy (port 443, default) or by an external reverse proxy.
