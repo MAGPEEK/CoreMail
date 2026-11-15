@@ -1,0 +1,20 @@
+# Filesystem object storage (CoreMail >= 7.1.0) on a PVC, no MinIO,
+# NetworkPolicies off, NodePort mail service. Dummy secrets only.
+secrets:
+  jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"
+  pepper: "ci-pepper-0000000000000000000000000000000000000000000000000000000"
+  postgresPassword: ci-postgres-password
+  redisPassword: ci-redis-password
+  setupToken: ci-setup-token-0001
+objectStorage:
+  driver: filesystem
+  filesystem:
+    size: 50Gi
+minio:
+  enabled: false
+networkPolicy:
+  enabled: false
+mailService:
+  type: NodePort
+  ports:
+    smtp: { enabled: true, port: 25, targetPort: 25, nodePort: 30025 }

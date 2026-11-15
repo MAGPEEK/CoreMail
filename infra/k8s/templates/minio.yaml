@@ -1,117 +1,115 @@
 {{- if .Values.minio.enabled }}
-# MinIO distributed mode StatefulSet
+{{- $m := .Values.minio }}
+{{- $name := include "coremail.componentName" (dict "root" . "component" "minio") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "minio") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "minio") | nindent 4 }}
+  # S3 API only. Console (9001): kubectl port-forward pod/<name>-0 9001
+  ports:
+    - { name: s3, port: 9000, targetPort: s3, protocol: TCP }
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "coremail.fullname" . }}-minio
+  name: {{ $name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "coremail.labels" . | nindent 4 }}
-    app.kubernetes.io/component: minio
+    {{- include "coremail.labels" (dict "root" . "component" "minio") | nindent 4 }}
 spec:
-  serviceName: {{ include "coremail.fullname" . }}-minio-headless
-  replicas: {{ .Values.minio.replicas }}
+  serviceName: {{ $name }}
+  replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: minio
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "minio") | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: minio
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "coremail.labels" (dict "root" . "component" "minio") | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $m.podSecurityContext | nindent 8 }}
       containers:
         - name: minio
-          image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
-          args:
-            - server
-            - >-
-              {{- range $i := until (int .Values.minio.replicas) }}
-              http://{{ include "coremail.fullname" $ }}-minio-{{ $i }}.{{ include "coremail.fullname" $ }}-minio-headless/data
-              {{- end }}
-            - --console-address
-            - ":9001"
-          env:
-            - name: MINIO_ROOT_USER
-              value: {{ .Values.minio.rootUser | quote }}
-            - name: MINIO_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "coremail.secretName" . }}
-                  key: MINIO_ROOT_PASSWORD
+          image: {{ include "coremail.image" (dict "image" $m.image "default" "latest") }}
+          imagePullPolicy: {{ $m.image.pullPolicy }}
+          args: ["server", "/data", "--console-address", ":9001"]
           ports:
-            - name: api
-              containerPort: 9000
-            - name: console
-              containerPort: 9001
-          volumeMounts:
-            - name: data
-              mountPath: /data
+            - { name: s3, containerPort: 9000, protocol: TCP }
+            - { name: console, containerPort: 9001, protocol: TCP }
+          env:
+            - name: HOME
+              value: /tmp
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: {{ include "coremail.secretName" . }}, key: MINIO_ROOT_USER } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "coremail.secretName" . }}, key: MINIO_ROOT_PASSWORD } }
+            - name: MINIO_BROWSER_REDIRECT
+              value: "false"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           livenessProbe:
-            httpGet:
-              path: /minio/health/live
-              port: 9000
-            initialDelaySeconds: 30
+            httpGet: { path: /minio/health/live, port: s3 }
             periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
           readinessProbe:
-            httpGet:
-              path: /minio/health/ready
-              port: 9000
-            initialDelaySeconds: 15
-            periodSeconds: 15
+            httpGet: { path: /minio/health/ready, port: s3 }
+            periodSeconds: 10
+            timeoutSeconds: 5
           resources:
-            requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              cpu: "2000m"
-              memory: "2Gi"
+            {{- toYaml $m.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
+        {{- if not $m.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $m.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $m.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
+        labels:
+          {{- include "coremail.selectorLabels" (dict "root" . "component" "minio") | nindent 10 }}
       spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- if .Values.minio.storageClass }}
-        storageClassName: {{ .Values.minio.storageClass }}
+        accessModes:
+          {{- toYaml $m.persistence.accessModes | nindent 10 }}
+        {{- with $m.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
         {{- end }}
         resources:
           requests:
-            storage: {{ .Values.minio.storageSize }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "coremail.fullname" . }}-minio
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "coremail.labels" . | nindent 4 }}
-spec:
-  selector:
-    app.kubernetes.io/name: minio
-    app.kubernetes.io/instance: {{ .Release.Name }}
-  ports:
-    - name: api
-      port: 9000
-      targetPort: 9000
-    - name: console
-      port: 9001
-      targetPort: 9001
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "coremail.fullname" . }}-minio-headless
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "coremail.labels" . | nindent 4 }}
-spec:
-  clusterIP: None
-  selector:
-    app.kubernetes.io/name: minio
-    app.kubernetes.io/instance: {{ .Release.Name }}
-  ports:
-    - name: api
-      port: 9000
-      targetPort: 9000
+            storage: {{ $m.persistence.size }}
+  {{- end }}
 {{- end }}

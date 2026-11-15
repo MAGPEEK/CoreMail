@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "coremail.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "app") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.mailService.enabled }}
+{{- $m := .Values.mailService }}
+{{- $ports := include "coremail.enabledMailPorts" . | fromJsonArray }}
+{{- if not $ports }}{{ fail "mailService.enabled=true but no mailService.ports are enabled" }}{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "coremail.componentName" (dict "root" . "component" "mail") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+  {{- with $m.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $m.type }}
+  # Local: no SNAT — CoreMail sees the real client IP (SPF, DNSBL, GeoIP,
+  # greylisting, per-IP lockouts). Traffic only goes to nodes running the pod.
+  externalTrafficPolicy: {{ $m.externalTrafficPolicy }}
+  {{- if and (eq $m.type "LoadBalancer") $m.loadBalancerIP }}
+  loadBalancerIP: {{ $m.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq $m.type "LoadBalancer") $m.loadBalancerClass }}
+  loadBalancerClass: {{ $m.loadBalancerClass }}
+  {{- end }}
+  {{- with $m.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $m.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ . }}
+  {{- end }}
+  {{- with $m.ipFamilies }}
+  ipFamilies:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "app") | nindent 4 }}
+  ports:
+    {{- range $ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .targetPort }}
+      protocol: TCP
+      {{- if and .nodePort (eq $m.type "NodePort" "LoadBalancer") }}
+      nodePort: {{ .nodePort }}
+      {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,20 +1,47 @@
-CoreMail {{ .Chart.AppVersion }} deployed successfully!
+CoreMail {{ .Chart.AppVersion }} — release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
 
-Domain: https://{{ .Values.global.domain }}
+1. Wait for the app (first start applies the database schema, ~1–2 min):
+     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "coremail.fullname" . }}
 
-  Webmail (OWA):       https://{{ .Values.global.domain }}/owa/
-  Admin panel (BCP):   https://{{ .Values.global.domain }}/bcp/
-  REST API:            https://{{ .Values.global.domain }}/api/v1/
+2. Setup wizard — one-time setup token:
+{{- if .Values.secrets.setupToken }}
+     the value of secrets.setupToken
+{{- else }}
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "coremail.fullname" . }} -c coremail | grep -i "setup token"
+     (or SETUP_TOKEN in secret {{ include "coremail.secretName" . }}, if set)
+{{- end }}
+{{- if .Values.ingress.enabled }}
+   Open {{ ternary "https" "http" .Values.ingress.tls.enabled }}://{{ .Values.ingress.host }}/bcp/
+{{- else }}
+   No Ingress configured. Temporarily:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "coremail.fullname" . }} 3000:{{ .Values.service.port }}
+     → http://localhost:3000/bcp/
+{{- end }}
 
-Prerequisites (must be installed separately):
-  - CloudNativePG operator:  kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.22/releases/cnpg-1.22.0.yaml
-  - cert-manager:            helm install cert-manager jetstack/cert-manager --set installCRDs=true
+3. Mail ports:
+{{- if .Values.mailService.enabled }}
+     kubectl -n {{ .Release.Namespace }} get svc {{ include "coremail.componentName" (dict "root" . "component" "mail") }}
+   Point MX/A records at the external IP. Mail-protocol TLS certificates are
+   managed inside CoreMail (BCP → SSL/TLS, or `coremail cert letsencrypt`).
+{{- if eq .Values.mailService.externalTrafficPolicy "Cluster" }}
+   WARNING: externalTrafficPolicy=Cluster — CoreMail sees node IPs instead of
+   client IPs: SPF, DNSBL, GeoIP and per-IP lockouts do not work correctly.
+{{- end }}
+{{- else }}
+     mailService.enabled=false — SMTP/IMAP/POP3 are not exposed.
+{{- end }}
 
-Check pod status:
-  kubectl get pods -n {{ .Release.Namespace }}
+4. Admin CLI:
+     kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "coremail.fullname" . }} -c coremail -- coremail --help
 
-Watch SMTP/IMAP LoadBalancer IPs:
-  kubectl get svc -n {{ .Release.Namespace }} -w
+TRUST_PROXY = "{{ include "coremail.trustProxy" . }}"{{ if not (include "coremail.trustProxy" .) }} (off){{ end }}
+{{- if not .Values.secrets.mfaEncryptionKey }}{{ if not .Values.secrets.existingSecret }}
 
-View logs:
-  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f --max-log-requests=20
+NOTE: secrets.mfaEncryptionKey is not set — TOTP secrets are then encrypted with
+a key derived from JWT_SECRET + PEPPER. Set it before you ever rotate those.
+{{- end }}{{ end }}
+{{- if gt (int .Values.app.replicaCount) 1 }}
+
+WARNING: app.replicaCount={{ .Values.app.replicaCount }}. The backup scheduler and the retention
+worker have no cross-pod lock and run in every pod. See the chart README.
+{{- end }}

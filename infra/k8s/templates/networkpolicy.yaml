@@ -1,0 +1,95 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $ports := include "coremail.enabledMailPorts" . | fromJsonArray }}
+{{- $appPeer := dict "podSelector" (dict "matchLabels" (include "coremail.selectorLabels" (dict "root" . "component" "app") | fromYaml)) }}
+# ── App: ingress only on the published ports; egress open (outbound SMTP to
+#    any MX, DNS, ACME, DNSBL, LDAP/OIDC, external DB/S3).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "coremail.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "app") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- $mail := list }}
+    {{- range $ports }}
+    {{- if not (has .name (list "http" "https")) }}
+    {{- $mail = append $mail . }}
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.mailService.enabled $mail }}
+    # Mail protocols from anywhere
+    - ports:
+        {{- range $mail }}
+        - { port: {{ .targetPort }}, protocol: TCP }
+        {{- end }}
+    {{- end }}
+    {{- if and .Values.mailService.enabled .Values.mailService.ports.https.enabled }}
+    # Integrated HTTPS proxy from anywhere
+    - ports:
+        - { port: 443, protocol: TCP }
+    {{- end }}
+    # HTTP 3000
+    - ports:
+        - { port: 3000, protocol: TCP }
+      {{- if and $np.httpFrom (not (and .Values.mailService.enabled .Values.mailService.ports.http.enabled)) }}
+      from:
+        {{- toYaml $np.httpFrom | nindent 8 }}
+      {{- end }}
+    {{- with $np.extraAppIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- range $component, $cfg := dict "postgresql" (list 5432) "redis" (list 6379) "minio" (list 9000) "rspamd" (list 11333 11334) "clamav" (list 3310) }}
+{{- if (index $.Values $component).enabled }}
+---
+# ── {{ $component }}: reachable only from the CoreMail app pod
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "coremail.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{ toJson $appPeer }}
+      ports:
+        {{- range $cfg }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+  {{- if has $component (list "rspamd" "clamav") }}
+  # DNS anywhere; signature/map updates (HTTP/S) and rspamd fuzzy (UDP 11335)
+  # to the internet only — no access to cluster-internal ranges.
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with $np.internetExcept }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+      ports:
+        - { port: 80, protocol: TCP }
+        - { port: 443, protocol: TCP }
+        - { port: 11335, protocol: UDP }
+  {{- else }}
+  # No egress at all
+  egress: []
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,236 @@
+{{- $a := .Values.app }}
+{{- $secret := include "coremail.secretName" . }}
+{{- $os := .Values.objectStorage }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "coremail.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+spec:
+  replicas: {{ $a.replicaCount }}
+  revisionHistoryLimit: 5
+  strategy:
+    {{- toYaml $a.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "app") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 8 }}
+        {{- with $a.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with $a.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "coremail.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $a.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml $a.podSecurityContext | nindent 8 }}
+      {{- if $a.schemaSync.enabled }}
+      initContainers:
+        # Equivalent of entrypoint-app.sh steps 1+2: wait for PostgreSQL, then
+        # apply the Prisma schema (db push --accept-data-loss), with retries.
+        - name: schema-sync
+          image: {{ include "coremail.image" (dict "image" $a.image "default" .Chart.AppVersion) }}
+          imagePullPolicy: {{ $a.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "[schema-sync] waiting for PostgreSQL at ${DB_HOST}:${DB_PORT} ..."
+              until nc -z "${DB_HOST}" "${DB_PORT}" 2>/dev/null; do sleep 2; done
+              cd /app/packages/storage
+              n=0
+              until node node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss; do
+                n=$((n + 1))
+                if [ "$n" -ge "${MAX_ATTEMPTS}" ]; then
+                  echo "[schema-sync] schema push failed after ${n} attempts"; exit 1
+                fi
+                echo "[schema-sync] not ready (attempt ${n}/${MAX_ATTEMPTS}) — retrying in 5 s"
+                sleep 5
+              done
+              echo "[schema-sync] schema applied"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: DB_HOST
+              value: {{ include "coremail.postgresql.host" . | quote }}
+            - name: DB_PORT
+              value: {{ include "coremail.postgresql.port" . | quote }}
+            - name: MAX_ATTEMPTS
+              value: {{ $a.schemaSync.maxAttempts | quote }}
+            - name: CHECKPOINT_DISABLE
+              value: "1"
+            - name: PRISMA_HIDE_UPDATE_MESSAGE
+              value: "1"
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: POSTGRES_PASSWORD } }
+            - name: DATABASE_URL
+              value: {{ include "coremail.databaseUrl" . | quote }}
+          securityContext:
+            {{- toYaml $a.securityContext | nindent 12 }}
+          {{- with $a.schemaSync.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      {{- end }}
+      containers:
+        - name: coremail
+          image: {{ include "coremail.image" (dict "image" $a.image "default" .Chart.AppVersion) }}
+          imagePullPolicy: {{ $a.image.pullPolicy }}
+          # supervisord directly (tini as PID 1). The image entrypoint script is
+          # skipped: the schema sync runs in the init container above.
+          command: ["/sbin/tini", "--"]
+          args: ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf", "-n"]
+          ports:
+            - { name: http, containerPort: 3000, protocol: TCP }
+            - { name: https, containerPort: 443, protocol: TCP }
+            - { name: smtp, containerPort: 25, protocol: TCP }
+            - { name: smtps, containerPort: 465, protocol: TCP }
+            - { name: submission, containerPort: 587, protocol: TCP }
+            - { name: imap, containerPort: 143, protocol: TCP }
+            - { name: imaps, containerPort: 993, protocol: TCP }
+            - { name: pop3, containerPort: 110, protocol: TCP }
+            - { name: pop3s, containerPort: 995, protocol: TCP }
+          envFrom:
+            - configMapRef:
+                name: {{ include "coremail.fullname" . }}
+            {{- with $a.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: HOME
+              value: /home/node
+            # Secrets (order matters: referenced by $(…) below)
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: JWT_SECRET } }
+            - name: PEPPER
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: PEPPER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: POSTGRES_PASSWORD } }
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: REDIS_PASSWORD } }
+            {{- if include "coremail.minio.host" . }}
+            - name: MINIO_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MINIO_ROOT_USER } }
+            - name: MINIO_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MINIO_ROOT_PASSWORD } }
+            - name: S3_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MINIO_ROOT_USER } }
+            - name: S3_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MINIO_ROOT_PASSWORD } }
+            {{- end }}
+            - name: MFA_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: MFA_ENCRYPTION_KEY, optional: true } }
+            - name: SETUP_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: SETUP_TOKEN, optional: true } }
+            - name: VAPID_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: {{ $secret }}, key: VAPID_PRIVATE_KEY, optional: true } }
+            - name: DATABASE_URL
+              value: {{ include "coremail.databaseUrl" . | quote }}
+            - name: REDIS_URL
+              value: {{ include "coremail.redisUrl" . | quote }}
+            {{- with $a.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml $a.securityContext | nindent 12 }}
+          {{- with $a.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $a.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $a.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $a.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem: the only writable paths the app needs
+            - { name: tmp, mountPath: /tmp }
+            - { name: supervisor-log, mountPath: /var/log/supervisor }
+            - { name: supervisor-run, mountPath: /var/run/supervisor }
+            - { name: home, mountPath: /home/node }
+            {{- if eq $os.driver "filesystem" }}
+            - { name: objects, mountPath: {{ $os.filesystem.path }} }
+            {{- end }}
+            {{- if or $os.caFile.configMap $os.caFile.secret }}
+            - { name: storage-ca, mountPath: /etc/coremail/storage-ca, readOnly: true }
+            {{- end }}
+            {{- with $a.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ $a.tmpSizeLimit }}
+        - name: supervisor-log
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: supervisor-run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: home
+          emptyDir:
+            sizeLimit: 16Mi
+        {{- if eq $os.driver "filesystem" }}
+        - name: objects
+          persistentVolumeClaim:
+            claimName: {{ $os.filesystem.existingClaim | default (include "coremail.componentName" (dict "root" . "component" "objects")) }}
+        {{- end }}
+        {{- if $os.caFile.configMap }}
+        - name: storage-ca
+          configMap:
+            name: {{ $os.caFile.configMap }}
+            items: [{ key: {{ $os.caFile.key }}, path: {{ $os.caFile.key }} }]
+        {{- else if $os.caFile.secret }}
+        - name: storage-ca
+          secret:
+            secretName: {{ $os.caFile.secret }}
+            items: [{ key: {{ $os.caFile.key }}, path: {{ $os.caFile.key }} }]
+        {{- end }}
+        {{- with $a.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $a.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $a.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

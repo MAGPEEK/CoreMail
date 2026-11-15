@@ -1,0 +1,23 @@
+{{- $fs := .Values.objectStorage.filesystem }}
+{{- if and (eq .Values.objectStorage.driver "filesystem") (not $fs.existingClaim) }}
+# Object store of the filesystem driver (CoreMail >= 7.1.0). Kept on
+# `helm uninstall` — it holds every message body and attachment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "coremail.componentName" (dict "root" . "component" "objects") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml $fs.accessModes | nindent 4 }}
+  {{- with $fs.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $fs.size }}
+{{- end }}

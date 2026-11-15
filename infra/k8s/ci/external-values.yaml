@@ -1,0 +1,45 @@
+# External datastores, existing Secret, no Ingress; HTTP/HTTPS via the
+# LoadBalancer (integrated TLS proxy); POP3 off; image pinned by digest.
+secrets:
+  existingSecret: coremail-credentials
+app:
+  image:
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+mailService:
+  loadBalancerIP: 203.0.113.10
+  loadBalancerSourceRanges: [0.0.0.0/0]
+  ports:
+    pop3: { enabled: false, port: 110, targetPort: 110, nodePort: "" }
+    pop3s: { enabled: false, port: 995, targetPort: 995, nodePort: "" }
+    http: { enabled: true, port: 80, targetPort: 3000, nodePort: "" }
+    https: { enabled: true, port: 443, targetPort: 443, nodePort: "" }
+postgresql:
+  enabled: false
+  external:
+    host: db.example.internal
+    params: sslmode=require
+redis:
+  enabled: false
+  external:
+    host: redis.example.internal
+    tls: true
+objectStorage:
+  driver: s3
+  useSSL: true
+  region: eu-central-1
+  caFile:
+    secret: s3-private-ca
+    key: ca.crt
+minio:
+  enabled: false
+  external:
+    host: s3.example.internal
+    port: 443
+rspamd:
+  enabled: false
+  external:
+    host: rspamd.example.internal
+clamav:
+  enabled: false
+  external:
+    host: clamav.example.internal

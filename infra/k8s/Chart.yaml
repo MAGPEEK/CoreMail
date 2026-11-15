@@ -1,20 +1,28 @@
 apiVersion: v2
 name: coremail
-description: CoreMail — Open-Source Exchange 2019 Alternative
+description: >-
+  CoreMail — self-hosted mail server (SMTP/IMAP/POP3, JMAP, ActiveSync,
+  CalDAV/CardDAV, webmail and admin panel) as one app pod, with optional
+  bundled PostgreSQL, Redis, MinIO, rspamd and ClamAV.
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+# Version of the chart itself (SemVer, independent of the app version).
+# 1.0.0: complete rewrite for the single coremail-app image (CoreMail 7.x).
+version: 1.0.0
+# Default image tag of magpeek/coremail-app.
+appVersion: "7.0.0"
+kubeVersion: ">=1.25.0-0"
 keywords:
   - mail
   - email
-  - exchange
-  - imap
   - smtp
+  - imap
+  - jmap
+  - activesync
+  - caldav
 home: https://github.com/MAGPEEK/CoreMail
+sources:
+  - https://github.com/MAGPEEK/CoreMail
 maintainers:
   - name: CoreMail Team
-dependencies:
-  - name: redis
-    version: "19.x.x"
-    repository: https://charts.bitnami.com/bitnami
-    condition: redis.enabled
+# No chart dependencies: every component is rendered from this chart, so an
+# install needs no network access to third-party chart repositories.
