@@ -13,6 +13,139 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [9.0.0] — 2026-11-15 — OWASP security hardening, Exchange-parity mail logic, encrypted backups
+
+Major release (SemVer: several security fixes and new limits change behaviour for operators,
+API clients and non-conformant senders — read "Upgrade notes (breaking)" at the end of this
+section before upgrading). CoreMail was audited against OWASP Top 10 2021 / ASVS 4.0.3 L2 in four
+areas (API/auth, frontends, mail protocols, supply chain/deployment); every finding was fixed with
+regression tests. Exchange Server 2019 was analysed as a reference for transport, mailbox, admin
+and webmail logic, and the useful parts were implemented. Two independent review rounds followed,
+and all of their findings were fixed as well.
+
+### Security
+- **Authentication and sessions**
+  - The web/API login shares the Redis per-account/per-IP lockout of the mail protocols (`429 ACCOUNT_LOCKED`); wrong MFA codes count too.
+  - Browser refresh tokens live in HttpOnly SameSite=Strict cookies (`cm_rt` / `cm_rt_bcp`, Path=/auth) with a same-origin check; access tokens are kept in memory only. The CLI keeps body tokens.
+  - Access tokens are accepted in the Authorization header only. SSE uses single-use tickets (`POST /api/v1/events/ticket`).
+  - Creating an app password requires re-authentication and sends a notice mail. Re-auth failures answer 403.
+  - OIDC `allowLinking` binds the account to the first IdP subject (`User.oidcSubject`). The IdP `amr` claim no longer satisfies `requireMfaForAdmins` (`OIDC_TRUST_IDP_MFA_FOR_ADMINS`).
+- **Access control**
+  - Mailbox delegation follows the admin-account rule (no privilege escalation to organization admins).
+  - Backup download, per-mailbox backup and import are limited to Organization/Compliance Management and audited.
+  - HELP_DESK can no longer change the server-wide quota defaults.
+  - One permission map (`ROLE_PERMISSIONS` + narrow actions) drives both the API guards and the BCP (`GET /api/v1/admin/me/permissions`).
+- **Inbound mail**
+  - SPF/DKIM/DMARC are evaluated on the real SMTP session (MAIL FROM, HELO, IP). The sender's DMARC policy is enforced, including `pct`.
+  - Local-domain anti-spoofing follows the domain's own DMARC policy (`LOCAL_SPOOF_ACTION`, `LOCAL_SPOOF_ALLOW`, `ARC_TRUSTED_SEALERS`).
+  - Unauthenticated mail with a missing From, several From fields or several From mailboxes is rejected.
+  - RFC 8601 Authentication-Results are added; forged ones are stripped on every delivery path.
+- **Calendar and rules**
+  - iTIP replies and resource-booking changes require an authenticated sender or organizer. Bookings are scoped per resource.
+  - Rule, transport-rule and blacklist regexes run on a linear-time matcher with per-rule step budgets (ReDoS fix). Blocking rules fail closed when the budget runs out.
+- **Denial of service**
+  - Pre-auth limits for IMAP (8 KiB lines/literals, 60 s idle) and per-IP/global/per-user connection caps for IMAP and POP3.
+  - STARTTLS/STLS handshake timeouts.
+  - Unauthenticated BDAT chunks are never buffered; SMTP command pipelining has backpressure.
+  - Port-25 tarpit for repeated errors.
+  - JMAP concurrency and upload quotas are enforced.
+  - The MIME header section is capped at 256 KiB before parsing.
+- **Abuse and SSRF**
+  - Outbound MX targets on private/loopback addresses are refused (SSRF).
+  - Success DSNs to unverified port-25 senders are suppressed (no backscatter).
+- **Webmail and API**
+  - Mail CSS can no longer overlay the UI (phishing).
+  - Only raster inline images are used, via an SSRF-safe authenticated image proxy (`GET /api/v1/mail/image-proxy`).
+  - Editor links are limited to http/https/mailto. The reset token is removed from the address bar and verified via POST.
+  - `/mail/send` caps size, attachments and recipients and is rate-limited per user. Draft writes are rate-limited.
+  - Client-supplied forwarding and internal headers are stripped before proxying.
+  - HTTP→HTTPS redirect (`HTTP_REDIRECT_HTTPS`, `HTTPS_PUBLIC_PORT`); HSTS is sent only over HTTPS.
+  - Audit exports are signed with HMAC-SHA256 (`AUDIT_EXPORT_SIGNING_KEY`), and CSV cells are formula-safe.
+- **Deployment**
+  - Schema sync fails closed, with a pre-migration `pg_dump`. Backups are encrypted client-side (AES-256-GCM, `BACKUP_ENCRYPTION_KEY`).
+  - Compose runs with `no-new-privileges` and minimal capabilities. The rspamd controller trusts only the app and supports a password.
+  - Optional non-superuser database role. No default MinIO/S3 credentials. No fallback passwords in the Synology compose.
+  - pino log redaction. CI builds the real image with provenance, SBOM and cosign signing.
+- **Dependencies**
+  - nodemailer 10, mailparser 3.14, express 4.22.3 (body-parser, proxy-addr), node-forge 1.4.3, multer 2.5, ws 8.23, zod 4.6.7, DOMPurify 3.4.18, Tiptap 2.27.3 with prosemirror-view 1.42.9, react-router 6.30.6, plus overrides for vulnerable indirect packages.
+  - `pnpm audit --prod` went from 2 critical / 74 high to 0 critical / 1 high (not reachable).
+
+### Added
+- SMTP: CHUNKING/BINARYMIME (`BDAT`), DSN (RFC 3461: RET/ENVID/NOTIFY/ORCPT with delivered/relayed/delayed/failed reports), SMTPUTF8 with IDN recipient matching, HELP. EHLO matches Exchange 2019 (`SMTP_EXT_*` switches).
+- IMAP: QRESYNC (RFC 7162), SORT and THREAD=ORDEREDSUBJECT/REFERENCES (RFC 5256), read-only ACL (RFC 4314), COMPRESS=DEFLATE (RFC 4978).
+- Outbound delivery works like Exchange: retries for `outboundRetentionHours` (default 48 h), a delay DSN after 4 h (`OUTBOUND_DELAY_DSN_HOURS`), and a final 5.4.7 NDR.
+- Mailbox quota levels: warning mail, prohibit send and prohibit send/receive, enforced on SMTP, REST, drafts, JMAP, ActiveSync and IMAP APPEND/COPY. Includes a quota bar in the webmail and `coremail mailbox quota --warning/--prohibit-send`.
+- Recover deleted items for 30 days (`/api/v1/mail/recoverable`, `DELETED_ITEM_RETENTION_DAYS`), with a webmail view and an audited admin purge. The purge also removes unreferenced objects and ActiveSync item state (`DELETED_ITEM_PURGE_OBJECTS`).
+- Out-of-office sends exactly one reply per sender and OOF period (internal/external texts, contacts-only option, schedule).
+- Server drafts API (`/api/v1/mail/drafts`), webmail autosave, and server-side undo send: the mail is sent even if the tab is closed or the user logs out.
+- Webmail:
+  - keyboard shortcuts (CoreMail and Gmail-compatible sets, `?` help);
+  - undo for delete/move/archive/junk;
+  - search operators (`from:`, `to:`, `subject:`, `has:attachment`, `is:`, `before:`/`after:`, `older_than:`, `in:`, `-`) with help and chips;
+  - "all caught up" empty states and skeleton loaders;
+  - accessible dialogs.
+- Automatic client setup:
+  - Thunderbird autoconfig (`/.well-known/autoconfig/mail/config-v1.1.xml`, `autoconfig.<domain>`);
+  - Apple configuration profile download (IMAP/CalDAV/CardDAV or ActiveSync);
+  - recommended SRV/autoconfig records in the DNS check;
+  - `docs/clients.md`.
+- BCP:
+  - shared DataTable list pattern (search, sort, paging, selection, toolbar, keyboard navigation) on eight pages;
+  - mailbox detail panel with quick actions;
+  - read-only rendering and a 403 page per permission;
+  - "Sign out everywhere" (`POST /api/v1/admin/mailboxes/:id/revoke-sessions`);
+  - last login (`User.lastLoginAt`).
+- Docker Compose variants: `docker-compose.minimal.yml` (CoreMail + PostgreSQL + Redis) and `docker-compose.full.yml` (rspamd, ClamAV, limits, log rotation, profiles `minio`/`backup`/`geoip`), a bind-mount example, `setup.sh --variant minimal|standard|full` and `docs/docker-compose.md` (storage mounting guide).
+- Tools and settings:
+  - `RSPAMD_ENABLED` / `CLAMAV_ENABLED` environment switches;
+  - `coremail-decrypt-backup` in the image;
+  - `coremail audit verify` and `POST /api/v1/admin/audit-log/verify-export`;
+  - Helm secrets for the backup key and rspamd password;
+  - compose pass-through and `.env.example` documentation for all new settings.
+
+### Changed
+- Admin roles:
+  - SERVER_MANAGEMENT no longer gets mailbox data (per-mailbox backups, downloads, import);
+  - COMPLIANCE_MANAGEMENT does;
+  - HELP_DESK sees exactly the actions the server allows it.
+- Schema sync applies new unique constraints automatically after a duplicate check. Destructive changes need `COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true`.
+- Resource bookings are unique per (calendar, UID), so one meeting can book several rooms.
+- Unknown local recipients on submission/REST/worker paths receive an NDR instead of being dropped. Room invitations from local senders are processed.
+- Validation error texts follow zod 4 wording (response shape unchanged).
+- Helm chart 2.0.0: `app.mailAuth.limitPrivateIps` was replaced by `exemptCidrs` and new tuning values were added.
+
+### Fixed
+- Replies carry the original Message-ID/References. Signature images and font sizes survive compose. Forwarding keeps attachments. "Show images" works. Sent drafts keep inline (`cid:`) images.
+- Refreshing the page or opening tabs no longer logs users out (separate refresh limiter; 429/5xx are treated as temporary). The MFA login sets the refresh cookie.
+- No HTTP→HTTPS redirect loop behind a reverse proxy without `TRUST_PROXY`.
+- No false success DSNs on retries. NDRs survive SMTP retries. Alias outcomes are reported under the original address. An admin retry of a dead letter no longer sends a second NDR.
+- ActiveSync devices get Delete for purged items. Restore and purge no longer race. Draft versions no longer pile up storage.
+- The backup import no longer corrupts binary/encrypted uploads. Backup uploads abort on read errors.
+
+### Upgrade notes (breaking)
+See [docs/releases/v9.0.0.md](docs/releases/v9.0.0.md) for the full list. The most important:
+1. **Back up the database first.** All schema changes in this release are applied automatically. A future destructive change will stop the container until `COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true` is set.
+2. **Deleted items:** messages deleted more than 30 days ago are purged on the first start, together with their stored objects. Set `DELETED_ITEM_RETENTION_DAYS=0` before upgrading to keep them.
+3. **Quotas are enforced now.** Mailboxes above 87 % of their quota cannot send, full mailboxes reject mail (`552 5.2.2`), and users above 83 % get one warning mail.
+4. **Spoofing protection:** mail failing DMARC `p=reject` is rejected. Unaligned mail using your own domains goes to Junk (or is rejected if your domain publishes `p=reject`). Add third-party senders to `LOCAL_SPOOF_ALLOW`.
+5. **Lockout and limits count private/NAT addresses.** Behind NAT or a reverse proxy, set `MAIL_AUTH_EXEMPT_CIDRS` / `MAIL_CONN_EXEMPT_CIDRS`.
+6. **API clients:**
+   - `?token=` is no longer accepted; use the Authorization header (SSE: `?ticket=`).
+   - Re-auth errors are 403.
+   - `DELETE /auth/sessions/admin/:userId` returns 410.
+   - Creating an app password needs `currentPassword` or `mfaCode`.
+   - The audit export signature is `hmac-sha256=`.
+7. **Regex rules** with backreferences, lookarounds or named groups no longer match. At most 20 regex conditions per user.
+8. **Compose:**
+   - New variables `RSPAMD_CONTROLLER_PASSWORD` and `BACKUP_ENCRYPTION_KEY` (keep a copy of the key off the server).
+   - rspamd runs on a new network `10.253.253.0/29` (`RSPAMD_NET_PREFIX`).
+   - The app container drops capabilities.
+   - There are no default MinIO credentials any more.
+9. **Helm:** chart 2.0.0 refuses `app.mailAuth.limitPrivateIps`; use `exemptCidrs`.
+10. **HTTPS:** with the integrated HTTPS proxy active, HTTP requests are redirected. Behind a TLS terminator that sends no forwarding headers, set `HTTP_REDIRECT_HTTPS=false`.
+
+---
+
 ## [8.0.0] — 2026-11-15 — Protocol conformance, ActiveSync 14.1, local storage, live session control
 
 Major release (SemVer: several security fixes change behaviour for operators and non-conformant
