@@ -208,7 +208,7 @@ app.use('/dav',          internalProxy(DAV_URL));
 // Auth-service routes (MFA, app passwords, sessions) — BEFORE express.json()!
 // Login/Refresh/Logout are implemented directly in authRouter (no proxy needed).
 const AUTH_SERVICE_URL = process.env['AUTH_SERVICE_URL'] ?? 'http://localhost:3003';
-// v6.0.0: the auth-service gets the real client IP (per-IP MFA failure limit,
+// v7.0.0: the auth-service gets the real client IP (per-IP MFA failure limit,
 // session IP). The header is overwritten, never appended, so clients cannot spoof it.
 const authServiceProxy = createProxyMiddleware({
   target: AUTH_SERVICE_URL,
@@ -226,7 +226,7 @@ const authServiceProxy = createProxyMiddleware({
     },
   },
 }) as express.RequestHandler;
-// v6.0.0: /auth/mfa/* (verify, WebAuthn auth start, MFA changes) behind the strict
+// v7.0.0: /auth/mfa/* (verify, WebAuthn auth start, MFA changes) behind the strict
 // auth limiter; read-only GETs (status) are exempt so the settings page cannot lock users out.
 const mfaRateLimit: express.RequestHandler = (req, res, next) =>
   req.method === 'GET' ? next() : authRateLimit(req, res, next);

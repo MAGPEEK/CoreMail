@@ -13,7 +13,7 @@ export function createApp(): Express {
   // v6: async handler rejections → error middleware instead of process death
   installAsyncErrorHandling(express);
   const app = express();
-  // v6.0.0: the api-gateway proxy sets X-Forwarded-For to the real client IP
+  // v7.0.0: the api-gateway proxy sets X-Forwarded-For to the real client IP
   // (overwritten, not appended). Only trusted from loopback.
   app.set('trust proxy', 'loopback');
   app.use(express.json());

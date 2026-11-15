@@ -1,7 +1,7 @@
 /**
  * Auth routes in the api-gateway (used by MWA, BCP and the admin CLI).
  *
- * v6.0.0: login / refresh / logout / password reset all go through the single
+ * v7.0.0: login / refresh / logout / password reset all go through the single
  * login service in `@coremail/storage/auth` (shared with the auth-service):
  *   POST /auth/login          → { accessToken, refreshToken, expiresIn }
  *                               | { mfaRequired: true, challengeToken, method, methods }
@@ -138,7 +138,7 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
 //   1. No user enumeration: the response is always identical (200 OK)
 //   2. Rate limit: max 3 requests per IP + email per hour (Redis)
 //   3. Token: crypto.randomBytes(32) = 256 bit entropy, stored as SHA-256 hash
-//   4. Earlier links stay valid until they expire (v6.0.0) — a reset request by
+//   4. Earlier links stay valid until they expire (v7.0.0) — a reset request by
 //      an attacker cannot invalidate the victim's link
 //   5. Only active when ServerSettings.selfServicePasswordReset = true
 authRouter.post('/forgot-password', async (req: Request, res: Response) => {

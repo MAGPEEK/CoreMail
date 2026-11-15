@@ -1,5 +1,5 @@
 /**
- * The single web/API login service (v6.0.0) — used by POST /auth/login and
+ * The single web/API login service (v7.0.0) — used by POST /auth/login and
  * POST /auth/mfa/verify in the api-gateway and (delegated) the auth-service.
  *
  * Steps: first factor (local password, then registered external

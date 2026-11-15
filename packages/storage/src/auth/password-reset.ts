@@ -1,5 +1,5 @@
 /**
- * Self-service password reset tokens (v6.0.0).
+ * Self-service password reset tokens (v7.0.0).
  *
  * - Tokens are stored as sha256(token); several may be active at the same time
  *   (a new request does NOT invalidate earlier links, so an attacker requesting

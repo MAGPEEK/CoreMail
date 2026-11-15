@@ -1,5 +1,5 @@
 /**
- * Gateway auth HTTP contract (v6.0.0): /auth/login, /auth/refresh, /auth/logout,
+ * Gateway auth HTTP contract (v7.0.0): /auth/login, /auth/refresh, /auth/logout,
  * password reset, revocation hooks (password change, admin reset/deactivate)
  * and requireAdmin MFA enforcement (fail closed).
  * Express app on an ephemeral loopback port; Prisma via globalThis.__prisma,

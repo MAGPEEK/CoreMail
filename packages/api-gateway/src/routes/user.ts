@@ -529,7 +529,7 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
   const valid = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
   if (!valid) { res.status(400).json({ error: 'Aktuelles Passwort ist falsch' }); return; }
 
-  // v6.0.0: minimum length from ServerSettings.minPasswordLength
+  // v7.0.0: minimum length from ServerSettings.minPasswordLength
   const policyError = await checkPasswordPolicy(parsed.data.newPassword);
   if (policyError) { res.status(400).json({ error: policyError }); return; }
 
@@ -538,7 +538,7 @@ userRouter.post('/change-password', async (req: Request, res: Response) => {
     where: { id: req.apiUser!.userId },
     data:  { passwordHash: newHash },
   });
-  // v6.0.0: all OTHER sessions are revoked; this session and app passwords stay.
+  // v7.0.0: all OTHER sessions are revoked; this session and app passwords stay.
   await revokeAllSessions(req.apiUser!.userId, {
     ...(req.apiUser!.sessionId ? { exceptSessionId: req.apiUser!.sessionId } : {}),
     reason: 'password-change',

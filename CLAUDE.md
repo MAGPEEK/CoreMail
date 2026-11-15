@@ -13,7 +13,9 @@ It contains all the important context information about the CoreMail project.
 ```
 
 **Goal**: Coremail mail server for 10–500 users (SMB)
-**Current version**: `6.0.0` (security & cleanup release after a full code review: token handling, JMAP pollution/Bcc/delegation, XSS, cross-mailbox access, SMTP/IMAP fixes, ActiveSync/EWS sending via BullMQ, DKIM for every outbound path, spam-filter connection stage, retention by delivery time; MAPI over HTTP + storage-api + PowerShell stub removed; EWS has its own switch; v5.8.0 admin CLI; v5.7.1 JMAP server)
+**Current version**: `7.0.0` (secure by default: MFA users need app passwords on all mail protocols, auth only after TLS, shared lockout, rotating hashed sessions, RBAC, setup token, TRUST_PROXY, raw message storage, atomic UID/modSeq message store, OIDC SSO + LDAP, cert auto-renewal, EWS removed, e2e harness in scripts/e2e; v6.0.0 security & cleanup release, MAPI removed; v5.8.0 admin CLI; v5.7.1 JMAP server)
+**Versioning**: Semantic Versioning 2.0.0 — MAJOR for breaking changes (removed/changed endpoints, protocol behaviour, config, CLI, schema), MINOR for compatible features, PATCH for fixes; docs-only changes keep the version.
+**Message writers**: every create/move/copy/flag/expunge goes through `packages/storage/src/message-store.ts` (atomic UID + modSeq), and every new message stores the raw original (`loadRawMessage()` in storage) — never allocate UIDs or write modSeq by hand.
 **GitHub**: https://github.com/MAGPEEK/CoreMail.git
 **Docker Hub**: https://hub.docker.com/u/magpeek
 

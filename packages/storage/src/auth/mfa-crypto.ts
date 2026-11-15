@@ -1,5 +1,5 @@
 /**
- * TOTP secret encryption at rest (v6.0.0): AES-256-GCM.
+ * TOTP secret encryption at rest (v7.0.0): AES-256-GCM.
  *
  * Key: `MFA_ENCRYPTION_KEY` (64 hex chars or base64 of 32 bytes are used as-is,
  * any other string is stretched with HKDF-SHA256). Without the variable the key

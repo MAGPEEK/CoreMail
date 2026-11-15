@@ -1,5 +1,5 @@
 /**
- * Web/API sessions (v6.0.0).
+ * Web/API sessions (v7.0.0).
  *
  * - `Session.id` is the JWT `sessionId` claim of both access and refresh token.
  * - `Session.tokenHash` = sha256(current refresh token). The raw token is never stored.

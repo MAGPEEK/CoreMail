@@ -1,5 +1,5 @@
 /**
- * Login service, sessions, MFA, re-auth and password reset (v6.0.0).
+ * Login service, sessions, MFA, re-auth and password reset (v7.0.0).
  * Infra-free: Prisma via globalThis.__prisma, Redis via globalThis.__authRedis.
  * Run: node --import tsx --test src/auth/auth.test.ts  (in packages/storage)
  */

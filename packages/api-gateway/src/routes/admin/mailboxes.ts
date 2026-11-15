@@ -132,7 +132,7 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (!canAssignRole(req.apiUser?.role, role)) {
     forbidden(res, 'Only Organization Management may assign admin roles'); return;
   }
-  // v6.0.0: minimum length from ServerSettings.minPasswordLength
+  // v7.0.0: minimum length from ServerSettings.minPasswordLength
   const policyError = await checkPasswordPolicy(password);
   if (policyError) { res.status(400).json({ error: policyError }); return; }
 
@@ -207,7 +207,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 
   const { displayName, role, active, quotaBytes, password } = parsed.data;
   if (password) {
-    // v6.0.0: minimum length from ServerSettings.minPasswordLength
+    // v7.0.0: minimum length from ServerSettings.minPasswordLength
     const policyError = await checkPasswordPolicy(password);
     if (policyError) { res.status(400).json({ error: policyError }); return; }
   }
@@ -222,7 +222,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     },
     select: { id: true, email: true, displayName: true, role: true, active: true },
   });
-  // v6.0.0: an admin password reset or a deactivation ends all web/API sessions
+  // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept; inactive users cannot use them anyway).
   if (password || (active === false && user.active)) {
     await revokeAllSessions(id, { reason: password ? 'admin-password-reset' : 'deactivated' });

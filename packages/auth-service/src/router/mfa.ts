@@ -1,7 +1,7 @@
 /**
  * MFA management (/auth/mfa/*).
  *
- * v6.0.0: every change of the second factor requires re-authentication in the
+ * v7.0.0: every change of the second factor requires re-authentication in the
  * request body — `currentPassword` or `mfaCode` (TOTP or backup code):
  *   POST   /totp/setup                { currentPassword | mfaCode }   (409 while TOTP is enabled)
  *   POST   /totp/confirm              { code }                         (code of the NEW secret)
@@ -131,7 +131,7 @@ mfaRouter.post('/webauthn/register/finish', authed(async (req, res, userId) => {
 }));
 
 // WebAuthn authentication start (second factor of a pending login).
-// v6.0.0: requires the MFA challengeToken from /auth/login — no longer any userId.
+// v7.0.0: requires the MFA challengeToken from /auth/login — no longer any userId.
 mfaRouter.post('/webauthn/auth/start', async (req: Request, res: Response) => {
   const parsed = z.object({ challengeToken: z.string().min(1).max(128) }).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'challengeToken required' }); return; }

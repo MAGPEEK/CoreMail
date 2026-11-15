@@ -17,7 +17,7 @@ const log = createLogger('auth:webauthn');
 const RP_NAME = process.env['WEBAUTHN_RP_NAME'] ?? 'CoreMail';
 const CHALLENGE_TTL = 5 * 60; // 5 minutes
 
-// v6.0.0: separate Redis keys for registration (per user) and authentication
+// v7.0.0: separate Redis keys for registration (per user) and authentication
 // (per MFA login challenge) so one flow cannot overwrite/consume the other.
 export function registrationChallengeKey(userId: string): string {
   return `coremail:webauthn:reg:${userId}`;
@@ -30,7 +30,7 @@ export interface RpConfig { rpID: string; origin: string }
 let rpCache: { value: RpConfig; expires: number } | null = null;
 
 /**
- * v6.0.0: Relying party from ServerSettings.publicHostname (https://<host>);
+ * v7.0.0: Relying party from ServerSettings.publicHostname (https://<host>);
  * WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN override. Cached for 60 s.
  */
 export async function getRpConfig(): Promise<RpConfig> {

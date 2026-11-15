@@ -10,9 +10,9 @@ export interface ApiUser {
   userId: string;
   email: string;
   role: string;
-  /** Session the access token belongs to (v6.0.0). */
+  /** Session the access token belongs to (v7.0.0). */
   sessionId?: string;
-  /** true when the session was established with a second factor (v6.0.0). */
+  /** true when the session was established with a second factor (v7.0.0). */
   mfaVerified?: boolean;
 }
 
@@ -42,7 +42,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
-  // v6.0.0: tokens issued before a "revoke all sessions" event (deactivation,
+  // v7.0.0: tokens issued before a "revoke all sessions" event (deactivation,
   // password change/reset) are rejected even before they expire.
   if (isAccessTokenRevoked(payload.sub, payload.iat, payload.sessionId)) {
     res.status(401).json({ error: 'Session revoked', code: 'SESSION_REVOKED' });
@@ -70,7 +70,7 @@ const MFA_CHECKED = Symbol('adminMfaChecked');
  *                                  outside /admin — no chicken-and-egg lockout)
  *   - enrolled, but this session was not established with MFA
  *                                → 403 MFA_NOT_VERIFIED (log in again)
- * v6.0.0: fails CLOSED on database errors (503) instead of letting admins through.
+ * v7.0.0: fails CLOSED on database errors (503) instead of letting admins through.
  * Runs at most once per request.
  */
 function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void {

@@ -13,6 +13,136 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [7.0.0] — 2026-11-15 — Secure by default: mandatory MFA for mail clients, TLS-first auth, EWS removed
+
+Major release. Finishes the code review started in 6.0.0: every remaining finding was fixed,
+the stack was verified end to end against the real container image (`docs/e2e.md`,
+95/95 checks), and every fix has an automated test (`pnpm -r test`: 561 tests).
+**Breaking changes and required actions are listed under "Upgrade notes" at the end.**
+
+### Security
+
+- **Mail clients: MFA users need app passwords.** SMTP, IMAP, POP3, ActiveSync, Autodiscover,
+  JMAP and CalDAV/CardDAV share one credential check (`verifyMailCredentials`). With TOTP or
+  WebAuthn enabled, the account password is rejected there — only app passwords work.
+- **Authentication only after TLS:** IMAP 143 offers real STARTTLS and advertises
+  LOGINDISABLED until then (`NO [PRIVACYREQUIRED]`), POP3 110 offers STLS and refuses
+  USER/PASS before it, SMTP 587 advertises and accepts AUTH only after STARTTLS
+  (`538 5.7.11`). Input pipelined before a TLS handshake is discarded (CVE-2011-0411 class).
+- **Brute-force protection for all mail protocols:** lockout per IP and per account with
+  exponential backoff (`MAIL_AUTH_*`), checked on every attempt; SMTP disconnects after
+  3 failed AUTHs; unknown users are timing-equalised.
+- **Web/API sessions:** one shared login service; refresh tokens stored hashed and rotated on
+  every refresh with reuse detection; sessions revoked on logout, password change/reset and
+  deactivation; access tokens of revoked sessions rejected immediately.
+- **MFA hardening:** attempt limit per challenge and per IP, TOTP replay protection, TOTP
+  secrets encrypted with AES-256-GCM (`MFA_ENCRYPTION_KEY`, legacy secrets migrated on use),
+  atomic single-use backup codes, MFA changes require re-authentication, WebAuthn bound to
+  the login challenge, `requireMfaForAdmins` requires an MFA-verified session and fails closed.
+- **No request can crash a service:** async route errors go to a shared error middleware
+  (no error details leaked), process guards in every service.
+- **Admin API:** role-based access per area (RBAC matrix, `GET /api/v1/user/me` → `adminAreas`);
+  only Organization Management may assign roles or manage admin accounts; `tlsKey`,
+  `passwordHash` and LDAP/smarthost passwords are never returned (write-only).
+- **Setup wizard** requires a one-time setup token and can complete only once.
+- **`TRUST_PROXY`** (default off) replaces the hard-coded `trust proxy 1`; the gateway sets
+  `X-Forwarded-For` itself for internal services, so client IPs cannot be spoofed.
+- **Internal services** bind to 127.0.0.1 (`INTERNAL_BIND_HOST`), `/internal/*` routes need
+  loopback or `INTERNAL_API_TOKEN`.
+- **Mail content:** IMAP responses can no longer be injected through CR/LF in subjects or
+  names; submission rejects foreign `From:`/`Sender:` headers (550 5.7.1); JMAP CORS
+  allow-list and SSRF protection for push endpoints; iTIP replies only from the attendee for
+  the recipient's own events; transport-rule reject DSNs only to local senders (no
+  backscatter); attachment downloads with `nosniff`, sandbox CSP and inline only for images.
+- **Web client:** external-image blocking moved into DOMPurify hooks (no regex bypasses),
+  forms in mail bodies removed, links open with `noopener noreferrer`, no tokens in URLs for
+  downloads, exports and inline images; logout revokes the session on the server.
+
+### Added
+
+- **OIDC single sign-on** for MWA and BCP (Entra ID, Keycloak, Authentik, Google, Okta):
+  PKCE, state and nonce, verified e-mail and allowed domains, one-time exchange code.
+- **LDAP/Active Directory:** login over TLS with certificate verification (web and mail
+  protocols), first-login provisioning, manual and scheduled sync, real connection test.
+- **WebAuthn security keys** and **backup codes** at login; key registration in the MWA.
+- **Automatic certificate renewal** (Let's Encrypt, hourly check with lock and backoff);
+  SMTP/IMAP/POP3 pick up renewed certificates without a restart.
+- **Out-of-office auto-replies** (RFC 3834) for MWA and JMAP VacationResponse.
+- **Real S/MIME signature verification** with signer, validity and trust status.
+- **IMAP:** literals and LITERAL+, full SEARCH grammar with ESEARCH, multi-item STATUS with
+  real SIZE, `UID EXPUNGE`, COPYUID on MOVE, CHANGEDSINCE.
+- **CalDAV:** REPORT (calendar-query, multiget, sync-collection) and MKCALENDAR; server-side
+  recurrence expansion for event lists and free/busy.
+- **Quarantine release** delivers the message; transport-rule quarantine, redirect, add and
+  remove recipient actions work; release is audit-logged.
+- **MWA:** infinite scroll and server-side search, attachment download, error toasts and an
+  error boundary; **BCP** hides pages by admin area.
+- **End-to-end test harness** (`scripts/e2e/`, `infra/docker/docker-compose.e2e.yml`).
+
+### Changed
+
+- **Messages are always stored as the original RFC 5322 message** (content-addressed in
+  MinIO). IMAP and POP3 serve it byte-exact with attachments; backups export and restore it.
+  Existing messages are rebuilt once on first access.
+- **UIDs and modSeqs are allocated atomically** for every writer (shared message store);
+  moved messages get new UIDs (RFC 6851); JMAP and ActiveSync see changes from all
+  protocols. Old ActiveSync sync keys force one full resync.
+- **Settings take effect:** security-filter honours GeoIP, attachment, DNSBL and ClamAV
+  settings; per-service log levels apply at runtime; queue retry/retention settings apply to
+  all producers; greylisting has one source (SMTP settings).
+- **MinIO image:** `pgsty/minio` pinned by digest — the official `minio/minio` image can no
+  longer be pulled.
+
+### Fixed
+
+- ActiveSync: correct WBXML code pages, initial sync delivers existing mail, incremental
+  sync delivers new mail, GetAttachment returns the body.
+- SMTP: transient errors stay 4xx; oversized DATA handled without command injection.
+- Calendar: all-day and recurring events keep `allDay`/`rrule`; editing in the MWA no longer
+  destroys CalDAV data; ETags/ctags change on every edit; window overlap queries.
+- DNSBL return codes interpreted correctly; blacklist regex case; CIDR whitelists; ClamAV
+  reply parsing.
+- Container start on Windows checkouts (CRLF entrypoint), rspamd `actions.conf`, setup status
+  no longer counted against the setup rate limit, non-ASCII protocol reply texts.
+
+### Removed
+
+- **Exchange Web Services (EWS)** completely: `ews-server`, `/EWS/*`, `/OAB/*`, the BCP
+  switch, `ServerSettings.mapiHttpEnabled`/`ewsUrl` (columns dropped at startup),
+  `coremail connector ews|mapi`, Autodiscover `Protocol=EWS` (404). `/EWS`, `/OAB` and `/mapi`
+  return 404.
+- SAML from the BCP SSO page (it was never implemented).
+
+### Upgrade notes
+
+1. **Users with two-factor authentication** must create app passwords (MWA → Settings →
+   Security) for every mail client and phone; the account password stops working there.
+2. **Clients on ports 143, 110 or 587 without encryption** must use STARTTLS/STLS or switch
+   to 993/995/465. A protocol certificate must be active (setup creates a self-signed one).
+3. **EWS clients** (e.g. macOS Mail "Exchange" accounts, eM Client in EWS mode) must switch to
+   IMAP + CalDAV/CardDAV, JMAP, or ActiveSync on phones.
+4. **Behind a reverse proxy** (Traefik, Caddy, nginx, Synology DSM) set `TRUST_PROXY`,
+   otherwise all clients share one IP for rate limits.
+5. **New installations** need the setup token from the log
+   (`docker logs coremail | grep -i "setup token"`) or `SETUP_TOKEN`.
+6. **Admin roles are now enforced:** Server Management loses mailbox and settings write
+   access; Help Desk, Recipient, Hygiene and Compliance Management get their areas. Admins
+   under `requireMfaForAdmins` who logged in without MFA must log in again.
+7. **Set `MFA_ENCRYPTION_KEY`** (64 hex characters) before you ever rotate `JWT_SECRET` or
+   `PEPPER`; otherwise stored TOTP secrets become unreadable.
+8. **LDAP:** plain `ldap://` without StartTLS is refused (except loopback or
+   `LDAP_ALLOW_INSECURE=true`); the directory `mail` attribute must equal the login;
+   local accounts are only taken over with `allowLocalTakeover`.
+9. **Multi-host deployments** must set `INTERNAL_BIND_HOST` (and `INTERNAL_API_TOKEN`).
+10. **MinIO:** pull the new image (`docker compose pull`); data in the MinIO volume stays.
+11. Phones using ActiveSync perform one full resync after the upgrade.
+
+Known limitations: ActiveSync still sends the EAS 2.5 body element instead of the 14.1
+AirSyncBase body and answers Settings/ItemOperations/Search/MoveItems with an empty 200;
+JMAP caches successful Basic logins for up to 60 s; the Helm chart is outdated.
+
+---
+
 ## [6.0.0] — 2026-11-14 — Security & cleanup release
 
 Major release after a full code review (clean code, security, business logic and protocol

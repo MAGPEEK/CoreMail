@@ -1,6 +1,6 @@
 /**
  * @coremail/storage/auth — single source of truth for web/API login, sessions,
- * MFA verification and password reset (v6.0.0). Used by the api-gateway and the
+ * MFA verification and password reset (v7.0.0). Used by the api-gateway and the
  * auth-service.
  */
 export * from './login-service.js';

@@ -1,5 +1,5 @@
 /**
- * auth-service MFA endpoints (v6.0.0): delegated login + /auth/mfa/verify
+ * auth-service MFA endpoints (v7.0.0): delegated login + /auth/mfa/verify
  * (TOTP / backup code), re-authentication for MFA changes, WebAuthn auth start
  * bound to the MFA challenge, separate registration/authentication keys.
  * Infra-free: Prisma via globalThis.__prisma, Redis via globalThis.__authRedis.

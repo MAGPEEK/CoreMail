@@ -7,7 +7,7 @@ import { createLogger } from '@coremail/core';
 const log = createLogger('auth:totp');
 
 /**
- * Generates a new (pending, not yet enabled) TOTP secret. v6.0.0: the secret
+ * Generates a new (pending, not yet enabled) TOTP secret. v7.0.0: the secret
  * is stored AES-256-GCM encrypted (see @coremail/storage/auth mfa-crypto).
  * Callers must refuse this while TOTP is enabled (no silent overwrite).
  */

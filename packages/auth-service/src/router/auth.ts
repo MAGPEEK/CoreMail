@@ -1,5 +1,5 @@
 /**
- * auth-service login endpoints — v6.0.0: thin delegates to the single login
+ * auth-service login endpoints — v7.0.0: thin delegates to the single login
  * service in @coremail/storage/auth (same code as the api-gateway's /auth/*).
  *
  * The api-gateway serves /auth/login, /auth/refresh and /auth/logout itself and
