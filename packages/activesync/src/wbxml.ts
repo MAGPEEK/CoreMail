@@ -45,6 +45,12 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x3c: 'ContentClass', 0x3d: 'FlagType', 0x3e: 'CompleteTime',
     0x3f: 'DisallowNewTimeProposal',
   },
+  // Code page 6: GetItemEstimate ([MS-ASWBXML]; Version/Class/DateTime are EAS 12.1 only)
+  6: {
+    0x05: 'GetItemEstimate', 0x06: 'Version', 0x07: 'Collections', 0x08: 'Collection',
+    0x09: 'Class', 0x0a: 'CollectionId', 0x0b: 'DateTime', 0x0c: 'Estimate',
+    0x0d: 'Response', 0x0e: 'Status',
+  },
   // Code page 7: FolderHierarchy
   7: {
     0x05: 'Folders', 0x06: 'Folder', 0x07: 'DisplayName', 0x08: 'ServerId',
@@ -97,7 +103,8 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x0e: 'Attachments', 0x0f: 'Attachment', 0x10: 'DisplayName',
     0x11: 'FileReference', 0x12: 'Method', 0x13: 'ContentId',
     0x14: 'ContentLocation', 0x15: 'IsInline', 0x16: 'NativeBodyType',
-    0x17: 'ContentType', 0x18: 'Preview',
+    0x17: 'ContentType', 0x18: 'Preview', 0x19: 'BodyPartPreference', 0x1a: 'BodyPart',
+    0x1b: 'Status',
   },
   // Code page 20: ItemOperations
   20: {
@@ -116,7 +123,18 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x0f: 'InstanceId', 0x10: 'Mime', 0x11: 'ClientId',
     0x12: 'Status', 0x13: 'AccountId',
   },
+  // Code page 22: Email2 ([MS-ASWBXML]; EAS 14.0+)
+  22: {
+    0x05: 'UmCallerID', 0x06: 'UmUserNotes', 0x07: 'UmAttDuration', 0x08: 'UmAttOrder',
+    0x09: 'ConversationId', 0x0a: 'ConversationIndex', 0x0b: 'LastVerbExecuted',
+    0x0c: 'LastVerbExecutionTime', 0x0d: 'ReceivedAsBcc', 0x0e: 'Sender',
+    0x0f: 'CalendarType', 0x10: 'IsLeapMonth', 0x11: 'AccountId',
+    0x12: 'FirstDayOfWeek', 0x13: 'MeetingMessageType',
+  },
 };
+
+/** Code page numbers for an explicit `WbxmlElement.page` (names shared across pages). */
+export const CP = { AirSync: 0, Email: 2, GetItemEstimate: 6, AirSyncBase: 17, ItemOperations: 20, Email2: 22 } as const;
 
 // Default map: element name → [codePage, token] (lowest page wins) …
 const ELEM_TO_TOKEN: Record<string, [number, number]> = {};
@@ -153,6 +171,25 @@ export interface WbxmlElement {
   attributes?: Record<string, string>;
   children?: (WbxmlElement | string)[];
   text?: string;
+  /**
+   * Encoder: code page to emit this element on (overrides the parent-page /
+   * lowest-page resolution — needed where a name exists on several pages, e.g.
+   * AirSyncBase:Body vs. Email:Body). Decoder: set NON-enumerable (tree
+   * comparisons stay unchanged).
+   */
+  page?: number;
+  /**
+   * Encoder: content as raw octets (written as an inline string byte-exact, or as
+   * OPAQUE when `opaque` is set or the bytes contain NUL). Decoder: the raw content
+   * octets of a string/opaque element, set NON-enumerable.
+   */
+  bytes?: Buffer;
+  /** Encoder: write `bytes` as WBXML OPAQUE (binary types such as Email2:ConversationId). */
+  opaque?: boolean;
+}
+
+function hide(obj: object, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: false, writable: true, configurable: true });
 }
 
 // ─── Decoder ─────────────────────────────────────────────────────────────────
@@ -175,13 +212,15 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     return result;
   }
 
-  function readStrI(): string {
+  function readStrI(): Buffer {
     const start = pos;
     while (pos < buf.length && buf[pos] !== 0x00) pos++;
-    const s = buf.slice(start, pos).toString('utf8');
+    const s = buf.subarray(start, pos);
     pos++; // skip null terminator
     return s;
   }
+  /** String / opaque content: utf8 text + raw octets. */
+  class Content { constructor(readonly raw: Buffer) {} }
 
   function readOpaque(): Buffer {
     const length = readMBUInt32();
@@ -197,7 +236,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
   const strTableLen = readMBUInt32();
   pos += strTableLen; // skip string table
 
-  function parseElement(): WbxmlElement | string | null {
+  function parseElement(): WbxmlElement | Content | null {
     if (pos >= buf.length) return null;
     const byte = readByte();
 
@@ -209,11 +248,11 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     }
 
     if (byte === STR_I) {
-      return readStrI();
+      return new Content(readStrI());
     }
 
     if (byte === OPAQUE) {
-      return readOpaque().toString('utf8');
+      return new Content(readOpaque());
     }
 
     const hasContent = !!(byte & 0x40);
@@ -230,15 +269,22 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     }
 
     const elem: WbxmlElement = { name, children: [] };
+    hide(elem, 'page', currentPage);
 
     if (hasContent) {
-      let child: WbxmlElement | string | null;
+      let child: WbxmlElement | Content | null;
+      const parts: Buffer[] = [];
       while ((child = parseElement()) !== null) {
-        if (typeof child === 'string') {
-          elem.text = child;
+        if (child instanceof Content) {
+          parts.push(child.raw);
         } else {
           elem.children!.push(child);
         }
+      }
+      if (parts.length > 0) {
+        const raw = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+        elem.text = raw.toString('utf8');
+        hide(elem, 'bytes', raw);
       }
     }
 
@@ -246,7 +292,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
   }
 
   const root = parseElement();
-  if (!root || typeof root === 'string') throw new Error('Invalid WBXML: no root element');
+  if (!root || root instanceof Content) throw new Error('Invalid WBXML: no root element');
   return root;
 }
 
@@ -276,9 +322,27 @@ export function encodeWbxml(root: WbxmlElement): Buffer {
     writeByte(0x00);
   }
 
+  function writeBytes(data: Buffer, opaque: boolean) {
+    if (opaque || data.includes(0x00)) {
+      writeByte(OPAQUE);
+      writeMBUInt32(data.length);
+      chunks.push(data);
+    } else {
+      writeByte(STR_I);
+      chunks.push(data);
+      writeByte(0x00);
+    }
+  }
+
   function writeElement(elem: WbxmlElement, parentPage: number | null) {
-    const tokenInfo = resolveToken(elem.name, parentPage);
-    if (!tokenInfo) throw new Error(`Unknown EAS element: ${elem.name}`);
+    let tokenInfo: [number, number] | undefined;
+    if (elem.page !== undefined) {
+      const t = PAGE_NAME_TO_TOKEN[elem.page]?.[elem.name];
+      tokenInfo = t === undefined ? undefined : [elem.page, t];
+    } else {
+      tokenInfo = resolveToken(elem.name, parentPage);
+    }
+    if (!tokenInfo) throw new Error(`Unknown EAS element: ${elem.name}${elem.page !== undefined ? ` on page ${elem.page}` : ''}`);
     const [page, token] = tokenInfo;
 
     if (page !== currentPage) {
@@ -287,12 +351,15 @@ export function encodeWbxml(root: WbxmlElement): Buffer {
       currentPage = page;
     }
 
-    const hasChildren = !!(elem.children?.length || elem.text);
+    const hasBytes = !!elem.bytes && elem.bytes.length > 0;
+    const hasChildren = !!(elem.children?.length || elem.text || hasBytes);
     const tokenByte = token | (hasChildren ? 0x40 : 0x00);
     writeByte(tokenByte);
 
     if (hasChildren) {
-      if (elem.text) {
+      if (hasBytes) {
+        writeBytes(elem.bytes!, !!elem.opaque);
+      } else if (elem.text) {
         writeStrI(elem.text);
       }
       for (const child of elem.children ?? []) {
@@ -329,5 +396,14 @@ export function el(name: string, text?: string, children?: (WbxmlElement | strin
   const result: WbxmlElement = { name };
   if (text !== undefined) result.text = text;
   if (children !== undefined) result.children = children;
+  return result;
+}
+
+/** Element pinned to a code page; `content` as text, raw octets or child elements. */
+export function pel(page: number, name: string, content?: string | Buffer | WbxmlElement[], opts: { opaque?: boolean } = {}): WbxmlElement {
+  const result: WbxmlElement = { name, page };
+  if (typeof content === 'string') result.text = content;
+  else if (Buffer.isBuffer(content)) { result.bytes = content; if (opts.opaque) result.opaque = true; }
+  else if (content !== undefined) result.children = content;
   return result;
 }
