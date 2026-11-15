@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-7.0.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-8.0.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -22,7 +22,7 @@
 
 **🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — Standard-Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) verbinden sich über IMAP/SMTP. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v7.0.0** — sicher ab Werk: App-Passwörter für Mailprogramme bei aktiver Zwei-Faktor-Anmeldung, Zugangsdaten auf allen Ports nur nach TLS, Brute-Force-Sperre, rotierende Sessions, rollenbasierter Admin-Zugriff, OIDC-SSO + LDAP, vollständige Originalmails über IMAP/POP3, automatische Zertifikatserneuerung; EWS entfernt; Ende-zu-Ende getestet ([docs/e2e.md](docs/e2e.md)). **Breaking — vor dem Upgrade die [Upgrade-Hinweise](docs/releases/v7.0.0.md) lesen** · Admin-CLI `coremail` ([Doku](docs/cli.md)) · JMAP-Server ([Doku](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v8.0.0** — alle Protokolle gegen ihre RFC/Microsoft-Spezifikation geprüft und korrigiert; ActiveSync 14.1 (AirSyncBase-Bodies, Geräte-Policy-Key, Remote-Wipe); lokaler Speicher auf einem Docker-Volume oder S3 mit TLS; geänderte Zugangsdaten beenden offene Sitzungen sofort; Helm-Chart 1.0.0; Ende-zu-Ende in beiden Speichermodi getestet ([docs/e2e.md](docs/e2e.md)). **Breaking — vor dem Upgrade die [Upgrade-Hinweise](docs/releases/v8.0.0.md) lesen** · Admin-CLI `coremail` ([Doku](docs/cli.md)) · JMAP-Server ([Doku](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Hinweis zu Outlook**: CoreMail lässt sich nicht als Exchange-Konto einrichten. Outlook wird über **„Andere E-Mail-Konten" → IMAP** eingerichtet (bei aktivem MFA mit App-Passwort), Kalender + Kontakte via CalDAV/CardDAV (Outlook-CalDav-Synchronizer-Plugin; oder Apple Kalender, Thunderbird Lightning).
 >
@@ -63,7 +63,7 @@
 | **IMAP4rev2** (Port 993 implicit-TLS, Port 143 STARTTLS — Login erst nach TLS, davor `LOGINDISABLED`) — Originalnachrichten byte-genau inkl. Anhängen | ✅ | **9051** |
 | IMAP-Capabilities: AUTHENTICATE PLAIN/LOGIN, IDLE, CONDSTORE, ESEARCH, SEARCHRES, BINARY, LIST-EXTENDED, LIST-STATUS, QUOTA (nur lesend), SPECIAL-USE, NAMESPACE, MOVE, UNSELECT, UIDPLUS, ID, ENABLE, LITERAL+, STATUS=SIZE, vollständiges SEARCH; Sequenznummern pro Sitzung mit EXISTS/EXPUNGE/FLAGS-Updates | ✅ | 2087, 2971, 3502, 3516, 3691, 4314, 4731, 4978, 5161, 5182, 5258, 5819, 6154, 6851, 7162, 7888, 8438, 9208 |
 | **POP3** (Port 995 implicit-TLS, Port 110 STLS — USER/PASS erst nach TLS) + App-Password-Support | ⚠️ kein SASL (`AUTH`); nur USER/PASS | 1939, 2595 |
-| **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ⚠️ erfolgreiche Basic-Logins werden 60 s zwischengespeichert (Passwortänderung oder widerrufenes App-Passwort greift erst nach bis zu 60 s) | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
+| **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | Admin-CLI `coremail` im Container (Benutzer, Postfächer, Konnektoren, Banner, Zertifikate) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
 | ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile (Provision, FolderSync, Sync mit AirSyncBase-Bodies, Ping, SendMail, SmartReply/Forward, GetAttachment, ItemOperations, GetItemEstimate, Settings, Search, MoveItems, MeetingResponse, ResolveRecipients) | ⚠️ nicht mit echten Geräten getestet; Ordner anlegen/umbenennen/löschen vom Gerät aus wird nicht unterstützt |
@@ -315,7 +315,7 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:7.0.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
+| `coremail` | `magpeek/coremail-app:8.0.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -332,7 +332,7 @@ Die Datei `infra/docker/docker-compose.yml` ist seit v5.8.0 auf das Nötigste re
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-7.0.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-8.0.0}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER fehlt in .env  →  openssl rand -hex 32}
@@ -432,7 +432,7 @@ REDIS_PASSWORD=…
 MINIO_ROOT_PASSWORD=…
 
 # ── Optional (Defaults in Klammern) ────────────────────────
-#COREMAIL_VERSION=7.0.0         # Image-Tag
+#COREMAIL_VERSION=8.0.0         # Image-Tag
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
 #MINIO_ROOT_USER=minioadmin
@@ -596,7 +596,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:7.0.0
+docker pull magpeek/coremail-app:8.0.0
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -604,6 +604,12 @@ docker pull magpeek/coremail-app:7.0.0
 ---
 
 ## Versionsverlauf
+
+### v8.x — Protokoll-Konformität
+
+| Version | Highlights |
+|---------|-----------|
+| **v8.0.0** | **Protokoll-Konformität** (Breaking). Alle Protokolle gegen RFC/MS-Spezifikation und Clean Code geprüft; alle Befunde mit Tests behoben. SMTP-Ergebnisse pro Empfänger, geprüftes Smarthost-TLS, RFC-3464-Bounces; IMAP-Sequenznummern pro Sitzung, modified UTF-7; POP3 atomares QUIT + Maildrop-Sperre; JMAP vollständige Absender-Policy, seitenweises `/changes`; CalDAV/CardDAV-Discovery + Filter; ActiveSync 14.1 (AirSyncBase, ItemOperations, Search, MeetingResponse, Pflicht-Policy-Key, Remote-Wipe). Lokaler Speicher auf Docker-Volume, S3 mit TLS, `coremail storage migrate`. Geänderte Zugangsdaten schließen offene Sitzungen sofort. Neues Helm-Chart 1.0.0. Ende-zu-Ende getestet (MinIO 131/131, Dateisystem 126/126). |
 
 ### v7.x — Sicher ab Werk
 
@@ -690,7 +696,7 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v7.0.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v8.0.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

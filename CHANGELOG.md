@@ -11,6 +11,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+---
+
+## [8.0.0] — 2026-11-15 — Protocol conformance, ActiveSync 14.1, local storage, live session control
+
+Major release (SemVer: several security fixes change behaviour for operators and non-conformant
+clients — see "Upgrade notes (breaking)" at the end of this section). Every protocol was
+reviewed against its RFC/MS specification and Clean Code, all critical/high/medium findings
+were fixed with regression tests, and the release was verified end to end against the real
+container image in both storage modes (MinIO 131/131, filesystem 126/126; `pnpm -r test`
+1,315 tests; independent pre-release review with all findings fixed).
+
 ### Added
 
 - **ActiveSync 14.1 message bodies:** Sync sends `airsyncbase:Body` per BodyPreference (plain
