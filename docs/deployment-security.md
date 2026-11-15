@@ -87,7 +87,9 @@ its `pg_dump` and says so explicitly: an automatic unique-constraint change
 still runs (dump skipped, warning), a destructive change with
 `COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true` stops until you dumped the database
 yourself with a matching `pg_dump` (or a provider snapshot) and set
-`COREMAIL_SCHEMA_BACKUP=skip` (Helm: `app.schemaSync.skipBackup=true`).
+`COREMAIL_SCHEMA_BACKUP=skip` in `.env` — the shipped Compose files pass it
+(and `COREMAIL_SCHEMA_BACKUP_DIR`) through to the container (Helm:
+`app.schemaSync.skipBackup=true`).
 
 ---
 
@@ -192,6 +194,21 @@ JWT_SECRET=… PEPPER=… node scripts/decrypt-backup.mjs 123.mbox.enc 123.mbox
 ```
 
 It verifies every frame and deletes the partial output on any error.
+
+The app image ships the same script as `coremail-decrypt-backup` (from 9.0).
+Inside the container `BACKUP_ENCRYPTION_KEY`, `JWT_SECRET` and `PEPPER` are
+already set, so no key has to be typed on the command line:
+
+```bash
+docker cp a_at_b.zip.enc coremail:/tmp/a_at_b.zip.enc
+docker exec coremail coremail-decrypt-backup /tmp/a_at_b.zip.enc /tmp/a_at_b.zip
+docker cp coremail:/tmp/a_at_b.zip ./a_at_b.zip
+docker exec coremail rm /tmp/a_at_b.zip.enc /tmp/a_at_b.zip
+docker exec coremail coremail-decrypt-backup --help
+```
+
+With an older key (after a rotation) pass it explicitly:
+`docker exec -e BACKUP_ENCRYPTION_KEY=<old key> coremail coremail-decrypt-backup …`.
 
 ---
 
