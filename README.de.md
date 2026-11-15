@@ -252,7 +252,23 @@ cd CoreMail
 bash scripts/setup.sh
 ```
 
-Das Skript prüft Docker, erstellt die `.env` mit zufällig generierten Schlüsseln und zeigt die nächsten Schritte. Alternativ manuell:
+Das Skript prüft Docker, erstellt die `.env` mit zufällig generierten Schlüsseln und zeigt die nächsten Schritte.
+
+**Stack-Variante wählen** mit `--variant` (Standard: `standard`):
+
+| Variante | Compose-Datei | Inhalt | Für |
+|---|---|---|---|
+| `minimal` | `infra/docker/docker-compose.minimal.yml` | coremail + PostgreSQL + Redis, Mails auf dem lokalen Volume, kein rspamd/ClamAV | 1–50 Benutzer, ~1 GB RAM |
+| `standard` | `infra/docker/docker-compose.yml` | + MinIO, rspamd, ClamAV | Standard, bestehende Installationen |
+| `full` | `infra/docker/docker-compose.full.yml` | alles + Ressourcenlimits, Log-Rotation, Profile `minio` / `backup` / `geoip` | 50–500 Benutzer, ab 4 GB RAM |
+
+```bash
+bash scripts/setup.sh --variant minimal    # danach: docker compose -f infra/docker/docker-compose.minimal.yml up -d
+```
+
+Vergleich, Speicher einbinden (eigene Platte, NFS/SMB, Bind-Mounts), Backups und Wechsel zwischen den Varianten: [docs/docker-compose.md](docs/docker-compose.md) (Englisch).
+
+Alternativ manuell:
 
 ```bash
 cp .env.example .env

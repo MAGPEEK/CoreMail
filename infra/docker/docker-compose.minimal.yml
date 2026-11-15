@@ -1,0 +1,185 @@
+name: coremail
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail 8.0.0 — Docker Compose, variant MINIMAL
+#
+#  Variants (docs/docker-compose.md has the comparison table):
+#    docker-compose.minimal.yml   MINIMAL   ← this file: coremail + postgres + redis
+#    docker-compose.yml           STANDARD  + minio, rspamd, clamav (existing installs)
+#    docker-compose.full.yml      MAXIMAL   + rspamd, clamav, limits, log rotation,
+#                                           optional profiles minio / backup / geoip
+#
+#  For 1–50 users on a small VPS: 1–2 vCPU, 2 GB RAM (1 GB only with swap).
+#  Measured (8.0.0, empty install): coremail 650–850 MB (12 Node.js services,
+#  peak right after start), postgres ~110 MB, redis ~10 MB → ~0.8–1 GB in total.
+#
+#  What is NOT in this stack:
+#    • no rspamd (spam scoring) and no ClamAV (virus scanning). SPF, DKIM, DMARC,
+#      ARC, DNSBL, greylisting, the attachment filter and the blacklists stay
+#      active — they run inside the coremail container.
+#      After the setup wizard switch both scanners off in BCP → Protection
+#      ("rspamd" and "ClamAV"; they default to on). Until then every inbound
+#      mail waits for the failing lookups of the missing hosts (measured ~10 s)
+#      and logs two errors — it is still delivered (rspamd fails open, ClamAV
+#      accepts unscanned), unless "block on failure" for ClamAV is on: then
+#      every inbound mail is deferred (451).
+#    • no MinIO: mail contents live on the volume coremail-data (/data/objects,
+#      OBJECT_STORAGE=filesystem). The built-in backup service needs an S3 target
+#      (S3_ENDPOINT etc. in .env); without it back up the volumes instead
+#      (docs/docker-compose.md → Backup and restore).
+#
+#  Start (in the repo root):
+#    bash scripts/setup.sh --variant minimal
+#    docker compose -f infra/docker/docker-compose.minimal.yml up -d
+#    docker logs coremail 2>&1 | grep -i "setup token"   → http://<server-ip>:3000/bcp/
+#
+#  Required in .env: JWT_SECRET, PEPPER, POSTGRES_PASSWORD, REDIS_PASSWORD
+#  (scripts/setup.sh generates them; MINIO_ROOT_PASSWORD is not needed here).
+# ═════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  coremail:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-8.0.0}
+    container_name: coremail
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
+      PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
+
+      # Non-superuser DB role on fresh databases (setup.sh); unset = superuser "coremail"
+      DATABASE_URL: postgresql://${COREMAIL_DB_USER:-coremail}:${COREMAIL_DB_PASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}}@postgres:5432/coremail
+      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
+      COREMAIL_ALLOW_SCHEMA_DATA_LOSS: ${COREMAIL_ALLOW_SCHEMA_DATA_LOSS:-false}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+
+      # ── Object storage: filesystem only (volume coremail-data) ───────────────
+      # Fixed on purpose. An installation whose mail is still in MinIO must run
+      # `coremail storage migrate --from minio --to filesystem` on the standard
+      # stack first (docs/storage.md) — otherwise the startup check blocks
+      # (/healthz 503 "missing-objects"), nothing is lost.
+      OBJECT_STORAGE: filesystem
+      STORAGE_PATH:   /data/objects
+
+      # ── Built-in backup service (optional external S3 target) ───────────────
+      # Empty = backups are not configured (logged once, mail is unaffected).
+      S3_ENDPOINT:   ${S3_ENDPOINT:-}
+      S3_REGION:     ${S3_REGION:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+
+      # ── Operation ────────────────────────────────────────────────────────────
+      NODE_ENV:  production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ:        ${TZ:-Europe/Berlin}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
+      WEBAUTHN_RP_ID:  ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      SECURITY_FILTER_URL: http://localhost:3002   # internal — do not change
+      SMARTHOST_TLS_INSECURE: ${SMARTHOST_TLS_INSECURE:-false}
+      RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
+      VAPID_PUBLIC_KEY:  ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+
+    ports:
+      - "25:25"       # SMTP inbound (server → server)
+      - "465:465"     # SMTPS (implicit TLS)
+      - "587:587"     # SMTP submission (STARTTLS)
+      - "143:143"     # IMAP (STARTTLS)
+      - "993:993"     # IMAPS
+      - "110:110"     # POP3 (STARTTLS)  — remove if POP3 is not wanted
+      - "995:995"     # POP3S            — same
+      - "80:3000"     # HTTP: Let's Encrypt HTTP-01 + redirect
+      - "443:443"     # HTTPS: integrated TLS proxy (BCP → SSL/TLS)
+      - "3000:3000"   # HTTP without TLS: initial setup / behind your own reverse proxy
+    volumes:
+      # Mail contents (/data/objects) and pre-migration dumps (/data/backups).
+      # Bind mount instead, e.g.:  - /srv/coremail/data:/data   (docs/docker-compose.md)
+      - coremail-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '${COREMAIL_CPU_LIMIT:-2}'
+          memory: ${COREMAIL_MEM_LIMIT:-1536m}
+    # Same hardening as docker-compose.yml (docs/deployment-security.md §5)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_BIND_SERVICE]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks: [coremail]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       coremail
+      POSTGRES_USER:     coremail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
+    volumes:
+      # Local disk only — never NFS/SMB (docs/docker-compose.md → Storage).
+      # Bind mount instead, e.g.:  - /srv/coremail/postgres:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./postgres/02-app-role.sh:/docker-entrypoint-initdb.d/02-app-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Data (back up pgdata + coremail-data; redisdata is expendable)
+#    pgdata         PostgreSQL: users, folders, mail metadata, settings
+#    coremail-data  /data/objects mail contents + attachments, /data/backups dumps
+#    redisdata      sessions, queues, greylisting
+#  Same volume names as docker-compose.yml → switching variants keeps the data.
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  pgdata:
+  coremail-data:
+  redisdata:
+
+networks:
+  coremail:
+    driver: bridge
