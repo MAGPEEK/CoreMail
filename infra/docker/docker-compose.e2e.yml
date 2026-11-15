@@ -1,0 +1,68 @@
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail — end-to-end test override (see docs/e2e.md)
+#
+#    docker compose -p coremail-e2e --env-file <e2e.env> \
+#      -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.e2e.yml up -d
+#
+#  • Uses the locally built image coremail-app:e2e (docker build -f infra/docker/Dockerfile.app -t coremail-app:e2e .)
+#  • Publishes only high host ports on 127.0.0.1 — does not collide with a
+#    production stack on the same machine.
+#  • Adds an SMTP sink ("sink") — the e2e runner configures it as smarthost, so
+#    outbound mail (auto-replies, DSNs, relay) never leaves the test network.
+#  • Own container names; use a dedicated project name (-p coremail-e2e) so
+#    `down -v` only removes the e2e volumes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+services:
+  coremail:
+    image: ${E2E_IMAGE:-coremail-app:e2e}
+    container_name: coremail-e2e
+    restart: "no"
+    ports: !override
+      - "127.0.0.1:12525:25"
+      - "127.0.0.1:12465:465"
+      - "127.0.0.1:12587:587"
+      - "127.0.0.1:12143:143"
+      - "127.0.0.1:12993:993"
+      - "127.0.0.1:12110:110"
+      - "127.0.0.1:12995:995"
+      - "127.0.0.1:18080:3000"
+      - "127.0.0.1:18443:443"
+    depends_on: !override
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      minio:    { condition: service_healthy }
+      sink:     { condition: service_started }
+
+  postgres:
+    container_name: coremail-e2e-postgres
+    restart: "no"
+  redis:
+    container_name: coremail-e2e-redis
+    restart: "no"
+  minio:
+    # minio/minio is no longer published on Docker Hub (pull access denied since
+    # MinIO stopped community images) — use a maintained community build.
+    image: ${E2E_MINIO_IMAGE:-pgsty/minio:latest}
+    container_name: coremail-e2e-minio
+    restart: "no"
+    ports: !reset []
+  rspamd:
+    container_name: coremail-e2e-rspamd
+    restart: "no"
+  clamav:
+    container_name: coremail-e2e-clamav
+    restart: "no"
+
+  # Local SMTP sink (smarthost target). Stores every received message and lists
+  # them over HTTP: GET http://127.0.0.1:18025/messages
+  sink:
+    image: node:22-alpine
+    container_name: coremail-e2e-sink
+    restart: "no"
+    command: ["node", "/sink/smtp-sink.mjs"]
+    volumes:
+      - ../../scripts/e2e/smtp-sink.mjs:/sink/smtp-sink.mjs:ro
+    ports:
+      - "127.0.0.1:18025:8025"
+    networks: [coremail]
