@@ -18,6 +18,7 @@
 import { prisma } from '@coremail/storage';
 import { flagList } from '../fetch/imap-string.js';
 import { type ImapSession, type SelectedMailbox, sendUntagged, sendOk } from './state.js';
+import { chunkRanges, rangesOf } from './uid-set.js';
 
 export interface ViewRow { uid: number; flags: string[]; modSeq: bigint }
 
@@ -133,16 +134,20 @@ export function markReported(view: SelectedMailbox, uid: number, modSeq: bigint)
 export function reportExpunged(session: ImapSession, view: SelectedMailbox, gone: Set<number>): void {
   if (gone.size === 0) return;
   const keep: number[] = [];
+  const vanished: number[] = [];
   let removed = 0;
   for (const [i, uid] of view.uids.entries()) {
     if (gone.has(uid)) {
-      sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
+      // RFC 7162 §3.2.10: with QRESYNC enabled, VANISHED replaces EXPUNGE.
+      if (session.qresyncEnabled) vanished.push(uid);
+      else sendUntagged(session, `${i + 1 - removed} EXPUNGE`);
       removed++;
       view.known.delete(uid);
     } else {
       keep.push(uid);
     }
   }
+  for (const set of chunkRanges(rangesOf(vanished))) sendUntagged(session, `VANISHED ${set}`);
   view.uids = keep;
   if (removed > 0) view.searchRes = view.searchRes.filter((uid) => !gone.has(uid));
 }
@@ -200,9 +205,25 @@ export async function syncView(session: ImapSession, opts: SyncOptions): Promise
  * Sends the pending mailbox updates and the tagged OK of a command.
  * `expunge` follows RFC 9051 §7.5.1 (false for FETCH, STORE and SEARCH).
  */
-export async function completeWithUpdates(session: ImapSession, tag: string, text: string, expunge = true): Promise<void> {
+export async function completeWithUpdates(
+  session: ImapSession, tag: string, text: string, expunge = true, withHighestModSeq = false,
+): Promise<void> {
+  // RFC 7162 §3.2.10: after EXPUNGE / UID EXPUNGE / MOVE a QRESYNC client is told
+  // the HIGHESTMODSEQ it is now synchronised to. It is read BEFORE the updates
+  // are computed, so a change racing with them is reported again later.
+  let prefix = '';
+  if (withHighestModSeq && session.qresyncEnabled && session.selected) {
+    const highest = await highestModSeqOf(session.selected.folderId);
+    if (highest !== null) prefix = `[HIGHESTMODSEQ ${highest}] `;
+  }
   if (session.selected) await syncView(session, { expunge });
-  sendOk(session, tag, text);
+  sendOk(session, tag, `${prefix}${text}`);
+}
+
+/** Current highestModSeq of the mailbox a folder belongs to (null: folder gone). */
+export async function highestModSeqOf(folderId: string): Promise<bigint | null> {
+  const folder = await prisma.folder.findFirst({ where: { id: folderId }, select: { mailbox: { select: { highestModSeq: true } } } });
+  return folder?.mailbox?.highestModSeq ?? null;
 }
 
 /** Runs `fn` after all earlier queued update work of the session (IDLE push/poll vs. DONE). */

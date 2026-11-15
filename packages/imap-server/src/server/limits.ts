@@ -31,6 +31,12 @@ export function maxConnsPerUser(): number { return maxPerUser; }
 /** Overrides IMAP_MAX_CONNS_PER_USER (tests). */
 export function setMaxConnsPerUser(n: number): void { maxPerUser = n; }
 
+let maxSort = envLimit('IMAP_SORT_MAX_MESSAGES', 100_000);
+/** Largest mailbox (messages in the view) SORT/THREAD work on; <= 0: unlimited. */
+export function maxSortMessages(): number { return maxSort > 0 ? maxSort : Number.MAX_SAFE_INTEGER; }
+/** Overrides IMAP_SORT_MAX_MESSAGES (tests). */
+export function setMaxSortMessages(n: number): void { maxSort = n; }
+
 const exempt = createExemptIpMatcher(process.env['MAIL_CONN_EXEMPT_CIDRS']);
 export const invalidExemptEntries = exempt.invalid;
 

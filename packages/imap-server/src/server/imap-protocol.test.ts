@@ -81,9 +81,12 @@ function matches(row: Row, where: Row | undefined): boolean {
     const value = row[key];
     if (cond === null) return value === null || value === undefined;
     if (typeof cond === 'object') {
-      const c = cond as { has?: unknown; in?: unknown[] };
+      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number };
       if ('has' in c) return (value as unknown[]).includes(c.has);
       if ('in' in c) return (c.in ?? []).includes(value);
+      if ('gte' in c || 'lte' in c) {
+        return (c.gte === undefined || (value as number) >= c.gte) && (c.lte === undefined || (value as number) <= c.lte);
+      }
       throw new Error(`fake prisma: unsupported condition on "${key}"`);
     }
     return value === cond;
