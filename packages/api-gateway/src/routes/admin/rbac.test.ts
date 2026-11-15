@@ -28,7 +28,13 @@ const settingsPuts: Row[] = [];
 
 installFakePrisma({
   user: {
-    findUnique: (a) => { const q = a as { where: Row; select?: Row }; return applySelect(users[String(q.where['id'])] ?? null, q.select); },
+    // Token actors ("actor-<ROLE>") exist with that role — v7.0.1 admin guards check the current role.
+    findUnique: (a) => {
+      const q = a as { where: Row; select?: Row };
+      const id = String(q.where['id']);
+      const row = users[id] ?? (id.startsWith('actor-') ? { id, role: id.slice(6), active: true } : null);
+      return applySelect(row, q.select);
+    },
     update: (a) => { const q = a as { where: Row; data: Row; select?: Row }; updates.push(q.data); return applySelect({ ...users[String(q.where['id'])], ...q.data }, q.select); },
     delete: () => ({}),
     findMany: () => [],

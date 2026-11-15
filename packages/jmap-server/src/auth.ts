@@ -50,12 +50,21 @@ async function loadUser(where: { id: string } | { email: string }): Promise<Jmap
 }
 
 export async function authenticateBearer(token: string): Promise<JmapUser | null> {
+  const startedAt = Date.now();
   try {
     const payload = verifyAccessToken(token);
     if (!payload?.sub) return null;
     // v7.0.1: tokens of revoked sessions (logout, password change, admin revoke)
     if (await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId)) return null;
-    return await loadUser({ id: payload.sub });
+    const user = await loadUser({ id: payload.sub });
+    return user ? {
+      ...user,
+      auth: {
+        credential: 'token', startedAt,
+        ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
+        ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
+      },
+    } : null;
   } catch {
     return null;
   }
@@ -70,9 +79,9 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
  * not cached; `error` (database down) is reported as AuthUnavailableError.
  */
 export async function authenticateBasic(email: string, password: string, ip?: string): Promise<JmapUser | null> {
-  const hit = basicCache.get(email, password);
-  if (hit) return hit;
   const startedAt = Date.now();
+  const hit = basicCache.get(email, password);
+  if (hit) return { ...hit, ...(hit.auth ? { auth: { ...hit.auth, startedAt } } : {}) };
 
   const result = await verifyMailCredentials(email, password, { ip, protocol: 'jmap' });
   if (result.status === 'error') throw new AuthUnavailableError('temporary');
@@ -83,6 +92,7 @@ export async function authenticateBasic(email: string, password: string, ip?: st
   const jmapUser: JmapUser = {
     userId: user.id, email: user.email, displayName: user.displayName, domainId: user.domainId,
     role: user.role,
+    auth: { credential: result.method, startedAt, ...(result.appPasswordId ? { appPasswordId: result.appPasswordId } : {}) },
   };
   // Not cached when the user was invalidated while the check was running.
   basicCache.set(email, password, user.id, jmapUser, startedAt);

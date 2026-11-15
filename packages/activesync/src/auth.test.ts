@@ -58,7 +58,10 @@ async function run(login: string, pw: string, ip = '203.0.113.20') {
 test('password login of a non-MFA user passes', async () => {
   const out = await run('bob@example.com', 'pw');
   assert.equal(out.next, true);
-  assert.deepEqual(out.user, { userId: 'u1', email: 'bob@example.com' });
+  // v7.0.1: the credential used (+ check start) travels with the request (Ping termination).
+  const { authStartedAt, ...user } = out.user as Record<string, unknown>;
+  assert.deepEqual(user, { userId: 'u1', email: 'bob@example.com', credential: 'password' });
+  assert.equal(typeof authStartedAt, 'number');
 });
 
 test('DOMAIN\\user and bare user names are normalised', async () => {

@@ -8,6 +8,10 @@ export type AuthMechanism = 'PLAIN' | 'LOGIN';
 export interface AuthUser {
   id: string;
   email: string;
+  /** v7.0.1: credential used (live-session termination after credential changes). */
+  credential?: 'password' | 'app_password' | 'external';
+  /** v7.0.1: the app password used, when credential is app_password. */
+  appPasswordId?: string;
 }
 
 export interface Transaction {

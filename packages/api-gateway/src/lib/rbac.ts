@@ -65,6 +65,23 @@ export function isAdminRole(role: string | undefined): boolean {
   return !!role && role !== 'USER' && isUserRole(role);
 }
 
+/** Privilege rank (v7.0.1) — used to pick the stricter of two roles. */
+const ROLE_RANK: Record<UserRoleName, number> = {
+  USER: 0, VIEW_ONLY_ORG: 1, HELP_DESK: 1,
+  RECIPIENT_MANAGEMENT: 2, COMPLIANCE_MANAGEMENT: 2, HYGIENE_MANAGEMENT: 2, SERVER_MANAGEMENT: 2,
+  ORGANIZATION_MANAGEMENT: 3,
+};
+
+/**
+ * The less privileged of two roles (v7.0.1): the role in an access token vs.
+ * the current role in the database. Same rank (lateral change) → `current`
+ * (the database is authoritative); unknown roles count as USER.
+ */
+export function stricterRole(tokenRole: string, current: string): string {
+  const rank = (r: string): number => (isUserRole(r) ? ROLE_RANK[r] : 0);
+  return rank(tokenRole) < rank(current) ? tokenRole : current;
+}
+
 export function isReadMethod(method: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }

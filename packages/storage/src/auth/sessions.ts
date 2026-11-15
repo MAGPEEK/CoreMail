@@ -309,6 +309,8 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
   await publishUserAuthChange(userId, opts.reason, {
     ...(ids.length > 0 ? { sessionIds: ids } : {}),
     revokeBefore: mark,
+    // v7.0.1: live mail connections authenticated with an app password end too.
+    ...(opts.appPasswords ? { appPasswordsRevoked: true } : {}),
   });
   log.info({ userId, sessions, appPasswords, reason: opts.reason }, 'All sessions revoked');
   return { sessions, appPasswords };

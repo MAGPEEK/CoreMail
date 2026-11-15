@@ -1,6 +1,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
+import { LiveConnectionRegistry, type LiveCredential } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
 import {
   expunge, verifyMailCredentials, loadRawMessage, parseMimeTree, headerBytes, type RawSourceMessage,
@@ -25,6 +26,15 @@ export function setPop3Hostname(hostname: string): void {
 }
 
 type State = 'AUTHORIZATION' | 'TRANSACTION' | 'UPDATE';
+
+/**
+ * v7.0.1: authenticated POP3 sessions, ended when their credentials become
+ * invalid (password change/reset, MFA enabled, app password revoked,
+ * deactivation …). server.ts attaches the registry to the auth bus.
+ */
+export const pop3LiveSessions = new LiveConnectionRegistry('pop3');
+
+export const CREDENTIALS_CHANGED_ERR = '-ERR [AUTH] Credentials changed, please log in again';
 
 /** RFC 1939 §3: the autologout timer must be at least 10 minutes. */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -53,6 +63,9 @@ export class POP3Session {
   private epoch = 0;
   /** Set after QUIT / autologout: further input is ignored. */
   private closed = false;
+  /** v7.0.1: credential change — the running command finishes, nothing after it runs. */
+  private terminating = false;
+  private unregisterLive: (() => void) | null = null;
   private readonly onDataBound = (chunk: string) => this.onData(chunk);
 
   constructor(
@@ -68,6 +81,7 @@ export class POP3Session {
   start() {
     this.socket.setEncoding('utf8');
     this.socket.on('data', this.onDataBound);
+    this.socket.once('close', () => { this.unregisterLive?.(); this.unregisterLive = null; });
     // RFC 1939 §3: inactivity autologout timer (≥ 10 minutes). No UPDATE state:
     // messages marked as deleted stay in the maildrop.
     this.socket.setTimeout(IDLE_TIMEOUT_MS, () => {
@@ -110,7 +124,7 @@ export class POP3Session {
   /** Commands queued before STLS (older epoch) or after QUIT/autologout are dropped. */
   private enqueue(epoch: number, fn: () => Promise<void>) {
     this.queue = this.queue.then(async () => {
-      if (this.closed || epoch !== this.epoch) return;
+      if (this.closed || this.terminating || epoch !== this.epoch) return;
       try {
         await fn();
       } catch (err) {
@@ -220,6 +234,7 @@ export class POP3Session {
 
       // v7: shared mail-protocol check — DOMAIN\user / bare user name
       // normalisation, MFA → app passwords only, shared lockout.
+      const authStartedAt = Date.now();
       const result = await verifyMailCredentials(this.user, args[0], {
         ip: this.socket.remoteAddress,
         protocol: 'pop3',
@@ -239,10 +254,41 @@ export class POP3Session {
       this.userId = result.user.id;
       await this.loadMaildrop();
       this.state = 'TRANSACTION';
+      this.registerLive(result.method, result.appPasswordId, authStartedAt);
       this.send(`+OK mailbox has ${this.maildrop.length} messages`);
     } else {
       this.send('-ERR unknown command');
     }
+  }
+
+  /** v7.0.1: the session ends when the credentials it used become invalid. */
+  private registerLive(method: string, appPasswordId?: string, authStartedAt?: number) {
+    if (!this.userId) return;
+    const credential: LiveCredential = method === 'password' || method === 'app_password' || method === 'external' ? method : 'unknown';
+    this.unregisterLive?.();
+    this.unregisterLive = pop3LiveSessions.register({
+      userId: this.userId,
+      credential,
+      ...(appPasswordId ? { appPasswordId } : {}),
+      terminate: () => this.terminateForCredentialChange(),
+    }, authStartedAt);
+  }
+
+  /**
+   * Ends the session after a credential change: the running command (e.g. a
+   * RETR) completes, queued commands are dropped, then -ERR [AUTH] and close.
+   * No UPDATE state — messages marked as deleted are not removed (RFC 1939 §6).
+   */
+  private terminateForCredentialChange() {
+    this.unregisterLive = null;
+    if (this.closed || this.terminating) return;
+    this.terminating = true;
+    this.queue = this.queue.then(() => {
+      if (this.closed) return;
+      this.send(CREDENTIALS_CHANGED_ERR);
+      this.closed = true;
+      this.socket.end();
+    });
   }
 
   private async loadMaildrop() {

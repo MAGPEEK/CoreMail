@@ -25,7 +25,12 @@ export async function verifySmtpCredentials(
   switch (result.status) {
     case 'ok':
       log.info({ email: result.user.email, method: result.method }, 'SMTP auth success');
-      return { id: result.user.id, email: result.user.email };
+      return {
+        id: result.user.id,
+        email: result.user.email,
+        credential: result.method,
+        ...(result.appPasswordId ? { appPasswordId: result.appPasswordId } : {}),
+      };
     case 'locked':
       return { failure: 'locked', retryAfterSec: result.retryAfterSec };
     case 'error':

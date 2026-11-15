@@ -5,9 +5,11 @@ import { X509Certificate } from 'node:crypto';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
+  startAuthInvalidationSubscriber,
 } from '@coremail/core';
 import { connectDatabase, ensureBuckets, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
+import { smtpLiveSessions } from './core/live-sessions.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
 import { submissionHandlers } from './submission/handler.js';
@@ -377,6 +379,9 @@ async function reloadListeners(): Promise<void> {
 async function main(): Promise<void> {
   await connectDatabase();
   void initRuntimeLogLevel('smtp-server', { aliases: ['smtp'] }); // BCP per-service log level
+  // v7.0.1: credential changes end the user's authenticated submission sessions (421).
+  smtpLiveSessions.attachInvalidation();
+  startAuthInvalidationSubscriber();
   await ensureBuckets();
   await refreshHostname();
   await refreshTlsConfig(); // load certificate or generate self-signed

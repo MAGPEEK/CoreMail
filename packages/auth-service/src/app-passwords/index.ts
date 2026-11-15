@@ -44,7 +44,8 @@ export async function deleteAppPassword(userId: string, id: string): Promise<boo
   if (!record) return false;
   await prisma.appPassword.delete({ where: { id } });
   // v7.0.1: cached mail logins with this app password are dropped immediately (JMAP).
-  await publishUserAuthChange(userId, 'app-password-revoked');
+  // v7.0.1: live IMAP/POP3/SMTP/EAS/JMAP connections that used THIS app password end.
+  await publishUserAuthChange(userId, 'app-password-revoked', { appPasswordId: id });
   log.info({ userId, id }, 'App password deleted');
   return true;
 }

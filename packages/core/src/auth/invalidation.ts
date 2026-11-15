@@ -43,6 +43,10 @@ export interface AuthInvalidationEvent {
    * session `except`" — mirrors revokeAllSessions() in other processes.
    */
   revokeBefore?: { before: number; except: string | null; expires: number };
+  /** app-password-revoked: the revoked app password (live connections using it end). */
+  appPasswordId?: string;
+  /** All app passwords of the user were deleted together with the sessions. */
+  appPasswordsRevoked?: boolean;
 }
 
 export type AuthInvalidationHandler = (event: AuthInvalidationEvent) => void;
@@ -106,6 +110,8 @@ export function parseAuthInvalidationEvent(message: string): AuthInvalidationEve
       expires: rb['expires'],
     };
   }
+  if (typeof r['appPasswordId'] === 'string' && r['appPasswordId']) event.appPasswordId = r['appPasswordId'];
+  if (r['appPasswordsRevoked'] === true) event.appPasswordsRevoked = true;
   return event;
 }
 

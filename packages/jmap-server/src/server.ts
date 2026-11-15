@@ -31,6 +31,7 @@ import { invalidateJmapFlagCache, requireJmapEnabled } from './feature-flag.js';
 import { resolveBlob, storeUpload } from './blobs.js';
 import { eventSourceHandler } from './push/eventsource.js';
 import { attachWebSocket } from './push/websocket.js';
+import { jmapLiveConnections } from './push/live.js';
 import { startChangeBus } from './push/bus.js';
 import './methods/index.js';
 import type { JmapUser } from './types.js';
@@ -54,7 +55,9 @@ async function main(): Promise<void> {
   await connectDatabase();
   void initRuntimeLogLevel('jmap-server', { aliases: ['jmap'] }); // BCP per-service log level
   startChangeBus();
-  // v7.0.1: drop cached Basic logins + apply session revocations on credential changes
+  // v7.0.1: drop cached Basic logins + apply session revocations on credential changes;
+  // WebSocket / EventSource push connections of the user end.
+  jmapLiveConnections.attachInvalidation();
   startAuthInvalidationSubscriber();
 
   try {

@@ -224,11 +224,17 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   });
   // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept; inactive users cannot use them anyway).
+  const roleChanged = !!role && role !== user.role;
   if (password || (active === false && user.active)) {
     await revokeAllSessions(id, { reason: password ? 'admin-password-reset' : 'deactivated' });
-  } else if ((role && role !== user.role) || (active !== undefined && active !== user.active)) {
-    // v7.0.1: cached logins carry the role / active state — drop them now.
-    await publishUserAuthChange(id, role && role !== user.role ? 'role-change' : 'reactivated');
+  } else if (roleChanged) {
+    // v7.0.1: the role travels in the access token — a role change ends all
+    // web/API sessions (refresh tokens included) so no token keeps the old
+    // role. Mail-protocol logins and app passwords are not affected.
+    await revokeAllSessions(id, { reason: 'role-change' });
+  } else if (active !== undefined && active !== user.active) {
+    // v7.0.1: cached logins carry the active state — drop them now.
+    await publishUserAuthChange(id, 'reactivated');
   }
   res.json(updated);
 });

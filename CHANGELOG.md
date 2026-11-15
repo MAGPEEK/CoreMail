@@ -35,6 +35,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   (`DELETE /auth/sessions/:id`) now revokes its access tokens immediately.
 - **EMS bridge:** `Set-Mailbox -IsEnabled $false` and `Remove-Mailbox` now end all sessions,
   like the BCP mailbox routes; deleting a mailbox in the BCP does the same.
+- **A role change ends the user's web/API sessions.** The role is part of the access token, so
+  a demoted admin kept the old rights for up to 15 minutes. Changing the role
+  (`PUT /api/v1/admin/mailboxes/:id`, the only role-changing path) now revokes all sessions of
+  the user (refresh tokens deleted, access tokens rejected); mail-protocol logins and app
+  passwords are unaffected.
+- **Admin guards check the current role.** When an access token claims admin rights,
+  `requireAdmin` / `requireRole` / `requireArea` read the user's current role from the database
+  (15 s in-process cache, dropped by the invalidation bus); both roles must pass and routes see
+  the stricter one. A disabled or deleted account gets 401, a database error 503. A missed
+  invalidation event can no longer keep elevated rights.
+- **Long-lived protocol connections end after a credential change.** Authenticated IMAP
+  (incl. IDLE), POP3 and SMTP submission sessions, ActiveSync Ping long-polls and JMAP
+  WebSocket/EventSource connections stayed authenticated after a password change. They are now
+  registered per user and credential (`LiveConnectionRegistry` in `@coremail/core`) and
+  terminated on the invalidation bus: IMAP `* BYE Credentials changed, please log in again`,
+  POP3 `-ERR [AUTH] Credentials changed …` (no UPDATE state), SMTP `421 4.7.0 … Credentials
+  changed …` (never mid-DATA: the body is read to its end and the message rejected; a delivery
+  already in progress completes), ActiveSync Ping HTTP 401 with `WWW-Authenticate`, JMAP
+  WebSocket close code 1008 / EventSource stream end. Password change/reset ends password
+  logins (app-password logins only when the app passwords were deleted too), MFA enabled ends
+  password logins, revoking an app password ends only the connections that used that app
+  password (event carries `appPasswordId`), deactivation/deletion/"revoke all sessions" end
+  everything; JMAP Bearer connections follow their web session. A login whose credential check
+  began before the change but completed after it is terminated as well. Role changes, web
+  logouts and app password creation do not touch protocol connections.
 
 ---
 

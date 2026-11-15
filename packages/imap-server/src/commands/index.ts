@@ -16,6 +16,7 @@ import {
   sendOk, sendNo, sendBad, sendUntagged, send, refreshCapabilities,
 } from '../session/state.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
+import { registerLiveSession } from '../session/live.js';
 import {
   parseSearch, needsBody, evaluateSearch, formatEsearch,
   type SearchProgram, type SearchableMessage,
@@ -863,6 +864,7 @@ async function loginUser(
   command: 'LOGIN' | 'AUTHENTICATE' = 'AUTHENTICATE',
 ): Promise<void> {
   if (!session.isTls) { sendNo(session, tag, PRIVACY_REQUIRED); return; }
+  const authStartedAt = Date.now();
   const result = await verifyMailCredentials(username, password, {
     ip: session.socket.remoteAddress,
     protocol: 'imap',
@@ -872,6 +874,8 @@ async function loginUser(
       session.state = 'AUTHENTICATED';
       session.userId = result.user.id;
       session.mailboxId = result.user.mailboxId;
+      // v7.0.1: the connection ends when these credentials become invalid.
+      registerLiveSession(session, result.method, result.appPasswordId, authStartedAt);
       refreshCapabilities(session);
       log.info({ email: result.user.email, method: result.method, command }, 'IMAP login success');
       sendOk(session, tag, `[CAPABILITY ${session.capabilities.join(' ')}] ${command} completed`);

@@ -2,10 +2,10 @@ import { initRuntimeLogLevel } from '@coremail/core';
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import net from 'node:net';
 import tls from 'node:tls';
-import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards } from '@coremail/core';
+import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { prisma, loadProtocolCert } from '@coremail/storage';
-import { POP3Session, setPop3Hostname } from './session.js';
+import { POP3Session, setPop3Hostname, pop3LiveSessions } from './session.js';
 
 const log = createLogger('pop3-server');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
@@ -222,6 +222,9 @@ async function reloadListeners(): Promise<void> {
 
 async function main() {
   void initRuntimeLogLevel('pop3-server', { aliases: ['pop3'] }); // BCP per-service log level
+  // v7.0.1: credential changes end the user's live POP3 sessions (-ERR [AUTH]).
+  pop3LiveSessions.attachInvalidation();
+  startAuthInvalidationSubscriber();
   await refreshHostname();
   await refreshTlsConfig();
 

@@ -41,6 +41,12 @@ export interface ImapSession {
   starttlsAvailable: boolean;
   // v7: set by the server — performs the STARTTLS upgrade after the tagged OK
   beginTls?: (tag: string) => void;
+  // v7.0.1: a command is being executed (deferred termination waits for it)
+  busy?: boolean;
+  // v7.0.1: runs once the current command has finished (credential change)
+  afterCommand?: (() => void) | null;
+  // v7.0.1: removes the session from the live-connection registry
+  unregisterLive?: (() => void) | null;
 }
 
 function buildCapabilities(isTls: boolean, _isAuthenticated: boolean, starttlsAvailable = false): string[] {
