@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
 import { createImapServer } from './index.js';
+import { setIdlePollInterval } from '../commands/index.js';
 import { selfSignedTestCert } from '../test-cert.js';
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
@@ -164,7 +165,10 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     },
   };
 
-  const users = [{ id: 'u1', email: 'bob@example.test', active: true, passwordHash: 'hash:secret', mailbox: { id: 'mb1' } }];
+  const users = [{
+    id: 'u1', email: 'bob@example.test', active: true, passwordHash: 'hash:secret', mailbox: { id: 'mb1' },
+    quotaBytes: 1024n * 1024n,
+  }];
   const withMailbox = (f: FakeFolder | undefined): (FakeFolder & { mailbox: FakeMailbox }) | null =>
     f ? { ...f, mailbox: { ...mailbox } } : null;
   const asRow = (v: unknown): Row => v as Row;
@@ -1675,5 +1679,528 @@ describe('UID EXPUNGE semantics and input limits (RFC 4315 §2.1)', () => {
 
     assert.match(bye, /^\* BYE/);
     assert.equal(closed, true);
+  });
+});
+
+// ─── v7.1.0 review regressions ───────────────────────────────────────────────
+
+/** Simulates another client (or the web client) expunging a message. */
+const expungeElsewhere = (db: FakeDb, uid: number): void => { db.byUid(uid).deletedAt = new Date(); };
+
+/** Sends APPEND with a synchronizing literal (or literal8 with `~`) and returns the completion. */
+async function appendRaw(client: ImapClient, mailbox: string, raw: string | Buffer, extra = '', marker = ''): Promise<Response> {
+  const data = Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'utf8');
+  const tag = client.nextTag();
+  client.write(`${tag} APPEND ${mailbox}${extra ? ` ${extra}` : ''} ${marker}{${data.length}}\r\n`);
+  const cont = await client.readLine();
+  assert.match(cont, /^\+/, `expected a continuation request, got: ${cont}`);
+  (client as unknown as { socket: net.Socket }).socket.write(Buffer.concat([data, Buffer.from('\r\n')]));
+  return client.completion(tag);
+}
+
+describe('per-session sequence map and unsolicited updates (RFC 9051 §2.3.1.2, §5.2, §7.4.1, §7.5.1)', () => {
+  test('a message expunged by another client keeps its sequence number until EXPUNGE is reported (no data loss)', async (t) => {
+    // Reviewer probe P4: STORE 1 + EXPUNGE used to hit UID 9 after UID 5 was deleted elsewhere.
+    const { client, db } = await select(t);
+    expungeElsewhere(db, 5);
+
+    const store = await client.cmd('STORE 1 +FLAGS (\\Deleted)');
+    const expunge = await client.cmd('EXPUNGE');
+
+    assert.equal(store.status, 'OK');
+    assert.deepEqual(untagged(store, /EXPUNGE/), [], 'no EXPUNGE during STORE');
+    assert.ok(!db.byUid(9).flags.includes('\\Deleted'), 'STORE 1 must not touch UID 9');
+    assert.equal(db.byUid(9).deletedAt, null, 'EXPUNGE must not delete UID 9');
+    assert.deepEqual(expunge.lines, ['* 1 EXPUNGE']);
+  });
+
+  test('FETCH, STORE and SEARCH never send EXPUNGE; NOOP then reports it', async (t) => {
+    const { client, db } = await select(t);
+    expungeElsewhere(db, 5);
+
+    const fetch = await client.cmd('FETCH 2 (UID)');
+    const search = await client.cmd('SEARCH ALL');
+    const noop = await client.cmd('NOOP');
+    const after = await client.cmd('FETCH 1 (UID)');
+
+    assert.deepEqual(fetch.lines, ['* 2 FETCH (UID 9)'], 'sequence number 2 is still UID 9');
+    assert.deepEqual(untagged(search, /EXPUNGE/), []);
+    assert.deepEqual(search.lines, ['* SEARCH 2 3']);
+    assert.deepEqual(noop.lines, ['* 1 EXPUNGE']);
+    assert.deepEqual(after.lines, ['* 1 FETCH (UID 9)'], 'renumbered only after the EXPUNGE response');
+  });
+
+  test('UID FETCH may report the expunge at its end', async (t) => {
+    const { client, db } = await select(t);
+    expungeElsewhere(db, 12);
+
+    const response = await client.cmd('UID FETCH 1:* (FLAGS)');
+
+    assert.deepEqual(response.lines.slice(-1), ['* 3 EXPUNGE']);
+  });
+
+  test('a delivered message is announced with EXISTS before it can be addressed', async (t) => {
+    // Reviewer probe P4b: "* 4 FETCH" was sent without "* 4 EXISTS".
+    const { client, db } = await select(t);
+    db.deliver('f-inbox');
+
+    const fetch = await client.cmd('FETCH 1:* (UID)');
+    const again = await client.cmd('FETCH 4 (UID)');
+
+    assert.deepEqual(fetch.lines, ['* 1 FETCH (UID 5)', '* 2 FETCH (UID 9)', '* 3 FETCH (UID 12)', '* 4 EXISTS']);
+    assert.deepEqual(again.lines, ['* 4 FETCH (UID 13)']);
+  });
+
+  test('a flag change by another client is reported with an unsolicited FETCH including UID', async (t) => {
+    const { client, db } = await select(t);
+    db.byUid(9).flags.push('\\Flagged');
+    db.byUid(9).modSeq = 11n;
+
+    const response = await client.cmd('NOOP');
+
+    assert.deepEqual(response.lines, ['* 2 FETCH (UID 9 FLAGS (\\Seen \\Flagged))']);
+  });
+
+  test('an expunge by another client is pushed while idling', async (t) => {
+    setIdlePollInterval(40);
+    t.after(() => setIdlePollInterval(30_000));
+    const { client, db } = await select(t);
+    client.write('I1 IDLE\r\n');
+    await client.readLine();
+
+    expungeElsewhere(db, 9);
+    const update = await client.readLine();
+    client.write('DONE\r\n');
+    const done = await client.completion('I1');
+
+    assert.equal(update, '* 2 EXPUNGE');
+    assert.equal(done.status, 'OK');
+  });
+
+  test('new mail during IDLE is announced with EXISTS only (no RECENT)', async (t) => {
+    const { client, db, redis } = await select(t);
+    client.write('I1 IDLE\r\n');
+    await client.readLine();
+
+    const delivered = db.deliver('f-inbox');
+    redis.emitNewMail({ userId: 'u1', folderId: 'f-inbox', messageId: delivered.id, uid: delivered.uid, subject: 'new' });
+    const lines = await client.drain(200);
+
+    assert.deepEqual(lines, ['* 4 EXISTS']);
+  });
+
+  test('a failed SELECT leaves no mailbox selected', async (t) => {
+    const { client } = await select(t);
+
+    await client.cmd('SELECT Nope');
+    const fetch = await client.cmd('FETCH 1 (UID)');
+
+    assert.notEqual(fetch.status, 'OK');
+  });
+});
+
+describe('EXAMINE is read-only (RFC 9051 §6.3.3, RFC 6851 §3.3)', () => {
+  test('EXPUNGE and UID EXPUNGE are refused and remove nothing', async (t) => {
+    const { client, db } = await select(t, 'INBOX', 'EXAMINE');
+    db.byUid(5).flags.push('\\Deleted');
+
+    const expunge = await client.cmd('EXPUNGE');
+    const uidExpunge = await client.cmd('UID EXPUNGE 5');
+
+    assert.match(expunge.tagged, /NO \[READ-ONLY\]/);
+    assert.match(uidExpunge.tagged, /NO \[READ-ONLY\]/);
+    assert.equal(db.byUid(5).deletedAt, null);
+  });
+
+  test('MOVE is refused and the message stays', async (t) => {
+    const { client, db } = await select(t, 'INBOX', 'EXAMINE');
+
+    const response = await client.cmd('UID MOVE 9 Work');
+
+    assert.match(response.tagged, /NO \[READ-ONLY\]/);
+    assert.equal(db.byUid(9).folderId, 'f-inbox');
+  });
+});
+
+describe('CONDSTORE (RFC 7162)', () => {
+  test('STORE UNCHANGEDSINCE stores where possible and reports the rest as MODIFIED', async (t) => {
+    const { client, db } = await select(t);
+    db.byUid(9).modSeq = 20n;
+
+    const response = await client.cmd('STORE 1:3 (UNCHANGEDSINCE 15) +FLAGS (\\Flagged)');
+
+    assert.match(response.tagged, /^A\d+ OK \[MODIFIED 2\]/);
+    assert.ok(db.byUid(5).flags.includes('\\Flagged') && db.byUid(12).flags.includes('\\Flagged'));
+    assert.ok(!db.byUid(9).flags.includes('\\Flagged'));
+    assert.equal(untagged(response, /^\* [13] FETCH \(FLAGS .* MODSEQ \(\d+\)\)$/).length, 2, JSON.stringify(response.lines));
+  });
+
+  test('UID STORE UNCHANGEDSINCE reports UIDs in MODIFIED', async (t) => {
+    const { client, db } = await select(t);
+    db.byUid(9).modSeq = 20n;
+
+    const response = await client.cmd('UID STORE 9 (UNCHANGEDSINCE 15) +FLAGS (\\Flagged)');
+
+    assert.match(response.tagged, /OK \[MODIFIED 9\]/);
+  });
+
+  test('SEARCH MODSEQ ends with the highest MODSEQ of the result', async (t) => {
+    const { client, db } = await select(t);
+    db.byUid(12).modSeq = 42n;
+
+    const search = await client.cmd('SEARCH MODSEQ 1');
+    const esearch = await client.cmd('SEARCH RETURN (ALL) MODSEQ 1');
+
+    // (The modSeq change of UID 12 is also reported as an unsolicited FETCH after the result.)
+    assert.equal(search.lines[0], '* SEARCH 1 2 3 (MODSEQ 42)');
+    assert.match(esearch.lines[0] ?? '', /^\* ESEARCH \(TAG "A\d+"\) ALL 1:3 MODSEQ 42$/);
+  });
+
+  test('SELECT … (CONDSTORE) enables MODSEQ in FETCH responses', async (t) => {
+    const { client } = await login(t);
+    await client.cmd('SELECT INBOX (CONDSTORE)');
+
+    const response = await client.cmd('FETCH 1 (FLAGS)');
+
+    assert.match(response.lines[0] ?? '', /MODSEQ \(10\)/);
+  });
+
+  test('FETCH MODSEQ is a CONDSTORE-enabling command', async (t) => {
+    const { client } = await select(t);
+    await client.cmd('FETCH 1 (MODSEQ)');
+
+    const response = await client.cmd('FETCH 1 (FLAGS)');
+
+    assert.match(response.lines[0] ?? '', /MODSEQ \(10\)/);
+  });
+});
+
+describe('mailbox names (RFC 9051 §5.1, RFC 3501 §5.1.3)', () => {
+  test('INBOX is case-insensitive in SELECT, STATUS, APPEND, COPY and MOVE', async (t) => {
+    const { client, db } = await login(t);
+
+    const status = await client.cmd('STATUS inbox (MESSAGES)');
+    const append = await appendRaw(client, 'Inbox', 'Subject: x\r\n\r\nbody\r\n');
+    const selectWork = await client.cmd('SELECT Work');
+    const copy = await client.cmd('COPY 1 inBox');
+    const move = await client.cmd('MOVE 2 INBOX');
+    const select = await client.cmd('SELECT inbox');
+
+    assert.deepEqual(status.lines, ['* STATUS "INBOX" (MESSAGES 3)']);
+    assert.equal(append.status, 'OK', append.tagged);
+    assert.equal(selectWork.status, 'OK');
+    assert.equal(copy.status, 'OK', copy.tagged);
+    assert.equal(move.status, 'OK', move.tagged);
+    assert.equal(select.status, 'OK', select.tagged);
+    assert.ok(select.lines.includes('* 6 EXISTS'), JSON.stringify(select.lines));
+    assert.equal(db.messages.filter((m) => m.folderId === 'f-inbox' && m.deletedAt === null).length, 6);
+  });
+
+  test('non-ASCII names are sent and accepted in modified UTF-7', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-de', mailboxId: 'mb1', name: 'Entwürfe', displayName: 'Entwürfe' });
+
+    const list = await client.cmd('LIST "" "Entw*"');
+    const select = await client.cmd('SELECT "Entw&APw-rfe"');
+    const create = await client.cmd('CREATE "Caf&AOk-"');
+
+    assert.deepEqual(untagged(list, /^\* LIST /), ['* LIST (\\HasNoChildren \\Drafts) "." "Entw&APw-rfe"']);
+    assert.equal(select.status, 'OK', select.tagged);
+    assert.equal(create.status, 'OK');
+    assert.ok(db.folders.some((f) => f.name === 'Café'), db.folders.map((f) => f.name).join(','));
+  });
+
+  test('after ENABLE IMAP4rev2 names are UTF-8', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-de', mailboxId: 'mb1', name: 'Entwürfe', displayName: 'Entwürfe' });
+    await client.cmd('ENABLE IMAP4rev2');
+
+    const list = await client.cmd('LIST "" "Entw*"');
+    const select = await client.cmd('SELECT "Entwürfe"');
+
+    assert.match(list.raw, /\* LIST \(\\HasNoChildren \\Drafts\) "\." \{9\}\r\nEntwürfe/);
+    assert.equal(select.status, 'OK', select.tagged);
+  });
+
+  test('quotes inside a mailbox name are kept (no second unquoting)', async (t) => {
+    const { client, db } = await login(t);
+
+    await client.cmd(`CREATE "'Old'"`);
+
+    assert.ok(db.folders.some((f) => f.name === "'Old'"), db.folders.map((f) => f.name).join(','));
+  });
+
+  test('RENAME of a mailbox with inferiors renames them as well', async (t) => {
+    const { client, db } = await login(t);
+
+    const response = await client.cmd('RENAME Archive Old');
+
+    assert.equal(response.status, 'OK');
+    assert.deepEqual(db.folders.map((f) => f.name).filter((n) => n.startsWith('Old') || n.startsWith('Archive')).sort(), ['Old', 'Old.2025']);
+  });
+});
+
+describe('IMAP4rev2 after ENABLE IMAP4rev2 (RFC 9051 Appendix E)', () => {
+  async function rev2(t: TestContext): Promise<Harness> {
+    const harness = await login(t);
+    await harness.client.cmd('ENABLE IMAP4rev2');
+    return harness;
+  }
+
+  test('SELECT sends a LIST response and neither RECENT nor UNSEEN', async (t) => {
+    const { client } = await rev2(t);
+
+    const response = await client.cmd('SELECT INBOX');
+
+    assert.ok(response.lines.includes('* LIST () "." "INBOX"'), JSON.stringify(response.lines));
+    assert.deepEqual(untagged(response, /RECENT|UNSEEN/), []);
+  });
+
+  test('SELECT while a mailbox is selected reports [CLOSED]', async (t) => {
+    const { client } = await rev2(t);
+    await client.cmd('SELECT INBOX');
+
+    const response = await client.cmd('SELECT Work');
+
+    assert.equal(response.lines[0], '* OK [CLOSED] Previous mailbox closed');
+  });
+
+  test('SEARCH is answered with ESEARCH', async (t) => {
+    const { client } = await rev2(t);
+    await client.cmd('SELECT INBOX');
+
+    const search = await client.cmd('SEARCH UNSEEN');
+    const uidSearch = await client.cmd('UID SEARCH ALL');
+
+    assert.match(search.lines[0] ?? '', /^\* ESEARCH \(TAG "A\d+"\) ALL 3$/);
+    assert.match(uidSearch.lines[0] ?? '', /^\* ESEARCH \(TAG "A\d+"\) UID ALL 5,9,12$/);
+  });
+});
+
+describe('BINARY (RFC 3516)', () => {
+  const B64 = 'From: a@example.test\r\nSubject: bin\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nSGVsbG8gQklOQVJZ\r\n';
+  const NUL = 'From: a@example.test\r\nSubject: nul\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\n\r\nAAEC\r\n';
+  const QP = 'From: a@example.test\r\nSubject: qp\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nGr=C3=BC=\r\n=C3=9Fe\r\n';
+
+  test('BINARY.PEEK[1] returns the decoded part and BINARY.SIZE its decoded size', async (t) => {
+    const { client } = await select(t);
+    await appendRaw(client, 'INBOX', B64);
+    await client.cmd('NOOP');
+
+    const response = await client.cmd('FETCH 4 (BINARY.PEEK[1] BINARY.SIZE[1])');
+
+    assert.match(response.raw, /BINARY\[1\] \{12\}\r\nHello BINARY BINARY\.SIZE\[1\] 12\)/);
+  });
+
+  test('quoted-printable is decoded', async (t) => {
+    const { client } = await select(t);
+    await appendRaw(client, 'INBOX', QP);
+    await client.cmd('NOOP');
+
+    const response = await client.cmd('FETCH 4 (BINARY.PEEK[1])');
+
+    // "Gr=C3=BC=<CRLF>=C3=9Fe<CRLF>": soft line break removed, the final line break kept.
+    assert.match(response.raw, /BINARY\[1\] \{9\}\r\nGrüße\r\n\)/);
+  });
+
+  test('data with NUL is sent as literal8', async (t) => {
+    const { client } = await select(t);
+    await appendRaw(client, 'INBOX', NUL);
+    await client.cmd('NOOP');
+
+    const response = await client.cmd('FETCH 4 (BINARY.PEEK[1])');
+
+    assert.match(response.raw, /BINARY\[1\] ~\{3\}\r\n\u0000\u0001\u0002\)/);
+  });
+
+  test('APPEND accepts a literal8', async (t) => {
+    const { client, db } = await login(t);
+
+    const response = await appendRaw(client, 'Sent', 'Subject: eight\r\n\r\nx\u0000y\r\n', '', '~');
+
+    assert.equal(response.status, 'OK', response.tagged);
+    assert.ok(db.messages.some((m) => m.folderId === 'f-sent' && m.subject === 'eight'));
+  });
+
+  test('BINARY without .PEEK sets \\Seen', async (t) => {
+    const { client, db } = await select(t);
+
+    await client.cmd('FETCH 3 (BINARY[1])');
+
+    assert.ok(db.byUid(12).flags.includes('\\Seen'));
+  });
+});
+
+describe('SEARCHRES (RFC 5182)', () => {
+  test('RETURN (SAVE) sends no ESEARCH and "$" addresses the saved messages', async (t) => {
+    const { client } = await select(t);
+
+    const save = await client.cmd('SEARCH RETURN (SAVE) UNSEEN');
+    const fetch = await client.cmd('FETCH $ (UID)');
+    const uidSearch = await client.cmd('UID SEARCH $');
+
+    assert.deepEqual(save.lines, []);
+    assert.deepEqual(fetch.lines, ['* 3 FETCH (UID 12)']);
+    assert.deepEqual(uidSearch.lines, ['* SEARCH 12']);
+  });
+
+  test('SAVE with MIN saves only the minimum', async (t) => {
+    const { client } = await select(t);
+
+    const save = await client.cmd('UID SEARCH RETURN (SAVE MIN) ALL');
+    const fetch = await client.cmd('UID FETCH $ (FLAGS)');
+
+    assert.match(save.lines[0] ?? '', /^\* ESEARCH \(TAG "A\d+"\) UID MIN 5$/);
+    assert.equal(untagged(fetch, / FETCH /).length, 1);
+    assert.match(fetch.lines[0] ?? '', /^\* 1 FETCH \(UID 5 /);
+  });
+});
+
+describe('LIST-EXTENDED (RFC 5258), LIST-STATUS (RFC 5819), QUOTA (RFC 9208)', () => {
+  test('LIST (SUBSCRIBED) returns every mailbox with \\Subscribed', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST (SUBSCRIBED) "" "*"');
+
+    const lines = untagged(response, /^\* LIST /);
+    assert.equal(lines.length, 5);
+    assert.ok(lines.every((l) => l.includes('\\Subscribed')), JSON.stringify(lines));
+  });
+
+  test('LIST (SPECIAL-USE) returns only special-use mailboxes', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST (SPECIAL-USE) "" "*"');
+
+    assert.deepEqual(untagged(response, /^\* LIST /).map((l) => /"\." "([^"]+)"$/.exec(l)?.[1]), ['Archive', 'Sent']);
+  });
+
+  test('LIST with several patterns', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST "" ("INBOX" "Work")');
+
+    assert.equal(untagged(response, /^\* LIST /).length, 2);
+  });
+
+  test('LIST … RETURN (STATUS (MESSAGES UNSEEN)) follows each LIST with STATUS', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST "" "INBOX" RETURN (STATUS (MESSAGES UNSEEN))');
+
+    assert.deepEqual(response.lines, ['* LIST (\\HasNoChildren) "." "INBOX"', '* STATUS "INBOX" (MESSAGES 3 UNSEEN 1)']);
+  });
+
+  test('"%" lists a parent that only exists implicitly', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-deep', mailboxId: 'mb1', name: 'Projects.2026', displayName: '2026' });
+
+    const response = await client.cmd('LIST "" "%"');
+
+    assert.ok(response.lines.includes('* LIST (\\Noselect \\HasChildren) "." "Projects"'), JSON.stringify(response.lines));
+  });
+
+  test('GETQUOTAROOT reports the STORAGE usage and limit', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('GETQUOTAROOT INBOX');
+
+    assert.deepEqual(response.lines, ['* QUOTAROOT "INBOX" ""', '* QUOTA "" (STORAGE 5 1024)']);
+  });
+});
+
+describe('state checks, flags, APPEND date and HEADER search', () => {
+  test('LOGIN in the authenticated or selected state is rejected and keeps the selection', async (t) => {
+    const { client } = await select(t);
+
+    const relogin = await client.cmd('LOGIN bob@example.test secret');
+    const fetch = await client.cmd('FETCH 1 (UID)');
+
+    assert.equal(relogin.status, 'BAD');
+    assert.equal(fetch.status, 'OK');
+  });
+
+  test('ENABLE before authentication is rejected', async (t) => {
+    const { client } = await connect(t);
+
+    const response = await client.cmd('ENABLE CONDSTORE');
+
+    assert.equal(response.status, 'BAD');
+    assert.deepEqual(response.lines, []);
+  });
+
+  test('system flags are case-insensitive and \\Recent cannot be set', async (t) => {
+    const { client, db } = await select(t);
+
+    await client.cmd('STORE 3 +FLAGS (\\seen)');
+    const status = await client.cmd('STATUS INBOX (UNSEEN)');
+    const removed = await client.cmd('STORE 1 -FLAGS (\\SEEN)');
+    const recent = await client.cmd('STORE 2 +FLAGS (\\Recent)');
+
+    assert.deepEqual(db.byUid(12).flags, ['\\Seen']);
+    assert.match(status.lines.join('\n'), /UNSEEN 0/);
+    assert.equal(removed.status, 'OK');
+    assert.deepEqual(db.byUid(5).flags, []);
+    assert.equal(recent.status, 'BAD');
+    assert.deepEqual(db.byUid(9).flags, ['\\Seen']);
+  });
+
+  test('the APPEND date-time becomes the internal date', async (t) => {
+    const { client, db } = await login(t);
+
+    const ok = await appendRaw(client, 'Sent', 'Subject: dated\r\n\r\nx\r\n', '(\\Seen) "03-Feb-2026 10:20:30 +0100"');
+    const bad = await client.cmd('APPEND Sent "yesterday" {1+}\r\nx');
+
+    assert.equal(ok.status, 'OK', ok.tagged);
+    const stored = db.messages.find((m) => m.subject === 'dated');
+    assert.equal(stored?.createdAt.toISOString(), '2026-02-03T09:20:30.000Z');
+    assert.equal(bad.status, 'BAD');
+  });
+
+  test('SEARCH HEADER matches any header field, "" every message that has it', async (t) => {
+    const { client } = await select(t);
+    await appendRaw(client, 'INBOX', 'Subject: prio\r\nX-Priority: 1 (Highest)\r\n\r\nx\r\n');
+    await client.cmd('NOOP');
+
+    const value = await client.cmd('SEARCH HEADER X-Priority 1');
+    const exists = await client.cmd('SEARCH HEADER X-Priority ""');
+    const missing = await client.cmd('SEARCH HEADER X-Mailer ""');
+
+    assert.deepEqual(value.lines, ['* SEARCH 4']);
+    assert.deepEqual(exists.lines, ['* SEARCH 4']);
+    assert.deepEqual(missing.lines, ['* SEARCH']);
+  });
+
+  test('SEARCH RECENT matches nothing (SELECT reports 0 RECENT)', async (t) => {
+    const { client } = await select(t);
+
+    const response = await client.cmd('SEARCH RECENT');
+
+    assert.deepEqual(response.lines, ['* SEARCH']);
+  });
+});
+
+describe('SASL (RFC 9051 §6.2.2, RFC 4616)', () => {
+  test('a response that is not base64 is answered with BAD', async (t) => {
+    const { client } = await connect(t);
+
+    const initial = await client.cmd('AUTHENTICATE PLAIN !!!notbase64');
+    client.write('A9 AUTHENTICATE PLAIN\r\n');
+    await client.readLine();
+    client.write('%%%\r\n');
+    const continuation = await client.completion('A9');
+
+    assert.equal(initial.status, 'BAD');
+    assert.equal(continuation.status, 'BAD');
+  });
+
+  test('an authorization identity other than the login is refused', async (t) => {
+    const { client } = await connect(t);
+
+    const response = await client.cmd(`AUTHENTICATE PLAIN ${b64('alice@example.test\u0000bob@example.test\u0000secret')}`);
+    const same = await client.cmd(`AUTHENTICATE PLAIN ${b64('bob@example.test\u0000bob@example.test\u0000secret')}`);
+
+    assert.match(response.tagged, /NO \[AUTHORIZATIONFAILED\]/);
+    assert.equal(same.status, 'OK', same.tagged);
   });
 });

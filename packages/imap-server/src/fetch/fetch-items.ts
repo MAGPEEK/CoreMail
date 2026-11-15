@@ -18,9 +18,14 @@ export interface SectionSpec {
 export type SimpleItem = 'UID' | 'FLAGS' | 'INTERNALDATE' | 'RFC822.SIZE' | 'ENVELOPE' | 'BODYSTRUCTURE' | 'BODY' | 'MODSEQ'
   | 'RFC822' | 'RFC822.HEADER' | 'RFC822.TEXT';
 
+export interface PartialSpec { origin: number; length: number }
+
 export type FetchItem =
   | { kind: SimpleItem }
-  | { kind: 'SECTION'; peek: boolean; section: SectionSpec; partial: { origin: number; length: number } | null };
+  | { kind: 'SECTION'; peek: boolean; section: SectionSpec; partial: PartialSpec | null }
+  // RFC 3516: BINARY[part]<partial>, BINARY.PEEK[...], BINARY.SIZE[part] (path [] = whole message)
+  | { kind: 'BINARY'; peek: boolean; path: number[]; partial: PartialSpec | null }
+  | { kind: 'BINARY.SIZE'; path: number[] };
 
 export class FetchParseError extends Error {}
 
@@ -64,6 +69,15 @@ export function parseSection(text: string): SectionSpec {
   throw new FetchParseError(`Invalid section "${text}"`);
 }
 
+function parseBinaryPath(text: string): number[] {
+  const t = text.trim();
+  if (t === '') return [];
+  if (!/^[1-9]\d*(?:\.[1-9]\d*)*$/.test(t)) throw new FetchParseError('BINARY takes part numbers only');
+  const path = t.split('.').map(Number);
+  if (path.some((n) => !Number.isSafeInteger(n))) throw new FetchParseError('Invalid part number');
+  return path;
+}
+
 /** Response label of a section, e.g. "1.HEADER.FIELDS (SUBJECT)". */
 export function sectionLabel(spec: SectionSpec): string {
   const prefix = spec.path.join('.');
@@ -96,12 +110,13 @@ export function parseFetchItems(input: string): FetchItem[] {
     while (i < s.length && s[i] !== ' ' && s[i] !== '[') name += s[i++];
     const upper = name.toUpperCase();
     if (s[i] === '[') {
-      if (upper !== 'BODY' && upper !== 'BODY.PEEK') throw new FetchParseError(`Unknown FETCH item ${name}`);
+      const binary = upper === 'BINARY' || upper === 'BINARY.PEEK' || upper === 'BINARY.SIZE';
+      if (upper !== 'BODY' && upper !== 'BODY.PEEK' && !binary) throw new FetchParseError(`Unknown FETCH item ${name}`);
       const close = s.indexOf(']', i);
       if (close === -1) throw new FetchParseError('Missing "]"');
-      const section = parseSection(s.slice(i + 1, close));
+      const sectionText = s.slice(i + 1, close);
       i = close + 1;
-      let partial: { origin: number; length: number } | null = null;
+      let partial: PartialSpec | null = null;
       if (s[i] === '<') {
         const gt = s.indexOf('>', i);
         const p = gt === -1 ? null : /^<(\d+)\.(\d+)>$/.exec(s.slice(i, gt + 1));
@@ -115,7 +130,18 @@ export function parseFetchItems(input: string): FetchItem[] {
         i = gt + 1;
       }
       if (i < s.length && s[i] !== ' ') throw new FetchParseError('Garbage after section');
-      items.push({ kind: 'SECTION', peek: upper === 'BODY.PEEK', section, partial });
+      if (binary) {
+        // section-binary = "[" [section-part] "]" — part numbers only (RFC 3516 §6).
+        const path = parseBinaryPath(sectionText);
+        if (upper === 'BINARY.SIZE') {
+          if (partial) throw new FetchParseError('BINARY.SIZE takes no partial specifier');
+          items.push({ kind: 'BINARY.SIZE', path });
+        } else {
+          items.push({ kind: 'BINARY', peek: upper === 'BINARY.PEEK', path, partial });
+        }
+        continue;
+      }
+      items.push({ kind: 'SECTION', peek: upper === 'BODY.PEEK', section: parseSection(sectionText), partial });
       continue;
     }
     if (MACROS[upper]) throw new FetchParseError(`${upper} cannot be combined with other items`);

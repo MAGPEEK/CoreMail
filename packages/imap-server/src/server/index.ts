@@ -17,6 +17,8 @@ import {
   // v5.5.0: RFC 9051 IMAP4rev2 + RFC 2971 + RFC 3501 §6.2.2 SASL
   handleUnselect, handleId, handleAuthenticate, handleSaslContinuation,
   appendTargetExists,
+  // v7.1.0: QUOTA (RFC 9208, read-only) + per-session mailbox view updates
+  handleGetQuotaRoot, handleGetQuota, handleSetQuota, notifyMailboxChanged, stopIdleTimer,
 } from '../commands/index.js';
 import { CommandReader, type LiteralDecision } from './command-reader.js';
 import { unregisterLiveSession } from '../session/live.js';
@@ -153,13 +155,14 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
         log.warn({ err, id: session.id, ip }, 'IMAP STARTTLS handshake/socket error');
         secure.destroy();
       });
-      secure.on('close', () => { reader.close(); sessions.delete(session.id); unregisterLiveSession(session); });
+      secure.on('close', () => { reader.close(); sessions.delete(session.id); stopIdleTimer(session); unregisterLiveSession(session); });
       socket.setTimeout(0);
     };
 
     socket.on('close', () => {
       reader.close();
       sessions.delete(session.id);
+      stopIdleTimer(session);
       unregisterLiveSession(session);
       log.debug({ id: session.id }, 'IMAP disconnect');
     });
@@ -167,6 +170,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
     socket.on('error', (err) => {
       log.error({ err, id: session.id }, 'IMAP socket error');
       sessions.delete(session.id);
+      stopIdleTimer(session);
       unregisterLiveSession(session);
     });
 
@@ -249,7 +253,7 @@ async function runCommand(session: ImapSession, segments: CommandSegment[]): Pro
   if (segments.length === 1 && typeof first === 'string') {
     // IDLE is terminated by a bare "DONE" line (RFC 2177).
     if (session.idleActive && first.trim().toUpperCase() === 'DONE') {
-      handleIdleDone(session);
+      await handleIdleDone(session);
       return;
     }
     // v5.5.0: SASL continuation (AUTHENTICATE PLAIN/LOGIN multi-step):
@@ -361,24 +365,44 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
         await handleLogout(session, tag);
         break;
 
+      // RFC 9051 §6.2.3: LOGIN is only valid in the not authenticated state.
       case 'LOGIN':
-        await handleLogin(session, tag, args);
+        if (session.state !== 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} BAD Already authenticated\r\n`);
+        } else {
+          await handleLogin(session, tag, args);
+        }
         break;
 
       case 'LIST':
         if (session.state === 'NOT_AUTHENTICATED') {
-          session.socket.write(`${tag} NO [AUTHENTICATIONFAILED] Not authenticated\r\n`);
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
         } else {
-          await handleList(session, tag, args);
+          await handleList(session, tag, argTokens);
         }
         break;
 
       // v5.2.18: Mac Mail needs LSUB + SUBSCRIBE + NAMESPACE + STATUS
       case 'LSUB':
         if (session.state === 'NOT_AUTHENTICATED') {
-          session.socket.write(`${tag} NO [AUTHENTICATIONFAILED] Not authenticated\r\n`);
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
         } else {
-          await handleLsub(session, tag, args);
+          await handleLsub(session, tag, argTokens);
+        }
+        break;
+
+      // v7.1.0: QUOTA (RFC 9208), read-only
+      case 'GETQUOTAROOT':
+      case 'GETQUOTA':
+      case 'SETQUOTA':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else if (cmd === 'GETQUOTAROOT') {
+          await handleGetQuotaRoot(session, tag, args);
+        } else if (cmd === 'GETQUOTA') {
+          await handleGetQuota(session, tag, args);
+        } else {
+          handleSetQuota(session, tag);
         }
         break;
 
@@ -473,12 +497,17 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
         if (session.state === 'NOT_AUTHENTICATED') {
           session.socket.write(`${tag} NO Not authenticated\r\n`);
         } else {
-          handleIdle(session, tag);
+          await handleIdle(session, tag);
         }
         break;
 
       // RFC 5161: the ENABLED response lists the extensions that were enabled.
+      // ENABLE is only valid after authentication (RFC 5161 §3.1).
       case 'ENABLE': {
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} BAD ENABLE is only valid in the authenticated state\r\n`);
+          break;
+        }
         const enabled: string[] = [];
         for (const ext of args) {
           const name = ext.toUpperCase();
@@ -589,7 +618,7 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
         if (session.state !== 'SELECTED') {
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
-          handleCheck(session, tag);
+          await handleCheck(session, tag);
         }
         break;
 
@@ -616,16 +645,16 @@ function setupIdlePush(): void {
         subject: string;
       };
 
-      // Notify all IDLE sessions watching the same folder
+      // IDLE sessions watching the same folder compare their view with the
+      // database and report the difference (EXISTS, and anything else that
+      // changed meanwhile) — never a blind "EXISTS + 1".
       for (const session of sessions.values()) {
         if (
           session.idleActive &&
           session.userId === event.userId &&
           session.selected?.folderId === event.folderId
         ) {
-          sendUntagged(session, `${session.selected.exists + 1} EXISTS`);
-          sendUntagged(session, '1 RECENT');
-          session.selected.exists += 1;
+          notifyMailboxChanged(session);
           log.debug({ userId: event.userId, uid: event.uid }, 'IDLE push: new message');
         }
       }

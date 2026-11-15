@@ -22,7 +22,8 @@ export type CommandSegment = string | Buffer;
 
 export class ImapParseError extends Error {}
 
-const LITERAL_MARKER = /\{(\d+)(\+?)\}$/;
+// "{n}" / "{n+}", and the literal8 form "~{n}" (RFC 3516 / RFC 9051 APPEND with BINARY).
+const LITERAL_MARKER = /~?\{(\d+)(\+?)\}$/;
 
 /** Returns the literal size announced at the end of a text line, or null. */
 export function literalMarker(line: string): { size: number; sync: boolean } | null {
