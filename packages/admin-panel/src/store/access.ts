@@ -1,14 +1,31 @@
 import { create } from 'zustand';
 import type { AdminAreas } from '../lib/adminAreas.js';
+import type { Permissions } from '../lib/permissions.js';
 
 interface AccessState {
-  /** null = not (yet) known / backend without adminAreas → previous behaviour (everything visible) */
+  /** null = not (yet) known / backend without permissions → previous behaviour (everything visible) */
   areas: AdminAreas | null;
-  setAreas: (areas: AdminAreas | null) => void;
+  role: string | null;
+  mfaVerified: boolean;
+  /** 'loading' until GET /admin/me/permissions answered (or failed). */
+  status: 'loading' | 'ready';
+  setPermissions: (p: Permissions) => void;
+  /** Lookup failed — keep the previous behaviour (server still enforces). */
+  setUnknown: () => void;
+  /** Back to the initial state (logout). */
+  reset: () => void;
 }
 
-/** Admin areas of the signed-in admin (from GET /api/v1/user/me). */
+/**
+ * Permissions of the signed-in admin (GET /api/v1/admin/me/permissions).
+ * Components read them through usePermissions() / <Can>, never directly.
+ */
 export const useAccessStore = create<AccessState>()((set) => ({
   areas: null,
-  setAreas: (areas) => set({ areas }),
+  role: null,
+  mfaVerified: false,
+  status: 'loading',
+  setPermissions: (p) => set({ areas: p.areas, role: p.role, mfaVerified: p.mfaVerified, status: 'ready' }),
+  setUnknown: () => set({ areas: null, role: null, mfaVerified: false, status: 'ready' }),
+  reset: () => set({ areas: null, role: null, mfaVerified: false, status: 'loading' }),
 }));
