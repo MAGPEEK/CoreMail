@@ -21,6 +21,10 @@ import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
+import {
+  parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
+  MAX_QUERY_LENGTH, type FolderRef,
+} from '../lib/search-query.js';
 
 const replyLookup = prismaReplyLookup(
   prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
@@ -1135,34 +1139,35 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
 // GET /api/v1/mail/search?q=foo&categoryId=...&folderId=...&limit=&offset=
 // folderId (optional) restricts the search to one of the user's own folders.
 mailRouter.get('/search', async (req: Request, res: Response) => {
-  const q = String(req.query['q'] ?? '').trim();
+  const q = String(req.query['q'] ?? '').trim().slice(0, MAX_QUERY_LENGTH);
   const categoryId = req.query['categoryId'] ? String(req.query['categoryId']) : null;
   const folderId = req.query['folderId'] ? String(req.query['folderId']) : null;
   const { limit, offset } = parsePaging(req.query);
-  const empty = { messages: [], total: 0, limit, offset };
-  if (q.length < 2 && !categoryId) { res.json(empty); return; }
+  // Operators (from:, is:unread, before:, in:, "phrase", -word …) — lib/search-query.ts
+  const parsed = parseSearchQuery(q);
+  const chips = searchChips(parsed);
+  const empty = { messages: [], total: 0, limit, offset, chips };
+  if (!hasCriteria(parsed) && !categoryId) { res.json(empty); return; }
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   if (!mailbox) { res.json(empty); return; }
 
-  const folderIds = (await prisma.folder.findMany({
-    where: { mailboxId: mailbox.id, ...(folderId ? { id: folderId } : {}) },
-    select: { id: true },
-  })).map((f: { id: string }) => f.id);
-  if (folderId && folderIds.length === 0) { res.status(404).json({ error: 'Folder not found' }); return; }
+  const allFolders = await prisma.folder.findMany({
+    where: { mailboxId: mailbox.id },
+    select: { id: true, name: true, displayName: true },
+  }) as FolderRef[];
+  if (folderId && !allFolders.some((f) => f.id === folderId)) { res.status(404).json({ error: 'Folder not found' }); return; }
+  // An explicit in:<folder> replaces the list's folder scope
+  const folderIds = resolveFolderScope(parsed, folderId ? [folderId] : allFolders.map((f) => f.id), allFolders);
+  if (folderIds.length === 0) { res.json(empty); return; }
 
   const where: Record<string, unknown> = {
     folderId: { in: folderIds },
     deletedAt: null,
   };
-  if (q.length >= 2) {
-    where['OR'] = [
-      { subject:  { contains: q, mode: 'insensitive' } },
-      { fromAddr: { contains: q, mode: 'insensitive' } },
-      { fromName: { contains: q, mode: 'insensitive' } },
-      { bodyText: { contains: q, mode: 'insensitive' } },
-    ];
-  }
+  const conditions = buildSearchConditions(parsed);
+  if (conditions.length === 1) Object.assign(where, conditions[0]);
+  else if (conditions.length > 1) where['AND'] = conditions;
   if (categoryId) {
     where['categories'] = { some: { categoryId, category: { userId: req.apiUser!.userId } } };
   }
@@ -1186,7 +1191,7 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
     categories: m.categories?.map((c: any) => c.category) ?? [],
   }));
 
-  res.json({ messages: flat, total, limit, offset });
+  res.json({ messages: flat, total, limit, offset, chips });
 });
 
 // GET /api/v1/mail/delegated-mailboxes
