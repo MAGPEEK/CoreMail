@@ -81,12 +81,9 @@ export const helmetMiddleware = helmet({
     },
   },
 
-  // HSTS — browsers remember the HTTPS requirement for 1 year
-  hsts: {
-    maxAge: 31_536_000,      // 1 year in seconds
-    includeSubDomains: true,
-    preload: true,
-  },
+  // HSTS (1 year, includeSubDomains, preload) is set by hstsOnHttps()
+  // (lib/https-redirect.ts) on HTTPS responses only — 8.0.x.
+  hsts: false,
 
   // Disables X-Powered-By (no framework fingerprinting)
   hidePoweredBy: true,

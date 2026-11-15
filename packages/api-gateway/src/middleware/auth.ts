@@ -3,6 +3,7 @@ import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/c
 import { prisma } from '@coremail/storage';
 import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import { canAccess, isAdminRole, isReadMethod, stricterRole, type AdminArea, type UserRoleName } from '../lib/rbac.js';
+import { redeemEventTicket } from '../lib/event-tickets.js';
 
 const log = createLogger('api:auth');
 
@@ -28,20 +29,62 @@ declare module 'express' {
   }
 }
 
+/** Claims needed to authenticate a request (from an access token or an SSE ticket). */
+export interface AuthClaims {
+  sub: string;
+  role: string;
+  email: string;
+  sessionId?: string | undefined;
+  mfaVerified?: boolean | undefined;
+  iat?: number | undefined;
+  iatMs?: number | undefined;
+}
+
+/**
+ * Bearer token from the Authorization header ONLY (8.0.x). Query-string
+ * tokens end up in access logs, proxy logs and browser history; the single
+ * exception is the SSE stream (requireSseAuth below), which EventSource opens
+ * without custom headers.
+ */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  // Preferred: Authorization header. Fallback: ?token=… in the query
-  // (for EventSource/SSE, which cannot send headers)
   const header = req.get('Authorization') ?? '';
-  let rawToken: string | null = null;
-  if (header.startsWith('Bearer ')) {
-    rawToken = header.slice(7);
-  } else if (typeof req.query['token'] === 'string' && req.query['token']) {
-    rawToken = req.query['token'];
-  }
+  const rawToken = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!rawToken) {
     res.status(401).json({ error: 'Authorization required' });
     return;
   }
+  authenticateRawToken(rawToken, req, res, next);
+}
+
+/**
+ * Auth for GET /api/v1/events (EventSource cannot send headers), in order:
+ *   1. Authorization: Bearer header
+ *   2. `?ticket=` — single-use, 60 s ticket from POST /api/v1/events/ticket,
+ *      bound to the user + session it was issued for (preferred)
+ *   3. `?token=` — the access token itself (DEPRECATED, kept for one release so
+ *      existing frontends keep working; scheduled for removal)
+ */
+export function requireSseAuth(req: Request, res: Response, next: NextFunction): void {
+  const header = req.get('Authorization') ?? '';
+  if (header.startsWith('Bearer ')) { authenticateRawToken(header.slice(7), req, res, next); return; }
+  const ticket = typeof req.query['ticket'] === 'string' ? req.query['ticket'] : '';
+  if (ticket) {
+    const authStartedAt = Date.now();
+    redeemEventTicket(ticket).then((claims) => {
+      if (!claims) { res.status(401).json({ error: 'Invalid or expired ticket' }); return; }
+      authenticateClaims(claims, authStartedAt, req, res, next);
+    }, (err: unknown) => {
+      log.error({ err }, 'SSE ticket redemption failed');
+      res.status(503).json({ error: 'Authentication temporarily unavailable' });
+    });
+    return;
+  }
+  const token = typeof req.query['token'] === 'string' ? req.query['token'] : '';
+  if (token) { authenticateRawToken(token, req, res, next); return; }
+  res.status(401).json({ error: 'Authorization required' });
+}
+
+function authenticateRawToken(rawToken: string, req: Request, res: Response, next: NextFunction): void {
   const authStartedAt = Date.now();
   // verifyAccessToken never throws (returns null for bad/expired/refresh tokens)
   const payload = verifyAccessToken(rawToken);
@@ -49,6 +92,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Invalid or expired token' });
     return;
   }
+  authenticateClaims(payload, authStartedAt, req, res, next);
+}
+
+function authenticateClaims(payload: AuthClaims, authStartedAt: number, req: Request, res: Response, next: NextFunction): void {
   // v7.0.0: tokens issued before a "revoke all sessions" event (deactivation,
   // password change/reset) are rejected even before they expire.
   // 8.0.0: besides the in-process maps, the shared Redis markers are consulted
@@ -59,7 +106,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       userId: payload.sub,
       role: payload.role,
       email: payload.email,
-      sessionId: payload.sessionId,
+      ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}),
       mfaVerified: payload.mfaVerified === true,
       ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
       ...(typeof payload.iatMs === 'number' ? { issuedAtMs: payload.iatMs } : {}),

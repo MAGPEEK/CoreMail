@@ -37,7 +37,7 @@ import { categoriesRouter } from './routes/categories.js';
 // Journaling feature completely removed in v3.13.6
 import { getAcmeChallenge } from './routes/admin/certificates.js';
 import { mountAdminRoutes } from './routes/admin/index.js';
-import { startTlsProxy, setTlsUpgradeHandler } from './tls-proxy.js';
+import { startTlsProxy, setTlsUpgradeHandler, httpsRedirectState } from './tls-proxy.js';
 import { startCertRenewalScheduler } from './lib/cert-renewal.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
 // adminExternalContactsRouter completely removed in v3.18.33
@@ -48,7 +48,10 @@ import { authRouter } from './routes/auth.js';
 import { ssoRouter } from './routes/sso.js';
 import { startLdapSyncScheduler } from '@coremail/auth-ldap';
 import { retentionTagsRouter } from './routes/retention-tags.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requireSseAuth } from './middleware/auth.js';
+import { eventTicketHandler } from './lib/event-tickets.js';
+import { applyUpstreamHeaders, type TrustFn } from './lib/proxy-headers.js';
+import { createHttpsRedirect, hstsOnHttps } from './lib/https-redirect.js';
 import { sseHandler } from './sse.js';
 import { startSseHub } from './lib/sse-hub.js';
 import { sseLiveConnections } from './lib/live-sse.js';
@@ -92,6 +95,22 @@ app.use(requestId);
 // 2. Helmet — set security headers on every response
 //    Must come early so that error responses carry the right headers too.
 app.use(helmetMiddleware);
+// 8.0.x: HSTS only on HTTPS responses (helmet's own HSTS is off)
+app.use(hstsOnHttps);
+
+// 2b. HTTP → HTTPS redirect (8.0.x) once the integrated HTTPS proxy serves a
+//     certificate active for HTTPS. Exempt: ACME HTTP-01, /healthz, /livez,
+//     loopback peers. HTTP_REDIRECT_HTTPS=false disables it (lib/https-redirect.ts).
+let redirectHostCache: { host: string | null; expires: number } | null = null;
+app.use(createHttpsRedirect({
+  state: httpsRedirectState,
+  publicHostname: async () => {
+    if (redirectHostCache && redirectHostCache.expires > Date.now()) return redirectHostCache.host;
+    const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
+    redirectHostCache = { host: s?.publicHostname ?? null, expires: Date.now() + 60_000 };
+    return redirectHostCache.host;
+  },
+}));
 
 // 3. Suspicious-input guard — before the body parser consumes the stream
 //    Blocks CRLF injection, null bytes, path traversal, oversized headers.
@@ -128,29 +147,18 @@ const AUTODISCOVER_URL = process.env['AUTODISCOVER_SERVICE_URL'] ?? 'http://loca
 const JMAP_URL = process.env['JMAP_SERVICE_URL'] ?? 'http://localhost:3006';
 
 /**
- * v6: real client IP for internal services. Express requests use req.ip
- * (TRUST_PROXY-aware); raw upgrade requests are resolved with the same
- * trust function. Internal services (jmap, caldav, activesync, autodiscover)
- * take the right-most X-Forwarded-For hop from a loopback/private peer —
- * the gateway therefore always OVERWRITES the header (never appends), so a
- * client-supplied value cannot spoof the IP used for lockouts and logs.
+ * v6: real client IP for internal services. Internal services (jmap, caldav,
+ * activesync, autodiscover, auth-service) take the right-most X-Forwarded-For
+ * hop from a loopback/private peer — the gateway therefore always OVERWRITES
+ * the header (never appends), so a client-supplied value cannot spoof the IP
+ * used for lockouts and logs.
+ * 8.0.x: the same applies to every other forwarding / internal identity header
+ * (Forwarded, X-Forwarded-Host/-Proto/-Port, X-Real-IP, X-Internal-*, …):
+ * client values are removed and Proto/Host are set from trusted values
+ * (lib/proxy-headers.ts).
  */
-function upstreamClientIp(req: IncomingMessage): string {
-  const ip = (req as Partial<express.Request>).ip;
-  if (typeof ip === 'string' && ip) return ip;
-  const trust = app.get('trust proxy fn') as (addr: string, i: number) => boolean;
-  const raw = req.headers['x-forwarded-for'];
-  const hops = (Array.isArray(raw) ? raw.join(',') : (raw ?? ''))
-    .split(',').map((h) => h.trim()).filter(Boolean).reverse();
-  const addrs = [req.socket?.remoteAddress ?? '', ...hops];
-  for (let i = 0; i < addrs.length - 1; i++) {
-    if (!trust(addrs[i]!, i)) return addrs[i]!;
-  }
-  return addrs[addrs.length - 1]!;
-}
-
 function setUpstreamForwardedFor(proxyReq: ClientRequest, req: IncomingMessage): void {
-  proxyReq.setHeader('X-Forwarded-For', upstreamClientIp(req));
+  applyUpstreamHeaders(proxyReq, req, app.get('trust proxy fn') as TrustFn);
 }
 
 function internalProxy(targetBase: string): express.RequestHandler {
@@ -342,7 +350,11 @@ app.get('/api/v1/changelog', (_req, res) => {
 });
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
-app.get('/api/v1/events', requireAuth, sseHandler);
+// 8.0.x: the access token is accepted in the query ONLY here (EventSource) —
+// preferably as a single-use ticket: POST /api/v1/events/ticket → ?ticket=…
+// (?token= stays for one release, deprecated). Every other route: header only.
+app.post('/api/v1/events/ticket', requireAuth, eventTicketHandler);
+app.get('/api/v1/events', requireSseAuth, sseHandler);
 
 // ── Feature Routes ────────────────────────────────────────────────────────────
 app.use('/api/v1/setup', setupRateLimit, setupRouter);

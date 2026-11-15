@@ -122,9 +122,14 @@ export function auditContext(req: Request): Pick<AuditEntry, 'ipAddress' | 'user
  * Compliance background: whoever exports audit data or reads raw mail content
  * is audited themselves — otherwise an admin could exfiltrate data without a trace.
  */
-const AUDIT_SENSITIVE_GET = [
+export const AUDIT_SENSITIVE_GET = [
   /^\/audit-log\/export\.(csv|pdf|json)$/i,
   /^\/audit-log\/anomalies$/i,
+  // 8.0.x: backup downloads hand out mailbox content
+  /^\/backups\/download\/[^/]+\/?$/i,
+  /^\/backups\/archive\/download\/?$/i,
+  // message-trace CSV (mail-flow metadata of every user)
+  /^\/message-trace\/export\/?$/i,
 ];
 
 /**

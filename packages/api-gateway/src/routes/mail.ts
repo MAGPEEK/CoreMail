@@ -15,6 +15,16 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
+import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
+import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
+import { resolveReplyHeaders, prismaReplyLookup } from '../lib/reply-headers.js';
+import { createImageProxyHandler } from '../lib/image-proxy.js';
+
+const replyLookup = prismaReplyLookup(
+  prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
+  (p) => (p.storagePath ? loadRawMessage(p as unknown as Parameters<typeof loadRawMessage>[0], { persist: false }) : Promise.resolve(null)),
+);
 
 const log = createLogger('api:mail');
 export const mailRouter: RouterType = Router();
@@ -56,11 +66,21 @@ async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham',
 }
 mailRouter.use(requireAuth);
 
-// ── Multer (attachments, max 25 MB/file, max 20 files) ───────────────────────
-const uploadMiddleware = multer({
+// ── Multer (attachments) ──────────────────────────────────────────────────────
+// 8.0.x: the WHOLE request (all files + fields) is limited to the configured
+// max. message size, and at most MAX_SEND_FILES files (was 20 × 25 MB ≈ 500 MB
+// buffered in memory per request).
+const sendUploadMiddleware = withBodyLimit((limit) => multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
-}).array('attachments', 20);
+  limits: { fileSize: limit, files: MAX_SEND_FILES, fields: 50, fieldSize: limit, parts: MAX_SEND_FILES + 50 },
+}).array('attachments', MAX_SEND_FILES));
+
+// 8.0.x: per-user send rate limit (default 30 messages / 60 s, 0 disables)
+const sendRateLimiter = createUserRateLimiter({
+  scope: 'mail-send',
+  limit: envInt('MAIL_SEND_RATE_LIMIT', 30),
+  windowSec: Math.max(1, envInt('MAIL_SEND_RATE_WINDOW_SEC', 60)),
+});
 
 // ── BullMQ outbound queue (same as smtp-server) ───────────────────────────────
 let _outboundQueue: Queue | null = null;
@@ -182,6 +202,17 @@ mailRouter.patch('/folders/:id', async (req: Request, res: Response) => {
 
   if (parsed.data.name && SYSTEM_FOLDER_NAMES.has(folder.name)) {
     res.status(400).json({ error: 'Systemordner kann nicht umbenannt werden' }); return;
+  }
+  // 8.0.x: the new parent must be one of the caller's folders (same mailbox)
+  // and must not create a cycle; system folders stay at the top level.
+  if (parsed.data.parentId !== undefined && parsed.data.parentId !== folder.parentId) {
+    if (SYSTEM_FOLDER_NAMES.has(folder.name)) {
+      res.status(400).json({ error: 'Systemordner kann nicht verschoben werden' }); return;
+    }
+    if (parsed.data.parentId) {
+      const check = await checkFolderParent(prisma as unknown as FolderLookup, id, parsed.data.parentId, folder.mailboxId);
+      if (!check.ok) { res.status(check.status).json({ error: check.error }); return; }
+    }
   }
   if (parsed.data.name && parsed.data.name !== folder.name) {
     const collision = await prisma.folder.findFirst({
@@ -535,6 +566,15 @@ mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
   warn: (msg, err) => log.warn({ err }, msg),
 }));
 
+// GET /api/v1/mail/image-proxy?url=<http(s) URL> — external images for "show images"
+// (8.0.x; SSRF-safe, image types only, per-user rate limit — lib/image-proxy.ts)
+const imageProxyLimiter = createUserRateLimiter({
+  scope: 'image-proxy',
+  limit: envInt('IMAGE_PROXY_RATE_LIMIT', 120),
+  windowSec: Math.max(1, envInt('IMAGE_PROXY_RATE_WINDOW_SEC', 60)),
+});
+mailRouter.get('/image-proxy', createImageProxyHandler({ allow: (userId) => imageProxyLimiter.hit(userId) }));
+
 // GET /api/v1/mail/messages/:id/raw — RFC 822 raw EML / source view
 mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -730,17 +770,15 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
 // POST /api/v1/mail/send — compose and send (multipart/form-data with optional attachments)
 mailRouter.post(
   '/send',
+  // 8.0.x: per-user send rate (MAIL_SEND_RATE_LIMIT / MAIL_SEND_RATE_WINDOW_SEC)
+  sendRateLimiter.middleware,
   // Multer middleware: processes multipart/form-data; no intervention for application/json
+  // (JSON bodies are capped by express.json()). 8.0.x: the whole request is capped
+  // at the configured max. message size (lib/send-limits.ts).
   (req: Request, res: Response, next: NextFunction) => {
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) { next(); return; }
-    uploadMiddleware(req, res, (err) => {
-      if (err instanceof multer.MulterError) {
-        res.status(400).json({ error: `Upload-Fehler: ${err.message}` }); return;
-      }
-      if (err) { res.status(400).json({ error: String(err) }); return; }
-      next();
-    });
+    sendUploadMiddleware(req, res, next);
   },
   async (req: Request, res: Response) => {
     // Read fields from JSON body OR multipart form
@@ -799,6 +837,12 @@ mailRouter.post(
     }
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
+    // 8.0.x: recipient count + syntax (header injection, envelope abuse)
+    const rcptCheck = checkRecipients([to, cc, bcc]);
+    if (!rcptCheck.ok) {
+      res.status(400).json({ error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
+      return;
+    }
 
     // Schedule-send validation: time must be in the future (>30s),
     // not more than 1 year ahead (otherwise probably an error)
@@ -862,6 +906,9 @@ mailRouter.post(
       onBehalfHeader           = `${(user.displayName ?? '').trim() ? `"${(user.displayName ?? '').trim()}" ` : ''}<${user.email}>`;
     }
 
+    // 8.0.x: In-Reply-To/References from the parent's Message-ID (never an internal id)
+    const reply = await resolveReplyHeaders(inReplyTo, user.id, replyLookup);
+
     const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
     const jobId       = crypto.randomUUID();
     const msgId       = `<${crypto.randomUUID()}@${user.domain.name}>`;
@@ -923,7 +970,7 @@ mailRouter.post(
           // For schedule-send: set the Date header to scheduledAt so that the
           // recipient sees the scheduled send time (not the creation time)
           date:      (scheduledAt ?? sendDate).toISOString(),
-          ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
+          ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo, references: reply.references ?? reply.inReplyTo } : {}),
           attachments: queueAttachments,
         },
       }, jobOptions);
@@ -984,7 +1031,7 @@ mailRouter.post(
           ...(bcc.length            ? { bcc }                                 : {}),
           ...(bodyHtml              ? { html: bodyHtml }                      : {}),
           ...(bodyText              ? { text: bodyText }                      : {}),
-          ...(inReplyTo             ? { inReplyTo, references: inReplyTo }    : {}),
+          ...(reply.inReplyTo       ? { inReplyTo: reply.inReplyTo, references: reply.references ?? reply.inReplyTo } : {}),
           ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
         });
 

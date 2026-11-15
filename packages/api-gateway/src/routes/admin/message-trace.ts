@@ -10,6 +10,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { csvCellQuoted } from '../../lib/export-safety.js';
 
 export const adminMessageTraceRouter: RouterType = Router();
 adminMessageTraceRouter.use(requireArea('compliance'));
@@ -87,7 +88,7 @@ adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
   const header = 'Zeitstempel,Absender,Empfänger,Betreff,Status,MessageId\r\n';
   const lines = filtered.map(r => {
     const m = (r.metadata ?? {}) as Record<string, string>;
-    const esc = (s: string) => `"${(s ?? '').replace(/"/g, '""')}"`;
+    const esc = (s: string) => csvCellQuoted(s ?? ''); // formula-safe (lib/export-safety.ts)
     return [
       esc(new Date(r.timestamp).toISOString()),
       esc(m['sender'] ?? ''), esc(m['recipient'] ?? ''),

@@ -165,12 +165,32 @@ function sniCallback(
   cb(new Error('No matching certificate'));
 }
 
+/** true while the HTTPS server listens with a certificate marked isActiveHttps. */
+let httpsActive = false;
+
+/** Does one of the loaded certificates cover `host` (exact or one-level wildcard)? */
+function coversHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (sniContexts.has(lower)) return true;
+  return wildcardContexts.some((w) => {
+    if (!lower.endsWith(w.suffix)) return false;
+    const prefix = lower.slice(0, -w.suffix.length);
+    return prefix.length > 0 && !prefix.includes('.');
+  });
+}
+
+/** State for the HTTP → HTTPS redirect (lib/https-redirect.ts). */
+export function httpsRedirectState(): { active: boolean; port: number; covers: (host: string) => boolean } {
+  return { active: httpsActive && activeServer !== null, port: PORT, covers: coversHost };
+}
+
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 
 async function reloadServer(app: Application): Promise<void> {
   const loaded = await loadCerts();
 
   // Stop the running HTTPS server (graceful — max 5 s)
+  httpsActive = false;
   if (activeServer) {
     await stopServer(activeServer);
     activeServer = null;
@@ -247,6 +267,7 @@ async function reloadServer(app: Application): Promise<void> {
   });
 
   activeServer = server;
+  httpsActive = certs.some((c) => c.isActiveHttps);
 }
 
 // ── Graceful Shutdown ─────────────────────────────────────────────────────────
