@@ -394,9 +394,16 @@ HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
 - 0: AirSync (Sync, SyncKey, Collection, Status ...)
 - 2: Email (Subject, From, To, Body, Read ...)
 - 7: FolderHierarchy (FolderSync, ServerId, DisplayName, Type ...)
+- 5: Move, 8: MeetingResponse, 10: ResolveRecipients, 15: Search, 16: GAL, 18: Settings
+- 6: GetItemEstimate, 17: AirSyncBase (Body, Attachments ...), 20: ItemOperations, 22: Email2
+- 13: Ping (HeartbeatInterval, Folders ...)
 - 14: Provision (PolicyKey, EASProvisionDoc ...)
-- 17: Ping (HeartbeatInterval, Folders ...)
-- 25: ComposeMail (SendMail, Mime ...)
+- 21: ComposeMail (SendMail, Mime ...)
+- Names resolve on the parent element's page first; two equivalent ways force a page where a
+  child lives on another page than its parent: a qualified name `Namespace:Name` (e.g.
+  `el('GAL:DisplayName')`) or an explicit page (`pel(CP.AirSyncBase, 'Body')`, `CP` in
+  `wbxml.ts`). The decoder exposes `page` and raw `bytes` non-enumerably; `bytes` content is
+  written byte-exact (OPAQUE for NUL/binary). Byte fixtures: `src/wbxml-pages.test.ts`.
 
 ### EAS commands
 | Command | File | Description |
@@ -407,6 +414,17 @@ HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
 | `SendMail` | `commands/send-mail.ts` | Outgoing mail |
 | `SmartReply/Forward` | `commands/send-mail.ts` | Reply/forward |
 | `Ping` | `commands/ping.ts` | Long poll (up to 59 min) |
+| `Settings` | `commands/settings.ts` | Oof ↔ `UserSettings.oof*`, DeviceInformation, UserInformation, RightsManagementInformation |
+| `Search` | `commands/search.ts` | Store Mailbox (own mailbox only) + GAL (`commands/directory.ts`: own domain only) |
+| `MoveItems` | `commands/move-items.ts` | `moveMessages` (new UID), own folders only |
+| `MeetingResponse` | `commands/meeting-response.ts` | Calendar event + iTIP REPLY (`@coremail/storage` `itip-reply.ts`), request → Trash |
+| `ResolveRecipients` | `commands/resolve-recipients.ts` | GAL + own contacts; Certificates/Availability minimal |
+| `ItemOperations` | `commands/item-operations.ts` | Fetch (FileReference / ServerId, body + MIME), EmptyFolderContents; own items only |
+| `GetItemEstimate` | `commands/get-item-estimate.ts` | Count over the Sync window's modSeq range |
+
+Sync bodies: `commands/body.ts` (AirSyncBase Body per BodyPreference, MIME = `loadRawMessage()`).
+
+`src/commands.ts` (`EAS_COMMANDS`) is the OPTIONS command list — only commands with a real handler.
 
 ### Ping long poll
 nginx must have `proxy_read_timeout 600s` for `/Microsoft-Server-ActiveSync` (already configured).

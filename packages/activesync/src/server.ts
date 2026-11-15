@@ -5,7 +5,8 @@ import { createLogger } from '@coremail/core/logger';
 import { installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost } from '@coremail/core/http';
 import { prisma } from '@coremail/storage/prisma';
 import { requireAuth } from './auth.js';
-import { decodeWbxml } from './wbxml.js';
+import { decodeWbxml, type WbxmlElement } from './wbxml.js';
+import { EAS_COMMANDS } from './commands.js';
 import { handleProvision } from './commands/provision.js';
 import { handleFolderSync } from './commands/folder-sync.js';
 import { handleSync } from './commands/sync.js';
@@ -14,6 +15,11 @@ import { handlePing } from './commands/ping.js';
 import { handleGetAttachment } from './commands/get-attachment.js';
 import { handleItemOperations, prismaItemOperationsDeps } from './commands/item-operations.js';
 import { handleGetItemEstimate } from './commands/get-item-estimate.js';
+import { handleSettings } from './commands/settings.js';
+import { handleSearch } from './commands/search.js';
+import { handleMoveItems } from './commands/move-items.js';
+import { handleMeetingResponse } from './commands/meeting-response.js';
+import { handleResolveRecipients } from './commands/resolve-recipients.js';
 import { getObjectStream } from '@coremail/storage/minio';
 
 const log = createLogger('activesync');
@@ -32,14 +38,7 @@ app.use('/Microsoft-Server-ActiveSync', express.raw({ type: '*/*', limit: '25mb'
 app.options('/Microsoft-Server-ActiveSync', (_req: Request, res: Response) => {
   res.setHeader('MS-Server-ActiveSync', '14.1');
   res.setHeader('MS-ASProtocolVersions', '14.0,14.1');
-  res.setHeader(
-    'MS-ASProtocolCommands',
-    'Sync,SendMail,SmartForward,SmartReply,GetAttachment,GetHierarchy,' +
-    'CreateCollection,DeleteCollection,MoveCollection,FolderSync,FolderCreate,' +
-    'FolderDelete,FolderUpdate,MoveItems,GetItemEstimate,MeetingResponse,' +
-    'Provision,ResolveRecipients,ValidateCert,Find,Ping,Notify,Search,' +
-    'Settings,ItemOperations',
-  );
+  res.setHeader('MS-ASProtocolCommands', EAS_COMMANDS.join(','));
   res.status(200).end();
 });
 
@@ -148,13 +147,15 @@ app.post(
           break;
         }
         case 'Settings':
-        case 'MeetingResponse':
-        case 'ResolveRecipients':
         case 'Search':
         case 'MoveItems':
-          // Return empty success for unsupported optional commands
-          res.status(200).end();
+        case 'MeetingResponse':
+        case 'ResolveRecipients': {
+          if (!wbxmlBody) { res.status(400).send('Missing body'); return; }
+          const result = await runCommand(command, wbxmlBody, user.userId, deviceId, req.get('MS-ASProtocolVersion') ?? '14.1');
+          res.status(200).send(result);
           break;
+        }
         default:
           log.warn({ command }, 'Unknown EAS command');
           res.status(501).send('Not implemented');
@@ -165,6 +166,16 @@ app.post(
     }
   },
 );
+
+function runCommand(command: string, body: WbxmlElement, userId: string, deviceId: string, protocolVersion: string): Promise<Buffer> {
+  switch (command) {
+    case 'Settings': return handleSettings(body, userId, deviceId, protocolVersion);
+    case 'Search': return handleSearch(body, userId);
+    case 'MoveItems': return handleMoveItems(body, userId);
+    case 'MeetingResponse': return handleMeetingResponse(body, userId);
+    default: return handleResolveRecipients(body, userId);
+  }
+}
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {

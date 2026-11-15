@@ -66,7 +66,7 @@
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ⚠️ successful Basic logins are cached for 60 s (a password change or revoked app password takes up to 60 s to apply) | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | Admin CLI `coremail` inside the container (users, mailboxes, connectors, banner, certificates) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
-| ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile (Provision, FolderSync, Sync, Ping, SendMail, GetAttachment) | ⚠️ message bodies are sent as EAS 2.5 `Email:Body` instead of the 14.1 AirSyncBase body; Settings, ItemOperations, Search, MoveItems, GetItemEstimate, MeetingResponse and ResolveRecipients are answered with an empty 200; not tested with real devices |
+| ActiveSync EAS 14.1 — iOS Mail, Android, Outlook Mobile (Provision, FolderSync, Sync with AirSyncBase bodies, Ping, SendMail, SmartReply/Forward, GetAttachment, ItemOperations, GetItemEstimate, Settings, Search, MoveItems, MeetingResponse, ResolveRecipients) | ⚠️ not tested with real devices; folder create/rename/delete from the device is not supported |
 | MWA — Mail Web Access (React, Exchange-like layout; infinite scroll, attachment download, inline images) | ✅ |
 | RFC 822 source view (modal in MWA) | ✅ |
 | Recipient autocomplete in compose (To/CC/BCC, keyboard navigation) | ✅ |
