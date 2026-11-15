@@ -49,9 +49,20 @@ runs `coremail-schema-sync` (`infra/docker/schema-sync.sh`):
 
 1. `prisma db push` **without** `--accept-data-loss` (retried while PostgreSQL
    is still starting).
-2. If the new schema would delete data (dropped table/column that still has
-   rows, narrowed type …) the start **stops**, nothing is changed, and the log
-   says what to do. Before, such changes were applied silently.
+2. Prisma's "might be data loss" warnings are classified
+   (`infra/docker/schema-sync-classify.mjs`):
+   - **Only new unique constraints** (e.g. 8.0.0 → 9.0: `resource_bookings`
+     `UNIQUE (calendarId, uid)` instead of `UNIQUE (uid)`): nothing is deleted.
+     For every new constraint a duplicate check runs (`SELECT … GROUP BY …
+     HAVING count(*) > 1`). Without duplicates the change is applied
+     automatically; a pre-migration dump is written first when `pg_dump`, the
+     server version and the free space allow it (otherwise skipped with a
+     warning). With duplicates the start **stops**, names the table and prints
+     the query that finds them — merge/remove them and start again.
+   - **Anything else** (dropped table/column that still has rows, type change,
+     removed enum value, a warning schema-sync does not recognise): the start
+     **stops**, nothing is changed, and the log says what to do. Before, such
+     changes were applied silently.
 3. To apply it: back up, set `COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true` in `.env`,
    `docker compose up -d coremail`. CoreMail first writes
    `/data/backups/pre-migrate-<UTC timestamp>.sql.gz` (`pg_dump`, plain SQL,
@@ -70,8 +81,13 @@ docker run --rm -v coremail_coremail-data:/data alpine cat /data/backups/pre-mig
 ```
 
 The image contains `pg_dump` 16 (`postgresql16-client`), matching the bundled
-`postgres:16`. With a newer external PostgreSQL `pg_dump` refuses — back up
-yourself and set `COREMAIL_SCHEMA_BACKUP=skip`.
+`postgres:16`. `pg_dump` cannot dump a **newer server** (external PostgreSQL ≥
+17). schema-sync compares the server version (`SHOW server_version_num`) with
+its `pg_dump` and says so explicitly: an automatic unique-constraint change
+still runs (dump skipped, warning), a destructive change with
+`COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true` stops until you dumped the database
+yourself with a matching `pg_dump` (or a provider snapshot) and set
+`COREMAIL_SCHEMA_BACKUP=skip` (Helm: `app.schemaSync.skipBackup=true`).
 
 ---
 
@@ -256,9 +272,17 @@ If `10.253.253.0/29` collides with a network on the host or LAN, set e.g.
 The shared pino logger (`@coremail/core`) replaces these values with
 `[Redacted]`: `authorization`, `cookie`, `set-cookie`, `password`,
 `currentPassword`, `newPassword`, `appPassword`, `token`, `accessToken`,
-`refreshToken`, `challengeToken`, `secret`, `clientSecret` — at the top level of
-a log object and one level below (`*.password`), plus `req.headers.*` /
-`res.headers.set-cookie` / `headers.*` (authorization, cookie, x-internal-token).
+`refreshToken`, `challengeToken`, `idToken`, `secret`, `clientSecret`, `apiKey`,
+`privateKey`, `totpSecret`, `mfaCode`, `backupCode`, `pass`, `passwd`,
+`code_verifier` — at the top level of a log object, one level below
+(`*.password`) and two levels below (`*.*.password`, e.g. `req.body.password`),
+plus the headers `authorization`, `cookie`, `set-cookie`, `x-internal-token`,
+`proxy-authorization` in the lowercase (Node) and canonical (`Authorization`,
+`Cookie`, … — pino paths are case-sensitive) spelling under `req.headers`,
+`res.headers`, `headers`, `*.headers`, `request.headers`, `response.headers`,
+`config.headers`, and `command.args` of failed ioredis commands (an `AUTH`
+error carries the Redis password) under `err`, `error` and up to two levels
+deep. Deeper nesting is not covered — log identifiers, not whole objects.
 
 ---
 
@@ -272,9 +296,30 @@ rspamd configuration to `/volume1/docker/coremail/config/`.
 - **Existing installation** that ran on the old Compose fallbacks: the old
   values are written explicitly (so nothing breaks) and listed as a warning —
   **except `JWT_SECRET`**: a publicly known JWT secret lets anyone forge login
-  tokens, so it is rotated right away. Its only other use was deriving the 2FA
-  (TOTP) encryption key; that key is pinned first as `MFA_ENCRYPTION_KEY`
-  (same bytes), so existing 2FA keeps working. Every user is logged out once.
+  tokens, so it is rotated right away. Two keys were derived from it, and both
+  are pinned first with the same bytes: the 2FA (TOTP) encryption key as
+  `MFA_ENCRYPTION_KEY` (existing 2FA keeps working) and the backup encryption
+  key as `BACKUP_ENCRYPTION_KEY` (HKDF-SHA256 of `JWT_SECRET\0PEPPER`, salt
+  `coremail-backup-key`, info `coremail backup encryption key v1`, as in
+  `backup-crypto.ts` — existing encrypted backups stay restorable). Every user
+  is logged out once. If a key cannot be computed (no Docker access), the old
+  `JWT_SECRET` is kept and reported instead of losing 2FA or backups. **Copy
+  `BACKUP_ENCRYPTION_KEY` off the NAS.**
+
+  *Only updated the image, never ran the new setup script?* Then the old Compose
+  file is still in place with the public `CHANGE-ME-openssl-rand-hex-32`
+  `JWT_SECRET`, and backups are encrypted with a key derived from that public
+  value — run `scripts/synology-setup.sh` once. Backups made before a rotation
+  done without the pinned key (e.g. by an older setup script or by hand) are
+  still recoverable, because the old secret is the public default:
+
+  ```bash
+  # PEPPER = the value from /volume1/docker/coremail/.env (old default: CHANGE-ME-openssl-rand-hex-32)
+  JWT_SECRET=CHANGE-ME-openssl-rand-hex-32 PEPPER='<PEPPER from .env>' \
+    node scripts/decrypt-backup.mjs a_at_b.zip.enc a_at_b.zip
+  ```
+
+  The decrypted archive can then be imported again (BCP → Backup & Restore).
 
 Rotating the remaining old defaults:
 
