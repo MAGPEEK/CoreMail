@@ -31,6 +31,8 @@ export type AuthInvalidationReason =
   | 'password-change' | 'password-reset' | 'admin-password-reset'
   | 'mfa-change' | 'app-password-created' | 'app-password-revoked'
   | 'deactivated' | 'deleted' | 'role-change' | 'sessions-revoked'
+  /** 9.1: a shared-mailbox permission or delegation of the user changed (no credential change). */
+  | 'permission-change'
   | (string & {});
 
 /**

@@ -29,7 +29,7 @@ import {
   POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS,
 } from './limits.js';
 import { unregisterLiveSession } from '../session/live.js';
-import { revalidateSelected } from '../commands/namespaces.js';
+import { invalidateAccessCaches, revalidateSelected } from '../commands/namespaces.js';
 import { CompressedSocket } from './compress.js';
 import {
   tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
@@ -790,6 +790,23 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
   } catch (err) {
     log.error({ err, cmd, tag }, 'Command handler error');
     session.socket.write(`${tag} NO Internal error\r\n`);
+  }
+}
+
+/**
+ * v9.1: an auth invalidation event (credential change, deactivation, or a
+ * `permission-change` of a shared mailbox / delegation) for `event.userId`:
+ * drops every session's cached shared-mailbox access list and re-checks the
+ * selected foreign mailbox of that user's IDLE sessions right away (a revoked
+ * one is closed with `* OK [CLOSED]`). Other sessions re-check it before
+ * their next command.
+ */
+export function applyAuthInvalidation(event: { userId: string }): void {
+  invalidateAccessCaches();
+  for (const session of sessions.values()) {
+    if (session.userId === event.userId && session.idleActive && session.selected?.foreign) {
+      notifyMailboxChanged(session);
+    }
   }
 }
 

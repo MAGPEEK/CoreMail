@@ -24,7 +24,7 @@ import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
-import { createImapServer } from './index.js';
+import { applyAuthInvalidation, createImapServer } from './index.js';
 import { setIdlePollInterval } from '../commands/index.js';
 import {
   invalidateAccessCaches, loadNamespaceConfig, parseForeignName, parseNamespacePrefix, setNamespaceConfig,
@@ -661,6 +661,31 @@ describe('CREATE/DELETE/RENAME and ACL rights', () => {
     assert.match((await client.cmd('CREATE "Shared/team@example.test/a.b"')).tagged, /NO \[NOPERM\]/);
   });
 
+  test('personal folders under a reserved prefix are hidden from LIST; CREATE/RENAME into a prefix say it is reserved', async (t) => {
+    const { client, db } = await login(t);
+    // Legacy personal folders (created before 9.1) whose names start with a namespace prefix.
+    db.folders.push(
+      { id: 'f-bob-legacy1', mailboxId: 'mb-bob', name: 'Shared/old', displayName: 'Shared/old' },
+      { id: 'f-bob-legacy2', mailboxId: 'mb-bob', name: 'other users/x', displayName: 'other users/x' },
+      { id: 'f-bob-legacy3', mailboxId: 'mb-bob', name: 'Shared/team@example.test/INBOX', displayName: 'Shared/team@example.test/INBOX' },
+    );
+    const r = await client.cmd('LIST "" "*"');
+    assert.equal(r.status, 'OK');
+    assert.equal(untagged(r, /Shared\/old|other users\/x/i).length, 0, r.raw);
+    // The real shared entry is listed once, with the "/" delimiter (not shadowed by the personal one).
+    assert.deepEqual(untagged(r, /"Shared\/team@example.test\/INBOX"$/), ['* LIST (\\HasNoChildren) "/" "Shared/team@example.test/INBOX"']);
+    assert.ok(untagged(r, /"Work"$/).length === 1, 'ordinary personal folders stay listed');
+
+    const c = await client.cmd('CREATE "Shared/nobody@example.test/New"');
+    assert.match(c.tagged, /NO \[NOPERM\].*reserved/, c.tagged);
+    const c2 = await client.cmd('CREATE "shared/Whatever"');
+    assert.match(c2.tagged, /NO \[NOPERM\].*"Shared\/" are reserved/, c2.tagged);
+    const rn = await client.cmd('RENAME Work "Other Users/zed@example.test/Work"');
+    assert.match(rn.tagged, /NO \[NOPERM\].*"Other Users\/" are reserved/, rn.tagged);
+    assert.ok(db.folders.some((x) => x.id === 'f-bob-work' && x.name === 'Work'), 'nothing renamed');
+    assert.equal(db.folders.filter((x) => x.mailboxId === 'mb-bob' && /^shared\//i.test(x.name)).length, 2, 'nothing created');
+  });
+
   test('MYRIGHTS maps the permission; GETACL/LISTRIGHTS of others and SETACL are NOPERM', async (t) => {
     const { client } = await login(t);
     assert.deepEqual((await client.cmd(`MYRIGHTS ${TEAM}`)).lines, ['* MYRIGHTS "Shared/team@example.test/INBOX" lrswipkxtecd']);
@@ -814,5 +839,34 @@ describe('permission changes take effect on a live session', () => {
     assert.equal(await client.line(), '* OK [CLOSED] Access to the selected mailbox was revoked');
     client.write('DONE\r\n');
     assert.match(await client.line(), /^I1 OK/);
+  });
+
+  test('a permission-change event closes a revoked read-only folder during IDLE at once', async (t) => {
+    setIdlePollInterval(60_000);
+    const { client, db } = await login(t);
+    assert.equal((await client.cmd(`EXAMINE ${RO}`)).status, 'OK');
+    client.write('I2 IDLE\r\n');
+    assert.match(await client.line(), /^\+ /);
+    await new Promise((r) => setTimeout(r, 50));
+    db.sharedPerms = db.sharedPerms.filter((p) => !(p.userId === 'u1' && p.sharedMailboxId === 's2'));
+    // Another user's event changes nothing for bob's session …
+    applyAuthInvalidation({ userId: 'u2' });
+    await assert.rejects(client.line(200), /timeout/);
+    // … bob's own (what publishUserAuthChange(granteeId, 'permission-change') delivers) closes it, no new mail needed.
+    applyAuthInvalidation({ userId: 'u1' });
+    assert.equal(await client.line(), '* OK [CLOSED] Access to the selected mailbox was revoked');
+    client.write('DONE\r\n');
+    assert.match(await client.line(), /^I2 OK/);
+  });
+
+  test('a permission-change event: the next command of a non-idle session gets [CLOSED]', async (t) => {
+    const { client, db } = await login(t);
+    assert.equal((await client.cmd(`EXAMINE ${RO}`)).status, 'OK');
+    assert.equal((await client.cmd('NOOP')).status, 'OK'); // cache warm
+    db.sharedPerms = db.sharedPerms.filter((p) => !(p.userId === 'u1' && p.sharedMailboxId === 's2'));
+    applyAuthInvalidation({ userId: 'u1' });
+    const r = await client.cmd('FETCH 1 (FLAGS)');
+    assert.ok(r.lines.includes('* OK [CLOSED] Access to the selected mailbox was revoked'), r.raw);
+    assert.match(r.tagged, /NO \[NOPERM\]/);
   });
 });

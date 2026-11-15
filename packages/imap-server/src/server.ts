@@ -6,9 +6,9 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, onAuthInvalidation,
 } from '@coremail/core';
-import { invalidateAccessCaches, namespaceConfig } from './commands/namespaces.js';
+import { namespaceConfig } from './commands/namespaces.js';
 import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
-import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
+import { applyAuthInvalidation, createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 import { invalidExemptEntries } from './server/limits.js';
 
@@ -219,9 +219,11 @@ async function main() {
   // v7.1.0: credential changes (password, MFA, app password, deactivation …)
   // end the user's live IMAP connections (incl. IDLE) with * BYE.
   imapLiveSessions.attachInvalidation();
-  // v9.1: any auth change (e.g. a delegating owner deactivated) drops the cached
-  // shared / delegated mailbox permissions of all sessions (re-read on next use).
-  onAuthInvalidation(() => invalidateAccessCaches());
+  // v9.1: any auth change (e.g. a delegating owner deactivated, or a
+  // `permission-change` published by the admin API) drops the cached shared /
+  // delegated mailbox permissions of all sessions (re-read on next use) and
+  // re-checks the selected foreign mailbox of the user's IDLE sessions at once.
+  onAuthInvalidation((e) => applyAuthInvalidation(e));
   startAuthInvalidationSubscriber();
   const ns = namespaceConfig();
   log.info({ otherUsers: ns.otherUsers, shared: ns.shared, accessCacheMs: ns.cacheMs }, 'IMAP namespaces');

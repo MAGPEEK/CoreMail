@@ -311,3 +311,17 @@ export async function selectedWritable(session: ImapSession): Promise<boolean> {
 }
 
 export const NOPERM = '[NOPERM] Permission denied';
+
+/**
+ * NOPERM text for a CREATE / RENAME target that lies in a foreign namespace but
+ * names no folder the user may write: says that the prefix is reserved (the same
+ * text whether or not the address exists — no oracle). Personal folders can
+ * therefore never be created under "Shared/" or "Other Users/".
+ */
+export function reservedNamePerm(session: ImapSession, raw: string): string {
+  const parsed = parseForeignName(decodeClientName(session, raw));
+  const prefix = parsed ? prefixOf(parsed.kind) : null;
+  return prefix === null
+    ? NOPERM
+    : `[NOPERM] Permission denied: names under "${prefix}${FOREIGN_DELIMITER}" are reserved for shared and delegated mailboxes`;
+}

@@ -33,7 +33,7 @@ import {
 } from './sort-thread.js';
 import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
 import {
-  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, resolveMailbox, revalidateSelected, selectedWritable,
+  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, reservedNamePerm, resolveMailbox, revalidateSelected, selectedWritable,
 } from './namespaces.js';
 import { runStatus } from './list.js';
 import {
@@ -157,7 +157,8 @@ export async function handleCreate(
   // v9.1: names in the Shared / Other Users namespaces create folders in that
   // mailbox (FULL_ACCESS only); an inaccessible or read-only one is NOPERM alike.
   const resolved = await resolveMailbox(session, rawName, true);
-  if (!resolved.ok || !resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!resolved.ok) { sendNo(session, tag, reservedNamePerm(session, rawName)); return; }
+  if (!resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
   const { target } = resolved;
   const name = target.folderName;
   if (name === 'INBOX') {
@@ -225,7 +226,8 @@ export async function handleRename(
   const to = await resolveMailbox(session, args[1]);
   if (!from.ok) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   if (!from.target.writable) { sendNo(session, tag, NOPERM); return; }
-  if (!to.ok || !to.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!to.ok) { sendNo(session, tag, reservedNamePerm(session, args[1])); return; }
+  if (!to.target.writable) { sendNo(session, tag, NOPERM); return; }
   if (to.target.mailboxId !== from.target.mailboxId) {
     sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into another account');
     return;
