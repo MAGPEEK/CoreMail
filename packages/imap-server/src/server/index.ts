@@ -16,7 +16,7 @@ import {
   handleCopy, handleMove, handleSearch, handleClose, handleCheck,
   // v5.5.0: RFC 9051 IMAP4rev2 + RFC 2971 + RFC 3501 §6.2.2 SASL
   handleUnselect, handleId, handleAuthenticate, handleSaslContinuation,
-  appendTargetExists,
+  appendTargetCheck,
   // v7.1.0: QUOTA (RFC 9208, read-only) + per-session mailbox view updates
   handleGetQuotaRoot, handleGetQuota, handleSetQuota, notifyMailboxChanged, stopIdleTimer,
   // SORT/THREAD (RFC 5256), ACL (RFC 4314)
@@ -29,6 +29,7 @@ import {
   POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS,
 } from './limits.js';
 import { unregisterLiveSession } from '../session/live.js';
+import { revalidateSelected } from '../commands/namespaces.js';
 import { CompressedSocket } from './compress.js';
 import {
   tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
@@ -38,6 +39,12 @@ import {
 const log = createLogger('imap:server');
 
 const sessions = new Map<string, ImapSession>();
+
+/** Commands that need a selected mailbox (RFC 9051 §6.4) — NOPERM after a revoked permission. */
+const SELECTED_STATE_COMMANDS = new Set([
+  'FETCH', 'UID FETCH', 'STORE', 'UID STORE', 'SEARCH', 'UID SEARCH', 'COPY', 'UID COPY', 'MOVE', 'UID MOVE',
+  'EXPUNGE', 'UID EXPUNGE', 'SORT', 'UID SORT', 'THREAD', 'UID THREAD', 'CHECK',
+]);
 
 // Maximum length of an input line that has not (yet) been terminated by CRLF.
 // 64 KiB matches common server defaults (e.g. Dovecot imap_max_line_length)
@@ -320,8 +327,10 @@ async function checkLiteral(
       return 'drop';
     }
     const mailbox = tokenString(tokens[2]);
-    if (mailbox !== null && !(await appendTargetExists(session, mailbox))) {
-      session.socket.write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+    // v9.1: also refuses a read-only shared / delegated target before the literal.
+    const refusal = mailbox === null ? null : await appendTargetCheck(session, mailbox);
+    if (refusal !== null) {
+      session.socket.write(`${tag} NO ${refusal}\r\n`);
       return 'drop';
     }
   }
@@ -396,6 +405,20 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
   log.debug({ id: session.id, cmd, tag }, 'IMAP command');
 
   try {
+    // v9.1: the permission for a selected shared / delegated mailbox is re-checked
+    // before every command (cached ≤ 30 s; writes re-read it). Revoked → the
+    // mailbox is closed ("* OK [CLOSED]") and commands that need it get NOPERM.
+    if (session.selected?.foreign && cmd !== 'LOGOUT' && cmd !== 'CAPABILITY'
+      && !(await revalidateSelected(session, false))) {
+      if (cmd === 'CLOSE' || cmd === 'UNSELECT') {
+        session.socket.write(`${tag} OK ${cmd} completed\r\n`);
+        return;
+      }
+      if (SELECTED_STATE_COMMANDS.has(cmd)) {
+        session.socket.write(`${tag} NO [NOPERM] Access to the selected mailbox was revoked\r\n`);
+        return;
+      }
+    }
     switch (cmd) {
       case 'CAPABILITY':
         await handleCapability(session, tag);
@@ -787,11 +810,14 @@ function setupIdlePush(): void {
       // IDLE sessions watching the same folder compare their view with the
       // database and report the difference (EXISTS, and anything else that
       // changed meanwhile) — never a blind "EXISTS + 1".
+      // v9.1: matched by folder only — a shared / delegated folder is watched by
+      // other users than the event's mailbox owner. The folder was access-checked
+      // on SELECT and the sync re-checks the permission (namespaces.ts).
       for (const session of sessions.values()) {
         if (
           session.idleActive &&
-          session.userId === event.userId &&
-          session.selected?.folderId === event.folderId
+          session.selected?.folderId === event.folderId &&
+          (session.userId === event.userId || !!session.selected.foreign)
         ) {
           notifyMailboxChanged(session);
           log.debug({ userId: event.userId, uid: event.uid }, 'IDLE push: new message');

@@ -26,6 +26,7 @@ import zlib from 'node:zlib';
 import { createImapServer } from './index.js';
 import { setIdlePollInterval } from '../commands/index.js';
 import { selfSignedTestCert } from '../test-cert.js';
+import { formatReferencesColumn } from '@coremail/storage';
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ interface FakeMessage {
   storagePath: string | null;
   deletedAt: Date | null;
   attachments: Array<{ filename: string; mimeType: string; size: number }>;
+  references?: string | null;
 }
 
 interface FakeFolder { id: string; mailboxId: string; name: string; displayName: string }
@@ -185,6 +187,9 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
 
   const prisma = {
     domain: { findFirst: async () => ({ name: 'example.test' }) },
+    // v9.1: no shared / delegated mailboxes in this fixture (see imap-shared.test.ts).
+    sharedMailboxPerm: { findMany: async () => [] },
+    mailboxDelegate: { findMany: async () => [] },
     user: {
       findFirst: async ({ where }: { where: Row }) => { await tick(); return users.find((u) => matches(asRow(u), where)) ?? null; },
     },
@@ -834,12 +839,21 @@ describe('LIST, NAMESPACE and STATUS (RFC 9051 §6.3.9–11)', () => {
     assert.match(untagged(response, /^\* LIST /)[0] ?? '', /\\HasChildren/);
   });
 
-  test('NAMESPACE returns one personal namespace with delimiter "."', async (t) => {
+  test('NAMESPACE returns the personal namespace with delimiter "." plus Other Users and Shared (v9.1)', async (t) => {
     const { client } = await login(t);
 
     const response = await client.cmd('NAMESPACE');
 
-    assert.deepEqual(untagged(response, /^\* NAMESPACE/), ['* NAMESPACE (("" ".")) NIL NIL']);
+    assert.deepEqual(untagged(response, /^\* NAMESPACE/), ['* NAMESPACE (("" ".")) (("Other Users/" "/")) (("Shared/" "/"))']);
+  });
+
+  test('without shared or delegated mailboxes LIST shows only the own folders (v9.1)', async (t) => {
+    const { client } = await login(t);
+
+    const response = await client.cmd('LIST "" "*"');
+
+    assert.ok(response.lines.every((l) => l.endsWith('"."' ) || / "\." /.test(l)), response.raw);
+    assert.equal(untagged(response, /Shared|Other Users/).length, 0);
   });
 
   test('STATUS returns the requested item', async (t) => {
@@ -2585,6 +2599,38 @@ describe('SORT and THREAD (RFC 5256)', () => {
     assert.deepEqual(uidRefs.lines, ['* THREAD (5 9)(12)']);
     assert.deepEqual(ordered.lines, ['* THREAD (5 9)(12)']);
     assert.deepEqual(none.lines, ['* THREAD']);
+  });
+
+  test('THREAD REFERENCES: a reply whose direct parent is missing threads under its grandparent (stored References)', async (t) => {
+    const { client, db } = await select(t);
+    // UID 5 = grandparent <a@x>; UID 12 replies to the missing <b@x>, which replied to <a@x>.
+    // Distinct subjects, so only the References chain (not step 5 subject grouping) can join them.
+    Object.assign(db.byUid(5), { subject: 'Kickoff', messageId: '<a@x>', date: new Date('2026-02-01T00:00:00Z') });
+    Object.assign(db.byUid(9), { subject: 'Unrelated', messageId: '<z@x>', date: new Date('2026-02-02T00:00:00Z') });
+    Object.assign(db.byUid(12), {
+      subject: 'Follow-up numbers', messageId: '<c@x>', inReplyTo: '<b@x>', date: new Date('2026-02-03T00:00:00Z'),
+      references: formatReferencesColumn(['<a@x>', '<b@x>']),
+    });
+
+    const response = await client.cmd('UID THREAD REFERENCES UTF-8 ALL');
+
+    assert.deepEqual(response.lines, ['* THREAD (5 12)(9)']);
+  });
+
+  test('THREAD REFERENCES uses the References header of APPENDed messages', async (t) => {
+    const { client } = await select(t, 'Work');
+    const append = async (text: string): Promise<void> => {
+      client.write(`AP APPEND Work {${Buffer.byteLength(text)}+}\r\n${text}\r\n`);
+      assert.equal((await client.completion('AP')).status, 'OK');
+    };
+    await append('Message-ID: <root@x>\r\nSubject: Root\r\nDate: Mon, 02 Feb 2026 10:00:00 +0000\r\n\r\nroot');
+    await append('Message-ID: <child@x>\r\nSubject: Different\r\nIn-Reply-To: <gone@x>\r\nReferences: <root@x> <gone@x>\r\nDate: Tue, 03 Feb 2026 10:00:00 +0000\r\n\r\nchild');
+    await client.cmd('NOOP');
+
+    const response = await client.cmd('UID THREAD REFERENCES UTF-8 OR SUBJECT Root SUBJECT Different');
+
+    assert.equal(response.lines.length, 1, response.raw);
+    assert.match(response.lines[0]!, /^\* THREAD \((\d+) (\d+)\)$/);
   });
 
   test('errors: charset, sort keys, algorithm, state, size limit', async (t) => {
