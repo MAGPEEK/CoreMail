@@ -4,7 +4,7 @@ import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
-import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
+import { canAssignRole, canManageAccount, hasAdminAction, mailboxUpdateFields, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { audit, auditContext } from '../../lib/audit.js';
 
@@ -12,18 +12,18 @@ export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
 // reset / enable-disable of USER accounts only — enforced in the handler) and
 // (v8.1) POST /:id/revoke-sessions ("sign out everywhere", USER accounts only).
+// 8.x: who gets these extras comes from the action map (lib/rbac.ts ADMIN_ACTIONS).
 export const isHelpDeskReset = (role: string, req: Request): boolean =>
-  role === 'HELP_DESK' && (
-    (req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path))
-    || (req.method === 'POST' && /^\/[^/]+\/revoke-sessions\/?$/.test(req.path))
-  );
+  (req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path)
+    && (hasAdminAction(role, 'resetPassword') || hasAdminAction(role, 'toggleActive')))
+  || (req.method === 'POST' && /^\/[^/]+\/revoke-sessions\/?$/.test(req.path) && hasAdminAction(role, 'revokeSessions'));
 adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
 
 // Fields of a user that may be returned to admins (never passwordHash).
 const PUBLIC_USER_SELECT = {
   id: true, email: true, displayName: true, role: true, active: true,
   quotaBytes: true, usedBytes: true, domainId: true, authSource: true, externalId: true,
-  createdAt: true, updatedAt: true,
+  createdAt: true, updatedAt: true, lastLoginAt: true,
 } as const;
 
 const ROLE_ENUM = z.enum(USER_ROLES);
@@ -50,7 +50,7 @@ async function calcUsedBytes(userId: string): Promise<number> {
 // updated in the user record at the same time (lazy sync).
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
+    select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true, lastLoginAt: true },
     orderBy: { email: 'asc' },
   });
 
@@ -189,8 +189,8 @@ const UpdateMailboxSchema = z.object({
   revokeAppPasswords: z.boolean().optional(),
 }).strict();
 
-// Fields HELP_DESK may change (password reset + enable/disable).
-const HELP_DESK_FIELDS = new Set(['password', 'revokeAppPasswords', 'active']);
+// Fields a role WITHOUT write on recipients may change come from its actions
+// (HELP_DESK: password reset + enable/disable) — lib/rbac.ts mailboxUpdateFields().
 
 // PUT /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
@@ -204,7 +204,8 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   // v6 escalation guards
   const actor = req.apiUser!;
   const isSelf = actor.userId === id;
-  if (actor.role === 'HELP_DESK' && Object.keys(parsed.data).some((k) => !HELP_DESK_FIELDS.has(k))) {
+  const limitedFields = mailboxUpdateFields(actor.role);
+  if (limitedFields && Object.keys(parsed.data).some((k) => !limitedFields.has(k))) {
     forbidden(res, 'Help Desk may only reset passwords or enable/disable accounts'); return;
   }
   if (!canAssignRole(actor.role, parsed.data.role, user.role)) {

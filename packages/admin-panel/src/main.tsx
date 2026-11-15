@@ -1,9 +1,9 @@
 import { StrictMode, Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryCache, MutationCache, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { QueryCache, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
-import { Lock, EyeOff } from 'lucide-react';
+import { Lock, Loader2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
 import { useThemeStore, resolveIsDark, ECP_ACCENT_RGB } from './store/theme.js';
@@ -37,9 +37,12 @@ import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
-import { api, getToken, useSessionChecked } from './api/client.js';
+import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
-import { accessForPath, firstAllowedPath, type AdminAreas } from './lib/adminAreas.js';
+import { firstAllowedPath } from './lib/adminAreas.js';
+import { usePermissions, usePermissionsLoader } from './hooks/usePermissions.js';
+import { ForbiddenPage } from './pages/ForbiddenPage.js';
+import { useT } from './i18n/useT.js';
 import { ApiError } from './lib/errors.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import './index.css';
@@ -164,28 +167,11 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-interface MeResponse { adminAreas?: AdminAreas }
-
-/** Loads the admin areas (GET /user/me). Without dminAreas everything stays visible. */
-function useAdminAreasLoader() {
-  const setAreas = useAccessStore((s) => s.setAreas);
-  const { data } = useQuery({
-    queryKey: ['user-me'],
-    queryFn: () => api.get<MeResponse>('/user/me'),
-    staleTime: 5 * 60_000,
-    meta: { silentError: true },
-  });
-  useEffect(() => {
-    if (data) setAreas(data.adminAreas && typeof data.adminAreas === 'object' ? data.adminAreas : null);
-  }, [data, setAreas]);
-}
-
-function NoAccessPage() {
+function PermissionsLoading() {
+  const t = useT();
   return (
-    <div className="p-8 max-w-xl mx-auto mt-16 text-center space-y-2">
-      <EyeOff size={28} className="mx-auto text-gray-400" />
-      <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Kein Zugriff</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400">Ihre Administratorrolle hat keinen Zugriff auf diesen Bereich.</p>
+    <div className="p-8 flex items-center justify-center gap-2 text-sm text-gray-400" role="status">
+      <Loader2 size={16} className="animate-spin" aria-hidden="true" /> {t('perm_loading')}
     </div>
   );
 }
@@ -193,10 +179,11 @@ function NoAccessPage() {
 function AdminLayout({ children }: { children: React.ReactNode }) {
   // Automatic logout on inactivity — configurable in Global Settings
   useInactivityLogout();
-  useAdminAreasLoader();
+  // Permissions (GET /admin/me/permissions) — consumed via usePermissions() / <Can>
+  usePermissionsLoader();
   const location = useLocation();
-  const areas = useAccessStore((s) => s.areas);
-  const access = accessForPath(areas, location.pathname);
+  const t = useT();
+  const { ready, pageAccess } = usePermissions();
 
   return (
     <div className="h-full flex flex-col">
@@ -205,15 +192,17 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
         <Sidebar />
         <main
           className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950"
-          {...(access === 'read' ? { 'data-area-readonly': '' } : {})}
+          {...(ready && pageAccess === 'read' ? { 'data-area-readonly': '' } : {})}
         >
-          {access === 'read' && (
+          {ready && pageAccess === 'read' && (
             <div role="status" className="m-4 mb-0 flex items-center gap-2 px-3 py-2 rounded border border-amber-200 bg-amber-50 text-amber-800 text-xs dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-200">
-              <Lock size={13} /> Nur Lesezugriff — Änderungen sind in diesem Bereich für Ihre Rolle deaktiviert.
+              <Lock size={13} aria-hidden="true" /> {t('perm_readonly_banner')}
             </div>
           )}
           <ErrorBoundary key={location.pathname}>
-            {access === 'none' ? <NoAccessPage /> : children}
+            {/* Pages render only once the permissions are known: a forbidden
+                route shows the 403 page instead of firing API calls that fail. */}
+            {!ready ? <PermissionsLoading /> : pageAccess === 'none' ? <ForbiddenPage /> : children}
           </ErrorBoundary>
         </main>
       </div>

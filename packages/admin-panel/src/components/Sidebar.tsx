@@ -8,17 +8,22 @@ import {
   Fingerprint, ServerCog, HardDriveDownload,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
-import { useAccessStore } from '../store/access.js';
-import { accessForPath } from '../lib/adminAreas.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { areaForPath } from '../lib/adminAreas.js';
 
 type NavItem  = { path: string; labelKey: string; icon: React.ElementType };
 type NavGroup = { groupKey: string; items: NavItem[] };
 
 export function Sidebar() {
   const t = useT();
-  const areas = useAccessStore((s) => s.areas);
-  // Hide pages whose admin area the role does not have (no adminAreas → show all)
-  const visible = (path: string) => accessForPath(areas, path) !== 'none';
+  const { can, ready } = usePermissions();
+  // Only areas the role may at least read (EAC: features without rights are not shown).
+  // Until the permissions are known only the always-visible entries are shown.
+  const visible = (path: string) => {
+    const area = areaForPath(path);
+    if (area === null || area === undefined) return true;
+    return ready && can(area, 'read');
+  };
 
   const ALL_NAV: (NavItem | NavGroup)[] = [
     { path: '/dashboard',        labelKey: 'nav_overview',         icon: LayoutDashboard },

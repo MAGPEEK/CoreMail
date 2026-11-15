@@ -2,7 +2,8 @@ import { useEffect, useSyncExternalStore } from 'react';
 import toast from 'react-hot-toast';
 import { ApiError, apiErrorFromBody } from '../lib/errors.js';
 import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
-import { accessForPath } from '../lib/adminAreas.js';
+import { accessForPath, areaForPath } from '../lib/adminAreas.js';
+import { blocksWrite } from '../lib/permissions.js';
 import { useAccessStore } from '../store/access.js';
 
 /** Keys of the pre-8.1 token storage (localStorage) — only read once for migration. */
@@ -258,12 +259,19 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
   redirectToLogin();
 }
 
+/** Read-only page without a narrow action of its area (lib/permissions.ts blocksWrite). */
+function pageBlocksWrite(): boolean {
+  const { areas, actions } = useAccessStore.getState();
+  const path = window.location.pathname;
+  return blocksWrite(areas, actions, { area: areaForPath(path), access: accessForPath(areas, path) });
+}
+
 async function request<T>(path: string, init: RequestInit = {}, contentType: string | null = 'application/json'): Promise<T> {
   // Read-only admin area: block write requests of the current page client-side
   // (the server enforces it as well; this avoids half-applied UI states).
   const method = (init.method ?? 'GET').toUpperCase();
   if (method !== 'GET' && path.startsWith('/admin/')
-    && accessForPath(useAccessStore.getState().areas, window.location.pathname) === 'read') {
+    && pageBlocksWrite()) {
     throw new ApiError('Nur Lesezugriff — Ihre Rolle darf in diesem Bereich nichts ändern.', 'AREA_READ_ONLY', 403);
   }
 

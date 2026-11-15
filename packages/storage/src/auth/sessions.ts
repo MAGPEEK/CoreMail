@@ -23,6 +23,7 @@ import { prisma } from '../prisma/index.js';
 import { authRedis } from './redis.js';
 import { publishUserAuthChange } from './invalidation.js';
 import { maintenanceBlock } from './policy.js';
+import { recordLastLogin } from './last-login.js';
 
 const log = createLogger('auth:sessions');
 
@@ -77,6 +78,8 @@ export async function issueSession(
       expiresAt: new Date(Date.now() + config.JWT_REFRESH_TTL * 1000),
     },
   });
+  // 8.x: every web/API/SSO login ends here → User.lastLoginAt (throttled, fire-and-forget)
+  void recordLastLogin(user.id);
   return { accessToken: accessToken(user, sessionId, opts.mfaVerified), refreshToken, expiresIn: config.JWT_ACCESS_TTL };
 }
 
