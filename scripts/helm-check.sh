@@ -41,7 +41,18 @@ for values in infra/k8s/ci/*-values.yaml; do
        -f "/chart/ci/$name.yaml" > "$OUT/$name.yaml"; then
     echo "rendered $(grep -c '^kind:' "$OUT/$name.yaml") objects → infra/k8s/.rendered/$name.yaml"
     # env names the app actually reads (regressions: RSPAMD_HOST/PORT instead of RSPAMD_URL)
-    if ! grep -q '^  RSPAMD_URL: "https\?://' "$OUT/$name.yaml"; then echo "ERROR: $name: RSPAMD_URL missing"; fail=1; fi
+    if ! grep -q '^  RSPAMD_URL: "https\?://' "$OUT/$name.yaml" && ! grep -q '^  RSPAMD_ENABLED: "false"' "$OUT/$name.yaml"; then
+      echo "ERROR: $name: neither RSPAMD_URL nor RSPAMD_ENABLED=false"; fail=1
+    fi
+    if ! grep -q '^  CLAMAV_HOST: ' "$OUT/$name.yaml" && ! grep -q '^  CLAMAV_ENABLED: "false"' "$OUT/$name.yaml"; then
+      echo "ERROR: $name: neither CLAMAV_HOST nor CLAMAV_ENABLED=false"; fail=1
+    fi
+    # optional secrets are wired into the app container (and the bundled rspamd)
+    for key in BACKUP_ENCRYPTION_KEY RSPAMD_CONTROLLER_PASSWORD MFA_ENCRYPTION_KEY; do
+      if ! grep -q "key: $key, optional: true" "$OUT/$name.yaml"; then echo "ERROR: $name: $key secretKeyRef missing"; fail=1; fi
+    done
+    # images <= 8.0.0 have no coremail-schema-sync → the init container must fall back
+    if ! grep -q 'if \[ -x /usr/local/bin/coremail-schema-sync \]' "$OUT/$name.yaml"; then echo "ERROR: $name: schema-sync fallback missing"; fail=1; fi
     if grep -q '^  RSPAMD_\(HOST\|PORT\):' "$OUT/$name.yaml"; then echo "ERROR: $name: legacy RSPAMD_HOST/RSPAMD_PORT rendered"; fail=1; fi
     # the object store reads MINIO_BUCKET_ATTACHMENTS (MINIO_BUCKET is ignored by the app)
     if grep -q '^  MINIO_BUCKET:' "$OUT/$name.yaml"; then echo "ERROR: $name: MINIO_BUCKET is not read by the app"; fail=1; fi
@@ -63,6 +74,23 @@ else
   grep -o 'secrets\.[a-zA-Z]* is required[^"]*' "$OUT/missing-secrets.err" | head -1 || cat "$OUT/missing-secrets.err"
   echo "ok (refused)"
 fi
+
+# Values that must be refused (chart 2.0 removals, malformed secrets)
+must_fail() {  # must_fail <label> <expected message part> <helm --set args...>
+  label="$1"; expect="$2"; shift 2
+  if helm template coremail /chart -f /chart/ci/default-values.yaml "$@" >/dev/null 2>"$OUT/must-fail.err"; then
+    echo "ERROR: rendered although $label"; fail=1
+  elif grep -q "$expect" "$OUT/must-fail.err"; then
+    echo "ok (refused: $label)"
+  else
+    echo "ERROR: $label refused with an unexpected message:"; cat "$OUT/must-fail.err"; fail=1
+  fi
+}
+echo "── fail-fast: removed / invalid values ────────────────"
+must_fail "app.mailAuth.limitPrivateIps=true" "limitPrivateIps was removed" --set app.mailAuth.limitPrivateIps=true
+must_fail "app.mailAuth.limitPrivateIps=false" "limitPrivateIps was removed" --set app.mailAuth.limitPrivateIps=false
+must_fail "invalid secrets.backupEncryptionKey" "backupEncryptionKey must be 32 bytes" --set secrets.backupEncryptionKey=short
+must_fail "invalid secrets.rspamdControllerPassword" "rspamdControllerPassword must be" --set-string 'secrets.rspamdControllerPassword=has"quote-and-more'
 
 if [ "$fail" -ne 0 ]; then echo "helm-check: FAILED"; exit 1; fi
 echo "helm-check: OK"

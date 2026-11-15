@@ -8,6 +8,7 @@
  *   GET /api/v1/admin/audit-log/export.csv    — CSV export (all filters)
  *   GET /api/v1/admin/audit-log/export.pdf    — PDF export (all filters, capped at 1000 rows)
  *   GET /api/v1/admin/audit-log/stats         — Statistics dashboard
+ *   POST /api/v1/admin/audit-log/verify-export — check an export's signature (v8.1)
  *
  * IMMUTABILITY NOTICE:
  *   Audit logs are immutable by design (compliance: DSGVO, SOX, HIPAA).
@@ -16,19 +17,50 @@
  *   Even administrators must NOT be able to delete or modify audit entries.
  */
 
-import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import express, { Router, type Router as RouterType, type Request, type Response } from 'express';
 import PDFDocument from 'pdfkit';
-import { createHash } from 'crypto';
 import { prisma } from '@coremail/storage/prisma';
 import { requireArea } from '../../middleware/auth.js';
-
-// SHA-256 helper: returns the hex digest of a string or buffer
-function sha256(input: string | Buffer): string {
-  return createHash('sha256').update(input).digest('hex');
-}
+import { csvCell, exportSignature, verifyExportSignature } from '../../lib/export-safety.js';
 
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireArea('compliance'));
+
+// ─── POST /api/v1/admin/audit-log/verify-export ─────────────────────────────
+// v8.1: checks the signature of an audit export (CSV / JSON / PDF). Body = the
+// exported file byte-exact (Content-Type application/octet-stream), signature =
+// the `X-CoreMail-Signature` value of the export response (header
+// X-CoreMail-Signature or ?signature=). Answer: { valid: boolean }.
+// Exports signed with an earlier key (rotated AUDIT_EXPORT_SIGNING_KEY,
+// JWT_SECRET or PEPPER) verify as invalid.
+const VERIFY_MAX_BYTES = 100 * 1024 * 1024;
+adminAuditLogRouter.post(
+  '/verify-export',
+  express.raw({ type: () => true, limit: VERIFY_MAX_BYTES }),
+  (req: Request, res: Response) => {
+    const q = req.query['signature'];
+    const signature = (req.get('x-coremail-signature') ?? (typeof q === 'string' ? q : '')).trim();
+    if (!signature || signature.length > 200) {
+      res.status(400).json({ error: 'Signature missing (X-CoreMail-Signature header or ?signature=)', code: 'SIGNATURE_MISSING' });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      // a JSON/form body was already parsed — the bytes are no longer exact
+      res.status(415).json({ error: 'Send the export file unchanged as application/octet-stream', code: 'RAW_BODY_REQUIRED' });
+      return;
+    }
+    const body = req.body as Buffer;
+    if (body.length === 0) { res.status(400).json({ error: 'Empty file', code: 'FILE_MISSING' }); return; }
+    let valid = false;
+    try {
+      valid = verifyExportSignature(body, signature);
+    } catch {
+      res.status(500).json({ error: 'Signature key unavailable' });
+      return;
+    }
+    res.json({ valid, bytes: body.length, algorithm: 'hmac-sha256' });
+  },
+);
 
 // ─── Filter parsing (shared by list + exports) ───────────────────────────────
 
@@ -212,16 +244,16 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 
   const csv = [csvHeader, ...csvRows].join('\n');
   const dateStr = new Date().toISOString().slice(0, 10);
-  // Integrity signature: SHA-256 over the exact payload (incl. UTF-8 BOM).
-  // Auditors can verify the file after download with
-  //   shasum -a 256 audit-log-YYYY-MM-DD.csv
-  // → must match the hash delivered in the X-CoreMail-Signature header.
+  // Integrity signature: HMAC-SHA256 over the exact payload (incl. UTF-8 BOM),
+  // keyed with a server secret (lib/export-safety.ts) — an unkeyed hash could be
+  // recomputed by whoever modified the file. Verification needs the server key
+  // (verifyExportSignature); the header is `hmac-sha256=<hex>`.
   const payload = '﻿' + csv;
-  const signature = sha256(payload);
+  const signature = exportSignature(payload);
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.csv"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -266,12 +298,12 @@ adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
     })),
   };
   const payload = JSON.stringify(payloadObj, null, 2);
-  const signature = sha256(payload);
+  const signature = exportSignature(payload);
   const dateStr = new Date().toISOString().slice(0, 10);
 
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.json"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -420,11 +452,11 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
 
   doc.end();
   const pdfBuffer = await pdfDone;
-  const signature = sha256(pdfBuffer);
+  const signature = exportSignature(pdfBuffer);
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="audit-log-${dateStr}.pdf"`);
-  res.setHeader('X-CoreMail-Signature', `sha256=${signature}`);
+  res.setHeader('X-CoreMail-Signature', signature);
   res.setHeader('X-CoreMail-Export-Entries', String(entries.length));
   res.setHeader('X-CoreMail-Export-Generated-At', new Date().toISOString());
   res.setHeader('Access-Control-Expose-Headers', 'X-CoreMail-Signature, X-CoreMail-Export-Entries, X-CoreMail-Export-Generated-At');
@@ -584,9 +616,7 @@ adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// Formula-safe CSV cell (= + - @ TAB CR prefixed with ') — see lib/export-safety.ts.
 function csvEscape(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
+  return csvCell(value);
 }

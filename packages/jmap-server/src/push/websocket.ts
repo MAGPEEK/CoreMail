@@ -15,6 +15,7 @@ import { RequestError } from '../errors.js';
 import { sessionStateFor } from '../session.js';
 import { isJmapEnabled } from '../feature-flag.js';
 import { LIMITS } from '../settings.js';
+import { apiRequestGate, limitError } from '../request-limits.js';
 import { accountsOf, buildStateChange, changeBus } from './bus.js';
 import { registerPushConnection, WS_CLOSE_CREDENTIALS_CHANGED, WS_CLOSE_REASON } from './live.js';
 import type { JmapUser, JsonObject } from '../types.js';
@@ -111,6 +112,12 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
       const requestId = typeof msg['id'] === 'string' ? msg['id'] : null;
       switch (msg['@type']) {
         case 'Request': {
+          // v8.1: maxConcurrentRequests is shared with HTTP /jmap/api (per user).
+          const release = apiRequestGate.tryAcquire(user.userId, LIMITS.maxConcurrentRequests);
+          if (!release) {
+            send({ '@type': 'RequestError', requestId, ...limitError('maxConcurrentRequests').toJson() });
+            return;
+          }
           try {
             const req = parseRequest({ using: msg['using'], methodCalls: msg['methodCalls'], ...(msg['createdIds'] ? { createdIds: msg['createdIds'] } : {}) });
             const accounts = await resolveAccounts(user);
@@ -119,6 +126,8 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
           } catch (err) {
             if (err instanceof RequestError) send({ '@type': 'RequestError', requestId, ...err.toJson() });
             else { log.error({ err }, 'WS request failed'); send({ '@type': 'RequestError', requestId, type: 'urn:ietf:params:jmap:error:serverFail', status: 500 }); }
+          } finally {
+            release();
           }
           return;
         }

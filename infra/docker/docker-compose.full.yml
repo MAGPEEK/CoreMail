@@ -1,0 +1,413 @@
+name: coremail
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail 8.0.0 — Docker Compose, variant MAXIMAL ("full")
+#
+#  Variants (docs/docker-compose.md has the comparison table):
+#    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis
+#    docker-compose.yml           STANDARD  + minio, rspamd, clamav (existing installs)
+#    docker-compose.full.yml      MAXIMAL   ← this file
+#
+#  Always:   coremail · postgres · redis · rspamd · clamav
+#  Profiles: minio   bundled MinIO (OBJECT_STORAGE=minio and/or backup target)
+#            backup  daily pg_dump sidecar into PG_BACKUP_DIR (default volume pg-backups)
+#            geoip   MaxMind GeoLite2-Country updater for the BCP country filter
+#  Every service has a healthcheck, restart policy, CPU/memory limits and
+#  reservations (override in .env) and json-file log rotation.
+#
+#  For 50–500 users. Measured idle after start (8.0.0, empty install): coremail
+#  ~630 MB, clamav ~950 MB, rspamd ~230 MB, postgres ~105 MB, minio ~90 MB,
+#  redis ~6 MB → ~2 GB. Under load: coremail 0.8–1.5 GB, clamav up to ~2 GB
+#  while it reloads signatures, postgres grows with the mailbox count →
+#  plan 4 GB RAM / 2–4 vCPU (8 GB from ~200 users). Sum of the default limits
+#  without profiles: ~6 GB (limits are ceilings, not reservations).
+#
+#  Start (in the repo root):
+#    bash scripts/setup.sh --variant full
+#    docker compose -f infra/docker/docker-compose.full.yml up -d
+#    # with profiles:
+#    docker compose -f infra/docker/docker-compose.full.yml --profile backup --profile minio up -d
+#    # or COMPOSE_PROFILES=backup,minio in .env
+#
+#  Required in .env: JWT_SECRET, PEPPER, POSTGRES_PASSWORD, REDIS_PASSWORD,
+#  RSPAMD_CONTROLLER_PASSWORD, OBJECT_STORAGE (filesystem | minio | s3).
+#  Profile minio additionally: MINIO_ROOT_PASSWORD. Profile geoip:
+#  GEOIPUPDATE_ACCOUNT_ID + GEOIPUPDATE_LICENSE_KEY.
+# ═════════════════════════════════════════════════════════════════════════════
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-20m}
+    max-file: "${LOG_MAX_FILE:-5}"
+
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  coremail — all CoreMail services (SMTP/IMAP/POP3/JMAP/ActiveSync/CalDAV,
+  #  REST API, webmail, admin panel, admin CLI `coremail`)
+  # ───────────────────────────────────────────────────────────────────────────
+  coremail:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-8.0.0}
+    container_name: coremail
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
+      PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
+
+      DATABASE_URL: postgresql://${COREMAIL_DB_USER:-coremail}:${COREMAIL_DB_PASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}}@postgres:5432/coremail
+      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
+      COREMAIL_ALLOW_SCHEMA_DATA_LOSS: ${COREMAIL_ALLOW_SCHEMA_DATA_LOSS:-false}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+
+      # ── Object storage (docs/storage.md) ─────────────────────────────────────
+      # Must be set explicitly: filesystem (new installs, volume coremail-data),
+      # minio (pre-8.0 data; start with --profile minio) or s3 (external S3).
+      OBJECT_STORAGE: ${OBJECT_STORAGE:?OBJECT_STORAGE missing in .env  →  filesystem | minio | s3 (docs/docker-compose.md)}
+      STORAGE_PATH:   /data/objects
+      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT:       ${MINIO_PORT:-}
+      MINIO_USE_SSL:    ${MINIO_USE_SSL:-false}
+      MINIO_REGION:     ${MINIO_REGION:-}
+      MINIO_PATH_STYLE: ${MINIO_PATH_STYLE:-}
+      MINIO_CA_FILE:    ${MINIO_CA_FILE:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
+      MINIO_BUCKET_ATTACHMENTS: ${MINIO_BUCKET_ATTACHMENTS:-coremail-attachments}
+
+      # ── Built-in backup service target (bucket coremail-backups) ─────────────
+      # Default = the bundled MinIO (profile minio). External S3: set S3_* in .env.
+      # Neither → backups are "not configured" (logged; mail is unaffected).
+      S3_ENDPOINT:   ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION:     ${S3_REGION:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
+
+      # ── Spam and virus protection ────────────────────────────────────────────
+      RSPAMD_URL:  http://rspamd:11334
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      # GeoLite2 database written by the geoip profile (empty volume = filter off)
+      GEOIP_DB_PATH: /usr/share/GeoIP/GeoLite2-Country.mmdb
+
+      # ── Operation ────────────────────────────────────────────────────────────
+      NODE_ENV:  production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ:        ${TZ:-Europe/Berlin}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
+      WEBAUTHN_RP_ID:  ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      SECURITY_FILTER_URL: http://localhost:3002   # internal — do not change
+      SMARTHOST_TLS_INSECURE: ${SMARTHOST_TLS_INSECURE:-false}
+      RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
+      VAPID_PUBLIC_KEY:  ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+
+    ports:
+      - "25:25"       # SMTP inbound (server → server)
+      - "465:465"     # SMTPS (implicit TLS)
+      - "587:587"     # SMTP submission (STARTTLS)
+      - "143:143"     # IMAP (STARTTLS)
+      - "993:993"     # IMAPS
+      - "110:110"     # POP3 (STARTTLS)  — remove if POP3 is not wanted
+      - "995:995"     # POP3S            — same
+      - "80:3000"     # HTTP: Let's Encrypt HTTP-01 + redirect
+      - "443:443"     # HTTPS: integrated TLS proxy (BCP → SSL/TLS)
+      - "3000:3000"   # HTTP without TLS: initial setup / behind your own reverse proxy
+    volumes:
+      # /data/objects mail contents (filesystem driver), /data/backups pre-migration dumps.
+      # Bind mount instead, e.g.:  - /srv/coremail/data:/data   (docs/docker-compose.md)
+      - coremail-data:/data
+      - geoip-data:/usr/share/GeoIP:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      # Only waited for when the profile is active
+      minio:    { condition: service_healthy, required: false }
+      rspamd:   { condition: service_started }
+      clamav:   { condition: service_started }   # first signature download takes minutes
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '${COREMAIL_CPU_LIMIT:-2}'
+          memory: ${COREMAIL_MEM_LIMIT:-2g}
+        reservations:
+          memory: ${COREMAIL_MEM_RESERVATION:-768m}
+    # Same hardening as docker-compose.yml (docs/deployment-security.md §5)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_BIND_SERVICE]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    logging: *logging
+    networks:
+      coremail: {}
+      rspamd:
+        ipv4_address: ${RSPAMD_NET_PREFIX:-10.253.253}.2
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       coremail
+      POSTGRES_USER:     coremail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
+    volumes:
+      # Local disk only — never NFS/SMB (docs/docker-compose.md → Storage).
+      # Bind mount instead, e.g.:  - /srv/coremail/postgres:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./postgres/02-app-role.sh:/docker-entrypoint-initdb.d/02-app-role.sh:ro
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '${POSTGRES_CPU_LIMIT:-2}'
+          memory: ${POSTGRES_MEM_LIMIT:-1g}
+        reservations:
+          memory: 256m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    # No maxmemory/eviction: BullMQ queues must never be evicted.
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: ${REDIS_MEM_LIMIT:-512m}
+        reservations:
+          memory: 64m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  rspamd:
+    image: rspamd/rspamd:4.0.0
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    environment:
+      # Only the app container (fixed address) is trusted without a password;
+      # everything else (web UI via ssh tunnel / docker exec) needs the password.
+      RSPAMD_CONTROLLER_SECURE_IP: ${RSPAMD_NET_PREFIX:-10.253.253}.2
+      RSPAMD_CONTROLLER_PASSWORD:  ${RSPAMD_CONTROLLER_PASSWORD:?RSPAMD_CONTROLLER_PASSWORD missing in .env  →  openssl rand -hex 20}
+    volumes:
+      - ./rspamd/local.d:/etc/rspamd/local.d:ro
+      - rspamd-data:/var/lib/rspamd
+    healthcheck:
+      test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: ${RSPAMD_MEM_LIMIT:-512m}
+        reservations:
+          memory: 128m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks:
+      rspamd:
+        ipv4_address: ${RSPAMD_NET_PREFIX:-10.253.253}.3
+
+  clamav:
+    # Downloads ~300 MB of signatures on first start (a few minutes).
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          # clamd holds the signatures (~1 GB) and loads a second copy while reloading
+          memory: ${CLAMAV_MEM_LIMIT:-2560m}
+        reservations:
+          memory: 1g
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  Optional profiles
+  # ───────────────────────────────────────────────────────────────────────────
+  minio:
+    # --profile minio: mail contents with OBJECT_STORAGE=minio (pre-8.0 data)
+    # and/or the target of the built-in backup service. Not needed with
+    # OBJECT_STORAGE=filesystem + external S3 backups (S3_* in .env).
+    profiles: [minio]
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    container_name: coremail-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      # MinIO refuses to start with an empty password (fail closed)
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "127.0.0.1:9001:9001"   # console local only (ssh -L 9001:localhost:9001 <server>)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: ${MINIO_MEM_LIMIT:-1g}
+        reservations:
+          memory: 128m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  pg-backup:
+    # --profile backup: pg_dump every PG_BACKUP_INTERVAL_HOURS into PG_BACKUP_DIR
+    # (named volume pg-backups, or a host path such as /srv/coremail/backups).
+    # Dumps are plaintext (0600) — see infra/docker/pg-backup/pg-backup.sh.
+    profiles: [backup]
+    image: postgres:16-alpine
+    container_name: coremail-pg-backup
+    restart: unless-stopped
+    entrypoint: ["sh", "/pg-backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: coremail
+      PGDATABASE: coremail
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PG_BACKUP_INTERVAL_HOURS: ${PG_BACKUP_INTERVAL_HOURS:-24}
+      PG_BACKUP_KEEP_DAYS: ${PG_BACKUP_KEEP_DAYS:-14}
+      PG_BACKUP_START_DELAY_MIN: ${PG_BACKUP_START_DELAY_MIN:-10}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./pg-backup/pg-backup.sh:/pg-backup.sh:ro
+      - ${PG_BACKUP_DIR:-pg-backups}:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # healthy = a dump younger than two intervals exists
+      test: ["CMD-SHELL", "find /backups -maxdepth 1 -name 'coremail-*.dump' -mmin -$$((PG_BACKUP_INTERVAL_HOURS * 120)) | grep -q ."]
+      interval: 10m
+      timeout: 10s
+      retries: 3
+      start_period: 30m
+    # Root without capabilities: writes only to the root-owned backup directory
+    user: "0:0"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 256m
+    logging: *logging
+    networks: [coremail]
+
+  geoip:
+    # --profile geoip: keeps GeoLite2-Country current for BCP → Protection →
+    # country filter. Free account: https://www.maxmind.com/en/geolite2/signup
+    # The security filter loads the database on first use; after an update,
+    # `docker exec coremail supervisorctl restart security-filter` picks it up.
+    profiles: [geoip]
+    image: ghcr.io/maxmind/geoipupdate:v7.1.1
+    container_name: coremail-geoip
+    restart: unless-stopped
+    environment:
+      GEOIPUPDATE_ACCOUNT_ID:  ${GEOIPUPDATE_ACCOUNT_ID:-}
+      GEOIPUPDATE_LICENSE_KEY: ${GEOIPUPDATE_LICENSE_KEY:-}
+      GEOIPUPDATE_EDITION_IDS: GeoLite2-Country
+      GEOIPUPDATE_FREQUENCY:   "72"    # hours
+    volumes:
+      - geoip-data:/usr/share/GeoIP
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /usr/share/GeoIP/GeoLite2-Country.mmdb"]
+      interval: 1h
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128m
+    logging: *logging
+    networks: [coremail]
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Data — same volume names as docker-compose.yml / .minimal.yml (switching
+#  variants keeps the data). docs/docker-compose.md → Storage.
+#    pgdata         PostgreSQL (back up!)       coremail-data  mail contents + dumps (back up!)
+#    miniodata      MinIO (profile minio)       pg-backups     pg_dump files (profile backup)
+#    redisdata      sessions, queues            rspamd-data    Bayes data
+#    clamav-data    signatures (re-downloaded)  geoip-data     GeoLite2 (re-downloaded)
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  pgdata:
+  coremail-data:
+  redisdata:
+  miniodata:
+  rspamd-data:
+  clamav-data:
+  pg-backups:
+  geoip-data:
+
+networks:
+  coremail:
+    driver: bridge
+  # app ↔ rspamd only, fixed /29 (RSPAMD_NET_PREFIX in .env if it collides)
+  rspamd:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${RSPAMD_NET_PREFIX:-10.253.253}.0/29

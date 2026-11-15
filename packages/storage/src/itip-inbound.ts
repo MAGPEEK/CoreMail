@@ -18,7 +18,11 @@
  *  - the REPLY carries exactly one ATTENDEE, and
  *  - the From header address equals that attendee and the envelope sender is
  *    the attendee or an address of the attendee's domain (bounce/VERP
- *    addresses). Spoofed From headers are the job of SPF/DKIM/DMARC upstream.
+ *    addresses), and
+ *  - the attendee is authenticated (`ctx.senderAuth`): the authenticated local
+ *    envelope sender is the attendee, or the message passed DMARC / SPF / DKIM
+ *    for a domain aligned with the attendee's domain. Without a verdict the
+ *    REPLY is ignored (the mail itself is still delivered).
  *
  * Ordering (RFC 5546 §2.1.5): REPLYs with a lower SEQUENCE than the event are
  * ignored; with the same SEQUENCE, a REPLY older (DTSTAMP) than the last one
@@ -55,11 +59,50 @@ export interface ParsedReply {
   dtstamp: Date | null;
 }
 
+/**
+ * How the sender of a message was authenticated (threaded from the SMTP layer).
+ * Never derived from message headers.
+ */
+export interface SenderAuth {
+  /**
+   * Domains the message is authenticated for by the inbound filter: header-From
+   * domain on DMARC pass, MAIL FROM domain on SPF pass, DKIM d= domains.
+   */
+  verifiedDomains?: readonly string[];
+  /** Envelope sender proven by SMTP AUTH / an internal authenticated producer. */
+  authenticatedSender?: string;
+}
+
 export interface ITipContext {
   /** SMTP envelope MAIL FROM. */
   envelopeFrom: string;
   /** User whose mailbox receives the mail; null for shared mailboxes (REPLY ignored). */
   recipientUserId: string | null;
+  /** Sender authentication verdict; null/empty = unauthenticated (REPLY ignored). */
+  senderAuth: SenderAuth | null;
+}
+
+/** Pure: relaxed domain alignment (equal, or one is a subdomain of the other). */
+export function domainAligned(a: string, b: string): boolean {
+  const x = a.toLowerCase().replace(/\.$/, '');
+  const y = b.toLowerCase().replace(/\.$/, '');
+  if (!x || !y) return false;
+  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`);
+}
+
+/**
+ * Pure: is the attendee's identity authenticated? Either the authenticated
+ * local envelope sender IS the attendee, or the message passed DMARC, SPF or
+ * DKIM for a domain aligned with the attendee's domain (RFC 5546 §6.1.1:
+ * a REPLY must be authenticated as coming from the attendee).
+ */
+export function isAttendeeAuthenticated(attendeeEmail: string, auth: SenderAuth | null | undefined): boolean {
+  if (!auth) return false;
+  const attendee = attendeeEmail.toLowerCase();
+  if (auth.authenticatedSender && bare(auth.authenticatedSender) === attendee) return true;
+  const domain = attendee.slice(attendee.lastIndexOf('@') + 1);
+  if (!attendee.includes('@') || !domain) return false;
+  return (auth.verifiedDomains ?? []).some((d) => domainAligned(domain, d));
 }
 
 const VCAL_RE = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i;
@@ -274,6 +317,8 @@ export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): P
   }
   if (!reply) return false;
   if (!isReplyFromAttendee(rawBuffer, ctx.envelopeFrom, reply.attendeeEmail)) return false;
+  // The From header alone is forgeable: the attendee must be authenticated.
+  if (!isAttendeeAuthenticated(reply.attendeeEmail, ctx.senderAuth)) return false;
 
   const event = await prisma.calendarEvent.findFirst({
     where: { uid: reply.uid, calendar: { userId: ctx.recipientUserId } },

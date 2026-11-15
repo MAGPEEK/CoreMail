@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Archive, Plus, Pencil, Trash2, Tag, ListChecks,
@@ -250,19 +251,26 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
           <div>
-            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+            <h2 id={titleId} className="font-semibold text-gray-900 flex items-center gap-2">
               <Sparkles size={17} className="text-accent" /> Aufbewahrungsrichtlinie aus Vorlage
             </h2>
             <p className="text-xs text-gray-500 mt-0.5">
               Wähle eine Vorlage — Tag + Richtlinie + Zuweisung auf alle Postfächer werden in einem Schritt erstellt.
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -307,8 +315,7 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
             Schließen
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -354,12 +361,19 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white rounded-lg shadow-xl w-full max-w-lg"
+    >
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900">{isEdit ? 'Tag bearbeiten' : 'Neuer Retention Tag'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{isEdit ? 'Tag bearbeiten' : 'Neuer Retention Tag'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="px-6 py-4 space-y-3">
           <div>
@@ -438,8 +452,7 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
             {save.isPending ? 'Speichern…' : isEdit ? 'Speichern' : 'Erstellen'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -506,12 +519,19 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
     PERSONAL: allTags.filter((t) => t.type === 'PERSONAL'),
   };
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+    >
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-          <h2 className="text-base font-semibold text-gray-900">{isEdit ? 'Richtlinie bearbeiten' : 'Neue Aufbewahrungsrichtlinie'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{isEdit ? 'Richtlinie bearbeiten' : 'Neue Aufbewahrungsrichtlinie'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
         <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
@@ -581,8 +601,7 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
             {save.isPending ? 'Speichern…' : isEdit ? 'Speichern' : 'Erstellen'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -729,9 +748,9 @@ export function RetentionPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => setPolicyModal(p)}
+                      <button aria-label="Bearbeiten" onClick={() => setPolicyModal(p)}
                         className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"><Pencil size={13} /></button>
-                      <button onClick={() => setDeletePolicyConfirm(p)}
+                      <button aria-label="Löschen" onClick={() => setDeletePolicyConfirm(p)}
                         className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
                     </div>
                   </td>
@@ -792,9 +811,9 @@ export function RetentionPage() {
                     <div className="flex items-center justify-end gap-1">
                       {!t.isSystem && (
                         <>
-                          <button onClick={() => setTagModal(t)}
+                          <button aria-label="Bearbeiten" onClick={() => setTagModal(t)}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"><Pencil size={13} /></button>
-                          <button onClick={() => setDeleteTagConfirm(t)}
+                          <button aria-label="Löschen" onClick={() => setDeleteTagConfirm(t)}
                             className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
                         </>
                       )}
@@ -815,8 +834,12 @@ export function RetentionPage() {
       {templatePickerOpen && <TemplatePickerModal onClose={() => setTemplatePickerOpen(false)} />}
 
       {deletePolicyConfirm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
+        <Modal
+          onClose={() => setDeletePolicyConfirm(null)}
+          label="Richtlinie löschen"
+          overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6"
+        >
             <h2 className="text-base font-semibold text-gray-900 mb-2">Richtlinie löschen</h2>
             <p className="text-sm text-gray-600 mb-4">Soll <strong>{deletePolicyConfirm.name}</strong> wirklich gelöscht werden?</p>
             <div className="flex justify-end gap-2">
@@ -826,13 +849,16 @@ export function RetentionPage() {
                 {deletePolicy.isPending ? 'Löschen…' : 'Löschen'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {deleteTagConfirm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
+        <Modal
+          onClose={() => setDeleteTagConfirm(null)}
+          label="Tag löschen"
+          overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6"
+        >
             <h2 className="text-base font-semibold text-gray-900 mb-2">Tag löschen</h2>
             <p className="text-sm text-gray-600 mb-4">Soll der Tag <strong>{deleteTagConfirm.name}</strong> wirklich gelöscht werden? Er wird auch aus allen Policies entfernt.</p>
             <div className="flex justify-end gap-2">
@@ -842,8 +868,7 @@ export function RetentionPage() {
                 {deleteTag.isPending ? 'Löschen…' : 'Löschen'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

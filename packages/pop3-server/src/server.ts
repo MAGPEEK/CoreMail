@@ -5,11 +5,13 @@ import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { prisma, loadProtocolCert, waitForObjectStorage } from '@coremail/storage';
-import { POP3Session, setPop3Hostname, pop3LiveSessions } from './session.js';
+import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
+import { admitConnection, invalidExemptEntries } from './limits.js';
 
 const log = createLogger('pop3-server');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
 installProcessGuards(log);
+if (invalidExemptEntries.length) log.warn({ invalid: invalidExemptEntries }, 'ignoring invalid MAIL_CONN_EXEMPT_CIDRS entries');
 // v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
 registerLdapMailVerifier();
 
@@ -135,17 +137,20 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     socket.on('error', (err) => log.warn({ err }, 'POP3 socket error'));
   };
 
+  // v8.1: per-IP / global connection caps on the raw TCP connection
+  // (before the TLS handshake on port 995).
   let server: net.Server | tls.Server;
   if (cfg.ssl && _tlsConfig) {
     server = tls.createServer(
-      { cert: _tlsConfig.cert, key: _tlsConfig.key, minVersion: 'TLSv1.2' },
+      { cert: _tlsConfig.cert, key: _tlsConfig.key, minVersion: 'TLSv1.2', handshakeTimeout: TLS_HANDSHAKE_MS },
       onSocket as (s: tls.TLSSocket) => void,
     );
+    server.on('connection', (raw: net.Socket) => { admitConnection(raw, true); });
   } else {
     if (cfg.ssl) {
       log.warn({ port: cfg.port }, 'POP3 implicit TLS requested but no TLS cert available — falling back to plaintext');
     }
-    server = net.createServer(onSocket);
+    server = net.createServer((raw) => { if (admitConnection(raw, false)) onSocket(raw); });
   }
 
   return { server, sockets, ssl: cfg.ssl };

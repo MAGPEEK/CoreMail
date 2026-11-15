@@ -2,18 +2,19 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
   AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, Image as ImageIcon,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { useRef, useState, useEffect, useMemo } from 'react';
-import { renderMailHtml } from '../lib/mailHtml.js';
+import { useRef, useState } from 'react';
+import { textToQuotedHtml } from '../lib/mailHtml.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
-import { useInlineImages } from '../hooks/useInlineImages.js';
 import { toastError } from '../lib/errors.js';
+import { MailBody } from './MailBody.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
-import { showUndoToast } from './UndoToast.js';
+import { useMailActions } from '../hooks/useMailActions.js';
+import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
@@ -29,27 +30,14 @@ export function MessageReader({ messageId }: Props) {
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
-  // Privacy: load external images only on user request (tracking pixel protection)
-  const [showExternalImages, setShowExternalImages] = useState(false);
-  // Reset the toggle when switching to another mail
-  useEffect(() => { setShowExternalImages(false); }, [messageId]);
   const [rawSource, setRawSource] = useState<string | null>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: msg, isLoading } = useQuery({
+  const { data: msg, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['message', messageId],
     queryFn: () => api.get<Message>(`/mail/messages/${messageId}`),
   });
-
-  // Inline (cid:) images are fetched with the Authorization header → blob: URLs
-  const cidMap = useInlineImages(msg?.bodyHtml, msg?.attachments);
-  // Sanitize + privacy filter (DOMPurify hooks). Re-run when "show images" toggles.
-  const rendered = useMemo(
-    () => (msg?.bodyHtml ? renderMailHtml(msg.bodyHtml, { allowExternalImages: showExternalImages, cidMap }) : null),
-    [msg?.bodyHtml, showExternalImages, cidMap],
-  );
-  const blockedCount = showExternalImages ? 0 : rendered?.blockedCount ?? 0;
 
   const { data: folders = [] } = useQuery({
     queryKey: ['folders'],
@@ -79,8 +67,52 @@ export function MessageReader({ messageId }: Props) {
     onSettled: invalidate,
   });
 
+  const ariaKeys = useAriaKeys();
+  const { runWithUndo } = useMailActions();
+
+  /** Reply / reply all / forward with the quoted original (toolbar + shortcuts). */
+  const doReply = (mode: 'reply' | 'replyAll' | 'forward'): boolean => {
+    if (!msg) return false;
+    const quoted = msg.bodyHtml || textToQuotedHtml(msg.bodyText ?? '');
+    if (mode !== 'forward' && !msg.flags.includes('\\Answered')) {
+      // Set \Answered flag when Reply/Reply all is used
+      patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
+    }
+    openCompose({
+      mode, id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quoted,
+      ...(mode === 'replyAll' ? { toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs } : {}),
+    });
+    return true;
+  };
+  useShortcutHandlers({
+    'mail.reply': () => doReply('reply'),
+    'mail.replyAll': () => doReply('replyAll'),
+    'mail.forward': () => doReply('forward'),
+  });
+
   if (isLoading) return <MessageReaderSkeleton />;
-  if (!msg) return null;
+  if (!msg) {
+    if (!isError) return null;
+    return (
+      <div role="alert" className="flex-1 flex items-center justify-center bg-white dark:bg-gray-900 p-6">
+        <div className="text-center max-w-sm">
+          <AlertCircle size={32} className="mx-auto text-red-500 mb-2" aria-hidden="true" />
+          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Die Nachricht konnte nicht geladen werden.</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 break-words">
+            {error instanceof Error ? error.message : 'Unbekannter Fehler'}
+          </p>
+          <button
+            type="button"
+            onClick={() => { void refetch(); }}
+            disabled={isFetching}
+            className="btn-secondary text-xs mt-4 inline-flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> Erneut versuchen
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const isFlagged = msg.flags.includes('\\Flagged');
   const isPinned = !!msg.pinnedAt;
@@ -89,30 +121,14 @@ export function MessageReader({ messageId }: Props) {
   const currentFolder = folders.find((f) => f.id === selectedFolderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
 
-  // Set \Answered flag when Reply/Reply all is clicked
-  const markAnswered = () => {
-    if (!msg.flags.includes('\\Answered')) {
-      patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
-    }
+  // Undo toast (8 s, also `z`) only after the server confirmed the action
+  const loc = { id: msg.id, folderId: msg.folderId ?? selectedFolderId ?? '' };
+  const withUndo = (action: 'delete' | 'archive' | 'spam' | 'move', target?: string) => {
+    void runWithUndo(action, [loc], target).then((done) => { if (done) setSelectedMessage(null); });
   };
 
-  // Undo toast only after the server confirmed the action
-  const withUndo = (action: 'delete' | 'archive', message: string) => {
-    const src = msg.folderId ?? selectedFolderId;
-    bulkMutation.mutate({ ids: [msg.id], action }, {
-      onSuccess: () => {
-        if (!src) return;
-        showUndoToast({
-          message,
-          onUndo: () => bulkMutation.mutateAsync({ ids: [msg.id], action: 'move', folderId: src }),
-        });
-      },
-    });
-    setSelectedMessage(null);
-  };
-
-  const handleDelete = () => withUndo('delete', 'In den Papierkorb verschoben');
-  const handleArchive = () => withUndo('archive', 'Archiviert');
+  const handleDelete = () => withUndo('delete');
+  const handleArchive = () => withUndo('archive');
 
   const snoozeUntil = (d: Date) => {
     api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
@@ -139,7 +155,7 @@ export function MessageReader({ messageId }: Props) {
       children: folders.filter((f) => f.id !== selectedFolderId).map((f) => ({
         label: f.displayName ?? f.name,
         onClick: () => {
-          bulkMutation.mutate({ ids: [msg.id], action: 'move', folderId: f.id });
+          withUndo('move', f.id);
           setSelectedMessage(null);
         },
       })),
@@ -148,7 +164,7 @@ export function MessageReader({ messageId }: Props) {
       ? { label: 'Kein Junk (False Positive)', icon: <ShieldOff size={14} />,
           onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
       : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
-          onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); } },
+          onClick: () => withUndo('spam') },
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
@@ -173,25 +189,28 @@ export function MessageReader({ messageId }: Props) {
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 dark:border-gray-700 shrink-0">
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'reply', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
+          onClick={() => doReply('reply')}
+          aria-keyshortcuts={ariaKeys('mail.reply')}
           className="btn-secondary text-xs">
           <Reply size={14} /> Antworten
         </button>
         <button
-          onClick={() => { markAnswered(); openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` }); }}
+          onClick={() => doReply('replyAll')}
+          aria-keyshortcuts={ariaKeys('mail.replyAll')}
           className="btn-secondary text-xs">
           <ReplyAll size={14} /> Allen antworten
         </button>
         <button
-          onClick={() => openCompose({ mode: 'forward', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: msg.bodyHtml || `<p>${msg.bodyText.replace(/\n/g, '<br>')}</p>` })}
+          onClick={() => doReply('forward')}
+          aria-keyshortcuts={ariaKeys('mail.forward')}
           className="btn-secondary text-xs">
           <Forward size={14} /> Weiterleiten
         </button>
         <div className="flex-1" />
-        <button onClick={handleArchive} className="btn-ghost text-xs">
+        <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs">
           <Archive size={14} /> Archivieren
         </button>
-        <button onClick={handleDelete} className="btn-ghost text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
           <Trash2 size={14} /> Löschen
         </button>
         <button
@@ -199,8 +218,9 @@ export function MessageReader({ messageId }: Props) {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
             setMoreMenu({ x: r.right - 220, y: r.bottom });
           }}
-          className="btn-ghost text-xs" title="Mehr Optionen">
-          <MoreHorizontal size={14} />
+          className="btn-ghost text-xs" title="Mehr Optionen" aria-label="Mehr Optionen"
+          aria-haspopup="menu" aria-expanded={moreMenu !== null}>
+          <MoreHorizontal size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -241,7 +261,7 @@ export function MessageReader({ messageId }: Props) {
               </button>
             ) : (
               <button
-                onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'spam' }); setSelectedMessage(null); }}
+                onClick={() => withUndo('spam')}
                 className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
                 title="In Junk verschieben (Bayes-Lernen)"
               >
@@ -357,38 +377,14 @@ export function MessageReader({ messageId }: Props) {
             </div>
           );
         }
-        const externalImageCount = blockedCount;
         return (
-          <>
-            {externalImageCount > 0 && !showExternalImages && (
-              <div className="px-4 py-2.5 border-b border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center gap-2.5 text-sm shrink-0">
-                <ImageIcon size={16} className="text-blue-600 dark:text-blue-300 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-blue-900 dark:text-blue-200 leading-tight">
-                    {externalImageCount === 1
-                      ? '1 externes Bild wurde blockiert.'
-                      : `${externalImageCount} externe Bilder wurden blockiert.`}
-                  </p>
-                  <p className="text-xs text-blue-800/80 dark:text-blue-300/80 leading-tight">
-                    Externe Bilder können verwendet werden, um Ihr Lese-Verhalten zu verfolgen (Tracking-Pixel).
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowExternalImages(true)}
-                  className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
-                  title="Externe Bilder einmalig nachladen"
-                >
-                  <ImageIcon size={13} /> Bilder anzeigen
-                </button>
-              </div>
-            )}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              <div
-                className="prose prose-sm dark:prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: rendered?.html ?? '' }}
-              />
-            </div>
-          </>
+          <MailBody
+            messageId={msg.id}
+            html={msg.bodyHtml}
+            attachments={msg.attachments}
+            scrollClassName="flex-1 overflow-y-auto px-6 py-4"
+            bodyClassName="prose prose-sm dark:prose-invert max-w-none"
+          />
         );
       })()}
 

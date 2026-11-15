@@ -3,6 +3,7 @@ import { createConnection } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { rspamdControllerHeaders } from '../../lib/rspamd-controller.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 
 export const adminSecurityRouter: RouterType = Router();
@@ -18,7 +19,7 @@ async function rspamdFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(`${RSPAMD_URL}${path}`, {
     ...opts,
     signal: AbortSignal.timeout(5000),
-    headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
+    headers: { 'Content-Type': 'application/json', ...rspamdControllerHeaders(), ...(opts?.headers ?? {}) },
   });
   if (!r.ok) throw new Error(`rspamd HTTP ${r.status}`);
   return r.json() as Promise<T>;

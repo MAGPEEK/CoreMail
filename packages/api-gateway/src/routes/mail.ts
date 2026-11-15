@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response, type Ne
 import { z } from 'zod';
 import { Readable } from 'stream';
 import multer from 'multer';
-import nodemailer from 'nodemailer';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { Queue } from 'bullmq';
 import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
@@ -15,6 +15,21 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
+import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
+import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
+import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
+import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
+import { createImageProxyHandler } from '../lib/image-proxy.js';
+import {
+  parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
+  MAX_QUERY_LENGTH, type FolderRef,
+} from '../lib/search-query.js';
+
+const replyLookup = prismaReplyLookup(
+  prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
+  (p) => (p.storagePath ? loadRawMessage(p as unknown as Parameters<typeof loadRawMessage>[0], { persist: false }) : Promise.resolve(null)),
+);
 
 const log = createLogger('api:mail');
 export const mailRouter: RouterType = Router();
@@ -26,7 +41,7 @@ const RSPAMD_URL = process.env['RSPAMD_URL'] ?? 'http://rspamd:11334';
 async function rspamdLearn(action: 'learnspam' | 'learnham', raw: Buffer): Promise<void> {
   await fetch(`${RSPAMD_URL}/${action}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: { 'Content-Type': 'application/octet-stream', ...rspamdControllerHeaders() },
     body: raw,
     signal: AbortSignal.timeout(10_000),
   });
@@ -56,11 +71,21 @@ async function rspamdLearnBatch(ids: string[], action: 'learnspam' | 'learnham',
 }
 mailRouter.use(requireAuth);
 
-// ── Multer (attachments, max 25 MB/file, max 20 files) ───────────────────────
-const uploadMiddleware = multer({
+// ── Multer (attachments) ──────────────────────────────────────────────────────
+// 8.0.x: the WHOLE request (all files + fields) is limited to the configured
+// max. message size, and at most MAX_SEND_FILES files (was 20 × 25 MB ≈ 500 MB
+// buffered in memory per request).
+const sendUploadMiddleware = withBodyLimit((limit) => multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
-}).array('attachments', 20);
+  limits: { fileSize: limit, files: MAX_SEND_FILES, fields: 50, fieldSize: limit, parts: MAX_SEND_FILES + 50 },
+}).array('attachments', MAX_SEND_FILES));
+
+// 8.0.x: per-user send rate limit (default 30 messages / 60 s, 0 disables)
+const sendRateLimiter = createUserRateLimiter({
+  scope: 'mail-send',
+  limit: envInt('MAIL_SEND_RATE_LIMIT', 30),
+  windowSec: Math.max(1, envInt('MAIL_SEND_RATE_WINDOW_SEC', 60)),
+});
 
 // ── BullMQ outbound queue (same as smtp-server) ───────────────────────────────
 let _outboundQueue: Queue | null = null;
@@ -83,7 +108,7 @@ function getOutboundQueue(): Queue {
 // nodemailer's smtp-connection does NOT normalize Buffer content automatically
 // (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
 // the header/body separator (\r\n\r\n) → raw MIME text in the body.
-async function buildRawMime(options: nodemailer.SendMailOptions): Promise<Buffer> {
+async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
   const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
@@ -182,6 +207,17 @@ mailRouter.patch('/folders/:id', async (req: Request, res: Response) => {
 
   if (parsed.data.name && SYSTEM_FOLDER_NAMES.has(folder.name)) {
     res.status(400).json({ error: 'Systemordner kann nicht umbenannt werden' }); return;
+  }
+  // 8.0.x: the new parent must be one of the caller's folders (same mailbox)
+  // and must not create a cycle; system folders stay at the top level.
+  if (parsed.data.parentId !== undefined && parsed.data.parentId !== folder.parentId) {
+    if (SYSTEM_FOLDER_NAMES.has(folder.name)) {
+      res.status(400).json({ error: 'Systemordner kann nicht verschoben werden' }); return;
+    }
+    if (parsed.data.parentId) {
+      const check = await checkFolderParent(prisma as unknown as FolderLookup, id, parsed.data.parentId, folder.mailboxId);
+      if (!check.ok) { res.status(check.status).json({ error: check.error }); return; }
+    }
   }
   if (parsed.data.name && parsed.data.name !== folder.name) {
     const collision = await prisma.folder.findFirst({
@@ -535,6 +571,15 @@ mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
   warn: (msg, err) => log.warn({ err }, msg),
 }));
 
+// GET /api/v1/mail/image-proxy?url=<http(s) URL> — external images for "show images"
+// (8.0.x; SSRF-safe, image types only, per-user rate limit — lib/image-proxy.ts)
+const imageProxyLimiter = createUserRateLimiter({
+  scope: 'image-proxy',
+  limit: envInt('IMAGE_PROXY_RATE_LIMIT', 120),
+  windowSec: Math.max(1, envInt('IMAGE_PROXY_RATE_WINDOW_SEC', 60)),
+});
+mailRouter.get('/image-proxy', createImageProxyHandler({ allow: (userId) => imageProxyLimiter.hit(userId) }));
+
 // GET /api/v1/mail/messages/:id/raw — RFC 822 raw EML / source view
 mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -730,17 +775,15 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
 // POST /api/v1/mail/send — compose and send (multipart/form-data with optional attachments)
 mailRouter.post(
   '/send',
+  // 8.0.x: per-user send rate (MAIL_SEND_RATE_LIMIT / MAIL_SEND_RATE_WINDOW_SEC)
+  sendRateLimiter.middleware,
   // Multer middleware: processes multipart/form-data; no intervention for application/json
+  // (JSON bodies are capped by express.json()). 8.0.x: the whole request is capped
+  // at the configured max. message size (lib/send-limits.ts).
   (req: Request, res: Response, next: NextFunction) => {
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) { next(); return; }
-    uploadMiddleware(req, res, (err) => {
-      if (err instanceof multer.MulterError) {
-        res.status(400).json({ error: `Upload-Fehler: ${err.message}` }); return;
-      }
-      if (err) { res.status(400).json({ error: String(err) }); return; }
-      next();
-    });
+    sendUploadMiddleware(req, res, next);
   },
   async (req: Request, res: Response) => {
     // Read fields from JSON body OR multipart form
@@ -751,6 +794,7 @@ mailRouter.post(
     let bodyHtml: string;
     let bodyText: string;
     let inReplyTo: string | undefined;
+    let referencesRaw: unknown;
     let scheduledAt: Date | null = null;
     let sendAsAddress: string | null = null;     // shared mailbox address as sender (SEND_AS)
     let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
@@ -765,6 +809,7 @@ mailRouter.post(
         bodyHtml: z.string().optional(),
         bodyText: z.string().optional(),
         inReplyTo: z.string().optional(),
+        references: z.union([z.array(z.string()), z.string()]).optional(),
         scheduledAt: z.string().datetime().optional(),
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
@@ -778,6 +823,7 @@ mailRouter.post(
       bodyHtml = parsed.data.bodyHtml ?? '';
       bodyText = parsed.data.bodyText ?? '';
       inReplyTo = parsed.data.inReplyTo;
+      referencesRaw = parsed.data.references;
       if (parsed.data.scheduledAt)    scheduledAt    = new Date(parsed.data.scheduledAt);
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
@@ -790,6 +836,7 @@ mailRouter.post(
       bodyHtml = String(req.body['bodyHtml'] ?? '');
       bodyText = String(req.body['bodyText'] ?? '');
       inReplyTo = req.body['inReplyTo'] ? String(req.body['inReplyTo']) : undefined;
+      referencesRaw = req.body['references'] as unknown;
       if (req.body['scheduledAt']) {
         const d = new Date(String(req.body['scheduledAt']));
         if (!isNaN(d.getTime())) scheduledAt = d;
@@ -799,6 +846,15 @@ mailRouter.post(
     }
 
     if (!to.length) { res.status(400).json({ error: 'Kein Empfänger angegeben' }); return; }
+    // Optional client References chain (validated <msg-id> list, max 50, no CR/LF)
+    const clientRefs = parseClientReferences(referencesRaw);
+    if (!clientRefs.ok) { res.status(400).json({ error: clientRefs.error }); return; }
+    // 8.0.x: recipient count + syntax (header injection, envelope abuse)
+    const rcptCheck = checkRecipients([to, cc, bcc]);
+    if (!rcptCheck.ok) {
+      res.status(400).json({ error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
+      return;
+    }
 
     // Schedule-send validation: time must be in the future (>30s),
     // not more than 1 year ahead (otherwise probably an error)
@@ -862,6 +918,15 @@ mailRouter.post(
       onBehalfHeader           = `${(user.displayName ?? '').trim() ? `"${(user.displayName ?? '').trim()}" ` : ''}<${user.email}>`;
     }
 
+    // 8.0.x: In-Reply-To/References from the parent's Message-ID (never an internal id)
+    // The client's References list (when sent) wins over the server-resolved chain.
+    const reply = await resolveReplyHeaders(inReplyTo, user.id, replyLookup, clientRefs.refs);
+    const replyRefs = reply.references ?? reply.inReplyTo;
+    const replyHeaders = {
+      ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo } : {}),
+      ...(replyRefs ? { references: replyRefs } : {}),
+    };
+
     const files       = (req.files as Express.Multer.File[] | undefined) ?? [];
     const jobId       = crypto.randomUUID();
     const msgId       = `<${crypto.randomUUID()}@${user.domain.name}>`;
@@ -923,7 +988,7 @@ mailRouter.post(
           // For schedule-send: set the Date header to scheduledAt so that the
           // recipient sees the scheduled send time (not the creation time)
           date:      (scheduledAt ?? sendDate).toISOString(),
-          ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
+          ...replyHeaders,
           attachments: queueAttachments,
         },
       }, jobOptions);
@@ -965,12 +1030,12 @@ mailRouter.post(
         if (!sentFolder || !mailbox) return;
 
         // Raw buffer for the Sent copy with in-memory attachments
-        const sentAttachments: nodemailer.SendMailOptions['attachments'] = files.map((f) => ({
+        const sentAttachments: SendMailOptions['attachments'] = files.map((f) => ({
           filename:    f.originalname,
           content:     f.buffer,
           contentType: f.mimetype,
         }));
-        const fromAddress: nodemailer.SendMailOptions['from'] = displayName
+        const fromAddress: SendMailOptions['from'] = displayName
           ? { name: displayName, address: user.email }
           : user.email;
 
@@ -984,7 +1049,7 @@ mailRouter.post(
           ...(bcc.length            ? { bcc }                                 : {}),
           ...(bodyHtml              ? { html: bodyHtml }                      : {}),
           ...(bodyText              ? { text: bodyText }                      : {}),
-          ...(inReplyTo             ? { inReplyTo, references: inReplyTo }    : {}),
+          ...replyHeaders,
           ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
         });
 
@@ -1074,34 +1139,35 @@ mailRouter.post('/messages/:id/cancel-scheduled', async (req: Request, res: Resp
 // GET /api/v1/mail/search?q=foo&categoryId=...&folderId=...&limit=&offset=
 // folderId (optional) restricts the search to one of the user's own folders.
 mailRouter.get('/search', async (req: Request, res: Response) => {
-  const q = String(req.query['q'] ?? '').trim();
+  const q = String(req.query['q'] ?? '').trim().slice(0, MAX_QUERY_LENGTH);
   const categoryId = req.query['categoryId'] ? String(req.query['categoryId']) : null;
   const folderId = req.query['folderId'] ? String(req.query['folderId']) : null;
   const { limit, offset } = parsePaging(req.query);
-  const empty = { messages: [], total: 0, limit, offset };
-  if (q.length < 2 && !categoryId) { res.json(empty); return; }
+  // Operators (from:, is:unread, before:, in:, "phrase", -word …) — lib/search-query.ts
+  const parsed = parseSearchQuery(q);
+  const chips = searchChips(parsed);
+  const empty = { messages: [], total: 0, limit, offset, chips };
+  if (!hasCriteria(parsed) && !categoryId) { res.json(empty); return; }
 
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   if (!mailbox) { res.json(empty); return; }
 
-  const folderIds = (await prisma.folder.findMany({
-    where: { mailboxId: mailbox.id, ...(folderId ? { id: folderId } : {}) },
-    select: { id: true },
-  })).map((f: { id: string }) => f.id);
-  if (folderId && folderIds.length === 0) { res.status(404).json({ error: 'Folder not found' }); return; }
+  const allFolders = await prisma.folder.findMany({
+    where: { mailboxId: mailbox.id },
+    select: { id: true, name: true, displayName: true },
+  }) as FolderRef[];
+  if (folderId && !allFolders.some((f) => f.id === folderId)) { res.status(404).json({ error: 'Folder not found' }); return; }
+  // An explicit in:<folder> replaces the list's folder scope
+  const folderIds = resolveFolderScope(parsed, folderId ? [folderId] : allFolders.map((f) => f.id), allFolders);
+  if (folderIds.length === 0) { res.json(empty); return; }
 
   const where: Record<string, unknown> = {
     folderId: { in: folderIds },
     deletedAt: null,
   };
-  if (q.length >= 2) {
-    where['OR'] = [
-      { subject:  { contains: q, mode: 'insensitive' } },
-      { fromAddr: { contains: q, mode: 'insensitive' } },
-      { fromName: { contains: q, mode: 'insensitive' } },
-      { bodyText: { contains: q, mode: 'insensitive' } },
-    ];
-  }
+  const conditions = buildSearchConditions(parsed);
+  if (conditions.length === 1) Object.assign(where, conditions[0]);
+  else if (conditions.length > 1) where['AND'] = conditions;
   if (categoryId) {
     where['categories'] = { some: { categoryId, category: { userId: req.apiUser!.userId } } };
   }
@@ -1125,7 +1191,7 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
     categories: m.categories?.map((c: any) => c.category) ?? [],
   }));
 
-  res.json({ messages: flat, total, limit, offset });
+  res.json({ messages: flat, total, limit, offset, chips });
 });
 
 // GET /api/v1/mail/delegated-mailboxes

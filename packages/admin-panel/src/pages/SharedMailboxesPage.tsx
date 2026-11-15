@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useId, useState, useEffect } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw } from 'lucide-react';
@@ -223,12 +224,19 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
     onError: (e: Error) => toast.error(e.message || 'Fehler'),
   });
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-md"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="font-semibold text-gray-900">{item ? 'Postfach bearbeiten' : 'Neues freigegebenes Postfach'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <h2 id={titleId} className="font-semibold text-gray-900">{item ? 'Postfach bearbeiten' : 'Neues freigegebenes Postfach'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
           <div>
@@ -299,8 +307,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -364,15 +371,22 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   // Validation: SEND_AS and SEND_ON_BEHALF are mutually exclusive (Exchange behavior)
   const sendConflict = perms.includes('SEND_AS') && perms.includes('SEND_ON_BEHALF');
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-xl"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
-            <h2 className="font-semibold text-gray-900">Berechtigungen</h2>
+            <h2 id={titleId} className="font-semibold text-gray-900">Berechtigungen</h2>
             <p className="text-xs text-gray-500">{item.email}</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
         <WriteGuard area="recipients" className="p-5 space-y-4">
           {/* Existing permissions — grouped per user */}
@@ -405,7 +419,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                     >
                       Bearbeiten
                     </button>
-                    <button onClick={() => removeAllMutation.mutate(uid)}
+                    <button aria-label="Alle Berechtigungen entfernen" onClick={() => removeAllMutation.mutate(uid)}
                       className="p-1 text-gray-400 hover:text-red-600 transition-colors">
                       <X size={14} />
                     </button>
@@ -518,7 +532,6 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
             </div>
           </div>
         </WriteGuard>
-      </div>
-    </div>
+    </Modal>
   );
 }

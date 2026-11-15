@@ -65,15 +65,30 @@ export function normalizeClamavAction(v: unknown): ClamavAction {
   return v === 'reject' || v === 'pass' || v === 'quarantine' ? v : 'quarantine';
 }
 
+/**
+ * Deployment switches that override the database: RSPAMD_ENABLED=false /
+ * CLAMAV_ENABLED=false turn a scanner off when its container is not deployed
+ * (docker-compose.minimal.yml). Anything else leaves the BCP setting in charge.
+ */
+export function applyScannerEnvOverrides(cfg: PipelineConfig, env: NodeJS.ProcessEnv = process.env): PipelineConfig {
+  const off = (v: string | undefined) => v !== undefined && /^(false|0|no|off)$/i.test(v.trim());
+  return {
+    ...cfg,
+    ...(off(env['RSPAMD_ENABLED']) ? { rspamdEnabled: false } : {}),
+    ...(off(env['CLAMAV_ENABLED']) ? { clamavEnabled: false } : {}),
+  };
+}
+
 /** Pure mapping of the two settings rows (either may be missing) to the pipeline config. */
 export function buildPipelineConfig(
   sec: SecuritySettingsRow | null,
   smtp: SmtpGreylistRow | null,
+  env: NodeJS.ProcessEnv = process.env,
 ): PipelineConfig {
   const d = DEFAULT_PIPELINE_CONFIG;
   const cfg: PipelineConfig = { ...d, blockedExtensions: [...d.blockedExtensions] };
   if (smtp) cfg.greylistingEnabled = smtp.greylistingEnabled;
-  if (!sec) return cfg;
+  if (!sec) return applyScannerEnvOverrides(cfg, env);
 
   const mode = sec.geoipMode.toUpperCase();
   const countries = [...new Set(stringArray(sec.geoipCountries).map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c)))];
@@ -81,7 +96,7 @@ export function buildPipelineConfig(
     ? { mode: mode === 'WHITELIST' ? 'whitelist' as const : 'blacklist' as const, countries }
     : null;
 
-  return {
+  return applyScannerEnvOverrides({
     ...cfg,
     dnsblEnabled:         sec.dnsblEnabled,
     countryFilter,
@@ -94,5 +109,5 @@ export function buildPipelineConfig(
     clamavEnabled:        sec.clamavEnabled,
     clamavAction:         normalizeClamavAction(sec.clamavAction),
     clamavBlockOnFailure: sec.clamavBlockOnFailure,
-  };
+  }, env);
 }

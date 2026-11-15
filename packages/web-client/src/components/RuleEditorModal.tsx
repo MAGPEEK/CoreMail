@@ -136,7 +136,7 @@ function ConditionRow({ value, onChange, onRemove }: {
         />
       )}
 
-      <button
+      <button aria-label="Bedingung entfernen"
         onClick={onRemove}
         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
         title="Bedingung entfernen"
@@ -221,7 +221,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
         </select>
       )}
 
-      <button
+      <button aria-label="Aktion entfernen"
         onClick={onRemove}
         className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
         title="Aktion entfernen"
@@ -267,14 +267,22 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
     queryFn: () => api.get<Category[]>('/categories'),
   });
 
+  // Server-side validation message (e.g. a refused regex pattern) shown inline
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const save = useMutation({
     mutationFn: async () => {
+      setSaveError(null);
       const body = { name, enabled, matchAll, stopProcessing, conditions, exceptions, actions, priority: rule?.priority ?? 0 };
       if (isNew) return api.post<MailRule>('/user/rules', body);
       return api.put<MailRule>(`/user/rules/${rule.id}`, body);
     },
     onSuccess: () => { toast.success(isNew ? 'Regel erstellt' : 'Regel aktualisiert'); onSaved(); },
-    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Speichern fehlgeschlagen'),
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Speichern fehlgeschlagen';
+      setSaveError(msg);
+      toast.error(msg);
+    },
   });
 
   const canSave = name.trim().length > 0 && actions.length > 0;
@@ -291,7 +299,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             {isNew ? 'Neue Regel' : 'Regel bearbeiten'}
           </h2>
-          <button onClick={onClose} className="btn-ghost p-1.5"><X size={18} /></button>
+          <button aria-label="Schließen" onClick={onClose} className="btn-ghost p-1.5"><X size={18} /></button>
         </div>
 
         {/* Body */}
@@ -436,6 +444,11 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 shrink-0">
+          {saveError && (
+            <p role="alert" className="mr-auto text-xs text-red-600 dark:text-red-400 flex items-center gap-1 break-all">
+              <Info size={12} className="shrink-0" /> {saveError}
+            </p>
+          )}
           <button onClick={onClose} className="btn-secondary text-sm">Abbrechen</button>
           <button
             onClick={() => save.mutate()}

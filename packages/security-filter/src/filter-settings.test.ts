@@ -13,7 +13,7 @@ process.env['NODE_ENV'] = 'test';
 const { buildPipelineConfig, DEFAULT_PIPELINE_CONFIG } = await import('./settings.js');
 const { runIpChecks, runContentChecks, runGreylistCheck, decideClamav } = await import('./pipeline/index.js');
 const { checkAttachments, fileExtension } = await import('./attachment/index.js');
-const { matchBlacklistEntry } = await import('./blacklist/index.js');
+const { matchBlacklistEntry, matchWildcard } = await import('./blacklist/index.js');
 const { parseClamdResponse } = await import('./clamav/index.js');
 const { isGreylistExempt } = await import('./greylisting/index.js');
 
@@ -74,6 +74,7 @@ function fakeDeps(over: Partial<NonNullable<Deps>> = {}): NonNullable<Deps> & { 
     parse: async () => ({ attachments: [{ filename: 'invoice.EXE', mimeType: 'application/octet-stream', size: 10 }] }),
     clamav: async () => { calls.push('clamav'); return { status: 'infected' as const, clean: false, virusName: 'Eicar' }; },
     rspamd: async () => { calls.push('rspamd'); return { score: 7 }; },
+    isLocalDomain: async (d: string) => d === 'local.example',
     ...over,
   };
   return d as never;
@@ -151,6 +152,24 @@ test('blacklist REGEX is not lower-cased (\\D stays \\D) and is case-insensitive
   assert.equal(matchBlacklistEntry({ pattern: 'A@B.C', patternType: 'EXACT' }, 'a@b.c')?.matched, true);
 });
 
+test('v8.1: blacklist REGEX/WILDCARD run in linear time on hostile sender addresses (no ReDoS)', () => {
+  const hostile = `${'a'.repeat(5000)}!@x.example`;
+  const t0 = Date.now();
+  // catastrophic for a backtracking engine
+  assert.equal(matchBlacklistEntry({ pattern: '^(a+)+$', patternType: 'REGEX' }, hostile)?.matched, false);
+  assert.equal(matchBlacklistEntry({ pattern: '*a*a*a*a*a*a*a*a*b', patternType: 'WILDCARD' }, hostile)?.matched, false);
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+  // backreferences / lookarounds are unsupported → skipped (null), never a throw
+  assert.equal(matchBlacklistEntry({ pattern: '(a)\\1', patternType: 'REGEX' }, 'aa@x'), null);
+  assert.equal(matchBlacklistEntry({ pattern: '(?=a)a', patternType: 'REGEX' }, 'a@x'), null);
+  // wildcard semantics unchanged
+  assert.equal(matchWildcard('bulk-42@news.example', 'bulk-*@*.example'), true);
+  assert.equal(matchWildcard('bulk@news.example', 'bulk-*@*.example'), false);
+  assert.equal(matchWildcard('', '*'), true);
+  assert.equal(matchWildcard('abc', 'a*c*'), true);
+  assert.equal(matchWildcard('abcd', 'a*c'), false);
+});
+
 // ── ClamAV ────────────────────────────────────────────────────────────────────
 
 test('clamd reply parsing: FOUND before OK, errors are errors', () => {
@@ -190,4 +209,20 @@ test('greylist whitelist: real CIDR matching (IPv4/IPv6), IP, sender, domain', (
   assert.equal(isGreylistExempt(wl, '203.0.113.1', 'x@TRUSTED.example'), true);
   assert.equal(isGreylistExempt(wl, '203.0.113.1', 'x@untrusted.example'), false);
   assert.equal(isGreylistExempt(['192.0.2.0/99', 'garbage/x'], '192.0.2.1', ''), false);
+});
+
+test('RSPAMD_ENABLED=false / CLAMAV_ENABLED=false override the BCP settings (minimal compose)', () => {
+  const on = buildPipelineConfig({ ...SEC, rspamdEnabled: true, clamavEnabled: true }, null, {});
+  assert.equal(on.rspamdEnabled, true);
+  assert.equal(on.clamavEnabled, true);
+  const off = buildPipelineConfig({ ...SEC, rspamdEnabled: true, clamavEnabled: true }, null, { RSPAMD_ENABLED: 'false', CLAMAV_ENABLED: '0' });
+  assert.equal(off.rspamdEnabled, false);
+  assert.equal(off.clamavEnabled, false);
+  // without a settings row as well
+  const none = buildPipelineConfig(null, null, { RSPAMD_ENABLED: 'off' });
+  assert.equal(none.rspamdEnabled, false);
+  assert.equal(none.clamavEnabled, DEFAULT_PIPELINE_CONFIG.clamavEnabled);
+  // "true" never forces a scanner on against the BCP
+  const keep = buildPipelineConfig({ ...SEC, rspamdEnabled: false }, null, { RSPAMD_ENABLED: 'true' });
+  assert.equal(keep.rspamdEnabled, false);
 });

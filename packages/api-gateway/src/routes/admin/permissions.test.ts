@@ -27,6 +27,7 @@ installFakePrisma({
     findUnique: (a) => {
       const q = a as { where: Row; select?: Row };
       const id = String(q.where['id']);
+      if (id === 'u_user') return applySelect({ id, email: 'user@ex.com', displayName: 'U', role: 'USER', active: true }, q.select);
       return applySelect(id.startsWith('actor-') ? { id, role: id.slice(6), active: true } : null, q.select);
     },
   },
@@ -212,7 +213,9 @@ test('real admin routers admit exactly the roles ROLE_PERMISSIONS grants for the
   const mismatches: string[] = [];
   for (const p of probes) {
     for (const role of ROLES) {
-      const expected = p.area === null ? role === 'ORGANIZATION_MANAGEMENT' : rbac.canAccess(role, p.area, p.method);
+      const expected = (p.area === null ? role === 'ORGANIZATION_MANAGEMENT' : rbac.canAccess(role, p.area, p.method))
+        // narrow action grants (lib/rbac.ts ADMIN_ACTIONS): COMPLIANCE_MANAGEMENT lists backup jobs
+        || (p.path === '/backups/jobs' && rbac.hasAdminAction(role, 'backupMailboxData'));
       // Admitted requests reach handlers backed by fakes; only "denied or not" matters.
       const r = await call(p.method, `${ADMIN_PREFIX}${p.path}`, role, { timeoutMs: 1_500 });
       if (isForbidden(r) === expected) mismatches.push(`${role} ${p.method} ${p.path} → ${r.status} (expected ${expected ? 'allowed' : 'denied'})`);
@@ -254,4 +257,65 @@ test('GET /me/permissions follows forced admin MFA like every admin route', asyn
   } finally {
     requireMfaForAdmins = false;
   }
+});
+
+// ── Narrow admin actions (HELP_DESK, COMPLIANCE_MANAGEMENT backups) ──────────
+
+test('allowedActions: HELP_DESK and COMPLIANCE get exactly their grants, write implies the recipients actions', () => {
+  const RECIPIENT_ACTIONS = ['resetPassword', 'toggleActive', 'revokeSessions'];
+  assert.deepEqual(rbac.allowedActions('HELP_DESK'), { recipients: RECIPIENT_ACTIONS });
+  assert.deepEqual(rbac.allowedActions('RECIPIENT_MANAGEMENT'), { recipients: RECIPIENT_ACTIONS });
+  assert.deepEqual(rbac.allowedActions('COMPLIANCE_MANAGEMENT'), { servers: ['backupMailboxData'] });
+  assert.deepEqual(rbac.allowedActions('SERVER_MANAGEMENT'), {}, 'write on servers does not imply mailbox content');
+  assert.deepEqual(rbac.allowedActions('VIEW_ONLY_ORG'), {});
+  assert.deepEqual(rbac.allowedActions('USER'), {});
+  assert.deepEqual(rbac.allowedActions('ORGANIZATION_MANAGEMENT'), { recipients: RECIPIENT_ACTIONS, servers: ['backupMailboxData'] });
+  assert.equal(rbac.mailboxUpdateFields('RECIPIENT_MANAGEMENT'), null);
+  assert.deepEqual([...(rbac.mailboxUpdateFields('HELP_DESK') ?? [])].sort(), ['active', 'password', 'revokeAppPasswords']);
+  assert.deepEqual([...(rbac.mailboxUpdateFields('VIEW_ONLY_ORG') ?? [])], []);
+});
+
+test('server guards admit an action route exactly when the role has the action', async () => {
+  const P = '/api/v1/admin';
+  const has = (a: Parameters<typeof rbac.hasAdminAction>[1]) => (r: string) => rbac.hasAdminAction(r, a);
+  const probes: Array<{ action: string; ok: (role: string) => boolean; method: string; path: string; body?: unknown }> = [
+    { action: 'resetPassword',  ok: has('resetPassword'),  method: 'PUT',  path: `${P}/mailboxes/u_user`, body: { password: 'newpassword1' } },
+    { action: 'toggleActive',   ok: has('toggleActive'),   method: 'PUT',  path: `${P}/mailboxes/u_user`, body: { active: true } },
+    { action: 'revokeSessions', ok: has('revokeSessions'), method: 'POST', path: `${P}/mailboxes/u_user/revoke-sessions` },
+    // any other field needs write on recipients — no action covers it
+    { action: '(write)', ok: (r) => rbac.canAccess(r, 'recipients', 'PUT'), method: 'PUT', path: `${P}/mailboxes/u_user`, body: { displayName: 'X' } },
+    { action: 'backupMailboxData', ok: has('backupMailboxData'), method: 'GET',  path: `${P}/backups/download/c0000000000000000000000x1` },
+    { action: 'backupMailboxData', ok: has('backupMailboxData'), method: 'GET',  path: `${P}/backups/archive/download?key=x` },
+    { action: 'backupMailboxData', ok: has('backupMailboxData'), method: 'POST', path: `${P}/backups/import/u_user?folderId=f` },
+    { action: 'backupMailboxData', ok: has('backupMailboxData'), method: 'POST', path: `${P}/backups/mailbox/u_user` },
+  ];
+  const mismatches: string[] = [];
+  for (const p of probes) {
+    for (const role of ROLES) {
+      const headers: Record<string, string> = { 'content-type': 'application/json', authorization: `Bearer ${tok(role)}` };
+      let status = 0; let json: Row = {};
+      try {
+        const res = await fetch(`${base}${p.path}`, {
+          method: p.method, headers,
+          ...(p.body !== undefined ? { body: JSON.stringify(p.body) } : p.method !== 'GET' ? { body: '{}' } : {}),
+          signal: AbortSignal.timeout(1_500),
+        });
+        status = res.status;
+        try { json = JSON.parse(await res.text()) as Row; } catch { /* not JSON */ }
+      } catch { /* a handler waiting on a backend was reached: admitted */ }
+      const denied = status === 403 && json['code'] === 'FORBIDDEN_ROLE';
+      if (denied === p.ok(role)) mismatches.push(`${role} ${p.method} ${p.path} [${p.action}] → ${status} ${String(json['error'] ?? '')}`);
+    }
+  }
+  assert.deepEqual(mismatches, []);
+});
+
+test('GET /me/permissions reports the actions from the same map', async () => {
+  for (const role of rbac.ADMIN_ROLES) {
+    const r = await call('GET', '/api/v1/admin/me/permissions', role);
+    assert.deepEqual(r.json['actions'], rbac.allowedActions(role), role);
+  }
+  const hd = await call('GET', '/api/v1/admin/me/permissions', 'HELP_DESK');
+  assert.deepEqual(hd.json['actions'], { recipients: ['resetPassword', 'toggleActive', 'revokeSessions'] });
+  assert.deepEqual(hd.json['areas'], { dashboard: 'read', recipients: 'read' });
 });

@@ -19,9 +19,17 @@ import {
   appendTargetExists,
   // v7.1.0: QUOTA (RFC 9208, read-only) + per-session mailbox view updates
   handleGetQuotaRoot, handleGetQuota, handleSetQuota, notifyMailboxChanged, stopIdleTimer,
+  // SORT/THREAD (RFC 5256), ACL (RFC 4314)
+  handleSort, handleThread, handleMyRights, handleGetAcl, handleListRights, handleSetAcl,
 } from '../commands/index.js';
 import { CommandReader, type LiteralDecision } from './command-reader.js';
+import type { ConnectionLimiter } from '@coremail/core';
+import {
+  imapConnectionLimiter, PRE_AUTH_MAX_LINE, PRE_AUTH_MAX_LITERAL, PRE_AUTH_IDLE_MS,
+  POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS,
+} from './limits.js';
 import { unregisterLiveSession } from '../session/live.js';
+import { CompressedSocket } from './compress.js';
 import {
   tokenize, tokenizePrefix, tokenToArg, tokenString, ImapParseError,
   type Token, type CommandSegment,
@@ -65,12 +73,22 @@ export interface ImapServerOptions {
    * certificate the listener stays plaintext and refuses authentication.
    */
   starttls?: () => ImapTlsConfig | null | undefined;
+  /** v8.1: connection limiter (default: the process-wide one from limits.ts). */
+  limiter?: ConnectionLimiter;
+  /** v8.1: timeouts (tests). */
+  preAuthIdleMs?: number;
+  tlsHandshakeMs?: number;
 }
+
+const preAuth = (session: ImapSession): boolean => session.state === 'NOT_AUTHENTICATED';
 
 export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerOptions = {}): net.Server | tls.Server {
   // v5.5.0: isTls flag — on port 993 (implicit TLS) the connection is secure
   // immediately; on port 143 the client must send STARTTLS to upgrade.
   const isImplicitTls = !!tlsConfig;
+  const limiter = options.limiter ?? imapConnectionLimiter;
+  const preAuthIdleMs = options.preAuthIdleMs ?? PRE_AUTH_IDLE_MS;
+  const tlsHandshakeMs = options.tlsHandshakeMs ?? TLS_HANDSHAKE_MS;
   const onSocket = (socket: net.Socket): void => {
     const starttlsCert = (): ImapTlsConfig | null => (isImplicitTls ? null : options.starttls?.() ?? null);
     const session = createSession(socket, isImplicitTls, !!starttlsCert());
@@ -81,12 +99,24 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
     // RFC 3501 §7.1 — greeting with hostname and capability list
     socket.write(`* OK [CAPABILITY ${session.capabilities.join(' ')}] ${_hostname} IMAP4rev1 ready\r\n`);
 
+    // v8.1: idle timeout — 60 s before authentication, 30 min afterwards
+    // (switched by loginUser via session.onAuthenticated).
+    const armIdleTimeout = (s: net.Socket): void => {
+      s.setTimeout(preAuth(session) ? preAuthIdleMs : POST_AUTH_IDLE_MS);
+      s.on('timeout', () => {
+        sendUntagged(session, 'BYE Autologout; idle for too long');
+        s.destroy();
+      });
+    };
+    session.onAuthenticated = () => { session.socket.setTimeout(POST_AUTH_IDLE_MS); };
+
     // Byte-oriented reader: literals ({n} / {n+}) are read as raw octets and
     // commands are executed strictly in order (one at a time).
+    // v8.1: before authentication lines and literals are capped at 8 KiB.
     const createReader = (): CommandReader => {
       const reader: CommandReader = new CommandReader({
-        maxLineLength: MAX_UNTERMINATED_LINE,
-        maxLiteralSize: () => _maxLiteralSize,
+        maxLineLength: () => (preAuth(session) ? PRE_AUTH_MAX_LINE : MAX_UNTERMINATED_LINE),
+        maxLiteralSize: () => (preAuth(session) ? PRE_AUTH_MAX_LITERAL : _maxLiteralSize),
         // During IDLE and SASL exchanges the client sends raw lines, not commands.
         literalsAllowed: () => !session.idleActive && !session.saslMech,
         sendContinuation: () => { session.socket.write('+ Ready for literal data\r\n'); },
@@ -115,8 +145,38 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       return reader;
     };
     let reader = createReader();
-    const onData = (chunk: Buffer): void => reader.push(chunk);
+    // Where transport octets go: the command reader, or the inflate stream
+    // once COMPRESS=DEFLATE is active.
+    let feed = (chunk: Buffer): void => reader.push(chunk);
+    const onData = (chunk: Buffer): void => feed(chunk);
     socket.on('data', onData);
+    // The socket that currently carries the IMAP stream (TCP, or TLS after STARTTLS).
+    let transport: net.Socket = socket;
+
+    // RFC 4978: COMPRESS=DEFLATE. Called by the dispatcher after its checks;
+    // the tagged OK is the last uncompressed response.
+    session.beginCompress = (tag: string): void => {
+      const carrier = transport;
+      carrier.write(`${tag} OK DEFLATE active\r\n`);
+      // Octets the client pipelined after "COMPRESS DEFLATE" are already compressed.
+      const leftover = reader.detach();
+      const compressed = new CompressedSocket(carrier, (chunk) => reader.push(chunk), (err) => {
+        log.warn({ err, id: session.id, ip }, 'IMAP COMPRESS stream error — connection closed');
+        carrier.destroy();
+      });
+      session.socket = compressed;
+      session.compressActive = true;
+      refreshCapabilities(session);
+      reader = createReader();
+      feed = (chunk) => compressed.input(chunk);
+      // The old reader paused the transport for this command; input resumes
+      // after the command has completed (dispatcher bookkeeping first).
+      setImmediate(() => {
+        if (leftover.length > 0) compressed.input(leftover);
+        if (!reader.isClosed) compressed.resume();
+      });
+      log.debug({ id: session.id }, 'IMAP COMPRESS=DEFLATE active');
+    };
 
     // v7: STARTTLS (RFC 9051 §6.2.1). Called by the dispatcher after the
     // checks; sends the tagged OK and upgrades the socket.
@@ -137,25 +197,33 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
         secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
       });
       socket.resume();
+      // v8.1: a client that never completes the handshake must not hold the
+      // connection (the plaintext idle timer is disabled below).
+      const handshakeTimer = setTimeout(() => {
+        log.info({ id: session.id, ip }, 'IMAP STARTTLS handshake timed out');
+        secure.destroy();
+        socket.destroy();
+      }, tlsHandshakeMs);
+      handshakeTimer.unref();
       secure.once('secure', () => {
+        clearTimeout(handshakeTimer);
         session.socket = secure;
+        transport = secure;
         session.isTls = true;
         session.starttlsAvailable = false;
         refreshCapabilities(session); // re-advertised on the next CAPABILITY
         reader = createReader();
-        secure.on('data', (chunk: Buffer) => reader.push(chunk));
-        secure.setTimeout(1800_000);
-        secure.on('timeout', () => {
-          sendUntagged(session, 'BYE Autologout; idle for too long');
-          secure.destroy();
-        });
+        feed = (chunk) => reader.push(chunk);
+        secure.on('data', (chunk: Buffer) => feed(chunk));
+        armIdleTimeout(secure);
         log.debug({ id: session.id }, 'IMAP STARTTLS upgrade complete');
       });
       secure.on('error', (err) => {
+        clearTimeout(handshakeTimer);
         log.warn({ err, id: session.id, ip }, 'IMAP STARTTLS handshake/socket error');
         secure.destroy();
       });
-      secure.on('close', () => { reader.close(); sessions.delete(session.id); stopIdleTimer(session); unregisterLiveSession(session); });
+      secure.on('close', () => { clearTimeout(handshakeTimer); reader.close(); sessions.delete(session.id); stopIdleTimer(session); unregisterLiveSession(session); });
       socket.setTimeout(0);
     };
 
@@ -174,21 +242,36 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       unregisterLiveSession(session);
     });
 
-    socket.setTimeout(1800_000); // 30 min idle timeout
-    socket.on('timeout', () => {
-      sendUntagged(session, 'BYE Autologout; idle for too long');
-      socket.destroy();
-    });
+    armIdleTimeout(socket);
+  };
+
+  /**
+   * v8.1: per-IP and global connection caps, checked on the raw TCP
+   * connection (before the TLS handshake on port 993). The slot is released
+   * when the TCP connection closes.
+   */
+  const admit = (raw: net.Socket): boolean => {
+    const result = limiter.acquire(raw.remoteAddress);
+    if (!result.ok) {
+      log.warn({ ip: raw.remoteAddress, reason: result.reason, limit: result.limit }, 'IMAP connection rejected — connection limit reached');
+      if (!isImplicitTls) raw.end('* BYE [UNAVAILABLE] Too many connections, try again later\r\n');
+      else raw.destroy();
+      setTimeout(() => raw.destroy(), 2000).unref();
+      return false;
+    }
+    raw.once('close', result.release);
+    return true;
   };
 
   let server: net.Server | tls.Server;
   if (tlsConfig) {
     server = tls.createServer(
-      { cert: tlsConfig.cert, key: tlsConfig.key, minVersion: 'TLSv1.2' },
+      { cert: tlsConfig.cert, key: tlsConfig.key, minVersion: 'TLSv1.2', handshakeTimeout: tlsHandshakeMs },
       onSocket as (s: tls.TLSSocket) => void,
     );
+    server.on('connection', (raw: net.Socket) => { admit(raw); });
   } else {
-    server = net.createServer(onSocket);
+    server = net.createServer((raw) => { if (admit(raw)) onSocket(raw); });
   }
 
   // Subscribe to Redis for real-time IDLE push notifications
@@ -213,8 +296,11 @@ async function checkLiteral(
   const tokens = tokenizePrefix(segments);
   const tag = tokens[0]?.type === 'atom' ? tokens[0].value : '*';
   if (tooLarge) {
-    log.warn({ id: session.id, size, limit: _maxLiteralSize }, 'IMAP literal exceeds maximum size');
-    session.socket.write(`${tag} NO [TOOBIG] Literal exceeds the maximum message size\r\n`);
+    const unauthenticated = preAuth(session);
+    log.warn({ id: session.id, size, limit: unauthenticated ? PRE_AUTH_MAX_LITERAL : _maxLiteralSize, unauthenticated }, 'IMAP literal exceeds maximum size');
+    session.socket.write(unauthenticated
+      ? `${tag} NO [TOOBIG] Literal too large before authentication\r\n`
+      : `${tag} NO [TOOBIG] Literal exceeds the maximum message size\r\n`);
     if (sync) return 'drop';
     // A non-synchronizing literal is already on its way — close the connection.
     session.socket.end('* BYE Literal too large\r\n');
@@ -300,7 +386,7 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
   // recognized → Mac Mail's UID SEARCH/COPY/MOVE failed with "BAD".
   if (cmd === 'UID' && argTokens[0]?.type === 'atom') {
     const sub = argTokens[0].value.toUpperCase();
-    if (['FETCH', 'STORE', 'COPY', 'MOVE', 'SEARCH', 'EXPUNGE'].includes(sub)) {
+    if (['FETCH', 'STORE', 'COPY', 'MOVE', 'SEARCH', 'EXPUNGE', 'SORT', 'THREAD'].includes(sub)) {
       cmd = `UID ${sub}`;
       argTokens = argTokens.slice(1);
     }
@@ -517,6 +603,11 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
           } else if (name === 'IMAP4REV2' && !enabled.includes('IMAP4rev2')) {
             session.imap4rev2Enabled = true;
             enabled.push('IMAP4rev2');
+          } else if (name === 'QRESYNC' && !enabled.includes('QRESYNC')) {
+            // RFC 7162 §3.2.3: QRESYNC implies CONDSTORE.
+            session.qresyncEnabled = true;
+            session.condstoreEnabled = true;
+            enabled.push('QRESYNC');
           }
         }
         sendUntagged(session, `ENABLED${enabled.length ? ' ' + enabled.join(' ') : ''}`);
@@ -603,6 +694,54 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
           session.socket.write(`${tag} NO No mailbox selected\r\n`);
         } else {
           await handleSearch(session, tag, argTokens, true);
+        }
+        break;
+
+      // RFC 5256 SORT / THREAD
+      case 'SORT':
+      case 'UID SORT':
+      case 'THREAD':
+      case 'UID THREAD':
+        if (session.state !== 'SELECTED') {
+          session.socket.write(`${tag} NO No mailbox selected\r\n`);
+        } else if (cmd.endsWith('SORT')) {
+          await handleSort(session, tag, argTokens, cmd === 'UID SORT');
+        } else {
+          await handleThread(session, tag, argTokens, cmd === 'UID THREAD');
+        }
+        break;
+
+      // RFC 4314 ACL (read-only)
+      case 'MYRIGHTS':
+      case 'GETACL':
+      case 'LISTRIGHTS':
+      case 'SETACL':
+      case 'DELETEACL':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} NO Not authenticated\r\n`);
+        } else if (cmd === 'MYRIGHTS') {
+          await handleMyRights(session, tag, args);
+        } else if (cmd === 'GETACL') {
+          await handleGetAcl(session, tag, args);
+        } else if (cmd === 'LISTRIGHTS') {
+          await handleListRights(session, tag, args);
+        } else {
+          await handleSetAcl(session, tag, args, cmd);
+        }
+        break;
+
+      // RFC 4978 COMPRESS=DEFLATE — authenticated / selected state only
+      case 'COMPRESS':
+        if (session.state === 'NOT_AUTHENTICATED') {
+          session.socket.write(`${tag} BAD COMPRESS is only valid after authentication\r\n`);
+        } else if (args.length !== 1 || args[0]?.toUpperCase() !== 'DEFLATE') {
+          session.socket.write(`${tag} BAD Unsupported compression mechanism (DEFLATE)\r\n`);
+        } else if (session.compressActive) {
+          session.socket.write(`${tag} NO [COMPRESSIONACTIVE] DEFLATE is already active\r\n`);
+        } else if (!session.beginCompress) {
+          session.socket.write(`${tag} NO [UNAVAILABLE] COMPRESS is not available\r\n`);
+        } else {
+          session.beginCompress(tag);
         }
         break;
 

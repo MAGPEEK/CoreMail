@@ -1,14 +1,17 @@
 import { useId, type ReactNode } from 'react';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useAccessStore } from '../store/access.js';
-import { canOutcome } from '../lib/permissions.js';
+import { actionOutcome, canOutcome, type AdminAction } from '../lib/permissions.js';
 import type { AdminArea, AreaAccess } from '../lib/adminAreas.js';
 import { useT } from '../i18n/useT.js';
 
-interface CanProps {
-  area: AdminArea;
-  /** Required access (default 'read'). */
-  access?: AreaAccess;
+type CanProps = CanBase & (
+  | { area: AdminArea; /** Required access (default 'read'). */ access?: AreaAccess; action?: never }
+  /** A narrow action (lib/permissions.ts ADMIN_ACTIONS), e.g. resetPassword for HELP_DESK. */
+  | { action: AdminAction; area?: never; access?: never }
+);
+
+interface CanBase {
   /**
    * What happens without the right:
    *  - 'disable' (default for write): rendered disabled with a tooltip when the
@@ -28,10 +31,13 @@ interface CanProps {
  * button/input inside is disabled natively, keyboard included) inside a span
  * that carries the tooltip — disabled controls do not show their own title.
  */
-export function Can({ area, access = 'read', mode, fallback = null, children }: CanProps) {
+export function Can({ area, access = 'read', action, mode, fallback = null, children }: CanProps) {
   const areas = useAccessStore((s) => s.areas);
+  const actions = useAccessStore((s) => s.actions);
   const t = useT();
-  const outcome = canOutcome(areas, area, access, mode ?? (access === 'write' ? 'disable' : 'hide'));
+  const outcome = action
+    ? actionOutcome(areas, actions, action, mode ?? 'disable')
+    : canOutcome(areas, area!, access, mode ?? (access === 'write' ? 'disable' : 'hide'));
   if (outcome === 'allow') return <>{children}</>;
   if (outcome === 'hide') return <>{fallback}</>;
   return (

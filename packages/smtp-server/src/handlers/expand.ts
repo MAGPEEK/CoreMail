@@ -1,5 +1,41 @@
 import { prisma } from '@coremail/storage';
 import { BARE_POSTMASTER } from '../core/types.js';
+import { domainVariants, isNonAscii } from '../core/idn.js';
+
+/** True when a domain may have a second IDN spelling (U-label or "xn--" A-label). */
+function isIdnDomain(domain: string): boolean {
+  return isNonAscii(domain) || /(^|\.)xn--/i.test(domain);
+}
+
+/**
+ * v8.1 (RFC 6531): maps an address with an internationalized domain onto the
+ * spelling of the local domain as configured (A-label "xn--…" or U-label), so
+ * mailbox lookups by e-mail match either form. Non-IDN and non-local addresses
+ * are returned unchanged (lower-cased domain).
+ */
+export async function canonicalRecipient(address: string): Promise<string> {
+  const at = address.lastIndexOf('@');
+  if (at <= 0) return address;
+  const domain = address.slice(at + 1).toLowerCase();
+  if (!isIdnDomain(domain)) return address;
+  const local = await prisma.domain.findFirst({
+    where: { name: { in: domainVariants(domain) }, active: true },
+    select: { name: true },
+  });
+  return local ? `${address.slice(0, at)}@${local.name.toLowerCase()}` : address;
+}
+
+/** True when the address belongs to an active local domain (either IDN spelling). */
+export async function isLocalDomainAddress(address: string): Promise<boolean> {
+  const at = address.lastIndexOf('@');
+  if (at <= 0 || at === address.length - 1) return false;
+  const domain = address.slice(at + 1).toLowerCase();
+  const found = await prisma.domain.findFirst({
+    where: { name: { in: domainVariants(domain) }, active: true },
+    select: { id: true },
+  });
+  return !!found;
+}
 
 /** Roles whose (oldest active) member receives mail for postmaster (RFC 5321 §4.5.1). */
 const POSTMASTER_ROLES = ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'] as const;
@@ -51,7 +87,7 @@ export async function expandRecipients(rcptTo: string[]): Promise<string[]> {
   const result: string[] = [];
 
   for (const email of rcptTo) {
-    const normalised = email.toLowerCase();
+    const normalised = (await canonicalRecipient(email)).toLowerCase();
 
     // 1. Email alias? → replace with target primary address
     const alias = await prisma.emailAlias.findFirst({

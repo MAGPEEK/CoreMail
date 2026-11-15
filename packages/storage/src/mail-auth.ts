@@ -8,7 +8,9 @@
  * Environment (optional):
  *   MAIL_AUTH_IP_MAX_FAILURES (50)   MAIL_AUTH_IP_WINDOW_SEC (900)   MAIL_AUTH_IP_LOCK_SEC (900)
  *   MAIL_AUTH_ACCOUNT_MAX_FAILURES (10)   MAIL_AUTH_ACCOUNT_WINDOW_SEC (900)   MAIL_AUTH_ACCOUNT_LOCK_SEC (300)
- *   MAIL_AUTH_LIMIT_PRIVATE_IPS=true — also apply the per-IP counter to private/loopback addresses
+ *   MAIL_AUTH_EXEMPT_CIDRS — comma-separated IPs/CIDRs exempt from the per-IP counter
+ *     (default: none; loopback is always exempt). Since v8.1 private addresses are
+ *     counted like public ones; MAIL_AUTH_LIMIT_PRIVATE_IPS is obsolete and ignored.
  *
  * Test seam: `globalThis.__mailAuthRedis` (like `globalThis.__prisma`) or
  * configureMailAuth({ redis, verifyPassword, ... }).
@@ -16,9 +18,10 @@
 import { randomBytes } from 'node:crypto';
 import { createLogger, getRedisClient, hashPassword, verifyPassword } from '@coremail/core';
 import { prisma } from './prisma/index.js';
+import { recordLastLogin } from './auth/last-login.js';
 import {
-  createMailCredentialVerifier, isLoopbackIp, isPrivateOrLoopbackIp,
-  type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
+  createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
+  type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
   type MailAuthRedis, type MailAuthResult, type MailCredentialVerifier,
 } from './mail-auth-core.js';
 
@@ -73,14 +76,15 @@ function resolveRedis(): MailAuthRedis | null {
 
 function getVerifier(): MailCredentialVerifier {
   if (!instance) {
-    const limitPrivate = process.env['MAIL_AUTH_LIMIT_PRIVATE_IPS'] === 'true';
+    const exempt = createExemptIpMatcher(process.env['MAIL_AUTH_EXEMPT_CIDRS']);
+    if (exempt.invalid.length) log.warn({ invalid: exempt.invalid }, 'mail-auth: ignoring invalid MAIL_AUTH_EXEMPT_CIDRS entries');
     instance = createMailCredentialVerifier({
       prisma: prisma as unknown as MailAuthPrisma,
       redis: resolveRedis(),
       verifyPassword,
       dummyHash,
       limits: limitsFromEnv(),
-      isExemptIp: limitPrivate ? isLoopbackIp : isPrivateOrLoopbackIp,
+      isExemptIp: exempt.isExempt,
       log,
       ...overrides,
     });
@@ -95,7 +99,10 @@ export async function verifyMailCredentials(
   ctx: MailAuthContext,
 ): Promise<MailAuthResult> {
   try {
-    return await getVerifier().verify(login, password, ctx);
+    const result = await getVerifier().verify(login, password, ctx);
+    // 8.x: User.lastLoginAt (throttled, fire-and-forget)
+    if (result.status === 'ok') void recordLastLogin(result.user.id);
+    return result;
   } catch (error) {
     log.error({ err: error, protocol: ctx.protocol }, 'mail-auth: unexpected error');
     return { status: 'error', error };
@@ -109,4 +116,32 @@ export async function mailAuthIpLockedFor(ip: string): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+let lockoutInstance: { lockout: LoginLockout; redis: MailAuthRedis | null } | null = null;
+
+/**
+ * v8.1: the mail-protocol lockout counters for other login front doors (the
+ * web/API login in @coremail/storage/auth). Same Redis keys, limits (MAIL_AUTH_*)
+ * and IP exemptions as verifyMailCredentials. Test seams: globalThis.__mailAuthRedis,
+ * else globalThis.__authRedis (the auth-module fake), else the shared Redis client.
+ */
+export function sharedLoginLockout(): LoginLockout {
+  const auth = (globalThis as { __authRedis?: unknown }).__authRedis;
+  const redis = globalThis.__mailAuthRedis !== undefined
+    ? globalThis.__mailAuthRedis
+    : auth ? auth as MailAuthRedis : resolveRedis();
+  if (!lockoutInstance || lockoutInstance.redis !== redis) {
+    const exempt = createExemptIpMatcher(process.env['MAIL_AUTH_EXEMPT_CIDRS']);
+    lockoutInstance = {
+      redis,
+      lockout: createLoginLockout({
+        redis,
+        limits: { ...limitsFromEnv(), ...(overrides.limits ?? {}) },
+        isExemptIp: overrides.isExemptIp ?? exempt.isExempt,
+        log,
+      }),
+    };
+  }
+  return lockoutInstance.lockout;
 }

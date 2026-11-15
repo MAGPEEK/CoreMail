@@ -18,7 +18,7 @@ import { buildSyncFilter } from './filter.js';
 import {
   attrFirst, attrId, attrValues, mailAttr, nameAttr, serviceBind, toLdapSettings, uidAttr,
 } from './client.js';
-import { LDAP_EXTERNAL_ID_PREFIX } from './authenticate.js';
+import { LDAP_EXTERNAL_ID_PREFIX, legacyOidcBinding } from './authenticate.js';
 
 const log = createLogger('auth:ldap:sync');
 
@@ -74,7 +74,7 @@ export async function syncLdapUsers(domainId: string): Promise<LdapSyncResult> {
 
     const existing = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, authSource: true, active: true, externalId: true, deactivatedBySync: true, displayName: true },
+      select: { id: true, authSource: true, active: true, externalId: true, oidcSubject: true, deactivatedBySync: true, displayName: true },
     });
 
     if (!existing) {
@@ -91,10 +91,12 @@ export async function syncLdapUsers(domainId: string): Promise<LdapSyncResult> {
 
     const takeover = existing.authSource === 'LOCAL' && s.allowLocalTakeover;
     if (existing.authSource !== 'LDAP' && !takeover) { result.conflicts.push(email); continue; }
-    if (existing.externalId && externalId && existing.externalId !== externalId) { result.conflicts.push(email); continue; }
+    // v8.1: an `oidc:` externalId (legacy SSO link) is no directory id — migrated below
+    const { directoryId, migrate } = legacyOidcBinding(existing);
+    if (directoryId && externalId && directoryId !== externalId) { result.conflicts.push(email); continue; }
     seen.add(email);
 
-    const data: Record<string, unknown> = {};
+    const data: Record<string, unknown> = { ...migrate };
     if (existing.displayName !== displayName) data['displayName'] = displayName;
     if (externalId && existing.externalId !== externalId) data['externalId'] = externalId;
     if (takeover) { data['authSource'] = 'LDAP'; data['passwordHash'] = null; }

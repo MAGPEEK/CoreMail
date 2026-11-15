@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, X, Search } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
+import { Modal } from '../components/Modal.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +48,14 @@ const COLOR_DOT: Record<NoteColor, string> = {
 
 const COLORS: NoteColor[] = ['YELLOW', 'BLUE', 'GREEN', 'PINK', 'PURPLE'];
 
+const COLOR_LABEL: Record<NoteColor, string> = {
+  YELLOW: 'Gelb',
+  BLUE:   'Blau',
+  GREEN:  'Grün',
+  PINK:   'Rosa',
+  PURPLE: 'Lila',
+};
+
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
@@ -87,35 +96,40 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
     onError: (e: Error) => toast.error(e.message),
   });
 
-  if (!isNew && isLoading) {
-    return (
-      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-        <div className="bg-white rounded-lg p-8 text-gray-400 text-sm">Laden…</div>
-      </div>
-    );
-  }
+  const loading = !isNew && isLoading;
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-      <div className={`rounded-lg shadow-xl w-full max-w-lg border ${COLOR_BG[form.color]}`}>
+    <Modal
+      onClose={onClose}
+      label={isNew ? 'Neue Notiz' : 'Notiz bearbeiten'}
+      overlayClassName="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      className={loading
+        ? 'bg-white rounded-lg p-8 text-gray-400 text-sm'
+        : `rounded-lg shadow-xl w-full max-w-lg border ${COLOR_BG[form.color]}`}
+    >
+      {loading ? (
+        <span role="status">Laden…</span>
+      ) : (
+      <>
         {/* Header bar */}
         <div className={`flex items-center justify-between px-4 py-2.5 rounded-t-lg ${COLOR_HEADER[form.color]}`}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" role="radiogroup" aria-label="Farbe">
             {/* Color picker */}
             {COLORS.map(c => (
-              <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
+              <button key={c} type="button" onClick={() => setForm(f => ({ ...f, color: c }))}
+                role="radio" aria-checked={form.color === c} aria-label={COLOR_LABEL[c]} title={COLOR_LABEL[c]}
                 className={`w-4 h-4 rounded-full border-2 transition-all ${COLOR_DOT[c]} ${
                   form.color === c ? 'border-gray-600 scale-125' : 'border-transparent hover:border-gray-400'
                 }`} />
             ))}
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={() => save.mutate()} disabled={save.isPending || !form.subject}
+            <button type="button" onClick={() => save.mutate()} disabled={save.isPending || !form.subject}
               className="text-xs px-3 py-1 bg-white/60 hover:bg-white/80 rounded text-gray-700 font-medium disabled:opacity-50 transition-colors">
               {save.isPending ? 'Speichern…' : 'Speichern'}
             </button>
-            <button onClick={onClose} className="ml-1 text-gray-500 hover:text-gray-700">
-              <X size={16} />
+            <button type="button" onClick={onClose} aria-label="Schließen" className="ml-1 text-gray-500 hover:text-gray-700">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -123,14 +137,17 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
         {/* Content */}
         <div className="p-4 space-y-3">
           <input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+            aria-label="Betreff" autoFocus
             className="w-full bg-transparent border-b border-gray-300 pb-1 text-base font-semibold text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-500"
             placeholder="Betreff" />
           <textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+            aria-label="Notiz"
             rows={10} className="w-full bg-transparent text-sm text-gray-700 placeholder-gray-400 focus:outline-none resize-none"
             placeholder="Notiz eingeben…" />
         </div>
-      </div>
-    </div>
+      </>
+      )}
+    </Modal>
   );
 }
 
@@ -194,7 +211,7 @@ export function NotesPage() {
                 {/* Note header */}
                 <div className={`rounded-t-lg px-3 py-1.5 flex items-center justify-between ${COLOR_HEADER[note.color]}`}>
                   <div className={`w-2.5 h-2.5 rounded-full ${COLOR_DOT[note.color]}`} />
-                  <button
+                  <button aria-label="Notiz löschen"
                     onClick={e => { e.stopPropagation(); del.mutate(note.id); }}
                     className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all">
                     <Trash2 size={12} />

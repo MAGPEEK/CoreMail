@@ -86,6 +86,41 @@ export const ROLE_PERMISSIONS: Readonly<Record<UserRoleName, readonly AreaPermis
   })) as Record<UserRoleName, readonly AreaPermission[]>,
 );
 
+/**
+ * Narrow admin actions (8.x) — rights finer than an area's read/write that the
+ * routes grant via `requireArea(area, extra)` / handler checks. The guards
+ * consult `hasAdminAction()` (mailboxes, backups), GET /admin/me/permissions
+ * reports them as `actions: { <area>: AdminAction[] }`, and the BCP shows
+ * exactly these actions (permissions.test.ts proves guards and map agree).
+ *
+ *  action             area        what (route)                                           granted to
+ *  ─────────────────  ──────────  ─────────────────────────────────────────────────────  ─────────────────────────────────────────
+ *  resetPassword      recipients  PUT /mailboxes/:id { password, revokeAppPasswords }    write on recipients + HELP_DESK (USER accounts only)
+ *  toggleActive       recipients  PUT /mailboxes/:id { active }                          write on recipients + HELP_DESK (USER accounts only)
+ *  revokeSessions     recipients  POST /mailboxes/:id/revoke-sessions                    write on recipients + HELP_DESK (USER accounts only)
+ *  backupMailboxData  servers     per-mailbox backup, job/archive download, MBOX import  ORGANIZATION_MANAGEMENT + COMPLIANCE_MANAGEMENT
+ *                                 (+ GET job/archive/user lists for COMPLIANCE)          (NOT implied by write on servers)
+ */
+export const ADMIN_ACTIONS = {
+  resetPassword:     { area: 'recipients', impliedByWrite: true },
+  toggleActive:      { area: 'recipients', impliedByWrite: true },
+  revokeSessions:    { area: 'recipients', impliedByWrite: true },
+  backupMailboxData: { area: 'servers',    impliedByWrite: false },
+} as const satisfies Record<string, { area: AdminArea; impliedByWrite: boolean }>;
+export type AdminAction = keyof typeof ADMIN_ACTIONS;
+
+/** Explicit action grants beyond the area matrix (ORGANIZATION_MANAGEMENT has every action). */
+export const ROLE_ACTION_GRANTS: Readonly<Partial<Record<UserRoleName, readonly AdminAction[]>>> = {
+  HELP_DESK:             ['resetPassword', 'toggleActive', 'revokeSessions'],
+  COMPLIANCE_MANAGEMENT: ['backupMailboxData'],
+};
+
+/** Request-body fields a role WITHOUT write on recipients may send to PUT /mailboxes/:id, per action. */
+export const ACTION_FIELDS: Readonly<Partial<Record<AdminAction, readonly string[]>>> = {
+  resetPassword: ['password', 'revokeAppPasswords'],
+  toggleActive:  ['active'],
+};
+
 export function isUserRole(v: unknown): v is UserRoleName {
   return typeof v === 'string' && (USER_ROLES as readonly string[]).includes(v);
 }
@@ -135,6 +170,38 @@ export function allowedAreas(role: string | undefined): Partial<Record<AdminArea
     if (a) out[area] = a;
   }
   return out;
+}
+
+/** May `role` perform the narrow admin `action` (see ADMIN_ACTIONS)? */
+export function hasAdminAction(role: string | undefined, action: AdminAction): boolean {
+  if (!role || !isUserRole(role) || role === 'USER') return false;
+  if (role === 'ORGANIZATION_MANAGEMENT') return true;
+  const def = ADMIN_ACTIONS[action];
+  if (def.impliedByWrite && areaAccess(role, def.area) === 'write') return true;
+  return (ROLE_ACTION_GRANTS[role] ?? []).includes(action);
+}
+
+/** `{ <area>: AdminAction[] }` for every action the role may perform (empty for USER). */
+export function allowedActions(role: string | undefined): Partial<Record<AdminArea, AdminAction[]>> {
+  const out: Partial<Record<AdminArea, AdminAction[]>> = {};
+  for (const action of Object.keys(ADMIN_ACTIONS) as AdminAction[]) {
+    if (!hasAdminAction(role, action)) continue;
+    (out[ADMIN_ACTIONS[action].area] ??= []).push(action);
+  }
+  return out;
+}
+
+/**
+ * Fields a role may send to PUT /mailboxes/:id: null = unrestricted (write on
+ * recipients), otherwise the union of ACTION_FIELDS of its granted actions.
+ */
+export function mailboxUpdateFields(role: string | undefined): ReadonlySet<string> | null {
+  if (areaAccess(role, 'recipients') === 'write') return null;
+  const fields = new Set<string>();
+  for (const [action, f] of Object.entries(ACTION_FIELDS) as Array<[AdminAction, readonly string[]]>) {
+    if (hasAdminAction(role, action)) f.forEach((x) => fields.add(x));
+  }
+  return fields;
 }
 
 /**

@@ -394,7 +394,7 @@ export function TasksPage() {
                   title="Doppelklick zum Bearbeiten"
                 >
                   {/* Checkbox */}
-                  <button
+                  <button aria-label={done ? 'Als offen markieren' : 'Als erledigt markieren'}
                     onClick={(e) => { e.stopPropagation(); toggleMutation.mutate({ id: task.id, completed: !done }); }}
                     className="shrink-0 transition-colors"
                     title={done ? 'Als offen markieren' : 'Als erledigt markieren'}
@@ -411,7 +411,7 @@ export function TasksPage() {
                         {task.subject}
                       </p>
                       {hasBody && (
-                        <button
+                        <button aria-label="Beschreibung ein-/ausblenden"
                           onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
                           className="text-gray-300 hover:text-gray-500 shrink-0"
                         >
@@ -440,7 +440,7 @@ export function TasksPage() {
                         <Mail size={11} className="text-blue-400" />
                       </span>
                     )}
-                    <button
+                    <button aria-label="Aufgabe löschen"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (window.confirm(`Aufgabe „${task.subject}" löschen?`)) {
@@ -452,7 +452,7 @@ export function TasksPage() {
                       <Trash2 size={14} />
                     </button>
                     {hasBody && (
-                      <button
+                      <button aria-label={isOpen ? 'Beschreibung ausblenden' : 'Beschreibung einblenden'}
                         onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
                         className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-600 transition-all"
                       >

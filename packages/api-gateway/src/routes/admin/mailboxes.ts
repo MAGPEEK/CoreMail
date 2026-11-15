@@ -4,21 +4,26 @@ import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
-import { canAssignRole, canManageAccount, USER_ROLES } from '../../lib/rbac.js';
+import { canAssignRole, canManageAccount, hasAdminAction, mailboxUpdateFields, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
+import { audit, auditContext } from '../../lib/audit.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
-// reset / enable-disable of USER accounts only — enforced in the handler).
+// reset / enable-disable of USER accounts only — enforced in the handler) and
+// (v8.1) POST /:id/revoke-sessions ("sign out everywhere", USER accounts only).
+// 8.x: who gets these extras comes from the action map (lib/rbac.ts ADMIN_ACTIONS).
 export const isHelpDeskReset = (role: string, req: Request): boolean =>
-  role === 'HELP_DESK' && req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path);
+  (req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path)
+    && (hasAdminAction(role, 'resetPassword') || hasAdminAction(role, 'toggleActive')))
+  || (req.method === 'POST' && /^\/[^/]+\/revoke-sessions\/?$/.test(req.path) && hasAdminAction(role, 'revokeSessions'));
 adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
 
 // Fields of a user that may be returned to admins (never passwordHash).
 const PUBLIC_USER_SELECT = {
   id: true, email: true, displayName: true, role: true, active: true,
   quotaBytes: true, usedBytes: true, domainId: true, authSource: true, externalId: true,
-  createdAt: true, updatedAt: true,
+  createdAt: true, updatedAt: true, lastLoginAt: true,
 } as const;
 
 const ROLE_ENUM = z.enum(USER_ROLES);
@@ -45,7 +50,7 @@ async function calcUsedBytes(userId: string): Promise<number> {
 // updated in the user record at the same time (lazy sync).
 adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
+    select: { id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true, lastLoginAt: true },
     orderBy: { email: 'asc' },
   });
 
@@ -184,8 +189,8 @@ const UpdateMailboxSchema = z.object({
   revokeAppPasswords: z.boolean().optional(),
 }).strict();
 
-// Fields HELP_DESK may change (password reset + enable/disable).
-const HELP_DESK_FIELDS = new Set(['password', 'revokeAppPasswords', 'active']);
+// Fields a role WITHOUT write on recipients may change come from its actions
+// (HELP_DESK: password reset + enable/disable) — lib/rbac.ts mailboxUpdateFields().
 
 // PUT /api/v1/admin/mailboxes/:id
 adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
@@ -199,7 +204,8 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   // v6 escalation guards
   const actor = req.apiUser!;
   const isSelf = actor.userId === id;
-  if (actor.role === 'HELP_DESK' && Object.keys(parsed.data).some((k) => !HELP_DESK_FIELDS.has(k))) {
+  const limitedFields = mailboxUpdateFields(actor.role);
+  if (limitedFields && Object.keys(parsed.data).some((k) => !limitedFields.has(k))) {
     forbidden(res, 'Help Desk may only reset passwords or enable/disable accounts'); return;
   }
   if (!canAssignRole(actor.role, parsed.data.role, user.role)) {
@@ -270,6 +276,30 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// POST /api/v1/admin/mailboxes/:id/revoke-sessions — "sign out everywhere" (v8.1)
+// Replaces the removed DELETE /auth/sessions/admin/:userId. Ends every web/API
+// session of the user (refresh tokens deleted, access tokens rejected via the
+// revocation marks, live SSE/EAS/JMAP connections closed through
+// publishUserAuthChange). App passwords are kept — revoke them via a password
+// reset with revokeAppPasswords.
+adminMailboxesRouter.post('/:id/revoke-sessions', async (req: Request, res: Response) => {
+  const { id } = req.params as { id: string };
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = req.apiUser!;
+  if (actor.userId !== id && !canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may sign out admin accounts'); return;
+  }
+  const r = await revokeAllSessions(id, { reason: 'admin-revoke-sessions' });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.sessions.revoke', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { sessionsRevoked: r.sessions },
+    ...auditContext(req),
+  });
+  res.json({ ok: true, sessionsRevoked: r.sessions });
+});
+
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 
 // GET /api/v1/admin/mailboxes/:id/delegates
@@ -300,15 +330,26 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  const user = await prisma.user.findUnique({ where: { id } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
   if (parsed.data.granteeId === id) { res.status(400).json({ error: 'User cannot delegate to themselves' }); return; }
+
+  // A delegation is access to the owner's mail: the same rule as for modifying
+  // the account applies (admin mailboxes are ORGANIZATION_MANAGEMENT-only), and
+  // a non-ORG admin must never grant mailbox access to themselves.
+  const actor = req.apiUser!;
+  if (!canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may delegate access to admin mailboxes'); return;
+  }
+  if (parsed.data.granteeId === actor.userId && actor.role !== 'ORGANIZATION_MANAGEMENT') {
+    forbidden(res, 'Admins may not grant mailbox access to themselves'); return;
+  }
 
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
   // v6: unknown grantee used to crash with a Prisma FK error
-  const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true } });
+  const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true, email: true } });
   if (!grantee) { res.status(404).json({ error: 'Grantee not found' }); return; }
 
   // Upsert: update if exists, create if not
@@ -322,6 +363,12 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
       grantedBy: req.apiUser!.userId,
     },
   });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.delegate.grant', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { owner: user.email, grantee: grantee.email, granteeId: grantee.id, permission: parsed.data.permission },
+    ...auditContext(req),
+  });
   res.status(201).json(delegate);
 });
 
@@ -329,10 +376,24 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
 adminMailboxesRouter.delete('/:id/delegates/:granteeId', async (req: Request, res: Response) => {
   const { id, granteeId } = req.params as { id: string; granteeId: string };
 
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = req.apiUser!;
+  if (!canManageAccount(actor.role, user.role)) {
+    forbidden(res, 'Only Organization Management may change delegations of admin mailboxes'); return;
+  }
+
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
-  await prisma.mailboxDelegate.deleteMany({ where: { mailboxId: mailbox.id, granteeId } });
+  const grantee = await prisma.user.findUnique({ where: { id: granteeId }, select: { email: true } });
+  const removed = await prisma.mailboxDelegate.deleteMany({ where: { mailboxId: mailbox.id, granteeId } });
+  audit({
+    actorId: actor.userId, actorEmail: actor.email,
+    action: 'mailbox.delegate.revoke', targetType: 'mailbox', targetId: id, targetName: user.email,
+    changes: { owner: user.email, grantee: grantee?.email ?? granteeId, granteeId, removed: removed.count },
+    ...auditContext(req),
+  });
   res.json({ ok: true });
 });
 

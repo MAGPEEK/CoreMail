@@ -8,14 +8,19 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS } from '@coremail/storage';
+import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, type SenderAuth } from '@coremail/storage';
+import { bounceUnknownLocal } from '../handlers/local-delivery.js';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
-import { expandRecipients, isPostmasterAddress } from '../handlers/expand.js';
+import { expandRecipients, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
+import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
+import { dsnForRecipients } from '../core/dsn-params.js';
 import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
-import { buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS } from '../handlers/trace.js';
+import {
+  buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS, stripOwnAuthResults, sanitizeAuthHeaders,
+} from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import {
   callConnectionFilter,
@@ -35,13 +40,19 @@ const SECURITY_FILTER_URL =
 // ── RFC 822 lightweight header extraction (regex, no full parse) ──────────────
 function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
   const end = raw.indexOf('\r\n\r\n');
-  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('binary');
+  // UTF-8 header fields (RFC 6532, SMTPUTF8 mail) are decoded as UTF-8.
+  const text = raw.slice(0, end > 0 ? end : Math.min(raw.length, 8192)).toString('utf8');
   const subjectMatch = /^Subject:\s*(.+?)(?=\r?\n\S|\r?\n\r?\n|$)/im.exec(text);
   const msgIdMatch   = /^Message-ID:\s*([^\r\n]+)/im.exec(text);
   return {
     subject:   (subjectMatch?.[1] ?? '').replace(/\r?\n[ \t]/g, ' ').trim(),
     messageId: (msgIdMatch?.[1] ?? '').trim(),
   };
+}
+
+/** JSON with every non-ASCII character \u-escaped (safe as an HTTP header value). */
+export function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 // ── onConnect ─────────────────────────────────────────────────────────────────
@@ -100,7 +111,8 @@ async function onRcptTo(
     if (settings && settings.localDeliveryEnabled === false) {
       return '5.7.1 Local delivery is disabled by administrator';
     }
-    const exists = await verifyRecipient(to);
+    // v8.1: an IDN domain matches the local domain in either spelling.
+    const exists = await verifyRecipient(await canonicalRecipient(to));
     if (!exists) return '5.1.1 User unknown';
   } catch (err) {
     log.error({ err, to }, 'verifyRecipient error');
@@ -125,9 +137,11 @@ async function onMessage(
   ip: string,
   meta?: MessageMeta,
 ): Promise<void> {
+  const hostname = meta?.hostname ?? process.env['SMTP_HOSTNAME'] ?? 'mail.localhost';
   // Internal CoreMail headers (quarantine-release trace) are never accepted
-  // from outside — strip them before filtering, quarantine or delivery.
-  const stripped = stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS);
+  // from outside — strip them before filtering, quarantine or delivery. Same
+  // for Authentication-Results fields carrying our authserv-id (RFC 8601 §5).
+  const stripped = stripOwnAuthResults(stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS), hostname);
 
   // RFC 5321 §6.3: loop detection by hop count.
   if (countReceived(stripped) > MAX_RECEIVED_HOPS) {
@@ -158,11 +172,17 @@ async function onMessage(
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
-      'X-Filter-Context': JSON.stringify({
+      // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
+      // ASCII-only JSON: an HTTP header value cannot carry raw UTF-8
+      // (SMTPUTF8 addresses) — non-ASCII characters are \u-escaped.
+      'X-Filter-Context': asciiJson(filterContext({
         senderIp: ip,
         mailFrom: from,
-        rcptTo: to[0] ?? '',
-      }),
+        rcpts: to,
+        hostname,
+        ...(meta?.helo ? { helo: meta.helo } : {}),
+        ...(authUser ? { authUser: authUser.email } : {}),
+      })),
     },
     body: raw,
     signal: AbortSignal.timeout(30_000),
@@ -212,9 +232,16 @@ async function onMessage(
     throw new Error(`451 4.7.1 ${filterResult.reason ?? 'Temporary content filter failure'}`);
   }
 
+  // RFC 8601: our verdict travels with the stored message.
+  const authHeaders = filterResult.authHeaders ? sanitizeAuthHeaders(filterResult.authHeaders) : '';
+  const delivered = authHeaders ? prependHeader(raw, authHeaders) : raw;
+  const senderAuth: SenderAuth = authUser
+    ? { authenticatedSender: from }
+    : { verifiedDomains: filterResult.verifiedDomains ?? [] };
+
   if (filterResult.action === 'quarantine') {
     await quarantineMessage({
-      raw,
+      raw: delivered,
       from,
       recipients: to,
       reason:     filterResult.virusName ? 'VIRUS' : 'SPAM',
@@ -229,6 +256,7 @@ async function onMessage(
   }
 
   // 2. Expand distribution groups → individual delivery addresses
+  //    (IDN domains are mapped onto the configured spelling — v8.1).
   const deliveryAddresses = await expandRecipients(to);
 
   // 3. Split into local vs. external (Distribution groups may contain external
@@ -238,41 +266,102 @@ async function onMessage(
   const localDeliveries:    string[] = [];
   const externalDeliveries: string[] = [];
   for (const rcpt of deliveryAddresses) {
-    const domain = rcpt.split('@')[1]?.toLowerCase();
-    if (!domain) { localDeliveries.push(rcpt); continue; }
-    const localDomain = await prisma.domain.findFirst({
-      where: { name: domain, active: true },
-    });
-    if (localDomain) localDeliveries.push(rcpt);
-    else             externalDeliveries.push(rcpt);
+    if (!rcpt.includes('@')) { localDeliveries.push(rcpt); continue; }
+    if (await isLocalDomainAddress(rcpt)) localDeliveries.push(rcpt);
+    else                                  externalDeliveries.push(rcpt);
   }
+  const dsn = meta?.envelope?.dsn;
 
   // 3. Local storage + external forwarding. 250 only when every part is done;
   //    a failure answers 451 and the retry skips what was already delivered
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
   const txKey = deliveryKey(from, receivedRaw);
+  const unknownRcpts: string[] = [];
   await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
-    storeLocal: (rcpt) => storeInboundMessage(raw, {
-      fromAddr: from,
-      rcptTo: rcpt,
-      deliveryKey: txKey,
-      toJunk: filterResult.junkFolder ?? false,
-      ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
-    }),
+    // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
+    storeLocal: async (rcpt) => {
+      const result = await storeInboundMessage(delivered, {
+        fromAddr: from,
+        rcptTo: rcpt,
+        deliveryKey: txKey,
+        toJunk: filterResult.junkFolder ?? false,
+        senderAuth,
+        ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
+      });
+      if (result === 'unknown') unknownRcpts.push(rcpt);
+    },
     enqueueExternal: async (rcpts) => {
+      const jobDsn = dsnForRecipients(dsn, rcpts);
       await enqueueOutbound({
         messageId:  crypto.randomUUID(),
         from,
         to:         rcpts,
-        rawMessage: raw.toString('base64'),
+        rawMessage: delivered.toString('base64'),
+        ...(jobDsn ? { dsn: jobDsn } : {}),
       });
       log.info({ from, external: rcpts, originalTo: to }, 'External targets are forwarded via the outbound queue');
     },
   });
 
-  // 4. Handle resource mailbox auto-accept for calendar invitations
-  await processResourceMailboxes(raw, to, from);
+  // 4. RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for the local recipients as
+  //    addressed. Not for mail filed as junk (no delivery confirmation to spammers).
+  if (dsn && !filterResult.junkFolder) {
+    await notifyLocalSuccess(from, to.filter((r) => !unknownRcpts.includes(r)), dsn, hostname, delivered);
+  }
+
+  // 5. A recipient verified at RCPT TO but gone at delivery time (deleted in
+  //    between) — the message was accepted (250), so the sender gets an NDR.
+  if (unknownRcpts.length > 0) {
+    await bounceUnknownLocal(raw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
+      log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
+  }
+}
+
+/** Sends the "delivered" DSN for the local recipients that asked for SUCCESS (never throws). */
+async function notifyLocalSuccess(
+  from: string,
+  to: string[],
+  dsn: NonNullable<NonNullable<MessageMeta['envelope']>['dsn']>,
+  hostname: string,
+  raw: Buffer,
+): Promise<void> {
+  try {
+    const local: string[] = [];
+    for (const rcpt of to) if (rcpt === BARE_POSTMASTER || await isLocalDomainAddress(rcpt)) local.push(rcpt);
+    const original = rawSubjectAndId(raw);
+    await sendSuccessDsn({
+      from, rcpts: local, action: 'delivered', dsn, hostname, originalRaw: raw,
+      subject: original.subject, messageId: original.messageId, deliverExternal: true,
+    });
+  } catch (err) {
+    log.warn({ err, from }, 'Success DSN not sent');
+  }
+}
+
+
+/** Most recipients listed in X-Filter-Context (HTTP header size limit, 16 KB). */
+export const FILTER_CONTEXT_MAX_RCPTS = 100;
+
+/**
+ * Pure: the content-filter context. At most FILTER_CONTEXT_MAX_RCPTS recipients
+ * are listed (`rcptCount` carries the total) — a long list would exceed the
+ * HTTP header limit (431) and defer the message forever.
+ */
+export function filterContext(c: {
+  senderIp: string; mailFrom: string; rcpts: string[]; hostname: string; helo?: string; authUser?: string;
+}): Record<string, unknown> {
+  const capped = c.rcpts.length > FILTER_CONTEXT_MAX_RCPTS;
+  return {
+    senderIp: c.senderIp,
+    mailFrom: c.mailFrom,
+    rcptTo: c.rcpts[0] ?? '',
+    rcpts: capped ? c.rcpts.slice(0, FILTER_CONTEXT_MAX_RCPTS) : c.rcpts,
+    ...(capped ? { rcptCount: c.rcpts.length } : {}),
+    hostname: c.hostname,
+    ...(c.helo ? { helo: c.helo } : {}),
+    ...(c.authUser ? { authUser: c.authUser } : {}),
+  };
 }
 
 // ── Exported handler object ───────────────────────────────────────────────────
@@ -286,7 +375,7 @@ export const inboundHandlers: SmtpHandlers = {
 
 // ── Helper: verifyRecipient ───────────────────────────────────────────────────
 
-async function verifyRecipient(rcptTo: string): Promise<boolean> {
+export async function verifyRecipient(rcptTo: string): Promise<boolean> {
   const email = rcptTo.toLowerCase();
   // RFC 5321 §4.5.1: <Postmaster> MUST be accepted.
   if (email === BARE_POSTMASTER) return true;
@@ -326,148 +415,6 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 // used by the outbound queue worker and the submission handler
 // (local delivery needs alias resolution BEFORE storeInboundMessage).
 
-// ── Helper: processResourceMailboxes ─────────────────────────────────────────
-
-/**
- * Auto-accept/decline calendar invitations for resource mailboxes.
- * Parses iCal data from the message and creates/declines bookings accordingly.
- */
-async function processResourceMailboxes(
-  rawMessage: Buffer,
-  rcptTo: string[],
-  mailFrom: string,
-): Promise<void> {
-  for (const email of rcptTo) {
-    const resource = await prisma.resourceMailbox.findFirst({
-      where: { email: email.toLowerCase(), active: true },
-      include: { calendar: true },
-    });
-
-    if (!resource) continue;
-
-    // Extract iCal data from message (look for VEVENT in text/calendar attachment)
-    const rawText = rawMessage.toString('utf8');
-    const icalMatch = rawText.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/);
-    if (!icalMatch) continue;
-
-    const icalData = icalMatch[0];
-
-    // Extract essential fields
-    const uidMatch = /^UID:(.+)$/m.exec(icalData);
-    const dtStartMatch = /^DTSTART[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
-    const dtEndMatch = /^DTEND[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(icalData);
-    const summaryMatch = /^SUMMARY:(.+)$/m.exec(icalData);
-    const methodMatch = /^METHOD:(.+)$/m.exec(icalData);
-
-    if (!uidMatch || !dtStartMatch || !dtEndMatch) continue;
-
-    const uid = uidMatch[1]?.trim() ?? '';
-    const summary = summaryMatch?.[1]?.trim() ?? 'Meeting';
-    const method = methodMatch?.[1]?.trim() ?? 'REQUEST';
-
-    // Parse dates (basic ISO conversion)
-    const parseDtStamp = (s: string): Date => {
-      const clean = s.replace(/Z$/, '');
-      if (clean.length === 8) {
-        return new Date(`${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`);
-      }
-      return new Date(
-        `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}T` +
-          `${clean.slice(9, 11)}:${clean.slice(11, 13)}:${clean.slice(13, 15)}Z`,
-      );
-    };
-
-    const dtStart = parseDtStamp(dtStartMatch[1] ?? '');
-    const dtEnd = parseDtStamp(dtEndMatch[1] ?? '');
-
-    if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
-
-    // Handle CANCEL method — remove booking
-    if (method === 'CANCEL') {
-      await prisma.resourceBooking.deleteMany({ where: { uid } });
-      log.info({ resource: email, uid }, 'Resource booking cancelled');
-      continue;
-    }
-
-    if (!resource.autoAccept || resource.requireApproval) {
-      // Store as PENDING for manual approval
-      const calendarId = resource.calendar?.id;
-      if (!calendarId) continue;
-      await prisma.resourceBooking.upsert({
-        where: { uid },
-        create: {
-          calendarId,
-          uid,
-          summary,
-          organizer: mailFrom,
-          dtStart,
-          dtEnd,
-          status: 'PENDING',
-          icalData,
-        },
-        update: { dtStart, dtEnd, summary, status: 'PENDING', icalData },
-      });
-      log.info({ resource: email, uid }, 'Resource booking pending approval');
-      continue;
-    }
-
-    // Check for conflicts
-    if (resource.autoDeclineConflict) {
-      const conflict = await prisma.resourceBooking.findFirst({
-        where: {
-          calendar: { resourceId: resource.id },
-          uid: { not: uid },
-          status: { in: ['ACCEPTED', 'TENTATIVE'] },
-          dtStart: { lt: dtEnd },
-          dtEnd: { gt: dtStart },
-        },
-      });
-
-      if (conflict) {
-        log.info(
-          { resource: email, uid, conflict: conflict.uid },
-          'Resource booking declined — conflict',
-        );
-        const calendarId = resource.calendar?.id;
-        if (calendarId) {
-          await prisma.resourceBooking.upsert({
-            where: { uid },
-            create: {
-              calendarId,
-              uid,
-              summary,
-              organizer: mailFrom,
-              dtStart,
-              dtEnd,
-              status: 'DECLINED',
-              icalData,
-            },
-            update: { status: 'DECLINED' },
-          });
-        }
-        continue;
-      }
-    }
-
-    // Auto-accept
-    const calendarId = resource.calendar?.id;
-    if (!calendarId) continue;
-
-    await prisma.resourceBooking.upsert({
-      where: { uid },
-      create: {
-        calendarId,
-        uid,
-        summary,
-        organizer: mailFrom,
-        dtStart,
-        dtEnd,
-        status: 'ACCEPTED',
-        icalData,
-      },
-      update: { dtStart, dtEnd, summary, status: 'ACCEPTED', icalData },
-    });
-
-    log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
-  }
-}
+// Resource mailboxes (room/equipment bookings) are processed inside
+// storeInboundMessage() for every delivery path — see handlers/resource-booking.ts.
+export { processResourceMailboxes } from '../handlers/resource-booking.js';

@@ -330,7 +330,7 @@ function ProvidersSection() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
-        <button onClick={() => refetch()} className="p-2 text-gray-500 border border-gray-300 rounded hover:bg-gray-50"><RefreshCw size={13} /></button>
+        <button aria-label="Aktualisieren" onClick={() => refetch()} className="p-2 text-gray-500 border border-gray-300 rounded hover:bg-gray-50"><RefreshCw size={13} /></button>
         <button onClick={() => setShowForm(true)}
           className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90">
           <Plus size={14} /> Provider hinzufügen
@@ -365,16 +365,16 @@ function ProvidersSection() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <button onClick={() => void test(p.id)} className="p-1.5 text-gray-400 hover:text-accent" title="Discovery testen">
+                  <button aria-label="Discovery testen" onClick={() => void test(p.id)} className="p-1.5 text-gray-400 hover:text-accent" title="Discovery testen">
                     <TestTube2 size={13} />
                   </button>
                   <a href={p.discoveryUrl} target="_blank" rel="noopener noreferrer" className="p-1.5 text-gray-400 hover:text-blue-600" title="Discovery-URL öffnen">
                     <ExternalLink size={13} />
                   </a>
-                  <button onClick={() => setEditingProvider(p)} className="p-1.5 text-gray-400 hover:text-accent" title="Bearbeiten">
+                  <button aria-label="Bearbeiten" onClick={() => setEditingProvider(p)} className="p-1.5 text-gray-400 hover:text-accent" title="Bearbeiten">
                     <Edit2 size={13} />
                   </button>
-                  <button onClick={() => { if (confirm(`Provider „${p.name}" löschen?`)) deleteMut.mutate(p.id); }}
+                  <button aria-label="Löschen" onClick={() => { if (confirm(`Provider „${p.name}" löschen?`)) deleteMut.mutate(p.id); }}
                     className="p-1.5 text-gray-400 hover:text-red-500" title="Löschen">
                     <Trash2 size={13} />
                   </button>
@@ -390,7 +390,7 @@ function ProvidersSection() {
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-gray-500 shrink-0">Redirect-URI:</span>
                 <code className="font-mono text-gray-700 bg-gray-50 px-2 py-0.5 rounded truncate">{p.redirectUri}</code>
-                <button onClick={() => { void navigator.clipboard.writeText(p.redirectUri); toast.success('Kopiert'); }}
+                <button aria-label="Kopieren" onClick={() => { void navigator.clipboard.writeText(p.redirectUri); toast.success('Kopiert'); }}
                   className="p-1 text-gray-400 hover:text-accent" title="Kopieren"><Copy size={12} /></button>
               </div>
               {results[p.id] && <DiscoveryBox r={results[p.id]!} />}

@@ -51,6 +51,10 @@ export interface ContentFilterResult {
   junkFolder?: boolean;
   spamScore?: number;
   virusName?: string;
+  /** `Received-SPF` / `Authentication-Results` lines to prepend on delivery. */
+  authHeaders?: string;
+  /** Domains the message is authenticated for (DMARC/SPF/DKIM pass). */
+  verifiedDomains?: string[];
 }
 
 /** Body limit of `/check/content` (security-filter: express.raw limit '52mb'). */
@@ -93,6 +97,10 @@ export function interpretContentFilterResponse(
       ...(typeof b['junkFolder'] === 'boolean' ? { junkFolder: b['junkFolder'] } : {}),
       ...(typeof b['spamScore'] === 'number' ? { spamScore: b['spamScore'] } : {}),
       ...(typeof b['virusName'] === 'string' ? { virusName: b['virusName'] } : {}),
+      ...(typeof b['authHeaders'] === 'string' && b['authHeaders'] ? { authHeaders: b['authHeaders'] } : {}),
+      ...(Array.isArray(b['verifiedDomains'])
+        ? { verifiedDomains: (b['verifiedDomains'] as unknown[]).filter((d): d is string => typeof d === 'string' && /^[a-z0-9.-]{1,253}$/i.test(d)).map((d) => d.toLowerCase()) }
+        : {}),
     },
   };
 }

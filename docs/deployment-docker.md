@@ -2,6 +2,12 @@
 
 > **6-container architecture** — all CoreMail services run in a single app container (`magpeek/coremail-app`), managed by `supervisord`. Rspamd, ClamAV, PostgreSQL, Redis and MinIO run in separate standard images.
 
+> **Compose variants:** besides the standard `docker-compose.yml` described here there are
+> `docker-compose.minimal.yml` (coremail + postgres + redis, 1–50 users) and
+> `docker-compose.full.yml` (everything, resource limits, log rotation, optional
+> `minio`/`backup`/`geoip` profiles). Comparison, quick start per variant, storage on a separate
+> disk / NAS, backups and switching variants: **[docker-compose.md](docker-compose.md)**.
+
 ---
 
 ## Contents
@@ -88,6 +94,8 @@ cd CoreMail
 ### 2. Configuration
 
 ```bash
+bash scripts/setup.sh                      # standard; --variant minimal|full: docs/docker-compose.md
+# or by hand:
 cp .env.example .env
 ```
 
@@ -231,6 +239,14 @@ LOG_LEVEL=info                  # error | warn | info | debug
 BACKUP_SCHEDULE=0 2 * * *       # daily at 02:00 UTC
 BACKUP_RETENTION_DAYS=30
 RETENTION_SCHEDULE=0 3 * * *    # Managed Folder Assistant, daily at 03:00 UTC
+BACKUP_ENCRYPTION_KEY=<openssl rand -hex 32>   # backups are AES-256-GCM encrypted — keep a copy OFF the server
+
+# ─── Security (docs/deployment-security.md) ─────────────────────────────────
+RSPAMD_CONTROLLER_PASSWORD=<openssl rand -hex 20>
+# COREMAIL_DB_USER=coremail_app            # non-superuser DB role — fresh databases only (setup.sh)
+# COREMAIL_DB_PASSWORD=<openssl rand -hex 20>
+# COREMAIL_ALLOW_SCHEMA_DATA_LOSS=false    # true for ONE start: destructive schema update after a pg_dump
+# RSPAMD_NET_PREFIX=10.253.253             # app <-> rspamd /29 network
 
 # ─── VAPID Web Push — optional ───────────────────────────────────────────────
 # Generate keys: npx web-push generate-vapid-keys
@@ -288,6 +304,9 @@ MAXMIND_LICENSE_KEY=
 ---
 
 ## Data management
+
+Bind mounts, a separate disk, NFS/SMB, ownership, moving data and sizing:
+[docker-compose.md → Storage](docker-compose.md#storage).
 
 ### Docker volumes
 

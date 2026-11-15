@@ -2,6 +2,9 @@
  * Regression (e2e 7.0.0): /auth/app-passwords accepted the access token of a
  * logged-out session (only the JWT signature was checked) — a stolen access
  * token could mint a persistent app password after the victim logged out.
+ * v8.1: creating an app password needs re-authentication (currentPassword or
+ * mfaCode) and sends a security notice to the user's INBOX; the old admin
+ * session-revocation endpoint answers 410.
  * Run: node --import tsx --test src/router/app-passwords.test.ts  (in packages/auth-service)
  */
 import { test, before, after } from 'node:test';
@@ -12,6 +15,7 @@ import type { Server } from 'node:http';
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
 process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
+delete process.env['MFA_ENCRYPTION_KEY'];
 
 const { createFakePrisma, createFakeRedis } = await import('@coremail/storage/auth/testing');
 const db = createFakePrisma();
@@ -19,15 +23,22 @@ const db = createFakePrisma();
 (globalThis as Record<string, unknown>)['__authRedis'] = createFakeRedis();
 
 const core = await import('@coremail/core');
+const sauth = await import('@coremail/storage/auth');
 const { createApp } = await import('../app.js');
 
+const notices: Array<{ userId: string; subject: string; bodyText: string }> = [];
+sauth.setSecurityNotifier(async (n) => { notices.push(n); });
+
 const PW = 'correct horse battery';
+const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
 let server: Server;
 let base = '';
 
 before(async () => {
   await db.serverSettings.create({ data: { id: 'singleton', publicHostname: 'mail.example.org' } });
   await db.user.create({ data: { email: 'bob@example.com', passwordHash: await core.hashPassword(PW) } });
+  const carol = await db.user.create({ data: { email: 'carol@example.com', passwordHash: await core.hashPassword(PW) } });
+  await db.userMfa.create({ data: { userId: carol['id'], totpSecret: sauth.encryptMfaSecret(SECRET), totpEnabled: true } });
   await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', () => resolve()); });
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -46,10 +57,69 @@ test('app passwords: live session may create; after logout the access token is r
   const login = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
   assert.equal(login.status, 200, JSON.stringify(login.body));
   const token = String(login.body['accessToken']);
-  assert.equal((await call('POST', '/auth/app-passwords', { name: 'phone' }, token)).status, 201);
+  const before = db.appPassword.rows.length;
+  assert.equal((await call('POST', '/auth/app-passwords', { name: 'phone', currentPassword: PW }, token)).status, 201);
 
   assert.equal((await call('POST', '/auth/logout', { refreshToken: login.body['refreshToken'] })).status, 200);
-  assert.equal((await call('POST', '/auth/app-passwords', { name: 'attacker' }, token)).status, 401);
+  assert.equal((await call('POST', '/auth/app-passwords', { name: 'attacker', currentPassword: PW }, token)).status, 401);
   assert.equal((await call('GET', '/auth/app-passwords', undefined, token)).status, 401);
-  assert.equal(db.appPassword.rows.length, 1);
+  assert.equal(db.appPassword.rows.length, before + 1);
+});
+
+test('app passwords: creation needs re-authentication (REAUTH_REQUIRED / REAUTH_FAILED)', async () => {
+  const login = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
+  const token = String(login.body['accessToken']);
+  const before = db.appPassword.rows.length;
+
+  const missing = await call('POST', '/auth/app-passwords', { name: 'no-reauth' }, token);
+  assert.equal(missing.status, 403);
+  assert.equal(missing.body['code'], 'REAUTH_REQUIRED');
+
+  const wrong = await call('POST', '/auth/app-passwords', { name: 'wrong', currentPassword: 'nope' }, token);
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body['code'], 'REAUTH_FAILED');
+
+  const badCode = await call('POST', '/auth/app-passwords', { name: 'wrong', mfaCode: '123456' }, token);
+  assert.equal(badCode.status, 403);
+  assert.equal(db.appPassword.rows.length, before, 'nothing created');
+});
+
+test('app passwords: creation sends a security notice to the own INBOX', async () => {
+  const login = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
+  const token = String(login.body['accessToken']);
+  const bob = db.user.rows.find((u) => u['email'] === 'bob@example.com')!;
+  notices.length = 0;
+  const r = await call('POST', '/auth/app-passwords', { name: 'Thunderbird', currentPassword: PW }, token);
+  assert.equal(r.status, 201);
+  assert.match(String(r.body['password']), /^[0-9A-F]{4}(-[0-9A-F]{4}){3}$/);
+  await new Promise((res) => setImmediate(res));
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.userId, bob['id']);
+  assert.match(notices[0]!.subject, /app password/i);
+  assert.match(notices[0]!.bodyText, /Thunderbird/);
+  assert.ok(!notices[0]!.bodyText.includes(String(r.body['password'])), 'the secret is never mailed');
+});
+
+test('app passwords: an MFA user can re-authenticate with a TOTP code instead of the password', async () => {
+  const login = await call('POST', '/auth/login', { email: 'carol@example.com', password: PW });
+  assert.equal(login.body['mfaRequired'], true);
+  const verified = await call('POST', '/auth/mfa/verify', { challengeToken: login.body['challengeToken'], code: sauth.totpCode(SECRET) });
+  assert.equal(verified.status, 200, JSON.stringify(verified.body));
+  const token = String(verified.body['accessToken']);
+  // the login code was consumed (replay protection) — use the next step's code
+  const next = sauth.totpCode(SECRET, Date.now() + 30_000);
+  const r = await call('POST', '/auth/app-passwords', { name: 'tablet', mfaCode: next }, token);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+});
+
+test('sessions: the old admin revoke endpoint is gone (410), even for admins', async () => {
+  const admin = await db.user.create({ data: { email: 'admin@example.com', passwordHash: await core.hashPassword(PW), role: 'ORGANIZATION_MANAGEMENT' } });
+  const bob = db.user.rows.find((u) => u['email'] === 'bob@example.com')!;
+  const login = await call('POST', '/auth/login', { email: 'admin@example.com', password: PW });
+  const sessionsBefore = db.session.rows.filter((s) => s['userId'] === bob['id']).length;
+  const r = await call('DELETE', `/auth/sessions/admin/${String(bob['id'])}`, undefined, String(login.body['accessToken']));
+  assert.equal(r.status, 410);
+  assert.equal(r.body['code'], 'ENDPOINT_REMOVED');
+  assert.equal(db.session.rows.filter((s) => s['userId'] === bob['id']).length, sessionsBefore, 'nothing revoked');
+  assert.ok(admin['id']);
 });

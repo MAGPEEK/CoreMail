@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Search, Download, Loader2, ArrowRight, RefreshCw } from 'lucide-react';
-import { api } from '../api/client.js';
+import toast from 'react-hot-toast';
+import { api, downloadFile } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 
 interface TraceItem {
@@ -77,9 +78,15 @@ export function MessageTracePage() {
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / limit));
 
+  const [exporting, setExporting] = useState(false);
+  // Authenticated download (Authorization header) with the same filters as the
+  // table — window.open() could not send the token and dropped subject/status.
   function exportCsv() {
-    const url = `/api/v1/admin/message-trace/export?sender=${encodeURIComponent(sender)}&recipient=${encodeURIComponent(recipient)}&from=${fromDate}&to=${toDate}`;
-    window.open(url, '_blank');
+    const qs = new URLSearchParams({ sender, recipient, subject, status, from: fromDate, to: toDate });
+    setExporting(true);
+    downloadFile(`/admin/message-trace/export?${qs.toString()}`, 'message-trace.csv')
+      .catch((err: unknown) => { toast.error(err instanceof Error ? err.message : String(err)); })
+      .finally(() => setExporting(false));
   }
 
   const pageTitle       = lang === 'en' ? 'Message Trace'               : 'Nachrichtenablaufverfolgung';
@@ -185,9 +192,9 @@ export function MessageTracePage() {
         </div>
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <button onClick={exportCsv}
-              className="btn-secondary flex items-center gap-1.5 text-xs">
-              <Download size={13} /> {labelExport}
+            <button onClick={exportCsv} disabled={exporting}
+              className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-50">
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} {labelExport}
             </button>
             <button onClick={handleReset}
               className="btn-secondary flex items-center gap-1.5 text-xs text-gray-500">

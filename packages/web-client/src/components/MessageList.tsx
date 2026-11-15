@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
@@ -17,11 +17,27 @@ import { nextPageOffset, flattenPages, pageQuery } from '../lib/paging.js';
 import { toastError } from '../lib/errors.js';
 import { Modal } from './Modal.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
-import { showUndoToast } from './UndoToast.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
-import { MessageListSkeleton, EmptyInbox, EmptySearch } from './Skeleton.js';
+import { MessageListSkeleton, EmptyInbox, EmptySearch, EmptyFilter } from './Skeleton.js';
+import { MoveToFolderDialog } from './MoveToFolderDialog.js';
+import { SearchOperatorsHelp, SearchChips } from './SearchOperatorsHelp.js';
+import { useMailActions } from '../hooks/useMailActions.js';
+import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
+import type { MessageLocation } from '../lib/undo-stack.js';
+
+import { useT } from '../i18n/useT.js';
+
+/** Subject without reply/forward prefixes — groups a conversation for n/p. */
+function conversationKey(subject: string): string {
+  return subject.replace(/^\s*((re|aw|fwd?|wg|tr|rv|r)\s*(\[\d+\])?\s*:\s*)+/i, '').trim().toLowerCase();
+}
+
+/** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
+function hasOperatorSyntax(q: string): boolean {
+  return /(^|\s)-\S|"|\b[a-z_]+:/i.test(q);
+}
 
 interface Props {
   folderId: string;
@@ -65,6 +81,7 @@ function MessageRow({
   const avatarRef = useRef<HTMLDivElement>(null);
   const [showCard, setShowCard] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ariaKeys = useAriaKeys();
 
   const isUnread = !msg.flags.includes('\\Seen');
   const isFlagged = msg.flags.includes('\\Flagged');
@@ -86,8 +103,14 @@ function MessageRow({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      id={`msg-row-${msg.id}`}
       onClick={onClick}
+      onKeyDown={(e) => {
+        // role="button": Enter opens the row like a click (shortcut manager leaves it alone)
+        if (e.key === 'Enter' && e.target === e.currentTarget) onClick(e as unknown as React.MouseEvent);
+      }}
       onContextMenu={onContextMenu}
+      aria-current={selected ? 'true' : undefined}
       className={`w-full text-left px-3 ${py} border-b border-gray-100 dark:border-gray-700 transition-all duration-150 relative group cursor-pointer ${
         selected
           ? 'bg-accent/10 shadow-sm'
@@ -186,21 +209,23 @@ function MessageRow({
 
         {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
-          <button
+          <button aria-label="Archivieren"
+            aria-keyshortcuts={ariaKeys('mail.archive')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
             className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title="Archivieren"
           >
             <Archive size={13} />
           </button>
-          <button
+          <button aria-label="Löschen"
+            aria-keyshortcuts={ariaKeys('mail.delete')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
             className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90"
             title="Löschen"
           >
             <Trash2 size={13} />
           </button>
-          <button
+          <button aria-label={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
             className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
             title={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
@@ -250,7 +275,11 @@ export function MessageList({ folderId }: Props) {
   const qc = useQueryClient();
   const { selectedMessageId, setSelectedMessage, selectedIds, toggleSelection, selectAll, clearSelection, filter, setFilter, openCompose } = useUiStore();
   const { density } = useUiPrefs();
+  const t = useT();
+  const { runWithUndo, deletePermanently, setState } = useMailActions();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [moveTargets, setMoveTargets] = useState<MessageLocation[] | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [searchText, setSearchText] = useState('');
   const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -261,6 +290,7 @@ export function MessageList({ folderId }: Props) {
 
   // Global search from the TopBar navigates to /mail?q=… → run it as a mailbox-wide search
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const urlQuery = searchParams.get('q');
   useEffect(() => {
     if (urlQuery === null) return;
@@ -316,7 +346,6 @@ export function MessageList({ folderId }: Props) {
 
   const currentFolder = folders.find((f) => f.id === folderId);
   const isJunkFolder = currentFolder?.name === 'Junk';
-  const isTrashFolder = currentFolder?.name === 'Trash';
 
   const listMessages = useMemo(() => flattenPages(listQuery.data?.pages), [listQuery.data]);
   const searchMessages = useMemo(() => flattenPages(searchQuery.data?.pages), [searchQuery.data]);
@@ -372,35 +401,134 @@ export function MessageList({ folderId }: Props) {
     onSettled: invalidate,
   });
 
-  /** Runs a bulk action and shows the undo toast only after the server confirmed it. */
-  const bulkWithUndo = (body: { ids: string[]; action: string }, message: string | null, undoFolderId: string) => {
-    bulkMutation.mutate(body, {
-      onSuccess: () => {
-        if (!message) return;
-        showUndoToast({
-          message,
-          onUndo: () => bulkMutation.mutateAsync({ ids: body.ids, action: 'move', folderId: undoFolderId }),
-        });
-      },
-    });
+  // ── Targets + undoable actions (shared with the keyboard shortcuts) ─────────
+  const locate = (id: string): MessageLocation => ({
+    id, folderId: displayMessages.find((m) => m.id === id)?.folderId ?? folderId,
+  });
+  /** Checked messages, else the open one. */
+  const currentTargets = (): MessageLocation[] => {
+    const ids = useUiStore.getState().selectedIds.size > 0
+      ? [...useUiStore.getState().selectedIds]
+      : selectedMessageId ? [selectedMessageId] : [];
+    return ids.map(locate);
   };
+
+  /** OWA: after the open mail leaves the list, the next one opens. */
+  const selectAfterRemoval = (removed: string[]) => {
+    const gone = new Set(removed);
+    if (selectedMessageId && gone.has(selectedMessageId)) {
+      const idx = orderedIds.indexOf(selectedMessageId);
+      const next = orderedIds.slice(idx + 1).find((id) => !gone.has(id))
+        ?? orderedIds.slice(0, Math.max(idx, 0)).reverse().find((id) => !gone.has(id))
+        ?? null;
+      setSelectedMessage(next);
+    }
+    clearSelection();
+  };
+
+  const undoable = (action: 'delete' | 'archive' | 'spam' | 'move', items: MessageLocation[], target?: string) => {
+    if (items.length === 0) return false;
+    void runWithUndo(action, items, target).then((done) => { if (done) selectAfterRemoval(items.map((i) => i.id)); });
+    return true;
+  };
+
+  const scrollToRow = (id: string) => {
+    document.getElementById(`msg-row-${id}`)?.scrollIntoView({ block: 'nearest' });
+  };
+  const openAt = (id: string | undefined) => {
+    if (!id) return false;
+    clearSelection();
+    setSelectedMessage(id);
+    scrollToRow(id);
+    return true;
+  };
+  const stepConversation = (dir: 1 | -1) => {
+    const cur = displayMessages.find((m) => m.id === selectedMessageId);
+    if (!cur) return false;
+    const key = conversationKey(cur.subject);
+    const idx = orderedIds.indexOf(cur.id);
+    const range = dir === 1 ? displayMessages.slice(idx + 1) : displayMessages.slice(0, idx).reverse();
+    return openAt(range.find((m) => conversationKey(m.subject) === key)?.id);
+  };
+  const replyTo = (mode: 'reply' | 'replyAll' | 'forward') => {
+    const msg = displayMessages.find((m) => m.id === selectedMessageId);
+    if (!msg) return false;
+    openCompose({ mode, id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, ...(mode === 'replyAll' ? { toAddrs: msg.toAddrs } : {}) });
+    return true;
+  };
+
+  // Mail list shortcuts (reply/forward here are the fallback when no reader is open)
+  useShortcutHandlers({
+    'mail.archive': () => undoable('archive', currentTargets()),
+    'mail.delete': () => undoable('delete', currentTargets()),
+    'mail.spam': () => undoable('spam', currentTargets()),
+    'mail.deletePermanent': () => {
+      const items = currentTargets();
+      if (!items.length) return false;
+      void deletePermanently(items).then((done) => { if (done) selectAfterRemoval(items.map((i) => i.id)); });
+      return true;
+    },
+    'mail.move': () => {
+      const items = currentTargets();
+      if (!items.length) return false;
+      setMoveTargets(items);
+      return true;
+    },
+    'mail.flag': () => {
+      const items = currentTargets();
+      if (!items.length) return false;
+      const allFlagged = items.every((i) => displayMessages.find((m) => m.id === i.id)?.flags.includes('\\Flagged'));
+      void setState(allFlagged ? 'unflag' : 'flag', items.map((i) => i.id));
+      return true;
+    },
+    'mail.markRead': () => { const ids = currentTargets().map((i) => i.id); void setState('read', ids); return ids.length > 0; },
+    'mail.markUnread': () => { const ids = currentTargets().map((i) => i.id); void setState('unread', ids); return ids.length > 0; },
+    'mail.next': () => {
+      const idx = selectedMessageId ? orderedIds.indexOf(selectedMessageId) : -1;
+      return openAt(orderedIds[Math.min(idx + 1, orderedIds.length - 1)]);
+    },
+    'mail.prev': () => {
+      const idx = selectedMessageId ? orderedIds.indexOf(selectedMessageId) : orderedIds.length;
+      return openAt(orderedIds[Math.max(idx - 1, 0)]);
+    },
+    'mail.open': () => openAt(selectedMessageId ?? orderedIds[0]),
+    'mail.back': () => {
+      if (!selectedMessageId && selectedIds.size === 0) return false;
+      const last = selectedMessageId;
+      setSelectedMessage(null);
+      clearSelection();
+      if (last) document.getElementById(`msg-row-${last}`)?.focus();
+      return true;
+    },
+    'mail.select': () => {
+      const id = selectedMessageId ?? orderedIds[0];
+      if (!id) return false;
+      toggleSelection(id);
+      return true;
+    },
+    'mail.nextInConversation': () => stepConversation(1),
+    'mail.prevInConversation': () => stepConversation(-1),
+    'mail.reply': () => replyTo('reply'),
+    'mail.replyAll': () => replyTo('replyAll'),
+    'mail.forward': () => replyTo('forward'),
+    search: () => {
+      const el = searchInputRef.current;
+      if (!el) return false;
+      el.focus();
+      el.select();
+      return true;
+    },
+  });
 
   const quickAction = (msg: MessageSummary, action: 'archive' | 'delete' | 'read' | 'flag') => {
     const isUnread = !msg.flags.includes('\\Seen');
     const isFlagged = msg.flags.includes('\\Flagged');
-    const prevFolderId = msg.folderId ?? folderId;
+    const loc: MessageLocation = { id: msg.id, folderId: msg.folderId ?? folderId };
 
-    if (action === 'archive') {
-      bulkWithUndo({ ids: [msg.id], action: 'archive' }, 'Nachricht archiviert', prevFolderId);
-      if (msg.id === selectedMessageId) setSelectedMessage(null);
-    } else if (action === 'delete') {
-      const trash = folders.find((f) => f.name === 'Trash');
-      bulkWithUndo(
-        { ids: [msg.id], action: 'delete' },
-        !isTrashFolder && trash ? 'Nachricht in den Papierkorb verschoben' : null,
-        prevFolderId,
-      );
-      if (msg.id === selectedMessageId) setSelectedMessage(null);
+    if (action === 'archive' || action === 'delete') {
+      void runWithUndo(action, [loc]).then((done) => {
+        if (done && msg.id === selectedMessageId) setSelectedMessage(null);
+      });
     } else if (action === 'read') {
       patchMutation.mutate({ id: msg.id, body: { read: isUnread } });
     } else if (action === 'flag') {
@@ -420,8 +548,9 @@ export function MessageList({ folderId }: Props) {
         label: f.displayName ?? f.name,
         icon: <FolderInput size={14} style={f.color ? { color: f.color } : undefined} />,
         onClick: () => {
-          bulkMutation.mutate({ ids: [msg.id], action: 'move', folderId: f.id });
-          if (msg.id === selectedMessageId) setSelectedMessage(null);
+          void runWithUndo('move', [{ id: msg.id, folderId: msg.folderId ?? folderId }], f.id).then((done) => {
+            if (done && msg.id === selectedMessageId) setSelectedMessage(null);
+          });
         },
       }));
 
@@ -481,7 +610,7 @@ export function MessageList({ folderId }: Props) {
         : {
             label: 'Kategorien anlegen …',
             icon: <Tag size={14} />,
-            onClick: () => { window.location.href = '/settings'; },
+            onClick: () => navigate('/settings#categories'),
           },
       { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
@@ -494,14 +623,18 @@ export function MessageList({ folderId }: Props) {
       { label: 'Verschieben nach …', icon: <FolderInput size={14} />, children: moveTargets },
       isJunkFolder
         ? { label: 'Kein Junk', icon: <ShieldOff size={14} />, onClick: () => bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }) }
-        : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />, onClick: () => bulkMutation.mutate({ ids: [msg.id], action: 'spam' }) },
+        : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />, onClick: () => {
+            void runWithUndo('spam', [{ id: msg.id, folderId: msg.folderId ?? folderId }]).then((done) => {
+              if (done && msg.id === selectedMessageId) setSelectedMessage(null);
+            });
+          } },
       { label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') },
       { type: 'divider' },
       { label: 'Regeln', icon: <ListFilter size={14} />, children: [
         { label: 'Regel erstellen …', icon: <ListFilter size={14} />,
           onClick: () => setRuleEditor({ open: true, preset: { fromAddr: msg.fromAddr, subject: msg.subject } }) },
         { label: 'Regeln verwalten …', icon: <Settings size={14} />,
-          onClick: () => { window.location.hash = '#rules'; window.location.pathname = '/settings'; } },
+          onClick: () => navigate('/settings#rules') },
       ]},
       { type: 'divider' },
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
@@ -543,14 +676,22 @@ export function MessageList({ folderId }: Props) {
     setMenu({ x: e.clientX, y: e.clientY, items: buildMessageMenu(msg) });
   };
 
-  if (isLoading) {
-    return (
-      <div className="w-full h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col overflow-hidden">
-        <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 h-9" />
-        <MessageListSkeleton rows={8} />
-      </div>
-    );
-  }
+  const chips = searching ? (searchQuery.data?.pages[0]?.chips ?? []) : [];
+  const insertOperator = (token: string) => {
+    const base = searchText.trim();
+    setSearchText(base ? `${base} ${token}` : token);
+    requestAnimationFrame(() => {
+      const el = searchInputRef.current;
+      if (!el) return;
+      el.focus();
+      // Cursor inside "" for the phrase operator, else at the end
+      const pos = token === '""' ? el.value.length - 1 : el.value.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+  const removeChip = (raw: string) => {
+    setSearchText((s) => s.replace(raw, ' ').replace(/\s+/g, ' ').trim());
+  };
 
   return (
     <div className="w-full h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col overflow-hidden">
@@ -559,20 +700,25 @@ export function MessageList({ folderId }: Props) {
         <div className="relative flex-1">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
+            ref={searchInputRef}
+            type="search"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onFocus={() => setShowSuggestions(true)}
             onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 outline-none focus:border-accent dark:text-gray-100"
-            placeholder="Suchen…"
+            onKeyDown={(e) => { if (e.key === 'Escape' && searchText) { e.preventDefault(); setSearchText(''); } }}
+            aria-label={t('search_placeholder')}
+            aria-keyshortcuts="/"
+            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 outline-none focus:border-accent dark:text-gray-100 [&::-webkit-search-cancel-button]:hidden"
+            placeholder={t('search_placeholder')}
           />
           {searchText && (
-            <button onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button aria-label="Suche leeren" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <X size={12} />
             </button>
           )}
-          {/* Typeahead suggestions */}
-          {showSuggestions && suggestions.length > 0 && (
+          {/* Typeahead suggestions (plain words only — operators go to the server) */}
+          {showSuggestions && suggestions.length > 0 && !hasOperatorSyntax(searchText) && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
               {suggestions.map((m) => (
                 <button key={m.id}
@@ -598,7 +744,13 @@ export function MessageList({ folderId }: Props) {
             title="Gesamtes Postfach durchsuchen"
           >Alle</button>
         </div>
+        <SearchOperatorsHelp onInsert={insertOperator} />
       </div>
+      {chips.length > 0 && (
+        <div className="pt-2 border-b border-gray-100 dark:border-gray-700">
+          <SearchChips chips={chips} onRemove={(c) => removeChip(c.raw)} />
+        </div>
+      )}
       <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
         <input
           type="checkbox"
@@ -617,10 +769,12 @@ export function MessageList({ folderId }: Props) {
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        {displayMessages.length === 0 && !hasNextPage ? (
+        {isLoading ? (
+          <MessageListSkeleton rows={8} label={t('loading_more')} />
+        ) : displayMessages.length === 0 && !hasNextPage ? (
           activeQuery.isError
-            ? <p className="p-4 text-xs text-red-600">Nachrichten konnten nicht geladen werden.</p>
-            : filter === 'all' && !searching ? <EmptyInbox /> : <EmptySearch />
+            ? <p role="alert" className="p-4 text-xs text-red-600">Nachrichten konnten nicht geladen werden.</p>
+            : searching ? <EmptySearch /> : filter === 'all' ? <EmptyInbox /> : <EmptyFilter />
         ) : (
           displayMessages.map((msg) => (
             <MessageRow
@@ -637,20 +791,32 @@ export function MessageList({ folderId }: Props) {
             />
           ))
         )}
-        {hasNextPage && (
-          <div ref={sentinelRef} className="p-3 flex justify-center">
-            <button
-              onClick={() => void fetchNextPage()}
-              disabled={isFetchingNextPage}
-              className="text-xs text-accent hover:underline disabled:opacity-50"
-            >
-              {isFetchingNextPage ? 'Lädt …' : 'Weitere Nachrichten laden'}
-            </button>
-          </div>
+        {hasNextPage && !isLoading && (
+          isFetchingNextPage ? (
+            <div ref={sentinelRef}><MessageListSkeleton rows={2} label={t('loading_more')} /></div>
+          ) : (
+            <div ref={sentinelRef} className="p-3 flex justify-center">
+              <button
+                onClick={() => void fetchNextPage()}
+                className="text-xs text-accent hover:underline"
+              >
+                Weitere Nachrichten laden
+              </button>
+            </div>
+          )
         )}
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+
+      {moveTargets && (
+        <MoveToFolderDialog
+          folders={folders}
+          excludeFolderId={searching ? null : folderId}
+          onClose={() => setMoveTargets(null)}
+          onPick={(target) => { undoable('move', moveTargets, target); }}
+        />
+      )}
 
       {/* Rule editor (via context menu "Create rule") */}
       {ruleEditor.open && (
@@ -680,7 +846,7 @@ export function MessageList({ folderId }: Props) {
                 >
                   <Download size={12} /> .eml herunterladen
                 </button>
-                <button className="btn-ghost p-1" onClick={() => setRawModal(null)}>
+                <button aria-label="Schließen" className="btn-ghost p-1" onClick={() => setRawModal(null)}>
                   <X size={16} />
                 </button>
               </div>

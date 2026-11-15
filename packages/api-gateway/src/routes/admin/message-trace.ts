@@ -10,8 +10,27 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { csvCellQuoted } from '../../lib/export-safety.js';
 
 export const adminMessageTraceRouter: RouterType = Router();
+
+export interface TraceFilter { sender?: string; recipient?: string; subject?: string; status?: string }
+
+/**
+ * Post-filter on the MAIL_FLOW metadata — shared by the list and the CSV export
+ * so both return the same rows: sender/recipient/subject are case-insensitive
+ * substring matches, status is exact.
+ */
+export function matchesTraceFilter(metadata: unknown, f: TraceFilter): boolean {
+  const m = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>;
+  const has = (key: string, needle: string | undefined): boolean =>
+    !needle || (typeof m[key] === 'string' && (m[key] as string).toLowerCase().includes(needle.toLowerCase()));
+  if (!has('sender', f.sender)) return false;
+  if (!has('recipient', f.recipient)) return false;
+  if (!has('subject', f.subject)) return false;
+  if (f.status && m['status'] !== f.status) return false;
+  return true;
+}
 adminMessageTraceRouter.use(requireArea('compliance'));
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
@@ -49,21 +68,18 @@ adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {
   ]);
 
   // Post-filter by sender/recipient/subject/status
-  const filtered = rawItems.filter(row => {
-    const m = (row.metadata ?? {}) as Record<string, string>;
-    if (sender    && !m['sender']?.toLowerCase().includes(sender.toLowerCase()))       return false;
-    if (recipient && !m['recipient']?.toLowerCase().includes(recipient.toLowerCase())) return false;
-    if (subject   && !m['subject']?.toLowerCase().includes(subject.toLowerCase()))     return false;
-    if (status    && m['status'] !== status)                                          return false;
-    return true;
-  }).slice(0, parseInt(limit));
+  const filtered = rawItems
+    .filter(row => matchesTraceFilter(row.metadata, { sender, recipient, subject, status }))
+    .slice(0, parseInt(limit));
 
   res.json({ items: filtered, total, page: parseInt(page), limit: parseInt(limit) });
 });
 
 // ── GET /export ───────────────────────────────────────────────────────────────
 adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
-  const { from: fromDate = '', to: toDate = '', sender = '', recipient = '' } = req.query as Record<string, string>;
+  const {
+    from: fromDate = '', to: toDate = '', sender = '', recipient = '', subject = '', status = '',
+  } = req.query as Record<string, string>;
 
   const where: Record<string, unknown> = { category: 'MAIL_FLOW' };
   if (fromDate) where['timestamp'] = { gte: new Date(fromDate) };
@@ -77,17 +93,12 @@ adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
     select: { timestamp: true, message: true, metadata: true },
   });
 
-  const filtered = rows.filter(r => {
-    const m = (r.metadata ?? {}) as Record<string, string>;
-    if (sender    && !m['sender']?.toLowerCase().includes(sender.toLowerCase()))       return false;
-    if (recipient && !m['recipient']?.toLowerCase().includes(recipient.toLowerCase())) return false;
-    return true;
-  });
+  const filtered = rows.filter(r => matchesTraceFilter(r.metadata, { sender, recipient, subject, status }));
 
   const header = 'Zeitstempel,Absender,Empfänger,Betreff,Status,MessageId\r\n';
   const lines = filtered.map(r => {
     const m = (r.metadata ?? {}) as Record<string, string>;
-    const esc = (s: string) => `"${(s ?? '').replace(/"/g, '""')}"`;
+    const esc = (s: string) => csvCellQuoted(s ?? ''); // formula-safe (lib/export-safety.ts)
     return [
       esc(new Date(r.timestamp).toISOString()),
       esc(m['sender'] ?? ''), esc(m['recipient'] ?? ''),

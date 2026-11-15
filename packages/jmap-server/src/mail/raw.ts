@@ -3,9 +3,9 @@
  * parse headers (mailparser) and build new messages (drafts, Email/set create)
  * with nodemailer.
  */
-import nodemailer from 'nodemailer';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { simpleParser, type ParsedMail } from 'mailparser';
-import { downloadBuffer } from '@coremail/storage';
+import { capHeaderSection, downloadBuffer } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import type { EmailAddress, EmailHeader } from '../types.js';
 
@@ -85,7 +85,7 @@ export interface BuildOptions {
   extraHeaders: EmailHeader[];
 }
 
-function fmt(a: EmailAddress): nodemailer.SendMailOptions['from'] {
+function fmt(a: EmailAddress): SendMailOptions['from'] {
   return a.name ? { name: a.name, address: a.email } : a.email;
 }
 function fmtList(list: EmailAddress[]): Array<string | { name: string; address: string }> {
@@ -134,7 +134,7 @@ export function parseHeaders(raw: Buffer): Promise<ParsedHeaders> {
   let p = headerCache.get(raw);
   if (!p) {
     p = (async () => {
-      const parsed = await simpleParser(raw, {
+      const parsed = await simpleParser(capHeaderSection(raw), {
         skipHtmlToText: true, skipTextToHtml: true, skipImageLinks: true, skipTextLinks: true,
       });
       const lines: EmailHeader[] = parsed.headerLines.map((h) => {

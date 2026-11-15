@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
+import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Pencil, Trash2, X, KeyRound, ChevronDown,
@@ -19,6 +20,8 @@ interface User {
   id: string; email: string; displayName: string; role: string;
   active: boolean; quotaBytes: number; usedBytes: number;
   domainId: string; createdAt: string;
+  /** 8.x: last successful login (web, SSO, mail protocols) — null = never / not yet recorded */
+  lastLoginAt?: string | null;
 }
 interface UserDetail extends User {
   mailbox?: { folders: FolderInfo[] };
@@ -90,12 +93,11 @@ const EMPTY_FORM = {
 };
 
 // ── Main component ───────────────────────────────────────────────────────────
-interface AuditEntry { id: string; timestamp: string; actorEmail: string | null; action: string; ipAddress: string | null }
 
 export function MailboxesPage() {
   const t = useT();
   const qc = useQueryClient();
-  const { can } = usePermissions();
+  const { can, canManage } = usePermissions();
   const canWrite = can('recipients', 'write');
   const [domainFilter, setDomainFilter] = useState('');
   const [activeId, setActiveId]         = useState<string | null>(null);
@@ -129,19 +131,10 @@ export function MailboxesPage() {
     enabled:  !!activeId,
   });
 
-  // Last login: from the audit log (only for roles that may read it)
-  const canReadAudit = can('compliance', 'read');
-  const { data: lastLogin, isFetching: lastLoginLoading } = useQuery<AuditEntry | null>({
-    queryKey: ['admin-mailbox-last-login', active?.email],
-    queryFn:  async () => {
-      const r = await api.get<{ entries: AuditEntry[] }>(
-        `/admin/audit-log?actorEmail=${encodeURIComponent(active!.email)}&action=login&success=true&limit=20`);
-      // actorEmail filters with "contains" — keep exact matches only
-      return r.entries.find((e) => (e.actorEmail ?? '').toLowerCase() === active!.email.toLowerCase()) ?? null;
-    },
-    enabled:  !!active && canReadAudit,
-    meta:     { silentError: true },
-  });
+  // Narrow actions (HELP_DESK: reset password / enable-disable / sign out USER
+  // accounts) — from GET /admin/me/permissions; admin accounts: ORGANIZATION_MANAGEMENT only.
+  const mayOn = (u: User | null) => !!u && canManage(u.role);
+  const lastLoginAt = (detail?.id === active?.id ? detail?.lastLoginAt : undefined) ?? active?.lastLoginAt ?? null;
 
   const domainName = (id: string) => domains.find((d) => d.id === id)?.name ?? id;
 
@@ -211,6 +204,13 @@ export function MailboxesPage() {
     mutationFn: ({ id, password, revoke }: { id: string; password: string; revoke: boolean }) =>
       api.put(`/admin/mailboxes/${id}`, { password, ...(revoke ? { revokeAppPasswords: true } : {}) }),
     onSuccess: () => { toast.success(t('mbox_pw_changed')); setShowResetPw(null); setNewPassword(''); setRevokeAppPw(false); },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // v8.1: sign out everywhere (ends all web/API sessions of the user)
+  const revokeSessionsMutation = useMutation({
+    mutationFn: (id: string) => api.post<{ ok: boolean; sessionsRevoked: number }>(`/admin/mailboxes/${id}/revoke-sessions`, {}),
+    onSuccess: (r) => toast.success(`${t('mbox_signout_done')} ${r.sessionsRevoked}`),
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -447,30 +447,47 @@ export function MailboxesPage() {
             subtitle={active.email}
             onClose={() => setActiveId(null)}
             actions={
-              <Can area="recipients" access="write">
-                <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                {/* Each quick action follows its own right (HELP_DESK: reset / enable-disable / sign out). */}
+                <Can area="recipients" access="write">
                   <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => setEditUser(active)}>
                     <Pencil size={12} aria-hidden="true" /> {t('tb_edit')}
                   </button>
-                  <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => openReset(active)}
-                    title={t('mbox_quick_signout_hint')}>
-                    <KeyRound size={12} aria-hidden="true" /> {t('mbox_reset_pw_title')}
-                  </button>
-                  <button className="btn-secondary text-xs flex items-center gap-1"
-                    onClick={() => {
-                      if (active.active && !confirm(`${t('mbox_disable_confirm')} "${active.email}"`)) return;
-                      toggleMutation.mutate({ id: active.id, active: !active.active });
-                    }}
-                    disabled={toggleMutation.isPending}>
-                    {active.active
-                      ? <><LogOut size={12} aria-hidden="true" /> {t('mbox_quick_disable')}</>
-                      : <><UserCheck size={12} aria-hidden="true" /> {t('mbox_quick_enable')}</>}
-                  </button>
+                </Can>
+                {mayOn(active) && (
+                  <>
+                    <Can action="resetPassword">
+                      <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => openReset(active)}>
+                        <KeyRound size={12} aria-hidden="true" /> {t('mbox_reset_pw_title')}
+                      </button>
+                    </Can>
+                    <Can action="revokeSessions">
+                      <button className="btn-secondary text-xs flex items-center gap-1"
+                        onClick={() => { if (confirm(`${t('mbox_signout_confirm')}\n\n${active.email}`)) revokeSessionsMutation.mutate(active.id); }}
+                        disabled={revokeSessionsMutation.isPending}>
+                        <LogOut size={12} aria-hidden="true" /> {t('mbox_signout_title')}
+                      </button>
+                    </Can>
+                    <Can action="toggleActive">
+                      <button className="btn-secondary text-xs flex items-center gap-1"
+                        onClick={() => {
+                          if (active.active && !confirm(`${t('mbox_disable_confirm')} "${active.email}"`)) return;
+                          toggleMutation.mutate({ id: active.id, active: !active.active });
+                        }}
+                        disabled={toggleMutation.isPending}>
+                        {active.active
+                          ? <><UserX size={12} aria-hidden="true" /> {t('mbox_quick_disable')}</>
+                          : <><UserCheck size={12} aria-hidden="true" /> {t('mbox_quick_enable')}</>}
+                      </button>
+                    </Can>
+                  </>
+                )}
+                <Can area="recipients" access="write">
                   <button className="btn-secondary text-xs flex items-center gap-1 text-red-600" onClick={() => confirmDelete(active)}>
                     <Trash2 size={12} aria-hidden="true" /> {t('tb_delete')}
                   </button>
-                </div>
-              </Can>
+                </Can>
+              </div>
             }
           >
             {/* Quota / usage */}
@@ -492,10 +509,9 @@ export function MailboxesPage() {
               <dd className="text-gray-700 font-mono">{domainName(active.domainId)}</dd>
               <dt className="text-gray-400">{t('mbox_last_login')}</dt>
               <dd className="text-gray-700">
-                {!canReadAudit ? <span className="text-gray-400" title={t('mbox_last_login_no_audit')}>—</span>
-                  : lastLoginLoading ? <Loader2 size={11} className="animate-spin inline" aria-label={t('dt_loading')} />
-                    : lastLogin ? <>{new Date(lastLogin.timestamp).toLocaleString()}{lastLogin.ipAddress ? <span className="text-gray-400"> · {lastLogin.ipAddress}</span> : null}</>
-                      : <span className="text-gray-400">{t('mbox_last_login_none')}</span>}
+                {lastLoginAt
+                  ? <time dateTime={lastLoginAt}>{new Date(lastLoginAt).toLocaleString()}</time>
+                  : <span className="text-gray-400">{t('mbox_last_login_none')}</span>}
               </dd>
               <dt className="text-gray-400">{t('mbox_detail_created')}</dt>
               <dd className="text-gray-700">{new Date(active.createdAt).toLocaleDateString()}</dd>
@@ -683,16 +699,20 @@ export function MailboxesPage() {
 
 // ── Modal ────────────────────────────────────────────────────────────────────
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+    <AccessibleModal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white rounded-xl shadow-2xl w-full max-w-lg"
+    >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="btn-ghost p-1 rounded"><X size={16} className="text-gray-500" /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="btn-ghost p-1 rounded"><X size={16} className="text-gray-500" aria-hidden="true" /></button>
         </div>
         <div className="px-6 py-5">{children}</div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 

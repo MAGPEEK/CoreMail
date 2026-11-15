@@ -82,7 +82,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
         >
           <Mail size={12} /> Mail senden
         </a>
-        <button
+        <button aria-label="Adresse kopieren"
           onClick={copy}
           className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all duration-150 active:scale-95"
           title="Adresse kopieren"

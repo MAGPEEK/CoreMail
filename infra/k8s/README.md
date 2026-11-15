@@ -24,6 +24,8 @@ kubectl -n coremail create secret generic coremail-credentials \
   --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
   --from-literal=PEPPER="$(openssl rand -hex 32)" \
   --from-literal=MFA_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+  --from-literal=BACKUP_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+  --from-literal=RSPAMD_CONTROLLER_PASSWORD="$(openssl rand -hex 20)" \
   --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 20)" \
   --from-literal=REDIS_PASSWORD="$(openssl rand -hex 20)" \
   --from-literal=MINIO_ROOT_USER=coremail \
@@ -90,6 +92,8 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `secrets.postgresPassword`, `.redisPassword` | — | required, URL-safe (`[A-Za-z0-9._~-]`) — embedded in `DATABASE_URL`/`REDIS_URL` |
 | `secrets.minioRootUser`, `.minioRootPassword` | `coremail`, — | required when MinIO/S3 is used |
 | `secrets.mfaEncryptionKey` | `""` | 64 hex; strongly recommended (TOTP secrets survive JWT/PEPPER rotation) |
+| `secrets.backupEncryptionKey` | `""` | `BACKUP_ENCRYPTION_KEY`: 64 hex or base64 of 32 bytes; strongly recommended (unset = derived from `JWT_SECRET` + `PEPPER`). **Keep a copy off the cluster** |
+| `secrets.rspamdControllerPassword` | `""` | `RSPAMD_CONTROLLER_PASSWORD`: ≥ 12 chars `[A-Za-z0-9._~+/=-]`; set on the bundled rspamd controller and sent by the app |
 | `secrets.setupToken` | `""` | ≥ 16 chars; required for `app.replicaCount > 1` |
 | `app.image.tag` / `.digest` | appVersion / `""` | digest pins the image |
 | `app.replicaCount` | `1` | see [Replicas](#replicas) |
@@ -97,7 +101,7 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `app.trustProxy` | `auto` | see [TRUST_PROXY](#trust_proxy) |
 | `app.publicUrl` | `""` | `COREMAIL_PUBLIC_URL` (SSO redirect URIs) |
 | `app.webauthn.*`, `app.vapid.*`, `app.jmapCorsOrigins`, `app.ldapAllowInsecure` | | map to `WEBAUTHN_*`, `VAPID_*`, `JMAP_CORS_ORIGINS`, `LDAP_ALLOW_INSECURE` |
-| `app.mailAuth.*` | app defaults | `MAIL_AUTH_*` brute-force limits |
+| `app.mailAuth.*` | app defaults | `MAIL_AUTH_*` brute-force limits; `exemptCidrs` → `MAIL_AUTH_EXEMPT_CIDRS`/`MAIL_CONN_EXEMPT_CIDRS` (`limitPrivateIps` was removed in chart 2.0) |
 | `app.extraEnv`, `.extraVolumes`, `.extraVolumeMounts` | `[]` | e.g. a GeoIP database (`GEOIP_DB_PATH`) |
 | `mailService.type` | `LoadBalancer` | or `NodePort` |
 | `mailService.externalTrafficPolicy` | `Local` | keep `Local`, see [Client IPs](#client-ips) |
@@ -133,10 +137,22 @@ clamav:
 
 An external PostgreSQL should get the extensions/search configuration from
 `files/postgres-init.sql` (same as `infra/docker/postgres/init.sql`). With
-`rspamd`/`clamav` disabled and no external host, switch the filters off in
-BCP → Security. The bundled rspamd controller accepts unauthenticated API calls
-from `rspamd.secureIp` (must contain the pod network); the NetworkPolicy limits
-the port to the app pod.
+`rspamd`/`clamav` disabled and no external host the chart sets
+`RSPAMD_ENABLED=false` / `CLAMAV_ENABLED=false`, which switches the scanner off
+regardless of the BCP setting. The bundled rspamd controller accepts
+unauthenticated API calls from `rspamd.secureIp` (must contain the pod network);
+the NetworkPolicy limits the port to the app pod. With
+`secrets.rspamdControllerPassword` (`RSPAMD_CONTROLLER_PASSWORD`) the controller
+requires that password from every other address and the app sends it, so
+`rspamd.secureIp` can be reduced to `[127.0.0.1, "::1"]`. For an external rspamd,
+set the same value as its controller `password`/`enable_password`.
+
+**External PostgreSQL ≥ 17:** the image ships `pg_dump` 16, which cannot dump a
+newer server. Automatic schema changes that only add unique constraints still
+run (the optional pre-migration dump is skipped with a warning), but a
+destructive change with `app.schemaSync.allowDataLoss` needs
+`app.schemaSync.skipBackup=true` after you dumped the database yourself with a
+matching `pg_dump` (or a managed snapshot) — the init container says so.
 
 ### Object storage
 
@@ -171,12 +187,23 @@ S3 target unless `minio.external` is configured.
   capability is missing from the bounding set, exec of `node` fails with
   "Operation not permitted". supervisord runs directly as uid 1000 (no setuid
   needed, no `SETUID`/`SETGID` capabilities).
-- **No image entrypoint:** `entrypoint-app.sh` calls `pnpm` through corepack,
-  which needs a writable `$HOME` and registry access when not root. The chart runs
-  the same two steps (wait for PostgreSQL, `prisma db push --accept-data-loss`
-  with retries) in the `schema-sync` init container with the Prisma CLI
-  directly, then starts `tini → supervisord`. Keep this in mind if
-  `entrypoint-app.sh` gains new steps.
+- **No image entrypoint:** the entrypoint also prepares directories as root.
+  The chart runs the same schema step (wait for PostgreSQL, then the image's
+  `coremail-schema-sync`) in the `schema-sync` init container, then starts
+  `tini → supervisord`. Keep this in mind if `entrypoint-app.sh` gains new steps.
+- **Destructive schema changes fail closed:** `coremail-schema-sync` runs
+  `prisma db push` without `--accept-data-loss`. Prisma's data-loss warnings
+  are classified: a change that only **adds unique constraints** (e.g. 8.0.0 →
+  9.0, `resource_bookings (calendarId, uid)`) is applied automatically after a
+  duplicate check per constraint (best-effort dump to `backupClaim` first);
+  duplicates stop the rollout with the table and the query to find them. Any
+  other warning (dropped table/column with data, type change, removed enum
+  value) fails the init container and nothing is changed. After a backup, set
+  `app.schemaSync.allowDataLoss=true` plus either `app.schemaSync.backupClaim`
+  (an existing PVC; a `pre-migrate-<timestamp>.sql.gz` pg_dump is written there
+  first) or `app.schemaSync.skipBackup=true`, roll out once, then unset it again.
+  Images ≤ 8.0.0 contain no `coremail-schema-sync`; the init container then logs a
+  warning and falls back to a plain `prisma db push` without `--accept-data-loss`.
 - **ClamAV** is started with the same steps as the image's `/init`, minus the
   `chown` of the database volume (fails as non-root on a PVC).
 - **Redis requires a password**; it is passed on stdin (not in argv), probes use
@@ -198,8 +225,10 @@ S3 target unless `minio.external` is configured.
     `networkPolicy.internetExcept` (cluster-private ranges) excluded.
   The policies need a CNI that enforces them (Calico, Cilium, …).
 - **Fail-fast validation** at `helm install/upgrade/template`: missing or too short
-  secrets, non-URL-safe passwords, invalid `MFA_ENCRYPTION_KEY`/`SETUP_TOKEN`,
-  numeric secrets, `ingress.host`, replicas vs. setup token / filesystem storage.
+  secrets, non-URL-safe passwords, invalid `MFA_ENCRYPTION_KEY`/`SETUP_TOKEN`/
+  `BACKUP_ENCRYPTION_KEY`/`RSPAMD_CONTROLLER_PASSWORD`, numeric secrets,
+  `ingress.host`, replicas vs. setup token / filesystem storage, removed values
+  (`app.mailAuth.limitPrivateIps`).
 
 ### Internal services
 
@@ -234,10 +263,9 @@ DNSBL, GeoIP country filter, greylisting triples and the per-IP brute-force
 lockout (`MAIL_AUTH_*`) all use it. `mailService.externalTrafficPolicy: Local`
 preserves it (traffic goes only to nodes that run the pod; the cloud LB health
 check handles that). With `Cluster`, all clients appear as node IPs — SPF fails,
-DNSBL checks the wrong address, and because private addresses are exempt from
-per-IP lockouts by default, brute-force protection falls back to the per-account
-counter only (`app.mailAuth.limitPrivateIps: true` would instead lock out
-everybody at once). CoreMail does not speak PROXY protocol on the mail ports.
+DNSBL checks the wrong address, and the per-IP lockout and connection caps count
+all clients as a few node IPs (set `app.mailAuth.exemptCidrs` to the node CIDR so
+only the per-account counter applies, or better keep `Local`). CoreMail does not speak PROXY protocol on the mail ports.
 
 ### Replicas
 
@@ -255,6 +283,33 @@ is used — then set `SETUP_TOKEN` there). `filesystem` object storage is limite
 to one replica.
 
 ## Upgrading
+
+### Upgrading to chart 2.0 (CoreMail 9.0)
+
+- **`app.mailAuth.limitPrivateIps` was removed** (the app no longer reads
+  `MAIL_AUTH_LIMIT_PRIVATE_IPS`). CoreMail 9.0 exempts only loopback from the
+  per-IP lockout and the IMAP/POP3 per-IP connection caps; further exemptions go
+  into `app.mailAuth.exemptCidrs` (→ `MAIL_AUTH_EXEMPT_CIDRS` and
+  `MAIL_CONN_EXEMPT_CIDRS`, comma-separated IPs/CIDRs). The chart **refuses to
+  render** while `limitPrivateIps` is still in your values (even `false`):
+  - `limitPrivateIps: true` → delete it, leave `exemptCidrs` empty (same effect).
+  - `limitPrivateIps: false` (the old default) → delete it. The old behaviour
+    (all private ranges exempt) would be
+    `exemptCidrs: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"`
+    — not recommended; with `externalTrafficPolicy: Local` leave it empty, with
+    `Cluster` set only the node CIDR.
+- **New optional secrets** `secrets.backupEncryptionKey` (`BACKUP_ENCRYPTION_KEY`)
+  and `secrets.rspamdControllerPassword` (`RSPAMD_CONTROLLER_PASSWORD`), also as
+  keys of `existingSecret`. Setting `BACKUP_ENCRYPTION_KEY` on an existing
+  installation is safe: the backup service keeps accepting the key derived from
+  `JWT_SECRET` + `PEPPER` for older backups. The bundled rspamd now reads its
+  controller password from the Secret (empty = as before).
+- **Scanners without a backend are switched off:** `rspamd.enabled=false` /
+  `clamav.enabled=false` without an external endpoint now set
+  `RSPAMD_ENABLED=false` / `CLAMAV_ENABLED=false` (before, the BCP switch had to
+  be turned off by hand).
+- **Schema sync:** unique-constraint-only changes are applied automatically
+  (see [Security](#security)); images ≤ 8.0.0 fall back to a plain `prisma db push`.
 
 ### From the old chart (0.6.0, per-service images)
 
@@ -274,7 +329,8 @@ auth and a 4-node MinIO. Migrate like this:
    existing CNPG cluster: host `<name>-rw`, database/user from the old values,
    `postgresql.enabled=false`), mirror the buckets back into MinIO (`minio.bucket`,
    `minio.backupBucket`), then restart the app pod — the schema sync upgrades the
-   schema (destructive changes are applied with `--accept-data-loss`, like in Docker).
+   schema (a change that would delete data stops the rollout until
+   `app.schemaSync.allowDataLoss` is set — see "Destructive schema changes" above).
 5. Read the CoreMail 7.0.0 upgrade notes in `CHANGELOG.md` (app passwords for MFA
    users, STARTTLS-only auth, `TRUST_PROXY`, setup token, EWS removal).
 

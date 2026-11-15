@@ -9,7 +9,10 @@ process.env['NODE_ENV'] = 'test';
 const fakePrisma: Record<string, unknown> = { $on: () => undefined };
 (globalThis as unknown as { __prisma: unknown }).__prisma = fakePrisma;
 
-const { buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings } = await import('./queue-options.js');
+const {
+  buildOutboundJobOptions, isExpiredInQueue, queueCleanPlan, normalizeQueueSettings,
+  attemptsForRetention, outboundRetryStepMs, outboundRetryDelay, adminRetryJobData, queueStartMs,
+} = await import('./queue-options.js');
 const {
   extractITipReply, isReplyFromAttendee, processITipInbound, parseITipReply, applyReplyToIcal, MAX_REPLY_OVERRIDES, MAX_REPLY_STAMPS,
 } = await import('./itip-inbound.js');
@@ -19,13 +22,16 @@ const {
 test('outbound job options follow QueueSettings', () => {
   const d = buildOutboundJobOptions(null);
   assert.deepEqual(d, {
-    attempts: 10,
-    backoff: { type: 'exponential', delay: 60_000 },
+    // v8.1: enough attempts for 48 h (1 + 5 + 15 min, then every 30 min) + the expiry attempt
+    attempts: attemptsForRetention(48),
+    backoff: { type: 'coremail-outbound', delay: 60_000 },
     removeOnComplete: { age: 24 * 3600, count: 100 },
     removeOnFail: { count: 10_000 },
   });
-  const s = buildOutboundJobOptions({ maxRetryAttempts: 4, retryBackoffDelaySec: 30, completedRetentionHours: 2, deadLetterRetentionDays: 3, autoFlushDead: true });
-  assert.equal(s.attempts, 4);
+  assert.ok(d.attempts > 90 && d.attempts < 110, String(d.attempts));
+  const s = buildOutboundJobOptions({ maxRetryAttempts: 4, retryBackoffDelaySec: 30, completedRetentionHours: 2, deadLetterRetentionDays: 3, autoFlushDead: true, outboundRetentionHours: 1 });
+  assert.equal(s.attempts, attemptsForRetention(1, 30_000), 'expiry window wins over a small maxRetryAttempts');
+  assert.equal(buildOutboundJobOptions({ maxRetryAttempts: 500 }).attempts, 500, 'maxRetryAttempts is a minimum');
   assert.equal(s.backoff.delay, 30_000);
   assert.deepEqual(s.removeOnComplete, { age: 7200, count: 100 });
   assert.deepEqual(s.removeOnFail, { age: 3 * 86_400 });
@@ -41,6 +47,50 @@ test('outboundRetentionHours expiry counts from the planned send time', () => {
   assert.equal(isExpiredInQueue({ timestamp: now - 3 * h }, { outboundRetentionHours: 2 }, now), true);
 });
 
+test('admin retry of an expired dead letter restarts the retry window (expiryBaseMs)', () => {
+  const now = 1_000_000_000_000;
+  const h = 3_600_000;
+  const job = { timestamp: now - 100 * h, data: { to: ['a@x.test'], bouncedRcpts: ['b@x.test'] } };
+  assert.equal(isExpiredInQueue(job, null, now), true);
+  const data = adminRetryJobData(job.data, now);
+  assert.equal(data.expiryBaseMs, now);
+  assert.deepEqual(data.bouncedRcpts, ['b@x.test'], 'delivery progress is kept');
+  assert.equal(isExpiredInQueue({ ...job, data }, null, now + 1000), false);
+  assert.equal(isExpiredInQueue({ ...job, data }, null, now + 49 * h), true);
+  assert.equal(queueStartMs({ timestamp: 5, opts: { delay: 10 } }), 15);
+  // the backoff is capped at the new expiry, not the old one
+  assert.equal(outboundRetryDelay(0, { timestamp: now - 100 * h, data }, null, now), 60_000);
+});
+
+test('v8.1 retry schedule: 1, 5, 15, then every 30 min, capped at the expiry', () => {
+  const min = 60_000;
+  const h = 3_600_000;
+  assert.deepEqual([1, 2, 3, 4, 5, 50].map((n) => outboundRetryStepMs(n)), [min, 5 * min, 15 * min, 30 * min, 30 * min, 30 * min]);
+  assert.equal(outboundRetryStepMs(1, 10 * min), 10 * min, 'first step = retryBackoffDelaySec');
+  assert.equal(outboundRetryStepMs(2, 10 * min), 10 * min, 'never shorter than the first step');
+
+  const now = 1_000_000_000_000;
+  // early in the window: the plain step
+  assert.equal(outboundRetryDelay(4, { timestamp: now - h }, null, now), 30 * min);
+  // 10 min before the 48 h expiry: pulled forward to 1 s past the expiry
+  assert.equal(outboundRetryDelay(90, { timestamp: now - 48 * h + 10 * min }, null, now), 10 * min + 1000);
+  // already expired: retry right away so the worker gives up (final NDR)
+  assert.equal(outboundRetryDelay(90, { timestamp: now - 50 * h }, null, now), 1000);
+  // scheduled send: the window starts at the planned time
+  assert.equal(outboundRetryDelay(4, { timestamp: now - 50 * h, opts: { delay: 24 * h } }, null, now), 30 * min);
+
+  // simulate the whole window: the retries reach the expiry within `attempts`
+  const opts = buildOutboundJobOptions(null);
+  let t = 0;
+  let attempt = 1;
+  while (!isExpiredInQueue({ timestamp: 0 }, null, t)) {
+    t += outboundRetryDelay(attempt, { timestamp: 0 }, null, t);
+    attempt++;
+  }
+  assert.ok(attempt <= opts.attempts, `${attempt} attempts needed, ${opts.attempts} configured`);
+  assert.ok(t >= 48 * h && t <= 48 * h + 2000, `gives up at ${t / h} h`);
+});
+
 test('queue cleaner plan: dead letters only with autoFlushDead', () => {
   assert.deepEqual(queueCleanPlan(null), { completedGraceMs: 24 * 3_600_000, failedGraceMs: null });
   assert.deepEqual(queueCleanPlan({ autoFlushDead: true, deadLetterRetentionDays: 2, completedRetentionHours: 1 }),
@@ -48,6 +98,20 @@ test('queue cleaner plan: dead letters only with autoFlushDead', () => {
 });
 
 // ── iTIP REPLY ────────────────────────────────────────────────────────────────
+
+const AUTH = { verifiedDomains: ['partner.example'] };
+
+test('attendee authentication: aligned DMARC/SPF/DKIM domain or the authenticated local sender', async () => {
+  const { isAttendeeAuthenticated } = await import('./itip-inbound.js');
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', AUTH), true);
+  assert.equal(isAttendeeAuthenticated('bob@mail.partner.example', AUTH), true);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', { verifiedDomains: ['mail.partner.example'] }), true);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', { verifiedDomains: ['notpartner.example'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@corp.test', { authenticatedSender: 'Bob@corp.test' }), true);
+  assert.equal(isAttendeeAuthenticated('bob@corp.test', { authenticatedSender: 'alice@corp.test' }), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', null), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.example', {}), false);
+});
 
 const VCAL = [
   'BEGIN:VCALENDAR', 'METHOD:REPLY', 'BEGIN:VEVENT', 'UID:evt-1@example.org', 'SEQUENCE:2',
@@ -93,10 +157,15 @@ test('processITipInbound scopes the event lookup to the recipient and rejects fo
     update: async (u: unknown) => { updates.push(u); return {}; },
   };
   const m = mail('Bob <bob@partner.example>', b64Part);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'mallory@evil.example', recipientUserId: 'u1' }), false);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: null }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'mallory@evil.example', recipientUserId: 'u1', senderAuth: AUTH }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: null, senderAuth: AUTH }), false);
+  // forged From header: no authentication verdict, or one for another domain → ignored
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: null }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { verifiedDomains: [] } }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { verifiedDomains: ['evil.example'] } }), false);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: { authenticatedSender: 'carol@partner.example' } }), false);
   assert.equal(queries.length, 0);
-  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  assert.equal(await processITipInbound(m, { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   assert.deepEqual((queries[0] as { where: unknown }).where, { uid: 'evt-1@example.org', calendar: { userId: 'u1' } });
   assert.equal(((updates[0] as { data: { attendees: Array<{ partstat: string }> } }).data.attendees[0]!).partstat, 'ACCEPTED');
 });
@@ -142,7 +211,7 @@ test('REPLY parser handles quoted parameter values containing ":" (CN="Doe: J")'
 
 test('REPLY updates the PARTSTAT inside icalData (what CalDAV serves), keeping the rest', async () => {
   const { row } = fakeEvent();
-  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z']), { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+  assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z']), { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   const ical = String(row['icalData']).replace(/\r\n /g, '');
   assert.match(ical, /^ATTENDEE;CN="Doe: Bob";PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@partner.example$/m);
   assert.match(ical, /BEGIN:VALARM/);
@@ -153,7 +222,7 @@ test('REPLY updates the PARTSTAT inside icalData (what CalDAV serves), keeping t
 test('REPLY with RECURRENCE-ID only touches that instance (override created, series unchanged)', async () => {
   const { row } = fakeEvent();
   assert.equal(await processITipInbound(replyMail(['RECURRENCE-ID:20261109T090000Z', 'DTSTAMP:20261101T000000Z'], 'DECLINED'),
-    { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' }), true);
+    { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH }), true);
   const ical = String(row['icalData']).replace(/\r\n /g, '');
   const blocks = ical.split('BEGIN:VEVENT').slice(1);
   assert.equal(blocks.length, 2);
@@ -167,7 +236,7 @@ test('REPLY with RECURRENCE-ID only touches that instance (override created, ser
 
 test('REPLY with the same SEQUENCE but an older DTSTAMP than the last applied one is ignored', async () => {
   const { row, updates } = fakeEvent();
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261105T000000Z'], 'DECLINED'), ctx), true);
   assert.equal(await processITipInbound(replyMail(['DTSTAMP:20261101T000000Z'], 'ACCEPTED'), ctx), false);
   assert.equal(updates.length, 1);
@@ -176,7 +245,7 @@ test('REPLY with the same SEQUENCE but an older DTSTAMP than the last applied on
 });
 
 test('REPLY is only applied to the organizer copy (recipient address or alias = ORGANIZER)', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   fakeEvent({ organizer: 'carol@elsewhere.example' });
   assert.equal(await processITipInbound(replyMail([]), ctx), false);
   fakeEvent({ organizer: 'TEAM@local.example' });
@@ -186,7 +255,7 @@ test('REPLY is only applied to the organizer copy (recipient address or alias = 
 // ── v8.0 review: phantom occurrences and unbounded growth ─────────────────────
 
 test('REPLY with a RECURRENCE-ID that is not an instance of the series adds no override', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   // Series: weekly 2026-11-02 09:00Z, COUNT=4 → 02, 09, 16, 23 Nov.
   for (const rid of ['20261110T090000Z', '20261109T100000Z', '20261130T090000Z', '20991231T090000Z']) {
     const { row, updates } = fakeEvent();
@@ -201,7 +270,7 @@ test('REPLY with a RECURRENCE-ID that is not an instance of the series adds no o
 });
 
 test('REPLY overrides and per-instance stamps are capped', async () => {
-  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1' };
+  const ctx = { envelopeFrom: 'bob@partner.example', recipientUserId: 'u1', senderAuth: AUTH };
   const daily = STORED.replace('RRULE:FREQ=WEEKLY;COUNT=4', 'RRULE:FREQ=DAILY;COUNT=500');
   const instance = (i: number): string => new Date(Date.UTC(2026, 10, 2 + i, 9)).toISOString().replace(/[-:]/g, '').replace('.000', '');
   // Stamps: MAX_REPLY_STAMPS distinct instances already answered → a new instance is ignored.

@@ -1,13 +1,21 @@
 import { Queue, Worker, UnrecoverableError, type Job } from 'bullmq';
 import { Readable } from 'stream';
-import nodemailer from 'nodemailer';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
-import { prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue } from '@coremail/storage';
-import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions } from './relay.js';
-import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
+import {
+  prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
+  outboundRetryDelay, queueStartMs,
+} from '@coremail/storage';
+import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
+import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
+import type { EnvelopeDsn } from '../core/dsn-params.js';
+import { domainVariants } from '../core/idn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
-import { storeInboundMessage } from '../handlers/message.js';
+import { storeInboundMessage, type StoreResult } from '../handlers/message.js';
+import { stripForLocalDelivery, unknownRecipientDsn } from '../handlers/local-delivery.js';
+import { isRuleForwardedAlready } from '../handlers/rule-forward.js';
+import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
 import { resolveJobDkim } from './dkim.js';
 import { notifyDeadLetter, startQueueMaintenance } from './dead-letter.js';
@@ -70,6 +78,12 @@ export interface OutboundJob {
    * not re-quarantine the message. Only internal producers can set job fields.
    */
   quarantineReleaseId?: string;
+  /**
+   * v8.1: DSN request of the SMTP transaction (RFC 3461 RET/ENVID and the
+   * per-recipient NOTIFY/ORCPT). Honoured by the bounce/delay/success DSNs and
+   * passed to a next hop that advertises DSN.
+   */
+  dsn?: EnvelopeDsn;
   // ── Delivery progress (written by the worker, survives retries) ──────────
   /** Recipients (after alias expansion) that were stored or accepted remotely. */
   deliveredRcpts?: string[];
@@ -77,13 +91,29 @@ export interface OutboundJob {
   bouncedRcpts?:   string[];
   /** Last temporary failure per recipient still pending (final bounce text). */
   pendingFailures?: RecipientFailure[];
+  /** A delay DSN (RFC 3464 Action: delayed) was sent — at most one per message. */
+  delayNotified?: boolean;
+  /** Recipients whose success DSN (delivered / relayed) was already sent. */
+  successNotified?: string[];
+  /**
+   * Start of the retry window (ms). Unset = enqueue time + initial delay; an
+   * admin "Retry" of a dead letter sets it to the retry time
+   * (storage adminRetryJobData) so an expired message gets a fresh window.
+   */
+  expiryBaseMs?: number;
+  /**
+   * Recipients that already got a final NDR when the job gave up (dead
+   * letter). An admin retry delivers to them again but never bounces them a
+   * second time.
+   */
+  finalNdrRcpts?: string[];
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
 
 async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
   // Load attachments from MinIO (in parallel)
-  const attachments: nodemailer.SendMailOptions['attachments'] = await Promise.all(
+  const attachments: SendMailOptions['attachments'] = await Promise.all(
     msg.attachments.map(async (att) => ({
       filename:    att.filename,
       content:     await downloadBuffer(att.minioPath),
@@ -96,7 +126,7 @@ async function buildRawFromMessage(msg: StructuredMessage): Promise<Buffer> {
     newline: 'crlf',   // RFC 5321: SMTP requires CRLF line endings
   });
 
-  const fromField: nodemailer.SendMailOptions['from'] = msg.fromName
+  const fromField: SendMailOptions['from'] = msg.fromName
     ? { name: msg.fromName, address: msg.from }
     : msg.from;
 
@@ -168,18 +198,42 @@ export interface OutboundJobLike {
   id?: string | undefined;
   data: OutboundJob;
   attemptsMade: number;
-  opts: { attempts?: number | undefined };
+  opts: { attempts?: number | undefined; delay?: number | undefined };
+  /** Enqueue time (ms) — BullMQ `job.timestamp`; used for the delay DSN. */
+  timestamp?: number | undefined;
   updateData(data: OutboundJob): Promise<void>;
+}
+
+/**
+ * Hours a message may wait in the queue before the sender gets ONE delay
+ * notification (RFC 3464 Action: delayed, status 4.4.7). Env
+ * `OUTBOUND_DELAY_DSN_HOURS` (default 4, 0 = off).
+ */
+export function delayDsnHours(env: Record<string, string | undefined> = process.env): number {
+  const raw = (env['OUTBOUND_DELAY_DSN_HOURS'] ?? '').trim();
+  if (raw === '') return 4;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 4;
+}
+
+/** Pure: is a delay DSN due for this job (once, after `hours` since the planned send time)? */
+export function delayDsnDue(job: Pick<OutboundJobLike, 'data' | 'timestamp' | 'opts'>, hours: number, now = Date.now()): boolean {
+  if (hours <= 0 || job.data.delayNotified || job.timestamp === undefined) return false;
+  if (!job.data.from) return false; // null sender (bounces) never get a DSN
+  return now - queueStartMs(job) >= hours * 3_600_000;
 }
 
 export interface OutboundDeps {
   isLocalAddress(addr: string): Promise<boolean>;
   expand(addrs: string[]): Promise<string[]>;
-  storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void>;
+  /** 'unknown' = no such local mailbox/resource → bounced (5.1.1), never dropped silently. */
+  storeLocal(raw: Buffer, from: string, rcpt: string, job: OutboundJob): Promise<void | StoreResult>;
   resolveDkim(job: OutboundJob): Promise<DkimOptions>;
-  relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions): Promise<RelayResult>;
+  relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions, opts?: RelayOptions): Promise<RelayResult>;
   bounce(opts: DsnOptions): Promise<void>;
   hostname(): Promise<string>;
+  /** When the queue gives up on the job (Will-Retry-Until of a delay DSN). */
+  retryUntil?(job: Pick<OutboundJobLike, 'timestamp' | 'opts' | 'data'>): Promise<Date>;
 }
 
 export interface DeliverySummary {
@@ -211,12 +265,28 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const { from, to } = data;
   const delivered = new Set(data.deliveredRcpts ?? []);
   const bounced   = new Set(data.bouncedRcpts ?? []);
+  const notified  = new Set(data.successNotified ?? []);
   const persist = (pending: RecipientFailure[]) => job.updateData({
     ...job.data,
     deliveredRcpts:  [...delivered],
     bouncedRcpts:    [...bounced],
     pendingFailures: pending,
+    ...(notified.size > 0 ? { successNotified: [...notified] } : {}),
   });
+  // v8.1: DSN request (RFC 3461) + the original for RET=HDRS/FULL.
+  const original = rawSubjectAndId(buffer);
+  const dsnExtra = { ...(data.dsn ? { dsn: data.dsn } : {}), originalRaw: buffer };
+  const subject = data.message?.subject ?? original.subject;
+  const messageIdHeader = data.message?.messageId ?? original.messageId;
+  const notifySuccess = async (rcpts: string[], action: 'delivered' | 'relayed'): Promise<void> => {
+    const open = rcpts.filter((r) => !notified.has(r));
+    if (open.length === 0 || !data.dsn) return;
+    const sent = await sendSuccessDsn({
+      from, rcpts: open, action, dsn: data.dsn, hostname: await deps.hostname(), originalRaw: buffer,
+      subject, messageId: messageIdHeader, deliverExternal: data.ruleRedirect !== true,
+    }, deps.bounce);
+    for (const r of sent) notified.add(r);
+  };
   const isLocal = async (addr: string) => addr.toLowerCase() === BARE_POSTMASTER || deps.isLocalAddress(addr);
 
   // Split → expand local recipients (aliases, postmaster) → split again.
@@ -230,43 +300,96 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const external = [...new Set(finalExternal)];
 
   // ── Local delivery (write directly into the mailbox) ──────────────────────
+  const unknownLocal: string[] = [];
   for (const rcpt of finalLocal) {
-    if (delivered.has(rcpt)) continue;
+    if (delivered.has(rcpt) || bounced.has(rcpt)) continue;
+    let result: void | StoreResult;
     try {
-      await deps.storeLocal(buffer, from, rcpt, data);
+      result = await deps.storeLocal(buffer, from, rcpt, data);
     } catch (err) {
       await persist(data.pendingFailures ?? []);
       throw err;
     }
+    if (result === 'unknown') {
+      // no such mailbox (typo in a local domain, deleted user) → NDR below
+      bounced.add(rcpt);
+      unknownLocal.push(rcpt);
+      continue;
+    }
     delivered.add(rcpt);
     log.info({ rcpt, jobId: job.id }, 'Local delivery (outbound → mailbox)');
   }
+  const newlyBounced: string[] = [];
+  if (unknownLocal.length > 0) {
+    await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
+    const notify = unknownLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    if (notify.length > 0) {
+      await deps.bounce({
+        ...unknownRecipientDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
+        ...(data.message ? { originalSubject: data.message.subject, originalMessageId: data.message.messageId } : {}),
+      });
+    }
+    newlyBounced.push(...unknownLocal);
+  }
+  // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases included).
+  if (finalLocal.length > 0) await notifySuccess(localRcpts.filter((r) => !unknownLocal.includes(r)), 'delivered');
 
   // ── External delivery via MX / smarthost ──────────────────────────────────
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
   let transient: RecipientFailure[] = [];
-  const newlyBounced: string[] = [];
   if (pending.length > 0) {
-    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data));
+    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data), data.dsn ? { dsn: data.dsn } : {});
     for (const r of result.delivered) delivered.add(r);
+    // NOTIFY=SUCCESS to a next hop without DSN support → "relayed" (RFC 3461 §6.2.6.2).
+    const passedOn = new Set(result.dsnPassedOn ?? []);
+    await notifySuccess(result.delivered.filter((r) => !passedOn.has(r)), 'relayed');
+    for (const r of passedOn) notified.add(r);
     const permanent = result.failures.filter((f) => f.permanent);
     transient = result.failures.filter((f) => !f.permanent);
-    if (permanent.length > 0) {
+    // recipients that already got a final NDR (admin retry of a dead letter) are not bounced again
+    const alreadyNotified = new Set(data.finalNdrRcpts ?? []);
+    const toNotify = permanent.filter((f) => !alreadyNotified.has(f.rcpt));
+    if (toNotify.length > 0) {
       await deps.bounce({
+        ...dsnExtra,
         originalFrom:      from,
-        originalTo:        permanent.map((f) => f.rcpt),
-        originalSubject:   data.message?.subject ?? '',
-        originalMessageId: data.message?.messageId ?? null,
-        failureReason:     permanent[0]!.message,
-        smtpCode:          permanent[0]!.code,
+        originalTo:        toNotify.map((f) => f.rcpt),
+        originalSubject:   subject,
+        originalMessageId: messageIdHeader,
+        failureReason:     toNotify[0]!.message,
+        smtpCode:          toNotify[0]!.code,
         serverHostname:    await deps.hostname(),
-        recipients:        permanent.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
+        recipients:        toNotify.map((f) => ({ rcpt: f.rcpt, status: f.status, diagnostic: f.message, remote: f.code !== null })),
         deliverExternal:   data.ruleRedirect !== true, // redirect rule: no backscatter to a forged external sender
       });
-      for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
     }
+    for (const f of permanent) { bounced.add(f.rcpt); newlyBounced.push(f.rcpt); }
   }
   await persist(transient);
+
+  // One delay notification once the message waited OUTBOUND_DELAY_DSN_HOURS.
+  // Marked in the job BEFORE sending: at most one DSN even if sending fails.
+  if (transient.length > 0 && delayDsnDue(job, delayDsnHours())) {
+    await job.updateData({ ...job.data, delayNotified: true });
+    try {
+      await deps.bounce({
+        ...dsnExtra,
+        originalFrom:      from,
+        originalTo:        transient.map((f) => f.rcpt),
+        originalSubject:   subject,
+        originalMessageId: messageIdHeader,
+        failureReason:     transient[0]!.message,
+        smtpCode:          transient[0]!.code,
+        serverHostname:    await deps.hostname(),
+        recipients:        transient.map((f) => ({ rcpt: f.rcpt, status: '4.4.7', diagnostic: f.message, remote: f.code !== null })),
+        deliverExternal:   data.ruleRedirect !== true,
+        action:            'delayed',
+        ...(deps.retryUntil ? { willRetryUntil: await deps.retryUntil(job) } : {}),
+      });
+    } catch (err) {
+      log.warn({ err, jobId: job.id }, 'Delay DSN failed');
+    }
+  }
 
   if (transient.length > 0) {
     const err = new TemporaryDeliveryError(
@@ -288,14 +411,77 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
  * with its last temporary failure when one is known.
  */
 export function finalBounceRecipients(data: OutboundJob, err: unknown): RecipientFailure[] {
-  const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? [])]);
+  const done = new Set([...(data.deliveredRcpts ?? []), ...(data.bouncedRcpts ?? []), ...(data.finalNdrRcpts ?? [])]);
   const known = (data.pendingFailures ?? []).filter((f) => !done.has(f.rcpt));
+  // v8.1: the retry window ended → RFC 3463 5.4.7 "delivery time expired" (a
+  // permanent failure now), the last remote reply stays the diagnostic.
+  if (isQueueExpiredError(err)) {
+    const reason = (err as Error).message.replace(/[\r\n]+/g, ' ');
+    const list = known.length > 0
+      ? known
+      : data.to.filter((r) => !done.has(r)).map((rcpt) => ({ rcpt, code: null, status: '5.4.7', message: reason, permanent: true }));
+    return list.map((f) => ({ ...f, status: '5.4.7', permanent: true }));
+  }
   if (known.length > 0) return known;
   const { code } = extractSmtpCode(err);
   const message = (err instanceof Error ? err.message : String(err)).replace(/[\r\n]+/g, ' ');
   return data.to
     .filter((r) => !done.has(r))
     .map((rcpt) => ({ rcpt, code, status: code ? `${Math.floor(code / 100)}.0.0` : '4.4.7', message, permanent: false }));
+}
+
+/**
+ * Pure: sender authentication for a locally delivered queue job. Only jobs of
+ * an authenticated user (REST/JMAP/EAS/SMTP submission set `senderUserId`,
+ * after their sender-identity check) count — not rule forwards/redirects
+ * (they carry someone else's message) and not quarantine releases.
+ */
+export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: SenderAuth } | Record<string, never> {
+  if (!job.senderUserId || job.ruleRedirect || job.quarantineReleaseId) return {};
+  if (isRuleForwardedAlready(raw)) return {};
+  return { senderAuth: { authenticatedSender: job.from } };
+}
+
+/**
+ * The buffer a queue job stores locally. Authentication-Results fields with
+ * our authserv-id are removed (RFC 8601 §5) for every producer — REST/MWA,
+ * JMAP, EAS, SMTP submission and rule forwards — so a local user cannot hand a
+ * colleague a forged `dmarc=pass`. Exception: a BCP quarantine release
+ * re-injects a message that carries our own genuine inbound verdict.
+ */
+export async function localDeliveryBuffer(
+  raw: Buffer,
+  job: Pick<OutboundJob, 'quarantineReleaseId'>,
+  strip: (raw: Buffer) => Promise<Buffer> = (r) => stripForLocalDelivery(r),
+): Promise<Buffer> {
+  return job.quarantineReleaseId ? raw : strip(raw);
+}
+
+// ── Retry schedule + expiry ───────────────────────────────────────────────────
+
+const QUEUE_EXPIRED_PREFIX = 'Message expired in queue';
+
+/** The error the worker throws when a message outlived outboundRetentionHours. */
+export function queueExpiredError(hours: number): UnrecoverableError {
+  return new UnrecoverableError(`${QUEUE_EXPIRED_PREFIX} after ${hours} hours`);
+}
+
+export function isQueueExpiredError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith(QUEUE_EXPIRED_PREFIX);
+}
+
+/**
+ * BullMQ backoff strategy for `smtp-outbound` (type OUTBOUND_BACKOFF_TYPE):
+ * 1 min (retryBackoffDelaySec) → 5 → 15 → every 30 min, never past the
+ * expiry. Jobs of other backoff types keep BullMQ's built-ins (not called here).
+ */
+export async function outboundBackoffStrategy(
+  attemptsMade: number,
+  _type?: string,
+  _err?: Error,
+  job?: { timestamp?: number; opts?: { delay?: number }; data?: { expiryBaseMs?: number } },
+): Promise<number> {
+  return outboundRetryDelay(attemptsMade, job ?? {}, await loadQueueSettings());
 }
 
 // ── Worker ────────────────────────────────────────────────────────────────────
@@ -309,13 +495,15 @@ const defaultOutboundDeps: OutboundDeps = {
   isLocalAddress: async (addr) => {
     const domain = addr.slice(addr.lastIndexOf('@') + 1).toLowerCase();
     if (!addr.includes('@') || !domain) return false;
-    return !!(await prisma.domain.findFirst({ where: { name: domain, active: true }, select: { id: true } }));
+    // IDN: the domain may be stored as A-label or U-label (v8.1).
+    return !!(await prisma.domain.findFirst({ where: { name: { in: domainVariants(domain) }, active: true }, select: { id: true } }));
   },
   expand: (addrs) => expandRecipients(addrs),
-  storeLocal: (raw, from, rcpt, job) => storeInboundMessage(raw, {
+  storeLocal: async (raw, from, rcpt, job) => storeInboundMessage(await localDeliveryBuffer(raw, job), {
     fromAddr: from,
     rcptTo:   rcpt,
     toJunk:   false,
+    ...senderAuthForJob(job, raw),
     // Stable across the job's retries: rule forwards are not queued twice.
     deliveryKey: `job:${job.messageId}`,
     ...(job.quarantineReleaseId ? { quarantineRelease: true } : {}),
@@ -328,9 +516,13 @@ const defaultOutboundDeps: OutboundDeps = {
     ...(job.dkimSelector   ? { dkimSelector: job.dkimSelector }     : {}),
     ...(job.dkimPrivateKey ? { dkimPrivateKey: job.dkimPrivateKey } : {}),
   }),
-  relay: (raw, from, to, dkim) => relayMessage(raw, from, to, dkim),
+  relay: (raw, from, to, dkim, opts) => relayMessage(raw, from, to, dkim, undefined, opts),
   bounce: (opts) => sendDsnBounce(opts),
   hostname: publicHostname,
+  retryUntil: async (job) => {
+    const s = await loadQueueSettings();
+    return new Date(queueStartMs(job) + s.outboundRetentionHours * 3_600_000);
+  },
 };
 
 export function startOutboundWorker(): Worker<OutboundJob> {
@@ -345,7 +537,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       // too long in the queue (→ dead letter + DSN, no further retries).
       const queueSettings = await loadQueueSettings();
       if (isExpiredInQueue(job, queueSettings)) {
-        throw new UnrecoverableError(`Message expired in queue after ${queueSettings.outboundRetentionHours} hours`);
+        throw queueExpiredError(queueSettings.outboundRetentionHours);
       }
 
       // ── Schedule-send: cancellation check ────────────────────────────────
@@ -432,6 +624,8 @@ export function startOutboundWorker(): Worker<OutboundJob> {
     {
       connection: createBullMqConnection(), // maxRetriesPerRequest: null (required by BullMQ)
       concurrency: 10,
+      // v8.1: retries until outboundRetentionHours (1 / 5 / 15 / every 30 min, capped at the expiry)
+      settings: { backoffStrategy: outboundBackoffStrategy },
     },
   );
 
@@ -467,7 +661,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
  * processor; here only the final give-up bounces the still-open recipients.
  */
 export function handleFailedJob(
-  job: Pick<OutboundJobLike, 'id' | 'data' | 'attemptsMade' | 'opts'>,
+  job: Pick<OutboundJobLike, 'id' | 'data' | 'attemptsMade' | 'opts'> & { updateData?: OutboundJobLike['updateData'] },
   err: Error,
   deps: Pick<OutboundDeps, 'bounce' | 'hostname'> & { deadLetter?: typeof notifyDeadLetter },
 ): { final: boolean; bounced: string[] } {
@@ -507,13 +701,31 @@ export function handleFailedJob(
     bounceList = finalBounceRecipients(job.data, err);
     if (bounceList.length > 0) {
       const list = bounceList;
+      // v8.1: RET/ENVID/NOTIFY/ORCPT honoured; SMTP-path jobs return the original (headers by default).
+      const originalRaw = job.data.rawMessage ? Buffer.from(job.data.rawMessage, 'base64') : undefined;
+      const original = originalRaw ? rawSubjectAndId(originalRaw) : { subject: '', messageId: null };
+      // Recorded BEFORE the NDR is sent (at most once): an admin "Retry" of
+      // this dead letter tries these recipients again, but never sends them
+      // a second final NDR.
+      const data: OutboundJob = {
+        ...job.data,
+        finalNdrRcpts: [...new Set([...(job.data.finalNdrRcpts ?? []), ...list.map((f) => f.rcpt)])],
+      };
+      job.data = data;
       void (async () => {
         try {
+          if (job.updateData) await job.updateData(data);
+        } catch (e) {
+          log.warn({ err: e, jobId: job.id }, 'Recording bounced recipients failed');
+        }
+        try {
           await deps.bounce({
+            ...(job.data.dsn ? { dsn: job.data.dsn } : {}),
+            ...(originalRaw ? { originalRaw } : {}),
             originalFrom:      job.data.from,
             originalTo:        list.map((f) => f.rcpt),
-            originalSubject:   job.data.message?.subject ?? '',
-            originalMessageId: job.data.message?.messageId ?? null,
+            originalSubject:   job.data.message?.subject ?? original.subject,
+            originalMessageId: job.data.message?.messageId ?? original.messageId,
             failureReason:     err.message,
             smtpCode,
             serverHostname:    await deps.hostname(),

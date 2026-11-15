@@ -32,7 +32,8 @@ const storageUrl = (p) => new URL(`../../storage/src/${p}`, import.meta.url).hre
 const STUB_SOURCE = `
 export * from '${MESSAGE_STORE_URL}';
 import { createMailCredentialVerifier, createMemoryAuthRedis } from '${MAIL_AUTH_CORE_URL}';
-export { createMemoryAuthRedis, normalizeIp, isPrivateOrLoopbackIp } from '${MAIL_AUTH_CORE_URL}';
+export { createMemoryAuthRedis, normalizeIp, isPrivateOrLoopbackIp, createExemptIpMatcher } from '${MAIL_AUTH_CORE_URL}';
+export * from '${new URL('../../core/src/net/connection-limiter.ts', import.meta.url).href}';
 export * from '${storageUrl('mime/tree.ts')}';
 export * from '${storageUrl('mime/address.ts')}';
 export * from '${storageUrl('mime/build.ts')}';

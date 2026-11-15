@@ -70,6 +70,52 @@ export function buildReceivedHeader(o: ReceivedOptions): string {
     + `${forClause}; ${formatRfc5322Date(o.date)}\r\n`;
 }
 
+/**
+ * RFC 8601 §5: removes every `Authentication-Results:` field whose authserv-id
+ * is our own host name — a sender (or an earlier hop) must not be able to
+ * pre-forge "our" verdict. Fields of other authserv-ids stay untouched.
+ */
+export function stripOwnAuthResults(raw: Buffer, authservId: string): Buffer {
+  const id = authservId.trim().toLowerCase();
+  if (!id) return raw;
+  const { end, lineBreak } = headerBounds(raw);
+  const head = raw.subarray(0, end).toString('latin1');
+  if (!/^Authentication-Results:/im.test(head)) return raw;
+  const fieldRe = /^Authentication-Results:([^\r\n]*(?:\r?\n[ \t][^\r\n]*)*)(\r?\n|$)/gim;
+  const cleaned = head.replace(fieldRe, (all, value: string) => {
+    // authserv-id = first token, CFWS (comments) allowed before it
+    const v = value.replace(/\r?\n[ \t]+/g, ' ').replace(/\([^()]*\)/g, ' ').trim();
+    const token = (/^([^\s;]+)/.exec(v)?.[1] ?? '').toLowerCase();
+    return token === id ? '' : all;
+  });
+  if (cleaned.length === head.length) return raw;
+  const fixedHead = cleaned.replace(/\r?\n$/, '');
+  if (fixedHead === '') return raw.subarray(Math.min(end + lineBreak, raw.length)); // only the empty line + body remain
+  return Buffer.concat([Buffer.from(fixedHead, 'latin1'), raw.subarray(end)]);
+}
+
+/**
+ * Pure: keeps only well-formed `Received-SPF:` / `Authentication-Results:`
+ * fields (with folded continuation lines) of a security-filter answer —
+ * nothing else may be injected into the stored message. '' when none.
+ */
+export function sanitizeAuthHeaders(headers: string): string {
+  const lines = headers.replace(/\r?\n/g, '\r\n').split('\r\n');
+  const out: string[] = [];
+  let keep = false;
+  for (const line of lines) {
+    if (line === '') { keep = false; continue; }
+    if (/^[ \t]/.test(line)) {
+      if (keep) out.push(line);
+      continue;
+    }
+    keep = /^(Authentication-Results|Received-SPF):/i.test(line);
+    if (keep) out.push(line);
+  }
+  if (out.length === 0 || /[\0]/.test(out.join(''))) return '';
+  return `${out.join('\r\n')}\r\n`;
+}
+
 export function prependHeader(raw: Buffer, header: string): Buffer {
   return Buffer.concat([Buffer.from(header, 'utf8'), raw]);
 }

@@ -38,6 +38,21 @@ export type LdapAuthDecision =
 
 export const LDAP_EXTERNAL_ID_PREFIX = 'ldap:';
 
+/**
+ * v8.1: a LOCAL account linked via SSO by an older build carries its OIDC
+ * binding (`oidc:<provider>:<sub>`) in `externalId`. That is no directory id:
+ * LDAP compares only real ids, and a takeover moves the binding to
+ * `User.oidcSubject` before it writes its own `ldap:<id>`.
+ * Returns the directory id to compare and the update data for the migration.
+ */
+export function legacyOidcBinding(u: { externalId: string | null; oidcSubject?: string | null }): {
+  directoryId: string | null;
+  migrate: { externalId?: null; oidcSubject?: string };
+} {
+  if (!u.externalId?.startsWith('oidc:')) return { directoryId: u.externalId, migrate: {} };
+  return { directoryId: null, migrate: { externalId: null, ...(u.oidcSubject ? {} : { oidcSubject: u.externalId }) } };
+}
+
 async function loadSettings(domainName: string): Promise<{ settings: LdapSettings; domainId: string } | 'unknown_domain' | 'not_configured'> {
   const domain = await prisma.domain.findUnique({ where: { name: domainName }, select: { id: true, active: true } });
   if (!domain || !domain.active) return 'unknown_domain';
@@ -61,7 +76,7 @@ export async function ldapAuthDecision(rawEmail: string, password: string): Prom
 
   const existing = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, authSource: true, active: true, externalId: true, displayName: true },
+    select: { id: true, authSource: true, active: true, externalId: true, oidcSubject: true, displayName: true },
   });
   if (existing) {
     if (existing.authSource !== 'LDAP' && !(existing.authSource === 'LOCAL' && settings.allowLocalTakeover)) {
@@ -123,7 +138,8 @@ export async function ldapAuthDecision(rawEmail: string, password: string): Prom
   const displayName = attrFirst(entry[nameAttr(settings)])?.trim() || email;
 
   if (existing) {
-    if (existing.externalId && externalId && existing.externalId !== externalId) {
+    const { directoryId, migrate } = legacyOidcBinding(existing);
+    if (directoryId && externalId && directoryId !== externalId) {
       log.warn({ email }, 'LDAP directory id differs from the linked account — refused');
       return { ok: false, reason: 'external_id_mismatch' };
     }
@@ -131,6 +147,7 @@ export async function ldapAuthDecision(rawEmail: string, password: string): Prom
     await prisma.user.update({
       where: { id: existing.id },
       data: {
+        ...migrate,
         displayName,
         ...(externalId ? { externalId } : {}),
         ...(takeover ? { authSource: 'LDAP' as const, passwordHash: null } : {}),

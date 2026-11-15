@@ -143,11 +143,11 @@ function ConnectionsList({
                   <td className="px-4 py-3 text-xs text-gray-500">{fmtDt(c.lastSyncAt)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
-                      <button onClick={() => onSync(c.domainId)} title="Jetzt synchronisieren"
+                      <button aria-label="Jetzt synchronisieren" onClick={() => onSync(c.domainId)} title="Jetzt synchronisieren"
                         className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><RotateCcw size={13} /></button>
-                      <button onClick={() => onSelect(c.domainId)} title="Konfigurieren"
+                      <button aria-label="Konfigurieren" onClick={() => onSelect(c.domainId)} title="Konfigurieren"
                         className="p-1 text-gray-400 hover:text-accent transition-colors"><Settings size={13} /></button>
-                      <button onClick={() => { if (confirm(`LDAP-Konfiguration für „${c.domainName}" löschen?`)) onDelete(c.domainId); }}
+                      <button aria-label="Löschen" onClick={() => { if (confirm(`LDAP-Konfiguration für „${c.domainName}" löschen?`)) onDelete(c.domainId); }}
                         className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                     </div>
                   </td>
@@ -664,7 +664,7 @@ export function LdapPage() {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+              <button aria-label="Aktualisieren" onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
                 <RefreshCw size={13} />
               </button>
               {section === 'list' && !showNewForm && (

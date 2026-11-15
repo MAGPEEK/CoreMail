@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   HardDriveDownload, Play, RefreshCw, Upload, AlertCircle, CheckCircle2,
@@ -6,7 +7,8 @@ import {
   Pencil, PauseCircle, Archive, ListChecks,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { api, downloadFile } from '../api/client.js';
+import { api, downloadFileNamed } from '../api/client.js';
+import { backupFileName, contentDispositionName } from '../lib/backupNames.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from '../components/Can.js';
@@ -108,7 +110,7 @@ type Tab = 'jobs' | 'actions' | 'schedules' | 'archive' | 'restore';
 
 export function BackupsPage() {
   const t = useT();
-  const { can } = usePermissions();
+  const { can, canAction } = usePermissions();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('jobs');
   const [scheduleEditor, setScheduleEditor] = useState<Partial<BackupSchedule> | null>(null);
@@ -186,7 +188,8 @@ export function BackupsPage() {
   // v3.18.29: Archive object download (stream proxy by S3 key) — Bearer header + token refresh
   const downloadArchive = async (key: string) => {
     try {
-      await downloadFile(`/admin/backups/archive/download?key=${encodeURIComponent(key)}`, key.split('/').pop() ?? 'backup.bin');
+      // v8.1: `.enc` objects are decrypted by the server — the file is the plaintext archive
+      await downloadFileNamed(`/admin/backups/archive/download?key=${encodeURIComponent(key)}`, backupFileName(key), contentDispositionName);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -223,7 +226,11 @@ export function BackupsPage() {
   // Download via Authorization header (no direct href — backend needs Bearer)
   const downloadJob = async (jobId: string, filenameHint?: string) => {
     try {
-      await downloadFile(`/admin/backups/download/${encodeURIComponent(jobId)}`, filenameHint ?? `backup-${jobId.slice(0, 8)}.bin`);
+      await downloadFileNamed(
+        `/admin/backups/download/${encodeURIComponent(jobId)}`,
+        backupFileName(filenameHint, `backup-${jobId.slice(0, 8)}.bin`),
+        contentDispositionName,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download fehlgeschlagen');
     }
@@ -280,13 +287,16 @@ export function BackupsPage() {
       cell: (j) => (
         <div className="flex items-center justify-end gap-1">
           {j.status === 'COMPLETED' && j.downloadUrl && (
-            <button
-              onClick={() => void downloadJob(j.id, j.downloadUrl?.split('/').pop())}
-              className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
-              title="Backup herunterladen" aria-label="Backup herunterladen"
-            >
-              <HardDriveDownload size={13} />
-            </button>
+            // mailbox content: ORGANIZATION_MANAGEMENT / COMPLIANCE_MANAGEMENT only (action backupMailboxData)
+            <Can action="backupMailboxData">
+              <button
+                onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
+                className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                title="Backup herunterladen" aria-label="Backup herunterladen"
+              >
+                <HardDriveDownload size={13} />
+              </button>
+            </Can>
           )}
           <Can area="servers" access="write">
             <button
@@ -336,7 +346,7 @@ export function BackupsPage() {
           {can('servers', 'write') && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
           <TabBtn active={tab === 'schedules'} onClick={() => setTab('schedules')} icon={<CalendarClock size={14} />} label="Zeitpläne" badge={schedules.length} />
           <TabBtn active={tab === 'archive'} onClick={() => setTab('archive')} icon={<Archive size={14} />} label="Backup-Archiv" badge={s3Data.length} />
-          {can('servers', 'write') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />}
+          {canAction('backupMailboxData') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />}
         </nav>
       </div>
 
@@ -442,15 +452,15 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-xs">{s.lastStatus ?? '—'}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => runScheduleNow.mutate(s.id)} disabled={runScheduleNow.isPending}
+                          <button aria-label="Jetzt ausführen" onClick={() => runScheduleNow.mutate(s.id)} disabled={runScheduleNow.isPending}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded disabled:opacity-50" title="Jetzt ausführen">
                             <Play size={13} />
                           </button>
-                          <button onClick={() => setScheduleEditor(s)}
+                          <button aria-label="Bearbeiten" onClick={() => setScheduleEditor(s)}
                             className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded" title="Bearbeiten">
                             <Pencil size={13} />
                           </button>
-                          <button onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen?`)) deleteSchedule.mutate(s.id); }}
+                          <button aria-label="Löschen" onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen?`)) deleteSchedule.mutate(s.id); }}
                             className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded" title="Löschen">
                             <Trash2 size={13} />
                           </button>
@@ -495,14 +505,16 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{fmtDate(b.lastModified)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => void downloadArchive(b.key)}
-                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
-                            title="Backup herunterladen"
-                          >
-                            <HardDriveDownload size={13} />
-                          </button>
-                          <button
+                          <Can action="backupMailboxData">
+                            <button aria-label="Backup herunterladen"
+                              onClick={() => void downloadArchive(b.key)}
+                              className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                              title="Backup herunterladen"
+                            >
+                              <HardDriveDownload size={13} />
+                            </button>
+                          </Can>
+                          <button aria-label="Backup löschen"
                             onClick={() => {
                               if (window.confirm(`Backup „${b.key}" wirklich endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
                                 deleteArchive.mutate(b.key);
@@ -526,7 +538,7 @@ export function BackupsPage() {
       )}
 
       {/* TAB: Restore */}
-      {tab === 'restore' && can('servers', 'write') && <RestoreTab users={users} />}
+      {tab === 'restore' && canAction('backupMailboxData') && <RestoreTab users={users} />}
 
       {/* Schedule-Editor */}
       {scheduleEditor && (
@@ -639,6 +651,7 @@ function ActionsTab(props: {
               <option value="mbox">MBOX (Thunderbird/Apple Mail)</option>
             </select>
           </div>
+          <Can action="backupMailboxData">
           <button
             onClick={() => props.onMailboxBackup(mailboxUserId, mailboxFormat)}
             disabled={!mailboxUserId || props.mailboxPending}
@@ -647,6 +660,7 @@ function ActionsTab(props: {
             <Play size={14} />
             {props.mailboxPending ? 'Wird gestartet…' : 'Mailbox sichern'}
           </button>
+          </Can>
         </div>
       </div>
     </div>
@@ -656,25 +670,38 @@ function ActionsTab(props: {
 // ─── Tab: Restore (MBOX import) ─────────────────────────────────────────────
 function RestoreTab(props: { users: UserItem[] }) {
   const [importUserId, setImportUserId] = useState('');
+  const [importFolderId, setImportFolderId] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
 
+  // v8.1: target folder (the backup-service requires ?folderId=)
+  const { data: folders = [] } = useQuery<Array<{ id: string; name: string; displayName: string }>>({
+    queryKey: ['admin-backups-user-folders', importUserId],
+    queryFn: () => api.get(`/admin/backups/users/${encodeURIComponent(importUserId)}/folders`),
+    enabled: !!importUserId,
+  });
+
   const handleImport = async () => {
     if (!importUserId.trim()) { toast.error('User erforderlich'); return; }
+    const folderId = importFolderId || folders.find((f) => f.name === 'INBOX')?.id || '';
+    if (!folderId) { toast.error('Zielordner erforderlich'); return; }
     const file = fileRef.current?.files?.[0];
     if (!file) { toast.error('Bitte MBOX-Datei auswählen'); return; }
     if (file.size > 500 * 1024 * 1024) { toast.error('Datei zu groß (max 500 MB)'); return; }
     setImporting(true);
     try {
-      // Send the File itself as body — the browser streams it; file.text() would
-      // load up to 500 MB into a JS string (and break non-UTF-8 mailboxes).
-      const result = await api.postFile<{ imported?: number; failed?: number }>(
-        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}`,
+      // Send the File itself as raw bytes — the browser streams it; file.text()
+      // would load up to 500 MB into a JS string and corrupt encrypted (.enc)
+      // backups and non-UTF-8 mailboxes.
+      const result = await api.postFile<{ imported?: number; errors?: number; failed?: number; encrypted?: boolean }>(
+        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}?folderId=${encodeURIComponent(folderId)}`,
         file,
-        'application/mbox',
+        'application/octet-stream',
       );
-      toast.success(`Import: ${result.imported ?? '?'} importiert${result.failed ? `, ${result.failed} fehlgeschlagen` : ''}`);
+      const failed = result.failed ?? result.errors ?? 0;
+      toast.success(`Import${result.encrypted ? ' (verschlüsseltes Backup)' : ''}: ${result.imported ?? '?'} importiert${failed ? `, ${failed} fehlgeschlagen` : ''}`);
       setImportUserId('');
+      setImportFolderId('');
       if (fileRef.current) fileRef.current.value = '';
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import fehlgeschlagen');
@@ -699,7 +726,7 @@ function RestoreTab(props: { users: UserItem[] }) {
           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Ziel-User</label>
           <select
             value={importUserId}
-            onChange={(e) => setImportUserId(e.target.value)}
+            onChange={(e) => { setImportUserId(e.target.value); setImportFolderId(''); }}
             className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">— bitte wählen —</option>
@@ -707,8 +734,20 @@ function RestoreTab(props: { users: UserItem[] }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">MBOX-Datei</label>
-          <input ref={fileRef} type="file" accept=".mbox,.txt"
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Zielordner</label>
+          <select
+            value={importFolderId || folders.find((f) => f.name === 'INBOX')?.id || ''}
+            onChange={(e) => setImportFolderId(e.target.value)}
+            disabled={!importUserId}
+            className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+          >
+            <option value="">— bitte wählen —</option>
+            {folders.map((f) => <option key={f.id} value={f.id}>{f.displayName || f.name}</option>)}
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">MBOX-Datei (auch verschlüsseltes CoreMail-Backup .mbox.enc)</label>
+          <input ref={fileRef} type="file" accept=".mbox,.txt,.enc"
             className="w-full text-sm text-gray-700 dark:text-gray-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent hover:file:bg-accent/20" />
         </div>
       </div>
@@ -780,15 +819,22 @@ function ScheduleEditorModal(props: {
   const [enabled, setEnabled] = useState(props.initial.enabled !== false);
 
   const effectiveCron = buildCron(freq, minute, hour, weekday, day, customCron);
+  const titleId = useId();
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col">
+    <Modal
+      onClose={props.onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col"
+    >
         <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+          <h2 id={titleId} className="text-base font-semibold text-gray-900 dark:text-gray-100">
             {props.initial.id ? 'Zeitplan bearbeiten' : 'Neuer Zeitplan'}
           </h2>
-          <button onClick={props.onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          <button type="button" onClick={props.onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
         <div className="px-5 py-4 space-y-3 overflow-y-auto">
@@ -943,7 +989,6 @@ function ScheduleEditorModal(props: {
             {props.saving ? 'Speichern…' : 'Speichern'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { useShortcutHandlers } from '../hooks/useShortcuts.js';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -67,6 +68,19 @@ export function CalendarPage() {
     setSelectedDate(d);
     calendarRef.current?.getApi()?.gotoDate(d);
   };
+
+  // Keyboard shortcuts (both sets): c new event, t today, d / w / m views
+  useShortcutHandlers({
+    'calendar.new': () => {
+      if (eventDialog) return false;
+      setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } });
+      return true;
+    },
+    'calendar.today': () => handleSelectDate(new Date()),
+    'calendar.day': () => changeView('timeGridDay'),
+    'calendar.week': () => changeView('timeGridWeek'),
+    'calendar.month': () => changeView('dayGridMonth'),
+  });
 
   // Memoize hiddenDays/locale so FullCalendar does not get new props on every re-render
   const hiddenDays = useMemo(() => (view === 'workWeek' ? [0, 6] : []), [view]);

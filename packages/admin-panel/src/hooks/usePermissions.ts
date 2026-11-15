@@ -5,7 +5,7 @@ import { api } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { useAccessStore } from '../store/access.js';
 import { accessForPath, areaForPath, type AdminArea, type AreaAccess } from '../lib/adminAreas.js';
-import { can as canPure, parsePermissions, permissionsAfterError } from '../lib/permissions.js';
+import { can as canPure, canAction as canActionPure, canManageAccount, parsePermissions, permissionsAfterError, type AdminAction } from '../lib/permissions.js';
 
 /**
  * Loads the admin's permissions once per session: GET /admin/me/permissions
@@ -46,6 +46,10 @@ export interface PermissionsApi {
   ready: boolean;
   /** May the admin do `access` (default read) on `area`? */
   can: (area: AdminArea, access?: AreaAccess) => boolean;
+  /** May the admin perform a narrow action (e.g. resetPassword as HELP_DESK)? */
+  canAction: (action: AdminAction) => boolean;
+  /** May the admin change/reset/sign out an account with this role (admin accounts: ORGANIZATION_MANAGEMENT only)? */
+  canManage: (targetRole: string | undefined) => boolean;
   /** Area of the current page (null = page without an area). */
   pageArea: AdminArea | null;
   /** Access to the current page: 'write' | 'read' | 'none'. */
@@ -58,16 +62,20 @@ export interface PermissionsApi {
  */
 export function usePermissions(): PermissionsApi {
   const areas = useAccessStore((s) => s.areas);
+  const actions = useAccessStore((s) => s.actions);
   const role = useAccessStore((s) => s.role);
   const mfaVerified = useAccessStore((s) => s.mfaVerified);
   const status = useAccessStore((s) => s.status);
   const { pathname } = useLocation();
   const can = useCallback((area: AdminArea, access: AreaAccess = 'read') => canPure(areas, area, access), [areas]);
+  const canAction = useCallback((action: AdminAction) => canActionPure(areas, actions, action), [areas, actions]);
   return {
     role,
     mfaVerified,
     ready: status === 'ready',
     can,
+    canAction,
+    canManage: (targetRole: string | undefined) => canManageAccount(role, targetRole),
     pageArea: areaForPath(pathname) ?? null,
     pageAccess: accessForPath(areas, pathname),
   };

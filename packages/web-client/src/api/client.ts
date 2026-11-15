@@ -1,7 +1,17 @@
-import { useAuthStore } from '../store/auth.js';
+import { useEffect } from 'react';
+import { useAuthStore, takeLegacyRefreshToken } from '../store/auth.js';
+import toast from 'react-hot-toast';
 import { apiErrorFromBody } from '../lib/errors.js';
+import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
 
 const BASE = '/api/v1';
+
+/**
+ * v8.1: marks auth requests as coming from the browser frontend — the server
+ * then keeps the refresh token in the HttpOnly cookie `cm_rt` (Path=/auth)
+ * instead of the JSON body. The access token stays in memory (store/auth.ts).
+ */
+const WEB_CLIENT_HEADERS: Record<string, string> = { 'X-CoreMail-Client': 'web' };
 
 /** Decode JWT exp claim without a library (returns seconds since epoch or null). */
 function getJwtExp(token: string): number | null {
@@ -14,53 +24,63 @@ function getJwtExp(token: string): number | null {
 }
 
 let refreshPromise: Promise<string | null> | null = null;
-const MAINTENANCE = Symbol('maintenance');
 
-/** Tokens as persisted by zustand (shared by all tabs via localStorage). */
-function readPersistedTokens(): { accessToken: string | null; refreshToken: string | null } | null {
-  try {
-    const raw = localStorage.getItem('coremail-auth');
-    if (!raw) return null;
-    const s = (JSON.parse(raw) as { state?: { accessToken?: string | null; refreshToken?: string | null } }).state;
-    return { accessToken: s?.accessToken ?? null, refreshToken: s?.refreshToken ?? null };
-  } catch {
-    return null;
+type RefreshAttempt =
+  | { kind: 'ok'; token: string }
+  | { kind: 'logout' }
+  | { kind: 'retry'; retryAfter: string | null }
+  | { kind: 'fail' };
+
+/** Thrown when a refresh failed temporarily (429, 5xx, offline) — the session is kept. */
+export class RefreshUnavailableError extends Error {
+  constructor() {
+    super('Server vorübergehend nicht erreichbar. Bitte später erneut versuchen.');
+    this.name = 'RefreshUnavailableError';
   }
 }
 
 /**
- * Refreshes the access token. The server rotates the refresh token on every call
- * and treats two refreshes with the same token as token theft (session killed),
- * so this must be single-flight — within the tab (refreshPromise) AND across tabs
- * (Web Locks API; a tab that waited adopts the tokens another tab just obtained).
- * Returns the new access token, null (session over) or MAINTENANCE (503, keep session).
+ * One refresh attempt. v8.1: the refresh token is the HttpOnly cookie
+ * `cm_rt` (sent by the browser, rotated by the server's Set-Cookie). The server
+ * treats two refreshes with the same token as token theft (session killed), so
+ * this must be single-flight — within the tab (refreshPromise) AND across tabs
+ * (Web Locks API: a tab that waited sends the cookie the previous tab's response
+ * already replaced). A refresh token received in a body (SSO exchange) or left
+ * in localStorage by a pre-8.1 MWA is sent once in the body; the answer moves it
+ * into the cookie.
+ * Only a 401 with SESSION_REVOKED / REFRESH_* / TOKEN_* ends the session; 429,
+ * 5xx and network errors are temporary (lib/authRetry.ts).
  */
-async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
-  const used = useAuthStore.getState().refreshToken;
-  const doRefresh = async (): Promise<string | null | typeof MAINTENANCE> => {
-    // Another tab may have rotated the token while we waited for the lock
-    const persisted = readPersistedTokens();
-    if (persisted?.refreshToken && persisted.accessToken && persisted.refreshToken !== used) {
-      useAuthStore.getState().setTokens(persisted.accessToken, persisted.refreshToken);
-      return persisted.accessToken;
-    }
-    const refreshToken = persisted?.refreshToken ?? used;
-    if (!refreshToken) return null;
+async function tryRefresh(): Promise<RefreshAttempt> {
+  const doRefresh = async (): Promise<RefreshAttempt> => {
+    const pending = useAuthStore.getState().pendingRefreshToken;
+    const bodyToken = pending ?? takeLegacyRefreshToken();
+    if (pending) useAuthStore.setState({ pendingRefreshToken: null });
+    // keep a body token for the next try when this one was not answered
+    const keepBodyToken = () => {
+      if (bodyToken && !useAuthStore.getState().pendingRefreshToken) useAuthStore.setState({ pendingRefreshToken: bodyToken });
+    };
     try {
       const res = await fetch('/auth/refresh', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken }),
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+        body: JSON.stringify(bodyToken ? { refreshToken: bodyToken } : {}),
       });
-      if (res.status === 503) return MAINTENANCE;
-      if (!res.ok) return null; // 401 REFRESH_INVALID|EXPIRED|REUSED|INACTIVE → logout
-      const data = await res.json() as { accessToken: string; refreshToken?: string };
-      if (!data.accessToken) return null;
-      // Always store the rotated refresh token
-      useAuthStore.getState().setTokens(data.accessToken, data.refreshToken ?? refreshToken);
-      return data.accessToken;
+      if (res.ok) {
+        const data = await res.json().catch(() => ({})) as { accessToken?: string };
+        if (!data.accessToken) return { kind: 'fail' };
+        useAuthStore.getState().setAccessToken(data.accessToken);
+        return { kind: 'ok', token: data.accessToken };
+      }
+      const body = await res.json().catch(() => null) as { code?: string; error?: string } | null;
+      const verdict = refreshFailureVerdict(res.status, body?.code ?? body?.error);
+      if (verdict === 'logout') return { kind: 'logout' };
+      keepBodyToken();
+      return verdict === 'retry' ? { kind: 'retry', retryAfter: res.headers.get('Retry-After') } : { kind: 'fail' };
     } catch {
-      return MAINTENANCE; // network error: transient, do not log out
+      keepBodyToken(); // network error: transient, do not log out
+      return { kind: 'retry', retryAfter: null };
     }
   };
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
@@ -69,17 +89,69 @@ async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
   return doRefresh();
 }
 
-/** Single-flight refresh: concurrent callers share one /auth/refresh request. */
-async function refreshOnce(): Promise<string | null> {
-  if (!refreshPromise) {
-    refreshPromise = tryRefresh()
-      .then((r) => {
-        if (r === MAINTENANCE) throw new Error('Server vorübergehend nicht erreichbar (Wartung). Bitte später erneut versuchen.');
-        return r;
-      })
-      .finally(() => { refreshPromise = null; });
+const RETRY_NOTICE_ID = 'auth-refresh-retry';
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Refresh with backoff: the new access token, null when the session is over, or
+ * RefreshUnavailableError on a temporary failure (session kept, non-blocking notice).
+ */
+async function refreshWithRetry(maxAttempts: number): Promise<string | null> {
+  for (let attempt = 1; ; attempt++) {
+    const r = await tryRefresh();
+    if (r.kind === 'ok' || r.kind === 'logout') {
+      toast.dismiss(RETRY_NOTICE_ID);
+      return r.kind === 'ok' ? r.token : null;
+    }
+    if (r.kind === 'fail' || attempt >= maxAttempts) {
+      toast.error('Server vorübergehend nicht erreichbar — Ihre Sitzung bleibt erhalten.', { id: RETRY_NOTICE_ID, duration: 6000 });
+      throw new RefreshUnavailableError();
+    }
+    toast.loading('Server ausgelastet — Sitzung wird erneut geprüft …', { id: RETRY_NOTICE_ID });
+    await sleep(refreshBackoffMs(attempt, r.retryAfter));
   }
+}
+
+/** Single-flight refresh: concurrent callers share one /auth/refresh request (and its retries). */
+async function refreshOnce(maxAttempts = 3): Promise<string | null> {
+  refreshPromise ??= refreshWithRetry(maxAttempts).finally(() => { refreshPromise = null; });
   return refreshPromise;
+}
+
+// A body refresh token handed to the store (SSO exchange) is moved into the
+// HttpOnly cookie right away — it must not linger in memory until the access
+// token expires (and a reload would lose it).
+useAuthStore.subscribe((s, prev) => {
+  if (s.pendingRefreshToken && s.pendingRefreshToken !== prev.pendingRefreshToken) {
+    void refreshOnce().catch(() => undefined);
+  }
+});
+
+let sessionCheck: Promise<void> | null = null;
+
+/**
+ * Start-up session check: with no access token in memory (page load), asks
+ * /auth/refresh with the cookie for one. Resolves when done; afterwards
+ * `sessionChecked` is true and `accessToken` is set when a session exists.
+ */
+export function ensureSession(): Promise<void> {
+  if (useAuthStore.getState().sessionChecked) return Promise.resolve();
+  sessionCheck ??= (async () => {
+    if (!useAuthStore.getState().accessToken) {
+      // more attempts than mid-session (429/5xx/offline are retried with backoff);
+      // if it still fails the login page shows, but the cookie session is kept
+      try { await refreshOnce(6); } catch { /* temporary failure — see RefreshUnavailableError */ }
+    }
+    useAuthStore.getState().setSessionChecked(true);
+  })().finally(() => { sessionCheck = null; });
+  return sessionCheck;
+}
+
+/** Hook for route guards: false while the start-up session check runs. */
+export function useSessionChecked(): boolean {
+  const checked = useAuthStore((s) => s.sessionChecked);
+  useEffect(() => { if (!checked) void ensureSession(); }, [checked]);
+  return checked;
 }
 
 function sessionExpired(): never {
@@ -102,7 +174,12 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
     const exp = getJwtExp(token);
     const nowSecs = Math.floor(Date.now() / 1000);
     if (exp !== null && exp - nowSecs < 120) {
-      token = await refreshOnce();
+      try {
+        token = await refreshOnce();
+      } catch (err) {
+        // temporary refresh failure: go on with the still valid token
+        if (exp - nowSecs <= 5) throw err;
+      }
       if (!token) sessionExpired();
     }
   }
@@ -121,6 +198,9 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
   // Revoked session (admin/user ended it) → no refresh attempt
   const body = await res.clone().json().catch(() => null) as { error?: string; code?: string } | null;
   if (body?.code === 'SESSION_REVOKED' || body?.error === 'SESSION_REVOKED') sessionExpired();
+  // A 401 that is not about the access token (e.g. a failed re-authentication)
+  // goes to the caller unchanged — no refresh, no re-send, no logout.
+  if (!shouldRefreshOn401(body?.code)) return res;
 
   // Fallback: attempt refresh once before redirecting
   const newToken = await refreshOnce();
@@ -146,12 +226,26 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
 export const api = {
   get:      <T>(path: string)                   => request<T>(path),
   post:     <T>(path: string, body: unknown)    => request<T>(path, { method: 'POST',  body: JSON.stringify(body) }),
-  postForm: <T>(path: string, form: FormData)   => request<T>(path, { method: 'POST',  body: form }, true),
+  postForm: <T>(path: string, form: FormData, init: RequestInit = {}) => request<T>(path, { ...init, method: 'POST', body: form }, true),
   put:      <T>(path: string, body: unknown)    => request<T>(path, { method: 'PUT',   body: JSON.stringify(body) }),
   patch:    <T>(path: string, body: unknown)    => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   /** DELETE with an optional JSON body (e.g. `{ currentPassword }` for re-authentication). */
   delete:   <T>(path: string, body?: unknown)   => request<T>(path, { method: 'DELETE', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }),
 };
+
+/**
+ * v8.1: single-use SSE ticket (POST /api/v1/events/ticket, 60 s) for
+ * `GET /api/v1/events?ticket=` — the access token never goes into a URL.
+ * apiFetch sends the in-memory token and refreshes once on a 401. Returns null
+ * when no session exists (the caller retries later).
+ */
+export async function fetchEventTicket(): Promise<string | null> {
+  if (!useAuthStore.getState().accessToken) return null;
+  const res = await apiFetch('/api/v1/events/ticket', { method: 'POST', body: '{}' }, 'application/json');
+  if (!res.ok) throw new Error(`SSE ticket: HTTP ${res.status}`);
+  const data = await res.json() as { ticket?: unknown };
+  return typeof data.ticket === 'string' && data.ticket ? data.ticket : null;
+}
 
 // ── Binary / text downloads without tokens in URLs ───────────────────────────
 
@@ -196,21 +290,47 @@ export type LoginResult =
   | { accessToken: string; refreshToken: string }
   | { mfaRequired: true; challengeToken: string; method: string; methods?: MfaMethod[] };
 
+/**
+ * v8.1: `refreshToken` is '' for browser logins — the refresh token is set as
+ * the HttpOnly cookie by the server; callers pass it on to setTokens() unchanged.
+ */
 export async function login(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string; message?: string };
+    const body = await res.json().catch(() => ({ error: 'Login failed' })) as { error: string; message?: string; code?: string };
     // Maintenance mode: pass message as prefix so LoginPage can detect it
     if (body.error === 'maintenance') {
       throw new Error(`maintenance:${body.message ?? 'Wartungsmodus aktiv'}`);
     }
+    if (body.code === 'ACCOUNT_LOCKED') {
+      throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
+    }
     throw new Error(body.error);
   }
-  return res.json() as Promise<LoginResult>;
+  const data = await res.json() as LoginResult | { accessToken: string; refreshToken?: string };
+  if ('accessToken' in data) return { accessToken: data.accessToken, refreshToken: data.refreshToken ?? '' };
+  return data;
+}
+
+/**
+ * Trades the one-time SSO code for tokens (POST /auth/sso/exchange). v8.1: sent
+ * as browser client, so the refresh token comes back as the HttpOnly cookie
+ * `cm_rt` and the body only carries the access token (or an MFA challenge).
+ */
+export async function exchangeSsoCode(code: string): Promise<{ ok: boolean; body: Record<string, unknown> }> {
+  const res = await fetch('/auth/sso/exchange', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
+    body: JSON.stringify({ code }),
+  });
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return { ok: res.ok, body };
 }
 
 type TokenPair = { accessToken: string; refreshToken: string };
@@ -218,14 +338,19 @@ type TokenPair = { accessToken: string; refreshToken: string };
 async function postMfaVerify(body: Record<string, unknown>): Promise<TokenPair> {
   const res = await fetch('/auth/mfa/verify', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as unknown;
+    const err = await res.json().catch(() => ({ error: 'MFA fehlgeschlagen' })) as { code?: string };
+    if (err.code === 'ACCOUNT_LOCKED') {
+      throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
+    }
     throw apiErrorFromBody(err, res.status, 'Überprüfung fehlgeschlagen');
   }
-  return res.json() as Promise<TokenPair>;
+  const data = await res.json() as { accessToken: string; refreshToken?: string };
+  return { accessToken: data.accessToken, refreshToken: data.refreshToken ?? '' };
 }
 
 /**
@@ -257,23 +382,25 @@ export async function startMfaWebAuthn(challengeToken: string): Promise<unknown>
 }
 
 /**
- * Ends the session: revokes the refresh token server-side (POST /auth/logout)
- * and clears the local auth state. Server errors never block the local logout.
+ * Ends the session: revokes the refresh token server-side (POST /auth/logout —
+ * v8.1: the cookie, or a not yet adopted body token) and clears the local auth
+ * state. The server deletes the cookie. Server errors never block the local logout.
  */
 export async function logoutSession(): Promise<void> {
-  const { refreshToken, accessToken } = useAuthStore.getState();
-  if (refreshToken) {
-    try {
-      await fetch('/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ refreshToken }),
-        keepalive: true,
-      });
-    } catch { /* offline — still log out locally */ }
-  }
+  const { pendingRefreshToken, accessToken } = useAuthStore.getState();
+  try {
+    await fetch('/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        ...WEB_CLIENT_HEADERS,
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify(pendingRefreshToken ? { refreshToken: pendingRefreshToken } : {}),
+      keepalive: true,
+    });
+  } catch { /* offline — still log out locally */ }
+  takeLegacyRefreshToken(); // never leave a pre-8.1 token behind
   useAuthStore.getState().logout();
 }

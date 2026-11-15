@@ -13,10 +13,13 @@ data:
   actions.conf: |
     {{- .Files.Get "files/rspamd/actions.conf" | nindent 4 }}
   # Controller: CoreMail learns spam/ham and reads stats without a password from
-  # secure_ip; the NetworkPolicy limits access to the app pod.
+  # secure_ip; the NetworkPolicy limits access to the app pod. With
+  # RSPAMD_CONTROLLER_PASSWORD in the Secret (secrets.rspamdControllerPassword)
+  # every other caller needs it and the app sends it too, so secureIp can be
+  # narrowed to loopback. Unset = empty password (secure_ip only).
   worker-controller.inc: |
-    password = "";
-    enable_password = "";
+    password = "{= env.CONTROLLER_PASSWORD =}";
+    enable_password = "{= env.CONTROLLER_PASSWORD =}";
     bind_socket = "*:11334";
     secure_ip = [{{ range $i, $ip := $r.secureIp }}{{ if $i }}, {{ end }}{{ $ip | quote }}{{ end }}];
 ---
@@ -53,7 +56,7 @@ spec:
       labels:
         {{- include "coremail.labels" (dict "root" . "component" "rspamd") | nindent 8 }}
       annotations:
-        checksum/config: {{ printf "%s%v" (.Files.Get "files/rspamd/actions.conf") $r.secureIp | sha256sum }}
+        checksum/config: {{ printf "%s%v|controller-v2|%s" (.Files.Get "files/rspamd/actions.conf") $r.secureIp (.Values.secrets.rspamdControllerPassword | default "" | sha256sum) | sha256sum }}
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -70,6 +73,10 @@ spec:
           ports:
             - { name: normal, containerPort: 11333, protocol: TCP }
             - { name: controller, containerPort: 11334, protocol: TCP }
+          env:
+            # rspamd exposes RSPAMD_<NAME> as env.<NAME> in local.d (worker-controller.inc)
+            - name: RSPAMD_CONTROLLER_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "coremail.secretName" . }}, key: RSPAMD_CONTROLLER_PASSWORD, optional: true } }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

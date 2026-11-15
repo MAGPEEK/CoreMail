@@ -20,6 +20,11 @@
  *    every attempt. A successful login resets the ACCOUNT counter only — never
  *    the per-IP counter (an attacker with one valid account must not be able to
  *    reset the IP budget).
+ *  - Per-IP exemption (v8.1): only loopback by default; private ranges are
+ *    counted like public ones (behind a reverse proxy or the Docker userland
+ *    proxy every attacker would otherwise look exempt). Trusted internal
+ *    networks are configured explicitly (createExemptIpMatcher /
+ *    MAIL_AUTH_EXEMPT_CIDRS).
  *  - Unknown users are verified against a dummy hash (equal bcrypt cost).
  *  - Database errors → `error` (temporary failure), never `invalid`.
  *    Redis errors fail open (logged): mail keeps working while Redis is down.
@@ -136,7 +141,11 @@ export interface MailAuthDeps {
   /** A hash with the production cost factor; verified for unknown users (timing). */
   dummyHash(): Promise<string>;
   limits?: Partial<MailAuthLimits>;
-  /** IPs that are not subject to the per-IP counter (default: loopback + private ranges). */
+  /**
+   * IPs that are not subject to the per-IP counter. Default (v8.1): loopback
+   * only — private peers are counted. Operators widen it with
+   * createExemptIpMatcher(MAIL_AUTH_EXEMPT_CIDRS).
+   */
   isExemptIp?: (ip: string) => boolean;
   /** External verifiers (default: the global registry). */
   externalVerifiers?: () => ExternalPasswordVerifier[];
@@ -191,6 +200,43 @@ export function isPrivateOrLoopbackIp(raw: string): boolean {
 export function isLoopbackIp(raw: string): boolean {
   const ip = normalizeIp(raw);
   return ip === '::1' || (isIP(ip) === 4 && ip.startsWith('127.'));
+}
+
+/**
+ * Builds the per-IP brute-force exemption predicate: loopback (127.0.0.0/8,
+ * ::1) is always exempt, plus every IP or CIDR of `raw` (comma/space separated,
+ * e.g. MAIL_AUTH_EXEMPT_CIDRS="10.0.0.0/8, fd00::/8, 192.0.2.7"). Entries that
+ * are not a valid IP/CIDR are ignored and returned in `invalid` (the caller logs
+ * them) — a typo must never turn into "exempt everything".
+ */
+export function createExemptIpMatcher(raw: string | null | undefined): { isExempt: (ip: string) => boolean; invalid: string[] } {
+  const list = new BlockList();
+  const invalid: string[] = [];
+  let entries = 0;
+  for (const entry of (raw ?? '').split(/[\s,]+/).map((e) => e.trim()).filter(Boolean)) {
+    const slash = entry.indexOf('/');
+    const addr = normalizeIp(slash === -1 ? entry : entry.slice(0, slash));
+    const family = isIP(addr);
+    const maxPrefix = family === 4 ? 32 : 128;
+    const prefixText = slash === -1 ? String(maxPrefix) : entry.slice(slash + 1);
+    const prefix = Number(prefixText);
+    if (family === 0 || !/^\d{1,3}$/.test(prefixText) || prefix > maxPrefix) {
+      invalid.push(entry);
+      continue;
+    }
+    list.addSubnet(addr, prefix, family === 4 ? 'ipv4' : 'ipv6');
+    entries++;
+  }
+  const isExempt = (rawIp: string): boolean => {
+    const ip = normalizeIp(rawIp);
+    if (isLoopbackIp(ip)) return true;
+    if (entries === 0) return false;
+    const family = isIP(ip);
+    if (family === 4) return list.check(ip, 'ipv4');
+    if (family === 6) return list.check(ip, 'ipv6');
+    return false;
+  };
+  return { isExempt, invalid };
 }
 
 /**
@@ -296,34 +342,18 @@ export function hasMfa(user: Pick<UserRow, 'mfa'>): boolean {
   return Array.isArray(creds) && creds.length > 0;
 }
 
-export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredentialVerifier {
+// ─── Shared lockout (mail protocols + web login, v8.1) ──────────────────────
+
+interface LockoutCoreDeps {
+  redis: MailAuthRedis | null;
+  limits?: Partial<MailAuthLimits> | undefined;
+  log?: MailAuthLogger | undefined;
+}
+
+/** Counter primitives keyed by scope + id (shared by the verifier and createLoginLockout). */
+function lockoutCore(deps: LockoutCoreDeps) {
   const limits: MailAuthLimits = { ...DEFAULT_MAIL_AUTH_LIMITS, ...(deps.limits ?? {}) };
-  const isExempt = deps.isExemptIp ?? isPrivateOrLoopbackIp;
-  const externals = deps.externalVerifiers ?? listExternalPasswordVerifiers;
   const log = deps.log;
-
-  const safeVerify = async (password: string, hash: string): Promise<boolean> => {
-    try { return await deps.verifyPassword(password, hash); } catch { return false; }
-  };
-  const burnDummy = async (password: string): Promise<void> => {
-    try { await deps.verifyPassword(password, await deps.dummyHash()); } catch { /* timing only */ }
-  };
-
-  async function normalizeLogin(login: string): Promise<string | null> {
-    let name = (login ?? '').trim();
-    const bs = name.lastIndexOf('\\');
-    if (bs !== -1) name = name.slice(bs + 1);
-    name = name.trim().toLowerCase();
-    if (!name || /[\s\0]/.test(name)) return null;
-    if (!name.includes('@')) {
-      const primary = await deps.prisma.domain.findFirst({
-        where: { primary: true, active: true },
-        select: { name: true },
-      }) as { name?: string } | null;
-      if (primary?.name) name = `${name}@${primary.name.toLowerCase()}`;
-    }
-    return name;
-  }
 
   async function lockTtl(scope: 'ip' | 'acct', id: string): Promise<number> {
     if (!deps.redis) return 0;
@@ -360,6 +390,98 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
       log?.error({ err, scope }, 'mail-auth: Redis error while counting a failure');
     }
   }
+
+  return { lockTtl, countFailure };
+}
+
+export interface LoginLockoutDeps {
+  redis: MailAuthRedis | null;
+  limits?: Partial<MailAuthLimits> | undefined;
+  /** IPs that skip the per-IP counter (default: loopback only, like mail since v8.1). */
+  isExemptIp?: ((ip: string) => boolean) | undefined;
+  log?: MailAuthLogger | undefined;
+}
+
+export interface LoginLockState {
+  locked: boolean;
+  scope?: 'ip' | 'account';
+  retryAfterSec: number;
+}
+
+/**
+ * The Redis failure counters of the mail-protocol check, usable by other login
+ * front doors (v8.1: the web/API login). Same keys, limits and backoff as
+ * verifyMailCredentials — a failure on the web counts against the mail budget
+ * and vice versa. Accounts are keyed by the normalised e-mail.
+ */
+export interface LoginLockout {
+  /** Lock state of an account (normalised e-mail) and an optional client IP. */
+  check(email: string, ip?: string | null): Promise<LoginLockState>;
+  /** Counts one failed attempt for the account and the (non-exempt) IP. */
+  fail(email: string, ip?: string | null): Promise<void>;
+  /** Resets the ACCOUNT counter (never the per-IP counter). */
+  success(email: string): Promise<void>;
+}
+
+export function createLoginLockout(deps: LoginLockoutDeps): LoginLockout {
+  const isExempt = deps.isExemptIp ?? isLoopbackIp;
+  const { lockTtl, countFailure } = lockoutCore(deps);
+  const ipKey = (raw: string | null | undefined): string | null => {
+    const ip = normalizeIp(raw);
+    return ip && isIP(ip) !== 0 && !isExempt(ip) ? ip : null;
+  };
+  return {
+    async check(email, rawIp) {
+      const ipId = ipKey(rawIp);
+      const [ipTtl, acctTtl] = await Promise.all([
+        ipId ? lockTtl('ip', ipId) : Promise.resolve(0),
+        lockTtl('acct', accountId(email)),
+      ]);
+      if (ipTtl > 0 || acctTtl > 0) {
+        return { locked: true, scope: ipTtl > 0 ? 'ip' : 'account', retryAfterSec: Math.max(ipTtl, acctTtl) };
+      }
+      return { locked: false, retryAfterSec: 0 };
+    },
+    async fail(email, rawIp) {
+      const ipId = ipKey(rawIp);
+      await Promise.all([ipId ? countFailure('ip', ipId) : Promise.resolve(), countFailure('acct', accountId(email))]);
+    },
+    async success(email) {
+      if (!deps.redis) return;
+      try { await deps.redis.del(KEY.fail('acct', accountId(email))); } catch { /* non-critical */ }
+    },
+  };
+}
+
+export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredentialVerifier {
+  const isExempt = deps.isExemptIp ?? isLoopbackIp;
+  const externals = deps.externalVerifiers ?? listExternalPasswordVerifiers;
+  const log = deps.log;
+
+  const safeVerify = async (password: string, hash: string): Promise<boolean> => {
+    try { return await deps.verifyPassword(password, hash); } catch { return false; }
+  };
+  const burnDummy = async (password: string): Promise<void> => {
+    try { await deps.verifyPassword(password, await deps.dummyHash()); } catch { /* timing only */ }
+  };
+
+  async function normalizeLogin(login: string): Promise<string | null> {
+    let name = (login ?? '').trim();
+    const bs = name.lastIndexOf('\\');
+    if (bs !== -1) name = name.slice(bs + 1);
+    name = name.trim().toLowerCase();
+    if (!name || /[\s\0]/.test(name)) return null;
+    if (!name.includes('@')) {
+      const primary = await deps.prisma.domain.findFirst({
+        where: { primary: true, active: true },
+        select: { name: true },
+      }) as { name?: string } | null;
+      if (primary?.name) name = `${name}@${primary.name.toLowerCase()}`;
+    }
+    return name;
+  }
+
+  const { lockTtl, countFailure } = lockoutCore({ redis: deps.redis, limits: deps.limits, log });
 
   async function verify(login: string, password: string, ctx: MailAuthContext): Promise<MailAuthResult> {
     const ip = normalizeIp(ctx.ip);

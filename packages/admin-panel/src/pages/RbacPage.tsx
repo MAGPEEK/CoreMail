@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { usePopoverDismiss } from '../components/usePopoverDismiss.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldHalf, Search, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -90,6 +91,9 @@ function RoleBadge({ role }: { role: UserRole }) {
 function RoleSelector({ userId, currentRole }: { userId: string; currentRole: UserRole }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  usePopoverDismiss(open, () => setOpen(false), triggerRef, menuRef);
 
   const update = useMutation({
     mutationFn: (role: UserRole) => api.put(`/admin/mailboxes/${userId}`, { role }),
@@ -108,20 +112,21 @@ function RoleSelector({ userId, currentRole }: { userId: string; currentRole: Us
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen(o => !o)}
+      <button ref={triggerRef} type="button" onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu" aria-expanded={open} aria-label={`Rolle ändern (aktuell: ${ROLE_META[currentRole].label})`}
         className="flex items-center gap-1.5 px-2 py-1 rounded border border-gray-200 hover:border-accent hover:bg-accent/5 transition-colors">
         <RoleBadge role={currentRole} />
-        <ChevronDown size={11} className="text-gray-400" />
+        <ChevronDown size={11} className="text-gray-400" aria-hidden="true" />
       </button>
 
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 w-72 bg-white rounded-lg border border-gray-200 shadow-lg z-20 py-1 overflow-hidden">
+          <div ref={menuRef} role="menu" aria-label="Rolle wählen" className="absolute right-0 top-full mt-1 w-72 bg-white rounded-lg border border-gray-200 shadow-lg z-20 py-1 overflow-hidden">
             {adminRoles.map(r => {
               const m = ROLE_META[r];
               return (
-                <button key={r} onClick={() => update.mutate(r)}
+                <button key={r} type="button" role="menuitemradio" aria-checked={r === currentRole} onClick={() => update.mutate(r)}
                   className={`w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-start gap-3 ${r === currentRole ? 'bg-accent/5' : ''}`}>
                   <div className="pt-0.5">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${m.color}`}>

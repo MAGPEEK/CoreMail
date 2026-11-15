@@ -7,7 +7,7 @@
  * Sync:            runLdapSyncLocked(domainId) / startLdapSyncScheduler()
  */
 export {
-  authenticateLdap, ldapAuthDecision, ldapAuthenticator, verifyLdapMailPassword, LDAP_EXTERNAL_ID_PREFIX,
+  authenticateLdap, ldapAuthDecision, ldapAuthenticator, verifyLdapMailPassword, LDAP_EXTERNAL_ID_PREFIX, legacyOidcBinding,
   ldapMailPasswordVerifier, registerLdapMailVerifier,
   type LdapAuthDecision, type LdapAuthReason,
 } from './authenticate.js';

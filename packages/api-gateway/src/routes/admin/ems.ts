@@ -19,6 +19,7 @@ import { publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth
 import { requireArea, requireRole } from '../../middleware/auth.js';
 import { canManageAccount, type AdminArea } from '../../lib/rbac.js';
 import { generateDkimPrivateKey } from '../../lib/dkim.js';
+import { invalidRegexConditionMessage } from '../../lib/rule-validation.js';
 
 export const adminEmsRouter: RouterType = Router();
 // v6 RBAC: the EMS bridge spans several areas — guard per cmdlet family.
@@ -246,6 +247,8 @@ adminEmsRouter.post('/transport-rules', async (req: Request, res: Response) => {
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const patternError = invalidRegexConditionMessage(parsed.data.Conditions);
+  if (patternError) { res.status(400).json({ error: patternError }); return; }
 
   const createdBy = req.apiUser?.userId ?? '';
   const rule = await prisma.transportRule.create({
@@ -272,6 +275,8 @@ adminEmsRouter.put('/transport-rules/:identity', async (req: Request, res: Respo
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const patternError = invalidRegexConditionMessage(parsed.data.Conditions);
+  if (patternError) { res.status(400).json({ error: patternError }); return; }
 
   const rule = await prisma.transportRule.findFirst({ where: { OR: [{ name: identity }, { id: identity }] } });
   if (!rule) { res.status(404).json({ error: `Rule '${identity}' not found.` }); return; }

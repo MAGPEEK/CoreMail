@@ -15,11 +15,15 @@ import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
 import { useAuthStore } from './store/auth.js';
+import { useSessionChecked } from './api/client.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import { useTaskReminders } from './hooks/useTaskReminders.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
+import { useSendGuard } from './components/DelayedSendToast.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -57,6 +61,10 @@ const APP_MAP: Record<string, 'mail' | 'calendar' | 'contacts' | 'tasks' | 'note
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken);
+  // v8.1: the access token is memory-only — after a reload wait for the
+  // cookie-based session check before deciding to show the login page.
+  const sessionChecked = useSessionChecked();
+  if (!token && !sessionChecked) return null;
   if (!token) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -69,6 +77,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   useInactivityLogout();
   // Task reminders fire on every page, not only while /tasks is open
   useTaskReminders();
+  // Keyboard shortcuts (Settings → View) + undo-send unload guard
+  useGlobalShortcuts();
+  useSendGuard();
 
   const currentApp = APP_MAP[location.pathname] ?? 'mail';
 
@@ -85,6 +96,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
       </main>
       {composeOpen && <ComposeWindow />}
+      <ShortcutHelpDialog />
     </div>
   );
 }

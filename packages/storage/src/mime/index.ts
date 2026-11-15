@@ -28,8 +28,49 @@ export interface ParsedAttachment {
   inline: boolean;
 }
 
+/**
+ * Upper bound for the top-level header section handed to the MIME parser
+ * (Postfix `header_size_limit` semantics, 2.5× its default). Address headers are
+ * attacker-controlled; the cap bounds the parser's work independently of the
+ * address parser in use. The stored raw message is never changed.
+ */
+export const MAX_PARSE_HEADER_BYTES = 256 * 1024;
+
+const isFoldWs = (b: number | undefined): boolean => b === 0x20 || b === 0x09;
+
+/**
+ * Pure: returns `raw` unchanged when its header section fits `maxBytes`;
+ * otherwise a copy that keeps the complete header fields within the first
+ * `maxBytes` bytes, drops the rest of the header section and keeps the body.
+ */
+export function capHeaderSection(raw: Buffer, maxBytes = MAX_PARSE_HEADER_BYTES): Buffer {
+  if (raw.length <= maxBytes) return raw;
+  const crlf = raw.indexOf('\r\n\r\n');
+  const lf = raw.indexOf('\n\n');
+  // Offset of the line break that ends the last header line, and where the
+  // blank line + body start after it.
+  let headerEnd = -1;
+  let rest = -1;
+  if (crlf >= 0 && (lf < 0 || crlf < lf)) { headerEnd = crlf; rest = crlf + 2; }
+  else if (lf >= 0) { headerEnd = lf; rest = lf + 1; }
+  if (headerEnd >= 0 && headerEnd <= maxBytes) return raw;
+
+  // Last complete header field that ends within the limit: a line break whose
+  // next line does not start with folding whitespace.
+  let cut = 0;
+  for (let p = maxBytes - 1; p >= 0;) {
+    const nl = raw.lastIndexOf(0x0a, p);
+    if (nl < 0) break;
+    if (!isFoldWs(raw[nl + 1])) { cut = nl + 1; break; }
+    p = nl - 1;
+  }
+  const kept = raw.subarray(0, cut);
+  if (rest < 0) return Buffer.concat([kept, Buffer.from('\r\n')]);
+  return Buffer.concat([kept, raw.subarray(rest)]);
+}
+
 export async function parseRawMessage(rawBuffer: Buffer): Promise<ParsedMessage> {
-  const parsed: ParsedMail = await simpleParser(rawBuffer);
+  const parsed: ParsedMail = await simpleParser(capHeaderSection(rawBuffer));
 
   const toAddrs = addressesToArray(parsed.to);
   const ccAddrs = addressesToArray(parsed.cc);

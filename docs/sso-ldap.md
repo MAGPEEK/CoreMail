@@ -31,7 +31,7 @@ Provider settings (`OidcProvider`):
 | `forcedDomains` | `[]` | Allowed e-mail domains; empty = only the provider's own domain. Every domain must also exist (active) in CoreMail |
 | `requireEmailVerified` | true | `email_verified` must be `true`. Switch off only for IdPs that never send it (Entra ID) and then restrict `forcedDomains` and use a single-tenant discovery URL |
 | `autoProvision` | true | Unknown users are created (authSource OIDC) and their mailbox is provisioned |
-| `allowLinking` | false | Existing LOCAL/LDAP accounts with the same verified address may log in via SSO (the account is not converted) |
+| `allowLinking` | false | Existing LOCAL/LDAP accounts with the same verified address may log in via SSO (the account is not converted). Since v8.1 the account is bound to the IdP subject of its first SSO login; another subject with the same address gets `account_mismatch` |
 | `requireMfa` | false | Users with CoreMail MFA enrolled must enter their code after the IdP |
 
 ### Flow and security properties
@@ -55,6 +55,17 @@ POST /auth/sso/exchange { code }         → same body as POST /auth/login
   bound to `oidc:<providerId>:<sub>` on first use (another subject is refused),
   LOCAL/LDAP accounts only with `allowLinking`, inactive accounts refused,
   maintenance mode respected.
+- Linked accounts (v8.1) are bound like OIDC accounts: the LOCAL or LDAP account
+  stores `oidc:<providerId>:<sub>` in the column `User.oidcSubject`. `externalId`
+  stays free for the LDAP directory id (`ldap:<id>`). To re-link an account to
+  another IdP identity, set `oidcSubject` to NULL. A linked LOCAL account can
+  still be taken over by LDAP (`allowLocalTakeover`, login or sync); the SSO
+  binding stays.
+  Migration of older bindings happens on use: a LOCAL account with
+  `externalId = oidc:…` and the Redis key `auth:sso:link:<userId>` (LDAP accounts)
+  stay bound. The next SSO login moves the binding into `oidcSubject` (and clears
+  the `oidc:` externalId or deletes the Redis key). An LDAP takeover of such a LOCAL
+  account moves it as well and then writes its directory id.
 - The callback never puts tokens into a URL: it issues a one-time code (60 s, Redis,
   single use, bound to the same cookie). The SPA posts it to `/auth/sso/exchange` and
   receives a normal CoreMail session (rotating refresh token) or an MFA challenge.
@@ -70,7 +81,72 @@ CoreMail MFA code. The session counts as *MFA verified* (relevant for
 provider, users with CoreMail MFA enrolled get the normal MFA challenge
 (`/auth/mfa/verify`) and the session is MFA verified afterwards.
 
-SSO accounts have no CoreMail password; mail clients use app passwords.
+Admins (v8.1): when `requireMfaForAdmins` is on, an account with an admin role
+(anything but `USER`) is **not** MFA verified through `amr` — the claim is the
+IdP's own statement. Such admins get the CoreMail MFA challenge when enrolled (even
+if the provider has `requireMfa` off); without CoreMail MFA the session stays
+unverified and the admin API answers `MFA_REQUIRED` / `MFA_NOT_VERIFIED`. Set
+`OIDC_TRUST_IDP_MFA_FOR_ADMINS=true` (default `false`) to trust `amr` for admins
+again — only effective for providers with `requireMfa` off.
+
+SSO accounts have no CoreMail password; mail clients use app passwords. Creating
+an app password (v8.1) needs re-authentication — SSO users confirm with a
+CoreMail TOTP or backup code (`mfaCode`).
+
+## Web login hardening (v8.1)
+
+### Shared lockout
+
+`POST /auth/login` and `/auth/mfa/verify` use the same Redis failure counters as
+the mail protocols (`MAIL_AUTH_*` variables, see `packages/storage/src/mail-auth.ts`):
+per account (default 10 failures / 15 min → 5 min lock, doubling per strike) and per
+client IP (50 / 15 min; only loopback and `MAIL_AUTH_EXEMPT_CIDRS` are exempt). Wrong passwords and wrong MFA codes count alike;
+only a completed login resets the account counter. A locked account or IP gets
+`429 { code: 'ACCOUNT_LOCKED', retryAfter }` with `Retry-After` before any password
+check — also for unknown accounts, and `mfaRequired` is never revealed while locked.
+Failures on IMAP/SMTP/… and on the web count against the same budget.
+
+**Trade-off: lockout DoS.** The account counter does not depend on who sends the
+wrong passwords. Anyone who knows an address can lock that account with 10 wrong
+tries, from any IP. The lock lasts 5 minutes and doubles with each further strike.
+This affects the web login and all mail protocols, because they share the budget.
+We accept this because it bounds password guessing per account, even from
+distributed IPs. Mitigations:
+
+- The per-IP counter (50 / 15 min) slows down a single attacker. They need many
+  addresses to keep many accounts locked.
+- MFA: with TOTP/WebAuthn a guessed password alone is useless, so a higher
+  account threshold costs little security.
+- The env knobs: `MAIL_AUTH_ACCOUNT_MAX_FAILURES` (10), `MAIL_AUTH_ACCOUNT_WINDOW_SEC`
+  (900) and `MAIL_AUTH_ACCOUNT_LOCK_SEC` (300) set the account lock;
+  `MAIL_AUTH_IP_*` the per-IP lock. `MAIL_AUTH_EXEMPT_CIDRS` exempts trusted
+  networks (office NAT) from the per-IP counter only, not from the account
+  counter. Behind a reverse proxy set `TRUST_PROXY`, otherwise all clients share
+  the proxy's IP. Watch the logs for `ACCOUNT_LOCKED` bursts.
+
+### Refresh-token cookie
+
+Browser frontends send `X-CoreMail-Client: web` (the BCP also `X-CoreMail-App: bcp`).
+For them every token-issuing answer (`/auth/login`, `/auth/mfa/verify`,
+`/auth/refresh`) carries only `{ accessToken, expiresIn }`; the refresh token is set
+as cookie `cm_rt` (BCP: `cm_rt_bcp`) — `HttpOnly; SameSite=Strict; Path=/auth`,
+`Secure` when the request is HTTPS (TLS proxy, trusted `X-Forwarded-Proto`) or the
+page origin is `https://`. The access token is kept in memory; after a reload the
+frontends call `/auth/refresh` with the cookie.
+
+`/auth/refresh` and `/auth/logout` use the cookie when the JSON body has no
+`refreshToken`. Cookie use requires a same-origin `Origin` (or `Referer`) — the
+request's `Host`, `req.hostname` (`X-Forwarded-Host` with `TRUST_PROXY`), the
+configured public hostname or an entry of `COREMAIL_ALLOWED_ORIGINS`
+(comma-separated origins like `https://mail.example.com` or host names) — else
+`403 ORIGIN_MISMATCH`. Logout always deletes the cookie; a failed cookie refresh
+deletes it too.
+
+Compatibility: clients that send the refresh token in the body (admin CLI, API
+scripts) keep the old contract. A browser that still has a pre-8.1 token in
+localStorage sends it once in the body; the answer moves it into the cookie and the
+frontend deletes the stored copy. The SSO exchange (`/auth/sso/exchange`) still
+returns the refresh token in its body; the frontends hand it over the same way.
 
 ## LDAP / Active Directory
 

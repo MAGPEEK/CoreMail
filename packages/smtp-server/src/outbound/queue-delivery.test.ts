@@ -141,3 +141,70 @@ test('the bare <Postmaster> recipient is delivered locally (expanded), not relay
   assert.deepEqual(h.stored, ['admin@corp.test']);
   assert.deepEqual(h.relayed, []);
 });
+
+test('v8.1: a transient failure retries until the expiry; then ONE final NDR with 5.4.7 (expired)', async () => {
+  const { queueExpiredError, isQueueExpiredError, finalBounceRecipients, outboundBackoffStrategy } = await import('./queue.js');
+  const h = harness([() => ({ delivered: [], failures: [fail('slow@ext.test', 451, '4.4.1')] })]);
+  const j = job(['slow@ext.test']);
+  j.opts = { attempts: 100 };
+  await assert.rejects(deliverOutboundJob(j, Buffer.from('x'), h.deps), /Temporary failure/);
+
+  // a retry while attempts remain and the window is open → no bounce
+  const mid = handleFailedJob({ ...j, attemptsMade: 30 }, new Error('451 4.4.1 try later'), h.deps);
+  assert.equal(mid.final, false);
+
+  // the worker's expiry check → final NDR, status 5.4.7, last remote reply kept as diagnostic
+  const err = queueExpiredError(48);
+  assert.ok(isQueueExpiredError(err));
+  assert.ok(err instanceof UnrecoverableError);
+  const done = handleFailedJob({ ...j, attemptsMade: 31 }, err, h.deps);
+  assert.equal(done.final, true);
+  assert.deepEqual(done.bounced, ['slow@ext.test']);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+  const ndr = h.bounces[0]!;
+  assert.equal(ndr.action ?? 'failed', 'failed');
+  assert.equal(ndr.recipients![0]!.status, '5.4.7');
+  assert.match(ndr.recipients![0]!.diagnostic, /451 4\.4\.1/);
+  assert.match(ndr.failureReason, /expired in queue after 48 hours/);
+
+  // no pending failure known → every open recipient gets 5.4.7
+  assert.deepEqual(finalBounceRecipients({ messageId: 'm', from: 'a@corp.test', to: ['x@y', 'z@y'], deliveredRcpts: ['z@y'] }, err).map((f) => [f.rcpt, f.status]), [['x@y', '5.4.7']]);
+  // the BullMQ strategy delegates to the schedule (1 min after the first failure)
+  assert.equal(await outboundBackoffStrategy(1, 'coremail-outbound', undefined, { timestamp: Date.now() }), 60_000);
+});
+
+test('v8.1 review: admin retry of an expired dead letter gets a fresh window and never a second final NDR', async () => {
+  const { queueExpiredError } = await import('./queue.js');
+  const { isExpiredInQueue, adminRetryJobData } = await import('@coremail/storage');
+  const h = harness([
+    () => ({ delivered: [], failures: [fail('slow@ext.test', 451, '4.4.1')] }),
+    () => ({ delivered: [], failures: [fail('slow@ext.test', 550, '5.1.1')] }),
+  ]);
+  const now = Date.now();
+  const j = job(['slow@ext.test']);
+  j.timestamp = now - 100 * 3_600_000;
+  j.opts = { attempts: 100 };
+  j.data.delayNotified = true; // the delay DSN went out long ago
+  await assert.rejects(deliverOutboundJob(j, Buffer.from('x'), h.deps), /Temporary failure/);
+
+  // expired → dead letter with ONE 5.4.7 NDR; the recipient is recorded in the job
+  assert.equal(isExpiredInQueue({ timestamp: j.timestamp, opts: j.opts, data: j.data }, null, now), true);
+  const dead = { ...j, attemptsMade: 31 };
+  handleFailedJob(dead, queueExpiredError(48), h.deps);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+  assert.deepEqual(dead.data.finalNdrRcpts, ['slow@ext.test']);
+
+  // admin "Retry" (api-gateway adminRetryJob): window restarts, recipient is tried again
+  dead.data = adminRetryJobData(dead.data as unknown as Record<string, unknown>, now) as unknown as typeof dead.data;
+  assert.equal(isExpiredInQueue({ timestamp: dead.timestamp!, opts: dead.opts, data: dead.data }, null, now + 1000), false);
+  const err = await deliverOutboundJob(dead, Buffer.from('x'), h.deps).catch((e: unknown) => e as Error);
+  assert.deepEqual(h.relayed.at(-1), ['slow@ext.test'], 'the retry delivers again');
+  assert.ok(err instanceof UnrecoverableError);
+  // permanent failure on the retry and the final give-up: no second NDR
+  handleFailedJob({ ...dead, attemptsMade: 1 }, err, h.deps);
+  handleFailedJob({ ...dead, attemptsMade: 2 }, queueExpiredError(48), h.deps);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.bounces.length, 1);
+});

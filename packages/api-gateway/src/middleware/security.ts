@@ -81,12 +81,9 @@ export const helmetMiddleware = helmet({
     },
   },
 
-  // HSTS — browsers remember the HTTPS requirement for 1 year
-  hsts: {
-    maxAge: 31_536_000,      // 1 year in seconds
-    includeSubDomains: true,
-    preload: true,
-  },
+  // HSTS (1 year, includeSubDomains, preload) is set by hstsOnHttps()
+  // (lib/https-redirect.ts) on HTTPS responses only — 8.0.x.
+  hsts: false,
 
   // Disables X-Powered-By (no framework fingerprinting)
   hidePoweredBy: true,
@@ -180,7 +177,8 @@ export const generalRateLimit = rateLimit({
 
 /**
  * Auth endpoints — max. 20 attempts per 15 minutes per IP.
- * Protects against brute-force attacks on login and token refresh.
+ * Protects against brute-force attacks on login, MFA and password reset.
+ * Token refresh/logout have their own limiter (authRefreshRateLimit).
  */
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,
@@ -193,6 +191,37 @@ export const authRateLimit = rateLimit({
     res.status(options.statusCode).json(options.message);
   },
 });
+
+/**
+ * Token refresh + logout — 300 failed requests per 15 minutes per IP.
+ * The access token lives in memory only, so every page load and every new tab
+ * calls POST /auth/refresh; counting those against the 20-request login budget
+ * produced 429s that the frontends took for a logout. Successful refreshes are
+ * not counted; refresh tokens are 256-bit random, so the failure budget is no
+ * brute-force risk.
+ */
+export const authRefreshRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  max: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many token refresh attempts. Please try again later.', code: 'RATE_LIMITED' },
+  handler(req, res, _next, options) {
+    log.warn({ ip: req.ip, path: req.path }, 'Refresh rate limit exceeded');
+    res.status(options.statusCode).json(options.message);
+  },
+});
+
+/** Paths under /auth that use authRefreshRateLimit instead of the strict login limiter. */
+const REFRESH_PATHS = new Set(['/refresh', '/logout']);
+
+/**
+ * Limiter for the /auth mount (authRouter): POST /refresh and /logout get the
+ * generous refresh limiter, everything else (login, password reset) the strict one.
+ */
+export const authRouteRateLimit = (req: Request, res: Response, next: NextFunction): unknown =>
+  REFRESH_PATHS.has(req.path) ? authRefreshRateLimit(req, res, next) : authRateLimit(req, res, next);
 
 /**
  * SSO flow (v6.1) — start/callback/exchange: 60 per 15 minutes per IP (one

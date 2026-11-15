@@ -341,7 +341,7 @@ export function EventEditDialog({
               </span>
             )}
             {isEdit && (
-              <button
+              <button aria-label="Status der Gäste aktualisieren"
                 onClick={() => void refetchEvent()}
                 className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
                 title="Status der Gäste aktualisieren"
@@ -403,7 +403,7 @@ export function EventEditDialog({
                             {badge.icon}
                           </span>
                           {!readOnly && (
-                            <button onClick={() => removeAttendee(a.email)} className="p-0.5 text-gray-400 hover:text-red-500 ml-0.5">
+                            <button aria-label={`Gast ${a.email} entfernen`} onClick={() => removeAttendee(a.email)} className="p-0.5 text-gray-400 hover:text-red-500 ml-0.5">
                               <X size={11} />
                             </button>
                           )}

@@ -487,7 +487,7 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
           {whitelist.map(e => (
             <div key={e} className="flex items-center justify-between bg-gray-50 rounded px-3 py-1.5">
               <span className="text-sm font-mono text-gray-700">{e}</span>
-              <button onClick={() => setWhitelist(prev => prev.filter(x => x !== e))}
+              <button aria-label={`${e} entfernen`} onClick={() => setWhitelist(prev => prev.filter(x => x !== e))}
                 className="text-gray-400 hover:text-red-500 transition-colors">
                 <Trash2 size={13} />
               </button>
@@ -629,7 +629,7 @@ function RelayingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
               {trustedIps.map(ip => (
                 <div key={ip} className="flex items-center justify-between bg-gray-50 rounded px-3 py-1.5">
                   <span className="text-sm font-mono text-gray-700">{ip}</span>
-                  <button onClick={() => setTrustedIps(prev => prev.filter(x => x !== ip))}
+                  <button aria-label={`${ip} entfernen`} onClick={() => setTrustedIps(prev => prev.filter(x => x !== ip))}
                     className="text-gray-400 hover:text-red-500 transition-colors">
                     <Trash2 size={13} />
                   </button>
@@ -702,7 +702,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     setTestStatus('testing');
     setTestMsg('');
     try {
-      // API client: correct token (bcp-token), refresh + error handling
+      // API client: in-memory access token in the Authorization header, refresh + error handling
       const data = await api.post<{ ok: boolean; message: string }>('/admin/smtp-config/test-smarthost', {
         host, port, tls, implicitTls, username, password: password || undefined,
       });
@@ -1090,7 +1090,7 @@ function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
       .catch(() => toast.error('Kopieren fehlgeschlagen'));
   }, [text]);
   return (
-    <button
+    <button aria-label="Kopieren"
       onClick={handleCopy}
       title="Kopieren"
       className="shrink-0 p-1 rounded text-gray-400 hover:text-accent hover:bg-accent/10 transition-colors"

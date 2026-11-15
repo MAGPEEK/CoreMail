@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useId, useState, useEffect } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.js';
@@ -8,6 +9,7 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { clientSetupRows, clientSetupSummary } from '../lib/dnsClientSetup.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -23,10 +25,13 @@ interface DomainsResponse { domains: Domain[]; total: number; page: number; limi
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
 // ── DNS check types ───────────────────────────────────────────────────────────
-interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string }
+interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string; recommended?: boolean }
 interface DnsCheckResult {
   domain: string; hostname: string; serverIp: string;
   records: { a: DnsRec; mx: DnsRec; spf: DnsRec; dkim: DnsRec; dmarc: DnsRec; autodiscover: DnsRec; ptr: DnsRec };
+  // v8.1: recommended client auto-setup records (SRV/autoconfig) + certificate SAN hint
+  clientSetup?: Record<string, DnsRec>;
+  certificateHostnames?: string[];
 }
 
 // ── DNS helpers (module level) ────────────────────────────────────────────────
@@ -40,7 +45,7 @@ function getHostPart(name: string, domain: string): string {
 function CopyBtn({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
+    <button aria-label="Kopieren"
       onClick={() => { void copyToClipboard(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
       className="shrink-0 p-1 text-gray-400 hover:text-blue-600 transition-colors"
       title="Kopieren"
@@ -63,12 +68,14 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
       <div className="flex items-start gap-2">
         {record.ok
           ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-green-500" />
-          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning ? 'text-amber-500' : 'text-red-500'}`} />}
+          // v8.1: recommended records are yellow when missing, never red
+          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning || record.recommended ? 'text-amber-500' : 'text-red-500'}`} />}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 leading-none ${
           record.type === 'TXT'  ? 'bg-purple-100 text-purple-700' :
           record.type === 'MX'   ? 'bg-blue-100   text-blue-700'   :
           record.type === 'A'    ? 'bg-green-100  text-green-700'  :
           record.type === 'CNAME'? 'bg-amber-100  text-amber-700'  :
+          record.type === 'SRV'  ? 'bg-teal-100   text-teal-700'   :
                                    'bg-gray-100   text-gray-500'
         }`}>{record.type}</span>
         <div className="flex-1 min-w-0">
@@ -138,6 +145,40 @@ function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string;
 }
 
 
+// ── Recommended client auto-setup records (v8.1, module level) ────────────────
+function ClientSetupDnsSection({ dnsCheck }: { dnsCheck: DnsCheckResult }) {
+  const t = useT();
+  const rows = clientSetupRows(dnsCheck.clientSetup);
+  if (rows.length === 0) return null;
+  const summary = clientSetupSummary(rows);
+  return (
+    <div className="border-t border-gray-200">
+      <div className="bg-amber-50/60 px-3 py-2 border-b border-gray-100">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-gray-700">{t('domain_dns_recommended_title')}</span>
+          <span className={`text-[10px] font-mono ${summary.ok === summary.total ? 'text-green-600' : 'text-amber-600'}`}>
+            {summary.ok}/{summary.total} {t('domain_dns_recommended_count')}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">{t('domain_dns_recommended_hint')}</p>
+      </div>
+      <div className="px-3">
+        {rows.map((row) => (
+          <DnsRow key={row.key} label={t(row.labelKey)} record={{ ...row.record, recommended: true }} domain={dnsCheck.domain} />
+        ))}
+      </div>
+      {dnsCheck.certificateHostnames && dnsCheck.certificateHostnames.length > 0 && (
+        <div className="px-3 py-2 border-t border-gray-100 text-[10px] text-gray-500 leading-relaxed">
+          ℹ {t('domain_dns_cert_hint')}{' '}
+          {dnsCheck.certificateHostnames.map((h, i) => (
+            <span key={h}>{i > 0 && ', '}<code className="font-mono text-gray-700">{h}</code></span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Add-Domain-Modal ──────────────────────────────────────────────────────────
 function AddDomainModal({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -155,12 +196,19 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
     onError: (err: Error) => toast.error(err.message || t('domain_add_error')),
   });
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6"
+    >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded">
             <X size={16} />
           </button>
         </div>
@@ -204,8 +252,7 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
             {createMutation.isPending ? t('domain_add_btn_adding') : t('domain_add_btn_add')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -279,12 +326,19 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     }
   };
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}>
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+
+      closeOnBackdrop={false}
+      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
+    >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
         </div>
 
         <div className="space-y-3">
@@ -342,14 +396,14 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                 <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_dns_name')}</label>
                 <div className="flex items-center gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
+                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_txt_value')}</label>
                 <div className="flex items-start gap-2 mt-1">
                   <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
-                  <button onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
+                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
                 </div>
               </div>
             </div>
@@ -408,6 +462,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                     extra={<p className="mt-1 text-[10px] text-gray-400">ℹ {t('domain_dns_ptr_note')}</p>}
                   />
                 </div>
+                <ClientSetupDnsSection dnsCheck={dnsCheck} />
               </div>
             )}
           </div>
@@ -438,8 +493,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

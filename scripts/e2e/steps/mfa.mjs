@@ -89,7 +89,10 @@ export async function run(state) {
   });
 
   await check('mfa: app password created and works on IMAP/SMTP/POP3/JMAP/CalDAV/EAS', async () => {
-    const ap = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e client' } });
+    // Creating an app password needs re-authentication (currentPassword or mfaCode)
+    const noReauth = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e no reauth' } });
+    assert(noReauth.status === 401 && noReauth.json?.code === 'REAUTH_REQUIRED', `without re-auth → ${noReauth.status} ${noReauth.text.slice(0, 120)}`);
+    const ap = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e client', currentPassword: c.userA } });
     assert(ap.status === 201 && ap.json?.password, `${ap.status} ${ap.text.slice(0, 200)}`);
     setCred('appPwA', ap.json.password);
     state.appPwId = ap.json.id;
@@ -107,7 +110,7 @@ export async function run(state) {
   });
 
   await check('mfa: revoked app password → JMAP 401 on the immediate retry (no cache window)', async () => {
-    const ap = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e revoke' } });
+    const ap = await http('POST', '/auth/app-passwords', { token: mfaTok, body: { name: 'e2e revoke', currentPassword: c.userA } });
     assert(ap.status === 201 && ap.json?.password, `${ap.status} ${ap.text.slice(0, 200)}`);
     const auth = basic(A, ap.json.password);
     const before = await http('GET', '/jmap/session', { headers: { Authorization: auth } });

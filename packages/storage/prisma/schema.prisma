@@ -95,6 +95,9 @@ model User {
   passwordHash    String?
   authSource      AuthSource     @default(LOCAL)
   externalId      String?        // LDAP objectGUID or OIDC sub
+  // v8.1: OIDC binding (`oidc:<providerId>:<sub>`) of a LOCAL/LDAP account linked
+  // via SSO (OidcProvider.allowLinking). OIDC-only accounts keep it in externalId.
+  oidcSubject     String?
   role            UserRole       @default(USER)
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)
@@ -102,6 +105,9 @@ model User {
   // v6.1: set when the LDAP sync deactivated the account (missing in / disabled
   // in the directory) — only such accounts are re-activated by the sync.
   deactivatedBySync Boolean      @default(false)
+  // 8.x: last successful login (web/API, SSO, mail protocols). Written by
+  // recordLastLogin() (src/auth/last-login.ts), at most once per user per 5 min.
+  lastLoginAt     DateTime?
   domain          Domain         @relation(fields: [domainId], references: [id])
   domainId        String
   mailbox         Mailbox?
@@ -941,7 +947,9 @@ model ResourceBooking {
   id         String           @id @default(cuid())
   calendar   ResourceCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
   calendarId String
-  uid        String           @unique // iCal UID
+  // iCal UID — unique per resource calendar (v8.1; was globally unique, so a
+  // meeting that books two rooms could only ever create one booking)
+  uid        String
   summary    String
   organizer  String
   attendees  Json             @default("[]")
@@ -951,6 +959,7 @@ model ResourceBooking {
   icalData   String
   createdAt  DateTime         @default(now())
 
+  @@unique([calendarId, uid])
   @@index([calendarId, dtStart])
   @@index([dtStart, dtEnd])
   @@map("resource_bookings")

@@ -37,7 +37,7 @@ import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
-import { getToken } from './api/client.js';
+import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
 import { usePermissions, usePermissionsLoader } from './hooks/usePermissions.js';
@@ -128,6 +128,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
+  // v8.1: the access token is memory-only — after a reload wait for the
+  // cookie-based session check (cm_rt_bcp) before showing the login page.
+  const sessionChecked = useSessionChecked();
+  if (!getToken() && !sessionChecked) return null;
   if (!getToken()) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

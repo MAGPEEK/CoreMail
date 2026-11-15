@@ -128,16 +128,20 @@ export class CoreMailClient {
 
   // ── HTTP ──────────────────────────────────────────────────────────────────
 
-  private async rawJson<T>(method: string, path: string, body: unknown, auth: boolean): Promise<T> {
+  private async rawJson<T>(
+    method: string, path: string, body: unknown, auth: boolean,
+    raw?: { bytes: Uint8Array; headers: Record<string, string> },
+  ): Promise<T> {
     if (auth) await this.ensureAuth();
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const headers: Record<string, string> = { Accept: 'application/json', ...(raw?.headers ?? {}) };
+    if (raw) headers['Content-Type'] = 'application/octet-stream';
+    else if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth && this.token) headers['Authorization'] = `Bearer ${this.token}`;
     let resp: Response;
     try {
       resp = await fetch(`${this.server}${path}`, {
         method, headers,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(raw ? { body: raw.bytes } : body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(60_000),
       });
     } catch (err) {
@@ -162,6 +166,10 @@ export class CoreMailClient {
   put<T>(path: string, body?: unknown): Promise<T> { return this.rawJson<T>('PUT', path, body, true); }
   patch<T>(path: string, body?: unknown): Promise<T> { return this.rawJson<T>('PATCH', path, body, true); }
   delete<T>(path: string): Promise<T> { return this.rawJson<T>('DELETE', path, undefined, true); }
+  /** POST of raw bytes (application/octet-stream), e.g. a file to verify. */
+  postRaw<T>(path: string, bytes: Uint8Array, headers: Record<string, string> = {}): Promise<T> {
+    return this.rawJson<T>('POST', path, undefined, true, { bytes, headers });
+  }
 }
 
 // ── Shared resolvers ──────────────────────────────────────────────────────

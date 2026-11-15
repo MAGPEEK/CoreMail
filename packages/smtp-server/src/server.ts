@@ -10,6 +10,7 @@ import {
 import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
+import { inboundTarpitMaxDelayMs } from './core/session.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
 import { submissionHandlers } from './submission/handler.js';
@@ -48,6 +49,7 @@ let _bannerText: string = '';
 // Passed to the session config as getters → live updates take effect without
 // restarting the listeners.
 import { DEFAULT_ESMTP_EXTENSIONS, type EsmtpExtensions } from './core/types.js';
+import { esmtpEnvFlags } from './core/esmtp-env.js';
 let _esmtp: EsmtpExtensions = { ...DEFAULT_ESMTP_EXTENSIONS };
 let _maxSize: number = 25 * 1024 * 1024; // 25 MB default (matches SmtpSettings.maxMessageSizeMb default)
 let _maxRcpt: number = 100;
@@ -61,7 +63,9 @@ async function refreshSmtpSettings(): Promise<void> {
         extStarttls: true, extAuthPlain: true, extAuthLogin: true,
         extPipelining: true, extSize: true, ext8bitmime: true,
         extEnhancedStatus: true,
-        // extAuthCramMd5, extSmtputf8, extDsn, extChunking no longer read — hardcoded false
+        // extAuthCramMd5, extSmtputf8, extDsn, extChunking are not read: the BCP no longer
+        // exposes them (their stored values are stale). v8.1: SMTPUTF8/DSN/CHUNKING are
+        // controlled by SMTP_EXT_* env vars (default on), CRAM-MD5 stays off.
         maxMessageSizeMb: true, maxRecipients: true,
       },
     });
@@ -74,15 +78,9 @@ async function refreshSmtpSettings(): Promise<void> {
       size:           s?.extSize           ?? true,
       bit8mime:       s?.ext8bitmime       ?? true,
       enhancedStatus: s?.extEnhancedStatus ?? true,
-      // Deliberately hardcoded false — the server has no implementation of these extensions:
-      //   CRAM-MD5 (RFC 4954) — handleAuth only knows PLAIN+LOGIN, would return 504
-      //   SMTPUTF8 (RFC 6531) — UTF-8 in envelope addresses not handled specially
-      //   DSN (RFC 3461)      — no NOTIFY/ORCPT/ENVID/RET parsing, no multipart/report
-      //   CHUNKING (RFC 3030) — BDAT command is not recognized by the parser
+      // CRAM-MD5 (RFC 4954) — handleAuth only knows PLAIN+LOGIN, would return 504
       authCramMd5:    false,
-      smtputf8:       false,
-      dsn:            false,
-      chunking:       false,
+      ...esmtpEnvFlags(),
     };
     _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
     _maxRcpt = Math.max(1, s?.maxRecipients ?? 100);
@@ -278,6 +276,8 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
     {
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
+      // Tarpit only for inbound MTA traffic (port 25); SMTP_TARPIT_MAX_DELAY_MS=0 disables it.
+      ...(isSubmission ? {} : { tarpitMaxDelayMs: inboundTarpitMaxDelayMs() }),
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
     } as Parameters<typeof createSmtpServer>[0],
     {

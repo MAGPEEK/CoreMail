@@ -130,7 +130,7 @@ export function MailboxAliasesSection({
               >
                 {a.active ? 'Deaktivieren' : 'Aktivieren'}
               </button>
-              <button
+              <button aria-label="Alias löschen"
                 type="button"
                 onClick={() => {
                   if (window.confirm(`Alias „${a.address}" wirklich löschen?`)) {

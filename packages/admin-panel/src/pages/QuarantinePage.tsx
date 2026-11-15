@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -88,21 +89,23 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
     .filter(h => hdrs[h])
     .map(h => [h, hdrs[h]!] as [string, string]);
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex">
-      {/* Backdrop */}
-      <div className="flex-1 bg-black/30" onClick={onClose} />
-
-      {/* Panel */}
-      <div className="w-[600px] bg-white h-full shadow-2xl flex flex-col overflow-hidden">
+    // Slide-over panel on the right; clicking the dimmed area closes it
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 z-50 flex justify-end bg-black/30"
+      className="w-[600px] max-w-full bg-white h-full shadow-2xl flex flex-col overflow-hidden"
+    >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50 shrink-0">
           <div className="flex items-center gap-2">
-            <Eye size={16} className="text-gray-500" />
-            <span className="font-semibold text-gray-900 text-sm">{t('quar_detail_title')}</span>
+            <Eye size={16} className="text-gray-500" aria-hidden="true" />
+            <h2 id={titleId} className="font-semibold text-gray-900 text-sm">{t('quar_detail_title')}</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded">
-            <X size={16} />
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 hover:bg-gray-200 rounded">
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
 
@@ -237,8 +240,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
           </div>
           </Can>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -249,13 +251,17 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
   const [days, setDays]               = useState(30);
   const [onlyReleased, setOnlyReleased] = useState(true);
 
+  const titleId = useId();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-xl shadow-2xl w-[400px] p-6 space-y-5">
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="relative bg-white rounded-xl shadow-2xl w-[400px] max-w-full p-6 space-y-5"
+    >
         <div className="flex items-center gap-2">
-          <Trash2 size={18} className="text-red-500" />
-          <h2 className="text-base font-semibold text-gray-900">{t('quar_cleanup_title')}</h2>
+          <Trash2 size={18} className="text-red-500" aria-hidden="true" />
+          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('quar_cleanup_title')}</h2>
         </div>
 
         <div className="space-y-4">
@@ -301,8 +307,7 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
             <Trash2 size={13} /> {t('quar_cleanup_btn')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

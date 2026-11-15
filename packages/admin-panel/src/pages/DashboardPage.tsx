@@ -12,7 +12,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
 } from 'recharts';
-import { api, getToken } from '../api/client.js';
+import { api, fetchEventTicket } from '../api/client.js';
+import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
 
@@ -388,21 +389,19 @@ function AttackEventsWidget() {
   });
 
   // SSE subscription for live updates
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    const url = `/api/v1/events?token=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-
-    es.addEventListener('security:attack', () => {
-      // Invalidating is enough — the query fetches the new data
-      void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
-    });
-
-    es.onerror = () => { /* reconnect handled by browser */ };
-    return () => es.close();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => openReconnectingEventSource({
+    // v8.1: a fresh single-use ticket on every (re)connect — no token in the URL
+    url: async () => {
+      const ticket = await fetchEventTicket();
+      return ticket ? eventStreamUrl(ticket) : null;
+    },
+    handlers: {
+      'security:attack': () => {
+        // Invalidating is enough — the query fetches the new data
+        void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
+      },
+    },
+  }), [queryClient]);
 
   const typeLabel: Record<string, string> = {
     AUTH_BRUTE_FORCE: 'Brute-Force',

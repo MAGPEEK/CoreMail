@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
-import { sanitizeMailHtml } from '../lib/mailHtml.js';
+import { MessageListSkeleton, EmptyInbox } from '../components/Skeleton.js';
+import { MailBody } from '../components/MailBody.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 
@@ -57,7 +58,7 @@ interface MessageListEntry {
 interface MessageDetail extends MessageListEntry {
   bodyHtml:    string;
   folder:      { id: string; name: string; displayName: string };
-  attachments: { id: string; filename: string; mimeType: string; size: number }[];
+  attachments: { id: string; filename: string; mimeType: string; size: number; contentId?: string | null }[];
 }
 
 interface MessageListResponse {
@@ -297,7 +298,7 @@ export function SharedMailboxPage() {
                     disabled={createFolder.isPending || !newFolderName.trim()}
                     className="text-xs text-white bg-accent rounded px-2 py-1 disabled:opacity-50"
                   >OK</button>
-                  <button type="button"
+                  <button aria-label="Abbrechen" type="button"
                     onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}
                     className="text-gray-400 hover:text-gray-700"
                   ><X size={12} /></button>
@@ -346,7 +347,7 @@ export function SharedMailboxPage() {
                             disabled={renameFolder.isPending || !renameValue.trim()}
                             className="text-[10px] text-white bg-accent rounded px-1.5 py-0.5"
                           >OK</button>
-                          <button type="button" onClick={() => { setRenamingId(null); setRenameValue(''); }}
+                          <button aria-label="Umbenennen abbrechen" type="button" onClick={() => { setRenamingId(null); setRenameValue(''); }}
                             className="text-gray-400"><X size={11} /></button>
                         </div>
                       ) : (
@@ -376,12 +377,12 @@ export function SharedMailboxPage() {
                           {/* Rename/delete buttons (custom folders + full access only) */}
                           {!isReadOnly && !protectedFolder && (
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <button type="button"
+                              <button aria-label="Umbenennen" type="button"
                                 onClick={() => { setRenamingId(f.id); setRenameValue(f.displayName); }}
                                 title="Umbenennen"
                                 className="p-1 text-gray-400 hover:text-accent rounded"
                               ><Pencil size={11} /></button>
-                              <button type="button"
+                              <button aria-label="Löschen" type="button"
                                 onClick={() => {
                                   if (window.confirm(`Ordner „${label}" löschen? Alle enthaltenen Nachrichten gehen verloren.`))
                                     deleteFolder.mutate(f.id);
@@ -404,11 +405,11 @@ export function SharedMailboxPage() {
         {/* ── Message list ────────────────────────────────────────────────────── */}
         <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto shrink-0">
           {loadingMessages ? (
-            <p className="text-xs text-gray-400 p-3">Lade Nachrichten…</p>
+            <MessageListSkeleton rows={8} />
           ) : !messageList || messageList.messages.length === 0 ? (
-            <p className="text-xs text-gray-400 p-6 text-center">
-              {selectedFolderId ? 'Keine Nachrichten in diesem Ordner.' : 'Bitte einen Ordner wählen.'}
-            </p>
+            selectedFolderId
+              ? <EmptyInbox />
+              : <p className="text-xs text-gray-400 p-6 text-center">Bitte einen Ordner wählen.</p>
           ) : (
             <>
               <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100">
@@ -479,10 +480,11 @@ export function SharedMailboxPage() {
                 )}
               </header>
               {messageDetail.bodyHtml ? (
-                <div
-                  className="prose prose-sm max-w-none text-gray-800"
-                  // eslint-disable-next-line react/no-danger -- sanitized with DOMPurify
-                  dangerouslySetInnerHTML={{ __html: sanitizeMailHtml(messageDetail.bodyHtml) }}
+                <MailBody
+                  messageId={messageDetail.id}
+                  html={messageDetail.bodyHtml}
+                  attachments={messageDetail.attachments}
+                  bodyClassName="prose prose-sm max-w-none text-gray-800"
                 />
               ) : (
                 <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">{messageDetail.bodyText}</pre>

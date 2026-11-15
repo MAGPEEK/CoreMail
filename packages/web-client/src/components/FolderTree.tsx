@@ -14,6 +14,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import { useT } from '../i18n/useT.js';
+import { useAriaKeys } from '../hooks/useShortcuts.js';
 import { useLanguageStore } from '../store/language.js';
 
 type DialogState =
@@ -129,7 +130,7 @@ function FolderItem({
         tabIndex={0}
       >
         {hasChildren ? (
-          <button
+          <button aria-label={expanded ? 'Ordner zuklappen' : 'Ordner aufklappen'}
             onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
             onPointerDown={(e) => e.stopPropagation()}
             className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
@@ -180,6 +181,7 @@ function SectionHeader({ label, collapsed, onToggle, action }: {
 }
 
 export function FolderTree({ onNewMail }: Props) {
+  const ariaKeys = useAriaKeys();
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
@@ -491,6 +493,7 @@ export function FolderTree({ onNewMail }: Props) {
       <div className="p-3 flex items-center gap-2">
         <button
           onClick={onNewMail}
+          aria-keyshortcuts={ariaKeys('compose.new')}
           className="btn-primary flex-1 justify-center group/newmail animate-halo"
         >
           <Plus size={15} className="transition-transform duration-200 group-hover/newmail:rotate-90" />
@@ -546,7 +549,7 @@ export function FolderTree({ onNewMail }: Props) {
           collapsed={folderTreeCollapsed}
           onToggle={toggleFolderTree}
           action={
-            <button
+            <button aria-label="Neuer Ordner"
               onClick={() => setDialog({ kind: 'createRoot' })}
               className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               title="Neuer Ordner"

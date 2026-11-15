@@ -1,10 +1,11 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, type SenderAuth } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
+import { processResourceMailboxes } from './resource-booking.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -27,12 +28,26 @@ export interface StoreOptions {
    * transaction whose local store failed does not queue the rule forwards again.
    */
   deliveryKey?: string;
+  /**
+   * How the sender was authenticated (inbound filter verdict or authenticated
+   * local sender). Absent = unauthenticated: iTIP REPLYs are not applied.
+   */
+  senderAuth?: SenderAuth;
 }
+
+/**
+ * Result of one local delivery:
+ *  - 'stored'   the message is in the mailbox (or a rule/transport rule took it over)
+ *  - 'resource' the recipient is a resource mailbox — the invitation was processed
+ *  - 'unknown'  no active mailbox/resource of that address — the caller sends an
+ *               NDR to the sender (never a silent drop)
+ */
+export type StoreResult = 'stored' | 'resource' | 'unknown';
 
 export async function storeInboundMessage(
   rawBuffer: Buffer,
   opts: StoreOptions,
-): Promise<void> {
+): Promise<StoreResult> {
   // Find recipient — can be a User (mailbox) or a SharedMailbox.
   // (Public folder path removed in v3.18.31 — feature completely removed)
   const [user, sharedMailbox] = await Promise.all([
@@ -52,8 +67,12 @@ export async function storeInboundMessage(
   const ownerType: 'user' | 'shared' = user?.mailbox ? 'user' : 'shared';
 
   if (!mailbox) {
-    log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — dropping message');
-    return;
+    // Room/equipment mailbox: process the invitation for every delivery path
+    // (port 25, submission, worker for MWA/JMAP/EAS) with the sender's auth.
+    const handled = await processResourceMailboxes(rawBuffer, [opts.rcptTo], opts.fromAddr, opts.senderAuth ?? null);
+    if (handled.length > 0) return 'resource';
+    log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — recipient unknown at delivery time');
+    return 'unknown';
   }
 
   // ── Phase 9: S/MIME — decrypt + verify (user mailboxes ONLY, not SharedMailbox)
@@ -119,17 +138,27 @@ export async function storeInboundMessage(
 
   if (!folder) {
     log.error({ rcptTo: opts.rcptTo, folder: targetFolderName }, 'Target folder not found');
-    return;
+    return 'unknown';
   }
 
   let parsed = await parseRawMessage(effectiveBuffer);
+
+  // One regex step budget (RULE_PATTERN_STEP_BUDGET) for all transport and
+  // inbox rules evaluated for this message.
+  const patternBudget = createRulePatternBudget({
+    onExhausted: () => log.warn({ rcptTo: opts.rcptTo }, 'Regex step budget exhausted — remaining rule regex conditions do not match'),
+  });
 
   // ── iTIP REPLY handler (v3.18.25 A5) ────────────────────────────────────────
   // If the incoming mail is a REPLY to a calendar invitation, we update the
   // attendee status in the corresponding CalendarEvent. The mail is STILL
   // delivered normally to the inbox (user awareness, like Outlook).
   try {
-    const handled = await processITipInbound(effectiveBuffer, { envelopeFrom: opts.fromAddr, recipientUserId: ownerType === 'user' && user ? user.id : null });
+    const handled = await processITipInbound(effectiveBuffer, {
+      envelopeFrom: opts.fromAddr,
+      recipientUserId: ownerType === 'user' && user ? user.id : null,
+      senderAuth: opts.senderAuth ?? null,
+    });
     if (handled) {
       log.info({ rcptTo: opts.rcptTo, from: opts.fromAddr }, 'iTIP REPLY processed — CalendarEvent attendee updated');
     }
@@ -143,6 +172,7 @@ export async function storeInboundMessage(
   if (!opts.skipTransportRules) try {
     const transportOutcome = await applyTransportRules(parsed, {
       envelopeRcpt: opts.rcptTo,
+      patternBudget,
       ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
     });
     // reject → DSN, quarantine → quarantine store, redirect/add/removeRecipient
@@ -156,7 +186,7 @@ export async function storeInboundMessage(
       ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
       ...(opts.quarantineRelease ? { quarantineRelease: true } : {}),
     });
-    if (decision === 'stop') return;
+    if (decision === 'stop') return 'stored';
     // If buffer modifications are needed: adjust buffer + re-parse
     if (
       transportOutcome.headerAdds.length > 0 ||
@@ -184,7 +214,7 @@ export async function storeInboundMessage(
   const ruleForwards: Array<{ address: string; mode: 'forward' | 'redirect' }> = [];
   if (ownerType === 'user' && user) {
     try {
-      const outcome = await applyMailRules(parsed, user.id, user.email, folder.id);
+      const outcome = await applyMailRules(parsed, user.id, user.email, folder.id, patternBudget);
       if (outcome.targetFolderId) ruleFolderId = outcome.targetFolderId;
       ruleFlags = [...outcome.flagsToAdd];
       ruleCategories = [...outcome.categoriesToAdd];
@@ -242,7 +272,7 @@ export async function storeInboundMessage(
 
   if (ruleDiscard) {
     log.info({ rcptTo: opts.rcptTo, from: parsed.fromAddr }, 'Mail discarded by rule (hardDelete)');
-    return;
+    return 'stored';
   }
 
   // RFC 5321 §4.4: final delivery inserts Return-Path: <reverse-path> at the
@@ -430,4 +460,5 @@ export async function storeInboundMessage(
 
   // Out-of-office reply (RFC 3834) — decision + sending in ./auto-reply.ts
   if (ownerType === 'user' && user) void sendAutoReplyIfNeeded({ userId: user.id, userEmail: user.email, envelopeFrom: opts.fromAddr, raw: effectiveBuffer, deliveredToJunk: opts.toJunk || mailbox.folders.find((f: { name: string }) => f.name === 'Junk')?.id === ruleFolderId });
+  return 'stored';
 }

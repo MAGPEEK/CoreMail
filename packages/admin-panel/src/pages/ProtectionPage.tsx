@@ -982,7 +982,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
                     </div>
                   </div>
                   {!z.isBuiltin && (
-                    <button onClick={() => {
+                    <button aria-label={`Zone ${z.name} löschen`} onClick={() => {
                       if (window.confirm(`Zone „${z.name}" wirklich löschen?`)) deleteZone.mutate(z.id);
                     }} className="text-gray-400 hover:text-red-500 transition-colors p-1">
                       <Trash2 size={14} />
@@ -1262,7 +1262,7 @@ function AttachmentsSection({ settings, onSave }: { settings: SecuritySettings; 
           {exts.map(ext => (
             <span key={ext} className="flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-xs px-2 py-0.5 rounded-full">
               .{ext}
-              <button onClick={() => setExts(prev => prev.filter(e => e !== ext))}
+              <button aria-label={`.${ext} entfernen`} onClick={() => setExts(prev => prev.filter(e => e !== ext))}
                 className="hover:text-red-900 ml-0.5">
                 <XCircle size={11} />
               </button>

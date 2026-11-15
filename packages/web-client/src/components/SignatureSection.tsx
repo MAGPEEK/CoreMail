@@ -7,7 +7,7 @@ import {
   ChevronDown, Quote, Highlighter, Type, Image as ImageIcon,
   Loader2, Eye, Code2,
 } from 'lucide-react';
-import { useEditor, EditorContent, Extension } from '@tiptap/react';
+import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import UnderlineExt from '@tiptap/extension-underline';
 import LinkExt from '@tiptap/extension-link';
@@ -16,43 +16,16 @@ import { Color } from '@tiptap/extension-color';
 import TextStyle from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import FontFamilyExt from '@tiptap/extension-font-family';
-import ImageExt from '@tiptap/extension-image';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { safeLinkUrl } from '../lib/compose.js';
+import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
 
 interface SigData {
   signature: string;
   autoNew:   boolean;
   autoReply: boolean;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Custom font-size extension (TipTap has no standard extension for this)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Custom extension for the inline `style="font-size: …"` attribute.
-// We define NO global module augmentation for Commands<> (avoids ChainedCommands
-// conflicts); instead we call the mark directly via setMark/unsetMark.
-const FontSizeExt = Extension.create({
-  name: 'fontSize',
-  addOptions() {
-    return { types: ['textStyle'] as string[] };
-  },
-  addGlobalAttributes() {
-    return [{
-      types: this.options.types,
-      attributes: {
-        fontSize: {
-          default: null,
-          parseHTML: (el: HTMLElement) => el.style.fontSize || null,
-          renderHTML: (attrs: Record<string, unknown>) => attrs['fontSize']
-            ? { style: `font-size: ${attrs['fontSize']}` }
-            : {},
-        },
-      },
-    }];
-  },
-});
 
 /** Helper: sets or removes font-size on the current TextStyle mark. */
 function applyFontSize(editor: ReturnType<typeof useEditor>, size: string): void {
@@ -274,11 +247,7 @@ export function SignatureSection() {
       Highlight.configure({ multicolor: true }),
       FontFamilyExt,
       FontSizeExt,
-      ImageExt.configure({
-        inline: true,
-        allowBase64: true,
-        HTMLAttributes: { class: 'inline-block max-w-full h-auto' },
-      }),
+      InlineImageExt,
     ],
     content: '',
     editorProps: {
@@ -302,15 +271,25 @@ export function SignatureSection() {
     if (url === null) return;
     if (!url.trim()) {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
+      return;
+    }
+    const href = safeLinkUrl(url);
+    if (!href) {
+      toast.error('Ungültiger Link — erlaubt sind http://, https:// und mailto:');
+      return;
+    }
+    // If text is selected → link on the selected text
+    // If nothing is selected → insert the URL as text with a link mark
+    // (ProseMirror JSON, never an HTML string built from user input)
+    const { from, to } = editor.state.selection;
+    if (from === to) {
+      editor.chain().focus().insertContent({
+        type: 'text',
+        text: url.trim(),
+        marks: [{ type: 'link', attrs: { href } }],
+      }).run();
     } else {
-      // If text is selected → link on the selected text
-      // If nothing is selected → insert link with URL as text
-      const { from, to } = editor.state.selection;
-      if (from === to) {
-        editor.chain().focus().insertContent(`<a href="${url.trim()}">${url.trim()}</a>`).run();
-      } else {
-        editor.chain().focus().setLink({ href: url.trim() }).run();
-      }
+      editor.chain().focus().setLink({ href }).run();
     }
   }, [editor]);
 

@@ -14,7 +14,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { Queue, type Job } from 'bullmq';
 import { z } from 'zod';
 import { createBullMqConnection, createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, adminRetryJobData } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:queues');
@@ -126,6 +126,21 @@ adminQueuesRouter.get('/jobs', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Admin "Retry" of a dead letter: the retry window starts again now
+ * (`expiryBaseMs`, otherwise an expired message fails again at once and the
+ * sender gets a second 5.4.7 NDR) and the attempt counter is reset. Delivery
+ * progress and the recipients that already got a final NDR stay in the job
+ * data — the worker never sends them a second final NDR.
+ */
+export async function adminRetryJob(
+  job: Pick<Job, 'data' | 'updateData' | 'retry'>,
+  now = Date.now(),
+): Promise<void> {
+  await job.updateData(adminRetryJobData((job.data ?? {}) as Record<string, unknown>, now));
+  await job.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
+}
+
 // ── POST /jobs/:id/retry ──────────────────────────────────────────────────────
 adminQueuesRouter.post('/jobs/:id/retry', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -133,7 +148,7 @@ adminQueuesRouter.post('/jobs/:id/retry', async (req: Request, res: Response) =>
     await withQueue(async (q) => {
       const job = await q.getJob(id);
       if (!job) { res.status(404).json({ error: 'Job nicht gefunden' }); return; }
-      await job.retry('failed');
+      await adminRetryJob(job);
       log.info({ id }, 'Queue job retried');
       res.json({ ok: true });
     });
@@ -150,7 +165,7 @@ adminQueuesRouter.post('/retry-failed', async (_req: Request, res: Response) => 
       const failedJobs = await q.getFailed(0, 999);
       let count = 0;
       for (const job of failedJobs) {
-        try { await job.retry('failed'); count++; } catch { /* skip */ }
+        try { await adminRetryJob(job); count++; } catch { /* skip */ }
       }
       return count;
     });

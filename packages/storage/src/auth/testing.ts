@@ -241,7 +241,18 @@ export class FakeRedis {
   }
   async get(key: string) { return this.live(key)?.v ?? null; }
   async setex(key: string, s: number, v: string) { this.store.set(key, { v, exp: Date.now() + s * 1000 }); return 'OK'; }
-  async set(key: string, v: string) { this.store.set(key, { v, exp: null }); return 'OK'; }
+  /** SET key value [EX seconds] (the mail-auth lockout uses the EX form). */
+  async set(key: string, v: string, mode?: string, seconds?: number) {
+    const exp = mode === 'EX' && typeof seconds === 'number' ? Date.now() + seconds * 1000 : null;
+    this.store.set(key, { v, exp });
+    return 'OK';
+  }
+  async ttl(key: string) {
+    const e = this.live(key);
+    if (!e) return -2;
+    if (e.exp === null) return -1;
+    return Math.max(1, Math.ceil((e.exp - Date.now()) / 1000));
+  }
   async del(...keys: string[]) {
     let n = 0;
     for (const k of keys) if (this.live(k) && this.store.delete(k)) n++;

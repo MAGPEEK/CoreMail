@@ -21,15 +21,25 @@ import {
   syncView, completeWithUpdates, withUpdateLock,
 } from '../session/view.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
-import { registerLiveSession } from '../session/live.js';
+import { registerLiveSession, imapLiveSessions } from '../session/live.js';
+import { maxConnsPerUser, maxSortMessages } from '../server/limits.js';
 import {
   parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
-  type SearchProgram, type SearchableMessage, type ReturnOption,
+  type SearchProgram, type SearchableMessage, type ReturnOption, type SearchKey,
 } from './search-parser.js';
+import {
+  parseSortCriteria, parseCharset, sortMessages, threadOrderedSubject, threadReferences, formatThreads,
+  type SortCriterion, type SortMessage,
+} from './sort-thread.js';
 import { displayNames, fromClient, resolveStoredName, toClient } from './mailbox-name.js';
 import { runStatus } from './list.js';
+import {
+  parseSelectParams, selectCandidates, sendVanishedEarlier, vanishedUids, type SelectParams,
+} from './qresync.js';
+import { MAX_UID, clampRanges, parseUidRanges, rangesOf } from '../session/uid-set.js';
 
 export { handleList, handleLsub, handleGetQuotaRoot, handleGetQuota, handleSetQuota } from './list.js';
+export { handleMyRights, handleGetAcl, handleListRights, handleSetAcl } from './acl.js';
 
 const log = createLogger('imap:commands');
 
@@ -492,7 +502,7 @@ export async function handleMove(
   // RFC 6851 §3.3: EXPUNGE responses for the moved messages. Nothing to expunge
   // when moving into the same folder.
   reportExpunged(session, view, new Set(mapping.map((m) => m.oldUid)));
-  await completeWithUpdates(session, tag, 'MOVE completed');
+  await completeWithUpdates(session, tag, 'MOVE completed', true, true);
 }
 
 // ─────────────────────────────────────────────
@@ -533,43 +543,8 @@ export async function handleSearch(
   // RFC 7162 §3.1: SEARCH MODSEQ is a CONDSTORE-enabling command.
   if (withModseq) session.condstoreEnabled = true;
 
-  const withBody = needsBody(program.key);
-  const withHeaders = needsRawHeaders(program.key);
-  const rows = withHeaders
-    ? await loadMessages(view.folderId, view.uids, true)
-    : await prisma.message.findMany({
-      where: { folderId: view.folderId, deletedAt: null },
-      select: {
-        id: true, uid: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
-        toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true, messageId: true, inReplyTo: true,
-        date: true, createdAt: true, rawSize: true,
-        ...(withBody ? { bodyText: true, bodyHtml: true } : {}),
-      },
-      orderBy: { uid: 'asc' },
-    });
-
-  const maxSeq = view.uids.length;
-  const maxUid = lastUid(view);
-  const saved = new Set(view.searchRes);
-  const matched: Array<{ uid: number; seq: number; modSeq: bigint }> = [];
-  for (const msg of rows) {
-    const seq = seqOf(view, msg.uid);
-    if (seq === 0) continue; // not announced to the client yet
-    let headers: Array<{ name: string; value: string }> | undefined;
-    if (withHeaders) {
-      try {
-        headers = (await getRaw(session, msg as unknown as RawSourceMessage)).tree().headers;
-      } catch (err) {
-        log.error({ err, uid: msg.uid }, 'IMAP SEARCH: raw message unavailable');
-        sendNo(session, tag, '[UNAVAILABLE] Message content temporarily unavailable');
-        return;
-      }
-    }
-    const ctx = { seq, maxSeq, maxUid, saved, ...(headers ? { headers } : {}) };
-    if (evaluateSearch(program.key, msg as SearchableMessage, ctx)) {
-      matched.push({ uid: msg.uid, seq, modSeq: msg.modSeq });
-    }
-  }
+  const matched = await matchSearch(session, tag, view, program.key);
+  if (matched === null) return;
   const results = matched.map((m) => (byUid ? m.uid : m.seq));
 
   // IMAP4rev2: SEARCH without RETURN is answered with ESEARCH (RETURN (ALL)).
@@ -587,9 +562,7 @@ export async function handleSearch(
     // RFC 5182 §2.4: with MIN/MAX only, just those messages are saved.
     view.searchRes = (minMaxOnly ? returned : matched).map((m) => m.uid);
   }
-  const modseq = withModseq && returned.length > 0
-    ? returned.reduce((max, m) => (m.modSeq > max ? m.modSeq : max), 0n)
-    : null;
+  const modseq = withModseq ? maxModSeq(returned) : null;
 
   if (options === null) {
     const tail = modseq !== null ? ` (MODSEQ ${modseq})` : '';
@@ -599,6 +572,133 @@ export async function handleSearch(
   }
   // RFC 5182 §2.4: RETURN (SAVE) alone produces no ESEARCH response.
   await completeWithUpdates(session, tag, `${byUid ? 'UID SEARCH' : 'SEARCH'} completed`, byUid);
+}
+
+/** Highest modSeq of a result (null when empty) — RFC 7162 §3.1.5/§3.1.6. */
+function maxModSeq(rows: Array<{ modSeq: bigint }>): bigint | null {
+  return rows.length > 0 ? rows.reduce((max, m) => (m.modSeq > max ? m.modSeq : max), 0n) : null;
+}
+
+type MatchedRow = SearchableMessage & { id: string; uid: number; seq: number; modSeq: bigint };
+
+/**
+ * Evaluates a search key against the messages of the session's view
+ * (ascending UID order). Returns null when an error response was sent.
+ */
+async function matchSearch(
+  session: ImapSession, tag: string, view: NonNullable<ImapSession['selected']>, key: SearchKey,
+): Promise<MatchedRow[] | null> {
+  const withBody = needsBody(key);
+  const withHeaders = needsRawHeaders(key);
+  const rows = withHeaders
+    ? await loadMessages(view.folderId, view.uids, true)
+    : await prisma.message.findMany({
+      where: { folderId: view.folderId, deletedAt: null },
+      select: {
+        id: true, uid: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
+        toAddrs: true, ccAddrs: true, bccAddrs: true, replyTo: true, messageId: true, inReplyTo: true,
+        date: true, createdAt: true, rawSize: true,
+        ...(withBody ? { bodyText: true, bodyHtml: true } : {}),
+      },
+      orderBy: { uid: 'asc' },
+    });
+
+  const maxSeq = view.uids.length;
+  const maxUid = lastUid(view);
+  const saved = new Set(view.searchRes);
+  const matched: MatchedRow[] = [];
+  for (const msg of rows) {
+    const seq = seqOf(view, msg.uid);
+    if (seq === 0) continue; // not announced to the client yet
+    let headers: Array<{ name: string; value: string }> | undefined;
+    if (withHeaders) {
+      try {
+        headers = (await getRaw(session, msg as unknown as RawSourceMessage)).tree().headers;
+      } catch (err) {
+        log.error({ err, uid: msg.uid }, 'IMAP SEARCH: raw message unavailable');
+        sendNo(session, tag, '[UNAVAILABLE] Message content temporarily unavailable');
+        return null;
+      }
+    }
+    const ctx = { seq, maxSeq, maxUid, saved, ...(headers ? { headers } : {}) };
+    if (evaluateSearch(key, msg as SearchableMessage, ctx)) {
+      matched.push({ ...(msg as unknown as SearchableMessage & { id: string }), seq });
+    }
+  }
+  return matched;
+}
+
+// ─────────────────────────────────────────────
+// SORT / THREAD — RFC 5256 (UID variants, charsets UTF-8 and US-ASCII)
+// ─────────────────────────────────────────────
+// The search criteria are evaluated like SEARCH (column projection, bodies only
+// for BODY/TEXT); sorting and threading run in memory on the matching rows.
+// Mailboxes larger than IMAP_SORT_MAX_MESSAGES are refused with NO [LIMIT].
+
+/** Parses "<charset> <criteria>" and evaluates the criteria; null when a response was sent. */
+async function sortThreadMatches(
+  session: ImapSession, tag: string, tokens: Token[], verb: string,
+): Promise<{ rows: MatchedRow[]; withModseq: boolean } | null> {
+  const view = session.selected!;
+  let charset: string;
+  let program: SearchProgram;
+  try {
+    charset = parseCharset(tokens[0]);
+    if (tokens.length < 2) throw new ImapParseError(`${verb} requires search criteria`);
+    program = parseSearch(tokens.slice(1));
+    if (program.returnOptions !== null || program.charset !== null) throw new ImapParseError(`Invalid ${verb} criteria`);
+  } catch (err) {
+    sendBad(session, tag, err instanceof ImapParseError ? err.message : `Invalid ${verb} command`);
+    return null;
+  }
+  if (charset !== 'UTF-8' && charset !== 'US-ASCII') {
+    sendNo(session, tag, '[BADCHARSET (UTF-8 US-ASCII)] Unsupported charset');
+    return null;
+  }
+  if (view.uids.length > maxSortMessages()) {
+    sendNo(session, tag, `[LIMIT] ${verb} is limited to mailboxes with ${maxSortMessages()} messages`);
+    return null;
+  }
+  if (hasModseq(program.key)) session.condstoreEnabled = true;
+  const rows = await matchSearch(session, tag, view, program.key);
+  if (rows === null) return null;
+  return { rows, withModseq: hasModseq(program.key) };
+}
+
+export async function handleSort(session: ImapSession, tag: string, tokens: Token[], byUid: boolean): Promise<void> {
+  let criteria: SortCriterion[];
+  try {
+    criteria = parseSortCriteria(tokens[0]);
+  } catch (err) {
+    sendBad(session, tag, err instanceof ImapParseError ? err.message : 'Invalid SORT command');
+    return;
+  }
+  const found = await sortThreadMatches(session, tag, tokens.slice(1), 'SORT');
+  if (found === null) return;
+  const { rows } = found;
+  const sorted = sortMessages(rows, criteria);
+  // RFC 7162 §3.1.5: with a MODSEQ criterion the response carries the highest MODSEQ.
+  const modseq = found.withModseq ? maxModSeq(rows) : null;
+  const numbers = sorted.map((m) => (byUid ? m.uid : m.seq));
+  sendUntagged(session, `SORT${numbers.length ? ' ' + numbers.join(' ') : ''}${modseq !== null ? ` (MODSEQ ${modseq})` : ''}`);
+  // RFC 5256 §4: like SEARCH, non-UID SORT must not cause EXPUNGE responses.
+  await completeWithUpdates(session, tag, `${byUid ? 'UID SORT' : 'SORT'} completed`, byUid);
+}
+
+export async function handleThread(session: ImapSession, tag: string, tokens: Token[], byUid: boolean): Promise<void> {
+  const algorithm = tokens[0]?.type === 'atom' ? tokens[0].value.toUpperCase() : '';
+  if (algorithm !== 'ORDEREDSUBJECT' && algorithm !== 'REFERENCES') {
+    sendBad(session, tag, 'Unsupported THREAD algorithm (ORDEREDSUBJECT, REFERENCES)');
+    return;
+  }
+  const found = await sortThreadMatches(session, tag, tokens.slice(1), 'THREAD');
+  if (found === null) return;
+  const { rows } = found;
+  const idOf = (m: SortMessage): number => (byUid ? m.uid : m.seq);
+  const threads = algorithm === 'REFERENCES' ? threadReferences(rows, idOf) : threadOrderedSubject(rows, idOf);
+  const text = formatThreads(threads);
+  sendUntagged(session, `THREAD${text ? ' ' + text : ''}`);
+  await completeWithUpdates(session, tag, `${byUid ? 'UID THREAD' : 'THREAD'} completed`, byUid);
 }
 
 // ─────────────────────────────────────────────
@@ -807,8 +907,16 @@ async function loginUser(
   });
   switch (result.status) {
     case 'ok':
+      // v8.1: concurrent sessions per user (Exchange-style per-protocol cap).
+      if (maxConnsPerUser() > 0 && imapLiveSessions.count(result.user.id) >= maxConnsPerUser()) {
+        log.warn({ email: result.user.email, limit: maxConnsPerUser(), command }, 'IMAP login refused — too many sessions for this user');
+        sendNo(session, tag, '[LIMIT] Too many concurrent IMAP sessions for this account');
+        return;
+      }
       session.state = 'AUTHENTICATED';
+      session.onAuthenticated?.();
       session.userId = result.user.id;
+      session.userEmail = result.user.email;
       session.mailboxId = result.user.mailboxId;
       // v7.1.0: the connection ends when these credentials become invalid.
       registerLiveSession(session, result.method, result.appPasswordId, authStartedAt);
@@ -844,20 +952,30 @@ export async function handleSelect(
   }
   const verb = readOnly ? 'EXAMINE' : 'SELECT';
   if (args.length < 1 || args.length > 2 || !args[0]) { sendBad(session, tag, `${verb} requires a mailbox name`); return; }
-  let condstore = false;
+  let params: SelectParams = { condstore: false, qresync: null };
   if (args[1] !== undefined) {
-    const params = /^\((.*)\)$/s.exec(args[1]);
-    const names = (params?.[1] ?? '').toUpperCase().split(/\s+/).filter(Boolean);
-    if (!params || names.some((p) => p !== 'CONDSTORE')) { sendBad(session, tag, `Unknown ${verb} parameter`); return; }
-    condstore = names.length > 0;
+    try {
+      params = parseSelectParams(args[1]);
+    } catch (err) {
+      sendBad(session, tag, err instanceof ImapParseError ? `${verb}: ${err.message}` : `Unknown ${verb} parameter`);
+      return;
+    }
+    // RFC 7162 §3.2.5: the QRESYNC parameter needs a prior "ENABLE QRESYNC".
+    if (params.qresync && !session.qresyncEnabled) {
+      sendBad(session, tag, `${verb} QRESYNC requires ENABLE QRESYNC first`);
+      return;
+    }
   }
+  const condstore = params.condstore;
 
   // RFC 9051 §6.3.2: the selected mailbox is closed first (no EXPUNGE); a
   // failed SELECT leaves the session in the authenticated state.
+  // RFC 7162 §3.2.11: a server advertising QRESYNC reports the implicit close
+  // with the CLOSED response code (also required by IMAP4rev2).
   if (session.selected) {
     session.selected = null;
     session.state = 'AUTHENTICATED';
-    if (session.imap4rev2Enabled) sendUntagged(session, 'OK [CLOSED] Previous mailbox closed');
+    sendUntagged(session, 'OK [CLOSED] Previous mailbox closed');
   }
 
   const folder = await prisma.folder.findFirst({
@@ -893,6 +1011,19 @@ export async function handleSelect(
     ? 'OK [PERMANENTFLAGS ()] No permanent flags permitted'
     : `OK [PERMANENTFLAGS (${SYSTEM_FLAGS.join(' ')} \\*)] Flags permitted`);
 
+  // RFC 7162 §3.2.5.1: QRESYNC resynchronisation — only when the client's
+  // UIDVALIDITY still matches (otherwise its cache is void anyway).
+  const q = params.qresync;
+  if (q && q.uidValidity === folder.mailbox.uidValidity) {
+    const candidates = selectCandidates(q, folder.mailbox.uidNext);
+    // Explicit known UIDs are reported even when the expunge predates the modseq.
+    sendVanishedEarlier(session, await vanishedUids(folder.id, candidates, q.knownUids === null ? q.modSeq : null));
+    for (const [i, row] of rows.entries()) {
+      if (row.modSeq <= q.modSeq) continue;
+      sendUntagged(session, `${i + 1} FETCH (UID ${row.uid} FLAGS ${flagList(row.flags)} MODSEQ (${row.modSeq}))`);
+    }
+  }
+
   sendOk(session, tag, `${readOnly ? '[READ-ONLY]' : '[READ-WRITE]'} ${verb} completed`);
 }
 
@@ -926,12 +1057,40 @@ export async function handleFetch(
     return;
   }
   // RFC 7162 §3.1.4: FETCH ... (CHANGEDSINCE <modseq>)
+  // RFC 7162 §3.2.6: UID FETCH ... (CHANGEDSINCE <modseq> VANISHED)
   let changedSince: bigint | null = null;
+  let withVanished = false;
   if (args.length > 3) { sendBad(session, tag, 'Too many FETCH arguments'); return; }
   if (args[2] !== undefined) {
-    const m = /^\(\s*CHANGEDSINCE\s+(\d{1,19})\s*\)$/i.exec(args[2]);
-    if (!m) { sendBad(session, tag, 'Unknown FETCH modifier'); return; }
-    changedSince = BigInt(m[1]!);
+    const mods = /^\((.*)\)$/s.exec(args[2]);
+    const words = (mods?.[1] ?? '').trim().split(/\s+/).filter(Boolean);
+    for (let i = 0; mods && i < words.length; i++) {
+      const word = words[i]!.toUpperCase();
+      if (word === 'CHANGEDSINCE' && changedSince === null && /^\d{1,19}$/.test(words[i + 1] ?? '')) {
+        changedSince = BigInt(words[++i]!);
+      } else if (word === 'VANISHED' && !withVanished) {
+        withVanished = true;
+      } else {
+        sendBad(session, tag, 'Unknown FETCH modifier');
+        return;
+      }
+    }
+    if (!mods || words.length === 0) { sendBad(session, tag, 'Unknown FETCH modifier'); return; }
+    // VANISHED needs QRESYNC, a UID FETCH and CHANGEDSINCE.
+    if (withVanished && (!session.qresyncEnabled || !byUid || changedSince === null)) {
+      sendBad(session, tag, 'VANISHED requires UID FETCH with CHANGEDSINCE after ENABLE QRESYNC');
+      return;
+    }
+  }
+  if (withVanished && changedSince !== null) {
+    const folder = await prisma.folder.findFirst({ where: { id: view.folderId }, include: { mailbox: true } });
+    const top = Math.max(lastUid(view), (folder?.mailbox.uidNext ?? 1) - 1);
+    // "$" (SEARCHRES) is a saved UID list; otherwise the UID set, "*" = highest UID ever assigned.
+    const requested = sequenceSet === '$'
+      ? rangesOf([...new Set(view.searchRes)].sort((a, b) => a - b))
+      : parseUidRanges(sequenceSet, top) ?? [];
+    const candidates = clampRanges(requested, 1, Math.min(top, MAX_UID));
+    sendVanishedEarlier(session, await vanishedUids(view.folderId, candidates, changedSince));
   }
 
   const has = (k: string): boolean => items.some((i) => i.kind === k);
@@ -1243,7 +1402,7 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
     await prisma.$transaction((tx) => expunge(tx, toDelete.map((m) => m.id), { mailboxId }));
   }
   // The EXPUNGE responses (ours and those of other clients) come from the view sync.
-  await completeWithUpdates(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed');
+  await completeWithUpdates(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed', true, true);
 }
 
 // ─────────────────────────────────────────────

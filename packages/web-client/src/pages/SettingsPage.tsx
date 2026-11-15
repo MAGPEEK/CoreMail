@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useLocation, Link } from 'react-router-dom';
 import {
   User, PenLine, BellOff, Shield, Key, HardDrive, Trash2,
   ChevronDown, Loader2, Lock, Palette, Sun, Moon, Monitor, Check,
@@ -10,9 +11,11 @@ import {
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { SignatureSection } from '../components/SignatureSection.js';
+import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
-import { api, apiFetch } from '../api/client.js';
-import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
+import { appleProfileFileName, appleProfilePath, type AppleProfileKind } from '../lib/appleProfile.js';
+import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
 import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
@@ -210,7 +213,7 @@ function PasswordSection() {
               placeholder="Aktuelles Passwort eingeben"
               autoComplete="current-password"
             />
-            <button
+            <button aria-label={showCurrent ? 'Passwort verbergen' : 'Passwort anzeigen'}
               type="button"
               onClick={() => setShowCurrent(v => !v)}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -232,7 +235,7 @@ function PasswordSection() {
               placeholder="Mindestens 8 Zeichen"
               autoComplete="new-password"
             />
-            <button
+            <button aria-label={showNew ? 'Passwort verbergen' : 'Passwort anzeigen'}
               type="button"
               onClick={() => setShowNew(v => !v)}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
@@ -956,9 +959,10 @@ function SecuritySection() {
           <span className="text-sm font-medium">App-Passwörter</span>
         </div>
         <p className="text-xs text-gray-500 mb-3">Für externe E-Mail-Clients ohne Hauptpasswort verbinden.</p>
-        <a href="/auth/app-passwords" target="_blank" rel="noopener noreferrer" className="btn-secondary text-xs">
+        {/* In-app section (the old link opened the raw /auth/app-passwords JSON API, which needs a header token) */}
+        <Link to="/settings#appPasswords" className="btn-secondary text-xs">
           App-Passwörter verwalten
-        </a>
+        </Link>
       </div>
 
       {/* ── 2FA card ── */}
@@ -1010,7 +1014,7 @@ function SecuritySection() {
               <p className="text-xs text-gray-500 mb-1">Oder geben Sie den Secret-Schlüssel manuell ein:</p>
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded px-3 py-1.5">
                 <code className="text-xs font-mono text-gray-700 flex-1 select-all break-all">{setupData.secret}</code>
-                <button onClick={copySecret} className="text-gray-400 hover:text-gray-600 shrink-0">
+                <button aria-label="Geheimnis kopieren" onClick={copySecret} className="text-gray-400 hover:text-gray-600 shrink-0">
                   <Copy size={13} />
                 </button>
               </div>
@@ -1203,20 +1207,21 @@ function AppPasswordsSection() {
     queryFn: () => authFetch<AppPassword[]>('/auth/app-passwords'),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (name: string) =>
-      authFetch<{ id: string; password: string }>('/auth/app-passwords', {
-        method: 'POST',
-        body: JSON.stringify({ name }),
-      }),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['app-passwords'] });
-      setCreatedPw({ name: newName, password: data.password });
-      setCreating(false);
-      setNewName('');
-    },
-    onError: (e: Error) => toast.error(e.message || 'Fehler beim Erstellen'),
-  });
+  // v8.1: creating an app password needs re-authentication (current password or
+  // an authenticator/backup code); the dialog shows server errors and stays open.
+  const [reauthFor, setReauthFor] = useState<string | null>(null);
+  const createWithReauth = async (secret: string, kind: ReauthKind) => {
+    const name = reauthFor ?? '';
+    const data = await authFetch<{ id: string; password: string }>('/auth/app-passwords', {
+      method: 'POST',
+      body: JSON.stringify(kind === 'mfa' ? { name, mfaCode: secret } : { name, currentPassword: secret }),
+    });
+    qc.invalidateQueries({ queryKey: ['app-passwords'] });
+    setCreatedPw({ name, password: data.password });
+    setCreating(false);
+    setNewName('');
+  };
+  const startCreate = () => { if (newName.trim()) setReauthFor(newName.trim()); };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => authFetch(`/auth/app-passwords/${id}`, { method: 'DELETE' }),
@@ -1291,7 +1296,7 @@ function AppPasswordsSection() {
             placeholder="z. B. Thunderbird"
             className="input text-sm"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim());
+              if (e.key === 'Enter') startCreate();
               if (e.key === 'Escape') { setCreating(false); setNewName(''); }
             }}
           />
@@ -1300,15 +1305,26 @@ function AppPasswordsSection() {
               <XIcon size={13} /> Abbrechen
             </button>
             <button
-              onClick={() => createMutation.mutate(newName.trim())}
-              disabled={!newName.trim() || createMutation.isPending}
+              onClick={startCreate}
+              disabled={!newName.trim() || reauthFor !== null}
               className="btn-primary text-xs"
             >
-              {createMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              {reauthFor !== null ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
               Erstellen
             </button>
           </div>
         </div>
+      )}
+
+      {reauthFor !== null && (
+        <PasswordPromptDialog
+          title="App-Passwort erstellen"
+          confirmLabel="Erstellen"
+          description="App-Passwörter umgehen die Zwei-Faktor-Anmeldung. Bitte bestätigen Sie mit Ihrem aktuellen Passwort."
+          allowMfaCode
+          onConfirm={createWithReauth}
+          onClose={() => setReauthFor(null)}
+        />
       )}
 
       {/* List */}
@@ -1469,17 +1485,17 @@ function CategoryRow({
       <Tag size={16} style={{ color: cat.color, fill: `${cat.color}33` }} className="shrink-0" />
       <span className="flex-1 text-sm text-gray-800 truncate">{cat.name}</span>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
+        <button aria-label="Favorit"
           onClick={onToggleFavorite}
           className="p-1.5 rounded text-gray-400 hover:text-amber-500 hover:bg-gray-100 transition-all active:scale-90"
           title="Favorit"
         >
           <Star size={14} className={cat.isFavorite ? 'fill-amber-400 text-amber-500' : ''} />
         </button>
-        <button onClick={onEdit} className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90" title="Bearbeiten">
+        <button aria-label="Bearbeiten" onClick={onEdit} className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all active:scale-90" title="Bearbeiten">
           <Pencil size={14} />
         </button>
-        <button onClick={onDelete} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90" title="Löschen">
+        <button aria-label="Löschen" onClick={onDelete} className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all active:scale-90" title="Löschen">
           <Trash2 size={14} />
         </button>
       </div>
@@ -1885,6 +1901,9 @@ function ViewSection() {
         />
         <p className="text-xs text-gray-500 mt-2 ml-14">Zusammengehörige Nachrichten (gleicher Betreff) werden gebündelt angezeigt.</p>
       </div>
+
+      {/* ── Keyboard shortcuts + undo send ───────────────────────────────────── */}
+      <ViewKeyboardSettings />
     </section>
   );
 }
@@ -1974,13 +1993,76 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
       <code className={`flex-1 text-xs ${mono ? 'font-mono' : ''} text-gray-800 dark:text-gray-200 break-all`}>
         {value}
       </code>
-      <button
+      <button aria-label={`${label} kopieren`}
         onClick={() => { void copyToClipboard(value); toast.success(`${label} kopiert`); }}
         className="shrink-0 p-1.5 text-gray-400 hover:text-accent rounded hover:bg-gray-100 dark:hover:bg-gray-700"
         title={`${label} kopieren`}
       >
         <Copy size={13} />
       </button>
+    </div>
+  );
+}
+
+// v8.1: automatic setup — Apple configuration profile (.mobileconfig) download and
+// hints for clients that configure themselves (Thunderbird autoconfig, Outlook).
+// Module level (never define components inline).
+function AutoSetupCard({ email, requiresAppPassword }: { email: string; requiresAppPassword: boolean }) {
+  const [busy, setBusy] = useState<AppleProfileKind | null>(null);
+  const download = async (kind: AppleProfileKind) => {
+    setBusy(kind);
+    try {
+      // fetch with the Authorization header — no token in the URL
+      saveBlob(await fetchBlob(appleProfilePath(kind)), appleProfileFileName(email, kind));
+    } catch {
+      toast.error('Profil konnte nicht geladen werden');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
+      <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2 mb-1">
+        <Smartphone size={16} className="text-accent" /> Automatische Einrichtung
+      </h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Thunderbird, K-9 Mail / FairEmail, Outlook und eM Client richten das Konto nach Eingabe von
+        E-Mail-Adresse und Passwort selbst ein (Autoconfig / Autodiscover). Für iPhone, iPad und Mac
+        gibt es ein Konfigurationsprofil mit E-Mail, Kalender und Kontakten.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void download('imap')}
+          disabled={busy !== null}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 disabled:opacity-50"
+        >
+          {busy === 'imap' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+          Profil für iPhone/iPad/Mac laden
+        </button>
+        <button
+          type="button"
+          onClick={() => void download('eas')}
+          disabled={busy !== null}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+          title="Ein Exchange-ActiveSync-Konto statt IMAP + CalDAV + CardDAV"
+        >
+          {busy === 'eas' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+          Variante Exchange ActiveSync
+        </button>
+      </div>
+      <ol className="list-decimal ml-5 mt-4 text-xs text-gray-600 dark:text-gray-400 space-y-1">
+        <li>Profil herunterladen (am besten direkt auf dem Gerät in Safari öffnen, oder per AirDrop übertragen).</li>
+        <li>iPhone/iPad: <strong>Einstellungen → Profil geladen</strong> → Installieren. Mac: <strong>Systemeinstellungen → Allgemein → Geräteverwaltung</strong>.</li>
+        <li>
+          Beim Installieren fragt das Gerät nach dem Passwort —{' '}
+          {requiresAppPassword
+            ? <strong>wegen aktiver MFA ein App-Passwort verwenden</strong>
+            : 'dein Login-Passwort (bei aktiver MFA ein App-Passwort)'}.
+          Das Profil selbst enthält kein Passwort.
+        </li>
+        <li>Nur eine der beiden Varianten installieren, sonst erscheint das Konto doppelt.</li>
+      </ol>
     </div>
   );
 }
@@ -2057,6 +2139,8 @@ function ExternalClientsSection() {
           </div>
         </div>
       )}
+
+      <AutoSetupCard email={cfg.user.email} requiresAppPassword={cfg.requiresAppPassword} />
 
       {/* E-Mail (IMAP / SMTP / POP3) */}
       <div className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-5">
@@ -2240,7 +2324,12 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
 // MAIN EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 export function SettingsPage() {
-  const [section, setSection] = useState<Section>('profile');
+  // Deep link via hash (e.g. /settings#rules from the message list context menu)
+  const { hash } = useLocation();
+  const hashSection = hash.replace(/^#/, '');
+  const sectionFromHash = Object.prototype.hasOwnProperty.call(SECTION_MAP, hashSection) ? hashSection as Section : null;
+  const [section, setSection] = useState<Section>(sectionFromHash ?? 'profile');
+  useEffect(() => { if (sectionFromHash) setSection(sectionFromHash); }, [sectionFromHash]);
   const SectionComp = SECTION_MAP[section];
 
   return (
