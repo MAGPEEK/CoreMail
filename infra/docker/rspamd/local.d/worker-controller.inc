@@ -10,7 +10,7 @@
 #                                dedicated "rspamd" network in docker-compose.yml).
 #                                CoreMail does not send a controller password yet,
 #                                so this must be the app's address.
-# Unset secure IP = loopback only (fail closed). Before 8.0.1 every RFC 1918
+# Unset secure IP = loopback only (fail closed). Previously every RFC 1918
 # network was trusted without a password.
 # A hashed password (rspamadm pw --encrypt -p <pw>) is accepted as well.
 password = "{= env.CONTROLLER_PASSWORD =}";

@@ -1,5 +1,5 @@
 /**
- * Import input (8.0.1): accepts an encrypted backup (`CMBK` header, see
+ * Import input: accepts an encrypted backup (`CMBK` header, see
  * crypto/backup-crypto.ts) as well as a legacy plaintext MBOX. Encrypted input
  * is fully decrypted AND authenticated into a temp file before anything is
  * imported — a modified or truncated file imports nothing.

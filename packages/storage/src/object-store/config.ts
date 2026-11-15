@@ -114,7 +114,7 @@ export function parseObjectStorageConfig(env: Env = process.env, driver: ObjectS
   const bucket = (env['MINIO_BUCKET_ATTACHMENTS'] ?? '').trim() || DEFAULT_BUCKET;
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new ObjectStorageConfigError(`MINIO_BUCKET_ATTACHMENTS is not a valid bucket name: ${bucket}`);
 
-  // 8.0.1: fail closed — no silent fallback to the well-known minioadmin/minioadmin.
+  // Fail closed — no silent fallback to the well-known minioadmin/minioadmin.
   const accessKey = (env['MINIO_ACCESS_KEY'] ?? '').trim();
   const secretKey = env['MINIO_SECRET_KEY'] ?? '';
   // (Test seam: a fake client injected via globalThis.__minioClient needs no credentials.)

@@ -63,7 +63,7 @@ export async function ensureBackupBucket(): Promise<void> {
 }
 
 /**
- * Uploads a backup archive ENCRYPTED (8.0.1, AES-256-GCM frames, see
+ * Uploads a backup archive ENCRYPTED (AES-256-GCM frames, see
  * crypto/backup-crypto.ts) under `<s3Key>.enc` and returns the stored key —
  * callers persist that key (BackupJob.downloadUrl). The archive never leaves
  * the container in plaintext.

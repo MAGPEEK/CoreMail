@@ -96,12 +96,36 @@ if [ "${FRESH_INSTALL}" = "1" ]; then
 else
   # Existing installation: data was created with the old Compose fallbacks.
   # Changing them here would lock CoreMail out of its own database (Postgres
-  # stores the password; PEPPER is part of every password hash; JWT_SECRET +
-  # PEPPER derive the 2FA key). Write them explicitly and warn.
+  # stores the password; PEPPER is part of every password hash). Write them
+  # explicitly and warn.
   set_env POSTGRES_PASSWORD 'CoreMail2024!' && LEGACY_SECRETS="${LEGACY_SECRETS} POSTGRES_PASSWORD"
   set_env MINIO_ROOT_PASSWORD 'MinioSecret2024!' && LEGACY_SECRETS="${LEGACY_SECRETS} MINIO_ROOT_PASSWORD"
-  set_env JWT_SECRET 'CHANGE-ME-openssl-rand-hex-32' && LEGACY_SECRETS="${LEGACY_SECRETS} JWT_SECRET"
   set_env PEPPER 'CHANGE-ME-openssl-rand-hex-32' && LEGACY_SECRETS="${LEGACY_SECRETS} PEPPER"
+  # A publicly known JWT_SECRET lets anyone forge login tokens → rotate it now.
+  # Its only other use is deriving the 2FA (TOTP) encryption key, so that key is
+  # pinned first as MFA_ENCRYPTION_KEY (same bytes → existing 2FA keeps working).
+  # Rotating only logs every user out once.
+  if ! grep -qs '^JWT_SECRET=' "${ENV_FILE}"; then
+    if ! grep -qs '^MFA_ENCRYPTION_KEY=' "${ENV_FILE}"; then
+      LEGACY_PEPPER="$(grep '^PEPPER=' "${ENV_FILE}" | head -1 | cut -d= -f2-)"
+      APP_IMAGE="$(grep -m1 'image: magpeek/coremail-app' "${REPO_ROOT}/infra/docker/docker-compose.synology.yml" | awk '{print $2}')"
+      MFA_KEY="$(LEGACY_JWT='CHANGE-ME-openssl-rand-hex-32' LEGACY_PEPPER="${LEGACY_PEPPER}" docker run --rm -e LEGACY_JWT -e LEGACY_PEPPER \
+        --entrypoint node "${APP_IMAGE:-magpeek/coremail-app:8.0.0}" -e \
+        "process.stdout.write(Buffer.from(require('crypto').hkdfSync('sha256', process.env.LEGACY_JWT + '\0' + process.env.LEGACY_PEPPER, 'coremail-mfa', 'totp-secret-v1', 32)).toString('hex'))" \
+        2>/dev/null || true)"
+      if printf '%s' "${MFA_KEY}" | grep -Eq '^[0-9a-f]{64}$'; then
+        set_env MFA_ENCRYPTION_KEY "${MFA_KEY}" || true
+        set_env JWT_SECRET "$(rnd 32)" || true
+        echo "      ✓ JWT_SECRET rotated (was the public default); 2FA key pinned as MFA_ENCRYPTION_KEY"
+      else
+        set_env JWT_SECRET 'CHANGE-ME-openssl-rand-hex-32' || true
+        LEGACY_SECRETS="${LEGACY_SECRETS} JWT_SECRET(!)"
+      fi
+    else
+      set_env JWT_SECRET "$(rnd 32)" || true
+      echo "      ✓ JWT_SECRET rotated (was the public default; MFA_ENCRYPTION_KEY is set)"
+    fi
+  fi
 fi
 # Safe to (re)generate on every installation: only used at runtime
 set_env REDIS_PASSWORD "$(rnd 20)" || true

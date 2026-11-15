@@ -13,7 +13,7 @@ export interface BackupS3Options {
 
 /**
  * S3_ENDPOINT (default http://minio:9000), S3_REGION (default us-east-1),
- * S3_ACCESS_KEY + S3_SECRET_KEY (required). 8.0.1: fails closed — no fallback
+ * S3_ACCESS_KEY + S3_SECRET_KEY (required). Fails closed — no fallback
  * to the well-known minioadmin/minioadmin credentials.
  */
 export function backupS3Options(env: Record<string, string | undefined> = process.env): BackupS3Options {

@@ -44,6 +44,13 @@ MinIO uses `pgsty/minio` (override with `E2E_MINIO_IMAGE`) because `minio/minio`
 longer pullable from Docker Hub. ClamAV downloads its signatures on first start
 (a few minutes); the mail tests do not wait for it.
 
+The app ↔ rspamd network uses `10.253.254.0/29` in the e2e stack (production:
+`10.253.253.0/29`), override with `E2E_RSPAMD_NET_PREFIX`. To exercise the
+setup.sh defaults of a new installation as well, append to `e2e.env`:
+`COREMAIL_DB_USER=coremail_app`, `COREMAIL_DB_PASSWORD=…`,
+`RSPAMD_CONTROLLER_PASSWORD=…`, `BACKUP_ENCRYPTION_KEY=<64 hex>` (see
+`docs/deployment-security.md`).
+
 ### Storage run modes (v8.0)
 
 | `E2E_STORAGE` | Compose files | Object storage |

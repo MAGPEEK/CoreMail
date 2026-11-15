@@ -226,7 +226,7 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
           const { fileCount } = await exportZip(user.id, null, outPath);
           const s3Key = `full-backup/${dateStr}/${user.email.replace('@', '_at_')}.zip`;
           const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
-          // 8.0.1: stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
+          // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
           const stored = await uploadToS3(outPath, s3Key, 'application/zip').finally(() => unlink(outPath).catch(() => undefined));
 
           await prisma.backupJob.create({
@@ -340,7 +340,7 @@ export async function runSingleMailboxBackup(opts: {
       const s3Key = `mailbox/${opts.userId}/${Date.now()}.${opts.format === 'mbox' ? 'mbox' : 'zip'}`;
       const contentType = opts.format === 'mbox' ? 'application/mbox' : 'application/zip';
       const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
-      // 8.0.1: stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
+      // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
       const stored = await uploadToS3(outPath, s3Key, contentType).finally(() => unlink(outPath).catch(() => undefined));
       const downloadUrl = await getSignedDownloadUrl(stored.key);
 

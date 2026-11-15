@@ -257,7 +257,7 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
 });
 
 /**
- * Streams a stored backup to the client. 8.0.1: encrypted backups (`.enc`)
+ * Streams a stored backup to the client. Encrypted backups (`.enc`)
  * are decrypted on the fly; a wrong key / foreign file is answered with 500
  * before any byte is sent, a corrupted frame later aborts the connection (the
  * client never receives an apparently complete file).
@@ -373,7 +373,7 @@ app.post('/internal/retention/run', requireInternal(), async (_req, res) => {
 });
 
 // POST /backup/admin/import/:userId — import MBOX for a specific user (admin)
-// 8.0.1: the body is read as raw bytes (application/mbox or application/octet-stream)
+// The body is read as raw bytes (application/mbox or application/octet-stream)
 // and may be a legacy plaintext MBOX or an encrypted CoreMail backup (.mbox.enc,
 // decrypted + authenticated before anything is imported). The target folder is
 // given as ?folderId= (the old text body could never carry it).
@@ -422,7 +422,7 @@ async function start() {
   // listBackups() crashes with NoSuchBucket on every first start.
   await ensureBackupBucket();
 
-  // 8.0.1: backups are encrypted — report the key situation at start (warning
+  // Backups are encrypted — report the key situation at start (warning
   // for the derived fallback key; an invalid BACKUP_ENCRYPTION_KEY makes every
   // backup run fail instead of silently writing plaintext).
   try {

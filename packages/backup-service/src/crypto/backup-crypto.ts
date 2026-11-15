@@ -1,5 +1,5 @@
 /**
- * Client-side backup encryption (8.0.1): AES-256-GCM in independently
+ * Client-side backup encryption: AES-256-GCM in independently
  * authenticated frames, so archives of any size are encrypted and decrypted
  * as streams.
  *

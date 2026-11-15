@@ -30,7 +30,7 @@ log "PostgreSQL TCP reachable after ${WAITED}s"
 # On Synology NAS (slow volume mount) the DB initialization keeps running
 # for up to 2 minutes after nc -z reports true.
 # Therefore: prisma db push with a retry loop of up to 60 attempts (5 min).
-# 8.0.1: never --accept-data-loss implicitly — a destructive change stops the
+# Never --accept-data-loss implicitly — a destructive change stops the
 # start until the operator sets COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true, and then
 # a pg_dump is written to /data/backups first (schema-sync.sh).
 

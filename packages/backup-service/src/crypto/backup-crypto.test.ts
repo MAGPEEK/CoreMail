@@ -1,5 +1,5 @@
 /**
- * 8.0.1: client-side backup encryption — round trip, tamper/truncation
+ * Client-side backup encryption — round trip, tamper/truncation
  * detection, key handling, import of encrypted + legacy plaintext files.
  * Run: node --import tsx --test src/crypto/backup-crypto.test.ts  (in packages/backup-service)
  */

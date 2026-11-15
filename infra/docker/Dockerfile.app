@@ -125,7 +125,7 @@ ENV NODE_ENV=production
 #         without root privileges (cap_net_bind_service).
 # tini:   init process (PID 1) — clean signal handling, no zombie processes.
 # postgresql16-client: pg_dump for the pre-migration dump of schema-sync.sh
-#         (8.0.1; matches the bundled postgres:16 — pg_dump must be >= the server).
+#         (matches the bundled postgres:16 — pg_dump must be >= the server).
 RUN apk add --no-cache supervisor curl tini netcat-openbsd openssl libcap postgresql16-client
 
 # ── setcap: node may bind privileged ports (25, 110, 143, …) ──────────────────
@@ -215,7 +215,7 @@ RUN chmod +x /app/packages/cli/dist/index.js \
 # supervisord configuration
 COPY infra/docker/supervisord-app.conf /etc/supervisord.conf
 COPY infra/docker/entrypoint-app.sh /entrypoint.sh
-# Schema sync (8.0.1): used by the entrypoint and the Helm init container
+# Schema sync: used by the entrypoint and the Helm init container
 COPY infra/docker/schema-sync.sh /usr/local/bin/coremail-schema-sync
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
