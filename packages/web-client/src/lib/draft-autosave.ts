@@ -9,7 +9,7 @@
 
 export const AUTOSAVE_IDLE_MS = 3000;
 
-export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
+export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error' | 'locked';
 
 export interface SavedDraft {
   id: string;
@@ -27,6 +27,11 @@ export interface AutosaveOptions<S> {
   onStatus?: (status: SaveStatus, info: { savedAt?: string; error?: unknown }) => void;
   /** Called after each successful save with the state that was saved. */
   onSaved?: (saved: SavedDraft, state: S) => void;
+  /**
+   * 8.1: a save error after which saving must stop for good (the draft is being
+   * or was sent elsewhere): status 'locked', no retries, flush() saves nothing.
+   */
+  isFatal?: (error: unknown) => boolean;
 }
 
 export interface DraftAutosave {
@@ -50,6 +55,7 @@ export function createDraftAutosave<S>(o: AutosaveOptions<S>): DraftAutosave {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<void> | null = null;
   let disposed = false;
+  let locked = false;
 
   const setStatus = (s: SaveStatus, info: { savedAt?: string; error?: unknown } = {}) => {
     status = s;
@@ -69,6 +75,13 @@ export function createDraftAutosave<S>(o: AutosaveOptions<S>): DraftAutosave {
         setStatus(dirty ? 'dirty' : 'saved', { savedAt: saved.savedAt });
       },
       (error: unknown) => {
+        if (o.isFatal?.(error)) {
+          locked = true;            // being / already sent: never save again
+          dirty = false;
+          clearTimer();
+          setStatus('locked', { error });
+          return;
+        }
         dirty = true;               // keep the change; retried on the next touch/flush
         setStatus('error', { error });
       },
@@ -94,7 +107,7 @@ export function createDraftAutosave<S>(o: AutosaveOptions<S>): DraftAutosave {
     get draftId() { return draftId; },
     get status() { return status; },
     touch() {
-      if (disposed) return;
+      if (disposed || locked) return;
       dirty = true;
       if (status !== 'saving') setStatus('dirty');
       arm();
@@ -102,7 +115,7 @@ export function createDraftAutosave<S>(o: AutosaveOptions<S>): DraftAutosave {
     async flush() {
       clearTimer();
       if (running) await running;
-      if (dirty) await saveOnce();
+      if (dirty && !locked) await saveOnce();
       if (status === 'error') throw new Error('Draft could not be saved');
       return draftId;
     },

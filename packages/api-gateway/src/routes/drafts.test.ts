@@ -39,6 +39,10 @@ const sharedPerms = [
 ];
 const messages = new Map<string, Row>();
 const attachments: Row[] = [];
+/** Quota usage per user id (bytes) for the receive-quota check. */
+const usage: Record<string, number> = {};
+/** Makes message update/updateMany throw for matching data (DB failure injection). */
+let failMessageWrite: ((data: Row) => boolean) | null = null;
 const modSeqLog: Array<{ mailboxId: string; modSeq: bigint }> = [];
 let seq = 0;
 
@@ -49,6 +53,8 @@ function matchFolder(f: Row | undefined, w: Row): boolean {
     if (k === 'mailbox') {
       const mb = mailboxes[f['mailboxId'] as string];
       if (!mb || (v as Row)['userId'] !== mb.userId) return false;
+    } else if (v && typeof v === 'object' && 'in' in (v as Row)) {
+      if (!((v as { in: unknown[] }).in).includes(f[k])) return false;
     } else if (f[k] !== v) return false;
   }
   return true;
@@ -105,8 +111,14 @@ installFakePrisma({
       return row ? withIncludes(row, q) : null;
     },
     findMany: (a) => [...messages.values()].filter((m) => match(m, (a as { where: Row }).where))
-      .sort((x, y) => (x['uid'] as number) - (y['uid'] as number)),
-    aggregate: () => ({ _max: { modSeq: null, uid: null } }),
+      .sort((x, y) => (x['uid'] as number) - (y['uid'] as number))
+      .map((m) => ((a as { select?: Row }).select?.['attachments'] ? { ...m, attachments: attachments.filter((x) => x['messageId'] === m['id']) } : m)),
+    count: (a) => [...messages.values()].filter((m) => match(m, (a as { where: Row }).where)).length,
+    aggregate: (a) => {
+      // quota usage (mailbox-quota usageWhere: folder.mailbox.userId)
+      const userId = (((a as { where?: Row }).where?.['folder'] as Row | undefined)?.['mailbox'] as Row | undefined)?.['userId'];
+      return { _max: { modSeq: null, uid: null }, ...(typeof userId === 'string' && usage[userId] !== undefined ? { _sum: { rawSize: usage[userId] } } : {}) };
+    },
     create: (a) => {
       const data = { ...(a as { data: Row }).data };
       const id = `m${++seq}`;
@@ -117,15 +129,30 @@ installFakePrisma({
       for (const att of nested?.create ?? []) attachments.push({ id: `a${++seq}`, ...att, messageId: id });
       return row;
     },
-    update: (a) => { const q = a as { where: { id: string }; data: Row }; const m = messages.get(q.where.id)!; applyData(m, q.data); return m; },
+    update: (a) => {
+      const q = a as { where: { id: string }; data: Row };
+      if (failMessageWrite?.(q.data)) throw new Error('db write failed');
+      const m = messages.get(q.where.id)!; applyData(m, q.data); return m;
+    },
     updateMany: (a) => {
       const q = a as { where: Row; data: Row };
+      if (failMessageWrite?.(q.data)) throw new Error('db write failed');
       let count = 0;
       for (const m of messages.values()) if (match(m, q.where)) { applyData(m, q.data); count++; }
       return { count };
     },
   },
-  attachment: { findMany: (a) => attachments.filter((x) => x['messageId'] === (a as { where: { messageId: string } }).where.messageId) },
+  attachment: {
+    findMany: (a) => attachments.filter((x) => x['messageId'] === (a as { where: { messageId: string } }).where.messageId),
+    count: (a) => attachments.filter((x) => x['storagePath'] === (a as { where: { storagePath: string } }).where.storagePath).length,
+    deleteMany: (a) => {
+      const ids = ((a as { where: { messageId: { in: string[] } } }).where.messageId.in);
+      const keep = attachments.filter((x) => !ids.includes(String(x['messageId'])));
+      const n = attachments.length - keep.length;
+      attachments.splice(0, attachments.length, ...keep);
+      return { count: n };
+    },
+  },
   sharedMailboxPerm: {
     findFirst: (a) => {
       const w = (a as { where: { userId: string; permission: string | { in: string[] }; sharedMailbox: { email: string } } }).where;
@@ -171,6 +198,13 @@ const counters = new Map<string, number>();
 (globalThis as Record<string, unknown>)['__rateLimitRedis'] = {
   incr: async (k: string) => { const n = (counters.get(k) ?? 0) + 1; counters.set(k, n); return n; },
   expire: async () => 1,
+};
+const draftState = new Map<string, string>();
+let draftStateDown = false;
+(globalThis as Record<string, unknown>)['__draftStateRedis'] = {
+  get: async (k: string) => { if (draftStateDown) throw new Error('redis down'); return draftState.get(k) ?? null; },
+  set: async (k: string, v: string) => { if (draftStateDown) throw new Error('redis down'); draftState.set(k, v); return 'OK'; },
+  del: async (k: string) => { draftState.delete(k); return 1; },
 };
 
 const express = (await import('express')).default;
@@ -247,6 +281,7 @@ test('draft CRUD: create, load (incl. Bcc), replace with new UID + expunged old 
   assert.match(String(loaded.json['bodyHtml']), /<p>Text<\/p>/);
   assert.equal(loaded.json['sendAs'], null);
 
+  const oldRawKey = String(row1['storagePath']);
   const replaced = await call('PUT', `/drafts/${id1}`, { user: 'u1', body: { to: ['bob@x.test'], subject: 'Hallo 2', bodyHtml: '<p>Neu</p>' } });
   assert.equal(replaced.status, 200);
   const id2 = String(replaced.json['id']);
@@ -258,7 +293,13 @@ test('draft CRUD: create, load (incl. Bcc), replace with new UID + expunged old 
   assert.equal(row2['messageId'], row1['messageId'], 'Message-ID stays stable across versions');
   assert.equal(folderOf('d1')!.totalCount, 1);
   assert.equal((await call('GET', `/drafts/${id1}`, { user: 'u1' })).status, 404, 'old version is gone');
-  assert.equal((await call('PUT', `/drafts/${id1}`, { user: 'u1', body: { subject: 'x' } })).status, 404, 'stale replace');
+  const stale = await call('PUT', `/drafts/${id1}`, { user: 'u1', body: { subject: 'x' } });
+  assert.deepEqual([stale.status, stale.json['code'], stale.json['currentId']], [409, 'DRAFT_SUPERSEDED', id2], 'stale replace names the current version');
+  // 8.1: the replaced version is no recoverable item and holds no objects
+  const old = messages.get(id1)!;
+  assert.ok((old['flags'] as string[]).includes('$CoreMailSuperseded'));
+  assert.deepEqual([old['storagePath'], old['rawSize'], old['bodyHtml']], [null, 0, '']);
+  assert.ok(!objects.has(oldRawKey), 'raw object of the old version deleted');
 
   assert.equal((await call('DELETE', `/drafts/${id2}`, { user: 'u1' })).status, 200);
   assert.ok(messages.get(id2)!['deletedAt'] instanceof Date);
@@ -285,12 +326,27 @@ test('attachments: uploaded once, kept by id on replace (same object, no new upl
   assert.equal(keptAtts.length, 1);
   const keptRow = attachments.find((a) => a['id'] === keptAtts[0]!['id'])!;
   assert.equal(keptRow['storagePath'], firstKey, 'object reused');
-  assert.equal(objects.size, objectCount + 1, 'only the new raw message was written');
+  assert.equal(objects.size, objectCount, 'new raw written, old raw released, kept attachment not stored again');
+  assert.ok(objects.has(firstKey), 'kept attachment object still there');
+  // the superseded id resolves to the new version, with the attachment id mapping
+  const stale = await call('PUT', `/drafts/${String(created.json['id'])}`, { user: 'u1', body: { keepAttachmentIds: [atts[0]!['id']] } });
+  assert.equal(stale.status, 409);
+  assert.deepEqual(stale.json['attachmentIds'], { [String(atts[0]!['id'])]: keptAtts[0]!['id'] });
 
   assert.equal((await call('PUT', `/drafts/${String(kept.json['id'])}`, { user: 'u1', body: { keepAttachmentIds: ['nope'] } })).status, 400);
   const dropped = await call('PUT', `/drafts/${String(kept.json['id'])}`, { user: 'u1', body: { subject: 'ohne' } });
   assert.equal(dropped.status, 200);
   assert.deepEqual(dropped.json['attachments'], []);
+  assert.ok(!objects.has(firstKey), 'dropped attachment object released');
+
+  // the same file attached twice is stored once
+  const twice = new FormData();
+  twice.append('draft', JSON.stringify({ to: ['a@x.test'], subject: 'zweimal' }));
+  for (const name of ['x.bin', 'y.bin']) twice.append('attachments', new Blob([Buffer.from('SAME'.repeat(50))], { type: 'application/octet-stream' }), name);
+  const t = await call('POST', '/drafts', { user: 'u1', form: twice });
+  const keys = attachments.filter((a) => a['messageId'] === t.json['id']).map((a) => a['storagePath']);
+  assert.equal(keys.length, 2);
+  assert.equal(keys[0], keys[1], 'one object for equal content');
   assert.equal((await call('POST', '/drafts', { user: 'u1', body: { keepAttachmentIds: [keptAtts[0]!['id']] } })).status, 400, 'create cannot keep');
 });
 
@@ -436,4 +492,109 @@ test('send-from-draft shares the per-user send rate limit with /send', async () 
   const limited = await call('POST', `/drafts/${id}/send`, { user: 'u2', body: {} });
   assert.equal(limited.status, 429);
   assert.equal(messages.get(id)!['folderId'], 'd2');
+});
+
+// ── 8.1 review fixes ──────────────────────────────────────────────────────────
+
+test('a draft being sent: PUT → 409 DRAFT_SENDING, DELETE → 409 (stale claim: deletable again)', async () => {
+  const d = await call('POST', '/drafts', { user: 'u1', body: { to: ['a@x.test'], subject: 'claimed' } });
+  const id = String(d.json['id']);
+  Object.assign(messages.get(id)!, { scheduledStatus: 'SENDING', scheduledAt: new Date() });
+  const put = await call('PUT', `/drafts/${id}`, { user: 'u1', body: { subject: 'x' } });
+  assert.deepEqual([put.status, put.json['code']], [409, 'DRAFT_SENDING']);
+  const del = await call('DELETE', `/drafts/${id}`, { user: 'u1' });
+  assert.deepEqual([del.status, del.json['code']], [409, 'DRAFT_SENDING']);
+  assert.equal(messages.get(id)!['deletedAt'], null, 'not deleted under a running send');
+  // an abandoned claim (process crash) does not block forever
+  messages.get(id)!['scheduledAt'] = new Date(Date.now() - 120_000);
+  assert.equal((await call('DELETE', `/drafts/${id}`, { user: 'u1' })).status, 200);
+});
+
+test('superseded chain: an id two versions old resolves to the newest; unknown id → 404 DRAFT_GONE', async () => {
+  const a = await call('POST', '/drafts', { user: 'u1', body: { subject: 'v1' } });
+  const b = await call('PUT', `/drafts/${String(a.json['id'])}`, { user: 'u1', body: { subject: 'v2' } });
+  const c = await call('PUT', `/drafts/${String(b.json['id'])}`, { user: 'u1', body: { subject: 'v3' } });
+  assert.equal(c.json['supersedes'], b.json['id']);
+  const stale = await call('PUT', `/drafts/${String(a.json['id'])}`, { user: 'u1', body: { subject: 'tab 2' } });
+  assert.deepEqual([stale.status, stale.json['currentId']], [409, c.json['id']]);
+  // another user never learns about the chain
+  assert.equal((await call('PUT', `/drafts/${String(a.json['id'])}`, { user: 'u2', body: {} })).status, 404);
+  const gone = await call('PUT', '/drafts/never-existed', { user: 'u1', body: {} });
+  assert.deepEqual([gone.status, gone.json['code']], [404, 'DRAFT_GONE']);
+});
+
+test('send-from-draft carries inline images (cid without brackets, inline) to the outbound job', async () => {
+  const d = await call('POST', '/drafts', { user: 'u1', body: { to: ['a@x.test'], subject: 'inline', bodyHtml: '<p>x</p>' } });
+  const id = String(d.json['id']);
+  attachments.push({ id: 'att-inline', messageId: id, filename: 'logo.png', mimeType: 'image/png', size: 4, sha256: 'x', storagePath: 'attachments/inline/logo', contentId: '<logo@x>', inline: true });
+  objects.set('attachments/inline/logo', Buffer.from('PNG!'));
+  const r = await call('POST', `/drafts/${id}/send`, { user: 'u1', body: {} });
+  assert.equal(r.status, 200);
+  const qAtt = (([...jobs.values()].at(-1)!.data['message'] as Row)['attachments'] as Row[])[0]!;
+  assert.equal(qAtt['cid'], 'logo@x');
+  assert.equal(qAtt['inline'], true);
+});
+
+test('post-enqueue failure: queued draft is marked SENT/PENDING, never re-sendable; undo still works', async () => {
+  // move to Sent fails → fallback state in Drafts, 200
+  const d = await call('POST', '/drafts', { user: 'u1', body: { to: ['a@x.test'], subject: 'fallback' } });
+  const id = String(d.json['id']);
+  failMessageWrite = (data) => data['folderId'] === 's1';
+  const r = await call('POST', `/drafts/${id}/send`, { user: 'u1', body: {} });
+  failMessageWrite = null;
+  assert.equal(r.status, 200);
+  const row = messages.get(id)!;
+  assert.deepEqual([row['folderId'], row['scheduledStatus']], ['d1', 'SENT']);
+  const before = jobs.size;
+  const again = await call('POST', `/drafts/${id}/send`, { user: 'u1', body: {} });
+  assert.deepEqual([again.status, again.json['code']], [409, 'DRAFT_SENT']);
+  assert.equal(jobs.size, before, 'not enqueued twice');
+  assert.equal((await call('PUT', `/drafts/${id}`, { user: 'u1', body: { subject: 'x' } })).json['code'], 'DRAFT_SENT');
+
+  // held send + failed move → PENDING with the job id in Drafts; unsend works
+  const h = await call('POST', '/drafts', { user: 'u1', body: { to: ['a@x.test'], subject: 'held' } });
+  const hid = String(h.json['id']);
+  failMessageWrite = (data) => data['folderId'] === 's1';
+  assert.equal((await call('POST', `/drafts/${hid}/send`, { user: 'u1', body: { undoDelaySec: 10 } })).status, 200);
+  failMessageWrite = null;
+  const job = [...jobs.values()].at(-1)!;
+  assert.deepEqual([messages.get(hid)!['scheduledStatus'], messages.get(hid)!['scheduledJobId']], ['PENDING', job.id]);
+  assert.equal((await call('POST', `/drafts/${hid}/unsend`, { user: 'u1', body: {} })).status, 200);
+  assert.ok(!jobs.has(job.id));
+  assert.equal(messages.get(hid)!['scheduledStatus'], null);
+  assert.equal((await call('PUT', `/drafts/${hid}`, { user: 'u1', body: { to: ['a@x.test'], subject: 'edited' } })).status, 200, 'editable after undo');
+
+  // every DB write fails → non-200 with queued:true, the claim is kept, no resend
+  const z = await call('POST', '/drafts', { user: 'u1', body: { to: ['a@x.test'], subject: 'zero' } });
+  const zid = String(z.json['id']);
+  failMessageWrite = (data) => data['folderId'] === 's1' || data['scheduledStatus'] === 'SENT';
+  const zr = await call('POST', `/drafts/${zid}/send`, { user: 'u1', body: {} });
+  failMessageWrite = null;
+  assert.deepEqual([zr.status, zr.json['code'], zr.json['queued']], [500, 'SEND_STATE_UNSAVED', true]);
+  assert.equal(messages.get(zid)!['scheduledStatus'], 'SENDING', 'claim not released');
+  messages.get(zid)!['scheduledAt'] = new Date(Date.now() - 120_000); // claim expired
+  const n = jobs.size;
+  assert.equal((await call('POST', `/drafts/${zid}/send`, { user: 'u1', body: {} })).json['code'], 'DRAFT_SENT');
+  // also when Redis is down (in-process fallback of the draft state)
+  draftStateDown = true;
+  assert.equal((await call('POST', `/drafts/${zid}/send`, { user: 'u1', body: {} })).json['code'], 'DRAFT_SENT');
+  draftStateDown = false;
+  assert.equal(jobs.size, n, 'never re-sent');
+});
+
+test('draft writes: refused at ProhibitSendReceive; per-user rate limit', async () => {
+  Object.assign(users['u2']!, { quotaBytes: 1000n, usedBytes: 0n, quotaWarningBytes: null, quotaProhibitSendBytes: null, mailbox: { id: 'mb2' } });
+  usage['u2'] = 2000;
+  const full = await call('POST', '/drafts', { user: 'u2', body: { to: ['a@x.test'], subject: 'voll' } });
+  assert.deepEqual([full.status, full.json['code']], [403, 'MAILBOX_FULL']);
+  delete usage['u2'];
+  delete users['u2']!['quotaBytes'];
+  (await import('@coremail/storage')).resetQuotaCache();
+
+  let limited = 0;
+  for (let i = 0; i < 70 && !limited; i++) {
+    const r = await call('POST', '/drafts', { user: 'u2', body: { subject: `n${i}` } });
+    if (r.status === 429) limited = i + 1;
+  }
+  assert.ok(limited > 0 && limited <= 61, `rate limited after at most 60 writes (got ${limited})`);
 });

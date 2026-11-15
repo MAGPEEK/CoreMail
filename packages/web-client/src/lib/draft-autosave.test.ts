@@ -35,6 +35,30 @@ function harness(opts: { fail?: () => boolean; initialId?: string } = {}) {
   };
 }
 
+test('8.1: a fatal error (draft being / already sent) stops autosave for good', async () => {
+  let calls = 0;
+  const statuses: string[] = [];
+  let text = '';
+  const saver = createDraftAutosave({
+    idleMs: 3000,
+    initialId: 'v1',
+    snapshot: () => text,
+    save: () => { calls++; return Promise.reject(Object.assign(new Error('sending'), { fatal: true })); },
+    isFatal: (e) => (e as { fatal?: boolean }).fatal === true,
+    onStatus: (s) => statuses.push(s),
+  });
+  text = 'a'; saver.touch();
+  mock.timers.tick(3000);
+  await flushMicrotasks();
+  assert.equal(saver.status, 'locked');
+  text = 'ab'; saver.touch();
+  mock.timers.tick(60_000);
+  await flushMicrotasks();
+  assert.equal(await saver.flush(), 'v1', 'flush saves nothing and does not throw');
+  assert.equal(calls, 1, 'never retried');
+  assert.equal(statuses.at(-1), 'locked');
+});
+
 test('saves once after 3 s idle; typing restarts the timer (debounce)', async () => {
   const h = harness();
   h.type('H');

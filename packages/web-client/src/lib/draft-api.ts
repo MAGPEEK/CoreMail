@@ -5,6 +5,7 @@
 import { api, apiFetch } from '../api/client.js';
 import { ApiError, apiErrorFromBody } from './errors.js';
 import type { DraftAttachmentRef, SavedDraft } from './draft-autosave.js';
+import { draftConflictFromBody, saveDraftWith } from './draft-conflict.js';
 
 export interface DraftPayload {
   to: string[];
@@ -51,33 +52,48 @@ async function writeDraft(method: 'POST' | 'PUT', path: string, p: DraftPayload)
     res = await apiFetch(path, { method, body: JSON.stringify(fields) }, 'application/json');
   }
   const body = await res.json().catch(() => ({ error: res.statusText })) as unknown;
-  if (!res.ok) throw apiErrorFromBody(body, res.status);
+  if (!res.ok) {
+    const err = apiErrorFromBody(body, res.status);
+    throw draftConflictFromBody(body, res.status, err.message) ?? err;
+  }
   return body as SavedDraftResponse;
 }
 
+export { isDraftLocked, DraftLockedError, DraftSupersededError } from './draft-conflict.js';
+
 /**
- * Creates (id null) or replaces a draft. A draft deleted meanwhile (another
- * client, sent elsewhere) is recreated so nothing typed is lost; attachments
- * that only existed on the deleted version cannot be kept then.
+ * Creates (id null) or replaces a draft (8.1 conflict rules, lib/draft-conflict.ts):
+ * superseded → retried once on the current version (no duplicate draft);
+ * being / already sent → DraftLockedError (autosave stops); 404 gone → recreated
+ * so nothing typed is lost (attachments of the deleted version cannot be kept).
  */
-export async function saveDraft(id: string | null, p: DraftPayload): Promise<SavedDraftResponse> {
-  if (!id) return writeDraft('POST', '/mail/drafts', p);
-  try {
-    return await writeDraft('PUT', `/mail/drafts/${encodeURIComponent(id)}`, p);
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      return writeDraft('POST', '/mail/drafts', { ...p, keepAttachmentIds: [] });
-    }
-    throw err;
-  }
+export function saveDraft(id: string | null, p: DraftPayload): Promise<SavedDraftResponse> {
+  return saveDraftWith(id, p, {
+    post: (payload) => writeDraft('POST', '/mail/drafts', payload),
+    put: (draftId, payload) => writeDraft('PUT', `/mail/drafts/${encodeURIComponent(draftId)}`, payload),
+  });
 }
 
 export const loadDraft = (id: string) => api.get<LoadedDraft>(`/mail/drafts/${encodeURIComponent(id)}`);
 
 export const deleteDraft = (id: string) => api.delete<{ ok: boolean }>(`/mail/drafts/${encodeURIComponent(id)}`);
 
-export const sendDraft = (id: string, body: { undoDelaySec?: number; scheduledAt?: string }) =>
-  api.post<{ ok: boolean; jobId: string; scheduled: boolean; sendAt?: string }>(`/mail/drafts/${encodeURIComponent(id)}/send`, body);
+/**
+ * Sends a draft. 8.1: `500 SEND_STATE_UNSAVED` means the mail IS queued but its
+ * state could not be stored — that is a success for the caller (never resend);
+ * `stateUnsaved` lets the UI mention it.
+ */
+export async function sendDraft(id: string, body: { undoDelaySec?: number; scheduledAt?: string }) {
+  try {
+    return await api.post<{ ok: boolean; jobId: string; scheduled: boolean; sendAt?: string; stateUnsaved?: boolean }>(
+      `/mail/drafts/${encodeURIComponent(id)}/send`, body);
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'SEND_STATE_UNSAVED') {
+      return { ok: true, jobId: '', scheduled: !!body.scheduledAt, stateUnsaved: true };
+    }
+    throw err;
+  }
+}
 
 /** Withdraws a held/scheduled send; false when the server is already sending it. */
 export async function unsendDraft(id: string): Promise<boolean> {

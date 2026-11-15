@@ -17,7 +17,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { createHash } from 'node:crypto';
-import { prisma } from '@coremail/storage';
+import { prisma, hasMfa } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
 export const appleProfileRouter: RouterType = Router();
@@ -228,9 +228,9 @@ appleProfileRouter.get('/', requireAuth, async (req: Request, res: Response) => 
   ]);
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
-  // Same rule as GET /user/client-config
-  const requiresAppPassword = !!(mfa?.totpEnabled || (mfa?.webAuthnCredentials &&
-    typeof mfa.webAuthnCredentials === 'string' && mfa.webAuthnCredentials.length > 2));
+  // Same rule as GET /user/client-config and the mail-protocol login (hasMfa:
+  // webAuthnCredentials is a Json array, not a string)
+  const requiresAppPassword = hasMfa({ mfa });
   const hostname = settings?.publicHostname ?? 'mail.local';
   const useHttps = settings ? settings.useHttps : true;
 

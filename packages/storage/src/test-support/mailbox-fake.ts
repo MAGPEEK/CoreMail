@@ -15,10 +15,11 @@ export interface FakeDb {
   aliases: Row[];
   serverSettings: Row[];
   userSettings: Row[];
+  attachments: Row[];
 }
 
 export function emptyDb(): FakeDb {
-  return { users: [], sharedMailboxes: [], mailboxes: [], folders: [], messages: [], aliases: [], serverSettings: [], userSettings: [] };
+  return { users: [], sharedMailboxes: [], mailboxes: [], folders: [], messages: [], aliases: [], serverSettings: [], userSettings: [], attachments: [] };
 }
 
 function cmp(a: unknown, b: unknown): number {
@@ -87,7 +88,11 @@ export function createFake(db: FakeDb) {
     const out: Row = {};
     for (const [k, v] of Object.entries(select)) {
       const rel = relations[table]?.[k];
-      if (rel) {
+      if (table === 'messages' && k === 'attachments') {
+        // list relation message → attachments
+        out[k] = db.attachments.filter((a) => a['messageId'] === row['id'])
+          .map((a) => project('attachments', a, (v as Row)['select'] as Row | undefined));
+      } else if (rel) {
         const r = rel(row);
         out[k] = r ? project(tableOf[k]!, r, (v as Row)['select'] as Row | undefined) : null;
       } else if (table === 'users' || table === 'sharedMailboxes') {
@@ -186,6 +191,7 @@ export function createFake(db: FakeDb) {
     emailAlias: model('aliases'),
     serverSettings: model('serverSettings'),
     userSettings: model('userSettings'),
+    attachment: model('attachments'),
   };
   fake['$transaction'] = async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(fake);
   return fake;

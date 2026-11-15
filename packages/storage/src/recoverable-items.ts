@@ -24,6 +24,7 @@ import { createLogger } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import { restoreMessages, nextModSeq } from './message-store.js';
 import { invalidateUsage, type QuotaOwner } from './mailbox-quota.js';
+import { SUPERSEDED_DRAFT_FLAG, purgeSupersededDraftTombstones } from './draft-versions.js';
 
 const log = createLogger('storage:recoverable');
 
@@ -78,6 +79,8 @@ function recoverableWhere(mailboxId: string, now: Date, days: number) {
       { deletedAt: cutoff ? { gte: cutoff } : { not: null } },
       { deletedAt: null, folder: { name: RECOVERABLE_DELETIONS } },
     ],
+    // 8.1: replaced webmail draft versions are not deleted items
+    NOT: { flags: { has: SUPERSEDED_DRAFT_FLAG } },
   };
 }
 
@@ -243,8 +246,11 @@ export async function purgeRecoverableItems(mailboxId: string, ids?: string[]): 
  */
 export async function purgeExpiredDeletedItems(opts: { now?: Date; days?: number; batchSize?: number; maxBatches?: number } = {}): Promise<number> {
   const days = opts.days ?? deletedItemRetentionDays();
+  // 8.1: tombstones of replaced draft versions go after a day, whatever the retention
+  const superseded = await purgeSupersededDraftTombstones(opts.now ?? new Date());
+  if (superseded > 0) log.info({ purged: superseded }, 'Superseded draft versions purged');
   const cutoff = retentionCutoff(opts.now ?? new Date(), days);
-  if (!cutoff) return 0;
+  if (!cutoff) return superseded;
   const batchSize = opts.batchSize ?? 1000;
   const maxBatches = opts.maxBatches ?? 1000;
   let total = 0;
@@ -260,7 +266,7 @@ export async function purgeExpiredDeletedItems(opts: { now?: Date; days?: number
     if (batch.length < batchSize) break;
   }
   if (total > 0) log.info({ purged: total, retentionDays: days }, 'Expired deleted items purged');
-  return total;
+  return total + superseded;
 }
 
 export const DELETED_ITEMS_PURGE_LOCK_KEY = 'storage:deleted-items-purge:lock';

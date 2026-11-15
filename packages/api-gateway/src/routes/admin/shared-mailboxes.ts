@@ -16,7 +16,7 @@ import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
-import { quotaLevelError } from '../../lib/quota-levels.js';
+import { quotaLevelPatchError } from '../../lib/quota-levels.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -120,7 +120,12 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
-  const levelError = quotaLevelError(p.data.quotaWarningBytes, p.data.quotaProhibitSendBytes, p.data.quotaBytes);
+  // 8.1: partial updates are validated against the stored levels
+  const stored = await prisma.sharedMailbox.findUnique({
+    where: { id }, select: { quotaBytes: true, quotaWarningBytes: true, quotaProhibitSendBytes: true },
+  });
+  if (!stored) { res.status(404).json({ error: 'Not found' }); return; }
+  const levelError = quotaLevelPatchError(p.data, stored);
   if (levelError) { res.status(400).json({ error: levelError }); return; }
   const big = (v: number | null): bigint | null => (v === null ? null : BigInt(v));
   try {

@@ -47,6 +47,7 @@ before(async () => {
   core.installAsyncErrorHandling(express);
   const app = express();
   app.use('/api/v1/user/apple-profile', appleProfileRouter);
+  app.use('/api/v1/user', (await import('./user.js')).userRouter);
   app.use(core.errorMiddleware({ error: () => undefined, warn: () => undefined }));
   server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
@@ -200,6 +201,26 @@ test('EAS variant: one com.apple.eas.account payload with its own stable identit
 
 test('unknown user → 404', async () => {
   assert.equal((await getProfile('', tok('ghost'))).status, 404);
+});
+
+test('WebAuthn-only MFA (Json array) requires an app password — profile and client-config agree', async () => {
+  const clientConfig = async () => (await (await fetch(`${base}/api/v1/user/client-config`, {
+    headers: { authorization: `Bearer ${tok('alice')}` },
+  })).json() as { requiresAppPassword: boolean }).requiresAppPassword;
+  try {
+    state.mfa = { totpEnabled: false, webAuthnCredentials: [{ id: 'cred-1', publicKey: 'x' }] };
+    const root = parsePlist(await (await getProfile()).text()) as Record<string, PV>;
+    assert.match(String(root['PayloadDescription']), /enter an app password/);
+    assert.equal(await clientConfig(), true);
+    // an empty array, or a legacy string value, is no MFA
+    for (const creds of [[], '[{"id":"x"}]']) {
+      state.mfa = { totpEnabled: false, webAuthnCredentials: creds };
+      assert.doesNotMatch(String((parsePlist(await (await getProfile()).text()) as Record<string, PV>)['PayloadDescription']), /enter an app password/);
+      assert.equal(await clientConfig(), false);
+    }
+  } finally {
+    state.mfa = null;
+  }
 });
 
 test('plist writer: escaping, empty containers, booleans', () => {
