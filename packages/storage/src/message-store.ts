@@ -306,6 +306,48 @@ export async function moveMessages(
   return { mapping, modSeq };
 }
 
+/**
+ * Bring deleted rows back (v8.1 "Recover deleted items"): expunge tombstones
+ * (deletedAt) or retention soft-deletes (softDeletedAt) become live messages in
+ * `targetFolderId` again. Like a move they get NEW UIDs from the target mailbox
+ * (the old UID was reported as expunged and is never reused), one new modSeq and
+ * createdModSeq = modSeq, so IMAP (CONDSTORE/QRESYNC), JMAP Email/changes and the
+ * ActiveSync sync see them as new messages. The source mailbox gets a modSeq bump
+ * when it differs. Mapping order = ascending old UID.
+ */
+export async function restoreMessages(
+  tx: MessageStoreTx,
+  ids: string[],
+  targetFolderId: string,
+  opts: { targetMailboxId?: string } = {},
+): Promise<{ mapping: UidMapping[]; modSeq: bigint | null }> {
+  if (ids.length === 0) return { mapping: [], modSeq: null };
+  const src = await tx.message.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, uid: true, folderId: true },
+    orderBy: [{ uid: 'asc' }],
+  });
+  if (src.length === 0) return { mapping: [], modSeq: null };
+  const targetMailboxId = opts.targetMailboxId ?? await mailboxOfFolder(tx, targetFolderId);
+  const { firstUid, modSeq } = await allocate(tx, targetMailboxId, src.length);
+  const sourceMailboxes = new Set<string>();
+  for (const folderId of new Set(src.map((m) => m.folderId))) sourceMailboxes.add(await mailboxOfFolder(tx, folderId));
+  const mapping: UidMapping[] = [];
+  for (const [i, m] of src.entries()) {
+    const newUid = firstUid + i;
+    await tx.message.update({
+      where: { id: m.id },
+      data: {
+        folderId: targetFolderId, uid: newUid, modSeq, createdModSeq: modSeq, changeKey: modSeq.toString(),
+        deletedAt: null, softDeletedAt: null,
+      },
+    });
+    mapping.push({ id: m.id, oldUid: m.uid, newUid });
+  }
+  for (const mbx of sourceMailboxes) if (mbx !== targetMailboxId) await nextModSeq(tx, mbx);
+  return { mapping, modSeq };
+}
+
 export interface CopyOpts {
   targetMailboxId?: string;
   /** Override fields on the copies (e.g. flags). */

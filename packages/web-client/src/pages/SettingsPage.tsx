@@ -7,9 +7,11 @@ import {
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
   Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
-  Cable, Mail as MailIcon, BookUser, Info, ExternalLink,
+  Cable, Mail as MailIcon, BookUser, Info, ExternalLink, RotateCcw,
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
+import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
+import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSection } from '../components/SignatureSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
@@ -27,7 +29,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
 
 interface RetentionTagDto {
   id: string;
@@ -75,7 +77,12 @@ interface OofData {
 // SigData is now defined in SignatureSection.tsx
 
 interface StorageFolder { id: string; name: string; displayName: string; sizeBytes: number; messageCount: number }
-interface StorageData { quotaBytes: number; usedBytes: number; folders: StorageFolder[] }
+interface StorageData {
+  quotaBytes: number; usedBytes: number; folders: StorageFolder[];
+  // v8.1: Exchange-style quota levels (bytes, 0 = unlimited)
+  limits?: { warningBytes: number; prohibitSendBytes: number; prohibitSendReceiveBytes: number };
+  level?: QuotaLevel;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBytes(b: number): string {
@@ -484,6 +491,9 @@ function OofSection() {
           Verwenden Sie automatische Antworten, um anderen mitzuteilen, dass Sie im Urlaub sind oder Ihre E-Mails zurzeit nicht beantworten können.
           Sie können festlegen, dass Ihre Antworten an einem bestimmten Zeitpunkt beginnen und enden. Andernfalls bleiben sie aktiviert, bis Sie sie deaktivieren.
         </p>
+        <p className="text-xs text-gray-500 mt-1">
+          Jeder Absender erhält pro Abwesenheitszeitraum genau eine automatische Antwort. Mailinglisten, automatisch erzeugte Nachrichten und „noreply"-Absender erhalten keine Antwort.
+        </p>
       </div>
 
       {/* Main toggle */}
@@ -595,6 +605,17 @@ const FOLDER_ICON_MAP: Record<string, React.ElementType> = {
   Junk:  () => <span className="text-gray-400">⚠️</span>,
 };
 
+// v8.1: Recover deleted items (Exchange Recoverable Items)
+function RecoverSection() {
+  const t = useT();
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('recover_title')}</h2>
+      <RecoverDeletedItemsPanel />
+    </div>
+  );
+}
+
 function StorageSection() {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -646,10 +667,25 @@ function StorageSection() {
 
       {/* Usage display */}
       <div className="space-y-2">
-        <p className="text-sm text-gray-700">
+        <p className={`text-sm ${data?.level && data.level !== 'ok' ? quotaColor(data.level).text : 'text-gray-700'}`}>
           <span className="font-medium">{fmtBytes(used)}</span> von <span className="font-medium">{fmtBytes(quota)}</span>{' '}
           (<span className="font-medium">{pct.toFixed(1)}%</span>) verwendet
         </p>
+        {/* v8.1: Exchange quota levels */}
+        {data?.limits && (
+          <ul className="text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+            {data.limits.warningBytes > 0 && <li>Warnung ab {fmtBytes(data.limits.warningBytes)}</li>}
+            {data.limits.prohibitSendBytes > 0 && <li>Senden gesperrt ab {fmtBytes(data.limits.prohibitSendBytes)}</li>}
+            {data.limits.prohibitSendReceiveBytes > 0 && <li>Senden und Empfangen gesperrt ab {fmtBytes(data.limits.prohibitSendReceiveBytes)}</li>}
+          </ul>
+        )}
+        {data?.level && data.level !== 'ok' && (
+          <p className={`text-sm font-medium ${quotaColor(data.level).text}`}>
+            {data.level === 'warning' ? 'Ihr Postfach ist fast voll.'
+              : data.level === 'prohibitSend' ? 'Postfach voll – Senden ist gesperrt.'
+                : 'Postfach voll – Senden und Empfangen sind gesperrt.'}
+          </p>
+        )}
 
         {/* Stacked bar */}
         <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden flex">
@@ -679,7 +715,7 @@ function StorageSection() {
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-1">Speicher verwalten</h3>
         <p className="text-xs text-gray-500 mb-3">
-          Wenn Sie Inhalte aus einem Ordner leeren, können Sie Speicherplatz freigeben. Elemente werden endgültig gelöscht.
+          Wenn Sie Inhalte aus einem Ordner leeren, können Sie Speicherplatz freigeben. Geleerte Elemente lassen sich eine Zeit lang unter „Gelöschte Elemente wiederherstellen" zurückholen.
         </p>
 
         {folders.length === 0 ? (
@@ -2286,6 +2322,7 @@ const NAV: { group: string; items: { id: Section; label: string; icon: React.Ele
       { id: 'categories',   label: 'Kategorien',              icon: Tag        },
       { id: 'retention',    label: 'Aufbewahrungsrichtlinien', icon: Clock      },
       { id: 'storage',      label: 'Speicher',                icon: HardDrive  },
+      { id: 'recover',      label: 'Gelöschte Elemente wiederherstellen', icon: RotateCcw },
     ],
   },
   {
@@ -2307,6 +2344,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   oof:          OofSection,
   signature:    SignatureSection,
   storage:      StorageSection,
+  recover:      RecoverSection,
   theme:        ThemeSection,
   security:     SecuritySection,
   language:     LanguageSection,
@@ -2356,7 +2394,7 @@ export function SettingsPage() {
 
       {/* Right content area — external clients needs more width for URLs */}
       <div className="flex-1 overflow-y-auto p-8 bg-white">
-        <div className={section === 'externalClients' ? 'max-w-5xl' : 'max-w-xl'}>
+        <div className={section === 'externalClients' ? 'max-w-5xl' : section === 'recover' ? 'max-w-3xl' : 'max-w-xl'}>
           <SectionComp />
         </div>
       </div>

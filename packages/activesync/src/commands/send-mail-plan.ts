@@ -11,6 +11,8 @@ export const EAS_SEND_STATUS = {
   SUCCESS:           '1',
   INVALID_MIME:      '107',
   SERVER_ERROR:      '110',
+  /** [MS-ASCMD] common status 113 MailboxQuotaExceeded (v8.1: ProhibitSendQuota). */
+  MAILBOX_QUOTA_EXCEEDED: '113',
   MESSAGE_PREVIOUSLY_SENT: '118',
   NO_RECIPIENTS:     '119',
   SUBMISSION_FAILED: '120',

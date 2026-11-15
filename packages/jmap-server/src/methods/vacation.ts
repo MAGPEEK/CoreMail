@@ -1,7 +1,7 @@
 /**
  * VacationResponse/* (RFC 8621 §8) — singleton on UserSettings.oof*.
  */
-import { prisma } from '@coremail/storage';
+import { prisma, saveOofSettings } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_VACATION } from '../capabilities.js';
 import { MethodError, setError } from '../errors.js';
@@ -56,10 +56,16 @@ registerMethod('VacationResponse/set', CAP_VACATION, async (args, ctx) => {
     const from = parseDate(next['fromDate']); const to = parseDate(next['toDate']);
     const escape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const html = typeof next['htmlBody'] === 'string' ? next['htmlBody'] : (typeof next['textBody'] === 'string' ? escape(next['textBody']).replace(/\n/g, '<br>') : '');
-    await prisma.userSettings.upsert({
-      where: { userId: ctx.user.userId },
-      create: { userId: ctx.user.userId, oofEnabled: next['isEnabled'] === true, oofExternal: html, oofInternal: html, oofUseTimeRange: !!(from || to), oofStart: from, oofEnd: to },
-      update: { oofEnabled: next['isEnabled'] === true, oofExternal: html, oofInternal: html, oofUseTimeRange: !!(from || to), oofStart: from, oofEnd: to },
+    // v8.1: shared OOF writer (maintains the OOF period id — one reply per sender
+    // per period). VacationResponse has one text for every audience; the
+    // audience switches (external on/only contacts) keep their stored values.
+    const cur = await prisma.userSettings.findUnique({
+      where: { userId: ctx.user.userId }, select: { oofExternalEnabled: true, oofExternalOnlyContacts: true },
+    });
+    await saveOofSettings(ctx.user.userId, {
+      oofEnabled: next['isEnabled'] === true, oofExternal: html, oofInternal: html,
+      oofExternalEnabled: cur?.oofExternalEnabled ?? true, oofExternalOnlyContacts: cur?.oofExternalOnlyContacts ?? false,
+      oofUseTimeRange: !!(from || to), oofStart: from, oofEnd: to,
     });
     updated[id] = null;
   }

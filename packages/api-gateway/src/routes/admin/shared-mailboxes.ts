@@ -16,6 +16,7 @@ import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
+import { quotaLevelError } from '../../lib/quota-levels.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -24,6 +25,7 @@ adminSharedMailboxesRouter.use(requireArea('recipients'));
 const SELECT = {
   id: true, email: true, displayName: true, domainId: true,
   quotaBytes: true, usedBytes: true, active: true, createdAt: true,
+  quotaWarningBytes: true, quotaProhibitSendBytes: true,
   permissions: {
     select: {
       id: true, userId: true, permission: true, grantedAt: true,
@@ -112,9 +114,15 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     displayName: z.string().min(1).max(200).optional(),
     active:      z.boolean().optional(),
     quotaBytes:  z.number().int().positive().optional(),
+    // v8.1: Exchange quota levels (null = server default percent of quotaBytes)
+    quotaWarningBytes:      z.number().int().min(0).nullable().optional(),
+    quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
+  const levelError = quotaLevelError(p.data.quotaWarningBytes, p.data.quotaProhibitSendBytes, p.data.quotaBytes);
+  if (levelError) { res.status(400).json({ error: levelError }); return; }
+  const big = (v: number | null): bigint | null => (v === null ? null : BigInt(v));
   try {
     const item = await prisma.sharedMailbox.update({
       where: { id },
@@ -122,6 +130,8 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
         ...(p.data.displayName !== undefined ? { displayName: p.data.displayName } : {}),
         ...(p.data.active      !== undefined ? { active: p.data.active }           : {}),
         ...(p.data.quotaBytes  !== undefined ? { quotaBytes: BigInt(p.data.quotaBytes) } : {}),
+        ...(p.data.quotaWarningBytes !== undefined ? { quotaWarningBytes: big(p.data.quotaWarningBytes) } : {}),
+        ...(p.data.quotaProhibitSendBytes !== undefined ? { quotaProhibitSendBytes: big(p.data.quotaProhibitSendBytes) } : {}),
       },
       select: SELECT,
     });

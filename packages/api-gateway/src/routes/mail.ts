@@ -8,6 +8,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
+  checkSendQuota,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -332,7 +333,9 @@ mailRouter.patch('/messages/:id/retention-tag', async (req: Request, res: Respon
   });
 });
 
-// POST /api/v1/mail/folders/:id/empty — delete all messages in folder (hard-delete for Trash/Junk, soft for others)
+// POST /api/v1/mail/folders/:id/empty — Trash/Junk: delete all messages (v8.1:
+// expunge tombstones, recoverable for DELETED_ITEM_RETENTION_DAYS via
+// /mail/recoverable); other folders: move to Trash
 mailRouter.post('/folders/:id/empty', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
 
@@ -344,13 +347,12 @@ mailRouter.post('/folders/:id/empty', async (req: Request, res: Response) => {
   const hardDelete = folder.name === 'Trash' || folder.name === 'Junk';
 
   if (hardDelete) {
-    const result = await prisma.$transaction(async (tx) => {
-      const r = await tx.message.deleteMany({ where: { folderId: id } });
+    const live = await prisma.message.findMany({ where: { folderId: id, deletedAt: null }, select: { id: true } });
+    await prisma.$transaction(async (tx) => {
+      if (live.length > 0) await expunge(tx, live.map((m) => m.id), { mailboxId: folder.mailboxId, where: { folderId: id, deletedAt: null } });
       await tx.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
-      if (r.count > 0) await nextModSeq(tx, folder.mailboxId);
-      return r;
     });
-    res.json({ ok: true, deleted: result.count });
+    res.json({ ok: true, deleted: live.length });
     return;
   }
 
@@ -452,14 +454,12 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
     }
     case 'delete': {
       const trash = await resolveSysFolder('Trash');
-      // Already in Trash? → hard delete
+      // Already in Trash? → delete (v8.1: expunge tombstone — recoverable via
+      // /mail/recoverable for DELETED_ITEM_RETENTION_DAYS)
       const inTrash = messages.filter((m) => m.folderId === trash?.id).map((m) => m.id);
       const notInTrash = messages.filter((m) => m.folderId !== trash?.id).map((m) => m.id);
       if (inTrash.length) {
-        await prisma.$transaction(async (tx) => {
-          await tx.message.deleteMany({ where: { id: { in: inTrash } } });
-          await nextModSeq(tx, mailboxId);
-        });
+        await prisma.$transaction((tx) => expunge(tx, inTrash, { mailboxId, where: { deletedAt: null } }));
       }
       if (notInTrash.length && trash) {
         await moveTo(trash.id, notInTrash);
@@ -753,10 +753,8 @@ mailRouter.delete('/messages/:id', async (req: Request, res: Response) => {
   const mailbox = await prisma.mailbox.findFirst({ where: { userId: req.apiUser!.userId } });
   const mailboxId = mailbox!.id;
   if (hard) {
-    await prisma.$transaction(async (tx) => {
-      await tx.message.delete({ where: { id } });
-      await nextModSeq(tx, mailboxId);
-    });
+    // v8.1: "permanent" delete keeps a tombstone (Recover deleted items)
+    await prisma.$transaction((tx) => expunge(tx, [id], { mailboxId }));
   } else {
     // Move to Trash (new UID + modSeq), or soft-delete when there is no Trash
     const trash = await prisma.folder.findFirst({ where: { mailboxId, name: 'Trash' } });
@@ -1002,6 +1000,18 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
       include: { domain: true },
     });
     if (!user) return fail(404, { error: 'Benutzer nicht gefunden' });
+
+    // v8.1: ProhibitSendQuota (same check as SMTP submission, JMAP and EAS).
+    // Inside performSend: covers /mail/send, send-from-draft and the undo-send hold.
+    const sendQuota = await checkSendQuota(user.id);
+    if (!sendQuota.allowed) {
+      return fail(403, {
+        error: sendQuota.message,
+        code: 'MAILBOX_QUOTA_EXCEEDED',
+        usedBytes: sendQuota.status.usedBytes,
+        limitBytes: sendQuota.status.limits.prohibitSendBytes,
+      });
+    }
 
     // ── Shared-mailbox permission check (v3.18.9) ──────────────────────────
     const sender = await resolveSender(user, input.sendAs ?? null, input.sendOnBehalfOf ?? null);

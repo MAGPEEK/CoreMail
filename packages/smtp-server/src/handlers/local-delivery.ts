@@ -100,6 +100,42 @@ export async function bounceUnknownLocal(
   await (opts.bounce ?? sendDsnBounce)(unknownRecipientDsn(raw, from, rcpts, hostname, opts.deliverExternal ?? true));
 }
 
+/** Pure: DSN options for local recipients whose mailbox is over its receive quota (5.2.2, v8.1). */
+export function quotaExceededDsn(raw: Buffer, from: string, rcpts: readonly string[], hostname: string, deliverExternal: boolean): DsnOptions {
+  const { subject, messageId } = headerInfo(raw);
+  return {
+    originalFrom: from,
+    originalTo: [...rcpts],
+    originalSubject: subject,
+    originalMessageId: messageId,
+    failureReason: 'Mailbox full: the recipient\'s mailbox is over its storage quota',
+    smtpCode: 552,
+    serverHostname: hostname,
+    recipients: rcpts.map((rcpt) => ({ rcpt, status: '5.2.2', diagnostic: '552 5.2.2 Mailbox full', remote: false })),
+    deliverExternal,
+  };
+}
+
+/**
+ * NDR (5.2.2) for local recipients whose mailbox was over its
+ * ProhibitSendReceiveQuota at delivery time. Never for a null-sender message.
+ */
+export async function bounceQuotaLocal(
+  raw: Buffer,
+  from: string,
+  rcpts: readonly string[],
+  opts: { hostname?: string; deliverExternal?: boolean; bounce?: (o: DsnOptions) => Promise<void> } = {},
+): Promise<void> {
+  if (rcpts.length === 0) return;
+  if (!from) {
+    log.warn({ rcpts }, 'Mailbox full for a null-sender message — not bounced');
+    return;
+  }
+  const hostname = opts.hostname ?? (await ownAuthservIds())[0] ?? 'mail.localhost';
+  log.warn({ from, rcpts }, 'Recipient mailbox over quota at delivery time — sending an NDR');
+  await (opts.bounce ?? sendDsnBounce)(quotaExceededDsn(raw, from, rcpts, hostname, opts.deliverExternal ?? true));
+}
+
 /** Tests: forget the cached authserv-ids. */
 export function resetAuthservIdCache(): void {
   cachedIds = null;

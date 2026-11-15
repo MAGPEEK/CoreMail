@@ -19,4 +19,8 @@ export * from './mail-auth.js';
 export * from './queue-options.js';
 export * from './provision-mailbox.js';
 export * from './itip-reply.js';
+export * from './internal-notify.js';
+export * from './mailbox-quota.js';
+export * from './recoverable-items.js';
+export * from './oof.js';
 export * from './draft.js';

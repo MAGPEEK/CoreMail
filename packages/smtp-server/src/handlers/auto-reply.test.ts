@@ -12,7 +12,7 @@ process.env['LOG_LEVEL'] = 'error';
 process.env['NODE_ENV'] = 'test';
 (globalThis as unknown as { __prisma: unknown }).__prisma = { $on: () => undefined };
 
-const { decideAutoReply, parseHeaderBlock, sendAutoReplyIfNeeded, buildAutoReply } = await import('./auto-reply.js');
+const { decideAutoReply, parseHeaderBlock, sendAutoReplyIfNeeded, buildAutoReply, replyMemoryTtlSec, rateLimitKey } = await import('./auto-reply.js');
 type Settings = NonNullable<Parameters<typeof decideAutoReply>[0]['settings']>;
 
 const S: Settings = {
@@ -144,4 +144,70 @@ test('HTML out-of-office text produces an alternative text part', async () => {
   const raw = (await buildAutoReply({ fromAddress: 'bob@local.example', to: 'ann@ext.example', originalHeaders: parseHeaderBlock(ORIG), body: '<p>Away &amp; back</p>', hostname: 'h.example' })).toString('utf8');
   assert.match(raw, /multipart\/alternative/);
   assert.match(raw, /Away & back/);
+});
+
+// ── v8.1: exactly one reply per sender per OOF period ─────────────────────────
+
+test('one reply per sender per OOF period: no second reply weeks later, a new period replies again', async () => {
+  let settings: Settings = { ...S, oofPeriodId: 'p1' };
+  const keys = new Map<string, number>();
+  const d = deps({
+    loadSettings: async () => settings,
+    acquire: async (k: string, ttl: number) => { if (keys.has(k)) return false; keys.set(k, ttl); return true; },
+  });
+  const ctx = { userId: 'u1', userEmail: 'bob@local.example', envelopeFrom: 'ann@ext.example', raw: ORIG, deliveredToJunk: false, now: NOW };
+  assert.equal(await sendAutoReplyIfNeeded(ctx, d), 'sent');
+  // the marker outlives the old 7-day window (open-ended OOF: a year)
+  assert.ok([...keys.values()][0]! >= 366 * 86400);
+  assert.equal(await sendAutoReplyIfNeeded({ ...ctx, now: new Date(NOW.getTime() + 30 * 86400_000) }, d), 'rate limited');
+  // OOF switched off and on again → new period id → the sender gets one reply again
+  settings = { ...S, oofPeriodId: 'p2' };
+  assert.equal(await sendAutoReplyIfNeeded(ctx, d), 'sent');
+  assert.equal(await sendAutoReplyIfNeeded(ctx, d), 'rate limited');
+  assert.equal(d.sent.length, 2);
+});
+
+test('reply memory lives until the end of a scheduled period (+1 day), at least 7 days', () => {
+  const sched: Settings = { ...S, oofUseTimeRange: true, oofStart: new Date('2026-07-01T00:00:00Z'), oofEnd: new Date('2026-08-10T12:00:00Z') };
+  assert.equal(replyMemoryTtlSec(sched, NOW), (Date.parse('2026-08-10T12:00:00Z') - NOW.getTime()) / 1000 + 86400);
+  assert.equal(replyMemoryTtlSec({ ...sched, oofEnd: new Date(NOW.getTime() + 3600_000) }, NOW), 7 * 86400);
+  assert.equal(replyMemoryTtlSec(S, NOW, { OOF_REPLY_MEMORY_DAYS: '30' }), 30 * 86400);
+  assert.equal(replyMemoryTtlSec(S, NOW, {}), 366 * 86400);
+});
+
+test('rate-limit key changes with the period id, the texts and the schedule', () => {
+  const base = rateLimitKey('u1', 'ann@ext.example', { ...S, oofPeriodId: 'p1' });
+  assert.equal(rateLimitKey('u1', 'ANN@ext.example', { ...S, oofPeriodId: 'p1' }), base);
+  assert.notEqual(rateLimitKey('u1', 'ann@ext.example', { ...S, oofPeriodId: 'p2' }), base);
+  assert.notEqual(rateLimitKey('u1', 'ann@ext.example', { ...S, oofPeriodId: 'p1', oofExternal: 'x' }), base);
+  assert.notEqual(rateLimitKey('u1', 'ann@ext.example', { ...S, oofPeriodId: 'p1', oofUseTimeRange: true }), base);
+});
+
+test('RFC 3834 suppressions: noreply variants, own address and lists send nothing', async () => {
+  for (const sender of ['noreply@shop.example', 'do-not-reply@shop.example', 'donotreply@shop.example', 'bounce@lists.example']) {
+    assert.deepEqual(decideAutoReply(input({ envelopeFrom: sender })), { send: false, reason: 'automated sender' }, sender);
+  }
+  const d = deps();
+  const base = { userId: 'u1', userEmail: 'bob@local.example', raw: ORIG, deliveredToJunk: false, now: NOW };
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'bob@local.example' }, d), 'own address');
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: '' }, d), 'null sender');
+  const bulk = Buffer.concat([Buffer.from('Precedence: bulk\r\n'), ORIG]);
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'ann@ext.example', raw: bulk }, d), 'precedence');
+  const auto = Buffer.concat([Buffer.from('Auto-Submitted: auto-generated\r\n'), ORIG]);
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'ann@ext.example', raw: auto }, d), 'auto-submitted');
+  assert.equal(d.sent.length, 0);
+});
+
+test('schedule and audience end to end: outside the period nothing, contacts-only external', async () => {
+  const sched: Settings = { ...S, oofUseTimeRange: true, oofStart: new Date('2026-07-11T00:00:00Z'), oofEnd: new Date('2026-07-20T00:00:00Z'), oofExternalOnlyContacts: true };
+  const d = deps({ loadSettings: async () => sched, isContact: async (_u: string, s: string) => s === 'ann@ext.example' });
+  const base = { userId: 'u1', userEmail: 'bob@local.example', raw: ORIG, deliveredToJunk: false };
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'ann@ext.example', now: NOW }, d), 'before oof period');
+  const inside = new Date('2026-07-12T00:00:00Z');
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'carl@ext.example', now: inside }, d), 'sender not a contact');
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'ann@ext.example', now: inside }, d), 'sent');
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'eve@local.example', now: inside }, d), 'sent');
+  assert.match(d.sent[0]!.raw.toString('utf8'), /I am out\./);
+  assert.match(d.sent[1]!.raw.toString('utf8'), /I am out \(internal\)\./);
+  assert.equal(await sendAutoReplyIfNeeded({ ...base, envelopeFrom: 'ann@ext.example', now: new Date('2026-07-21T00:00:00Z') }, d), 'after oof period');
 });

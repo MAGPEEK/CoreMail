@@ -1,7 +1,9 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { hashPassword, verifyPassword } from '@coremail/core';
-import { prisma, expunge, nextModSeq, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER } from '@coremail/storage';
+import {
+  prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus,
+} from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
@@ -212,30 +214,24 @@ userRouter.put('/oof', async (req: Request, res: Response) => {
   const d = parsed.data;
   const oofStart = d.startDate ? new Date(d.startDate) : null;
   const oofEnd   = d.endDate   ? new Date(d.endDate)   : null;
+  if ((oofStart && isNaN(oofStart.getTime())) || (oofEnd && isNaN(oofEnd.getTime()))) {
+    res.status(400).json({ error: 'Invalid date' }); return;
+  }
+  if (d.useTimeRange && oofStart && oofEnd && oofEnd.getTime() <= oofStart.getTime()) {
+    res.status(400).json({ error: 'End must be after start' }); return;
+  }
 
-  await prisma.userSettings.upsert({
-    where:  { userId: req.apiUser!.userId },
-    update: {
-      oofEnabled:              d.enabled,
-      oofInternal:             d.internalMessage,
-      oofExternal:             d.externalMessage,
-      oofExternalEnabled:      d.externalEnabled,
-      oofExternalOnlyContacts: d.externalOnlyContacts,
-      oofUseTimeRange:         d.useTimeRange,
-      oofStart,
-      oofEnd,
-    },
-    create: {
-      userId:                  req.apiUser!.userId,
-      oofEnabled:              d.enabled,
-      oofInternal:             d.internalMessage,
-      oofExternal:             d.externalMessage,
-      oofExternalEnabled:      d.externalEnabled,
-      oofExternalOnlyContacts: d.externalOnlyContacts,
-      oofUseTimeRange:         d.useTimeRange,
-      oofStart,
-      oofEnd,
-    },
+  // v8.1: one writer for MWA/JMAP/EAS — maintains the OOF period id
+  // (one auto-reply per sender per period).
+  await saveOofSettings(req.apiUser!.userId, {
+    oofEnabled:              d.enabled,
+    oofInternal:             d.internalMessage,
+    oofExternal:             d.externalMessage,
+    oofExternalEnabled:      d.externalEnabled,
+    oofExternalOnlyContacts: d.externalOnlyContacts,
+    oofUseTimeRange:         d.useTimeRange,
+    oofStart,
+    oofEnd,
   });
 
   // Create/update the out-of-office calendar event when a period is set
@@ -304,7 +300,20 @@ userRouter.get('/storage', async (req: Request, res: Response) => {
     messageCount: sizeMap.get(f.id)?.count ?? 0,
   })).filter(f => f.messageCount > 0).sort((a, b) => b.sizeBytes - a.sizeBytes);
 
-  res.json({ quotaBytes: user?.quotaBytes ?? 0, usedBytes: totalUsed, folders });
+  const status = await getQuotaStatus({ kind: 'user', id: userId }).catch(() => null);
+  res.json({
+    quotaBytes: user?.quotaBytes ?? 0, usedBytes: totalUsed, folders,
+    ...(status ? { limits: status.limits, level: status.level } : {}),
+  });
+});
+
+// GET /api/v1/user/quota — v8.1: mailbox usage + Exchange-style quota levels
+// (cached usage, cheap enough for the sidebar). level: ok | warning |
+// prohibitSend | prohibitSendReceive; limits in bytes, 0 = unlimited.
+userRouter.get('/quota', async (req: Request, res: Response) => {
+  const status = await getQuotaStatus({ kind: 'user', id: req.apiUser!.userId });
+  if (!status) { res.status(404).json({ error: 'User not found' }); return; }
+  res.json({ usedBytes: status.usedBytes, level: status.level, ...status.limits });
 });
 
 // DELETE /api/v1/user/folders/:id/empty — empty folder (soft-delete all messages)
@@ -904,12 +913,13 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
   });
   if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const r = await tx.message.deleteMany({ where: { folderId } });
-    if (r.count > 0) await nextModSeq(tx, access.mailboxId);
-    return r;
+  // v8.1: expunge tombstones (recoverable for DELETED_ITEM_RETENTION_DAYS)
+  const live = await prisma.message.findMany({ where: { folderId, deletedAt: null }, select: { id: true } });
+  await prisma.$transaction(async (tx) => {
+    if (live.length > 0) await expunge(tx, live.map((m) => m.id), { mailboxId: access.mailboxId, where: { folderId, deletedAt: null } });
+    await tx.folder.update({ where: { id: folderId }, data: { totalCount: 0, unreadCount: 0 } });
   });
-  res.json({ deleted: result.count });
+  res.json({ deleted: live.length });
 });
 
 // ── GET /api/v1/user/preferences ─────────────────────────────────────────────

@@ -31,13 +31,28 @@ export function registerMailbox(program: Command, api: () => CoreMailClient, jso
         [{ key: 'name', label: 'Folder' }, { key: 'total', label: 'Messages' }, { key: 'unread', label: 'Unread' }, { key: 'id', label: 'ID' }]);
     });
 
-  mb.command('quota <email|id> <size>').description('Set the storage quota, e.g. 10GB')
-    .action(async (ref: string, size: string) => {
+  mb.command('quota <email|id> <size>')
+    .description('Set the storage quota (= prohibit send/receive), e.g. 10GB; optional warning / prohibit-send levels')
+    .option('--warning <size>', 'warning mail level, e.g. 9GB ("default" = server default)')
+    .option('--prohibit-send <size>', 'sending blocked from this level, e.g. 9.5GB ("default" = server default)')
+    .action(async (ref: string, size: string, opts: { warning?: string; prohibitSend?: string }) => {
       const u = await resolveUser(api(), ref);
       const bytes = parseBytes(size);
       if (bytes <= 0) fail('Quota must be greater than 0');
-      await api().put(`/api/v1/admin/mailboxes/${u.id}`, { quotaBytes: bytes });
-      process.stdout.write(`Quota for ${u.email}: ${formatBytes(bytes)}\n`);
+      const level = (v: string | undefined): number | null | undefined =>
+        v === undefined ? undefined : v.toLowerCase() === 'default' ? null : parseBytes(v);
+      const warning = level(opts.warning);
+      const prohibitSend = level(opts.prohibitSend);
+      await api().put(`/api/v1/admin/mailboxes/${u.id}`, {
+        quotaBytes: bytes,
+        ...(warning !== undefined ? { quotaWarningBytes: warning } : {}),
+        ...(prohibitSend !== undefined ? { quotaProhibitSendBytes: prohibitSend } : {}),
+      });
+      const extra = [
+        warning !== undefined ? `warning ${warning === null ? 'server default' : formatBytes(warning)}` : '',
+        prohibitSend !== undefined ? `prohibit send ${prohibitSend === null ? 'server default' : formatBytes(prohibitSend)}` : '',
+      ].filter(Boolean).join(', ');
+      process.stdout.write(`Quota for ${u.email}: ${formatBytes(bytes)}${extra ? ` (${extra})` : ''}\n`);
     });
 
   mb.command('recalculate [email|id]').description('Recalculate usage (one mailbox or all)')

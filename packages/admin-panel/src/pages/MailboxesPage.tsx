@@ -13,6 +13,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { Can, WriteGuard } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { DetailPanel } from '../components/DetailPanel.js';
+import { gbInputToBytes, bytesToGbInput } from '../lib/quotaInput.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
@@ -22,9 +23,16 @@ interface User {
   domainId: string; createdAt: string;
   /** 8.x: last successful login (web, SSO, mail protocols) — null = never / not yet recorded */
   lastLoginAt?: string | null;
+  /** v8.1: explicit Exchange quota levels (null = server default) */
+  quotaWarningBytes?: number | null;
+  quotaProhibitSendBytes?: number | null;
 }
+type QuotaLevel = 'ok' | 'warning' | 'prohibitSend' | 'prohibitSendReceive';
 interface UserDetail extends User {
   mailbox?: { folders: FolderInfo[] };
+  /** v8.1: effective levels (explicit or server default) + current level */
+  quotaLimits?: { warningBytes: number; prohibitSendBytes: number; prohibitSendReceiveBytes: number };
+  quotaLevel?: QuotaLevel;
 }
 interface Domain { id: string; name: string; active: boolean }
 interface DelegateGrantee { id: string; email: string; displayName: string }
@@ -497,6 +505,24 @@ export function MailboxesPage() {
               </h3>
               <QuotaBar used={detail?.id === active.id ? detail.usedBytes : active.usedBytes}
                 total={active.quotaBytes} showLabel />
+              {/* v8.1: Exchange quota levels */}
+              {detail?.id === active.id && detail.quotaLimits && (
+                <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-gray-400">{t('mbox_quota_warning').replace(' (GB)', '')}</dt>
+                  <dd className="text-gray-700">{detail.quotaLimits.warningBytes > 0 ? formatBytes(detail.quotaLimits.warningBytes) : '—'}</dd>
+                  <dt className="text-gray-400">{t('mbox_quota_prohibit_send').replace(' (GB)', '')}</dt>
+                  <dd className="text-gray-700">{detail.quotaLimits.prohibitSendBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendBytes) : '—'}</dd>
+                  <dt className="text-gray-400">{t('mbox_quota_receive_limit')}</dt>
+                  <dd className="text-gray-700">{detail.quotaLimits.prohibitSendReceiveBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendReceiveBytes) : '—'}</dd>
+                  {detail.quotaLevel && (
+                    <dd className={`col-span-2 font-medium ${
+                      detail.quotaLevel === 'ok' ? 'text-gray-500'
+                        : detail.quotaLevel === 'warning' ? 'text-amber-600' : 'text-red-600'}`}>
+                      {t(`mbox_quota_level_${detail.quotaLevel}` as 'mbox_quota_level_ok')}
+                    </dd>
+                  )}
+                </dl>
+              )}
             </section>
 
             {/* Facts */}
@@ -724,6 +750,8 @@ function EditForm({ user, domains, onSave, isPending }:
   const [displayName, setDisplayName] = useState(user.displayName);
   const [role, setRole]               = useState(user.role);
   const [quotaBytes, setQuotaBytes]   = useState(user.quotaBytes);
+  const [warningGb, setWarningGb]     = useState(bytesToGbInput(user.quotaWarningBytes));
+  const [sendGb, setSendGb]           = useState(bytesToGbInput(user.quotaProhibitSendBytes));
   const domainLabel = `@${domains.find((d) => d.id === user.domainId)?.name ?? user.domainId}`;
 
   return (
@@ -754,9 +782,26 @@ function EditForm({ user, domains, onSave, isPending }:
           </select>
         </div>
       </div>
+      {/* v8.1: Exchange quota levels (IssueWarningQuota / ProhibitSendQuota) */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="field-label" htmlFor="mbox-quota-warning">{t('mbox_quota_warning')}</label>
+          <input id="mbox-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
+            placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
+        </div>
+        <div>
+          <label className="field-label" htmlFor="mbox-quota-send">{t('mbox_quota_prohibit_send')}</label>
+          <input id="mbox-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
+            placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
+        </div>
+      </div>
       <div className="flex justify-end pt-1">
         <button
-          onClick={() => onSave({ displayName, role, quotaBytes })}
+          onClick={() => onSave({
+            displayName, role, quotaBytes,
+            quotaWarningBytes: gbInputToBytes(warningGb),
+            quotaProhibitSendBytes: gbInputToBytes(sendGb),
+          })}
           disabled={!displayName || isPending}
           className="btn-primary disabled:opacity-50 flex items-center gap-2"
         >
