@@ -54,6 +54,12 @@ Then:
    The HTTP-01 challenge reaches the app through the Ingress. The Ingress
    certificate (cert-manager) is separate and only covers HTTPS.
 
+The mail Service defaults to `type: LoadBalancer`. On a cluster without a
+load-balancer controller (kind, minikube without `tunnel`, bare metal without
+MetalLB) its EXTERNAL-IP stays `<pending>` — and `helm install/upgrade --wait`
+then waits for it until the timeout (`context deadline exceeded`). Use
+`--set mailService.type=NodePort` there.
+
 Without an Ingress: `kubectl -n coremail port-forward svc/coremail 3000:3000`, or
 expose HTTP/HTTPS on the mail LoadBalancer (`mailService.ports.http/https.enabled`,
 integrated TLS proxy on 443).
@@ -172,9 +178,21 @@ through (7.0.0 ignores them and always uses MinIO/S3 over HTTP):
 `filesystem` stores objects on a PVC (`<release>-objects`, or
 `objectStorage.filesystem.existingClaim`) mounted into the app pod. It requires
 `app.replicaCount: 1` and, for a ReadWriteOnce volume, `app.strategy.type:
-Recreate` (the chart refuses other combinations). Set `minio.enabled: false` if
-you do not want MinIO at all — note that backups (`BACKUP_BUCKET`) then have no
-S3 target unless `minio.external` is configured.
+Recreate` (the chart refuses other combinations). Keep `minio.enabled: true`
+with `filesystem`: MinIO then only holds the backups (`BACKUP_BUCKET`) — the
+same layout as a new Docker install. With `minio.enabled: false` and no
+`minio.external`, backups have no target: the backup service logs
+`Backup storage needs S3_ACCESS_KEY and S3_SECRET_KEY` at start and the chart
+NOTES print a warning.
+
+The `objects` PVC is not `chown`ed (the image entrypoint, which does that in
+Docker, is skipped and the pod runs as non-root): it must be writable by uid
+1000. Volume types that support `fsGroup` (most CSI/block volumes) get that from
+the pod's `fsGroup: 1000`; host-path style provisioners ignore `fsGroup` — kind's
+`local-path` hands out a `0777` directory, which works (the driver creates its
+own subdirectories `0750`). With a provisioner that creates root-owned `0755`
+directories, the app cannot write objects — pre-create the volume with
+the right owner or use `objectStorage.filesystem.existingClaim`.
 
 ## Security
 
@@ -182,7 +200,8 @@ S3 target unless `minio.external` is configured.
   (app uid 1000, postgres 70, redis 999, minio 1000, rspamd 11333, clamav 100),
   `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, all
   capabilities dropped, `seccompProfile: RuntimeDefault`. The namespace can be
-  labelled `pod-security.kubernetes.io/enforce=restricted`.
+  labelled `pod-security.kubernetes.io/enforce=restricted` (verified on a real
+  cluster by `scripts/k8s-e2e.sh`).
 - **App capabilities:** only `NET_BIND_SERVICE` is added (the only addition
   `restricted` allows). The image sets the file capability `cap_net_bind_service`
   on `/usr/local/bin/node` for ports 25/110/143/443/465/587/993/995; if the
@@ -225,7 +244,9 @@ S3 target unless `minio.external` is configured.
   - rspamd / clamav — ingress only from the app pod; egress DNS plus
     HTTP/HTTPS (and UDP 11335 fuzzy) to the internet with
     `networkPolicy.internetExcept` (cluster-private ranges) excluded.
-  The policies need a CNI that enforces them (Calico, Cilium, …).
+  The policies need a CNI that enforces them (Calico, Cilium, kindnet in
+  kind ≥ 0.24, …). Kubelet probes come from the node and are not affected.
+  `kubectl port-forward` bypasses NetworkPolicies (handy for the setup wizard).
 - **Fail-fast validation** at `helm install/upgrade/template`: missing or too short
   secrets, non-URL-safe passwords, invalid `MFA_ENCRYPTION_KEY`/`SETUP_TOKEN`/
   `BACKUP_ENCRYPTION_KEY`/`RSPAMD_CONTROLLER_PASSWORD`, numeric secrets,
@@ -366,10 +387,57 @@ bash scripts/helm-check.sh
 Runs, via Docker only (pinned `alpine/helm:3.16.4` and
 `ghcr.io/yannh/kubeconform:v0.6.7`): `helm lint --strict` and `helm template`
 for every `ci/*-values.yaml` (bundled + Ingress/cert-manager; external datastores
-+ existing Secret + LB HTTP/HTTPS + S3 with TLS/CA; filesystem storage + NodePort),
++ existing Secret + LB HTTP/HTTPS + S3 with TLS/CA; filesystem storage + NodePort; the kind profile of `scripts/k8s-e2e.sh`),
 kubeconform `-strict` on the rendered manifests (Kubernetes 1.30 schemas,
 override with `KUBE_VERSION`), and a negative test that rendering without the
 required secrets fails. Rendered output: `infra/k8s/.rendered/` (git-ignored).
+It also checks statically that every rendered container and pod keeps the
+Pod Security `restricted` fields (`allowPrivilegeEscalation: false`,
+`readOnlyRootFilesystem: true`, `runAsNonRoot: true`, `seccompProfile:
+RuntimeDefault`, no privileged/host settings).
+
+### Real-cluster test (kind)
+
+```bash
+K8S_E2E_DIR=/path/outside/the/repo bash scripts/k8s-e2e.sh
+```
+
+Needs Docker, `curl`, `openssl` and Node ≥ 22 (Linux, macOS or Windows Git
+Bash). The script downloads pinned `kind` v0.33.0, `helm` v3.22.1 and `kubectl`
+v1.37.0 into `$K8S_E2E_DIR/bin` (each verified against the release's sha256
+file), creates a kind cluster (`kindest/node:v1.37.0`, pinned by digest), builds
+`infra/docker/Dockerfile.app` as `coremail-app:k8s-test`, loads it into the
+cluster and installs the chart with [`ci/kind-values.yaml`](ci/kind-values.yaml)
+(bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV, filesystem object storage on a
+PVC, NetworkPolicies on, NodePort mail Service) and freshly generated secrets
+into a namespace labelled `pod-security.kubernetes.io/enforce=restricted`. It
+then checks:
+
+- `helm install --wait`; all pods Ready; no PodSecurity warnings, and a
+  server-side dry-run re-evaluation of the running pods against `restricted`
+- the `schema-sync` init container applied the schema (exit code 0)
+- NetworkPolicies: the app reaches PostgreSQL, Redis, MinIO, rspamd (`/ping`)
+  and ClamAV; a foreign pod is blocked from all of them and from port 3000 but
+  reaches the mail ports
+- `/healthz` (incl. `storage: filesystem ok`) through `kubectl port-forward`
+- SMTP 25/465/587, IMAP 143/993, POP3 110/995 banners through the mail Service
+- setup token flow: status, `403` without token, setup with the token from the
+  pod log, `409` on repeat
+- admin login, two users via the admin API, SMTP submission (STARTTLS + AUTH)
+  from one to the other and IMAP (STARTTLS + LOGIN) retrieval of the message
+- `helm upgrade` with a changed value (`app.logLevel=debug`): ConfigMap
+  changed, pod rolled (Recreate), message still readable afterwards
+- `helm rollback` to revision 1: `LOG_LEVEL=info` again, message still readable
+
+Finally it deletes the cluster and the image (`KEEP=1` keeps both,
+`SKIP_BUILD=1` reuses an existing image, `CLAMAV=0` saves ~1.5 GiB RAM).
+Logs and the generated secrets (mode 0600) stay in `$K8S_E2E_DIR`.
+
+Status: chart 2.0.x with app 9.0.0 passed all checks on kind v0.33.0 /
+Kubernetes 1.37 (Docker Desktop, WSL2). Not covered: Ingress controllers and
+cert-manager, cloud load balancers (`externalTrafficPolicy: Local` with real
+client IPs), external datastores (`ci/external-values.yaml` is only rendered),
+`app.replicaCount > 1`, other CNIs (Calico, Cilium) and storage provisioners.
 
 The bundled files `files/postgres-init.sql` and `files/rspamd/actions.conf`
 mirror `infra/docker/postgres/init.sql` and `infra/docker/rspamd/local.d/actions.conf`
