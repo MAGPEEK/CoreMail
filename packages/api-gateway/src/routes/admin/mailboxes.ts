@@ -7,18 +7,33 @@ import { requireArea } from '../../middleware/auth.js';
 import { canAssignRole, canManageAccount, hasAdminAction, mailboxUpdateFields, USER_ROLES } from '../../lib/rbac.js';
 import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { audit, auditContext } from '../../lib/audit.js';
-import { quotaLevelError } from '../../lib/quota-levels.js';
+import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
 // reset / enable-disable of USER accounts only — enforced in the handler) and
 // (v8.1) POST /:id/revoke-sessions ("sign out everywhere", USER accounts only).
 // 8.x: who gets these extras comes from the action map (lib/rbac.ts ADMIN_ACTIONS).
+// 8.1: only real ids match — the fixed (non-id) paths of this router are never
+// an `:id` (PUT /quota-defaults used to slip through for HELP_DESK).
+export const RESERVED_MAILBOX_PATHS: ReadonlySet<string> = new Set([
+  'quota-defaults', 'recalculate-all-quotas', 'bulk-provision',
+]);
+const idOf = (path: string, re: RegExp): string | null => {
+  const m = re.exec(path);
+  if (!m?.[1]) return null;
+  let id: string;
+  try { id = decodeURIComponent(m[1]); } catch { return null; }
+  return RESERVED_MAILBOX_PATHS.has(id.toLowerCase()) ? null : id;
+};
 export const isHelpDeskReset = (role: string, req: Request): boolean =>
-  (req.method === 'PUT' && /^\/[^/]+\/?$/.test(req.path)
+  (req.method === 'PUT' && idOf(req.path, /^\/([^/]+)\/?$/) !== null
     && (hasAdminAction(role, 'resetPassword') || hasAdminAction(role, 'toggleActive')))
-  || (req.method === 'POST' && /^\/[^/]+\/revoke-sessions\/?$/.test(req.path) && hasAdminAction(role, 'revokeSessions'));
+  || (req.method === 'POST' && idOf(req.path, /^\/([^/]+)\/revoke-sessions\/?$/) !== null && hasAdminAction(role, 'revokeSessions'));
 adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
+// Route-level guard for the fixed paths: recipients write only, no extras
+// (defence in depth should the router-level predicate ever widen again).
+const requireRecipientsWrite = requireArea('recipients');
 
 // Fields of a user that may be returned to admins (never passwordHash).
 const PUBLIC_USER_SELECT = {
@@ -43,18 +58,25 @@ adminMailboxesRouter.get('/quota-defaults', async (_req: Request, res: Response)
 });
 
 // PUT /api/v1/admin/mailboxes/quota-defaults
-adminMailboxesRouter.put('/quota-defaults', async (req: Request, res: Response) => {
+adminMailboxesRouter.put('/quota-defaults', requireRecipientsWrite, async (req: Request, res: Response) => {
   const parsed = QuotaDefaultsSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
   const cur = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' }, select: { quotaWarningPercent: true, quotaProhibitSendPercent: true },
   });
-  const warning = parsed.data.quotaWarningPercent ?? cur?.quotaWarningPercent ?? 83;
-  const send = parsed.data.quotaProhibitSendPercent ?? cur?.quotaProhibitSendPercent ?? 87;
+  const before = { quotaWarningPercent: cur?.quotaWarningPercent ?? 83, quotaProhibitSendPercent: cur?.quotaProhibitSendPercent ?? 87 };
+  const warning = parsed.data.quotaWarningPercent ?? before.quotaWarningPercent;
+  const send = parsed.data.quotaProhibitSendPercent ?? before.quotaProhibitSendPercent;
   if (warning > send) { res.status(400).json({ error: 'quotaWarningPercent must not exceed quotaProhibitSendPercent' }); return; }
   const data = { quotaWarningPercent: warning, quotaProhibitSendPercent: send };
   await prisma.serverSettings.upsert({ where: { id: 'singleton' }, update: data, create: { id: 'singleton', ...data } });
   resetQuotaCache();
+  audit({
+    actorId: req.apiUser!.userId, actorEmail: req.apiUser!.email,
+    action: 'mailbox.quota-defaults.update', targetType: 'settings', targetId: 'singleton', targetName: 'quota-defaults',
+    changes: { before, after: data },
+    ...auditContext(req),
+  });
   res.json(data);
 });
 
@@ -165,7 +187,7 @@ adminMailboxesRouter.post('/:id/recalculate-quota', async (req: Request, res: Re
 
 // POST /api/v1/admin/mailboxes/recalculate-all-quotas
 // Recomputes usedBytes for ALL users (admin maintenance function).
-adminMailboxesRouter.post('/recalculate-all-quotas', async (_req: Request, res: Response) => {
+adminMailboxesRouter.post('/recalculate-all-quotas', requireRecipientsWrite, async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({ select: { id: true, email: true } });
   const results = await Promise.all(
     users.map(async (u) => {
@@ -267,7 +289,10 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   const parsed = UpdateMailboxSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true } });
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: { id: true, role: true, active: true, quotaBytes: true, quotaWarningBytes: true, quotaProhibitSendBytes: true },
+  });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
   // v6 escalation guards
@@ -288,7 +313,8 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   if (revokeAppPasswords && !password) {
     res.status(400).json({ error: 'revokeAppPasswords is only valid together with password' }); return;
   }
-  const levelError = quotaLevelError(quotaWarningBytes, quotaProhibitSendBytes, quotaBytes);
+  // 8.1: partial updates are validated against the stored levels
+  const levelError = quotaLevelPatchError({ quotaBytes, quotaWarningBytes, quotaProhibitSendBytes }, user);
   if (levelError) { res.status(400).json({ error: levelError }); return; }
   if (password) {
     // v7.0.0: minimum length from ServerSettings.minPasswordLength
@@ -490,7 +516,7 @@ adminMailboxesRouter.post('/:id/provision', async (req: Request, res: Response) 
  * Provision mailboxes for all users who don't have one yet.
  * Returns a summary of what was created.
  */
-adminMailboxesRouter.post('/bulk-provision', async (_req: Request, res: Response) => {
+adminMailboxesRouter.post('/bulk-provision', requireRecipientsWrite, async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
     where: { active: true },
     select: { id: true, email: true },
