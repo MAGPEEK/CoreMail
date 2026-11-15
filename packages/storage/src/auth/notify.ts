@@ -55,6 +55,7 @@ async function deliver(n: SecurityNotice): Promise<void> {
     bodyHtml,
     rawSize: Buffer.byteLength(`${n.subject}\n\n${n.bodyText}`, 'utf8'),
     messageId: `<${Date.now()}.${randomBytes(8).toString('hex')}@coremail.system>`,
+    references: '',
   }));
   await prisma.folder.update({
     where: { id: inbox.id },
