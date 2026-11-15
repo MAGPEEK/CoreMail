@@ -77,6 +77,8 @@ services:
       # KEEP A COPY OFF THIS SERVER — without it backups cannot be restored.
       # Empty = derived from JWT_SECRET + PEPPER (warning in the log).
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      # Password header for rspamd controller calls (learn_spam/ham, thresholds).
+      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
 
       # ── Object storage (v8.0, docs/storage.md) ───────────────────────────────
       # Mail contents, attachments, quarantine. OBJECT_STORAGE unset = minio
