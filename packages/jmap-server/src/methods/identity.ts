@@ -19,6 +19,8 @@ function stripHtml(html: string): string {
 
 export async function listIdentities(account: AccountContext, user: JmapUser): Promise<JsonObject[]> {
   const out: JsonObject[] = [];
+  // No send permission in this account (read-only shares, mailbox delegates) → no identity.
+  if (!account.maySend) return out;
   const settings = await prisma.userSettings.findUnique({ where: { userId: user.userId }, select: { signature: true } });
   const html = settings?.signature ?? '';
   const sig = { textSignature: stripHtml(html), htmlSignature: html };
@@ -43,7 +45,7 @@ export async function listIdentities(account: AccountContext, user: JmapUser): P
         out.push({ id: `sm-${p.sharedMailbox.id}`, name: p.sharedMailbox.displayName, email: p.sharedMailbox.email, replyTo: null, bcc: null, ...sig, mayDelete: false });
       }
     }
-  } else if (account.sharedMailboxId && account.maySend) {
+  } else if (account.sharedMailboxId) {
     out.push({ id: `sm-${account.sharedMailboxId}`, name: account.name, email: account.email, replyTo: null, bcc: null, ...sig, mayDelete: false });
     const aliases = await prisma.emailAlias.findMany({ where: { targetSharedId: account.sharedMailboxId, active: true }, select: { id: true, address: true } });
     for (const a of aliases) out.push({ id: `al-${a.id}`, name: account.name, email: a.address, replyTo: null, bcc: null, ...sig, mayDelete: false });

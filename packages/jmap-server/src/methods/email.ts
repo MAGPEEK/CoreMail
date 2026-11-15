@@ -7,16 +7,16 @@ import { CAP_MAIL } from '../capabilities.js';
 import { MethodError, cannotCalculateChanges, requestTooLarge, setError, type SetError } from '../errors.js';
 import { decodeEmailState, emailState, emailStateParts, encodeEmailState } from '../state.js';
 import { flagsToKeywords, isValidKeyword, keywordsToFlags } from '../mail/keywords.js';
-import { ensureThreadIds } from '../mail/thread.js';
+import { deriveMissingThreads } from '../mail/thread.js';
 import { buildRfc822, loadRawMessage, type BuildOptions } from '../mail/raw.js';
 import {
-  invalidEmailProperties, parseMapOptions, toJmapEmail, utcDate, type MappableMessage,
+  invalidEmailProperties, parseMapOptions, toJmapEmail, type MappableMessage,
 } from '../mail/email-mapper.js';
 import { applyEmailChange, destroyEmail, storeEmailFromRaw } from '../mail/write.js';
 import { resolveBlob } from '../blobs.js';
 import { LIMITS } from '../settings.js';
-import { applyPatch, assertState, paginate, parseGetArgs, parseSetArgs, parseDate } from './common.js';
-import { changedMessageIds } from './email-changes.js';
+import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetArgs, parseDate } from './common.js';
+import { changedMessageIds, parseMaxChanges } from './email-changes.js';
 import { parseSort, queryEmailIds } from './email-query.js';
 import type { AccountContext, EmailAddress, EmailHeader, JsonObject } from '../types.js';
 
@@ -37,15 +37,16 @@ registerMethod('Email/get', CAP_MAIL, async (args, ctx) => {
   const opts = parseMapOptions(args);
   const bad = invalidEmailProperties(opts.properties);
   if (bad.length) throw new MethodError('invalidArguments', `Unknown properties: ${bad.join(', ')}`);
+  // threads first: persisting a derived threadId changes the state returned below
+  await deriveMissingThreads(account.mailboxId, { ids });
   const msgs = await loadMessages(account, ids);
-  const threads = await ensureThreadIds(msgs, account.mailboxId);
   const byId = new Map(msgs.map((m) => [m.id, m]));
   const list: JsonObject[] = [];
   const notFound: string[] = [];
   for (const id of ids) {
     const m = byId.get(id);
     if (!m) { notFound.push(id); continue; }
-    list.push(await toJmapEmail(m, threads.get(id) ?? id, opts));
+    list.push(await toJmapEmail(m, m.threadId ?? m.id, opts));
   }
   return { accountId: account.accountId, state: await emailState(account.mailboxId), list, notFound };
 });
@@ -56,18 +57,17 @@ registerMethod('Email/changes', CAP_MAIL, async (args, ctx) => {
   const account = ctx.account(args['accountId']);
   const old = decodeEmailState(args['sinceState']);
   if (!old) throw cannotCalculateChanges();
+  const max = parseMaxChanges(args['maxChanges']);
   const parts = await emailStateParts(account.mailboxId);
-  const max = typeof args['maxChanges'] === 'number' && args['maxChanges'] > 0 ? Math.trunc(args['maxChanges']) : Infinity;
-  const ch = await changedMessageIds(account, old, parts);
-  if (ch.created.length + ch.updated.length > max) throw new MethodError('cannotCalculateChanges', 'too many changes');
+  const ch = await changedMessageIds(account, old, parts, max);
   return {
     accountId: account.accountId,
-    oldState: encodeEmailState(old),
-    newState: encodeEmailState(parts),
-    hasMoreChanges: false,
+    oldState: String(args['sinceState']),
+    newState: encodeEmailState(ch.newState),
+    hasMoreChanges: ch.hasMoreChanges,
     created: ch.created,
     updated: ch.updated,
-    destroyed: [],
+    destroyed: ch.destroyed,
   };
 });
 
@@ -82,10 +82,7 @@ registerMethod('Email/query', CAP_MAIL, async (args, ctx) => {
     accountId: account.accountId,
     queryState: await emailState(account.mailboxId),
     canCalculateChanges: false,
-    position: page.position,
-    ids: page.ids,
-    ...(args['calculateTotal'] === true ? { total: page.total } : {}),
-    ...(page.limit !== null ? { limit: page.limit } : {}),
+    ...pageFields(page, args),
   };
 });
 
@@ -114,19 +111,37 @@ function strList(v: unknown): string[] {
   return (Array.isArray(v) ? v : [v]).map(String);
 }
 
-async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { resolveId(id: string): string }): Promise<CreateParsed> {
-  // mailboxIds — CoreMail: exactly one folder
-  const mbIds = obj['mailboxIds'];
+/**
+ * mailboxIds → the one folder (CoreMail stores each email in exactly one mailbox,
+ * maxMailboxesPerEmail = 1). None → invalidProperties, more → tooManyMailboxes.
+ */
+async function singleFolder(mbIds: unknown, mailboxId: string, resolveId: (id: string) => string): Promise<string> {
   if (!mbIds || typeof mbIds !== 'object' || Array.isArray(mbIds)) throw setError('invalidProperties', 'mailboxIds required', ['mailboxIds']);
-  const folderIds = Object.entries(mbIds as JsonObject).filter(([, v]) => v === true).map(([k]) => ctx.resolveId(k));
-  if (folderIds.length !== 1) throw setError('tooManyMailboxes', 'CoreMail stores each email in exactly one mailbox', ['mailboxIds']);
-  const folder = await prisma.folder.findFirst({ where: { id: folderIds[0]!, mailboxId: account.mailboxId }, select: { id: true } });
+  const folderIds = Object.entries(mbIds as JsonObject).filter(([, v]) => v === true).map(([k]) => resolveId(k));
+  if (folderIds.length === 0) throw setError('invalidProperties', 'an email must be in exactly one mailbox', ['mailboxIds']);
+  if (folderIds.length > 1) throw setError('tooManyMailboxes', 'CoreMail stores each email in exactly one mailbox', ['mailboxIds']);
+  const folder = await prisma.folder.findFirst({ where: { id: folderIds[0]!, mailboxId }, select: { id: true } });
   if (!folder) throw setError('invalidProperties', 'mailbox not found', ['mailboxIds']);
+  return folder.id;
+}
 
-  const kw = (obj['keywords'] ?? {}) as JsonObject;
+function parseKeywords(v: unknown): string[] {
+  const kw = (v ?? {}) as JsonObject;
   if (typeof kw !== 'object' || Array.isArray(kw)) throw setError('invalidProperties', 'keywords must be an object', ['keywords']);
   for (const k of Object.keys(kw)) if (!isValidKeyword(k)) throw setError('invalidProperties', `invalid keyword ${k}`, ['keywords']);
-  const flags = keywordsToFlags(kw);
+  return keywordsToFlags(kw);
+}
+
+/**
+ * Header fields a client may not set through header:* / headers on create: they
+ * have dedicated properties, are generated, or carry sender identity (Sender is
+ * set via the "sender" property, so EmailSubmission can check it).
+ */
+const RESERVED_HEADER = /^(from|sender|to|cc|bcc|subject|date|message-id|in-reply-to|references|reply-to|resent-[a-z-]+|return-path|received|content-[a-z-]+|mime-version)$/i;
+
+async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { resolveId(id: string): string }): Promise<CreateParsed> {
+  const folderId = await singleFolder(obj['mailboxIds'], account.mailboxId, (id) => ctx.resolveId(id));
+  const flags = parseKeywords(obj['keywords']);
 
   const receivedAt = parseDate(obj['receivedAt']) ?? undefined;
 
@@ -190,14 +205,18 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { reso
     const m = /^header:([^:]+)(?::as(Raw|Text))?$/.exec(k);
     if (!m) throw setError('invalidProperties', `unsupported header form ${k}`, [k]);
     const name = m[1]!;
-    if (/^(from|to|cc|bcc|subject|date|message-id|in-reply-to|references|reply-to|sender|content-type|content-transfer-encoding|mime-version)$/i.test(name)) {
-      throw setError('invalidProperties', `use the dedicated property instead of ${k}`, [k]);
-    }
+    if (RESERVED_HEADER.test(name)) throw setError('invalidProperties', `use the dedicated property instead of ${k}`, [k]);
     extraHeaders.push({ name, value: String(v ?? '').trim() });
   }
-  if (Array.isArray(obj['headers'])) {
+  if (obj['headers'] !== undefined && obj['headers'] !== null) {
+    if (!Array.isArray(obj['headers'])) throw setError('invalidProperties', 'headers must be EmailHeader[]', ['headers']);
     for (const h of obj['headers'] as JsonObject[]) {
-      if (typeof h['name'] === 'string' && typeof h['value'] === 'string') extraHeaders.push({ name: h['name'], value: h['value'].trim() });
+      if (!h || typeof h['name'] !== 'string' || typeof h['value'] !== 'string' || !/^[\x21-\x39\x3B-\x7E]+$/.test(h['name'])) {
+        throw setError('invalidProperties', 'headers: invalid EmailHeader', ['headers']);
+      }
+      // Same rule as header:* — e.g. a "Sender" here would bypass the sender check of EmailSubmission.
+      if (RESERVED_HEADER.test(h['name'])) throw setError('invalidProperties', `use the dedicated property instead of header ${h['name']}`, ['headers']);
+      extraHeaders.push({ name: h['name'], value: h['value'].trim() });
     }
   }
 
@@ -220,7 +239,7 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: { reso
     attachments,
     extraHeaders,
   });
-  return { folderId: folder.id, flags, receivedAt, raw };
+  return { folderId, flags, receivedAt, raw };
 }
 
 export interface EmailSetResult {
@@ -250,44 +269,57 @@ export async function runEmailSet(
     }
   }
 
+  // Each update/destroy is independent: a failure is reported for that id only
+  // (RFC 8620 §5.3) — earlier writes of the same call stay reported as done.
   for (const [id, patch] of Object.entries(update)) {
-    const msg = await prisma.message.findFirst({
-      where: { id, folder: { mailboxId: account.mailboxId }, deletedAt: null },
-      select: { id: true, folderId: true, flags: true },
-    });
-    if (!msg) { r.notUpdated[id] = setError('notFound'); continue; }
-    const bad = Object.keys(patch).map((k) => k.split('/')[0]!).filter((k) => k !== 'keywords' && k !== 'mailboxIds');
-    if (bad.length) { r.notUpdated[id] = setError('invalidProperties', 'only keywords and mailboxIds are mutable', [...new Set(bad)]); continue; }
-    let next: JsonObject;
     try {
-      next = applyPatch({ keywords: flagsToKeywords(msg.flags), mailboxIds: { [msg.folderId]: true } }, patch);
-    } catch (e) { r.notUpdated[id] = setError('invalidPatch', e instanceof Error ? e.message : undefined); continue; }
-    const kw = next['keywords'] as JsonObject;
-    const invalidKw = Object.keys(kw).filter((k) => !isValidKeyword(k));
-    if (invalidKw.length) { r.notUpdated[id] = setError('invalidProperties', `invalid keyword ${invalidKw[0]}`, ['keywords']); continue; }
-    const folderIds = Object.entries(next['mailboxIds'] as JsonObject).filter(([, v]) => v === true).map(([k]) => ctx.resolveId(k));
-    if (folderIds.length !== 1) { r.notUpdated[id] = setError('tooManyMailboxes', 'exactly one mailbox required', ['mailboxIds']); continue; }
-    if (folderIds[0] !== msg.folderId) {
-      const f = await prisma.folder.findFirst({ where: { id: folderIds[0]!, mailboxId: account.mailboxId }, select: { id: true } });
-      if (!f) { r.notUpdated[id] = setError('invalidProperties', 'mailbox not found', ['mailboxIds']); continue; }
+      await updateOne(account, ctx, id, patch);
+      r.updated[id] = null;
+    } catch (e) {
+      r.notUpdated[id] = isSetError(e) ? e : setError('serverFail', e instanceof Error ? e.message : undefined);
     }
-    const newFlags = keywordsToFlags(kw);
-    // keep non-JMAP flags (e.g. \Recent)
-    for (const f of msg.flags) if (f.startsWith('\\') && !['\\Seen', '\\Flagged', '\\Answered', '\\Draft', '\\Forwarded'].includes(f)) newFlags.push(f);
-    await applyEmailChange(account, msg, { flags: [...new Set(newFlags)], folderId: folderIds[0]! });
-    r.updated[id] = null;
   }
 
   for (const id of destroy) {
-    const msg = await prisma.message.findFirst({
-      where: { id, folder: { mailboxId: account.mailboxId } },
-      select: { id: true, folderId: true, flags: true },
-    });
-    if (!msg) { r.notDestroyed[id] = setError('notFound'); continue; }
-    await destroyEmail(account, msg);
-    r.destroyed.push(id);
+    try {
+      const msg = await prisma.message.findFirst({
+        // already expunged (IMAP, recovery window) → notFound, counters untouched
+        where: { id, folder: { mailboxId: account.mailboxId }, deletedAt: null },
+        select: { id: true, folderId: true, flags: true },
+      });
+      if (!msg) { r.notDestroyed[id] = setError('notFound'); continue; }
+      await destroyEmail(account, msg);
+      r.destroyed.push(id);
+    } catch (e) {
+      r.notDestroyed[id] = setError('serverFail', e instanceof Error ? e.message : undefined);
+    }
   }
   return r;
+}
+
+const JMAP_SYSTEM_FLAGS = new Set(['\\Seen', '\\Flagged', '\\Answered', '\\Draft', '\\Forwarded']);
+
+async function updateOne(account: AccountContext, ctx: { resolveId(id: string): string }, id: string, patch: JsonObject): Promise<void> {
+  const msg = await prisma.message.findFirst({
+    where: { id, folder: { mailboxId: account.mailboxId }, deletedAt: null },
+    select: { id: true, folderId: true, flags: true },
+  });
+  if (!msg) throw setError('notFound');
+  const bad = Object.keys(patch).map((k) => k.split('/')[0]!).filter((k) => k !== 'keywords' && k !== 'mailboxIds');
+  if (bad.length) throw setError('invalidProperties', 'only keywords and mailboxIds are mutable', [...new Set(bad)]);
+  let next: JsonObject;
+  try {
+    next = applyPatch({ keywords: flagsToKeywords(msg.flags), mailboxIds: { [msg.folderId]: true } }, patch);
+  } catch (e) { throw setError('invalidPatch', e instanceof Error ? e.message : undefined); }
+  const kw = next['keywords'];
+  if (!kw || typeof kw !== 'object' || Array.isArray(kw)) throw setError('invalidProperties', 'keywords must be an object', ['keywords']);
+  const invalidKw = Object.keys(kw).filter((k) => !isValidKeyword(k));
+  if (invalidKw.length) throw setError('invalidProperties', `invalid keyword ${invalidKw[0]}`, ['keywords']);
+  const folderId = await singleFolder(next['mailboxIds'], account.mailboxId, (x) => ctx.resolveId(x));
+  // unchanged custom flags keep their IMAP spelling; non-JMAP system flags (e.g. \Recent) are kept
+  const newFlags = keywordsToFlags(kw as JsonObject, msg.flags);
+  for (const f of msg.flags) if (f.startsWith('\\') && !JMAP_SYSTEM_FLAGS.has(f)) newFlags.push(f);
+  await applyEmailChange(account, msg, { flags: [...new Set(newFlags)], folderId });
 }
 
 function isSetError(e: unknown): e is SetError {
@@ -327,16 +359,10 @@ registerMethod('Email/import', CAP_MAIL, async (args, ctx) => {
       if (typeof obj['blobId'] !== 'string') throw setError('invalidProperties', 'blobId required', ['blobId']);
       const blob = await resolveBlob(account, obj['blobId']);
       if (!blob) throw setError('blobNotFound');
-      const mb = obj['mailboxIds'];
-      if (!mb || typeof mb !== 'object') throw setError('invalidProperties', 'mailboxIds required', ['mailboxIds']);
-      const folderIds = Object.entries(mb as JsonObject).filter(([, v]) => v === true).map(([k]) => ctx.resolveId(k));
-      if (folderIds.length !== 1) throw setError('tooManyMailboxes', undefined, ['mailboxIds']);
-      const folder = await prisma.folder.findFirst({ where: { id: folderIds[0]!, mailboxId: account.mailboxId }, select: { id: true } });
-      if (!folder) throw setError('invalidProperties', 'mailbox not found', ['mailboxIds']);
-      const kw = (obj['keywords'] ?? {}) as JsonObject;
-      for (const k of Object.keys(kw)) if (!isValidKeyword(k)) throw setError('invalidProperties', `invalid keyword ${k}`, ['keywords']);
+      const folderId = await singleFolder(obj['mailboxIds'], account.mailboxId, (id) => ctx.resolveId(id));
+      const flags = parseKeywords(obj['keywords']);
       try { await parseRawMessage(blob.buffer); } catch { throw setError('invalidEmail'); }
-      const stored = await storeEmailFromRaw(account, folder.id, blob.buffer, keywordsToFlags(kw), parseDate(obj['receivedAt']) ?? undefined);
+      const stored = await storeEmailFromRaw(account, folderId, blob.buffer, flags, parseDate(obj['receivedAt']) ?? undefined);
       ctx.createdIds.set(cid, stored.id);
       created[cid] = { id: stored.id, blobId: `m-${stored.id}`, threadId: stored.threadId, size: stored.size };
     } catch (e) {
@@ -369,15 +395,10 @@ registerMethod('Email/copy', CAP_MAIL, async (args, ctx) => {
       const srcId = typeof obj['id'] === 'string' ? ctx.resolveId(obj['id']) : '';
       const [src] = await loadMessages(from, [srcId]);
       if (!src) throw setError('notFound');
-      const mb = obj['mailboxIds'];
-      if (!mb || typeof mb !== 'object') throw setError('invalidProperties', 'mailboxIds required', ['mailboxIds']);
-      const folderIds = Object.entries(mb as JsonObject).filter(([, v]) => v === true).map(([k]) => ctx.resolveId(k));
-      if (folderIds.length !== 1) throw setError('tooManyMailboxes', undefined, ['mailboxIds']);
-      const folder = await prisma.folder.findFirst({ where: { id: folderIds[0]!, mailboxId: to.mailboxId }, select: { id: true } });
-      if (!folder) throw setError('invalidProperties', 'mailbox not found', ['mailboxIds']);
-      const kw = obj['keywords'] && typeof obj['keywords'] === 'object' ? keywordsToFlags(obj['keywords'] as JsonObject) : src.flags;
+      const folderId = await singleFolder(obj['mailboxIds'], to.mailboxId, (id) => ctx.resolveId(id));
+      const kw = obj['keywords'] !== undefined && obj['keywords'] !== null ? parseKeywords(obj['keywords']) : src.flags;
       const raw = await loadRawMessage(src);
-      const stored = await storeEmailFromRaw(to, folder.id, raw, kw, parseDate(obj['receivedAt']) ?? src.createdAt);
+      const stored = await storeEmailFromRaw(to, folderId, raw, kw, parseDate(obj['receivedAt']) ?? src.createdAt);
       ctx.createdIds.set(cid, stored.id);
       created[cid] = { id: stored.id, blobId: `m-${stored.id}`, threadId: stored.threadId, size: stored.size };
       copiedSourceIds.push(src.id);
@@ -413,6 +434,8 @@ registerMethod('Email/parse', CAP_MAIL, async (args, ctx) => {
   if (!Array.isArray(blobIds) || !blobIds.every((b) => typeof b === 'string')) throw new MethodError('invalidArguments', 'blobIds must be Id[]');
   if (blobIds.length > LIMITS.maxObjectsInGet) throw requestTooLarge();
   const opts = parseMapOptions(args);
+  const badProps = invalidEmailProperties(opts.properties);
+  if (badProps.length) throw new MethodError('invalidArguments', `Unknown properties: ${badProps.join(', ')}`);
   const parsed: JsonObject = {}; const notParsable: string[] = []; const notFound: string[] = [];
   for (const blobId of blobIds as string[]) {
     const blob = await resolveBlob(account, blobId);
@@ -448,7 +471,13 @@ registerMethod('Email/parse', CAP_MAIL, async (args, ctx) => {
         if (Array.isArray(v)) for (const part of v as JsonObject[]) rewrite(part);
         else if (v && typeof v === 'object') rewrite(v as JsonObject);
       }
-      parsed[blobId] = { ...email, size: blob.buffer.length, receivedAt: utcDate(new Date()) };
+      // RFC 8621 §4.9: id, mailboxIds, keywords, receivedAt (and threadId) are null for a
+      // parsed blob; blobId is the parsed blob itself.
+      const requested = opts.properties ?? [];
+      const meta: JsonObject = { size: blob.buffer.length };
+      for (const p of ['id', 'threadId', 'mailboxIds', 'keywords', 'receivedAt']) if (requested.includes(p)) meta[p] = null;
+      if (!opts.properties || requested.includes('blobId')) meta['blobId'] = blobId;
+      parsed[blobId] = { ...email, ...meta };
     } catch {
       notParsable.push(blobId);
     }

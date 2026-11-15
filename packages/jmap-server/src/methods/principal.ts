@@ -8,7 +8,7 @@ import { registerMethod } from '../dispatcher.js';
 import { CAP_MAIL, CAP_PRINCIPALS, CAP_SUBMISSION } from '../capabilities.js';
 import { cannotCalculateChanges, setError, unsupportedFilter, unsupportedSort } from '../errors.js';
 import { hashState } from '../state.js';
-import { paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
+import { compareBy, pageFields, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
 import type { JsonObject, MethodContext } from '../types.js';
 
 async function listPrincipals(ctx: MethodContext): Promise<JsonObject[]> {
@@ -80,16 +80,17 @@ registerMethod('Principal/query', CAP_PRINCIPALS, async (args, ctx) => {
     if (Array.isArray(f['accountIds'])) all = all.filter((p) => p['accounts'] && (f['accountIds'] as string[]).some((a) => a in (p['accounts'] as JsonObject)));
   }
   const sort = Array.isArray(args['sort']) ? (args['sort'] as JsonObject[]) : [];
-  for (const s of sort) {
+  // RFC 8620 §5.5: first comparator is primary — one chained sort, not one sort per comparator
+  all.sort(compareBy(sort.map((s) => {
     const prop = String(s['property']);
     if (prop !== 'name' && prop !== 'email') throw unsupportedSort(`Cannot sort by ${prop}`);
     const dir = s['isAscending'] === false ? -1 : 1;
-    all.sort((a, b) => String(a[prop]).localeCompare(String(b[prop])) * dir);
-  }
+    return (a: JsonObject, b: JsonObject) => String(a[prop]).localeCompare(String(b[prop])) * dir;
+  })));
   const page = paginate(all.map((p) => String(p['id'])), args);
   return {
     accountId: account.accountId, queryState: hashState(all.map((p) => p['id'])), canCalculateChanges: false,
-    position: page.position, ids: page.ids, ...(args['calculateTotal'] === true ? { total: page.total } : {}),
+    ...pageFields(page, args),
   };
 });
 

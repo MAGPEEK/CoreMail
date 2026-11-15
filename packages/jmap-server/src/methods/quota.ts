@@ -7,7 +7,7 @@ import { registerMethod } from '../dispatcher.js';
 import { CAP_QUOTA } from '../capabilities.js';
 import { cannotCalculateChanges } from '../errors.js';
 import { hashState } from '../state.js';
-import { paginate, parseGetArgs, pick } from './common.js';
+import { pageFields, paginate, parseGetArgs, pick } from './common.js';
 import type { AccountContext, JsonObject } from '../types.js';
 
 const QUOTA_ID = 'storage';
@@ -32,8 +32,8 @@ async function loadQuota(account: AccountContext): Promise<JsonObject | null> {
     used: Number(used),
     hardLimit: hard,
     scope: 'account',
-    name: 'Speicherplatz',
-    description: `Speicherkontingent für ${account.email}`,
+    name: 'Storage',
+    description: `Storage quota of ${account.email}`,
     types: ['Email'],
     warnLimit: Math.floor(hard * 0.9),
     softLimit: null,
@@ -73,7 +73,7 @@ registerMethod('Quota/query', CAP_QUOTA, async (args, ctx) => {
   const page = paginate(ids, args);
   return {
     accountId: account.accountId, queryState: hashState(q), canCalculateChanges: false,
-    position: page.position, ids: page.ids, ...(args['calculateTotal'] === true ? { total: page.total } : {}),
+    ...pageFields(page, args),
   };
 });
 

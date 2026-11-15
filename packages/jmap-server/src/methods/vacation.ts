@@ -49,8 +49,13 @@ registerMethod('VacationResponse/set', CAP_VACATION, async (args, ctx) => {
     if (id !== 'singleton') { notUpdated[id] = setError('notFound'); continue; }
     let next: JsonObject;
     try { next = applyPatch(before, patch); } catch (e) { notUpdated[id] = setError('invalidPatch', e instanceof Error ? e.message : undefined); continue; }
+    // CoreMail's out-of-office reply has no own subject: refuse instead of silently dropping it.
+    if (next['subject'] !== null && next['subject'] !== undefined) {
+      notUpdated[id] = setError('invalidProperties', 'a custom subject is not supported', ['subject']); continue;
+    }
     const from = parseDate(next['fromDate']); const to = parseDate(next['toDate']);
-    const html = typeof next['htmlBody'] === 'string' ? next['htmlBody'] : (typeof next['textBody'] === 'string' ? next['textBody'].replace(/\n/g, '<br>') : '');
+    const escape = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const html = typeof next['htmlBody'] === 'string' ? next['htmlBody'] : (typeof next['textBody'] === 'string' ? escape(next['textBody']).replace(/\n/g, '<br>') : '');
     await prisma.userSettings.upsert({
       where: { userId: ctx.user.userId },
       create: { userId: ctx.user.userId, oofEnabled: next['isEnabled'] === true, oofExternal: html, oofInternal: html, oofUseTimeRange: !!(from || to), oofStart: from, oofEnd: to },

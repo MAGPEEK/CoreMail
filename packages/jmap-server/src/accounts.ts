@@ -84,7 +84,9 @@ export async function resolveAccounts(user: JmapUser): Promise<Map<string, Accou
       email: owner.email,
       readOnly: d.permission === 'READ_ONLY',
       isPersonal: false,
-      maySend: d.permission === 'FULL_ACCESS',
+      // MailboxDelegate grants mailbox access only, never send-as (same policy as SMTP
+      // and ActiveSync: storage sender-identity.ts listAllowedSenderAddresses).
+      maySend: false,
     });
   }
 
@@ -101,7 +103,8 @@ export async function usersForAccount(accountId: string): Promise<string[]> {
     return [...new Set(perms.map((p) => p.userId))];
   }
   const delegates = await prisma.mailboxDelegate.findMany({
-    where: { mailbox: { userId: accountId } },
+    // only delegates that actually get an account (see resolveAccounts)
+    where: { mailbox: { userId: accountId }, permission: { in: ['FULL_ACCESS', 'READ_ONLY'] } },
     select: { granteeId: true },
   });
   return [accountId, ...delegates.map((d) => d.granteeId)];

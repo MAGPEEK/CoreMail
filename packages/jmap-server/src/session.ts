@@ -4,6 +4,7 @@
 import type { AccountContext, JmapUser, JsonObject } from './types.js';
 import { hashState } from './state.js';
 import { LIMITS } from './settings.js';
+import { MAX_DELAYED_SEND_SEC } from './limits.js';
 import {
   CAP_BLOB, CAP_CORE, CAP_MAIL, CAP_PRINCIPALS, CAP_PRINCIPALS_OWNER, CAP_QUOTA,
   CAP_SUBMISSION, CAP_VACATION, CAP_VAPID, CAP_WEBSOCKET, VAPID_PUBLIC_KEY,
@@ -39,10 +40,20 @@ export function buildSession(user: JmapUser, accounts: Map<string, AccountContex
       },
     };
     if (a.maySend) {
-      caps[CAP_SUBMISSION] = { maxDelayedSend: 30 * 24 * 3600, submissionExtensions: {} };
+      caps[CAP_SUBMISSION] = {
+        maxDelayedSend: MAX_DELAYED_SEND_SEC,
+        // RFC 4865 EHLO args: max-future-release-interval, max-future-release-date-time
+        submissionExtensions: {
+          FUTURERELEASE: [String(MAX_DELAYED_SEND_SEC), new Date(Date.now() + MAX_DELAYED_SEND_SEC * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')],
+        },
+      };
     }
     if (a.isPersonal) {
       caps[CAP_VACATION] = {};
+    }
+    if (a.accountId === user.userId) {
+      // RFC 9670 §2: the principal directory lives in the own account (primaryAccounts below)
+      caps[CAP_PRINCIPALS] = { currentUserPrincipalId: user.userId };
     }
     accountObjs[a.accountId] = {
       name: a.name,

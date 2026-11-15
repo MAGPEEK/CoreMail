@@ -5,11 +5,11 @@
  */
 import {
   prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey,
-  createMessage, moveMessages, setFlags, nextModSeq,
+  createMessage, moveMessages, setFlags, expunge,
 } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
 import type { AccountContext } from '../types.js';
-import { ensureThreadId } from './thread.js';
+import { resolveThreadId } from './thread.js';
 
 const log = createLogger('jmap:write');
 
@@ -34,7 +34,11 @@ export async function storeEmailFromRaw(
   const { storagePath } = await storeRawMessage(raw);
 
   // UID + modSeq are allocated atomically by the message store.
-  const msg = await prisma.$transaction((tx) => createMessage(tx, account.mailboxId, folderId, {
+  // Thread (RFC 8621 §3) is assigned in the creating transaction: the row is never
+  // visible without its threadId and no extra modSeq is needed.
+  const msg = await prisma.$transaction(async (tx) => {
+    const thread = await resolveThreadId({ id: '', messageId: parsed.messageId, inReplyTo: parsed.inReplyTo }, account.mailboxId, tx);
+    const created = await createMessage(tx, account.mailboxId, folderId, {
       flags,
       subject: parsed.subject,
       fromAddr: parsed.fromAddr,
@@ -51,7 +55,11 @@ export async function storeEmailFromRaw(
       rawSize: raw.length,
       storagePath,
       ...(receivedAt ? { createdAt: receivedAt } : {}),
-  }));
+      ...(thread ? { threadId: thread } : {}),
+    });
+    if (thread) return created;
+    return tx.message.update({ where: { id: created.id }, data: { threadId: created.id } });
+  });
 
   for (const [index, att] of parsed.attachments.entries()) {
     const key = attachmentKey(msg.id, `${index}-${att.sha256.slice(0, 16)}`);
@@ -73,9 +81,9 @@ export async function storeEmailFromRaw(
   await prisma.folder.update({
     where: { id: folderId },
     data: { totalCount: { increment: 1 }, ...(seen ? {} : { unreadCount: { increment: 1 } }) },
-  }).catch(() => undefined);
+  }).catch((err: unknown) => log.warn({ err, folderId }, 'folder counter update failed'));
 
-  const threadId = await ensureThreadId({ id: msg.id, threadId: null, inReplyTo: parsed.inReplyTo }, account.mailboxId);
+  const threadId = msg.threadId ?? msg.id;
   await notify(account, folderId, msg.id, 'new');
   return { id: msg.id, folderId, threadId, size: raw.length };
 }
@@ -126,13 +134,14 @@ export async function applyEmailChange(
 export async function destroyEmail(account: AccountContext, msg: { id: string; folderId: string; flags: string[] }): Promise<void> {
   const mailboxId = account.mailboxId;
   await prisma.$transaction(async (tx) => {
-    await tx.message.delete({ where: { id: msg.id } });
+    // Soft delete like IMAP EXPUNGE (30-day recovery window). The row stays as a
+    // tombstone with a fresh modSeq, which lets Email/changes report it in
+    // "destroyed" (RFC 8620 §5.2) instead of failing with cannotCalculateChanges.
+    await expunge(tx, [msg.id], { mailboxId });
     await tx.folder.update({
       where: { id: msg.folderId },
       data: { totalCount: { decrement: 1 }, ...(msg.flags.includes('\\Seen') ? {} : { unreadCount: { decrement: 1 } }) },
     });
-    // Hard delete leaves no row behind — at least advance HIGHESTMODSEQ.
-    await nextModSeq(tx, mailboxId);
   });
   await notify(account, msg.folderId, msg.id, 'update');
 }

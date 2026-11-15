@@ -43,10 +43,12 @@ test('own mailbox is always a writable personal account', async () => {
   assert.equal(acc?.readOnly, false);
 });
 
-test('FULL_ACCESS delegation gives a writable account that may send', async () => {
+test('FULL_ACCESS delegation gives a writable account that may not send as the owner', async () => {
+  // Send-as policy (storage sender-identity, as SMTP/ActiveSync): a mailbox delegate
+  // gets no right to use the owner's address.
   const acc = (await accountsFor([{ permission: 'FULL_ACCESS', ownerId: 'owner' }])).get('owner');
   assert.equal(acc?.readOnly, false);
-  assert.equal(acc?.maySend, true);
+  assert.equal(acc?.maySend, false);
 });
 
 test('READ_ONLY delegation gives a read-only account that may not send', async () => {

@@ -34,21 +34,72 @@ export function flagsToKeywords(flags: string[]): Record<string, true> {
   return out;
 }
 
-export function keywordToFlag(keyword: string): string {
-  return KEYWORD_TO_FLAG[keyword.toLowerCase()] ?? keyword;
+/**
+ * Keyword → IMAP flag. Keywords are case-insensitive (RFC 8621 §4.1.1), so custom
+ * keywords are normalised to lower case; `existing` (the message's current flags)
+ * lets an unchanged custom flag keep its original IMAP spelling.
+ */
+export function keywordToFlag(keyword: string, existing: readonly string[] = []): string {
+  const lower = keyword.toLowerCase();
+  const system = KEYWORD_TO_FLAG[lower];
+  if (system) return system;
+  return existing.find((f) => !f.startsWith('\\') && f.toLowerCase() === lower) ?? lower;
 }
 
-export function keywordsToFlags(keywords: Record<string, unknown>): string[] {
-  const flags = new Set<string>();
-  for (const [k, v] of Object.entries(keywords)) {
-    if (v === true) flags.add(keywordToFlag(k));
+/**
+ * All spellings a stored IMAP flag may have for `keyword` (for hasKeyword
+ * filters/sorts; the database compares array elements case-sensitively).
+ */
+export function flagVariants(keyword: string): string[] {
+  const lower = keyword.toLowerCase();
+  const system = KEYWORD_TO_FLAG[lower];
+  if (system) return lower === '$forwarded' ? [system, '\\Forwarded'] : [system];
+  const out = new Set<string>([keyword, lower, keyword.toUpperCase()]);
+  if (lower.startsWith('$')) {
+    // IMAP convention: "$MDNSent", "$Forwarded", "$Label1", "$NotJunk", …
+    const word = lower.slice(1);
+    out.add(`$${word.charAt(0).toUpperCase()}${word.slice(1)}`);
+    if (word.startsWith('not')) out.add(`$Not${word.charAt(3).toUpperCase()}${word.slice(4)}`);
+    if (word === 'mdnsent') out.add('$MDNSent');
   }
-  return [...flags];
+  return [...out];
 }
 
-/** RFC 8621 §4.1.1: keyword syntax (IMAP atom without certain characters, 1–255). */
+/** Case-insensitive membership test (RFC 8621 §4.1.1). */
+export function hasKeywordFlag(flags: readonly string[], keyword: string): boolean {
+  const want = keywordToFlag(keyword).toLowerCase();
+  return flags.some((f) => f.toLowerCase() === want);
+}
+
+export function keywordsToFlags(keywords: Record<string, unknown>, existing: readonly string[] = []): string[] {
+  const flags = new Map<string, string>(); // lower-case → flag (dedupes {Foo, foo})
+  for (const [k, v] of Object.entries(keywords)) {
+    if (v !== true) continue;
+    const flag = keywordToFlag(k, existing);
+    if (!flags.has(flag.toLowerCase())) flags.set(flag.toLowerCase(), flag);
+  }
+  return [...flags.values()];
+}
+
+/** Lower-case keyword keys (PatchObject tokens below "keywords/" included). */
+export function normalizeKeywordPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (k === 'keywords' && v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([kw, x]) => [kw.toLowerCase(), x]));
+    } else {
+      out[k.startsWith('keywords/') ? `keywords/${k.slice('keywords/'.length).toLowerCase()}` : k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * RFC 8621 §4.1.1: keyword = 1–255 characters of %x21-%x7E (printable ASCII,
+ * no space) except ( ) { ] % * " \ — the IMAP atom-specials.
+ */
 export function isValidKeyword(k: string): boolean {
-  return /^[^\s()\]{%*"\\]{1,255}$/.test(k);
+  return /^[\x21-\x7E]{1,255}$/.test(k) && !/[(){\]%*"\\]/.test(k);
 }
 
 const ROLE_BY_NAME: Record<string, string> = {

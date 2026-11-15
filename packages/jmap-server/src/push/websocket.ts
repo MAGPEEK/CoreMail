@@ -8,6 +8,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { createLogger } from '@coremail/core';
 import { clientIpFromRequest } from '@coremail/storage';
 import { authenticateCredentials } from '../auth.js';
+import { isWsOriginAllowed } from '../cors.js';
 import { resolveAccounts } from '../accounts.js';
 import { parseRequest, processRequest } from '../dispatcher.js';
 import { RequestError } from '../errors.js';
@@ -20,7 +21,11 @@ import type { JmapUser, JsonObject } from '../types.js';
 
 const log = createLogger('jmap:ws');
 
-export function attachWebSocket(server: Server, path = '/jmap/ws'): void {
+export function attachWebSocket(
+  server: Server,
+  allowedOrigins: () => Promise<string[]> = async () => [],
+  path = '/jmap/ws',
+): void {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: LIMITS.maxSizeRequest,
@@ -33,6 +38,11 @@ export function attachWebSocket(server: Server, path = '/jmap/ws'): void {
     void (async () => {
       if (!(await isJmapEnabled())) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
       const token = url.searchParams.get('access_token') ?? url.searchParams.get('token') ?? undefined;
+      if (!isWsOriginAllowed(req.headers.origin, await allowedOrigins(), token !== undefined)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       const user = await authenticateCredentials(
         req.headers.authorization ?? '', token,
         clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),

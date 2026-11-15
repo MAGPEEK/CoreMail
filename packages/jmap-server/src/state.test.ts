@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { decodeEmailState, encodeEmailState, decodeMailboxState, encodeMailboxState, hashState } from './state-codec.js';
 
 test('Email-State round-trip', () => {
-  const p = { maxModSeq: 1761580000000n, highestModSeq: 42n, maxCreatedMs: 1761580000123, count: 17 };
+  const p = { maxModSeq: 1761580000000n, highestModSeq: 42n, maxCreatedMs: 1761580000123, count: 17, createdBase: 42n };
   assert.deepEqual(decodeEmailState(encodeEmailState(p)), p);
   assert.equal(decodeEmailState('garbage'), null);
   assert.equal(decodeEmailState(42), null);

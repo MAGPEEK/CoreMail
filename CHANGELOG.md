@@ -220,9 +220,64 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `mobilesync` schema (MS-ASCMD) get the MobileSync server URL, unknown schemas get Error 601.
   The Outlook (2006a) response no longer contains the schema-invalid second `ActiveSync`
   account. `EMailAddress` with a namespace prefix or XML entities is understood.
+- **JMAP `/changes` (RFC 8620 §5.2):** `Email/changes` and `Thread/changes` silently dropped
+  everything beyond 5,000 changed rows, answered `maxChanges` with `cannotCalculateChanges`
+  and never reported `destroyed`. They now page in modSeq order with `hasMoreChanges` and an
+  intermediate state (server limit 5,000 ids), reject an invalid `maxChanges` with
+  `invalidArguments`, and report `Email/set destroy` in `destroyed`: destroy now soft-deletes
+  like IMAP EXPUNGE (30-day recovery window) instead of hard-deleting. Created vs. updated no
+  longer depends on `receivedAt` (an import with a past date plus a destroy produced a wrong
+  delta): the message store records `Message.createdModSeq` (new nullable column, added
+  automatically at container start). `Thread/changes` reports new threads in `created` and
+  emptied threads in `destroyed`. `Mailbox/changes` honours `maxChanges`.
+- **JMAP threads:** messages delivered by SMTP/IMAP/ActiveSync got a `threadId` only when a
+  JMAP client read them, without a state change, so `Thread/get` missed replies and thread
+  membership changed silently. Missing thread ids are now derived before every thread read and
+  persisted through the message store (new modSeq); JMAP-created messages get theirs in the
+  creating transaction, and a parent that arrives after its reply joins the reply's thread.
+- **JMAP `Email/query`:** results were capped at 10,000 (older mail unreachable, `total`
+  wrong); a `hasKeyword` sort overrode the primary comparator; `text` ignored To/Cc/Bcc and the
+  HTML body; `to`/`cc`/`bcc` required an exact address instead of a substring; invalid dates or
+  sizes failed with `serverFail`; `allInThreadHaveKeyword`/`someInThreadHaveKeyword` sorts were
+  silently treated as `hasKeyword` (now `unsupportedSort`, as not advertised). Principal/query
+  and EmailSubmission/query applied comparators in reverse precedence.
+- **JMAP keywords (RFC 8621 §4.1.1):** only `%x21-%x7E` is accepted; keywords are
+  case-insensitive (`{Foo, foo}` is one flag, `keywords/Foo: null` removes `Foo`, `hasKeyword`
+  finds IMAP-cased flags such as `$MDNSent`); unchanged custom flags keep their IMAP spelling.
+- **JMAP protocol details:** `Email/set` reports a database error per id instead of failing the
+  whole call after partial writes; destroying an already expunged message answers `notFound`
+  (counters were decremented twice); zero `mailboxIds` is `invalidProperties` (was
+  `tooManyMailboxes`); `header:*` properties with an unknown or disallowed form (`asFoo`,
+  `Subject:asAddresses`) are `invalidArguments`, `asGroupedAddresses` keeps groups; `sentAt` and
+  `asDate` have no `.000`; `Email/parse` returns `null` for id/mailboxIds/keywords/receivedAt;
+  `createdIds` is only returned when the request had it; result references and PatchObjects
+  reject inherited members and prefix pointers; an anchor with a negative offset clamps to 0
+  and a server-imposed `/query` limit is reported in `limit`; the session lists the principals
+  account capability (`currentUserPrincipalId`); `VacationResponse/set` refuses a subject
+  instead of dropping it and escapes `textBody`; `Blob/get` defaults to `["data", "size"]`;
+  English quota name/description.
 
 ### Security
 
+- **JMAP EmailSubmission sender spoofing (RFC 8621 §7.5).** Only the first From address was
+  compared with the identity, and the check was skipped when From was empty, so
+  `From: me@corp, ceo@corp`, two From fields, `From: undisclosed` and any `Sender:` were sent.
+  EmailSubmission now applies the SMTP submission policy (`@coremail/storage`
+  sender-identity): every From address and the Sender address must be allowed for the user,
+  the identity must appear in From or Sender (`forbiddenFrom`), and a message without exactly
+  one parseable From is `invalidEmail`. `Email/set` no longer accepts From/Sender/To/… or trace
+  fields through the `headers` array. **Behaviour change:** mailbox delegates (MailboxDelegate
+  FULL_ACCESS) no longer get send permission or the owner's identity in the delegated JMAP
+  account — the same rule as SMTP and ActiveSync.
+- **JMAP FUTURERELEASE.** `maxDelayedSend` was advertised, but `HOLDFOR`/`HOLDUNTIL` were
+  dropped and the mail went out at once, while a client-set `sendAt` was accepted without
+  limit. HOLDFOR/HOLDUNTIL now delay the send (max. 30 days, `FUTURERELEASE` in
+  `submissionExtensions`), unknown envelope parameters and a client `sendAt` (server-set) are
+  rejected with `invalidProperties`.
+- **JMAP WebSocket origin check.** A WebSocket handshake from a browser Origin outside the CORS
+  allow-list is refused unless it carries an explicit `access_token`, so a foreign page can no
+  longer ride on cached Basic credentials (RFC 6455 §10.2). Web Push for a mailbox goes only
+  to delegates with mailbox access.
 - **Credential changes take effect immediately on cached logins.** The jmap-server cached
   successful Basic logins for 60 s, so after enabling MFA, changing or resetting the password,
   revoking an app password, or deactivating/deleting a user, JMAP still accepted the old

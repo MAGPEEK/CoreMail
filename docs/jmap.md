@@ -84,10 +84,10 @@ immediately visible in IMAP clients and in the MWA, and vice versa.
 |------|----------|
 | Mailbox | `Folder`; `role` derived from the folder name (`INBOX`→inbox, `Drafts`, `Sent`, `Trash`, `Junk`, `Archive`) |
 | Email | `Message` (+ `Attachment`); `blobId = m-<id>`; an email lives in **exactly one** folder |
-| keywords | IMAP flags: `$seen`↔`\Seen`, `$flagged`↔`\Flagged`, `$answered`, `$draft`, `$forwarded` |
-| Thread | `Message.threadId` (lazy: `inReplyTo` → known message → its thread) |
-| Identity | primary address `u-<userId>`, aliases `al-<id>`, Shared Mailbox with SEND_AS `sm-<id>`; signature from the MWA settings |
-| EmailSubmission | Redis (7 days); sending via the BullMQ queue `smtp-outbound`; `sendAt` in the future → delayed, `undoStatus: canceled` cancels |
+| keywords | IMAP flags: `$seen`↔`\Seen`, `$flagged`↔`\Flagged`, `$answered`, `$draft`, `$forwarded`; case-insensitive, custom keywords are stored lower-case (an existing flag keeps its spelling) |
+| Thread | `Message.threadId`: `inReplyTo` → known message → its thread; otherwise an earlier reply's thread; otherwise own id. Set when JMAP creates the message; rows from other writers are derived before any thread read and persisted with a new modSeq (the state changes) |
+| Identity | primary address `u-<userId>`, aliases `al-<id>`, Shared Mailbox with SEND_AS `sm-<id>`; signature from the MWA settings. None in accounts without send permission (read-only shares, mailbox delegates) |
+| EmailSubmission | Redis (7 days); sending via the BullMQ queue `smtp-outbound`; FUTURERELEASE (`HOLDFOR`/`HOLDUNTIL`, max. 30 days) → delayed, `undoStatus: canceled` cancels |
 | VacationResponse | `UserSettings.oof*` (out of office) |
 | Quota | `quotaBytes` / `usedBytes` (user or Shared Mailbox), resource `octets` |
 | Principal | active users (`individual`), Shared Mailboxes (`group`) |
@@ -95,10 +95,16 @@ immediately visible in IMAP clients and in the MWA, and vice versa.
 
 ## State strings
 
-- **Email/Thread**: `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>` — captures both
-  REST/JMAP changes (`modSeq = Date.now()`) and SMTP/IMAP counters.
+- **Email/Thread**: `<maxModSeq>.<highestModSeq>.<maxCreatedMs>.<count>` (message-store
+  counters; legacy `Date.now()` modSeqs are still understood). An intermediate state of a paged
+  `/changes` response carries a fifth part, the creation base of the original state.
+- `/changes`: rows with a modSeq above the old state; created vs. updated by
+  `Message.createdModSeq` (set by the message store on create/copy/cross-mailbox move; rows from
+  before v7.1 fall back to `createdAt`). `Email/set destroy` soft-deletes like IMAP EXPUNGE, so
+  the tombstone shows up in `destroyed`. At most `maxChanges` (server limit 5,000) ids per
+  response, pages end on a modSeq boundary with `hasMoreChanges: true`.
 - **Mailbox**: `<count>.<maxCreatedMs>.<hash>`.
-- Deleted objects have no tombstones. After a hard delete, `/changes` returns
+- Hard deletes (e.g. the recovery-window purge) leave no tombstone: `/changes` returns
   `cannotCalculateChanges`; the client reloads the list (RFC-compliant).
 - `*/queryChanges` is not implemented (`cannotCalculateChanges`).
 
@@ -201,8 +207,13 @@ curl -s -u "$U" -H 'Content-Type: application/json' "$H/jmap/api" -d '{
   ]}' | jq .
 ```
 The `identityId` (`u-<userId>`, `al-<aliasId>`, `sm-<sharedId>`) is returned by `Identity/get`.
-The From header must match the identity (`forbiddenFrom`). With `"sendAt": "2026-11-01T08:00:00Z"`
-sending is delayed; `EmailSubmission/set` with `update: { "<id>": { "undoStatus": "canceled" } }`
+Every From address and the Sender address must be addresses the user may send as — the same
+policy as SMTP submission (own address, aliases, Shared Mailboxes with SEND_AS/FULL_ACCESS;
+SEND_ON_BEHALF with the own address in Sender) — and the identity must appear in From or Sender
+(`forbiddenFrom`). A message without a single, parseable From is `invalidEmail`. `From`,
+`Sender` and the other address/trace fields cannot be set through `header:*` or `headers`.
+With `"envelope": { "mailFrom": { "email": "…", "parameters": { "HOLDFOR": "3600" } }, "rcptTo": […] }`
+(or `HOLDUNTIL`) sending is delayed (`sendAt` is server-set; unknown parameters are rejected); `EmailSubmission/set` with `update: { "<id>": { "undoStatus": "canceled" } }`
 cancels as long as `undoStatus` is still `pending`.
 
 **Upload an attachment and send it along**
@@ -271,7 +282,10 @@ state model (`state`) that lets clients synchronize efficiently.
 ## Limitations (as of v5.7.1)
 
 - `Email/query`: filters `header`, `allInThreadHaveKeyword` and similar → `unsupportedFilter`;
-  sorting by `to` → `unsupportedSort`. Maximum 10,000 hits per query.
+  sorting by `to`, `allInThreadHaveKeyword`, `someInThreadHaveKeyword` → `unsupportedSort`.
+  No cap on hits (`total`/`position` cover the whole result).
+- Mailbox hierarchy: JMAP `parentId` and IMAP's flat `.`-delimited names are not mapped onto
+  each other yet (a JMAP child folder appears top-level in IMAP).
 - `bodyStructure` is synthesized from the stored fields
   (text/plain, text/html, attachments) — not a 1:1 image of nested MIME trees.
 - `Mailbox` does not allow role changes; system folders cannot be deleted.

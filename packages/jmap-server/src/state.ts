@@ -26,11 +26,13 @@ export async function emailStateParts(mailboxId: string): Promise<EmailStatePart
     }),
     prisma.mailbox.findUnique({ where: { id: mailboxId }, select: { highestModSeq: true } }),
   ]);
+  const highestModSeq = mbx?.highestModSeq ?? 0n;
   return {
     maxModSeq: agg._max.modSeq ?? 0n,
-    highestModSeq: mbx?.highestModSeq ?? 0n,
+    highestModSeq,
     maxCreatedMs: agg._max.createdAt?.getTime() ?? 0,
     count: agg._count._all,
+    createdBase: highestModSeq,
   };
 }
 

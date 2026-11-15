@@ -20,3 +20,6 @@ export const LIMITS: JmapLimits = {
   maxObjectsInSet: 500,
   maxSizeAttachmentsPerEmail: 25 * 1024 * 1024,
 };
+
+/** RFC 8621 §1.3.3 maxDelayedSend (seconds) — upper bound for FUTURERELEASE (RFC 4865). */
+export const MAX_DELAYED_SEND_SEC = 30 * 24 * 3600;
