@@ -98,9 +98,13 @@ export function inboundTarpitMaxDelayMs(env: Record<string, string | undefined> 
   return Number.isFinite(n) && n >= 0 ? Math.min(n, 30_000) : 5000;
 }
 
-/** Replies counted by the tarpit: 5yz, except the 421/554 closing replies. */
-function isTarpitError(line: string): boolean {
-  return /^5\d\d[ -]/.test(line) && !/^554[ -]/.test(line);
+/**
+ * Replies counted by the tarpit: 5yz, except the 554 closing reply. A
+ * multi-line reply counts once — only its last line ("5yz " / bare "5yz"),
+ * never the "5yz-" continuation lines.
+ */
+export function isTarpitError(line: string): boolean {
+  return /^5\d\d(?: |$)/.test(line) && !/^554(?: |$)/.test(line);
 }
 
 /** True when a handler error carries an SMTP reply ("550 …" or an enhanced code "5.7.1 …"). */
@@ -275,7 +279,7 @@ export class SmtpSession {
    * async handlers (onMailFrom, onRcptTo) suspend mid-execution and the next
    * pipelined command sees stale state.
    */
-  private enqueueCommand(fn: () => Promise<void> | void): void {
+  private enqueueCommand(fn: () => Promise<void> | void, opts: { noTarpit?: boolean } = {}): void {
     const epoch = this.epoch;
     this.cmdQueue = this.cmdQueue.then(async () => {
       // Skip if session already terminated
@@ -283,8 +287,9 @@ export class SmtpSession {
       // Received before a STARTTLS that has since been executed → discard.
       if (epoch !== this.epoch) return;
       // Tarpit: a client that keeps producing errors (dictionary attack,
-      // broken spam bot) waits before each further reply.
-      const delay = this.authUser ? 0 : tarpitDelayMs(this.permanentErrors, this.config.tarpitMaxDelayMs);
+      // broken spam bot) waits before each further reply. QUIT and RSET are
+      // never delayed — a client that gives up or resets must not be held.
+      const delay = this.authUser || opts.noTarpit ? 0 : tarpitDelayMs(this.permanentErrors, this.config.tarpitMaxDelayMs);
       if (delay > 0) {
         await new Promise<void>((r) => setTimeout(r, delay));
         if ((this.state as SmtpState) === 'QUIT' || this.terminating || this.socket.destroyed) return;
@@ -520,6 +525,10 @@ export class SmtpSession {
 
     try {
       await this.config.handlers.onMessage(raw, from, to, authUser, ip, meta);
+      // A delivered message (DATA or BDAT) proves a legitimate sender: the
+      // tarpit starts over (a cached MTA connection is not punished for the
+      // unknown recipients of earlier messages).
+      this.permanentErrors = 0;
       this.send('250 2.0.0 OK');
       log.info({ id: this.id, from, rcpt: to, size: raw.length }, 'Message accepted');
     } catch (err) {
@@ -595,7 +604,7 @@ export class SmtpSession {
       case 'DATA':    this.enqueueCommand(() => this.handleDataCommand()); break;
       case 'BDAT':    this.startBdat(args); break;
       case 'HELP':    this.enqueueCommand(() => { for (const l of HELP_LINES) this.send(l); }); break;
-      case 'RSET':    this.enqueueCommand(() => this.handleRset()); break;
+      case 'RSET':    this.enqueueCommand(() => this.handleRset(), { noTarpit: true }); break;
       case 'NOOP':    this.enqueueCommand(() => { this.send('250 2.0.0 OK'); }); break;
       // RFC 5321 §3.5.3 / §7.3: VRFY is part of the minimum implementation; a
       // server that does not verify addresses answers 252, never 502.
@@ -603,7 +612,7 @@ export class SmtpSession {
         this.send(args ? '252 2.5.0 Cannot VRFY user, but will accept message and attempt delivery' : '501 5.5.4 Syntax: VRFY <address>');
       }); break;
       case 'EXPN':    this.enqueueCommand(() => { this.send('502 5.5.1 EXPN not supported'); }); break;
-      case 'QUIT':    this.enqueueCommand(() => this.handleQuit()); break;
+      case 'QUIT':    this.enqueueCommand(() => this.handleQuit(), { noTarpit: true }); break;
       default:
         this.enqueueCommand(() => { this.send(`500 5.5.1 Command not recognized: ${cmd}`); });
     }

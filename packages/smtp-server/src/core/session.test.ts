@@ -12,7 +12,7 @@ import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
-import { SmtpSession } from './session.js';
+import { SmtpSession, isTarpitError } from './session.js';
 import { selfSignedTestCert } from '../test-cert.js';
 import type { AuthUser, EsmtpExtensions, MessageMeta, SmtpSessionConfig } from './types.js';
 
@@ -1597,6 +1597,63 @@ describe('HELP (RFC 5321 §4.1.1.8)', () => {
     await client.cmd('MAIL FROM:<alice@example.test>');
     assert.equal((await client.cmd('HELP')).code, 214);
     assert.equal((await client.cmd('RCPT TO:<bob@example.test>')).code, 250);
+  });
+});
+
+describe('tarpit fairness (review L5)', () => {
+  const tarpitOptions = (): HarnessOptions => ({
+    config: { tarpitMaxDelayMs: 3000 },
+    onRcptTo: async (to) => (to.startsWith('bad') ? '5.1.1 User unknown' : null),
+  });
+  const timed = async (fn: () => Promise<Reply>): Promise<{ reply: Reply; ms: number }> => {
+    const start = Date.now();
+    const reply = await fn();
+    return { reply, ms: Date.now() - start };
+  };
+  async function threeUnknownRecipients(client: SmtpClient): Promise<void> {
+    await client.cmd('MAIL FROM:<alice@example.test>');
+    for (const r of ['bad1', 'bad2', 'bad3']) assert.equal((await client.cmd(`RCPT TO:<${r}@example.test>`)).code, 550);
+  }
+
+  test('a multi-line 5yz reply counts once: only its final line is a tarpit error', () => {
+    assert.equal(isTarpitError('550-5.1.1 first line'), false);
+    assert.equal(isTarpitError('550 5.1.1 last line'), true);
+    assert.equal(isTarpitError('550'), true);
+    assert.equal(isTarpitError('554 5.4.6 closing'), false);
+    assert.equal(isTarpitError('250 2.0.0 OK'), false);
+  });
+
+  test('RSET and QUIT are answered without tarpit delay', async (t) => {
+    const { client } = await connectReady(t, tarpitOptions());
+    await threeUnknownRecipients(client);
+
+    const slow = await timed(() => client.cmd('NOOP'));
+    const rset = await timed(() => client.cmd('RSET'));
+    const quit = await timed(() => client.cmd('QUIT'));
+
+    assert.ok(slow.ms >= 900, `NOOP is tarpitted (${slow.ms} ms)`);
+    assert.equal(rset.reply.code, 250);
+    assert.ok(rset.ms < 500, `RSET not delayed (${rset.ms} ms)`);
+    assert.equal(quit.reply.code, 221);
+    assert.ok(quit.ms < 500, `QUIT not delayed (${quit.ms} ms)`);
+  });
+
+  test('a delivered message (DATA or BDAT) resets the tarpit counter', async (t) => {
+    const { client } = await connectReady(t, tarpitOptions());
+    await threeUnknownRecipients(client);
+    await client.cmd('RCPT TO:<ok@example.test>');
+    await client.cmd('DATA');
+    assert.equal((await client.cmd('x\r\n.')).code, 250);
+
+    const afterData = await timed(() => client.cmd('MAIL FROM:<alice@example.test>'));
+    for (const r of ['bad4', 'bad5', 'bad6']) await client.cmd(`RCPT TO:<${r}@example.test>`);
+    await client.cmd('RCPT TO:<ok@example.test>');
+    client.write('BDAT 1 LAST\r\nx');
+    assert.equal((await client.reply()).code, 250);
+    const afterBdat = await timed(() => client.cmd('NOOP'));
+
+    assert.ok(afterData.ms < 500, `no delay after a delivered DATA message (${afterData.ms} ms)`);
+    assert.ok(afterBdat.ms < 500, `no delay after a delivered BDAT message (${afterBdat.ms} ms)`);
   });
 });
 
