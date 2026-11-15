@@ -9,10 +9,12 @@ import {
 import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
+import { invalidExemptEntries } from './server/limits.js';
 
 const log = createLogger('imap:main');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
 installProcessGuards(log);
+if (invalidExemptEntries.length) log.warn({ invalid: invalidExemptEntries }, 'ignoring invalid MAIL_CONN_EXEMPT_CIDRS entries');
 // v6.1: LDAP accounts can log in on the mail protocols (shared credential check)
 registerLdapMailVerifier();
 
