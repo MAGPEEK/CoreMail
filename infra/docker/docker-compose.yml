@@ -203,6 +203,7 @@ services:
       OIDC_TRUST_IDP_MFA_FOR_ADMINS: ${OIDC_TRUST_IDP_MFA_FOR_ADMINS:-}
       SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
       POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
+      REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
 
       # ── Optional: different HTTPS port if 443 is already in use on the host ──
       # HTTPS_PORT: "8443"     # then also map "8443:8443" below

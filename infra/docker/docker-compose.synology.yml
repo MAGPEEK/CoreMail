@@ -117,6 +117,7 @@ services:
       OIDC_TRUST_IDP_MFA_FOR_ADMINS: ${OIDC_TRUST_IDP_MFA_FOR_ADMINS:-}
       SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
       POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
+      REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
 
       # Internal service URLs
       AUTH_SERVICE_URL: http://localhost:3003

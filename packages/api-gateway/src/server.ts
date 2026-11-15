@@ -8,6 +8,7 @@ import {
   connectDatabase, prisma, migrateMailboxCounters,
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
   startDeletedItemsPurger, type PurgeRedis,
+  startReferencesBackfill, type BackfillRedis,
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
@@ -573,6 +574,10 @@ async function start() {
   // v8.1: Recover deleted items — hourly purge of expunge tombstones older than
   // DELETED_ITEM_RETENTION_DAYS (default 30; 0 = never). Redis-locked.
   startDeletedItemsPurger(getRedisClient() as unknown as PurgeRedis);
+
+  // 9.1: background backfill of Message References for older mail (IMAP THREAD /
+  // threading); REFERENCES_BACKFILL=on (default) | off. Redis-locked.
+  startReferencesBackfill(getRedisClient() as unknown as BackfillRedis);
 }
 
 async function syncProtocolCertState(): Promise<void> {
