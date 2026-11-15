@@ -215,6 +215,12 @@ async function connectWithRecipient(t: TestContext, options: HarnessOptions = {}
   return harness;
 }
 
+/** Extension flags with SMTPUTF8, DSN and CHUNKING switched off (pre-8.1 behaviour). */
+const EXT_OFF: EsmtpExtensions = {
+  starttls: true, authPlain: true, authLogin: true, authCramMd5: false, pipelining: true, size: true,
+  bit8mime: true, enhancedStatus: true, smtputf8: false, dsn: false, chunking: false,
+};
+
 function ehloKeywords(reply: Reply): string[] {
   return reply.lines.slice(1).map((line) => (line.slice(4).split(' ')[0] ?? '').toUpperCase());
 }
@@ -260,7 +266,20 @@ describe('EHLO / HELO (RFC 5321 §4.1.1.1)', () => {
 
     const reply = await client.cmd('EHLO client.example.test');
 
-    assert.deepEqual(ehloKeywords(reply).sort(), ['8BITMIME', 'AUTH', 'ENHANCEDSTATUSCODES', 'PIPELINING', 'SIZE']);
+    assert.deepEqual(ehloKeywords(reply).sort(), [
+      '8BITMIME', 'AUTH', 'BINARYMIME', 'CHUNKING', 'DSN', 'ENHANCEDSTATUSCODES', 'PIPELINING', 'SIZE', 'SMTPUTF8',
+    ]);
+  });
+
+  test('EHLO keyword order follows Exchange 2019 (SIZE … SMTPUTF8)', async (t) => {
+    const { client } = await connect(t, { config: { tls: testCert() } });
+    await client.reply();
+
+    const reply = await client.cmd('EHLO client.example.test');
+
+    assert.deepEqual(ehloKeywords(reply), [
+      'SIZE', 'PIPELINING', 'DSN', 'ENHANCEDSTATUSCODES', 'STARTTLS', '8BITMIME', 'BINARYMIME', 'CHUNKING', 'SMTPUTF8',
+    ]);
   });
 
   test('EHLO advertises the configured maximum message size (RFC 1870)', async (t) => {
@@ -281,7 +300,7 @@ describe('EHLO / HELO (RFC 5321 §4.1.1.1)', () => {
     assert.ok(reply.lines.some((line) => line.slice(4) === 'AUTH PLAIN LOGIN'));
   });
 
-  test('EHLO never advertises CRAM-MD5, SMTPUTF8, CHUNKING or DSN even if the settings flags are on', async (t) => {
+  test('EHLO never advertises CRAM-MD5 even if the settings flag is on', async (t) => {
     const everythingOn: EsmtpExtensions = {
       starttls: true, authPlain: true, authLogin: true, authCramMd5: true, pipelining: true, size: true,
       bit8mime: true, enhancedStatus: true, smtputf8: true, dsn: true, chunking: true,
@@ -291,7 +310,19 @@ describe('EHLO / HELO (RFC 5321 §4.1.1.1)', () => {
 
     const reply = await client.cmd('EHLO client.example.test');
 
-    assert.doesNotMatch(reply.text, /CRAM-MD5|SMTPUTF8|CHUNKING|\bDSN\b|BINARYMIME/);
+    assert.doesNotMatch(reply.text, /CRAM-MD5/);
+  });
+
+  test('switched-off SMTPUTF8, DSN and CHUNKING are neither advertised nor accepted', async (t) => {
+    const { client } = await connectReady(t, { config: { esmtp: EXT_OFF } });
+
+    assert.equal((await client.cmd('EHLO client.example.test')).text.match(/SMTPUTF8|CHUNKING|\bDSN\b|BINARYMIME/), null);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> SMTPUTF8')).code, 555);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> RET=HDRS')).code, 555);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> BODY=BINARYMIME')).code, 555);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test>')).code, 250);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> NOTIFY=SUCCESS')).code, 555);
+    assert.equal((await client.cmd('BDAT 5 LAST')).code, 500);
   });
 
   test('EHLO does not advertise AUTH when no credential verifier is configured', async (t) => {
@@ -416,12 +447,14 @@ describe('command sequence (RFC 5321 §4.1.4)', () => {
     assert.equal(reply.code, 500);
   });
 
-  test('BDAT is not recognized because CHUNKING is not implemented', async (t) => {
+  test('BDAT without an open transaction is a bad sequence (503); its chunk is consumed', async (t) => {
     const { client } = await connectReady(t);
 
-    const reply = await client.cmd('BDAT 5 LAST');
+    client.write('BDAT 6 LAST\r\nNOOP\r\n');
+    const reply = await client.reply();
 
-    assert.equal(reply.code, 500);
+    assert.equal(reply.code, 503);
+    assert.equal((await client.cmd('NOOP')).code, 250, 'the chunk "NOOP\\r\\n" was not run as a command');
   });
 
   test('NOOP is answered with 250 and ignores its argument', async (t) => {
@@ -1045,11 +1078,11 @@ async function flushIo(ms = 60): Promise<void> {
 }
 
 describe('envelope parameters and syntax (review fixes)', () => {
-  test('RCPT parameters are not implemented (DSN not advertised) → 555', async (t) => {
+  test('unknown RCPT parameters are refused with 555', async (t) => {
     const { client } = await connectReady(t);
     await client.cmd('MAIL FROM:<alice@example.test>');
 
-    const reply = await client.cmd('RCPT TO:<bob@example.test> NOTIFY=SUCCESS');
+    const reply = await client.cmd('RCPT TO:<bob@example.test> FOO=BAR');
 
     assert.equal(reply.code, 555);
   });
@@ -1259,5 +1292,329 @@ describe('STARTTLS and timers (review fixes)', () => {
     const reply = await client.reply();
 
     assert.equal(reply.code, 421);
+  });
+});
+
+// ─── v8.1: CHUNKING / BINARYMIME (RFC 3030) ─────────────────────────────────
+
+/** Sends UTF-8 text as octets (the harness writes latin1 strings byte for byte). */
+const utf8 = (s: string): string => Buffer.from(s, 'utf8').toString('latin1');
+
+describe('BDAT (RFC 3030 CHUNKING)', () => {
+  test('chunk boundaries inside a CRLF are reassembled byte-exact; no dot-unstuffing', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    const message = 'Subject: chunked\r\n\r\nline one\r\n.hidden dot line\r\n..two dots\r\nend\r\n';
+    const cut = message.indexOf('\r\n.hidden') + 1; // first chunk ends with "\r", second starts with "\n"
+    const first = message.slice(0, cut);
+    const second = message.slice(cut);
+
+    client.write(`BDAT ${first.length}\r\n${first}`);
+    const r1 = await client.reply();
+    client.write(`BDAT ${second.length} LAST\r\n${second}`);
+    const r2 = await client.reply();
+
+    assert.equal(r1.text, `250 2.0.0 ${first.length} octets received`);
+    assert.equal(r2.text, '250 2.0.0 OK');
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), message);
+    assert.equal(recorded.messages[0]?.meta?.envelope?.chunking, true);
+  });
+
+  test('a chunk split over several TCP writes (and the command line itself) is read completely', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    const body = 'A'.repeat(300);
+
+    client.write('BD');
+    await delay(20);
+    client.write(`AT ${body.length} LA`);
+    await delay(20);
+    client.write(`ST\r\n${body.slice(0, 100)}`);
+    await delay(20);
+    client.write(body.slice(100, 299));
+    await delay(20);
+    client.write(body.slice(299));
+    const reply = await client.reply();
+
+    assert.equal(reply.code, 250);
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), body);
+  });
+
+  test('a binary chunk with NUL and all other octets is delivered unchanged (BODY=BINARYMIME)', async (t) => {
+    const { client, recorded } = await connectReady(t);
+    const bytes = Buffer.from(Array.from({ length: 256 }, (_v, i) => i));
+    await client.cmd('MAIL FROM:<alice@example.test> BODY=BINARYMIME');
+    await client.cmd('RCPT TO:<bob@example.test>');
+
+    client.write(`BDAT ${bytes.length} LAST\r\n${bytes.toString('latin1')}`);
+    const reply = await client.reply();
+
+    assert.equal(reply.code, 250);
+    assert.ok(recorded.messages[0]?.raw.equals(bytes));
+    assert.equal(recorded.messages[0]?.meta?.envelope?.body, 'BINARYMIME');
+  });
+
+  test('a zero-length BDAT LAST ends the message', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+
+    client.write('BDAT 4\r\nabcd');
+    const r1 = await client.reply();
+    const r2 = await client.cmd('BDAT 0 LAST');
+
+    assert.equal(r1.code, 250);
+    assert.equal(r2.text, '250 2.0.0 OK');
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), 'abcd');
+  });
+
+  test('SIZE is enforced across chunks: 552, nothing delivered, the session stays usable', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t); // maxSize 1024
+
+    client.write(`BDAT 600\r\n${'x'.repeat(600)}`);
+    const r1 = await client.reply();
+    client.write(`BDAT 600 LAST\r\n${'y'.repeat(600)}`);
+    const r2 = await client.reply();
+    const afterLast = await client.cmd('BDAT 0 LAST');
+    const mail = await client.cmd('MAIL FROM:<alice@example.test>');
+
+    assert.equal(r1.code, 250);
+    assert.equal(r2.text, '552 5.3.4 Message exceeds size limit');
+    assert.equal(afterLast.code, 503, 'the failed transaction is closed');
+    assert.equal(mail.code, 250);
+    assert.equal(recorded.messages.length, 0);
+  });
+
+  test('an oversized single chunk is consumed (never run as commands) and refused with 552', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    const payload = 'QUIT\r\n'.repeat(400); // 2400 octets of "commands"
+
+    client.write(`BDAT ${payload.length} LAST\r\n${payload}`);
+    const reply = await client.reply();
+    const noop = await client.cmd('NOOP');
+
+    assert.equal(reply.code, 552);
+    assert.equal(noop.code, 250);
+    assert.equal(client.closed, false);
+    assert.equal(recorded.messages.length, 0);
+  });
+
+  test('MAIL, RCPT, two BDAT chunks and QUIT in one TCP write (PIPELINING)', async (t) => {
+    const { client, recorded } = await connectReady(t, { handlerDelayMs: 20 });
+
+    client.write('MAIL FROM:<alice@example.test>\r\nRCPT TO:<bob@example.test>\r\nBDAT 5\r\nHELLOBDAT 7 LAST\r\n, WORLDQUIT\r\n');
+    const replies = [await client.reply(), await client.reply(), await client.reply(), await client.reply(), await client.reply()];
+
+    assert.deepEqual(replies.map((r) => r.code), [250, 250, 250, 250, 221]);
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), 'HELLO, WORLD');
+  });
+
+  test('BDAT works over TLS', async (t) => {
+    const { client, recorded } = await connect(t, { auth: true });
+    await client.reply();
+    await client.cmd('EHLO client.example.test');
+    await client.cmd(`AUTH PLAIN ${b64('\0user@example.test\0secret')}`);
+
+    client.write('MAIL FROM:<user@example.test>\r\nRCPT TO:<bob@example.test>\r\nBDAT 3 LAST\r\nxyz');
+    const replies = [await client.reply(), await client.reply(), await client.reply()];
+
+    assert.deepEqual(replies.map((r) => r.code), [250, 250, 250]);
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), 'xyz');
+  });
+
+  test('DATA after BDAT in the same transaction is refused with 503', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+
+    client.write('BDAT 3\r\nabc');
+    await client.reply();
+    const data = await client.cmd('DATA');
+    const last = await client.cmd('BDAT 0 LAST');
+
+    assert.equal(data.code, 503);
+    assert.equal(last.code, 250, 'the BDAT transaction continues');
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), 'abc');
+  });
+
+  test('DATA is refused for BODY=BINARYMIME (RFC 3030 §3)', async (t) => {
+    const { client } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test> BODY=BINARYMIME');
+    await client.cmd('RCPT TO:<bob@example.test>');
+
+    const reply = await client.cmd('DATA');
+
+    assert.equal(reply.code, 503);
+  });
+
+  test('BDAT before RCPT is 503 and a BDAT after LAST is 503', async (t) => {
+    const { client } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test>');
+
+    client.write('BDAT 2\r\nab');
+    const early = await client.reply();
+    await client.cmd('RCPT TO:<bob@example.test>');
+    client.write('BDAT 2 LAST\r\nab');
+    await client.reply();
+    client.write('BDAT 2\r\ncd');
+    const late = await client.reply();
+
+    assert.equal(early.code, 503);
+    assert.equal(late.code, 503);
+  });
+
+  test('a malformed BDAT size is a syntax error (501)', async (t) => {
+    const { client } = await connectWithRecipient(t);
+
+    assert.equal((await client.cmd('BDAT ten LAST')).code, 501);
+    assert.equal((await client.cmd('BDAT')).code, 501);
+  });
+
+  test('BDAT LAST runs through the same message handler path as DATA (handler errors)', async (t) => {
+    const { client } = await connectWithRecipient(t, { onMessage: async () => { throw new Error('550 5.7.1 Rejected by filter'); } });
+
+    client.write('BDAT 1 LAST\r\nx');
+    const reply = await client.reply();
+
+    assert.equal(reply.text, '550 5.7.1 Rejected by filter');
+  });
+});
+
+// ─── v8.1: DSN parameters (RFC 3461) ─────────────────────────────────────────
+
+describe('DSN parameters (RFC 3461)', () => {
+  test('RET, ENVID (xtext), NOTIFY and ORCPT are stored with the transaction and handed to onMessage', async (t) => {
+    const { client, recorded } = await connectReady(t);
+
+    assert.equal((await client.cmd('MAIL FROM:<alice@example.test> RET=HDRS ENVID=QQ+2B314')).code, 250);
+    assert.equal((await client.cmd('RCPT TO:<Bob@example.test> NOTIFY=SUCCESS,DELAY ORCPT=rfc822;bob+2Bx@example.test')).code, 250);
+    assert.equal((await client.cmd('RCPT TO:<carol@example.test> NOTIFY=NEVER')).code, 250);
+    await client.cmd('DATA');
+    await client.cmd('x\r\n.');
+
+    assert.deepEqual(recorded.messages[0]?.meta?.envelope?.dsn, {
+      ret: 'HDRS',
+      envid: 'QQ+314',
+      rcpts: {
+        'bob@example.test': { notify: ['SUCCESS', 'DELAY'], orcpt: { type: 'rfc822', address: 'bob+x@example.test' } },
+        'carol@example.test': { notify: [] },
+      },
+    });
+  });
+
+  test('a transaction without DSN parameters carries no DSN request', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    await client.cmd('DATA');
+    await client.cmd('x\r\n.');
+
+    assert.equal(recorded.messages[0]?.meta?.envelope?.dsn, undefined);
+  });
+
+  test('malformed DSN parameters are refused with 501', async (t) => {
+    const { client } = await connectReady(t);
+
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> RET=BODY')).code, 501);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> ENVID=abc+zz')).code, 501);
+    assert.equal((await client.cmd(`MAIL FROM:<a@example.test> ENVID=${'x'.repeat(101)}`)).code, 501);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> RET=FULL RET=HDRS')).code, 501);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> RET=full')).code, 250);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> NOTIFY=NEVER,SUCCESS')).code, 501);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> NOTIFY=SOMETIMES')).code, 501);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> NOTIFY=FAILURE,FAILURE')).code, 501);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> ORCPT=b@example.test')).code, 501);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> ORCPT=rfc822;b+4')).code, 501);
+    assert.equal((await client.cmd('RCPT TO:<b@example.test> NOTIFY=failure,delay')).code, 250);
+  });
+});
+
+// ─── v8.1: SMTPUTF8 (RFC 6531) ───────────────────────────────────────────────
+
+describe('SMTPUTF8 (RFC 6531)', () => {
+  test('UTF-8 local-parts and U-label domains are accepted with MAIL … SMTPUTF8', async (t) => {
+    const { client, recorded } = await connectReady(t);
+
+    const mail = await client.cmd(utf8('MAIL FROM:<jörg@bücher.example> SMTPUTF8'));
+    const rcpt = await client.cmd(utf8('RCPT TO:<用户@例子.example>'));
+    await client.cmd('DATA');
+    await client.cmd(utf8('Subject: Grüße\r\n\r\nHallo\r\n.'));
+
+    assert.equal(mail.code, 250);
+    assert.equal(rcpt.code, 250);
+    assert.deepEqual(recorded.mailFrom, ['jörg@bücher.example']);
+    assert.deepEqual(recorded.rcptTo, ['用户@例子.example']);
+    assert.equal(recorded.messages[0]?.meta?.envelope?.smtputf8, true);
+    assert.equal(recorded.messages[0]?.meta?.protocol, 'UTF8SMTP');
+    assert.equal(recorded.messages[0]?.raw.toString('utf8'), 'Subject: Grüße\r\n\r\nHallo\r\n');
+  });
+
+  test('an IDN domain is normalised (case folding, NFC); an A-label domain stays ASCII', async (t) => {
+    const { client, recorded } = await connectReady(t);
+    await client.cmd('MAIL FROM:<a@example.test> SMTPUTF8');
+
+    await client.cmd(utf8('RCPT TO:<User@BÜCHER.example>'));
+    await client.cmd('RCPT TO:<user@XN--BCHER-KVA.example>');
+
+    assert.deepEqual(recorded.rcptTo, ['User@bücher.example', 'user@xn--bcher-kva.example']);
+  });
+
+  test('a UTF-8 address without the SMTPUTF8 parameter is refused with 553 5.6.7', async (t) => {
+    const { client } = await connectReady(t);
+
+    const mail = await client.cmd(utf8('MAIL FROM:<jörg@example.test>'));
+    await client.cmd('MAIL FROM:<a@example.test>');
+    const rcpt = await client.cmd(utf8('RCPT TO:<bob@bücher.example>'));
+    const orcpt = await client.cmd(utf8('RCPT TO:<bob@example.test> ORCPT=utf-8;bób@example.test'));
+
+    assert.match(mail.text, /^553 5\.6\.7 /);
+    assert.match(rcpt.text, /^553 5\.6\.7 /);
+    assert.match(orcpt.text, /^553 5\.6\.7 /);
+  });
+
+  test('ill-formed UTF-8, invalid IDN domains, C1 controls and SMTPUTF8=value are refused', async (t) => {
+    const { client } = await connectReady(t);
+
+    assert.equal((await client.cmd('MAIL FROM:<j\xc3\x28rg@example.test> SMTPUTF8')).code, 501);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> SMTPUTF8=yes')).code, 501);
+    assert.equal((await client.cmd(utf8('MAIL FROM:<a@bü_cher.example> SMTPUTF8'))).code, 501);
+    assert.equal((await client.cmd(utf8('MAIL FROM:<a\u0085b@example.test> SMTPUTF8'))).code, 501);
+    assert.equal((await client.cmd('MAIL FROM:<a@example.test> SMTPUTF8')).code, 250);
+    assert.equal((await client.cmd(utf8('RCPT TO:<ok@bü_cher.example>'))).code, 501);
+  });
+});
+
+describe('HELP (RFC 5321 §4.1.1.8)', () => {
+  test('HELP answers 214 with enhanced codes and an RFC link, also with an argument', async (t) => {
+    const { client } = await connectReady(t);
+
+    const help = await client.cmd('HELP');
+    const topic = await client.cmd('HELP MAIL');
+
+    assert.equal(help.code, 214);
+    assert.ok(help.lines.every((l) => /^214[- ]2\.0\.0 /.test(l)));
+    assert.match(help.lines.at(-1) ?? '', /^214 2\.0\.0 .*https:\/\/www\.rfc-editor\.org\/rfc\/rfc5321/);
+    assert.equal(topic.code, 214);
+  });
+
+  test('HELP works before EHLO and inside a transaction without changing its state', async (t) => {
+    const { client } = await connect(t);
+    await client.reply();
+    assert.equal((await client.cmd('HELP')).code, 214);
+    await client.cmd('EHLO client.example.test');
+    await client.cmd('MAIL FROM:<alice@example.test>');
+    assert.equal((await client.cmd('HELP')).code, 214);
+    assert.equal((await client.cmd('RCPT TO:<bob@example.test>')).code, 250);
+  });
+});
+
+describe('enhanced status codes on the new replies (RFC 2034)', () => {
+  test('every 2yz/4yz/5yz reply of BDAT, DSN and SMTPUTF8 commands carries an enhanced code', async (t) => {
+    const { client } = await connectReady(t);
+    const replies: Reply[] = [];
+    replies.push(await client.cmd('MAIL FROM:<a@example.test> RET=XX'));
+    replies.push(await client.cmd(utf8('MAIL FROM:<ä@example.test>')));
+    replies.push(await client.cmd('MAIL FROM:<a@example.test> SMTPUTF8 BODY=BINARYMIME'));
+    replies.push(await client.cmd('RCPT TO:<b@example.test> NOTIFY=X'));
+    replies.push(await client.cmd('RCPT TO:<b@example.test>'));
+    replies.push(await client.cmd('DATA'));
+    replies.push(await client.cmd('BDAT x'));
+    client.write('BDAT 1\r\nz');
+    replies.push(await client.reply());
+    replies.push(await client.cmd('BDAT 0 LAST'));
+
+    for (const r of replies) assert.match(r.text, /^\d{3} [245]\.\d{1,3}\.\d{1,3} /, r.text);
   });
 });

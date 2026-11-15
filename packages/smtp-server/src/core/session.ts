@@ -6,7 +6,9 @@
  *   - AUTH PLAIN / LOGIN (RFC 4954)
  *   - STARTTLS (RFC 3207)
  *   - MAIL FROM / RCPT TO / DATA with dot-stuffing
- *   - RSET / NOOP / VRFY / EXPN / QUIT
+ *   - BDAT (RFC 3030 CHUNKING + BINARYMIME): exact octet counts, no dot-stuffing
+ *   - DSN parameters (RFC 3461), SMTPUTF8 (RFC 6531)
+ *   - RSET / NOOP / VRFY / EXPN / HELP / QUIT
  *   - RFC 5321 §4.5.3.2 timeouts
  *   - RFC 5321 §4.5.3.1 max line length
  *   - State enforcement and sequence checks
@@ -16,10 +18,13 @@ import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { createLogger } from '@coremail/core';
-import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta } from './types.js';
+import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
 import { smtpLiveSessions } from './live-sessions.js';
-import { parseMailFrom, parseRcptTo, decodeBase64Strict, oneLine, isValidDomain } from './envelope.js';
+import {
+  parseMailFrom, parseRcptTo, decodeBase64Strict, decodeUtf8Command, oneLine, isValidDomain,
+} from './envelope.js';
+import { hasDsnRequest } from './dsn-params.js';
 
 const log = createLogger('smtp:session');
 
@@ -103,6 +108,33 @@ function isReplyError(message: string): boolean {
   return /^[45]\d\d(?: |-|$)/.test(message) || /^[45]\.\d{1,3}\.\d{1,3}\b/.test(message);
 }
 
+/** RFC 3030 §2: `BDAT SP chunk-size [SP end-marker]`, chunk-size = 1*DIGIT, end-marker = "LAST". */
+export function parseBdatArgs(args: string): { size: number; last: boolean } | null {
+  const m = /^(\d{1,15})(?: +(LAST))? *$/i.exec(args);
+  if (!m) return null;
+  const size = Number(m[1]);
+  return Number.isSafeInteger(size) ? { size, last: m[2] !== undefined } : null;
+}
+
+/** RFC 5321 §4.1.1.8 HELP — 214 reply lines (with enhanced codes, RFC 2034). */
+export const HELP_LINES = [
+  '214-2.0.0 CoreMail ESMTP server. Commands:',
+  '214-2.0.0   EHLO HELO STARTTLS AUTH MAIL RCPT DATA BDAT RSET NOOP VRFY HELP QUIT',
+  '214-2.0.0 Extensions: PIPELINING SIZE 8BITMIME BINARYMIME CHUNKING DSN SMTPUTF8 ENHANCEDSTATUSCODES',
+  '214 2.0.0 See https://www.rfc-editor.org/rfc/rfc5321 for the protocol',
+];
+
+/** A BDAT chunk being read from the socket (exact octet count, RFC 3030 §2). */
+interface BdatChunk {
+  size: number;
+  last: boolean;
+  remaining: number;
+  /** Chunk octets (latin1 string slices) — empty when the chunk is discarded. */
+  parts: string[];
+  /** Over the size limit: read and dropped without buffering. */
+  discard: boolean;
+}
+
 /**
  * Auth context stored during multi-step AUTH exchange.
  */
@@ -140,6 +172,20 @@ export class SmtpSession {
 
   // Set once the connection is being torn down (oversized line).
   private closing: boolean = false;
+
+  /**
+   * BDAT chunk currently being read. Chunk octets are taken from the input
+   * synchronously (they follow the command line immediately, also when
+   * pipelined); the chunk is then handed to the command queue.
+   */
+  private bdat: BdatChunk | null = null;
+
+  /**
+   * Octets announced by BDAT since the last MAIL/RSET/EHLO/HELO/LAST, counted
+   * at read time — chunks beyond the size limit are dropped while reading
+   * instead of being buffered (memory bound before the queue sees them).
+   */
+  private bdatAnnounced = 0;
 
   /**
    * Command queue — serializes async command processing to prevent PIPELINING
@@ -265,10 +311,15 @@ export class SmtpSession {
     if (this.closing) return;
     // RFC 5321 §4.5.3.2.6: the data block timeout runs per received chunk, not
     // for the whole message — a slow but progressing upload must not time out.
-    if (this.inData) this.resetTimer(T_DATA);
+    if (this.inData || this.bdat) this.resetTimer(T_DATA);
     this.lineBuffer += chunk;
 
-    while (true) {
+    while (!this.closing) {
+      if (this.bdat) {
+        // Exact octet count — no line parsing, no dot-stuffing (RFC 3030 §2).
+        if (!this.consumeBdatChunk()) break;
+        continue;
+      }
       const crlf = this.lineBuffer.indexOf('\r\n');
       if (crlf === -1) break;
 
@@ -293,9 +344,89 @@ export class SmtpSession {
     }
   }
 
+  /**
+   * Moves up to the remaining chunk octets from the input buffer into the
+   * current BDAT chunk. Returns false while more octets are needed (or the
+   * session closed); true when the chunk is complete and queued.
+   */
+  private consumeBdatChunk(): boolean {
+    const chunk = this.bdat!;
+    const take = Math.min(chunk.remaining, this.lineBuffer.length);
+    if (take > 0) {
+      if (!chunk.discard) chunk.parts.push(this.lineBuffer.slice(0, take));
+      this.lineBuffer = this.lineBuffer.slice(take);
+      chunk.remaining -= take;
+    }
+    if (chunk.remaining > 0) return false;
+    this.bdat = null;
+    if (this.terminateAfterData) {
+      // v7.1.0: credentials changed during the transfer — not accepted.
+      this.closeForCredentialChange();
+      return false;
+    }
+    const data = chunk.discard ? null : Buffer.from(chunk.parts.join(''), 'latin1');
+    this.enqueueCommand(() => this.handleBdatChunk(chunk, data));
+    this.resetTimer(T_COMMAND);
+    return true;
+  }
+
+  /** Synchronous part of BDAT: parse the size and start reading the chunk octets. */
+  private startBdat(args: string): void {
+    const esmtp = this.extensions();
+    if (!esmtp.chunking) {
+      this.enqueueCommand(() => { this.send('500 5.5.1 Command not recognized: BDAT'); });
+      return;
+    }
+    const parsed = parseBdatArgs(args);
+    if (!parsed) {
+      // Without a valid size the chunk boundary is unknown: nothing is
+      // consumed, the client must reset (RFC 3030 §2: 501).
+      this.enqueueCommand(() => { this.send('501 5.5.4 Syntax: BDAT <chunk-size> [LAST]'); });
+      return;
+    }
+    this.bdatAnnounced += parsed.size;
+    const discard = this.bdatAnnounced > this.config.maxSize;
+    this.bdat = { size: parsed.size, last: parsed.last, remaining: parsed.size, parts: [], discard };
+    if (parsed.last) this.bdatAnnounced = 0;
+    this.resetTimer(T_DATA);
+  }
+
+  /** Queued part of BDAT: sequence checks, size limit, then 250 or delivery on LAST. */
+  private async handleBdatChunk(chunk: BdatChunk, data: Buffer | null): Promise<void> {
+    const tx = this.transaction;
+    this.resetTimer(T_COMMAND);
+    // RFC 3030 §2: BDAT needs an open transaction with a recipient; after
+    // BDAT LAST (or a failed chunk) it is a bad sequence until RSET/MAIL.
+    if (!tx || (this.state !== 'RCPT' && this.state !== 'BDAT')) {
+      this.send('503 5.5.1 Bad sequence of commands');
+      return;
+    }
+    tx.size += chunk.size;
+    if (chunk.discard || data === null || tx.size > this.config.maxSize) {
+      // The chunk was read completely; the transaction is aborted (RFC 1870 §6 / RFC 3030 §4.2).
+      this.transaction = null;
+      this.state = 'READY';
+      this.send('552 5.3.4 Message exceeds size limit');
+      return;
+    }
+    tx.data.push(data);
+    if (!chunk.last) {
+      this.state = 'BDAT';
+      this.send(`250 2.0.0 ${chunk.size} octets received`);
+      return;
+    }
+    await this.finishData(true);
+  }
+
+  /** Effective ESMTP extension flags. */
+  private extensions(): EsmtpExtensions {
+    return this.config.esmtp ?? DEFAULT_ESMTP_EXTENSIONS;
+  }
+
   private closeForOversizedLine(): void {
     this.closing = true;
     this.lineBuffer = '';
+    this.bdat = null;
     this.transaction = null;
     this.inData = false;
     this.dataOverflow = false;
@@ -363,7 +494,11 @@ export class SmtpSession {
     }
   }
 
-  private async finishData(): Promise<void> {
+  /**
+   * Hands the complete message (DATA terminator or BDAT LAST) to the message
+   * handler — the same path for both transfer modes (filter, delivery, tarpit).
+   */
+  private async finishData(chunking = false): Promise<void> {
     const tx = this.transaction;
     if (!tx) {
       this.send('451 4.3.0 Internal error');
@@ -376,7 +511,7 @@ export class SmtpSession {
     const to = [...tx.rcptTo];
     const authUser = this.authUser;
     const ip = this.ip;
-    const meta = this.messageMeta();
+    const meta = this.messageMeta(tx, chunking);
 
     // Reset transaction state before calling handler (handler may take time)
     this.transaction = null;
@@ -399,11 +534,21 @@ export class SmtpSession {
   }
 
   /** Trace data for the Received: header (RFC 5321 §4.4, RFC 3848). */
-  private messageMeta(): MessageMeta {
+  private messageMeta(tx: Transaction, chunking: boolean): MessageMeta {
+    // RFC 6531 §3.7.3: SMTPUTF8 transactions use the UTF8SMTP* "with" keywords.
+    const base = tx.smtputf8 ? 'UTF8SMTP' : 'ESMTP';
     const protocol: MessageMeta['protocol'] = !this.esmtpSession
       ? 'SMTP'
-      : `ESMTP${this.tlsUpgraded ? 'S' : ''}${this.authUser ? 'A' : ''}` as MessageMeta['protocol'];
-    return { helo: this.greeting, protocol, hostname: this.config.hostname, sessionId: this.id };
+      : `${base}${this.tlsUpgraded ? 'S' : ''}${this.authUser ? 'A' : ''}` as MessageMeta['protocol'];
+    return {
+      helo: this.greeting, protocol, hostname: this.config.hostname, sessionId: this.id,
+      envelope: {
+        smtputf8: tx.smtputf8,
+        body: tx.body,
+        chunking,
+        ...(hasDsnRequest(tx.dsn) ? { dsn: tx.dsn } : {}),
+      },
+    };
   }
 
   // ─── Command dispatch ────────────────────────────────────────────────────────
@@ -431,10 +576,15 @@ export class SmtpSession {
 
     this.resetTimer(T_COMMAND);
 
+    // A new transaction (or its reset) restarts the BDAT read-time size count.
+    if (cmd === 'MAIL' || cmd === 'RSET' || cmd === 'EHLO' || cmd === 'HELO') this.bdatAnnounced = 0;
+
     // ALL commands go through the queue — this serializes async handlers
     // (onMailFrom, onRcptTo) so that pipelined commands always see the correct
     // state set by the previous command. Without this, RCPT TO arrives while
     // MAIL FROM's onMailFrom() is still awaiting, sees state='READY' → 503.
+    // BDAT is the exception for its octets only: they follow the command line
+    // directly and are read now (startBdat); the chunk is then queued.
     switch (cmd) {
       case 'EHLO':    this.enqueueCommand(() => this.handleEhlo(args)); break;
       case 'HELO':    this.enqueueCommand(() => this.handleHelo(args)); break;
@@ -443,6 +593,8 @@ export class SmtpSession {
       case 'MAIL':    this.enqueueCommand(() => this.handleMailFrom(args)); break;
       case 'RCPT':    this.enqueueCommand(() => this.handleRcptTo(args)); break;
       case 'DATA':    this.enqueueCommand(() => this.handleDataCommand()); break;
+      case 'BDAT':    this.startBdat(args); break;
+      case 'HELP':    this.enqueueCommand(() => { for (const l of HELP_LINES) this.send(l); }); break;
       case 'RSET':    this.enqueueCommand(() => this.handleRset()); break;
       case 'NOOP':    this.enqueueCommand(() => { this.send('250 2.0.0 OK'); }); break;
       // RFC 5321 §3.5.3 / §7.3: VRFY is part of the minimum implementation; a
@@ -469,17 +621,15 @@ export class SmtpSession {
     this.esmtpSession = true;
     this.transaction = null;
 
-    const esmtp = this.config.esmtp ?? DEFAULT_ESMTP_EXTENSIONS;
+    const esmtp = this.extensions();
     const lines: string[] = [`${this.config.hostname}`];
 
+    // Order as Exchange 2019 (port 25): SIZE, PIPELINING, DSN, ENHANCEDSTATUSCODES,
+    // STARTTLS, 8BITMIME, BINARYMIME, CHUNKING, SMTPUTF8 (+ AUTH after TLS).
     if (esmtp.size)           lines.push(`SIZE ${this.config.maxSize}`);
     if (esmtp.pipelining)     lines.push('PIPELINING');
-    if (esmtp.bit8mime)       lines.push('8BITMIME');
+    if (esmtp.dsn)            lines.push('DSN');
     if (esmtp.enhancedStatus) lines.push('ENHANCEDSTATUSCODES');
-    // Deliberately not advertised (stub-only / not implemented):
-    //   DSN (RFC 3461)       — no parsing of NOTIFY/ORCPT/ENVID/RET, no multipart/report
-    //   SMTPUTF8 (RFC 6531)  — UTF-8 envelope addresses are not handled specially
-    //   CHUNKING (RFC 3030)  — BDAT command is not recognized by the parser
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
     // AND advertiseStarttls != false. On port 25 with a self-signed cert the server suppresses
@@ -488,6 +638,10 @@ export class SmtpSession {
     if (esmtp.starttls && this.config.tls && !this.tlsUpgraded && advertise) {
       lines.push('STARTTLS');
     }
+    if (esmtp.bit8mime)       lines.push('8BITMIME');
+    // BINARYMIME is only usable with BDAT (RFC 3030 §3) — advertised together.
+    if (esmtp.chunking)       lines.push('BINARYMIME', 'CHUNKING');
+    if (esmtp.smtputf8)       lines.push('SMTPUTF8');
 
     // AUTH only if verifyCredentials is configured AND at least one mech enabled
     // AND the connection is encrypted (implicit TLS or after STARTTLS) — v7:
@@ -724,7 +878,7 @@ export class SmtpSession {
     this.terminating = true;
     this.cmdQueue = this.cmdQueue.then(() => {
       if (this.state === 'QUIT' || this.closing) return;
-      if (this.inData) { this.terminateAfterData = true; return; }
+      if (this.inData || this.bdat) { this.terminateAfterData = true; return; }
       this.closeForCredentialChange();
     });
   }
@@ -735,6 +889,7 @@ export class SmtpSession {
     this.lineBuffer = '';
     this.transaction = null;
     this.inData = false;
+    this.bdat = null;
     this.dataOverflow = false;
     this.authUser = null;
     this.state = 'QUIT';
@@ -785,6 +940,9 @@ export class SmtpSession {
     // remainder of the plaintext buffer is dropped.
     this.epoch += 1;
     this.lineBuffer = '';
+    // A BDAT chunk pipelined after STARTTLS must not swallow TLS records.
+    this.bdat = null;
+    this.bdatAnnounced = 0;
 
     this.send('220 2.0.0 Ready to start TLS');
 
@@ -817,6 +975,7 @@ export class SmtpSession {
       this.esmtpSession = false;
       this.transaction = null;
       this.lineBuffer = '';
+      this.bdat = null;
       this.authUser = null;
       this.authCtx = null;
 
@@ -851,8 +1010,15 @@ export class SmtpSession {
     }
 
     // RFC 5321 §4.1.1.2: "MAIL FROM:" keyword, path, then only parameters of
-    // advertised extensions (SIZE, BODY, AUTH) — anything else is 555 (§4.1.1.11).
-    const parsed = parseMailFrom(args);
+    // advertised extensions (SIZE, BODY, AUTH, SMTPUTF8, RET, ENVID) —
+    // anything else is 555 (§4.1.1.11). UTF-8 is decoded strictly (RFC 6531).
+    const esmtp = this.extensions();
+    const decoded = decodeUtf8Command(args);
+    if (decoded === null) {
+      this.send('501 5.5.4 Invalid UTF-8 in command');
+      return;
+    }
+    const parsed = parseMailFrom(decoded, { smtputf8: esmtp.smtputf8, dsn: esmtp.dsn, chunking: esmtp.chunking });
     if (!parsed.ok) {
       this.send(parsed.reply);
       return;
@@ -878,7 +1044,15 @@ export class SmtpSession {
       return;
     }
 
-    this.transaction = { from: addr, rcptTo: [], data: [], size: 0 };
+    this.transaction = {
+      from: addr, rcptTo: [], data: [], size: 0,
+      smtputf8: parsed.smtputf8,
+      body: parsed.body,
+      dsn: {
+        ...(parsed.ret ? { ret: parsed.ret } : {}),
+        ...(parsed.envid !== undefined ? { envid: parsed.envid } : {}),
+      },
+    };
     this.state = 'MAIL';
     this.send(`250 2.1.0 OK`);
   }
@@ -903,8 +1077,15 @@ export class SmtpSession {
     }
 
     // RFC 5321 §4.1.1.3: "RCPT TO:" keyword, a valid mailbox or <Postmaster>;
-    // no RCPT parameters are implemented (DSN is not advertised) → 555.
-    const parsed = parseRcptTo(args);
+    // RCPT parameters: NOTIFY and ORCPT when DSN is advertised, else 555.
+    // UTF-8 addresses only in an SMTPUTF8 transaction (553 5.6.7).
+    const esmtp = this.extensions();
+    const decoded = decodeUtf8Command(args);
+    if (decoded === null) {
+      this.send('501 5.5.4 Invalid UTF-8 in command');
+      return;
+    }
+    const parsed = parseRcptTo(decoded, { dsn: esmtp.dsn, utf8Transaction: tx.smtputf8 });
     if (!parsed.ok) {
       this.send(parsed.reply);
       return;
@@ -924,6 +1105,7 @@ export class SmtpSession {
     }
 
     tx.rcptTo.push(addr);
+    if (parsed.dsn) (tx.dsn.rcpts ??= {})[addr.toLowerCase()] = parsed.dsn;
     this.state = 'RCPT';
     this.send(`250 2.1.5 OK`);
   }
@@ -931,8 +1113,18 @@ export class SmtpSession {
   // ─── DATA ────────────────────────────────────────────────────────────────────
 
   private handleDataCommand(): void {
+    // RFC 3030 §2: DATA and BDAT must not be mixed in one transaction.
+    if (this.state === 'BDAT') {
+      this.send('503 5.5.1 DATA not allowed after BDAT in the same transaction');
+      return;
+    }
     if (this.state !== 'RCPT') {
       this.send('503 5.5.1 Bad sequence of commands');
+      return;
+    }
+    // RFC 3030 §3: a BODY=BINARYMIME message can only be sent with BDAT.
+    if (this.transaction?.body === 'BINARYMIME') {
+      this.send('503 5.5.1 BODY=BINARYMIME requires BDAT');
       return;
     }
 
@@ -947,6 +1139,7 @@ export class SmtpSession {
   private handleRset(): void {
     this.transaction = null;
     this.inData = false;
+    this.bdatAnnounced = 0;
     this.dataOverflow = false;
     // Do not reset authUser per RFC 5321
     if (this.state !== 'INIT') {
