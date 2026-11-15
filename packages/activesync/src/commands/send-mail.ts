@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
-  truncateBodyColumn, uploadBuffer, attachmentKey, type RawSourceMessage,
+  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -27,6 +27,8 @@ export interface SendMailDeps {
   saveSentCopy: (userId: string, plan: EasSubmissionPlan) => Promise<void>;
   loadSource: (userId: string, ref: { itemId: string; folderId?: string }) => Promise<SourceMessage | null>;
   markSource: (source: SourceMessage, flag: string) => Promise<void>;
+  /** v8.1: false = the mailbox is at/over its ProhibitSendQuota. Default: storage checkSendQuota. */
+  sendAllowed?: (userId: string) => Promise<boolean>;
 }
 
 const clientIdKey = (userId: string, clientId: string) => `eas:clientid:${userId}:${clientId}`;
@@ -103,6 +105,13 @@ export async function handleSendMail(
       select: { email: true },
     });
     if (!user) return statusResponse(command, EAS_SEND_STATUS.ACCESS_DENIED);
+
+    // v8.1: ProhibitSendQuota (same check as SMTP submission, REST and JMAP)
+    const allowed = await (deps.sendAllowed ?? (async (id: string) => (await checkSendQuota(id)).allowed))(userId);
+    if (!allowed) {
+      log.info({ userId }, 'SendMail refused: mailbox over its send quota');
+      return statusResponse(command, EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED);
+    }
 
     // SmartReply / SmartForward: the original message.
     let raw: Buffer = Buffer.from(mime);

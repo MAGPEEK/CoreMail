@@ -9,6 +9,7 @@
  *  - DevicePassword Set   → accepted (no recovery password storage)
  */
 import { prisma } from '@coremail/storage/prisma';
+import { saveOofSettings } from '@coremail/storage';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
 
 export const SETTINGS_STATUS = {
@@ -137,12 +138,9 @@ async function handleOof(oof: WbxmlElement, userId: string): Promise<WbxmlElemen
   if (set) {
     const res = applyOofSet(await loadOof(userId), set);
     if (!res.ok) return el('Oof', undefined, [el('Status', res.status)]);
-    const f = res.fields;
-    await prisma.userSettings.upsert({
-      where: { userId },
-      update: { ...f },
-      create: { userId, ...f },
-    });
+    // v8.1: shared OOF writer — maintains the OOF period id (one auto-reply
+    // per sender per period, consistent with MWA and JMAP).
+    await saveOofSettings(userId, res.fields);
     return el('Oof', undefined, [el('Status', SETTINGS_STATUS.SUCCESS)]);
   }
   return el('Oof', undefined, [el('Status', SETTINGS_STATUS.PROTOCOL_ERROR)]);

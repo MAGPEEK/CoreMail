@@ -142,3 +142,14 @@ test('Sent copy: raw message stored, row parsed from it, attachments stored', as
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('v8.1: a mailbox over its ProhibitSendQuota gets Status 113 (SendMail/SmartReply), nothing is queued', async () => {
+  const h = deps({ sendAllowed: async () => false });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', h.d)), '113');
+  assert.equal(status(await handleSendMail(composeReq('SmartReply', MIME, source('orig')), 'u1', 'SmartReply', h.d)), '113');
+  assert.equal(h.jobs.length, 0);
+  assert.equal(h.sent.length, 0);
+  const ok = deps({ sendAllowed: async () => true });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');
+  assert.equal(ok.jobs.length, 1);
+});

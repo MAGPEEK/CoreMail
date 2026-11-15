@@ -60,6 +60,8 @@ test('Oof Set (time based) → MWA fields; Get returns the same values', async (
   assert.equal(row['oofExternal'], 'Out of office');
   assert.equal(row['oofExternalEnabled'], true);
   assert.equal(row['oofExternalOnlyContacts'], true); // known on, unknown off
+  // v8.1: switching OOF on starts a period (one auto-reply per sender per period)
+  assert.ok(typeof row['oofPeriodId'] === 'string' && (row['oofPeriodId'] as string).length > 0);
 
   const get = kid(kid(await run(oofGet()), 'Oof'), 'Get');
   assert.equal(kid(get, 'OofState')?.text, '2');

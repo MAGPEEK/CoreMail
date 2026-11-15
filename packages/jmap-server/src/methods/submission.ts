@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { listAllowedSenderAddresses, prisma } from '@coremail/storage';
+import { checkSendQuota, listAllowedSenderAddresses, prisma } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
@@ -74,6 +74,12 @@ function toJson(s: Submission): JsonObject {
   return rest as unknown as JsonObject;
 }
 
+/** v8.1: SetError `overQuota` when the user's mailbox is at/over its ProhibitSendQuota, else null. */
+export async function submissionQuotaError(userId: string): Promise<SetError | null> {
+  const quota = await checkSendQuota(userId);
+  return quota.allowed ? null : setError('overQuota', quota.message);
+}
+
 /** dkimDomain: domain of the VERIFIED envelope sender — never taken from unchecked input. */
 interface CreateInput { identityId: string; emailId: string; envelope: Submission['envelope']; sendAt: Date; dkimDomain: string }
 
@@ -86,6 +92,11 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
 
   // sendAt is server-set (RFC 8621 §7); a delayed send is requested via FUTURERELEASE.
   if (obj['sendAt'] !== undefined) throw setError('invalidProperties', 'sendAt is server-set — use envelope HOLDFOR/HOLDUNTIL', ['sendAt']);
+
+  // v8.1: ProhibitSendQuota of the submitting user (same check as SMTP
+  // submission, REST and EAS) → RFC 8620 §5.3 SetError overQuota.
+  const quotaError = await submissionQuotaError(ctx.user.userId);
+  if (quotaError) throw quotaError;
 
   const emailId = typeof obj['emailId'] === 'string' ? ctx.resolveId(obj['emailId']) : '';
   const msg = await prisma.message.findFirst({
