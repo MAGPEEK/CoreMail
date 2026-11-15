@@ -168,6 +168,18 @@ the command polls and prints progress. It streams and verifies every object (sha
 skips objects already present (run it again to resume) and never deletes the source.
 Procedure and backups: [storage.md](storage.md).
 
+## Audit log (`audit`, v8.1, compliance area)
+
+```bash
+coremail audit verify audit-log-2026-11-15.csv --signature 'hmac-sha256=<hex>'
+```
+
+Checks a downloaded audit-log export (CSV, JSON or PDF, unchanged) against the
+`X-CoreMail-Signature` header of the export response
+(`POST /api/v1/admin/audit-log/verify-export`). Prints `VALID` (exit 0) or
+`INVALID` (exit 1). Exports signed before a key rotation (`AUDIT_EXPORT_SIGNING_KEY`,
+or `JWT_SECRET`/`PEPPER` without it) are reported as invalid.
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

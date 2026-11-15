@@ -9,6 +9,8 @@ are the secure choice.
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_REDIRECT_HTTPS` | `true` | Plain-HTTP requests get `308` to `https://…` while the integrated HTTPS proxy serves a certificate marked "active for HTTPS". `false` disables it. |
+| `HTTPS_PUBLIC_PORT` | `443` | Port in the redirect URL (v8.1): the port clients reach, e.g. `8443` for a `8443:443` mapping. |
+| `AUDIT_EXPORT_SIGNING_KEY` | — | Optional dedicated key (≥ 32 characters) for audit export signatures (v8.1). Rotating it invalidates old signatures. |
 | `MAIL_SEND_RATE_LIMIT` | `30` | Messages per user and window via `POST /api/v1/mail/send` (`0` = off). Over the limit: `429` + `Retry-After`. |
 | `MAIL_SEND_RATE_WINDOW_SEC` | `60` | Window of the send rate limit. |
 | `MAIL_SEND_MAX_RECIPIENTS` | `500` | Max. recipients (to + cc + bcc) per message. |
@@ -26,7 +28,18 @@ counter takes over.
   one served certificate has `isActiveHttps` (BCP → SSL/TLS → lock icon).
 - Target host: the requested host if a served certificate covers it, otherwise
   `ServerSettings.publicHostname`. Client-supplied hosts are never echoed, so
-  there is no open redirect. Non-443 `HTTPS_PORT` values are added to the URL.
+  there is no open redirect.
+- Port in the redirect URL: `HTTPS_PUBLIC_PORT` (default `443`, then omitted) —
+  the port clients reach, not the listener port `HTTPS_PORT`. With a port mapping
+  such as `8443:443` set `HTTPS_PUBLIC_PORT=8443`; with `HTTPS_PORT=8443` and
+  `8443:8443` set `HTTPS_PUBLIC_PORT=8443` as well (before v8.1 the listener
+  port was used, which leaked the internal port behind a mapping).
+- Reverse proxy without `TRUST_PROXY`: a request carrying any `X-Forwarded-*`
+  or `Forwarded` header is **not** redirected, and a warning is logged once.
+  Its `X-Forwarded-Proto` cannot be trusted, and a proxy that speaks plain HTTP
+  to port 3000 would otherwise get an endless `308` loop (e.g. Synology DSM
+  Application Portal, Traefik). Direct clients without such headers are still
+  redirected.
 - Exempt: `/.well-known/acme-challenge/*`, `/healthz`, `/livez`, loopback peers
   (checked on the raw socket address), and requests that are already HTTPS.
   A request counts as HTTPS if it came in on the TLS socket, or if it carries
@@ -34,7 +47,8 @@ counter takes over.
 - External TLS terminator (Traefik, Caddy, DSM) in front of port 3000: set
   `TRUST_PROXY` so its `X-Forwarded-Proto` is honoured. If you cannot set it,
   set `HTTP_REDIRECT_HTTPS=false`. The redirect only applies when the integrated
-  proxy has an active HTTPS certificate.
+  proxy has an active HTTPS certificate. `infra/docker/docker-compose.synology.yml`
+  sets `HTTP_REDIRECT_HTTPS: "false"` because TLS ends at the DSM portal there.
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` is
   sent on HTTPS responses only.
 
@@ -61,6 +75,24 @@ GET  /api/v1/events?ticket=<ticket>
   (`useMailEvents`) and the BCP dashboard do exactly that
   (`lib/reconnectingEventSource.ts`, ticket request through the API client, one
   refresh on a 401); neither puts the access token into a URL any more.
+
+## Auth rate limits and error codes (v8.1)
+
+- Login, password reset and `/auth/mfa/*` (non-GET) share the strict limiter:
+  20 requests per 15 minutes per IP.
+- `POST /auth/refresh` and `/auth/logout` have their own limiter: 300 **failed**
+  requests per 15 minutes per IP (successful refreshes are not counted). The
+  access token lives in memory, so every page load and every new tab refreshes.
+  Before v8.1 these refreshes used up the login budget and users got `429`.
+- The frontends treat `429`, `5xx` and network errors from `/auth/refresh` as
+  temporary. They keep the session, retry with backoff (1 s, 2 s, 4 s …, or
+  `Retry-After`) and show a notice. They log out only on `401` with
+  `SESSION_REVOKED`, `REFRESH_*` or `TOKEN_*`.
+- Failed re-authentication (`REAUTH_REQUIRED`, `REAUTH_FAILED` for app-password
+  creation and MFA changes) answers `403`, not `401`. The session is valid, so the
+  frontends must not refresh and re-send (that counted a second failure and then
+  logged the user out). The frontends refresh-and-retry a `401` only when it has
+  no `code`, or a `TOKEN_*` / `SESSION_*` / `UNAUTHORIZED` code.
 
 ## Refresh cookie for SSO logins
 
@@ -129,6 +161,17 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   HMAC-SHA256 over the exact payload, with a key derived via HKDF-SHA256 from
   `JWT_SECRET` + `PEPPER` (info `audit-export`). Verifying it needs the server
   key; it was previously an unkeyed `sha256=` hash.
+- v8.1: `AUDIT_EXPORT_SIGNING_KEY` (at least 32 characters) is an optional
+  dedicated key. If set, it wins over the `JWT_SECRET` + `PEPPER` derivation, so
+  rotating the JWT secret no longer touches export signatures. **Rotating the key
+  in use (this variable, or `JWT_SECRET`/`PEPPER` without it) invalidates the
+  signatures of all earlier exports.** Keep the old key if old exports must stay
+  verifiable.
+- v8.1: verification without the key in hand:
+  `POST /api/v1/admin/audit-log/verify-export` (compliance area). The body is the
+  exported file, byte-exact, as `application/octet-stream`. The signature goes in
+  the `X-CoreMail-Signature` header (or `?signature=`). The answer is
+  `{ valid, bytes, algorithm }`. CLI: `coremail audit verify <file> --signature <value>`.
 - `GET /api/v1/admin/message-trace/export` requires the Authorization header.
   Fetch it with `fetch()` and download it as a blob. A `window.open()` cannot
   authenticate. Since 8.1 it honours `sender`, `recipient`, `subject` and
@@ -169,6 +212,11 @@ internal identity headers:
 
 - `Forwarded`, `X-Forwarded-*`, `X-Real-IP`
 - `X-Internal-*`, `X-CoreMail-*`, `X-User-*`, `X-Auth-*`
+
+Exception (v8.1): `X-CoreMail-Client` with the value `web` and `X-CoreMail-App`
+with `bcp` or `mwa` pass through, lower-cased. The auth-service needs them so
+that `/auth/mfa/verify` sets the refresh token as cookie instead of returning it
+in the body. Other values and every other `X-CoreMail-*` header are dropped.
 
 It then sets the following from trusted values:
 

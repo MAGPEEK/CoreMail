@@ -8,6 +8,7 @@
  *   GET /api/v1/admin/audit-log/export.csv    — CSV export (all filters)
  *   GET /api/v1/admin/audit-log/export.pdf    — PDF export (all filters, capped at 1000 rows)
  *   GET /api/v1/admin/audit-log/stats         — Statistics dashboard
+ *   POST /api/v1/admin/audit-log/verify-export — check an export's signature (v8.1)
  *
  * IMMUTABILITY NOTICE:
  *   Audit logs are immutable by design (compliance: DSGVO, SOX, HIPAA).
@@ -16,14 +17,50 @@
  *   Even administrators must NOT be able to delete or modify audit entries.
  */
 
-import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import express, { Router, type Router as RouterType, type Request, type Response } from 'express';
 import PDFDocument from 'pdfkit';
 import { prisma } from '@coremail/storage/prisma';
 import { requireArea } from '../../middleware/auth.js';
-import { csvCell, exportSignature } from '../../lib/export-safety.js';
+import { csvCell, exportSignature, verifyExportSignature } from '../../lib/export-safety.js';
 
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireArea('compliance'));
+
+// ─── POST /api/v1/admin/audit-log/verify-export ─────────────────────────────
+// v8.1: checks the signature of an audit export (CSV / JSON / PDF). Body = the
+// exported file byte-exact (Content-Type application/octet-stream), signature =
+// the `X-CoreMail-Signature` value of the export response (header
+// X-CoreMail-Signature or ?signature=). Answer: { valid: boolean }.
+// Exports signed with an earlier key (rotated AUDIT_EXPORT_SIGNING_KEY,
+// JWT_SECRET or PEPPER) verify as invalid.
+const VERIFY_MAX_BYTES = 100 * 1024 * 1024;
+adminAuditLogRouter.post(
+  '/verify-export',
+  express.raw({ type: () => true, limit: VERIFY_MAX_BYTES }),
+  (req: Request, res: Response) => {
+    const q = req.query['signature'];
+    const signature = (req.get('x-coremail-signature') ?? (typeof q === 'string' ? q : '')).trim();
+    if (!signature || signature.length > 200) {
+      res.status(400).json({ error: 'Signature missing (X-CoreMail-Signature header or ?signature=)', code: 'SIGNATURE_MISSING' });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      // a JSON/form body was already parsed — the bytes are no longer exact
+      res.status(415).json({ error: 'Send the export file unchanged as application/octet-stream', code: 'RAW_BODY_REQUIRED' });
+      return;
+    }
+    const body = req.body as Buffer;
+    if (body.length === 0) { res.status(400).json({ error: 'Empty file', code: 'FILE_MISSING' }); return; }
+    let valid = false;
+    try {
+      valid = verifyExportSignature(body, signature);
+    } catch {
+      res.status(500).json({ error: 'Signature key unavailable' });
+      return;
+    }
+    res.json({ valid, bytes: body.length, algorithm: 'hmac-sha256' });
+  },
+);
 
 // ─── Filter parsing (shared by list + exports) ───────────────────────────────
 

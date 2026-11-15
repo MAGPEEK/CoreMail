@@ -1,5 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import toast from 'react-hot-toast';
 import { ApiError, apiErrorFromBody } from '../lib/errors.js';
+import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
 import { accessForPath } from '../lib/adminAreas.js';
 import { useAccessStore } from '../store/access.js';
 
@@ -83,7 +85,9 @@ export function ensureSession(): Promise<void> {
   if (sessionChecked) return Promise.resolve();
   sessionCheck ??= (async () => {
     if (!accessToken) {
-      try { await refreshOnce(); } catch { /* maintenance / offline → logged out */ }
+      // more attempts than mid-session (429/5xx/offline are retried with backoff);
+      // if it still fails the login page shows, but the cookie session is kept
+      try { await refreshOnce(6); } catch { /* temporary failure — see RefreshUnavailableError */ }
     }
     sessionChecked = true;
     notify();
@@ -111,20 +115,35 @@ function getJwtExp(token: string): number | null {
   }
 }
 
-const MAINTENANCE = Symbol('maintenance');
+type RefreshAttempt =
+  | { kind: 'ok'; token: string }
+  | { kind: 'logout' }
+  | { kind: 'retry'; retryAfter: string | null }
+  | { kind: 'fail' };
+
+/** Thrown when a refresh failed temporarily (429, 5xx, offline) — the session is kept. */
+export class RefreshUnavailableError extends Error {
+  constructor() {
+    super('Server vorübergehend nicht erreichbar. Bitte später erneut versuchen.');
+    this.name = 'RefreshUnavailableError';
+  }
+}
 
 /**
- * Refreshes the access token. v8.1: authenticated by the HttpOnly cookie
+ * One refresh attempt. v8.1: authenticated by the HttpOnly cookie
  * `cm_rt_bcp`, which the server rotates on every call; it treats two refreshes
  * with the same token as reuse (session killed), so the refresh is single-flight
  * within the tab (refreshPromise) and across tabs (Web Locks — a waiting tab
  * sends the cookie the previous response already replaced). A body token (SSO
  * exchange, pre-8.1 localStorage) is sent once and thereby moved into the cookie.
+ * Only a 401 with SESSION_REVOKED / REFRESH_* / TOKEN_* ends the session; 429,
+ * 5xx and network errors are temporary (lib/authRetry.ts).
  */
-async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
-  const doRefresh = async (): Promise<string | null | typeof MAINTENANCE> => {
+async function tryRefresh(): Promise<RefreshAttempt> {
+  const doRefresh = async (): Promise<RefreshAttempt> => {
     const bodyToken = pendingRefreshToken ?? takeLegacyRefreshToken();
     pendingRefreshToken = null;
+    const keepBodyToken = () => { if (bodyToken && !pendingRefreshToken) pendingRefreshToken = bodyToken; };
     try {
       const res = await fetch('/auth/refresh', {
         method: 'POST',
@@ -132,15 +151,20 @@ async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
         headers: { 'Content-Type': 'application/json', ...WEB_CLIENT_HEADERS },
         body: JSON.stringify(bodyToken ? { refreshToken: bodyToken } : {}),
       });
-      if (res.status === 503) return MAINTENANCE;
-      if (!res.ok) return null; // REFRESH_INVALID|EXPIRED|REUSED|INACTIVE|MISSING
-      const data = await res.json() as { accessToken?: string };
-      if (!data.accessToken) return null;
-      setToken(data.accessToken);
-      return data.accessToken;
+      if (res.ok) {
+        const data = await res.json().catch(() => ({})) as { accessToken?: string };
+        if (!data.accessToken) return { kind: 'fail' };
+        setToken(data.accessToken);
+        return { kind: 'ok', token: data.accessToken };
+      }
+      const body = await res.json().catch(() => null) as { code?: string; error?: string } | null;
+      const verdict = refreshFailureVerdict(res.status, body?.code ?? body?.error);
+      if (verdict === 'logout') return { kind: 'logout' };
+      keepBodyToken();
+      return verdict === 'retry' ? { kind: 'retry', retryAfter: res.headers.get('Retry-After') } : { kind: 'fail' };
     } catch {
-      if (bodyToken && !pendingRefreshToken) pendingRefreshToken = bodyToken; // retry later
-      return MAINTENANCE; // network error — transient
+      keepBodyToken();
+      return { kind: 'retry', retryAfter: null }; // network error — transient
     }
   };
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
@@ -149,17 +173,34 @@ async function tryRefresh(): Promise<string | null | typeof MAINTENANCE> {
   return doRefresh();
 }
 
+const RETRY_NOTICE_ID = 'auth-refresh-retry';
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Refresh with backoff: the new access token, null when the session is over, or
+ * RefreshUnavailableError on a temporary failure (session kept, non-blocking notice).
+ */
+async function refreshWithRetry(maxAttempts: number): Promise<string | null> {
+  for (let attempt = 1; ; attempt++) {
+    const r = await tryRefresh();
+    if (r.kind === 'ok' || r.kind === 'logout') {
+      toast.dismiss(RETRY_NOTICE_ID);
+      return r.kind === 'ok' ? r.token : null;
+    }
+    if (r.kind === 'fail' || attempt >= maxAttempts) {
+      toast.error('Server vorübergehend nicht erreichbar — Ihre Sitzung bleibt erhalten.', { id: RETRY_NOTICE_ID, duration: 6000 });
+      throw new RefreshUnavailableError();
+    }
+    toast.loading('Server ausgelastet — Sitzung wird erneut geprüft …', { id: RETRY_NOTICE_ID });
+    await sleep(refreshBackoffMs(attempt, r.retryAfter));
+  }
+}
+
 let refreshPromise: Promise<string | null> | null = null;
 
-function refreshOnce(): Promise<string | null> {
-  if (!refreshPromise) {
-    refreshPromise = tryRefresh()
-      .then((r) => {
-        if (r === MAINTENANCE) throw new Error('Server vorübergehend nicht erreichbar (Wartung). Bitte später erneut versuchen.');
-        return r;
-      })
-      .finally(() => { refreshPromise = null; });
-  }
+/** Single-flight refresh: concurrent callers share one /auth/refresh request (and its retries). */
+function refreshOnce(maxAttempts = 3): Promise<string | null> {
+  refreshPromise ??= refreshWithRetry(maxAttempts).finally(() => { refreshPromise = null; });
   return refreshPromise;
 }
 
@@ -181,8 +222,14 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
 
   if (token) {
     const exp = getJwtExp(token);
-    if (exp !== null && exp - Math.floor(Date.now() / 1000) < 120) {
-      token = await refreshOnce();
+    const left = exp === null ? Infinity : exp - Math.floor(Date.now() / 1000);
+    if (left < 120) {
+      try {
+        token = await refreshOnce();
+      } catch (err) {
+        // temporary refresh failure: go on with the still valid token
+        if (left <= 5) throw err;
+      }
       if (!token) redirectToLogin();
     }
   }
@@ -199,6 +246,9 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
 
   const body = await res.clone().json().catch(() => null) as { error?: string; code?: string } | null;
   if (body?.code === 'SESSION_REVOKED' || body?.error === 'SESSION_REVOKED') redirectToLogin('revoked');
+  // A 401 that is not about the access token (e.g. a failed re-authentication)
+  // goes to the caller unchanged — no refresh, no re-send, no logout.
+  if (!shouldRefreshOn401(body?.code)) return res;
 
   const newToken = await refreshOnce();
   if (newToken) {

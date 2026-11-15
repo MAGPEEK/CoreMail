@@ -95,6 +95,9 @@ model User {
   passwordHash    String?
   authSource      AuthSource     @default(LOCAL)
   externalId      String?        // LDAP objectGUID or OIDC sub
+  // v8.1: OIDC binding (`oidc:<providerId>:<sub>`) of a LOCAL/LDAP account linked
+  // via SSO (OidcProvider.allowLinking). OIDC-only accounts keep it in externalId.
+  oidcSubject     String?
   role            UserRole       @default(USER)
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)

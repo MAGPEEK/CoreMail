@@ -61,6 +61,7 @@ services:
       # by untrusted clients directly. Setup wizard token: docker logs coremail | grep -i "setup token"
       TRUST_PROXY: ${TRUST_PROXY:-}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
+      HTTP_REDIRECT_HTTPS: "false"   # TLS ends at the DSM portal; see docs/api-gateway-security.md
 
       # Internal service URLs
       AUTH_SERVICE_URL: http://localhost:3003

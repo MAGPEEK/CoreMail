@@ -212,21 +212,47 @@ test('linking (v8.1): a LOCAL account is bound to the first IdP subject; another
   await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
   const u = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'h', domainId } });
   assert.ok((await flow(verifiedAlice)).cb.ok);
-  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['externalId'], `oidc:${providerId}:sub-alice`);
-  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['authSource'], 'LOCAL', 'still a LOCAL account');
+  const row = db.user.rows.find((r) => r['id'] === u['id'])!;
+  assert.equal(row['oidcSubject'], `oidc:${providerId}:sub-alice`);
+  assert.equal(row['externalId'] ?? null, null, 'externalId stays free for a later LDAP takeover');
+  assert.equal(row['authSource'], 'LOCAL', 'still a LOCAL account');
   // a second IdP identity that also claims the (verified) address
   const attacker = { sub: 'sub-mallory', claims: { email: 'alice@example.com', email_verified: true } };
   assert.equal(((await flow(attacker)).cb as { error?: string }).error, 'account_mismatch');
   assert.ok((await flow(verifiedAlice)).cb.ok, 'the bound subject keeps working');
 });
 
-test('linking (v8.1): an LDAP account keeps its directory id; the IdP binding lives in Redis', async () => {
+test('linking (v8.1): an LDAP account keeps its directory id; the IdP binding is the oidcSubject column', async () => {
   await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
   const u = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LDAP', externalId: 'ldap:guid-1', domainId } });
   assert.ok((await flow(verifiedAlice)).cb.ok);
-  assert.equal(db.user.rows.find((r) => r['id'] === u['id'])!['externalId'], 'ldap:guid-1', 'directory id untouched');
-  assert.equal(await redis.get(`${sso.SSO_LINK_PREFIX}${String(u['id'])}`), `oidc:${providerId}:sub-alice`);
+  const row = db.user.rows.find((r) => r['id'] === u['id'])!;
+  assert.equal(row['externalId'], 'ldap:guid-1', 'directory id untouched');
+  assert.equal(row['oidcSubject'], `oidc:${providerId}:sub-alice`);
   assert.equal(((await flow({ sub: 'sub-mallory', claims: { email: 'alice@example.com', email_verified: true } })).cb as { error?: string }).error, 'account_mismatch');
+  assert.ok((await flow(verifiedAlice)).cb.ok);
+});
+
+test('linking (v8.1): legacy bindings (LOCAL externalId oidc:…, Redis key) stay bound and move to oidcSubject', async () => {
+  await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
+  const mallory = { sub: 'sub-mallory', claims: { email: 'alice@example.com', email_verified: true } };
+  // LOCAL account bound by an older build in externalId
+  const local = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'h', domainId, externalId: `oidc:${providerId}:sub-alice` } });
+  assert.equal(((await flow(mallory)).cb as { error?: string }).error, 'account_mismatch', 'old binding honoured');
+  let row = db.user.rows.find((r) => r['id'] === local['id'])!;
+  assert.equal(row['oidcSubject'], `oidc:${providerId}:sub-alice`, 'migrated');
+  assert.equal(row['externalId'] ?? null, null);
+  assert.ok((await flow(verifiedAlice)).cb.ok);
+
+  // LDAP account bound by an older build in Redis
+  db.user.rows = [];
+  const ldap = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LDAP', externalId: 'ldap:guid-1', domainId } });
+  await redis.set(`${sso.SSO_LINK_PREFIX}${String(ldap['id'])}`, `oidc:${providerId}:sub-alice`);
+  assert.equal(((await flow(mallory)).cb as { error?: string }).error, 'account_mismatch');
+  row = db.user.rows.find((r) => r['id'] === ldap['id'])!;
+  assert.equal(row['oidcSubject'], `oidc:${providerId}:sub-alice`);
+  assert.equal(row['externalId'], 'ldap:guid-1');
+  assert.equal(await redis.get(`${sso.SSO_LINK_PREFIX}${String(ldap['id'])}`), null, 'Redis key removed after migration');
   assert.ok((await flow(verifiedAlice)).cb.ok);
 });
 

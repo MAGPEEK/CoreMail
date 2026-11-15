@@ -205,6 +205,28 @@ test('LOCAL account is never converted silently; opt-in takeover works', async (
   assert.deepEqual(await ldap.ldapAuthDecision('bob@example.com', 'bob-pw'), { ok: false, reason: 'local_account' });
 });
 
+test('takeover of a LOCAL account with a legacy SSO binding (externalId oidc:…) migrates it to oidcSubject', async () => {
+  await db.ldapConfig.update({ where: { domainId }, data: { allowLocalTakeover: true } });
+  // login takeover
+  const alice = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'x', domainId, externalId: 'oidc:p1:sub-alice' } });
+  const d = await ldap.ldapAuthDecision('alice@example.com', 'alice-pw');
+  assert.ok(d.ok && d.userId === alice['id'], `not refused as external_id_mismatch: ${JSON.stringify(d)}`);
+  const a = db.user.rows.find((u) => u['id'] === alice['id'])!;
+  assert.equal(a['authSource'], 'LDAP');
+  assert.equal(a['externalId'], 'ldap:guid-alice', 'LDAP sets its directory id');
+  assert.equal(a['oidcSubject'], 'oidc:p1:sub-alice', 'SSO binding kept');
+
+  // sync takeover (bound oidcSubject already present → not overwritten)
+  const bob = await db.user.create({ data: { email: 'bob@example.com', authSource: 'LOCAL', passwordHash: 'x', domainId, externalId: 'oidc:p1:sub-bob', oidcSubject: 'oidc:p1:sub-bob' } });
+  const r = await ldap.syncLdapUsers(domainId);
+  assert.deepEqual(r.conflicts, []);
+  const b = db.user.rows.find((u) => u['id'] === bob['id'])!;
+  assert.equal(b['authSource'], 'LDAP');
+  assert.equal(b['externalId'], 'ldap:guid-bob');
+  assert.equal(b['oidcSubject'], 'oidc:p1:sub-bob');
+  assert.deepEqual(ldap.legacyOidcBinding({ externalId: 'ldap:x' }), { directoryId: 'ldap:x', migrate: {} });
+});
+
 test('inactive LDAP account and directory-id mismatch are refused', async () => {
   await db.user.create({ data: { email: 'alice@example.com', authSource: 'LDAP', active: false, domainId } });
   assert.deepEqual(await ldap.ldapAuthDecision('alice@example.com', 'alice-pw'), { ok: false, reason: 'inactive' });

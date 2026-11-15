@@ -63,7 +63,9 @@ async function userWithSession(email = 'alice@example.com') {
 test('TOTP setup / disable / backup codes / WebAuthn registration require re-authentication', async () => {
   const { id, token } = await userWithSession();
   assert.equal((await call('POST', '/auth/mfa/totp/setup', {}, token)).body['code'], 'REAUTH_REQUIRED');
-  assert.equal((await call('POST', '/auth/mfa/totp/setup', { currentPassword: 'wrong' }, token)).body['code'], 'REAUTH_FAILED');
+  const wrongPw = await call('POST', '/auth/mfa/totp/setup', { currentPassword: 'wrong' }, token);
+  assert.equal(wrongPw.body['code'], 'REAUTH_FAILED');
+  assert.equal(wrongPw.status, 403, 'wrong re-auth is 403 so the frontend does not refresh + log out');
   const setup = await call('POST', '/auth/mfa/totp/setup', { currentPassword: PW }, token);
   assert.equal(setup.status, 200);
   const secret = String(setup.body['secret']);
@@ -78,17 +80,17 @@ test('TOTP setup / disable / backup codes / WebAuthn registration require re-aut
   assert.equal(again.status, 409);
   assert.equal(again.body['code'], 'TOTP_ALREADY_ENABLED');
 
-  assert.equal((await call('POST', '/auth/mfa/backup-codes/generate', {}, token)).status, 401);
+  assert.equal((await call('POST', '/auth/mfa/backup-codes/generate', {}, token)).status, 403);
   const codes = await call('POST', '/auth/mfa/backup-codes/generate', { currentPassword: PW }, token);
   assert.equal((codes.body['codes'] as string[]).length, 10);
 
-  assert.equal((await call('POST', '/auth/mfa/webauthn/register/start', { email: 'alice@example.com' }, token)).status, 401);
+  assert.equal((await call('POST', '/auth/mfa/webauthn/register/start', { email: 'alice@example.com' }, token)).status, 403);
   const reg = await call('POST', '/auth/mfa/webauthn/register/start', { email: 'alice@example.com', mfaCode: (codes.body['codes'] as string[])[0] }, token);
   assert.equal(reg.status, 200, JSON.stringify(reg.body));
   assert.equal((reg.body['rp'] as { id: string }).id, 'mail.example.org', 'RP ID from publicHostname');
   assert.ok(redis.store.has(`coremail:webauthn:reg:${id}`));
 
-  assert.equal((await call('DELETE', '/auth/mfa/totp', {}, token)).status, 401);
+  assert.equal((await call('DELETE', '/auth/mfa/totp', {}, token)).status, 403);
   assert.equal(db.userMfa.rows[0]!['totpEnabled'], true);
   assert.equal((await call('DELETE', '/auth/mfa/totp', { currentPassword: PW }, token)).status, 200);
   assert.equal(db.userMfa.rows[0]!['totpEnabled'], false);

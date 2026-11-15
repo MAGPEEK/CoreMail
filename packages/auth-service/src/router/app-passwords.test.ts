@@ -72,15 +72,15 @@ test('app passwords: creation needs re-authentication (REAUTH_REQUIRED / REAUTH_
   const before = db.appPassword.rows.length;
 
   const missing = await call('POST', '/auth/app-passwords', { name: 'no-reauth' }, token);
-  assert.equal(missing.status, 401);
+  assert.equal(missing.status, 403);
   assert.equal(missing.body['code'], 'REAUTH_REQUIRED');
 
   const wrong = await call('POST', '/auth/app-passwords', { name: 'wrong', currentPassword: 'nope' }, token);
-  assert.equal(wrong.status, 401);
+  assert.equal(wrong.status, 403);
   assert.equal(wrong.body['code'], 'REAUTH_FAILED');
 
   const badCode = await call('POST', '/auth/app-passwords', { name: 'wrong', mfaCode: '123456' }, token);
-  assert.equal(badCode.status, 401);
+  assert.equal(badCode.status, 403);
   assert.equal(db.appPassword.rows.length, before, 'nothing created');
 });
 

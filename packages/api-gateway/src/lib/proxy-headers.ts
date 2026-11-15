@@ -8,7 +8,9 @@
  * the client sent must never reach them. For every proxied request:
  *  - removed: Forwarded, X-Forwarded-*, X-Real-IP, X-Client-IP,
  *    True-Client-IP, CF-Connecting-IP, X-Internal-Token and any X-Internal-* /
- *    X-CoreMail-* / X-User-* / X-Auth-* header (internal identity headers)
+ *    X-CoreMail-* / X-User-* / X-Auth-* header (internal identity headers);
+ *    exception: X-CoreMail-Client (web) and X-CoreMail-App (bcp|mwa) with a
+ *    valid value (v8.1, see CLIENT_HEADER_VALUES)
  *  - set from trusted values: X-Forwarded-For (client IP per TRUST_PROXY),
  *    X-Forwarded-Proto (TLS socket or trusted proxy), X-Forwarded-Host (Host;
  *    a forwarded host only from a trusted proxy)
@@ -68,6 +70,26 @@ export function upstreamHost(req: IncomingMessage, trust: TrustFn): string | und
   return host && /^[A-Za-z0-9.\-:[\]]{1,255}$/.test(host) ? host : undefined;
 }
 
+/**
+ * v8.1: the two X-CoreMail-* headers a browser frontend sets itself pass the
+ * proxy — but only with a known value. `X-CoreMail-Client: web` makes the
+ * auth-service (e.g. /auth/mfa/verify) return the refresh token as HttpOnly
+ * cookie instead of in the JSON body; `X-CoreMail-App` selects the MWA/BCP cookie.
+ * Every other X-CoreMail-* header is still dropped.
+ */
+const CLIENT_HEADER_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
+  'x-coremail-client': new Set(['web']),
+  'x-coremail-app': new Set(['bcp', 'mwa']),
+};
+
+/** Validated value of an allow-listed client header (lower-cased), or undefined. */
+export function allowedClientHeader(name: string, value: string | string[] | undefined): string | undefined {
+  const allowed = CLIENT_HEADER_VALUES[name.toLowerCase()];
+  if (!allowed || value === undefined) return undefined;
+  const v = (Array.isArray(value) ? value[0] : value)?.trim().toLowerCase();
+  return v && allowed.has(v) ? v : undefined;
+}
+
 /** Rewrites the forwarding headers of a proxied request (see module comment). */
 export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessage, trust: TrustFn): void {
   // compute from the ORIGINAL request headers before anything is removed
@@ -76,6 +98,10 @@ export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessa
   const host = upstreamHost(req, trust);
   for (const name of proxyReq.getHeaderNames()) {
     if (isUntrustedForwardingHeader(name)) proxyReq.removeHeader(name);
+  }
+  for (const name of Object.keys(CLIENT_HEADER_VALUES)) {
+    const v = allowedClientHeader(name, req.headers[name]);
+    if (v) proxyReq.setHeader(name, v);
   }
   proxyReq.setHeader('X-Forwarded-For', ip);
   proxyReq.setHeader('X-Forwarded-Proto', proto);

@@ -6,7 +6,8 @@
  *                       a single quote so spreadsheet programs never evaluate it.
  *  exportSignature()  — keyed integrity signature for admin exports:
  *                       HMAC-SHA256 with a key derived via HKDF-SHA256 from
- *                       JWT_SECRET + PEPPER (info "audit-export"). Header value
+ *                       JWT_SECRET + PEPPER (info "audit-export"), or from
+ *                       AUDIT_EXPORT_SIGNING_KEY when set (v8.1). Header value
  *                       `hmac-sha256=<hex>`. Unlike the former unkeyed SHA-256,
  *                       a modified file cannot be re-signed without the server secret.
  */
@@ -32,7 +33,17 @@ export function csvCellQuoted(value: unknown): string {
 const SIGNATURE_SALT = 'coremail-export-signature';
 const SIGNATURE_INFO = 'audit-export';
 
+/**
+ * Signing key. v8.1: a dedicated AUDIT_EXPORT_SIGNING_KEY (≥ 32 characters)
+ * wins; otherwise HKDF-SHA256 from JWT_SECRET + PEPPER as before. Rotating the
+ * key in use invalidates the signatures of all earlier exports.
+ */
 function signatureKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  const dedicated = (env['AUDIT_EXPORT_SIGNING_KEY'] ?? '').trim();
+  if (dedicated) {
+    if (dedicated.length < 32) throw new Error('AUDIT_EXPORT_SIGNING_KEY must be at least 32 characters');
+    return Buffer.from(hkdfSync('sha256', dedicated, SIGNATURE_SALT, SIGNATURE_INFO, 32));
+  }
   const secret = env['JWT_SECRET'] ?? '';
   const pepper = env['PEPPER'] ?? '';
   if (!secret || !pepper) throw new Error('Export signature key derivation needs JWT_SECRET and PEPPER');
@@ -47,6 +58,8 @@ export function exportSignature(payload: string | Buffer, env: NodeJS.ProcessEnv
 /** Constant-time verification of an `hmac-sha256=` header value. */
 export function verifyExportSignature(payload: string | Buffer, header: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const expected = Buffer.from(exportSignature(payload, env));
-  const given = Buffer.from(header.trim());
+  // accept the bare hex as well as the full `hmac-sha256=<hex>` header value
+  const h = header.trim();
+  const given = Buffer.from(/^[0-9a-f]{64}$/i.test(h) ? `hmac-sha256=${h.toLowerCase()}` : h);
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
