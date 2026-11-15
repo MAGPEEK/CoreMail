@@ -1,0 +1,135 @@
+{{- if .Values.clamav.enabled }}
+{{- $c := .Values.clamav }}
+{{- $name := include "coremail.componentName" (dict "root" . "component" "clamav") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "clamav") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "clamav") | nindent 4 }}
+  ports:
+    - { name: clamd, port: 3310, targetPort: clamd, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "clamav") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "clamav") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coremail.labels" (dict "root" . "component" "clamav") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $c.podSecurityContext | nindent 8 }}
+      containers:
+        - name: clamav
+          image: {{ include "coremail.image" (dict "image" $c.image "default" "stable") }}
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          # Same steps as the image's /init, minus the root-only parts (chown of
+          # the database volume, which fails as non-root on a PVC owned by root:fsGroup).
+          command: ["/sbin/tini", "--", "/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ ! -f /var/lib/clamav/main.cvd ] && [ ! -f /var/lib/clamav/main.cld ]; then
+                echo "Updating initial database"
+                sed -e 's|^\(TestDatabases \)|#\1|' -e '$a TestDatabases no' \
+                    -e 's|^\(NotifyClamd \)|#\1|' /etc/clamav/freshclam.conf > /tmp/freshclam-initial.conf
+                freshclam --foreground --stdout --config-file=/tmp/freshclam-initial.conf
+              fi
+              if [ "${CLAMAV_NO_FRESHCLAMD:-false}" != "true" ]; then
+                freshclam --checks="${FRESHCLAM_CHECKS:-1}" --daemon --foreground --stdout &
+              fi
+              exec clamd --foreground
+          env:
+            - name: CLAMAV_NO_FRESHCLAMD
+              value: "false"       # daily signature updates
+          ports:
+            - { name: clamd, containerPort: 3310, protocol: TCP }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          startupProbe:
+            tcpSocket: { port: clamd }
+            periodSeconds: 10
+            failureThreshold: {{ $c.startupFailureThreshold }}
+          livenessProbe:
+            exec: { command: ["/usr/local/bin/clamdcheck.sh"] }
+            periodSeconds: 60
+            timeoutSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: { port: clamd }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clamav }
+            - { name: run, mountPath: /run/clamav }
+            - { name: lock, mountPath: /run/lock }
+            - { name: log, mountPath: /var/log/clamav }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: run
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+        - name: lock
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: log
+          emptyDir: { sizeLimit: 256Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 2Gi }
+        {{- if not $c.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $c.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "coremail.selectorLabels" (dict "root" . "component" "clamav") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $c.persistence.accessModes | nindent 10 }}
+        {{- with $c.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $c.persistence.size }}
+  {{- end }}
+{{- end }}

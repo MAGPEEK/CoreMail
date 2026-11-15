@@ -1,209 +1,456 @@
-# CoreMail Helm Chart — Default Values
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail Helm chart — default values
+#
+#  Minimal install (bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV):
+#    helm install coremail infra/k8s -n coremail --create-namespace \
+#      --set secrets.jwtSecret=$(openssl rand -hex 32) \
+#      --set secrets.pepper=$(openssl rand -hex 32) \
+#      --set secrets.mfaEncryptionKey=$(openssl rand -hex 32) \
+#      --set secrets.postgresPassword=$(openssl rand -hex 20) \
+#      --set secrets.redisPassword=$(openssl rand -hex 20) \
+#      --set secrets.minioRootPassword=$(openssl rand -hex 20)
+#  Better: keep the values in a Secret of your own (secrets.existingSecret).
+#  See infra/k8s/README.md for all options.
+# ═════════════════════════════════════════════════════════════════════════════
 
-global:
-  image:
-    registry: ghcr.io/magpeek/coremail
-    tag: "0.6.0"
-    pullPolicy: IfNotPresent
-  domain: "mail.example.com"
-  # TLS secret created by cert-manager
-  tlsSecretName: "coremail-tls"
+nameOverride: ""
+fullnameOverride: ""
+# Extra labels on every object
+commonLabels: {}
+imagePullSecrets: []
 
-# ── Secrets ─────────────────────────────────────────────────────────────────
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Either name an existing Secret (recommended: SealedSecrets, External Secrets,
+# SOPS …) or let the chart create one from the values below.
+#
+# Keys of the Secret (existingSecret must provide the required ones):
+#   JWT_SECRET            required  ≥ 32 chars   (openssl rand -hex 32)
+#   PEPPER                required  ≥ 32 chars   NEVER change after the first start
+#   POSTGRES_PASSWORD     required  URL-safe     (openssl rand -hex 20)
+#   REDIS_PASSWORD        required  URL-safe
+#   MINIO_ROOT_USER       required
+#   MINIO_ROOT_PASSWORD   required  ≥ 8 chars
+#   MFA_ENCRYPTION_KEY    optional  64 hex chars (strongly recommended)
+#   SETUP_TOKEN           optional  ≥ 16 chars   (required for app.replicaCount > 1)
+#   VAPID_PRIVATE_KEY     optional  web push
+# The passwords are embedded in DATABASE_URL / REDIS_URL — use URL-safe
+# characters only ([A-Za-z0-9._~-]; hex is ideal).
 secrets:
-  # Name of a pre-existing Kubernetes Secret (or use secretRef below)
   existingSecret: ""
-  # If existingSecret is empty, chart creates a Secret from these values.
-  # DO NOT commit real values — use --set or a sealed-secrets file.
-  jwtSecret: "changeme-jwt-secret"
-  postgresPassword: "changeme-postgres"
-  minioRootPassword: "changeme-minio"
-  smtpRelayPassword: ""
+  jwtSecret: ""
+  pepper: ""
+  mfaEncryptionKey: ""
+  setupToken: ""
+  postgresPassword: ""
+  redisPassword: ""
+  minioRootUser: coremail
+  minioRootPassword: ""
+  vapidPrivateKey: ""
 
-# ── PostgreSQL (CloudNativePG) ───────────────────────────────────────────────
-cnpg:
-  enabled: true
-  name: coremail-pg
-  instances: 3
-  image: ghcr.io/cloudnative-pg/postgresql:16
-  storageClass: ""          # leave empty for cluster default
-  storageSize: "50Gi"
-  database: mailserver
-  owner: ms
+# ── CoreMail app (magpeek/coremail-app: all services in one container) ────────
+app:
+  image:
+    repository: magpeek/coremail-app
+    # Defaults to .Chart.AppVersion
+    tag: ""
+    # Optional: pin by digest (sha256:…); takes precedence over the tag
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # Keep 1. SMTP/IMAP/POP3 state (lockouts, queues) and the certificate renewal
+  # scheduler are coordinated through Redis, but the backup scheduler and the
+  # retention worker have no cross-pod lock (duplicate runs with > 1 replica),
+  # and the setup token must then be fixed (secrets.setupToken). See README.
+  replicaCount: 1
+  # Recreate: never two pods with schedulers at the same time during upgrades.
+  strategy:
+    type: Recreate
+
+  logLevel: info          # error | warn | info | debug
+  timezone: Europe/Berlin
+
+  # TRUST_PROXY for port 3000. "auto" = "1" (trust exactly one hop: the ingress
+  # controller) when ingress.enabled AND networkPolicy.enabled AND
+  # networkPolicy.httpFrom is non-empty AND mailService.ports.http is off —
+  # i.e. only the ingress controller can reach port 3000. Otherwise "" (off).
+  # Any other string is passed through verbatim ("", "1", "10.0.0.0/8", …).
+  trustProxy: auto
+
+  # COREMAIL_PUBLIC_URL — public base URL (SSO redirect URIs). Empty = derived
+  # from the server settings (BCP). Typically https://<ingress.host>
+  publicUrl: ""
+  webauthn:
+    rpId: ""              # WEBAUTHN_RP_ID   (default: publicHostname)
+    origin: ""            # WEBAUTHN_ORIGIN  (default: https://<publicHostname>)
+  vapid:
+    publicKey: ""         # private key → secrets.vapidPrivateKey
+    subject: mailto:admin@example.com
   backup:
-    enabled: false          # set true + configure destinationPath for WAL archiving
-    destinationPath: ""
-    s3Credentials: {}
+    schedule: "0 2 * * *"
+    retentionDays: 30
+  retentionSchedule: "0 3 * * *"
+  ldapAllowInsecure: false
+  # JMAP_CORS_ORIGINS — comma-separated allow-list of browser origins
+  jmapCorsOrigins: ""
+  # Brute-force protection for SMTP/IMAP/POP3/… (empty = app defaults:
+  # IP 50 failures/900 s → 900 s lock, account 10/900 s → 300 s lock)
+  mailAuth:
+    ipMaxFailures: ""
+    ipWindowSec: ""
+    ipLockSec: ""
+    accountMaxFailures: ""
+    accountWindowSec: ""
+    accountLockSec: ""
+    # Also count failures from private/loopback IPs per IP. Set true when
+    # externalTrafficPolicy is Cluster (all clients then appear as node IPs).
+    limitPrivateIps: false
 
-# ── Redis (Bitnami subchart) ─────────────────────────────────────────────────
+  extraEnv: []
+  #  - name: GEOIP_DB_PATH
+  #    value: /geoip/GeoLite2-Country.mmdb
+  extraEnvFrom: []
+
+  # Schema sync (prisma db push --accept-data-loss) in an init container before
+  # the app starts — same as entrypoint-app.sh in Docker, but without pnpm/corepack
+  # (which needs a writable HOME and registry access when not running as root).
+  schemaSync:
+    enabled: true
+    maxAttempts: 60
+    resources: {}
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  # /tmp (emptyDir): backup/export temp files, TLS material, MBOX imports
+  tmpSizeLimit: 4Gi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000         # "node" in the image; supervisord runs as it, no setuid
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+      # The node binary carries file capability cap_net_bind_service (ports
+      # 25/110/143/443/465/587/993/995). Without NET_BIND_SERVICE in the
+      # bounding set, exec of node fails with "Operation not permitted".
+      add: [NET_BIND_SERVICE]
+
+  startupProbe:
+    httpGet: { path: /healthz, port: http }
+    periodSeconds: 5
+    failureThreshold: 60
+  livenessProbe:
+    httpGet: { path: /healthz, port: http }
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 5
+  readinessProbe:
+    httpGet: { path: /healthz, port: http }
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  terminationGracePeriodSeconds: 60
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+# CoreMail does not talk to the Kubernetes API
+automountServiceAccountToken: false
+
+# ── HTTP Service (ClusterIP, target of the Ingress) ───────────────────────────
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+# ── Mail Service (SMTP/IMAP/POP3, optionally HTTP/HTTPS without Ingress) ──────
+mailService:
+  enabled: true
+  type: LoadBalancer        # or NodePort
+  # Local keeps the real client IP (SPF, DNSBL, GeoIP, greylisting, per-IP
+  # lockouts all need it). Cluster SNATs clients to node IPs — do not use it.
+  externalTrafficPolicy: Local
+  loadBalancerIP: ""
+  loadBalancerClass: ""
+  loadBalancerSourceRanges: []
+  annotations: {}
+  ipFamilyPolicy: ""        # SingleStack | PreferDualStack | RequireDualStack
+  ipFamilies: []
+  ports:
+    smtp:       { enabled: true,  port: 25,  targetPort: 25,  nodePort: "" }   # MX inbound
+    smtps:      { enabled: true,  port: 465, targetPort: 465, nodePort: "" }   # implicit TLS
+    submission: { enabled: true,  port: 587, targetPort: 587, nodePort: "" }   # STARTTLS
+    imap:       { enabled: true,  port: 143, targetPort: 143, nodePort: "" }   # STARTTLS
+    imaps:      { enabled: true,  port: 993, targetPort: 993, nodePort: "" }
+    pop3:       { enabled: true,  port: 110, targetPort: 110, nodePort: "" }   # STLS
+    pop3s:      { enabled: true,  port: 995, targetPort: 995, nodePort: "" }
+    # Without an Ingress: plain HTTP (Let's Encrypt HTTP-01 + redirect) and the
+    # integrated HTTPS proxy (certificate managed in BCP → SSL/TLS).
+    http:       { enabled: false, port: 80,  targetPort: 3000, nodePort: "" }
+    https:      { enabled: false, port: 443, targetPort: 443, nodePort: "" }
+
+# ── Ingress (webmail, admin panel, REST, JMAP, ActiveSync, CalDAV, Autodiscover)
+ingress:
+  enabled: false
+  className: ""
+  # Required when enabled
+  host: ""
+  # Additional host names served by the same backend (e.g. autodiscover.example.com)
+  extraHosts: []
+  annotations:
+    # ingress-nginx: large attachments, ActiveSync Ping long-poll (up to ~60 min
+    # heartbeat; 600 s matches the Docker setup) and JMAP WebSocket/EventSource.
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+  tls:
+    enabled: true
+    # Default: <fullname>-tls
+    secretName: ""
+  certManager:
+    # Adds cert-manager.io/(cluster-)issuer — cert-manager then fills tls.secretName
+    enabled: false
+    issuer: ""                # e.g. letsencrypt-prod
+    issuerKind: ClusterIssuer # or Issuer
+
+# ── NetworkPolicies ───────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+  # Peers allowed to reach the app's HTTP port 3000 (the ingress controller).
+  # Empty list = any source. Ignored (any source) when mailService.ports.http
+  # is enabled. Adjust to your controller (traefik, haproxy, …).
+  httpFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  # Egress of rspamd and ClamAV (signature/map updates, DNS): internet only,
+  # cluster-private ranges excluded (DNS on port 53 is always allowed).
+  internetExcept:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+  # The app's egress stays open (outbound SMTP to any MX, DNS, ACME, DNSBL,
+  # LDAP, OIDC, external S3/DB). Optional extra ingress peers per component:
+  extraAppIngress: []
+
+# ── Object storage (attachments, raw RFC 5322 messages, quarantine) ───────────
+# Driver selection and TLS options of the storage abstraction (CoreMail ≥ 7.1.0;
+# 7.0.0 ignores these variables and always uses MinIO/S3 over plain HTTP).
+objectStorage:
+  # OBJECT_STORAGE: minio | s3 | filesystem
+  #   minio/s3   → the bundled MinIO (minio.enabled) or minio.external
+  #   filesystem → objects on a PersistentVolume mounted into the app pod;
+  #                only with app.replicaCount: 1 (ReadWriteOnce volume, no
+  #                shared object store between pods).
+  driver: minio
+  useSSL: false             # MINIO_USE_SSL (external endpoint with TLS)
+  region: ""                # MINIO_REGION
+  # MINIO_CA_FILE: private CA for the endpoint, mounted read-only from a
+  # ConfigMap or Secret (set one of them).
+  caFile:
+    configMap: ""
+    secret: ""
+    key: ca.crt
+  filesystem:
+    path: /data/objects     # STORAGE_PATH
+    existingClaim: ""
+    size: 100Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Dependencies — bundled (StatefulSet + PVC) or external (enabled: false)
+# ═════════════════════════════════════════════════════════════════════════════
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    digest: ""
+    pullPolicy: IfNotPresent
+  database: coremail
+  username: coremail
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 1Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70           # postgres in the alpine image
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Used when enabled: false. The password comes from POSTGRES_PASSWORD in the Secret.
+  external:
+    host: ""
+    port: 5432
+    database: coremail
+    username: coremail
+    # Appended as query string, e.g. "sslmode=require"
+    params: ""
+
 redis:
   enabled: true
-  architecture: replication
-  auth:
-    enabled: false
-  master:
-    persistence:
-      size: 8Gi
-  replica:
-    replicaCount: 2
-    persistence:
-      size: 8Gi
+  image:
+    repository: redis
+    tag: 7-alpine
+    digest: ""
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 512Mi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999          # redis in the alpine image
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Used when enabled: false. Password = REDIS_PASSWORD from the Secret (auth is mandatory).
+  external:
+    host: ""
+    port: 6379
+    tls: false              # rediss://
 
-# ── MinIO ────────────────────────────────────────────────────────────────────
 minio:
   enabled: true
-  replicas: 4
-  storageClass: ""
-  storageSize: "100Gi"
-  rootUser: minioadmin
-  # rootPassword comes from secret
+  image:
+    # Community build of MinIO (official images are no longer published),
+    # pinned by digest like infra/docker/docker-compose.yml
+    repository: pgsty/minio
+    tag: RELEASE.2026-08-04T00-00-00Z
+    digest: sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    pullPolicy: IfNotPresent
+  # Bucket for attachments/raw mail (MINIO_BUCKET) and for backups (BACKUP_BUCKET)
+  bucket: mail-attachments
+  backupBucket: coremail-backups
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 1Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Used when enabled: false. Credentials = MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
+  # from the Secret. CoreMail talks plain HTTP to this endpoint (no TLS option).
+  external:
+    host: ""
+    port: 9000
 
-# ── Ingress / TLS ────────────────────────────────────────────────────────────
-ingress:
+rspamd:
   enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-
-# ── Default resource requests/limits (overridable per service) ───────────────
-defaultResources:
-  requests:
-    cpu: "100m"
-    memory: "128Mi"
-  limits:
-    cpu: "500m"
-    memory: "512Mi"
-
-# ── HPA defaults ─────────────────────────────────────────────────────────────
-defaultHpa:
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-
-# ── Per-service overrides ────────────────────────────────────────────────────
-services:
-  smtpServer:
+  image:
+    repository: rspamd/rspamd
+    tag: "4.0.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Networks allowed to use the controller API (learn spam/ham, stats) without
+  # a password. Must contain the pod network; the NetworkPolicy additionally
+  # restricts the ports to the app pod.
+  secureIp:
+    - 127.0.0.1
+    - ::1
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - fd00::/8
+  persistence:
     enabled: true
-    image: smtp-server
-    port: 25
-    extraPorts:
-      - name: submission-tls
-        containerPort: 465
-      - name: submission
-        containerPort: 587
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 8
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "256Mi"
-      limits:
-        cpu: "1000m"
-        memory: "1Gi"
+    size: 1Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 1Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 11333        # _rspamd in the image
+    runAsGroup: 11333
+    fsGroup: 11333
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  external:
+    host: ""
+    port: 11333             # normal worker (scanning)
+    controllerPort: 11334   # controller (learn, stats) — CoreMail uses both
 
-  imapServer:
+clamav:
+  enabled: true
+  image:
+    repository: clamav/clamav
+    tag: stable
+    digest: ""
+    pullPolicy: IfNotPresent
+  persistence:
     enabled: true
-    image: imap-server
-    port: 143
-    extraPorts:
-      - name: imaps
-        containerPort: 993
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 10
-
-  pop3Server:
-    enabled: true
-    image: pop3-server
-    port: 110
-    extraPorts:
-      - name: pop3s
-        containerPort: 995
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 6
-
-  apiGateway:
-    enabled: true
-    image: api-gateway
-    port: 3000
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 10
-    resources:
-      requests:
-        cpu: "150m"
-        memory: "192Mi"
-      limits:
-        cpu: "750m"
-        memory: "768Mi"
-
-  autodiscover:
-    enabled: true
-    image: autodiscover
-    port: 8081
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 4
-
-  caldavServer:
-    enabled: true
-    image: caldav-server
-    port: 8082
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 6
-
-  webClient:
-    enabled: true
-    image: web-client
-    port: 80
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 6
-
-  adminPanel:
-    enabled: true
-    image: admin-panel
-    port: 80
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 4
-
-  backupService:
-    enabled: true
-    image: backup-service
-    port: 3004
-    replicaCount: 1          # backup jobs should not run in parallel
-    hpa:
-      minReplicas: 1
-      maxReplicas: 2
-
-  securityFilter:
-    enabled: true
-    image: security-filter
-    port: 3005
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 8
-
-  authService:
-    enabled: true
-    image: auth-service
-    port: 3003
-    replicaCount: 2
-    hpa:
-      minReplicas: 2
-      maxReplicas: 8
+    size: 2Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests: { cpu: 100m, memory: 1536Mi }
+    limits:   { memory: 3Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 100          # clamav in the image
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile: { type: RuntimeDefault }
+  # First start downloads ~300 MB of signatures
+  startupFailureThreshold: 60
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  external:
+    host: ""
+    port: 3310

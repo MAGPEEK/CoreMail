@@ -1,0 +1,19 @@
+# Bundled dependencies, Ingress with cert-manager (used by scripts/helm-check.sh).
+# Dummy secrets — never use these values in a real installation.
+secrets:
+  jwtSecret: "ci-jwt-secret-00000000000000000000000000000000000000000000000000"
+  pepper: "ci-pepper-0000000000000000000000000000000000000000000000000000000"
+  mfaEncryptionKey: "abcdef0000000000000000000000000000000000000000000000000000000003"
+  postgresPassword: ci-postgres-password
+  redisPassword: ci-redis-password
+  minioRootPassword: ci-minio-password
+ingress:
+  enabled: true
+  className: nginx
+  host: mail.example.com
+  extraHosts: [autodiscover.example.com]
+  certManager:
+    enabled: true
+    issuer: letsencrypt-prod
+app:
+  publicUrl: https://mail.example.com

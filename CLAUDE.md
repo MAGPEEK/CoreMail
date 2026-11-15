@@ -499,11 +499,14 @@ GITHUB_TOKEN=$PAT gh issue close <nr> --comment "..." --repo MAGPEEK/CoreMail
 All paths are Coremail-compatible. ActiveSync needs a 600s timeout (Ping command).
 
 ### Kubernetes (infra/k8s/)
-- CloudNativePG operator (3 PostgreSQL instances, automatic failover)
-- HPA + PDB for all services (min 2, max 10 pods)
-- Redis Cluster (6 nodes: 3 masters + 3 replicas)
-- MinIO Distributed (4 nodes, erasure coding)
-- cert-manager + External Secrets Operator
+- Chart 1.0.0 (independent SemVer, `appVersion` = default image tag): one `coremail-app`
+  Deployment (1 replica, Recreate, schema-sync init container, non-root, read-only root FS),
+  ClusterIP + Ingress for HTTP, LoadBalancer/NodePort Service for the mail ports.
+- Optional bundled PostgreSQL, Redis (password mandatory), MinIO, rspamd, ClamAV as
+  StatefulSets — or external endpoints; NetworkPolicies; no chart dependencies.
+- Secrets via `secrets.*` or `secrets.existingSecret` (fail-fast `required`), `objectStorage.*`
+  for the storage driver. Docs `infra/k8s/README.md`; check: `bash scripts/helm-check.sh`
+  (helm lint/template + kubeconform via pinned Docker images, `infra/k8s/ci/*-values.yaml`).
 
 ---
 

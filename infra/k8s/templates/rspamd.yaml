@@ -1,0 +1,137 @@
+{{- if .Values.rspamd.enabled }}
+{{- $r := .Values.rspamd }}
+{{- $name := include "coremail.componentName" (dict "root" . "component" "rspamd") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "rspamd") | nindent 4 }}
+data:
+  # Same as infra/docker/rspamd/local.d/actions.conf
+  actions.conf: |
+    {{- .Files.Get "files/rspamd/actions.conf" | nindent 4 }}
+  # Controller: CoreMail learns spam/ham and reads stats without a password from
+  # secure_ip; the NetworkPolicy limits access to the app pod.
+  worker-controller.inc: |
+    password = "";
+    enable_password = "";
+    bind_socket = "*:11334";
+    secure_ip = [{{ range $i, $ip := $r.secureIp }}{{ if $i }}, {{ end }}{{ $ip | quote }}{{ end }}];
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "rspamd") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "rspamd") | nindent 4 }}
+  ports:
+    - { name: normal, port: 11333, targetPort: normal, protocol: TCP }
+    - { name: controller, port: 11334, targetPort: controller, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "rspamd") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "rspamd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coremail.labels" (dict "root" . "component" "rspamd") | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%s%v" (.Files.Get "files/rspamd/actions.conf") $r.secureIp | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $r.podSecurityContext | nindent 8 }}
+      containers:
+        - name: rspamd
+          image: {{ include "coremail.image" (dict "image" $r.image "default" "4.0.0") }}
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          ports:
+            - { name: normal, containerPort: 11333, protocol: TCP }
+            - { name: controller, containerPort: 11334, protocol: TCP }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          startupProbe:
+            tcpSocket: { port: normal }
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket: { port: controller }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ping, port: controller }
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/rspamd/local.d, readOnly: true }
+            - { name: data, mountPath: /var/lib/rspamd }
+            - { name: run, mountPath: /run/rspamd }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: run
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 512Mi }
+        {{- if not $r.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $r.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $r.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $r.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $r.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "coremail.selectorLabels" (dict "root" . "component" "rspamd") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $r.persistence.accessModes | nindent 10 }}
+        {{- with $r.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $r.persistence.size }}
+  {{- end }}
+{{- end }}

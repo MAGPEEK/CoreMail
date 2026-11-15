@@ -1,0 +1,116 @@
+{{- if .Values.redis.enabled }}
+{{- $r := .Values.redis }}
+{{- $name := include "coremail.componentName" (dict "root" . "component" "redis") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "redis") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coremail.selectorLabels" (dict "root" . "component" "redis") | nindent 4 }}
+  ports:
+    - { name: redis, port: 6379, targetPort: redis, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coremail.labels" (dict "root" . "component" "redis") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "coremail.selectorLabels" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coremail.labels" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $r.podSecurityContext | nindent 8 }}
+      containers:
+        - name: redis
+          image: {{ include "coremail.image" (dict "image" $r.image "default" "7-alpine") }}
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          # Password passed via stdin config, so it never appears in argv / ps.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              exec redis-server - --appendonly yes --dir /data --protected-mode yes <<EOF
+              requirepass ${REDIS_PASSWORD}
+              EOF
+          ports:
+            - { name: redis, containerPort: 6379, protocol: TCP }
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "coremail.secretName" . }}, key: REDIS_PASSWORD } }
+            # redis-cli in the probes reads the password from here
+            - name: REDISCLI_AUTH
+              valueFrom: { secretKeyRef: { name: {{ include "coremail.secretName" . }}, key: REDIS_PASSWORD } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          livenessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+        {{- if not $r.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $r.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $r.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $r.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $r.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "coremail.selectorLabels" (dict "root" . "component" "redis") | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $r.persistence.accessModes | nindent 10 }}
+        {{- with $r.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $r.persistence.size }}
+  {{- end }}
+{{- end }}

@@ -1,85 +1,50 @@
 {{- if .Values.ingress.enabled }}
+{{- $i := .Values.ingress }}
+{{- $hosts := prepend $i.extraHosts $i.host }}
+{{- $tlsSecret := $i.tls.secretName | default (printf "%s-tls" (include "coremail.fullname" .)) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "coremail.fullname" . }}-web
+  name: {{ include "coremail.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "coremail.labels" . | nindent 4 }}
+    {{- include "coremail.labels" (dict "root" . "component" "app") | nindent 4 }}
+  {{- if or $i.annotations $i.certManager.enabled }}
   annotations:
-    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- with $i.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $i.certManager.enabled }}
+    {{- if eq $i.certManager.issuerKind "Issuer" }}
+    cert-manager.io/issuer: {{ $i.certManager.issuer | quote }}
+    {{- else }}
+    cert-manager.io/cluster-issuer: {{ $i.certManager.issuer | quote }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
 spec:
-  ingressClassName: {{ .Values.ingress.className }}
+  {{- with $i.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if $i.tls.enabled }}
   tls:
-    - hosts:
-        - {{ .Values.global.domain }}
-      secretName: {{ .Values.global.tlsSecretName }}
+    - secretName: {{ $tlsSecret }}
+      hosts:
+        {{- range $hosts }}
+        - {{ . | quote }}
+        {{- end }}
+  {{- end }}
   rules:
-    - host: {{ .Values.global.domain }}
+    {{- range $hosts }}
+    - host: {{ . | quote }}
       http:
         paths:
-          # Webmail (OWA)
-          - path: /owa
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-web-client
-                port:
-                  name: http
-          # Admin panel (BCP)
-          - path: /bcp
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-admin-panel
-                port:
-                  name: http
-          # Autodiscover v1
-          - path: /Autodiscover
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-autodiscover
-                port:
-                  name: http
-          # Autodiscover v2
-          - path: /autodiscover
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-autodiscover
-                port:
-                  name: http
-          # REST API
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-api-gateway
-                port:
-                  name: http
-          # CalDAV / CardDAV
-          - path: /dav
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-caldav-server
-                port:
-                  name: http
-          # Well-known
-          - path: /.well-known
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "coremail.fullname" . }}-caldav-server
-                port:
-                  name: http
-          # Root → redirect to OWA
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "coremail.fullname" . }}-web-client
+                name: {{ include "coremail.fullname" $ }}
                 port:
                   name: http
+    {{- end }}
 {{- end }}

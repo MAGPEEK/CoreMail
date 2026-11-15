@@ -37,6 +37,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   iTIP reply, and the invitation moves to Deleted Items.
 - **ActiveSync `ResolveRecipients`:** names and addresses are resolved against the address book
   of the user's domain and the user's contacts.
+- **Helm chart 1.0.0 (`infra/k8s`)** — complete rewrite for the single `coremail-app` image:
+  app Deployment with schema-sync init container (non-root, read-only root filesystem,
+  `/healthz` probes), Ingress for HTTP and a LoadBalancer/NodePort Service for the mail ports,
+  optional bundled PostgreSQL, Redis (password mandatory), MinIO, rspamd and ClamAV or external
+  endpoints, NetworkPolicies, secrets via values or an existing Secret (rendering fails without
+  them). `scripts/helm-check.sh` runs helm lint/template and kubeconform via pinned Docker
+  images. The old per-service chart (EWS, storage-api, 0.6.x images) is gone.
 
 ### Changed
 
