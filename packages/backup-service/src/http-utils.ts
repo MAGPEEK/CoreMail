@@ -21,8 +21,14 @@ const MAILBOX_DATA_LISTINGS: ReadonlyArray<RegExp> = [
   /^\/backup\/admin\/(users|list|jobs)\/?$/,
 ];
 
+/**
+ * 9.1: also tested against the lower-cased path — a second guard next to the
+ * case-sensitive routing of server.ts, so `/backup/admin/DOWNLOAD/x` can never
+ * reach a handler while being classified as "not mailbox data".
+ */
 export function isMailboxDataRoute(path: string): boolean {
-  return MAILBOX_DATA_ROUTES.some((r) => r.test(path));
+  const lower = path.toLowerCase();
+  return MAILBOX_DATA_ROUTES.some((r) => r.test(path) || r.test(lower));
 }
 
 /**

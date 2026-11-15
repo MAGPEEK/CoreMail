@@ -31,10 +31,21 @@ const shared: Record<string, Row> = {
   sm2: { id: 'sm2', email: 'sales@ex.com', displayName: 'Sales', active: true, mailboxId: 'mb-sm2', quotaBytes: BigInt(50 * MB), usedBytes: 0n, quotaWarningBytes: null, quotaProhibitSendBytes: null },
   sm3: { id: 'sm3', email: 'old@ex.com', displayName: 'Old', active: false, mailboxId: 'mb-sm3', quotaBytes: 0n, usedBytes: 0n, quotaWarningBytes: null, quotaProhibitSendBytes: null },
 };
-// dave: FULL_ACCESS delegate on erin's mailbox; frank: READ_ONLY delegate on it
+// dave: FULL_ACCESS delegate on erin's mailbox; frank: READ_ONLY delegate on it.
+// dave also holds FULL_ACCESS rows on gina's mailbox (gina deactivated), on a mailbox
+// without a user, and on his own mailbox — none of those grant anything.
+const owners: Record<string, Row | null> = {
+  'mb-erin': { id: 'erin', email: 'erin@ex.com', displayName: 'Erin', active: true },
+  'mb-gina': { id: 'gina', email: 'gina@ex.com', displayName: 'Gina', active: false },
+  'mb-orphan': null,
+  'mb-dave': { id: 'dave', email: 'dave@ex.com', displayName: 'Dave', active: true },
+};
 const delegates = [
   { granteeId: 'dave',  mailboxId: 'mb-erin', permission: 'FULL_ACCESS' },
   { granteeId: 'frank', mailboxId: 'mb-erin', permission: 'READ_ONLY' },
+  { granteeId: 'dave',  mailboxId: 'mb-gina', permission: 'FULL_ACCESS' },
+  { granteeId: 'dave',  mailboxId: 'mb-orphan', permission: 'FULL_ACCESS' },
+  { granteeId: 'dave',  mailboxId: 'mb-dave', permission: 'FULL_ACCESS' },
 ];
 const messageQueries: string[] = [];
 const auditRows: Row[] = [];
@@ -50,6 +61,15 @@ installFakePrisma({
       const p = perms.find((x) => x.userId === w['userId'] && x.sharedMailboxId === w['sharedMailboxId'] && matchPerm(w['permission'], x.permission));
       if (!p) return null;
       return { ...p, sharedMailbox: applySelect(shared[p.sharedMailboxId]!, { id: true, email: true, displayName: true, active: true }) };
+    },
+    findMany: (a) => {
+      const w = (a as { where: Row }).where;
+      return perms
+        .filter((x) => x.userId === w['userId'] && matchPerm(w['permission'], x.permission))
+        .map((p) => {
+          const s = shared[p.sharedMailboxId]!;
+          return { permission: p.permission, sharedMailbox: { id: s['id'], email: s['email'], displayName: s['displayName'], active: s['active'], mailbox: { id: s['mailboxId'] } } };
+        });
     },
   },
   sharedMailbox: {
@@ -72,6 +92,12 @@ installFakePrisma({
       const w = (a as { where: Row }).where;
       const d = delegates.find((x) => x.granteeId === w['granteeId'] && x.mailboxId === w['mailboxId'] && matchPerm(w['permission'], x.permission));
       return d ? { mailboxId: d.mailboxId } : null;
+    },
+    findMany: (a) => {
+      const w = (a as { where: Row }).where;
+      return delegates
+        .filter((x) => x.granteeId === w['granteeId'] && matchPerm(w['permission'], x.permission))
+        .map((d) => ({ permission: d.permission, mailbox: { id: d.mailboxId, user: owners[d.mailboxId] ?? null } }));
     },
   },
   message: {
@@ -135,6 +161,12 @@ test('FULL_ACCESS on the shared mailbox: list / restore / purge scoped to its ma
   assert.ok(messageQueries.length >= 3);
   assert.ok(messageQueries.every((w) => w.includes('"mailboxId":"mb-sm1"')), 'every query is scoped to the shared mailbox');
   await flush();
+  const restored = auditRows.find((a) => a['action'] === 'mailbox.recoverable.restore');
+  assert.ok(restored, 'restore audited');
+  assert.equal(restored!['actorId'], 'alice');
+  assert.equal(restored!['targetType'], 'sharedMailbox');
+  assert.equal(restored!['targetId'], 'sm1');
+  assert.deepEqual(restored!['changes'], { restored: 0, notFound: 1, ids: 1, mailboxId: 'mb-sm1' });
   const entry = auditRows.find((a) => a['action'] === 'mailbox.recoverable.purge');
   assert.ok(entry, 'purge audited');
   assert.equal(entry!['actorId'], 'alice');
@@ -182,6 +214,17 @@ test('delegated mailbox: FULL_ACCESS delegate only', async () => {
   assert.equal((await call('POST', `${D('mb-other')}/restore`, tok('dave'), { ids: ['m1'] })).status, 403, 'another mailbox');
   assert.equal((await call('GET', D('mb-sm1'), tok('alice'))).status, 403, 'a shared mailbox id is not a delegation');
   assert.equal(messageQueries.length, 0);
+});
+
+test('delegated mailbox: deactivated owner, mailbox without a user, own mailbox → 403', async () => {
+  for (const id of ['mb-gina', 'mb-orphan', 'mb-dave']) {
+    assert.equal((await call('GET', D(id), tok('dave'))).status, 403, `list ${id}`);
+    assert.equal((await call('POST', `${D(id)}/restore`, tok('dave'), { ids: ['m1'] })).status, 403, `restore ${id}`);
+    assert.equal((await call('POST', `${D(id)}/purge`, tok('dave'), { ids: ['m1'] })).status, 403, `purge ${id}`);
+  }
+  assert.equal(messageQueries.length, 0, 'no message was read or touched');
+  await flush();
+  assert.equal(auditRows.length, 0);
 });
 
 test('GET /user/shared-mailboxes/:id/quota: read access, same shape as /user/quota', async () => {

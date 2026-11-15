@@ -17,7 +17,9 @@
  * READ_ONLY / SEND_AS / SEND_ON_BEHALF are not enough (listing deleted items
  * reveals content the folder views no longer show; restore and purge change the
  * mailbox). No access, an unknown or inactive mailbox → 403 (no existence oracle).
- * A purge in someone else's mailbox is audited (`mailbox.recoverable.purge`).
+ * A restore or purge in someone else's mailbox is audited
+ * (`mailbox.recoverable.restore` / `mailbox.recoverable.purge`). A delegation counts
+ * only while the owner exists, is active and is not the caller (lib/mailbox-access.ts).
  *
  * Items stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 30); see
  * @coremail/storage recoverable-items.ts and docs/mailbox-quotas-recovery.md.
@@ -55,6 +57,19 @@ export function createRecoverableRouter(opts: RecoverableRouterOpts): RouterType
     return mailboxId;
   };
 
+  /** Audits restore/purge in someone else's mailbox (no-op for the caller's own). */
+  const auditForeign = (req: Request, action: string, mailboxId: string, changes: Record<string, unknown>): void => {
+    if (!opts.auditTarget) return;
+    const params = req.params as Record<string, string>;
+    audit({
+      actorId: req.apiUser!.userId, actorEmail: req.apiUser!.email,
+      action, targetType: opts.auditTarget.type,
+      targetId: params[opts.auditTarget.param] ?? mailboxId,
+      changes,
+      ...auditContext(req),
+    });
+  };
+
   router.get('/', async (req: Request, res: Response) => {
     const mailboxId = await target(req, res);
     if (!mailboxId) return;
@@ -76,6 +91,10 @@ export function createRecoverableRouter(opts: RecoverableRouterOpts): RouterType
       const result = await restoreRecoverableItems(mailboxId, parsed.data.ids, {
         ...(parsed.data.folderId ? { targetFolderId: parsed.data.folderId } : {}),
       });
+      auditForeign(req, 'mailbox.recoverable.restore', mailboxId, {
+        restored: result.restored.length, notFound: result.notFound.length, ids: parsed.data.ids.length, mailboxId,
+        ...(parsed.data.folderId ? { folderId: parsed.data.folderId } : {}),
+      });
       res.json({ ok: true, ...result });
     } catch (err) {
       if (err instanceof RangeError) { res.status(400).json({ error: 'Invalid target folder' }); return; }
@@ -89,16 +108,7 @@ export function createRecoverableRouter(opts: RecoverableRouterOpts): RouterType
     const mailboxId = await target(req, res);
     if (!mailboxId) return;
     const purged = await purgeRecoverableItems(mailboxId, parsed.data.ids);
-    if (opts.auditTarget) {
-      const params = req.params as Record<string, string>;
-      audit({
-        actorId: req.apiUser!.userId, actorEmail: req.apiUser!.email,
-        action: 'mailbox.recoverable.purge', targetType: opts.auditTarget.type,
-        targetId: params[opts.auditTarget.param] ?? mailboxId,
-        changes: { purged, ids: parsed.data.ids.length, mailboxId },
-        ...auditContext(req),
-      });
-    }
+    auditForeign(req, 'mailbox.recoverable.purge', mailboxId, { purged, ids: parsed.data.ids.length, mailboxId });
     res.json({ ok: true, purged });
   });
 
