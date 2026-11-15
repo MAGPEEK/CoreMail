@@ -47,7 +47,7 @@ export async function storeEmailFromRaw(
   // Thread (RFC 8621 §3) is assigned in the creating transaction: the row is never
   // visible without its threadId and no extra modSeq is needed.
   const msg = await prisma.$transaction(async (tx) => {
-    const thread = await resolveThreadId({ id: '', messageId: parsed.messageId, inReplyTo: parsed.inReplyTo }, account.mailboxId, tx);
+    const thread = await resolveThreadId({ id: '', messageId: parsed.messageId, inReplyTo: parsed.inReplyTo, references: parsed.references }, account.mailboxId, tx);
     const created = await createMessage(tx, account.mailboxId, folderId, {
       flags,
       subject: parsed.subject,

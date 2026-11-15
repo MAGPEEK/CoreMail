@@ -2,7 +2,9 @@
  * SORT and THREAD (RFC 5256). Pure module: base subject extraction, the sort
  * comparator and the ORDEREDSUBJECT / REFERENCES threading algorithms. No
  * database access — the handler (commands/index.ts) evaluates the search
- * criteria and passes the matching messages in.
+ * criteria and passes the matching messages in; for REFERENCES it attaches the
+ * stored References lists (`loadThreadReferences` of @coremail/storage, which
+ * also indexes older rows lazily).
  *
  * Comparisons use the i;ascii-casemap collation (RFC 4790 §9.2): ASCII letters
  * are upper-cased, then the UTF-8 octets are compared.
@@ -29,6 +31,11 @@ export interface SortMessage {
   rawSize: number;
   messageId?: string | null;
   inReplyTo?: string | null;
+  /**
+   * References header msg-ids, oldest first (`Message.references`, v9.1). Null,
+   * undefined or [] → the first In-Reply-To msg-id is used (RFC 5256 §3).
+   */
+  references?: readonly string[] | null;
 }
 
 const SORT_KEYS = new Set<SortKey>(['ARRIVAL', 'CC', 'DATE', 'FROM', 'SIZE', 'SUBJECT', 'TO']);
@@ -162,12 +169,28 @@ export interface ThreadNode {
   children: ThreadNode[];
 }
 
-function serializeNode(node: ThreadNode): string {
-  const head = node.id === null ? '' : `${node.id}`;
-  if (node.children.length === 0) return head;
-  if (node.children.length === 1 && node.id !== null) return `${head} ${serializeNode(node.children[0]!)}`;
-  const kids = node.children.map((c) => `(${serializeNode(c)})`).join('');
-  return node.id === null ? kids : `${head} ${kids}`;
+/**
+ * Thread syntax of one node (RFC 5256 §4): "id child" for a single child,
+ * "id (a)(b)" for several, "(a)(b)" for a dummy. Iterative: a reply chain can
+ * be thousands of messages deep.
+ */
+function serializeNode(root: ThreadNode): string {
+  const out: string[] = [];
+  const stack: Array<ThreadNode | string> = [root];
+  while (stack.length > 0) {
+    const item = stack.pop()!;
+    if (typeof item === 'string') { out.push(item); continue; }
+    const head = item.id === null ? '' : `${item.id}`;
+    const parts: Array<ThreadNode | string> = [];
+    if (item.children.length === 0) parts.push(head);
+    else if (item.children.length === 1 && item.id !== null) parts.push(`${head} `, item.children[0]!);
+    else {
+      if (item.id !== null) parts.push(`${head} `);
+      for (const c of item.children) parts.push('(', c, ')');
+    }
+    for (let i = parts.length - 1; i >= 0; i--) stack.push(parts[i]!);
+  }
+  return out.join('');
 }
 
 /** Thread list of the THREAD response: "(3 6 (4 23)(44 7 96))((1)(2))". */
@@ -200,13 +223,28 @@ export function threadOrderedSubject(messages: SortMessage[], idOf: (m: SortMess
   }));
 }
 
-/** Extracts msg-ids ("<…>") from a header value; a bare value counts as one id. */
+/**
+ * Extracts msg-ids ("<…>") from a header value; a bare value counts as one id.
+ * Tokens with whitespace or nested angle brackets are not msg-ids and are skipped.
+ */
 export function msgIds(value: string | null | undefined): string[] {
   if (!value) return [];
   const ids = value.match(/<[^<>\s]+>/g);
   if (ids) return ids;
+  if (/[<>]/.test(value)) return [];
   const bare = value.trim();
-  return bare ? [`<${bare.replace(/^<|>$/g, '')}>`] : [];
+  return bare && !/\s/.test(bare) ? [`<${bare}>`] : [];
+}
+
+/**
+ * Reference list of a message (RFC 5256 §3 REFERENCES step 1B): the msg-ids of
+ * its References header (`m.references`, oldest first); when it has none, the
+ * first valid msg-id of In-Reply-To.
+ */
+export function referencesOf(m: SortMessage): string[] {
+  const refs = (m.references ?? []).filter((r) => typeof r === 'string' && r.length > 0);
+  if (refs.length > 0) return refs;
+  return msgIds(m.inReplyTo).slice(0, 1);
 }
 
 interface Container {
@@ -215,51 +253,74 @@ interface Container {
   children: Container[];
 }
 
+const newContainer = (): Container => ({ message: null, parent: null, children: [] });
+
 function isAncestor(maybeAncestor: Container, node: Container): boolean {
+  // A container without children is nobody's ancestor (cheap common case).
+  if (maybeAncestor.children.length === 0) return maybeAncestor === node;
   for (let p: Container | null = node; p; p = p.parent) if (p === maybeAncestor) return true;
   return false;
 }
 
+function unlink(child: Container): void {
+  const parent = child.parent;
+  if (!parent) return;
+  const i = parent.children.indexOf(child);
+  if (i >= 0) parent.children.splice(i, 1);
+  child.parent = null;
+}
+
 function link(parent: Container, child: Container): void {
-  if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
+  unlink(child);
   child.parent = parent;
   parent.children.push(child);
 }
 
-/** Earliest sent date in a container's subtree (dummy nodes sort by their first child). */
-function containerDate(c: Container): SortMessage | null {
+/** Message whose sent date orders a container (dummies: their earliest child, recursively). */
+function containerDate(c: Container, memo: Map<Container, SortMessage | null>): SortMessage | null {
   if (c.message) return c.message;
+  const known = memo.get(c);
+  if (known !== undefined) return known;
   let best: SortMessage | null = null;
   for (const child of c.children) {
-    const d = containerDate(child);
+    const d = containerDate(child, memo);
     if (d && (!best || byDate(d, best) < 0)) best = d;
   }
+  memo.set(c, best);
   return best;
 }
 
-function compareContainers(a: Container, b: Container): number {
-  const x = containerDate(a);
-  const y = containerDate(b);
-  if (!x || !y) return x ? -1 : y ? 1 : 0;
-  return byDate(x, y);
-}
-
 /**
- * THREAD=REFERENCES (RFC 5256 §3, the "JWZ" algorithm). The parent chain comes
- * from the References header; CoreMail stores In-Reply-To (and Message-ID) as
- * columns, so `referencesOf` supplies the reference list per message (by
- * default the In-Reply-To msg-id).
+ * THREAD=REFERENCES (RFC 5256 §3, Jamie Zawinski's algorithm):
+ *
+ *  1. every message gets the container of its Message-ID (duplicates and
+ *     messages without one get a container of their own); the msg-ids of its
+ *     reference list (References, else the first In-Reply-To id) are linked
+ *     parent → child in order — existing links are kept, links that would
+ *     create a loop are not added — and the last reference becomes the
+ *     message's parent (missing messages are dummy containers);
+ *  2. the root set is every container without a parent;
+ *  4. dummies without children are removed; a dummy's children are promoted to
+ *     its level (to the root set only when it has exactly one child);
+ *  5. roots with the same base subject are merged (dummy preferred, an original
+ *     preferred over a reply/forward, two of a kind become siblings under a new
+ *     dummy);
+ *  6. siblings are sorted by sent date (dummies by their earliest child; ties
+ *     by sequence number), and so are the threads.
+ *
+ * `references` defaults to {@link referencesOf}. Complexity is O(n log n) for
+ * the usual shapes (maps/sets, no list scans per root).
  */
 export function threadReferences(
   messages: SortMessage[],
   idOf: (m: SortMessage) => number,
-  referencesOf: (m: SortMessage) => string[] = (m) => msgIds(m.inReplyTo).slice(0, 1),
+  references: (m: SortMessage) => string[] = referencesOf,
 ): ThreadNode[] {
   const byId = new Map<string, Container>();
   const all: Container[] = [];
   const containerFor = (id: string): Container => {
     let c = byId.get(id);
-    if (!c) { c = { message: null, parent: null, children: [] }; byId.set(id, c); all.push(c); }
+    if (!c) { c = newContainer(); byId.set(id, c); all.push(c); }
     return c;
   };
 
@@ -271,77 +332,93 @@ export function threadReferences(
     if (own && existing && existing.message === null) {
       container = existing;
     } else {
-      // Missing or duplicate Message-ID → a container of its own.
-      container = { message: null, parent: null, children: [] };
+      // (1A) Missing or duplicate Message-ID → a unique container of its own.
+      container = newContainer();
       all.push(container);
       if (own && !existing) byId.set(own, container);
     }
     container.message = m;
 
+    // (1B) link the reference chain; existing links win, no loops.
     let prev: Container | null = null;
-    for (const ref of referencesOf(m)) {
+    for (const ref of references(m)) {
+      if (ref === own) continue; // a message never references itself
       const c = containerFor(ref);
-      if (prev && !c.parent && c !== prev && !isAncestor(c, prev)) link(prev, c);
+      if (prev && c !== prev && !c.parent && !isAncestor(c, prev)) link(prev, c);
       prev = c;
     }
-    // (1B) the last reference becomes the parent (unless that creates a loop).
-    if (container.parent) container.parent.children = container.parent.children.filter((c) => c !== container);
-    container.parent = null;
+    // (1C) the last reference becomes the parent (unless it is the message
+    // itself or a descendant of it); without references the message is a root.
     if (prev && prev !== container && !isAncestor(container, prev)) link(prev, container);
+    else unlink(container);
   }
 
   // (2) root set.
-  let roots = all.filter((c) => c.parent === null);
+  const rootSet = all.filter((c) => c.parent === null);
 
-  // (4) prune empty dummies; promote children of dummies (not at root level with > 1 child).
-  const prune = (list: Container[], atRoot: boolean): Container[] => {
-    const out: Container[] = [];
-    for (const c of list) {
-      c.children = prune(c.children, false);
-      for (const child of c.children) child.parent = c;
+  // (4) prune empty dummies; promote children of dummies (not to the root set
+  // when the dummy has more than one child).
+  // Iterative post-order (reply chains can be thousands deep): children are
+  // pruned before their parent looks at them.
+  const top = newContainer();
+  top.children = rootSet;
+  const order: Container[] = [];
+  for (const stack = [top]; stack.length > 0;) {
+    const c = stack.pop()!;
+    order.push(c);
+    for (const child of c.children) stack.push(child);
+  }
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = order[i]!;
+    const kept: Container[] = [];
+    for (const c of node.children) {
       if (c.message === null) {
         if (c.children.length === 0) continue;
-        if (!atRoot || c.children.length === 1) {
-          for (const child of c.children) { child.parent = c.parent; out.push(child); }
+        if (node !== top || c.children.length === 1) {
+          for (const child of c.children) kept.push(child);
           continue;
         }
       }
-      out.push(c);
+      kept.push(c);
     }
-    return out;
-  };
-  roots = prune(roots, true);
-  for (const r of roots) r.parent = null;
+    node.children = kept;
+    for (const c of kept) c.parent = node === top ? null : node;
+  }
+  const roots = top.children;
 
-  // (5) group the root set by base subject.
+  // (5A/B) subject table over the root set.
   const subjectOf = (c: Container): { base: string; reply: boolean } | null => {
     const m = c.message ?? c.children[0]?.message ?? null;
     if (!m) return null;
     const b = baseSubject(m.subject);
     return { base: casemapKey(b.base).toString('latin1'), reply: b.isReplyOrForward };
   };
+  const subjects = new Map<Container, { base: string; reply: boolean } | null>();
+  for (const r of roots) subjects.set(r, subjectOf(r));
   const table = new Map<string, Container>();
   for (const r of roots) {
-    const s = subjectOf(r);
+    const s = subjects.get(r);
     if (!s || s.base === '') continue;
     const old = table.get(s.base);
     if (!old
       || (r.message === null && old.message !== null)
-      || (old.message !== null && r.message !== null && subjectOf(old)!.reply && !s.reply)) {
+      || (old.message !== null && r.message !== null && subjects.get(old)!.reply && !s.reply)) {
       table.set(s.base, r);
     }
   }
-  // (5B) merge roots with the same base subject.
-  const result = [...roots];
-  const drop = (c: Container): void => { const i = result.indexOf(c); if (i >= 0) result.splice(i, 1); };
-  const swap = (old: Container, next: Container): void => { const i = result.indexOf(old); if (i >= 0) result[i] = next; };
+
+  // (5C) merge roots with the same base subject. `slot` keeps the root order;
+  // a root that is merged away gets no slot, a new dummy takes its target's slot.
+  const slot = new Map<Container, number>();
+  roots.forEach((r, i) => slot.set(r, i));
+  const finalRoots: Array<Container | null> = [...roots];
+  const drop = (c: Container): void => { const i = slot.get(c); if (i !== undefined) { finalRoots[i] = null; slot.delete(c); } };
   for (const r of roots) {
-    if (!result.includes(r)) continue;
-    const s = subjectOf(r);
+    if (!slot.has(r)) continue;
+    const s = subjects.get(r);
     if (!s || s.base === '') continue;
     const target = table.get(s.base);
-    if (!target || target === r || !result.includes(target)) continue;
-    const targetReply = subjectOf(target)?.reply ?? false;
+    if (!target || target === r || !slot.has(target)) continue;
     if (target.message === null && r.message === null) {
       for (const child of [...r.children]) link(target, child);
       drop(r);
@@ -352,29 +429,48 @@ export function threadReferences(
       link(r, target);
       drop(target);
       table.set(s.base, r);
-    } else if (!targetReply && s.reply) {
+    } else if (!subjects.get(target)!.reply && s.reply) {
       link(target, r);
       drop(r);
-    } else if (targetReply && !s.reply) {
+    } else if (subjects.get(target)!.reply && !s.reply) {
       link(r, target);
       drop(target);
       table.set(s.base, r);
     } else {
       // Two real messages with the same subject: a new dummy holds them as siblings.
-      const dummy: Container = { message: null, parent: null, children: [] };
-      swap(target, dummy);
+      const dummy = newContainer();
+      const i = slot.get(target)!;
+      slot.delete(target);
+      finalRoots[i] = dummy;
+      slot.set(dummy, i);
       link(dummy, target);
       link(dummy, r);
       drop(r);
+      subjects.set(dummy, { base: s.base, reply: false });
       table.set(s.base, dummy);
     }
   }
-  const finalRoots = result;
 
   // (6) sort siblings by sent date and convert.
-  const convert = (c: Container): ThreadNode => ({
-    id: c.message ? idOf(c.message) : null,
-    children: [...c.children].sort(compareContainers).map(convert),
-  });
-  return finalRoots.sort(compareContainers).map(convert);
+  const memo = new Map<Container, SortMessage | null>();
+  const compare = (a: Container, b: Container): number => {
+    const x = containerDate(a, memo);
+    const y = containerDate(b, memo);
+    if (!x || !y) return x ? -1 : y ? 1 : 0;
+    return byDate(x, y);
+  };
+  const sortedRoots = finalRoots.filter((c): c is Container => c !== null).sort(compare);
+  // Iterative conversion (deep chains). Depth-first pop order visits the
+  // siblings of every list left to right, so appending keeps the sort order.
+  const result: ThreadNode[] = [];
+  const work: Array<{ c: Container; into: ThreadNode[] }> = [];
+  for (let i = sortedRoots.length - 1; i >= 0; i--) work.push({ c: sortedRoots[i]!, into: result });
+  while (work.length > 0) {
+    const { c, into } = work.pop()!;
+    const node: ThreadNode = { id: c.message ? idOf(c.message) : null, children: [] };
+    into.push(node);
+    const kids = [...c.children].sort(compare);
+    for (let i = kids.length - 1; i >= 0; i--) work.push({ c: kids[i]!, into: node.children });
+  }
+  return result;
 }
